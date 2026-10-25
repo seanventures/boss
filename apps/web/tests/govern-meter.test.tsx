@@ -68,6 +68,22 @@ describe("the meter draws real numbers", () => {
     expect($("[data-testid=gv-meter-amount]")!.textContent).toBe("$0.00 of $10.00");
   });
 
+  it("says what was spent from the one ledger, the build money no cap counts, and the estimate apart (brec_85de2541)", async () => {
+    const ledger = { money_usd_micros: 292_430_000, under_cap_usd_micros: 8_420_000, not_under_cap_usd_micros: 284_010_000,
+                     included_usd_micros: 488_490_000, metered_calls: 470, included_calls: 352 };
+    await mount(<GovernMeter meter={{ ...METER, ledger }} error="" onRetry={() => {}} />);
+    expect($("[data-testid=gv-spent-money]")!.textContent).toBe("Spent $292.43");
+    expect($("[data-testid=gv-spent-money]")!.getAttribute("title")).toContain("Counted by caps $8.42");
+    expect($("[data-testid=gv-spent-uncapped]")!.textContent).toContain("Builds $284.01 not capped");
+    expect($("[data-testid=gv-included]")!.textContent).toBe(" · Included in plan ~$488.49");
+    expect($("[data-testid=gv-included]")!.getAttribute("title")).toContain("an estimate at list price. Not money");
+    unmount();
+    await mount(<GovernMeter meter={{ ...METER, ledger: { ...ledger, not_under_cap_usd_micros: 0, included_usd_micros: 0 } }}
+                             error="" onRetry={() => {}} />);
+    expect($("[data-testid=gv-spent-uncapped]")).toBeNull();
+    expect($("[data-testid=gv-included]")).toBeNull();
+  });
+
   it("the forecast marker appears only when there is a forecast", async () => {
     await mount(<GovernMeter meter={{ ...METER, forecasted_24h_usd_micros: 0 }} error="" onRetry={() => {}} />);
     expect($("[data-testid=gv-forecast]")).toBeNull();

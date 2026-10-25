@@ -179,15 +179,9 @@ def engine_call_is_included(engine_name: Optional[str], usage: Optional[dict]) -
     """Whether a call on `engine_name` ran on included capacity (a subscription or a local
     model). The adapter's own `billing` stamp wins; otherwise the engine decides, by the same
     list the router reserves nothing for (model_routing.UNMETERED)."""
-    from .included_spend import usage_is_included
-    from .model_routing import UNMETERED
+    from .included_spend import call_is_included
 
-    if isinstance(usage, dict) and usage.get("billing"):
-        return usage_is_included(usage)
-    name = str(engine_name or "").strip().lower()
-    if name.startswith("guest:"):
-        name = name.split(":", 1)[1]
-    return name in UNMETERED
+    return call_is_included(engine_name, usage)
 
 
 def record_llm_call(
@@ -202,6 +196,7 @@ def record_llm_call(
     stage: Optional[str] = None,
     route_id: Optional[str] = None,
     project_id: Optional[str] = None,
+    billing: Optional[str] = None,
 ) -> None:
     """Insert one llm_calls row from the call result + the ambient context. Never raises.
     `route_id` / `project_id` name the model router's decision and project when the caller
@@ -213,7 +208,11 @@ def record_llm_call(
         ctx = dict(_llm_ctx.get())
         if project_id and not ctx.get("project_id"):
             ctx["project_id"] = project_id
-        u = usage or {}
+        u = dict(usage or {})
+        # The credential the adapter ran on, for a row whose usage carries no stamp (a failed
+        # call): the same answer its successful calls give (included_spend.call_is_included).
+        if billing and not u.get("billing"):
+            u["billing"] = billing
         model = str(u.get("model") or "")
         # Self-reported cost (Claude CLI) is exact; otherwise the price table estimated it,
         # and a model absent from the table means the DEFAULT_PRICE fallback was used.

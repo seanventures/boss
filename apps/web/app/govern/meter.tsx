@@ -56,6 +56,36 @@ function capIn(seconds: number | null): string {
   return h >= 1 ? `${h}h` : `${Math.max(1, Math.round(seconds / 60))}m`;
 }
 
+/** Money spent this period, the same figure get_costs gives (included_spend.ledger_spend): what
+ *  the caps count plus build money no cap counts (Community builds are not metered), and what
+ *  subscription calls ran beside it — at list price, never money. */
+function Spent({ ledger, fallbackIncluded }: { ledger?: MeterData["ledger"]; fallbackIncluded: number }) {
+  const included = ledger ? ledger.included_usd_micros : fallbackIncluded;
+  if (!ledger && included <= 0) return null;
+  return (
+    <div className="gv-included" data-testid="gv-spent">
+      {ledger ? (
+        <span data-testid="gv-spent-money"
+              title={`On API keys: ${ledger.metered_calls} calls. Counted by caps ${money(ledger.under_cap_usd_micros)}.`}>
+          Spent {money(ledger.money_usd_micros)}
+        </span>
+      ) : null}
+      {ledger && ledger.not_under_cap_usd_micros > 0 ? (
+        <span data-testid="gv-spent-uncapped" title="Build spend this install's budget does not meter, so no cap stops it">
+          {" · "}Builds {money(ledger.not_under_cap_usd_micros)} not capped ⓘ
+        </span>
+      ) : null}
+      {included > 0 ? (
+        <span data-testid="gv-included"
+              title={ledger ? `Ran on a subscription (${ledger.included_calls} calls): an estimate at list price. Not money, not counted.`
+                : "Ran on a subscription. Not money, not counted."}>
+          {ledger ? ` · Included in plan ~${money(included)}` : `Included in plan ${money(included)}`}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
 export function GovernMeter({ meter, error, onRetry }: { meter: MeterData | null; error: string; onRetry: () => void }) {
   if (!meter) {
     return (
@@ -124,11 +154,7 @@ export function GovernMeter({ meter, error, onRetry }: { meter: MeterData | null
           <Bar cap={p.cap_usd_micros} actual={p.actual_usd_micros} reserved={p.reserved_usd_micros} thin testid={`gv-bar-${p.period}`} />
         </div>
       ))}
-      {meter.included_in_subscription_usd_micros > 0 ? (
-        <div className="gv-included" data-testid="gv-included" title="Ran on a subscription. Not money, not counted.">
-          Included in plan {money(meter.included_in_subscription_usd_micros)}
-        </div>
-      ) : null}
+      <Spent ledger={meter.ledger} fallbackIncluded={meter.included_in_subscription_usd_micros} />
     </section>
   );
 }

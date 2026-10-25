@@ -4085,7 +4085,17 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         pid = project_id
         days = int(args.get("days") or 7)
         limit = int(args.get("limit") or 25)
+        from ..services.included_spend import LLM_INCLUDED_SQL, LLM_MONEY_SQL, ledger_spend
+
         with ctx.begin() as c:
+            # MONEY AND ESTIMATE ARE TWO FIGURES, and the money is Govern's (brec_85de2541).
+            # This summed every row's list-price value, subscription calls included, and called
+            # it spend ($749), while Govern counted only the budget ledger ($8.47). Both read
+            # `ledger_spend` now: what was spent (and how much of it no cap counts), with what
+            # subscriptions ran beside it as an estimate.
+            since = c.execute(_text("SELECT now() - make_interval(days => :d)"),
+                              {"d": days}).scalar()
+            ledger = ledger_spend(c, pid, since)
             # THE TOTAL IS NOT THE SUM OF THE PAGE.
             #
             # total_cost_usd used to be sum(runs), and runs is LIMIT-ed to the most recent 25.
@@ -4097,8 +4107,7 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
             # The total is now its own aggregate over the whole window, independent of limit.
             totals = c.execute(
                 _text(
-                    "SELECT COALESCE(sum(cost_usd_micros), 0) AS micros, "
-                    "       COALESCE(sum(total_tokens), 0)   AS tokens, "
+                    "SELECT COALESCE(sum(total_tokens), 0)   AS tokens, "
                     "       count(*)                          AS calls, "
                     "       count(DISTINCT code_task_run_id)  AS runs "
                     "FROM llm_calls "
@@ -4110,7 +4119,8 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
             rows = c.execute(
                 _text(
                     "SELECT l.code_task_run_id AS run_id, r.title, r.status, "
-                    "       sum(l.cost_usd_micros) AS micros, sum(l.total_tokens) AS tokens, "
+                    f"       sum({LLM_MONEY_SQL}) AS micros, sum({LLM_INCLUDED_SQL}) AS est, "
+                    "       sum(l.total_tokens) AS tokens, "
                     "       count(*) AS calls, max(l.created_at) AS last_call "
                     "FROM llm_calls l LEFT JOIN code_task_runs r ON r.id = l.code_task_run_id "
                     "WHERE l.project_id = :p "
@@ -4124,7 +4134,9 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         for r in rows:
             d = _json_safe(dict(r))
             d["cost_usd"] = round(int(r["micros"] or 0) / 1_000_000, 4)
+            d["included_estimate_usd"] = round(int(r["est"] or 0) / 1_000_000, 4)
             d.pop("micros", None)
+            d.pop("est", None)
             runs.append(d)
         total_runs = int(totals.get("runs") or 0)
         return {
@@ -4132,7 +4144,13 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
             "window_days": days,
             # Say the window in words too: the model was labelling a 7-day figure "this month".
             "window_description": f"the last {days} days (not a calendar month)",
-            "total_cost_usd": round(int(totals.get("micros") or 0) / 1_000_000, 4),
+            # Money spent: the same figure Govern's meter shows for the same window.
+            "total_cost_usd": round(ledger["money_usd_micros"] / 1_000_000, 4),
+            "not_under_a_cap_usd": round(ledger["not_under_cap_usd_micros"] / 1_000_000, 4),
+            # What subscription / local calls ran, at list price. NOT money; in no total.
+            "included_estimate_usd": round(ledger["included_usd_micros"] / 1_000_000, 4),
+            "calls_by_credential": {"api_key_or_metered": ledger["metered_calls"],
+                                    "subscription_or_local": ledger["included_calls"]},
             "total_tokens": int(totals.get("tokens") or 0),
             "total_llm_calls": int(totals.get("calls") or 0),
             "runs_in_window": total_runs,
@@ -4140,7 +4158,9 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
             "runs_shown": len(runs),
             "runs_truncated": total_runs > len(runs),
             "note": (
-                "total_cost_usd is the WHOLE window and is authoritative. `runs` is only the "
+                "total_cost_usd is the money spent over the WHOLE window (Govern's figure) and "
+                "is authoritative; included_estimate_usd is what subscription calls would have "
+                "cost and is not money. `runs` is only the "
                 f"{len(runs)} most recent of {total_runs} — never sum `runs` and call it the "
                 "total. Report the window: this is the last "
                 f"{days} days, which is not the same as a calendar month."

@@ -61,6 +61,14 @@ export type Meter = {
   periods: Period[];
   legacy_financial_hold?: LegacyFinancialHold | null;
   legacy_provider_hold?: LegacyProviderHold | null;
+  /** Money spent this period, one definition with get_costs (included_spend.ledger_spend). */
+  ledger?: Ledger;
+};
+/** under_cap (what caps count) + not_under_cap (build money no cap counts) = money spent;
+ *  included is subscription calls at list price — an estimate, never money. */
+export type Ledger = {
+  money_usd_micros: number; under_cap_usd_micros: number; not_under_cap_usd_micros: number;
+  included_usd_micros: number; metered_calls: number; included_calls: number;
 };
 export type TokenPolicy = {
   stage: string; max_total_tokens_per_call: number | null; max_tokens_per_day: number | null;
