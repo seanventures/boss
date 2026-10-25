@@ -56,14 +56,23 @@ export function cookieWith(raw: string | null | undefined, area: string): string
  * fast however many areas an earlier tab opened. Everything else renders what the session
  * has opened, so a refresh never unmounts an area the operator already has on screen.
  */
+/**
+ * AREAS THE SERVER FETCHES NOTHING FOR: each reads its own views in the browser, only once it is
+ * on screen (the Knowledge Graph: lib/kg-view.ts, useOnScreen). Rendering them costs the server
+ * nothing, so they are in every render and opening one is the CSS reveal — never the
+ * whole-page round trip that held NorthPeak Bank's graph on "Loading Knowledge Graph…" for ~20 s
+ * while every other opened area's feeds were fetched again (tester round 2).
+ */
+export const CLIENT_FED_AREAS: readonly string[] = ["knowledge"];
+
 export function areasToRender(input: {
   requested: string;
   cookie: string | null | undefined;
   fullDocument: boolean;
 }): Set<string> {
   const requested = AREA_ID.test(input.requested) ? input.requested : "overview";
-  if (input.fullDocument) return new Set([requested]);
-  return new Set([requested, ...parseLoadedAreas(input.cookie)]);
+  if (input.fullDocument) return new Set([requested, ...CLIENT_FED_AREAS]);
+  return new Set([requested, ...parseLoadedAreas(input.cookie), ...CLIENT_FED_AREAS]);
 }
 
 /**

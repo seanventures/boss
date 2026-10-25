@@ -333,8 +333,10 @@ class ModelGatewayService:
             if unresolved:
                 decision_id = create_blocking_decision(
                     connection, project_id, None,
-                    f"Reconcile expired model invocation {unresolved[0]}",
-                    {"action": "verify_provider_outcome_before_retry", "lease_id": row['id']},
+                    # Words, not ids (tester round 2): the invocation is in the payload.
+                    "Check whether a model call that timed out was charged before retrying it",
+                    {"action": "verify_provider_outcome_before_retry", "lease_id": row['id'],
+                     "invocation_id": unresolved[0]},
                     {"budget_reservation_id": row['budget_reservation_id']},
                     'model_outcome_unknown',
                 )

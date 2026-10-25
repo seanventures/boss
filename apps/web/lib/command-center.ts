@@ -9,6 +9,7 @@ import type { RunAction } from "../app/delivery-workflows-ui";
  *
  * Pure helpers here (hrefs, labels, durations) so the rules are testable without a browser.
  */
+import { withoutIds } from "./actor-words";
 import { API_URL, authHeaders } from "./client";
 import type { AttentionItem, Mission } from "./agents-live-board";
 
@@ -226,7 +227,7 @@ export function attentionFromNeedsYou(item: NeedsYouItem): AttentionItem {
     id, kind: item.kind,
     decisionKind: (item.decision_kind as AttentionItem["decisionKind"]) ?? undefined,
     decisionId: item.decision_id ?? undefined,
-    title: item.title, detail: item.detail, whatToDo: item.what_to_do ?? undefined,
+    title: withoutIds(item.title), detail: withoutIds(item.detail), whatToDo: item.what_to_do ?? undefined,
     roleKey: item.role_key ?? null,
     run: item.run_id ? { id: item.run_id, subject: item.workflow_name ?? "", stepId: item.step_id ?? undefined } : undefined,
     actions: [],

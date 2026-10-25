@@ -89,7 +89,8 @@ _NOUNS = {"calls": ("call", "calls"), "imports": ("import", "imports"),
           "evidenced_by": ("rule", "rules"), "about": ("learning", "learnings"),
           "changed": ("learning", "learnings")}
 #: Code attrs too large or internal for the panel (a file's parse facts).
-_HIDDEN_ATTRS = frozenset({"facts", "names", "content_hash"})
+#: source_id is a run's raw id: the run is named, and linked by "Open in Factory run".
+_HIDDEN_ATTRS = frozenset({"facts", "names", "content_hash", "source_id"})
 #: A file node's attrs are its parse facts: never read them where only the node is drawn.
 _NODE_COLS = ("n.id, n.kind, n.node_key, n.name, n.trust_tier, n.path, n.repo, n.valid_to, "
               "n.created_by, n.recorded_at, n.first_seen, "
@@ -899,34 +900,75 @@ def _usage(connection: Connection, project_id: str, node_id: str) -> dict[str, i
     return {"shown": int(row[0]), "consulted_runs": int(row[1]), "reused_runs": int(row[2])}
 
 
+#: An audit action key said as a person reads it: knowledge.rule.approve → "approved".
+_DONE_WORD = {"record": "recorded", "propose": "proposed", "approve": "approved", "edit": "edited",
+              "reject": "rejected", "supersede": "superseded", "promote": "promoted",
+              "forget": "forgotten", "index": "indexed", "indexed": "indexed",
+              "index_failed": "failed to index"}
+#: The audit actions that ARE the creation the first event already says.
+_CREATION = frozenset({"record", "propose", "index", "indexed"})
+#: Said for an item recorded before BOSS kept who recorded it (BOSSAPP-768 round 2).
+NOT_RECORDED = "an agent (not recorded)"
+
+
+def action_words(action: str) -> str:
+    last = str(action or "").rsplit(".", 1)[-1]
+    return _DONE_WORD.get(last, last.replace("_", " "))
+
+
+def _who(layer: Optional[str], by_kind: str, prov: Mapping[str, Any], created_by: str) -> str:
+    """WHO ADDED IT, in words, for every layer: the code index for code; an agent by its name
+    (and role) for what an agent wrote — "BOSS (general)" when nobody was addressed, "an agent (not
+    recorded)" for an item written before BOSS kept the name; a person otherwise. Never an event
+    key, and never "the code index" for a rule or a learning."""
+    if layer == "code":
+        return "the code index"
+    name = str(prov.get("agent_name") or "").strip()
+    role = str(prov.get("agent_role") or "").strip()
+    if by_kind == "person":
+        return created_by
+    if name:
+        return name
+    return role.replace("_", " ") if role and role != "boss" else NOT_RECORDED
+
+
 def _provenance(connection: Connection, project_id: str, row: Mapping[str, Any],
                 attrs: Mapping[str, Any]) -> dict[str, Any]:
     prov = _attrs(attrs.get("provenance"))
     review = _attrs(attrs.get("review"))
     created_by = str(row.get("created_by") or "system")
-    if created_by == "system":
+    layer = product_layer(str(row["kind"]))
+    if layer == "code":
         by_kind = "system"
-    elif prov.get("agent_role") and created_by == prov.get("agent_role"):
+    elif prov.get("agent_role") or prov.get("agent_name") or created_by == "system":
+        # Rules and learnings are written by agents (BOSS itself included); one without a recorded
+        # name predates attribution and is said so, never as the code index.
+        by_kind = "agent"
+    elif created_by == prov.get("agent_role"):
         by_kind = "agent"
     else:
         by_kind = "person"
+    who = _who(layer, by_kind, prov, created_by)
     at = prov.get("at") or prov.get("proposed_at") or _iso(row.get("first_seen") or row.get("recorded_at"))
-    layer = product_layer(str(row["kind"]))
     events: list[dict[str, Any]] = [{
-        "at": at, "by": prov.get("agent_name") or prov.get("agent_role") or (None if by_kind == "system" else created_by),
+        "at": at, "by": None if layer == "code" else who,
         "what": "indexed" if layer == "code" else "proposed" if layer == "rules" else "recorded"}]
     for action, when, detail, actor in connection.execute(text(
             "SELECT action, created_at, detail, actor_kind FROM kg_audit WHERE project_id = :p AND entity_id = :id "
             "ORDER BY created_at LIMIT 50"), {"p": project_id, "id": row["id"]}).all():
+        if str(action or "").rsplit(".", 1)[-1] in _CREATION:
+            continue
         detail = _attrs(detail)
-        events.append({"at": _iso(when), "what": str(action),
-                       "by": detail.get("actor_ref") or detail.get("actor") or actor})
+        by = detail.get("actor_ref") or detail.get("actor")
+        events.append({"at": _iso(when), "what": action_words(str(action)),
+                       "by": by if by and by != "system" else (who if actor in ("agent", "system") else actor)})
     if review.get("at") and not any(e["at"] == review.get("at") for e in events):
         events.append({"at": review.get("at"), "what": str(review.get("decision") or rule_status(row)),
                        "by": review.get("by"), "by_name": review.get("by_name")})
     events.sort(key=lambda e: str(e["at"] or ""))
     approved = layer == "rules" and rule_status(row) == "approved"
-    out: dict[str, Any] = {"created_by": created_by, "created_by_kind": by_kind, "at": at, "events": events}
+    out: dict[str, Any] = {"created_by": created_by, "created_by_kind": by_kind, "at": at, "events": events,
+                           "who": who}
     for key in ("agent_role", "agent_name", "agent_id", "run_id", "workflow_run_id", "code_task_run_id", "step", "model_id"):
         if prov.get(key) is not None:
             out[key] = prov.get(key)
@@ -1105,6 +1147,10 @@ def _item_tree(connection: Connection, project_id: str, tab: str, parent: Option
             label, parent_key = parts[2].replace("_", " ").capitalize(), f"rules:{parts[1]}"
         else:
             label = parts[1].capitalize() if tab == "rules" else _PLURAL.get(parts[1], parts[1])
+            if tab == "learning" and parts[1] in ANCHOR_KINDS:
+                # A run (an incident, a PR) is where something was learned, not a learning
+                # (tester round 2: "3 learned" beside four groups).
+                label = f"{label} it came from"
             parent_key = None
         out = {"key": key, "parent_key": parent_key, "level": "group", "node_id": None, "label": label,
                "kind": "group", "layer": layer, "count": count, "has_children": count > 0}

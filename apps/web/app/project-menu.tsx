@@ -3,18 +3,19 @@
 import React, { useEffect, useRef, useState } from "react";
 
 import { GatedButton } from "../components/gated";
-import { ActionForm } from "./client-forms";
 import { consoleHref } from "./console-href";
-import { createProjectAction } from "./project-actions";
+import { EMPTY_DRAFT, NewProjectSheet, type NewProjectDraft } from "./new-project-sheet";
 import { ArchiveDialog, ArchivedNotice, ArchivedProjects, useArchived } from "./project-archive";
 import type { ProjectType } from "@boss/api-client";
-import { SubmitButton } from "./submit-button";
 
 export type ProjectMenuItem = { id: string; name: string; type?: ProjectType };
 
 /** Where a project opens: the org's own project is the console with no ?project_id=. */
 export function projectHref(id: string, homeId: string): string {
-  return consoleHref({ project_id: id === homeId ? undefined : id, task: undefined, run: undefined });
+  // The AREA STAYS (tester round 2: switching project on the Knowledge Graph landed on the Command
+  // Center); what names one project's records (a node, a scan, a build) does not.
+  return consoleHref({ project_id: id === homeId ? undefined : id, task: undefined, run: undefined,
+                       kg_node: undefined, kg_scan: undefined, build: undefined, role: undefined });
 }
 
 /** Where a new knowledge-graph project opens: its Knowledge Graph setup (kg-setup.tsx). */
@@ -24,12 +25,7 @@ export function knowledgeSetupHref(id: string, homeId: string): string {
 }
 
 /** The two kinds of project, said in one line each (POST /v1/projects `project_type`). */
-export const PROJECT_TYPES: { key: ProjectType; label: string; line: string }[] = [
-  { key: "app", label: "Build an app",
-    line: "Agents plan, build, test and ship an app through gated pull requests." },
-  { key: "knowledge_graph", label: "Knowledge Graph for an existing codebase",
-    line: "Import a repository, map its code, and have agents find its business rules and learn as they work." },
-];
+export { PROJECT_TYPES } from "./new-project-sheet";
 
 /** The short name a project's type goes by in a list (none for an app: it is the usual kind). */
 export function projectTypeBadge(type: ProjectType | undefined): string | null {
@@ -61,7 +57,8 @@ export function ProjectMenu({ projects, activeId, homeId, orgId }: {
   orgId?: string;
 }) {
   const [creating, setCreating] = useState(false);
-  const [newType, setNewType] = useState<ProjectType>("app");
+  // The draft is the menu's, not the sheet's form: a passkey prompt or a refused step-up keeps it.
+  const [draft, setDraft] = useState<NewProjectDraft>(EMPTY_DRAFT);
   const [archiving, setArchiving] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
   const active = projects.find((p) => p.id === activeId);
@@ -104,54 +101,23 @@ export function ProjectMenu({ projects, activeId, homeId, orgId }: {
               {/* A real load (data-console-load): the home project's link names no project, so the
                   shell could not tell it from an in-console reveal of the project on screen. */}
               <a href={projectHref(p.id, homeId)} aria-current={p.id === activeId ? "page" : undefined}
-                 data-testid={`project-menu-${p.id}`} data-console-load="" onClick={close}>
+                 data-testid={`project-menu-${p.id}`} data-console-load=""
+                 onClick={(e) => {
+                   // Read the URL at the press, not at render: a server-rendered href has no query
+                   // (no window), and hydration does not rewrite it, so the area was dropped.
+                   if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+                   e.preventDefault(); close(); window.location.assign(projectHref(p.id, homeId));
+                 }}>
                 {p.name}
                 {projectTypeBadge(p.type) ? <span className="bx-project-menu-type" data-testid={`project-menu-type-${p.id}`}>{projectTypeBadge(p.type)}</span> : null}
               </a>
             </li>
           ))}
         </ul>
-        {creating ? (
-          <ActionForm action={createProjectAction} permission="project:create"
-                      data-testid="new-project-form"
-                      onResult={(r) => {
-                        const id = r.ok ? r.data?.projectId : null;
-                        if (typeof id !== "string") return;
-                        // A knowledge-graph project opens on its setup: import, team, first scan.
-                        window.location.assign(r.data?.projectType === "knowledge_graph"
-                          ? knowledgeSetupHref(id, homeId) : projectHref(id, homeId));
-                      }}>
-            <fieldset className="bx-project-type" data-testid="new-project-type">
-              <legend>What is it for?</legend>
-              {PROJECT_TYPES.map((t) => (
-                <label key={t.key} className="bx-project-type-option" data-checked={newType === t.key || undefined}
-                       data-testid={`new-project-type-${t.key}`}>
-                  <input type="radio" name="project_type" value={t.key} checked={newType === t.key}
-                         onChange={() => setNewType(t.key)} />
-                  <span className="bx-project-type-text">
-                    <b>{t.label}</b>
-                    <small>{t.line}</small>
-                  </span>
-                </label>
-              ))}
-            </fieldset>
-            <label>Name<input name="name" required maxLength={120} autoFocus
-                              placeholder={newType === "knowledge_graph" ? "e.g. Fineract knowledge graph" : undefined} /></label>
-            <label>Description<input name="description" maxLength={2000} placeholder="Optional" /></label>
-            <div className="bx-project-menu-actions">
-              <SubmitButton type="submit" pendingLabel="Creating…"
-                            title={newType === "knowledge_graph" ? "Create the project and open its setup: import the code, assign the team, a first scan" : "Create the project and open it"}>
-                {newType === "knowledge_graph" ? "Create and set up" : "Create"}
-              </SubmitButton>
-              <button type="button" onClick={() => { setCreating(false); setNewType("app"); }}>Cancel</button>
-            </div>
-          </ActionForm>
-        ) : (
-          <GatedButton permission="project:create" className="bx-project-menu-new" title={NEW_PROJECT_TIP}
-                       data-testid="new-project" onClick={() => setCreating(true)}>
-            + New project
-          </GatedButton>
-        )}
+        <GatedButton permission="project:create" className="bx-project-menu-new" title={NEW_PROJECT_TIP}
+                     data-testid="new-project" onClick={() => { close(); setCreating(true); }}>
+          + New project
+        </GatedButton>
         {active ? (isHome ? (
           <button type="button" className="bx-project-menu-new bx-project-menu-archive" aria-disabled="true"
                   title={HOME_TIP} data-testid="archive-project" onClick={(event) => event.preventDefault()}>
@@ -176,6 +142,14 @@ export function ProjectMenu({ projects, activeId, homeId, orgId }: {
         ) : null}
       </div>
     </details>
+    {creating ? (
+      <NewProjectSheet draft={draft} onDraft={setDraft} onClose={() => setCreating(false)}
+                       onCreated={(id, type) => {
+                         setDraft(EMPTY_DRAFT);
+                         // A knowledge-graph project opens on its setup: import, team, first scan.
+                         window.location.assign(type === "knowledge_graph" ? knowledgeSetupHref(id, homeId) : projectHref(id, homeId));
+                       }} />
+    ) : null}
     {archiving && active ? (
       <ArchiveDialog projectId={active.id} name={active.name} onClose={() => setArchiving(false)}
                      onArchived={goHome} />

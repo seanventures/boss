@@ -85,12 +85,23 @@ export function ProjectTree({ projectId, actor, tab, onTab, query, selectedId, o
     return r.ok ? r.data.rows : [];
   }, [who, tab]);
 
-  // A new tab (or project) starts from its roots.
+  // A new tab (or project) starts from its roots. A REFRESH (something new was learned or
+  // approved) keeps what is open and re-reads it in place (tester round 2: a live update while
+  // opening Rules › Approved › Calculation collapsed the whole Approved group).
+  const lastLoad = useRef<typeof load | null>(null);
+  const openRef = useRef(open);
+  openRef.current = open;
   useEffect(() => {
-    setPages(new Map());
-    setOpen(new Set());
-    setCursor(null);
+    if (lastLoad.current !== load) {
+      lastLoad.current = load;
+      setPages(new Map());
+      setOpen(new Set());
+      setCursor(null);
+      void load(null);
+      return;
+    }
     void load(null);
+    for (const key of openRef.current) void load(key);
   }, [load, refreshKey]);
 
   // The search: one call answers the matches plus their ancestors (§3 tree/children with q).

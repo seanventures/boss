@@ -10564,3 +10564,15 @@ BEGIN
   END IF;
 END $kgr_age$;
 -- ================================ end BOSSAPP-KGR rules + usage =============================
+
+-- BEGIN run nodes by name (BOSSAPP-768 round 2) ----------------------------------------------------
+-- A run node is named for its run (learning_writeback.run_title), never "Run wfr_…": the ones written
+-- before that are renamed once from the run's own title and start time. Idempotent.
+UPDATE kg_nodes n SET name = left(regexp_replace(coalesce(nullif(r.input->>'title', ''), d.name), '\s+', ' ', 'g'), 90)
+       || ' · ' || to_char(r.created_at, 'Mon DD, HH24:MI')
+  FROM workflow_runs r LEFT JOIN workflow_definitions d ON d.id = r.workflow_definition_id
+ WHERE n.kind = 'run' AND n.name = 'Run ' || r.id AND coalesce(nullif(r.input->>'title', ''), d.name) IS NOT NULL;
+UPDATE kg_nodes n SET name = left(regexp_replace(c.title, '\s+', ' ', 'g'), 90) || ' · ' || to_char(c.created_at, 'Mon DD, HH24:MI')
+  FROM code_task_runs c
+ WHERE n.kind = 'run' AND n.name = 'Run ' || c.id AND nullif(c.title, '') IS NOT NULL;
+-- END run nodes by name ------------------------------------------------------------------------------

@@ -1,4 +1,5 @@
 /** Presentation priority over the existing Command Center records; no new readiness authority. */
+import { withoutIds } from "../../lib/actor-words";
 import type { AttentionItem } from "../../lib/agents-live-board";
 import { appNeed, shelfState, type CcApp } from "../../lib/command-center-apps";
 import type { CommandCenterView } from "../../lib/command-center-view";
@@ -26,8 +27,16 @@ function attentionAction(item: AttentionItem, kind: NextAction["kind"]): NextAct
     label: kind === "setup" ? item.fix?.label || "Finish setup" : "Review", patch };
 }
 
+/** The hero's one action, said in words: a record's id is never its headline (tester round 2:
+ *  "Reconcile expired model invocation minv_5733948397584a8182c7"). */
 export function nextAction(view: CommandCenterView | null, attention: AttentionItem[],
                            apps: CcApp[] | null, reachable: boolean, appsError?: string | null): NextAction {
+  const action = pickNextAction(view, attention, apps, reachable, appsError);
+  return { ...action, title: withoutIds(action.title), detail: withoutIds(action.detail) };
+}
+
+function pickNextAction(view: CommandCenterView | null, attention: AttentionItem[],
+                        apps: CcApp[] | null, reachable: boolean, appsError?: string | null): NextAction {
   if (!view || !reachable || !view.projectId || !view.generatedAt) return { kind: "unknown", title: "Current work is unavailable",
     detail: "Refresh to check setup, decisions and results.", label: "Refresh" };
   if (view.budgetRefusal) return { kind: "blocked", title: view.budgetRefusal.title,

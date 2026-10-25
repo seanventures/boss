@@ -15,7 +15,11 @@ import "./kg.css";
 
 function n(v: number): string { return v.toLocaleString("en-US"); }
 
-export function KgLifecycleCard({ projectId, actor, orgId }: { projectId: string; actor: string; orgId?: string | null }) {
+export function KgLifecycleCard({ projectId, actor, orgId, projectType }: {
+  projectId: string; actor: string; orgId?: string | null;
+  /** A knowledge-graph project shows the card from the first paint; any other only once it has a graph. */
+  projectType?: string;
+}) {
   const w = useMemo(() => ({ projectId, actor }), [projectId, actor]);
   const [setup, setSetup] = useState<KgSetupResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -30,6 +34,10 @@ export function KgLifecycleCard({ projectId, actor, orgId }: { projectId: string
   const href = (params: Record<string, string | undefined>) =>
     consoleHref({ area: "knowledge", kg_tab: undefined, ...(orgId ? { org: orgId } : {}), ...params });
 
+  // SHOWN FOR ANY PROJECT WITH A CODE GRAPH (tester round 2: NorthPeak Bank had 51k nodes and no
+  // card): a knowledge-graph project always, an app project once something is indexed.
+  const isKg = (setup?.project_type ?? projectType) === "knowledge_graph";
+  if (setup ? !(isKg || setup.has_graph) : !isKg) return null;
   if (!setup) {
     return (
       <section className="kg-life" data-testid="kg-lifecycle" aria-busy={!error}>

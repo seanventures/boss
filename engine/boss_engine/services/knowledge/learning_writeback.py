@@ -442,10 +442,43 @@ def _anchor(connection: Connection, project_id: str, kind: str, key: str, name: 
                               attrs=attrs or {})
 
 
+def run_title(connection: Connection, ref: str) -> str:
+    """A RUN BY ITS NAME, never its id (tester round 2: the tree, the canvas and the panel said
+    "Run wfr_6267…"): a workflow run's title (else its workflow's name), a build's title, then
+    when it started — "Business rules scan: loan repayment… · Oct 25, 02:50"."""
+    ref = str(ref or "")
+    row = None
+    try:
+        with connection.begin_nested():
+            if ref.startswith("wfr"):
+                row = connection.execute(text(
+                    "SELECT coalesce(nullif(r.input->>'title', ''), d.name) AS title, r.created_at "
+                    "FROM workflow_runs r LEFT JOIN workflow_definitions d ON d.id = r.workflow_definition_id "
+                    "WHERE r.id = :r"), {"r": ref}).mappings().first()
+            else:
+                row = connection.execute(text(
+                    "SELECT title, created_at FROM code_task_runs WHERE id = :r"), {"r": ref}).mappings().first()
+    except Exception:  # noqa: BLE001 — a name is a label, never a reason to refuse
+        row = None
+    if not row or not row["title"]:
+        return "A run" + (f" · {row['created_at']:%b %d, %H:%M}" if row and row.get("created_at") else "")
+    title = " ".join(str(row["title"]).split())
+    title = title if len(title) <= 90 else title[:89].rstrip() + "…"
+    return f"{title} · {row['created_at']:%b %d, %H:%M}" if row.get("created_at") else title
+
+
 def run_anchor(connection: Connection, project_id: str, ref: str) -> str:
-    """The run node a learning or a use hangs on (``run:<id>``, the key ingest captures under);
-    an existing one is kept as it is."""
-    return _anchor(connection, project_id, "run", f"run:{ref}", f"Run {ref}", {"source_id": ref})
+    """The run node a learning or a use hangs on (``run:<id>``, the key ingest captures under),
+    named for the run (run_title). One still named by its raw id is renamed."""
+    node_id = _anchor(connection, project_id, "run", f"run:{ref}", run_title(connection, ref), {"source_id": ref})
+    rename_raw_run(connection, project_id, node_id, ref)
+    return node_id
+
+
+def rename_raw_run(connection: Connection, project_id: str, node_id: str, ref: str) -> None:
+    connection.execute(text(
+        "UPDATE kg_nodes SET name = :n WHERE project_id = :p AND id = :id AND name = :raw"),
+        {"n": run_title(connection, ref), "p": project_id, "id": node_id, "raw": f"Run {ref}"})
 
 
 # --- the write ------------------------------------------------------------------------------------

@@ -88,11 +88,16 @@ describe("the project menu", () => {
     expect(button.getAttribute("data-can")).toBe("yes");
     expect(button.getAttribute("title")).toMatch(/new project in this organization/i);
     await act(async () => button.click());
-    const f = el.querySelector('[data-testid="new-project-form"]')!;
+    // A SHEET, outside the menu (round 2: the dropdown cut the type's text and scrolled sideways).
+    const f = document.querySelector('[data-testid="new-project-form"]')!;
+    expect(el.contains(f)).toBe(false);
+    expect(f.getAttribute("role")).toBe("dialog");
     expect(f.getAttribute("data-permission")).toBe("project:create");
     expect(f.querySelector<HTMLInputElement>('input[name="name"]')!.required).toBe(true);
     expect(f.querySelector<HTMLInputElement>('input[name="description"]')!.required).toBe(false);
     expect(f.querySelector('button[type="submit"]')!.textContent).toBe("Create");
+    expect(f.querySelector('button[type="submit"]')!.className).toBe("ag-btn ag-btn-primary");
+    expect(f.querySelector('[data-testid="new-project-cancel"]')!.className).toBe("ag-btn");
   });
 
   it("is refused, with the reason, to a member without project:create", async () => {
@@ -101,7 +106,7 @@ describe("the project menu", () => {
     expect(button.getAttribute("aria-disabled")).toBe("true");
     expect(button.getAttribute("title")).toBe(needsWords("project:create"));
     await act(async () => button.click());
-    expect(el.querySelector('[data-testid="new-project-form"]')).toBeNull();
+    expect(document.querySelector('[data-testid="new-project-form"]')).toBeNull();
   });
 
   it("sits in the top bar beside the organization, on the org's own projects", () => {
@@ -150,13 +155,39 @@ describe("a project's type (BOSSAPP-768 project flow)", () => {
   it("New project asks what it is for — an app, or a knowledge graph of an existing codebase", async () => {
     const el = await mount("admin");
     await act(async () => el.querySelector<HTMLButtonElement>('[data-testid="new-project"]')!.click());
-    const radios = [...el.querySelectorAll<HTMLInputElement>('[data-testid="new-project-type"] input[name="project_type"]')];
+    const radios = [...document.querySelectorAll<HTMLInputElement>('[data-testid="new-project-type"] input[name="project_type"]')];
     expect(radios.map((r) => r.value)).toEqual(["app", "knowledge_graph"]);
     expect(radios[0].checked).toBe(true);
-    expect([...el.querySelectorAll('[data-testid="new-project-type"] b')].map((b) => b.textContent))
+    expect([...document.querySelectorAll('[data-testid="new-project-type"] b')].map((b) => b.textContent))
       .toEqual(["Build an app", "Knowledge Graph for an existing codebase"]);
     await act(async () => radios[1].click());
-    expect(el.querySelector('[data-testid="new-project-form"] button[type="submit"]')!.textContent).toBe("Create and set up");
+    expect(document.querySelector('[data-testid="new-project-form"] button[type="submit"]')!.textContent).toBe("Create and set up");
+  });
+
+  it("a refused or cancelled step-up keeps what was typed, and says why", async () => {
+    // Round 2: cancelling the passkey closed the form and lost the name.
+    createProject.mockRejectedValue(new BossApiError("conflict", 409, {
+      detail: { error: "project_exists", slug: "fineract-map", project_id: null } }));
+    const el = await mount("admin");
+    await act(async () => el.querySelector<HTMLButtonElement>('[data-testid="new-project"]')!.click());
+    const name = document.querySelector<HTMLInputElement>('[data-testid="new-project-form"] input[name="name"]')!;
+    await act(async () => {
+      const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+      set.call(name, "Fineract map");
+      name.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => document.querySelector<HTMLInputElement>('[data-testid="new-project-type-knowledge_graph"] input')!.click());
+    // The menu closing around it (a passkey prompt's press outside) does not touch the sheet.
+    await act(async () => document.body.dispatchEvent(new Event("pointerdown", { bubbles: true })));
+    await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="new-project-create"]')!.click());
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    const f = document.querySelector('[data-testid="new-project-form"]')!;
+    expect(f).not.toBeNull();
+    expect(f.querySelector<HTMLInputElement>('input[name="name"]')!.value).toBe("Fineract map");
+    expect(f.querySelector<HTMLInputElement>('[data-testid="new-project-type-knowledge_graph"] input')!.checked).toBe(true);
+    expect(f.querySelector('[data-testid="new-project-error"]')!.textContent).toBe("That name is taken. Choose another.");
+    await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="new-project-cancel"]')!.click());
+    expect(document.querySelector('[data-testid="new-project-form"]')).toBeNull();
   });
 
   it("the action sends the type, and a knowledge-graph project is handed back as one", async () => {

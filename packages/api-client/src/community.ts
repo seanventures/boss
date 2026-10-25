@@ -5510,6 +5510,9 @@ export type KgProvenance = {
   agent_name?: string | null;
   /** The agent's Passport id (roles.agent_id); absent for BOSS itself ("BOSS (general)"). */
   agent_id?: string | null;
+  /** Who added it, in words (view._who): the code index for code, the agent's name, "BOSS
+   *  (general)", or "an agent (not recorded)" for an item written before names were kept. */
+  who?: string | null;
   run_id?: string | null;
   workflow_run_id?: string | null;
   code_task_run_id?: string | null;
@@ -5672,6 +5675,8 @@ export type KgRulesResponse = {
   items: KgRule[];
   counts: Record<KgRuleStatus, number>;
   scan_id: string | null;
+  /** Every scan that proposed rules here, by what it read and when (never its raw id). */
+  scans?: { id: string; label: string; rules: number }[];
 };
 
 /** POST /v1/knowledge/view/rules/{id}/approve · /edit · /reject (needs knowledge:review). */

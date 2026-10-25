@@ -88,7 +88,13 @@ export function RulesReview({ projectId, actor, orgId, archived, locked, initial
   }
 
   const items = data?.items ?? [];
-  const scans = [...new Set([...(data?.items ?? []).map((r) => r.scan_id).filter((s): s is string => !!s), ...(scan ? [scan] : [])])];
+  const scans = [...new Set([...(data?.scans ?? []).map((x) => x.id),
+    ...(data?.items ?? []).map((r) => r.scan_id).filter((s): s is string => !!s), ...(scan ? [scan] : [])])];
+  // A scan by what it read and when (the server's words), never its raw id.
+  const scanLabel = (id: string) => {
+    const known = data?.scans?.find((x) => x.id === id);
+    return known ? `${known.label} (${known.rules} rule${known.rules === 1 ? "" : "s"})` : "A scan";
+  };
   const areas = [...new Set((data?.items ?? []).flatMap((r) => r.scope.areas))].sort();
   const proposedShown = items.filter((r) => r.status === "proposed");
   const archivedWhy = "This project is archived: nothing new runs on it. Restore it to review rules.";
@@ -132,7 +138,7 @@ export function RulesReview({ projectId, actor, orgId, archived, locked, initial
               <span>Scan</span>
               <select value={scan} onChange={(e) => setScan(e.target.value)} data-testid="kg-review-scan" aria-label="Filter by scan">
                 <option value="">Every scan</option>
-                {scans.map((s) => <option key={s} value={s}>{s}</option>)}
+                {scans.map((s) => <option key={s} value={s}>{scanLabel(s)}</option>)}
               </select>
             </label>
             <label className="kg-select">

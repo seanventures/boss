@@ -1134,11 +1134,11 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         <section className="ov-cc" data-area="overview" aria-label="Command center">
           {/* The monthly check-in: renders nothing unless it is this person's month (≤ once in 30 days). */}
           <CheckinCard projectId={activeProjectId} actor={activeActorId} />
-          {/* A KNOWLEDGE-GRAPH PROJECT'S HOME: its lifecycle (indexed → rules → learnings) and its
-              team, from GET /v1/knowledge/setup. Nothing for an app project. */}
-          {activeProject?.projectType === "knowledge_graph" ? (
-            <KgLifecycleCard projectId={activeProjectId} actor={activeActorId} orgId={activeOrgId} />
-          ) : null}
+          {/* THE KNOWLEDGE GRAPH'S LIFECYCLE (indexed → rules → learnings) and its team. */}
+          {/* Any project with a code graph (an app project too: NorthPeak Bank, boss-dogfood); the
+              card decides from GET /v1/knowledge/setup and draws nothing for a project without one. */}
+          <KgLifecycleCard projectId={activeProjectId} actor={activeActorId} orgId={activeOrgId}
+                           projectType={activeProject?.projectType} />
           <CommandCenter key={`${activeOrgId}:${activeProjectId}`} projectId={activeProjectId}
             orgId={activeOrgId} actor={activeActorId} viewer={activeActorId}
             initial={null} initialWire={commandCenter.wire} initialError={commandCenter.error} tz={ccZone}
