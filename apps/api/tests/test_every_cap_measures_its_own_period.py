@@ -152,7 +152,7 @@ def test_reserve_refuses_on_the_period_cap_and_says_when_it_resets(engine, caps)
     month = budget_period("month")
     assert refused["message"].startswith(
         "Budget cap exceeded: this month's budget is 95% used ($19 of $20). "
-        f"It resets at 00:00 UTC on 1 {month['end']:%B}, or raise the monthly cap in Budget.")
+        f"It resets at 00:00 UTC on 1 {month['end']:%B}, or raise the monthly cap in Govern › Limits.")
     said = explain(refused["message"])
     assert said["kind"] == "budget_refused"
     assert said["headline"] == ("The budget refused this work. This month's budget is 95% used "
@@ -183,11 +183,11 @@ def test_the_job_gate_holds_until_the_period_rolls_over(engine, caps):
     message = row["last_error"]["message"]
     assert message.startswith(
         "Held — the budget is red (95% of today's $10 used), so only P0 work runs. "
-        "It resets at 00:00 UTC, or raise the daily cap in Budget."), message
+        "It resets at 00:00 UTC, or raise the daily cap in Govern › Limits."), message
     assert row["run_after"] <= day["end"], "never deferred past the reset"
     said = explain(message)
     assert said["kind"] == "budget_hold"
-    assert said["action"].startswith("It resets at 00:00 UTC, or raise the daily cap in Budget.")
+    assert said["action"].startswith("It resets at 00:00 UTC, or raise the daily cap in Govern › Limits.")
 
     # Midnight passes: today's money becomes yesterday's, and the held job is due again.
     with engine.begin() as c:

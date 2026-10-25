@@ -6219,9 +6219,9 @@ def wait_step(
         # work holding the budget's headroom for a long time (model_failures.explain).
         held = "other work" in reason.lower()
         if kind == "budget_wait":
-            then = ("See what is holding the budget in Budget, or raise the daily or monthly "
+            then = ("See what is holding the budget in Govern › Limits, or raise the daily or monthly "
                     "cap, then try it again." if held else
-                    "Raise the per-minute cap in Budget, then try it again.")
+                    "Raise the per-minute cap in Govern › Limits, then try it again.")
         else:
             # Not the budget: a busy model source or a secret store that kept not answering.
             then = "Look at what is using it (Running work), then try it again."

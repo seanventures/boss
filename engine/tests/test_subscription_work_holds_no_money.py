@@ -66,7 +66,10 @@ def test_the_meeting_and_the_code_task_reserve_through_the_marginal_rule():
     assert "routed_reservation_estimate(" in meeting[at - 400:at]
     code = inspect.getsource(code_task_service)
     at = code.index('reason=f"code task: {run[\'title\'][:80]}"')
-    assert "routed_reservation_estimate(" in code[at - 400:at]
+    # Every build reserves through build_budget.reservation_estimate, which IS the marginal rule.
+    assert "_build_budget.reservation_estimate(" in code[at - 400:at]
+    from boss_engine.services import build_budget
+    assert "routed_reservation_estimate(" in inspect.getsource(build_budget.reservation_estimate)
 
 
 def test_the_typed_decision_token_ceiling_holds_what_was_measured():

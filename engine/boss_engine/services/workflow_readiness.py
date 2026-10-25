@@ -117,7 +117,7 @@ NEEDS: dict[str, Need] = {
     "budget": Need(
         "budget", "Budget is red — work will be held",
         "Wait for the cap's period to reset (a daily cap at 00:00 UTC) or raise the cap in "
-        "Budget. Calls on a subscription cost no money and do not count against it; only "
+        "Govern › Limits. Calls on a subscription cost no money and do not count against it; only "
         "metered API spend does.", "budget"),
     "agent_pool": Need(
         "agent_pool", "An agent that holds at least one skill",

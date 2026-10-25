@@ -64,10 +64,12 @@ export type Meter = {
   /** Money spent this period, one definition with get_costs (included_spend.ledger_spend). */
   ledger?: Ledger;
 };
-/** under_cap (what caps count) + not_under_cap (build money no cap counts) = money spent;
- *  included is subscription calls at list price — an estimate, never money. */
+/** under_cap (settled, what caps count) + in_flight (running builds, under the caps, not settled
+ *  yet) + not_under_cap (builds from before builds were metered) = money spent; included is
+ *  subscription calls at list price — an estimate, never money. */
 export type Ledger = {
-  money_usd_micros: number; under_cap_usd_micros: number; not_under_cap_usd_micros: number;
+  money_usd_micros: number; under_cap_usd_micros: number; in_flight_usd_micros?: number;
+  not_under_cap_usd_micros: number;
   included_usd_micros: number; metered_calls: number; included_calls: number;
 };
 export type TokenPolicy = {

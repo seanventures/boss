@@ -169,12 +169,13 @@ def routed_reservation_estimate(connection: Any, settings: Any, project_id: str,
 #
 # Two ledgers each hold part of the truth. `cost_receipts` is what every cap counts (settled
 # money per reservation). `llm_calls` is one row per model call — what get_costs and Spend by
-# agent/model read. On Community the code-task pipeline's budget port is unmetered
-# (defaults.NoopBudgetPort), so a build's calls are in `llm_calls` and never settle a receipt:
-# Govern said $8.47 spent while the builds alone had spent $284 (brec_85de2541). `ledger_spend`
-# is the one answer: the receipts' money plus every build's money no receipt settled
-# (`not_under_cap`), with what subscriptions ran (an estimate at list price, never money) beside
-# it. Govern's meter and get_costs both read it, so they cannot disagree.
+# agent/model read. A build settles its money on a receipt under ``code_task:<run>``
+# (build_budget) when it ends; until then its calls are in `llm_calls` only, and its money is
+# `in_flight` — under the caps, which count it at every stage boundary. Builds from before
+# Community metered them (defaults.NoopBudgetPort: Govern said $8.47 spent while the builds
+# alone had spent $284, brec_85de2541) never settled: that money is `not_under_cap`, kept so
+# history does not vanish. `ledger_spend` is the one answer — Govern's meter and get_costs both
+# read it, so they cannot disagree, and no call is counted on a receipt AND in llm_calls.
 
 #: Money on a llm_calls row: its cost, unless a subscription or local model answered (then $0).
 LLM_MONEY_SQL = ("CASE WHEN COALESCE(included_in_subscription, false) THEN 0 "
@@ -187,9 +188,13 @@ LLM_INCLUDED_SQL = ("CASE WHEN COALESCE(included_in_subscription, false) "
 def ledger_spend(connection: Any, project_id: str, start: Any, end: Any = None) -> dict[str, int]:
     """Money spent over [start, end) and how it splits:
 
-      money_usd_micros         = under_cap + not_under_cap (the figure to call "spent")
+      money_usd_micros         = under_cap + in_flight + not_under_cap (the figure to call
+                                 "spent")
       under_cap_usd_micros     — settled in cost_receipts: what the caps count
-      not_under_cap_usd_micros — build money in llm_calls that no receipt settled
+      in_flight_usd_micros     — running builds' money not settled yet (their reservation is
+                                 active): under the caps, settled when the build ends
+      not_under_cap_usd_micros — build money in llm_calls that no receipt settled and no live
+                                 reservation holds (builds from before builds were metered)
       included_usd_micros      — subscription / local calls at list price (receipted ones, and
                                  builds' from llm_calls): an estimate, not money, in no total
       metered_calls / included_calls — llm_calls rows by credential kind (API key vs plan)
@@ -200,8 +205,9 @@ def ledger_spend(connection: Any, project_id: str, start: Any, end: Any = None) 
     params = {"p": project_id, "start": start, "end": end}
     window = "project_id = :p AND created_at >= :start" + (
         " AND created_at < :end" if end is not None else "")
-    zero = {"money_usd_micros": 0, "under_cap_usd_micros": 0, "not_under_cap_usd_micros": 0,
-            "included_usd_micros": 0, "metered_calls": 0, "included_calls": 0}
+    zero = {"money_usd_micros": 0, "under_cap_usd_micros": 0, "in_flight_usd_micros": 0,
+            "not_under_cap_usd_micros": 0, "included_usd_micros": 0, "metered_calls": 0,
+            "included_calls": 0}
     try:
         with connection.begin_nested():
             calls = connection.execute(text(
@@ -218,22 +224,36 @@ def ledger_spend(connection: Any, project_id: str, start: Any, end: Any = None) 
                 f"SELECT COALESCE(SUM({MONEY_SQL}), 0) AS money, "
                 f"       COALESCE(SUM({INCLUDED_SQL}), 0) AS included "
                 f"FROM cost_receipts WHERE {window}"), params).mappings().one()
-            uncapped = connection.execute(text(
-                f"WITH runs AS (SELECT code_task_run_id AS r, SUM({LLM_MONEY_SQL}) AS m "
-                f"              FROM llm_calls WHERE {window} AND code_task_run_id IS NOT NULL "
-                "               GROUP BY 1), "
-                "     settled AS (SELECT substr(skill_or_model_id, 11) AS r, "
-                "                        SUM(COALESCE(actual_usd_micros, estimated_usd_micros, 0))"
-                "                          AS s "
-                "                 FROM cost_receipts WHERE project_id = :p "
-                "                  AND skill_or_model_id LIKE 'code_task:%' GROUP BY 1) "
-                "SELECT COALESCE(SUM(GREATEST(runs.m - COALESCE(settled.s, 0), 0)), 0) "
-                "FROM runs LEFT JOIN settled ON settled.r = runs.r"), params).scalar()
+            # Per build: its metered money (from its first reservation on), its money from
+            # before builds were metered, and what its receipts settled (build_budget).
+            from .build_budget import CALLS_SQL, SETTLED_SQL
+
+            lwindow = "l.project_id = :p AND l.created_at >= :start" + (
+                " AND l.created_at < :end" if end is not None else "")
+            unsettled = connection.execute(text(
+                "WITH runs AS (SELECT r, SUM(money) FILTER (WHERE metered) AS m, "
+                "                     SUM(money) FILTER (WHERE NOT metered) AS before "
+                "              FROM (" + CALLS_SQL.format(
+                    where=lwindow + " AND l.code_task_run_id IS NOT NULL") + ") calls "
+                "              GROUP BY 1), "
+                f"     settled AS ({SETTLED_SQL}), "
+                "     live AS (SELECT cr.id AS r FROM code_task_runs cr "
+                "              JOIN budget_reservations b ON b.id = cr.reservation_id "
+                "              WHERE cr.project_id = :p AND b.status = 'active'), "
+                "     owed AS (SELECT runs.r, GREATEST(COALESCE(runs.m, 0) "
+                "                                      - COALESCE(settled.s, 0), 0) AS o, "
+                "                     COALESCE(runs.before, 0) AS before "
+                "              FROM runs LEFT JOIN settled ON settled.r = runs.r) "
+                "SELECT COALESCE(SUM(o) FILTER (WHERE r IN (SELECT r FROM live)), 0) AS live, "
+                "       COALESCE(SUM(o) FILTER (WHERE r NOT IN (SELECT r FROM live)), 0) "
+                "         + COALESCE(SUM(before), 0) AS old "
+                "FROM owed"), params).mappings().one()
     except Exception:  # noqa: BLE001 — a figure beside the meter must not take the meter down
         return zero
-    under, outside = int(receipts["money"] or 0), int(uncapped or 0)
-    return {"money_usd_micros": under + outside, "under_cap_usd_micros": under,
-            "not_under_cap_usd_micros": outside,
+    under = int(receipts["money"] or 0)
+    live, outside = int(unsettled["live"] or 0), int(unsettled["old"] or 0)
+    return {"money_usd_micros": under + live + outside, "under_cap_usd_micros": under,
+            "in_flight_usd_micros": live, "not_under_cap_usd_micros": outside,
             "included_usd_micros": int(receipts["included"] or 0) + int(calls["included"] or 0),
             "metered_calls": int(calls["metered_calls"] or 0),
             "included_calls": int(calls["included_calls"] or 0)}

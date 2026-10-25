@@ -31,6 +31,7 @@ import threading
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from . import build_budget as _build_budget
 from . import parallel_build as _parallel_build
 from .monitoring_guard import KEEP_MONITORING_RULE as _KEEP_MONITORING
 from .review_seats import run_seats as _run_seats
@@ -600,6 +601,33 @@ class CodeTaskCancelled(Exception):
     """The operator cancelled this run. Raised at a stage boundary so the pipeline unwinds
     cleanly (releasing budget, retaining the sandbox) instead of running to completion on
     work nobody wants."""
+
+
+class BuildBudgetStopped(CodeTaskCancelled):
+    """A cap was reached while this build ran (build_budget.cap_reached). Raised at the next
+    stage boundary that would spend — never mid-write — so the build unwinds like a stop: its
+    work kept, its money so far settled. It ends blocked as `budget_denied` (Budget refused), in
+    the cap's words; Retry continues from the kept work once the cap has room."""
+
+
+def stop_build_for_budget(engine, budget, *, run_id: str, project_id: str,
+                          reservation_id: Optional[str], message: str) -> dict:
+    """THE END OF A BUILD THE CAPS STOPPED (BuildBudgetStopped, after its work was kept): its
+    money so far settled on its reservation, and the run blocked as `budget_denied` — the state
+    the console already reads as "Budget refused" (factory_view) — in the cap's words."""
+    with _transaction(engine) as c:
+        _release(budget, c, project_id, reservation_id, "stopped by the budget cap",
+                 run_id=run_id)
+        emit_event(c, project_id, "code_task.budget_stopped", "boss", "code_task_run",
+                   run_id, {"message": message[:400]})
+        return _fail(c, run_id, project_id, f"The budget stopped this code task: {message}",
+                     status="blocked", failure_class="needs_human",
+                     reason_code="budget_denied")
+
+
+#: Phases that deliver finished work and spend no agent money: the budget does not stop a
+#: build at them (the money is spent; refusing the pull request only throws the work away).
+_DELIVERY_PHASES = frozenset({"opening_pr", "waiting_for_ci"})
 
 
 # The full adversarial panel. A profile may enable a subset via `panel_checks`; `regression`
@@ -3807,18 +3835,27 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                             "skipped_stages": ["standards", "spec", "plan", "review_plan"]})
 
     with _transaction(engine) as c:
+        # A RE-ENTRY (lease reclaim, a deploy's hand-back, a resume) settles the earlier
+        # attempt's hold first: what it spent is the build's, and a hold left to lapse would
+        # ask a person to reconcile it.
+        if run.get("reservation_id"):
+            _release(budget, c, project_id, run["reservation_id"],
+                     "re-entry: the earlier attempt's hold settled", run_id=run_id)
+        # THE BUILD IS UNDER THE PROJECT'S CAPS (build_budget): its estimate at marginal cost
+        # ($0 on a subscription — a gate, refused once the cap's money is spent). A cap with
+        # no room refuses the start here, in the governor's words (refused_reservation).
         reservation = budget.reserve(
             c, project_id, category="code_task",
-            amount_usd_micros=int(settings.code_task_budget_usd_micros),
-            reason=f"governed code task: {title[:64]}", expires_in_minutes=45, job_id=job_id,
+            amount_usd_micros=_build_budget.reservation_estimate(c, settings, project_id),
+            reason=f"governed code task: {title[:64]}",
+            expires_in_minutes=_build_budget.RESERVATION_MINUTES, job_id=job_id,
             risk_tier=spec.get("risk_tier"))
     if reservation.get("status") != "reserved":
         return refused_reservation(engine, jobs, run_id=run_id, project_id=project_id,
                                    reservation=reservation, fencing_token=fencing_token)
     reservation_id = reservation["reservation_id"]
     with _transaction(engine) as c:
-        c.execute(sql("UPDATE code_task_runs SET reservation_id=:r WHERE id=:id"),
-                  {"r": reservation_id, "id": run_id})
+        _build_budget.bind(c, run_id, reservation_id)
 
     owner, repo = _owner, _repo
     base_branch = spec.get("base_branch") or "main"
@@ -4365,7 +4402,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # EVERY PHASE IS A STAGE BOUNDARY (factory test D1). Stop was only checked before
         # write_tests and implement, so a build stopped during its checks ran on through review
         # and opened its PR. Reads only (MVCC): it never waits on the row `c` may hold.
-        _abort_if_cancelled(f"phase->{name}")
+        _abort_if_cancelled(f"phase->{name}", spends=name not in _DELIVERY_PHASES)
         from .run_fencing import guarded_update
         guarded_update(
             c, run_id, _fence,
@@ -4446,11 +4483,14 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         with _transaction(engine) as c:
             return guarded_status(c, run_id, _fence, status, extra_set, params)
 
-    def _abort_if_cancelled(where: str) -> None:
+    def _abort_if_cancelled(where: str, spends: bool = True) -> None:
         """Stop a run the operator cancelled. Cancellation was a DB update nobody read: one
         cancelled run kept executing for 40 minutes and $6.73 afterwards, and cancelled runs
         later overwrote their own status. Checked at stage boundaries so it costs one cheap
-        query per stage and never interrupts an agent mid-call."""
+        query per stage and never interrupts an agent mid-call.
+
+        `spends`: the next stage spends model money, so the budget is checked too
+        (_stop_if_cap_reached). Delivery of finished work (the PR) passes False."""
         # THE ENGINE COULD NOT RUN (harness_failures): a stage that swallowed the failure does
         # not get to start the next one — the build ends here with the harness verdict.
         _stop_on_harness_failure(where)
@@ -4497,6 +4537,26 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 assert_owner(c, run_id, _fence, where)
         except RunFenced as exc:
             raise CodeTaskCancelled(str(exc)) from exc
+        if spends:
+            _stop_if_cap_reached(where)
+
+    def _stop_if_cap_reached(where: str) -> None:
+        """THE CAPS STOP A BUILD AT A STAGE BOUNDARY (build_budget.cap_reached). The hold is
+        renewed for the next stage first, so a long build keeps it; then, if the money settled
+        this period plus what running builds have spent reaches a cap, the build stops here,
+        before the next stage spends. Its own transaction: it never waits on the row `c` holds.
+        A budget that cannot be read never stops a build."""
+        try:
+            with _transaction(engine) as c:
+                _build_budget.renew(budget, c, project_id, reservation_id)
+                reached = _build_budget.cap_reached(budget, c, project_id)
+        except Exception:  # noqa: BLE001 — never let the check itself break a run
+            _log_caught(logger)
+            return
+        if reached:
+            raise BuildBudgetStopped(
+                f"{reached['message']} The build stopped before {where.removeprefix('phase->')}"
+                "; its work so far is kept, and Retry continues it.")
 
     def _stop_on_harness_failure(where: str) -> None:
         """Raise the run's harness failure, if a session of this run found its engine cannot
@@ -4672,7 +4732,21 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             for sid in guest_vm_ids:
                 mv.hold(sid, ttl_seconds=7200, reason="governed build available for preview")
 
+    def _honour_budget_stop(exc):
+        # A cap was reached: stop like a Stop (work kept, money so far settled), but the build
+        # ends blocked as `budget_denied` — Budget refused, in the cap's words — not cancelled.
+        _finish_vms(success=False)
+        _save_workspace("budget_stopped")
+        try:
+            _checkpoint("budget_stopped")
+        except Exception:  # noqa: BLE001
+            _log_caught(logger)
+        return stop_build_for_budget(engine, budget, run_id=run_id, project_id=project_id,
+                                     reservation_id=reservation_id, message=str(exc))
+
     def _honour_cancel(exc):
+        if isinstance(exc, BuildBudgetStopped):
+            return _honour_budget_stop(exc)
         # Operator intent, not a failure: stop, keep the work on the branch, release budget.
         _finish_vms(success=False)
         _save_workspace("cancelled")
@@ -8265,7 +8339,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 if not budget.assert_active_reservation(c, project_id, reservation_id):
                     renewed = budget.reserve(
                         c, project_id, category="code_task",
-                        amount_usd_micros=int(settings.code_task_budget_usd_micros),
+                        amount_usd_micros=_build_budget.reservation_estimate(
+                            c, settings, project_id),
                         reason=f"re-reserve to open PR (original expired): {title[:48]}",
                         expires_in_minutes=30, job_id=job_id, risk_tier=spec.get("risk_tier"))
                     if renewed.get("status") == "reserved":
@@ -8287,7 +8362,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             from .checks_failing import KEY as _CF_KEY, pr_section as _cf_section
 
             _checks = evidence.get(_CF_KEY) if isinstance(evidence.get(_CF_KEY), dict) else None
-            _abort_if_cancelled("before opening the PR")
+            _abort_if_cancelled("before opening the PR", spends=False)
             _pr_files = ([FileChange(path=p, content=content)
                           for p, content in accumulated.items()]
                          if use_microvm else sandbox.diff())
@@ -8325,7 +8400,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     if not budget.assert_active_reservation(c, project_id, reservation_id):
                         renewed = budget.reserve(
                             c, project_id, category="code_task",
-                            amount_usd_micros=int(settings.code_task_budget_usd_micros),
+                            amount_usd_micros=_build_budget.reservation_estimate(
+                                c, settings, project_id),
                             reason=f"re-reserve PR retry {_pr_attempt}: {title[:48]}",
                             expires_in_minutes=30, job_id=job_id, risk_tier=spec.get("risk_tier"))
                         if renewed.get("status") == "reserved":
@@ -8343,7 +8419,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         "code_task_run", run_id,
                         {"attempt": _pr_attempt, "error": f"{type(exc).__name__}: {exc}"[:200]},
                     )
-                _abort_if_cancelled("before retrying the PR")
+                _abort_if_cancelled("before retrying the PR", spends=False)
                 try:
                     proposal = sf.propose_pull_request(
                         c, project_id, task_id, reservation_id=reservation_id,

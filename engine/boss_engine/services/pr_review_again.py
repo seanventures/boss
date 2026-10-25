@@ -192,17 +192,21 @@ def execute(engine, settings, payload: dict, *, github: Any = None, agent: Any =
 
             with _transaction(engine) as c:
                 eff = applied(c, project_id, settings)
+                from .build_budget import reservation_estimate
+
                 reserved = ports.budget.reserve(
                     c, project_id, category="code_task",
-                    amount_usd_micros=int(getattr(eff, "code_task_budget_usd_micros", 0)
-                                          or 5_000_000),
+                    amount_usd_micros=reservation_estimate(c, eff, project_id),
                     reason=f"review pull request #{number} again", expires_in_minutes=60,
                     risk_tier=spec.get("risk_tier"))
                 if reserved.get("status") != "reserved":
                     raise ReviewAgainRefused(
                         "the budget refused the review: "
-                        + str(reserved.get("reason") or reserved.get("refusal") or "denied"))
+                        + str(reserved.get("message") or reserved.get("refusal") or "denied"))
                 reservation_id = reserved["reservation_id"]
+                from .build_budget import bind
+
+                bind(c, run_id, None)  # only calls from here on are this build's to settle
                 lane = (eff.code_review_engine or eff.code_agent_engine or "claude_code").lower()
                 agent = make_code_agent(eff, engine=lane, connection=c, project_id=project_id)
         set_llm_context(db_engine=engine, project_id=project_id, run_id=run_id,
@@ -298,10 +302,13 @@ def execute(engine, settings, payload: dict, *, github: Any = None, agent: Any =
             shutil.rmtree(workdir, ignore_errors=True)
         if reservation_id:
             try:
+                from .build_budget import settle_or_release
+
                 with _transaction(engine) as c:
-                    ports.budget.release(c, project_id, reservation_id,
-                                         "review again finished; its model calls are metered "
-                                         "on the build")
+                    # Its model calls are the build's (code_task_run_id): settled with the
+                    # build's other unsettled money, under the build's receipt.
+                    settle_or_release(ports.budget, c, project_id, reservation_id,
+                                      "review again finished", run_id=run_id)
             except Exception:  # noqa: BLE001
                 log.warning("pr_review_again: reservation %s not released", reservation_id)
 

@@ -4256,6 +4256,10 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
             "window_description": f"the last {days} days (not a calendar month)",
             # Money spent: the same figure Govern's meter shows for the same window.
             "total_cost_usd": round(ledger["money_usd_micros"] / 1_000_000, 4),
+            # Running builds' money, not settled yet: under the caps (build_budget).
+            "in_flight_usd": round(ledger["in_flight_usd_micros"] / 1_000_000, 4),
+            # Spent outside the caps: builds from before builds were metered, and self-fixes
+            # (their own budget).
             "not_under_a_cap_usd": round(ledger["not_under_cap_usd_micros"] / 1_000_000, 4),
             # What subscription / local calls ran, at list price. NOT money; in no total.
             "included_estimate_usd": round(ledger["included_usd_micros"] / 1_000_000, 4),

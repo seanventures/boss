@@ -31,7 +31,7 @@ def test_the_governed_build_checks_for_a_stop_before_each_pr_write():
                 .split("summary=")[0]]
     assert len(shipping) >= 2
     for preamble in shipping:
-        assert re.search(r"_abort_if_cancelled\(\"before (opening|retrying) the PR\"\)", preamble), \
+        assert re.search(r"_abort_if_cancelled\(\"before (opening|retrying) the PR\"(, spends=False)?\)", preamble), \
             preamble
 
 

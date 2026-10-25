@@ -105,8 +105,12 @@ class NoopBudgetPort:
         skill_or_model_id: str,
         estimated_usd_micros: int,
         actual_usd_micros: Optional[int],
+        *,
+        included_in_subscription: bool = False,
+        allow_expired: bool = False,
     ) -> str:
         del connection, category, skill_or_model_id, estimated_usd_micros, actual_usd_micros
+        del included_in_subscription, allow_expired
         with self._lock:
             reservation = self._reservations.get(reservation_id)
             if reservation is None or reservation["project_id"] != project_id:
@@ -114,3 +118,21 @@ class NoopBudgetPort:
             reservation["status"] = "consumed"
             reservation["receipt_id"] = receipt_id
         return f"oss_cost_{uuid4().hex[:20]}"
+
+    def extend(
+        self,
+        connection: Any,
+        project_id: str,
+        reservation_id: str,
+        expires_in_minutes: int,
+    ) -> bool:
+        del connection
+        with self._lock:
+            reservation = self._reservations.get(reservation_id)
+            if (reservation is None or reservation["project_id"] != project_id
+                    or reservation["status"] != "reserved"):
+                return False
+            reservation["expires_at"] = (
+                datetime.now(timezone.utc) + timedelta(minutes=expires_in_minutes)
+            ).isoformat()
+        return True

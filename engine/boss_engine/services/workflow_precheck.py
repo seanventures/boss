@@ -1257,7 +1257,7 @@ def check_budget(ctx: Context, step: dict[str, Any]) -> Optional[dict[str, Any]]
         return result("budget.headroom", "ready", evidence)
     if worst["kind"] == "cap":
         return result("budget.headroom", "will_fail", evidence + " — the money already spent "
-                      "leaves no room for this reservation", action="Raise the cap in Budget or "
+                      "leaves no room for this reservation", action="Raise the cap in Govern › Limits or "
                       "wait for the period to reset.")
     if worst["kind"] == "headroom":
         return result("budget.headroom", "unknown", evidence + " — other work's reservations "

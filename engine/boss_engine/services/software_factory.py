@@ -1699,8 +1699,15 @@ class SoftwareFactoryService:
         checks_failing: Optional[dict] = None,
         pr_base: Optional[str] = None,
         monitoring_removals: Optional[list[str]] = None,
+        settle_run_id: Optional[str] = None,
     ) -> dict:
         """Open the change's pull request and its merge decision.
+
+        THE BUILD'S MONEY SETTLES HERE, ONCE. For a build (`run_id`, or `settle_run_id` for a
+        caller that does not pass `run_id`), the reservation is settled with the build's
+        unsettled money from its llm_calls under ``code_task:<run>`` (build_budget) — never
+        the caller's `actual_usd_micros`, a list-price sum that counted subscription calls as
+        money. Without a build it settles `actual_usd_micros` as before.
 
         ``monitoring_removals``: the monitoring entries (monitoring_guard.entries names) a
         change about monitoring removes ON PURPOSE. Any other removal is undone.
@@ -2278,16 +2285,24 @@ class SoftwareFactoryService:
             run_id=run_id,
         )
         self.receipts.mark_succeeded(connection, pr_receipt["id"], pr.url, result)
-        self.budget.settle(
-            connection,
-            project_id,
-            reservation_id,
-            pr_receipt["id"],
-            "tool",
-            "github.pull_request.create",
-            int(reservation["amount_usd_micros"]),
-            actual_usd_micros,
-        )
+        build_run = settle_run_id or run_id
+        if build_run:
+            from .build_budget import settle_on_pull_request
+
+            settle_on_pull_request(self.budget, connection, project_id, reservation_id,
+                                   pr_receipt["id"], int(reservation["amount_usd_micros"]),
+                                   build_run)
+        else:
+            self.budget.settle(
+                connection,
+                project_id,
+                reservation_id,
+                pr_receipt["id"],
+                "tool",
+                "github.pull_request.create",
+                int(reservation["amount_usd_micros"]),
+                actual_usd_micros,
+            )
         self.events.emit(
             connection,
             project_id,

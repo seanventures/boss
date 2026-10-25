@@ -324,7 +324,8 @@ def meter(status: dict[str, Any], ledger: Optional[dict[str, int]] = None) -> di
     """The meter: the binding period's money and holds against its cap, the other period
     beneath it, and the subscription figure that is shown and never counted. `ledger` is the
     model-call ledger over the same period: `spent` (money), `estimate` (subscription calls at
-    list price, not money), and `not_under_cap` (build money no cap counts)."""
+    list price, not money), `in_flight` (running builds' money, under the caps, not settled yet)
+    and `not_under_cap` (builds from before builds were metered: no cap counted them)."""
     periods = status.get("periods") or {}
     return {
         "ledger": dict(ledger or {}),
