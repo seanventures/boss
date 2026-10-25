@@ -167,6 +167,12 @@ class FailoverAgent:
                     self._on_hop(failed, decision, kind)
                 self._agent, self._model, self._engine = agent, model, decision.engine
                 kwargs.pop("resume_session_id", None)   # a new source has no such session
+                from ..engine_contract import capabilities_of
+
+                if not capabilities_of(agent).budget_limit:
+                    # A spend ceiling only an engine that stops itself takes; the caller's
+                    # stage boundary still enforces it on this one.
+                    kwargs.pop("max_budget_usd", None)
 
     def run_role(self, *args: Any, **kwargs: Any) -> Any:
         return self._call("run_role", *args, **kwargs)

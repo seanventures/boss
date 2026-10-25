@@ -123,3 +123,80 @@ def test_an_overrun_before_a_stage_that_spends_still_refuses(harness):
     out = self_fix_build.Build(engine=harness.eng, settings=harness.settings, sfx_id=sfx["id"],
                                source=harness.mirror).run()
     assert out["refusal"] == "budget"
+
+
+# THE CAP BOUNDS EACH TURN WHILE IT RUNS (operator, 2026-10-25): sfx_3f2fb90a spent $15.64 of a
+# $10 cap inside ONE diagnosis turn — the cap was checked only at stage boundaries.
+
+class _CeilingAgent:
+    """An engine that can stop itself at a spend ceiling: records what it was given."""
+
+    def __init__(self, *, can_stop: bool):
+        from boss_engine.services.engine_contract import EngineCapabilities
+
+        self.capabilities = EngineCapabilities(budget_limit=can_stop)
+        self.calls = []
+
+    def run_role(self, prompt, cwd, **kwargs):
+        self.calls.append(kwargs)
+        return {"summary": "done", "cost_usd_micros": 0}
+
+
+def test_a_turn_is_given_what_is_left_of_the_cap(harness, tmp_path):
+    sfx = harness.propose()["self_fix"]
+    build = self_fix_build.Build(engine=harness.eng, settings=harness.settings, sfx_id=sfx["id"],
+                                 source=harness.mirror)
+    build.cost_micros = int(sfx["budget_usd_micros"]) - 2_500_000
+    agent = _CeilingAgent(can_stop=True)
+    build.turn(agent, "self_fix_diagnose", "p", tmp_path, read_only=True)
+    assert agent.calls[-1]["max_budget_usd"] == 2.5, "the turn's ceiling is the cap left"
+    build.cost_micros = int(sfx["budget_usd_micros"]) + 1
+    build.turn(agent, "self_fix_diagnose", "p", tmp_path, read_only=True)
+    assert agent.calls[-1]["max_budget_usd"] == 0.0
+    plain = _CeilingAgent(can_stop=False)
+    build.turn(plain, "self_fix_diagnose", "p", tmp_path, read_only=True)
+    assert "max_budget_usd" not in plain.calls[-1], "only an engine that can stop itself"
+
+
+def test_the_claude_engine_stops_itself_at_the_ceiling(monkeypatch, tmp_path):
+    """ClaudeCodeAgent passes the ceiling to the CLI (--max-budget-usd), which stops there."""
+    from boss_engine.config import get_settings
+    from boss_engine.services import code_agent
+
+    agent = code_agent.ClaudeCodeAgent(get_settings())
+    assert agent.capabilities.budget_limit
+    seen = {}
+
+    def fake_invoke(prompt, cwd, **kwargs):
+        seen.update(kwargs)
+        return {"result": "ok", "num_turns": 1, "total_cost_usd": 0.01, "usage": {}}
+
+    monkeypatch.setattr(agent, "_invoke", fake_invoke)
+    agent.run_role("p", tmp_path, read_only=True, max_budget_usd=2.5)
+    assert seen["max_budget_usd"] == 2.5
+    src = open(code_agent.__file__, encoding="utf-8").read()
+    assert '"--max-budget-usd"' in src
+
+
+def test_every_engine_that_claims_a_ceiling_takes_it_all_the_way_down(tmp_path, monkeypatch):
+    """budget_limit is a promise: run_role AND the session it starts accept max_budget_usd.
+    (The Agent SDK engine inherited the claim from claude_code without the parameter.)"""
+    import inspect
+
+    from boss_engine.config import get_settings
+    from boss_engine.services import agent_sdk_engine, code_agent
+
+    for cls in (code_agent.ClaudeCodeAgent, agent_sdk_engine.build_agent_class()):
+        assert cls.capabilities.budget_limit, cls.__name__
+        for method in ("run_role", "_invoke"):
+            assert "max_budget_usd" in inspect.signature(getattr(cls, method)).parameters, (
+                f"{cls.__name__}.{method} claims budget_limit but cannot take max_budget_usd")
+    sdk = agent_sdk_engine.build_agent_class()(get_settings())
+    monkeypatch.setattr(sdk, "_child_env", lambda: {})   # the option, not the credential
+    try:
+        options = sdk._options(cwd=tmp_path, read_only=True, allowed="Read", permission="default",
+                               max_turns=4, model="m", resume=None, shared_ctx="", fan_out=0,
+                               effort=None, max_budget_usd=2.5)
+    except ImportError:  # pragma: no cover — the SDK ships in the API image
+        return
+    assert options.max_budget_usd == 2.5

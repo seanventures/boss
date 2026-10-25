@@ -463,7 +463,8 @@ def build_agent_class():
 
         def _options(self, *, cwd: Path, read_only: bool, allowed: str, permission: str,
                      max_turns: int, model: str, resume: Optional[str], shared_ctx: str,
-                     fan_out: int, effort: Optional[str]):
+                     fan_out: int, effort: Optional[str],
+                     max_budget_usd: Optional[float] = None):
             from claude_agent_sdk import ClaudeAgentOptions
 
             system_prompt: dict[str, Any] = {"type": "preset", "preset": "claude_code",
@@ -490,6 +491,9 @@ def build_agent_class():
                 cli_path=cli,
                 effort=effort or None,
                 max_thinking_tokens=int(thinking) if thinking else None,
+                # The session's spend ceiling (engine_contract budget_limit): the SDK stops there.
+                max_budget_usd=(max(float(max_budget_usd), 0.01)
+                                if max_budget_usd is not None else None),
             )
 
         @model_proxy.scoped(attach_usage=True)
@@ -498,7 +502,7 @@ def build_agent_class():
             model: Optional[str] = None, allowed_tools: Optional[str] = None,
             resume_session_id: Optional[str] = None, max_turns: Optional[int] = None,
             seat: str = "agent", on_turn: Optional[Callable[[dict], None]] = None,
-            parallel_agents: int = 0,
+            parallel_agents: int = 0, max_budget_usd: Optional[float] = None,
         ) -> dict:
             # A run whose engine already could not run starts no new session.
             harness_failures.raise_if_tripped()
@@ -547,7 +551,8 @@ def build_agent_class():
                 options = self._options(
                     cwd=cwd, read_only=read_only, allowed=allowed, permission=permission,
                     max_turns=turns_cap, model=model_name, resume=resume,
-                    shared_ctx=shared_ctx, fan_out=fan_out, effort=ca._current_effort())
+                    shared_ctx=shared_ctx, fan_out=fan_out, effort=ca._current_effort(),
+                    max_budget_usd=max_budget_usd)
                 parser = StreamParser()
                 written = {"rows": 0}
                 if capturing:
