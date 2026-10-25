@@ -80,7 +80,11 @@ describe("P1-5 the canvas and the panel show the same connections (round 2: dete
     const drawn = Number($('[data-testid="kg-canvas"]')?.getAttribute("data-nodes"));
     // 80 read: as many drawn on the ring as the canvas shows readably, the rest in package groups; the same number every time.
     expect(drawn).toBeLessThan(FX.hood.nodes.length);
-    expect($('[data-testid="kg-view-note"]')?.textContent).toMatch(/and 80 connected within 1 hop · \d+ drawn, the rest in \d+ groups?/);
+    // One count source (round 4): the header's total is the banner's, and its drawn/grouped split
+    // is the panel's "In this view".
+    const total = 80 + FX.hood.hidden.nodes;
+    expect($('[data-testid="kg-view-note"]')?.textContent).toMatch(new RegExp(`· ${total} connected within 1 hop · the 80 most connected shown · \\d+ drawn, \\d+ in \\d+ groups?`));
+    expect($('[data-testid="kg-truncated"]')?.textContent).toContain(`Showing 80 of ${total}`);
     const inView = $$('[data-testid="kg-conn-view"] [data-testid="kg-conn-item"]');
     expect(inView.length).toBe(drawn - 1);
     const labels = inView.map((e) => e.textContent);

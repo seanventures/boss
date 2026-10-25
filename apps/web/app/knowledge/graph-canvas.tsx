@@ -17,7 +17,7 @@ import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo
 
 import {
   BEND, BUBBLE_R, LABEL_ARC, LABEL_MAX, LOOP_EDGES, NODE_R, arrowRim, bidirectional, distanceToEdge, edgeGeometry, edgeWidth,
-  fitTransform, kindName, layerToken, middleEllipsis, nodeAt, placeLabels, placeNodeLabels, revealPan, toScreen, toWorld, weightOrder,
+  LABEL_ZOOM_OUTER, fitTransform, kindName, layerToken, nodeAt, placeLabels, placeNodeLabels, revealPan, toScreen, toWorld, weightOrder, wordEllipsis,
   zoomAt,
   type EdgeGeometry, type LabelBox, type LabelItem, type Pt, type Transform,
 } from "../../lib/kg-layout";
@@ -46,6 +46,10 @@ export type CanvasNode = {
   labelMax?: number;
   /** Its shortest form when the name has no room ("+38 more" for a group). */
   short?: string;
+  /** Its label always shows, never on another (the Focus's first ring, the selection's
+   *  neighbours, a Whole-repo bubble): moved outward on a leader line when there is no room. A
+   *  ring node without it is named on hover, when selected, or from LABEL_ZOOM_OUTER up. */
+  keepLabel?: boolean;
 };
 
 /** One edge's identity on the canvas: hover, labels and the strongest-edge set use it. */
@@ -340,8 +344,14 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(function GraphCanvas(
         ctx.stroke();
       }
       ctx.restore();
+      // LABEL CULLING BY ZOOM AND PRIORITY (tester round 4 P0): an outer-ring node that is not
+      // kept is named on hover, when selected, or once zoomed in — never fighting the first ring.
+      const culled = mode === "focus" && !isSel && !isHover && d.id !== centerId && !n.keepLabel
+        && (n.ring ?? 0) >= 1 && tr.k < LABEL_ZOOM_OUTER;
+      if (culled) continue;
       const max = n.labelMax ?? LABEL_MAX;
-      const name = (m: number) => middleEllipsis(n.label, m);
+      // Cut at word boundaries, never mid-word (round 4: "Creo…sor").
+      const name = (m: number) => wordEllipsis(n.label, m);
       const weight = isSel ? 600 : 400;
       // The full name first; shorter middle-ellipsised names (and a bubble without its second
       // line) when it would collide or leave the canvas.
@@ -369,6 +379,7 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(function GraphCanvas(
           id: d.id, x: d.x, y: d.y, r: d.r, priority: pri, variants: sized.map((v) => ({ w: v.w, h: v.h })),
           prefer: out ? "out" : "below", dir: out ? { x: Math.cos(n.angle!), y: Math.sin(n.angle!) } : undefined,
           must: isSel || isHover || d.id === centerId,
+          keep: !!n.keepLabel,
         },
       });
     }
@@ -400,6 +411,21 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(function GraphCanvas(
       const p = chosen.get(l.id);
       if (!p) continue;
       const v = l.sized[p.variant];
+      if (p.leader) {
+        // Moved outward for room: a thin line from its node to it says whose it is.
+        const from = screen.get(l.id);
+        if (from) {
+          ctx.save();
+          ctx.strokeStyle = c("--border-strong");
+          ctx.globalAlpha = 0.9;
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(from.x, from.y);
+          ctx.lineTo(Math.min(Math.max(from.x, p.x - p.w / 2), p.x + p.w / 2), Math.min(Math.max(from.y, p.y), p.y + p.h));
+          ctx.stroke();
+          ctx.restore();
+        }
+      }
       // An opaque backdrop in the canvas colour: an edge never runs through a label (round 3 P1).
       ctx.save();
       ctx.fillStyle = c("--graph");
@@ -446,7 +472,10 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(function GraphCanvas(
    * button, 0) shows everything whatever the scale. Room is kept for the labels past the outer
    * nodes. The legend has its own gutter under the canvas, so nothing is reserved for it.
    */
+  /** How far the picture was panned to clear the drawer, undone when the drawer closes. */
+  const revealed = useRef(0);
   const frameView = useCallback((readable: boolean) => {
+    revealed.current = 0;   // a new frame is its own; nothing to pan back
     // Framed against the canvas as it is NOW (a picture can arrive before the observer reports a
     // new size): a hidden canvas (0 × 0) keeps its last real size.
     const r = wrap.current?.getBoundingClientRect();
@@ -486,7 +515,12 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(function GraphCanvas(
   useEffect(() => {
     // The Focus centre: the whole ring is re-framed beside the drawer.
     if (mode === "focus" && selectedId && selectedId === centerId) { home(); return; }
-    if (!occludeRight || !selectedId) return;
+    if (!occludeRight || !selectedId) {
+      // The drawer closed: the picture goes back to where it was before it was moved out from
+      // under it (tester round 4: the overview kept its shifted positions after a deselect).
+      if (revealed.current) { setT({ ...t.current, x: t.current.x - revealed.current }); revealed.current = 0; }
+      return;
+    }
     const boxOf = (id: string) => {
       const p = posOf(id);
       const n = byId.get(id);
@@ -503,11 +537,14 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(function GraphCanvas(
     if (!sel) return;
     const rest = nodes.map((n) => boxOf(n.id)).filter((b): b is { x: number; w: number } => !!b);
     const dx = revealPan([sel], mode === "overview" ? rest : [], size.current.w - occludeRight);
-    if (dx) setT({ ...t.current, x: t.current.x + dx });
+    if (dx) { setT({ ...t.current, x: t.current.x + dx }); revealed.current += dx; }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [occludeRight, selectedId]);
 
-  useEffect(() => { schedule(); }, [schedule, draw, selectedId, hover]);
+  // The drawer's width is part of every frame (labels stay left of it): a change repaints, or a
+  // deselect painted with the old drawer's bounds and the Rules and Learning bubbles lost their
+  // labels (tester round 4).
+  useEffect(() => { schedule(); }, [schedule, draw, selectedId, hover, occludeRight]);
 
   // Fit to the window on resize, and repaint whenever the canvas is shown again (the Graph tab
   // stays mounted, hidden, under Rules review): a hidden canvas measures 0 and keeps its last

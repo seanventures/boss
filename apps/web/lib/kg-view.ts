@@ -355,3 +355,37 @@ export function rankHits<H extends { match: string; node: { symbol_kind?: string
   return hits.map((h, i) => ({ h, i })).sort((a, b) => (tier[a.h.match] ?? 9) - (tier[b.h.match] ?? 9)
     || member(a.h) - member(b.h) || a.i - b.i).map((x) => x.h);
 }
+
+
+/**
+ * A FOCUS'S COUNTS, ONE SOURCE (tester round 4: "and 40 connected within 1 hop" beside "Showing 40
+ * of 47", "80 connected" beside "Showing 80 of 809", "200 is the most one view reads" on 147).
+ * The header, the truncation banner and the panel's "In this view" all read these numbers:
+ * `total` connected within the hops (what was read plus what the limit left out), `shown` what was
+ * read, `drawn` the neighbours with a circle of their own, and `grouped` in `groups` bubbles.
+ */
+export type FocusCounts = { total: number; shown: number; drawn: number; grouped: number; groups: number; noun: string; maxed: boolean };
+
+export function focusCounts(
+  h: { center: { id: string }; nodes: Array<{ id: string }>; hidden: { nodes: number }; level: string },
+  picture: { nodes: Array<{ id: string; kind: string }>; groups: Map<string, unknown[]> } | null,
+  opts: { max: number; asked: number },
+): FocusCounts {
+  const shown = h.nodes.filter((n) => n.id !== h.center.id).length;
+  const total = shown + Math.max(0, h.hidden.nodes);
+  const groups = picture ? picture.groups.size : 0;
+  const grouped = picture ? [...picture.groups.values()].reduce((s, m) => s + m.length, 0) : 0;
+  const drawn = picture ? picture.nodes.filter((n) => n.id !== h.center.id && n.kind !== "group").length : shown;
+  const noun = h.level === "class" ? "classes" : h.level === "package" ? "packages" : h.level === "method" ? "symbols" : "nodes";
+  // "The most one view reads" only when that is why: asked for the most, and read the most.
+  const maxed = opts.asked >= opts.max && shown >= opts.max;
+  return { total, shown, drawn, grouped, groups, noun, maxed };
+}
+
+/** "AbstractLoan… · 47 connected within 1 hop · the 40 most connected shown · 31 drawn, 9 in 3 groups". */
+export function focusNote(label: string, depth: number, c: FocusCounts): string {
+  const parts = [`${label} · ${c.total.toLocaleString("en-US")} connected within ${depth} ${depth === 1 ? "hop" : "hops"}`];
+  if (c.shown < c.total) parts.push(`the ${c.shown.toLocaleString("en-US")} most connected shown`);
+  if (c.groups) parts.push(`${c.drawn.toLocaleString("en-US")} drawn, ${c.grouped.toLocaleString("en-US")} in ${c.groups} ${c.groups === 1 ? "group" : "groups"}`);
+  return parts.join(" · ");
+}

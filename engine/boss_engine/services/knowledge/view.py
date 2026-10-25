@@ -546,7 +546,6 @@ class _Walk:
         if "code" not in self.layers:
             self._finish_rollup(level)
             return
-        per_hop = max(1, self.limit // self.depth)
         frontier = {center_key}
         for hop in range(1, self.depth + 1):
             if not frontier or self.room <= 0:
@@ -557,6 +556,9 @@ class _Walk:
                 "SELECT src_key, dst_key, kind, weight FROM kg_view_edges WHERE project_id = :p "
                 "AND level = :l AND dst_key = ANY(:f) AND NOT (src_key = ANY(:f))"),
                 {"p": self.p, "l": level, "f": list(frontier)}).all()]
+            # What a hop leaves unused is the next hop's (tester round 4: Show 200 read 147 of 809
+            # because each of 2 hops was held to 100 while the first had only 47).
+            per_hop = max(1, self.room // (self.depth - hop + 1))
             frontier = set(self._keep(frontier, found, hop, rollup=True, per_hop=per_hop))
         self._finish_rollup(level)
 
@@ -644,7 +646,6 @@ class _Walk:
                 self.hops[context] = 1
                 self.payloads[context] = node_payload(owner)
                 self._edge(context, cid, "defines", 1, rollup=False)
-        per_hop = max(1, self.limit // self.depth)
         frontier = {cid}
         kind_sql = "AND e.kind = ANY(:k)" if kinds else ""
         for hop in range(1, self.depth + 1):
@@ -664,6 +665,9 @@ class _Walk:
             found = [(s, d, k, max(1, int(round(float(w or 1)))))
                      for s, d, k, w, other in rows if _readable(other, self.layers, self.withheld)
                      or (s in frontier and d in frontier)]
+            # What a hop leaves unused is the next hop's (tester round 4: Show 200 read 147 of 809
+            # because each of 2 hops was held to 100 while the first had only 47).
+            per_hop = max(1, self.room // (self.depth - hop + 1))
             frontier = set(self._keep(frontier, found, hop, rollup=False, per_hop=per_hop))
         missing = [i for i in self.hops if i not in self.payloads]
         for nid, row in _nodes_by_id(self.c, self.p, missing).items():

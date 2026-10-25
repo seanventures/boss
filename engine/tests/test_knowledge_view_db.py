@@ -509,6 +509,22 @@ def test_search_finds_a_learning_by_an_incident_id_in_its_evidence_or_its_conver
     assert view.search(connection, P, "INC-2041", layers={"code"})["hits"] == []
 
 
+def test_a_hop_that_needs_less_than_its_share_leaves_the_rest_to_the_next(connection):
+    """Tester round 4: Show 200 at 2 hops read 147 of 809 — each hop was held to 100 although the
+    first had only 47. The limit is the whole view's: what one hop leaves, the next may use."""
+    centre = _raw_node(connection, "kgn_hop_c", "investigation", "Why the allocator overbooks", attrs={})
+    for i in range(3):
+        a = _raw_node(connection, f"kgn_hop_a{i}", "investigation", f"First {i}", attrs={})
+        _raw_edge(connection, centre, a, "about")
+        for j in range(6):
+            b = _raw_node(connection, f"kgn_hop_b{i}{j}", "investigation", f"Second {i}{j}", attrs={})
+            _raw_edge(connection, a, b, "about")
+    out = view.neighbourhood(connection, P, centre, depth=2, limit=10)
+    hops = [n.get("hop") for n in out["nodes"] if n["id"] != centre]
+    assert len(hops) == 10 and hops.count(1) == 3 and hops.count(2) == 7
+    assert out["truncated"] and out["hidden"]["nodes"] == 18 - 7
+
+
 # ── the wire contract ───────────────────────────────────────────────────────────────────────
 
 _NODE_KEYS = {"id", "key", "kind", "symbol_kind", "layer", "label", "sub", "trust_tier", "status", "counts"}

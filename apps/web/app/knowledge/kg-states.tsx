@@ -245,10 +245,13 @@ export function KgEmptyLayer({ layer, onScan, scope = "repo", children }: {
 }
 
 /** A large neighbourhood: what the limit left out, and Show more up to the most one view reads. */
-export function KgTruncation({ shown, hidden, level, onMore, maxed, max = 200 }: {
+export function KgTruncation({ shown, hidden, level, onMore, maxed, max = 200, counts }: {
   shown: number; hidden: number; level: string; onMore?: () => void; maxed: boolean; max?: number;
+  /** The Focus's one count source (lib/kg-view.ts focusCounts): wins over shown/hidden. */
+  counts?: { total: number; shown: number; noun: string; maxed: boolean } | null;
 }) {
-  const noun = level === "class" ? "classes" : level === "package" ? "packages" : level === "method" ? "symbols" : "nodes";
+  const noun = counts?.noun ?? (level === "class" ? "classes" : level === "package" ? "packages" : level === "method" ? "symbols" : "nodes");
+  if (counts) { shown = counts.shown; hidden = counts.total - counts.shown; maxed = counts.maxed; }
   const total = (shown + hidden).toLocaleString("en-US");
   // Short, so the bar stays one line beside Built · Rebuild; the whole sentence is its tooltip.
   const full = `Showing the ${shown.toLocaleString("en-US")} most connected of ${total} connected ${noun}${maxed ? `. ${max} is the most one view reads: narrow it with layers or hops.` : "."}`;

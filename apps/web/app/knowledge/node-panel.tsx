@@ -54,7 +54,7 @@ export function ProvLineView({ line }: { line: ProvLine }) {
 }
 
 export function NodePanel({ projectId, actor, orgId, nodeId, preview, bubble, archived, rulesLocked,
-  onFocusNode, onShowConnected, onDrill, onEditRule, onClose, onChanged, viewEdges, onDetail }: {
+  onFocusNode, onShowConnected, onDrill, onEditRule, onClose, onChanged, viewEdges, onDetail, viewNote }: {
   projectId: string; actor: string; orgId?: string | null;
   nodeId: string | null;
   /** What the canvas already knows (label, kind), shown while the detail loads. */
@@ -75,6 +75,9 @@ export function NodePanel({ projectId, actor, orgId, nodeId, preview, bubble, ar
   viewEdges?: Array<{ edge: KgViewEdge; other: KgViewNode; out: boolean }> | null;
   /** The detail, once read: the canvas draws the connections it lists (one source of truth). */
   onDetail?: (d: KgNodeDetailResponse) => void;
+  /** The Focus header's own words for what is drawn ("31 drawn, 9 in 3 groups"), shown as the
+   *  centre's "In this view" count so the two never disagree (lib/kg-view.ts focusCounts). */
+  viewNote?: string | null;
 }) {
   const w = useMemo(() => ({ projectId, actor }), [projectId, actor]);
   const [detail, setDetail] = useState<KgNodeDetailResponse | null>(null);
@@ -166,7 +169,7 @@ export function NodePanel({ projectId, actor, orgId, nodeId, preview, bubble, ar
         </div>
       ) : null}
       {!isBubble && detail ? (
-        <DetailBody d={detail} w={w} orgId={orgId} onFocusNode={onFocusNode} viewEdges={viewEdges ?? null} />
+        <DetailBody d={detail} w={w} orgId={orgId} onFocusNode={onFocusNode} viewEdges={viewEdges ?? null} viewNote={viewNote ?? null} />
       ) : null}
 
       <PanelActions w={w} node={node} detail={detail} archived={!!archived} rulesLocked={rulesLocked ?? null}
@@ -269,10 +272,11 @@ function BubbleBody({ b, onFocusNode }: { b: BubbleSummary; onFocusNode: (id: st
 
 const ATTR_SKIP = new Set(["line", "end_line", "module", "lang", "language", "symbol_kind", "type_kind", "kind", "statement", "provenance", "review", "scope", "detail", "about", "evidence", "category", "confidence", "status"]);
 
-function DetailBody({ d, w, orgId, onFocusNode, viewEdges }: {
+function DetailBody({ d, w, orgId, onFocusNode, viewEdges, viewNote = null }: {
   d: KgNodeDetailResponse; w: { projectId: string; actor: string }; orgId?: string | null;
   onFocusNode: (id: string, n?: KgViewNode) => void;
   viewEdges: Array<{ edge: KgViewEdge; other: KgViewNode; out: boolean }> | null;
+  viewNote?: string | null;
 }) {
   const a = d.attrs ?? {};
   const href = codeHref(d.repo, d.path, d.line && d.end_line ? [d.line, d.end_line] : d.line);
@@ -326,7 +330,7 @@ function DetailBody({ d, w, orgId, onFocusNode, viewEdges }: {
         </dl>
       </Section>
       {isType(d.node) ? <Members d={d} w={w} onFocusNode={onFocusNode} /> : null}
-      <Connections d={d} w={w} onFocusNode={onFocusNode} viewEdges={viewEdges} />
+      <Connections d={d} w={w} onFocusNode={onFocusNode} viewEdges={viewEdges} viewNote={viewNote} />
       <Section title="Vector" testId="kg-panel-vector">
         {d.vector.embedded ? (
           <>
@@ -437,9 +441,10 @@ function MemberRow({ m, w, onFocusNode }: { m: KgViewNode; w: { projectId: strin
   );
 }
 
-function Connections({ d, w, onFocusNode, viewEdges }: {
+function Connections({ d, w, onFocusNode, viewEdges, viewNote = null }: {
   d: KgNodeDetailResponse; w: { projectId: string; actor: string }; onFocusNode: (id: string, n?: KgViewNode) => void;
   viewEdges: Array<{ edge: KgViewEdge; other: KgViewNode; out: boolean }> | null;
+  viewNote?: string | null;
 }) {
   // A type's own members are listed under Methods (round 2), not again here.
   const own = (gs: KgConnectionGroup[]) => (isType(d.node) ? gs.filter((g) => !(g.kind === "defines" && g.direction === "out")) : gs);
@@ -467,7 +472,7 @@ function Connections({ d, w, onFocusNode, viewEdges }: {
         // What the canvas draws for it right now — class calls rolled up from its methods
         // included — so a line on the canvas is always a row here.
         <div className="kg-group" data-testid="kg-conn-view">
-          <h5 className="kg-group-head" title="The connections drawn on the canvas now">In this view <span>{viewEdges.length.toLocaleString("en-US")}</span></h5>
+          <h5 className="kg-group-head" title="The connections drawn on the canvas now" data-testid="kg-conn-view-count">In this view <span>{viewNote ?? viewEdges.length.toLocaleString("en-US")}</span></h5>
           <ul className="kg-conn-list">
             {viewEdges.map(({ edge, other, out }) => (
               <NodeRow key={`v-${other.id}-${edge.kind}-${out}`} n={other}

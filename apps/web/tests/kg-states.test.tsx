@@ -158,7 +158,11 @@ describe("the Graph area's states", () => {
     await settle();
     expect(calls.some((c) => c.includes("/view/neighbourhood") && c.includes("limit=200"))).toBe(true);
     expect(calls.some((c) => /limit=(2[0-9][1-9]|[3-9]\d\d)/.test(c))).toBe(false);
-    expect(text("kg-truncated")).toContain("200 is the most one view reads");
+    // Asked for the most; the answer still says how many of how many, and says "the most one view
+    // reads" only when that is why fewer show (tester round 4: it said so on 147 of 809).
+    expect($('[data-testid="kg-show-more"]')).toBeNull();
+    expect(text("kg-truncated")).toContain(`Showing 80 of ${80 + FX.hood.hidden.nodes} connected classes`);
+    expect(text("kg-truncated")).not.toContain("200 is the most one view reads");
     expect($('[data-testid="kg-show-more"]')).toBeNull();
   });
 

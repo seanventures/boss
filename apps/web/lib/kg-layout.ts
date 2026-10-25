@@ -610,6 +610,41 @@ export function middleEllipsis(text: string, max = LABEL_MAX): string {
   return `${text.slice(0, head)}…${text.slice(text.length - (keep - head))}`;
 }
 
+/** Shortened at WORD boundaries (tester round 4: "Creo…sor", "DuePenl…cessor", "fineract…ts-core"):
+ *  the first words and the last kept whole — "DuePen…TransactionProcessor", "fineract-…-core" —
+ *  camelCase humps, "-", "_", ".", "/" and spaces are where a name may be cut. A single word
+ *  longer than `max` falls back to the middle ellipsis. */
+export function wordEllipsis(text: string, max = LABEL_MAX): string {
+  if (text.length <= max) return text;
+  const words = text.match(/[A-Z]+(?![a-z])|[A-Z]?[a-z0-9]+|[^A-Za-z0-9]+|[A-Z]/g) ?? [text];
+  if (words.length < 2) return middleEllipsis(text, max);
+  let head = 0; let tail = words.length;
+  let len = 1; // the ellipsis
+  // The last word first (what kind of thing it is: Processor, Service), then the first, alternating.
+  const take = (fromEnd: boolean) => {
+    const w = fromEnd ? words[tail - 1] : words[head];
+    if (head >= tail || len + w.length > max) return false;
+    len += w.length;
+    if (fromEnd) tail -= 1; else head += 1;
+    return true;
+  };
+  let end = take(true);
+  let start = take(false);
+  while (end || start) { end = take(true); start = take(false); }
+  // Room for one whole word only: the first ("Abstract…"), else the last ("…Processor").
+  if (!head) {
+    if (words[0].length + 1 <= max) return `${words[0].replace(/[-_./\s]+$/, "")}…`;
+    return tail < words.length ? `…${words.slice(tail).join("").replace(/^[-_./\s]+/, "")}` : middleEllipsis(text, max);
+  }
+  if (tail === words.length) return `${words.slice(0, head).join("").replace(/[-_./\s]+$/, "")}…`;
+  const trim = (s: string) => s.replace(/[-_./\s]+$/, "");
+  const lead = (s: string) => s.replace(/^[-_./\s]+/, "");
+  const a = words.slice(0, head).join("");
+  const b = words.slice(tail).join("");
+  // Keep a separator the name had ("fineract-…-core"); drop a dangling one otherwise.
+  return /[-_./]$/.test(a) || /^[-_./]/.test(b) ? `${a}…${b}` : `${trim(a)}…${lead(b)}`;
+}
+
 export type LabelBox = { id: string; x: number; y: number; w: number; h: number; priority: number };
 
 /** Greedy label placement: highest priority first, a label that would overlap one already placed
@@ -713,9 +748,14 @@ export type LabelItem = {
   dir?: Pt;
   /** Drawn even with no room (the selection, the hovered node, the centre). */
   must?: boolean;
+  /** Always shown and never on another label (the selection's first hop, a Whole-repo bubble):
+   *  with no room beside its node it moves outward, joined to its node by a leader line. */
+  keep?: boolean;
 };
 
-export type PlacedLabel = { variant: number; side: LabelSide; x: number; y: number; w: number; h: number };
+export type PlacedLabel = { variant: number; side: LabelSide; x: number; y: number; w: number; h: number;
+  /** Moved outward from its node: drawn with a leader line back to it. */
+  leader?: boolean };
 
 /** The rectangle labels must stay inside: the canvas minus what the details drawer covers. */
 export type LabelBounds = { x0: number; y0: number; x1: number; y1: number };
@@ -726,8 +766,13 @@ function sidesFor(it: LabelItem): LabelSide[] {
     if (Math.abs(it.dir.x) >= 0.4) first = it.dir.x > 0 ? "right" : "left";
     else first = it.dir.y < 0 ? "above" : "below";
   }
-  const rest: LabelSide[] = first === "left" ? ["below", "above", "right"] : first === "right" ? ["below", "above", "left"]
-    : first === "above" ? ["below", "right", "left"] : ["above", "right", "left"];
+  // A ring node's label never goes INWARD (tester round 4: "Money" and "FineractSt…Processor" sat
+  // inside the ring, "+9 in loanaccount/domain" read as the centre's label): only outward or along.
+  const out = it.prefer === "out";
+  const rest: LabelSide[] = first === "left" ? (out ? ["below", "above"] : ["below", "above", "right"])
+    : first === "right" ? (out ? ["below", "above"] : ["below", "above", "left"])
+    : first === "above" ? (out ? ["right", "left"] : ["below", "right", "left"])
+    : out ? ["right", "left"] : ["above", "right", "left"];
   // A ring's top and bottom are where neighbours sit side by side: their labels take turns on a
   // second row out (never further, so each still reads as its node's).
   const extra: LabelSide[] = it.prefer === "out" ? (first === "above" ? ["above2"] : first === "below" ? ["below2"] : []) : [];
@@ -783,7 +828,24 @@ export function placeNodeLabels(items: LabelItem[], obstacles: LabelBox[], bound
         if (clear(bx, it.id)) { got = { variant: v, side, x: at.x, y: at.y, w, h }; break; }
       }
     }
-    if (!got && it.must) {
+    if (!got && it.keep) {
+      // Outward along its ray, in steps, the shortest form first: clear of every label already
+      // placed (circles it may cross; its leader line says whose it is).
+      const v = it.variants.length - 1;
+      const { w, h } = it.variants[v];
+      const dir = it.dir ?? { x: 0, y: 1 };
+      for (let step = 1; step <= 14 && !got; step += 1) {
+        const off = step * (h + 4);
+        const probe = { ...it, x: it.x + dir.x * off, y: it.y + dir.y * off, r: 2 };
+        for (const side of sides) {
+          const at = labelBox(probe, side, w, h, bounds);
+          if (!at) continue;
+          const bx = { id: it.id, x: at.x, y: at.y, w, h, priority: it.priority };
+          if (!placed.some((p) => overlaps(bx, p, gap))) { got = { variant: v, side, x: at.x, y: at.y, w, h, leader: true }; break; }
+        }
+      }
+    }
+    if (!got && (it.must || it.keep)) {
       const v = it.variants.length - 1;
       const { w, h } = it.variants[v];
       const loose = { x0: -1e9, y0: -1e9, x1: 1e9, y1: 1e9 };
@@ -923,4 +985,48 @@ export function groupFocus<N extends { id: string; key: string; layer: string; s
     merged.set(k, { ...prev, weight: w, label: noun ? `${w.toLocaleString("en-US")} ${w === 1 ? noun.replace(/s$/, "") : noun.endsWith("s") ? noun : `${noun}s`}` : null });
   }
   return { nodes: out, edges: [...merged.values()], members };
+}
+
+
+/** A ring node's label is shown only from this zoom up (or on hover, or when it is the selection
+ *  or one hop from it): 2 hops / Show 200 name the first ring, the rest on hover or zoom. */
+export const LABEL_ZOOM_OUTER = 1;
+
+/**
+ * WHAT A FOCUS DRAWS (tester round 4 P0: 2 hops and Show 200 were a solid knot of edges at the
+ * centre). Every edge to the centre; for each node further out, its strongest edge to the ring
+ * inside it — the tree that says how it is reached; and every edge of the selection. The rest
+ * (chords between two nodes of one ring, a second route in) are in the list view and the panel.
+ */
+export function focusEdges<E extends { src: string; dst: string; weight: number }>(
+  centerId: string, hops: Map<string, number>, edges: E[], selectedId?: string | null,
+): E[] {
+  const keep = new Set<E>();
+  const best = new Map<string, E>();
+  for (const e of edges) {
+    if (e.src === centerId || e.dst === centerId) { keep.add(e); continue; }
+    if (selectedId && selectedId !== centerId && (e.src === selectedId || e.dst === selectedId)) keep.add(e);
+    const hs = hops.get(e.src); const hd = hops.get(e.dst);
+    if (hs === undefined || hd === undefined || Math.abs(hs - hd) !== 1) continue;
+    const outer = hs > hd ? e.src : e.dst;
+    const prev = best.get(outer);
+    if (!prev || e.weight > prev.weight || (e.weight === prev.weight && `${e.src}${e.dst}` < `${prev.src}${prev.dst}`)) best.set(outer, e);
+  }
+  for (const e of best.values()) keep.add(e);
+  return edges.filter((e) => keep.has(e));
+}
+
+/** Whose label always shows in a Focus: the centre's first ring, and the selection's neighbours. */
+export function focusKeepLabels(centerId: string, hops: Map<string, number>, edges: Array<{ src: string; dst: string }>, selectedId?: string | null): Set<string> {
+  const out = new Set<string>();
+  for (const [id, h] of hops) if (h <= 1) out.add(id);
+  if (selectedId) {
+    out.add(selectedId);
+    for (const e of edges) {
+      if (e.src === selectedId) out.add(e.dst);
+      if (e.dst === selectedId) out.add(e.src);
+    }
+  }
+  out.add(centerId);
+  return out;
 }
