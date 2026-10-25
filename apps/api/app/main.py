@@ -13514,6 +13514,15 @@ def agent_action(payload: AgentActionRunRequest, request: Request) -> AgentActio
         # (`run_on_host` is host:exec), not only assistant:chat.
         auth=_request_identity(request),
     )
+    # NEEDS YOUR CONSENT IS A QUESTION, NOT AN OUTCOME (registry.consent_result). Raised again, it
+    # is answered as the flat 409 every start answers (install_consent_handler): the console's
+    # button path opens the consent sheet and presses once more after the grant, and Metatron
+    # prints the link to the same sheet. Nothing ran, so nothing is recorded: the offer stays
+    # standing to be pressed again.
+    if result.get("error") == "consent_required" and isinstance(result.get("consent"), dict):
+        from boss_engine.identity.consent import ConsentRequired
+
+        raise ConsentRequired(result["consent"])
     ok = bool(result.get("ok", True))
     with begin(engine) as connection:
         emit_event(connection, payload.project_id, "agent.action_accepted", payload.actor,

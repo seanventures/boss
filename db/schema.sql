@@ -8126,6 +8126,18 @@ CREATE TABLE IF NOT EXISTS identity_delegation_grants (
 CREATE INDEX IF NOT EXISTS identity_delegation_grants_user ON identity_delegation_grants (user_principal_id, status);
 -- §7.3: "BOSS reminds the user 3 days before expiry" — once per grant (extending clears it).
 ALTER TABLE identity_delegation_grants ADD COLUMN IF NOT EXISTS reminded_at TIMESTAMPTZ;
+-- §7.3 2, ASKED WHERE NO SHEET CAN OPEN: a consent request raised in an agent turn, an MCP call or
+-- a key-authenticated start, kept for an hour so the console can open the same sheet from a link
+-- (/account/agents?consent=<id>). The link carries only this id; only the person it names reads it.
+CREATE TABLE IF NOT EXISTS identity_pending_consents (
+  id           TEXT PRIMARY KEY,                         -- pcn_
+  org_id       TEXT NOT NULL,
+  principal_id TEXT NOT NULL,
+  body         JSONB NOT NULL,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at   TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS identity_pending_consents_expiry ON identity_pending_consents (expires_at);
 CREATE TABLE IF NOT EXISTS identity_delegation_grant_permissions (
   grant_id       TEXT NOT NULL REFERENCES identity_delegation_grants(id),
   permission_key TEXT NOT NULL REFERENCES identity_permissions(key),   -- trigger: must be delegable

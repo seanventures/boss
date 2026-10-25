@@ -21,7 +21,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public
-from boss_engine.identity import cascade, delegation, grants, passports, signing_keys, tokens, vault
+from boss_engine.identity import cascade, consent, delegation, grants, passports, signing_keys, tokens, vault
 from boss_engine.identity.authn import AuthnError
 from boss_engine.identity.delegation import CascadeTrigger, GrantRequest, TokenExchangeRequest
 
@@ -461,6 +461,19 @@ def build_identity_agents_router() -> APIRouter:
         ctx = _ctx(request)
         with _engine().begin() as db:
             return {"delegations": [_grant_json(g, db) for g in grants.for_person(ctx.principal.id, db=db)]}
+
+    @router.get("/v1/identity/me/consent-requests/{consent_id}")
+    @authenticated(self_only=True)
+    def my_consent_request(request: Request, consent_id: str):
+        """A consent request raised where no sheet could open (an agent turn, Metatron, an MCP
+        call, a key): the console's link /account/agents?consent=<id> opens the same sheet from it.
+        Only the person it was raised for reads it; another's, an expired or an unknown id is 404."""
+        ctx = _ctx(request)
+        with _engine().begin() as db:
+            body = consent.pending_consent(db, consent_id, principal_id=ctx.principal.id)
+        if body is None:
+            return _err("not_found", 404)
+        return body
 
     @router.post("/v1/identity/me/delegations")
     @permit(P.DELEGATION_GRANT, scope=Scope.org())

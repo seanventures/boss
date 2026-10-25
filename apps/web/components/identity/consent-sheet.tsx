@@ -19,7 +19,7 @@ import React, { useEffect, useState } from "react";
 import { FileCode, GithubLogo, LockKey, ShieldCheck } from "@phosphor-icons/react";
 
 import { AgentAvatar } from "../../app/agent-avatar";
-import { IdentityError, idPost } from "../../lib/identity/api";
+import { idPost, refusalSentence } from "../../lib/identity/api";
 import { CONSENT_EVENT, grantBodyFor, type ConsentDuration, type ConsentRequest } from "../../lib/identity/consent";
 import { isPermission, type Permission } from "../../lib/identity/permissions.gen";
 import { useGuardedCall } from "./identity-provider";
@@ -40,16 +40,12 @@ function names(list: { name: string }[]): string {
 /**
  * WHY A GRANT WAS REFUSED, IN WORDS (round 3: the sheet said only "That didn't work" when the API
  * answered 403 github_access_lacking — a person with no GitHub access of their own granting an
- * agent push on a repo). The API's own sentence when it wrote one (a bare code is never shown);
- * the GitHub refusal names the repo and the fix.
+ * agent push on a repo). The one identity fallback (lib/identity/api.ts refusalSentence): the
+ * API's own sentence when it wrote one, else the refusal's words, which name the repo, the
+ * project and the permissions from its body.
  */
 export function consentRefusal(e: unknown): string {
-  if (!(e instanceof IdentityError)) return "That didn't work";
-  if (e.code === "github_access_lacking") {
-    const repo = typeof e.body.repo === "string" && e.body.repo ? e.body.repo : "this repository";
-    return `Your own GitHub account can't push to ${repo}, so you can't let an agent do it for you. Connect your GitHub in My account › Agents, then try again.`;
-  }
-  return e.detail && /\s/.test(e.detail) ? e.detail : e.message;
+  return refusalSentence(e);
 }
 
 export function ConsentSheet({ request, onClose }: { request: ConsentRequest; onClose: () => void }) {

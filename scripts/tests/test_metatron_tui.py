@@ -1623,3 +1623,53 @@ def test_every_api_form_is_in_the_command_list_the_help_and_completion_read():
     row = next(entry for entry in tui.SLASH_COMMANDS if entry[0] == "/api")
     assert "N" in row[1] and "run N" in row[1] and "METHOD /v1/path" in row[1]
     assert "/api NUMBER" in tui.HELP_TEXT and "/api run NUMBER" in tui.HELP_TEXT
+
+
+# ---- consent asked in a turn: Metatron prints the console link (operator, 2026-10-24) -------------
+
+CONSENT_LINK = "https://boss.test/account/agents?consent=pcn_abc"
+CONSENT_TURN = {
+    **AGENT_TURN,
+    "reply": "The Software Engineer needs your consent to build in northpeak-bank.",
+    "proposed_actions": [
+        {"id": "pa_c", "tool": "create_code_task", "args": {"title": "Loan ledger"},
+         "label": "Give consent · Build: Loan ledger", "why": "Needs your consent",
+         "consent": {"consent_id": "pcn_abc", "grant_href": "/account/agents?consent=pcn_abc",
+                     "grant_url": CONSENT_LINK}},
+    ],
+    "next_steps": [],
+}
+CONSENT_409 = {"error": "consent_required", "task": "Loan ledger", "task_run_id": None,
+               "agents": [{"id": "agt_se", "name": "Software Engineer", "role_key": "builder"}],
+               "permissions": ["code_task:read"], "projects": ["northpeak-bank"],
+               "durations": [{"kind": "standing", "label": "For 30 days", "days": 30}],
+               "consent_id": "pcn_abc", "grant_href": "/account/agents?consent=pcn_abc",
+               "grant_url": CONSENT_LINK}
+
+
+def test_a_give_consent_offer_prints_the_console_link_that_opens_the_sheet():
+    opener = FakeOpener([(200, CONSENT_TURN)])
+    client = tui.MetatronClient(_config(), urlopen=opener)
+    out = client.handle(tui.parse_line("start the build in northpeak-bank"))
+    assert "1. Give consent · Build: Loan ledger" in out
+    assert f"Give consent in the console: {CONSENT_LINK}, then /pick 1 again." in out
+    assert "Create one in the console" not in out
+
+
+def test_picking_it_before_consenting_says_where_to_consent_not_http_409():
+    opener = FakeOpener([(200, CONSENT_TURN), (409, CONSENT_409)])
+    client = tui.MetatronClient(_config(), urlopen=opener)
+    client.handle(tui.parse_line("start the build in northpeak-bank"))
+    out = client.handle(tui.parse_line("1"))
+    assert opener.calls[1]["url"].endswith("/v1/engine/agent/action")
+    assert "Software Engineer need your consent" in out and CONSENT_LINK in out
+    assert "HTTP 409" not in out and "consent_required" not in out
+    # Nothing ran, so the offer still stands to be picked after the grant.
+    assert [c["tool"] for c in client.choices()] == ["create_code_task"]
+
+
+def test_without_a_public_address_the_link_is_the_console_path():
+    assert tui.consent_where({"grant_href": "/account/agents?consent=pcn_x"}) == \
+        "Give consent in the BOSS console at /account/agents?consent=pcn_x"
+    assert tui.consent_refusal("not json") is None
+    assert tui.consent_refusal(json.dumps({"detail": CONSENT_409})).startswith("Nothing ran")

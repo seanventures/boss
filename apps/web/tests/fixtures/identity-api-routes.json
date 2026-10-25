@@ -118,6 +118,7 @@
   "POST /v1/identity/me/connections",
   "DELETE /v1/identity/me/connections/{item_id}",
   "GET /v1/identity/me/connections/{provider}/callback",
+  "GET /v1/identity/me/consent-requests/{consent_id}",
   "GET /v1/identity/me/delegations",
   "POST /v1/identity/me/delegations",
   "POST /v1/identity/me/delegations/preview",

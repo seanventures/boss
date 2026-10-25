@@ -1131,6 +1131,17 @@ def _offered_args(result: dict, step: dict) -> dict:
     return {}
 
 
+def consent_link(result: dict) -> dict:
+    """`{"consent": {consent_id, grant_href, grant_url?}}` for an offer made from a call refused for
+    want of consent (agent/engine_agent._consent_offer), else {}. The console shows the button as
+    "Give consent"; Metatron prints the link that opens the same sheet. Only the link travels on
+    the offer: pressing it asks the API again, which answers the 409 the sheet opens on."""
+    if not isinstance(result, dict) or not isinstance(result.get("consent"), dict):
+        return {}
+    link = {k: str(result[k]) for k in ("consent_id", "grant_href", "grant_url") if result.get(k)}
+    return {"consent": link or {"grant_href": "/account/agents"}}
+
+
 def _button_label(result: dict, step: dict) -> str:
     """Text for an offered action, never empty.
 
@@ -2829,6 +2840,7 @@ class IntentRouter:
                                 # the answer is not.
                                 "label": _button_label(result, step),
                                 "why": str(result.get("why") or ""),
+                                **consent_link(result),
                             }, registry=self._answer_agent().registry)
                     # ANSWERED AS A ROLE WITHOUT READING WHAT THAT ROLE HAS SEEN.
                     #
@@ -3123,6 +3135,7 @@ class IntentRouter:
                                     "args": _offered_args(result, step),
                                     "label": _button_label(result, step),
                                     "why": str(result.get("why") or ""),
+                                    **consent_link(result),
                                 }, registry=self._answer_agent().registry)
                         improved = str(getattr(better, "reply", "") or "").strip()
                         # A RE-ASK MAY REFINE AN ANSWER, NOT SWAP ITS SUBJECT. In boss-1 this

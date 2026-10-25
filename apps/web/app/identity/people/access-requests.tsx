@@ -13,7 +13,7 @@ import { showToast } from "../../client-forms";
 import { CanButton, useGuardedCall, useIdentity } from "../../../components/identity/identity-provider";
 import { Ago, ErrorLine, Perm, RoleChip, Sheet, useNow } from "../../../components/identity/kit";
 import { ErrorState, type ReadFailure } from "../../../components/identity/states";
-import { IdentityError, idPost } from "../../../lib/identity/api";
+import { IdentityError, idPost, refusalSentence } from "../../../lib/identity/api";
 import type { AccessRole } from "../../../lib/identity/types";
 import type { AccessRequestRow } from "../../../lib/identity/types-people";
 import { grantReach } from "../../../lib/identity/grant-limit";
@@ -26,9 +26,8 @@ function refusal(e: unknown): string {
     if (e.code === "role_lacks_permission") return "That role does not carry it";
     if (e.code === "binding_exists") return "They already have it";
     if (e.code === "scope_not_bindable") return "That role binds at org only";
-    return e.message;
   }
-  return "That didn't work";
+  return refusalSentence(e);
 }
 
 /** Roles that carry the permission: the API's candidates, else the ones the console can see. */

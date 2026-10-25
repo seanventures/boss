@@ -8,7 +8,7 @@
 import React, { useState } from "react";
 import { DeviceMobile, Desktop, SignOut } from "@phosphor-icons/react";
 
-import { IdentityError, idDelete, idGet } from "../../../lib/identity/api";
+import { IdentityError, idDelete, idGet, refusalSentence } from "../../../lib/identity/api";
 import type { SessionRow } from "../../../lib/identity/types";
 import { toSessionRows } from "../../../lib/identity/adapt-session";
 import { useGuardedCall } from "../../../components/identity/identity-provider";
@@ -32,7 +32,7 @@ export function MySessions({ sessions: initial }: { sessions: SessionRow[] }) {
     setError(null);
     guarded("Ending sessions signs those browsers out.", call)
       .then(reload).then(() => showToast("success", toast))
-      .catch((e) => setError(e instanceof IdentityError ? e.message : "That didn't work"));
+      .catch((e) => setError(refusalSentence(e)));
   };
   const others = sessions.filter((s) => !s.current);
   return (

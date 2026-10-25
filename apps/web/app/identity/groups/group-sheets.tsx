@@ -13,7 +13,7 @@ import { LockSimple, PencilSimple, Plus, Trash, UsersThree } from "@phosphor-ico
 import { showToast } from "../../client-forms";
 import { useGuardedCall, useIdentity } from "../../../components/identity/identity-provider";
 import { ErrorLine, RoleChip, Sheet } from "../../../components/identity/kit";
-import { IdentityError, idDelete, idPatch, idPost } from "../../../lib/identity/api";
+import { IdentityError, idDelete, idPatch, idPost, refusalSentence } from "../../../lib/identity/api";
 import type { AccessRole, Binding, Group } from "../../../lib/identity/types";
 import { grantReach } from "../../../lib/identity/grant-limit";
 import type { ProjectChoice } from "../../../lib/identity/types-people";
@@ -26,9 +26,8 @@ export function refusalWords(e: unknown): string {
     if (e.code === "invalid_group") return "Check the name";
     if (e.code === "binding_exists") return "They already have it";
     if (e.code === "scope_not_bindable") return "This role binds at org only";
-    return e.message;
   }
-  return "That didn't work";
+  return refusalSentence(e);
 }
 
 /** "Release Captains" → "release-captains": the group's key (lower case, 1–63, GROUP_KEY). */

@@ -166,3 +166,24 @@ export async function withConsent<T>(start: () => Promise<T>): Promise<T> {
     return start();
   }
 }
+
+/**
+ * The same, for a server action's result (actions.ts postJsonReturn answers a 409
+ * consent_required as `{ok: false, data: {consent}}`): ask, and once granted call again — once.
+ * Every press of an agent's offer goes through it (the dock, Ask BOSS on the Command Center), so
+ * a "Give consent" offer (a call refused for want of consent in an agent turn) opens the sheet
+ * and then runs the call it was made from.
+ */
+export async function withConsentResult<R extends { ok: boolean; data?: unknown }>(call: () => Promise<R>): Promise<R> {
+  const r = await call();
+  const asked = !r.ok ? consentFromBody((r.data as Record<string, unknown> | undefined)?.consent) : null;
+  if (asked && await askConsent(asked)) return call();
+  return r;
+}
+
+/** Where a consent request can be given from a link: /account/agents?consent=<id>. */
+export const CONSENT_LINK_PARAM = "consent";
+
+/** An offer made from a call refused for want of consent (engine intent_router.consent_link). */
+export type ConsentLink = { consent_id?: string; grant_href?: string; grant_url?: string };
+

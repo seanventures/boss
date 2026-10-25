@@ -8,7 +8,7 @@ import { CSRF_HEADER, ME_PATH } from "./contract";
 import { isPermission, type Permission } from "./permissions.gen";
 import { apiWrite, type WriteMethod } from "../api-write";
 import { sendToEnrolment } from "./enrolment";
-import { needsWords } from "./words";
+import { humanise, needsWords, permissionName } from "./words";
 import { refusalCode } from "./refusal-code";
 
 export type IdentityErrorCode =
@@ -29,7 +29,7 @@ export class IdentityError extends Error {
     // A seat refusal names who holds the seat and where seats are changed: its own sentence.
     super(code === "seat_required" && typeof extra.body?.message === "string" && extra.body.message
       ? extra.body.message
-      : (status === 422 && fieldSentence(extra.body?.detail)) || errorSentence(status, code, extra.permission));
+      : (status === 422 && fieldSentence(extra.body?.detail)) || errorSentence(status, code, extra.permission, extra.body ?? {}));
     this.name = "IdentityError";
     this.status = status;
     this.code = code;
@@ -55,34 +55,117 @@ export function fieldSentence(detail: unknown): string | null {
   return msg ? `${name}: ${msg}` : `${name} is not valid`;
 }
 
-/** The words for a refusal. Short: they land in toasts (≤ 4 words) and inline lines. */
-export function errorSentence(status: number, code: string, permission?: unknown): string {
-  if (code === "step_up_required") return "Confirm it's you";
+type Body = Record<string, unknown>;
+const strOf = (v: unknown): string => (typeof v === "string" ? v : "");
+const listOf = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : strOf(v) ? [strOf(v)] : []);
+function namesOf(perms: string[]): string {
+  const names = perms.map((p) => `“${permissionName(p)}”`);
+  return names.length <= 1 ? (names[0] ?? "") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
+/**
+ * THE WORDS FOR EVERY REFUSAL THE IDENTITY API GIVES, by code (engine identity/grants.py
+ * GrantRefused, identity/authn.py AuthnError, routers/identity_agents.py _err). Each reads the
+ * refusal's own body where it names something (the project, the permissions, the repo), so the
+ * person learns what to change, never only that it failed. A code with no entry here still gets
+ * the API's sentence or its humanised code (errorSentence). Enforced by
+ * tests/every-identity-refusal-has-words.test.ts.
+ */
+export const REFUSAL_WORDS: Readonly<Record<string, (body: Body) => string>> = {
+  step_up_required: () => "Confirm it's you",
+  step_up_cancelled: () => "Not confirmed — press it again and confirm it's you",
+  unauthenticated: () => "Sign in again",
+  csrf_failed: () => "Reload and retry",
+  invalid_credentials: () => "Wrong email or password",
+  account_disabled: () => "This account is disabled",
+  ambiguous_credentials: () => "Sign out, then sign in once",
+  last_owner: () => "Add another Owner first",
+  identity_unavailable: () => "Identity is unavailable",
+  invalid_code: () => "That code didn't work",
+  code_invalid: () => "That code didn't work",
+  policy_refused: () => "Not allowed by policy",
+  invalid_policy: () => "Check the fields",
+  invalid_request: () => "Check the fields",
+  unknown_fields: () => "Check the fields",
+  confirmation_required: () => "Confirm critical changes",
+  consent_required: () => "Needs your consent",
+  no_second_factor: () => "Add a second factor first",
+  mfa_enrolment_required: () => "Add a second factor first",
+  enrolment_expired: () => "That key expired — start again",
+  enrolment_grant_required: () => "Ask an admin to reset your second factor",
+  task_grants_end_with_their_run: () => "Ends with its run",
+  revoked_is_terminal: () => "Already ended",
+  too_long: (b) => (typeof b.max_days === "number" ? `At most ${b.max_days} days` : "Longer than policy allows"),
+  expired: () => "Pick an expiry in the future",
+  role_exists: () => "That key is taken",
+  system_passport: () => "BOSS manages this agent",
+  people_only: () => "Only a person signed in to the console can do this",
+  person_inactive: () => "Your account isn't active",
+  not_found: () => "Not found",
+  no_agents: () => "Pick at least one agent",
+  no_projects: () => "Pick at least one project",
+  empty_permissions: () => "Pick at least one ability",
+  unknown_permission: (b) => (strOf(b.permission) ? `BOSS has no permission “${strOf(b.permission)}”` : "Unknown permission"),
+  not_delegable: (b) => (strOf(b.permission) ? `${namesOf([strOf(b.permission)])} can't be given to an agent` : "That can't be given to an agent"),
+  narrowing_only: (b) => (strOf(b.permission) ? `A grant only narrows: it can't add ${namesOf([strOf(b.permission)])}` : "A grant only narrows"),
+  bad_max_depth: () => "Choose a depth the policy allows",
+  children_without_subdelegation: () => "Allow sub-delegation to name child agents",
+  bad_child_name: () => "Check the child agent's name",
+  unknown_agent: (b) => (strOf(b.agent) ? `${strOf(b.agent)} isn't an agent here` : "That agent isn't here"),
+  agent_inactive: (b) => (strOf(b.agent) ? `${strOf(b.agent)} is paused or revoked` : "That agent is paused or revoked"),
+  exceeds_ceiling: (b) => {
+    const perms = listOf(b.permissions);
+    return perms.length ? `No agent picked may ever hold ${namesOf(perms)}` : "Beyond what the agent may ever hold";
+  },
+  exceeds_your_access: (b) => {
+    const perms = listOf(b.permissions);
+    const where = strOf(b.project_name) || strOf(b.project);
+    return perms.length
+      ? `You don't hold ${namesOf(perms)}${where ? ` in ${where}` : ""}, so you can't let an agent do it. Leave it out, or ask an Admin.`
+      : `That is more than you hold${where ? ` in ${where}` : ""}`;
+  },
+  bad_resources: () => "Check the repositories and their access",
+  bad_repos: () => "Check the repositories: each is owner/name",
+  bad_github_permission: (b) => (strOf(b.key) ? `GitHub access “${strOf(b.key)}” isn't one BOSS grants` : "Check the GitHub access"),
+  github_access_lacking: (b) => (strOf(b.repo)
+    ? `Your own GitHub account can't push to ${strOf(b.repo)}, so you can't let an agent do it. Connect your GitHub in My account › Agents, then try again.`
+    : "Connect your GitHub first"),
+  public_origin_required: () => "Set BOSS's public address first",
+  run_token_required: () => "Only a running agent can do this",
+  unknown_provider: () => "BOSS doesn't know that provider",
+  vault_error: () => "The vault couldn't do that",
+  rate_limited: () => "Too many tries",
+};
+
+/** The words for a refusal. Short where they can be: they land in toasts and inline lines. */
+export function errorSentence(status: number, code: string, permission?: unknown, body: Body = {}): string {
   if (code === "forbidden") return typeof permission === "string" ? needsWords(permission) : "Not allowed";
-  if (code === "unauthenticated") return "Sign in again";
-  if (code === "csrf_failed") return "Reload and retry";
-  if (code === "invalid_credentials") return "Wrong email or password";
-  if (code === "last_owner") return "Add another Owner first";
-  if (code === "identity_unavailable") return "Identity is unavailable";
-  if (code === "invalid_code" || code === "code_invalid") return "That code didn't work";
-  if (code === "policy_refused") return "Not allowed by policy";
-  if (code === "invalid_policy") return "Check the fields";
-  if (code === "confirmation_required") return "Confirm critical changes";
-  if (code === "consent_required") return "Needs your consent";
-  if (code === "no_second_factor" || code === "mfa_enrolment_required") return "Add a second factor first";
-  if (code === "enrolment_expired") return "That key expired — start again";
-  if (code === "enrolment_grant_required") return "Ask an admin to reset your second factor";
-  if (code === "task_grants_end_with_their_run") return "Ends with its run";
-  if (code === "revoked_is_terminal") return "Already ended";
-  if (code === "too_long") return "Longer than policy allows";
-  if (code === "role_exists") return "That key is taken";
-  if (code === "github_access_lacking") return "Connect your GitHub first";
-  if (code === "system_passport") return "BOSS manages this agent";
+  const words = REFUSAL_WORDS[code];
+  if (words) return words({ ...(typeof permission === "string" && !("permission" in body) ? { permission } : {}), ...body });
+  // The API's own sentence, when it wrote one (refusalCode takes a bare `detail` as the code).
+  if (/\s/.test(code)) return code;
+  if (strOf(body.detail) && /\s/.test(strOf(body.detail))) return strOf(body.detail);
+  if (strOf(body.message)) return strOf(body.message);
   if (status === 429) return "Too many tries";
   if (status === 404) return "Not found";
-  if (status === 409) return "Changed meanwhile — reload";
-  if (status === 422) return "Check the fields";
-  return "That didn't work";
+  if (status === 409 && (!code || code === "error")) return "Changed meanwhile — reload";
+  if (status === 422 && (!code || code === "error")) return "Check the fields";
+  // An unworded code still says which refusal it was, never only that one happened.
+  if (code && code !== "error") return humanise(code);
+  return status ? `Refused (HTTP ${status})` : "No answer from BOSS";
+}
+
+/**
+ * THE ONE FALLBACK for an identity screen's error line: an IdentityError's sentence (above), the
+ * error's own text, and only with neither the bare words. Every screen's local `said()` ends here,
+ * so no screen ever says only "That didn't work" when the API gave a reason
+ * (tests/every-identity-refusal-has-words.test.ts keeps the literal in this function alone).
+ */
+export function refusalSentence(e: unknown): string {
+  // The API's own sentence when it wrote one (a bare code in `detail` is never shown).
+  if (e instanceof IdentityError) return e.detail && /\s/.test(e.detail) ? e.detail : e.message;
+  const why = e instanceof Error && e.message ? e.message : "";
+  return `That didn't work · ${why || "no answer"}`;
 }
 
 let csrfToken = "";

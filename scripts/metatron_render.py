@@ -420,6 +420,8 @@ def choices_card(choices: list[Mapping[str, Any]]) -> Panel:
         why = str(choice.get("why") or "").strip()
         if why:
             label.append(f"\n{why}", style="boss.dim")
+        if choice.get("consent_where"):
+            label.append(f"\n{choice['consent_where']}, then /pick {number} again.", style="boss.decide")
         table.add_row(f"{number}", label)
     footer = Text("Nothing has run yet. Type a number, or /pick to choose with the arrows.",
                   style="boss.dim")
@@ -930,6 +932,12 @@ def result(client: Any, command: Any, payload: Any, *, commands: Iterable[tuple[
         payload = tui.redact_payload(payload, client.config.api_key)
     kind = command.kind
     if isinstance(payload, dict) and (payload.get("__command_error__") or payload.get("__http_error__")):
+        consent = (tui.consent_refusal(str(payload.get("body") or ""))
+                   if payload.get("status") == 409 and hasattr(tui, "consent_refusal") else None)
+        if consent:
+            return Panel(Text(consent), title=Text("Needs your consent", style="boss.decide"),
+                         title_align="left", border_style="boss.decide.border", box=box.ROUNDED,
+                         padding=(0, 1))
         return failure(payload, api_url=client.config.api_url, project_id=client.project_id)
     if kind == "help":
         return help_table(commands)

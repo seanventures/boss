@@ -980,7 +980,7 @@ class EngineAgent:
                 ),
                 "proposed": proposal,
             }
-        return self.registry.invoke(
+        result = self.registry.invoke(
             # AMBIENT CONTEXT THE MODEL CANNOT KNOW AND MUST NOT HAVE TO GUESS.
             #
             # An investigation posts its result back into the conversation that asked for it,
@@ -994,3 +994,34 @@ class EngineAgent:
             # escalates its own permissions (a fixing investigation) has to be able to make.
             args={**(self.ambient or {}), **args, "_writes_allowed": bool(allow_writes)},
         )
+        return _consent_offer(name, args, result, pending)
+
+
+def _consent_offer(name: str, args: dict, result: Any, pending: list[dict]) -> Any:
+    """A CALL REFUSED FOR WANT OF CONSENT BECOMES ITS OWN "GIVE CONSENT" BUTTON.
+
+    The operator asked Metatron to start a build; create_code_task was refused consent_required
+    and the reply printed the raw refusal ("Create one in the console …"). The person's consent is
+    a question only they can answer, so the turn offers the exact call again as a press: pressing
+    it answers 409 consent_required, the console opens its consent sheet and presses once more
+    after the grant; Metatron prints the console link that opens the same sheet. Every tool, every
+    surface: the registry's structured result (registry.consent_result) is the one input."""
+    if not (isinstance(result, dict) and result.get("error") == "consent_required"):
+        return result
+    offered = {k: v for k, v in (args or {}).items() if not str(k).startswith("_")}
+    pending.append({"tool": name, "args": offered})
+    where = result.get("grant_url") or result.get("grant_href") or ""
+    # An OFFER, like any write the loop turns into a button: not a failure of the turn (the reply
+    # must not list it under "tried and did not work"), and not a deed.
+    return {
+        **{k: v for k, v in result.items() if k != "error"},
+        "ok": True, "status": "needs_consent",
+        "proposed": True,
+        "label": "Give consent · " + _propose_label(name, offered),
+        "why": "Needs your consent: the agents act with your access",
+        "note": ("NOT run: it needs the person's consent, which only they can give. A 'Give consent' "
+                 "button for this exact call is attached to your reply. Say in one or two sentences "
+                 "which agents need to act for them and on what, and that pressing the button (or "
+                 + (f"opening {where} " if where else "opening the console ")
+                 + "and then picking the choice again) starts it. Never paste the refusal's fields."),
+    }

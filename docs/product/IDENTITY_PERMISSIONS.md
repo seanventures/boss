@@ -310,6 +310,7 @@ These routes do not exist yet. They are specified in IDENTITY.md §10.
 | * | `/v1/identity/me/connections` | connection:use_own |
 | POST | `/v1/identity/me/delegations` | delegation:grant |
 | GET/DELETE | `/v1/identity/me/delegations/{id}` | authenticated (own grant only; 404 otherwise) |
+| GET | `/v1/identity/me/consent-requests/{id}` | authenticated (the consent request raised for you, behind a console link; 404 otherwise or after an hour) |
 | GET | `/v1/identity/users · /users/{id}` | user:read |
 | POST | `/v1/identity/users (invite)` | user:invite |
 | PATCH | `/v1/identity/users/{id}` | user:update |

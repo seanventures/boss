@@ -9,7 +9,7 @@ import React, { useState } from "react";
 import { Key, Fingerprint } from "@phosphor-icons/react";
 
 import type { MeResponse } from "../../lib/identity/contract";
-import { IdentityError, idPost } from "../../lib/identity/api";
+import { IdentityError, idPost, refusalSentence } from "../../lib/identity/api";
 import { passkeyFailureWords } from "../../lib/identity/passkey-support";
 import { getAssertion, webauthnAvailable, type AssertionOptions, type Wrapped } from "../../lib/identity/webauthn";
 import { CodeInput, ErrorLine, Sheet } from "./kit";
@@ -31,7 +31,7 @@ export function StepUpSheet({ reason, me, onDone }: { reason: string; me: MeResp
       onDone(true);
     } catch (e) {
       setError(passkeyFailureWords(e) ?? (e instanceof IdentityError ? (e.attemptsLeft !== null ? `Wrong code · ${e.attemptsLeft} left` : e.message)
-        : `That didn't work · ${e instanceof Error && e.message ? e.message : "no answer"}`));
+        : refusalSentence(e)));
       setBusy(false);
     }
   };
