@@ -478,24 +478,54 @@ def _register_read_tools(reg: ToolRegistry) -> None:
     # budget and time, red test, gates, reviewers, the approval card, install only by policy.
     @reg.tool(
         "list_platform_gaps",
-        "The gaps in BOSS ITSELF recorded for BOSS's developers (its recommendations): each one's "
-        "id (brec_…), signature, status (open / fixing / implemented / done / wont_fix), title, "
-        "how often it was seen, its acceptance tests and the self-fix working on it. Read this "
-        "before filing one, so the same cause is counted again rather than filed twice.",
+        "The gaps in BOSS ITSELF recorded for BOSS's developers (its recommendations), newest "
+        "first, a page at a time: each row's id (brec_…), signature, status (open / fixing / "
+        "implemented / done / wont_fix), title, how often it was seen and the self-fix on it. "
+        "`total` is how many match; when `next_offset` is set there are more — pass it as "
+        "`offset`. Pass `id` (brec_…) for ONE gap in full (symptom, root cause, proposed change, "
+        "acceptance tests), or `detail: true` for full rows on this page. Read this before "
+        "filing one, so the same cause is counted again rather than filed twice. A gap is "
+        "absent only when `total` says so — never from a page you did not finish.",
         _obj({"status": {"type": "string",
                          "enum": ["open", "fixing", "implemented", "done", "wont_fix"]},
-              "limit": _LIMIT}), permission="improvement:read")
+              "id": {"type": "string", "description": "brec_… — that one gap, in full"},
+              "offset": {"type": "integer", "minimum": 0, "default": 0},
+              "detail": {"type": "boolean", "default": False},
+              "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20}}),
+        permission="improvement:read")
     def list_platform_gaps(ctx, *, project_id, actor, args):
+        """PAGED HONESTLY. The rows carried every prose field, so 14 of them overflowed the
+        agent's tool-result budget and arrived as 8 and a cut-off tail; the agent concluded the
+        gap it was looking for did not exist. A page is now compact rows that fit, with the
+        total and the next offset, and one gap in full is a direct lookup by id."""
         from ..services import boss_recommendations as recs
 
-        with ctx.begin() as c:
-            items = recs.list_recommendations(c, project_id, status=args.get("status") or None)
-        items = list(reversed(items))[: int(args.get("limit") or 25)]
-        keep = ("id", "signature", "status", "title", "symptom", "root_cause",
+        full = ("id", "signature", "status", "title", "symptom", "root_cause",
                 "proposed_change", "acceptance_tests", "files", "occurrences", "self_fix_id",
                 "created_by", "updated_at")
-        return {"count": len(items), "gaps": [{k: _json_safe(i.get(k)) for k in keep}
-                                              for i in items]}
+        brief = ("id", "signature", "status", "title", "occurrences", "self_fix_id",
+                 "updated_at")
+        wanted = str(args.get("id") or "").strip()
+        with ctx.begin() as c:
+            items = recs.list_recommendations(
+                c, project_id, status=None if wanted else (args.get("status") or None))
+        if wanted:
+            found = next((i for i in items if i.get("id") == wanted), None)
+            if found is None:
+                return {"ok": False, "found": False, "id": wanted,
+                        "error": f"no platform gap {wanted!r} in this project"}
+            return {"ok": True, "found": True, "gap": {k: _json_safe(found.get(k)) for k in full}}
+        items = list(reversed(items))
+        total = len(items)
+        offset = max(0, int(args.get("offset") or 0))
+        limit = max(1, min(50, int(args.get("limit") or 20)))
+        page = items[offset:offset + limit]
+        keep = full if args.get("detail") else brief
+        nxt = offset + len(page)
+        return {"total": total, "offset": offset, "returned": len(page),
+                "next_offset": nxt if nxt < total else None,
+                "complete": offset == 0 and nxt >= total,
+                "gaps": [{k: _json_safe(i.get(k)) for k in keep} for i in page]}
 
     @reg.tool(
         "file_platform_gap",
@@ -2551,17 +2581,74 @@ def _workflow_key_for_proposed_name(name: str, reg: "ToolRegistry") -> str | Non
     return None
 
 
-def _placeholder_argument(args: dict) -> str:
-    """The first argument that looks invented, described for the model, or ''."""
+#: WORD MARKERS MATCH WHOLE WORDS. `foo` is a placeholder; `boss-dogfood` is a real project id
+#: that holds it, and was refused as "invented" (2026-10-24). A word marker matches only a whole
+#: token of the value (split on anything that is not a letter or digit): "crun_placeholder",
+#: "foo-app", "todo" — never "dogfood", "barcode" or "todolist-api".
+_PLACEHOLDER_WORDS = frozenset({"placeholder", "todo", "tbd", "xxx", "changeme", "foo", "bar",
+                                "abc123"})
+#: SHAPE MARKERS match where they are: anywhere ("example.com", "<", "...", "owner/name"), or at
+#: the start of the value or of a segment for a prefix ("your-", "some-", "my-app") — so
+#: "awesome-api" is not "some-".
+_PLACEHOLDER_PREFIXES = ("your-", "some-", "my-app")
+
+
+def _looks_invented(value: str) -> bool:
+    low = value.strip().lower()
+    if not low:
+        return False
+    if set(re.split(r"[^a-z0-9]+", low)) & _PLACEHOLDER_WORDS:
+        return True
+    for marker in _PLACEHOLDER_MARKERS:
+        if marker in _PLACEHOLDER_WORDS:
+            continue
+        if marker in _PLACEHOLDER_PREFIXES:
+            if re.search(r"(^|[/_.\s:=])" + re.escape(marker), low):
+                return True
+        elif marker in low:
+            return True
+    return False
+
+
+#: An argument that NAMES A RECORD, and where its real values live. A value found there is never
+#: "invented", whatever it spells: the existence of the record is the evidence the heuristic
+#: only guesses at. Read-only lookups; any failure leaves the heuristic's answer.
+_REAL_ID_TABLES = {
+    "project": ("projects", ("id", "slug")), "project_id": ("projects", ("id", "slug")),
+    "run_id": ("code_task_runs", ("id",)), "code_task_run_id": ("code_task_runs", ("id",)),
+    "workflow_run_id": ("workflow_runs", ("id",)), "wfr": ("workflow_runs", ("id",)),
+    "job_id": ("jobs", ("id",)), "task_id": ("code_tasks", ("id",)),
+    "decision_id": ("decisions", ("id",)), "recommendation_id": ("boss_recommendations", ("id",)),
+    "workflow_key": ("workflow_definitions", ("key",)),
+}
+
+
+def _is_real_record(ctx: Any, key: str, value: str) -> bool:
+    found = _REAL_ID_TABLES.get(str(key).lower())
+    if ctx is None or not found or not hasattr(ctx, "begin"):
+        return False
+    table, columns = found
+    where = " OR ".join(f"{col} = :v" for col in columns)
+    try:
+        with ctx.begin() as c:
+            with c.begin_nested():
+                return c.execute(_text(f"SELECT 1 FROM {table} WHERE {where} LIMIT 1"),
+                                 {"v": value.strip()}).first() is not None
+    except Exception:  # noqa: BLE001 — no answer is not a yes
+        return False
+
+
+def _placeholder_argument(args: dict, ctx: Any = None) -> str:
+    """The first argument that looks invented, described for the model, or ''.
+
+    A value that names a record that EXISTS is never invented (`_is_real_record`, when `ctx` is
+    given); otherwise the markers decide, words as whole words (`_looks_invented`)."""
     for key, value in (args or {}).items():
         if not isinstance(value, str):
             continue
         if str(key).lower() in _FREE_TEXT_ARGS:
             continue
-        low = value.strip().lower()
-        if not low:
-            continue
-        if any(marker in low for marker in _PLACEHOLDER_MARKERS):
+        if _looks_invented(value) and not _is_real_record(ctx, key, value):
             return f"{key}={value!r}"
     return ""
 
@@ -2879,7 +2966,7 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
                     "error": f"cannot propose {name!r} here: {unavailable} Offer what BOSS "
                              "can run instead (for a deploy: a retry or `redeploy`), and ask the "
                              "operator to act by hand only if nothing in BOSS can."}
-        placeholder = _placeholder_argument(call_args)
+        placeholder = _placeholder_argument(call_args, ctx)
         if placeholder:
             # A BUTTON WITH AN INVENTED ARGUMENT IS A BUTTON THAT FAILS ON CLICK.
             #

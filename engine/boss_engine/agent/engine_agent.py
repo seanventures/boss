@@ -33,6 +33,7 @@ from .._compat import services_module
 from ..services import protocol_reply
 from ..tools import ToolError, ToolRegistry, build_discuss_read_registry
 from ..tools.registry import offer_warning
+from ..services.tool_result_text import clip_for_model
 
 
 _UNSCOPED_SQL_TOOLS = frozenset({"query_db", "write_db"})
@@ -753,7 +754,7 @@ class EngineAgent:
                     {
                         "role": "tool",
                         "tool_call_id": tc.get("id"),
-                        "content": json.dumps(result, default=_jsonable)[:16000],
+                        "content": clip_for_model(json.dumps(result, default=_jsonable), 16000),
                     }
                 )
 
