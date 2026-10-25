@@ -3218,6 +3218,8 @@ class IntentRouter:
                 )
         except Exception as exc:  # noqa: BLE001 — a hiccup must never break the chat
             failure = f"{type(exc).__name__}: {exc}"
+            # Never only in the reply: a crash the operator sees must be findable with its stack.
+            logging.getLogger(__name__).exception("agent answer failed (project %s)", project_id)
         if not reply:
             if failure:
                 try:
