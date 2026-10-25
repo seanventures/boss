@@ -16,10 +16,10 @@
 import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 
 import {
-  BEND, BUBBLE_R, LABEL_MAX, LOOP_EDGES, NODE_R, arrowRim, bidirectional, distanceToEdge, edgeGeometry, edgeWidth,
-  fitTransform, kindName, layerToken, middleEllipsis, nodeAt, placeLabels, placeNodeLabels, radialLabel, toScreen, toWorld, weightOrder,
+  BEND, BUBBLE_R, LABEL_ARC, LABEL_MAX, LOOP_EDGES, NODE_R, arrowRim, bidirectional, distanceToEdge, edgeGeometry, edgeWidth,
+  fitTransform, kindName, layerToken, middleEllipsis, nodeAt, placeLabels, placeNodeLabels, revealPan, toScreen, toWorld, weightOrder,
   zoomAt,
-  type EdgeGeometry, type LabelBox, type Pt, type Transform,
+  type EdgeGeometry, type LabelBox, type LabelItem, type Pt, type Transform,
 } from "../../lib/kg-layout";
 
 export type CanvasNode = {
@@ -36,13 +36,16 @@ export type CanvasNode = {
   fresh?: boolean;
   /** Which labels win when they collide: the bigger area's (its class count). */
   rank?: number;
-  /** Where its label goes: under it (default), along its ray out or in (Focus rings). */
-  labelMode?: "below" | "out" | "in";
-  /** Its angle around the Focus centre and its ring, for a radial label. */
+  /** Where its label goes first: under it (default), or on the side facing away from the Focus
+   *  centre (ring nodes). Either way it moves to another side, or shortens, rather than overlap. */
+  labelMode?: "below" | "out";
+  /** Its polar angle around the Focus centre and its ring. */
   angle?: number;
   ring?: number;
   /** Characters before the label is middle-ellipsised (the full name is in the tooltip). */
   labelMax?: number;
+  /** Its shortest form when the name has no room ("+38 more" for a group). */
+  short?: string;
 };
 
 /** One edge's identity on the canvas: hover, labels and the strongest-edge set use it. */
@@ -58,8 +61,9 @@ type Props = {
   nodes: CanvasNode[];
   edges: CanvasEdge[];
   positions: Map<string, Pt>;
-  /** Faint hop rings around the centre (Focus). */
+  /** Faint hop rings around the centre (Focus): half-heights; their half-width is `ringAspect` times. */
   rings?: number[];
+  ringAspect?: number;
   centerId?: string | null;
   mode: "overview" | "focus";
   selectedId: string | null;
@@ -97,20 +101,65 @@ const ROOT_PX = 19;
 
 /** The opening view's least scale: below it labels stop reading as designed. */
 export const READABLE = 0.85;
+/** Text never shrinks below this share of its size (12 px node labels at the default root). */
+export const MIN_TEXT = 0.8;
+
+/**
+ * The width a picture is framed in beside the details drawer: what the drawer leaves, unless that
+ * is a sliver (a narrow window, where the drawer covers most of the canvas) — then the whole
+ * canvas, the drawer over its edge, so the picture is not squeezed to a stamp.
+ */
+export function visibleWidth(canvasW: number, occlude: number): number {
+  const left = canvasW - occlude;
+  return occlude > 0 && left < Math.max(300, canvasW * 0.35) ? canvasW : Math.max(240, left);
+}
+
+function rootScale(): number {
+  if (typeof document === "undefined") return 1;
+  return (parseFloat(getComputedStyle(document.documentElement).fontSize) || ROOT_PX) / ROOT_PX;
+}
+
+/** A label's width at 100% (screen px), estimated from its characters: the frame and the
+ *  drawer's pan use it before anything is measured. */
+export function estimateLabel(n: Pick<CanvasNode, "label" | "labelMax" | "bubble" | "sub">, scale = 1): number {
+  const chars = Math.min(n.label.length, n.labelMax ?? LABEL_MAX);
+  const name = chars * (n.bubble ? 9 : 7.6) * scale + 10;
+  const sub = n.bubble && n.sub ? n.sub.length * 6.6 * scale + 10 : 0;
+  return Math.max(name, sub);
+}
+
+/**
+ * The screen room a picture needs past its outer node centres (fitTransform's extent): under
+ * a Whole-repo bubble its two lines, half its label each side; beside a Focus ring node its
+ * side label, above and below it one line. So a fitted view never cuts a label at the edge.
+ */
+export function frameExtent(nodes: Array<Pick<CanvasNode, "label" | "labelMax" | "bubble" | "sub" | "labelMode">>, mode: "overview" | "focus", scale = 1, viewW = Infinity): { x: number; top: number; bottom: number } {
+  if (mode === "overview") {
+    const widest = Math.max(160, ...nodes.map((n) => estimateLabel(n, scale)));
+    return { x: Math.min(170, widest / 2 + 12), top: BUBBLE_R + 6, bottom: BUBBLE_R + 50 };
+  }
+  // A side label past the outer ring may shorten or move above/below (the placement does), so
+  // the frame keeps room for most of one, not the longest name at full length.
+  const side = Math.max(60, ...nodes.filter((n) => n.labelMode === "out").map((n) => estimateLabel(n, scale)));
+  // In a narrow view the labels give way (shorter, above or below) before the picture does.
+  return { x: Math.min(NODE_R + 10 + Math.min(130, side * 0.7), viewW * 0.12), top: NODE_R + 30, bottom: NODE_R + 30 };
+}
 
 const TOKENS = ["--graph", "--ink", "--ink-soft", "--muted", "--faint", "--border-strong", "--surface", "--sans"] as const;
 
 type Drawn = { id: string; x: number; y: number; r: number };
 
 export const GraphCanvas = forwardRef<CanvasHandle, Props>(function GraphCanvas(props, ref) {
-  const { nodes, edges, positions, rings, centerId, mode, selectedId, onSelect, onActivate, onBack, onZoom, ariaLabel, fitKey, labelled, occludeRight = 0, onClear } = props;
+  const { nodes, edges, positions, rings, ringAspect = 1, centerId, mode, selectedId, onSelect, onActivate, onBack, onZoom, ariaLabel, fitKey, labelled, occludeRight = 0, onClear } = props;
   const wrap = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const t = useRef<Transform>({ k: 1, x: 0, y: 0 });
-  const size = useRef({ w: 800, h: 520 });
+  // The same default the area lays its pictures out to (graph-view stageSize) until measured.
+  const size = useRef({ w: 1000, h: 520 });
   const moved = useRef(new Map<string, Pt>());
   const born = useRef(new Map<string, number>());
   const drawn = useRef<Drawn[]>([]);
+  const labelBoxes = useRef(new Map<string, { x: number; y: number; w: number; h: number }>());
   const geoms = useRef<Array<{ e: CanvasEdge; g: EdgeGeometry }>>([]);
   const frame = useRef<number | null>(null);
   const [hover, setHover] = useState<{ what: "node" | "edge"; id: string; x: number; y: number } | null>(null);
@@ -145,10 +194,13 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(function GraphCanvas(
     for (const name of TOKENS) c(name);
     const font = c("--sans") || "sans-serif";
     // Text follows the console's type scale: the spec's 14 / 16 / 12 px at the default root size,
-    // and shrinks with the picture below 100% (never under 72%) so a fitted view never collides.
+    // and shrinks with the picture below 100% — never under 80% (tester round 3: ~7 px labels):
+    // what has no room at that size waits for zoom or hover instead of overlapping.
     const root = parseFloat(getComputedStyle(document.documentElement).fontSize) || ROOT_PX;
     const tr = t.current;
-    const shrink = Math.min(1, Math.max(0.62, tr.k));
+    const shrink = Math.min(1, Math.max(MIN_TEXT, tr.k));
+    // Labels stay inside what is visible: the canvas minus the details drawer over its right edge.
+    const bounds = { x0: 4, y0: 4, x1: visibleWidth(w, occludeRef.current) - 4, y1: h - 4 };
     const fs = (px: number) => Math.round(px * (root / ROOT_PX) * shrink * 10) / 10;
     const now = typeof performance !== "undefined" ? performance.now() : 0;
     let animating = false;
@@ -167,20 +219,23 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(function GraphCanvas(
         ctx.strokeStyle = c("--border-strong");
         ctx.globalAlpha = 0.45;
         ctx.lineWidth = 1;
-        for (const r of rings) { ctx.beginPath(); ctx.arc(s.x, s.y, r * tr.k, 0, Math.PI * 2); ctx.stroke(); }
+        for (const r of rings) { ctx.beginPath(); ctx.ellipse(s.x, s.y, r * ringAspect * tr.k, r * tr.k, 0, 0, Math.PI * 2); ctx.stroke(); }
         ctx.restore();
       }
     }
 
-    // Screen positions, culled. Every node the same size: 28 px (56 px bubbles) from 62.5% zoom
-    // up; zoomed further out the whole picture shrinks together, so nothing piles up.
+    // Screen positions, culled. Every node the same size: 28 px (56 px bubbles) from 80% zoom up;
+    // zoomed further out the whole picture shrinks together, and a Focus ring's nodes never grow
+    // past the arc they share, so they never touch like beads (tester round 3 P0).
     const margin = 160;
     const screen = new Map<string, Drawn>();
+    const ringCap = mode === "focus" ? Math.max(5, (LABEL_ARC * tr.k - 8) / 2) : Infinity;
     for (const n of nodes) {
       const p = posOf(n.id);
       if (!p) continue;
       const s = toScreen(tr, p);
-      const r = Math.max(n.bubble ? 14 : 8, (n.bubble ? BUBBLE_R : NODE_R) * Math.min(1, tr.k * 1.6));
+      const full = (n.bubble ? BUBBLE_R : NODE_R) * Math.min(1, tr.k * 1.25);
+      const r = n.bubble ? Math.max(12, full) : Math.max(5, Math.min(full, n.ring !== undefined ? ringCap : full));
       screen.set(n.id, { id: n.id, x: s.x, y: s.y, r });
     }
     const visible = (d: Drawn) => d.x > -margin && d.x < w + margin && d.y > -margin && d.y < h + margin;
@@ -247,14 +302,14 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(function GraphCanvas(
 
     // Nodes.
     type Line = { text: string; size: number; weight: number; muted: boolean };
-    type NodeLabel = LabelBox & { lines: Line[]; sized: Array<{ lines: Line[]; w: number; h: number }> };
-    const labels: NodeLabel[] = [];
-    const radial: Array<{ d: Drawn; n: CanvasNode; out: boolean }> = [];
+    type Sized = { lines: Line[]; w: number; h: number };
+    const labels: Array<{ id: string; item: LabelItem; sized: Sized[] }> = [];
     // Each node's circle is an obstacle no label may cover.
     const obstacles: LabelBox[] = drawn.current.map((d) => ({ id: `o:${d.id}`, x: d.x, y: d.y - d.r, w: d.r * 2, h: d.r * 2, priority: 1e9 }));
     for (const d of drawn.current) {
       const n = byId.get(d.id)!;
       const isSel = d.id === selId;
+      const isHover = hv?.what === "node" && hv.id === d.id;
       let alpha = 1;
       if (n.fresh) {
         if (!born.current.has(n.id)) born.current.set(n.id, now);
@@ -277,7 +332,7 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(function GraphCanvas(
         ctx.beginPath();
         ctx.arc(d.x, d.y, d.r + 4.5, 0, Math.PI * 2);
         ctx.stroke();
-      } else if (hv?.what === "node" && hv.id === d.id) {
+      } else if (isHover) {
         ctx.strokeStyle = c("--ink-soft");
         ctx.lineWidth = 1.5;
         ctx.beginPath();
@@ -285,54 +340,50 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(function GraphCanvas(
         ctx.stroke();
       }
       ctx.restore();
-      const mode_ = n.labelMode ?? "below";
-      if ((mode_ === "out" || mode_ === "in") && n.angle !== undefined && !isSel && !(hv?.what === "node" && hv.id === d.id)) {
-        radial.push({ d, n, out: mode_ === "out" });
-        continue;
-      }
-      const name = (max: number) => middleEllipsis(n.label, max);
       const max = n.labelMax ?? LABEL_MAX;
+      const name = (m: number) => middleEllipsis(n.label, m);
+      const weight = isSel ? 600 : 400;
       // The full name first; shorter middle-ellipsised names (and a bubble without its second
-      // line) when it would collide — a node is never left without a label.
-      const variants: Array<Array<{ text: string; size: number; weight: number; muted: boolean }>> = n.bubble
+      // line) when it would collide or leave the canvas.
+      const variants: Line[][] = n.bubble
         ? [
           [{ text: name(max), size: fs(16), weight: 600, muted: false }, ...(n.sub ? [{ text: n.sub, size: fs(13), weight: 400, muted: true }] : [])],
           [{ text: name(Math.min(max, 16)), size: fs(16), weight: 600, muted: false }],
-          [{ text: name(10), size: fs(14), weight: 600, muted: false }],
+          [{ text: n.short ?? name(10), size: fs(14), weight: 600, muted: false }],
         ]
         : [
-          [{ text: name(max), size: fs(14), weight: isSel ? 600 : 400, muted: false }],
-          [{ text: name(Math.min(max, 14)), size: fs(14), weight: isSel ? 600 : 400, muted: false }],
-          [{ text: name(8), size: fs(12), weight: isSel ? 600 : 400, muted: false }],
+          [{ text: name(max), size: fs(14), weight, muted: false }],
+          ...(n.short ? [] : [[{ text: name(Math.min(max, 14)), size: fs(14), weight, muted: false }]]),
+          [{ text: n.short ?? name(8), size: fs(12), weight, muted: false }],
         ];
       const sized = variants.map((lines) => {
         let tw = 0;
         for (const l of lines) { ctx.font = `${l.weight} ${l.size}px ${font}`; tw = Math.max(tw, ctx.measureText(l.text).width + 10); }
-        return { lines, w: tw, h: lines.reduce((s, l) => s + l.size + 4, 0) };
+        return { lines, w: tw, h: lines.reduce((acc, l) => acc + l.size + 4, 0) };
       });
-      // Kept inside the canvas: a label at the edge slides in rather than being cut.
-      const tw0 = sized[0].w;
-      const lx = Math.min(Math.max(d.x, tw0 / 2 + 4), Math.max(tw0 / 2 + 4, w - tw0 / 2 - 4));
-      const pri = isSel ? 1e7 : (hv?.what === "node" && hv.id === d.id) ? 9e6 : n.bubble ? 5e6 + (n.rank ?? 0) : d.id === centerId ? 8e6 : 1e6 - order.indexOf(d.id);
-      labels.push({ id: d.id, x: lx, y: d.y + d.r + 5, w: tw0, h: sized[0].h, priority: pri, lines: sized[0].lines, sized });
+      const pri = isSel ? 1e7 : isHover ? 9e6 : d.id === centerId ? 8e6 : n.bubble ? 5e6 + (n.rank ?? 0) : 1e6 - order.indexOf(d.id);
+      const out = n.labelMode === "out" && n.angle !== undefined;
+      labels.push({
+        id: d.id, sized,
+        item: {
+          id: d.id, x: d.x, y: d.y, r: d.r, priority: pri, variants: sized.map((v) => ({ w: v.w, h: v.h })),
+          prefer: out ? "out" : "below", dir: out ? { x: Math.cos(n.angle!), y: Math.sin(n.angle!) } : undefined,
+          must: isSel || isHover || d.id === centerId,
+        },
+      });
     }
 
-    // One placement for node and edge labels, around the circles: node labels first; a label
-    // that would still collide waits for hover or zoom (its full name is in the tooltip).
-    // Node labels first, every one placed (its shortest form if need be); then edge labels in
-    // what is left, around the circles and the node labels.
-    const chosen = placeNodeLabels(labels.map((l) => ({ id: l.id, x: l.x, y: l.y, priority: l.priority, variants: l.sized })), obstacles);
-    const nodeBoxes: LabelBox[] = labels.map((l) => {
-      const v = l.sized[chosen.get(l.id) ?? 0];
-      l.lines = v.lines; l.w = v.w; l.h = v.h;
-      return { id: l.id, x: l.x, y: l.y, w: v.w, h: v.h, priority: 2e9 };
-    });
-    const shown = new Set([...labels.map((l) => l.id), ...placeLabels([...obstacles, ...nodeBoxes, ...edgeLabels]).values()]);
+    // One placement for node and edge labels, around the circles, inside the visible canvas:
+    // node labels first (each on its best free side, or shortened, or left for hover — never on
+    // another label), then edge labels in what is left.
+    const chosen = placeNodeLabels(labels.map((l) => l.item), obstacles, bounds);
+    const nodeBoxes: LabelBox[] = [...chosen.entries()].map(([id, p]) => ({ id, x: p.x, y: p.y, w: p.w, h: p.h, priority: 2e9 }));
+    const inside = (l: LabelBox) => l.x - l.w / 2 >= bounds.x0 && l.x + l.w / 2 <= bounds.x1 && l.y >= bounds.y0 && l.y + l.h <= bounds.y1;
+    const shownEdges = placeLabels([...obstacles, ...nodeBoxes, ...edgeLabels.filter(inside)]);
     for (const l of edgeLabels) {
-      if (!shown.has(l.id)) continue;
+      if (!shownEdges.has(l.id) || !inside(l)) continue;
       ctx.save();
       ctx.font = `500 ${fs(12)}px ${font}`;
-      ctx.globalAlpha = 0.96;
       ctx.fillStyle = c("--surface");
       roundRect(ctx, l.at.x - l.w / 2, l.at.y - l.h / 2, l.w, l.h, l.h / 2);
       ctx.fill();
@@ -346,69 +397,42 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(function GraphCanvas(
       ctx.restore();
     }
     for (const l of labels) {
-      if (!shown.has(l.id)) continue;
-      // A backdrop in the canvas colour: an edge never runs through a label's text.
+      const p = chosen.get(l.id);
+      if (!p) continue;
+      const v = l.sized[p.variant];
+      // An opaque backdrop in the canvas colour: an edge never runs through a label (round 3 P1).
       ctx.save();
-      ctx.globalAlpha = 0.82;
       ctx.fillStyle = c("--graph");
-      roundRect(ctx, l.x - l.w / 2, l.y - 1, l.w, l.h, 5);
+      roundRect(ctx, p.x - p.w / 2, p.y - 1, p.w, p.h + 1, 5);
       ctx.fill();
       ctx.restore();
-      let y = l.y;
-      for (const line of l.lines) {
+      let y = p.y;
+      for (const line of v.lines) {
         ctx.save();
         ctx.font = `${line.weight} ${line.size}px ${font}`;
         ctx.textAlign = "center";
         ctx.textBaseline = "top";
-        ctx.lineJoin = "round";
-        ctx.lineWidth = 5;
-        ctx.strokeStyle = c("--graph");
-        ctx.strokeText(line.text, l.x, y);
         ctx.fillStyle = l.id === selId ? c("--ink") : line.muted ? c("--muted") : c("--ink-soft");
-        ctx.fillText(line.text, l.x, y);
+        ctx.fillText(line.text, p.x, y + 1);
         ctx.restore();
         y += line.size + 4;
       }
     }
-    // Radial labels (Focus rings): along each node's ray, outward on the outer ring, inward on
-    // the first when there is more than one — every neighbour named, none on another (P1-4).
-    // Too dense to read at this zoom (under 9 px of arc each), they wait for zoom or hover.
-    const ringSize = new Map<number, number>();
-    for (const { n } of radial) ringSize.set(n.ring ?? 0, (ringSize.get(n.ring ?? 0) ?? 0) + 1);
-    for (const { d, n, out } of radial) {
-      const ringR = (rings?.[n.ring ?? 0] ?? 0) * tr.k;
-      const count = ringSize.get(n.ring ?? 0) ?? 1;
-      if (ringR && (2 * Math.PI * ringR) / count < 9) continue;
-      const { rotate, align } = radialLabel(n.angle!, out);
-      const size = fs(14);
-      ctx.save();
-      ctx.font = `400 ${size}px ${font}`;
-      const room = out ? 999 : Math.max(0, ringR - 30 * shrink - d.r);
-      let text = middleEllipsis(n.label, n.labelMax ?? 22);
-      while (text.length > 4 && ctx.measureText(text).width > room) text = middleEllipsis(n.label, text.length - 2);
-      if (!out && ctx.measureText(text).width > room) { ctx.restore(); continue; }
-      const off = d.r + 5;
-      const dir = out ? 1 : -1;
-      ctx.translate(d.x + Math.cos(n.angle!) * off * dir, d.y + Math.sin(n.angle!) * off * dir);
-      ctx.rotate(rotate);
-      ctx.textAlign = align;
-      ctx.textBaseline = "middle";
-      ctx.lineJoin = "round";
-      ctx.lineWidth = 4;
-      ctx.strokeStyle = c("--graph");
-      ctx.strokeText(text, 0, 0);
-      ctx.fillStyle = c("--ink-soft");
-      ctx.fillText(text, 0, 0);
-      ctx.restore();
-    }
+    labelBoxes.current = chosen;
     if (animating) schedule();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nodes, edges, rings, centerId, mode, byId, pairs, maxW, order, posOf, labelled]);
+  }, [nodes, edges, rings, ringAspect, centerId, mode, byId, pairs, maxW, order, posOf, labelled]);
+  // Every frame paints the CURRENT picture: a callback registered once (the resize observer, a
+  // timer) reaches the latest draw through this ref, never the one of the render it was made in
+  // (tester round 3 P1: a resize or hide/show painted the old picture until Fit).
+  const drawRef = useRef(draw);
+  drawRef.current = draw;
 
   const schedule = useCallback(() => {
     if (frame.current !== null || typeof window === "undefined") return;
-    frame.current = window.requestAnimationFrame ? window.requestAnimationFrame(() => draw()) : (setTimeout(draw, 16) as unknown as number);
-  }, [draw]);
+    const run = () => drawRef.current();
+    frame.current = window.requestAnimationFrame ? window.requestAnimationFrame(run) : (setTimeout(run, 16) as unknown as number);
+  }, []);
 
   const setT = useCallback((next: Transform) => {
     t.current = next;
@@ -423,20 +447,25 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(function GraphCanvas(
    * nodes. The legend has its own gutter under the canvas, so nothing is reserved for it.
    */
   const frameView = useCallback((readable: boolean) => {
+    // Framed against the canvas as it is NOW (a picture can arrive before the observer reports a
+    // new size): a hidden canvas (0 × 0) keeps its last real size.
+    const r = wrap.current?.getBoundingClientRect();
+    if (r && r.width >= 2 && r.height >= 2) size.current = { w: Math.round(r.width), h: Math.round(r.height) };
     const pts = nodes.map((n) => posOf(n.id)).filter((p): p is Pt => !!p);
-    const ext = mode === "overview" ? { x: 110, top: BUBBLE_R + 4, bottom: BUBBLE_R + 46 } : { x: 140, top: 118, bottom: 118 };
     // A new picture is framed in the part the details drawer leaves visible.
-    const view = { w: Math.max(240, size.current.w - occludeRef.current), h: size.current.h };
+    const view = { w: visibleWidth(size.current.w, occludeRef.current), h: size.current.h };
+    const ext = frameExtent(nodes, mode, rootScale(), view.w);
     const fitted = fitTransform(pts, view, { extent: ext });
-    if (!readable || (fitted.k >= READABLE && fitted.k <= 1)) { setT(fitted); return; }
-    // A Focus ring with its spoke labels is wide: it may open a little smaller than Whole repo.
-    const floor = mode === "focus" ? 0.6 : READABLE;
-    if (fitted.k >= floor && fitted.k <= 1) { setT(fitted); return; }
-    const k = Math.min(1, Math.max(floor, fitted.k));
-    setT(zoomAt(fitted, k / fitted.k, { x: view.w / 2, y: view.h / 2 }));
+    // The opening view never cuts anything off (tester round 3 P1: a page or a Focus opened
+    // clipped, labels clamped over nodes, until Fit): everything is framed, at 100% at most;
+    // the layouts are sized to the canvas so that is a readable scale.
+    if (!readable || fitted.k <= 1) { setT(fitted); return; }
+    setT(zoomAt(fitted, 1 / fitted.k, { x: view.w / 2, y: view.h / 2 }));
   }, [nodes, posOf, mode, setT]);
+  const homeRef = useRef<() => void>(() => undefined);
   const fit = useCallback(() => frameView(false), [frameView]);
   const home = useCallback(() => frameView(true), [frameView]);
+  homeRef.current = home;
 
   useImperativeHandle(ref, () => ({
     zoomIn: () => setT(zoomAt(t.current, 1.25, { x: size.current.w / 2, y: size.current.h / 2 })),
@@ -451,40 +480,65 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(function GraphCanvas(
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fitKey]);
 
-  // The details drawer slides over the right edge: the selection is panned out from under it,
-  // never re-zoomed (round 2).
+  // The details drawer slides over the right edge: the selection AND its label are panned out
+  // from under it, never re-zoomed (round 2) — using the room on the left first, so the rest of
+  // the picture (the pinned Rules and Learning bubbles) comes out too where it can (round 3).
   useEffect(() => {
-    // The Focus centre: the whole ring is re-framed beside the drawer (its scale kept readable).
+    // The Focus centre: the whole ring is re-framed beside the drawer.
     if (mode === "focus" && selectedId && selectedId === centerId) { home(); return; }
     if (!occludeRight || !selectedId) return;
-    const p = posOf(selectedId);
-    if (!p) return;
-    const s = toScreen(t.current, p);
-    const limit = size.current.w - occludeRight - 80;
-    if (s.x > limit) setT({ ...t.current, x: t.current.x - (s.x - limit) });
+    const boxOf = (id: string) => {
+      const p = posOf(id);
+      const n = byId.get(id);
+      if (!p || !n) return null;
+      const s = toScreen(t.current, p);
+      const r = n.bubble ? BUBBLE_R : NODE_R;
+      const placed = labelBoxes.current.get(id);
+      const half = estimateLabel(n, rootScale()) / 2;
+      const left = Math.min(s.x - r, placed ? placed.x - placed.w / 2 : s.x - half);
+      const right = Math.max(s.x + r, placed ? placed.x + placed.w / 2 : s.x + half);
+      return { x: left, w: right - left };
+    };
+    const sel = boxOf(selectedId);
+    if (!sel) return;
+    const rest = nodes.map((n) => boxOf(n.id)).filter((b): b is { x: number; w: number } => !!b);
+    const dx = revealPan([sel], mode === "overview" ? rest : [], size.current.w - occludeRight);
+    if (dx) setT({ ...t.current, x: t.current.x + dx });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [occludeRight, selectedId]);
 
-  useEffect(() => { schedule(); }, [schedule, selectedId, hover]);
+  useEffect(() => { schedule(); }, [schedule, draw, selectedId, hover]);
 
-  // Fit to the window on resize.
+  // Fit to the window on resize, and repaint whenever the canvas is shown again (the Graph tab
+  // stays mounted, hidden, under Rules review): a hidden canvas measures 0 and keeps its last
+  // real size, so coming back paints the current picture at once (tester round 3 P1).
   useEffect(() => {
     const el = wrap.current;
     if (!el) return undefined;
     const measure = () => {
-      const w = el.clientWidth || 800;
-      const h = el.clientHeight || 520;
-      if (w === size.current.w && h === size.current.h) return false;
+      const r = el.getBoundingClientRect();
+      const w = Math.round(r.width || el.clientWidth);
+      const h = Math.round(r.height || el.clientHeight);
+      if (w < 2 || h < 2) return "hidden" as const;
+      if (w === size.current.w && h === size.current.h) return "same" as const;
       size.current = { w, h };
-      return true;
+      return "changed" as const;
     };
-    measure();
-    home();
-    if (typeof ResizeObserver === "undefined") return undefined;
-    const ro = new ResizeObserver(() => { if (measure()) home(); });
+    const react = () => {
+      const m = measure();
+      if (m === "hidden") return;
+      if (m === "changed") homeRef.current();
+      // Paint now: the bitmap was cleared or stretched by the change.
+      if (frame.current !== null && typeof window !== "undefined") { window.cancelAnimationFrame?.(frame.current); frame.current = null; }
+      drawRef.current();
+    };
+    react();
+    const onVisible = () => { if (document.visibilityState !== "hidden") react(); };
+    document.addEventListener("visibilitychange", onVisible);
+    if (typeof ResizeObserver === "undefined") return () => document.removeEventListener("visibilitychange", onVisible);
+    const ro = new ResizeObserver(react);
     ro.observe(el);
-    return () => ro.disconnect();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => { ro.disconnect(); document.removeEventListener("visibilitychange", onVisible); };
   }, []);
 
   useEffect(() => () => { if (frame.current !== null && typeof window !== "undefined") window.cancelAnimationFrame?.(frame.current); }, []);

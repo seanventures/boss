@@ -30,10 +30,13 @@ describe("the Graph area's states", () => {
     await open();
     expect($('[data-testid="kg-empty-graph"]')).toBeNull();
     expect($('[data-testid="kg-canvas"]')?.getAttribute("data-mode")).toBe("overview");
-    // Ten areas, "26 more areas", Rules and Learning (tester round 1 P0-1: never a 38-bubble hairball).
-    expect($('[data-testid="kg-canvas"]')?.getAttribute("data-nodes")).toBe("13");
-    expect($('[data-testid="kg-canvas"]')?.getAttribute("aria-label")).toMatch(/^Whole repository: 13 bubbles and the \d+ strongest of 194 calls/);
-    expect(text("kg-overview-note")).toContain("The 10 largest of 36 areas; the rest are in “26 more”.");
+    // At most ten areas — as many as this canvas shows readably (round 3) — "N more areas", Rules
+    // and Learning (tester round 1 P0-1: never a 38-bubble hairball).
+    const drawn = Number($('[data-testid="kg-canvas"]')?.getAttribute("data-nodes")) - 3;
+    expect(drawn).toBeGreaterThanOrEqual(4);
+    expect(drawn).toBeLessThanOrEqual(10);
+    expect($('[data-testid="kg-canvas"]')?.getAttribute("aria-label")).toMatch(new RegExp(`^Whole repository: ${drawn + 3} bubbles and the \\d+ strongest of \\d+ calls`));
+    expect(text("kg-overview-note")).toContain(`The ${drawn} largest of 36 areas; the rest are in “${36 - drawn} more”.`);
     expect($$('[data-testid="kg-tree-row"]').length).toBeGreaterThan(10);
     expect($$(".kg-legend-item").map((l) => l.textContent)).toEqual(expect.arrayContaining(["Area", "Rules layer", "Learning layer"]));
     expect(text("kg-built")).toMatch(/^Built .* agoRebuild$/);

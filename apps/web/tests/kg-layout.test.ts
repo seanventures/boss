@@ -10,7 +10,7 @@ import { describe, expect, it } from "vitest";
 import {
   ARROW_LEN, ARROW_WIDTH, BUBBLE_R, EDGE_MAX, EDGE_MIN, FIT_PADDING, NODE_R, ZOOM_MAX, ZOOM_MIN, bidirectional, bounds,
   clampZoom, edgeGeometry, edgeWidth, fitTransform, focusLayout, hashSeed, kindName, kindToken, middleEllipsis, nodeAt,
-  overviewLayout, placeLabels, placeNear, seeded, pickOverview, pickEdges, boxesClear, OVERVIEW_AREAS, OVERVIEW_BOX, LABEL_ARC, radialLabel, arrowRim, MORE_ID, toScreen, toWorld, weightOrder, zoomAt,
+  overviewLayout, placeLabels, placeNear, seeded, pickOverview, pickEdges, boxesClear, OVERVIEW_AREAS, OVERVIEW_BOX, LABEL_ARC, ellipsePerimeter, arrowRim, MORE_ID, toScreen, toWorld, weightOrder, zoomAt,
 } from "../lib/kg-layout";
 import type { KgNeighbourhoodResponse, KgOverviewResponse } from "../lib/kg-view-types";
 
@@ -99,15 +99,12 @@ describe("determinism", () => {
     expect(top.x).toBeCloseTo(0, 0);
     expect(top.y).toBeLessThan(0);
     expect(rings).toHaveLength(1);
-    expect((2 * Math.PI * rings[0]) / 80).toBeGreaterThanOrEqual(LABEL_ARC - 0.01);
+    expect(ellipsePerimeter(rings[0], rings[0]) / 80).toBeGreaterThanOrEqual(LABEL_ARC - 0.01);
     expect(angle.size).toBe(80);
     expect(focusLayout(hood.center.id, [...hood.nodes].reverse(), hood.edges).pos).toEqual(pos);
   });
 
-  it("radial labels read upright on both halves; a crowded rim spreads its arrowheads", () => {
-    expect(radialLabel(0, true)).toEqual({ rotate: 0, align: "left" });
-    expect(radialLabel(Math.PI, true)).toEqual({ rotate: 2 * Math.PI, align: "right" });
-    expect(radialLabel(Math.PI, false).align).toBe("left");
+  it("a crowded rim spreads its arrowheads", () => {
     expect(arrowRim(14, 3)).toBe(14);
     expect(arrowRim(14, 40)).toBeGreaterThan(14);
     expect(arrowRim(14, 400)).toBeLessThanOrEqual(14 + 36);

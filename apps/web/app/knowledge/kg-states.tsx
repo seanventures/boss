@@ -248,11 +248,13 @@ export function KgTruncation({ shown, hidden, level, onMore, maxed, max = 200 }:
   shown: number; hidden: number; level: string; onMore?: () => void; maxed: boolean; max?: number;
 }) {
   const noun = level === "class" ? "classes" : level === "package" ? "packages" : level === "method" ? "symbols" : "nodes";
+  const total = (shown + hidden).toLocaleString("en-US");
+  // Short, so the bar stays one line beside Built · Rebuild; the whole sentence is its tooltip.
+  const full = `Showing the ${shown.toLocaleString("en-US")} most connected of ${total} connected ${noun}${maxed ? `. ${max} is the most one view reads: narrow it with layers or hops.` : "."}`;
   return (
-    <p className="kg-trunc" data-testid="kg-truncated" role="status">
-      Showing {shown.toLocaleString("en-US")} of {(shown + hidden).toLocaleString("en-US")} connected {noun}, the most connected first
-      {maxed ? ` — ${max} is the most one view reads; narrow it with layers or hops.` : null}
-      {!maxed && onMore ? <> · <button type="button" className="inf-link" data-testid="kg-show-more" onClick={onMore}>Show {max}</button></> : null}
+    <p className="kg-trunc" data-testid="kg-truncated" role="status" title={full}>
+      {!maxed && onMore ? <><button type="button" className="inf-link" data-testid="kg-show-more" onClick={onMore}>Show {max}</button> · </> : null}
+      Showing {shown.toLocaleString("en-US")} of {total} connected {noun}{maxed ? ` · ${max} is the most one view reads` : ""}
     </p>
   );
 }

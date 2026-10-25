@@ -114,15 +114,20 @@
   display: flex; flex-direction: column; min-width: 0; border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--surface);
   overflow: hidden; container: kg / inline-size;
 }
-/* One row at every desktop width (tester round 1 P0-2, P1-10): the search gives way first. */
-.kg-toolbar { display: flex; flex-wrap: nowrap; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--border); min-width: 0; }
+/* One row at every desktop width (tester round 1 P0-2, P1-10): the search gives way first, then
+   quieter controls (the container queries below). Never clipped (round 3 P1: at 1280 the zoom,
+   List and Details went past the edge): what still does not fit wraps, the controls at the end
+   staying together on the right. */
+.kg-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; padding: 6px 10px; border-bottom: 1px solid var(--border); min-width: 0; }
 .kg-toolbar > * { flex: none; }
-.kg-toolbar > .kg-search { flex: 0 1 15rem; min-width: 7rem; }
-.kg-toolbar > .ag-spacer { flex: 1 1 0; min-width: 0; }
+.kg-toolbar > .kg-search { flex: 1 1 8rem; max-width: 15rem; min-width: 6.5rem; }
+.kg-toolbar-end { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; }
 .kg-subbar { display: flex; flex-wrap: nowrap; align-items: center; gap: 4px 14px; min-height: 28px; padding: 2px 10px; font-size: 0.78rem; color: var(--muted); min-width: 0; }
 .kg-subbar > * { flex: none; }
-/* The one sentence about the view stays one line (its whole text is its tooltip). */
+/* The sentences about the view stay one line each and give way before the Built/Rebuild end
+   (round 3 P1: after Show 200 the bar wrapped and cut the header); the whole text is the tooltip. */
 .kg-subbar > .kg-view-note { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kg-subbar > .kg-trunc { flex: 0 2 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kg-subbar:empty { display: none; }
 .kg-view-note { color: var(--muted); }
 .kg-crumbs { display: inline-flex; align-items: center; gap: 4px; font-size: 0.82rem; color: var(--ink); }
@@ -170,10 +175,13 @@
 /* The details panel is a drawer over the canvas's right edge (round 2): hidden until something is
    selected, slid in, closed with × or Esc. The graph has the whole width meanwhile. */
 .kg-col-panel {
-  position: absolute; top: 0; right: 0; bottom: 0; z-index: 6; width: min(22rem, 92%); border-left: 1px solid var(--border-strong);
+  position: absolute; top: 0; right: 0; bottom: 0; z-index: 6; width: clamp(16rem, calc((100% - 14.21053rem) * 0.5), 22rem); border-left: 1px solid var(--border-strong);
   box-shadow: var(--shadow-lg); transform: translateX(105%); transition: transform 200ms ease, visibility 200ms; visibility: hidden;
 }
 .kg-work[data-panel-open] .kg-col-panel { transform: none; visibility: visible; }
+/* The drawer never covers more than half the canvas beside the tree (round 3: at 1280 it hid the
+   whole Focus). Without the tree column the canvas is the work area. */
+.kg-work[data-tree-collapsed] .kg-col-panel { width: clamp(16rem, 50%, 22rem); }
 .kg-panel-close { display: inline-flex !important; }
 .kg-work-loading { border: 1px solid var(--border); border-radius: var(--r-lg); overflow: hidden; background: var(--surface); }
 .kg-col-tree { display: flex; flex-direction: column; min-height: 0; min-width: 0; border-right: 1px solid var(--border); background: var(--surface-2); }
@@ -355,11 +363,14 @@
     box-shadow: var(--shadow-lg); transform: translateX(-105%); transition: transform 200ms ease; visibility: hidden;
   }
   .kg-work[data-tree-open] .kg-col-tree { transform: none; visibility: visible; }
+  .kg-col-panel { width: clamp(16rem, 50%, 22rem); }
   .kg-tree-toggle { display: inline-flex; }
   .kg-toolbar { flex-wrap: wrap; }
-  .kg-toolbar > .kg-search { flex: 1 1 100%; }
+  .kg-toolbar > .kg-search { flex: 1 1 100%; max-width: none; }
 }
 @media (max-width: 760px) {
+  /* A phone: the drawer takes the width (beside it there is no graph to keep in view). */
+  .kg-col-panel { width: min(22rem, 92%); }
   .kg-stage { min-height: 380px; padding: 24px 12px; }
   .kg-empty { padding: 20px 16px; }
   .kg .ag-btn, .kg-layer-chip, .kg .inf-seg-btn { min-height: 44px; }
@@ -390,7 +401,8 @@
 .kg-col-panel, .kg-tree-scroll { overscroll-behavior: contain; }
 /* A narrower graph (a 1280 px window): the toolbar still fits one row — quieter controls first. */
 @container kg (max-width: 1150px) {
-  .kg-zoom-pct, .kg-kbd { display: none; }
+  .kg-zoom-pct, .kg-kbd, .kg-tree-word { display: none; }
   .kg-layer-chip { padding: 0 8px; gap: 5px; }
-  .kg-toolbar { gap: 6px; }
+  .kg-toolbar { column-gap: 6px; }
+  .kg-toolbar .inf-seg-btn { padding-left: 9px; padding-right: 9px; }
 }

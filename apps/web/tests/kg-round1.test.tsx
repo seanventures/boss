@@ -78,9 +78,9 @@ describe("P1-5 the canvas and the panel show the same connections (round 2: dete
     await mount(<GraphArea projectId="p" actor="ceo" />);
     await settle();
     const drawn = Number($('[data-testid="kg-canvas"]')?.getAttribute("data-nodes"));
-    // 80 read: 28 drawn on the ring, the rest in package groups; the same number every time.
+    // 80 read: as many drawn on the ring as the canvas shows readably, the rest in package groups; the same number every time.
     expect(drawn).toBeLessThan(FX.hood.nodes.length);
-    expect($('[data-testid="kg-view-note"]')?.textContent).toMatch(/and 80 connected within 1 hop · 28 drawn, the rest in \d+ groups?/);
+    expect($('[data-testid="kg-view-note"]')?.textContent).toMatch(/and 80 connected within 1 hop · \d+ drawn, the rest in \d+ groups?/);
     const inView = $$('[data-testid="kg-conn-view"] [data-testid="kg-conn-item"]');
     expect(inView.length).toBe(drawn - 1);
     const labels = inView.map((e) => e.textContent);
@@ -211,9 +211,12 @@ describe("P1-12, P1-13, P2", () => {
     expect(rule).not.toMatch(/#fff8e6|surface-warn/);
   });
 
-  it("the toolbar is one row on desktop widths; the layout counts the graph's own width (container queries)", () => {
+  it("the toolbar is one row on desktop widths, never clipped; the layout counts the graph's own width (container queries)", () => {
     const css = readFileSync("app/knowledge/kg.css", "utf8");
-    expect(css).toMatch(/\.kg-toolbar \{[^}]*flex-wrap: nowrap/);
+    // Round 3: a row that does not fit wraps, its end controls together on the right — never cut off.
+    expect(css).toMatch(/\.kg-toolbar \{[^}]*flex-wrap: wrap/);
+    expect(css).toMatch(/\.kg-toolbar-end \{[^}]*margin-left: auto/);
+    expect(css).toMatch(/@container kg \(max-width: 1150px\) \{[^}]*\.kg-tree-word/);
     expect(css).toMatch(/container: kg \/ inline-size/);
     expect(css).toMatch(/@container kg \(max-width: 860px\)/);
     expect(css).not.toMatch(/@media \(max-width: 1100px\)/);

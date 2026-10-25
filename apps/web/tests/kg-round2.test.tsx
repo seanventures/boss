@@ -142,16 +142,17 @@ import { ProjectMenu } from "../app/project-menu";
 import { IdentityProvider } from "../components/identity/identity-provider";
 
 describe("tester round 2: never an unlabelled or overlapping node", () => {
-  it("every node gets a label — its shortest form when the full one has no room", () => {
+  it("every node gets a label where there is room — its shortest form, or another side, when the full one has none", () => {
+    const v = [{ w: 200, h: 20 }, { w: 80, h: 20 }, { w: 40, h: 16 }];
     const items = [
-      { id: "a", x: 100, y: 100, priority: 3, variants: [{ w: 200, h: 20 }, { w: 80, h: 20 }, { w: 40, h: 16 }] },
-      { id: "b", x: 160, y: 100, priority: 2, variants: [{ w: 200, h: 20 }, { w: 80, h: 20 }, { w: 40, h: 16 }] },
-      { id: "c", x: 100, y: 100, priority: 1, variants: [{ w: 200, h: 20 }, { w: 80, h: 20 }] },
+      { id: "a", x: 300, y: 100, r: 14, priority: 3, variants: v },
+      { id: "b", x: 360, y: 100, r: 14, priority: 2, variants: v },
+      { id: "c", x: 420, y: 100, r: 14, priority: 1, variants: v },
     ];
-    const chosen = placeNodeLabels(items, []);
+    const chosen = placeNodeLabels(items, [], { x0: 0, y0: 0, x1: 800, y1: 400 });
     expect([...chosen.keys()].sort()).toEqual(["a", "b", "c"]);
-    expect(chosen.get("a")).toBe(0);
-    expect(chosen.get("b")).toBeGreaterThan(0);
+    expect(chosen.get("a")!.variant).toBe(0);
+    expect(chosen.get("b")!.variant > 0 || chosen.get("b")!.side !== "below").toBe(true);
   });
 
   it("Focus caps each ring and folds the rest into package groups: 2 hops or 200 read stays readable and deterministic", () => {

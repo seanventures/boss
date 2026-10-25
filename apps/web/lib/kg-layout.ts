@@ -307,22 +307,66 @@ export function pickEdges<E extends { src: string; dst: string; kind: string; we
 
 export type FocusNode = { id: string; hop: number };
 
-/** The first ring's least radius, the room between rings, and the arc one radial label needs. */
-export const RING_FIRST = 150;
-export const RING_GAP = 150;
-/** Arc per neighbour: a 28 px node and room either side, so neither nodes nor their radial labels touch. */
-export const LABEL_ARC = 34;
+/** The first ring's least half-height, the room between rings (vertically; horizontally it is
+ *  `aspect` times more), and the arc each neighbour takes along its ring (tester round 3). */
+export const RING_FIRST = 120;
+export const RING_GAP = 120;
+/** Arc per neighbour along its ring: a 28 px node, its label beside it, and air on both sides,
+ *  so ring nodes never touch like beads (tester round 3 P0) and a side label has a row to itself. */
+export const LABEL_ARC = 46;
+/** The widest a Focus ring is stretched to follow the canvas (wider than tall, like the canvas). */
+export const RING_ASPECT_MAX = 2.2;
+export const RING_ASPECT_MIN = 0.6;
+
+/** An ellipse's perimeter (Ramanujan): the arc the ring's nodes share. */
+export function ellipsePerimeter(a: number, b: number): number {
+  return Math.PI * (3 * (a + b) - Math.sqrt((3 * a + b) * (a + 3 * b)));
+}
+
+/** Points along an ellipse at equal ARC LENGTH (not equal angle): every neighbour gets the same
+ *  room, at the narrow ends as on the long sides. `from` is the polar angle of the first. */
+function alongEllipse(a: number, b: number, count: number, from: number): Pt[] {
+  const M = 1440;
+  const cum: number[] = [0];
+  const pts: Pt[] = [];
+  for (let i = 0; i <= M; i += 1) {
+    const t = (i / M) * Math.PI * 2;
+    pts.push({ x: a * Math.cos(t), y: b * Math.sin(t) });
+    if (i) cum.push(cum[i - 1] + Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y));
+  }
+  const total = cum[M];
+  // The parameter of the polar angle `from`, then its arc position.
+  const t0 = (Math.atan2(a * Math.sin(from), b * Math.cos(from)) + Math.PI * 4) % (Math.PI * 2);
+  const s0 = cum[Math.round((t0 / (Math.PI * 2)) * M) % M];
+  const out: Pt[] = [];
+  let k = 0;
+  for (let j = 0; j < count; j += 1) {
+    const want = (s0 + (j * total) / count) % total;
+    // cum is increasing: walk from where the last one was (wrapping once).
+    while (k < M && cum[k + 1] < want) k += 1;
+    if (cum[k] > want) k = 0;
+    while (k < M && cum[k + 1] < want) k += 1;
+    const seg = cum[k + 1] - cum[k] || 1;
+    const f = (want - cum[k]) / seg;
+    out.push({ x: pts[k].x + (pts[k + 1].x - pts[k].x) * f, y: pts[k].y + (pts[k + 1].y - pts[k].y) * f });
+  }
+  return out;
+}
 
 /**
- * Focus (§5.4, tester round 1 P1-4): radial by hop, ONE ring per hop, each ring large enough that
- * every node's label fits beside its neighbours' (LABEL_ARC px of arc each, at 100%). The first
- * hop is ordered by its edge weight to the centre (heaviest at the top, clockwise); a later hop
- * sits at the angle of what it connects to. Returns positions, the ring radii, each node's angle
- * (for its radial label) and its ring.
+ * Focus (§5.4; tester rounds 1-3): radial by hop, ONE ring per hop, each ring an ellipse as wide
+ * as the canvas is (`aspect`, at most RING_ASPECT_MAX) and long enough that every neighbour has
+ * LABEL_ARC px of it at 100%, nodes spaced by arc length. The first hop is ordered by its edge
+ * weight to the centre (heaviest at the top, clockwise); a later hop sits at the angle of what it
+ * connects to. Returns positions, each ring's half-height (its half-width is `aspect` times it),
+ * each node's polar angle (where its label goes: outward) and its ring.
  */
-export function focusLayout(centerId: string, nodes: FocusNode[], edges: LayoutEdge[]): {
-  pos: Map<string, Pt>; rings: number[]; angle: Map<string, number>; ring: Map<string, number>;
+export function focusLayout(centerId: string, nodes: FocusNode[], edges: LayoutEdge[], opts: { aspect?: number } = {}): {
+  pos: Map<string, Pt>; rings: number[]; aspect: number; angle: Map<string, number>; ring: Map<string, number>;
 } {
+  // Wider than tall in a wide canvas; taller than wide (down to RING_ASPECT_MIN) in a narrow one
+  // beside the drawer, so the picture fills what is visible either way.
+  const ax = Math.min(RING_ASPECT_MAX, Math.max(RING_ASPECT_MIN, opts.aspect ?? 1));
   const pos = new Map<string, Pt>([[centerId, { x: 0, y: 0 }]]);
   const rings: number[] = [];
   const angle = new Map<string, number>();
@@ -340,6 +384,7 @@ export function focusLayout(centerId: string, nodes: FocusNode[], edges: LayoutE
   }
   let prev = 0;
   const hops = [...byHop.keys()].sort((a, b) => a - b);
+  const unitPerimeter = ellipsePerimeter(ax, 1);
   for (const h of hops) {
     const list = byHop.get(h)!;
     let ordered: Array<{ id: string; want: number }>;
@@ -353,28 +398,20 @@ export function focusLayout(centerId: string, nodes: FocusNode[], edges: LayoutE
         return { id: nd.id, want: (want + Math.PI * 4) % (Math.PI * 2) };
       }).sort((a, b) => a.want - b.want || (a.id < b.id ? -1 : 1));
     }
-    const need = (ordered.length * LABEL_ARC) / (2 * Math.PI);
+    const need = (ordered.length * LABEL_ARC) / unitPerimeter;
     const radius = round(Math.max(prev ? prev + RING_GAP : RING_FIRST, need));
-    const step = (Math.PI * 2) / ordered.length;
     const start = h === hops[0] ? -Math.PI / 2 : ordered[0].want;
+    const at = alongEllipse(radius * ax, radius, ordered.length, start);
     ordered.forEach((t, j) => {
-      const a = start + j * step;
-      angle.set(t.id, a);
+      const p = { x: round(at[j].x), y: round(at[j].y) };
+      angle.set(t.id, Math.atan2(p.y, p.x));
       ringOf.set(t.id, rings.length);
-      pos.set(t.id, { x: round(Math.cos(a) * radius), y: round(Math.sin(a) * radius) });
+      pos.set(t.id, p);
     });
     rings.push(radius);
     prev = radius;
   }
-  return { pos, rings, angle, ring: ringOf };
-}
-
-/** A radial label's rotation and anchor: along its ray, upright on the left half. */
-export function radialLabel(a: number, outward: boolean): { rotate: number; align: "left" | "right" } {
-  const left = Math.cos(a) < -1e-9;
-  const rotate = left ? a + Math.PI : a;
-  const align = outward ? (left ? "right" : "left") : (left ? "left" : "right");
-  return { rotate, align };
+  return { pos, rings, aspect: ax, angle, ring: ringOf };
 }
 
 /** Where a node with many arrows coming in has its arrowheads: spread on a wider rim so each
@@ -660,29 +697,146 @@ export function layerToken(layer: string): string {
   return layer === "rules" ? "--kg-layer-rules" : layer === "learning" ? "--kg-layer-learning" : "--kg-layer-code";
 }
 
-export type LabelChoice = { id: string; x: number; y: number; priority: number; variants: Array<{ w: number; h: number }> };
+/** Where a label may go around its node, in the order tried. */
+export type LabelSide = "below" | "above" | "right" | "left" | "above2" | "below2";
+
+export type LabelItem = {
+  id: string;
+  /** The node, screen px: the label touches it wherever it goes. */
+  x: number; y: number; r: number;
+  priority: number;
+  /** Its forms, longest first (full name, shorter middle-ellipsised names, one line). */
+  variants: Array<{ w: number; h: number }>;
+  /** "below" (bubbles, a few neighbours), or "out": the side facing away from the Focus centre. */
+  prefer?: "below" | "out";
+  /** Outward unit vector (Focus rings). */
+  dir?: Pt;
+  /** Drawn even with no room (the selection, the hovered node, the centre). */
+  must?: boolean;
+};
+
+export type PlacedLabel = { variant: number; side: LabelSide; x: number; y: number; w: number; h: number };
+
+/** The rectangle labels must stay inside: the canvas minus what the details drawer covers. */
+export type LabelBounds = { x0: number; y0: number; x1: number; y1: number };
+
+function sidesFor(it: LabelItem): LabelSide[] {
+  let first: LabelSide = "below";
+  if (it.prefer === "out" && it.dir) {
+    if (Math.abs(it.dir.x) >= 0.4) first = it.dir.x > 0 ? "right" : "left";
+    else first = it.dir.y < 0 ? "above" : "below";
+  }
+  const rest: LabelSide[] = first === "left" ? ["below", "above", "right"] : first === "right" ? ["below", "above", "left"]
+    : first === "above" ? ["below", "right", "left"] : ["above", "right", "left"];
+  // A ring's top and bottom are where neighbours sit side by side: their labels take turns on a
+  // second row out (never further, so each still reads as its node's).
+  const extra: LabelSide[] = it.prefer === "out" ? (first === "above" ? ["above2"] : first === "below" ? ["below2"] : []) : [];
+  return [first, ...extra, ...rest];
+}
+
+/** A label's box on one side of its node (x = its centre, y = its top), slid inside `b` along
+ *  the node where that keeps it touching the node; null when it cannot be inside. */
+export function labelBox(it: Pick<LabelItem, "x" | "y" | "r">, side: LabelSide, w: number, h: number, b: LabelBounds, gap = 5): { x: number; y: number } | null {
+  let x: number; let y: number;
+  if (side === "below" || side === "above" || side === "below2" || side === "above2") {
+    const row = side === "below2" || side === "above2" ? h + 2 : 0;
+    y = side === "below" || side === "below2" ? it.y + it.r + gap - 1 + row : it.y - it.r - gap - h - row;
+    // Slid in from an edge, never so far it no longer spans its node.
+    const lo = b.x0 + w / 2; const hi = b.x1 - w / 2;
+    x = hi < lo ? it.x : Math.min(Math.max(it.x, lo), hi);
+    if (Math.abs(x - it.x) > w / 2 - 2) return null;
+  } else {
+    x = side === "right" ? it.x + it.r + gap + w / 2 : it.x - it.r - gap - w / 2;
+    y = it.y - h / 2;
+    if (x - w / 2 < b.x0 || x + w / 2 > b.x1) return null;
+  }
+  if (y < b.y0 || y + h > b.y1) return null;
+  return { x, y };
+}
+
+function overlaps(a: LabelBox, c: LabelBox, gap: number): boolean {
+  return a.x - a.w / 2 - gap < c.x + c.w / 2 && a.x + a.w / 2 + gap > c.x - c.w / 2 && a.y - gap < c.y + c.h && a.y + a.h + gap > c.y;
+}
 
 /**
- * Every node keeps a label (tester round 2: "never draw an unlabelled node"). Highest priority
- * first, each label takes the first of its variants (full name, then shorter middle-ellipsised
- * names, then without its second line) that clears the circles and the labels already placed;
- * when none does, the shortest is drawn all the same. Returns the variant index per id.
+ * Node labels that never overlap (tester round 3 P0): highest priority first, each label takes
+ * the first of its forms (full name, then shorter middle-ellipsised ones) that fits on any side
+ * of its node — its preferred side first — clear of every circle, every label already placed and
+ * the edge of the visible canvas. A label with no room anywhere waits for hover or zoom (its full
+ * name is in the tooltip), unless it `must` show (the selection, the centre): then its shortest
+ * form goes on its preferred side regardless. Deterministic: ties by id.
  */
-export function placeNodeLabels(items: LabelChoice[], obstacles: LabelBox[], gap = 2): Map<string, number> {
+export function placeNodeLabels(items: LabelItem[], obstacles: LabelBox[], bounds: LabelBounds, gap = 2): Map<string, PlacedLabel> {
   const placed: LabelBox[] = [];
-  const out = new Map<string, number>();
-  const hits = (b: LabelBox, others: LabelBox[], self: string) => others.some((p) => p.id !== self && p.id !== `o:${self}`
-    && b.x - b.w / 2 - gap < p.x + p.w / 2 && b.x + b.w / 2 + gap > p.x - p.w / 2 && b.y - gap < p.y + p.h && b.y + b.h + gap > p.y);
+  const out = new Map<string, PlacedLabel>();
+  const clear = (bx: LabelBox, self: string) => !obstacles.some((o) => o.id !== `o:${self}` && overlaps(bx, o, gap))
+    && !placed.some((p) => overlaps(bx, p, gap));
   for (const it of [...items].sort((a, b) => b.priority - a.priority || (a.id < b.id ? -1 : 1))) {
-    let chosen = it.variants.length - 1;
-    for (let v = 0; v < it.variants.length; v += 1) {
-      const box = { id: it.id, x: it.x, y: it.y, w: it.variants[v].w, h: it.variants[v].h, priority: it.priority };
-      if (!hits(box, obstacles, it.id) && !hits(box, placed, it.id)) { chosen = v; break; }
+    let got: PlacedLabel | null = null;
+    const sides = sidesFor(it);
+    for (let v = 0; v < it.variants.length && !got; v += 1) {
+      const { w, h } = it.variants[v];
+      for (const side of sides) {
+        const at = labelBox(it, side, w, h, bounds);
+        if (!at) continue;
+        const bx = { id: it.id, x: at.x, y: at.y, w, h, priority: it.priority };
+        if (clear(bx, it.id)) { got = { variant: v, side, x: at.x, y: at.y, w, h }; break; }
+      }
     }
-    out.set(it.id, chosen);
-    placed.push({ id: it.id, x: it.x, y: it.y, w: it.variants[chosen].w, h: it.variants[chosen].h, priority: it.priority });
+    if (!got && it.must) {
+      const v = it.variants.length - 1;
+      const { w, h } = it.variants[v];
+      const loose = { x0: -1e9, y0: -1e9, x1: 1e9, y1: 1e9 };
+      const at = labelBox(it, sides[0], w, h, bounds) ?? labelBox(it, sides[0], w, h, loose)!;
+      got = { variant: v, side: sides[0], x: at.x, y: at.y, w, h };
+    }
+    if (!got) continue;
+    out.set(it.id, got);
+    placed.push({ id: it.id, x: got.x, y: got.y, w: got.w, h: got.h, priority: it.priority });
   }
   return out;
+}
+
+/** True when no two boxes (x = centre, y = top) overlap: what the placement promises. */
+export function labelsClear(boxes: Array<{ x: number; y: number; w: number; h: number }>): boolean {
+  for (let i = 0; i < boxes.length; i += 1) {
+    for (let j = i + 1; j < boxes.length; j += 1) {
+      const a = boxes[i]; const c = boxes[j];
+      if (a.x - a.w / 2 < c.x + c.w / 2 - 0.5 && a.x + a.w / 2 > c.x - c.w / 2 + 0.5 && a.y < c.y + c.h - 0.5 && a.y + a.h > c.y + 0.5) return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * How far to pan left (≤ 0) so the selection and its label clear the details drawer, using the
+ * room on the left first so the rest of the picture (the pinned Rules and Learning bubbles too)
+ * comes out from under it where it can (tester round 3 P1): `must` boxes always end visible,
+ * `rest` only as far as the left margin allows. Boxes are screen px, x = left edge.
+ */
+export function revealPan(must: Array<{ x: number; w: number }>, rest: Array<{ x: number; w: number }>, visibleRight: number, margin = 16): number {
+  const all = [...must, ...rest];
+  if (!all.length) return 0;
+  const right = (bs: Array<{ x: number; w: number }>) => Math.max(...bs.map((b) => b.x + b.w));
+  const left = Math.min(...all.map((b) => b.x));
+  const needMust = must.length ? Math.max(0, right(must) - (visibleRight - margin)) : 0;
+  const needAll = Math.max(0, right(all) - (visibleRight - margin));
+  const slack = Math.max(0, left - margin);
+  return -Math.max(needMust, Math.min(needAll, slack));
+}
+
+/** The tail of a path-like name, ellipsised at the START ("…/loanaccount/service"): a package
+ *  group's label keeps the part that tells packages apart and is never cut mid-word. */
+export function tailEllipsis(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const parts = text.split("/").filter(Boolean);
+  let tail = "";
+  for (let i = parts.length - 1; i >= 0; i -= 1) {
+    const next = tail ? `${parts[i]}/${tail}` : parts[i];
+    if (next.length + 2 > max && tail) break;
+    tail = next;
+  }
+  return tail.length + 2 > max ? middleEllipsis(tail, max) : `…/${tail}`;
 }
 
 // ── Focus that stays readable at any size (tester round 2: 2 hops / Show 200) ─────────────
@@ -691,6 +845,8 @@ export function placeNodeLabels(items: LabelChoice[], obstacles: LabelBox[], gap
 export const FOCUS_RING_CAP: Record<number, number> = { 1: 28, 2: 32, 3: 32 };
 /** At most this many group bubbles per hop; anything beyond joins one "+N more" group. */
 export const FOCUS_GROUPS = 6;
+/** A group's package name is shortened from its start past this (its label is never cut). */
+export const GROUP_NAME_MAX = 20;
 
 export type GroupNode = { id: string; key: string; kind: string; label: string; layer: "code" | "rules" | "learning"; trust_tier: "observed"; sub?: string; hop: number };
 
@@ -710,7 +866,7 @@ export function groupKey(n: { layer: string; sub?: string; key: string }): { key
  */
 export function groupFocus<N extends { id: string; key: string; layer: string; sub?: string; hop: number; label: string },
   E extends { src: string; dst: string; kind: string; weight: number; label: string | null }>(
-  centerId: string, nodes: N[], edges: E[],
+  centerId: string, nodes: N[], edges: E[], caps: Record<number, number> = FOCUS_RING_CAP,
 ): { nodes: Array<N | GroupNode>; edges: E[]; members: Map<string, N[]> } {
   const weight = new Map<string, number>();
   for (const e of edges) {
@@ -724,7 +880,7 @@ export function groupFocus<N extends { id: string; key: string; layer: string; s
   for (const h of hops) {
     const list = nodes.filter((n) => n.hop === h);
     if (h === 0 || list.some((n) => n.id === centerId)) { out.push(...list); continue; }
-    const cap = FOCUS_RING_CAP[h] ?? 32;
+    const cap = caps[h] ?? FOCUS_RING_CAP[h] ?? 32;
     const ranked = [...list].sort((a, b) => (weight.get(b.id) ?? 0) - (weight.get(a.id) ?? 0) || (a.id < b.id ? -1 : 1));
     if (ranked.length <= cap + 2) { out.push(...ranked); continue; }
     const keep = ranked.slice(0, cap);
@@ -748,7 +904,7 @@ export function groupFocus<N extends { id: string; key: string; layer: string; s
       const id = `group:${h}:${key}`;
       members.set(id, items);
       for (const n of items) into.set(n.id, id);
-      out.push({ id, key: id, kind: "group", label: `+${items.length} in ${label}`, layer: items[0].layer === "code" ? "code" : items[0].layer as "rules" | "learning",
+      out.push({ id, key: id, kind: "group", label: `+${items.length} in ${tailEllipsis(label, GROUP_NAME_MAX)}`, layer: items[0].layer === "code" ? "code" : items[0].layer as "rules" | "learning",
         trust_tier: "observed", sub: `${items.length} more, grouped`, hop: h });
     };
     for (const [key, g] of named) make(key, g.label, g.items);
