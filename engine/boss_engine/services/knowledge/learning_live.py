@@ -249,8 +249,12 @@ def run_proof(connection: Connection, project_id: str, run: str, *,
     consulted, reused, learned = _used(connection, project_id, [f"run:{r}" for r in family], withheld)
     from .runtime import knowledge_mode
 
+    from .learning_writeback import run_title
+
     return {
         "run_id": run,
+        # By its name, never its id: the console says what the baseline was.
+        "title": run_title(connection, run),
         "status": (flow["status"] if flow else (builds[0]["status"] if builds else None)),
         "knowledge_graph": knowledge_mode(connection, project_id),
         "steps": int(calls["steps"] or 0),

@@ -19,7 +19,7 @@ import type { Permission } from "./identity/permissions.gen";
 import type {
   KgLiveResponse, KgNeighbourhoodResponse, KgNodeDetailResponse, KgOverviewResponse, KgRuleActionRequest,
   KgRuleActionResponse, KgRuleCategory, KgRuleScope, KgRulesResponse, KgRuleStatus, KgSearchResponse,
-  KgTreeChildrenResponse, KgTreeTab,
+  KgTreeChildrenResponse, KgTreeTab, KgRunProofResponse,
 } from "./kg-view-types";
 import { KG_VIEW_BASE } from "./kg-view-types";
 
@@ -154,6 +154,12 @@ export function getTreeChildren(w: Who, o: { tab: KgTreeTab; parent?: string | n
 
 export function getSearch(w: Who, q: string, o: { layers?: string; limit?: number; meaning?: boolean } = {}, signal?: AbortSignal) {
   return kgRead<KgSearchResponse>(`${KG_VIEW_BASE}/search`, { project_id: w.projectId, actor: w.actor, q, layers: o.layers, limit: o.limit ?? 20, meaning: o.meaning ? 1 : undefined }, signal);
+}
+
+/** The reuse scorecard (§4.6): one run (or conversation), or it against a baseline — what it
+ *  carried from the baseline, each metric's change and BOSS's verdict. */
+export function getProof(w: Who, run: string, baseline?: string | null, signal?: AbortSignal) {
+  return kgRead<KgRunProofResponse>(`${KG_VIEW_BASE}/proof`, { project_id: w.projectId, actor: w.actor, run, baseline }, signal);
 }
 
 export function getRules(w: Who, o: { status?: KgRuleStatus | null; scan_id?: string | null; area?: string | null } = {}, signal?: AbortSignal) {

@@ -18,7 +18,7 @@ import { useGate } from "../../components/gated";
 import { useOnScreen } from "../../lib/area-shown";
 import { useAreaKeydown } from "../../lib/area-keys";
 import {
-  CLUSTER_ARC, CLUSTER_R, FOCUS_CEILING, LABEL_ARC, FOCUS_CLUSTERS, FOCUS_RING_CAP, MORE_ID, OVERVIEW_AREAS, RING_ASPECT_MAX, RING_ASPECT_MIN, fitTransform, focusEdges, focusKeepLabels, focusLayout, isBubble, kindName, kindToken, legendKey, overviewLayout,
+  CLUSTER_ARC, CLUSTER_R, FOCUS_CEILING, LABEL_ARC, FOCUS_CLUSTERS, FOCUS_RING_CAP, MORE_ID, OVERVIEW_AREAS, RING_ASPECT_MAX, RING_ASPECT_MIN, fitTransform, focusEdges, focusKeepLabels, LEARNING_EDGES, learningHow, mergeLearningEdges, focusLayout, isBubble, kindName, kindToken, legendKey, overviewLayout,
   charEllipsis, groupFocus, pickEdges, pickOverview, placeMembers, placeNear, slotMeasure, type Pt,
 } from "../../lib/kg-layout";
 import {
@@ -29,6 +29,7 @@ import type {
   KgLiveResponse, KgNeighbourhoodResponse, KgNodeDetailResponse, KgOverviewResponse, KgSearchHit, KgSearchResponse,
   KgTreeTab, KgViewEdge, KgViewNode,
 } from "../../lib/kg-view-types";
+import { productLayerOf } from "../../lib/kg-view-types";
 import { GraphCanvas, GraphLegend, GraphTable, READABLE, edgeKey, frameExtent, framePadding, visibleWidth, type CanvasEdge, type CanvasHandle, type CanvasNode } from "./graph-canvas";
 import { CanvasLoading, KgBuilt, KgEmptyLayer, KgError, KgIndexing, KgReadError, KgTruncation, StageCard } from "./kg-states";
 import { NodePanel, ScanForRules, type BubbleSummary } from "./node-panel";
@@ -125,7 +126,10 @@ export function layFocus(center: string, read: Array<KgViewNode & { hop: number 
   // With an outer ring (2 hops and more) the first ring opens wider (tester round 6: at 2 hops it
   // was about 280 px across, its labels cut or missing): it takes the room between the centre and
   // the clusters that was empty, so its names fit where they sit.
-  const first = read.some((n) => n.hop >= 2) ? 120 : 90;
+  // A learning at the centre (tester, KG video): its few neighbours are joined by the loop's
+  // words ("produced", "reused"), which need a line long enough to sit on beside two circles.
+  const learningCentre = read.some((n) => n.id === center && productLayerOf(n.kind) === "learning");
+  const first = read.some((n) => n.hop >= 2) ? 120 : learningCentre ? 150 : 90;
   const one = (cap1: number, clusters: number) => {
     const grouped = groupFocus(center, read, inView, { 1: cap1 }, { clusterFrom: 2, clusters });
     const nodes = grouped.nodes as Array<KgViewNode & { hop: number; cluster?: boolean }>;
@@ -449,7 +453,8 @@ export function GraphView({ projectId, actor, orgId, repos, onReposChanged, rule
     // Exactly what the server answered — the same count every time (tester round 2) — with each
     // hop's ring capped and the rest folded into "+N in <package>" groups, so 2 hops or 200
     // neighbours still read: every node labelled, none on another.
-    const inView = h.edges.filter((e) => readIds.has(e.src) && readIds.has(e.dst));
+    // The learning loop one line per pair, its most telling word on it (mergeLearningEdges).
+    const inView = mergeLearningEdges(h.edges.filter((e) => readIds.has(e.src) && readIds.has(e.dst)));
     // Each ring names as many neighbours as the canvas shows at a readable scale (beside the
     // drawer, which a Focus opens); the rest fold into "+N in <package>" groups (round 3 P0).
     const visW = layoutW;
@@ -524,7 +529,8 @@ export function GraphView({ projectId, actor, orgId, repos, onReposChanged, rule
     const strongest = new Set([...drawnEdges].filter((e) => e.weight > 1).sort((a, b) => b.weight - a.weight).slice(0, rings.length > 1 ? 6 : 12).map(edgeKey));
     const all = [...edges, ...extraEdges.filter((e) => (e.kind as string) !== "member")];
     return {
-      nodes: [...canvasNodes, ...extra], raw, edges: [...drawnEdges, ...extraEdges], allEdges: all, pos, rings, ringAspect: best.laid.aspect, center: h.center.id, labelled: strongest,
+      // A live addition of an edge already drawn is the same line (mergeLearningEdges), never a second chip.
+      nodes: [...canvasNodes, ...extra], raw, edges: mergeLearningEdges([...drawnEdges, ...extraEdges]), allEdges: mergeLearningEdges(all), pos, rings, ringAspect: best.laid.aspect, center: h.center.id, labelled: strongest,
       groups: grouped.members as Map<string, KgViewNode[]>, readCount: read.length - 1,
       folded: [] as KgViewNode[], pages: 1, page: 0, pageOf: new Map<string, number>(), total: 0, noun: "", drawnCount: all.length, edgeTotal: all.length,
       layoutCount: canvasNodes.length,
@@ -571,7 +577,17 @@ export function GraphView({ projectId, actor, orgId, repos, onReposChanged, rule
       const key = n.kind === "more" ? "more" : legendKey(n.kind, n.symbol_kind, n.id);
       if (!seen.has(key)) seen.set(key, { key, token: n.token, name: n.kind === "more" ? "More areas" : kindName(n.kind, n.symbol_kind, n.id) });
     }
-    return [...seen.values()];
+    // The learning edges drawn, each by its word and colour (a line swatch).
+    const hows = new Set<string>();
+    for (const e of picture.edges as CanvasEdge[]) {
+      const how = learningHow(e);
+      if (how) hows.add(how);
+      for (const a of e.also ?? []) hows.add(a);
+    }
+    // First: the legend is one row, and the loop's words are what a Focus on a learning shows.
+    const lines = LEARNING_EDGES.filter((x) => hows.has(x.how))
+      .map((x) => ({ key: `edge:${x.how}`, token: x.token, name: x.word, title: x.legend, line: true }));
+    return [...lines, ...seen.values()];
   }, [picture]);
 
   // ── the panel's subject ──────────────────────────────────────────────────────────────────

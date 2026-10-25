@@ -12,13 +12,13 @@ import { Copy, X } from "@phosphor-icons/react";
 
 import { GatedButton } from "../../components/gated";
 import { openAgent } from "../../lib/agent-world";
-import { RUN_TITLE_MAX, agentName, approvalWords, eventWords, isWordsAttr, provenanceLines, stepWords, useWords, type ProvLine } from "../../lib/kg-provenance";
+import { RUN_TITLE_MAX, agentName, approvalWords, eventWords, isWordsAttr, provenanceLines, stepWords, storyWords, useWords, type ProvLine } from "../../lib/kg-provenance";
 import { wordCut } from "../../lib/word-cut";
 import { scanReader, sentenceStart } from "../../lib/kg-scan";
-import { isLearnedKind, type KgConnectionGroup, type KgNodeDetailResponse, type KgProvenance, type KgViewEdge, type KgViewNode } from "../../lib/kg-view-types";
-import { kindName, kindToken } from "../../lib/kg-layout";
+import { isLearnedKind, type KgConnectionGroup, type KgNodeDetailResponse, type KgProvenance, type KgRunComparison, type KgRunProof, type KgViewEdge, type KgViewNode } from "../../lib/kg-view-types";
+import { LEARNING_EDGES, kindName, kindToken, learningEdgeStyle, learningHow } from "../../lib/kg-layout";
 import {
-  FACT_MANAGE, RULE_REVIEW, SCAN_START, approveRule, codeHref, forgetFact, getBlastRadius, getNode, getWhy,
+  FACT_MANAGE, RULE_REVIEW, SCAN_START, approveRule, codeHref, forgetFact, getBlastRadius, getNode, getProof, getWhy,
   kgRunHref, rejectRule,
   kgWhen,
 } from "../../lib/kg-view";
@@ -309,6 +309,8 @@ function DetailBody({ d, w, orgId, onFocusNode, viewEdges, viewNote = null }: {
   const detail = (a.detail && typeof a.detail === "object") ? (a.detail as Record<string, unknown>) : null;
   return (
     <>
+      {/* The loop in one line, first: who learned it, where, and where it was reused since. */}
+      {storyWords(d) ? <p className="kg-story" data-testid="kg-panel-story">{storyWords(d)}</p> : null}
       {d.statement ? (
         <Section title={isRule ? "Rule" : isLearnedKind(d.node.kind) ? "What was learned" : "Statement"} testId="kg-panel-statement">
           <div className="kg-statement" data-layer={d.node.layer}>
@@ -317,6 +319,7 @@ function DetailBody({ d, w, orgId, onFocusNode, viewEdges, viewNote = null }: {
           </div>
         </Section>
       ) : null}
+      {d.node.kind === "run" && d.node.key.startsWith("run:") ? <ReuseCard w={w} run={d.node.key.slice(4)} /> : null}
       <Section title="Attributes" testId="kg-panel-attrs">
         <dl className="kg-attrs">
           {d.path ? (
@@ -484,7 +487,8 @@ function Connections({ d, w, onFocusNode, viewEdges, viewNote = null }: {
   return (
     <Section title="Connections" testId="kg-panel-connections">
       {groups.length ? <p className="kg-quiet" data-testid="kg-panel-conn-summary">{summary}</p> : !viewEdges?.length ? <p className="kg-quiet">Nothing connects to it.</p> : null}
-      {viewEdges?.length ? (
+      {viewEdges?.length && isLearnedKind(d.node.kind) ? <LearningView viewEdges={viewEdges} onFocusNode={onFocusNode} /> : null}
+      {viewEdges?.length && !isLearnedKind(d.node.kind) ? (
         // What the canvas draws for it right now — class calls rolled up from its methods
         // included — so a line on the canvas is always a row here.
         <div className="kg-group" data-testid="kg-conn-view">
@@ -514,6 +518,162 @@ function Connections({ d, w, onFocusNode, viewEdges, viewNote = null }: {
         );
       })}
       {err ? <p className="kg-inline-err" role="alert">{err}</p> : null}
+    </Section>
+  );
+}
+
+/** A conversation's agent, from its sub ("Conversation with Site Reliability Engineer"). */
+function conversationAgent(n: KgViewNode): string | null {
+  const m = /^Conversation with (.+)$/.exec(n.sub ?? "");
+  return m ? m[1] : null;
+}
+
+const LEARNING_HEADS: Record<string, string> = {
+  produced: "Produced by", reused: "Reused by", cited: "Cited by", consulted: "Consulted by", about: "About",
+};
+
+/**
+ * WHAT THE CANVAS DRAWS AROUND A LEARNING, in the canvas's own words and colours: "Reused by:
+ * B4 · Incident… (Site Reliability Engineer)". The learning loop first, in LEARNING_EDGES order;
+ * any other edge (proposed by, supersedes) after it, by its kind.
+ */
+function LearningView({ viewEdges, onFocusNode }: {
+  viewEdges: Array<{ edge: KgViewEdge & { also?: string[] }; other: KgViewNode; out: boolean }>;
+  onFocusNode: (id: string, n?: KgViewNode) => void;
+}) {
+  const groups = new Map<string, typeof viewEdges>();
+  for (const v of viewEdges) {
+    const how = learningHow(v.edge) ?? `other:${v.edge.kind}:${v.out ? "out" : "in"}`;
+    groups.set(how, [...(groups.get(how) ?? []), v]);
+  }
+  const order = [...LEARNING_EDGES.map((x) => x.how as string).filter((h) => groups.has(h)), ...[...groups.keys()].filter((h) => h.startsWith("other:"))];
+  return (
+    <div className="kg-group" data-testid="kg-conn-view">
+      {order.map((how) => {
+        const rows = groups.get(how)!;
+        const style = learningEdgeStyle(how);
+        const head = style ? LEARNING_HEADS[how] : (() => { const [, kind, way] = how.split(":"); const w = edgeWords(kind); return way === "in" ? `${w.charAt(0).toUpperCase()}${w.slice(1)} (incoming)` : `${w.charAt(0).toUpperCase()}${w.slice(1)}`; })();
+        return (
+          <div key={how} className="kg-learn-group" data-testid="kg-learn-group" data-how={how}>
+            <h5 className="kg-group-head kg-learn-head" style={style ? { color: `var(${style.token})` } : undefined}>
+              {style ? <span className="kg-legend-line" style={{ background: `var(${style.token})` }} aria-hidden /> : null}
+              {head} <span>{rows.length.toLocaleString("en-US")}</span>
+            </h5>
+            <ul className="kg-conn-list">
+              {rows.map(({ edge, other, out }) => {
+                const who = conversationAgent(other);
+                const also = edge.also?.length ? `also ${edge.also.join(", ")}` : null;
+                const note = [who, also].filter(Boolean).join(" · ");
+                return (
+                  <li key={`v-${other.id}-${edge.kind}-${out}`}>
+                    {/* The name whole on its line, who and what else under it ("Reused by: B4 · Incident…
+                        (Site Reliability Engineer)"): a long title never squeezes the agent out. */}
+                    <button type="button" className="kg-conn kg-learn-row" onClick={() => onFocusNode(other.id, other)}
+                            title={`${kindName(other.kind, other.symbol_kind, other.id)} · ${other.label}${note ? ` · ${note}` : ""}`} data-testid="kg-conn-item">
+                      <span className="kg-dot" style={{ background: `var(${kindToken(other.kind, other.symbol_kind, other.id)})` }} aria-hidden />
+                      <span className="kg-learn-row-text">
+                        <span className="kg-conn-label" data-user-text>{other.label}</span>
+                        {note ? <span className="kg-learn-row-note">{who ? `(${who})` : ""}{who && also ? " · " : ""}{also ?? ""}</span> : null}
+                      </span>
+                      <span className="kg-conn-go" aria-hidden>›</span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** The run or conversation it learned from: the one that produced what it reused (else consulted). */
+export function reuseBaseline(p: KgRunProof): string | null {
+  for (const i of [...p.reused, ...p.consulted]) if (i.learned_in && i.learned_in !== p.run_id) return i.learned_in;
+  return null;
+}
+
+function seconds(v: number | null | undefined): string {
+  return v === null || v === undefined ? "—" : `${v.toLocaleString("en-US", { maximumFractionDigits: 1 })} s`;
+}
+
+function delta(v: number | null | undefined, unit = ""): string | null {
+  if (v === null || v === undefined || v === 0) return v === 0 ? "no change" : null;
+  return `${v > 0 ? "+" : "−"}${Math.abs(v).toLocaleString("en-US", { maximumFractionDigits: 1 })}${unit}`;
+}
+
+/**
+ * THE REUSE SCORECARD (spec §4.6) for a run or conversation that used what an earlier one
+ * learned: the baseline (picked as the run that produced what it reused or consulted), steps,
+ * turns and time to root cause baseline → this run with the change, what was carried, and BOSS's
+ * verdict. Tokens are said as not metered rather than shown as 0.
+ */
+function ReuseCard({ w, run }: { w: { projectId: string; actor: string }; run: string }) {
+  const [cmp, setCmp] = useState<KgRunComparison | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    const ac = new AbortController();
+    setCmp(null); setErr(null);
+    void (async () => {
+      const one = await getProof(w, run, null, ac.signal);
+      if (ac.signal.aborted) return;
+      if (!one.ok || !one.data.run) { if (!one.ok && one.status !== 404 && one.status !== -1) setErr(one.error); return; }
+      const base = reuseBaseline(one.data.run);
+      if (!base) return;
+      const two = await getProof(w, run, base, ac.signal);
+      if (ac.signal.aborted) return;
+      if (two.ok && two.data.comparison) setCmp(two.data.comparison); else if (!two.ok && two.status !== -1) setErr(two.error);
+    })();
+    return () => ac.abort();
+  }, [w.projectId, w.actor, run]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (err) return <Section title="Reuse" testId="kg-panel-reuse"><p className="kg-inline-err" role="alert">{err}</p></Section>;
+  if (!cmp) return null;
+  const { baseline: b, run: r, delta: dl } = cmp;
+  const metered = (b.tokens_measured ?? true) && (r.tokens_measured ?? true);
+  const conversations = b.kind === "conversation" || r.kind === "conversation";
+  const rows: Array<[string, string, string, string | null]> = [
+    ["Steps", b.steps.toLocaleString("en-US"), r.steps.toLocaleString("en-US"), delta(dl.steps)],
+    ["Turns", b.turns.toLocaleString("en-US"), r.turns.toLocaleString("en-US"), delta(dl.turns)],
+  ];
+  if ("time_to_root_cause_seconds" in dl || b.time_to_root_cause_seconds != null || r.time_to_root_cause_seconds != null) {
+    rows.push(["Time to root cause", seconds(b.time_to_root_cause_seconds), seconds(r.time_to_root_cause_seconds), delta(dl.time_to_root_cause_seconds, " s")]);
+  } else {
+    rows.push(["Wall time", seconds(b.wall_seconds), seconds(r.wall_seconds), delta(dl.wall_seconds, " s")]);
+  }
+  if (metered) rows.push(["Tokens", b.tokens.toLocaleString("en-US"), r.tokens.toLocaleString("en-US"), delta(dl.tokens)]);
+  const carried = [...new Map(cmp.carried.map((i) => [i.id, i])).values()];
+  return (
+    <Section title="Reuse" testId="kg-panel-reuse">
+      <div className="kg-reuse" data-attributed={cmp.attributed || undefined}>
+        <p className="kg-reuse-from" data-testid="kg-reuse-baseline">
+          Learned from <strong>“{wordCut(b.title ?? "an earlier run", RUN_TITLE_MAX).text}”</strong>
+        </p>
+        <table className="kg-reuse-table" data-testid="kg-reuse-metrics">
+          <thead><tr><th scope="col" /><th scope="col">Before</th><th scope="col">This run</th><th scope="col">Change</th></tr></thead>
+          <tbody>
+            {rows.map(([name, before, after, change]) => (
+              <tr key={name} data-metric={name}>
+                <th scope="row">{name}</th><td>{before}</td><td>{after}</td>
+                <td data-better={change && change.startsWith("−") ? true : undefined}>{change ?? "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {!metered ? <p className="kg-quiet" data-testid="kg-reuse-tokens">Tokens: not metered for {conversations ? "conversations" : "these runs"}</p> : null}
+        {carried.length ? (
+          <div data-testid="kg-reuse-carried">
+            <h5 className="kg-group-head">Carried over <span>{carried.length}</span></h5>
+            <ul className="kg-reuse-carried">
+              {carried.map((i) => (
+                <li key={i.id}><span className="kg-dot" style={{ background: `var(${kindToken(i.kind)})` }} aria-hidden />
+                  <span><span className="kg-reuse-kind">{kindName(i.kind)}</span> <span data-user-text>{i.title}</span></span></li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+        <p className="kg-reuse-verdict" data-testid="kg-reuse-verdict">{cmp.verdict.charAt(0).toUpperCase()}{cmp.verdict.slice(1)}.</p>
+      </div>
     </Section>
   );
 }

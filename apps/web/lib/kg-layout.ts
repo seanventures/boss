@@ -755,6 +755,28 @@ export function placeLabels(boxes: LabelBox[], gap = 2): Set<string> {
   return out;
 }
 
+/**
+ * Where else a learning edge's chip may sit when its midpoint is taken (a short edge between two
+ * circles has no room on the line): along the line, then beside it on either side, far enough
+ * that a ``w`` × ``h`` chip clears the line. The midpoint is not among them.
+ */
+export function chipSpots(start: Pt, end: Pt, w: number, h: number): Pt[] {
+  const dx = end.x - start.x, dy = end.y - start.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const nx = -dy / len, ny = dx / len;
+  const off = Math.abs(nx) * (w / 2) + Math.abs(ny) * (h / 2) + 4;
+  const at = (t: number) => ({ x: start.x + dx * t, y: start.y + dy * t });
+  const out: Pt[] = [at(0.35), at(0.65)];
+  // Beside the line, then further out (clear of the circles a short edge runs between).
+  for (const k of [1, 2, 3]) {
+    for (const t of [0.5, 0.35, 0.65, 0.2, 0.8]) {
+      const p = at(t);
+      out.push({ x: p.x + nx * off * k, y: p.y + ny * off * k }, { x: p.x - nx * off * k, y: p.y - ny * off * k });
+    }
+  }
+  return out;
+}
+
 /** Keyboard order (§5.3: Tab cycles nodes in weight order): heaviest total edge weight first. */
 export function weightOrder(ids: string[], edges: LayoutEdge[], first?: string | null): string[] {
   const w = new Map<string, number>();
@@ -822,6 +844,60 @@ export function isBubble(kind: string): boolean {
 
 /** Edges that read as the learning loop take the target's layer colour (§5.3). */
 export const LOOP_EDGES = new Set(["consulted", "reused", "approved_by"]);
+
+/**
+ * THE LEARNING LOOP, READABLE ON THE CANVAS: what each learning edge is, in one word, in its own
+ * colour, always labelled — "produced" (a run or conversation learned it), "consulted" (an agent
+ * read it), "cited" (an agent named it in its answer), "reused" (an agent applied it: the accent),
+ * "about" (the code it is about). The order is how much an edge tells: where several join the
+ * same two nodes, the line carries the first and its tooltip the rest. Code edges are not here:
+ * they keep their weight labels and their kind on hover.
+ */
+export const LEARNING_EDGES = [
+  { how: "produced", word: "produced", token: "--kg-edge-produced", legend: "Produced: where it was learned" },
+  { how: "reused", word: "reused", token: "--kg-edge-reused", legend: "Reused: applied in a later run" },
+  { how: "cited", word: "cited", token: "--kg-edge-cited", legend: "Cited: named in an agent's answer" },
+  { how: "consulted", word: "consulted", token: "--kg-edge-consulted", legend: "Consulted: read by an agent" },
+  { how: "about", word: "about", token: "--kg-edge-about", legend: "About: the code it concerns" },
+] as const;
+export type LearningHow = (typeof LEARNING_EDGES)[number]["how"];
+const LEARNING_BY = new Map<string, (typeof LEARNING_EDGES)[number]>(LEARNING_EDGES.map((x) => [x.how, x]));
+
+/** What a learning edge is ("cited" is a consulted edge whose use was a citation), or null for
+ *  any other edge. */
+export function learningHow(e: { kind: string; how?: string | null }): LearningHow | null {
+  const how = e.kind === "consulted" && e.how === "cited" ? "cited" : e.kind;
+  return LEARNING_BY.has(how) ? (how as LearningHow) : null;
+}
+
+export function learningEdgeStyle(how: string) {
+  return LEARNING_BY.get(how) ?? null;
+}
+
+/**
+ * One line per pair of nodes for the learning loop: a conversation that consulted a precedent
+ * and then reused it is one "reused" line (with "consulted" in `also`), not two lines on top of
+ * each other with one label lost. Other edges pass through untouched.
+ */
+export function mergeLearningEdges<E extends { src: string; dst: string; kind: string; how?: string | null }>(edges: E[]): Array<E & { also?: string[] }> {
+  const rank = (e: E) => LEARNING_EDGES.findIndex((x) => x.how === learningHow(e));
+  const best = new Map<string, { e: E; also: string[] }>();
+  const out: Array<E & { also?: string[] }> = [];
+  for (const e of edges) {
+    if (learningHow(e) === null) { out.push(e); continue; }
+    const key = `${e.src}\u0000${e.dst}`;
+    const prev = best.get(key);
+    if (!prev) { best.set(key, { e, also: [] }); continue; }
+    if (rank(e) < rank(prev.e)) best.set(key, { e, also: [...prev.also, learningHow(prev.e)!] });
+    else prev.also.push(learningHow(e)!);
+  }
+  for (const { e, also } of best.values()) {
+    // The same word twice (a live addition of an edge already read) is one line, said once.
+    const rest = [...new Set(also)].filter((h) => h !== learningHow(e));
+    out.push(rest.length ? { ...e, also: rest } : e);
+  }
+  return out;
+}
 
 export function layerToken(layer: string): string {
   return layer === "rules" ? "--kg-layer-rules" : layer === "learning" ? "--kg-layer-learning" : "--kg-layer-code";

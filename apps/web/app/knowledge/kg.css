@@ -34,6 +34,12 @@
   --kg-layer-code: #5b9dff;
   --kg-layer-rules: #f0a43a;
   --kg-layer-learning: #c4a1ff;
+  /* The learning loop's edges (lib/kg-layout LEARNING_EDGES): reuse takes the console accent. */
+  --kg-edge-produced: #c4a1ff;
+  --kg-edge-reused: var(--accent-text, #2EC5C5);
+  --kg-edge-cited: #fcd34d;
+  --kg-edge-consulted: #a5b4fc;
+  --kg-edge-about: #94a3c8;
 }
 
 .kg { display: flex; flex-direction: column; gap: 6px; width: 100%; min-width: 0; }
@@ -44,6 +50,7 @@
 .kg .inf-head { gap: 6px 12px; }
 
 /* ── shared bits ──────────────────────────────────────────────────────────────────────────── */
+.kg-legend-line { display: inline-block; flex: none; width: 16px; height: 3px; border-radius: 2px; }
 .kg-dot { display: inline-block; flex: none; width: 12px; height: 12px; border-radius: 50%; background: var(--kg-layer-code); }
 .kg-dot[data-layer="rules"] { background: var(--kg-layer-rules); }
 .kg-dot[data-layer="learning"] { background: var(--kg-layer-learning); }
@@ -583,3 +590,29 @@
   .kg-life-stages { grid-template-columns: minmax(0, 1fr); }
   .kg-life-arrow { display: none; }
 }
+
+/* ── the learning loop in the panel: the story line, the grouped edges, the reuse scorecard ── */
+.kg-story { margin: 0; padding: 8px 12px; border-left: 3px solid var(--kg-edge-reused); border-radius: 0 var(--r) var(--r) 0; background: var(--surface-2); color: var(--ink); font-size: 0.84rem; line-height: 1.45; }
+.kg-learn-group + .kg-learn-group { margin-top: 8px; }
+.kg-learn-head { display: flex; align-items: center; gap: 6px; }
+.kg-reuse { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--r); background: var(--surface-2); }
+.kg-reuse[data-attributed] { border-color: color-mix(in srgb, var(--kg-edge-reused) 55%, var(--border)); }
+.kg-reuse-from { margin: 0; font-size: 0.82rem; color: var(--ink-soft); }
+.kg-reuse-from strong { color: var(--ink); font-weight: 600; }
+.kg-reuse-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; font-variant-numeric: tabular-nums; }
+.kg-reuse-table th, .kg-reuse-table td { padding: 3px 4px; text-align: right; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.kg-reuse-table th[scope="row"] { white-space: normal; }
+.kg-reuse-table th[scope="row"], .kg-reuse-table thead th:first-child { text-align: left; font-weight: 500; color: var(--ink-soft); }
+.kg-reuse-table thead th { font-weight: 500; color: var(--muted); font-size: 0.72rem; }
+.kg-reuse-table td[data-better] { color: var(--kg-edge-reused); font-weight: 600; }
+.kg-reuse-carried { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; font-size: 0.8rem; color: var(--ink); }
+.kg-reuse-carried li { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.kg-reuse-carried .kg-dot { width: 9px; height: 9px; transform: translateY(1px); }
+.kg-reuse-kind { color: var(--muted); font-size: 0.72rem; margin-right: 4px; }
+.kg-reuse-verdict { margin: 0; font-size: 0.84rem; font-weight: 600; color: var(--ink); }
+.kg-reuse[data-attributed] .kg-reuse-verdict { color: var(--kg-edge-reused); }
+.kg-learn-row { align-items: flex-start; }
+.kg-learn-row .kg-dot { margin-top: 5px; }
+.kg-learn-row-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; }
+.kg-learn-row-text .kg-conn-label { white-space: normal; overflow: visible; overflow-wrap: anywhere; }
+.kg-learn-row-note { font-size: 0.74rem; color: var(--muted); }
