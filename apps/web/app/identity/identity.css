@@ -573,7 +573,8 @@ textarea.idn-input { min-height: 74px; line-height: 1.45; color: var(--ink-soft)
 .idn-me-menu a:hover, .idn-me-menu button:hover { background: var(--surface-3); color: var(--ink); }
 
 /* ── sheets (step-up, consent, shown-once, confirm) ──────────────────────────────────────── */
-.idn-sheet-wrap { position: fixed; inset: 0; z-index: 200; display: flex; align-items: flex-start; justify-content: center; padding: 96px 16px 16px; background: var(--idn-scrim); backdrop-filter: blur(2px); animation: idn-fade 160ms ease-out both; overflow-y: auto; }
+.idn-sheet-wrap { position: fixed; inset: 0; z-index: var(--z-page); display: flex; align-items: flex-start; justify-content: center; padding: 96px 16px 16px; background: var(--idn-scrim); backdrop-filter: blur(2px); animation: idn-fade 160ms ease-out both; overflow-y: auto; }
+.idn-sheet-wrap[data-layer="step-up"] { z-index: var(--z-step-up); }
 @keyframes idn-fade { from { opacity: 0; } to { opacity: 1; } }
 .idn-sheet { width: 100%; max-width: 460px; border: 1px solid var(--idn-panel-line); border-radius: 18px; padding: 20px; background: linear-gradient(180deg, var(--surface-2), var(--idn-card-b)); box-shadow: 0 50px 100px -30px var(--idn-shadow), 0 0 0 6px color-mix(in srgb, var(--teal) 6%, transparent); color: var(--ink); font-family: var(--sans); font-size: 0.73684rem; animation: idn-rise 200ms cubic-bezier(0.22, 1, 0.36, 1) both; }
 .idn-sheet.wide { max-width: 620px; border-radius: 22px; padding: 22px 24px; border-color: var(--idn-modal-line); }

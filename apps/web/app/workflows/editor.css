@@ -266,7 +266,7 @@
 
 /* ── Toast, FAB, sheet, loading ── */
 .wf-toast {
-  position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 10003;
+  position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: var(--z-flow-toast);
   display: inline-flex; align-items: center; gap: 12px;
   padding: 10px 14px; border: 1px solid var(--border); border-radius: var(--r-xl);
   background: var(--surface); color: var(--ink); box-shadow: var(--shadow);

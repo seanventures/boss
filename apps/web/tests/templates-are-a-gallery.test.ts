@@ -170,7 +170,8 @@ describe("clicking opens a page, and reading is not the same as buying", () => {
     // Above the topbar (30), dock (60) and mobile nav (70); below toasts (9999), because a
     // toast about something going wrong should still be readable over a template page.
     const at = CSS.indexOf(".tpl-page {");
-    expect(CSS.slice(at, at + 140)).toContain("z-index: 200");
+    expect(CSS.slice(at, at + 140)).toContain("z-index: var(--z-page)");
+    expect(CSS).toMatch(/--z-page: 200;/);
   });
 
   it("and the portal is never built during a server render", () => {

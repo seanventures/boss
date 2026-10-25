@@ -210,7 +210,7 @@
   .lx-body { height: calc(100vh - 220px); }
   .lx-pulse { height: 48px; }
   /* A full-screen sheet over the console (its own close bar), like every sheet on a phone. */
-  .lx-drawer { position: fixed; inset: 0; z-index: 260; width: 100%; border-radius: 0; border: 0; }
+  .lx-drawer { position: fixed; inset: 0; z-index: var(--z-over-page); width: 100%; border-radius: 0; border: 0; }
   .lx-drawer-head { min-height: 52px; }
   /* Range and Export live behind ⋯ (D11): the header keeps the count, the tail and Filters. */
   .lx-more-btn { display: inline-flex; }

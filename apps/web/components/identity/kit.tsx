@@ -6,6 +6,7 @@
  * idn- tokens; no inline style anywhere (tests/identity-is-tokens-only.test.ts).
  */
 import React, { createContext, useContext, useEffect, useId, useRef, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 
 import { PERMISSION_META, type Permission } from "../../lib/identity/permissions.gen";
 import { deltaParts, permissionName, permissionTip } from "../../lib/identity/words";
@@ -124,8 +125,11 @@ export function Pill({ tone, children, tip }: { tone: "ok" | "warn" | "bad" | "i
  */
 /** A dialog for one job: centred, or `side` (docked to the right, full height: a list's row
  * opens it and the list stays in view beside it). */
-export function Sheet({ title, icon, onClose, wide = false, side = false, locked = false, children, testId }: {
+export function Sheet({ title, icon, onClose, wide = false, side = false, locked = false, children, testId, layer }: {
   title: ReactNode; icon?: ReactNode; onClose: () => void; wide?: boolean; side?: boolean; locked?: boolean; children: ReactNode; testId?: string;
+  /** "step-up": the top of the console's z-order scale (--z-step-up), at the end of <body>, so it
+   *  is above whatever sheet or dialog is waiting on it — never inside the shell's stacking context. */
+  layer?: "step-up";
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const titleId = useId();
@@ -157,14 +161,15 @@ export function Sheet({ title, icon, onClose, wide = false, side = false, locked
     document.addEventListener("keydown", onKey);
     return () => { document.removeEventListener("keydown", onKey); opener?.focus?.({ preventScroll: true }); };
   }, []);
-  return (
-    <div className={`idn-sheet-wrap${side ? " side" : ""}`} onMouseDown={(e) => { if (e.target === e.currentTarget && !locked) onClose(); }}>
+  const wrap = (
+    <div className={`idn-sheet-wrap${side ? " side" : ""}`} data-layer={layer} onMouseDown={(e) => { if (e.target === e.currentTarget && !locked) onClose(); }}>
       <div ref={ref} className={`idn-sheet${wide ? " wide" : ""}${side ? " side" : ""}`} role="dialog" aria-modal="true" aria-labelledby={titleId} data-testid={testId}>
         <h2 id={titleId}>{icon}{title}</h2>
         {children}
       </div>
     </div>
   );
+  return layer && typeof document !== "undefined" ? createPortal(wrap, document.body) : wrap;
 }
 
 // ---- six-digit code entry --------------------------------------------------------------------

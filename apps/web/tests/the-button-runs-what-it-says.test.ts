@@ -60,7 +60,7 @@ describe("the options are readable when they open", () => {
     // menu inside it ranks only against its siblings, and the reply below painted through it.
     expect(SRC).toContain("createPortal");
     expect(SRC).toContain("document.body");
-    expect(CSS).toContain("position: fixed; z-index: 240;");
+    expect(CSS).toContain("position: fixed; z-index: var(--z-menu);");
   });
 
   it("and it is opaque, not whatever --surface happens to be", () => {

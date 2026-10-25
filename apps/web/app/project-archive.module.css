@@ -3,7 +3,7 @@
 .backdrop {
   position: fixed;
   inset: 0;
-  z-index: 1300;
+  z-index: var(--z-sheet);
   display: grid;
   place-items: center;
   padding: 16px;

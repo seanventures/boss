@@ -159,7 +159,7 @@ function makeGhost(s: Session) {
   const h = s.from.offsetHeight || rect.height / scale;
   Object.assign(ghost.style, {
     position: "fixed", left: "0px", top: "0px", width: `${w}px`, height: `${h}px`, margin: "0",
-    pointerEvents: "none", zIndex: "10001", transformOrigin: "0 0",
+    pointerEvents: "none", zIndex: "var(--z-flow-drag)", transformOrigin: "0 0",
   });
   s.grabX = s.startX - rect.left;
   s.grabY = s.startY - rect.top;
