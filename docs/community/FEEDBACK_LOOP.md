@@ -11,7 +11,7 @@ To file one, [open a new issue](https://github.com/seanventures/boss/issues/new/
 
 1. In the install directory, run `boss status` and `boss doctor`. A healthy API proves the service is reachable; it does not prove your model, repository or build works.
 2. If sign-in cannot reach BOSS, keep the install running, check your SSH tunnel or HTTPS proxy, and use **Retry**. Follow [Sign in](CONSOLE_AUTH.md) for claim or account recovery.
-3. If a model or repository is blocked, open **Repo and models** and read that connection's status. A model **Re-check** makes a small governed call; reviewing the status does not.
+3. If a model or repository is blocked, open **Repo and models** and read that connection's status. A model **Test** makes a small governed call; reviewing the status does not.
 4. If work stops, open the run in **Workflow** and read the failed or waiting step. Resolve its named cause or approval before retrying. Keep the run ID and receipt or request ID, if shown.
 5. [Report the problem](https://github.com/seanventures/boss/issues/new/choose) with the installed release (`cat .boss-release`), OS, install method, what you tried, the exact error and the run ID. Copy only relevant lines from `boss doctor`; remove private paths, repository content and account information.
 

@@ -45,13 +45,12 @@ After the stack is healthy, the installer runs one **Models** step. `boss connec
 | Source | What happens |
 |---|---|
 | Exported provider keys | Saved to the private `.env`. Exporting the key for this command is the consent. |
-| Codex ChatGPT login | Asks once before copying `~/.codex/auth.json` into BOSS's secret store. `--yes` copies nothing unless you add `--connect-found`. On the database store, that also needs `--accept-database-fallback`. |
-| Claude Code or Grok Build login | The login on this machine is never copied. Asks once whether to sign the CLI in inside the BOSS API container, as the `boss` user, with the provider's own login (`claude auth login`, `grok login --device-auth`). The login is then recorded through the existing `--connect-claude-local` / `--connect-grok-local` path. There is no question when the CLI is already signed in there. `--yes` signs nothing in unless you add `--connect-found`. Even then a sign-in needs a person at a terminal; without one, the card says to run `boss connect claude` or `boss connect grok`. |
+| Codex, Claude Code or Grok Build login | The login on this machine is never copied. Asks once whether to sign that subscription in inside the BOSS API container, as the `boss` user, through the provider's own login: BOSS prints the link and code, you finish it in a browser, and BOSS proves the connection with one test turn. There is no question when the CLI is already signed in there. `--yes` signs nothing in unless you add `--connect-found`. Even then a sign-in needs a person at a terminal; without one, the card says to run `boss connect codex`, `boss connect claude` or `boss connect grok`. |
 | Ollama running on this machine | Asks once whether to connect it. `--yes` connects it only with `--connect-found`. See [Ollama](#ollama). |
 
 **3. When no model is usable, offer one.** "Usable" means a connected API key, subscription, or Ollama. These offers come only at a terminal, one question each:
 
-- Sign in to Claude Code, then to Grok Build, inside BOSS. Each question defaults to no.
+- Sign in to Codex, then Claude Code, then Grok Build, inside BOSS. Each question defaults to no.
 - Set up a free local model, with the download size in the question. This one defaults to **yes**, because without it BOSS has no model; it is still a question because the download is several GB. See [The local model](#the-local-model). `--no-local-model` turns this offer off.
 - The installer only: install the official coding CLIs on this machine, through the same path as `--install-coding-clis`. Codex needs its CLI here to sign in; Claude Code and Grok Build already run inside BOSS. This question defaults to no.
 
@@ -106,11 +105,11 @@ The installer puts `boss` in `~/.local/bin` (or in `/usr/local/bin` when that is
 | `boss password` | Shows the console password, in a terminal only: it claims a new install, then signs teammates in as Operator for 30 days after the claim. `boss password reset` rotates it |
 | `boss doctor` | Runs `checkup.sh` (`--probe` also asks a model a question) |
 | `boss logs [-f] [api\|worker\|web\|db]` | Recent service logs |
-| `boss connect` | Runs the [Models](#models) step again. It saves newly exported provider keys into `.env` and restarts only api and worker. It then asks once before each copy, sign-in, or connection, offers a subscription sign-in or a local model when nothing is usable, and ends with the Models table. `--connect-found` answers yes for what was found. `--yes` asks nothing and installs nothing |
+| `boss connect` | Runs the [Models](#models) step again. It saves newly exported provider keys into `.env` and restarts only api and worker. It then asks once before each sign-in or connection, offers a subscription sign-in or a local model when nothing is usable, and ends with the Models table. `--connect-found` answers yes for what was found. `--yes` asks nothing and installs nothing |
 | `boss connect --list` / `--summary` | Prints what this machine has, or the Models table, and changes nothing |
 | `boss connect --install-ollama [--local-model NAME]` | Sets up [the local model](#the-local-model) end to end without asking |
 | `boss connect keys` | Saves `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `XAI_API_KEY`, or `OPENROUTER_API_KEY` exported in this shell into the private `.env` (mode `0600`), then recreates the api and worker containers so they read it. Names only are printed; a key is never accepted as an argument. No `boss update` needed |
-| `boss connect codex\|claude\|grok\|ollama` | Connects one. `claude` and `grok` sign in inside the BOSS container and need a terminal. `ollama` connects a running Ollama |
+| `boss connect codex\|claude\|grok\|ollama` | Connects one. `codex`, `claude` and `grok` sign in inside the BOSS container through the provider's own login (open the link it prints), then prove it; they need a terminal. `ollama` connects a running Ollama |
 | `boss upgrade [--to REF]` | Backs up, then moves to the newest release, or to `REF`. `--dry-run` shows the move first |
 | `boss update` | Re-applies configuration on the installed release: reruns the installer so newly exported keys and flags such as `--web` take effect. It never changes the release |
 | `boss uninstall [--purge]` | Stops BOSS and keeps data and the `boss` command. `--purge` deletes data after a backup and a typed confirmation, then removes the `boss` command the installer wrote for this install (one that belongs to another program or another install is left alone) |
@@ -289,64 +288,30 @@ A hosted BOSS account is not required. Connect a model you already have only if 
 
 ## Optional coding subscriptions
 
-The Community API and worker images already contain pinned Claude Code, Codex CLI, and Grok Build binaries. This option installs separate host copies for the VM user, for when you want to inspect or import that user's subscription login.
-
-On the VM, add `--install-coding-clis` to install any missing official Claude Code, Codex CLI, and Grok Build binaries for the VM user. Existing working binaries are left alone, and each new binary must pass `--version`. The option also reports which VM logins can be verified. The installer downloads each provider's native install script over HTTPS before running it; review the upstream install methods for [Claude Code](https://code.claude.com/docs/en/setup), [Codex CLI](https://github.com/openai/codex#installing-and-running-codex-cli), and [Grok Build](https://docs.x.ai/build/overview).
+The Community API and worker images already contain pinned Claude Code, Codex CLI, and Grok Build binaries, and each subscription signs in **inside** the BOSS API container, as the `boss` user, through the provider's own login. A login on your laptop or on the VM's own account is never copied into BOSS:
 
 ```bash
-# After BOSS is installed (or on a rerun):
-./install.sh --dir "$PWD" --yes --skip-model-key --install-coding-clis
+boss connect codex     # or: boss connect claude, boss connect grok
 ```
 
-The VM cannot discover a subscription login on your laptop. Sign in with the provider's official CLI **on the VM**, under the account you intend to use:
-
-```bash
-codex login --device-auth
-grok login --device-auth
-```
-
-`--discover-subscriptions` only checks status and sends no credentials.
+BOSS prints the link and one-time code that the provider's login shows. Open the link in any browser and enter the code; Claude Code instead shows a code on its page for you to paste at the hidden prompt, which its own login reads inside BOSS. BOSS then connects the subscription and proves it with one governed test turn (`BOSS_OK`). A refusal prints as BOSS's own "headline — fix". The link expires after 15 minutes; Ctrl-C cancels. The console's **+ Add model › Subscription › Sign in** and `remote.sh subscription --provider codex|claude_code|grok` run the same sign-in.
 
 | Flag | What it does |
 |---|---|
-| `--install-coding-clis` | Installs missing official CLIs for the VM user and reports verifiable logins |
-| `--discover-subscriptions` | Checks login status only; sends no credentials |
-| `--connect-claude-local` | Records a Claude Code CLI-owned local login made inside the API container |
-| `--connect-claude` | Imports a setup token you supply into the local secret store |
-| `--connect-codex` | Imports the VM user's Codex CLI auth JSON into BOSS's secret backend |
-| `--connect-grok-local` | Records a Grok device login made inside the API container |
+| `--connect-codex` | Signs Codex in inside BOSS as above, then proves it. Needs a terminal; without one the installer says to run `boss connect codex` and still finishes |
+| `--connect-claude` | The same for Claude Code |
+| `--connect-claude-local` | Records a Claude Code login already made inside the API container |
+| `--connect-grok-local` | Records a Grok device login already made inside the API container |
+| `--install-coding-clis` | Installs missing official CLIs for the VM user (for your own use on the VM; BOSS does not need them) |
+| `--discover-subscriptions` | Checks the VM user's login status only; sends no credentials |
 
-### Claude Code
-
-Claude Code has a separate **CLI-owned local login**. Sign in through the official CLI as the `boss` user inside the API container, then tell BOSS to record that connection. The API and worker share the same private Claude config volume, including `.claude.json`, across container recreates:
-
-```bash
-docker compose -f scripts/install/community-compose.yml --env-file .env \
-  exec -u boss api claude auth login
-./install.sh --dir "$PWD" --yes --skip-model-key --connect-claude-local
-```
-
-The login happens in Anthropic's browser/device flow. BOSS reads the official CLI's sanitized `auth status` result and records connection metadata; this path does not send OAuth bytes to a BOSS endpoint or database.
-
-- Recording is refused if `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, or a previously stored setup token could make the status misleading.
-- Community does not run a live proof turn during setup, so model use remains unverified until a governed job succeeds.
-- `--connect-claude` imports a setup token the operator supplies and stores it only in the local secret store. It does not call a model. A missing token fails before anything is stored.
-
-### Codex CLI
-
-`--connect-codex` imports the VM user's CLI auth JSON into BOSS's secret backend. A database-backed install asks for `--accept-database-fallback` before that credential can be stored in Postgres; `--secret-store infisical` provisions a dedicated store. See [model connections](../../docs/community/MODEL_CONNECTIONS.md) for each path's limits.
+- Claude Code is refused while `.env` holds `ANTHROPIC_API_KEY` or a legacy `CLAUDE_CODE_OAUTH_TOKEN`, because headless work would use that instead of the subscription.
+- The CLI homes (`/home/boss/.codex`, `.claude`, `.grok`) are private volumes shared by the API and worker. Safe uninstalls and upgrades keep them; a data purge removes them.
 
 ### Grok Build
 
-Grok's device session is tied to the Unix account and home that runs BOSS, so a login under the SSH admin account does not authenticate the containers. The API and worker images include Grok and share an owner-only `.grok` volume; run the device login as `boss` **inside the API container**:
+Grok's device session is tied to the Unix account and home that runs BOSS, which is why it signs in inside the container: a login under the SSH admin account does not authenticate the containers. BOSS never copies or parses `~/.grok/auth.json`.
 
-```bash
-docker compose -f scripts/install/community-compose.yml --env-file .env \
-  exec -u boss api grok login --device-auth
-./install.sh --dir "$PWD" --yes --skip-model-key --connect-grok-local
-```
-
-- The installer does not copy or parse `~/.grok/auth.json`, and `--connect-grok-local` does not call the model. If the login is missing, setup stops and records nothing.
 - Once the Grok harness is available and its BOSS readiness proof passes, set `BOSS_CODE_AGENT_ENGINE=grok` in `.env` and recreate the API and worker. This selects Grok for governed coding work, not the console's chat model.
 - To run governed coding work on an Anthropic API key as Agent SDK usage (metered on your Anthropic account, never the Claude subscription), store the key in Repo and models -> Anthropic API, then pick **Claude Agent SDK** for Build, Review or Chat there, or set `BOSS_CODE_AGENT_ENGINE=claude_agent_sdk` in `.env` for the whole install and recreate the API and worker. `BOSS_AGENT_SDK_MODEL` sets its model (default `claude-sonnet-5`).
 
