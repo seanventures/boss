@@ -13,6 +13,7 @@ import { LockedPanel } from "../../components/locked-panel";
 import { GatedButton } from "../../components/gated";
 import { KG_LAYERS } from "../../lib/kg-view-types";
 import { INDEX_NOW, type KgRepository } from "../../lib/kg-view";
+import { scanReader } from "../../lib/kg-scan";
 
 const LAYER_LINE: Record<(typeof KG_LAYERS)[number], { name: string; what: string }> = {
   code: { name: "Code", what: "indexed from the repository" },
@@ -232,8 +233,8 @@ export function KgEmptyLayer({ layer, onScan, scope = "repo", children }: {
   return layer === "rules" ? (
     <StageCard testId="kg-empty-layer" eyebrow="Rules" title={scope === "here" ? "No rules here yet" : "No rules yet"}
                body={scope === "here"
-                 ? "No business rule governs this code yet. Scan it: Scout reads it within a budget you set and proposes the rules it finds, each with the lines that show it. You approve them in Rules review."
-                 : "Scan an area for business rules: Scout reads its code within a budget you set and proposes the rules it finds, each with the lines that show it. You approve them in Rules review."}>
+                 ? `No business rule governs this code yet. Scan it: ${scanReader()} reads it within a budget you set and proposes the rules it finds, each with the lines that show it. You approve them in Rules review.`
+                 : `Scan an area for business rules: ${scanReader()} reads its code within a budget you set and proposes the rules it finds, each with the lines that show it. You approve them in Rules review.`}>
       {children}
       {onScan ? <button type="button" className="ag-btn ag-btn-primary" data-testid="kg-empty-layer-scan" onClick={onScan}>Choose an area to scan</button> : null}
     </StageCard>
