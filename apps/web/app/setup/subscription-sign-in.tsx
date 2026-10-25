@@ -264,16 +264,9 @@ export function SubscriptionSignIn({ provider, label, autoStart = false, fresh =
     );
   }
 
-  if (session?.state === "signed_in") {
-    return (
-      <div className="su-signin su-line" data-testid="su-signin" data-state="signed_in">
-        <span className="su-pill su-tone-green" role="status" data-testid="su-signin-done"
-              title={session.headline} data-tip={session.headline}>
-          <Dot tone="green" />Signed in
-        </span>
-      </div>
-    );
-  }
+  // Signed in: the drawer shows "Signed in" left of its Connect, on one line (it floated
+  // centred on a line of its own, 2026-10-25).
+  if (session?.state === "signed_in") return null;
 
   // Stopped (failed, expired, cancelled) or refused at start: the headline, its fix, Try again.
   const stoppedTone = session ? STOPPED_TONE[session.state] ?? "grey" : "red";

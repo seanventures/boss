@@ -1,35 +1,78 @@
 "use client";
 
 /**
- * ② Models: one row per model source — a subscription, a key, a local model, or one from the
- * install's settings file — each with its kind, the jobs it does now, and its last check.
+ * ② Models: what BOSS thinks with. One header — what works, what needs you, and a clear
+ * "+ Add a model" — then ONE list of sources (capacity-row.tsx): each a single line with its
+ * name, its pill, one plain sentence and one primary action, the rest behind Details and ⋯.
+ *
+ * Every way into a model (Add, Connect, Sign in, Replace key, a picked catalogue source) opens
+ * the one drawer owned here, so there is one surface per job. Closing it, or anything it
+ * connects, re-reads the board; the list re-reads its sources whenever the board changes, so the
+ * header, the rows and the drawer never disagree (2026-10-25: "Working" above, "Needs sign-in"
+ * below, until a reload).
  */
 import { GatedButton } from "../../components/gated";
-import React, { forwardRef, useState } from "react";
+import React, { createContext, forwardRef, useContext, useState } from "react";
 import { Plus } from "@phosphor-icons/react";
 
-import { fetchModelList, SetupFailure, setupWrite } from "../../lib/setup-client";
-import { ageLabel, defaultAdd, tileOf } from "../../lib/setup-stepper";
+import { fetchModelList, fetchSetup, SetupFailure, setupWrite } from "../../lib/setup-client";
+import { defaultAdd, tileOf } from "../../lib/setup-stepper";
 import type { ModelEntry, SetupView } from "../../lib/setup-types";
 import { AddModelPanel } from "./add-model-drawer";
 import { Drawer } from "./drawer";
-import { AskBoss, RowMenu, toast, useBoard } from "./parts";
-import { Out, Pill, Tip } from "./pill";
+import { providerRow } from "./model-status";
+import { toast, useBoard } from "./parts";
+import { Tip } from "./pill";
 import { SetupRow } from "./setup-row";
 import { SIGN_IN_PROVIDERS } from "./subscription-sign-in";
 
 /** A subscription BOSS signs in itself: it signs in again, it is never Replaced (BOSSAPP-769). */
-const signsIn = (entry: ModelEntry) => entry.kind === "subscription" && SIGN_IN_PROVIDERS.has(entry.provider);
+export const signsIn = (entry: ModelEntry) => entry.kind === "subscription" && SIGN_IN_PROVIDERS.has(entry.provider);
 
-type Opening = { provider: string; sourceId?: string; signIn?: boolean };
+/** How the drawer opens: Add (provider only), Replace key (sourceId), Sign in (signIn: a fresh
+ *  login), or Connect (connect: prove the CLI's current login — nothing is signed out). */
+export type Opening = { provider: string; sourceId?: string; signIn?: boolean; connect?: boolean };
 
-const KIND = {
+export const KIND = {
   subscription: { label: "Subscription", tip: "Your plan. No per-call charge; plan limits apply." },
   metered: { label: "Metered", tip: "Billed per call to your key. Counts toward the budget." },
   local: { label: "Local", tip: "Runs on your hardware. Free." },
 } as const;
 
-function DefaultModel({ entry, onDone }: { entry: ModelEntry; onDone: () => void }) {
+/** A catalogue source nobody uses yet, offered under the drawer's "More sources". */
+export type MoreSource = { id: string; label: string };
+
+type SectionCtx = {
+  open: (opening: Opening) => void;
+  /** The source the drawer is replacing or signing in right now (its old check is void). */
+  editing: string | null;
+  /** `?source=<id>`: that row's ⋯ menu opens. */
+  menuSource: string | null;
+  /** Catalogue sources the list proved unused; the drawer offers them. */
+  setMore: (more: MoreSource[]) => void;
+  /** The source picked from "More sources": the list shows it with its form open. */
+  picked: string | null;
+  clearPicked: () => void;
+};
+const Section = createContext<SectionCtx>({
+  open: () => undefined, editing: null, menuSource: null, setMore: () => undefined,
+  picked: null, clearPicked: () => undefined,
+});
+export const useModelsSection = () => useContext(Section);
+
+/** Add a model opens on what is most likely next: a signed-in CLI not yet connected, else the
+ *  board's default (never a subscription that already works). */
+function addStart(view: SetupView): { provider: string } {
+  const ready = view.detected.find((d) => d.kind === "subscription" && d.found === "signed_in"
+                                          && providerRow(view, d.provider)?.pill.tone !== "green");
+  if (ready) return { provider: ready.provider };
+  const start = defaultAdd(view);
+  if (providerRow(view, start.provider)?.pill.tone !== "green") return { provider: start.provider };
+  const free = view.catalogue.find((c) => c.kind === "api_key" && !providerRow(view, c.provider));
+  return { provider: free?.provider ?? start.provider };
+}
+
+export function DefaultModel({ entry, onDone }: { entry: ModelEntry; onDone: () => void }) {
   const { projectId, apply } = useBoard();
   const [value, setValue] = useState(entry.model ?? "");
   const [options, setOptions] = useState<string[]>([]);
@@ -58,133 +101,47 @@ function DefaultModel({ entry, onDone }: { entry: ModelEntry; onDone: () => void
                   toast((error as SetupFailure).refusal?.headline ?? "Check failed", "error");
                 } finally { setBusy(false); }
               }}>Save</GatedButton>
+      <button type="button" className="su-link" onClick={onDone}>Cancel</button>
     </div>
   );
 }
 
-function ModelLine({ entry, menuOpen, onReplace, onSignIn, replacing }: {
-  entry: ModelEntry; menuOpen: boolean; onReplace: (provider: string, sourceId: string) => void;
-  onSignIn: (provider: string, sourceId: string) => void;
-  /** The Add model drawer is open to paste this row a new key. Its last check no longer
-   *  describes anything — a stale "Paused · budget" sat there while the operator typed a
-   *  fresh key that had not been tested yet (boss-1 rc10.9, Setup > Add a model). */
-  replacing: boolean;
-}) {
-  const again = signsIn(entry);
-  const { projectId, apply, checking, setChecking } = useBoard();
-  const key = `model:${entry.source_id}`;
-  const busy = checking.has(key) || checking.has("all");
-  const pill = busy ? { state: "checking", tone: "busy" as const, label: "Checking…",
-                        tip: "Asking one tiny question. Budgeted." }
-             : replacing && again ? { state: "editing", tone: "grey" as const, label: "Signing in…",
-                                      tip: "Signing in again. The old check no longer applies." }
-             : replacing ? { state: "editing", tone: "grey" as const, label: "Editing…",
-                             tip: "Testing a new key. The old check no longer applies." }
-             : entry.pill;
-  const [picking, setPicking] = useState(false);
-  const [confirm, setConfirm] = useState<string[] | null>(null);
-  const test = async () => {
-    setChecking(key, true);
-    try {
-      apply(await setupWrite<SetupView>(projectId, "checks", { target: key }, { label: "Test" }));
-    } catch (error) {
-      toast((error as SetupFailure).refusal?.headline ?? "Check failed", "error");
-    } finally { setChecking(key, false); }
-  };
-  const remove = async (confirmed: boolean) => {
-    try {
-      apply(await setupWrite<SetupView>(projectId, "model_remove", {
-        source_id: entry.source_id, confirm: confirmed ? "true" : undefined }, { label: "Remove" }));
-      setConfirm(null);
-    } catch (error) {
-      const failure = error as SetupFailure;
-      if (failure.status === 409 && failure.refusal?.jobs?.length) setConfirm(failure.refusal.jobs);
-      else toast(failure.refusal?.headline ?? "Not removed", "error");
-    }
-  };
-  const red = pill.tone === "red";
-  const canPick = entry.kind !== "subscription" && entry.source === "connected";
+/** Catalogue sources the list proved unused (Cursor, Gemini, …): pick one, and its row appears
+ *  in the list, its action focused. Was a small "Add source" disclosure among the
+ *  rows that nobody found (2026-10-25). */
+function MoreSources({ more, onPick }: { more: MoreSource[]; onPick: (id: string) => void }) {
+  if (!more.length) return null;
   return (
-    <div className="su-model" data-testid={`su-model-${entry.source_id}`}>
-      <div className="su-line">
-        <Pill pill={pill} testid="su-model-pill" />
-        <span className="su-strong">{entry.label}</span>
-        <Tip tip={KIND[entry.kind].tip} className="su-chip">{KIND[entry.kind].label}</Tip>
-        {entry.scope === "org" ? (
-          <Tip tip="The org's connection: set once, every project in this org uses it."
-               className="su-chip" testid="su-model-scope">All projects</Tip>
-        ) : null}
-        {entry.source === "install" ? (
-          <Tip tip="Set in the server's settings file. Replace here to manage it in BOSS."
-               className="su-chip">From install</Tip>
-        ) : null}
-        {entry.model ? <span className="su-faint su-mono" data-user-text>{entry.model}</span> : null}
-        <Tip tip={usedForTip(entry.used_for)} className="su-used" testid="su-model-used">
-          {usedForLabel(entry.used_for)}
+    <label className="su-field su-more-sources" data-testid="setup-cap-add">
+      <Tip tip="Catalogue sources nobody uses yet: pick one to add its key or sign-in steps."
+           className="su-field-label">More sources</Tip>
+      <select value="" aria-label="More sources" data-testid="setup-cap-chooser"
+              onChange={(e) => { if (e.target.value) onPick(e.target.value); }}>
+        <option value="">Choose a source</option>
+        {more.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
+      </select>
+    </label>
+  );
+}
+
+/** "2 working · 1 needs you": the section in five words; each count's rows in its tooltip. */
+function Summary({ models }: { models: ModelEntry[] }) {
+  const working = models.filter((m) => m.pill.tone === "green");
+  const needs = models.filter((m) => m.pill.tone === "red" || m.pill.tone === "amber");
+  if (!models.length) return <span className="su-faint">None connected yet</span>;
+  return (
+    <span className="su-line su-models-summary" data-testid="su-models-summary">
+      <Tip tip={working.length ? "Models that answered their last check." : "Nothing answers yet."}
+           className={working.length ? "su-models-count su-count-ok" : "su-models-count"}>
+        {working.length} working
+      </Tip>
+      {needs.length ? (
+        <Tip tip="Rows below with a red or amber pill: each says its fix."
+             className="su-models-count su-count-needs" testid="su-models-needs">
+          {needs.length} {needs.length === 1 ? "needs" : "need"} you
         </Tip>
-        {entry.checked_at ? (
-          <Tip tip={`Last checked ${ageLabel(entry.checked_at)} ago.`} className="su-faint su-age">
-            Checked {ageLabel(entry.checked_at)}
-          </Tip>
-        ) : null}
-        <RowMenu label={`${entry.label} actions`} testid="su-model-menu" open={menuOpen} items={[
-          { label: "Test", onSelect: test, testid: "su-menu-test" },
-          again ? { label: "Sign in", onSelect: () => onSignIn(entry.provider, entry.source_id),
-                    testid: "su-menu-sign-in" }
-                : { label: "Replace", onSelect: () => onReplace(entry.provider, entry.source_id),
-                    testid: "su-menu-replace" },
-          ...(canPick ? [{ label: "Default model…", onSelect: () => setPicking(true),
-                           testid: "su-menu-default-model" }] : []),
-          ...(entry.source === "connected" ? [{ label: "Remove", danger: true,
-                                                onSelect: () => void remove(false),
-                                                testid: "su-menu-remove" }] : []),
-        ]} />
-      </div>
-      {red || pill.tone === "amber" ? (
-        <div className="su-line su-fix">
-          {entry.pill.action === "sign_in" || (entry.pill.action === "replace" && again) ? (
-            <GatedButton permission="model_provider:manage" type="button" className="su-btn su-btn-sm"
-                         data-testid="su-model-sign-in"
-                         title="Runs the provider's sign-in on the BOSS server, then checks it."
-                         data-tip="Runs the provider's sign-in on the BOSS server, then checks it."
-                         onClick={() => onSignIn(entry.provider, entry.source_id)}>
-              Sign in
-            </GatedButton>
-          ) : null}
-          {entry.pill.action === "replace" && !again ? (
-            <GatedButton permission="model_provider:manage" type="button" className="su-btn su-btn-sm"
-                    onClick={() => onReplace(entry.provider, entry.source_id)}>
-              Replace
-            </GatedButton>
-          ) : null}
-          {entry.pill.action === "fix_link" && entry.pill.fix_url ? (
-            <Out href={entry.pill.fix_url}>Fix</Out>
-          ) : null}
-          {entry.pill.action === "default_model" && canPick ? (
-            <GatedButton permission="model_provider:manage" type="button" className="su-btn su-btn-sm" onClick={() => setPicking(true)}>
-              Default model…
-            </GatedButton>
-          ) : null}
-          {entry.pill.action === "budget" ? (
-            <a className="su-link" href="?area=setup&focus=budget">Budget</a>
-          ) : null}
-          {entry.pill.action === "test" || entry.pill.action === "fix_link" ? (
-            <GatedButton permission="setup:manage" type="button" className="su-btn su-btn-sm" onClick={test} disabled={busy}>Test</GatedButton>
-          ) : null}
-          {red ? <AskBoss row={entry.label} pillLabel={entry.pill.label} tip={entry.pill.tip} /> : null}
-        </div>
       ) : null}
-      {picking ? <DefaultModel entry={entry} onDone={() => setPicking(false)} /> : null}
-      {confirm ? (
-        <div className="su-confirm" role="alertdialog" data-testid="su-remove-confirm">
-          <strong>Remove {entry.label}?</strong>
-          <span>{confirm.map((job) => `${job} goes back to Auto.`).join(" ")}</span>
-          <GatedButton permission="model_provider:manage" type="button" className="su-btn su-btn-sm su-btn-danger"
-                  data-testid="su-remove-confirm-yes" onClick={() => void remove(true)}>Remove</GatedButton>
-          <button type="button" className="su-link" onClick={() => setConfirm(null)}>Keep</button>
-        </div>
-      ) : null}
-    </div>
+    </span>
   );
 }
 
@@ -192,82 +149,92 @@ export const ModelsRow = forwardRef<HTMLElement, {
   mode: string; step: number | null; focused: boolean; add: string | null; source: string | null;
   onAddHandled: () => void; children?: React.ReactNode;
 }>(function ModelsRow({ mode, step, focused, add, source, onAddHandled, children }, ref) {
-  const { view } = useBoard();
+  const { view, projectId, apply } = useBoard();
   const [drawer, setDrawer] = useState<Opening | null>(null);
+  const [more, setMore] = useState<MoreSource[]>([]);
+  const [picked, setPicked] = useState<string | null>(null);
   const opening: Opening | null = drawer ?? (add ? { provider: add } : null);
-  const close = () => { setDrawer(null); onAddHandled(); };
-  const start = defaultAdd(view);
-  const working = view.models.find((m) => m.pill.tone === "green") ?? view.models[0];
+  // CLOSING RE-READS THE BOARD: a sign-in that finished without Connect, or a Connect whose
+  // answer was applied, leaves every row, chip and the header on the same, fresh view.
+  const close = () => {
+    setDrawer(null);
+    onAddHandled();
+    void fetchSetup(projectId).then(apply).catch(() => undefined);
+  };
+  const start = addStart(view);
+  const firstRunInline = mode === "current" && view.models.length === 0;
+  const ctx: SectionCtx = {
+    open: setDrawer, editing: drawer && !drawer.connect ? drawer.sourceId ?? null : null,
+    menuSource: source, setMore, picked, clearPicked: () => setPicked(null),
+  };
 
+  const addButton = (
+    <GatedButton permission="model_provider:manage" type="button"
+                 className="su-btn su-btn-primary su-add-model-btn" data-testid="su-add-model-open"
+                 title="Connect a subscription, an API key or a local model."
+                 data-tip="Connect a subscription, an API key or a local model."
+                 onClick={() => setDrawer({ provider: start.provider })}>
+      <Plus size={14} weight="bold" aria-hidden="true" />Add a model
+    </GatedButton>
+  );
   let body: React.ReactNode;
-  // A finished step, or a later one that already has a model (connected before the
-  // repository broke): one line with the model and its pill, never "Not connected".
-  if ((mode === "done" || mode === "waiting") && working) {
+  if (mode === "waiting" && !view.models.length) {
+    // An earlier step is open; adding a model stays possible (it never waited before either).
     body = (
-      <span className="su-line">
-        <span>{working.label}</span>
-        <Pill pill={working.pill} testid="su-model-pill" />
-        {working.source === "install" ? (
-          <Tip tip="Set in the server's settings file. Replace here to manage it in BOSS."
-               className="su-chip">From install</Tip>
-        ) : null}
-        <RowMenu label={`${working.label} actions`} testid="su-model-menu" items={[
-          signsIn(working)
-            ? { label: "Sign in", onSelect: () => setDrawer({ provider: working.provider,
-                                                              sourceId: working.source_id, signIn: true }),
-                testid: "su-menu-sign-in" }
-            : { label: "Replace", onSelect: () => setDrawer({ provider: working.provider,
-                                                              sourceId: working.source_id }),
-                testid: "su-menu-replace" },
-          { label: "Add model", onSelect: () => setDrawer({ provider: start.provider }),
-            testid: "su-menu-add" },
-        ]} />
-      </span>
+      <div className="su-models-head" data-testid="su-models-head">
+        <span className="su-faint su-model-empty">Not connected</span>
+        <span className="su-spacer" />
+        {addButton}
+      </div>
     );
-  } else if (mode === "waiting") {
-    body = <span className="su-faint su-model-empty">Not connected</span>;
-  } else if (mode === "current" && view.models.length === 0) {
+  } else if (firstRunInline) {
     body = (
       <div>
         <span className="su-row-title">Add a model</span>
         <AddModelPanel key={opening?.provider ?? "first"}
-                       initialTile={opening ? tileOf(view, opening.provider) : start.tile}
-                       initialProvider={opening?.provider ?? start.provider} onDone={close} />
+                       initialTile={opening ? tileOf(view, opening.provider) : defaultAdd(view).tile}
+                       initialProvider={opening?.provider ?? defaultAdd(view).provider} onDone={close} />
+        <MoreSources more={more} onPick={pick} />
       </div>
     );
   } else {
     body = (
-      <div className="su-stack">
-        {view.models.map((entry) => (
-          <ModelLine key={entry.source_id} entry={entry} menuOpen={source === entry.source_id}
-                     replacing={!!drawer?.sourceId && drawer.sourceId === entry.source_id}
-                     onReplace={(provider, sourceId) => setDrawer({ provider, sourceId })}
-                     onSignIn={(provider, sourceId) => setDrawer({ provider, sourceId, signIn: true })} />
-        ))}
-        <GatedButton permission="model_provider:manage" type="button" className="su-link su-add" data-testid="su-add-model-open"
-                onClick={() => setDrawer({ provider: start.provider })}>
-          <Plus size={12} aria-hidden="true" />Add model
-        </GatedButton>
+      <div className="su-models-head" data-testid="su-models-head">
+        <Summary models={view.models} />
+        <span className="su-spacer" />
+        {addButton}
       </div>
     );
   }
-  const showDrawer = opening && !(mode === "current" && view.models.length === 0);
+  const showDrawer = opening && !firstRunInline;
+  function pick(id: string) {
+    setPicked(id);
+    setDrawer(null);
+    onAddHandled();
+  }
+  const title = opening?.signIn ? "Sign in" : opening?.connect ? "Connect"
+    : opening?.sourceId ? "Replace key" : "Add a model";
   return (
-    <SetupRow ref={ref} row="models" label="Models" step={step}
-              mode={mode} done={mode === "done"} focused={focused}
-              tip="What BOSS thinks with: subscriptions, keys and local models.">
-      {body}
-      {showDrawer ? (
-        <Drawer title={opening!.signIn ? "Sign in" : "Add a model"} onClose={close} testid="su-model-drawer">
-          <AddModelPanel key={`${opening!.provider}:${drawer?.sourceId ?? ""}:${opening!.signIn ? "in" : ""}`}
-                         initialTile={tileOf(view, opening!.provider)}
-                         initialProvider={opening!.provider} onDone={close}
-                         replaceSourceId={opening!.signIn ? undefined : drawer?.sourceId}
-                         startSignIn={!!opening!.signIn} />
-        </Drawer>
-      ) : null}
-      {children}
-    </SetupRow>
+    <Section.Provider value={ctx}>
+      <SetupRow ref={ref} row="models" label="Models" step={step}
+                mode={mode} done={mode === "done"} focused={focused}
+                tip="What BOSS thinks with: subscriptions, keys and local models.">
+        {body}
+        {showDrawer ? (
+          <Drawer title={title} onClose={close} testid="su-model-drawer">
+            <AddModelPanel key={`${opening!.provider}:${drawer?.sourceId ?? ""}:${opening!.signIn ? "in" : ""}`}
+                           initialTile={tileOf(view, opening!.provider)}
+                           initialProvider={opening!.provider} onDone={close}
+                           replaceSourceId={opening!.signIn || opening!.connect ? undefined : drawer?.sourceId}
+                           startSignIn={!!opening!.signIn} />
+            {!opening!.sourceId && !opening!.signIn && !opening!.connect ? (
+              <MoreSources more={more} onPick={pick} />
+            ) : null}
+          </Drawer>
+        ) : null}
+        {children}
+      </SetupRow>
+    </Section.Provider>
   );
 });
 
@@ -279,7 +246,7 @@ export function usedForLabel(jobs: string[]): string {
   const shown = jobs.slice(0, USED_SHOWN).join(" · ");
   return jobs.length > USED_SHOWN ? `${shown} +${jobs.length - USED_SHOWN}` : shown;
 }
-function usedForTip(jobs: string[]): string {
+export function usedForTip(jobs: string[]): string {
   return jobs.length > USED_SHOWN ? `Used for ${jobs.join(", ")}.`
                                   : "Jobs this model does now, including Auto picks.";
 }

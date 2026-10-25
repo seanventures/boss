@@ -17,8 +17,8 @@ afterEach(() => { mounted?.unmount(); mounted = null; });
 
 function replaceButtonIn(row: Element): HTMLButtonElement {
   const found = Array.from(row.querySelectorAll("button"))
-    .find((b) => b.textContent?.trim() === "Replace");
-  if (!found) throw new Error("no Replace button in this row");
+    .find((b) => b.textContent?.trim() === "Replace key");
+  if (!found) throw new Error("no Replace key button in this row");
   return found as HTMLButtonElement;
 }
 

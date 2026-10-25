@@ -49,6 +49,9 @@ describe("Setup › Models are the org's", () => {
     view.models = view.models.map((m, i) => (i === 0 ? { ...m, scope: "org" as const } : m));
     fakeApi(view);
     mounted = await mountBoard(view, "?area=setup&focus=models");
+    // In the row's Details, in words.
+    const row = document.querySelector(`[data-testid="setup-cap-source"][data-source="${view.models[0].source_id}"]`)!;
+    await click(q(row as HTMLElement, "setup-cap-details"));
     expect(q(document.body, "su-model-scope")?.textContent).toBe("All projects");
   });
 });
