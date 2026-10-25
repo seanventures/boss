@@ -135,6 +135,25 @@ def burst_retry_after_seconds(frees_in: object) -> int:
 HEADROOM_MESSAGE = "Budget headroom is held by other work's active reservations. Retry shortly."
 HEADROOM_RETRY_AFTER_SECONDS = 60
 ADMISSION_BUSY_MESSAGE = "Budget admission is busy with another transaction. Retry shortly."
+#: How a busy admission is retried before it is answered "busy": a few short pauses, never a
+#: blocking wait (a caller may hold its transaction across work, and a wait could queue behind
+#: provider I/O or form a lock-order cycle). Two scans started a second apart both stopped
+#: "budget refused" on the first collision (brec_6025901347b6445eb9c1).
+ADMISSION_RETRY_PAUSES = (0.2, 0.4, 0.8)
+
+
+def _try_admit(connection: Connection, project_id: str) -> bool:
+    """The project's budget-admission lock (transaction-scoped), tried a few times."""
+    import time
+
+    for pause in (*ADMISSION_RETRY_PAUSES, None):
+        if connection.execute(text(
+                "SELECT pg_try_advisory_xact_lock(hashtextextended('boss-budget:' || :p, 0))"),
+                {"p": project_id}).scalar_one():
+            return True
+        if pause is not None:
+            time.sleep(pause)
+    return False
 
 #: The per-minute cap refusals. Both are `refusal: "burst"`, transient, and read by
 #: model_failures.explain as "Waiting for the per-minute budget to free up."
@@ -291,9 +310,7 @@ class BudgetGovernor:
         row = connection.execute(query, {"p": project_id}).mappings().first()
         if not row:
             return None
-        locked = connection.execute(text(
-            "SELECT pg_try_advisory_xact_lock(hashtextextended('boss-budget:' || :p, 0))"),
-            {"p": project_id}).scalar_one()
+        locked = _try_admit(connection, project_id)
         if not locked:
             return {"status": "denied", "refusal": "admission_busy", "transient": True,
                     "retry_after_seconds": 1, "decision_id": None, "budget_state": "unknown",
@@ -403,9 +420,7 @@ class BudgetGovernor:
         row = connection.execute(query, {"p": project_id}).mappings().first()
         if not row:
             return None
-        locked = connection.execute(text(
-            "SELECT pg_try_advisory_xact_lock(hashtextextended('boss-budget:' || :p, 0))"),
-            {"p": project_id}).scalar_one()
+        locked = _try_admit(connection, project_id)
         if not locked:
             return {"status": "denied", "refusal": "admission_busy", "transient": True,
                     "retry_after_seconds": 1, "decision_id": None, "budget_state": "unknown",
@@ -1123,9 +1138,7 @@ class BudgetGovernor:
         # Covers every allocation and allocation-free caller. Try rather than wait: some
         # callers retain their transaction across work or already own source/allocation
         # locks. Contention must not form a lock-order cycle or queue behind provider I/O.
-        admitted = connection.execute(text(
-            "SELECT pg_try_advisory_xact_lock(hashtextextended('boss-budget:' || :p, 0))"),
-            {"p": project_id}).scalar_one()
+        admitted = _try_admit(connection, project_id)
         if not admitted:
             refused = {"status": "denied", "refusal": "admission_busy", "transient": True,
                        "retry_after_seconds": 1, "decision_id": None, "budget_state": "unknown",

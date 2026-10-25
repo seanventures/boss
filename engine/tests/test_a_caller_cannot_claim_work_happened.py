@@ -164,3 +164,24 @@ def test_only_checked_sources_set_an_adoption():
 
         visit(ast.parse(path.read_text(encoding="utf-8")), "<module>")
     assert found == allowed
+
+
+def test_a_declared_input_named_at_the_top_level_reaches_the_run(eng, project):
+    """brec_6025901347b6445eb9c1: start_workflow(max_rules=15, budget_usd=3, ...) had both
+    dropped in silence and the scan ran on its defaults. A field the version's input schema
+    declares is carried into the run; one it does not declare is not; `inputs` wins."""
+    with eng.begin() as c:
+        key, version = _version(c, project)
+        c.execute(text("UPDATE workflow_versions SET spec = spec || CAST(:s AS JSONB) "
+                       "WHERE id = :v"),
+                  {"v": version["id"], "s": json.dumps({"input_schema": {"properties": {
+                      "max_rules": {"type": "integer"}, "budget_usd": {"type": "number"}}}})})
+    out = _agent_start(eng, project, {"directive": "scan it", "workflow_key": key,
+                                      "max_rules": 15, "budget_usd": 3, "not_declared": "x",
+                                      "inputs": {"budget_usd": 2.5}})
+    assert out.get("run_id"), out
+    with eng.begin() as c:
+        stored = _stored_input(c, out["run_id"])
+    assert stored["max_rules"] == 15
+    assert stored["budget_usd"] == 2.5, "inputs wins over the top level"
+    assert "not_declared" not in stored

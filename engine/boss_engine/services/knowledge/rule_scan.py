@@ -889,13 +889,27 @@ class Governor:
             estimate_usd_micros=self.estimate_usd_micros, choice=self.choice,
             category=BUDGET_CATEGORY)
 
+    #: A deferred reservation (a busy admission, a full minute) is waited out this many times,
+    #: for its own retry_after (at most DEFER_WAIT_CAP_S each), before the scan stops on it.
+    DEFER_TRIES = 3
+    DEFER_WAIT_CAP_S = 5.0
+
     def reserve(self) -> Any:
+        import time
+
         from ..model_routing import ModelSpendDeferred, ModelSpendRefused
 
-        try:
-            return self._governed._open()
-        except (ModelSpendRefused, ModelSpendDeferred) as refused:
-            raise BudgetRefused(str(refused)) from refused
+        for attempt in range(self.DEFER_TRIES + 1):
+            try:
+                return self._governed._open()
+            except ModelSpendRefused as refused:
+                raise BudgetRefused(str(refused)) from refused
+            except ModelSpendDeferred as deferred:
+                if attempt == self.DEFER_TRIES:
+                    raise BudgetRefused(str(deferred)) from deferred
+                wait = float(getattr(deferred, "retry_after_seconds", None) or 1.0)
+                time.sleep(min(max(wait, 0.2), self.DEFER_WAIT_CAP_S))
+        raise BudgetRefused("the budget did not admit the call")  # pragma: no cover
 
     def settle(self, held: Any, usage: Mapping[str, Any]) -> int:
         """Settle; return the money it cost (0 when included in a subscription)."""

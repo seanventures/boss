@@ -697,6 +697,13 @@ class GovernedChatAdapter:
                 raise ModelSpendDeferred(
                     f"waiting for the per-minute budget: {message} (burst cap)",
                     retry_after_seconds=reservation.get("retry_after_seconds"))
+            if reservation.get("transient"):
+                # A TRANSIENT REFUSAL IS A WAIT, NOT A CAP: "admission is busy" was raised as
+                # ModelSpendRefused "(budget cap …)" — terminal — so a scan colliding with
+                # another for a second stopped "budget refused" (brec_6025901347b6445eb9c1).
+                raise ModelSpendDeferred(
+                    f"waiting for the budget: {message}",
+                    retry_after_seconds=reservation.get("retry_after_seconds"))
             raise ModelSpendRefused(
                 f"{ModelSpendRefused.MARKER}: "
                 f"{reservation.get('message') or 'Budget reservation denied.'} "

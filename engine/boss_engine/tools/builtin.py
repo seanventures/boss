@@ -2202,6 +2202,18 @@ def _register_write_tools(reg: ToolRegistry) -> None:
             # replaced would be governed under a description of work it is not doing.
             supplied = args.get("inputs")
             run_input = dict(supplied) if isinstance(supplied, dict) else {}
+            # A WORKFLOW'S OWN INPUTS NAMED AT THE TOP LEVEL ARE STILL ITS INPUTS: a model that
+            # wrote start_workflow(max_rules=15, budget_usd=3, ...) had them dropped in silence
+            # and the scan ran on its defaults (brec_6025901347b6445eb9c1). Any argument the
+            # version's input schema declares is carried into the run; `inputs` wins.
+            declared = c.execute(_text(
+                "SELECT spec->'input_schema'->'properties' FROM workflow_versions WHERE id = :v"),
+                {"v": version_id}).scalar()
+            if isinstance(declared, dict):
+                for name in declared:
+                    if name in args and name not in run_input and name not in (
+                            "directive", "title", "workflow_key", "project_id", "inputs"):
+                        run_input[name] = args[name]
             run_input.update({"directive": directive, "title": title})
             # A MODEL DOES NOT GET TO SAY THE WORK ALREADY HAPPENED. `adopt_*` keys in `inputs`
             # were copied straight into the run, so an agent could make a run build on research
