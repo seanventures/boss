@@ -678,7 +678,46 @@ class GovernedChatAdapter:
         return result
 
     def _open(self) -> tuple[str, str]:
-        """Reserve one turn and open its receipt: (reservation_id, receipt_id), or raise."""
+        """Reserve one turn and open its receipt: (reservation_id, receipt_id), or raise.
+
+        RESERVE IN ITS OWN SHORT TRANSACTION, committed before the provider call, as
+        model_gateway.acquire's caller does ("The caller committed this reservation before the
+        provider attempt" / "Never wait while holding budget locks"). `budget.reserve` takes
+        `boss-budget:<project>` with pg_try_advisory_xact_lock — a TRANSACTION-scoped lock. The
+        caller's `self._connection` is long-lived (an agent run's whole tick is one transaction),
+        and the 12-78s inner provider call runs on it next; leaving the reservation on it would
+        hold the lock across that call, so the connection sits "idle in transaction" and every
+        concurrent admission for the project is starved with ADMISSION_BUSY_MESSAGE.
+
+        So the reservation runs on a FRESH connection from the caller's own engine and is
+        committed there — the lock is gone before any model I/O, and the caller's transaction is
+        never committed out from under its step (brec_042fa4c58dbb40259009; diagnosed by BOSS,
+        sfx_3ae11453 / sfx_be271156). It reserves in place, as before, only when a fresh
+        connection cannot see the project yet (a project created in the caller's own open
+        transaction — its first turn, or a test) or the connection has no engine (a double).
+        """
+        engine = getattr(self._connection, "engine", None)
+        if engine is not None:
+            from sqlalchemy import text as _sql
+
+            from ..db import begin
+
+            refused: Optional[BaseException] = None
+            with begin(engine) as connection:
+                if connection.execute(_sql("SELECT 1 FROM projects WHERE id = :p"),
+                                      {"p": self._project_id}).first() is not None:
+                    try:
+                        return self._reserve(connection)
+                    except (ModelSpendRefused, ModelSpendDeferred) as error:
+                        # Raised AFTER this transaction commits: the refusal's own records
+                        # (policy evaluation, refusal) are kept, as they were on the caller's.
+                        refused = error
+            if refused is not None:
+                raise refused
+        return self._reserve(self._connection)
+
+    def _reserve(self, connection: Any) -> tuple[str, str]:
+        """Reserve one turn and open its receipt on `connection`; the caller commits it."""
         import uuid
 
         from sqlalchemy import text
@@ -686,7 +725,7 @@ class GovernedChatAdapter:
         from .budget import BudgetGovernor
         from .receipts import ReceiptService
 
-        connection, project_id = self._connection, self._project_id
+        project_id = self._project_id
         budget = BudgetGovernor(self._settings)
         reservation = budget.reserve(
             connection, project_id, self._category, self._estimate,
