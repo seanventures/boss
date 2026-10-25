@@ -3719,6 +3719,7 @@ def entitlement_source_summary_from_service(
         created_at=payload["created_at"],
         updated_at=payload["updated_at"],
         claude_credential=payload.get("claude_credential"),
+        pill=payload.get("pill"),
     )
 
 
@@ -18157,7 +18158,9 @@ def setup_coding_agents(response: Response, project_id: str = "") -> dict:
             # Keep detection useful if the recorded connection lookup fails. An authority
             # failure must reach the caller instead of becoming connected=False.
             try:
-                agents = with_recorded_connections(agents, connection, project_id)
+                # The record AND its last proof's verdict (setup_view.source_state).
+                with connection.begin_nested():
+                    agents = with_recorded_connections(agents, connection, project_id)
             except Exception:  # noqa: BLE001
                 pass
     else:
@@ -18438,8 +18441,19 @@ def setup_model_endpoint(payload: open_bodies.ModelSetupBody, response: Response
 @app.get("/v1/entitlements/sources", response_model=EntitlementSourceListResponse)
 @permit(P.ENTITLEMENT_READ, scope=Scope.project(query="project_id"))
 def list_entitlement_sources(project_id: str) -> EntitlementSourceListResponse:
+    from .services.setup_view import source_pills
+
     with begin(engine) as connection:
         items = entitlements.list_sources(connection, project_id)
+        # Each row carries the pill its Models row shows (setup_view.source_state), so the
+        # Sources badge and the Models row cannot disagree. Read-only, never the network.
+        try:
+            with connection.begin_nested():
+                pills = source_pills(connection, get_settings(), project_id)
+        except Exception:  # noqa: BLE001 — the list stands without the pill
+            pills = {}
+        for item in items:
+            item["pill"] = pills.get(item["source_id"])
         return EntitlementSourceListResponse(
             project_id=project_id,
             items=[entitlement_source_summary_from_service(item) for item in items],

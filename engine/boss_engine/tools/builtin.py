@@ -3049,6 +3049,12 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
                 next_steps.append({"row": "models", "what": model["label"],
                                    "state": model["pill"]["label"], "fix": model["pill"]["tip"],
                                    "href": f"/?area=setup&focus=models&source={model['source_id']}"})
+        for found in view.get("detected") or []:
+            if found.get("legacy_token"):
+                # A token the retired import stored blocks the in-BOSS sign-in (cli_harness).
+                next_steps.append({"row": "models", "what": found["label"],
+                                   "state": "Old token stored", "fix": found.get("fix") or "",
+                                   "href": "/?area=setup&focus=models"})
         if not view["models"]:
             next_steps.append({"row": "models", "state": "Not connected",
                                "fix": "Connect a subscription, an API key or a local model.",
@@ -3513,10 +3519,21 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         "for anything not ready yet.",
         _obj({}, []), permission="setup:read")
     def detect_coding_agents(ctx, *, project_id, actor, args):
-        from ..services.setup_service import list_coding_agents
+        from ..services.setup_service import list_coding_agents, with_recorded_connections
 
         agents = list_coding_agents(ctx.settings)
+        # THE SAME VERDICT AS EVERY OTHER SURFACE: what was recorded, and what its last real
+        # proof said (setup_view.source_state). A login the provider refused is not ready,
+        # whatever the CLI's own status command says.
+        if project_id:
+            try:
+                with ctx.begin() as c:
+                    agents = with_recorded_connections(agents, c, project_id,
+                                                       settings=ctx.settings)
+            except Exception:  # noqa: BLE001 — detection still answers without the record
+                pass
         return {"ok": True, "agents": agents,
+                "connected": [a["name"] for a in agents if a.get("connected")],
                 "ready": [a["name"] for a in agents if a["ready"]],
                 "not_ready": [{"name": a["name"], "next_step": a["next_step"]}
                               for a in agents if not a["ready"]]}

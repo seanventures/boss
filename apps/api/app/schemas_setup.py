@@ -21,7 +21,7 @@ class Pill(_Open):
     tone: Tone
     label: str
     tip: str
-    action: Optional[Literal["connect", "test", "replace", "fix_link", "budget",
+    action: Optional[Literal["connect", "test", "replace", "sign_in", "fix_link", "budget",
                              "default_model"]] = None
     fix_url: Optional[str] = None
 
@@ -81,8 +81,12 @@ class Detected(_Open):
     provider: str
     label: str
     kind: Literal["subscription", "local"]
-    found: Literal["signed_in", "needs_token", "needs_file", "not_on_server", "found"]
+    # A subscription: signed in inside BOSS, needs the in-BOSS sign-in, or not in this image.
+    found: Literal["signed_in", "needs_sign_in", "not_on_server", "found"]
     base_url: Optional[str] = None
+    # A Claude token the retired setup-token import stored (never a sign-in), with its removal.
+    legacy_token: Optional[bool] = None
+    fix: Optional[str] = None
 
 
 class CatalogueEntry(_Open):

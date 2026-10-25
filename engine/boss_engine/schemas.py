@@ -4134,6 +4134,10 @@ class EntitlementSourceSummary(BaseModel):
     # Anthropic sources only: which Anthropic credential `claude` runs on for this project
     # (claude_credential.describe — never a value): active, order, billing, source_id.
     claude_credential: Optional[dict[str, Any]] = None
+    # THE SAME PILL the source's Models row shows ({state, label, tone, checked_at}, decided by
+    # setup_view.source_state: last real proof first, then credential). None when the source
+    # has no Models row. The Sources badge reads it, so the two can never disagree.
+    pill: Optional[dict[str, Any]] = None
 
 
 class EntitlementSourceListResponse(BaseModel):

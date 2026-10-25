@@ -35,12 +35,18 @@ LOCALS = ("ollama", "vllm")
 
 #: What Add a model offers, in the order it offers it. `fields` is the form; `command` a copy
 #: chip for the one thing an operator runs on their own computer.
+#:
+#: A SUBSCRIPTION HAS NO FIELDS. Its provider's own login runs inside BOSS (`boss connect
+#: <provider>`, or the console's Sign in), then Connect proves it with one turn. Nothing is
+#: pasted or dropped: a token field or an auth.json drop zone offered a route the backend
+#: refuses (`subscription_import_refusal`).
 CATALOGUE: tuple[dict[str, Any], ...] = (
     {"provider": "claude_code", "label": "Claude Code", "kind": "subscription",
-     "fields": ["token"], "command": "claude setup-token"},
+     "fields": [], "command": "boss connect claude"},
     {"provider": "codex", "label": "Codex", "kind": "subscription",
-     "fields": ["file"], "command": "~/.codex/auth.json"},
-    {"provider": "grok", "label": "Grok Build", "kind": "subscription", "fields": []},
+     "fields": [], "command": "boss connect codex"},
+    {"provider": "grok", "label": "Grok Build", "kind": "subscription", "fields": [],
+     "command": "boss connect grok"},
     {"provider": "cursor", "label": "Cursor", "kind": "subscription", "fields": []},
     {"provider": "openrouter", "label": "OpenRouter", "kind": "api_key",
      "fields": ["api_key", "model"], "key_url": "https://openrouter.ai/keys",
@@ -491,19 +497,37 @@ def provider_label(provider: str) -> str:
     return ENGINE_LABELS.get(provider, provider.replace("_", " ").title())
 
 
-def _model_state(*, kind: str, metadata: dict[str, Any], capacity: dict[str, Any],
-                 connected: bool, budget_spent: bool, now: datetime
+#: A last proof the provider answered by REFUSING THE CREDENTIAL itself — not busy, not
+#: unreachable, not a budget pause. Every surface that says whether a source works treats
+#: these as broken (entitlements' effective status, the coding-agent list, the CLI summary).
+CREDENTIAL_REFUSED = frozenset({"login_expired", "key_rejected", "key_unreadable"})
+
+
+def source_state(*, kind: str, metadata: dict[str, Any], capacity: dict[str, Any],
+                 budget_spent: bool, now: datetime
                  ) -> tuple[str, Optional[str], Optional[str]]:
-    """(state, checked_at, retry_at) for one model source."""
+    """THE ONE ANSWER to "does this model source work?": (state, checked_at, retry_at).
+
+    LAST REAL PROOF FIRST, THEN THE CREDENTIAL. The state is what the last governed check
+    (`setup_actions._record_model_check`) recorded; a credential a real call had refused
+    (`observed_capacity.credential_state`) overrides it. A source nobody has proved is "Not
+    checked" — never "Working": a subscription marked connected by a typed session ref
+    (entitlements' Complete session) or by a connect that skipped its proof has answered
+    nothing yet.
+
+    Every surface reads this, so they cannot disagree: the Models row (`source_entry`), the
+    Sources list (`source_pills` → GET /v1/entitlements/sources `pill`, and its
+    `effective_status`), GET /v1/setup/coding-agents, the agent's diagnose_setup and
+    detect_coding_agents, and `boss connect --summary`. (The live bug: Codex's last proof was
+    refused 401 and the Models row said Login expired, while Sources said Active · Available
+    and the CLI summary said Codex connected.)
+    """
     from .provider_limits import is_available
 
     last = metadata.get("last_check") if isinstance(metadata.get("last_check"), dict) else {}
     checked_at = last.get("at") or metadata.get("checked_at")
     if last and last.get("state") != "paused_budget":
         state = str(last.get("state") or ("working" if last.get("ok") else "failed"))
-    elif kind == "subscription" and connected:
-        # Recorded before checks existed, and only after a governed proof turn: it worked.
-        state = "working"
     else:
         state = "not_checked"
     if capacity.get("credential_state") == "rejected":
@@ -520,12 +544,21 @@ def _model_state(*, kind: str, metadata: dict[str, Any], capacity: dict[str, Any
     return state, checked_at, retry_at
 
 
-def _models(connection: Connection, settings: Any, project_id: str, now: datetime,
-            budget_spent: bool, *, budget_period: str = "month") -> list[dict[str, Any]]:
-    from .setup_service import ENV_LANES, _set_deliberately
+def _source_kind(provider: str, row: Any) -> str:
+    connected = row["connection_status"] == "connected"
+    if provider in SUBSCRIPTIONS and (row["cost_mode"] == "subscription" or connected) \
+            and not row["credential_secret_ref_id"]:
+        return "subscription"
+    if provider in SUBSCRIPTIONS and row["cost_mode"] == "subscription":
+        return "subscription"
+    if provider in LOCALS:
+        return "local"
+    return "metered"
 
-    by_entitlement = _by_entitlement(settings)
-    rows = connection.execute(
+
+def _model_rows(connection: Connection, project_id: str) -> list[Any]:
+    """The sources Repo and models lists as models: a stored credential or a connection."""
+    return connection.execute(
         text("SELECT source_id, provider, connection_status, credential_secret_ref_id, "
              "       cost_mode, supported_models, connection_metadata, observed_capacity, "
              "       updated_at "
@@ -533,6 +566,64 @@ def _models(connection: Connection, settings: Any, project_id: str, now: datetim
              " WHERE project_id = :p AND source_id <> 'typesafe_jev' "
              "   AND (credential_secret_ref_id IS NOT NULL OR connection_status = 'connected') "
              " ORDER BY created_at, source_id"), {"p": project_id}).mappings().all()
+
+
+def source_entry(row: Any, *, by_entitlement: dict[str, str], now: datetime,
+                 budget_spent: bool = False, budget_period: str = "month"
+                 ) -> Optional[dict[str, Any]]:
+    """One Models row — its pill decided by `source_state` — or None when the source is not
+    a model this page lists (a retired connection proof)."""
+    source_id = str(row["source_id"])
+    provider = _provider_of(source_id, by_entitlement)
+    metadata = _obj(row["connection_metadata"])
+    if metadata.get("proof_only"):
+        return None
+    capacity = _obj(row["observed_capacity"])
+    kind = _source_kind(provider, row)
+    state, checked_at, retry_at = source_state(
+        kind=kind, metadata=metadata, capacity=capacity, budget_spent=budget_spent, now=now)
+    if checked_at is None and state == "working":
+        checked_at = _iso(row["updated_at"])
+    models = [m for m in _list(row["supported_models"]) if isinstance(m, str) and m.strip()]
+    model = models[0] if models else (metadata.get("model") or None)
+    last = metadata.get("last_check") if isinstance(metadata.get("last_check"), dict) else {}
+    return _model_entry(
+        source_id=source_id, provider=provider, kind=kind, model=model, state=state,
+        checked_at=checked_at, retry_at=retry_at, source="connected", now=now,
+        host=last.get("host") or "", latency_ms=last.get("latency_ms"),
+        base_url=str(metadata.get("base_url") or ""), budget_period=budget_period)
+
+
+def source_pills(connection: Connection, settings: Any, project_id: str, *,
+                 now: Optional[datetime] = None) -> dict[str, dict[str, Any]]:
+    """{source_id: the pill its Models row shows} — `{state, label, tone, checked_at}` — for
+    every source Repo and models lists. A source absent here has no Models row (its pill is
+    null). The same `source_entry` the page builds, with the same budget answer."""
+    now = now or now_utc()
+    try:
+        budget = _budget(connection, settings, project_id)
+    except Exception:  # noqa: BLE001 — a budget that cannot be read pauses nothing here
+        budget = {"state": "ok", "period": "month"}
+    by_entitlement = _by_entitlement(settings)
+    out: dict[str, dict[str, Any]] = {}
+    for row in _model_rows(connection, project_id):
+        entry = source_entry(row, by_entitlement=by_entitlement, now=now,
+                             budget_spent=budget["state"] == "spent",
+                             budget_period=budget["period"])
+        if entry is None:
+            continue
+        out[entry["source_id"]] = {"state": entry["pill"]["state"],
+                                   "label": entry["pill"]["label"],
+                                   "tone": entry["pill"]["tone"],
+                                   "checked_at": entry["checked_at"]}
+    return out
+
+
+def _models(connection: Connection, settings: Any, project_id: str, now: datetime,
+            budget_spent: bool, *, budget_period: str = "month") -> list[dict[str, Any]]:
+    from .setup_service import ENV_LANES, _set_deliberately
+
+    by_entitlement = _by_entitlement(settings)
     out: list[dict[str, Any]] = []
     engines_seen: set[str] = set()
     try:
@@ -541,39 +632,15 @@ def _models(connection: Connection, settings: Any, project_id: str, now: datetim
         is_home = home_for(connection, project_id) == project_id
     except Exception:  # noqa: BLE001
         is_home = False
-    for row in rows:
-        source_id = str(row["source_id"])
-        provider = _provider_of(source_id, by_entitlement)
-        metadata = _obj(row["connection_metadata"])
-        if metadata.get("proof_only"):
+    for row in _model_rows(connection, project_id):
+        entry = source_entry(row, by_entitlement=by_entitlement, now=now,
+                             budget_spent=budget_spent, budget_period=budget_period)
+        if entry is None:
             continue
-        capacity = _obj(row["observed_capacity"])
-        connected = row["connection_status"] == "connected"
-        if provider in SUBSCRIPTIONS and (row["cost_mode"] == "subscription" or connected) \
-                and not row["credential_secret_ref_id"]:
-            kind = "subscription"
-        elif provider in SUBSCRIPTIONS and row["cost_mode"] == "subscription":
-            kind = "subscription"
-        elif provider in LOCALS:
-            kind = "local"
-        else:
-            kind = "metered"
-        state, checked_at, retry_at = _model_state(
-            kind=kind, metadata=metadata, capacity=capacity, connected=connected,
-            budget_spent=budget_spent, now=now)
-        if checked_at is None and state == "working":
-            checked_at = _iso(row["updated_at"])
-        models = [m for m in _list(row["supported_models"]) if isinstance(m, str) and m.strip()]
-        model = models[0] if models else (metadata.get("model") or None)
-        last = metadata.get("last_check") if isinstance(metadata.get("last_check"), dict) else {}
-        engines_seen.add(engine_for_provider(provider))
-        entry = _model_entry(
-            source_id=source_id, provider=provider, kind=kind, model=model, state=state,
-            checked_at=checked_at, retry_at=retry_at, source="connected", now=now,
-            host=last.get("host") or "", latency_ms=last.get("latency_ms"),
-            base_url=str(metadata.get("base_url") or ""), budget_period=budget_period)
+        engines_seen.add(engine_for_provider(entry["provider"]))
         # The org's connection (a mirror of the org's model home, org_models) or one this
         # project made for itself.
+        metadata = _obj(row["connection_metadata"])
         entry["scope"] = "org" if (metadata.get("org_source") or is_home) else "project"
         out.append(entry)
     # THE INSTALL'S OWN SETTINGS FILE. A key there is a model like any other, with the chip
@@ -590,9 +657,8 @@ def _models(connection: Connection, settings: Any, project_id: str, now: datetim
             if last else {}
         if last:
             metadata["last_check"]["at"] = _iso(last["_at"])
-        state, checked_at, retry_at = _model_state(
-            kind=kind, metadata=metadata, capacity={}, connected=False,
-            budget_spent=budget_spent, now=now)
+        state, checked_at, retry_at = source_state(
+            kind=kind, metadata=metadata, capacity={}, budget_spent=budget_spent, now=now)
         model = (str(getattr(settings, "openai_model", "") or "") or None) \
             if provider == "openai" else None
         engines_seen.add(engine)
@@ -663,31 +729,37 @@ def model_working(entry: dict[str, Any]) -> bool:
 # ── Detected, on the server ───────────────────────────────────────────────────────────────────
 
 def _detected(settings: Any) -> list[dict[str, Any]]:
+    """What is on the server. A subscription is `signed_in` (its CLI is signed in inside
+    BOSS), `needs_sign_in` (installed, not signed in — `boss connect <provider>` or Sign in
+    does it there) or `not_on_server` (the CLI is not in this image). There is no token to
+    paste and no file to drop, so no state asks for one."""
     found = _cli_detection(settings)
     out: list[dict[str, Any]] = []
     for provider in SUBSCRIPTIONS:
         info = found.get(provider) or {}
         if info.get("installed") and info.get("authenticated"):
             state = "signed_in"
-        elif not info.get("installed"):
-            state = "not_on_server"
-        elif provider == "claude_code":
-            state = "needs_token"
-        elif provider == "codex":
-            state = "needs_file"
+        elif info.get("installed"):
+            state = "needs_sign_in"
         else:
             state = "not_on_server"
-        out.append({"provider": provider, "label": provider_label(provider),
-                    "kind": "subscription", "found": state})
+        entry = {"provider": provider, "label": provider_label(provider),
+                 "kind": "subscription", "found": state,
+                 # A Claude token BOSS once stored (the retired setup-token import) is not a
+                 # sign-in: it is reported, with the one governed way to remove it.
+                 "legacy_token": bool(info.get("legacy_token"))}
+        if info.get("legacy_token"):
+            entry["fix"] = info.get("legacy_token_fix") or ""
+        out.append(entry)
     for provider in LOCALS:
         local = local_found(provider)
-        entry: dict[str, Any] = {"provider": provider, "label": provider_label(provider),
-                                 "kind": "local", "found": "found" if local else "not_on_server"}
+        entry = {"provider": provider, "label": provider_label(provider),
+                 "kind": "local", "found": "found" if local else "not_on_server"}
         if local:
             entry["base_url"] = local["base_url"]
         out.append(entry)
     # Found first: the drawer's tile order.
-    order = {"signed_in": 0, "found": 0, "needs_token": 1, "needs_file": 1, "not_on_server": 2}
+    order = {"signed_in": 0, "found": 0, "needs_sign_in": 1, "not_on_server": 2}
     return sorted(out, key=lambda d: (d["kind"] != "subscription", order[d["found"]]))
 
 
