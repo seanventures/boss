@@ -294,7 +294,9 @@ def test_daily_and_monthly_caps_refuse_as_before(engine, ledger):
     assert refused["status"] == "denied" and refused["refusal"] == "cap_exceeded"
     assert refused["transient"] is False and refused["decision_id"]
     assert refused["period"] == "day"
-    assert refused["message"].startswith("Budget cap exceeded: today's budget is 95% used")
+    # The refusal names what was asked against what is left (brec_bd2a474ed4eb4537a373).
+    assert refused["message"].startswith("Budget cap exceeded: this needs $1 reserved and "
+                                         "today's budget has $0.50 left ($9.50 of $10 used)")
     assert "It resets at 00:00 UTC" in refused["message"]
     assert refused["message"].endswith("Decision created.")
     with engine.begin() as c:
