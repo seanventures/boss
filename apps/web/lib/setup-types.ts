@@ -86,6 +86,8 @@ export type CatalogueEntry = {
   kind: "subscription" | "api_key" | "local";
   key_url?: string | null;
   example_model?: string | null;
+  /** Local › Ollama: where BOSS looks when the URL is left empty (OLLAMA_BASE_URL). */
+  example_base_url?: string | null;
   fields: Field[];
   command?: string | null;
 };

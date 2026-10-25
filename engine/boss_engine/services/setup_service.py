@@ -72,7 +72,10 @@ PROVIDERS: dict[str, dict[str, Any]] = {
     # per-call money. `setup-ollama` / `setup-vllm` are the lanes' own sources.
     "ollama": {
         "label": "Ollama",
-        "base_url": "http://127.0.0.1:11434/v1",
+        # NOT A FIXED ADDRESS: where Ollama answers depends on where BOSS runs (the container's
+        # own 127.0.0.1 is not the host's). `ollama_base_url(settings)` resolves it from
+        # OLLAMA_BASE_URL, which the Community compose sets to host.docker.internal.
+        "base_url": "",
         "api": "openai",
         "example_model": "",
         "key_url": "",
@@ -135,14 +138,19 @@ PROVIDERS: dict[str, dict[str, Any]] = {
         "source_kind": "official_cli",
         "note": "Authorised through the official Grok CLI's service-user device login.",
     },
-    "cursor": {
-        "label": "Cursor subscription",
-        "api": "subscription",
-        "kind": "subscription",
-        "source_kind": "official_cli",
-        "note": "Authorised through Cursor's own login.",
-    },
+    # CURSOR IS NOT OFFERED: `cursor-agent` is not in Dockerfile.community and its harness spec
+    # (cli_harness.BUILTIN_CLI_HARNESSES["cursor"]) is unverified, so the wizard listing it only
+    # ever led to "Not on server". The harness stays; it comes back here when it ships.
 }
+
+
+def ollama_base_url(settings: Any) -> str:
+    """Where this BOSS looks for Ollama: OLLAMA_BASE_URL. The Community compose sets it to
+    http://host.docker.internal:11434/v1 for api and worker (the host's Ollama, seen from the
+    container); a dev run outside Docker keeps the settings default, localhost. One answer for
+    the drawer's placeholder, detection, the model list and Connect with the URL left empty."""
+    configured = str(getattr(settings, "ollama_base_url", "") or "").strip()
+    return configured or str(Settings.model_fields["ollama_base_url"].default)
 
 
 class SetupError(RuntimeError):

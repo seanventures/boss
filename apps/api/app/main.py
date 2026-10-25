@@ -2744,6 +2744,15 @@ def require_authenticated_actor_binding(
     raise HTTPException(status_code=403, detail=reason)
 
 
+def request_actor_or_principal() -> Optional[str]:
+    """Who a router's request acts as: under enforce the guard's bound actor (the one
+    `require_authenticated_actor_binding` compares against — the legacy console key's is
+    `executive_console`, while its transport principal is `sys_legacy_console`), else the
+    transport principal. A router that derived its actor from the principal alone refused the
+    documented env.sh key with 403 actor_mismatch on every route, read or write."""
+    return identity_guard.request_actor() or current_api_principal.get()
+
+
 def require_project_actor(connection, project_id: str, actor: str, permission: str) -> None:
     # Authenticate the claimed actor before inspecting its permissions. Checking
     # permissions first can turn an impersonation attempt into a target-member
@@ -18085,7 +18094,7 @@ app.include_router(build_setup_router(
     # The module's own settings object, which the rest of this API (and its tests) use.
     get_settings=lambda: settings,
     require_actor=require_project_actor,
-    principal=lambda: current_api_principal.get(),
+    principal=request_actor_or_principal,
     require_reader=require_project_reader,
 ))
 
@@ -18097,7 +18106,7 @@ app.include_router(build_ci_router(
     engine=engine,
     get_settings=lambda: settings,
     require_actor=require_project_actor,
-    principal=lambda: current_api_principal.get(),
+    principal=request_actor_or_principal,
 ))
 
 
@@ -18158,10 +18167,9 @@ def setup_coding_agents(response: Response, project_id: str = "") -> dict:
 
     if project_id:
         with begin(engine) as connection:
-            require_project_actor(
-                connection, project_id, current_api_principal.get() or "ceo",
-                "entitlement_manage",
-            )
+            # A read (SETUP_READ): the project read, not a write's actor binding (see
+            # routers/setup.require_read).
+            require_project_reader(connection, project_id)
             agents = list_coding_agents(runtime_settings)
             # Keep detection useful if the recorded connection lookup fails. An authority
             # failure must reach the caller instead of becoming connected=False.

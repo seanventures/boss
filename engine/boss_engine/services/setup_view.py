@@ -47,7 +47,6 @@ CATALOGUE: tuple[dict[str, Any], ...] = (
      "fields": [], "command": "boss connect codex"},
     {"provider": "grok", "label": "Grok Build", "kind": "subscription", "fields": [],
      "command": "boss connect grok"},
-    {"provider": "cursor", "label": "Cursor", "kind": "subscription", "fields": []},
     {"provider": "openrouter", "label": "OpenRouter", "kind": "api_key",
      "fields": ["api_key", "model"], "key_url": "https://openrouter.ai/keys",
      "example_model": "anthropic/claude-sonnet-4.5",
@@ -72,6 +71,12 @@ CATALOGUE: tuple[dict[str, Any], ...] = (
     {"provider": "vllm", "label": "Other URL", "kind": "local", "fields": ["base_url", "model"]},
 )
 CATALOGUE_BY_PROVIDER = {entry["provider"]: entry for entry in CATALOGUE}
+#: The subscriptions Add a model OFFERS: each ships its CLI in Dockerfile.community and has a
+#: harness spec (`test_every_offered_subscription_ships_in_the_image`). Cursor is not offered:
+#: `cursor-agent` is not in the image and its spec is unverified, so it could only ever read
+#: "Not on server". SUBSCRIPTIONS still knows it, so an existing Cursor row keeps its kind.
+OFFERED_SUBSCRIPTIONS = tuple(entry["provider"] for entry in CATALOGUE
+                              if entry["kind"] == "subscription")
 
 #: engine (harness) -> the name an operator knows it by.
 ENGINE_LABELS = {
@@ -452,6 +457,11 @@ USABLE_REPOSITORY = frozenset({"working", "expiring", "checking", "rate_limited"
 #: Model states a job can still run on (a busy or unreachable provider recovers by itself).
 USABLE_MODEL = frozenset({"working", "not_checked", "rate_limited", "paused_budget",
                           "unreachable"})
+#: A MODEL ON THIS MACHINE THAT DOES NOT ANSWER IS NOT AN OUTAGE, it is the wrong address (the
+#: container's own 127.0.0.1) or a stopped server: it does not recover by itself, so Auto never
+#: picks it. Applies to the Local kinds and to an OpenAI-compatible URL on the install machine
+#: (`boss connect ollama`'s host.docker.internal).
+USABLE_LOCAL_MODEL = USABLE_MODEL - {"unreachable"}
 #: READY MEANS PROVEN. The header's "Repository and model checked" is only true of a row a check
 #: has answered: a busy or unreachable GitHub, a check not yet run and a model nobody has tried
 #: are still usable (a build may start) but they are not Ready.
@@ -722,8 +732,29 @@ def _label_with_host(provider: str, base_url: str) -> str:
     return label
 
 
+def _catalogue(settings: Any) -> list[dict[str, Any]]:
+    """The drawer's tiles. Ollama carries the address this BOSS looks at when its URL is left
+    empty (OLLAMA_BASE_URL: the host's Ollama under Docker), so the placeholder is never the
+    container's own loopback."""
+    from .setup_service import ollama_base_url
+
+    out = [dict(entry) for entry in CATALOGUE]
+    for entry in out:
+        if entry["provider"] == "ollama":
+            entry["example_base_url"] = ollama_base_url(settings)
+    return out
+
+
+def model_is_local(entry: dict[str, Any]) -> bool:
+    """A model served from the install machine: a Local row, or any row whose URL is there."""
+    from .code_agent import is_local_model_endpoint
+
+    return entry.get("kind") == "local" or is_local_model_endpoint(str(entry.get("base_url") or ""))
+
+
 def model_working(entry: dict[str, Any]) -> bool:
-    return entry["pill"]["state"] in USABLE_MODEL
+    usable = USABLE_LOCAL_MODEL if model_is_local(entry) else USABLE_MODEL
+    return entry["pill"]["state"] in usable
 
 
 # ── Detected, on the server ───────────────────────────────────────────────────────────────────
@@ -735,7 +766,7 @@ def _detected(settings: Any) -> list[dict[str, Any]]:
     paste and no file to drop, so no state asks for one."""
     found = _cli_detection(settings)
     out: list[dict[str, Any]] = []
-    for provider in SUBSCRIPTIONS:
+    for provider in OFFERED_SUBSCRIPTIONS:
         info = found.get(provider) or {}
         if info.get("installed") and info.get("authenticated"):
             state = "signed_in"
@@ -1081,7 +1112,7 @@ def _build(connection: Connection, settings: Any, project_id: str, *,
         "repository": repository,
         "models": models,
         "detected": detected,
-        "catalogue": [dict(entry) for entry in CATALOGUE],
+        "catalogue": _catalogue(settings),
         # Connection proofs whose money is held until a person reviews them (Review → Release).
         "held_proofs": _held_proofs(connection, project_id),
         "jobs": jobs,
@@ -1203,7 +1234,7 @@ def basics(view: dict[str, Any], *, router_runnable: Optional[bool] = None) -> d
 
     `router_runnable`: whether the chat router can build an adapter at all
     (`model_routing.choose(...).runnable`). A model counts when a row is usable AND the router
-    can reach one — a Cursor-only install is connected for builds, not for a step's model call.
+    can reach one — a CLI-only install is connected for builds, not for a step's model call.
     """
     repos = view["repository"]["repos"]
     default = next((r for r in repos if r["default"]), repos[0] if repos else None)

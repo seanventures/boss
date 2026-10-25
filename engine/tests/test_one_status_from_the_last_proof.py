@@ -249,6 +249,7 @@ def test_an_expired_login_is_not_a_usable_hosted_model(monkeypatch, tmp_path):
 
 def test_the_summary_usable_states_are_the_views():
     assert _model_status().USABLE_STATES == setup_view.USABLE_MODEL
+    assert _model_status().USABLE_LOCAL_STATES == setup_view.USABLE_LOCAL_MODEL
 
 
 # ── P0-4 (engine): no surface offers a route the backend refuses ─────────────────────────────
@@ -296,7 +297,8 @@ def test_installed_but_signed_out_needs_sign_in(monkeypatch):
     assert found["grok"] == "needs_sign_in"
     assert found["codex"] == "needs_sign_in"
     assert found["claude_code"] == "needs_sign_in"
-    assert found["cursor"] == "not_on_server"
+    # Cursor is not offered (P1-8): its CLI is not in the image, so detection does not list it.
+    assert "cursor" not in found
     assert not {"needs_token", "needs_file"} & set(found.values())
 
 

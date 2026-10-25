@@ -20,6 +20,14 @@ import { Consent, toast, useBoard } from "./parts";
 import { Out, Pill, Refusal, Tip } from "./pill";
 import { SIGN_IN_PROVIDERS, SubscriptionSignIn } from "./subscription-sign-in";
 
+/** Where Local › Ollama looks when the URL is left empty, if the server did not say: the host's
+ *  Ollama as the Community containers see it (never the container's own 127.0.0.1). */
+const OLLAMA_IN_DOCKER = "http://host.docker.internal:11434/v1";
+/** A URL as a placeholder short enough for a phone's field: host and port only. */
+const urlHint = (url: string): string => {
+  try { return url ? new URL(url).host : ""; } catch { return url; }
+};
+
 type Tile = "subscription" | "api_key" | "local";
 
 const TILES: Array<{ tile: Tile; label: string; tip: string }> = [
@@ -139,7 +147,7 @@ export function AddModelPanel({ initialTile, initialProvider, onDone, replaceSou
   const entry: CatalogueEntry | undefined = view.catalogue.find((c) => c.provider === provider);
   const detected: Detected | undefined = view.detected.find((d) => d.provider === provider);
   const chips = view.catalogue.filter((c) => c.kind === tile);
-  // Codex, Claude Code and Grok sign in here; another subscription (Cursor) is detected only.
+  // Codex, Claude Code and Grok sign in here (the only subscriptions the catalogue offers).
   const signsIn = tile === "subscription" && SIGN_IN_PROVIDERS.has(provider);
   // A LOGIN THE LAST PROOF REFUSED IS NOT A SIGN-IN, whatever `<cli> login status` says (the
   // live Codex loop: "Signed in on server" → Connect → Login expired → Connect …). The row's own
@@ -191,9 +199,11 @@ export function AddModelPanel({ initialTile, initialProvider, onDone, replaceSou
     ready = ready && !notOnServer && signedIn;
   } else if (tile === "api_key") {
     // THE PROOF ASKS EXACTLY THE MODEL TYPED: an empty field is not quietly the example.
-    ready = ready && (provider === "custom" ? !!baseUrl.trim() && !!model.trim()
-                                            : !!secret.trim()
-                                              && (!fields.includes("model") || !!model.trim()));
+    // "Other" needs its key too: the backend refuses an API-key connection without one (an
+    // unauthenticated local server is Local › Other URL), so Connect never offers that 422.
+    ready = ready && !!secret.trim()
+            && (provider !== "custom" || !!baseUrl.trim())
+            && (!fields.includes("model") || !!model.trim());
   } else {
     ready = ready && !!model.trim() && (provider === "ollama" || !!baseUrl.trim());
   }
@@ -213,11 +223,7 @@ export function AddModelPanel({ initialTile, initialProvider, onDone, replaceSou
       return "";
     }
     if (tile === "api_key") {
-      if (provider === "custom") {
-        if (!baseUrl.trim()) return "Add the base URL first";
-        if (!model.trim()) return "Name the model first";
-        return "";
-      }
+      if (provider === "custom" && !baseUrl.trim()) return "Add the base URL first";
       if (!secret.trim()) return "Paste a key first";
       if (fields.includes("model") && !model.trim()) return "Name the model first";
       return "";
@@ -340,7 +346,9 @@ export function AddModelPanel({ initialTile, initialProvider, onDone, replaceSou
             <span className="su-field-label">{tile === "local" ? "URL" : "Base URL"}</span>
             <input type="url" value={baseUrl} data-testid="su-model-base-url"
                    aria-label={tile === "local" ? "URL" : "Base URL"}
-                   placeholder={provider === "ollama" ? "http://127.0.0.1:11434/v1" : "http://host:8000/v1"}
+                   placeholder={urlHint(entry?.example_base_url
+                                    || (provider === "ollama" ? OLLAMA_IN_DOCKER : ""))
+                                || "http://host:8000/v1"}
                    onChange={(e) => setBaseUrl(e.target.value)}
                    onBlur={() => { if (tile === "local" && baseUrl) void list("", baseUrl); }} />
           </label>

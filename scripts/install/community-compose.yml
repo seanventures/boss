@@ -331,6 +331,10 @@ services:
       GEMINI_BASE_URL: ${GEMINI_BASE_URL:-https://generativelanguage.googleapis.com/v1beta/openai/}
       XAI_API_KEY: ${XAI_API_KEY:-}
       XAI_BASE_URL: ${XAI_BASE_URL:-https://api.x.ai/v1}
+      # Ollama on THIS machine, as the container sees it (the container's own 127.0.0.1 is not
+      # the host's): detection, the console's Local › Ollama default and Connect with the URL
+      # left empty all look here. host.docker.internal is mapped below (extra_hosts).
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434/v1}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       # Subscription credentials, so an operator who puts one in .env actually gets it.
       # Without these the value sits in .env, compose never passes it in, and the container
@@ -528,6 +532,10 @@ services:
       GEMINI_BASE_URL: ${GEMINI_BASE_URL:-https://generativelanguage.googleapis.com/v1beta/openai/}
       XAI_API_KEY: ${XAI_API_KEY:-}
       XAI_BASE_URL: ${XAI_BASE_URL:-https://api.x.ai/v1}
+      # Ollama on THIS machine, as the container sees it (the container's own 127.0.0.1 is not
+      # the host's): detection, the console's Local › Ollama default and Connect with the URL
+      # left empty all look here. host.docker.internal is mapped below (extra_hosts).
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434/v1}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       # Subscription credentials, so an operator who puts one in .env actually gets it.
       # Without these the value sits in .env, compose never passes it in, and the container

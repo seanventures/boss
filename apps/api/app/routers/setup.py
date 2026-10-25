@@ -37,6 +37,16 @@ def build_setup_router(
     def actor_for(claimed: Optional[str]) -> str:
         return str(principal() or claimed or "ceo").strip() or "ceo"
 
+    def require_read(connection, project_id: str) -> None:
+        """A READ IS NOT AN ACT: the view never calls a provider, decrypts nothing and records
+        nothing, so it asks the project read the route's SETUP_READ names — not the actor
+        binding plus entitlement_manage a write needs. Binding the actor here refused the
+        documented key (boss-community.env.sh's BOSS_API_KEY) with 403 actor_mismatch."""
+        if require_reader is not None:
+            require_reader(connection, project_id)
+        else:
+            require_actor(connection, project_id, actor_for(None), "entitlement_manage")
+
     def _signed_in_person() -> Optional[str]:
         """The PERSON behind this request (the identity context), whatever legacy member name the
         shadow-mode checks see. A repository picked after "Sign in with GitHub" uses their token."""
@@ -84,7 +94,7 @@ def build_setup_router(
     def get_setup(project_id: str) -> dict[str, Any]:
         """Repo and models, decided once on the server. Never touches the network."""
         with begin(engine) as connection:
-            require_actor(connection, project_id, actor_for(None), "entitlement_manage")
+            require_read(connection, project_id)
             return view(connection, project_id)
 
     @router.post("/v1/setup/checks", response_model=SetupView, response_model_by_alias=True)
