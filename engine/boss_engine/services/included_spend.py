@@ -65,6 +65,27 @@ def source_is_included(source: Optional[Mapping[str, Any]]) -> bool:
     return kind in INCLUDED_ENTITLEMENTS
 
 
+def call_is_included(engine: Optional[str], usage: Optional[Mapping[str, Any]] = None) -> bool:
+    """THE ONE DECISION: did this model call run on included capacity (a subscription or a local
+    model), so its cost is an estimate and not money?
+
+    Every recording site (llm_telemetry.record_llm_call, the model gateway, the router's turn
+    settlement) asks this, so one call cannot be stamped two ways. The adapter's `billing`
+    stamp — the credential it actually ran on — wins. Without one, the engine's class decides
+    (a subscription CLI or a local model; model_routing.UNMETERED). An adapter that knows its
+    credential stamps it on EVERY row it records, failed calls included: a failed Claude call on
+    an API key carried no stamp, fell to the engine rule, and read as a subscription call in the
+    middle of a metered run (brec_85de2541)."""
+    if isinstance(usage, Mapping) and usage.get("billing"):
+        return usage_is_included(usage)
+    from .model_routing import UNMETERED
+
+    name = str(engine or "").strip().lower()
+    if name.startswith("guest:"):
+        name = name.split(":", 1)[1]
+    return name in UNMETERED
+
+
 def usage_is_included(usage: Optional[Mapping[str, Any]]) -> bool:
     """Whether the adapter that answered said the call ran on included capacity."""
     if not isinstance(usage, Mapping):
@@ -142,3 +163,77 @@ def routed_reservation_estimate(connection: Any, settings: Any, project_id: str,
         except Exception:  # noqa: BLE001
             pass
     return 0 if included else int(estimate_usd_micros)
+
+
+# ── MONEY SPENT, ONE DEFINITION FOR GOVERN AND THE COST TOOLS ─────────────────────────────────
+#
+# Two ledgers each hold part of the truth. `cost_receipts` is what every cap counts (settled
+# money per reservation). `llm_calls` is one row per model call — what get_costs and Spend by
+# agent/model read. On Community the code-task pipeline's budget port is unmetered
+# (defaults.NoopBudgetPort), so a build's calls are in `llm_calls` and never settle a receipt:
+# Govern said $8.47 spent while the builds alone had spent $284 (brec_85de2541). `ledger_spend`
+# is the one answer: the receipts' money plus every build's money no receipt settled
+# (`not_under_cap`), with what subscriptions ran (an estimate at list price, never money) beside
+# it. Govern's meter and get_costs both read it, so they cannot disagree.
+
+#: Money on a llm_calls row: its cost, unless a subscription or local model answered (then $0).
+LLM_MONEY_SQL = ("CASE WHEN COALESCE(included_in_subscription, false) THEN 0 "
+                 "ELSE COALESCE(cost_usd_micros, 0) END")
+#: What an included row would have cost at list price — an estimate, never money.
+LLM_INCLUDED_SQL = ("CASE WHEN COALESCE(included_in_subscription, false) "
+                    "THEN COALESCE(cost_usd_micros, 0) ELSE 0 END")
+
+
+def ledger_spend(connection: Any, project_id: str, start: Any, end: Any = None) -> dict[str, int]:
+    """Money spent over [start, end) and how it splits:
+
+      money_usd_micros         = under_cap + not_under_cap (the figure to call "spent")
+      under_cap_usd_micros     — settled in cost_receipts: what the caps count
+      not_under_cap_usd_micros — build money in llm_calls that no receipt settled
+      included_usd_micros      — subscription / local calls at list price (receipted ones, and
+                                 builds' from llm_calls): an estimate, not money, in no total
+      metered_calls / included_calls — llm_calls rows by credential kind (API key vs plan)
+
+    Read-only; never raises (zeros when the tables are missing)."""
+    from sqlalchemy import text
+
+    params = {"p": project_id, "start": start, "end": end}
+    window = "project_id = :p AND created_at >= :start" + (
+        " AND created_at < :end" if end is not None else "")
+    zero = {"money_usd_micros": 0, "under_cap_usd_micros": 0, "not_under_cap_usd_micros": 0,
+            "included_usd_micros": 0, "metered_calls": 0, "included_calls": 0}
+    try:
+        with connection.begin_nested():
+            calls = connection.execute(text(
+                # A build's subscription calls settle no receipt in any edition; every other
+                # included call is receipted (its estimate below, from cost_receipts).
+                f"SELECT COALESCE(SUM({LLM_INCLUDED_SQL}) FILTER "
+                "          (WHERE code_task_run_id IS NOT NULL), 0) AS included, "
+                "        COUNT(*) FILTER (WHERE NOT COALESCE(included_in_subscription, false)) "
+                "          AS metered_calls, "
+                "        COUNT(*) FILTER (WHERE COALESCE(included_in_subscription, false)) "
+                "          AS included_calls "
+                f"FROM llm_calls WHERE {window}"), params).mappings().one()
+            receipts = connection.execute(text(
+                f"SELECT COALESCE(SUM({MONEY_SQL}), 0) AS money, "
+                f"       COALESCE(SUM({INCLUDED_SQL}), 0) AS included "
+                f"FROM cost_receipts WHERE {window}"), params).mappings().one()
+            uncapped = connection.execute(text(
+                f"WITH runs AS (SELECT code_task_run_id AS r, SUM({LLM_MONEY_SQL}) AS m "
+                f"              FROM llm_calls WHERE {window} AND code_task_run_id IS NOT NULL "
+                "               GROUP BY 1), "
+                "     settled AS (SELECT substr(skill_or_model_id, 11) AS r, "
+                "                        SUM(COALESCE(actual_usd_micros, estimated_usd_micros, 0))"
+                "                          AS s "
+                "                 FROM cost_receipts WHERE project_id = :p "
+                "                  AND skill_or_model_id LIKE 'code_task:%' GROUP BY 1) "
+                "SELECT COALESCE(SUM(GREATEST(runs.m - COALESCE(settled.s, 0), 0)), 0) "
+                "FROM runs LEFT JOIN settled ON settled.r = runs.r"), params).scalar()
+    except Exception:  # noqa: BLE001 — a figure beside the meter must not take the meter down
+        return zero
+    under, outside = int(receipts["money"] or 0), int(uncapped or 0)
+    return {"money_usd_micros": under + outside, "under_cap_usd_micros": under,
+            "not_under_cap_usd_micros": outside,
+            "included_usd_micros": int(receipts["included"] or 0) + int(calls["included"] or 0),
+            "metered_calls": int(calls["metered_calls"] or 0),
+            "included_calls": int(calls["included_calls"] or 0)}

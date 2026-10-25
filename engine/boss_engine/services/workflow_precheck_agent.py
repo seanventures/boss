@@ -66,6 +66,8 @@ from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
 
 from sqlalchemy import text
 
+from .tool_result_text import clip_for_model
+
 SOURCE = "(model)"
 VERDICTS = ("will_fail", "risk")
 WHO = ("auto", "person")
@@ -656,7 +658,8 @@ def run_agent(*, adapter: Any, raw_adapter: Any = None, evidence: Mapping[str, A
                                        args if isinstance(args, dict) else {})
                 except Exception as exc:  # noqa: BLE001
                     result = {"ok": False, "error": f"{type(exc).__name__}: {exc}"[:400]}
-                body = redact_secrets(json.dumps(result, default=str))[:MAX_TOOL_RESULT_CHARS]
+                body = clip_for_model(redact_secrets(json.dumps(result, default=str)),
+                                      MAX_TOOL_RESULT_CHARS)
                 corpus_parts.append(body)
                 messages.append({"role": "tool", "tool_call_id": call.get("id"),
                                  "content": body})

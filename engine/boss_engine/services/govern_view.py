@@ -295,7 +295,7 @@ def build(connection: Connection, settings: Any, project_id: str, *,
     ]
     return {
         "project_id": project_id,
-        "meter": meter(status),
+        "meter": meter(status, ledger_for(connection, project_id, status)),
         "controls": controls,
         "thresholds": thresholds,
         "token_guides": token_guides(connection, project_id),
@@ -304,11 +304,30 @@ def build(connection: Connection, settings: Any, project_id: str, *,
     }
 
 
-def meter(status: dict[str, Any]) -> dict[str, Any]:
+def ledger_for(connection: Connection, project_id: str, status: dict[str, Any]) -> dict[str, int]:
+    """The model-call ledger (llm_calls — what get_costs reads) over the meter's own period,
+    so Govern's "spent" and the cost tools' total are one figure (included_spend.ledger_spend)."""
+    from .included_spend import ledger_spend
+
+    def _at(value: Any) -> Any:
+        return datetime.fromisoformat(value) if isinstance(value, str) and value else value
+
+    start = _at(status.get("period_start"))
+    end = _at(status.get("resets_at"))
+    if not start:
+        bounds = budget_period("month")
+        start, end = bounds["start"], bounds["end"]
+    return ledger_spend(connection, project_id, start, end)
+
+
+def meter(status: dict[str, Any], ledger: Optional[dict[str, int]] = None) -> dict[str, Any]:
     """The meter: the binding period's money and holds against its cap, the other period
-    beneath it, and the subscription figure that is shown and never counted."""
+    beneath it, and the subscription figure that is shown and never counted. `ledger` is the
+    model-call ledger over the same period: `spent` (money), `estimate` (subscription calls at
+    list price, not money), and `not_under_cap` (build money no cap counts)."""
     periods = status.get("periods") or {}
     return {
+        "ledger": dict(ledger or {}),
         "period": status.get("period"),
         "state": status.get("budget_state"),
         "state_label": STATE_LABELS.get(str(status.get("budget_state")), "Unknown"),
@@ -442,12 +461,12 @@ def spend(connection: Connection, settings: Any, project_id: str, *, window: str
     hours = WINDOWS[window]
     now = now or datetime.now(timezone.utc)
     since = now - timedelta(hours=hours)
-    totals = connection.execute(text(f"""
-        SELECT COALESCE(SUM({MONEY_SQL}), 0) AS money,
-               COALESCE(SUM(CASE WHEN COALESCE(included_in_subscription, false)
-                                 THEN {INCLUDED_SQL} ELSE 0 END), 0) AS included
-        FROM cost_receipts WHERE project_id = :p AND created_at >= :s"""),
-        {"p": project_id, "s": since}).mappings().one()
+    # The window's money and estimate: the one definition get_costs and the meter read
+    # (included_spend.ledger_spend), so a build's spend is never missing from Spend.
+    from .included_spend import ledger_spend
+
+    ledger = ledger_spend(connection, project_id, since)
+    totals = {"money": ledger["money_usd_micros"], "included": ledger["included_usd_micros"]}
     drivers = [
         {"id": r["skill_or_model_id"], "amount_usd_micros": int(r["amount"] or 0)}
         for r in connection.execute(text(f"""
@@ -475,13 +494,14 @@ def spend(connection: Connection, settings: Any, project_id: str, *, window: str
         "by_model": _model_spend(connection, project_id, since, "model"),
         "money_usd_micros": int(totals["money"] or 0),
         "included_usd_micros": int(totals["included"] or 0),
+        "not_under_cap_usd_micros": ledger["not_under_cap_usd_micros"],
         "daily": daily_spend(connection, project_id, now=now),
         "daily_cap_usd_micros": int(((status.get("periods") or {}).get("day") or {})
                                     .get("cap_usd_micros") or 0),
         "scorecard": scorecard,
         "savings": list(savings.values()),
         "top_drivers": drivers,
-        "spent_vs_cap": meter(status),
+        "spent_vs_cap": meter(status, ledger_for(connection, project_id, status)),
     }
 
 

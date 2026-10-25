@@ -283,7 +283,8 @@ class CodexCodeAgent(GenericCliCodeAgent):
         except subprocess.TimeoutExpired:
             record_llm_call(engine_name=self.engine, usage={"model": model or ""},
                             latency_ms=int((time.monotonic() - started) * 1000),
-                            ok=False, error=f"timed out after {timeout}s")
+                            ok=False, error=f"timed out after {timeout}s",
+                            billing="metered" if metered else "subscription")
             _unlink(final_path)
             raise CliHarnessUnavailable(f"codex did not finish within {timeout}s") from None
         except FileNotFoundError as exc:

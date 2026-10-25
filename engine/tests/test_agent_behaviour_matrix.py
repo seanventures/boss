@@ -282,10 +282,11 @@ def test_the_spend_total_is_not_the_sum_of_one_page():
     from boss_engine.tools import builtin
     src = inspect.getsource(builtin)
     i = src.index('"get_costs"')
-    body = src[i:i + 4200]
+    body = src[i:i + 6000]
     assert 'sum(r["cost_usd"] for r in runs)' not in body, (
         "the total is being summed from the truncated page again")
-    assert "COALESCE(sum(cost_usd_micros), 0)" in body, "no window-wide aggregate"
+    # The window-wide money aggregate is the one Govern reads (included_spend.ledger_spend).
+    assert "ledger_spend(c, pid, since)" in body, "no window-wide aggregate"
     assert "runs_truncated" in body, "a truncated list must say so"
 
 
@@ -296,7 +297,7 @@ def test_the_window_is_stated_so_it_cannot_be_called_a_month():
     from boss_engine.tools import builtin
     src = inspect.getsource(builtin)
     i = src.index('"get_costs"')
-    body = src[i:i + 4200]
+    body = src[i:i + 6000]
     assert "window_description" in body
     assert "not a calendar month" in body
 

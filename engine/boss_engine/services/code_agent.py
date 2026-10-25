@@ -1492,7 +1492,8 @@ class ClaudeCodeAgent:
             failed_model = model or getattr(self.settings, "claude_cli_model", None) or ""
             record_llm_call(engine_name=self.engine, usage={"model": failed_model},
                             latency_ms=int((time.monotonic() - started) * 1000),
-                            ok=False, error=str(exc))
+                            ok=False, error=str(exc),
+                            billing=getattr(self, "_billing", None) or None)
             raise
         usage, cost_micros = self._usage(data, self.settings)
         _remember_shared(data.get("session_id"), _shared_for(prompt, resume_session_id)[0])
@@ -2188,6 +2189,7 @@ class PacedCodeAgent:
                 usage={"model": getattr(self.settings, "claude_cli_model", "") or ""},
                 latency_ms=int(waited * 1000), ok=False,
                 error=f"never dispatched: {exc}",
+                billing=getattr(self._inner, "_billing", None) or None,
             )
         except Exception:  # noqa: BLE001 — a diagnostic never breaks a dispatch
             pass

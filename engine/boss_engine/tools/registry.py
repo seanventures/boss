@@ -51,6 +51,30 @@ Reversibility = Literal["safe", "costs_money", "destroys_work", "irreversible",
 NEVER_SELF_EXECUTE: frozenset[str] = frozenset({"destroys_work", "irreversible",
                                                 "grants_authority"})
 
+#: WHAT THE OPERATOR READS ON A BUTTON THE MODEL MAY NOT PRESS ITSELF — one true sentence per
+#: reversibility class. Before this existed, a `costs_money` tool that is `operator_only`
+#: (request_self_fix: it only asks BOSS to diagnose and propose a diff a person still approves)
+#: fell through to the destructive wording and told the operator it "destroys work or removes a
+#: safeguard". Every class has its own entry (a test walks `Reversibility`), so no class ever
+#: borrows another's warning.
+REVERSIBILITY_WARNINGS: dict[str, str] = {
+    "safe": "changes state that can be undone or simply redone",
+    "costs_money": "spends model budget when it runs",
+    "destroys_work": "throws away work in flight, or removes a control",
+    "irreversible": "cannot be undone once done",
+    "grants_authority": "gives an agent reach on somebody's account",
+}
+
+
+def offer_warning(spec: "ToolSpec") -> str:
+    """Why this tool is offered as a button instead of run: its class's warning, the tool's own
+    true follow-on (`offer_note`, e.g. "nothing installs without a person's approval"), then who
+    decides. The one wording the agent's offer and the registry's refusal both use."""
+    warning = REVERSIBILITY_WARNINGS.get(spec.reversibility) or "changes state"
+    note = (spec.offer_note or "").strip()
+    return f"{warning}{'; ' + note if note else ''} — the operator decides"
+
+
 # handler(ctx, *, project_id, actor, args) -> dict
 ToolHandler = Callable[..., dict]
 
@@ -108,6 +132,9 @@ class ToolSpec:
     #: runs inside the turn that found it, even a question's: the finding is written down the
     #: moment it exists, and nothing else moves. Must be `safe` and never `operator_only`.
     queues_for_review: bool = False
+    #: A TRUE FOLLOW-ON TO THE OFFER'S WARNING, owned by the tool ("nothing installs without a
+    #: person's approval of the diff"). Optional; see `offer_warning`.
+    offer_note: str = ""
 
     def permission_for(self, args: Optional[dict]) -> Optional[str]:
         """The permission THIS call needs (see `permission_by_arg`)."""
@@ -207,6 +234,7 @@ class ToolRegistry:
         also_requires: tuple = (),
         operator_only: bool = False,
         queues_for_review: bool = False,
+        offer_note: str = "",
     ) -> Callable[[ToolHandler], ToolHandler]:
         """Decorator form: @registry.tool("list_x", "…", {...}, kind="read")."""
 
@@ -229,6 +257,7 @@ class ToolRegistry:
                     also_requires=tuple(also_requires),
                     operator_only=operator_only,
                     queues_for_review=queues_for_review,
+                    offer_note=offer_note,
                 )
             )
             return fn
@@ -360,14 +389,8 @@ class ToolRegistry:
                 # shown, so the arguments come back untouched for the proposal to carry.
                 "proposed_args": safe_args,
                 "message": (
-                    f"'{name}' applies moves a person has not seen one by one (a build may "
-                    "start) — so it runs only when an operator clicks it."
-                    if spec.operator_only and spec.reversibility not in NEVER_SELF_EXECUTE else
-                    f"'{name}' is declared '{spec.reversibility}' — "
-                    + ("it gives an agent reach on somebody's account"
-                       if spec.reversibility == "grants_authority"
-                       else "it throws away work or cannot be undone")
-                    + " — so it runs only when an operator clicks it."
+                    f"'{name}' is declared '{spec.reversibility}': it {offer_warning(spec)}, "
+                    "so it runs only when an operator clicks it."
                 ),
             }
         if getattr(spec, "pinned_project", False):

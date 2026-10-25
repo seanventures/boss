@@ -234,9 +234,12 @@ describe("the tab is in the URL", () => {
   });
 
   it("urlWithTab corrects only a tab that disagrees", () => {
-    expect(urlWithTab("?tab=new&wfr=w", "runs")).toBe("?tab=runs&wfr=w");
-    expect(urlWithTab("?tab=runs", "runs")).toBeNull();
+    expect(urlWithTab("?area=delivery_workflows&tab=new&wfr=w", "runs")).toBe("?area=delivery_workflows&tab=runs&wfr=w");
+    expect(urlWithTab("?area=delivery_workflows&tab=runs", "runs")).toBeNull();
     expect(urlWithTab("?area=x", "runs")).toBeNull();
+    // another area's tab is never this area's to correct (brec_4cafbcc6)
+    expect(urlWithTab("?area=budget&tab=selffix", "runs")).toBeNull();
+    expect(urlWithTab("?tab=new&wfr=w", "runs")).toBeNull();
   });
 
   it("New project drops the run the URL named, so the next read stays on it", async () => {

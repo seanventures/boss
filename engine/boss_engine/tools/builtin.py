@@ -478,24 +478,54 @@ def _register_read_tools(reg: ToolRegistry) -> None:
     # budget and time, red test, gates, reviewers, the approval card, install only by policy.
     @reg.tool(
         "list_platform_gaps",
-        "The gaps in BOSS ITSELF recorded for BOSS's developers (its recommendations): each one's "
-        "id (brec_…), signature, status (open / fixing / implemented / done / wont_fix), title, "
-        "how often it was seen, its acceptance tests and the self-fix working on it. Read this "
-        "before filing one, so the same cause is counted again rather than filed twice.",
+        "The gaps in BOSS ITSELF recorded for BOSS's developers (its recommendations), newest "
+        "first, a page at a time: each row's id (brec_…), signature, status (open / fixing / "
+        "implemented / done / wont_fix), title, how often it was seen and the self-fix on it. "
+        "`total` is how many match; when `next_offset` is set there are more — pass it as "
+        "`offset`. Pass `id` (brec_…) for ONE gap in full (symptom, root cause, proposed change, "
+        "acceptance tests), or `detail: true` for full rows on this page. Read this before "
+        "filing one, so the same cause is counted again rather than filed twice. A gap is "
+        "absent only when `total` says so — never from a page you did not finish.",
         _obj({"status": {"type": "string",
                          "enum": ["open", "fixing", "implemented", "done", "wont_fix"]},
-              "limit": _LIMIT}), permission="improvement:read")
+              "id": {"type": "string", "description": "brec_… — that one gap, in full"},
+              "offset": {"type": "integer", "minimum": 0, "default": 0},
+              "detail": {"type": "boolean", "default": False},
+              "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20}}),
+        permission="improvement:read")
     def list_platform_gaps(ctx, *, project_id, actor, args):
+        """PAGED HONESTLY. The rows carried every prose field, so 14 of them overflowed the
+        agent's tool-result budget and arrived as 8 and a cut-off tail; the agent concluded the
+        gap it was looking for did not exist. A page is now compact rows that fit, with the
+        total and the next offset, and one gap in full is a direct lookup by id."""
         from ..services import boss_recommendations as recs
 
-        with ctx.begin() as c:
-            items = recs.list_recommendations(c, project_id, status=args.get("status") or None)
-        items = list(reversed(items))[: int(args.get("limit") or 25)]
-        keep = ("id", "signature", "status", "title", "symptom", "root_cause",
+        full = ("id", "signature", "status", "title", "symptom", "root_cause",
                 "proposed_change", "acceptance_tests", "files", "occurrences", "self_fix_id",
                 "created_by", "updated_at")
-        return {"count": len(items), "gaps": [{k: _json_safe(i.get(k)) for k in keep}
-                                              for i in items]}
+        brief = ("id", "signature", "status", "title", "occurrences", "self_fix_id",
+                 "updated_at")
+        wanted = str(args.get("id") or "").strip()
+        with ctx.begin() as c:
+            items = recs.list_recommendations(
+                c, project_id, status=None if wanted else (args.get("status") or None))
+        if wanted:
+            found = next((i for i in items if i.get("id") == wanted), None)
+            if found is None:
+                return {"ok": False, "found": False, "id": wanted,
+                        "error": f"no platform gap {wanted!r} in this project"}
+            return {"ok": True, "found": True, "gap": {k: _json_safe(found.get(k)) for k in full}}
+        items = list(reversed(items))
+        total = len(items)
+        offset = max(0, int(args.get("offset") or 0))
+        limit = max(1, min(50, int(args.get("limit") or 20)))
+        page = items[offset:offset + limit]
+        keep = full if args.get("detail") else brief
+        nxt = offset + len(page)
+        return {"total": total, "offset": offset, "returned": len(page),
+                "next_offset": nxt if nxt < total else None,
+                "complete": offset == 0 and nxt >= total,
+                "gaps": [{k: _json_safe(i.get(k)) for k in keep} for i in page]}
 
     @reg.tool(
         "file_platform_gap",
@@ -593,7 +623,9 @@ def _register_read_tools(reg: ToolRegistry) -> None:
         _obj({"recommendation_id": {"type": "string", "description": "brec_… of an open gap"}},
              ["recommendation_id"]),
         kind="write", reversibility="costs_money", permission="improvement:manage",
-        operator_only=True)
+        operator_only=True,
+        offer_note="it only diagnoses and proposes a fix, and nothing installs without a "
+                   "person's approval of the diff")
     def request_self_fix(ctx, *, project_id, actor, args):
         sf = services_module("self_fix")
         rec_id = str(args.get("recommendation_id") or "").strip()
@@ -2549,17 +2581,74 @@ def _workflow_key_for_proposed_name(name: str, reg: "ToolRegistry") -> str | Non
     return None
 
 
-def _placeholder_argument(args: dict) -> str:
-    """The first argument that looks invented, described for the model, or ''."""
+#: WORD MARKERS MATCH WHOLE WORDS. `foo` is a placeholder; `boss-dogfood` is a real project id
+#: that holds it, and was refused as "invented" (2026-10-24). A word marker matches only a whole
+#: token of the value (split on anything that is not a letter or digit): "crun_placeholder",
+#: "foo-app", "todo" — never "dogfood", "barcode" or "todolist-api".
+_PLACEHOLDER_WORDS = frozenset({"placeholder", "todo", "tbd", "xxx", "changeme", "foo", "bar",
+                                "abc123"})
+#: SHAPE MARKERS match where they are: anywhere ("example.com", "<", "...", "owner/name"), or at
+#: the start of the value or of a segment for a prefix ("your-", "some-", "my-app") — so
+#: "awesome-api" is not "some-".
+_PLACEHOLDER_PREFIXES = ("your-", "some-", "my-app")
+
+
+def _looks_invented(value: str) -> bool:
+    low = value.strip().lower()
+    if not low:
+        return False
+    if set(re.split(r"[^a-z0-9]+", low)) & _PLACEHOLDER_WORDS:
+        return True
+    for marker in _PLACEHOLDER_MARKERS:
+        if marker in _PLACEHOLDER_WORDS:
+            continue
+        if marker in _PLACEHOLDER_PREFIXES:
+            if re.search(r"(^|[/_.\s:=])" + re.escape(marker), low):
+                return True
+        elif marker in low:
+            return True
+    return False
+
+
+#: An argument that NAMES A RECORD, and where its real values live. A value found there is never
+#: "invented", whatever it spells: the existence of the record is the evidence the heuristic
+#: only guesses at. Read-only lookups; any failure leaves the heuristic's answer.
+_REAL_ID_TABLES = {
+    "project": ("projects", ("id", "slug")), "project_id": ("projects", ("id", "slug")),
+    "run_id": ("code_task_runs", ("id",)), "code_task_run_id": ("code_task_runs", ("id",)),
+    "workflow_run_id": ("workflow_runs", ("id",)), "wfr": ("workflow_runs", ("id",)),
+    "job_id": ("jobs", ("id",)), "task_id": ("code_tasks", ("id",)),
+    "decision_id": ("decisions", ("id",)), "recommendation_id": ("boss_recommendations", ("id",)),
+    "workflow_key": ("workflow_definitions", ("key",)),
+}
+
+
+def _is_real_record(ctx: Any, key: str, value: str) -> bool:
+    found = _REAL_ID_TABLES.get(str(key).lower())
+    if ctx is None or not found or not hasattr(ctx, "begin"):
+        return False
+    table, columns = found
+    where = " OR ".join(f"{col} = :v" for col in columns)
+    try:
+        with ctx.begin() as c:
+            with c.begin_nested():
+                return c.execute(_text(f"SELECT 1 FROM {table} WHERE {where} LIMIT 1"),
+                                 {"v": value.strip()}).first() is not None
+    except Exception:  # noqa: BLE001 — no answer is not a yes
+        return False
+
+
+def _placeholder_argument(args: dict, ctx: Any = None) -> str:
+    """The first argument that looks invented, described for the model, or ''.
+
+    A value that names a record that EXISTS is never invented (`_is_real_record`, when `ctx` is
+    given); otherwise the markers decide, words as whole words (`_looks_invented`)."""
     for key, value in (args or {}).items():
         if not isinstance(value, str):
             continue
         if str(key).lower() in _FREE_TEXT_ARGS:
             continue
-        low = value.strip().lower()
-        if not low:
-            continue
-        if any(marker in low for marker in _PLACEHOLDER_MARKERS):
+        if _looks_invented(value) and not _is_real_record(ctx, key, value):
             return f"{key}={value!r}"
     return ""
 
@@ -2877,7 +2966,7 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
                     "error": f"cannot propose {name!r} here: {unavailable} Offer what BOSS "
                              "can run instead (for a deploy: a retry or `redeploy`), and ask the "
                              "operator to act by hand only if nothing in BOSS can."}
-        placeholder = _placeholder_argument(call_args)
+        placeholder = _placeholder_argument(call_args, ctx)
         if placeholder:
             # A BUTTON WITH AN INVENTED ARGUMENT IS A BUTTON THAT FAILS ON CLICK.
             #
@@ -4083,7 +4172,17 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         pid = project_id
         days = int(args.get("days") or 7)
         limit = int(args.get("limit") or 25)
+        from ..services.included_spend import LLM_INCLUDED_SQL, LLM_MONEY_SQL, ledger_spend
+
         with ctx.begin() as c:
+            # MONEY AND ESTIMATE ARE TWO FIGURES, and the money is Govern's (brec_85de2541).
+            # This summed every row's list-price value, subscription calls included, and called
+            # it spend ($749), while Govern counted only the budget ledger ($8.47). Both read
+            # `ledger_spend` now: what was spent (and how much of it no cap counts), with what
+            # subscriptions ran beside it as an estimate.
+            since = c.execute(_text("SELECT now() - make_interval(days => :d)"),
+                              {"d": days}).scalar()
+            ledger = ledger_spend(c, pid, since)
             # THE TOTAL IS NOT THE SUM OF THE PAGE.
             #
             # total_cost_usd used to be sum(runs), and runs is LIMIT-ed to the most recent 25.
@@ -4095,8 +4194,7 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
             # The total is now its own aggregate over the whole window, independent of limit.
             totals = c.execute(
                 _text(
-                    "SELECT COALESCE(sum(cost_usd_micros), 0) AS micros, "
-                    "       COALESCE(sum(total_tokens), 0)   AS tokens, "
+                    "SELECT COALESCE(sum(total_tokens), 0)   AS tokens, "
                     "       count(*)                          AS calls, "
                     "       count(DISTINCT code_task_run_id)  AS runs "
                     "FROM llm_calls "
@@ -4108,7 +4206,8 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
             rows = c.execute(
                 _text(
                     "SELECT l.code_task_run_id AS run_id, r.title, r.status, "
-                    "       sum(l.cost_usd_micros) AS micros, sum(l.total_tokens) AS tokens, "
+                    f"       sum({LLM_MONEY_SQL}) AS micros, sum({LLM_INCLUDED_SQL}) AS est, "
+                    "       sum(l.total_tokens) AS tokens, "
                     "       count(*) AS calls, max(l.created_at) AS last_call "
                     "FROM llm_calls l LEFT JOIN code_task_runs r ON r.id = l.code_task_run_id "
                     "WHERE l.project_id = :p "
@@ -4122,7 +4221,9 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         for r in rows:
             d = _json_safe(dict(r))
             d["cost_usd"] = round(int(r["micros"] or 0) / 1_000_000, 4)
+            d["included_estimate_usd"] = round(int(r["est"] or 0) / 1_000_000, 4)
             d.pop("micros", None)
+            d.pop("est", None)
             runs.append(d)
         total_runs = int(totals.get("runs") or 0)
         return {
@@ -4130,7 +4231,13 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
             "window_days": days,
             # Say the window in words too: the model was labelling a 7-day figure "this month".
             "window_description": f"the last {days} days (not a calendar month)",
-            "total_cost_usd": round(int(totals.get("micros") or 0) / 1_000_000, 4),
+            # Money spent: the same figure Govern's meter shows for the same window.
+            "total_cost_usd": round(ledger["money_usd_micros"] / 1_000_000, 4),
+            "not_under_a_cap_usd": round(ledger["not_under_cap_usd_micros"] / 1_000_000, 4),
+            # What subscription / local calls ran, at list price. NOT money; in no total.
+            "included_estimate_usd": round(ledger["included_usd_micros"] / 1_000_000, 4),
+            "calls_by_credential": {"api_key_or_metered": ledger["metered_calls"],
+                                    "subscription_or_local": ledger["included_calls"]},
             "total_tokens": int(totals.get("tokens") or 0),
             "total_llm_calls": int(totals.get("calls") or 0),
             "runs_in_window": total_runs,
@@ -4138,7 +4245,9 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
             "runs_shown": len(runs),
             "runs_truncated": total_runs > len(runs),
             "note": (
-                "total_cost_usd is the WHOLE window and is authoritative. `runs` is only the "
+                "total_cost_usd is the money spent over the WHOLE window (Govern's figure) and "
+                "is authoritative; included_estimate_usd is what subscription calls would have "
+                "cost and is not money. `runs` is only the "
                 f"{len(runs)} most recent of {total_runs} — never sum `runs` and call it the "
                 "total. Report the window: this is the last "
                 f"{days} days, which is not the same as a calendar month."
@@ -4990,7 +5099,7 @@ def _repo_root(settings: Any, repo: str,
     """
     name = (repo or "boss").strip()
     if name in ("boss", "self", "platform", ""):
-        return _SOURCE_ROOT, None
+        return _boss_source_root(settings, ref)
 
     owner, _, short = name.rpartition("/")
     owner = owner or (getattr(settings, "target_github_owner", "") or "")
@@ -5052,6 +5161,94 @@ def _repo_root(settings: Any, repo: str,
         return None, "git is not installed in this environment"
     except Exception as exc:  # noqa: BLE001 — a read tool must not raise
         return None, f"{type(exc).__name__}: {exc}"[:200]
+
+
+#: WHERE EACH BOSS-SOURCE ROOT CAME FROM, keyed by the root a read tool was handed, so every
+#: answer can say which source it read ({"source": "self-source mirror"|"running tree",
+#: "ref": <sha or why not>}).
+_BOSS_ROOT_ORIGIN: dict[str, dict] = {}
+
+
+def _boss_source_root(settings: Any, ref: _Optional[str] = None
+                      ) -> tuple[_Optional[str], _Optional[str]]:
+    """BOSS's own source for the read tools: the WHOLE repository at the running commit.
+
+    The api image's /app carries only what the API executes (engine, apps/api, apps/worker,
+    apps/egress, db, docs) — no apps/web — so a console bug could never be read with file:line
+    evidence (brec_44ad2f55). The self-source mirror (a bare clone of the install checkout,
+    seeded by `boss self-fix seed`) holds every file at the exact commit the stack runs, so when
+    it exists the read tools read a checkout of it: `ref` if one was named, else the running
+    stack head. Checked out once per commit under the repo cache (read-only: no remote, write
+    bits removed). Without a mirror, or when the commit is not in it, the running tree — and the
+    answer says which (see `_source_origin`)."""
+    import shutil as _shutil
+    import uuid
+    from pathlib import Path as _Path
+
+    from ..services import self_fix as _sf
+    from ..services import self_fix_source as _sfs
+
+    wanted = (ref or "").strip() or _sf.running_stack_head()
+    fallback = {"source": "running tree", "ref": "the code this process runs"}
+    try:
+        if not _sfs.has_mirror(settings):
+            fallback["why"] = "no self-source mirror on this install (`boss self-fix seed`)"
+            _BOSS_ROOT_ORIGIN[_SOURCE_ROOT] = fallback
+            return _SOURCE_ROOT, None
+        if not wanted:
+            fallback["why"] = "this install's running commit is not stamped (BOSS_SOURCE_SHA)"
+            _BOSS_ROOT_ORIGIN[_SOURCE_ROOT] = fallback
+            return _SOURCE_ROOT, None
+        mirror = _sfs.mirror_of(settings)
+        try:
+            sha = _sfs.resolve(mirror, wanted)
+        except _sfs.SourceError:
+            if ref:
+                return None, f"no commit {ref!r} in BOSS's self-source mirror"
+            fallback["why"] = f"the running commit {wanted[:12]} is not in the mirror yet"
+            _BOSS_ROOT_ORIGIN[_SOURCE_ROOT] = fallback
+            return _SOURCE_ROOT, None
+        dest = _os.path.join(_REPO_CACHE, f"boss-self__{sha}")
+        if not _os.path.isdir(dest):
+            _os.makedirs(_REPO_CACHE, exist_ok=True)
+            # Built beside, then renamed into place: a second reader never sees half a tree.
+            staging = f"{dest}.tmp-{_os.getpid()}-{uuid.uuid4().hex[:6]}"
+            try:
+                _sfs.workspace(settings, sha, _Path(staging), source=mirror)
+                for dirpath, _dirs, filenames in _os.walk(staging):
+                    if _os.sep + ".git" in dirpath + _os.sep:
+                        continue
+                    for fname in filenames:
+                        full = _os.path.join(dirpath, fname)
+                        try:
+                            _os.chmod(full, _os.stat(full).st_mode & 0o555)
+                        except OSError:
+                            pass
+                try:
+                    _os.rename(staging, dest)
+                except OSError:
+                    if not _os.path.isdir(dest):
+                        raise
+            finally:
+                if _os.path.isdir(staging):
+                    _shutil.rmtree(staging, ignore_errors=True)
+        _BOSS_ROOT_ORIGIN[dest] = {"source": "self-source mirror", "ref": sha}
+        return dest, None
+    except Exception as exc:  # noqa: BLE001 — a read tool must not raise; the running tree answers
+        fallback["why"] = f"the mirror could not be read ({type(exc).__name__})"
+        _BOSS_ROOT_ORIGIN[_SOURCE_ROOT] = fallback
+        return _SOURCE_ROOT, None
+
+
+def _source_origin(repo: str, ref: _Optional[str], root: str) -> dict:
+    """Which source a read tool read: repo, ref, root, and for BOSS's own source whether it was
+    the mirror (whole repository, at that commit) or the running tree (and why)."""
+    origin = _BOSS_ROOT_ORIGIN.get(root)
+    if origin is not None and (repo or "boss") in ("boss", "self", "platform", ""):
+        return {"repo": repo or "boss", "root": root, "ref": origin["ref"],
+                "source": origin["source"],
+                **({"why_not_mirror": origin["why"]} if origin.get("why") else {})}
+    return {"repo": repo, "root": root, "ref": ref or "(default branch)"}
 
 
 #: A commit named by a prefix of its sha (what `git log --oneline`, the knowledge graph's pinned
@@ -7479,15 +7676,14 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
                                     "line": n, "text": line.rstrip()[:300],
                                 })
                                 if len(hits) >= limit:
-                                    return {"matches": hits, "truncated": True, "root": root,
-                                            "repo": repo, "ref": ref or "(default branch)"}
+                                    return {"matches": hits, "truncated": True,
+                                            **_source_origin(repo, ref, root)}
                 except (OSError, UnicodeDecodeError):
                     continue
         # WHICH SOURCE WAS READ, always. "No matches" means nothing unless you know where it
         # looked — that ambiguity is what let a search of an empty default branch read as
         # "this code does not exist".
-        return {"matches": hits, "truncated": False, "root": root,
-                "repo": repo, "ref": ref or "(default branch)"}
+        return {"matches": hits, "truncated": False, **_source_origin(repo, ref, root)}
 
     @reg.tool(
         "list_source",
@@ -7543,8 +7739,7 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
                     break
             if truncated:
                 break
-        return {"repo": repo, "ref": ref or "(default branch)", "root": root,
-                "files": files, "truncated": truncated}
+        return {**_source_origin(repo, ref, root), "files": files, "truncated": truncated}
 
     @reg.tool(
         "read_code",
@@ -7582,7 +7777,8 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
         end = min(total, int(args.get("end") or min(total, start + 399)))
         body = "".join(lines[start - 1:end])
         return {"file": args["file"], "total_lines": total, "start": start, "end": end,
-                "truncated": end < total, "content": body[:_MAX_FILE_BYTES]}
+                "truncated": end < total, "content": body[:_MAX_FILE_BYTES],
+                **_source_origin(repo, ref, root)}
 
     @reg.tool(
         "read_logs",
@@ -8620,6 +8816,8 @@ def build_discuss_read_registry(*, edition: str | None = None) -> ToolRegistry:
                 # registry path) and a second key a route checks were never asked for.
                 permission_by_arg=spec.permission_by_arg,
                 also_requires=spec.also_requires,
+                # ...AND THE TOOL'S OWN TRUE WORDS ON ITS BUTTON (offer_warning).
+                offer_note=spec.offer_note,
             )
         )
     return reg

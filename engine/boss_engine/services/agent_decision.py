@@ -40,6 +40,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterator, Mapping, Optional, Sequence
 
+from .tool_result_text import clip_for_model
+
 log = logging.getLogger(__name__)
 
 #: Said whenever an agent cannot reach a model AND BOSS cannot tell why. Honest, specific, and
@@ -626,7 +628,8 @@ def _ask_reading(adapter: Any, system: str, prompt: str, *, read: ReadPhase,
                                       args if isinstance(args, dict) else {})
                 except Exception as exc:  # noqa: BLE001
                     result = {"ok": False, "error": f"{type(exc).__name__}: {exc}"[:300]}
-                body = redact_secrets(json.dumps(result, default=str))[:read.result_chars]
+                body = clip_for_model(redact_secrets(json.dumps(result, default=str)),
+                                      read.result_chars)
                 seen.append(body)
                 messages.append({"role": "tool", "tool_call_id": call.get("id"),
                                  "content": body})

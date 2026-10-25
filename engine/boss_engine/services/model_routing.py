@@ -572,11 +572,9 @@ def turn_is_included(choice: ModelChoice, usage: Optional[dict] = None) -> bool:
     The adapter's own word wins when it gives one (`usage["billing"]`: the Claude CLI on an
     ANTHROPIC_API_KEY is metered even though its engine is claude_code); otherwise the engine
     decides — a subscription CLI or a local model is included."""
-    from .included_spend import usage_is_included
+    from .included_spend import call_is_included as _one_decision
 
-    if isinstance(usage, dict) and usage.get("billing"):
-        return usage_is_included(usage)
-    return choice.engine in UNMETERED
+    return _one_decision(choice.engine, usage)
 
 
 def call_is_included(connection: Any, settings: Any, project_id: Optional[str],

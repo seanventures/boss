@@ -10,6 +10,7 @@ from typing import Any, Callable, Optional
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
+from .tool_result_text import clip_for_model
 from ..config import Settings
 from . import owned_process
 from . import decision_actions
@@ -1948,7 +1949,7 @@ def _replace_deferred_tool_result(messages: list, result: dict) -> None:
     call that was just approved. Older turns have already been replaced.
     """
     try:
-        encoded = json.dumps(result)[:16000]
+        encoded = clip_for_model(json.dumps(result), 16000)
     except TypeError:
         encoded = json.dumps({"status": "succeeded", "note": "result was not JSON-safe"})
     for message in reversed(messages):
@@ -2640,7 +2641,7 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
                         {
                             "role": "tool",
                             "tool_call_id": tc["id"],
-                            "content": json.dumps(result)[:16000],
+                            "content": clip_for_model(json.dumps(result), 16000),
                         }
                     )
                     continue
@@ -2756,7 +2757,8 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
             if tc_idx == 0 and thought:
                 step_obj["thought"] = thought
             transcript.append(step_obj)
-            messages.append({"role": "tool", "tool_call_id": tc["id"], "content": json.dumps(result)[:16000]})
+            messages.append({"role": "tool", "tool_call_id": tc["id"],
+                             "content": clip_for_model(json.dumps(result), 16000)})
 
         if budget_wait is not None and deferred is None:
             # THE AGENT DOES NOT DECIDE THIS ONE. It would read "budget busy" as a broken tool
