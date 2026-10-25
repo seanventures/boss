@@ -63,3 +63,21 @@ def test_the_time_cap_refuses_it(harness):
     out = self_fix_build.Build(engine=harness.eng, settings=harness.settings, sfx_id=sfx["id"],
                                source=harness.mirror).run()
     assert out["refusal"] == "time"
+
+
+def test_a_finished_fix_holds_what_it_cost_not_its_reservation(harness):
+    """Live install, 2026-10-24: three refused fixes that cost $15.47 held $30 of a $50 month,
+    so a fourth fix found 'no room'. A finished fix spends nothing more: it counts its cost."""
+    sfx = harness.propose()["self_fix"]
+    reserved = int(sfx["budget_usd_micros"])
+    with harness.eng.begin() as c:
+        assert sf.month_spent(c) == reserved  # still able to spend: the whole reservation
+        c.execute(text("UPDATE self_fixes SET status = 'refused', cost_micros = 1000000 "
+                       "WHERE id = :i"), {"i": sfx["id"]})
+        assert sf.month_spent(c) == 1_000_000
+        c.execute(text("UPDATE self_fixes SET status = 'not_resolved' WHERE id = :i"),
+                  {"i": sfx["id"]})
+        assert sf.month_spent(c) == 1_000_000
+        c.execute(text("UPDATE self_fixes SET status = 'awaiting_approval' WHERE id = :i"),
+                  {"i": sfx["id"]})
+        assert sf.month_spent(c) == reserved  # repair rounds may still spend

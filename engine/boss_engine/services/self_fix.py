@@ -493,14 +493,22 @@ def mender(connection: Connection) -> dict[str, Any]:
 
 # ── budget (§8.4) ────────────────────────────────────────────────────────────────────────────
 
+#: Ends after which a self-fix spends nothing more: the month counts what it really cost.
+_SPENT_FOR_GOOD = TERMINAL | {NOT_RESOLVED}
+
+
 def month_spent(connection: Connection) -> int:
+    """This month's self-fix spend: what each finished fix really cost, plus the full
+    reservation of each fix still able to spend. A refused fix that cost $1 holds $1 of the
+    month, not its $10 reservation — otherwise three refusals exhaust a $50 month."""
     start = now_utc().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     try:
         with connection.begin_nested():
             return int(connection.execute(text(
-                "SELECT COALESCE(SUM(GREATEST(cost_micros, budget_usd_micros)), 0) FROM "
-                "self_fixes WHERE created_at >= :s AND status <> 'cancelled'"),
-                {"s": start}).scalar() or 0)
+                "SELECT COALESCE(SUM(CASE WHEN status = ANY(:done) THEN COALESCE(cost_micros, 0) "
+                "ELSE GREATEST(COALESCE(cost_micros, 0), COALESCE(budget_usd_micros, 0)) END), 0) "
+                "FROM self_fixes WHERE created_at >= :s AND status <> 'cancelled'"),
+                {"s": start, "done": sorted(_SPENT_FOR_GOOD)}).scalar() or 0)
     except Exception:  # noqa: BLE001
         return 0
 
