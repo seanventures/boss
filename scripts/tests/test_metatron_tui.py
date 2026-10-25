@@ -1417,6 +1417,24 @@ def test_agent_model_runs_and_alerts_commands_use_their_routes():
     assert "/agent" in {name for name, _a, _d in tui.SLASH_COMMANDS}
 
 
+def test_an_agent_is_addressed_by_any_spelling_of_its_name():
+    """Live (northpeak-bank, BOSSAPP-768): `/agent site_reliability_engineer` answered "no agent"
+    for the Site Reliability Engineer, whose key is `sre`. Any spelling of the name is the agent."""
+    agents = {"project_id": "northpeak-bank", "items": [
+        {"role_key": "sre", "name": "Site Reliability Engineer", "lifecycle": "active"},
+        {"role_key": "incident_commander", "name": "Incident Commander", "lifecycle": "active"}]}
+    for typed, key in (("site_reliability_engineer", "sre"), ("Site Reliability Engineer", "sre"),
+                       ("site-reliability-engineer", "sre"), ("SRE", "sre"),
+                       ("incident commander", "incident_commander")):
+        opener = FakeOpener([(200, agents)])
+        client = tui.MetatronClient(_config(), urlopen=opener)
+        out = client.handle(tui.parse_line(f"/agent {typed}"))
+        assert client.role == key, (typed, out)
+    opener = FakeOpener([(200, agents)])
+    client = tui.MetatronClient(_config(), urlopen=opener)
+    assert "no agent 'nobody'" in client.handle(tui.parse_line("/agent nobody"))
+
+
 def test_the_rich_terminal_stays_a_thin_client_of_the_one_pipeline():
     """Metatron's drawing and keyboard files decide nothing: no model, no router, no agent
     decision, no request of their own. Every request is a MetatronClient method, and the only

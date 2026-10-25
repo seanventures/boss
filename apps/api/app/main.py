@@ -2634,6 +2634,7 @@ def project_summary_from_row(row) -> ProjectSummary:
         created_at=row["created_at"].isoformat(),
         archived_at=row["archived_at"].isoformat() if row.get("archived_at") else None,
         archived_by=row.get("archived_by"),
+        project_type=row.get("project_type") or "app",
     )
 
 
@@ -5807,7 +5808,7 @@ def list_projects(request: Request, include_archived: bool = False) -> ProjectLi
             text(
                 """
                 SELECT p.id, p.name, p.slug, p.workspace_id, p.created_at,
-                       p.archived_at, p.archived_by,
+                       p.archived_at, p.archived_by, p.project_type,
                        w.name AS workspace_name, o.id AS org_id, o.name AS org_name
                 FROM projects p
                 JOIN workspaces w ON w.id = p.workspace_id
@@ -5852,6 +5853,10 @@ def create_project_endpoint(request: Request, payload: ProjectCreateBody) -> Any
     existing project's id. Audited: an `events` row in the new project and, for an identity
     principal, `project.created` in the org's security log (who, when, what).
 
+    `project_type` is `app` (default) or `knowledge_graph`: a knowledge graph for an existing
+    codebase, whose guided setup is GET /v1/knowledge/setup (import code, assign the team, first
+    rules scan, review).
+
     `project:create` needs step-up for a person; a service account's own key is exempt exactly as
     it is for every other step-up permission outside identity administration (authz._step_up_exempt)."""
     body = payload.payload()
@@ -5872,6 +5877,7 @@ def create_project_endpoint(request: Request, payload: ProjectCreateBody) -> Any
                 connection, settings, auth=ctx, name=body.get("name"), slug=body.get("slug"),
                 description=body.get("description"), actor=actor, principal=principal,
                 entitlements=entitlements, members=members, specpack=specpack,
+                project_type=body.get("project_type"),
             )
         except project_service.ProjectExists as clash:
             raise HTTPException(status_code=409, detail={
@@ -5884,7 +5890,7 @@ def create_project_endpoint(request: Request, payload: ProjectCreateBody) -> Any
         project_id = created["project_id"]
         row = connection.execute(text(
             "SELECT p.id, p.name, p.slug, p.workspace_id, p.created_at, p.description, "
-            "w.name AS workspace_name, o.id AS org_id, o.name AS org_name FROM projects p "
+            "p.project_type, w.name AS workspace_name, o.id AS org_id, o.name AS org_name FROM projects p "
             "JOIN workspaces w ON w.id = p.workspace_id JOIN orgs o ON o.id = w.org_id "
             "WHERE p.id = :p"), {"p": project_id}).mappings().one()
     return ProjectCreatedResponse(**project_summary_from_row(row).model_dump(),
@@ -15431,7 +15437,8 @@ def list_project_agents(project_id: str, app: str = "", defaults: int = 0,
 @app.post("/v1/projects/{project_id}/agents")
 @permit(P.WORK_ITEM_MANAGE, scope=Scope.project(path="project_id"))
 def assign_project_agents(project_id: str, payload: ProjectAgentsBody = Body(...)) -> dict:
-    """Put agents on an app, take them off, or seed the ones that would have run anyway."""
+    """Put agents on an app, take them off, seed the ones that would have run anyway, or
+    (`action: set`) state the whole team: exactly `role_keys`, everyone else off."""
     payload = payload.payload()
     from boss_engine.services import agent_assignment
 
@@ -15450,6 +15457,15 @@ def assign_project_agents(project_id: str, payload: ProjectAgentsBody = Body(...
         if action == "defaults":
             return agent_assignment.ensure_defaults(
                 connection, project_id=project_id, app_name=app_name, actor=actor)
+        if action == "set":
+            # STATE the team (exactly these agents): the Knowledge Graph setup's team step and
+            # the set_project_team tool, one service (agent_assignment.set_team).
+            done = agent_assignment.set_team(
+                connection, project_id=project_id, role_keys=payload.get("role_keys") or [],
+                actor=actor, app_name=app_name)
+            if not done.get("ok"):
+                raise HTTPException(status_code=422, detail=done.get("error"))
+            return done
         roles = payload.get("role_keys") or ([payload["role_key"]]
                                              if payload.get("role_key") else [])
         if not roles:

@@ -266,6 +266,51 @@ def unassign(connection, *, project_id: str, app_name: str, role_key: str) -> di
             "assigned": [r["role_key"] for r in assigned(connection, project_id, key)]}
 
 
+def set_team(connection, *, project_id: str, role_keys: Iterable[str], actor: str,
+             app_name: str = PROJECT_DEFAULT) -> dict[str, Any]:
+    """STATE a team: exactly these agents on the app (the project's own team by default), chosen
+    by a person. The Knowledge Graph setup's "Assign the team" step and the `set_project_team`
+    tool both call this, so a press and an ask are one act.
+
+    `assign` adds (and, for a person adding one agent, keeps what was on screen); this replaces:
+    the chosen agents are recorded as the operator's (`source = operator`, never demoted by a
+    re-seed) and every other agent on the app comes off. Each key must be an agent of this
+    project (`roles`): a misspelt key is refused with the agents there are, never stored."""
+    chosen: list[str] = []
+    for raw in role_keys or []:
+        key = str(raw or "").strip()
+        if key and key not in chosen:
+            chosen.append(key)
+    if not chosen:
+        return {"ok": False, "error": "Choose at least one agent for the team."}
+    known = {r[0]: r[1] for r in connection.execute(
+        sql("SELECT role_key, display_name FROM roles WHERE project_id = :p"),
+        {"p": project_id}).all()}
+    unknown = [k for k in chosen if k not in known]
+    if unknown:
+        return {"ok": False, "error": (f"No agent {', '.join(unknown)} in this project. Its agents: "
+                                       f"{', '.join(sorted(known)[:40])}."),
+                "unknown": unknown}
+    key = app_key(app_name)
+    for role_key in chosen:
+        connection.execute(
+            sql("""
+                INSERT INTO project_agents
+                    (id, project_id, app_key, app_name, role_key, source, assigned_by)
+                VALUES (:i, :p, :a, :n, :r, :s, :by)
+                ON CONFLICT (project_id, app_key, role_key) DO UPDATE
+                    SET source = EXCLUDED.source, assigned_by = EXCLUDED.assigned_by
+                """),
+            {"i": make_id("pag"), "p": project_id, "a": key, "n": str(app_name).strip(),
+             "r": role_key, "s": OPERATOR, "by": actor})
+    removed = [r[0] for r in connection.execute(
+        sql("DELETE FROM project_agents WHERE project_id = :p AND app_key = :a "
+            "AND NOT (role_key = ANY(:keep)) RETURNING role_key"),
+        {"p": project_id, "a": key, "keep": chosen}).all()]
+    return {"ok": True, "app_key": key, "team": chosen, "removed": sorted(removed),
+            "agents": [{"role_key": k, "display_name": known[k]} for k in chosen]}
+
+
 def ensure_defaults(connection, *, project_id: str, app_name: str, actor: str = "boss",
                     spec: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     """Seed an app that has nobody on it. Does nothing to one that already has somebody.
@@ -371,6 +416,6 @@ def apps_for_role(connection, project_id: str, role_key: str) -> list[dict[str, 
     return [dict(r) for r in rows]
 
 
-__all__ = ["assign", "unassign", "assigned", "effective", "ensure_defaults", "may_act",
+__all__ = ["assign", "set_team", "unassign", "assigned", "effective", "ensure_defaults", "may_act",
            "apps_for_role", "project_team", "default_roles", "app_key",
            "DEFAULT", "OPERATOR", "BUILTIN", "PROJECT_DEFAULT"]

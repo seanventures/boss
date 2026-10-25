@@ -37,11 +37,12 @@ describe("the Run group order", () => {
       "code_tasks",          // Factory / Projects
       "delivery_workflows",  // Workflows
       "workforce",           // Agents
+      "knowledge",           // Knowledge Graph: what they work on (KNOWLEDGE_GRAPH_PRODUCT_SPEC §5.1)
       "decisions",           // Approvals
-      "infra",               // Infra (was `delivery`; infra-observability spec §4.1)
     ]);
-    // Observability follows Infra: where it runs, then whether it is alive.
-    expect(runOrder()[5]).toBe("observability");
+    // Infra, then Observability: where it runs, then whether it is alive.
+    expect(runOrder()[5]).toBe("infra");
+    expect(runOrder()[6]).toBe("observability");
     expect(runOrder()).not.toContain("org_chart");
     expect(runOrder()).not.toContain("studio");
   });

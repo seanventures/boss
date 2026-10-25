@@ -68,6 +68,9 @@ class ProjectSummary(BaseModel):
     # archived projects only when asked (include_archived=true).
     archived_at: Optional[str] = None
     archived_by: Optional[str] = None
+    # What the project is for (projects.project_type): `app` builds apps, `knowledge_graph` maps
+    # an existing codebase into a knowledge graph (its guided setup: GET /v1/knowledge/setup).
+    project_type: str = "app"
 
 
 class ProjectListResponse(BaseModel):

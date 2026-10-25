@@ -413,8 +413,22 @@ def project_slug_for(name: str, slug: str | None) -> str:
     return derived
 
 
+#: What a project is for (projects.project_type): `app` builds apps; `knowledge_graph` maps an
+#: existing codebase into a knowledge graph (services/knowledge/project_setup.py guides it).
+PROJECT_TYPES = ("app", "knowledge_graph")
+
+
+def project_type_for(value) -> str:
+    """The type asked for, `app` when none was. Raises ValueError naming the types."""
+    chosen = str(value or "").strip().lower().replace("-", "_") or "app"
+    if chosen not in PROJECT_TYPES:
+        raise ValueError("The project type is app (build apps) or knowledge_graph (a knowledge "
+                         "graph for an existing codebase).")
+    return chosen
+
+
 def create_project(connection, settings, *, org_id, name, slug=None, description=None,
-                   actor="boss", entitlements, members, specpack):
+                   actor="boss", entitlements, members, specpack, project_type=None):
     """A new project in an existing org, SEEDED EXACTLY LIKE THE DEFAULT ONE: the same
     `seed_project_defaults` that bootstrap runs for `boss-dogfood` and onboarding runs for a new
     org (budget policy, members, packs and agents, skills and their grants, MCP servers and their
@@ -432,6 +446,7 @@ def create_project(connection, settings, *, org_id, name, slug=None, description
     if description and len(description) > 2000:
         raise ValueError("The description is longer than 2000 characters.")
     project_slug = project_slug_for(name, slug)
+    kind = project_type_for(project_type)
     # One creator per slug at a time: two presses of Create make one project.
     connection.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"),
                        {"k": f"project.create:{project_slug}"})
@@ -453,10 +468,10 @@ def create_project(connection, settings, *, org_id, name, slug=None, description
     else:
         workspace_id = str(workspace[0])
     connection.execute(text(
-        "INSERT INTO projects (id, workspace_id, name, slug, description) "
-        "VALUES (:id, :ws, :name, :slug, :description)"),
+        "INSERT INTO projects (id, workspace_id, name, slug, description, project_type) "
+        "VALUES (:id, :ws, :name, :slug, :description, :kind)"),
         {"id": project_slug, "ws": workspace_id, "name": name, "slug": project_slug,
-         "description": description})
+         "description": description, "kind": kind})
     seed_project_defaults(
         connection, settings, project_slug,
         entitlements=entitlements, members=members, specpack=specpack, actor=actor,
@@ -467,7 +482,8 @@ def create_project(connection, settings, *, org_id, name, slug=None, description
 
     org_models.sync_for(connection, project_slug, actor=actor)
     return {"project_id": project_slug, "workspace_id": workspace_id, "org_id": org_id,
-            "name": name, "slug": project_slug, "description": description}
+            "name": name, "slug": project_slug, "description": description,
+            "project_type": kind}
 
 
 def seed() -> None:

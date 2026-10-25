@@ -345,6 +345,7 @@ def rule_payload(connection: Connection, project_id: str, rule_id: str) -> dict[
             "created_by_kind": "person" if attrs.get("edited") else (provenance.get("actor_kind") or "agent"),
             "agent_role": provenance.get("agent_role"),
             "agent_name": provenance.get("agent_name"),
+            "agent_id": provenance.get("agent_id"),
             "run_id": provenance.get("run_id"),
             "workflow_run_id": provenance.get("workflow_run_id"),
             "code_task_run_id": provenance.get("code_task_run_id"),
@@ -513,17 +514,36 @@ def _agent_name(connection: Connection, project_id: str, role_key: str) -> Optio
         return row["display_name"]
 
 
+def _agent_id(connection: Connection, project_id: str, role_key: str) -> Optional[str]:
+    """The agent's Passport id (roles.agent_id)."""
+    found = connection.execute(text(
+        "SELECT agent_id FROM roles WHERE project_id = :p AND role_key = :r"),
+        {"p": project_id, "r": role_key}).scalar()
+    return str(found) if found else None
+
+
 def _provenance(connection: Connection, project_id: str, actor_kind: str,
                 actor_ref: Optional[str]) -> dict[str, Any]:
+    from ..llm_telemetry import GENERAL_NAME, GENERAL_ROLE
+
     ctx = _context()
-    role = str(actor_ref or ctx.get("role_key") or "").strip() or None
+    role = str(actor_ref or ctx.get("speaker_role") or ctx.get("role_key") or "").strip() or None
     stage = ctx.get("step") or ctx.get("stage")
     run_id = ctx.get("run_id")
+    name = agent_id = None
+    if actor_kind == "agent":
+        # The context's name is the speaker's only when the rule is the speaker's own.
+        mine = role in (ctx.get("speaker_role"), ctx.get("role_key"))
+        name = (ctx.get("agent_name") if mine else None) or (_agent_name(connection, project_id, role) if role else None)
+        agent_id = (ctx.get("agent_id") if mine else None) or (_agent_id(connection, project_id, role) if role else None)
+        if role == GENERAL_ROLE or not (role or name):
+            # NEVER BLANK: a turn nobody was addressed in is BOSS itself, said so.
+            role, name, agent_id = GENERAL_ROLE, GENERAL_NAME, None
     return {
         "actor_kind": actor_kind,
         "agent_role": role if actor_kind == "agent" else None,
-        "agent_name": (ctx.get("agent_name") or (_agent_name(connection, project_id, role) if role else None))
-        if actor_kind == "agent" else None,
+        "agent_name": name,
+        "agent_id": agent_id,
         "run_id": run_id,
         "workflow_run_id": ctx.get("workflow_run_id"),
         "code_task_run_id": ctx.get("code_task_run_id") or (run_id if str(run_id or "").startswith("ctr") else None),

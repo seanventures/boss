@@ -1115,6 +1115,11 @@ def operation_records(document: Mapping[str, Any]) -> list[dict[str, Any]]:
     return sorted(records, key=lambda item: (item["path"], item["method"]))
 
 
+def _name_key(value: str) -> str:
+    """An agent's key or name as typed: case, spaces, hyphens and punctuation do not matter."""
+    return re.sub(r"[^a-z0-9]+", "_", str(value or "").casefold()).strip("_")
+
+
 def _command_error(message: str) -> dict[str, Any]:
     return {"__command_error__": True, "message": message}
 
@@ -1756,9 +1761,11 @@ class MetatronClient:
         listed = self.agents()
         if isinstance(listed, dict) and (listed.get("__http_error__") or listed.get("__command_error__")):
             return listed
-        wanted = key.casefold()
-        match = next((a for a in listed["items"] if str(a["role_key"]).casefold() == wanted
-                      or str(a.get("name") or "").casefold() == wanted), None)
+        # ANY SPELLING OF THE NAME: "Site Reliability Engineer", "site_reliability_engineer" and
+        # "site-reliability-engineer" are all `sre` (the engine's agent_identity.resolve_in).
+        wanted = _name_key(key)
+        match = next((a for a in listed["items"] if _name_key(str(a["role_key"])) == wanted
+                      or _name_key(str(a.get("name") or "")) == wanted), None)
         if match is None:
             return _command_error(f"no agent {key!r} in {self.project_id}; /agent lists them")
         if match["role_key"] != self.role:

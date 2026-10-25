@@ -1019,6 +1019,7 @@
 "POST /v1/knowledge/repositories/index": ["permit knowledge:read @ project(body=project_id)", "OAPVU"]
 "POST /v1/knowledge/repositories/index/execute": ["permit worker:lease @ org", "-"]
 "GET /v1/knowledge/search": ["permit knowledge:read @ project(query=project_id)", "OAPVU"]
+"GET /v1/knowledge/setup": ["permit knowledge:read @ project(query=project_id)", "OAPVU"]
 "GET /v1/knowledge/status": ["permit reliability:read @ project(query=project_id)|org", "OAPVU"]
 "GET /v1/knowledge/view/live": ["permit knowledge:read @ project(query=project_id)", "OAPVU"]
 "GET /v1/knowledge/view/neighbourhood": ["permit knowledge:read @ project(query=project_id)", "OAPVU"]

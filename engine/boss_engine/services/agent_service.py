@@ -857,6 +857,14 @@ class AgentService:
         #: thread for this same project+actor+surface+role, ignoring any held `thread_id`.
         new_thread: bool = False,
     ) -> dict[str, Any]:
+        # WHO IS SPOKEN TO, resolved once: the project's agent by any name it goes by ("Site
+        # Reliability Engineer", "site_reliability_engineer" → `sre`), or BOSS itself. What the
+        # turn records (rules, learnings, decisions) carries it as its provenance.
+        from . import agent_identity
+
+        speaker = agent_identity.addressed(connection, project_id, role)
+        if role and speaker["addressed"]:
+            role = speaker["agent_role"]
         # THE AGENT IS PART OF WHICH CONVERSATION THIS IS. Without it the thread resolved on
         # (project, surface, external_ref) alone, so asking a second agent about the same task
         # handed it the first one's history — and nothing on the messages could tell them
@@ -904,27 +912,39 @@ class AgentService:
         # A build or a panel this turn starts was started by this turn, for this person
         # (agent_acts.origin): its stages and seats are signed under the turn.
         from . import agent_acts
+        from .llm_telemetry import get_llm_context, set_llm_context
 
-        with agent_acts.origin(act_id=act_id, actor=actor):
-            turn = self.router.route_turn(
-                connection,
-                project_id=project_id,
-                actor=actor,
-                messages=messages,
-                manifest=manifest,
-                confirm_plan_id=confirm_plan_id,
-                pending_plan_id=thread.get("pending_plan_id"),
-                # A task-scoped thread carries its task_id -> the router builds ON that task's
-                # existing app branch (extend the PR) instead of a fresh build on main.
-                external_ref=thread.get("external_ref"),
-                role=role,
-                mode=mode,
-                # So the turn can report what it is doing while it does it. See agent_progress:
-                # a chat turn is one HTTP request, and an investigation that now runs six or more
-                # lookups would otherwise be two minutes of a pulsing dot.
-                thread_id=thread["id"],
-                depth=depth,
-            )
+        # THE TURN'S SPEAKER, for what it records: a rule, learning or decision written in this
+        # turn names the addressed agent (its name and Passport id), or "BOSS (general)" — never
+        # a blank provenance (knowledge/learning_writeback.provenance, rules._provenance).
+        # Speaker keys only: cost attribution (`role_key`) is left as it was.
+        held = get_llm_context()
+        restore = {k: held.get(k) for k in ("speaker_role", "agent_name", "agent_id")}
+        set_llm_context(speaker_role=speaker["agent_role"], agent_name=speaker["agent_name"],
+                        agent_id=speaker["agent_id"])
+        try:
+            with agent_acts.origin(act_id=act_id, actor=actor):
+                turn = self.router.route_turn(
+                    connection,
+                    project_id=project_id,
+                    actor=actor,
+                    messages=messages,
+                    manifest=manifest,
+                    confirm_plan_id=confirm_plan_id,
+                    pending_plan_id=thread.get("pending_plan_id"),
+                    # A task-scoped thread carries its task_id -> the router builds ON that
+                    # task's existing app branch (extend the PR) instead of a fresh build on main.
+                    external_ref=thread.get("external_ref"),
+                    role=role,
+                    mode=mode,
+                    # So the turn can report what it is doing while it does it. See
+                    # agent_progress: a chat turn is one HTTP request, and an investigation that
+                    # now runs six or more lookups would otherwise be two minutes of a pulsing dot.
+                    thread_id=thread["id"],
+                    depth=depth,
+                )
+        finally:
+            set_llm_context(**restore)
         # THE LAST DOOR BEFORE A PERSON READS IT, for every surface (console, Metatron, API,
         # wakeups): a decision structure is never the reply (protocol_reply.py).
         turn.reply = readable_reply(turn.reply, turn.tool_calls)

@@ -131,6 +131,7 @@ import { getShepherdOverviewAction } from "./actions";
 import { InfraHome } from "./infra/infra-home";
 import { ObsHome } from "./observability/obs-home";
 import { GraphArea } from "./knowledge/graph-area";
+import { KgLifecycleCard } from "./knowledge/kg-lifecycle";
 import { fetchReliabilityFeed } from "../lib/reliability";
 import { fetchAiSreCapabilities } from "../lib/ai-sre";
 import { AiSreHome } from "./ai-sre-ui";
@@ -986,7 +987,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       }}
       org={{ id: activeOrgId, name: activeOrgName }}
       projects={{
-        items: projects.items.filter((p) => p.orgId === activeOrgId).map((p) => ({ id: p.id, name: p.name })),
+        items: projects.items.filter((p) => p.orgId === activeOrgId).map((p) => ({ id: p.id, name: p.name, type: p.projectType })),
         homeId: selectedOrg.project_id,
       }}
       editionId={editionId}
@@ -1133,6 +1134,11 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         <section className="ov-cc" data-area="overview" aria-label="Command center">
           {/* The monthly check-in: renders nothing unless it is this person's month (≤ once in 30 days). */}
           <CheckinCard projectId={activeProjectId} actor={activeActorId} />
+          {/* A KNOWLEDGE-GRAPH PROJECT'S HOME: its lifecycle (indexed → rules → learnings) and its
+              team, from GET /v1/knowledge/setup. Nothing for an app project. */}
+          {activeProject?.projectType === "knowledge_graph" ? (
+            <KgLifecycleCard projectId={activeProjectId} actor={activeActorId} orgId={activeOrgId} />
+          ) : null}
           <CommandCenter key={`${activeOrgId}:${activeProjectId}`} projectId={activeProjectId}
             orgId={activeOrgId} actor={activeActorId} viewer={activeActorId}
             initial={null} initialWire={commandCenter.wire} initialError={commandCenter.error} tz={ccZone}
@@ -3037,9 +3043,10 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         {/* THE GRAPH (KNOWLEDGE_GRAPH_PRODUCT_SPEC.md §5). Fetches its own views client-side,
             scoped to the active project; nothing for it is fetched here. */}
         {shows("knowledge") ? (
-        <section className="panel-stack" data-area="knowledge" aria-label="Graph">
+        <section className="panel-stack" data-area="knowledge" aria-label="Knowledge Graph">
           {/* Keyed on the project: another project's Graph starts fresh, never with this one's repos. */}
-          <GraphArea key={activeProjectId} projectId={activeProjectId} actor={activeActorId} orgId={activeOrgId} />
+          <GraphArea key={activeProjectId} projectId={activeProjectId} actor={activeActorId} orgId={activeOrgId}
+                     projectType={activeProject?.projectType} />
         </section>
         ) : null}
 

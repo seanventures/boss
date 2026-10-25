@@ -493,13 +493,38 @@ def resolve_in(connection: Connection, project_id: str, key_or_title: str) -> Op
     if not raw:
         return None
     lowered = raw.lower()
+    # A NAME AS TYPED, in any spelling of it: "Site Reliability Engineer",
+    # "site_reliability_engineer" and "site-reliability-engineer" are the one agent `sre`
+    # (Metatron's /agent and a chat's role were refused for the snake_case spelling).
+    snake = re.sub(r"[^a-z0-9]+", "_", lowered).strip("_")
     row = connection.execute(
-        text("SELECT role_key FROM roles WHERE project_id = :p AND (role_key = :k "
-             "OR lower(display_name) = :k OR lower(spec->'persona'->>'callsign') = :k) "
+        text("SELECT role_key FROM roles WHERE project_id = :p AND (role_key = :k OR role_key = :s "
+             "OR lower(display_name) = :k OR lower(spec->'persona'->>'callsign') = :k "
+             "OR trim(both '_' from regexp_replace(lower(display_name), '[^a-z0-9]+', '_', 'g')) = :s) "
              "ORDER BY (role_key = :k) DESC, role_key LIMIT 1"),
-        {"p": project_id, "k": lowered},
+        {"p": project_id, "k": lowered, "s": snake},
     ).scalar()
     return str(row) if row else resolve(raw)
+
+
+def addressed(connection: Connection, project_id: str, key_or_name: Optional[str]) -> dict[str, Any]:
+    """WHO A TURN IS ADDRESSED TO, for its provenance: the project's agent the person named (by
+    key, name, callsign or any spelling of the name) with its real name and Passport id
+    (`agent_id`, `fingerprint`); or BOSS itself, said so, when no agent of this project was
+    named. Never blank: every rule, learning and decision recorded in the turn carries it."""
+    from .llm_telemetry import GENERAL_NAME, GENERAL_ROLE
+
+    key = resolve_in(connection, project_id, key_or_name) if str(key_or_name or "").strip() else None
+    row = connection.execute(
+        text("SELECT role_key, display_name, agent_id, fingerprint FROM roles "
+             "WHERE project_id = :p AND role_key = :r"),
+        {"p": project_id, "r": key}).mappings().first() if key else None
+    if row is None:
+        return {"addressed": False, "agent_role": GENERAL_ROLE, "agent_name": GENERAL_NAME,
+                "agent_id": None, "fingerprint": None}
+    return {"addressed": True, "agent_role": str(row["role_key"]),
+            "agent_name": str(row["display_name"] or row["role_key"]),
+            "agent_id": row["agent_id"], "fingerprint": row["fingerprint"]}
 
 
 def _persona(spec: Any) -> dict[str, Any]:

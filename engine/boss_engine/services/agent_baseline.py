@@ -63,6 +63,8 @@ FUNDAMENTALS_TOOLS: tuple[str, ...] = (
     "consistency_report", "project_status", "list_projects", "describe_project",
     # the code graph of the project's repositories: is it indexed, and index it now
     "code_graph_status", "index_repository_code",
+    # a knowledge-graph project's setup: its steps, team and next action (BOSSAPP-768)
+    "knowledge_project_setup",
     # waiting for BOSS's own work (a job, a build, a run, a code index) without a model call per look
     "wait_for",
     "list_org_repositories",

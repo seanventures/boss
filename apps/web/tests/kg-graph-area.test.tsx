@@ -24,15 +24,15 @@ afterEach(() => { unmount(); vi.unstubAllGlobals(); });
 const NO_REPO = { "/knowledge/repositories$": { body: { project_id: "p1", repositories: [] } } };
 
 describe("the Graph area", () => {
-  it("opens on Graph; with no repository, the designed card and the three layers", async () => {
+  it("opens on Graph; with no repository, the designed way in (never an empty canvas) and the three layers", async () => {
     mockKgFetch(NO_REPO);
     await mount(<GraphArea projectId="p1" actor="ceo" orgId="o1" />);
     const tabs = $$('[role="tab"]').filter((t) => t.closest(".inf-head")).map((t) => t.textContent);
     expect(tabs).toEqual(["Graph", "Rules review", "Settings"]);
-    expect($('[data-testid="kg-empty-graph"]')?.className).toBe("kg-stage");
-    expect($(".kg-empty-title")?.textContent).toBe("Connect a repository to see its graph");
+    expect($('[data-testid="kg-start"]')?.className).toBe("kg-stage");
+    expect($(".kg-empty-title")?.textContent).toBe("Start a knowledge graph for this project");
     expect($$(".kg-layer-name").map((n) => n.textContent)).toEqual(["Code", "Rules", "Learning"]);
-    expect($('[data-testid="kg-empty-graph"] a')?.getAttribute("href")).toBe("/?org=o1&area=setup");
+    expect($('[data-testid="kg-start-setup"]')?.textContent).toBe("Set up the knowledge graph");
   });
 
   it("each tab has its own designed body", async () => {

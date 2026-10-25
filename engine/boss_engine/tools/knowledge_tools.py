@@ -263,7 +263,10 @@ def _propose_rule(ctx, *, project_id, actor, args, policy=None, mode="on"):
 
     scope = args.get("scope") if isinstance(args.get("scope"), dict) else {}
     evidence = args.get("evidence") if isinstance(args.get("evidence"), list) else []
-    role = (get_llm_context() or {}).get("role_key") or actor
+    # The turn's speaker (an addressed agent, or BOSS itself — AgentService.chat), else the
+    # stage's agent, else the caller.
+    held = get_llm_context() or {}
+    role = held.get("speaker_role") or held.get("role_key") or actor
     with ctx.begin() as connection:
         try:
             with connection.begin_nested():

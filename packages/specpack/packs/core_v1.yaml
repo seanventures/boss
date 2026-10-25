@@ -36,6 +36,8 @@ installs:
     - frontend_engineer
     - operations_engineer
     - sre
+    # Runs an incident on one timeline, reading the knowledge graph's precedent first.
+    - incident_commander
   workflows:
     - ceo_command_to_pr
     - decision_inbox

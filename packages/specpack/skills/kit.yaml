@@ -59,7 +59,7 @@ skills:
               describe_workflow_run, diagnose_run, explain_run, read_run_turns, inspect_self,
               system_health, diagnose_setup, list_running_work,
               consistency_report, project_status, list_projects, describe_project,
-              code_graph_status, index_repository_code, wait_for,
+              code_graph_status, index_repository_code, knowledge_project_setup, wait_for,
               list_org_repositories,
               list_deployments, describe_deployment_target,
               list_deployment_hosts, describe_deployment_host, describe_schema,

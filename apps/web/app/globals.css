@@ -8761,3 +8761,21 @@ details[open] > .skill-form-summary::before { transform: rotate(90deg); }
   font-size: 0.66rem;
   font-weight: 600;
 }
+
+/* THE PROJECT'S TYPE (project-menu.tsx): its badge in the menu, and New project's choice. */
+.bx-project-menu-type {
+  margin-left: 6px; padding: 0 6px; border: 1px solid var(--accent-line); border-radius: 999px;
+  background: var(--accent-soft); color: var(--accent-text); font-size: 0.66rem; font-weight: 600; white-space: nowrap;
+}
+.bx-project-menu-panel .bx-project-type { display: grid; gap: 6px; margin: 0; padding: 0; border: 0; min-width: 0; }
+.bx-project-menu-panel .bx-project-type legend { padding: 0 0 4px; color: var(--ink-soft); }
+.bx-project-menu-panel .bx-project-type-option {
+  display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px; align-items: start;
+  padding: 8px; border: 1px solid var(--border); border-radius: 6px; cursor: pointer; color: var(--ink-soft);
+}
+.bx-project-menu-panel .bx-project-type-option[data-checked] { border-color: var(--accent-line); background: var(--accent-soft); color: var(--ink); }
+.bx-project-menu-panel .bx-project-type-option input { margin: 2px 0 0; padding: 0; accent-color: var(--accent); }
+.bx-project-type-text { display: grid; gap: 2px; min-width: 0; }
+.bx-project-type-text b { color: var(--ink); font-weight: 600; }
+.bx-project-type-text small { color: var(--ink-soft); font-size: 0.72rem; line-height: 1.35; }
+.bx-project-menu-panel:has(.bx-project-type) { min-width: min(340px, calc(100vw - 24px)); }

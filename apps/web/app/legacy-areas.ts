@@ -46,6 +46,7 @@ export const RAIL_LABEL_AREAS: Readonly<Record<string, AreaId>> = {
   factory: "code_tasks",
   agent_studio: "workforce",
   graph: "knowledge",
+  knowledge_graph: "knowledge",
   approvals: "decisions",
   activity_log: "activity",
   research: "discovery",

@@ -51,7 +51,12 @@ export type ProjectSummary = {
   org_id: string;
   org_name: string;
   created_at: string;
+  /** What the project is for: `app` builds apps; `knowledge_graph` maps an existing codebase
+   *  (its guided setup: GET /v1/knowledge/setup). Absent from an older API = `app`. */
+  project_type?: ProjectType;
 };
+
+export type ProjectType = "app" | "knowledge_graph";
 
 export type ProjectListResponse = {
   items: ProjectSummary[];
@@ -5503,6 +5508,8 @@ export type KgProvenance = {
   created_by_kind: "agent" | "person" | "system";
   agent_role?: string | null;
   agent_name?: string | null;
+  /** The agent's Passport id (roles.agent_id); absent for BOSS itself ("BOSS (general)"). */
+  agent_id?: string | null;
   run_id?: string | null;
   workflow_run_id?: string | null;
   code_task_run_id?: string | null;
@@ -5770,6 +5777,38 @@ export type KgRunComparison = {
 
 /** GET /v1/knowledge/view/proof?project_id&actor&run=&baseline= */
 export type KgRunProofResponse = { run: KgRunProof | null; comparison: KgRunComparison | null };
+
+/** GET /v1/knowledge/setup?project_id&actor — a knowledge-graph project's guided setup
+ *  (engine services/knowledge/project_setup.py): each step's state with its real counts. */
+export type KgSetupStepKey = "import" | "team" | "scan" | "review";
+export type KgSetupStepState = "done" | "working" | "current" | "waiting";
+export type KgSetupStep = { key: KgSetupStepKey; state: KgSetupStepState; done: boolean; summary: string };
+export type KgSetupRepository = {
+  repo: string; branch?: string | null; status: string; summary?: string | null; error?: string | null;
+  files?: number | null; parsed?: number | null; indexed_at?: string | null; graph?: { nodes: number; edges: number } | null;
+};
+export type KgSetupCandidate = {
+  role_key: string; display_name: string;
+  /** Its job in a knowledge-graph project (scans, changes, incidents), or null. */
+  job: string | null; does: string | null; recommended: boolean;
+  mission?: string | null; trust: number; runs: number; autonomy: number;
+  /** The first characters of the agent's Passport fingerprint. */
+  passport?: string | null;
+};
+export type KgSetupArea = { key: string; label: string; repo: string; classes: number; packages: number };
+export type KgSetupResponse = {
+  project_id: string; name: string; project_type: ProjectType; archived: boolean; has_graph: boolean;
+  steps: KgSetupStep[]; next: KgSetupStepKey | null; done_count: number;
+  repositories: KgSetupRepository[]; code_nodes: number;
+  team: { chosen: boolean; role_keys: string[]; candidates: KgSetupCandidate[] };
+  scans: { count: number; running: number; completed: number;
+           latest: { run_id: string; status: string; at: string | null; scope: unknown } | null };
+  scan_defaults: { max_files: number; max_rules: number; budget_usd: number };
+  areas: KgSetupArea[];
+  rules: { proposed: number; approved: number; rejected: number };
+  learnings: number;
+  tools?: Record<string, string>;
+};
 
 /** POST /v1/projects/{id}/archive · /unarchive (project:delete, step-up confirmed). */
 export type ProjectArchiveRequest = { actor?: string; step_up: "confirmed" };
@@ -6622,7 +6661,7 @@ export function createBossApiClient(config: BossApiClientConfig) {
     listProjects() {
       return request<ProjectListResponse>("GET", "/v1/projects");
     },
-    createProject(body: { name: string; slug?: string; description?: string }) {
+    createProject(body: { name: string; slug?: string; description?: string; project_type?: ProjectType }) {
       return request<ProjectSummary & { description: string | null }>("POST", "/v1/projects", { body });
     },
     getAuthSession() {

@@ -352,6 +352,20 @@ def _agent_name(connection: Connection, project_id: str, role: Optional[str]) ->
         return None
 
 
+def _agent_id(connection: Connection, project_id: str, role: Optional[str]) -> Optional[str]:
+    """The agent's Passport id (roles.agent_id), or None for BOSS itself or an unknown role."""
+    if not role:
+        return None
+    try:
+        with connection.begin_nested():
+            found = connection.execute(text(
+                "SELECT agent_id FROM roles WHERE project_id = :p AND role_key = :r"),
+                {"p": project_id, "r": role}).scalar()
+    except Exception:  # noqa: BLE001 — an id is a label, never a reason to refuse
+        return None
+    return str(found) if found else None
+
+
 def run_refs(connection: Connection, run_id: Optional[str]) -> dict[str, Optional[str]]:
     """What a run id is: ``{run_id, code_task_run_id, workflow_run_id}``. A code task run names
     the workflow run that started it (finalize_ctx.workflow_run_id)."""
@@ -379,12 +393,15 @@ def provenance(connection: Connection, project_id: str,
     """Who learned it, in which run and step, on which model. From the LLM context of the call
     in progress — what the pipeline set, never a tool's arguments — overlaid by what a hook
     observed (the pipeline itself is the witness there)."""
+    from ..llm_telemetry import GENERAL_NAME, GENERAL_ROLE
+
     ctx = _context()
     seen = dict(observed or {})
     run_id = seen.get("run_id") or ctx.get("run_id")
     refs = run_refs(connection, run_id)
     stage = seen.get("step") or ctx.get("step") or ctx.get("stage")
-    role = seen.get("agent_role") or ctx.get("role_key")
+    # The addressed agent of a chat turn (`speaker_role`, AgentService.chat), else the stage's.
+    role = seen.get("agent_role") or ctx.get("speaker_role") or ctx.get("role_key")
     if not role and stage:
         try:
             from ..llm_telemetry import canonical_role, role_for_stage
@@ -392,9 +409,14 @@ def provenance(connection: Connection, project_id: str,
             role = canonical_role(role_for_stage(str(stage).split("-", 1)[0]))
         except Exception:  # noqa: BLE001
             role = None
+    name = seen.get("agent_name") or ctx.get("agent_name") or _agent_name(connection, project_id, role)
+    if not role and not name:
+        # NEVER BLANK: nobody was addressed and no stage names an agent, so BOSS itself said it.
+        role, name = GENERAL_ROLE, GENERAL_NAME
     return {
         "agent_role": role or None,
-        "agent_name": seen.get("agent_name") or ctx.get("agent_name") or _agent_name(connection, project_id, role),
+        "agent_name": name or None,
+        "agent_id": seen.get("agent_id") or ctx.get("agent_id") or _agent_id(connection, project_id, role),
         "run_id": refs["run_id"],
         "workflow_run_id": seen.get("workflow_run_id") or ctx.get("workflow_run_id") or refs["workflow_run_id"],
         "code_task_run_id": seen.get("code_task_run_id") or ctx.get("code_task_run_id") or refs["code_task_run_id"],
@@ -475,7 +497,10 @@ def record(
     resolved_about, code_ids, rule_ids = _about(connection, project_id, about)
     _STORE._org_id(connection, project_id, None)
     prov = provenance(connection, project_id, observed)
-    role = prov["agent_role"]
+    from ..llm_telemetry import GENERAL_ROLE
+
+    # BOSS itself (no agent addressed) writes as the system, its provenance still saying so.
+    role = prov["agent_role"] if prov["agent_role"] != GENERAL_ROLE else None
     actor_kind = "agent" if role else "system"
     who = role or "system"
 
@@ -674,6 +699,7 @@ def payload_of(connection: Optional[Connection], row: Mapping[str, Any]) -> dict
             "created_by_kind": "agent" if prov.get("agent_role") and created_by == prov.get("agent_role")
             else ("system" if created_by == "system" else "person"),
             "agent_role": prov.get("agent_role"), "agent_name": prov.get("agent_name"),
+            "agent_id": prov.get("agent_id"),
             "run_id": prov.get("run_id"), "workflow_run_id": prov.get("workflow_run_id"),
             "code_task_run_id": prov.get("code_task_run_id"), "model_id": prov.get("model_id"),
             "step": prov.get("step"), "at": prov.get("at") or _iso(row.get("first_seen")),
