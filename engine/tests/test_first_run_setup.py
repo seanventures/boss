@@ -67,8 +67,9 @@ def test_the_catalogue_covers_keys_compatibles_locals_and_subscriptions():
     assert PROVIDERS["anthropic"]["kind"] == "api_key"
     # The widest open-source coverage is not a provider at all.
     assert PROVIDERS["custom"]["api"] == "openai"
-    for name in ("claude_code", "codex", "cursor"):
+    for name in ("claude_code", "codex", "grok"):
         assert PROVIDERS[name]["kind"] == "subscription"
+    assert "cursor" not in PROVIDERS        # not offered until its CLI ships (P1-8)
     assert PROVIDERS["ollama"]["kind"] == "local"
     # Add a model offers three kinds, never the decision service.
     kinds = {e["provider"]: e["kind"] for e in setup_view.CATALOGUE}

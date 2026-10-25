@@ -371,9 +371,9 @@ _TOKEN_FIELDS = ("max_tokens", "max_completion_tokens")
 def output_cap_field(api: str, model: str) -> str:
     """Which output-cap field a one-turn proof sends: Anthropic always `max_tokens`; an
     OpenAI-style API `max_completion_tokens` for the models that only accept it."""
-    if api != "anthropic" and _COMPLETION_TOKENS_MODEL.match((model or "").strip()):
-        return "max_completion_tokens"
-    return "max_tokens"
+    wants_completion = api != "anthropic" and bool(
+        _COMPLETION_TOKENS_MODEL.match((model or "").strip()))
+    return _TOKEN_FIELDS[1] if wants_completion else _TOKEN_FIELDS[0]
 
 
 def _names_other_cap_field(answer: HttpAnswer, sent: str) -> Optional[str]:
