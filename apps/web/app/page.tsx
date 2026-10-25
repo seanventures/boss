@@ -3038,7 +3038,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             scoped to the active project; nothing for it is fetched here. */}
         {shows("knowledge") ? (
         <section className="panel-stack" data-area="knowledge" aria-label="Graph">
-          <GraphArea projectId={activeProjectId} actor={activeActorId} orgId={activeOrgId} />
+          {/* Keyed on the project: another project's Graph starts fresh, never with this one's repos. */}
+          <GraphArea key={activeProjectId} projectId={activeProjectId} actor={activeActorId} orgId={activeOrgId} />
         </section>
         ) : null}
 

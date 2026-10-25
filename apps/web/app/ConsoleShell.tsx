@@ -1020,6 +1020,8 @@ function ConsoleShellInner({
         currentPathname: window.location.pathname,
         target: link.target,
         knownAreas: AREAS.map((a) => a.id),
+        currentSearch: window.location.search,
+        load: link.hasAttribute("data-console-load"),
       })) return;
       const area = url.searchParams.get("area") as AreaId;
 

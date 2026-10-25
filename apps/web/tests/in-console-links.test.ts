@@ -45,4 +45,19 @@ describe("in-console links are handled without a page load", () => {
   it("ignores an empty href", () => {
     expect(isInConsoleLink(null, here)).toBe(false);
   });
+
+  // Tester round 3: a project switch revealed the Graph under the new project's URL while every
+  // area still held the old project's data, and "Loading Graph…" waited 13-22 s for a background
+  // refresh. Another project is a page load (it renders the asked-for area alone, ~1 s).
+  it("a link to another project is a page load, not a reveal", () => {
+    const now = { ...here, currentSearch: "?org=o&project_id=p1&area=meetings" };
+    expect(isInConsoleLink("?org=o&project_id=p2&area=meetings", now)).toBe(false);
+    expect(isInConsoleLink("?org=o&project_id=p1&area=code_tasks", now)).toBe(true);
+    // A link that does not name a project keeps the one on screen.
+    expect(isInConsoleLink("?area=meetings", now)).toBe(true);
+  });
+
+  it("the project menu's links always load, the home project's (no project_id) too", () => {
+    expect(isInConsoleLink("?org=o&area=meetings", { ...here, currentSearch: "?org=o&project_id=p1&area=meetings", load: true })).toBe(false);
+  });
 });

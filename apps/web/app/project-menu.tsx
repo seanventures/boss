@@ -76,8 +76,10 @@ export function ProjectMenu({ projects, activeId, homeId, orgId }: {
         <ul aria-label="Projects">
           {projects.map((p) => (
             <li key={p.id}>
+              {/* A real load (data-console-load): the home project's link names no project, so the
+                  shell could not tell it from an in-console reveal of the project on screen. */}
               <a href={projectHref(p.id, homeId)} aria-current={p.id === activeId ? "page" : undefined}
-                 data-testid={`project-menu-${p.id}`} onClick={close}>{p.name}</a>
+                 data-testid={`project-menu-${p.id}`} data-console-load="" onClick={close}>{p.name}</a>
             </li>
           ))}
         </ul>
