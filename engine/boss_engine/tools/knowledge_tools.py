@@ -355,7 +355,11 @@ def register_knowledge_tools(reg) -> None:
                 handler=_scoped(name, handler),
                 kind=kind,
                 # kg_propose_fact writes one `inferred` fact, kg_propose_rule one proposed rule: both
-                # quarantined, never binding until a person approves, forgettable.
+                # quarantined, never binding until a person approves, forgettable. Being queued writes
+                # (like file_platform_gap/record_learning), the write gate runs them in-turn instead of
+                # returning status='confirmation_required' on a looking-only turn — the Rules-review
+                # approval is the only person-gate they need, never a second in-chat confirmation.
+                queues_for_review=(kind == "write"),
                 reversibility="safe",
                 requires_durable_workspace=True,
                 permission="knowledge:read",
