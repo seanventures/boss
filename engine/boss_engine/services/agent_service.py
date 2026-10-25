@@ -923,7 +923,7 @@ class AgentService:
         # a blank provenance (knowledge/learning_writeback.provenance, rules._provenance) — and
         # what a knowledge tool returns is "consulted" in this conversation, by that agent
         # (agent_identity.speaking: the same context a press of this thread's buttons carries).
-        with agent_identity.speaking(speaker, thread_id=thread["id"], act_id=act_id):
+        with agent_identity.speaking(speaker, thread_id=thread["id"], act_id=act_id, question=user_content):
             with agent_acts.origin(act_id=act_id, actor=actor):
                 turn = self.router.route_turn(
                     connection,

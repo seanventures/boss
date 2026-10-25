@@ -337,3 +337,59 @@ def test_backfill_recredits_a_press_that_said_boss_in_an_agents_thread_and_nothi
     # A learning a run produced keeps its run's provenance, whatever thread quotes it.
     assert lw.item_payload(connection, P, built)["provenance"]["run_id"] == "crun_kgc_build"
     assert lw.item_payload(connection, P, built)["provenance"]["agent_name"] == "BOSS (general)"
+
+
+# --- a conversation is named by its question, never its thread id ----------------------------------
+FRESH = "athr_kgc_fresh0001"
+
+
+def _fresh_thread(connection) -> None:
+    connection.execute(text(
+        "INSERT INTO agent_threads (id, project_id, actor, surface, agent_role, created_at) "
+        "VALUES (:t, :p, 'ceo', 'chat', 'sre', CAST('2026-10-25T16:15:09Z' AS TIMESTAMPTZ))"), {"t": FRESH, "p": P})
+
+
+def _name(connection, node_id) -> str:
+    return connection.execute(text("SELECT name FROM kg_nodes WHERE id = :i"), {"i": node_id}).scalar()
+
+
+def test_a_conversation_anchored_before_its_question_is_readable_is_named_by_the_turn(connection):
+    """northpeak-lending, 2026-10-25: a knowledge tool anchors the conversation on its own
+    connection before the turn's message row is committed, and the node was named
+    "Conversation athr_… · Oct 25, 16:15". The turn's own message names it."""
+    _fresh_thread(connection)
+    with agent_identity.speaking(agent_identity.addressed_in_thread(connection, P, FRESH), thread_id=FRESH,
+                                 question="# B4 · Incident: early repayments post more than the customer paid\n\nINC-2088"):
+        node = lc.anchor(connection, P, FRESH)
+    assert _name(connection, node) == "B4 · Incident: early repayments post more than the customer paid · Oct 25, 16:15"
+    assert "agent_thread_question" not in get_llm_context()
+
+
+def test_a_placeholder_is_named_on_read_renamed_at_turn_end_and_backfilled(connection):
+    from boss_engine.services.knowledge.view import node_payload
+
+    _fresh_thread(connection)
+    node = lc.anchor(connection, P, FRESH)       # no question anywhere yet: never the id
+    assert "athr_" not in _name(connection, node) and lc.is_placeholder(_name(connection, node))
+    # The placeholder an older build wrote, as on the live graph.
+    old = f"Conversation {FRESH} · Oct 25, 16:15"
+    connection.execute(text("UPDATE kg_nodes SET name = :n WHERE id = :i"), {"n": old, "i": node})
+    _message(connection, FRESH, "user", "# B4 · Incident: early repayments\n\nINC-2088", "2026-10-25T16:15:09Z")
+    want = "B4 · Incident: early repayments · Oct 25, 16:15"
+    # 1. On read, nothing written: a node (or tree row) and a use naming it.
+    row = dict(connection.execute(text("SELECT * FROM kg_nodes WHERE id = :i"), {"i": node}).mappings().one())
+    body = {"nodes": [node_payload(row)], "lineage": {"used": [{"run_id": FRESH, "run_title": f"Conversation {FRESH}"}]}}
+    lc.mend_names(connection, body)
+    assert body["nodes"][0]["label"] == want
+    assert body["lineage"]["used"][0]["run_title"] == "B4 · Incident: early repayments"
+    assert _name(connection, node) == old
+    # 2. The backfill: a dry run reports and writes nothing.
+    dry = lc.backfill(connection, P, thread_ids=[FRESH])
+    assert dry["renamed"] == [{"node_id": node, "from": old, "to": want}]
+    assert _name(connection, node) == old
+    # 3. Turn end renames it; then there is nothing left to backfill.
+    lc.turn_done(connection, project_id=P, thread_id=FRESH, act_id=None, message_id="amsg_x", reply="ok")
+    assert _name(connection, node) == want
+    assert lc.backfill(connection, P, thread_ids=[FRESH])["renamed"] == []
+    # A real name is never taken for a placeholder.
+    assert not lc.is_placeholder("Conversation about the allocator · Oct 25, 16:15")

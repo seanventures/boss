@@ -22,6 +22,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from boss_engine.config import get_settings
 from boss_engine.db import begin, get_engine
 from boss_engine.identity import P, Scope, permit
+from boss_engine.services.knowledge.learning_conversations import mend_names
 from boss_engine.services.knowledge import learning_live
 
 router = APIRouter(prefix="/v1/knowledge/view", tags=["knowledge"])
@@ -35,7 +36,8 @@ def _read(request: Request, project_id: str, actor: str, read):
     try:
         with begin(_engine) as connection:
             _actor(connection, project_id, actor)
-            return read(connection, _withheld(request, connection, project_id, actor))
+            # A conversation still named by its thread id is named on read (mend_names).
+            return mend_names(connection, read(connection, _withheld(request, connection, project_id, actor)))
     except HTTPException:
         raise
     except Exception as error:  # noqa: BLE001 — mapped to HTTP

@@ -5456,6 +5456,8 @@ export type KgViewEdge = {
   weight: number;
   /** Pre-formatted by the API ("16,749 calls"); null when weight is 1 and there is nothing to say. */
   label: string | null;
+  /** A `consulted` edge whose use was a citation in the agent's answer (Focus only). */
+  how?: "cited";
 };
 
 /** GET /v1/knowledge/view/overview?project_id&actor&layers=code,rules,learning&repo=&area=

@@ -83,17 +83,133 @@ def thread_row(connection: Connection, project_id: Optional[str], thread_id: str
     return dict(row) if row else None
 
 
-def title_of(connection: Connection, thread_id: str) -> str:
-    """The conversation's name: the first line of its first question ("B4 · Incident: early
-    repayments post more than the customer paid"), without the Markdown around it."""
-    first = connection.execute(text(
-        "SELECT content FROM agent_messages WHERE thread_id = :t AND role = 'user' "
-        "ORDER BY created_at, id LIMIT 1"), {"t": thread_id}).scalar()
-    for line in str(first or "").splitlines():
+def first_line(content: Any) -> Optional[str]:
+    """A question's first line, without the Markdown around it ("B4 · Incident: …"), or None."""
+    for line in str(content or "").splitlines():
         cleaned = _HEADING.sub("", line).strip().strip("*_` ")
         if cleaned:
             return cleaned[:MAX_TITLE]
-    return f"Conversation {thread_id}"
+    return None
+
+
+def title_of(connection: Connection, thread_id: str, *, question: Any = None) -> str:
+    """The conversation's name: the first line of its first question ("B4 · Incident: early
+    repayments post more than the customer paid"), without the Markdown around it.
+
+    ``question`` is the turn's own message (agent_identity.speaking): a knowledge tool anchors the
+    conversation on its own connection, before the turn's message row is committed, and reads no
+    first question; the turn's message is that question. NEVER THE THREAD ID AS A NAME: with
+    neither, the agent it was addressed to and "Conversation" (a later turn, or the read, names it)."""
+    first = connection.execute(text(
+        "SELECT content FROM agent_messages WHERE thread_id = :t AND role = 'user' "
+        "ORDER BY created_at, id LIMIT 1"), {"t": thread_id}).scalar()
+    named = first_line(first) or first_line(question)
+    if named:
+        return named
+    return UNNAMED
+
+
+#: The name of a conversation nobody can name yet. Never a raw ``athr_`` id: the placeholder
+#: the anchor once wrote ("Conversation athr_…") is found by is_placeholder and re-named.
+UNNAMED = "Conversation"
+_PLACEHOLDER = re.compile(r"^Conversation(?: athr_[A-Za-z0-9_]+)?(?: · .*)?$")
+
+
+def is_placeholder(name: Any) -> bool:
+    """A conversation node still named by its id (or by nothing): "Conversation athr_… · Oct 25, 16:15"."""
+    return bool(_PLACEHOLDER.match(str(name or "").strip()))
+
+
+def node_name(title: str, started: Any) -> str:
+    """As a run is named (learning_writeback.run_title): the title, then when it started."""
+    if isinstance(started, datetime):
+        return f"{word_cut(title)} · {started:%b %d, %H:%M}"
+    return title
+
+
+def proper_names(connection: Connection, thread_ids: Iterable[str]) -> dict[str, str]:
+    """The node name each conversation SHOULD carry, from its first question, for those that have
+    one (one query). A thread with no question yet is left out: it stays as it is."""
+    ids = [t for t in dict.fromkeys(str(t) for t in thread_ids) if is_conversation(t)]
+    if not ids:
+        return {}
+    rows = connection.execute(text(
+        """
+        SELECT t.id, t.created_at,
+               (SELECT m.content FROM agent_messages m WHERE m.thread_id = t.id AND m.role = 'user'
+                 ORDER BY m.created_at, m.id LIMIT 1) AS question
+        FROM agent_threads t WHERE t.id = ANY(:t)
+        """), {"t": ids}).mappings().all()
+    out: dict[str, str] = {}
+    for row in rows:
+        title = first_line(row["question"])
+        if title:
+            out[str(row["id"])] = node_name(title, row["created_at"])
+    return out
+
+
+def rename_placeholder(connection: Connection, thread_id: str) -> int:
+    """The turn is written: a conversation node (in any project) still carrying the placeholder
+    is named from its first question. Never raises; returns how many were renamed."""
+    try:
+        with connection.begin_nested():
+            named = proper_names(connection, [thread_id]).get(thread_id)
+            if not named:
+                return 0
+            rows = connection.execute(text(
+                "SELECT id, name FROM kg_nodes WHERE kind = 'run' AND node_key = :k"),
+                {"k": f"run:{thread_id}"}).mappings().all()
+            stale = [r["id"] for r in rows if is_placeholder(r["name"])]
+            if stale:
+                connection.execute(text("UPDATE kg_nodes SET name = :n WHERE id = ANY(:i)"),
+                                   {"n": named, "i": stale})
+            return len(stale)
+    except Exception:  # noqa: BLE001 — a name is a label, never a reason to fail the turn
+        LOG.info("could not name the conversation %s", thread_id, exc_info=True)
+        return 0
+
+
+def mend_names(connection: Connection, body: Any) -> Any:
+    """REPAIRED ON READ, never written: in a view response, at any depth, a conversation still
+    named by its placeholder — a node (KgViewNode, a tree row: ``kind`` run, ``key``
+    ``run:athr_…``, ``label``) or a use naming it (``run_id`` athr_…, ``run_title``) — is shown
+    under its question's name. Writes nothing (the backfill persists it); returns ``body``."""
+    nodes: list[tuple[dict, str]] = []
+    uses: list[tuple[dict, str]] = []
+
+    def walk(v: Any) -> None:
+        if isinstance(v, list):
+            for x in v:
+                walk(x)
+            return
+        if not isinstance(v, dict):
+            return
+        key = str(v.get("key") or "")
+        if v.get("kind") == "run" and key.startswith(f"run:{THREAD_PREFIX}") and is_placeholder(v.get("label")):
+            nodes.append((v, key.split(":", 1)[1]))
+        if is_conversation(v.get("run_id")) and "run_title" in v and (
+                not v.get("run_title") or is_placeholder(v.get("run_title"))):
+            uses.append((v, str(v["run_id"])))
+        for x in v.values():
+            if isinstance(x, (dict, list)):
+                walk(x)
+
+    walk(body)
+    if not nodes and not uses:
+        return body
+    try:
+        with connection.begin_nested():
+            names = proper_names(connection, [t for _, t in nodes + uses])
+    except Exception:  # noqa: BLE001 — a name is a label, never a reason to fail a read
+        LOG.info("could not name conversations on read", exc_info=True)
+        return body
+    for payload, thread in nodes:
+        if thread in names:
+            payload["label"] = names[thread]
+    for payload, thread in uses:
+        if thread in names:
+            payload["run_title"] = names[thread].rsplit(" · ", 1)[0]
+    return body
 
 
 def speaker_of(connection: Connection, project_id: str, role: Optional[str]) -> dict[str, Any]:
@@ -127,10 +243,12 @@ def anchor(connection: Connection, project_id: str, thread_id: str) -> str:
     attrs = {"source_id": thread_id, "subtype": SUBTYPE, "thread_id": thread_id,
              "thread_project_id": row["project_id"], "surface": row.get("surface"), "agent_role": who["agent_role"], "agent_name": who["agent_name"],
              "agent_id": who.get("agent_id"), "started_at": _iso(row.get("created_at"))}
-    started = row.get("created_at")
-    name = title_of(connection, thread_id)
-    if started is not None:          # as a run is named (learning_writeback.run_title)
-        name = f"{word_cut(name)} · {started:%b %d, %H:%M}"
+    from ..llm_telemetry import get_llm_context
+
+    ctx = get_llm_context()
+    # The turn's own question, when this is that turn's conversation (see title_of).
+    question = ctx.get("agent_thread_question") if ctx.get("agent_thread_id") == thread_id else None
+    name = node_name(title_of(connection, thread_id, question=question), row.get("created_at"))
     return _STORE.upsert_node(connection, project_id=project_id, kind="run", node_key=key,
                               name=name, body="", trust_tier="observed",
                               actor_kind="system", source="learning", attrs=attrs)
@@ -176,6 +294,8 @@ def turn_done(connection: Connection, *, project_id: str, thread_id: str, act_id
     from .learning_writeback import citations, log_use
 
     stamp_message(connection, thread_id=thread_id, message_id=message_id, act_id=act_id)
+    # A node a tool anchored before the question was readable is named now (rename_placeholder).
+    rename_placeholder(connection, thread_id)
     written = [c.get("args") for c in tool_calls or [] if isinstance(c, Mapping) and c.get("ok") is not False]
     cited = citations(reply, written)
     if not cited:
@@ -282,6 +402,8 @@ def backfill(connection: Connection, project_id: str, *, apply: bool = False,
       reported, not guessed.
     - ``cited``: an ``[L:<id>]`` / ``[R:<id>]`` in an agent reply or in what it wrote into a call.
 
+    - ``renamed``: a conversation node still named by its thread id, named from its first question.
+
     Idempotent (an existing row for the same thread, message, item and kind is kept; edges are
     unique). ``apply=False`` (the default) reports what it would write and writes nothing."""
     from .learning_writeback import LEARNING_KINDS, citations, sync_usage_edges
@@ -296,9 +418,24 @@ def backfill(connection: Connection, project_id: str, *, apply: bool = False,
     threads = [dict(r) for r in connection.execute(text(
         f"SELECT id, agent_role, created_at FROM agent_threads WHERE {where} ORDER BY created_at"), params).mappings()]
     report: dict[str, Any] = {"project_id": project_id, "applied": apply, "threads": 0, "produced": [],
-                              "provenance_filled": [], "consulted": [], "cited": [], "unprovable": []}
+                              "provenance_filled": [], "consulted": [], "cited": [], "unprovable": [],
+                              "renamed": []}
     savepoint = connection.begin_nested()
     try:
+        # renamed: a conversation node of this project still named by its id (anchored before
+        # its question was readable), named from that question.
+        stale = [dict(r) for r in connection.execute(text(
+            "SELECT id, node_key, name FROM kg_nodes WHERE project_id = :p AND kind = 'run' "
+            "AND node_key LIKE :k"), {"p": project_id, "k": f"run:{THREAD_PREFIX}%"}).mappings()
+            if is_placeholder(r["name"])]
+        if thread_ids:
+            stale = [r for r in stale if r["node_key"].split(":", 1)[1] in set(thread_ids)]
+        names = proper_names(connection, [r["node_key"].split(":", 1)[1] for r in stale])
+        for r in stale:
+            named = names.get(r["node_key"].split(":", 1)[1])
+            if named:
+                connection.execute(text("UPDATE kg_nodes SET name = :n WHERE id = :i"), {"n": named, "i": r["id"]})
+                report["renamed"].append({"node_id": r["id"], "from": r["name"], "to": named})
         for thread in threads:
             touched = False
             who = speaker_of(connection, project_id, thread.get("agent_role"))

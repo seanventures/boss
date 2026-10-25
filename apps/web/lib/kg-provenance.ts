@@ -10,7 +10,7 @@
  * conversation by its title; code as "Indexed from <repo>@<short sha> on <date>". No raw id
  * (RAW_ID_PATTERNS, enforced by tests/kg-provenance-in-words.test.tsx) ever reaches the words.
  */
-import type { KgLineageUse, KgProvenance, KgProvenanceEvent } from "@boss/api-client";
+import type { KgLineage, KgLineageUse, KgProvenance, KgProvenanceEvent } from "@boss/api-client";
 import { wordCut } from "./word-cut";
 
 import { roleWords } from "../app/agents/chain-model";
@@ -166,6 +166,42 @@ export function useWords(u: KgLineageUse): string {
   const who = agentName(u) ?? "an agent";
   const where = u.run_title && !rawIdsIn(u.run_title).length ? `“${wordCut(u.run_title, RUN_TITLE_MAX).text}”` : "a later run";
   return `${who} in ${where} (${u.how}${u.at ? `, ${kgWhen(u.at)}` : ""})`;
+}
+
+/**
+ * THE LEARNING LOOP IN ONE LINE (a learning node's panel): who learned it, where, and where it
+ * was used since, from the node's usage edges — "Learned by Site Reliability Engineer in “B3 ·
+ * Incident…” · reused by “B4 · Incident…”". A use by another agent names that agent. Reuse is
+ * said first; a learning nobody reused yet says where it was cited or consulted, or that it has
+ * not been used. Null when the node has no lineage (it is not a learning).
+ */
+const STORY_TITLE_MAX = 90;
+export function storyWords(d: { provenance: KgProvenance; lineage: KgLineage | null }): string | null {
+  const l = d.lineage;
+  if (!l) return null;
+  const learner = agentName(l.learned) ?? agentName(d.provenance);
+  const where = d.provenance.run_title ?? d.provenance.conversation_title ?? null;
+  const quote = (t: string) => `“${wordCut(t, STORY_TITLE_MAX).text}”`;
+  const head = `Learned${learner ? ` by ${learner}` : ""}${where && !rawIdsIn(where).length ? ` in ${quote(where)}` : ""}`;
+  // A use in the run that learned it is not a later use.
+  const later = l.used.filter((u) => u.run_title && !rawIdsIn(u.run_title).length && u.run_title !== where
+    && (!l.learned.run_id || u.run_id !== l.learned.run_id));
+  for (const how of ["reused", "cited", "consulted"] as const) {
+    const uses = later.filter((u) => u.how === how);
+    if (!uses.length) continue;
+    const seen = new Set<string>();
+    const parts: string[] = [];
+    for (const u of uses) {
+      if (seen.has(u.run_id)) continue;
+      seen.add(u.run_id);
+      // Another agent is named; the same one (by role: its persona name may differ) is not.
+      const same = !!u.agent_role && u.agent_role === (l.learned.agent_role ?? d.provenance.agent_role);
+      const who = same ? null : agentName(u);
+      parts.push(`${quote(u.run_title!)}${who && who !== learner ? ` by ${who}` : ""}`);
+    }
+    return `${head} · ${how === "reused" ? "reused by" : `${how} in`} ${parts.join(", ")}`;
+  }
+  return `${head} · not reused yet`;
 }
 
 /** Plain text of lines, for a title attribute or a test. */

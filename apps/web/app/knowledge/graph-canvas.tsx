@@ -17,7 +17,7 @@ import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo
 
 import {
   BEND, BUBBLE_R, FIT_PADDING, LABEL_ARC, LABEL_MAX, LOOP_EDGES, NODE_R, arrowRim, bidirectional, distanceToEdge, edgeGeometry, edgeWidth,
-  LABEL_ZOOM_OUTER, charEllipsis, fitTransform, kindName, layerToken, nodeAt, placeLabels, placeNodeLabels, revealPan, toScreen, toWorld, twoLines, weightOrder, wordEllipsis,
+  LABEL_ZOOM_OUTER, charEllipsis, chipSpots, learningEdgeStyle, learningHow, fitTransform, kindName, layerToken, nodeAt, placeLabels, placeNodeLabels, revealPan, toScreen, toWorld, twoLines, weightOrder, wordEllipsis,
   zoomAt,
   type EdgeGeometry, type LabelBox, type LabelItem, type Pt, type Transform,
 } from "../../lib/kg-layout";
@@ -62,7 +62,23 @@ export function edgeKey(e: { src: string; dst: string; kind: string }): string {
   return `${e.src}\u0000${e.dst}\u0000${e.kind}`;
 }
 
-export type CanvasEdge = { src: string; dst: string; kind: string; weight: number; label: string | null };
+export type CanvasEdge = {
+  src: string; dst: string; kind: string; weight: number; label: string | null;
+  /** "cited": a consulted edge whose use was a citation. */
+  how?: string | null;
+  /** Other learning edges between the same two nodes (mergeLearningEdges): said on hover. */
+  also?: string[];
+};
+
+/** Which learning word wins a place first when chips compete for room. */
+const LEARNING_RANK: Record<string, number> = { reused: 4e4, produced: 3e4, cited: 2e4, consulted: 1e4, about: 0 };
+
+/** A learning edge's words: its own, then the others it stands for ("reused · also consulted"). */
+export function learningWords(e: Pick<CanvasEdge, "kind" | "how" | "also">): string | null {
+  const how = learningHow(e);
+  if (!how) return null;
+  return e.also?.length ? `${how} · also ${e.also.join(", ")}` : how;
+}
 
 export type CanvasHandle = { zoomIn: () => void; zoomOut: () => void; fit: () => void };
 
@@ -266,7 +282,7 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(function GraphCanvas(
     const hv = hoverRef.current;
     const selId = sel.current;
     const g: Array<{ e: CanvasEdge; g: EdgeGeometry }> = [];
-    const edgeLabels: Array<LabelBox & { text: string; at: Pt; hot: boolean }> = [];
+    const edgeLabels: Array<LabelBox & { text: string; at: Pt; hot: boolean; color?: string; alts?: Pt[] }> = [];
     ctx.save();
     for (const e of edges) {
       const a = screen.get(e.src);
@@ -282,14 +298,17 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(function GraphCanvas(
       const hot = hovered || (touchesSel && selId !== centerId);
       let stroke = c("--muted");
       let alpha = mode === "overview" ? 0.55 : 0.6;
-      if (LOOP_EDGES.has(e.kind)) { stroke = c(layerToken(byId.get(e.dst)?.layer ?? "code")); alpha = 0.95; }
-      if (hot) { stroke = LOOP_EDGES.has(e.kind) ? stroke : c("--ink-soft"); alpha = 1; }
+      // A learning edge in its own colour, always said in a word (LEARNING_EDGES).
+      const learning = learningEdgeStyle(learningHow(e) ?? "");
+      if (learning) { stroke = c(learning.token) || stroke; alpha = 0.95; }
+      else if (LOOP_EDGES.has(e.kind)) { stroke = c(layerToken(byId.get(e.dst)?.layer ?? "code")); alpha = 0.95; }
+      if (hot) { stroke = LOOP_EDGES.has(e.kind) || learning ? stroke : c("--ink-soft"); alpha = 1; }
       const fresh = born.current.get(e.dst) ?? born.current.get(e.src);
       if (fresh !== undefined) { const f = Math.min(1, (now - fresh) / 600); alpha *= f; if (f < 1) animating = true; }
       ctx.globalAlpha = alpha;
       ctx.strokeStyle = stroke;
       ctx.fillStyle = stroke;
-      ctx.lineWidth = edgeWidth(e.weight, maxW);
+      ctx.lineWidth = learning ? Math.max(learning.how === "reused" ? 3 : 2, edgeWidth(e.weight, maxW)) : edgeWidth(e.weight, maxW);
       ctx.setLineDash(e.kind === "dispatches_to" ? [6, 5] : []);
       // An opened cluster's spoke to each member: a quiet dotted line, no arrow (it is not a call).
       const member = e.kind === "member";
@@ -310,7 +329,19 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(function GraphCanvas(
       // Labels (P1-3): the weight where it says something (> 1) and the edge is one of the
       // strongest; the type only on hover or on the selected node's own edges.
       const weighty = e.weight > 1 && !!e.label && (labelled ? labelled.has(key) : true);
-      if (hot || weighty) {
+      if (learning) {
+        // The learning loop is the story: its word is always on the line, before any weight.
+        const text = learning.word;
+        ctx.font = `600 ${fs(12)}px ${font}`;
+        const tw = ctx.measureText(text).width + 14;
+        const lh = fs(19);
+        // The centre's (or the selection's) own edges first, the loop's telling words before
+        // "about"; only those move aside for room — an outer ring's word shows where it fits.
+        const near = e.src === centerId || e.dst === centerId || touchesSel;
+        const rank = LEARNING_RANK[learning.how] ?? 0;
+        edgeLabels.push({ id: key, x: geo.label.x, y: geo.label.y - lh / 2, w: tw, h: lh, priority: (near ? 7e5 : 4e5) + rank, text, at: geo.label, hot, color: stroke,
+                          alts: near ? chipSpots(geo.start, geo.end, tw, lh) : undefined });
+      } else if (hot || weighty) {
         // "16,749 calls" says its kind already; a weightless edge says its kind ("implements").
         const text = e.weight > 1 && e.label ? e.label : edgeWords(e.kind);
         ctx.font = `500 ${fs(12)}px ${font}`;
@@ -419,17 +450,34 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(function GraphCanvas(
     const nodeBoxes: LabelBox[] = [...chosen.entries()].map(([id, p]) => ({ id, x: p.x, y: p.y, w: p.w, h: p.h, priority: 2e9 }));
     const inside = (l: LabelBox) => l.x - l.w / 2 >= bounds.x0 && l.x + l.w / 2 <= bounds.x1 && l.y >= bounds.y0 && l.y + l.h <= bounds.y1;
     const shownEdges = placeLabels([...obstacles, ...nodeBoxes, ...edgeLabels.filter(inside)]);
+    // A learning edge's word is the story: one its midpoint had no room for moves along the line
+    // or beside it (chipSpots) to the first free place, rather than being left for hover.
+    const taken: LabelBox[] = [...obstacles, ...nodeBoxes, ...edgeLabels.filter((l) => shownEdges.has(l.id) && inside(l))];
+    const clear = (b: LabelBox) => inside(b) && !taken.some((p) => b.x - b.w / 2 - 2 < p.x + p.w / 2 && b.x + b.w / 2 + 2 > p.x - p.w / 2
+      && b.y - 2 < p.y + p.h && b.y + b.h + 2 > p.y);
+    for (const l of [...edgeLabels].sort((a, b) => b.priority - a.priority)) {
+      if (!l.alts || shownEdges.has(l.id)) continue;
+      for (const at of l.alts) {
+        const box = { ...l, x: at.x, y: at.y - l.h / 2 };
+        if (!clear(box)) continue;
+        l.at = at; l.x = box.x; l.y = box.y;
+        taken.push(box);
+        shownEdges.add(l.id);
+        break;
+      }
+    }
     for (const l of edgeLabels) {
       if (!shownEdges.has(l.id) || !inside(l)) continue;
       ctx.save();
-      ctx.font = `500 ${fs(12)}px ${font}`;
+      ctx.font = `${l.color ? 600 : 500} ${fs(12)}px ${font}`;
       ctx.fillStyle = c("--surface");
       roundRect(ctx, l.at.x - l.w / 2, l.at.y - l.h / 2, l.w, l.h, l.h / 2);
       ctx.fill();
-      ctx.strokeStyle = c("--border-strong");
-      ctx.lineWidth = 1;
+      // A learning edge's chip in its colour: the word and the line read as one.
+      ctx.strokeStyle = l.color ?? c("--border-strong");
+      ctx.lineWidth = l.color ? 1.5 : 1;
       ctx.stroke();
-      ctx.fillStyle = l.hot ? c("--ink") : c("--ink-soft");
+      ctx.fillStyle = l.color ?? (l.hot ? c("--ink") : c("--ink-soft"));
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.fillText(l.text, l.at.x, l.at.y + 0.5);
@@ -724,7 +772,7 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(function GraphCanvas(
     const [src, dst, kind] = hover.id.split("\u0000");
     const e = edges.find((x) => x.src === src && x.dst === dst && x.kind === kind);
     if (!e) return null;
-    return { title: `${byId.get(src)?.label ?? src} → ${byId.get(dst)?.label ?? dst}`, line: e.label ?? edgeWords(e.kind) };
+    return { title: `${byId.get(src)?.label ?? src} → ${byId.get(dst)?.label ?? dst}`, line: learningWords(e) ?? e.label ?? edgeWords(e.kind) };
   })();
 
   return (
@@ -767,7 +815,7 @@ function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: numbe
 }
 
 /** The legend (§5.3): every kind colour present in the view, collapsible, bottom-left. */
-export function GraphLegend({ items }: { items: Array<{ key: string; token: string; name: string }> }) {
+export function GraphLegend({ items }: { items: Array<{ key: string; token: string; name: string; line?: boolean; title?: string }> }) {
   const [open, setOpen] = useState(true);
   if (!items.length) return null;
   return (
@@ -779,8 +827,10 @@ export function GraphLegend({ items }: { items: Array<{ key: string; token: stri
       {open ? (
         <ul className="kg-legend-list">
           {items.map((i) => (
-            <li key={i.key} className="kg-legend-item" data-kind={i.key}>
-              <span className="kg-dot" style={{ background: `var(${i.token})` }} aria-hidden />
+            <li key={i.key} className="kg-legend-item" data-kind={i.key} title={i.title}>
+              {i.line
+                ? <span className="kg-legend-line" style={{ background: `var(${i.token})` }} aria-hidden />
+                : <span className="kg-dot" style={{ background: `var(${i.token})` }} aria-hidden />}
               {i.name}
             </li>
           ))}
@@ -822,7 +872,7 @@ export function GraphTable({ nodes, edges, selectedId, onSelect, onActivate }: {
           {edges.map((e) => (
             <tr key={`${e.src}-${e.dst}-${e.kind}`} data-testid="kg-list-edge">
               <td>{label.get(e.src) ?? e.src}</td>
-              <td>{edgeWords(e.kind)}</td>
+              <td>{learningWords(e) ?? edgeWords(e.kind)}</td>
               <td>{label.get(e.dst) ?? e.dst}</td>
               <td className="inf-num">{e.label ?? e.weight.toLocaleString("en-US")}</td>
             </tr>

@@ -553,24 +553,27 @@ def addressed_in_thread(target: Any, project_id: str, thread_id: Optional[str]) 
 
 @contextlib.contextmanager
 def speaking(speaker: Optional[dict[str, Any]], *, thread_id: Optional[str] = None,
-             act_id: Optional[str] = None) -> Iterator[None]:
+             act_id: Optional[str] = None, question: Optional[str] = None) -> Iterator[None]:
     """THE TURN'S SPEAKER, for what is recorded while it speaks — one context for every path
     that records in a conversation (a chat turn, a press of one of its buttons in the console,
     Metatron or the CLI): a rule, learning or decision written names the addressed agent (its
     name and Passport id) or "BOSS (general)" — never a blank provenance — and a rule or learning
     a tool returns is "consulted" in that conversation (knowledge/learning_conversations).
     Speaker keys only: cost attribution (`role_key`, `act_id`) is left as it was; everything set
-    is restored after."""
+    is restored after. ``question`` is the turn's own message: a tool that anchors the conversation
+    in the graph on its own connection cannot see the message row yet (it is written in the turn's
+    transaction), and names the conversation from this instead of its id."""
     from .llm_telemetry import get_llm_context, set_llm_context
 
     if speaker is None:
         yield
         return
-    keys = ("speaker_role", "agent_name", "agent_id", "agent_thread_id", "agent_act_id")
+    keys = ("speaker_role", "agent_name", "agent_id", "agent_thread_id", "agent_act_id", "agent_thread_question")
     held = get_llm_context()
     restore = {k: held.get(k) for k in keys}
     set_llm_context(speaker_role=speaker.get("agent_role"), agent_name=speaker.get("agent_name"),
-                    agent_id=speaker.get("agent_id"), agent_thread_id=thread_id, agent_act_id=act_id)
+                    agent_id=speaker.get("agent_id"), agent_thread_id=thread_id, agent_act_id=act_id,
+                    agent_thread_question=(str(question)[:2000] if question else None))
     try:
         yield
     finally:

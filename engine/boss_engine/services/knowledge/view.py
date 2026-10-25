@@ -505,6 +505,8 @@ class _Walk:
         self.edges: dict[tuple[str, str, str], dict[str, Any]] = {}
         self.hidden_nodes = 0
         self.hidden_edges = 0
+        #: consulted edges whose use was a citation (attrs.how = cited): drawn as "cited".
+        self.cited: set[tuple[str, str, str]] = set()
 
     @property
     def room(self) -> int:
@@ -657,17 +659,19 @@ class _Walk:
                 break
             rows = self.c.execute(text(
                 f"""
-                SELECT e.src_id, e.dst_id, e.kind, e.weight, o.kind AS other_kind FROM kg_edges e
+                SELECT e.src_id, e.dst_id, e.kind, e.weight, o.kind AS other_kind, e.attrs->>'how' AS how FROM kg_edges e
                 JOIN kg_nodes o ON o.id = e.dst_id AND o.valid_to IS NULL
                 WHERE e.project_id = :p AND e.valid_to IS NULL AND e.src_id = ANY(:f) {kind_sql}
                 UNION ALL
-                SELECT e.src_id, e.dst_id, e.kind, e.weight, o.kind FROM kg_edges e
+                SELECT e.src_id, e.dst_id, e.kind, e.weight, o.kind, e.attrs->>'how' FROM kg_edges e
                 JOIN kg_nodes o ON o.id = e.src_id AND o.valid_to IS NULL
                 WHERE e.project_id = :p AND e.valid_to IS NULL AND e.dst_id = ANY(:f)
                   AND NOT (e.src_id = ANY(:f)) {kind_sql}
                 """), {"p": self.p, "f": list(frontier), "k": list(kinds or ())}).all()
+            # A consultation the agent CITED in its answer says so on the canvas ("cited").
+            self.cited.update((s, d, k) for s, d, k, _w, _o, how in rows if k == "consulted" and how == "cited")
             found = [(s, d, k, max(1, int(round(float(w or 1)))))
-                     for s, d, k, w, other in rows if _readable(other, self.layers, self.withheld)
+                     for s, d, k, w, other, _how in rows if _readable(other, self.layers, self.withheld)
                      or (s in frontier and d in frontier)]
             # What a hop leaves unused is the next hop's (tester round 4: Show 200 read 147 of 809
             # because each of 2 hops was held to 100 while the first had only 47).
@@ -684,7 +688,8 @@ class _Walk:
         ordered = sorted((i for i in self.hops if i in self.payloads), key=lambda i: (self.hops[i], i != cid))
         nodes = [{**self.payloads[i], "hop": self.hops[i]} for i in ordered]
         ids = {n["id"] for n in nodes}
-        edges = sorted((e for e in self.edges.values() if e["src"] in ids and e["dst"] in ids),
+        edges = sorted(({**e, "how": "cited"} if (e["src"], e["dst"], e["kind"]) in self.cited else e
+                        for e in self.edges.values() if e["src"] in ids and e["dst"] in ids),
                        key=lambda e: (-e["weight"], e["src"], e["dst"], e["kind"]))
         return {"center": {**self.payloads[cid], "hop": 0}, "nodes": nodes, "edges": edges,
                 "depth": self.depth, "limit": self.limit, "level": level,
@@ -1059,7 +1064,12 @@ def _where_from(connection: Connection, project_id: str, row: Mapping[str, Any],
         if found:
             # The conversation node is named "<its question> · Oct 25, 07:13" (UTC): the words
             # say its question; the console shows the time in the viewer's zone.
-            mended = repair_cut(str(found["name"]))
+            from .learning_conversations import is_placeholder, proper_names
+
+            name = str(found["name"])
+            if is_placeholder(name):     # still named by its id: named on read (mend_names)
+                name = proper_names(connection, [str(thread)]).get(str(thread), name)
+            mended = repair_cut(name)
             out["conversation_title"] = mended.rsplit(" · ", 1)[0] if " · " in mended else mended
             out["conversation_at"] = found["at"]
     return out
