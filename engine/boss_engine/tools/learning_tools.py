@@ -115,6 +115,10 @@ def register_learning_tools(reg) -> None:
             kind="write",
             # One `inferred` learned item: quarantined, never binding, forgettable by a person.
             reversibility="safe",
+            # A QUEUED WRITE, like file_platform_gap and the KG proposals (brec_eddfaf96…): it
+            # changes nothing until a person acts, so the chat write gate runs it in the turn
+            # rather than holding it behind a confirm button (brec_9157d2686df34517addc).
+            queues_for_review=True,
             requires_durable_workspace=True,
             permission="knowledge:read",
         )
