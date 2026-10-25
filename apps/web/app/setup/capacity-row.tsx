@@ -106,6 +106,9 @@ export function stateOf(src: CapSource): { label: string; tone: "green" | "amber
   if (src.effective === "active" && takesKey(src) && src.connection === "connected") return { label: "Connected", tone: "green" };
   if (src.effective === "active") return { label: "Active", tone: "green" };
   if (src.effective === "blocked") return { label: "Blocked", tone: "red" };
+  // The last proof refused this source's login or key (the API's one status): red, never Active.
+  if (src.effective === "login_rejected") return { label: "Login expired", tone: "red" };
+  if (src.effective === "key_rejected") return { label: "Key rejected", tone: "red" };
   // A disconnected flag must not replace an unknown, unsupported or failed verdict.
   const unused = ["declared", "needs_connection", "missing_credentials", "missing_oauth_connection"].includes(src.effective);
   if (unused && src.connection === "not_connected") {

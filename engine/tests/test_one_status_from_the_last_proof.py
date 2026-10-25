@@ -265,6 +265,11 @@ def test_no_fix_offers_a_refused_import():
              *(e["tip"] for e in setup_pills.MODEL.values()), cli_harness.LEGACY_TOKEN_FIX]
     for spec in cli_harness.BUILTIN_CLI_HARNESSES.values():
         texts += [spec.token_hint, spec.signin_hint, cli_harness._sign_in_step(spec)]
+    # A failed model call's own advice too (it told people to paste a `claude setup-token`).
+    from boss_engine.services import model_failures
+
+    texts.append(model_failures.explain("401 invalid_refresh_token: not logged in",
+                                        source_id="codex_subscription")["action"])
     for said in texts:
         assert not any(bad in said.lower() for bad in REFUSED_IMPORTS), said
     for provider in ("codex", "claude_code", "grok"):

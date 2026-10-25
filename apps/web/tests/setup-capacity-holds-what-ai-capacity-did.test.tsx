@@ -442,6 +442,11 @@ describe("the badge is the source's proven pill", () => {
   it("no Models row (pill null) falls back to the record, marked unproven", () => {
     expect(badgeOf({ ...codex, pill: null })).toEqual({ label: "Active", tone: "green", proven: false });
   });
+  it("a record whose login or key was refused reads red without a pill", () => {
+    expect(badgeOf({ ...codex, pill: null, effective: "login_rejected" }))
+      .toEqual({ label: "Login expired", tone: "red", proven: false });
+    expect(badgeOf({ ...codex, pill: null, effective: "key_rejected" }).tone).toBe("red");
+  });
 });
 
 describe("model and source anchors share the model section", () => {

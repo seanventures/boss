@@ -328,8 +328,9 @@ def explain(error: object, *, source_id: Optional[str] = None) -> dict:
         return {
             "kind": "login_rejected",
             "headline": f"The {who} login was rejected, so no model call can run.",
-            "action": (f"Reconnect the {who} in Repo and models. For Claude Code, run "
-                       "`claude setup-token` and paste the long sk-ant-… value it prints."),
+            "action": (f"Reconnect the {who} in Repo and models. A subscription (Codex, "
+                       "Claude Code, Grok) signs in again inside BOSS: press Sign in there, "
+                       "or run `boss connect <provider>`."),
             "href": setup_href(source_id), "retry": False,
         }
     # HELD BY THE BUDGET STATE (the job gate). Not a failure and not a missing worker: the job
