@@ -3,6 +3,7 @@ the same class signature waits on the fix being built instead of starting anothe
 with it."""
 from __future__ import annotations
 
+import pytest
 from sqlalchemy import text
 
 from boss_engine.services import self_fix as sf
@@ -52,3 +53,40 @@ def test_the_attempts_per_cause_are_capped(harness):
                       settings=harness.settings)
     third = harness.propose(run_id="wfr_3", signature="deploy:port_held:8000", kind="deploy")
     assert third["outcome"] == "skipped" and "already tried" in third["why"]
+
+
+# brec_9a4e09127375448294f0 (live, 2026-10-24): two tries were used up by refusals BOSS's own
+# harness made — api_suite (no self-fix test database) and tests_weakened from a gate bug fixed
+# in ef166d9cd — so a person's request was refused "already tried 2 time(s)" before BOSS ever
+# completed one genuine attempt.
+
+def _refused(harness, n, refusal):
+    out = harness.propose(run_id=f"wfr_m{n}", signature="deploy:port_held:8000", kind="deploy")
+    assert out["outcome"] == "started", out
+    with harness.eng.begin() as c:
+        sf.refuse(c, out["self_fix"]["id"], refusal, "x", settings=harness.settings)
+    return out["self_fix"]["id"]
+
+
+@pytest.mark.parametrize("refusal", sorted(sf.INFRA_REFUSALS))
+def test_a_try_the_harness_could_not_run_is_not_a_try(harness, refusal):
+    for n in range(3):
+        _refused(harness, n, refusal)
+    again = harness.propose(run_id="wfr_m9", signature="deploy:port_held:8000", kind="deploy")
+    assert again["outcome"] == "started", again
+
+
+def test_a_gate_refusal_counts_while_that_gate_is_unchanged(harness):
+    for n in range(2):
+        _refused(harness, n, "tests_weakened")
+    third = harness.propose(run_id="wfr_m9", signature="deploy:port_held:8000", kind="deploy")
+    assert third["outcome"] == "skipped" and "already tried" in third["why"]
+
+
+def test_a_fixed_gate_gives_the_cause_its_tries_back(harness):
+    ids = [_refused(harness, n, "secrets") for n in range(2)]
+    with harness.eng.begin() as c:   # refused by an earlier build of the gates
+        c.execute(text("UPDATE self_fixes SET gates = gates || '{\"gate_fingerprint\": \"old\"}'"
+                       "::jsonb WHERE id = ANY(:i)"), {"i": ids})
+    again = harness.propose(run_id="wfr_m9", signature="deploy:port_held:8000", kind="deploy")
+    assert again["outcome"] == "started", again

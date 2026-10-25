@@ -41,6 +41,7 @@ mirror (self_fix_source), the approval, tickets, install, rollback and upgrade p
 """
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import os
@@ -513,11 +514,44 @@ def month_spent(connection: Connection) -> int:
         return 0
 
 
+#: Refusals where BOSS's own harness could not attempt the fix at all (no test database, no
+#: source, no engine, switched off). They never count as a try (brec_9a4e09127375448294f0).
+INFRA_REFUSALS = frozenset({"api_suite", "no_source", "engine", "switched_off"})
+#: Refusals an integrity gate made. A gate can be wrong (sfx_ffa93c54: tests_weakened on a
+#: conditional pytest.fail; sfx_de308b79: secrets on `workflow_key = f(name)`), so such a
+#: refusal counts only while the gates that made it are unchanged: each records the gates'
+#: fingerprint, and a fixed gate gives the cause its tries back.
+GATE_REFUSALS = frozenset({"tests_weakened", "secrets", "scope", "dependencies", "too_big"})
+
+
+@functools.lru_cache(maxsize=1)
+def gate_fingerprint() -> str:
+    """The running BOSS's integrity gates and path policy, as one short hash."""
+    import hashlib
+    from . import self_fix_integrity, self_fix_policy
+
+    digest = hashlib.sha256()
+    for path in (Path(self_fix_integrity.__file__), Path(self_fix_policy.__file__),
+                 Path(self_fix_policy.POLICY_PATH)):
+        try:
+            digest.update(path.read_bytes())
+        except OSError:
+            digest.update(str(path).encode())
+    return digest.hexdigest()[:16]
+
+
 def attempts_for(connection: Connection, klass: str) -> int:
+    """The tries a cause has had ON ITS MERITS: a fix that failed its tests, its review, a
+    person's approval or its install. Not one the harness could not run, nor one a gate since
+    changed refused."""
     with connection.begin_nested():
         return int(connection.execute(text(
             "SELECT count(*) FROM self_fixes WHERE class_signature = :c AND status NOT IN "
-            "('cancelled', 'superseded')"), {"c": klass}).scalar() or 0)
+            "('cancelled', 'superseded') AND NOT (status = 'refused' AND ("
+            "refusal = ANY(:infra) OR (refusal = ANY(:gate) AND "
+            "COALESCE(gates->>'gate_fingerprint', '') <> :fp)))"),
+            {"c": klass, "infra": sorted(INFRA_REFUSALS), "gate": sorted(GATE_REFUSALS),
+             "fp": gate_fingerprint()}).scalar() or 0)
 
 
 def _reserve(connection: Connection, settings: Any, project_id: str, sfx_id: str,
@@ -784,6 +818,12 @@ def refuse(connection: Connection, sfx_id: str, refusal: str, detail: str, *,
     sentence = f"{AGENT_NAME}: BOSS did not fix itself — {refusal_words(refusal, detail)}"
     out = transition(connection, sfx_id, REFUSED, actor=actor, sentence=sentence,
                      data={"refusal": refusal}, refusal=refusal, refusal_detail=detail[:2000])
+    if refusal in GATE_REFUSALS:
+        # Which gates said no: a later fix to them gives this cause its try back.
+        connection.execute(text(
+            "UPDATE self_fixes SET gates = COALESCE(gates, '{}'::jsonb) || "
+            "jsonb_build_object('gate_fingerprint', CAST(:fp AS text)) WHERE id = :i"),
+            {"fp": gate_fingerprint(), "i": sfx_id})
     release_budget(connection, settings, out, f"self-fix refused: {refusal}")
     return out
 
