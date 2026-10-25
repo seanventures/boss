@@ -120,6 +120,10 @@ class Scope:
     files: tuple[str, ...] = ()
     #: node ids still to resolve
     ids: tuple[str, ...] = ()
+    #: ``module:`` keys (a package as the graph tools name it) still to resolve to packages
+    modules: tuple[str, ...] = ()
+    #: plain repository-relative paths (a file or a folder) still to resolve
+    paths: tuple[str, ...] = ()
     keys: tuple[str, ...] = ()
 
     def words(self) -> str:
@@ -136,8 +140,12 @@ class Scope:
 
 #: The most keys one scan's scope may name.
 MAX_SCOPE_KEYS = 50
-_SCOPE_HELP = ("Use keys from the Graph's project tree: area:<repo>:<area>, "
-               "pkg:<repo>:<area>:<package>, a class's symbol: key, or a file: key.")
+#: A plain repository path: segments of word characters, dots and dashes.
+_PATH = re.compile(r"\.?/?[\w.\-]+(?:/[\w.\-]+)*/?")
+_SCOPE_HELP = ("Name what to scan with any of: an area (area:<repo>:<area>), a package "
+               "(pkg:<repo>:<area>:<package>, or module:<repo>:<package> as the graph tools "
+               "show it), a class (its symbol: key), a file (file:<repo>:<path>), or a plain "
+               "repository path to a file or a folder (fineract-loan/src/main/java/...).")
 
 
 def _repo_and_rest(key: str, prefix: str, *, parts_after_repo: int) -> tuple[str, str]:
@@ -177,6 +185,8 @@ def parse_scope(value: Any) -> Scope:
     symbols: list[str] = []
     files: list[str] = []
     ids: list[str] = []
+    modules: list[str] = []
+    paths: list[str] = []
     for key in keys:
         if key.startswith("area:"):
             parts = key.split(":", 2)
@@ -203,8 +213,17 @@ def parse_scope(value: Any) -> Scope:
                 raise RuleScanRefused(f"'{key}' is not a file key (file:<repo>:<path>).")
             repos.add(repo)
             files.append(path)
+        elif key.startswith("module:"):
+            repo, module = _repo_and_rest(key, "module", parts_after_repo=1)
+            if not module:
+                raise RuleScanRefused(f"'{key}' is not a package key (module:<repo>:<package>).")
+            repos.add(repo)
+            modules.append(module)
         elif re.fullmatch(r"kgn_[A-Za-z0-9_]+", key):
             ids.append(key)
+        elif ":" not in key and _PATH.fullmatch(key):
+            # A repository path, as the repo browser and the Graph's file panel show it.
+            paths.append(key.strip("/").removeprefix("./"))
         else:
             raise RuleScanRefused(f"'{key}' is not something the scan can read. " + _SCOPE_HELP)
     if len(repos) > 1:
@@ -212,30 +231,115 @@ def parse_scope(value: Any) -> Scope:
                               f"{len(repos)}: {', '.join(sorted(r or '(unnamed)' for r in repos))}.")
     return Scope(repo=next(iter(repos), "") or None, areas=tuple(dict.fromkeys(areas)),
                  packages=tuple(dict.fromkeys(packages)), symbols=tuple(dict.fromkeys(symbols)),
-                 files=tuple(dict.fromkeys(files)), ids=tuple(ids), keys=tuple(keys))
+                 files=tuple(dict.fromkeys(files)), ids=tuple(ids),
+                 modules=tuple(dict.fromkeys(modules)), paths=tuple(dict.fromkeys(paths)),
+                 keys=tuple(keys))
 
 
 def resolve_ids(connection: Connection, project_id: str, scope: Scope) -> Scope:
-    """Replace node ids in `scope` by their keys (a code node of this project), or refuse."""
-    if not scope.ids:
+    """Resolve everything in `scope` that is not yet a tree key — node ids, ``module:`` keys and
+    plain repository paths — to the keys the scan reads, or refuse in words. The graph tools an
+    agent uses (kg_schema / kg_cypher) name packages ``module:<repo>:<package>`` while the tree
+    names them ``pkg:<repo>:<area>:<package>``, and a person names code by its path; two credit
+    scans deadlettered on exactly that (wfr_5af8917f…, wfr_ab044938…, brec_40c192798f564212a02d)."""
+    if not (scope.ids or scope.modules or scope.paths):
         return scope
-    rows = connection.execute(
-        text("SELECT id, kind, node_key FROM kg_nodes WHERE project_id = :p "
-             "AND id = ANY(:ids) AND valid_to IS NULL"),
-        {"p": project_id, "ids": list(scope.ids)},
-    ).mappings().all()
-    found = {r["id"]: r for r in rows}
-    keys = [k for k in scope.keys if k not in scope.ids]
-    for node_id in scope.ids:
-        row = found.get(node_id)
-        if row is None:
-            raise RuleScanRefused(f"'{node_id}' is not a node of this project's graph.")
-        if row["kind"] not in ("symbol", "file"):
+    pending = set(scope.ids) | {k for k in scope.keys if k.startswith("module:")} \
+        | {k for k in scope.keys if ":" not in k and not re.fullmatch(r"kgn_[A-Za-z0-9_]+", k)}
+    keys = [k for k in scope.keys if k not in pending]
+    if scope.ids:
+        rows = connection.execute(
+            text("SELECT id, kind, node_key FROM kg_nodes WHERE project_id = :p "
+                 "AND id = ANY(:ids) AND valid_to IS NULL"),
+            {"p": project_id, "ids": list(scope.ids)},
+        ).mappings().all()
+        found = {r["id"]: r for r in rows}
+        for node_id in scope.ids:
+            row = found.get(node_id)
+            if row is None:
+                raise RuleScanRefused(f"'{node_id}' is not a node of this project's graph.")
+            if row["kind"] not in ("symbol", "file"):
+                raise RuleScanRefused(
+                    f"'{node_id}' is a {row['kind']}, not code. Scan an area, a package, a class "
+                    "or a file.")
+            keys.append(str(row["node_key"]))
+    for module in scope.modules:
+        rows = connection.execute(text(
+            "SELECT DISTINCT repo, area, package FROM kg_view_tree WHERE project_id = :p "
+            "AND level = 'package' AND package = :m AND (:r = '' OR repo = :r)"),
+            {"p": project_id, "m": module, "r": scope.repo or ""}).mappings().all()
+        if not rows:
             raise RuleScanRefused(
-                f"'{node_id}' is a {row['kind']}, not code. Scan an area, a package, a class or "
-                "a file.")
-        keys.append(str(row["node_key"]))
+                f"module:{module} names no package in this project's graph. Check the repository "
+                "is indexed (Graph › its status) and the package is in Graph › Tree.")
+        keys += [f"pkg:{r['repo']}:{r['area']}:{r['package']}" for r in rows]
+    for path in scope.paths:
+        keys += _keys_for_path(connection, project_id, scope.repo or "", path)
+    keys = list(dict.fromkeys(keys))
+    if len(keys) > MAX_SCOPE_KEYS:
+        raise RuleScanRefused(
+            f"That scope covers {len(keys)} packages or files; one scan reads at most "
+            f"{MAX_SCOPE_KEYS}. Choose a narrower folder, a package or an area.")
     return parse_scope(keys)
+
+
+def _keys_for_path(connection: Connection, project_id: str, repo: str, path: str) -> list[str]:
+    """A repository path → its file key (a file), else the packages of the classes under it (a
+    folder), else every file under it. Refused when nothing indexed is there."""
+    exact = connection.execute(text(
+        "SELECT node_key FROM kg_nodes WHERE project_id = :p AND kind = 'file' "
+        "AND valid_to IS NULL AND path = :path AND (:r = '' OR repo = :r) LIMIT 2"),
+        {"p": project_id, "path": path, "r": repo}).scalars().all()
+    if exact:
+        return [str(k) for k in exact]
+    prefix = path.rstrip("/") + "/%"
+    packages = connection.execute(text(
+        "SELECT DISTINCT t.repo, t.area, t.package FROM kg_view_tree t "
+        "JOIN kg_nodes n ON n.id = t.node_id AND n.valid_to IS NULL "
+        "WHERE t.project_id = :p AND t.level = 'class' AND t.package IS NOT NULL "
+        "AND n.path LIKE :prefix AND (:r = '' OR t.repo = :r)"),
+        {"p": project_id, "prefix": prefix, "r": repo}).mappings().all()
+    if packages:
+        return [f"pkg:{r['repo']}:{r['area']}:{r['package']}" for r in packages]
+    files = connection.execute(text(
+        "SELECT node_key FROM kg_nodes WHERE project_id = :p AND kind = 'file' "
+        "AND valid_to IS NULL AND path LIKE :prefix AND (:r = '' OR repo = :r) "
+        "ORDER BY path LIMIT :n"),
+        {"p": project_id, "prefix": prefix, "r": repo, "n": MAX_SCOPE_KEYS + 1}).scalars().all()
+    if files:
+        return [str(k) for k in files]
+    raise RuleScanRefused(
+        f"'{path}' is not a file or folder of this project's indexed code. Check the path from "
+        "the repository root, or pick it in Graph › Tree.")
+
+
+def validate_scope(connection: Connection, project_id: str, scope: Any, *,
+                   exclude_tests: Any = None) -> list[str]:
+    """THE SCAN'S SCOPE, CHECKED AT START (before anything is queued or spent): parsed, resolved
+    and holding code to read — the same three checks the scan step makes. Returns the resolved
+    keys the run should carry; raises RuleScanRefused in words."""
+    parsed = resolve_ids(connection, project_id, parse_scope(scope))
+    units = units_in_scope(connection, project_id, parsed,
+                           exclude_tests=_excludes_tests(exclude_tests))
+    if not units:
+        raise RuleScanRefused(
+            f"There is no code in {parsed.words()} to read. Check the repository is indexed "
+            "(Graph › its status) and the key or path comes from this project's tree.")
+    return list(parsed.keys)
+
+
+def is_test_path(path: str) -> bool:
+    """Test code (it exercises rules; it does not enforce them): left out unless asked."""
+    return bool(_TEST_PATH.search(str(path or "")))
+
+
+def _excludes_tests(value: Any) -> bool:
+    """`exclude_tests`: on by default; "false", "no", "0" or False read the tests too."""
+    if value is None or value == "":
+        return True
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() not in ("false", "no", "0", "off")
 
 
 # ── Limits ───────────────────────────────────────────────────────────────────────────────────
@@ -441,7 +545,8 @@ def _with_method_owners(connection: Connection, project_id: str, scope: Scope) -
                  keys=scope.keys)
 
 
-def units_in_scope(connection: Connection, project_id: str, scope: Scope) -> list[Unit]:
+def units_in_scope(connection: Connection, project_id: str, scope: Scope, *,
+                   exclude_tests: bool = True) -> list[Unit]:
     """Every unit the scope holds, weighed from its graph edges (see the module docstring)."""
     scope = _with_method_owners(connection, project_id, scope)
     rows = (_symbols_in_tree(connection, project_id, scope)
@@ -524,14 +629,14 @@ def units_in_scope(connection: Connection, project_id: str, scope: Scope) -> lis
         caller = unit_of.get(src) or _owner_key(src, classes) or src.rsplit(".", 1)[0]
         if caller and caller != unit.key:
             unit.callers.add(caller)
-    readable = [u for u in units.values() if _readable(u)]
+    readable = [u for u in units.values() if _readable(u, exclude_tests=exclude_tests)]
     for unit in readable:
         unit.score = weigh(unit, units)
     return readable
 
 
-def _readable(unit: Unit) -> bool:
-    if _TEST_PATH.search(unit.path or ""):
+def _readable(unit: Unit, *, exclude_tests: bool = True) -> bool:
+    if exclude_tests and is_test_path(unit.path or ""):
         return False
     if unit.type_kind in ("interface", "annotation"):
         return False
@@ -878,11 +983,15 @@ def scan(
     limits = parse_limits(inputs or {}, cap_usd_micros=_project_cap(connection, settings,
                                                                     project_id))
     scan_id = scan_id or f"rscan_{uuid.uuid4().hex[:16]}"
-    units = units_in_scope(connection, project_id, parsed)
+    exclude_tests = _excludes_tests((inputs or {}).get("exclude_tests"))
+    units = units_in_scope(connection, project_id, parsed, exclude_tests=exclude_tests)
     if not units:
         raise RuleScanRefused(
-            f"There is no code in {parsed.words()} to read. Check the repository is indexed "
-            "(Graph › its status) and the key comes from this project's tree.")
+            f"There is no code in {parsed.words()} to read"
+            + (" outside its tests (set exclude_tests false to read them)" if exclude_tests
+               else "")
+            + ". Check the repository is indexed (Graph › its status) and the key or path "
+              "comes from this project's tree.")
     if agent is None:
         agent, engine = _scan_agent(connection, settings, project_id)
     engine = engine or str(getattr(agent, "engine", "") or "")
@@ -896,7 +1005,9 @@ def scan(
         "scan_id": scan_id, "scope": list(parsed.keys), "scope_words": parsed.words(),
         "limits": {"max_files": limits.max_files, "max_rules": limits.max_rules,
                    "budget_usd": limits.budget_usd_micros / 1_000_000},
-        "notes": list(limits.notes), "units_in_scope": len(units), "engine": engine,
+        "notes": list(limits.notes) + ([] if exclude_tests else ["test code read too "
+                                                                 "(exclude_tests false)"]),
+        "units_in_scope": len(units), "engine": engine,
         "files_read": 0, "classes_read": 0, "calls": 0, "rules_proposed": 0, "spend": 0.0,
         "stopped_by": "scope_exhausted", "proposals": [], "set_aside": [], "unread": [],
         "malformed_answers": 0, "provenance": {"agent_role": agent_role,

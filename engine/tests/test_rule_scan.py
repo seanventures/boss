@@ -394,7 +394,11 @@ def test_a_scope_the_scan_cannot_read_is_refused_in_words(value, words):
 def test_scope_keys_are_the_trees():
     scope = rule_scan.parse_scope(f"area:{REPO}:core, pkg:{REPO}:core:{PKG}")
     assert scope.repo == REPO and scope.areas == ("core",) and scope.packages == (("core", PKG),)
-    for bad, words in (([], "Choose what to scan"), (["loans"], "not something"),
+    # A bare word is a repository path now (resolved, or refused, against the graph:
+    # test_scope_forms_resolve_on_a_real_graph_and_are_checked_at_start); text that is
+    # neither a key nor a path is still refused here.
+    assert rule_scan.parse_scope(["loans"]).paths == ("loans",)
+    for bad, words in (([], "Choose what to scan"), (["loans? please"], "not something"),
                        ([f"area:{REPO}:a", "area:other/repo:b"], "one repository")):
         with pytest.raises(rule_scan.RuleScanRefused, match=words):
             rule_scan.parse_scope(bad)
@@ -429,7 +433,8 @@ def test_tests_and_interfaces_are_not_read():
 def test_the_capabilities_are_declared_and_judged():
     scan = CAPABILITIES["scan_business_rules"]
     assert scan.required_inputs == ("scope",)
-    assert set(scan.optional_inputs) == {"focus", "max_files", "max_rules", "budget_usd"}
+    assert set(scan.optional_inputs) == {"focus", "max_files", "max_rules", "budget_usd",
+                                         "exclude_tests"}
     assert scan.tool is None and scan.needs_model and not scan.is_async
     review = CAPABILITIES["rules_review"]
     assert review.is_gate and review.risk_tier >= 2
@@ -454,7 +459,8 @@ def test_the_catalogue_entry_validates_and_asks_for_its_scope():
         "from_step": "scan", "field": "scan_id"}
     assert spec["input_schema"]["required"] == ["scope"]
     assert set(spec["input_schema"]["properties"]) == {"scope", "directive", "max_files",
-                                                       "max_rules", "budget_usd"}
+                                                       "max_rules", "budget_usd",
+                                                       "exclude_tests"}
     assert entry["steps"][0]["binding"]["inputs"]["focus"] == {"from_input": "directive"}
     card = next(c for c in catalogue_summary(prd_auto_approve=True)
                 if c["key"] == "business_rules_scan")
@@ -750,3 +756,136 @@ def test_a_scan_writes_real_proposed_rules_through_the_rules_layer(pg_engine, mo
             assert rule_scan.open_proposals(conn, project, "rscan_real") == len(rows)
         finally:
             transaction.rollback()
+
+
+# ── the scope forms people and agents actually use (brec_40c192798f564212a02d) ──────────────
+#
+# Two credit scans deadlettered (wfr_5af8917f…, wfr_ab044938…): the agent's graph tools name a
+# package module:<repo>:<package>, a person names code by its path, and parse_scope accepted
+# only area:/pkg:/symbol:/file:. Both forms are accepted now, resolved against the graph, and
+# the whole scope is checked when the run STARTS, before anything is queued or spent.
+
+def test_module_keys_and_plain_paths_are_accepted_for_resolution():
+    scope = rule_scan.parse_scope([f"module:{REPO}:{PKG}",
+                                   "core/src/main/java/com/example/loans/",
+                                   "./core/src/main/java/com/example/Ledger.java"])
+    assert scope.repo == REPO and scope.modules == (PKG,)
+    assert scope.paths == ("core/src/main/java/com/example/loans",
+                           "core/src/main/java/com/example/Ledger.java")
+    with pytest.raises(rule_scan.RuleScanRefused, match="module:<repo>:<package>"):
+        rule_scan.parse_scope(["module:"])
+    with pytest.raises(rule_scan.RuleScanRefused) as refused:
+        rule_scan.parse_scope(["what? this"])
+    assert "plain repository path" in str(refused.value)
+
+
+def test_test_code_is_read_only_when_asked():
+    assert rule_scan.is_test_path("core/src/test/java/C1Test.java")
+    assert not rule_scan.is_test_path("core/src/main/java/C1.java")
+    test_unit = _unit(1)
+    test_unit.path = "core/src/test/java/C1Test.java"
+    assert not rule_scan._readable(test_unit)
+    assert rule_scan._readable(test_unit, exclude_tests=False)
+    assert rule_scan._excludes_tests(None) and rule_scan._excludes_tests("")
+    assert not rule_scan._excludes_tests(False) and not rule_scan._excludes_tests("false")
+
+
+def test_the_catalogue_entry_declares_every_scan_input():
+    from boss_engine.services.workflow_catalogue import CATALOGUE, input_schema_for
+
+    entry = next(e for e in CATALOGUE if e["key"] == "business_rules_scan")
+    props = input_schema_for(entry)["properties"]
+    assert {"scope", "max_files", "max_rules", "budget_usd", "exclude_tests"} <= set(props)
+    assert props["exclude_tests"]["type"] == "boolean" and props["exclude_tests"]["default"] is True
+    assert "module:" in props["scope"]["description"]
+    assert "exclude_tests" in CAPABILITIES["scan_business_rules"].optional_inputs
+
+
+LOANS_TEST = '''
+class LoansTest:
+    def test_disburse(self):
+        assert True
+'''
+
+
+def test_scope_forms_resolve_on_a_real_graph_and_are_checked_at_start(pg_engine):
+    pytest.importorskip("tree_sitter")
+    from sqlalchemy import text
+
+    from boss_engine.services import workflows
+    from boss_engine.services.knowledge import view_rollup
+    from boss_engine.services.knowledge.code_index import index_files
+    from boss_engine.services.knowledge.store import PostgresKnowledgeStore
+
+    suffix = uuid.uuid4().hex[:8]
+    project = f"proj_rsf_{suffix}"
+    with pg_engine.connect() as conn:
+        transaction = conn.begin()
+        try:
+            conn.execute(text("INSERT INTO orgs (id, name) VALUES (:o, 'RSF')"),
+                         {"o": f"org_rsf_{suffix}"})
+            conn.execute(text("INSERT INTO workspaces (id, org_id, name) VALUES (:w, :o, 'RSF')"),
+                         {"w": f"ws_rsf_{suffix}", "o": f"org_rsf_{suffix}"})
+            conn.execute(text("INSERT INTO projects (id, workspace_id, name, slug) "
+                              "VALUES (:p, :w, 'RSF', :s)"),
+                         {"p": project, "w": f"ws_rsf_{suffix}", "s": f"rsf-{suffix}"})
+            index_files(conn, PostgresKnowledgeStore(), project_id=project,
+                        files=[{"path": "money/ledger.py", "language": "python",
+                                "source": LEDGER},
+                               {"path": "money/tests/test_loans.py", "language": "python",
+                                "source": LOANS_TEST}])
+            view_rollup.rebuild(conn, project)
+            pkg = conn.execute(text(
+                "SELECT key, package FROM kg_view_tree WHERE project_id = :p AND level = 'package' "
+                "AND package NOT LIKE '%tests%' ORDER BY key LIMIT 1"), {"p": project}).mappings().one()
+
+            # module:<package> (as kg_schema / kg_cypher show it) → the tree's package key
+            by_module = rule_scan.resolve_ids(
+                conn, project, rule_scan.parse_scope([f"module:{pkg['package']}"]))
+            assert pkg["key"] in by_module.keys and not by_module.modules
+            # a folder → the packages of the classes under it; a file → its file key
+            by_folder = rule_scan.resolve_ids(conn, project, rule_scan.parse_scope(["money/"]))
+            assert by_folder.packages and not by_folder.paths
+            by_file = rule_scan.resolve_ids(conn, project,
+                                            rule_scan.parse_scope(["money/ledger.py"]))
+            assert by_file.files == ("money/ledger.py",)
+            # nothing indexed there → refused in words, before any step
+            with pytest.raises(rule_scan.RuleScanRefused, match="not a file or folder"):
+                rule_scan.resolve_ids(conn, project, rule_scan.parse_scope(["nowhere/at/all"]))
+            with pytest.raises(rule_scan.RuleScanRefused, match="names no package"):
+                rule_scan.resolve_ids(conn, project, rule_scan.parse_scope(["module:no.such"]))
+
+            # THE START CHECK: a spec with a scan step gets its scope resolved, or is refused
+            spec = {"steps": [{"id": "scan", "binding": {"capability": "scan_business_rules"}}]}
+            checked = workflows.checked_capability_inputs(
+                conn, project, spec, {"scope": ["money/ledger.py"], "directive": "d"})
+            assert checked["scope"] == [f"file:money/ledger.py"]
+            with pytest.raises(workflows.WorkflowValidationError, match="the scan cannot start"):
+                workflows.checked_capability_inputs(conn, project, spec,
+                                                    {"scope": ["nowhere/at/all"]})
+            # test code only when asked
+            only_tests = ["money/tests/test_loans.py"]
+            with pytest.raises(rule_scan.RuleScanRefused, match="outside its tests|no code"):
+                rule_scan.validate_scope(conn, project, only_tests)
+            assert rule_scan.validate_scope(conn, project, only_tests, exclude_tests=False)
+            # a spec with no scan step is left alone
+            assert workflows.checked_capability_inputs(conn, project, {"steps": []},
+                                                       {"scope": ["anything"]}) == {
+                "scope": ["anything"]}
+        finally:
+            transaction.rollback()
+
+
+def test_describe_workflow_shows_the_scans_optional_inputs():
+    """describe_workflow (workflow_explain) listed only required inputs, so an agent never saw
+    the limits it could set. Each is listed, as optional, from the capability's palette."""
+    from boss_engine.services import workflow_capabilities, workflow_explain
+
+    scan = next(c for c in workflow_capabilities.palette() if c["key"] == "scan_business_rules")
+    declared = workflow_explain.step_inputs(scan, {})
+    assert ("scope", True) in declared
+    assert {("max_files", False), ("max_rules", False), ("budget_usd", False),
+            ("exclude_tests", False)} <= set(declared)
+    # a custom step's own schema still stands when its capability declares nothing required
+    assert workflow_explain.step_inputs({}, {"inputs": [{"name": "url", "required": True}]}) == [
+        ("url", True)]

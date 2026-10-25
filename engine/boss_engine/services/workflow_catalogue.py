@@ -882,7 +882,8 @@ CATALOGUE: list[dict[str, Any]] = [
         "steps": _chain([
             _step("scan", "scan_business_rules", {
                 "scope": _in("scope"), "focus": _in("directive"), "max_files": _in("max_files"),
-                "max_rules": _in("max_rules"), "budget_usd": _in("budget_usd")}),
+                "max_rules": _in("max_rules"), "budget_usd": _in("budget_usd"),
+                "exclude_tests": _in("exclude_tests")}),
             _step("review", "rules_review", {"scan_id": _from("scan", "scan_id")}),
         ]),
     },
@@ -973,10 +974,18 @@ _FIELD_TEXT: dict[str, dict[str, Any]] = {
                                    "Respond automatically is on (the app's Alerts tab).",
                     "examples": ["inc_0123456789ab"]},
     "scope": {"type": "array", "items": {"type": "string"}, "title": "What to scan",
-              "description": "Areas or packages from the Graph's project tree (their keys: "
-                             "area:<repo>:<area> or pkg:<repo>:<area>:<package>). Start the "
-                             "scan from the tree to have this filled in.",
-              "examples": [["pkg:owner/app:core:com.example.loans"]]},
+              "description": "Areas, packages, classes, files or folders: a key from the "
+                             "Graph's project tree (area:<repo>:<area>, "
+                             "pkg:<repo>:<area>:<package>, module:<repo>:<package>, a class's "
+                             "symbol: key, file:<repo>:<path>) or a plain repository path to a "
+                             "file or folder. Checked when the scan starts. Start the scan from "
+                             "the tree to have this filled in.",
+              "examples": [["pkg:owner/app:core:com.example.loans"],
+                           ["core/src/main/java/com/example/loans"]]},
+    "exclude_tests": {"type": "boolean", "default": True,
+                      "title": "Leave test code out (optional)",
+                      "description": "Test code exercises rules; it does not enforce them. On "
+                                     "by default; turn it off to read the tests too."},
     "max_files": {"type": "integer", "minimum": 1, "maximum": 500, "default": 60,
                   "title": "Most files to read (optional)",
                   "description": "The scan stops after reading this many files. Default 60."},

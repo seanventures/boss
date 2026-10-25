@@ -626,6 +626,11 @@ def test_work_the_runner_does_itself_stops_the_run_when_it_fails(eng, project, m
 
     monkeypatch.setattr(runner, INTERNAL[key], explode)
     monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([]))
+    # The scan's start check (workflows.START_INPUT_CHECKS) belongs to the scan this test
+    # replaces; with no code graph here it would refuse the run before the step it is about.
+    from boss_engine.services import workflows as _workflows
+
+    monkeypatch.setattr(_workflows, "START_INPUT_CHECKS", {})
 
     with eng.begin() as c:
         run = _two_step(c, project, key)

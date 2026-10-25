@@ -245,6 +245,11 @@ def test_every_catalogue_template_runs_to_its_last_step(eng, project, monkeypatc
         # proposed nothing, so the review gate steps aside (rule_scan.has_open_proposals).
         from boss_engine.services.knowledge import rule_scan
 
+        # The scan is stubbed below, and so is its start check (workflows.START_INPUT_CHECKS
+        # resolves the scope against the code graph, which this harness does not build).
+        monkeypatch.setattr(rule_scan, "validate_scope",
+                            lambda _c, _p, scope, **_k: list(scope or []))
+
         monkeypatch.setattr(rule_scan, "run_step", lambda *_a, **_k: {
             "capability": "scan_business_rules", "tool": None, "status": "succeeded",
             "scan_id": f"rscan_{uuid.uuid4().hex[:10]}", "files_read": 3, "rules_proposed": 0,

@@ -771,11 +771,13 @@ CAPABILITIES: dict[str, Capability] = {
             calls=("read_code",),
             # Spends model budget and writes inferred rules, which a person can reject.
             risk_tier=1,
-            # `scope`: area or package keys from the Graph's project tree. `budget_usd`: the
+            # `scope`: tree keys (area/pkg/module/symbol/file) or plain repository paths,
+            # checked when the run starts (workflows.START_INPUT_CHECKS). `budget_usd`: the
             # scan's own ceiling (default 2.00, at most the project's cap).
             required_inputs=("scope",),
             # `focus`: what the person wants read for first, in their words (the run's brief).
-            optional_inputs=("focus", "max_files", "max_rules", "budget_usd"),
+            # `exclude_tests`: leave test code out (default on).
+            optional_inputs=("focus", "max_files", "max_rules", "budget_usd", "exclude_tests"),
             produces=("scan_id", "files_read", "rules_proposed", "spend_usd", "stopped_by",
                       "report", "review_link"),
             requires_project=("repository",),
