@@ -4992,7 +4992,7 @@ def _repo_root(settings: Any, repo: str,
     """
     name = (repo or "boss").strip()
     if name in ("boss", "self", "platform", ""):
-        return _SOURCE_ROOT, None
+        return _boss_source_root(settings, ref)
 
     owner, _, short = name.rpartition("/")
     owner = owner or (getattr(settings, "target_github_owner", "") or "")
@@ -5054,6 +5054,94 @@ def _repo_root(settings: Any, repo: str,
         return None, "git is not installed in this environment"
     except Exception as exc:  # noqa: BLE001 — a read tool must not raise
         return None, f"{type(exc).__name__}: {exc}"[:200]
+
+
+#: WHERE EACH BOSS-SOURCE ROOT CAME FROM, keyed by the root a read tool was handed, so every
+#: answer can say which source it read ({"source": "self-source mirror"|"running tree",
+#: "ref": <sha or why not>}).
+_BOSS_ROOT_ORIGIN: dict[str, dict] = {}
+
+
+def _boss_source_root(settings: Any, ref: _Optional[str] = None
+                      ) -> tuple[_Optional[str], _Optional[str]]:
+    """BOSS's own source for the read tools: the WHOLE repository at the running commit.
+
+    The api image's /app carries only what the API executes (engine, apps/api, apps/worker,
+    apps/egress, db, docs) — no apps/web — so a console bug could never be read with file:line
+    evidence (brec_44ad2f55). The self-source mirror (a bare clone of the install checkout,
+    seeded by `boss self-fix seed`) holds every file at the exact commit the stack runs, so when
+    it exists the read tools read a checkout of it: `ref` if one was named, else the running
+    stack head. Checked out once per commit under the repo cache (read-only: no remote, write
+    bits removed). Without a mirror, or when the commit is not in it, the running tree — and the
+    answer says which (see `_source_origin`)."""
+    import shutil as _shutil
+    import uuid
+    from pathlib import Path as _Path
+
+    from ..services import self_fix as _sf
+    from ..services import self_fix_source as _sfs
+
+    wanted = (ref or "").strip() or _sf.running_stack_head()
+    fallback = {"source": "running tree", "ref": "the code this process runs"}
+    try:
+        if not _sfs.has_mirror(settings):
+            fallback["why"] = "no self-source mirror on this install (`boss self-fix seed`)"
+            _BOSS_ROOT_ORIGIN[_SOURCE_ROOT] = fallback
+            return _SOURCE_ROOT, None
+        if not wanted:
+            fallback["why"] = "this install's running commit is not stamped (BOSS_SOURCE_SHA)"
+            _BOSS_ROOT_ORIGIN[_SOURCE_ROOT] = fallback
+            return _SOURCE_ROOT, None
+        mirror = _sfs.mirror_of(settings)
+        try:
+            sha = _sfs.resolve(mirror, wanted)
+        except _sfs.SourceError:
+            if ref:
+                return None, f"no commit {ref!r} in BOSS's self-source mirror"
+            fallback["why"] = f"the running commit {wanted[:12]} is not in the mirror yet"
+            _BOSS_ROOT_ORIGIN[_SOURCE_ROOT] = fallback
+            return _SOURCE_ROOT, None
+        dest = _os.path.join(_REPO_CACHE, f"boss-self__{sha}")
+        if not _os.path.isdir(dest):
+            _os.makedirs(_REPO_CACHE, exist_ok=True)
+            # Built beside, then renamed into place: a second reader never sees half a tree.
+            staging = f"{dest}.tmp-{_os.getpid()}-{uuid.uuid4().hex[:6]}"
+            try:
+                _sfs.workspace(settings, sha, _Path(staging), source=mirror)
+                for dirpath, _dirs, filenames in _os.walk(staging):
+                    if _os.sep + ".git" in dirpath + _os.sep:
+                        continue
+                    for fname in filenames:
+                        full = _os.path.join(dirpath, fname)
+                        try:
+                            _os.chmod(full, _os.stat(full).st_mode & 0o555)
+                        except OSError:
+                            pass
+                try:
+                    _os.rename(staging, dest)
+                except OSError:
+                    if not _os.path.isdir(dest):
+                        raise
+            finally:
+                if _os.path.isdir(staging):
+                    _shutil.rmtree(staging, ignore_errors=True)
+        _BOSS_ROOT_ORIGIN[dest] = {"source": "self-source mirror", "ref": sha}
+        return dest, None
+    except Exception as exc:  # noqa: BLE001 — a read tool must not raise; the running tree answers
+        fallback["why"] = f"the mirror could not be read ({type(exc).__name__})"
+        _BOSS_ROOT_ORIGIN[_SOURCE_ROOT] = fallback
+        return _SOURCE_ROOT, None
+
+
+def _source_origin(repo: str, ref: _Optional[str], root: str) -> dict:
+    """Which source a read tool read: repo, ref, root, and for BOSS's own source whether it was
+    the mirror (whole repository, at that commit) or the running tree (and why)."""
+    origin = _BOSS_ROOT_ORIGIN.get(root)
+    if origin is not None and (repo or "boss") in ("boss", "self", "platform", ""):
+        return {"repo": repo or "boss", "root": root, "ref": origin["ref"],
+                "source": origin["source"],
+                **({"why_not_mirror": origin["why"]} if origin.get("why") else {})}
+    return {"repo": repo, "root": root, "ref": ref or "(default branch)"}
 
 
 #: A commit named by a prefix of its sha (what `git log --oneline`, the knowledge graph's pinned
@@ -7481,15 +7569,14 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
                                     "line": n, "text": line.rstrip()[:300],
                                 })
                                 if len(hits) >= limit:
-                                    return {"matches": hits, "truncated": True, "root": root,
-                                            "repo": repo, "ref": ref or "(default branch)"}
+                                    return {"matches": hits, "truncated": True,
+                                            **_source_origin(repo, ref, root)}
                 except (OSError, UnicodeDecodeError):
                     continue
         # WHICH SOURCE WAS READ, always. "No matches" means nothing unless you know where it
         # looked — that ambiguity is what let a search of an empty default branch read as
         # "this code does not exist".
-        return {"matches": hits, "truncated": False, "root": root,
-                "repo": repo, "ref": ref or "(default branch)"}
+        return {"matches": hits, "truncated": False, **_source_origin(repo, ref, root)}
 
     @reg.tool(
         "list_source",
@@ -7545,8 +7632,7 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
                     break
             if truncated:
                 break
-        return {"repo": repo, "ref": ref or "(default branch)", "root": root,
-                "files": files, "truncated": truncated}
+        return {**_source_origin(repo, ref, root), "files": files, "truncated": truncated}
 
     @reg.tool(
         "read_code",
@@ -7584,7 +7670,8 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
         end = min(total, int(args.get("end") or min(total, start + 399)))
         body = "".join(lines[start - 1:end])
         return {"file": args["file"], "total_lines": total, "start": start, "end": end,
-                "truncated": end < total, "content": body[:_MAX_FILE_BYTES]}
+                "truncated": end < total, "content": body[:_MAX_FILE_BYTES],
+                **_source_origin(repo, ref, root)}
 
     @reg.tool(
         "read_logs",
