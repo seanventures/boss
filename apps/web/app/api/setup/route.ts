@@ -14,12 +14,15 @@ import { rawRequestUrl } from "../../../lib/raw-request-url";
  * GET  ?project_id=&repos=<connection_id>  -> what the stored token can see (+ Add repo)
  * GET  ?project_id=&catalogue=<provider>   -> the provider's model list (stored key)
  * GET  ?project_id=&ci_workflows=<binding>  -> "Builds may change CI workflows" for a repo
+ * GET  ?project_id=&sign_in=<sign_in_id>   -> a subscription sign-in's state (polled)
  * POST {op, ...}                           -> one of OPS below
  */
 export const dynamic = "force-dynamic";
 
 type Op = { method: "POST" | "PUT" | "DELETE"; path: (b: Record<string, unknown>) => string;
-            query?: string[] };
+            query?: string[];
+            /** Keys that name the path only: they are not repeated in the body. */
+            pathOnly?: string[] };
 
 const enc = (v: unknown) => encodeURIComponent(String(v ?? ""));
 
@@ -56,6 +59,14 @@ const OPS: Record<string, Op> = {
   embedding_model: { method: "POST", path: () => "/v1/setup/embedding-model" },
   embedding_model_check: { method: "POST", path: () => "/v1/setup/embedding-model/check" },
   embedding_model_remove: { method: "DELETE", path: () => "/v1/setup/embedding-model", query: ["project_id"] },
+  // Add model › Subscription › Sign in (BOSSAPP-769): the provider's own login runs on the BOSS
+  // server. Start answers the session (URL + one-time code); a pasted-back code goes to the
+  // provider's CLI, never stored; Cancel kills the login.
+  sign_in_start: { method: "POST", path: () => "/v1/setup/sign-in" },
+  sign_in_code: { method: "POST", path: (b) => `/v1/setup/sign-in/${enc(b.sign_in_id)}/code`,
+                  pathOnly: ["sign_in_id"] },
+  sign_in_cancel: { method: "DELETE", path: (b) => `/v1/setup/sign-in/${enc(b.sign_in_id)}`,
+                    query: ["project_id"] },
 };
 
 async function forward(r: Response) {
@@ -82,7 +93,10 @@ export async function GET(req: Request) {
   const repos = url.searchParams.get("repos");
   const catalogue = url.searchParams.get("catalogue");
   const ciWorkflows = url.searchParams.get("ci_workflows");
-  const path = ciWorkflows
+  const signIn = url.searchParams.get("sign_in");
+  const path = signIn
+    ? `/v1/setup/sign-in/${enc(signIn)}?project_id=${enc(projectId)}`
+    : ciWorkflows
     ? `/v1/setup/repository/${enc(ciWorkflows)}/ci-workflows?project_id=${enc(projectId)}`
       + (url.searchParams.get("recheck") === "1" ? "&recheck=true" : "")
     : repos
@@ -118,6 +132,7 @@ export async function POST(req: Request) {
                              { status: 400 });
   }
   const { op: _op, ...payload } = body;
+  const pathOnly = new Set(op.pathOnly ?? []);
   // The press's key, for the routes that de-duplicate a repeated press themselves.
   const pressKey = req.headers.get("Idempotency-Key");
   if (pressKey && payload.idempotency_key === undefined) payload.idempotency_key = pressKey;
@@ -129,7 +144,8 @@ export async function POST(req: Request) {
     const r = await apiWrite(`${API_URL}${path}`, {
       method: op.method,
       headers: authHeaders({ "Content-Type": "application/json" }),
-      body: op.method === "DELETE" ? undefined : JSON.stringify(payload),
+      body: op.method === "DELETE" ? undefined : JSON.stringify(
+        Object.fromEntries(Object.entries(payload).filter(([k]) => !pathOnly.has(k)))),
       cache: "no-store",
     });
     return await forward(r);

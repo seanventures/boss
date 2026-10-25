@@ -4,9 +4,12 @@
  * The server decides every pill — label, tone, tooltip, action — so the console only renders.
  * Nothing in apps/web computes a tone from a state (tests/setup-renders-server-pills.test.tsx).
  */
+import type { SetupDetectedFound } from "@boss/api-client";
 
 export type Tone = "green" | "amber" | "red" | "grey" | "busy";
-export type PillAction = "connect" | "test" | "replace" | "fix_link" | "budget" | "default_model";
+/** `sign_in`: a subscription whose login failed — it opens Sign in, never Replace (BOSSAPP-769). */
+export type PillAction = "connect" | "test" | "replace" | "fix_link" | "budget" | "default_model"
+  | "sign_in";
 
 export type Pill = {
   state: string;
@@ -63,7 +66,9 @@ export type ModelEntry = {
   scope?: "org" | "project";
 };
 
-export type Found = "signed_in" | "needs_token" | "needs_file" | "not_on_server" | "found";
+/** Subscriptions: signed_in | needs_sign_in | not_on_server (nothing is pasted any more). Local:
+ *  found | not_on_server. The wire type lives in @boss/api-client (SetupDetectedFound). */
+export type Found = SetupDetectedFound;
 
 export type Detected = {
   provider: string;

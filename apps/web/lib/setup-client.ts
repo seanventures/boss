@@ -8,6 +8,7 @@
 import { apiWrite } from "./api-write";
 import { askConsent, consentFromBody } from "./identity/consent";
 import { identityRefusal, identitySentence } from "./identity/guarded-action";
+import type { SignInSession } from "@boss/api-client";
 import type { SetupRefusal, SetupView, TokenFound } from "./setup-types";
 
 export class SetupFailure extends Error {
@@ -87,6 +88,17 @@ export async function fetchCiWorkflows(projectId: string, bindingId: string,
                         { cache: "no-store" });
   return read<CiWorkflows>(r);
 }
+
+/** A subscription sign-in's state (GET /v1/setup/sign-in/{id}), polled while it waits. */
+export async function fetchSignIn(projectId: string, signInId: string): Promise<SignInSession> {
+  const r = await fetch(`/api/setup?project_id=${encodeURIComponent(projectId)}`
+                        + `&sign_in=${encodeURIComponent(signInId)}`, { cache: "no-store" });
+  return read<SignInSession>(r);
+}
+
+/** A sign-in that is still running: one the provider's CLI is waiting on. */
+export const signInLive = (s: SignInSession | null): boolean =>
+  !!s && (s.state === "starting" || s.state === "waiting");
 
 /** A write. `label` is the button's own words (the press registry quotes it on a refusal);
  *  a background write (an automatic re-check) passes `background` and takes no press scope. */

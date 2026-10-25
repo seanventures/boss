@@ -2,19 +2,23 @@
 
 /**
  * Add a model: three kinds of thing, never one dropdown mixing them. A subscription you sign
- * into, an API key you paste, or a local model on your hardware. Every Connect stores the
- * credential and asks one tiny question — budgeted and receipted — before saying Working.
+ * into, an API key you paste, or a local model on your hardware. Every Connect asks one tiny
+ * question — budgeted and receipted — before saying Working.
+ *
+ * A subscription (Codex, Claude Code, Grok) is never pasted, dropped or imported: Sign in runs the
+ * provider's own login on the BOSS server, then Connect proves it (BOSSAPP-769).
  */
 import { GatedButton } from "../../components/gated";
 import React, { useEffect, useRef, useState } from "react";
-import { Copy } from "@phosphor-icons/react";
+import type { SignInSession } from "@boss/api-client";
 
 import { SetupFailure, fetchSetup, setupWrite } from "../../lib/setup-client";
 import type {
-  CatalogueEntry, Detected, Found, HeldProof, SetupRefusal, SetupView,
+  CatalogueEntry, Detected, Found, HeldProof, ModelEntry, SetupRefusal, SetupView,
 } from "../../lib/setup-types";
 import { Consent, toast, useBoard } from "./parts";
-import { Out, Refusal, Tip } from "./pill";
+import { Out, Pill, Refusal, Tip } from "./pill";
+import { SIGN_IN_PROVIDERS, SubscriptionSignIn } from "./subscription-sign-in";
 
 type Tile = "subscription" | "api_key" | "local";
 
@@ -25,8 +29,12 @@ const TILES: Array<{ tile: Tile; label: string; tip: string }> = [
 ];
 
 const FOUND_LABEL: Record<Found, string> = {
-  signed_in: "Found", found: "Found", needs_token: "Needs token", needs_file: "Needs file",
-  not_on_server: "Not on server",
+  signed_in: "Signed in", found: "Found", needs_sign_in: "Sign in", not_on_server: "Not on server",
+};
+const FOUND_TIP: Record<Found, string> = {
+  signed_in: "Already signed in on the BOSS server.", found: "Found on this server.",
+  needs_sign_in: "Sign in below. Runs on the BOSS server.",
+  not_on_server: "Install it on the BOSS server first.",
 };
 
 function refusalOf(error: unknown): SetupRefusal {
@@ -103,27 +111,23 @@ export function HeldProofNotice({ hold, onReleased }: {
   );
 }
 
-function CopyChip({ text, tip }: { text: string; tip: string }) {
-  return (
-    <button type="button" className="su-copy" title={tip} data-tip={tip}
-            data-testid="su-copy-chip"
-            onClick={() => { void navigator.clipboard?.writeText(text).catch(() => undefined); }}>
-      <code>{text}</code><Copy size={12} aria-label="copy" />
-    </button>
-  );
-}
-
-export function AddModelPanel({ initialTile, initialProvider, onDone, replaceSourceId }: {
+export function AddModelPanel({ initialTile, initialProvider, onDone, replaceSourceId,
+                               startSignIn = false }: {
   initialTile: Tile; initialProvider: string; onDone?: () => void;
-  /** Replace: the one connection this replaces (a new key never overwrites another). */
+  /** Replace: the one KEY connection this replaces (a new key never overwrites another). A
+   *  subscription is never replaced: it signs in again. */
   replaceSourceId?: string;
+  /** Opened from a row's Sign in: start the provider's login at once. */
+  startSignIn?: boolean;
 }) {
   const { projectId, view, apply } = useBoard();
   const [tile, setTile] = useState<Tile>(initialTile);
   const [provider, setProvider] = useState(initialProvider);
   const [secret, setSecret] = useState("");
-  const [file, setFile] = useState("");
-  const [fileName, setFileName] = useState("");
+  const [session, setSession] = useState<SignInSession | null>(null);
+  const [again, setAgain] = useState(startSignIn);
+  const [attempt, setAttempt] = useState(0);
+  const [result, setResult] = useState<ModelEntry["pill"] | null>(null);
   const [baseUrl, setBaseUrl] = useState("");
   const [model, setModel] = useState("");
   const [models, setModels] = useState<string[]>([]);
@@ -135,14 +139,16 @@ export function AddModelPanel({ initialTile, initialProvider, onDone, replaceSou
   const entry: CatalogueEntry | undefined = view.catalogue.find((c) => c.provider === provider);
   const detected: Detected | undefined = view.detected.find((d) => d.provider === provider);
   const chips = view.catalogue.filter((c) => c.kind === tile);
-  const signedIn = detected?.found === "signed_in";
-  // A CLI that is not on the server cannot use a pasted token: say so instead of a field.
+  // Codex, Claude Code and Grok sign in here; another subscription (Cursor) is detected only.
+  const signsIn = tile === "subscription" && SIGN_IN_PROVIDERS.has(provider);
+  const detectedIn = detected?.found === "signed_in";
+  const signedIn = session?.state === "signed_in" || (detectedIn && !again);
   const notOnServer = detected?.found === "not_on_server";
-  const onServerOnly = provider === "grok" || provider === "cursor";
 
   useEffect(() => {
     // A new provider is a new form: nothing typed for the last one carries over.
-    setSecret(""); setFile(""); setFileName(""); setModels([]); setRefusal(null);
+    setSecret(""); setModels([]); setRefusal(null); setResult(null);
+    setAgain(startSignIn && provider === initialProvider);
     // REPLACE ASKS FOR THE KEY ONLY: the model and URL of the connection it replaces stay.
     const replacing = view.models.find((m) => m.source_id === replaceSourceId
                                               && m.provider === provider);
@@ -172,12 +178,12 @@ export function AddModelPanel({ initialTile, initialProvider, onDone, replaceSou
 
   // A HELD PROOF BLOCKS CONNECT for its provider until a person reviews and releases it.
   const held = (view.held_proofs ?? []).filter((h) => h.provider === provider);
-  const needsConsent = view.secrets.needs_consent && (tile !== "local" || !!secret);
+  // A subscription stores no secret, so it asks no consent to store one.
+  const needsConsent = view.secrets.needs_consent && (tile === "api_key" || (tile === "local" && !!secret));
   const fields = entry?.fields ?? [];
   let ready = !busy && held.length === 0 && (!needsConsent || consent);
   if (tile === "subscription") {
-    if (onServerOnly || notOnServer) ready = ready && signedIn;
-    else if (!signedIn) ready = ready && (provider === "codex" ? !!file : !!secret.trim());
+    ready = ready && !notOnServer && signedIn;
   } else if (tile === "api_key") {
     // THE PROOF ASKS EXACTLY THE MODEL TYPED: an empty field is not quietly the example.
     ready = ready && (provider === "custom" ? !!baseUrl.trim() && !!model.trim()
@@ -195,8 +201,10 @@ export function AddModelPanel({ initialTile, initialProvider, onDone, replaceSou
     if (held.length) return "Release the hold first";
     if (needsConsent && !consent) return "Accept to continue first";
     if (tile === "subscription") {
-      if (onServerOnly || notOnServer) return "Install and sign in on the BOSS server first";
-      if (!signedIn) return provider === "codex" ? "Drop auth.json first" : "Paste a token first";
+      if (notOnServer) return "Install it on the BOSS server first";
+      if (!signsIn) return "Sign in on the BOSS server first";
+      if (session && (session.state === "starting" || session.state === "waiting")) return "Finish signing in first";
+      if (!signedIn) return "Sign in first";
       return "";
     }
     if (tile === "api_key") {
@@ -217,18 +225,21 @@ export function AddModelPanel({ initialTile, initialProvider, onDone, replaceSou
   const connect = async () => {
     setBusy(true);
     setRefusal(null);
-    const sent = { secret, file };
-    setSecret(""); setFile(""); setFileName("");           // cleared on every submit
+    setResult(null);
+    const sent = secret;
+    setSecret("");                                          // cleared on every submit
     try {
-      const next = await setupWrite<SetupView>(projectId, "models", {
-        provider, kind: tile,
-        api_key: tile !== "subscription" ? sent.secret || undefined : undefined,
-        credential: tile === "subscription" && sent.secret ? sent.secret : undefined,
-        credential_file: tile === "subscription" && sent.file ? sent.file : undefined,
-        base_url: baseUrl || undefined, model: model.trim() || undefined,
-        accept_database_fallback: needsConsent ? consent : undefined,
-        source_id: replaceSourceId,
-      }, { label: "Connect" });
+      // A SUBSCRIPTION SENDS NO CREDENTIAL: the login already lives on the BOSS server, and
+      // Connect only proves it. It replaces nothing (no source_id) and stores no secret.
+      const next = await setupWrite<SetupView>(projectId, "models", tile === "subscription"
+        ? { provider, kind: tile }
+        : {
+          provider, kind: tile,
+          api_key: sent || undefined,
+          base_url: baseUrl || undefined, model: model.trim() || undefined,
+          accept_database_fallback: needsConsent ? consent : undefined,
+          source_id: replaceSourceId,
+        }, { label: "Connect" });
       apply(next);
       // SAY WHAT THE CHECK SAID: a busy provider's key is kept, but it is not "Working".
       const before = new Set(view.models.map((m) => m.source_id));
@@ -236,7 +247,16 @@ export function AddModelPanel({ initialTile, initialProvider, onDone, replaceSou
         ?? next.models.find((m) => !before.has(m.source_id) && m.provider === provider)
         ?? next.models.find((m) => m.provider === provider);
       const label = row?.pill.label ?? "Working";
-      toast(`Connected · ${label}`, row && row.pill.tone !== "green" ? "error" : "success");
+      const proven = !row || row.pill.tone === "green";
+      toast(`Connected · ${label}`, proven ? "success" : "error");
+      // A subscription whose proof failed stays open on its pill, so Sign in again is right here.
+      if (tile === "subscription" && row && !proven) {
+        setResult(row.pill);
+        setSession(null);
+        setAgain(true);
+        setAttempt((n) => n + 1);                           // a fresh Sign in, not the old one
+        return;
+      }
       onDone?.();
     } catch (error) {
       const refused = refusalOf(error);
@@ -272,11 +292,8 @@ export function AddModelPanel({ initialTile, initialProvider, onDone, replaceSou
                     className="su-provider" data-testid={`su-provider-${c.provider}`}
                     onClick={() => setProvider(c.provider)}>
               {c.label}
-              {d && (tile === "subscription" || d.found === "found") ? (
-                <Tip tip={d.found === "not_on_server" ? "Install and sign in on the BOSS server first."
-                     : d.found === "signed_in" ? "Already signed in on the BOSS server."
-                     : d.found === "found" ? "Found on this server." : "Paste it below."}
-                     className={`su-found su-found-${d.found}`}>
+              {d && (tile === "subscription" || d.found === "found") && FOUND_LABEL[d.found] ? (
+                <Tip tip={FOUND_TIP[d.found]} className={`su-found su-found-${d.found}`}>
                   {FOUND_LABEL[d.found]}
                 </Tip>
               ) : null}
@@ -286,46 +303,31 @@ export function AddModelPanel({ initialTile, initialProvider, onDone, replaceSou
       </div>
 
       <div className="su-form">
-        {tile === "subscription" && signedIn ? (
-          <Tip tip="Already signed in on the BOSS server." className="su-faint">Found</Tip>
-        ) : null}
-        {tile === "subscription" && notOnServer && !onServerOnly ? (
-          <Tip tip="Install and sign in on the BOSS server first." className="su-faint"
+        {tile === "subscription" && notOnServer ? (
+          <Tip tip="Install it on the BOSS server, then sign in here." className="su-faint"
                testid="su-not-on-server">Not on server</Tip>
         ) : null}
-        {tile === "subscription" && !signedIn && !notOnServer && provider === "claude_code" ? (
-          <>
-            <CopyChip text="claude setup-token" tip="Run on your computer. Paste the token it prints." />
-            <label className="su-field">
-              <span className="su-field-label">Token</span>
-              <input type="password" autoComplete="off" spellCheck={false} value={secret}
-                     data-testid="su-model-token" aria-label="Token"
-                     title="Stored in BOSS's secret store. Never shown again."
-                     onChange={(e) => setSecret(e.target.value)} />
-            </label>
-          </>
+        {tile === "subscription" && !notOnServer && detectedIn && !again && !session ? (
+          <span className="su-line" data-testid="su-signed-in-on-server">
+            <Tip tip="Already signed in on the BOSS server. Connect checks it." className="su-faint">
+              Signed in on server
+            </Tip>
+            {signsIn ? (
+              <button type="button" className="su-link" data-testid="su-signin-again"
+                      title="Runs the provider's sign-in again on the BOSS server."
+                      onClick={() => setAgain(true)}>Sign in again</button>
+            ) : null}
+          </span>
         ) : null}
-        {tile === "subscription" && !signedIn && !notOnServer && provider === "codex" ? (
-          <>
-            <CopyChip text="~/.codex/auth.json" tip="After codex login on your computer, drop this file." />
-            <label className="su-drop" data-testid="su-model-file">
-              <input type="file" accept=".json,application/json" aria-label="Drop auth.json"
-                     onChange={async (e) => {
-                       const picked = e.target.files?.[0];
-                       e.target.value = "";
-                       if (!picked) return;
-                       setFile(await picked.text());
-                       setFileName(picked.name);
-                     }} />
-              <span>{fileName ? fileName : "Drop auth.json"}</span>
-            </label>
-          </>
+        {tile === "subscription" && !signsIn && !notOnServer && !detectedIn ? (
+          <Tip tip="Sign in on the BOSS server, then Connect." className="su-faint">Not signed in</Tip>
         ) : null}
-        {tile === "subscription" && !signedIn && onServerOnly ? (
-          <Tip tip="Install and sign in on the BOSS server, then Connect." className="su-faint">
-            Not on server
-          </Tip>
+        {signsIn && !notOnServer && (!detectedIn || again || session) ? (
+          <SubscriptionSignIn key={`${provider}:${attempt}`} provider={provider}
+                              label={entry?.label ?? provider}
+                              autoStart={startSignIn && attempt === 0} onSession={setSession} />
         ) : null}
+        {result ? <Pill pill={result} testid="su-connect-result" /> : null}
 
         {fields.includes("base_url") ? (
           <label className="su-field">

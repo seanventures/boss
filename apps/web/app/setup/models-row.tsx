@@ -16,6 +16,12 @@ import { Drawer } from "./drawer";
 import { AskBoss, RowMenu, toast, useBoard } from "./parts";
 import { Out, Pill, Tip } from "./pill";
 import { SetupRow } from "./setup-row";
+import { SIGN_IN_PROVIDERS } from "./subscription-sign-in";
+
+/** A subscription BOSS signs in itself: it signs in again, it is never Replaced (BOSSAPP-769). */
+const signsIn = (entry: ModelEntry) => entry.kind === "subscription" && SIGN_IN_PROVIDERS.has(entry.provider);
+
+type Opening = { provider: string; sourceId?: string; signIn?: boolean };
 
 const KIND = {
   subscription: { label: "Subscription", tip: "Your plan. No per-call charge; plan limits apply." },
@@ -56,18 +62,22 @@ function DefaultModel({ entry, onDone }: { entry: ModelEntry; onDone: () => void
   );
 }
 
-function ModelLine({ entry, menuOpen, onReplace, replacing }: {
+function ModelLine({ entry, menuOpen, onReplace, onSignIn, replacing }: {
   entry: ModelEntry; menuOpen: boolean; onReplace: (provider: string, sourceId: string) => void;
+  onSignIn: (provider: string, sourceId: string) => void;
   /** The Add model drawer is open to paste this row a new key. Its last check no longer
    *  describes anything — a stale "Paused · budget" sat there while the operator typed a
    *  fresh key that had not been tested yet (boss-1 rc10.9, Setup > Add a model). */
   replacing: boolean;
 }) {
+  const again = signsIn(entry);
   const { projectId, apply, checking, setChecking } = useBoard();
   const key = `model:${entry.source_id}`;
   const busy = checking.has(key) || checking.has("all");
   const pill = busy ? { state: "checking", tone: "busy" as const, label: "Checking…",
                         tip: "Asking one tiny question. Budgeted." }
+             : replacing && again ? { state: "editing", tone: "grey" as const, label: "Signing in…",
+                                      tip: "Signing in again. The old check no longer applies." }
              : replacing ? { state: "editing", tone: "grey" as const, label: "Editing…",
                              tip: "Testing a new key. The old check no longer applies." }
              : entry.pill;
@@ -119,8 +129,10 @@ function ModelLine({ entry, menuOpen, onReplace, replacing }: {
         ) : null}
         <RowMenu label={`${entry.label} actions`} testid="su-model-menu" open={menuOpen} items={[
           { label: "Test", onSelect: test, testid: "su-menu-test" },
-          { label: "Replace", onSelect: () => onReplace(entry.provider, entry.source_id),
-            testid: "su-menu-replace" },
+          again ? { label: "Sign in", onSelect: () => onSignIn(entry.provider, entry.source_id),
+                    testid: "su-menu-sign-in" }
+                : { label: "Replace", onSelect: () => onReplace(entry.provider, entry.source_id),
+                    testid: "su-menu-replace" },
           ...(canPick ? [{ label: "Default model…", onSelect: () => setPicking(true),
                            testid: "su-menu-default-model" }] : []),
           ...(entry.source === "connected" ? [{ label: "Remove", danger: true,
@@ -130,7 +142,16 @@ function ModelLine({ entry, menuOpen, onReplace, replacing }: {
       </div>
       {red || pill.tone === "amber" ? (
         <div className="su-line su-fix">
-          {entry.pill.action === "replace" ? (
+          {entry.pill.action === "sign_in" || (entry.pill.action === "replace" && again) ? (
+            <GatedButton permission="model_provider:manage" type="button" className="su-btn su-btn-sm"
+                         data-testid="su-model-sign-in"
+                         title="Runs the provider's sign-in on the BOSS server, then checks it."
+                         data-tip="Runs the provider's sign-in on the BOSS server, then checks it."
+                         onClick={() => onSignIn(entry.provider, entry.source_id)}>
+              Sign in
+            </GatedButton>
+          ) : null}
+          {entry.pill.action === "replace" && !again ? (
             <GatedButton permission="model_provider:manage" type="button" className="su-btn su-btn-sm"
                     onClick={() => onReplace(entry.provider, entry.source_id)}>
               Replace
@@ -172,8 +193,8 @@ export const ModelsRow = forwardRef<HTMLElement, {
   onAddHandled: () => void; children?: React.ReactNode;
 }>(function ModelsRow({ mode, step, focused, add, source, onAddHandled, children }, ref) {
   const { view } = useBoard();
-  const [drawer, setDrawer] = useState<{ provider: string; sourceId?: string } | null>(null);
-  const opening = drawer ?? (add ? { provider: add } : null);
+  const [drawer, setDrawer] = useState<Opening | null>(null);
+  const opening: Opening | null = drawer ?? (add ? { provider: add } : null);
   const close = () => { setDrawer(null); onAddHandled(); };
   const start = defaultAdd(view);
   const working = view.models.find((m) => m.pill.tone === "green") ?? view.models[0];
@@ -191,9 +212,13 @@ export const ModelsRow = forwardRef<HTMLElement, {
                className="su-chip">From install</Tip>
         ) : null}
         <RowMenu label={`${working.label} actions`} testid="su-model-menu" items={[
-          { label: "Replace", onSelect: () => setDrawer({ provider: working.provider,
-                                                          sourceId: working.source_id }),
-            testid: "su-menu-replace" },
+          signsIn(working)
+            ? { label: "Sign in", onSelect: () => setDrawer({ provider: working.provider,
+                                                              sourceId: working.source_id, signIn: true }),
+                testid: "su-menu-sign-in" }
+            : { label: "Replace", onSelect: () => setDrawer({ provider: working.provider,
+                                                              sourceId: working.source_id }),
+                testid: "su-menu-replace" },
           { label: "Add model", onSelect: () => setDrawer({ provider: start.provider }),
             testid: "su-menu-add" },
         ]} />
@@ -216,7 +241,8 @@ export const ModelsRow = forwardRef<HTMLElement, {
         {view.models.map((entry) => (
           <ModelLine key={entry.source_id} entry={entry} menuOpen={source === entry.source_id}
                      replacing={!!drawer?.sourceId && drawer.sourceId === entry.source_id}
-                     onReplace={(provider, sourceId) => setDrawer({ provider, sourceId })} />
+                     onReplace={(provider, sourceId) => setDrawer({ provider, sourceId })}
+                     onSignIn={(provider, sourceId) => setDrawer({ provider, sourceId, signIn: true })} />
         ))}
         <GatedButton permission="model_provider:manage" type="button" className="su-link su-add" data-testid="su-add-model-open"
                 onClick={() => setDrawer({ provider: start.provider })}>
@@ -232,11 +258,12 @@ export const ModelsRow = forwardRef<HTMLElement, {
               tip="What BOSS thinks with: subscriptions, keys and local models.">
       {body}
       {showDrawer ? (
-        <Drawer title="Add a model" onClose={close} testid="su-model-drawer">
-          <AddModelPanel key={`${opening!.provider}:${drawer?.sourceId ?? ""}`}
+        <Drawer title={opening!.signIn ? "Sign in" : "Add a model"} onClose={close} testid="su-model-drawer">
+          <AddModelPanel key={`${opening!.provider}:${drawer?.sourceId ?? ""}:${opening!.signIn ? "in" : ""}`}
                          initialTile={tileOf(view, opening!.provider)}
                          initialProvider={opening!.provider} onDone={close}
-                         replaceSourceId={drawer?.sourceId} />
+                         replaceSourceId={opening!.signIn ? undefined : drawer?.sourceId}
+                         startSignIn={!!opening!.signIn} />
         </Drawer>
       ) : null}
       {children}
