@@ -47,7 +47,11 @@ KIND_SUBSCRIPTION = "subscription"
 KIND_STORED_KEY = "stored_key"
 KIND_ENV_KEY = "env_key"
 KIND_NONE = "none"
-KINDS = (KIND_SUBSCRIPTION, KIND_STORED_KEY, KIND_ENV_KEY, KIND_NONE)
+#: The Claude subscription signed in INSIDE BOSS (console Sign in / `boss connect claude`): the
+#: CLI's own login in its config dir, shared by the API and worker. Nothing to inject — the
+#: child must simply be given no API key, which would take precedence over the login.
+KIND_CLI_LOGIN = "cli_login"
+KINDS = (KIND_SUBSCRIPTION, KIND_CLI_LOGIN, KIND_STORED_KEY, KIND_ENV_KEY, KIND_NONE)
 
 
 @dataclass(frozen=True)
@@ -238,7 +242,8 @@ def resolve_claude_credential(settings: Any, *, connection: Any = None,
             value = ""
         if value:
             _register(value)
-        return ClaudeCredential(bound if value or bound == KIND_NONE else KIND_NONE, value)
+        keep = value or bound in (KIND_NONE, KIND_CLI_LOGIN)
+        return ClaudeCredential(bound if keep else KIND_NONE, value)
 
     order = order_of(settings, connection, project_id)
     disconnected = subscription_disconnected(connection, project_id)
@@ -246,11 +251,14 @@ def resolve_claude_credential(settings: Any, *, connection: Any = None,
     def subscription() -> str:
         return "" if disconnected else _subscription_token(settings, connection, project_id)
 
-    steps = [(KIND_SUBSCRIPTION, subscription),
+    def cli_login() -> str:
+        return "" if disconnected or not cli_login_present() else _CLI_LOGIN_MARK
+
+    steps = [(KIND_SUBSCRIPTION, subscription), (KIND_CLI_LOGIN, cli_login),
              (KIND_STORED_KEY, lambda: _stored_key(settings, connection, project_id)),
              (KIND_ENV_KEY, lambda: _env_key(settings))]
     if order == API_KEY_FIRST:
-        steps = steps[1:] + steps[:1]
+        steps = steps[2:] + steps[:2]
     for kind, read in steps:
         try:
             value = (read() or "").strip()
@@ -260,10 +268,31 @@ def resolve_claude_credential(settings: Any, *, connection: Any = None,
                 _register(env)
                 return ClaudeCredential(KIND_ENV_KEY, env)
             raise
+        if kind == KIND_CLI_LOGIN and value:
+            return ClaudeCredential(KIND_CLI_LOGIN)
         if value:
             _register(value)
             return ClaudeCredential(kind, value)
     return ClaudeCredential(KIND_NONE)
+
+
+_CLI_LOGIN_MARK = "cli-login"
+
+
+def cli_login_present() -> bool:
+    """Is the Claude CLI signed in with its OWN login in this process's config dir — the
+    private, service-user-owned `.credentials.json` that `claude auth login` writes? A file
+    check, not a CLI call: it runs on every resolution. Never raises; never reads a value."""
+    import stat as _stat
+
+    home = os.path.expanduser(os.environ.get("CLAUDE_CONFIG_DIR", "") or "~/.claude")
+    path = os.path.join(home, ".credentials.json")
+    try:
+        info = os.stat(path)
+    except OSError:
+        return False
+    return (_stat.S_ISREG(info.st_mode) and info.st_size > 2 and info.st_uid == os.geteuid()
+            and info.st_mode & 0o077 == 0)
 
 
 def bind_claude_credential(settings: Any, *, connection: Any = None,
