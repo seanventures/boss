@@ -17,6 +17,7 @@ import {
   loadedAreasCookie,
   loadedAreasCookieValue,
   parseLoadedAreas,
+  CLIENT_FED_AREAS,
 } from "../lib/area-loading";
 import { codeOnly } from "./_helpers/source";
 
@@ -25,13 +26,22 @@ const headers = (h: Record<string, string>) => (name: string) => h[name] ?? null
 describe("which areas a render includes", () => {
   it("a browser load renders only the requested area, whatever the session opened", () => {
     expect([...areasToRender({ requested: "decisions", cookie: "overview,workforce",
-                                fullDocument: true })]).toEqual(["decisions"]);
+                                fullDocument: true })]).toEqual(["decisions", ...CLIENT_FED_AREAS]);
+  });
+
+  it("an area the server fetches nothing for is in every render, so opening it is a reveal", () => {
+    // NorthPeak Bank's graph sat on "Loading Knowledge Graph…" ~20 s: the round trip re-fetched
+    // every other opened area's feeds for an area that reads its own views in the browser.
+    expect(CLIENT_FED_AREAS).toEqual(["knowledge"]);
+    for (const fullDocument of [true, false]) {
+      expect(areasToRender({ requested: "overview", cookie: "", fullDocument }).has("knowledge")).toBe(true);
+    }
   });
 
   it("a refresh keeps every area the session opened, so none on screen is unmounted", () => {
     const areas = areasToRender({ requested: "decisions", cookie: "overview,workforce",
                                   fullDocument: false });
-    expect([...areas].sort()).toEqual(["decisions", "overview", "workforce"]);
+    expect([...areas].sort()).toEqual(["decisions", "knowledge", "overview", "workforce"]);
   });
 
   it("a router refresh and a server action both count as not a browser load", () => {
@@ -55,7 +65,7 @@ describe("which areas a render includes", () => {
     expect(parseLoadedAreas(Array.from({ length: 500 }, (_, i) => `a${i}`).join(","))
       .length).toBeLessThanOrEqual(64);
     expect(areasToRender({ requested: "<bad>", cookie: "", fullDocument: true }))
-      .toEqual(new Set(["overview"]));
+      .toEqual(new Set(["overview", ...CLIENT_FED_AREAS]));
   });
 
   it("the cookie round-trips and only grows", () => {

@@ -14,6 +14,7 @@
  *
  * HEALTH is money against the cap and the seven systems, each a link to the area that fixes it.
  */
+import { withoutIds } from "../../lib/actor-words";
 import React, { useState } from "react";
 
 import type { AttentionItem, Mission } from "../../lib/agents-live-board";
@@ -71,27 +72,27 @@ export function needRow(item: AttentionItem, now: number | null): NeedRow {
   }
   if (item.kind === "approval" && item.build) {
     return { item, roleKey: item.roleKey, icon: "⇡", primary: true,
-             title: `${cut(item.title)}${app ? ` · ${app}` : ""}`,
+             title: `${cut(withoutIds(item.title))}${app ? ` · ${app}` : ""}`,
              sub: [who ? `${who} built it` : "Factory", waited && `waiting ${waited}`].filter(Boolean).join(" · ") };
   }
   if (item.kind === "approval") {
     const source = item.source || item.run?.subject || (item.decisionKind === "refusal" ? "Budget" : "");
     const money = /spend|budget|cost/i.test(source) || item.decisionKind === "refusal";
     return { item, roleKey: item.roleKey, icon: money ? "$" : "?", primary: !!item.roleKey,
-             title: cut(item.title),
+             title: cut(withoutIds(item.title)),
              sub: [source, waited && (item.run ? `waiting ${waited}` : `raised ${waited} ago`)].filter(Boolean).join(" · ") };
   }
   if (item.kind === "readiness") {
-    return { item, roleKey: null, icon: "⚙", primary: false, title: `Setup: ${item.title}`,
+    return { item, roleKey: null, icon: "⚙", primary: false, title: `Setup: ${withoutIds(item.title)}`,
              sub: item.detail || "Builds can't start until this is done" };
   }
   if (item.kind === "system_health") {
-    return { item, roleKey: null, icon: "↺", primary: false, title: item.title,
+    return { item, roleKey: null, icon: "↺", primary: false, title: withoutIds(item.title),
              sub: [item.detail, waited && `${waited} ago`].filter(Boolean).join(" · ") };
   }
   // A failed step, a build stopped at its checks or its budget, the budget refusing at the door.
   return { item, roleKey: item.roleKey, icon: item.kind === "budget_refused" ? "$" : "!", primary: false,
-           title: item.title,
+           title: withoutIds(item.title),
            sub: [item.detail, waited && `${waited} ago`].filter(Boolean).join(" · ") };
 }
 

@@ -157,7 +157,10 @@ export function GraphArea({ projectId, actor, orgId, archived = false, projectTy
   const totalNodes = (repos.data ?? []).reduce((s, r) => s + (r.graph?.nodes ?? 0), 0);
 
   const stepsLeft = setup.data ? setup.data.steps.length - setup.data.done_count : 0;
-  const showSetupTab = isKgProject || tab === "setup";
+  // Any project with a graph has a setup to finish (its team, a first scan), not only one created
+  // as a knowledge-graph project (tester round 2: NorthPeak Bank had no strip).
+  const hasGraph = !!setup.data?.has_graph;
+  const showSetupTab = isKgProject || hasGraph || tab === "setup";
   const TABS: HeadTab[] = [
     ...(showSetupTab ? [{ key: "setup", label: "Setup", tip: "Import code, assign the team, a first scan, review: this project's knowledge graph, in order",
                            count: stepsLeft ? stepsLeft : undefined }] : []),
@@ -207,7 +210,7 @@ export function GraphArea({ projectId, actor, orgId, archived = false, projectTy
       {archived ? <KgArchived /> : null}
       {/* Over a graph only: the Start card already says what the three layers are. */}
       {tab === "graph" && anyIndexed ? <KgIntro /> : null}
-      {tab === "graph" && isKgProject && setup.data?.next && anyIndexed ? (
+      {tab === "graph" && (isKgProject || hasGraph) && setup.data?.next && anyIndexed ? (
         <KgSetupStrip setup={setup.data} onOpen={() => changeTab("setup")} />
       ) : null}
       {repos.error && !repos.data && tab === "graph" ? (

@@ -52,7 +52,8 @@ describe("2. the canvas starts high", () => {
     expect(css).toContain('.panel-stack[data-area="knowledge"] { padding: 10px 12px 12px; gap: 6px; }');
     expect(css).toMatch(/\.bx-content\[data-active="knowledge"\]:has\(\.kg\) \{[^}]*padding-top: 12px/);
     expect(css).toMatch(/\.kg-toolbar \{[^}]*padding: 6px 10px/);
-    expect(css).toMatch(/\.kg-subbar > \.kg-view-note \{[^}]*white-space: nowrap/);
+    // Round 2 of the project flow: the hint wraps rather than cut its sentence.
+    expect(css).toMatch(/\.kg-subbar > \.kg-view-note \{[^}]*white-space: normal/);
   });
 });
 

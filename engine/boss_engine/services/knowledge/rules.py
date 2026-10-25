@@ -407,7 +407,25 @@ def list_rules(
         f"SELECT id FROM kg_nodes WHERE {listed} ORDER BY first_seen DESC, id LIMIT :n"),
         {**params, "status": status, "n": max(1, min(int(limit), 500))}).scalars().all()
     return {"items": [rule_payload(connection, project_id, rid) for rid in ids],
-            "counts": counts, "scan_id": scan_id}
+            "counts": counts, "scan_id": scan_id, "scans": scan_labels(connection, project_id)}
+
+
+def scan_labels(connection: Connection, project_id: str) -> list[dict[str, Any]]:
+    """Every scan that proposed rules here, by what it read and when — never its raw id (tester
+    round 2: the Scan filter listed `rscan_caa44184979a_scan`). Newest first."""
+    from .learning_writeback import run_title
+
+    rows = connection.execute(text(
+        "SELECT attrs->>'scan_id' AS scan, max(attrs->'provenance'->>'workflow_run_id') AS run, "
+        "min(first_seen) AS at, count(*) AS n FROM kg_nodes WHERE project_id = :p AND kind = 'rule' "
+        "AND attrs->>'scan_id' IS NOT NULL GROUP BY 1 ORDER BY min(first_seen) DESC LIMIT 50"),
+        {"p": project_id}).mappings().all()
+    out = []
+    for r in rows:
+        label = run_title(connection, r["run"]) if r["run"] else (
+            f"A scan · {r['at']:%b %d, %H:%M}" if r["at"] else "A scan")
+        out.append({"id": r["scan"], "label": label, "rules": int(r["n"])})
+    return out
 
 
 def rules_for(
@@ -722,8 +740,9 @@ def propose_rule(
         _edge(connection, project_id, rule_id, agent_id, "proposed_by", edge_actor, who, step_attrs)
     run_ref = provenance["run_id"] or provenance["workflow_run_id"]
     if run_ref:
-        run_id = _anchor(connection, project_id, "run", f"run:{run_ref}", f"Run {run_ref}",
-                         {"source_id": run_ref})
+        from .learning_writeback import run_anchor
+
+        run_id = run_anchor(connection, project_id, run_ref)
         _edge(connection, project_id, run_id, rule_id, "produced", edge_actor, who,
               {"step": provenance["step"], "at": provenance["proposed_at"]})
     if corrected is not None:

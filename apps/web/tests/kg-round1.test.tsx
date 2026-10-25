@@ -206,8 +206,9 @@ describe("P1-12, P1-13, P2", () => {
   it("the away-from-home banner is drawn in the dark tokens, never a cream fallback", () => {
     const css = readFileSync("app/globals.css", "utf8");
     const rule = css.slice(css.indexOf(".project-away {"), css.indexOf("}", css.indexOf(".project-away {")));
-    expect(rule).toContain("var(--amber-soft)");
-    expect(rule).toContain("color: var(--ink)");
+    // Round 2: in the console's accent tokens (a grey bar read as off-theme); a lab keeps amber.
+    expect(rule).toContain("var(--accent-soft)");
+    expect(css).toContain('.project-away[data-lab] { border-color: color-mix(in srgb, var(--amber) 40%, var(--border)); background: var(--amber-soft); }');
     expect(rule).not.toMatch(/#fff8e6|surface-warn/);
   });
 

@@ -41,11 +41,16 @@ const when = kgWhen;
 function agentWords(p: { agent_name?: string | null; agent_role?: string | null }): string {
   // BOSS itself, when no agent was addressed in the turn: its name says so ("BOSS (general)").
   const role = p.agent_role && p.agent_role !== "boss" ? roleWords(p.agent_role) : "";
-  if (p.agent_name && role) return `${p.agent_name} (${role})`;
-  return p.agent_name || role || "an agent";
+  if (p.agent_name && role && p.agent_name.toLowerCase() !== role.toLowerCase()) return `${p.agent_name} (${role})`;
+  // An item recorded before BOSS kept who recorded it says so (BOSSAPP-768 round 2).
+  return p.agent_name || role || "an agent (not recorded)";
 }
 
+/** Who added it: the server's words for every layer (view._who), the agent's name and role
+ *  for what an agent wrote; "the code index" only ever for code. */
 function who(p: KgProvenance): string {
+  if (p.created_by_kind === "agent" && (p.agent_name || p.agent_role)) return agentWords(p);
+  if (p.who) return p.created_by_kind === "person" ? actorWords(p.who) : p.who;
   if (p.created_by_kind === "system") return "the code index";
   if (p.created_by_kind === "agent") return agentWords(p);
   return actorWords(p.created_by);
@@ -81,7 +86,10 @@ export function NodePanel({ projectId, actor, orgId, nodeId, preview, bubble, ar
   const [attempt, setAttempt] = useState(0);
   const detailRef = useRef<KgNodeDetailResponse | null>(null);
   detailRef.current = detail;
-  const isBubble = !!bubble || (nodeId ? /^(area|pkg|layer):/.test(nodeId) : false);
+  // A TREE GROUP IS NOT A NODE (tester round 2: "Investigations" read "This node is no longer in
+  // the graph"): a group heading, like a bubble, is a summary and is never fetched as a node.
+  const isGroup = preview?.kind === "group" || (nodeId ? /^group:/.test(nodeId) : false);
+  const isBubble = !!bubble || isGroup || (nodeId ? /^(area|pkg|layer):/.test(nodeId) : false);
 
   // A new node clears the panel; a reload of the same one (after an action) keeps it on screen.
   const shownId = useRef<string | null>(null);
@@ -146,6 +154,13 @@ export function NodePanel({ projectId, actor, orgId, nodeId, preview, bubble, ar
       </header>
 
       {isBubble && bubble ? <BubbleBody b={bubble} onFocusNode={onFocusNode} /> : null}
+      {isGroup && !bubble ? (
+        <section className="kg-sec" data-testid="kg-panel-group">
+          <p className="kg-quiet">
+            {groupCount(preview)} in this group. Open the group in the tree and pick one to see what it is, what it is about and who recorded it.
+          </p>
+        </section>
+      ) : null}
       {!isBubble && loading ? <PanelSkeleton /> : null}
       {!isBubble && error ? (
         <div className="kg-inline-err" role="alert" data-testid="kg-panel-error">
@@ -276,7 +291,7 @@ function DetailBody({ d, w, orgId, onFocusNode, viewEdges }: {
       {d.statement ? (
         <Section title={isRule ? "Rule" : isLearnedKind(d.node.kind) ? "What was learned" : "Statement"} testId="kg-panel-statement">
           <div className="kg-statement" data-layer={d.node.layer}>
-            <p data-user-text>{d.statement}</p>
+            <p data-user-text><InlineCode text={d.statement} /></p>
             {trust ? <p className="kg-statement-trust" data-testid="kg-panel-trust">{trust}</p> : null}
           </div>
         </Section>
@@ -299,7 +314,7 @@ function DetailBody({ d, w, orgId, onFocusNode, viewEdges }: {
           {d.repo ? <div className="kg-attr"><dt>repository</dt><dd className="inf-mono">{d.repo}</dd></div> : null}
           <div className="kg-attr"><dt>trust</dt><dd>{d.node.trust_tier}</dd></div>
           {detail ? Object.entries(detail).filter(([, v]) => typeof v === "string" || typeof v === "number").map(([k, v]) => (
-            <div key={`d-${k}`} className="kg-attr"><dt>{k.replace(/_/g, " ")}</dt><dd data-user-text>{String(v)}</dd></div>
+            <div key={`d-${k}`} className="kg-attr"><dt>{k.replace(/_/g, " ")}</dt><dd data-user-text><InlineCode text={String(v)} /></dd></div>
           )) : null}
           {extra.map(([k, v]) => <div key={k} className="kg-attr"><dt>{k.replace(/_/g, " ")}</dt><dd className="inf-mono">{String(v)}</dd></div>)}
         </dl>
@@ -497,6 +512,19 @@ function Lineage({ d, orgId }: { d: KgNodeDetailResponse; orgId?: string | null 
   );
 }
 
+/** Words an agent wrote, with `backticked` code as code (tester round 2: precedent text showed raw
+ *  backticks). Nothing else is interpreted: no HTML, no links, no other markdown. */
+export function InlineCode({ text }: { text: string }) {
+  const parts = String(text ?? "").split(/(`[^`\n]+`)/g);
+  return <>{parts.map((p, i) => (p.length > 2 && p.startsWith("`") && p.endsWith("`")
+    ? <code key={i} className="kg-code">{p.slice(1, -1)}</code> : <React.Fragment key={i}>{p}</React.Fragment>))}</>;
+}
+
+function groupCount(n: KgViewNode | null | undefined): string {
+  const c = n?.counts ? Object.values(n.counts).find((v) => typeof v === "number") : undefined;
+  return typeof c === "number" ? `${c.toLocaleString("en-US")} item${c === 1 ? "" : "s"}` : "The items";
+}
+
 function short(id: string): string {
   return id.length > 14 ? `${id.slice(0, 12)}…` : id;
 }
@@ -504,7 +532,8 @@ function short(id: string): string {
 function Provenance({ p, orgId }: { p: KgProvenance; orgId?: string | null }) {
   const run = kgRunHref(p, orgId);
   const lines: React.ReactNode[] = [];
-  lines.push(<>{p.created_by_kind === "system" ? "Indexed by" : p.created_by_kind === "agent" ? "Written by" : "Added by"} <strong>{who(p)}</strong>{p.at ? ` · ${when(p.at)}` : ""}</>);
+  lines.push(<>{p.created_by_kind === "system" ? "Indexed by" : p.created_by_kind === "agent" ? "Written by" : "Added by"} <strong data-testid="kg-panel-who">{who(p)}</strong>
+    {p.agent_id ? <> · <span className="inf-mono" title="The agent's Passport id">{short(p.agent_id)}</span></> : null}{p.at ? ` · ${when(p.at)}` : ""}</>);
   if (p.run_id || run) lines.push(<>Run {run ? <a className="inf-link" href={run} data-testid="kg-panel-run-link">{short(p.code_task_run_id ?? p.workflow_run_id ?? p.run_id ?? "")} ↗</a> : short(p.run_id ?? "")}{p.step ? ` · step ${p.step}` : ""}</>);
   if (p.model_id) lines.push(<>Model {p.model_id}</>);
   if (p.approved_by) lines.push(<>Approved by <strong>{reviewerWords(p.approved_by, p.approved_by_name)}</strong>{p.approved_at ? ` · ${when(p.approved_at)}` : ""}</>);
