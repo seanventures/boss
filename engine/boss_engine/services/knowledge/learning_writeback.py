@@ -40,6 +40,7 @@ from sqlalchemy.engine import Connection
 
 from .scrub import contains_secret_marker, scrub
 from .store import PostgresKnowledgeStore
+from .titles import word_cut
 
 LOG = logging.getLogger(__name__)
 
@@ -467,9 +468,8 @@ def run_name(connection: Connection, ref: str) -> tuple[Optional[str], Any]:
         row = None
     if not row:
         return None, None
-    title = " ".join(str(row["title"] or "").split()) or None
-    if title and len(title) > 90:
-        title = title[:89].rstrip() + "…"
+    # Cut at a word within its limit (tester round 6: "…(retry with verif…"), never mid-word.
+    title = word_cut(str(row["title"] or "")) or None
     return title, row.get("created_at")
 
 

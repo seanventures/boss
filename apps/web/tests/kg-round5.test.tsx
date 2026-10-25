@@ -137,7 +137,10 @@ describe("P1 the first ring spaces its nodes by the room their labels need: 2 ho
       const { placed, circles, k } = labelsAt(l, VIEW_1280);
       // Fewer on the first ring (the rest in groups) rather than a ring of unnamed ones.
       expect(l.g.nodes.filter((n) => n.hop === 1 && n.kind !== "group").length).toBeGreaterThanOrEqual(4);
-      expect(k).toBeGreaterThanOrEqual(0.45);
+      // Round 7: with an outer ring the first ring opens wider (120, not 90), so the picture
+      // opens a little smaller but the first ring — where the names were cut — is larger on screen.
+      expect(k).toBeGreaterThanOrEqual(second ? 0.4 : 0.45);
+      if (second) expect(l.laid.rings[0] * k).toBeGreaterThan(90 * 0.45);
       const unnamed = l.g.nodes.filter((n) => !placed.has(n.id));
       // At 1 hop every node; at 2 hops (a 330 px tall canvas opens near 50%, and this estimate of
       // label widths is generous) at most four first-ring nodes wait for hover — never a cluster,
@@ -183,12 +186,16 @@ describe("P1 the panel reserves its column; a selection never moves the picture"
   });
 });
 
-describe("P2 labels are cut by character or wrapped, never to one word", () => {
-  it("two lines at a word boundary, the rest cut by character", () => {
-    expect(twoLines("AdvancedPaymentScheduleTransactionProcessor", 18)).toEqual(["AdvancedPayment", "ScheduleTransacti…"]);
+describe("P2 labels are cut at a word or wrapped, never to a stub", () => {
+  it("two lines at a word boundary, the rest cut at a word (round 6: never mid-word)", () => {
+    expect(twoLines("AdvancedPaymentScheduleTransactionProcessor", 18)).toEqual(["AdvancedPayment", "Schedule…"]);
     expect(twoLines("LoanCharge", 18)).toEqual(["LoanCharge"]);
-    expect(charEllipsis("CreocoreLoanRepaymentScheduleTransactionProcessor", 14)).toBe("CreocoreLoanR…");
+    expect(charEllipsis("CreocoreLoanRepaymentScheduleTransactionProcessor", 14)).toBe("CreocoreLoan…");
+    expect(charEllipsis("+2 in core/service", 14)).toBe("+2 in core/…");
+    expect(charEllipsis("On-time repayment branch is the sole cause", 22)).toBe("On-time repayment…");
     expect(charEllipsis("Heavens", 14)).toBe("Heavens");
+    // A first word longer than most of the room: by character, never a stub.
+    expect(charEllipsis("Supercalifragilistic expialidocious", 14)).toBe("Supercalifrag…");
   });
 
   it("package names that share a tail say their module", () => {

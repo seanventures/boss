@@ -120,7 +120,9 @@
    staying together on the right. */
 .kg-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; padding: 6px 10px; border-bottom: 1px solid var(--border); min-width: 0; }
 .kg-toolbar > * { flex: none; }
-.kg-toolbar > .kg-search { flex: 1 1 8rem; max-width: 15rem; min-width: 6.5rem; }
+/* The search gives way first (round 6: at 1333 px in Focus the toolbar took two rows): its basis
+   is small, so the row decides it fits, then it grows into whatever room is left. */
+.kg-toolbar > .kg-search { flex: 1 1 5.25rem; max-width: 15rem; min-width: 5.25rem; }
 .kg-toolbar-end { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; }
 /* ONE status line under the toolbar (round 6: two wrapped lines and a third for "runs writing"
    took the canvas's height): the focus summary, "Showing N of M", runs writing and Built · Rebuild
@@ -161,7 +163,13 @@
 .kg-layer-chip:focus-visible, .kg-hit:focus-visible, .kg-conn:focus-visible, .kg-ev-chip:focus-visible, .kg-strip-item:focus-visible,
 .kg-legend-toggle:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
 .kg-zoom { display: inline-flex; align-items: center; gap: 4px; }
-.kg-zoom-pct { width: 44px; text-align: center; font-size: 0.78rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.kg-zoom-pct { min-width: 2.6em; text-align: right; font-size: 0.78rem; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+/* The zoom menu (round 6): "85% ▾" in the toolbar; Zoom in, Zoom out and List view in it. */
+.kg-view-menu-btn { display: inline-flex; align-items: center; gap: 4px; padding-left: 8px; padding-right: 8px; }
+.kg-view-menu-list { min-width: 170px; }
+.kg-view-menu-list button { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.kg-view-menu-list button:disabled { opacity: 0.5; cursor: not-allowed; }
+.kg-view-menu-list kbd { font: inherit; font-size: 0.8rem; color: var(--muted); }
 .kg-built { display: inline-flex; align-items: center; gap: 8px; font-size: 0.78rem; white-space: nowrap; }
 .kg-stale-badge { padding: 2px 9px; border-radius: 999px; background: var(--amber-soft); color: var(--amber); font-size: 0.76rem; }
 .kg-refreshing { position: absolute; top: 10px; right: 12px; font-size: 0.74rem; color: var(--muted); }
@@ -174,7 +182,8 @@
 .kg-hit[aria-selected="true"] { background: var(--surface-3); }
 .kg-hit-text { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
 .kg-hit-line { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
-.kg-hit-label { min-width: 0; font-size: 0.86rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Up to two lines, cut at a word in code (hitTitle); the clamp is only a backstop. */
+.kg-hit-label { min-width: 0; font-size: 0.86rem; line-height: 1.3; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow-wrap: normal; }
 .kg-hit-kind { flex: none; font-size: 0.72rem; color: var(--faint); }
 .kg-hit-path { font-size: 0.72rem; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kg-drop-none { margin: 0; padding: 10px; font-size: 0.84rem; color: var(--muted); }
@@ -365,20 +374,22 @@
 @media (prefers-reduced-motion: reduce) { .kg-strip-item { animation: none; } }
 
 /* ── widths, by the GRAPH's own width, not the window's (tester round 1 P0-2: the rail counts) ──
-   Wide: tree | canvas | panel. Medium (a 1280-1440 px window): canvas | panel, the tree a drawer
-   from the left (round 5: three columns left a 400 px canvas, too small for 2 hops). Narrow: the
-   canvas alone, tree and panel drawers over it. The canvas always gets the room. */
+   Wide: tree | canvas | panel. Medium (a 1280-1440 px window): canvas | panel, the tree put away
+   (round 5: three columns left a 400 px canvas, too small for 2 hops). Narrow: the canvas alone,
+   the panel a drawer. The tree, opened, is ALWAYS a column that pushes the canvas over — never a
+   drawer over it (tester round 6: it hid the focused node and its labels). --kg-tree-mode tells
+   the Tree button which flag it toggles (open where the tree starts put away, collapsed where it
+   starts shown). */
+.kg-col-tree { --kg-tree-mode: column; }
 @container kg (max-width: 1180px) {
   .kg-work, .kg-work[data-tree-collapsed] { grid-template-columns: minmax(0, 1fr) var(--kg-panel-w); }
-  .kg-col-tree {
-    position: absolute; top: 0; left: 0; bottom: 0; z-index: 7; width: min(18rem, 88%); border-right: 1px solid var(--border-strong);
-    box-shadow: var(--shadow-lg); transform: translateX(-105%); transition: transform 200ms ease; visibility: hidden;
-  }
-  .kg-work[data-tree-collapsed] .kg-col-tree { display: flex; }
-  .kg-work[data-tree-open] .kg-col-tree { transform: none; visibility: visible; }
+  .kg-col-tree, .kg-work[data-tree-collapsed] .kg-col-tree { display: none; --kg-tree-mode: opens; }
+  .kg-work[data-tree-open], .kg-work[data-tree-open][data-tree-collapsed] { grid-template-columns: min(13rem, 22%) minmax(0, 1fr) var(--kg-panel-w); }
+  .kg-work[data-tree-open] .kg-col-tree { display: flex; }
 }
 @container kg (max-width: 860px) {
   .kg-work, .kg-work[data-tree-collapsed] { grid-template-columns: minmax(0, 1fr); }
+  .kg-work[data-tree-open], .kg-work[data-tree-open][data-tree-collapsed] { grid-template-columns: min(15rem, 40%) minmax(0, 1fr); }
   .kg-col-panel {
     position: absolute; top: 0; right: 0; bottom: 0; z-index: 6; width: clamp(16rem, 50%, 22rem); border-left: 1px solid var(--border-strong);
     box-shadow: var(--shadow-lg); transform: translateX(105%); transition: transform 200ms ease, visibility 200ms; visibility: hidden;
@@ -424,7 +435,7 @@
 .kg-col-panel, .kg-tree-scroll { overscroll-behavior: contain; }
 /* A narrower graph (a 1280 px window): the toolbar still fits one row — quieter controls first. */
 @container kg (max-width: 1150px) {
-  .kg-zoom-pct, .kg-kbd, .kg-tree-word { display: none; }
+  .kg-kbd, .kg-tree-word, .kg-view-menu-btn svg { display: none; }
   .kg-layer-chip { padding: 0 8px; gap: 5px; }
   .kg-toolbar { column-gap: 6px; }
   .kg-toolbar .inf-seg-btn { padding-left: 9px; padding-right: 9px; }

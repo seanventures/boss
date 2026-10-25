@@ -33,6 +33,8 @@ from typing import Any, Iterable, Mapping, Optional, Sequence
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
+from .titles import word_cut
+
 LOG = logging.getLogger(__name__)
 
 THREAD_PREFIX = "athr_"
@@ -128,7 +130,7 @@ def anchor(connection: Connection, project_id: str, thread_id: str) -> str:
     started = row.get("created_at")
     name = title_of(connection, thread_id)
     if started is not None:          # as a run is named (learning_writeback.run_title)
-        name = f"{name if len(name) <= 90 else name[:89].rstrip() + '…'} · {started:%b %d, %H:%M}"
+        name = f"{word_cut(name)} · {started:%b %d, %H:%M}"
     return _STORE.upsert_node(connection, project_id=project_id, kind="run", node_key=key,
                               name=name, body="", trust_tier="observed",
                               actor_kind="system", source="learning", attrs=attrs)
