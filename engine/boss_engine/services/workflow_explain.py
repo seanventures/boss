@@ -53,6 +53,18 @@ def _source_of(binding: Any, step_labels: dict[str, str]) -> str:
     return "NOT SET — this step cannot run until it is"
 
 
+def step_inputs(capability: dict[str, Any], own: dict[str, Any]) -> list[tuple[str, bool]]:
+    """(name, required) for every input a step reads: its capability's required inputs (or a
+    custom step's own schema), then THE OPTIONAL ONES TOO. An agent asked "what can I tune"
+    read only the required ones, so a scan's max_files / max_rules / budget_usd /
+    exclude_tests were invisible to it (brec_40c192798f564212a02d) — said as optional, never
+    as missing."""
+    declared = _declared_inputs(capability.get("required_inputs") or own.get("inputs") or [])
+    named = {name for name, _required in declared}
+    return declared + [(str(n), False) for n in (capability.get("optional_inputs") or [])
+                       if str(n) and str(n) not in named]
+
+
 def _declared_inputs(raw: Any) -> list[tuple[str, bool]]:
     """Read capability names and the stored custom-step input schema alike.
 
@@ -214,8 +226,7 @@ def explain_version(
         minutes += int(spec_of.get("typical_minutes") or 0)
 
         inputs = []
-        declared = _declared_inputs(
-            spec_of.get("required_inputs") or own.get("inputs") or [])
+        declared = step_inputs(spec_of, own)
         wired = binding.get("inputs") or {}
         if not isinstance(wired, dict):
             wired = {}

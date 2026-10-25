@@ -3096,6 +3096,36 @@ ADOPT_PREFIX = "adopt_"
 PRECHECK_KEY = "_precheck"
 
 
+#: Capabilities whose run inputs are checked at START, not in their step: a bad value refused
+#: here costs nothing, the same value refused in the step had already queued and claimed the run
+#: (two credit scans deadlettered on a scope key their step could not read, brec_40c192798f564212a02d).
+def _check_rule_scan_inputs(connection: Connection, project_id: str,
+                            inputs: dict[str, Any]) -> dict[str, Any]:
+    from .knowledge.rule_scan import RuleScanRefused, validate_scope
+
+    try:
+        keys = validate_scope(connection, project_id, inputs.get("scope"),
+                              exclude_tests=inputs.get("exclude_tests"))
+    except RuleScanRefused as refused:
+        raise WorkflowValidationError(f"the scan cannot start: {refused}") from None
+    return {**inputs, "scope": keys}
+
+
+START_INPUT_CHECKS: dict[str, Any] = {"scan_business_rules": _check_rule_scan_inputs}
+
+
+def checked_capability_inputs(connection: Connection, project_id: str, spec: dict[str, Any],
+                              input_data: dict[str, Any]) -> dict[str, Any]:
+    """Every START_INPUT_CHECKS check for a capability the spec's steps use, in order; each may
+    return the inputs normalised (a scan's scope resolved to the keys its step reads)."""
+    used = {str(((step.get("binding") or {}).get("capability")) or "")
+            for step in (spec.get("steps") or []) if isinstance(step, dict)}
+    for capability, check in START_INPUT_CHECKS.items():
+        if capability in used:
+            input_data = check(connection, project_id, input_data)
+    return input_data
+
+
 def start_run(
     connection: Connection,
     *,
@@ -3209,6 +3239,7 @@ def start_run(
             for name in absent)
         raise WorkflowValidationError(
             f"this workflow needs {len(absent)} input(s) it was not given: {named}")
+    input_data = checked_capability_inputs(connection, project_id, spec, input_data)
 
     run_id = make_id("wfr")
     root_run_id = run_id
