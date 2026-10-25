@@ -98,7 +98,7 @@ def test_the_graph_finds_a_fact_about_the_symbol_the_query_names(connection):
                       actor_kind="system")
     found = SERVICE.search(connection, project_id="proj_hy", query="reserve")
     assert _hit(found, fact)["via"] == ["graph"]                  # no word of the query is in the fact
-    assert found["retrieval"] == {"mode": "text+graph", "lists": {"text": 1, "graph": 1}, "reason": NO_MODEL}
+    assert found["retrieval"] == {"mode": "text+graph", "lists": {"text": 1, "written": 0, "graph": 1}, "reason": NO_MODEL}
 
 
 def test_with_an_embedder_a_fact_in_other_words_is_found_through_the_vector_index(connection):

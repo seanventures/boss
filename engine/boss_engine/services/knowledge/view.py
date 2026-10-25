@@ -1340,46 +1340,19 @@ def search(connection: Connection, project_id: str, q: str, *, layers: Iterable[
                      coalesce(n.path, '') ~ :test, ts_rank(n.search_tsv, tq) DESC, length(n.name), n.id
             LIMIT :room
             """), {**params, "room": limit - len(rows)}).all()
-    # 3. Room left: what agents and people WROTE — a rule's or a learning's text and attributes
-    #    (an incident id like INC-2041 sits in a root cause's evidence, not its name), and the
-    #    learnings a run produced when the run matches: a conversation by its brief ("Incident
-    #    INC-2088 · Severity 2" is the operator's question, never copied into the root cause the
-    #    agent recorded from it). Tester round 4: neither id was found.
+    # 3. Room left: what agents and people WROTE — rules, learnings and the runs that produced
+    #    them, by exact id, phrase or words in their text and attributes, and the learnings a run
+    #    or conversation produced when its brief matches (find.find_written: the one search the
+    #    agent tools use too, so the console and the agents cannot disagree). Tester round 4:
+    #    INC-2041 (a root cause's evidence) and INC-2088 (only in the brief) were not found.
+    from .find import find_written
+
     written = sorted(set(kinds) & ({"rule", *LEARNED_KINDS} | set(ANCHOR_KINDS)))
     if len(rows) < limit and written:
         seen = {r[0] for r in rows}
-        rows += [r for r in connection.execute(text(
-            r"""
-            WITH runs AS (
-              SELECT r.id FROM kg_nodes r
-              WHERE r.project_id = :p AND r.valid_to IS NULL AND r.kind = ANY(:anchors)
-                AND (r.name ILIKE :contains ESCAPE '' OR r.body ILIKE :contains ESCAPE ''
-                     OR (r.attrs - 'provenance')::text ILIKE :contains ESCAPE ''
-                     OR (r.attrs->>'thread_id' IS NOT NULL AND EXISTS (
-                           SELECT 1 FROM agent_messages m WHERE m.thread_id = r.attrs->>'thread_id'
-                             AND m.role = 'user' AND m.content ILIKE :contains ESCAPE '')))
-            ), direct AS (
-              SELECT n.id, 0 AS via FROM kg_nodes n
-              WHERE n.project_id = :p AND n.valid_to IS NULL AND n.kind = ANY(:written)
-                AND NOT (n.kind = ANY(:anchors))
-                AND (n.body ILIKE :contains ESCAPE '' OR (n.attrs - 'provenance')::text ILIKE :contains ESCAPE '')
-            ), produced AS (
-              SELECT e.dst_id AS id, 1 AS via FROM kg_edges e JOIN runs ON runs.id = e.src_id
-              JOIN kg_nodes n ON n.id = e.dst_id
-              WHERE e.project_id = :p AND e.valid_to IS NULL AND e.kind = 'produced'
-                AND n.valid_to IS NULL AND n.kind = ANY(:written)
-            )
-            SELECT h.id, 2 FROM (
-              SELECT id, min(via) AS via FROM (
-                SELECT id, via FROM direct UNION ALL SELECT id, via FROM produced
-                UNION ALL SELECT id, 2 FROM runs WHERE id IN (SELECT id FROM kg_nodes WHERE kind = ANY(:written))
-              ) u GROUP BY id
-            ) h JOIN kg_nodes n ON n.id = h.id
-            ORDER BY h.via, CASE WHEN n.kind = 'rule' THEN 1 WHEN n.kind = ANY(:anchors) THEN 2 ELSE 0 END,
-                     n.last_seen DESC, n.id
-            LIMIT :room
-            """), {**params, "written": written, "anchors": sorted(set(ANCHOR_KINDS) & set(written)),
-                   "room": limit - len(rows) + len(seen)}).all() if r[0] not in seen][:limit - len(rows)]
+        rows += [(f["id"], 2) for f in find_written(connection, project_id, q, kinds=written,
+                                                    limit=limit + len(seen))
+                 if f["id"] not in seen][:limit - len(rows)]
     nodes = _nodes_by_id(connection, project_id, [r[0] for r in rows])
     hits = []
     n = len(rows)

@@ -15,6 +15,7 @@ from .age import extension_version as age_extension_version
 from .age import projection_counts
 from .archivist import distil, forget_source as forget_source_lineage
 from .capture import capture_lifecycle as capture_lifecycle_record
+from .find import find_written, pinned
 from .learning import apply_learning
 from .retrieval import blast_radius, fuse_lists, knowledge_pack, precedent_section, rank_hits
 from .scopes import KEYWORD_EXCLUDED_LAYERS, keyword_policy
@@ -57,9 +58,15 @@ class KnowledgeService:
             connection, project_id=project_id, query=query, limit=max(limit, 20), policy=policy,
             exclude_layers=exclude_layers,
         )
-        seed_ids = list(seeds or [hit["node_id"] for hit in text_hits[:5]])
+        # What agents and people wrote — rules, learnings, and what a matching run or conversation
+        # produced — by exact id, phrase or words in text AND attributes: the console's graph
+        # search reads the same list (find.find_written), so the two cannot disagree.
+        written = self._written(connection, project_id=project_id, query=query, policy=policy,
+                                exclude_layers=exclude_layers, limit=max(limit, 20))
+        seed_ids = list(seeds or [hit["node_id"] for hit in [*written, *text_hits][:5]])
         lists: dict[str, list[dict]] = {
             "text": text_hits,
+            "written": written,
             "graph": self.store.graph_candidates(
                 connection, project_id=project_id, seed_ids=seed_ids, policy=policy),
         }
@@ -81,6 +88,7 @@ class KnowledgeService:
             except Exception as error:  # noqa: BLE001
                 reason = ("meaning-based search is off for this search: the embedding model did "
                           f"not answer ({type(error).__name__}: {str(error)[:160]})")
+        by_written = {w["node_id"]: w["match"] for w in written}
         enriched = []
         for hit in fuse_lists(lists):
             node = self.store.get_node(
@@ -90,16 +98,34 @@ class KnowledgeService:
                 continue
             enriched.append({
                 **hit,
+                "kind": node.get("kind"),
                 "name": node["name"],
                 "trust_tier": node["trust_tier"],
                 "body": node["body"],
+                **({"match": by_written[hit["node_id"]]} if hit["node_id"] in by_written else {}),
             })
+        # An exact id the caller named (INC-2041, kgn_…) leads: the nodes that carry it, then what
+        # the run or conversation carrying it produced. Everything else ranks as before.
+        lead = {nid: i for i, nid in enumerate(pinned([{"id": w["node_id"], "match": w["match"]} for w in written]))}
+        first = sorted((h for h in enriched if h["node_id"] in lead), key=lambda h: lead[h["node_id"]])
+        rest = rank_hits([h for h in enriched if h["node_id"] not in lead])
         return {
-            "hits": rank_hits(enriched)[:limit],
+            "hits": (first + rest)[:limit],
             "retrieval": {"mode": "hybrid" if "vector" in lists else "text+graph",
                           "lists": {name: len(items) for name, items in lists.items()},
                           **({"reason": reason} if reason else {})},
         }
+
+    @staticmethod
+    def _written(connection: Connection, *, project_id: str, query: str, policy=None,
+                 exclude_layers: tuple[str, ...] = (), limit: int = 20) -> list[dict]:
+        """find_written under a stage's scope: its layers, approved rules only."""
+        from .scopes import LAYERS
+
+        layers = set(policy.layers if policy is not None else LAYERS) - {"code"} - set(exclude_layers)
+        found = find_written(connection, project_id, query, layers=layers,
+                             approved_rules_only=policy is not None, limit=limit)
+        return [{"node_id": f["id"], "kind": f["kind"], "match": f["match"]} for f in found]
 
     def _keyword_search(
         self, connection: Connection, *, project_id: str, query: str, limit: int, policy=None
@@ -388,6 +414,12 @@ class KnowledgeService:
                 packed["sections"] = sections(connection, project_id, query=query, mode=mode, policy=policy)
         except Exception:  # noqa: BLE001
             packed["sections"] = {"text": "", "rule_ids": [], "learning_ids": [], "rules": [], "learned": []}
+        # A rule or learning the sections quote ([R:…]/[L:…], with who learned it) is not quoted
+        # twice: search now finds learnings by their text and attributes too.
+        quoted = set(packed["sections"].get("rule_ids") or []) | set(packed["sections"].get("learning_ids") or [])
+        if quoted:
+            packed["items"] = [item for item in packed["items"] if item.get("node_id") not in quoted]
+            packed["fact_ids"] = [fid for fid in packed["fact_ids"] if fid not in quoted]
         return packed
 
     def precedent(

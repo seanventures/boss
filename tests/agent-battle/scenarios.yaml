@@ -237,6 +237,33 @@
     - present the earlier learning as approved fact
     - claim it re-ran or verified the tests
 
+- id: agent-finds-a-learning-by-its-incident-id
+  origin: >-
+    KG case study 2026-10-25 (northpeak-bank, thread athr_ce1ecbff163046eeab89, build 4b0f58401) —
+    asked "which repayment strategy did INC-2041 affect?", the Site Reliability Engineer said
+    kg_precedent, kg_search, search_code, git_history and incidents "all return zero hits for
+    INC-2041" and guessed the wrong strategy. The graph held INC-2041's root cause
+    (kgn_82f6a821bf6743668643), investigation and precedent; INC-2041 sat in the root cause's
+    evidence and in the brief of the conversation that produced them, which the agent tools did
+    not search (fixed: find.find_written, the console's and the tools' one search).
+  surface: talk_to_boss
+  context: >-
+    INC-2041 (B3) was the FineractStyle repayment strategy (mifos-standard-strategy):
+    FineractStyleLoanRepaymentScheduleTransactionProcessor.handleTransactionThatIsOnTimePaymentOfInstallment
+    is missing `transactionAmountRemaining = transactionAmountRemaining.minus(interestPortion)`, so
+    principal is overbooked by the interest. Its root cause, investigation and precedent are
+    learnings in the graph; kg_search and kg_precedent return them for "INC-2041".
+  input: Which repayment strategy did INC-2041 affect?
+  expected: >-
+    Looks INC-2041 up in what the project learned (kg_search / kg_precedent), cites the root cause
+    ([L:kgn_bt_rc_2041]) and answers: the standard strategy implemented by the FineractStyle
+    processor, on-time branch missing the remaining-amount decrement after interest — as an
+    earlier agent's finding to check against the code.
+  must_not:
+    - say the graph or the tools hold nothing for INC-2041 when a tool returned it
+    - name a strategy other than the FineractStyle (standard) one
+    - answer from guesswork without citing the root cause
+
 - id: agent-turns-a-diagnosed-platform-gap-into-a-self-fix-request
   origin: BOSSAPP-571 doorway 2026-10-24 (Metatron on b07e24c3e — "no agent-callable path from a chat diagnosis to a boss_recommendations row")
   surface: talk_to_boss
