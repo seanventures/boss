@@ -352,6 +352,43 @@ def within_size(changes: Iterable[FileChange], *, max_files: int, max_lines: int
     return GateResult("size", True, "", {"files": len(code), "lines": lines})
 
 
+#: Source files, where an unquoted right-hand side is code (a name, an attribute, a call),
+#: never a literal. A config/env/shell file's unquoted value IS a literal, so it stays checked.
+_CODE_SUFFIXES = frozenset({".py", ".pyi", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".go",
+                            ".java", ".kt", ".rs", ".rb", ".php", ".cs", ".swift", ".scala"})
+#: An identifier chain, optionally called or indexed: `workflow_key = _key_for(name)`.
+_CODE_REFERENCE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*(?:[(\[].*)?")
+#: A template placeholder: `'{workflow_key}'`, `${API_TOKEN}`, `{{ secret }}`.
+_PLACEHOLDER = re.compile(r"\$?\{+[^{}]*\}*")
+
+
+def _without_code_references(line: str, path: str) -> str:
+    """THE SECRET GATE READS CODE AS CODE. The redactor's assignment pattern (`…_key = value`)
+    is built for text crossing a data boundary, where `value` is data. On an added line of
+    source, `workflow_key = _workflow_key_for(name)`, `{"workflow_key": workflow_key}` and
+    `f"workflow_key='{workflow_key}'"` hold no value at all — a self-fix was refused 'secrets'
+    for exactly those three lines. Such references are blanked before the scan; a quoted
+    literal (`api_key = "sk-…"`), any provider token shape, and every value in a non-code file
+    are still scanned unchanged."""
+    from .redaction import _SECRET_PATTERNS
+
+    code = PurePosixPath(path).suffix.lower() in _CODE_SUFFIXES
+    for _label, pattern in _SECRET_PATTERNS:
+        if "value" not in pattern.groupindex:
+            continue
+
+        def _blank(m: "re.Match[str]") -> str:
+            value, sep = m.group("value"), m.group("sep")
+            quoted = sep.rstrip().endswith(("'", '"'))
+            if _PLACEHOLDER.fullmatch(value) or (
+                    code and not quoted and _CODE_REFERENCE.fullmatch(value)):
+                return m.group("name") + m.group("sep") + "_"
+            return m.group(0)
+
+        line = pattern.sub(_blank, line)
+    return line
+
+
 def no_committed_secrets(changes: Iterable[FileChange]) -> GateResult:
     from .redaction import redact
 
@@ -363,6 +400,7 @@ def no_committed_secrets(changes: Iterable[FileChange]) -> GateResult:
         lines = change.after.splitlines()
         for n in sorted(added):
             line = lines[n - 1] if 0 < n <= len(lines) else ""
+            line = _without_code_references(line, change.path)
             masked, found = redact(line)
             if found and masked != line and not set(found) <= {"IP"}:
                 hits.append(f"{change.path}:{n} ({', '.join(sorted(found))})")

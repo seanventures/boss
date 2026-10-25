@@ -186,3 +186,32 @@ def test_a_change_too_big_for_a_self_fix_is_refused():
 def test_a_secret_on_an_added_line_is_refused():
     leaked = 'KEY = "ghp_' + "a" * 36 + '"\n'
     assert not si.no_committed_secrets([FileChange(LOCATION["file"], "M", "", leaked)]).ok
+
+
+# Live, 2026-10-24 (sfx_de308b793d694ac983ff): the fix for propose_action was refused 'secrets'
+# for these three added lines of builtin.py — code references, no value anywhere.
+_CODE_REFERENCES = [
+    "            workflow_key = _workflow_key_for_proposed_name(name)\n",
+    "                            f\"with tool='start_workflow', workflow_key='{workflow_key}' and a \"\n",
+    "                        \"proposed_args\": {\"workflow_key\": workflow_key}}\n",
+    "    api_token = settings.github.token\n",
+    "    headers = {\"x-api-key\": self.api_key}\n",
+]
+
+
+@pytest.mark.parametrize("line", _CODE_REFERENCES)
+def test_a_code_reference_on_an_added_line_is_not_a_secret(line):
+    gate = si.no_committed_secrets([FileChange("engine/boss_engine/tools/builtin.py", "M", "", line)])
+    assert gate.ok, gate.detail if hasattr(gate, "detail") else gate
+
+
+@pytest.mark.parametrize("path,line", [
+    ("engine/boss_engine/tools/builtin.py", 'api_key = "Zq8vT4mN2pW6rX1y"\n'),           # quoted literal
+    ("engine/boss_engine/tools/builtin.py", "client_secret='Zq8vT4mN2pW6rX1y'\n"),
+    ("engine/boss_engine/tools/builtin.py", 'headers = {"token": "Zq8vT4mN2pW6rX1y"}\n'),
+    ("engine/boss_engine/tools/builtin.py", "x = 'sk-ant-" + "a" * 24 + "'\n"),         # token shape
+    ("scripts/install/example.env", "OPENAI_API_KEY=Zq8vT4mN2pW6rX1y\n"),               # env literal
+    ("scripts/install/deploy.sh", "export API_TOKEN=Zq8vT4mN2pW6rX1y\n"),
+])
+def test_a_literal_secret_is_still_refused(path, line):
+    assert not si.no_committed_secrets([FileChange(path, "M", "", line)]).ok
