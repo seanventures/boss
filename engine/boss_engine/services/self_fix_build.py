@@ -1268,7 +1268,7 @@ class Build:
         if self._work is None or not self._base:
             return
         try:
-            from .redaction import redact_secrets
+            from .self_fix_integrity import redact_diff_secrets
             from .self_fix_privacy import known_hosts, mask_hosts
 
             diff = src.diff_text(self._work, self._base)
@@ -1276,7 +1276,7 @@ class Build:
                 return
             with self.engine.begin() as c:
                 known = known_hosts(c, str(self.sfx().get("project_id") or "") or None)
-            kept = mask_hosts(redact_secrets(diff), known)[:60_000]
+            kept = mask_hosts(redact_diff_secrets(diff), known)[:60_000]
             review = dict(self.sfx().get("review") or {})
             review["attempt"] = {"diff": kept, "truncated": len(diff) > 60_000,
                                  "base": self._base}

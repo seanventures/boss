@@ -112,3 +112,23 @@ def test_the_body_and_evidence_are_scrubbed_and_the_machine_block_survives(verif
     assert "wfr_" not in got["body"] and "wfr_" not in got["evidence"]
     assert all("@" not in v or k == "BOSS-Signature" for k, v in got["trailers"].items()), \
         "no person's email in a trailer"
+
+
+# The diff of brec_c15618's fix (sfx_de308b79): code references, no credential anywhere.
+_CODE_DIFF = (
+    "diff --git a/engine/boss_engine/tools/builtin.py b/engine/boss_engine/tools/builtin.py\n"
+    "--- a/engine/boss_engine/tools/builtin.py\n+++ b/engine/boss_engine/tools/builtin.py\n"
+    "@@ -1,2 +1,4 @@\n"
+    "+            workflow_key = _workflow_key_for_proposed_name(name)\n"
+    "+                        \"proposed_args\": {\"workflow_key\": workflow_key}}\n")
+
+
+def test_a_diff_of_code_references_is_not_a_secret_shaped_send():
+    assert up.check_code({"diff": _CODE_DIFF}) == []
+
+
+def test_a_literal_credential_in_a_diff_still_stops_the_send():
+    leaked = _CODE_DIFF + '+    password = derive("hunter2-very-secret")\n'
+    assert any(f["kind"] == "secret-shaped value" for f in up.check_code({"diff": leaked}))
+    assert any(f["kind"] == "secret-shaped value"
+               for f in up.check_code({"title": "api_key=Zq8vT4mN2pW6rX1y"}))

@@ -395,6 +395,31 @@ def _without_code_references(line: str, path: str) -> str:
     return line
 
 
+def redact_diff_secrets(diff: str) -> str:
+    """A unified diff with every secret-shaped value masked — read as the secret gate reads it.
+    Each line is masked only where the gate would see a secret (code references and
+    placeholders are not secrets), so a kept attempt's diff still shows
+    `workflow_key = _key_for(name)` to the person reviewing it and to the next attempt that
+    learns from it, instead of `workflow_key = [SECRET])`."""
+    from .redaction import redact_secrets
+
+    path, out = "", []
+    for line in diff.splitlines(keepends=True):
+        if line.startswith("+++ "):
+            path = line[4:].strip()
+            path = path[2:] if path.startswith(("a/", "b/")) else path
+        if line.startswith(("diff --git", "--- ", "+++ ", "@@", "index ")):
+            out.append(line)
+            continue
+        body = line.rstrip("\n")
+        if redact_secrets(_without_code_references(body, path)) == \
+                _without_code_references(body, path):
+            out.append(line)
+        else:
+            out.append(redact_secrets(body) + line[len(body):])
+    return "".join(out)
+
+
 def no_committed_secrets(changes: Iterable[FileChange]) -> GateResult:
     from .redaction import redact
 

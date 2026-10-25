@@ -183,6 +183,7 @@ def check_code(parts: Mapping[str, str], *, names: Iterable[tuple[str, str]] = (
     and it has not left)."""
     from .private_infra import findings as denylisted
     from .redaction import redact_secrets
+    from .self_fix_integrity import redact_diff_secrets
 
     words = _install_words(names)
     hosts = sorted({str(h).strip() for h in known_hosts
@@ -208,7 +209,11 @@ def check_code(parts: Mapping[str, str], *, names: Iterable[tuple[str, str]] = (
                                 "detail": f"line {number}: {name}"})
         # Credentials (redaction's secret patterns). Addresses are judged above by their range
         # (a documentation address in a fixture is right); people by the denylist and names.
-        if redact_secrets(body) != body:
+        # A diff is code, read as the secret gate reads it (`workflow_key = f(name)` is not a
+        # credential); prose parts are read as text.
+        masked = redact_diff_secrets(body) if where == "diff" else \
+            redact_secrets(body)
+        if masked != body:
             out.append({"where": where, "kind": "secret-shaped value",
                         "detail": "a credential-shaped value"})
         for number, line in enumerate(low_lines, 1):

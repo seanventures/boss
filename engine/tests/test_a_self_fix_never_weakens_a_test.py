@@ -219,3 +219,16 @@ def test_a_code_reference_on_an_added_line_is_not_a_secret(line):
 ])
 def test_a_literal_secret_is_still_refused(path, line):
     assert not si.no_committed_secrets([FileChange(path, "M", "", line)]).ok
+
+
+def test_a_kept_diff_shows_code_references_and_masks_literals():
+    """sfx_de308b79's kept attempt read `workflow_key = [SECRET])` to the reviewer and to the
+    next attempt that learns from it. Code stays code; a literal is still masked."""
+    diff = ("diff --git a/x.py b/x.py\n--- a/x.py\n+++ b/x.py\n@@ -1 +1,3 @@\n"
+            "+    workflow_key = _workflow_key_for_proposed_name(name)\n"
+            "+    api_key = \"Zq8vT4mN2pW6rX1y\"\n"
+            "+    token = 'ghp_" + "a" * 36 + "'\n")
+    kept = si.redact_diff_secrets(diff)
+    assert "workflow_key = _workflow_key_for_proposed_name(name)" in kept
+    assert "Zq8vT4mN2pW6rX1y" not in kept and "ghp_" + "a" * 36 not in kept
+    assert kept.startswith("diff --git a/x.py b/x.py\n--- a/x.py\n+++ b/x.py\n")
