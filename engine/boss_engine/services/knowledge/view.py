@@ -923,7 +923,7 @@ def _provenance(connection: Connection, project_id: str, row: Mapping[str, Any],
                        "by": detail.get("actor_ref") or detail.get("actor") or actor})
     if review.get("at") and not any(e["at"] == review.get("at") for e in events):
         events.append({"at": review.get("at"), "what": str(review.get("decision") or rule_status(row)),
-                       "by": review.get("by")})
+                       "by": review.get("by"), "by_name": review.get("by_name")})
     events.sort(key=lambda e: str(e["at"] or ""))
     approved = layer == "rules" and rule_status(row) == "approved"
     out: dict[str, Any] = {"created_by": created_by, "created_by_kind": by_kind, "at": at, "events": events}
@@ -932,6 +932,7 @@ def _provenance(connection: Connection, project_id: str, row: Mapping[str, Any],
             out[key] = prov.get(key)
     if approved:
         out["approved_by"] = review.get("by")
+        out["approved_by_name"] = review.get("by_name")
         out["approved_at"] = review.get("at")
     if attrs.get("version") is not None:
         out["version"] = _int(attrs.get("version"))

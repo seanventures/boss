@@ -121,3 +121,67 @@ def test_the_review_that_empties_a_scans_queue_closes_its_gate_at_once(client, e
                          json={**review, "statement": f"Amounts above the product limit are refused ({scan})."})
     assert edited.status_code == 200, edited.text
     assert status() == "approved"                     # the queue is empty: closed in the same act
+
+
+# ── a rule's reviewer is the PERSON, named (brec_77cc82cb106640b09d44) ────────────────────────
+#
+# 11 approved rules in northpeak-bank stored review.by = "ceo" — the legacy member key the
+# console sends — while the operator approved each one signed in, with step-up. The reviewer is
+# now the verified person (the same test identity.approvals._approver uses), with their name.
+
+def _ctx(principal_id: str, *, session=True, run_token=None, person=True, name="Example Person"):
+    from types import SimpleNamespace
+
+    principal = SimpleNamespace(id=principal_id, display_name=name, is_person=person)
+    return SimpleNamespace(principal=principal, session=object() if session else None,
+                           run_token=run_token,
+                           is_human_session=person and session and run_token is None)
+
+
+def test_the_reviewer_is_the_signed_in_person_never_a_bridge_or_a_key():
+    from apps.api.app.identity_guard import REQUEST_IDENTITY
+    from apps.api.app.routers import knowledge_rules as kr
+
+    cases = [
+        (_ctx("usr_example1abc"), ("usr_example1abc", "Example Person")),
+        # the legacy console key's bridge principal is never "the person"
+        (_ctx("sys_legacy_console"), (ACTOR, None)),
+        # an API key / PAT (no session) is not a person's approval
+        (_ctx("usr_example1abc", session=False), (ACTOR, None)),
+        # an agent's run token never is
+        (_ctx("usr_example1abc", run_token=object()), (ACTOR, None)),
+        (None, (ACTOR, None)),
+    ]
+    for ctx, expected in cases:
+        token = REQUEST_IDENTITY.set(ctx)
+        try:
+            assert kr._reviewer(ACTOR) == expected, ctx
+        finally:
+            REQUEST_IDENTITY.reset(token)
+
+
+def test_an_approval_stores_the_person_and_their_name_everywhere(client, engine, monkeypatch):
+    from apps.api.app.routers import knowledge_rules as kr
+
+    monkeypatch.setattr(kr, "_reviewer", lambda claimed: ("usr_example1abc", "Example Person"))
+    rid = _proposed(engine, statement="Disbursements above the product cap are refused.",
+                    scan_id="scan_person")
+    approved = client.post(f"/v1/knowledge/view/rules/{rid}/approve",
+                           json={"project_id": PROJECT_ID, "actor": ACTOR, "step_up": "confirmed"})
+    assert approved.status_code == 200, approved.text
+    rule = approved.json()["rule"]
+    assert rule["review"]["by"] == "usr_example1abc"
+    assert rule["review"]["by_name"] == "Example Person"
+    assert rule["provenance"]["approved_by"] == "usr_example1abc"
+    assert rule["provenance"]["approved_by_name"] == "Example Person"
+    approve_events = [e for e in rule["provenance"]["events"] if e["what"] == "approved"]
+    assert approve_events and approve_events[-1]["by_name"] == "Example Person"
+    with begin(engine) as connection:
+        audit = connection.execute(text(
+            "SELECT actor_ref, detail->>'by_name' FROM kg_audit WHERE entity_id = :i "
+            "AND action = 'knowledge.rule.approve'"), {"i": rid}).one()
+        person = connection.execute(text(
+            "SELECT n.name FROM kg_edges e JOIN kg_nodes n ON n.id = e.dst_id "
+            "WHERE e.src_id = :i AND e.kind = 'approved_by'"), {"i": rid}).scalar_one()
+    assert tuple(audit) == ("usr_example1abc", "Example Person")
+    assert person == "Example Person"

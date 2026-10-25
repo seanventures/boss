@@ -5493,7 +5493,9 @@ export type KgNeighbourhoodResponse = {
   hidden: { nodes: number; edges: number };
 };
 
-export type KgProvenanceEvent = { at: string; what: string; by: string | null };
+export type KgProvenanceEvent = { at: string; what: string; by: string | null;
+  /** The person's display name when `by` is a person (provenance names people, never ids). */
+  by_name?: string | null };
 
 export type KgProvenance = {
   /** kg_nodes.created_by: an agent role key, a person id, or "system" for the code index. */
@@ -5508,6 +5510,8 @@ export type KgProvenance = {
   model_id?: string | null;
   at: string | null;
   approved_by?: string | null;
+  /** The approving person's display name, recorded with the approval. */
+  approved_by_name?: string | null;
   approved_at?: string | null;
   version?: number | null;
   previous_id?: string | null;
@@ -5634,7 +5638,9 @@ export type KgRuleEvidence = {
   excerpt: string | null;
 };
 
-export type KgRuleReview = { by: string; at: string; decision_id: string | null; note: string | null };
+export type KgRuleReview = { by: string; at: string; decision_id: string | null; note: string | null;
+  /** The reviewer's display name (null on records made before names were kept). */
+  by_name?: string | null };
 
 export type KgRule = {
   node: KgViewNode;

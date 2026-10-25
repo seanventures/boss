@@ -23,3 +23,14 @@ export function actorWords(actor: string | null | undefined, name?: string | nul
   if (!looksLikeAnId(id)) return id;
   return id.toLowerCase().startsWith("agt_") ? "an agent" : "a person";
 }
+
+/** Who reviewed or approved a knowledge-graph rule. The stored name wins; a record from before
+ *  names were kept holds the legacy member key ("ceo" for an Owner) and reads as what it is,
+ *  "an owner (legacy record)" — never the bare key and never a made-up person
+ *  (brec_77cc82cb106640b09d44). */
+export function reviewerWords(by: string | null | undefined, name?: string | null,
+                              viewer?: string | null): string {
+  const id = String(by ?? "").trim();
+  if (!String(name ?? "").trim() && id === "ceo") return "an owner (legacy record)";
+  return actorWords(by, name, viewer);
+}

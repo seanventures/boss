@@ -54,6 +54,26 @@ def _actor_kind() -> str:
     return "person"
 
 
+def _reviewer(claimed: str) -> tuple[str, Optional[str]]:
+    """WHO REVIEWED, AS A PERSON: (stable principal id, display name) of the signed-in person —
+    the same test an approval uses (identity.approvals._approver: a human session, never a
+    bridge or legacy principal). Approvals stored the body's legacy member id ("ceo" for an
+    Owner), so 11 approved rules in northpeak-bank named a role key, not the operator who
+    approved them (brec_77cc82cb106640b09d44). Without a verified person session (the legacy
+    console path, tests) the claimed actor stands, with no name — the console renders such a
+    legacy record as "an owner (legacy record)", never the bare id."""
+    try:
+        from apps.api.app.identity_guard import REQUEST_IDENTITY
+        from boss_engine.identity.legacy import is_bridge_principal
+    except ImportError:  # pragma: no cover — the guard ships with the API
+        return claimed, None
+    ctx = REQUEST_IDENTITY.get()
+    if ctx is not None and ctx.is_human_session and not is_bridge_principal(ctx.principal.id):
+        name = str(getattr(ctx.principal, "display_name", "") or "").strip() or None
+        return ctx.principal.id, name
+    return claimed, None
+
+
 def _http(error: Exception) -> HTTPException:
     if isinstance(error, HTTPException):
         return error
@@ -112,8 +132,10 @@ def _review(body: RuleActionBody, action, **kwargs) -> dict[str, Any]:
     try:
         with begin(_engine) as connection:
             _actor(connection, body.project_id, body.actor, REVIEW)
-            done = action(connection, project_id=body.project_id, actor_ref=body.actor,
-                          actor_kind=_actor_kind(), note=body.note, **kwargs)
+            reviewer, reviewer_name = _reviewer(body.actor)
+            done = action(connection, project_id=body.project_id, actor_ref=reviewer,
+                          actor_name=reviewer_name, actor_kind=_actor_kind(), note=body.note,
+                          **kwargs)
             _settle_scan_gate(connection, body.project_id, done)
             return done
     except Exception as error:  # noqa: BLE001

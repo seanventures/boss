@@ -14,7 +14,7 @@ import { GatedButton } from "../../components/gated";
 import { LockedPanel } from "../../components/locked-panel";
 import { KgReadError } from "./kg-states";
 import { roleWords } from "../agents/chain-model";
-import { actorWords } from "../../lib/actor-words";
+import { actorWords, reviewerWords } from "../../lib/actor-words";
 import {
   FACT_MANAGE, RULE_REVIEW, approveRule, codeHref, editRule, getGraphStatus, getRules, kgRunHref, promoteFact,
   rejectFact, rejectRule,
@@ -277,7 +277,7 @@ function RuleCard({ r, w, orgId, archived, archivedWhy, picked, editing, onPick,
         <span title="How sure the proposing agent was, capped by its evidence">{Math.round(r.confidence * 100)}% confident</span>
         <span>Proposed by <strong>{by}</strong>{r.provenance.at ? ` · ${when(r.provenance.at)}` : ""}</span>
         {run ? <a className="inf-link" href={run} data-testid="kg-rule-run">its run ↗</a> : null}
-        {r.review ? <span>{r.status === "rejected" ? "Rejected" : "Reviewed"} by <strong>{actorWords(r.review.by)}</strong> · {when(r.review.at)}{r.review.note ? ` — “${r.review.note}”` : ""}</span> : null}
+        {r.review ? <span>{r.status === "rejected" ? "Rejected" : "Reviewed"} by <strong>{reviewerWords(r.review.by, r.review.by_name)}</strong> · {when(r.review.at)}{r.review.note ? ` — “${r.review.note}”` : ""}</span> : null}
         {r.version > 1 ? <span>version {r.version}</span> : null}
       </div>
       <ul className="kg-evidence" aria-label="Evidence">

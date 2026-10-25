@@ -12,7 +12,7 @@ import { Copy, X } from "@phosphor-icons/react";
 
 import { GatedButton } from "../../components/gated";
 import { roleWords } from "../agents/chain-model";
-import { actorWords } from "../../lib/actor-words";
+import { actorWords, reviewerWords } from "../../lib/actor-words";
 import { isLearnedKind, type KgConnectionGroup, type KgNodeDetailResponse, type KgProvenance, type KgViewEdge, type KgViewNode } from "../../lib/kg-view-types";
 import { kindName, kindToken } from "../../lib/kg-layout";
 import {
@@ -265,7 +265,7 @@ function DetailBody({ d, w, orgId, onFocusNode, viewEdges }: {
   const isRule = d.node.kind === "rule";
   const statusWord = d.node.status ?? (typeof a.status === "string" ? a.status : null);
   const trust = isRule && d.provenance.approved_by
-    ? `Approved by ${actorWords(d.provenance.approved_by)}${d.provenance.approved_at ? ` · ${when(d.provenance.approved_at)}` : ""}`
+    ? `Approved by ${reviewerWords(d.provenance.approved_by, d.provenance.approved_by_name)}${d.provenance.approved_at ? ` · ${when(d.provenance.approved_at)}` : ""}`
     : isRule ? `${cap(statusWord ?? "proposed")} · not yet trusted by agents` : d.node.trust_tier === "inferred" ? "Inferred by an agent · not reviewed" : null;
   const extra = Object.entries(a).filter(([k, v]) => !ATTR_SKIP.has(k) && (typeof v === "string" || typeof v === "number" || typeof v === "boolean"));
   const detail = (a.detail && typeof a.detail === "object") ? (a.detail as Record<string, unknown>) : null;
@@ -505,7 +505,7 @@ function Provenance({ p, orgId }: { p: KgProvenance; orgId?: string | null }) {
   lines.push(<>{p.created_by_kind === "system" ? "Indexed by" : p.created_by_kind === "agent" ? "Written by" : "Added by"} <strong>{who(p)}</strong>{p.at ? ` · ${when(p.at)}` : ""}</>);
   if (p.run_id || run) lines.push(<>Run {run ? <a className="inf-link" href={run} data-testid="kg-panel-run-link">{short(p.code_task_run_id ?? p.workflow_run_id ?? p.run_id ?? "")} ↗</a> : short(p.run_id ?? "")}{p.step ? ` · step ${p.step}` : ""}</>);
   if (p.model_id) lines.push(<>Model {p.model_id}</>);
-  if (p.approved_by) lines.push(<>Approved by <strong>{actorWords(p.approved_by)}</strong>{p.approved_at ? ` · ${when(p.approved_at)}` : ""}</>);
+  if (p.approved_by) lines.push(<>Approved by <strong>{reviewerWords(p.approved_by, p.approved_by_name)}</strong>{p.approved_at ? ` · ${when(p.approved_at)}` : ""}</>);
   if (p.version && p.version > 1) lines.push(<>Version {p.version}, edited from v{p.version - 1}</>);
   return (
     <Section title="Provenance" testId="kg-panel-provenance">
@@ -513,7 +513,7 @@ function Provenance({ p, orgId }: { p: KgProvenance; orgId?: string | null }) {
       {p.events.length > 1 ? (
         <ol className="kg-timeline" data-testid="kg-panel-timeline">
           {p.events.map((e, i) => (
-            <li key={i}><span className="kg-timeline-at">{when(e.at)}</span> {e.what}{e.by ? ` by ${actorWords(e.by)}` : ""}</li>
+            <li key={i}><span className="kg-timeline-at">{when(e.at)}</span> {e.what}{e.by ? ` by ${reviewerWords(e.by, e.by_name)}` : ""}</li>
           ))}
         </ol>
       ) : null}

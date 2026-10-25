@@ -303,7 +303,8 @@ def _events(connection: Connection, project_id: str, rule: Mapping[str, Any]) ->
     events = [{"at": provenance.get("proposed_at") or _iso(rule["first_seen"]), "what": "proposed",
                "by": provenance.get("agent_name") or provenance.get("agent_role") or rule["created_by"]}]
     for row in connection.execute(text(
-            "SELECT action, actor_ref, actor_kind, created_at FROM kg_audit "
+            "SELECT action, actor_ref, actor_kind, created_at, detail->>'by_name' AS by_name "
+            "FROM kg_audit "
             "WHERE project_id = :p AND entity_id = :id AND action LIKE 'knowledge.rule.%' "
             "AND action <> 'knowledge.rule.propose' "
             "ORDER BY created_at"), {"p": project_id, "id": rule["id"]}).mappings():
@@ -311,7 +312,7 @@ def _events(connection: Connection, project_id: str, rule: Mapping[str, Any]) ->
         what = {"approve": "approved", "edit": "edited", "reject": "rejected",
                 "supersede": "superseded"}.get(what, what)
         events.append({"at": _iso(row["created_at"]), "what": what,
-                       "by": row["actor_ref"] or row["actor_kind"]})
+                       "by": row["actor_ref"] or row["actor_kind"], "by_name": row["by_name"]})
     return events
 
 
@@ -351,6 +352,8 @@ def rule_payload(connection: Connection, project_id: str, rule_id: str) -> dict[
             "model_id": provenance.get("model_id"),
             "at": provenance.get("proposed_at") or _iso(rule["first_seen"]),
             "approved_by": (review or {}).get("by") if status in ("approved", "superseded") else None,
+            "approved_by_name": (review or {}).get("by_name")
+            if status in ("approved", "superseded") else None,
             "approved_at": (review or {}).get("at") if status in ("approved", "superseded") else None,
             "version": int(attrs.get("version") or 1),
             "previous_id": attrs.get("previous_id"),
@@ -736,13 +739,25 @@ def _open_rule(connection: Connection, project_id: str, rule_id: str, allowed: t
     return rule
 
 
-def _review(actor_ref: str, note: Optional[str], decision_id: Optional[str]) -> dict[str, Any]:
-    return {"by": actor_ref, "at": _now_iso(), "decision_id": decision_id,
+def _review(actor_ref: str, note: Optional[str], decision_id: Optional[str],
+            actor_name: Optional[str] = None) -> dict[str, Any]:
+    """The review record. `by` is the reviewer's stable principal id; `by_name` the person's
+    display name at the time (provenance names a person, never an id)."""
+    return {"by": actor_ref, "by_name": _name(actor_name), "at": _now_iso(),
+            "decision_id": decision_id,
             "note": _clean(note, field="note", limit=MAX_RATIONALE, required=False) or None}
 
 
-def _person(connection: Connection, project_id: str, actor_ref: str) -> str:
-    return _anchor(connection, project_id, "person", f"person:{actor_ref}", actor_ref, {"ref": actor_ref})
+def _name(value: Optional[str]) -> Optional[str]:
+    named = str(value or "").strip()
+    return named[:200] or None
+
+
+def _person(connection: Connection, project_id: str, actor_ref: str,
+            actor_name: Optional[str] = None) -> str:
+    named = _name(actor_name)
+    return _anchor(connection, project_id, "person", f"person:{actor_ref}", named or actor_ref,
+                   {"ref": actor_ref, **({"name": named} if named else {})})
 
 
 def _governs(connection: Connection, project_id: str, rule_id: str, scope: Mapping[str, Any],
@@ -792,7 +807,8 @@ def _approve_in_place(connection: Connection, project_id: str, rule: Mapping[str
     _STORE.set_trust(connection, project_id=project_id, node_id=rule["id"], trust_tier="approved",
                      actor_kind="person")
     _merge_attrs(connection, rule["id"], {"status": "approved", "review": review})
-    _edge(connection, project_id, rule["id"], _person(connection, project_id, actor_ref), "approved_by",
+    _edge(connection, project_id, rule["id"],
+          _person(connection, project_id, actor_ref, review.get("by_name")), "approved_by",
           "person", actor_ref, {"at": review["at"], "note": review["note"]})
     _governs(connection, project_id, rule["id"], attrs.get("scope") or {}, actor_ref)
     corrected = attrs.get("corrects")
@@ -811,18 +827,21 @@ def approve_rule(
     actor_kind: str = "person",
     note: Optional[str] = None,
     decision_id: Optional[str] = None,
+    actor_name: Optional[str] = None,
 ) -> dict[str, Any]:
     """A person approves a proposed rule (``KgRuleActionResponse``). A correction, once approved,
-    supersedes the rule it corrects."""
+    supersedes the rule it corrects. `actor_name`: the person's display name, kept beside the
+    id so provenance names them."""
     _entitled(project_id)
     _require_person(actor_kind)
     actor_ref = _require_reviewer(actor_ref)
     rule = _open_rule(connection, project_id, rule_id, ("proposed",))
-    review = _review(actor_ref, note, decision_id)
+    review = _review(actor_ref, note, decision_id, actor_name)
     _approve_in_place(connection, project_id, rule, actor_ref, review)
     _STORE.audit(connection, project_id=project_id, action="knowledge.rule.approve", entity_id=rule_id,
                  actor_kind="person", actor_ref=actor_ref,
-                 detail={"note": review["note"], "decision_id": decision_id})
+                 detail={"note": review["note"], "decision_id": decision_id,
+                         "by_name": review["by_name"]})
     from .age import after_write
 
     after_write(connection, project_id)
@@ -842,6 +861,7 @@ def edit_rule(
     scope: Optional[Mapping[str, Any]] = None,
     note: Optional[str] = None,
     decision_id: Optional[str] = None,
+    actor_name: Optional[str] = None,
 ) -> dict[str, Any]:
     """A person edits a proposed or approved rule: version n+1, approved in the same act,
     ``supersedes`` the old version (closed). Its evidence and lineage carry over."""
@@ -883,12 +903,12 @@ def edit_rule(
         {"p": project_id, "k": key}).scalar()
     if clash:
         raise RuleRefused(f"That version already exists as rule {clash}.")
-    review = _review(actor_ref, note, decision_id)
+    review = _review(actor_ref, note, decision_id, actor_name)
     new_attrs = {
         **attrs, "statement": new_statement, "category": new_category, "scope": new_scope,
         "status": "approved", "review": review, "version": version, "previous_id": rule_id,
         "content_key": content_key,
-        "edited": {"by": actor_ref, "at": review["at"]},
+        "edited": {"by": actor_ref, "by_name": review["by_name"], "at": review["at"]},
     }
     new_id = _STORE.upsert_node(connection, project_id=project_id, kind="rule", node_key=key,
                                 name=new_title, body=new_statement, trust_tier="approved",
@@ -897,7 +917,8 @@ def edit_rule(
             "SELECT dst_id, kind, attrs FROM kg_edges WHERE src_id = :id AND kind IN ('evidenced_by', 'proposed_by', 'corrects')"),
             {"id": rule_id}).mappings().all():
         _edge(connection, project_id, new_id, row["dst_id"], row["kind"], "person", actor_ref, row["attrs"] or {})
-    _edge(connection, project_id, new_id, _person(connection, project_id, actor_ref), "approved_by",
+    _edge(connection, project_id, new_id,
+          _person(connection, project_id, actor_ref, review.get("by_name")), "approved_by",
           "person", actor_ref, {"at": review["at"], "note": review["note"]})
     _governs(connection, project_id, new_id, new_scope, actor_ref)
     _supersede(connection, project_id, rule_id, new_id, actor_ref)
@@ -908,7 +929,8 @@ def edit_rule(
             _supersede(connection, project_id, corrected, new_id, actor_ref)
     _STORE.audit(connection, project_id=project_id, action="knowledge.rule.edit", entity_id=new_id,
                  actor_kind="person", actor_ref=actor_ref,
-                 detail={"previous_id": rule_id, "version": version, "note": review["note"]})
+                 detail={"previous_id": rule_id, "version": version, "note": review["note"],
+                         "by_name": review["by_name"]})
     from .age import after_write
 
     after_write(connection, project_id)
@@ -925,18 +947,20 @@ def reject_rule(
     actor_kind: str = "person",
     note: Optional[str] = None,
     decision_id: Optional[str] = None,
+    actor_name: Optional[str] = None,
 ) -> dict[str, Any]:
     """A person rejects a proposed rule, or retires an approved one: closed, with the note."""
     _entitled(project_id)
     _require_person(actor_kind)
     actor_ref = _require_reviewer(actor_ref)
     _open_rule(connection, project_id, rule_id, ("proposed", "approved"))
-    review = _review(actor_ref, note, decision_id)
+    review = _review(actor_ref, note, decision_id, actor_name)
     _merge_attrs(connection, rule_id, {"status": "rejected", "review": review})
     _STORE.close_validity(connection, project_id=project_id, valid_to=datetime.now(timezone.utc),
                           actor_kind="person", node_id=rule_id)
     _STORE.audit(connection, project_id=project_id, action="knowledge.rule.reject", entity_id=rule_id,
-                 actor_kind="person", actor_ref=actor_ref, detail={"note": review["note"]})
+                 actor_kind="person", actor_ref=actor_ref,
+                 detail={"note": review["note"], "by_name": review["by_name"]})
     from .age import after_write
 
     after_write(connection, project_id)
