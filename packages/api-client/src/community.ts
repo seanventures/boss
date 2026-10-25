@@ -5527,6 +5527,14 @@ export type KgProvenance = {
   previous_id?: string | null;
   /** Shown as a timeline when there is more than one. */
   events: KgProvenanceEvent[];
+  /** Code: the index that wrote it — "Indexed from <repo>@<sha> on <date>". */
+  source?: { repo: string; branch?: string | null; sha?: string | null; at?: string | null } | null;
+  /** The run it came from, by its title and start (never "Run wfr_…"). */
+  run_title?: string | null;
+  run_at?: string | null;
+  /** The conversation it came from (a chat turn), by its question and start. */
+  conversation_title?: string | null;
+  conversation_at?: string | null;
 };
 
 export type KgConnectionGroup = {
@@ -5558,6 +5566,8 @@ export type KgLineageUse = {
   agent_name: string | null;
   how: "consulted" | "cited" | "reused";
   at: string;
+  /** The run's (or conversation's) name, never its id. */
+  run_title?: string | null;
 };
 
 /** "Learned by Responder in run A (step investigate) → used by Builder in run B". */

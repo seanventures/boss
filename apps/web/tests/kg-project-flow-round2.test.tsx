@@ -42,28 +42,28 @@ describe("provenance in words", () => {
     provenance: { created_by: "system", at: "2026-10-25T05:32:22Z", events: [{ at: "2026-10-25T05:32:22Z", what: "recorded", by: "an agent (not recorded)" }], ...provenance },
   });
 
-  it("a learning recorded before names were kept says 'an agent (not recorded)', never the code index", async () => {
+  it("a learning recorded before names were kept says so in words, never the indexer", async () => {
     mockKgFetch({ "/view/node/": { body: learned({ created_by_kind: "agent", who: "an agent (not recorded)" }) } });
     await mount(<NodePanel projectId="p" actor="ceo" nodeId="kgn_l" onFocusNode={() => {}} />);
     await settle();
-    expect($('[data-testid="kg-panel-who"]')?.textContent).toBe("an agent (not recorded)");
+    expect($('[data-testid="kg-panel-who"]')?.textContent).toBe("an agent, before BOSS kept agents' names");
     expect($('[data-testid="kg-panel-provenance"]')?.textContent).not.toMatch(/code index|knowledge\.learning/);
     // Backticked code in what was learned is code.
     expect($('[data-testid="kg-panel-statement"] code')?.textContent).toBe("mifos-standard-strategy");
   });
 
-  it("an agent's learning names it, its role and its Passport id; BOSS itself is 'BOSS (general)'", async () => {
+  it("an agent's learning names it, its role and its Passport; BOSS itself is 'BOSS, the general agent'", async () => {
     mockKgFetch({ "/view/node/": { body: learned({ created_by: "sre", created_by_kind: "agent", agent_role: "sre",
                                                    agent_name: "Beacon", agent_id: "agt_7f3a9c2e11d84b0a", who: "Beacon" }) } });
     await mount(<NodePanel projectId="p" actor="ceo" nodeId="kgn_l" onFocusNode={() => {}} />);
     await settle();
     expect($('[data-testid="kg-panel-who"]')?.textContent).toBe("Beacon (SRE)");
-    expect($('[data-testid="kg-panel-provenance"]')?.textContent).toContain("agt_7f3a9c2e");
+    expect($('[data-testid="kg-panel-passport"]')?.getAttribute("data-passport")).toBe("agt_7f3a9c2e11d84b0a");
     unmount();
     mockKgFetch({ "/view/node/": { body: learned({ created_by_kind: "agent", agent_role: "boss", agent_name: "BOSS (general)", who: "BOSS (general)" }) } });
     await mount(<NodePanel projectId="p" actor="ceo" nodeId="kgn_l" onFocusNode={() => {}} />);
     await settle();
-    expect($('[data-testid="kg-panel-who"]')?.textContent).toBe("BOSS (general)");
+    expect($('[data-testid="kg-panel-who"]')?.textContent).toBe("BOSS, the general agent");
   });
 
   it("inline code renders only backticks, nothing else", () => {

@@ -223,6 +223,13 @@ def node_payload(row: Mapping[str, Any]) -> dict[str, Any]:
         out["status"] = status
         category = attrs.get("category")
         out["sub"] = f"{status} · {category}" if category else status
+    elif kind == "person":
+        # Tester round 4: an "Approved by" node literally named "ceo" (the legacy member key).
+        named = str(attrs.get("name") or "").strip()
+        if named:
+            out["label"] = named
+        elif name == str(attrs.get("ref") or name) or name.startswith(("usr_", "prn_")) or name == "ceo":
+            out["label"] = OPERATOR
     elif kind == "run" and attrs.get("subtype") == "conversation":
         # A conversation is a run of its own (learning_conversations), named after its question
         # and when it started: "Conversation with Site Reliability Engineer".
@@ -912,8 +919,13 @@ _DONE_WORD = {"record": "recorded", "propose": "proposed", "approve": "approved"
               "index_failed": "failed to index"}
 #: The audit actions that ARE the creation the first event already says.
 _CREATION = frozenset({"record", "propose", "index", "indexed"})
-#: Said for an item recorded before BOSS kept who recorded it (BOSSAPP-768 round 2).
-NOT_RECORDED = "an agent (not recorded)"
+#: Said for an item recorded before BOSS kept who recorded it (BOSSAPP-768 round 2; round 4:
+#: in words, never "(not recorded)").
+NOT_RECORDED = "an agent, before BOSS kept agents' names"
+#: A person whose display name was never recorded (a legacy "ceo" review): never the key.
+OPERATOR = "the operator"
+#: Who indexed code, when the repository's index record is gone.
+CODE_WHO = "BOSS, from the repository"
 
 
 def action_words(action: str) -> str:
@@ -922,12 +934,12 @@ def action_words(action: str) -> str:
 
 
 def _who(layer: Optional[str], by_kind: str, prov: Mapping[str, Any], created_by: str) -> str:
-    """WHO ADDED IT, in words, for every layer: the code index for code; an agent by its name
+    """WHO ADDED IT, in words, for every layer: BOSS from the repository for code; an agent by its name
     (and role) for what an agent wrote — "BOSS (general)" when nobody was addressed, "an agent (not
     recorded)" for an item written before BOSS kept the name; a person otherwise. Never an event
-    key, and never "the code index" for a rule or a learning."""
+    key, and never the indexer for a rule or a learning."""
     if layer == "code":
-        return "the code index"
+        return CODE_WHO
     name = str(prov.get("agent_name") or "").strip()
     role = str(prov.get("agent_role") or "").strip()
     if by_kind == "person":
@@ -958,6 +970,7 @@ def _provenance(connection: Connection, project_id: str, row: Mapping[str, Any],
     events: list[dict[str, Any]] = [{
         "at": at, "by": None if layer == "code" else who,
         "what": "indexed" if layer == "code" else "proposed" if layer == "rules" else "recorded"}]
+    reviewed = str(review.get("decision") or rule_status(row)) if review.get("at") else None
     for action, when, detail, actor in connection.execute(text(
             "SELECT action, created_at, detail, actor_kind FROM kg_audit WHERE project_id = :p AND entity_id = :id "
             "ORDER BY created_at LIMIT 50"), {"p": project_id, "id": row["id"]}).all():
@@ -965,10 +978,18 @@ def _provenance(connection: Connection, project_id: str, row: Mapping[str, Any],
             continue
         detail = _attrs(detail)
         by = detail.get("actor_ref") or detail.get("actor")
-        events.append({"at": _iso(when), "what": action_words(str(action)),
-                       "by": by if by and by != "system" else (who if actor in ("agent", "system") else actor)})
-    if review.get("at") and not any(e["at"] == review.get("at") for e in events):
-        events.append({"at": review.get("at"), "what": str(review.get("decision") or rule_status(row)),
+        what = action_words(str(action))
+        event = {"at": _iso(when), "what": what,
+                 # A kind ("person", "agent") is never a name: a person's event without its ref is
+                 # the review's person when it is the review; otherwise unnamed.
+                 "by": by if by and by != "system" else (who if actor in ("agent", "system") else None)}
+        if what == reviewed and (event["by"] in (None, review.get("by"))):
+            event.update(by=review.get("by"), by_name=review.get("by_name"))
+        events.append(event)
+    # The review once: "approved by person" and then "approved by an owner" were the same act
+    # (tester round 4) — the audit row and the review record.
+    if reviewed and not any(e["at"] == review.get("at") or e["what"] == reviewed for e in events):
+        events.append({"at": review.get("at"), "what": reviewed,
                        "by": review.get("by"), "by_name": review.get("by_name")})
     events.sort(key=lambda e: str(e["at"] or ""))
     approved = layer == "rules" and rule_status(row) == "approved"
@@ -977,6 +998,7 @@ def _provenance(connection: Connection, project_id: str, row: Mapping[str, Any],
     for key in ("agent_role", "agent_name", "agent_id", "run_id", "workflow_run_id", "code_task_run_id", "step", "model_id"):
         if prov.get(key) is not None:
             out[key] = prov.get(key)
+    out.update(_where_from(connection, project_id, row, prov, layer))
     if approved:
         out["approved_by"] = review.get("by")
         out["approved_by_name"] = review.get("by_name")
@@ -987,11 +1009,58 @@ def _provenance(connection: Connection, project_id: str, row: Mapping[str, Any],
     return out
 
 
+def _where_from(connection: Connection, project_id: str, row: Mapping[str, Any], prov: Mapping[str, Any],
+                layer: Optional[str]) -> dict[str, Any]:
+    """WHERE IT CAME FROM, as the words need it (tester round 4: "Indexed by the code index",
+    "Run wfr_6267c5d3… ↗"): for code, the repository, commit and time of the index that wrote it;
+    for an agent's item, the run's title and start, or the conversation's title and start."""
+    out: dict[str, Any] = {}
+    if layer == "code":
+        repo = row.get("repo")
+        if repo:
+            src = None
+            try:
+                with connection.begin_nested():
+                    src = connection.execute(text(
+                        "SELECT repo, branch, indexed_sha, indexed_at FROM kg_repo_index "
+                        "WHERE project_id = :p AND repo = :r ORDER BY indexed_at DESC NULLS LAST LIMIT 1"),
+                        {"p": project_id, "r": repo}).mappings().first()
+            except Exception:  # noqa: BLE001 — provenance is words, never a reason to refuse
+                src = None
+            out["source"] = {"repo": repo, "branch": (src or {}).get("branch") or None,
+                             "sha": str((src or {}).get("indexed_sha") or "")[:7] or None,
+                             "at": _iso((src or {}).get("indexed_at")) or _iso(row.get("first_seen"))}
+        return out
+    from .learning_writeback import run_name
+
+    ref = prov.get("code_task_run_id") or prov.get("workflow_run_id") or prov.get("run_id")
+    if ref:
+        title, started = run_name(connection, str(ref))
+        out["run_title"] = title
+        out["run_at"] = _iso(started)
+    thread = prov.get("agent_thread_id")
+    if thread and not ref:
+        found = None
+        try:
+            with connection.begin_nested():
+                found = connection.execute(text(
+                    "SELECT name, attrs->>'started_at' AS at FROM kg_nodes WHERE project_id = :p AND kind = 'run' "
+                    "AND node_key = :k AND valid_to IS NULL LIMIT 1"), {"p": project_id, "k": f"run:{thread}"}).mappings().first()
+        except Exception:  # noqa: BLE001
+            found = None
+        if found:
+            # The conversation node is named "<its question> · Oct 25, 07:13" (UTC): the words
+            # say its question; the console shows the time in the viewer's zone.
+            out["conversation_title"] = str(found["name"]).rsplit(" · ", 1)[0] if " · " in str(found["name"]) else found["name"]
+            out["conversation_at"] = found["at"]
+    return out
+
+
 def _lineage(connection: Connection, project_id: str, node_id: str, attrs: Mapping[str, Any]) -> dict[str, Any]:
     prov = _attrs(attrs.get("provenance"))
     used = []
-    for kind, eattrs, at, run_key, run_attrs in connection.execute(text(
-            "SELECT e.kind, e.attrs, e.recorded_at, s.node_key, s.attrs FROM kg_edges e "
+    for kind, eattrs, at, run_key, run_attrs, run_name in connection.execute(text(
+            "SELECT e.kind, e.attrs, e.recorded_at, s.node_key, s.attrs, s.name FROM kg_edges e "
             "JOIN kg_nodes s ON s.id = e.src_id WHERE e.project_id = :p AND e.dst_id = :id "
             "AND e.kind IN ('consulted', 'reused') AND e.valid_to IS NULL ORDER BY e.recorded_at LIMIT 100"),
             {"p": project_id, "id": node_id}).all():
@@ -1000,6 +1069,9 @@ def _lineage(connection: Connection, project_id: str, node_id: str, attrs: Mappi
         used.append({"run_id": str(ea.get("run_id") or ra.get("run_id") or str(run_key).split(":", 1)[-1]),
                      "agent_role": ea.get("agent_role") or ra.get("agent_role") or ra.get("role"),
                      "agent_name": ea.get("agent_name") or ra.get("agent_name"),
+                     # The run by its name ("<title> · <when>", its time dropped: the console
+                     # shows times in the viewer's zone), never its id (tester round 4).
+                     "run_title": str(run_name or "").rsplit(" · ", 1)[0] or None,
                      "how": how, "at": _iso(at)})
     return {"learned": {k: prov.get(k) for k in ("run_id", "agent_role", "agent_name", "step")} | {"at": prov.get("at")},
             "used": used}

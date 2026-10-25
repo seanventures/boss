@@ -65,7 +65,7 @@ describe("the detail panel", () => {
     for (const t of ["org.apache.fineract.portfolio.loanaccount.service", "fineract-provider", "method", "java"]) expect(attrs).toContain(t);
     expect($('[data-testid="kg-panel-conn-summary"]')?.textContent).toBe("Calls 119 · References 23 · Dispatches to 20 · Overrides 1 · Called by 5 · Dispatched from 3 · Defined in 1");
     expect($('[data-testid="kg-panel-vector-reason"]')?.textContent).toBe("Not embedded: code symbols are matched by structure, not meaning");
-    expect($('[data-testid="kg-panel-provenance"]')?.textContent).toContain("Indexed by the code index");
+    expect($('[data-testid="kg-panel-provenance"]')?.textContent).toContain("Indexed from the repository on ");
     const order = $$('[data-testid^="kg-panel-"]').map((e) => e.getAttribute("data-testid"))
       .filter((t) => ["kg-panel-attrs", "kg-panel-connections", "kg-panel-vector", "kg-panel-provenance", "kg-panel-why"].includes(t!));
     expect(order).toEqual(["kg-panel-attrs", "kg-panel-connections", "kg-panel-vector", "kg-panel-provenance", "kg-panel-why"]);
@@ -109,8 +109,8 @@ describe("the detail panel", () => {
     expect($('[data-testid="kg-panel-statement"]')?.textContent).toContain(rule.statement);
     expect($('[data-testid="kg-panel-trust"]')?.textContent).toBe("Proposed · not yet trusted by agents");
     expect($('[data-testid="kg-panel-attrs"]')?.textContent).toContain(`${Math.round(rule.confidence * 100)}%`);
-    expect($('[data-testid="kg-panel-provenance"]')?.textContent).toContain("Written by Scout (Chief Architect)");
-    expect($('[data-testid="kg-panel-provenance"]')?.textContent).toContain("step scan");
+    expect($('[data-testid="kg-panel-provenance"]')?.textContent).toContain("Proposed by Scout (Chief Architect)");
+    expect($('[data-testid="kg-panel-provenance"]')?.textContent).toContain("its “scan” step");
     await act(async () => ($('[data-testid="kg-panel-edit"]') as HTMLButtonElement).click());
     expect(onEditRule).toHaveBeenCalledWith(rule.node.id);
     await act(async () => ($('[data-testid="kg-panel-approve"]') as HTMLButtonElement).click());
@@ -123,7 +123,7 @@ describe("the detail panel", () => {
     const approved = FX.rules.items.find((r) => r.status === "approved")!;
     mockKgFetch({ "/view/node/": { body: { ...RULE_DETAIL, node: approved.node, statement: approved.statement, provenance: approved.provenance } } });
     await mount(<Panel nodeId={approved.node.id} />);
-    expect($('[data-testid="kg-panel-trust"]')?.textContent).toMatch(/^Approved by usr_param · /);
+    expect($('[data-testid="kg-panel-trust"]')?.textContent).toMatch(/^Approved by the operator · /);
     expect($('[data-testid="kg-panel-approve"]')).toBeNull();
     expect($('[data-testid="kg-panel-timeline"]')?.querySelectorAll("li")).toHaveLength(2);
   });
@@ -141,7 +141,7 @@ describe("the detail panel", () => {
     expect(onFocusNode).toHaveBeenCalledWith(FX.live.learnings[1].node.id, FX.live.learnings[1].node);
     const lineage = $('[data-testid="kg-panel-lineage"]')!.textContent!;
     expect(lineage).toContain("Learned by Builder (Backend Engineer)");
-    expect(lineage).toContain("step implement-repair1");
+    expect(lineage).toContain("its “implement repair1” step");
     expect(lineage).toContain("used by Builder");
     expect(($('[data-testid="kg-panel-open-run"]') as HTMLAnchorElement).getAttribute("href")).toBe("/?area=code_tasks&build=ctr_fixture_build_1");
   });
