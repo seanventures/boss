@@ -200,12 +200,17 @@ export function SubscriptionSignIn({ provider, label, autoStart = false, fresh =
           ) : null}
         </div>
         {session.needs_code_input ? (
+          <p className="su-line su-faint" data-testid="su-signin-code-help">
+            Approve on the sign-in page. It then shows a code: copy it, paste it here, and press Submit.
+          </p>
+        ) : null}
+        {session.needs_code_input ? (
           <form className="su-line" data-testid="su-signin-code-form"
                 onSubmit={(e) => { e.preventDefault(); void submit(); }}>
             <label className="su-field su-field-inline su-signin-code-field">
               <span className="su-field-label">Code</span>
               <input type="text" autoComplete="one-time-code" spellCheck={false} value={code}
-                     aria-label="Code" placeholder="Code from the sign-in page"
+                     aria-label="Code" placeholder="Paste the code here"
                      data-testid="su-signin-code-input" onChange={(e) => setCode(e.target.value)} />
             </label>
             <GatedButton permission="model_provider:manage" type="submit" className="su-btn su-btn-sm"
@@ -220,7 +225,8 @@ export function SubscriptionSignIn({ provider, label, autoStart = false, fresh =
         <div className="su-line">
           <Tip tip={session.headline || "Approve the sign-in in your browser."} className="su-line su-faint"
                testid="su-signin-waiting">
-            <CircleNotch className="su-spin" size={12} aria-hidden />Waiting for you to approve…
+            <CircleNotch className="su-spin" size={12} aria-hidden />
+            {session.needs_code_input ? "Waiting for the code…" : "Waiting for you to approve…"}
           </Tip>
           <button type="button" className="su-link" data-testid="su-signin-cancel"
                   title="Stops the sign-in on the BOSS server." onClick={() => void cancel()}>Cancel</button>

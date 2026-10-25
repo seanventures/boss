@@ -141,6 +141,10 @@ describe("a CLI that asks for a code pasted back", () => {
     mounted = await mountBoard(view(), "?area=setup&add=claude_code");
     await click(q(drawer(), "su-signin-start"));
     const box = q(drawer(), "su-signin-code-input") as HTMLInputElement;
+    // It says where the provider's code goes: the provider's page says "paste into Claude Code".
+    expect(q(drawer(), "su-signin-code-help")!.textContent).toContain("paste it here");
+    expect(box.getAttribute("placeholder")).toBe("Paste the code here");
+    expect(q(drawer(), "su-signin-waiting")!.textContent).toContain("Waiting for the code");
     expect(box.getAttribute("type")).toBe("text");
     expect(drawer().querySelectorAll('input[type="password"]').length).toBe(0);
     expect((q(drawer(), "su-signin-code-submit") as HTMLButtonElement).disabled).toBe(true);
