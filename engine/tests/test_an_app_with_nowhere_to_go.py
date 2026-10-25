@@ -400,8 +400,14 @@ class TestTheDeadEndIsAppendedWhenTheModelWillNotSayIt:
         """Without this the note could say something failed and never say what."""
         from boss_engine.services import intent_router
 
+        # One record shape for every trace a turn produces (intent_router.tool_call_record),
+        # and every place a trace becomes the transcript uses it.
+        record = intent_router.tool_call_record(
+            {"tool": "read_code", "args": {}, "result": {"ok": False, "error": "no such ref"}})
+        assert record["ok"] is False and record["error"] == "no such ref"
         body = inspect.getsource(intent_router)
-        assert body.count('"error": str(result.get("error") or "")') >= 2
+        assert body.count("tool_calls.append(tool_call_record(step))") >= 2
+        assert body.count('{"tool": step.get("tool"),') == 1, "a second, hand-built record shape"
 
     def test_it_runs_after_the_reconcilers_and_before_the_repetition_filter(self):
         """Appended too early it would be stripped as a repetition; too late and a reconciler

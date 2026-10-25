@@ -50,6 +50,25 @@ from .receipts import ReceiptService
 #:
 #: The registry already knows: a tool is declared `kind="write"` or it is not. Reading it there
 #: means a new write is an action the day it is added, with nobody having to remember.
+
+def tool_call_record(step: dict) -> dict:
+    """ONE SHAPE FOR A TOOL CALL IN THE TRANSCRIPT (agent_messages.tool_calls), for every trace a
+    turn produces: the tool, its arguments, whether it worked and WHY it did not — and, for a
+    knowledge read (kg_precedent, kg_rules, kg_why, kg_search), the ids of the rules and learnings
+    it returned (`refs`), so what the agent was given is in the record and not only that it asked
+    (knowledge/learning_conversations)."""
+    result = step.get("result") or {}
+    if not isinstance(result, dict):
+        result = {}
+    record = {"tool": step.get("tool"), "args": step.get("args"),
+              "ok": bool(result.get("ok", True)), "error": str(result.get("error") or "")}
+    from .knowledge.learning_conversations import result_refs
+
+    refs = result_refs(step.get("tool"), result)
+    if refs:
+        record["refs"] = refs
+    return record
+
 def _is_acting(tool_name: str) -> bool:
     return tool_name in _acting_tools()
 
@@ -2812,12 +2831,9 @@ class IntentRouter:
                     # the answer.
                     for step in (getattr(turn, "trace", None) or []):
                         result = step.get("result") or {}
-                        tool_calls.append({"tool": step.get("tool"),
-                                           "args": step.get("args"),
-                                           "ok": bool(result.get("ok", True)),
-                                           # WHY it failed, so the reply can say so rather
-                                           # than only that something did.
-                                           "error": str(result.get("error") or "")})
+                        # WHY it failed, so the reply can say so rather than only that
+                        # something did; and what a knowledge read returned (tool_call_record).
+                        tool_calls.append(tool_call_record(step))
                         if _is_acting(str(step.get("tool"))) and not result.get("proposed"):
                             actions.append({"kind": str(step.get("tool")),
                                             "args": step.get("args"),
@@ -2945,12 +2961,7 @@ class IntentRouter:
                                          type(exc).__name__, exc)
                             reread = None
                         for step in (getattr(reread, "trace", None) or []):
-                            tool_calls.append({"tool": step.get("tool"),
-                                               "args": step.get("args"),
-                                               "ok": bool((step.get("result") or {})
-                                                          .get("ok", True)),
-                                               "error": str((step.get("result") or {})
-                                                            .get("error") or "")})
+                            tool_calls.append(tool_call_record(step))
                         grounded = getattr(reread, "reply", "")
                         if grounded and any(c.get("tool") == "recall_role_experience"
                                             for c in tool_calls) and (
@@ -3125,10 +3136,7 @@ class IntentRouter:
                             better = None
                         for step in (getattr(better, "trace", None) or []):
                             result = step.get("result") or {}
-                            tool_calls.append({"tool": step.get("tool"),
-                                               "args": step.get("args"),
-                                               "ok": bool(result.get("ok", True)),
-                                               "error": str(result.get("error") or "")})
+                            tool_calls.append(tool_call_record(step))
                             if _is_acting(str(step.get("tool"))) and not result.get("proposed"):
                                 actions.append({"kind": str(step.get("tool")),
                                                 "args": step.get("args"), "result": result})
@@ -3207,10 +3215,7 @@ class IntentRouter:
                             again = None
                         for step in (getattr(again, "trace", None) or []):
                             result = step.get("result") or {}
-                            tool_calls.append({"tool": step.get("tool"),
-                                               "args": step.get("args"),
-                                               "ok": bool(result.get("ok", True)),
-                                               "error": str(result.get("error") or "")})
+                            tool_calls.append(tool_call_record(step))
                             if _is_acting(str(step.get("tool"))) and not result.get("proposed"):
                                 actions.append({"kind": str(step.get("tool")),
                                                 "args": step.get("args"), "result": result})

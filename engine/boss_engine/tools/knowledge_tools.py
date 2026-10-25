@@ -61,7 +61,10 @@ def _search(ctx, *, project_id, actor, args, policy=None, mode="on"):
     if not query:
         return {"error": "query is required"}
     with ctx.begin() as connection:
-        return _SERVICE.search(connection, project_id=project_id, query=query, policy=policy, mode=mode)
+        found = _SERVICE.search(connection, project_id=project_id, query=query, policy=policy, mode=mode)
+        # A rule or learning a search returned to a run or a conversation is "consulted" (§2.5).
+        _log_consulted(connection, project_id, [hit.get("node_id") for hit in found.get("hits") or []])
+        return found
 
 
 def _symbol(ctx, *, project_id, actor, args, policy=None, mode="on"):
@@ -102,15 +105,22 @@ def _why(ctx, *, project_id, actor, args, policy=None, mode="on"):
 
 
 def _log_consulted(connection, project_id, ids) -> None:
-    """What a read tool returned to a run is "consulted" (spec §2.5): the run's edge to each rule
-    or learning now. log_use ignores ids that are neither, and a run-less caller logs nothing."""
+    """What a read tool returned to a run — or to a chat turn, whose conversation is its anchor —
+    is "consulted" (spec §2.5): the edge to each rule or learning now, with the agent whose turn it
+    was. log_use ignores ids that are neither, and a caller in neither a run nor a conversation
+    logs nothing. Logging never fails the read."""
     ids = [str(i) for i in ids if i]
     if not ids:
         return
     from ..services.knowledge.learning_writeback import log_use
 
-    with connection.begin_nested():
-        log_use(connection, project_id=project_id, ids=ids, use_kind="consulted")
+    try:
+        with connection.begin_nested():
+            log_use(connection, project_id=project_id, ids=ids, use_kind="consulted")
+    except Exception:  # noqa: BLE001 — the answer is the tool's job; the usage row is a label
+        import logging
+
+        logging.getLogger(__name__).info("consulted not logged in %s", project_id, exc_info=True)
 
 
 def _precedent(ctx, *, project_id, actor, args, policy=None, mode="on"):
@@ -119,8 +129,10 @@ def _precedent(ctx, *, project_id, actor, args, policy=None, mode="on"):
         return {"error": "query is required"}
     with ctx.begin() as connection:
         found = _SERVICE.precedent(connection, project_id=project_id, query=query, policy=policy, mode=mode)
-        # What earlier runs learned, returned to this run: "consulted" (spec §2.5), its edge now.
-        _log_consulted(connection, project_id, [item["id"] for item in found.get("learned") or []])
+        # What earlier runs learned (and the decisions it found), returned to this run or
+        # conversation: "consulted" (spec §2.5), its edge now.
+        _log_consulted(connection, project_id, list(found.get("cited_fact_ids") or [])
+                       or [item["id"] for item in found.get("learned") or []])
         return found
 
 
@@ -231,7 +243,6 @@ def _strings(value) -> list[str]:
 
 def _rules(ctx, *, project_id, actor, args, policy=None, mode="on"):
     from ..services.knowledge.rules import RuleRefused, rule_payload, rules_for
-    from ..services.llm_telemetry import get_llm_context
 
     status = str(args.get("status") or "approved").strip().lower()
     with ctx.begin() as connection:
@@ -243,14 +254,10 @@ def _rules(ctx, *, project_id, actor, args, policy=None, mode="on"):
         except (RuleRefused, LookupError) as error:
             return {"error": str(error)}
         rules = [_brief_rule(rule_payload(connection, project_id, rid)) for rid in ids]
-        context = get_llm_context() or {}
-        if rules and status == "approved" and context.get("run_id"):
-            # What a tool returned is "consulted" (spec §2.5): the run's edge to the rule.
-            _SERVICE.store.log_usage(
-                connection, project_id=project_id, run_id=str(context["run_id"]),
-                step=str(context.get("stage") or "tool"), fact_ids=[r["id"] for r in rules],
-                use_kind="consulted", workflow_run_id=context.get("workflow_run_id"),
-                code_task_run_id=context.get("code_task_run_id"), agent_role=context.get("role_key"))
+        if rules and status == "approved":
+            # What a tool returned is "consulted" (spec §2.5): the run's (or conversation's) edge
+            # to the rule. A proposed rule is untrusted and is not "used".
+            _log_consulted(connection, project_id, [r["id"] for r in rules])
     return {"status": status, "trust": _APPROVED if status == "approved" else _PROPOSED,
             "rules": rules, "count": len(rules)}
 

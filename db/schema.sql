@@ -10576,3 +10576,14 @@ UPDATE kg_nodes n SET name = left(regexp_replace(c.title, '\s+', ' ', 'g'), 90) 
   FROM code_task_runs c
  WHERE n.kind = 'run' AND n.name = 'Run ' || c.id AND nullif(c.title, '') IS NOT NULL;
 -- END run nodes by name ------------------------------------------------------------------------------
+-- ============================ BOSSAPP-768 S2c: usage in conversations ========================
+-- A chat turn that is given rules or learnings uses them as a run does (spec §2.5), with no run:
+-- its row names the conversation (agent_threads.id, also run_id: the anchor `run:<thread id>` is
+-- a run node whose attrs.subtype is 'conversation'), the turn (agent_acts.act_id) and, once the
+-- reply is written, the message that answered (agent_messages.id).
+ALTER TABLE kg_usage ADD COLUMN IF NOT EXISTS agent_thread_id TEXT;
+ALTER TABLE kg_usage ADD COLUMN IF NOT EXISTS act_id TEXT;
+ALTER TABLE kg_usage ADD COLUMN IF NOT EXISTS message_id TEXT;
+CREATE INDEX IF NOT EXISTS idx_kg_usage_thread ON kg_usage(project_id, agent_thread_id)
+  WHERE agent_thread_id IS NOT NULL;
+-- ============================ end BOSSAPP-768 S2c ============================================

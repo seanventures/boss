@@ -443,7 +443,7 @@ class AgentService:
         # like it broke something.
         survivors = _spend(self._offers(rows[0]["proposed_actions"]) if rows else [])
 
-        self.append_message(
+        outcome = self.append_message(
             connection, thread_id=thread_id, role="assistant", content=content,
             tool_calls=[{"tool": tool, "args": args or {}, "ok": ok, "error": error or ""}],
             # `kind` AS WELL AS `tool`, because both names are already in the table and the
@@ -454,6 +454,11 @@ class AgentService:
             actions=[{"id": action_id, "tool": tool, "kind": tool, "ok": ok}],
             proposed_actions=survivors,
         )
+        # What the press used of the graph (a learning it recorded that cites one) is named by
+        # this outcome, the message of the conversation it happened in.
+        from .knowledge.learning_conversations import stamp_message
+
+        stamp_message(connection, thread_id=thread_id, message_id=(outcome or {}).get("id"))
         for row in rows:
             offers = self._offers(row["proposed_actions"])
             kept = _spend(offers)
@@ -912,17 +917,13 @@ class AgentService:
         # A build or a panel this turn starts was started by this turn, for this person
         # (agent_acts.origin): its stages and seats are signed under the turn.
         from . import agent_acts
-        from .llm_telemetry import get_llm_context, set_llm_context
 
         # THE TURN'S SPEAKER, for what it records: a rule, learning or decision written in this
         # turn names the addressed agent (its name and Passport id), or "BOSS (general)" — never
-        # a blank provenance (knowledge/learning_writeback.provenance, rules._provenance).
-        # Speaker keys only: cost attribution (`role_key`) is left as it was.
-        held = get_llm_context()
-        restore = {k: held.get(k) for k in ("speaker_role", "agent_name", "agent_id")}
-        set_llm_context(speaker_role=speaker["agent_role"], agent_name=speaker["agent_name"],
-                        agent_id=speaker["agent_id"])
-        try:
+        # a blank provenance (knowledge/learning_writeback.provenance, rules._provenance) — and
+        # what a knowledge tool returns is "consulted" in this conversation, by that agent
+        # (agent_identity.speaking: the same context a press of this thread's buttons carries).
+        with agent_identity.speaking(speaker, thread_id=thread["id"], act_id=act_id):
             with agent_acts.origin(act_id=act_id, actor=actor):
                 turn = self.router.route_turn(
                     connection,
@@ -943,8 +944,6 @@ class AgentService:
                     thread_id=thread["id"],
                     depth=depth,
                 )
-        finally:
-            set_llm_context(**restore)
         # THE LAST DOOR BEFORE A PERSON READS IT, for every surface (console, Metatron, API,
         # wakeups): a decision structure is never the reply (protocol_reply.py).
         turn.reply = readable_reply(turn.reply, turn.tool_calls)
@@ -962,6 +961,13 @@ class AgentService:
         cited = self._close_chat_act(connection, project_id=project_id, act_id=act_id,
                                      message_ids=[written["id"], assistant["id"]],
                                      reply=turn.reply)
+        # What the turn used of the graph, named by the message that answered; what the reply
+        # cites ([L:…] / [R:…]) is "cited" (knowledge/learning_conversations.turn_done).
+        from .knowledge.learning_conversations import turn_done
+
+        turn_done(connection, project_id=project_id, thread_id=thread["id"], act_id=act_id,
+                  message_id=assistant["id"], reply=turn.reply, tool_calls=turn.tool_calls,
+                  agent_role=speaker["agent_role"])
 
         pending = turn.pending_confirmation
         # A dispatched OR explicitly dismissed plan clears the thread's pending state (a dismissed

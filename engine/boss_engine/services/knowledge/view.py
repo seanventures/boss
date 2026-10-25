@@ -223,6 +223,11 @@ def node_payload(row: Mapping[str, Any]) -> dict[str, Any]:
         out["status"] = status
         category = attrs.get("category")
         out["sub"] = f"{status} · {category}" if category else status
+    elif kind == "run" and attrs.get("subtype") == "conversation":
+        # A conversation is a run of its own (learning_conversations), named after its question
+        # and when it started: "Conversation with Site Reliability Engineer".
+        who = attrs.get("agent_name") or attrs.get("agent_role")
+        out["sub"] = f"Conversation with {who}" if who else "Conversation"
     elif layer == "learning":
         prov = _attrs(attrs.get("provenance"))
         who = prov.get("agent_name") or prov.get("agent_role")
