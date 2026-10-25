@@ -280,3 +280,36 @@ def test_the_same_script_ends_the_same_way_twice(harness):
     second = _build(harness, "good_fix")["row"]
     assert first["status"] == second["status"] == sf.AWAITING_APPROVAL
     assert first["fix_tree_sha"] == second["fix_tree_sha"], "same script, same tree"
+
+
+def test_a_test_the_fixer_says_cannot_pass_is_written_again_from_the_base(harness):
+    """brec_eddfaf96 (sfx_75665f42) and brec_c15618 (sfx_8f047bbb): the fixes were right and the
+    red tests could never pass (they asserted through the identity gate). The fixer may not edit
+    a test, so two repair rounds were spent and the fix was refused 'tests'. A fixer that answers
+    TEST_WRONG sends the round back to RED, its reason reaching the test stage word for word."""
+    from boss_engine.services import scripted_engine
+
+    row = _build(harness, "test_wrong")["row"]
+    assert row["status"] == sf.AWAITING_APPROVAL, (row["refusal"], row["refusal_detail"])
+    assert row["repair_rounds"] == 1
+    calls = scripted_engine.run_state(row["id"]).calls
+    writes = [c for c in calls if c["stage"] == "self_fix_write_test"]
+    assert len(writes) == 2, [c["stage"] for c in calls]
+    assert "the test asserts ok=True through the identity gate" in writes[1]["prompt_head"]
+
+
+def test_mender_is_told_how_boss_tests_reach_a_tool():
+    """The harness fact both failed tests were missing, in every write-test prompt."""
+    prompt = self_fix_build.write_test_prompt(
+        {"evidence": {}, "kind": "platform_gap"},
+        {"hypothesis": "h", "location": {"file": "engine/boss_engine/tools/builtin.py",
+                                         "function": "propose_action"}})
+    assert "identity_unavailable" in prompt and ".handler(ctx" in prompt
+    fix = self_fix_build.implement_prompt(
+        {"evidence": {}, "kind": "platform_gap"},
+        {"hypothesis": "h", "location": {"file": "engine/boss_engine/tools/builtin.py"}},
+        red_output="F")
+    assert "TEST_WRONG:" in fix
+    assert self_fix_build.test_wrong("Changed nothing.\nTEST_WRONG: it needs a person") == \
+        "it needs a person"
+    assert self_fix_build.test_wrong("Implemented the fix: applied fix.patch") is None

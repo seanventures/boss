@@ -501,6 +501,23 @@ def _protected_note() -> str:
             "its answer). Only when no such fix exists, name the protected location.")
 
 
+#: HOW BOSS'S OWN TESTS REACH ITS CODE, which Mender cannot see from the diagnosis alone.
+#: brec_eddfaf96 (sfx_75665f42) and brec_c15618 (sfx_8f047bbb): both fixes were right, and both
+#: red tests called a tool through ToolRegistry.invoke / EngineAgent._run_tool, which run the
+#: identity gate first; a unit test has no verified identity, so the tool answered
+#: identity_unavailable before its handler ran, and the test could never pass however BOSS was
+#: fixed. Two repair rounds each were spent on the fixer, which may not edit a test.
+TEST_HARNESS_FACTS = (
+    "- reach the code the way BOSS's own tests do. ToolRegistry.invoke and "
+    "EngineAgent._run_tool pass the identity gate before a tool's handler runs, and a unit test "
+    "carries no verified identity: they answer identity_unavailable without running the tool. "
+    "To test what a tool does, call its handler (registry.get(name).handler(ctx, project_id=…, "
+    "actor=…, **args)), as engine/tests/test_an_offered_button_says_what_it_does.py does; to "
+    "test a gate (the write gate, a confirmation), assert only what that gate decides. Every "
+    "assertion must be one the fixed code can satisfy in this test, with no person, identity "
+    "or service the test does not set up;\n")
+
+
 def write_test_prompt(sfx: Mapping[str, Any], diagnosis: Mapping[str, Any],
                       feedback: str = "", work: Optional[Path] = None,
                       keep: Optional[Mapping[str, str]] = None, history: str = "") -> str:
@@ -536,6 +553,7 @@ def write_test_prompt(sfx: Mapping[str, Any], diagnosis: Mapping[str, Any],
         "- neutral fixtures only: example-app, example.com, RFC 5737 addresses (192.0.2.x, "
         "198.51.100.x, 203.0.113.x); never a name from this install;\n"
         "- no network, no real host (fake docker and fake hosts, as BOSS's own tests do);\n"
+        + TEST_HARNESS_FACTS +
         "- no secret-shaped value on any line you add: BOSS's secret scan refuses the whole "
         "self-fix, with no second try, on a credential-named field or argument (token, "
         "apply_token, password, key, secret) holding a value longer than three characters; "
@@ -573,7 +591,11 @@ def implement_prompt(sfx: Mapping[str, Any], diagnosis: Mapping[str, Any], *, re
         history,
         f"The new test's failure on BOSS as it is:\n{red_output[-4000:]}",
         f"What to change this round: {note}" if note else "",
-        "Reply with a short summary of the change.") if p)
+        "If the new test cannot pass however BOSS's code is fixed — it asserts something the "
+        "diagnosis is not about, or needs a person, an identity or a service the test never "
+        "sets up — change no code and reply with one line: TEST_WRONG: <what in the test is "
+        "wrong and what it should assert instead>. BOSS then has the test written again.",
+        "Otherwise reply with a short summary of the change.") if p)
 
 
 _SEAT_ASK = {
@@ -781,8 +803,22 @@ class Build:
         note = self.note
         rounds = int(sfx.get("repair_rounds") or 0)
         while True:
-            self.fix(work, base_sha, diagnosis, tests, red_output=str(red.get("output_tail")
-                                                                      or ""), note=note)
+            wrong = self.fix(work, base_sha, diagnosis, tests,
+                             red_output=str(red.get("output_tail") or ""), note=note)
+            if wrong:
+                # THE FIXER SAYS THE TEST CANNOT PASS (it may not edit it): the round goes back
+                # to RED from the base, with its reason, like a test that broke in its own code.
+                if rounds >= MAX_REPAIR_ROUNDS:
+                    raise Stop("tests", f"the new test cannot pass however BOSS is fixed: {wrong}")
+                rounds += 1
+                note = f"The fix stage found the new test wrong: {wrong}"
+                self.write(repair_rounds=rounds)
+                self.say(f"{sf.AGENT_NAME}: the new test cannot pass as written; writing it "
+                         f"again from BOSS as it is (round {rounds}).")
+                src.discard(work, [c.path for c in src.changes(work, base_sha)], base_sha)
+                tests = self.reproduce(work, base_sha, diagnosis, feedback=note, rewrite=True)
+                red = (self.sfx().get("red_green") or {}).get("base") or {}
+                continue
             gate = self.check(work, base_sha, diagnosis, tests, source)
             if gate is not None:
                 if gate.final or rounds >= MAX_REPAIR_ROUNDS:
@@ -1055,16 +1091,18 @@ class Build:
                                       "asked for: " + feedback.split("\n")[-1][:300])
 
     def fix(self, work: Path, base_sha: str, diagnosis: dict[str, Any], tests: dict[str, str],
-            *, red_output: str, note: str) -> None:
+            *, red_output: str, note: str) -> Optional[str]:
+        """Stage 5, the fix. Returns why the new test is wrong when the fixer says it cannot
+        pass however BOSS is fixed (TEST_WRONG), else None."""
         self.boundary()
         sfx = self.sfx()
         if sfx["status"] != sf.FIXING:
             self.move(sf.FIXING, f"{sf.AGENT_NAME}: writing the smallest fix in "
                                  f"{(diagnosis.get('location') or {}).get('file')}.")
-        self.turn(self.engines.builder, "self_fix_implement",
-                  implement_prompt(sfx, diagnosis, red_output=red_output, note=note,
-                                   policy=self.policy, work=work, history=self.history()), work, read_only=False,
-                  model=self.engines.builder_model)
+        said = self.turn(self.engines.builder, "self_fix_implement",
+                         implement_prompt(sfx, diagnosis, red_output=red_output, note=note,
+                                          policy=self.policy, work=work, history=self.history()),
+                         work, read_only=False, model=self.engines.builder_model)
         edited = si.tests_edited(tests, src.snapshot(work, tests))
         if edited:
             # coder_did_not_edit_tests: a fix that changed its own test proves nothing. Final.
@@ -1079,6 +1117,7 @@ class Build:
             src.discard(work, stray, base_sha)
             self.say(f"{sf.AGENT_NAME}: the fix stage wrote a test file "
                      f"({', '.join(stray[:3])}); it was removed: only the test stage adds tests.")
+        return test_wrong(said)
 
     def check(self, work: Path, base_sha: str, diagnosis: dict[str, Any],
               tests: dict[str, str], source: Path) -> Optional[si.GateResult]:
@@ -1409,6 +1448,15 @@ _FRAME = re.compile(r"^([\w./-]+\.py):(\d+):", re.M)
 _ERROR = re.compile(r"^E\s+(\w+(?:Error|Exception))\b", re.M)
 
 
+def test_wrong(said: str) -> Optional[str]:
+    """The fixer's TEST_WRONG answer (its first line that starts so), or None."""
+    for line in str(said or "").splitlines():
+        text_ = line.strip().strip("`*").strip()
+        if text_.upper().startswith("TEST_WRONG:"):
+            return text_.split(":", 1)[1].strip()[:600] or "the fix stage said so"
+    return None
+
+
 def test_broke(gate: si.GateResult, tests: Mapping[str, str]) -> Optional[str]:
     """Why the new test failed WITH the fix in its own code, not by an assertion about BOSS: the
     error is not an AssertionError and the innermost repository frame is one of the new tests.
@@ -1644,4 +1692,4 @@ def execute_job(engine: Any, settings: Any, *, self_fix_id: str, job_id: str, wo
 __all__ = ["Build", "Engines", "MAX_REPAIR_ROUNDS", "REVIEW_SEATS", "Stop", "build_engines",
            "commit_message", "diagnose_prompt", "engine_names", "execute_job",
            "implement_prompt", "labels", "parse_diagnosis", "parse_review", "pr_body",
-           "review_prompt", "trailers", "write_test_prompt"]
+           "review_prompt", "test_wrong", "trailers", "write_test_prompt"]
