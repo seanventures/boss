@@ -4,6 +4,7 @@ import React, { useEffect, useRef, useState } from "react";
 
 import { GatedButton } from "../components/gated";
 import { consoleHref } from "./console-href";
+import { useDetailsDismiss } from "../lib/details-dismiss";
 import { EMPTY_DRAFT, NewProjectSheet, type NewProjectDraft } from "./new-project-sheet";
 import { ArchiveDialog, ArchivedNotice, ArchivedProjects, useArchived } from "./project-archive";
 import type { ProjectType } from "@boss/api-client";
@@ -15,7 +16,7 @@ export function projectHref(id: string, homeId: string): string {
   // The AREA STAYS (tester round 2: switching project on the Knowledge Graph landed on the Command
   // Center); what names one project's records (a node, a scan, a build) does not.
   return consoleHref({ project_id: id === homeId ? undefined : id, task: undefined, run: undefined,
-                       kg_node: undefined, kg_scan: undefined, build: undefined, role: undefined });
+                       kg_node: undefined, kg_scan: undefined, kg_tab: undefined, kg_sub: undefined, build: undefined, role: undefined });
 }
 
 /** Where a new knowledge-graph project opens: its Knowledge Graph setup (kg-setup.tsx). */
@@ -70,24 +71,11 @@ export function ProjectMenu({ projects, activeId, homeId, orgId }: {
   // A menu closes when it has done its job or the person looks away (KG tester round 2: it stayed
   // open over the page after a pick): on a pick, on Esc, and on a press anywhere outside it.
   const menu = useRef<HTMLDetailsElement>(null);
-  const [isOpen, setIsOpen] = useState(false);
-  const close = () => { if (menu.current) menu.current.open = false; setIsOpen(false); };
-  useEffect(() => {
-    if (!isOpen) return undefined;
-    const outside = (e: PointerEvent) => { if (menu.current && !menu.current.contains(e.target as Node)) close(); };
-    const escape = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      close();
-      menu.current?.querySelector<HTMLElement>("summary")?.focus();
-    };
-    document.addEventListener("pointerdown", outside);
-    document.addEventListener("keydown", escape);
-    return () => { document.removeEventListener("pointerdown", outside); document.removeEventListener("keydown", escape); };
-  }, [isOpen]);
+  const { open: isOpen, onToggle, close } = useDetailsDismiss(menu);
   return (
     <>
     <details ref={menu} className="bx-project-menu" data-testid="project-menu"
-             onToggle={(e) => setIsOpen((e.currentTarget as HTMLDetailsElement).open)}>
+             onToggle={onToggle}>
       <summary title={`Project${projectTypeBadge(active?.type) ? ` · ${projectTypeBadge(active?.type)}` : ""} · switch, create, or archive one`}>
         {active?.name ?? archived?.name ?? activeId}
         {projectTypeBadge(active?.type) ? <span className="bx-project-menu-type" data-testid="project-menu-type">{projectTypeBadge(active?.type)}</span> : null}

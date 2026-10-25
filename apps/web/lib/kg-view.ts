@@ -74,6 +74,40 @@ const sleep = (ms: number, signal?: AbortSignal) => new Promise<void>((resolve) 
   signal?.addEventListener?.("abort", () => { clearTimeout(t); resolve(); });
 });
 
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+/** The time the engine writes into a run's or a scan's name: " · Oct 25, 07:13", always UTC. */
+const BAKED_UTC = /^(.*) · (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (\d{1,2}), (\d{2}):(\d{2})$/;
+
+/**
+ * ONE ZONE ON EVERY KG SCREEN (tester round 5: run names read "Oct 25, 07:13" — UTC, unlabelled —
+ * beside provenance in "Oct 25, 00:13 PDT"). The engine names a run or a scan with the UTC time it
+ * started; that time is re-said by kgWhen, in the viewer's zone and labelled, the moment a
+ * response arrives — so the canvas, the tree, the panel and search all show the same clock.
+ */
+export function localizeName(name: string, now = Date.now()): string {
+  const m = BAKED_UTC.exec(name);
+  if (!m) return name;
+  const year = new Date(now).getUTCFullYear();
+  const at = (y: number) => Date.UTC(y, MONTHS.indexOf(m[2]), Number(m[3]), Number(m[4]), Number(m[5]));
+  // No year in the name: this year, unless that is more than a day ahead (then last year's).
+  const t = at(year) > now + 86_400_000 ? at(year - 1) : at(year);
+  return `${m[1]} · ${kgWhen(new Date(t).toISOString())}`;
+}
+
+/** localizeName over a response: every `label`, `name` and `title` string, at any depth. */
+export function localizeNames<T>(body: T): T {
+  const walk = (v: unknown): unknown => {
+    if (Array.isArray(v)) return v.map(walk);
+    if (!v || typeof v !== "object") return v;
+    const out: Record<string, unknown> = {};
+    for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
+      out[k] = typeof x === "string" && (k === "label" || k === "name" || k === "title") ? localizeName(x) : walk(x);
+    }
+    return out;
+  };
+  return walk(body) as T;
+}
+
 /** One GET, said in words when it fails. `status` 0 means nothing answered. */
 export async function kgRead<T>(path: string, params: Record<string, string | number | boolean | null | undefined>, signal?: AbortSignal): Promise<Read<T>> {
   for (let attempt = 0; ; attempt += 1) {
@@ -83,7 +117,7 @@ export async function kgRead<T>(path: string, params: Record<string, string | nu
       const r = await fetch(`${API_URL}${path}?${qs(params)}`, { cache: "no-store", signal });
       status = r.status;
       try { body = await r.json(); } catch { body = null; }
-      if (r.ok) return { ok: true, data: body as T };
+      if (r.ok) return { ok: true, data: localizeNames(body) as T };
       if (isMissingRoute(r.status, body)) return { ok: false, status: r.status, error: UNAVAILABLE, unavailable: true };
     } catch (e) {
       if ((e as { name?: string })?.name === "AbortError") return { ok: false, status: -1, error: "cancelled" };

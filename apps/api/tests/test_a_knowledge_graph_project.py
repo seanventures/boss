@@ -191,3 +191,29 @@ def test_the_agent_walks_the_same_steps(world, owner, engine, enforced):
 
     wrong = call("set_project_team", project=slug, role_keys=["nobody_here"])
     assert wrong["ok"] is False and "nobody_here" in wrong["error"]
+
+
+def test_a_team_card_counts_the_work_the_agent_did(world, engine):
+    """KG tester round 5: "Trust 50 · 0 runs" on the Chief Architect, who proposed every rule,
+    and on the SRE, who wrote a root cause in a conversation. A card counts each conversation the
+    agent held in the project and each run in which it wrote to the graph — a run once, however
+    many nodes it wrote."""
+    from boss_engine.services.knowledge.learning_writeback import _STORE
+
+    with engine.connect() as db:
+        tx = db.begin()
+        try:
+            p = world.project_a
+            before = project_setup._work_counts(db, p)
+            db.execute(text("INSERT INTO agent_threads (id, project_id, actor, agent_role) "
+                            "VALUES (:i, :p, 'ceo', 'sre')"), {"i": f"athr_{uuid.uuid4().hex[:12]}", "p": p})
+            run = f"wfr_{uuid.uuid4().hex[:12]}"
+            for i in range(3):   # three rules from ONE scan run
+                _STORE.upsert_node(db, project_id=p, kind="rule", node_key=f"rule:t5:{run}:{i}", name=f"Rule {i}",
+                                   body="", trust_tier="inferred", actor_kind="agent", source="rules",
+                                   attrs={"provenance": {"agent_role": "chief_architect", "workflow_run_id": run}})
+            after = project_setup._work_counts(db, p)
+            assert after.get("sre", 0) == before.get("sre", 0) + 1
+            assert after.get("chief_architect", 0) == before.get("chief_architect", 0) + 1
+        finally:
+            tx.rollback()

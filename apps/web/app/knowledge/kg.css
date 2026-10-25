@@ -169,20 +169,16 @@
 .kg-drop-none { margin: 0; padding: 10px; font-size: 0.84rem; color: var(--muted); }
 .kg-drop-meaning { display: block; margin: 4px 8px 6px; }
 
+/* TESTER ROUND 5 P1: the details panel RESERVES its column — the canvas (and every layout drawn
+   in it) is what is left, so selecting something never moves the picture or hides the Rules and
+   Learning bubbles under it. Nothing selected, the column says how to use it. */
 .kg-work {
-  position: relative; display: grid; grid-template-columns: 14.21053rem minmax(0, 1fr);
+  --kg-panel-w: clamp(17rem, 30%, 22rem);
+  position: relative; display: grid; grid-template-columns: 14.21053rem minmax(0, 1fr) var(--kg-panel-w);
   height: clamp(420px, calc(100vh - 190px), 1400px); border-top: 1px solid var(--border); min-width: 0; overflow: hidden;
 }
-/* The details panel is a drawer over the canvas's right edge (round 2): hidden until something is
-   selected, slid in, closed with × or Esc. The graph has the whole width meanwhile. */
-.kg-col-panel {
-  position: absolute; top: 0; right: 0; bottom: 0; z-index: 6; width: clamp(16rem, calc((100% - 14.21053rem) * 0.5), 22rem); border-left: 1px solid var(--border-strong);
-  box-shadow: var(--shadow-lg); transform: translateX(105%); transition: transform 200ms ease, visibility 200ms; visibility: hidden;
-}
-.kg-work[data-panel-open] .kg-col-panel { transform: none; visibility: visible; }
-/* The drawer never covers more than half the canvas beside the tree (round 3: at 1280 it hid the
-   whole Focus). Without the tree column the canvas is the work area. */
-.kg-work[data-tree-collapsed] .kg-col-panel { width: clamp(16rem, 50%, 22rem); }
+.kg-work[data-tree-collapsed] { grid-template-columns: minmax(0, 1fr) var(--kg-panel-w); }
+.kg-col-panel { position: relative; }
 .kg-panel-close { display: inline-flex !important; }
 .kg-work-loading { border: 1px solid var(--border); border-radius: var(--r-lg); overflow: hidden; background: var(--surface); }
 .kg-col-tree { display: flex; flex-direction: column; min-height: 0; min-width: 0; border-right: 1px solid var(--border); background: var(--surface-2); }
@@ -358,16 +354,25 @@
 @media (prefers-reduced-motion: reduce) { .kg-strip-item { animation: none; } }
 
 /* ── widths, by the GRAPH's own width, not the window's (tester round 1 P0-2: the rail counts) ──
-   Wide: tree | canvas | panel. Medium: tree | canvas, the panel a drawer over the canvas's right
-   edge. Narrow: the canvas alone, the tree a drawer from the left. The canvas always gets the room. */
-@container kg (max-width: 860px) {
-  .kg-work { grid-template-columns: minmax(0, 1fr); }
+   Wide: tree | canvas | panel. Medium (a 1280-1440 px window): canvas | panel, the tree a drawer
+   from the left (round 5: three columns left a 400 px canvas, too small for 2 hops). Narrow: the
+   canvas alone, tree and panel drawers over it. The canvas always gets the room. */
+@container kg (max-width: 1180px) {
+  .kg-work, .kg-work[data-tree-collapsed] { grid-template-columns: minmax(0, 1fr) var(--kg-panel-w); }
   .kg-col-tree {
     position: absolute; top: 0; left: 0; bottom: 0; z-index: 7; width: min(18rem, 88%); border-right: 1px solid var(--border-strong);
     box-shadow: var(--shadow-lg); transform: translateX(-105%); transition: transform 200ms ease; visibility: hidden;
   }
+  .kg-work[data-tree-collapsed] .kg-col-tree { display: flex; }
   .kg-work[data-tree-open] .kg-col-tree { transform: none; visibility: visible; }
-  .kg-col-panel { width: clamp(16rem, 50%, 22rem); }
+}
+@container kg (max-width: 860px) {
+  .kg-work, .kg-work[data-tree-collapsed] { grid-template-columns: minmax(0, 1fr); }
+  .kg-col-panel {
+    position: absolute; top: 0; right: 0; bottom: 0; z-index: 6; width: clamp(16rem, 50%, 22rem); border-left: 1px solid var(--border-strong);
+    box-shadow: var(--shadow-lg); transform: translateX(105%); transition: transform 200ms ease, visibility 200ms; visibility: hidden;
+  }
+  .kg-work[data-panel-open] .kg-col-panel { transform: none; visibility: visible; }
   .kg-tree-toggle { display: inline-flex; }
   .kg-toolbar { flex-wrap: wrap; }
   .kg-toolbar > .kg-search { flex: 1 1 100%; max-width: none; }
@@ -413,10 +418,12 @@
 
 /* ── Setup: a knowledge-graph project, in order (kg-setup.tsx; the Setup stepper's pattern) ── */
 .kg-intro {
-  display: flex; align-items: flex-start; gap: 12px; margin: 0; padding: 12px 14px;
+  display: flex; align-items: center; gap: 12px; margin: 0; padding: 7px 10px 7px 14px;
   border: 1px solid var(--accent-line); border-radius: var(--r-lg); background: var(--accent-soft);
 }
-.kg-intro-body { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 0; }
+/* One or two lines, not five (round 5: at 1280 × 800 the intro took the canvas's height). */
+.kg-intro-body { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 18px; flex: 1; min-width: 0; }
+.kg-intro-body > .kg-quiet { margin: 0; font-size: 0.8rem; }
 .kg-intro-title { font-size: 0.9rem; color: var(--ink); }
 .kg-intro-layers { display: flex; flex-wrap: wrap; gap: 4px 20px; margin: 0; padding: 0; list-style: none; font-size: 0.84rem; color: var(--ink-soft); }
 .kg-intro-layers li { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }

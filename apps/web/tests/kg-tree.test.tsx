@@ -120,7 +120,8 @@ describe("the project tree", () => {
 
   it("says so when nothing matches", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    mockKgFetch();
+    // Neither the tree nor the graph search finds it (one search source, round 5).
+    mockKgFetch({ "/view/search$": { body: { q: "zzzz-no-such", hits: [], meaning_available: false } } });
     await mount(<Tree query="zzzz-no-such" />);
     await act(async () => { vi.advanceTimersByTime(200); });
     await settle();
