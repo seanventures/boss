@@ -215,7 +215,8 @@ const AREAS: AreaDef[] = [
   { id: "workforce", label: "Agent Studio", sub: "Who does the work", group: "Run", icon: ICONS.org },
   // THE GRAPH (KNOWLEDGE_GRAPH_PRODUCT_SPEC.md §5.1): after who does the work, what they work
   // ON and what they learned doing it. Scoped to the active project like every area.
-  { id: "knowledge", label: "Graph", sub: "Code, rules and what agents learned", group: "Run", icon: ICONS.knowledge },
+  // NAMED FOR WHAT IT IS (operator, 2026-10-24): "Graph" told nobody it was a knowledge graph.
+  { id: "knowledge", label: "Knowledge Graph", sub: "Code, rules and what agents learned", group: "Run", icon: ICONS.knowledge },
   { id: "decisions", label: "Approvals", sub: "Explicit approvals before real effects", group: "Run", icon: ICONS.decisions },
   // TWO SCREENS, TWO QUESTIONS (infra-observability spec §0, §4.1). Infra is where it runs and
   // how it got there; Observability is whether it is alive, how fast, and what thinking costs.

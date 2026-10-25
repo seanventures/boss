@@ -110,6 +110,8 @@ export const WRITE_HELPERS: Readonly<Record<string, WriteGate | readonly Permiss
   "lib/kg-view.ts#promoteFact": "knowledge:manage",   // POST /v1/knowledge/facts/{id}/promote
   "lib/kg-view.ts#rejectFact": "knowledge:manage",    // POST /v1/knowledge/facts/{id}/reject
   "lib/kg-view.ts#forgetFact": "knowledge:manage",    // POST /v1/knowledge/facts/{id}/forget
+  // lib/kg-setup.ts — a knowledge-graph project's setup: the team step (the default-team door).
+  "lib/kg-setup.ts#setProjectTeam": "work_item:manage", // POST /v1/projects/{id}/agents action=set
 
   // app/delivery-workflows-ui.tsx — a run's answer pressed on another screen (Command Center)
   "app/delivery-workflows-ui.tsx#sendRunAnswer": "workflow_run:control", // retry-step / skip-step / recheck / input

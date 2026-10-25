@@ -656,9 +656,11 @@ function PanelActions({ w, node, detail, archived, rulesLocked, onEditRule, onCh
 }
 
 /** "Scan for rules here" (§4.5): a cost preview first, then the business_rules_scan workflow. */
-export function ScanForRules({ w, node, archived, archivedWhy, compact }: {
+export function ScanForRules({ w, node, archived, archivedWhy, compact, onStarted }: {
   w: { projectId: string; actor: string }; node: Pick<KgViewNode, "id" | "key" | "label" | "kind">;
   archived?: boolean; archivedWhy?: string; compact?: boolean;
+  /** Told once the scan started (the Knowledge Graph setup re-reads its step). */
+  onStarted?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [budget, setBudget] = useState("2.00");
@@ -675,7 +677,7 @@ export function ScanForRules({ w, node, archived, archivedWhy, compact }: {
       ...(startAnyway.length ? { start_anyway: startAnyway } : {}),
     });
     setBusy(false);
-    if (r.ok) { setOpen(false); setMsg({ ok: true, text: "Scan started. Proposed rules arrive in Rules review with the code that shows them." }); return; }
+    if (r.ok) { setOpen(false); setMsg({ ok: true, text: "Scan started. Proposed rules arrive in Rules review with the code that shows them." }); onStarted?.(); return; }
     // A start refused for what the project lacks: the shared checklist and "Scan anyway".
     const readiness = asReadiness(r.readiness);
     if (readiness) { setRefusal({ label: "Scan", message: String(r.error ?? ""), readiness, retry: (keys) => start(keys) }); return; }

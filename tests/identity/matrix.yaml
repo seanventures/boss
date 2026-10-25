@@ -3,7 +3,7 @@
 # One line per operation: its declaration, then the built-in roles allowed
 # (O owner, A admin, P operator, V viewer, U auditor; '-' none). Every other role is denied
 # 403, or 404 when the operation names an object the role cannot even read.
-# 1653 operations.
+# 1654 operations.
 "GET /.well-known/boss-jwks.json": ["public:jwks", "OAPVU"]
 "GET /docs": ["public:api_description", "OAPVU"]
 "GET /docs/oauth2-redirect": ["public:api_description", "OAPVU"]
@@ -1018,6 +1018,7 @@
 "POST /v1/knowledge/repositories/index": ["permit knowledge:read @ project(body=project_id)", "OAPVU"]
 "POST /v1/knowledge/repositories/index/execute": ["permit worker:lease @ org", "-"]
 "GET /v1/knowledge/search": ["permit knowledge:read @ project(query=project_id)", "OAPVU"]
+"GET /v1/knowledge/setup": ["permit knowledge:read @ project(query=project_id)", "OAPVU"]
 "GET /v1/knowledge/status": ["permit reliability:read @ project(query=project_id)|org", "OAPVU"]
 "GET /v1/knowledge/view/live": ["permit knowledge:read @ project(query=project_id)", "OAPVU"]
 "GET /v1/knowledge/view/neighbourhood": ["permit knowledge:read @ project(query=project_id)", "OAPVU"]

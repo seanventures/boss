@@ -1,4 +1,4 @@
-import { BossApiError, type ProjectSummary } from "@boss/api-client";
+import { BossApiError, type ProjectSummary, type ProjectType } from "@boss/api-client";
 
 import { client, PROJECT_ID, resolveProjectId } from "./client";
 
@@ -11,6 +11,8 @@ export type ProjectFeedItem = {
   orgId: string;
   orgName: string;
   createdAt: string;
+  /** `app` builds apps; `knowledge_graph` maps an existing codebase (an older API: `app`). */
+  projectType: ProjectType;
 };
 
 export type ProjectFeed = {
@@ -30,6 +32,7 @@ function mapProject(payload: ProjectSummary): ProjectFeedItem {
     orgId: payload.org_id,
     orgName: payload.org_name,
     createdAt: payload.created_at,
+    projectType: payload.project_type === "knowledge_graph" ? "knowledge_graph" : "app",
   };
 }
 

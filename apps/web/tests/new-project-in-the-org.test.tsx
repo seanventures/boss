@@ -145,3 +145,38 @@ describe("the Create action", () => {
     expect(createProject).not.toHaveBeenCalled();
   });
 });
+
+describe("a project's type (BOSSAPP-768 project flow)", () => {
+  it("New project asks what it is for — an app, or a knowledge graph of an existing codebase", async () => {
+    const el = await mount("admin");
+    await act(async () => el.querySelector<HTMLButtonElement>('[data-testid="new-project"]')!.click());
+    const radios = [...el.querySelectorAll<HTMLInputElement>('[data-testid="new-project-type"] input[name="project_type"]')];
+    expect(radios.map((r) => r.value)).toEqual(["app", "knowledge_graph"]);
+    expect(radios[0].checked).toBe(true);
+    expect([...el.querySelectorAll('[data-testid="new-project-type"] b')].map((b) => b.textContent))
+      .toEqual(["Build an app", "Knowledge Graph for an existing codebase"]);
+    await act(async () => radios[1].click());
+    expect(el.querySelector('[data-testid="new-project-form"] button[type="submit"]')!.textContent).toBe("Create and set up");
+  });
+
+  it("the action sends the type, and a knowledge-graph project is handed back as one", async () => {
+    createProject.mockResolvedValue({ id: "fineract-map", name: "Fineract map", project_type: "knowledge_graph" });
+    const result = await createProjectAction(form({ name: "Fineract map", project_type: "knowledge_graph" }));
+    expect(createProject).toHaveBeenCalledWith({ name: "Fineract map", project_type: "knowledge_graph" });
+    expect(result).toMatchObject({ ok: true, data: { projectId: "fineract-map", projectType: "knowledge_graph" } });
+  });
+
+  it("a knowledge-graph project carries its badge in the menu", async () => {
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+    await act(async () => root!.render(
+      <IdentityProvider me={ME} org={perms("admin")}>
+        <ProjectMenu projects={[...PROJECTS, { id: "fineract-map", name: "Fineract map", type: "knowledge_graph" }]}
+                     activeId="fineract-map" homeId="boss-dogfood" />
+      </IdentityProvider>));
+    expect(host.querySelector('[data-testid="project-menu-type"]')!.textContent).toBe("Knowledge graph");
+    expect(host.querySelector('[data-testid="project-menu-type-fineract-map"]')!.textContent).toBe("Knowledge graph");
+    expect(host.querySelector('[data-testid="project-menu-type-northpeak-bank-a"]')).toBeNull();
+  });
+});

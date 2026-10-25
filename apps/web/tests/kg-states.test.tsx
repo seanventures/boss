@@ -28,7 +28,7 @@ describe("the Graph area's states", () => {
   it("ready: the toolbar, the tree, the canvas with the whole repo, the legend and the detail panel", async () => {
     mockKgFetch();
     await open();
-    expect($('[data-testid="kg-empty-graph"]')).toBeNull();
+    expect($('[data-testid="kg-start"]')).toBeNull();
     expect($('[data-testid="kg-canvas"]')?.getAttribute("data-mode")).toBe("overview");
     // At most ten areas — as many as this canvas shows readably (round 3) — "N more areas", Rules
     // and Learning (tester round 1 P0-1: never a 38-bubble hairball).
@@ -74,12 +74,14 @@ describe("the Graph area's states", () => {
     expect($$('[data-testid="kg-loading"] .kg-skel-row').length).toBeGreaterThan(10);
   });
 
-  it("empty: no repository — the card links to Repo and models", async () => {
+  it("empty: no repository — Start a knowledge graph, which opens the setup", async () => {
     mockKgFetch({ "/knowledge/repositories$": { body: { project_id: "p", repositories: [] } } });
     await open();
-    expect($('[data-testid="kg-empty-graph"]')?.className).toBe("kg-stage");
-    expect(text("kg-empty-graph")).toContain("Connect a repository to see its graph");
-    expect($('[data-testid="kg-empty-graph"] a')?.getAttribute("href")).toBe("/?org=o1&area=setup");
+    expect($('[data-testid="kg-start"]')?.className).toBe("kg-stage");
+    expect(text("kg-start")).toContain("Start a knowledge graph for this project");
+    await act(async () => ($('[data-testid="kg-start-setup"]') as HTMLButtonElement).click());
+    await settle();
+    expect($('[data-testid="kg-tab-setup"]')?.getAttribute("aria-selected")).toBe("true");
   });
 
   it("indexing: progress from the repositories, refreshing on its own", async () => {
@@ -187,7 +189,7 @@ describe("the Graph area's states", () => {
   it("the P0 placeholder is gone wherever there is a graph", async () => {
     mockKgFetch();
     await open();
-    expect(document.body.textContent).not.toContain("Connect a repository to see its graph");
+    expect(document.body.textContent).not.toContain("Start a knowledge graph for this project");
     expect(document.body.textContent).not.toContain("These settings are in Reliability for now");
   });
 });
