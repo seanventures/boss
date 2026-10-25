@@ -163,7 +163,8 @@ export function KgSetup({ w, setup, error, onReload, onOpenTab, archived }: {
                 ) : null}
               </div>
               <div className="kg-setup-aside">
-                {!expanded && step.state !== "waiting" ? (
+                {/* Waiting on nothing but its turn (the team), a step opens anyway. */}
+                {!expanded && (step.state !== "waiting" || def.key === "team") ? (
                   <button type="button" className="inf-link" data-testid={`kg-step-${def.key}-open`} onClick={() => setOpen(def.key)}>
                     {step.done ? "Change" : "Open"}
                   </button>
@@ -403,7 +404,7 @@ function ScanStep({ w, setup, archived, onStarted }: { w: Who; setup: KgSetupRes
           </div>
           {chosen ? (
             <ScanForRules w={w} node={{ id: chosen.key, key: chosen.key, label: chosen.label, kind: "area" }} archived={archived}
-                          archivedWhy={ARCHIVED_WHY} compact onStarted={onStarted} />
+                          archivedWhy={ARCHIVED_WHY} compact onStarted={onStarted} reader={scanner?.display_name} />
           ) : null}
         </>
       ) : (

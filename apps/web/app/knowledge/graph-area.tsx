@@ -205,7 +205,8 @@ export function GraphArea({ projectId, actor, orgId, archived = false, projectTy
       <AreaHead area="kg" title="Knowledge Graph" tabs={TABS} active={tab} onTab={(k) => changeTab(k as GraphTab)}
                 counts={totalNodes ? <span>{totalNodes.toLocaleString("en-US")} code nodes</span> : undefined} />
       {archived ? <KgArchived /> : null}
-      {tab === "graph" ? <KgIntro /> : null}
+      {/* Over a graph only: the Start card already says what the three layers are. */}
+      {tab === "graph" && anyIndexed ? <KgIntro /> : null}
       {tab === "graph" && isKgProject && setup.data?.next && anyIndexed ? (
         <KgSetupStrip setup={setup.data} onOpen={() => changeTab("setup")} />
       ) : null}

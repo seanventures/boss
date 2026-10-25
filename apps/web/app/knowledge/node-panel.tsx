@@ -657,11 +657,13 @@ function PanelActions({ w, node, detail, archived, rulesLocked, onEditRule, onCh
 }
 
 /** "Scan for rules here" (§4.5): a cost preview first, then the business_rules_scan workflow. */
-export function ScanForRules({ w, node, archived, archivedWhy, compact, onStarted }: {
+export function ScanForRules({ w, node, archived, archivedWhy, compact, onStarted, reader = "Scout" }: {
   w: { projectId: string; actor: string }; node: Pick<KgViewNode, "id" | "key" | "label" | "kind">;
   archived?: boolean; archivedWhy?: string; compact?: boolean;
   /** Told once the scan started (the Knowledge Graph setup re-reads its step). */
   onStarted?: () => void;
+  /** Who reads the code, by name (the setup names the team's scanner). */
+  reader?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [budget, setBudget] = useState("2.00");
@@ -688,7 +690,7 @@ export function ScanForRules({ w, node, archived, archivedWhy, compact, onStarte
     return (
       <div className="kg-scan">
         <GatedButton permission={SCAN_START} className={compact ? "ag-btn ag-btn-primary" : "ag-btn"} data-testid="kg-scan"
-                     disabled={archived} title={archived ? archivedWhy : `Scout reads ${node.label} and proposes the business rules it finds`}
+                     disabled={archived} title={archived ? archivedWhy : `${reader} reads ${node.label} and proposes the business rules it finds`}
                      onClick={() => setOpen(true)}>Scan for rules here</GatedButton>
         {msg ? <p className={msg.ok ? "kg-ok" : "kg-inline-err"} role={msg.ok ? "status" : "alert"} data-testid="kg-scan-msg">{msg.text}</p> : null}
       </div>
@@ -697,7 +699,7 @@ export function ScanForRules({ w, node, archived, archivedWhy, compact, onStarte
   return (
     <form className="kg-scan-preview" data-testid="kg-scan-preview" noValidate onSubmit={(e) => { e.preventDefault(); if (valid) void start(); }}>
       <p className="kg-scan-what">
-        Scout reads {node.kind === "symbol" ? <><span data-user-text>{node.label}</span> and the code it calls</> : <>the code in <span data-user-text>{node.label}</span></>}
+        {reader} reads {node.kind === "symbol" ? <><span data-user-text>{node.label}</span> and the code it calls</> : <>the code in <span data-user-text>{node.label}</span></>}
         — up to <strong>60 files</strong>, the most connected first — and proposes up to
         <strong> 25 rules</strong>, each with the lines that show it. It stops at whichever limit comes first. No rule is trusted until
         a person approves it.</p>
