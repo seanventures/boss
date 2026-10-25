@@ -4,9 +4,9 @@
   "canonical_key": "method + path",
   "request_body_type_enforcement_note": "pass_through_documented fields appear in OpenAPI but SkipValidation preserves the handler's existing input coercion and error statuses; runtime_validated_input_schema is a legacy schema-presence flag",
   "edition": "community",
-  "operation_count": 1648,
+  "operation_count": 1649,
   "counts": {
-    "api_policy_gated": 1400,
+    "api_policy_gated": 1401,
     "excluded": 104,
     "human_confirmation_gated": 72,
     "operator_only_unavailable": 72
