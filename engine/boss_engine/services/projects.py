@@ -10,20 +10,27 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from ..bootstrap import ProjectExists, create_project as _seed_new_project
+from ..bootstrap import PROJECT_TYPES, ProjectExists, create_project as _seed_new_project
 from .core import emit_event
 
-__all__ = ["ProjectExists", "create"]
+__all__ = ["PROJECT_TYPES", "ProjectExists", "create"]
 
 
 def create(connection, settings, *, auth: Any, name: Any, slug: Any = None,
            description: Any = None, actor: str, principal: Optional[str] = None,
-           entitlements: Any = None, members: Any = None, specpack: Any = None) -> dict:
+           entitlements: Any = None, members: Any = None, specpack: Any = None,
+           project_type: Any = None) -> dict:
     """Make the project in the caller's org (the default org when there is no verified identity),
     seed it like the default project, and record who made it: an `events` row in the new project
     and, for an identity principal, `project.created` in the org's security log.
 
-    Raises ProjectExists (the slug is in use) or ValueError (a bad name or slug)."""
+    `project_type` is `app` (the default: it builds apps) or `knowledge_graph` (a knowledge graph
+    for an existing codebase). A knowledge-graph project starts with the project's knowledge
+    graph switched on for its agents (project setting `knowledge_graph` = on, pinned here so an
+    organisation-wide default cannot leave it off); its guided setup is
+    services/knowledge/project_setup.py, the same steps the console and the agent walk.
+
+    Raises ProjectExists (the slug is in use) or ValueError (a bad name, slug or type)."""
     from .entitlements import EntitlementBrokerService
     from .members import MemberDirectoryService
     from .specpack import SpecPackService
@@ -34,11 +41,16 @@ def create(connection, settings, *, auth: Any, name: Any, slug: Any = None,
         actor=actor,
         entitlements=entitlements or EntitlementBrokerService(settings),
         members=members or MemberDirectoryService(settings),
-        specpack=specpack or SpecPackService(settings),
+        specpack=specpack or SpecPackService(settings), project_type=project_type,
     )
     project_id = created["project_id"]
+    if created["project_type"] == "knowledge_graph":
+        from . import project_settings
+
+        project_settings.set_one(connection, project_id, "knowledge_graph", "on", actor=actor,
+                                 scope="project")
     what = {"name": created["name"], "slug": created["slug"], "org_id": org_id,
-            "workspace_id": created["workspace_id"]}
+            "workspace_id": created["workspace_id"], "project_type": created["project_type"]}
     emit_event(connection, project_id, "project.created", actor, "project", project_id,
                {**what, "description": created["description"],
                 "principal_id": auth.principal.id if auth is not None else principal})

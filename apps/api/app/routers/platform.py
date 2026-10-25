@@ -207,6 +207,14 @@ def mount_platform_routers(app: FastAPI) -> None:
     except ImportError:
         pass
 
+    # BOSSAPP-768 — a knowledge-graph project's guided setup (import, team, first scan, review)
+    try:
+        from .knowledge_setup import router as knowledge_setup_router
+
+        app.include_router(knowledge_setup_router)
+    except ImportError:
+        pass
+
     # BOSSAPP-768 — learning while executing: the live feed and the before/after proof
     try:
         from .knowledge_learning import router as knowledge_learning_router

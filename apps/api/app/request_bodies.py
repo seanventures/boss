@@ -316,6 +316,9 @@ class ProjectCreateBody(OpenRequestBody):
     name: str | None = None
     slug: str | None = None
     description: str | None = None
+    #: `app` (default: it builds apps) or `knowledge_graph` (a knowledge graph for an existing
+    #: codebase). Checked by bootstrap.project_type_for, which names the types on a bad one.
+    project_type: str | None = None
 
 
 class DeploymentTargetCreateBody(OpenProjectBody):

@@ -10400,6 +10400,22 @@ ALTER TABLE projects ADD COLUMN IF NOT EXISTS archived_by TEXT;
 CREATE INDEX IF NOT EXISTS idx_projects_archived ON projects(id) WHERE archived_at IS NOT NULL;
 -- END projects archive ---------------------------------------------------------------------------
 
+-- BEGIN project type (BOSSAPP-768 project flow) ---------------------------------------------------
+-- What a project is FOR, chosen at creation (POST /v1/projects, the create_project tool): `app`
+-- builds apps (every project before this column), `knowledge_graph` maps an existing codebase into
+-- a knowledge graph (import code → assign the team → first rules scan → review), guided by the
+-- Knowledge Graph area's setup (services/knowledge/project_setup.py). A generic column, not a KG
+-- flag: the type decides which guided flow and home card a project gets.
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS project_type TEXT NOT NULL DEFAULT 'app';
+DO $project_type$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'projects_project_type_check') THEN
+    ALTER TABLE projects ADD CONSTRAINT projects_project_type_check
+      CHECK (project_type IN ('app', 'knowledge_graph'));
+  END IF;
+END $project_type$;
+-- END project type -------------------------------------------------------------------------------
+
 -- ── BOSSAPP-768 KGV view rollups (KNOWLEDGE_GRAPH_PRODUCT_SPEC.md §2.4) ─────────────────────
 -- Derived and rebuildable (services/knowledge/view_rollup.py rebuild): the Graph area's overview
 -- and neighbourhood read these instead of aggregating a large code graph live (Fineract: 523 ms

@@ -135,7 +135,10 @@ _DECIDED_MEANS = {
                        "that project, ready to use. Then do the rest of what they asked on "
                        "those projects (repositories, settings) with each tool's `project` "
                        "argument, and say plainly anything you could not do and why. Start no "
-                       "build."),
+                       "build. A KNOWLEDGE GRAPH for an existing codebase is project_type="
+                       "knowledge_graph; then walk knowledge_project_setup's steps in it: "
+                       "register_repository, set_project_team, and offer start_workflow "
+                       "business_rules_scan on the area they named."),
     "new_code_change": ("a request for NEW work. Offer it: create_code_task for one scoped "
                         "change, start_workflow for a whole delivery — both come back as a "
                         "button the person presses; say it is offered, not started. Do not "
@@ -1914,7 +1917,8 @@ class IntentRouter:
                                  "change to an app's code (offered as a button for them to start)"),
             C("create_project", "create a new BOSS PROJECT in this organization: a separate "
                                 "workspace with its own agents, budget, settings and work, set up "
-                                "like the first one (not a new app)", label="Create the project"),
+                                "like the first one (not a new app) — including a knowledge-graph "
+                                "project for an existing codebase", label="Create the project"),
         ]
         if pending_plan:
             out += [C("confirm_plan", "run the pending plan exactly as proposed"),

@@ -253,8 +253,9 @@ def _register_read_tools(reg: ToolRegistry) -> None:
 
     @reg.tool(
         "list_projects",
-        "Every project in this organization the caller may read: id, slug, name, how many "
-        "repositories each has registered, and `archived_at` when it is archived (it takes no "
+        "Every project in this organization the caller may read: id, slug, name, its "
+        "`project_type` (app, or knowledge_graph: a knowledge graph for an existing codebase), "
+        "how many repositories each has registered, and `archived_at` when it is archived (it takes no "
         "new work until restore_project). The answer to 'which projects exist / does project "
         "X exist?' — never create a project to find out whether it exists.",
         _obj({}), permission="project:read")
@@ -266,7 +267,7 @@ def _register_read_tools(reg: ToolRegistry) -> None:
                   or getattr(ctx.settings, "default_org_id", "") or "")
         with ctx.begin() as c:
             rows = c.execute(_text(
-                "SELECT p.id, p.slug, p.name, p.description, p.archived_at, "
+                "SELECT p.id, p.slug, p.name, p.description, p.project_type, p.archived_at, "
                 "       (SELECT count(*) FROM github_repository_bindings b "
                 "         WHERE b.project_id = p.id AND b.status = 'active') AS repositories "
                 "  FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
@@ -280,7 +281,8 @@ def _register_read_tools(reg: ToolRegistry) -> None:
 
     @reg.tool(
         "describe_project",
-        "One project's real state in one call: whether it exists, its name and description, "
+        "One project's real state in one call: whether it exists, its name, description and "
+        "type (app, or knowledge_graph — then knowledge_project_setup says where its setup is), "
         "the repositories registered to it (with role, status and default branch), and EVERY "
         "project setting with its stored value, its effective value and the values it accepts. "
         "Pass `project` for a project other than this conversation's. Read this before "
@@ -291,8 +293,8 @@ def _register_read_tools(reg: ToolRegistry) -> None:
 
         with ctx.begin() as c:
             row = c.execute(_text(
-                "SELECT id, slug, name, description, created_at, archived_at, archived_by "
-                "FROM projects WHERE id = :p"),
+                "SELECT id, slug, name, description, project_type, created_at, archived_at, "
+                "archived_by FROM projects WHERE id = :p"),
                 {"p": project_id}).mappings().first()
             if row is None:
                 return {"ok": False, "error": "project_not_found", "project": project_id}
@@ -3112,11 +3114,17 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
         "create_code_task inside a project. The slug is kebab-case and becomes the project's "
         "id; give it when they named one, else it is made from the name. A slug already in use "
         "comes back with the existing project's id. Never call it to check whether a project "
-        "exists: list_projects and describe_project say that.",
+        "exists: list_projects and describe_project say that. `project_type`: app (the default, "
+        "it builds apps) or knowledge_graph — a KNOWLEDGE GRAPH FOR AN EXISTING CODEBASE (\"map "
+        "our repo\", \"a knowledge graph of X\"): its graph is switched on, and its setup is "
+        "the steps knowledge_project_setup names (register_repository, set_project_team, "
+        "start_workflow business_rules_scan), each with project=<the new id>.",
         _obj({"name": {"type": "string", "description": "the project's name, as they said it"},
               "slug": {"type": "string",
                        "description": "kebab-case id, e.g. northpeak-bank-a (optional)"},
-              "description": {"type": "string", "description": "what it is for (optional)"}},
+              "description": {"type": "string", "description": "what it is for (optional)"},
+              "project_type": {"type": "string", "enum": ["app", "knowledge_graph"],
+                               "description": "app (default) or knowledge_graph"}},
              required=["name"]),
         kind="write",
         # A NEW, EMPTY PROJECT: it spends nothing and changes no existing work. The identity gate
@@ -3132,7 +3140,8 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
             with ctx.begin() as c:
                 made = project_service.create(
                     c, ctx.settings, auth=auth, name=args.get("name"), slug=args.get("slug"),
-                    description=args.get("description"), actor=actor)
+                    description=args.get("description"), actor=actor,
+                    project_type=args.get("project_type"))
         except project_service.ProjectExists as clash:
             return {"ok": False, "error": "project_exists", "slug": clash.slug,
                     "project_id": clash.project_id,
@@ -3140,8 +3149,22 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
                                 else f"The slug {clash.slug} is taken; choose another.")}
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
+        if made["project_type"] == "knowledge_graph":
+            return {"ok": True, "project_id": made["project_id"], "name": made["name"],
+                    "slug": made["slug"], "project_type": "knowledge_graph",
+                    "href": f"/?project_id={made['project_id']}&area=knowledge&kg_tab=setup",
+                    "next_steps": [
+                        "register_repository (project=<this id>): the codebase to map",
+                        "set_project_team (project=<this id>): the agents who scan, change and "
+                        "handle incidents",
+                        "start_workflow business_rules_scan (project=<this id>) on one area",
+                        "knowledge_project_setup (project=<this id>) says where it is"],
+                    "note": f"Knowledge-graph project {made['name']} ({made['project_id']}) is "
+                            "ready, its graph switched on. Its setup: import the code, assign "
+                            "the team, a first rules scan, then a person reviews the rules."}
         return {"ok": True, "project_id": made["project_id"], "name": made["name"],
-                "slug": made["slug"], "href": f"/?project_id={made['project_id']}",
+                "slug": made["slug"], "project_type": made["project_type"],
+                "href": f"/?project_id={made['project_id']}",
                 "note": f"Project {made['name']} ({made['project_id']}) is ready, set up like "
                         "the first project."}
 
@@ -8439,6 +8462,11 @@ def build_default_registry() -> ToolRegistry:
     from .project_archive_tools import register_project_archive_tools
 
     register_project_archive_tools(reg)
+    # A knowledge-graph project's setup: its steps and its team, the console's own services
+    # (BOSSAPP-768 project flow).
+    from .knowledge_project_tools import register_knowledge_project_tools
+
+    register_knowledge_project_tools(reg)
     return reg
 
 
@@ -8510,6 +8538,9 @@ _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     # (operator_only, project:delete), the same service as the project menu's (BOSSAPP-768 S5).
     "archive_project",
     "restore_project",
+    # "Put the architect and the SRE on it": the project's team, stated (agent_assignment
+    # .set_team), the same service as Knowledge Graph › Setup › Assign the team.
+    "set_project_team",
     # BOSS FIXES ITSELF FROM A DIAGNOSIS (BOSSAPP-571): the gap an agent found in BOSS, filed in
     # the turn that found it (it only queues for a person), and the self-fix a person presses.
     "file_platform_gap",
