@@ -13339,46 +13339,6 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
-  /v1/setup/coding-agents/credential:
-    post:
-      summary: Setup Store Coding Agent Credential
-      description: 'Hand BOSS a subscription''s credential and let it choose where that lives.
-
-
-        Removes the step customers were being asked to perform for us. Before this, a subscription
-
-        on a server meant getting the credential into the process yourself: an env file you may not
-
-        be able to reach, or a secret store you may not run, followed by a redeploy — none of which
-
-        is BOSS''s business to make somebody''s problem. `default_secret_backend` already knows the
-
-        best store this installation has, down to Postgres when it has nothing else, so the honest
-
-        interface is "give it to BOSS" and the rest is an implementation detail.'
-      operationId: post_v1_setup_coding_agents_credential_02eafe48
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/CodingAgentCredentialBody'
-        required: true
-      responses:
-        '201':
-          description: Successful Response
-          content:
-            application/json:
-              schema:
-                additionalProperties: true
-                type: object
-                title: Response Setup Store Coding Agent Credential V1 Setup Coding Agents Credential
-                  Post
-        '422':
-          description: Validation Error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/HTTPValidationError'
   /v1/setup/coding-agents/connect:
     post:
       summary: Setup Connect Coding Agent
@@ -36510,40 +36470,6 @@ components:
       - project_id
       - provider
       title: CodingAgentConnectBody
-    CodingAgentCredentialBody:
-      properties:
-        project_id:
-          anyOf:
-          - type: string
-          - type: 'null'
-          title: Project Id
-        actor:
-          anyOf:
-          - type: string
-          - type: 'null'
-          title: Actor
-        provider:
-          anyOf:
-          - type: string
-          - type: 'null'
-          title: Provider
-        credential:
-          anyOf:
-          - type: string
-          - type: 'null'
-          title: Credential
-          writeOnly: true
-        accept_database_fallback:
-          anyOf:
-          - type: boolean
-          - type: 'null'
-          title: Accept Database Fallback
-      additionalProperties: true
-      type: object
-      required:
-      - project_id
-      - provider
-      title: CodingAgentCredentialBody
     CommandProposeRequest:
       properties:
         project_id:

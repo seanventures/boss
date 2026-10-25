@@ -64,14 +64,19 @@ python3 scripts/install/console_password.py reset
 
 For sign-in details, see [console access](CONSOLE_AUTH.md).
 
-## Record coding CLI logins
+## Sign a subscription in
 
-If you have already signed in to Claude Code, Codex, or Grok with that provider's own CLI on this machine, pass the matching flag so the installer records the login:
+A Codex, Claude Code or Grok Build subscription signs in inside BOSS through the provider's own login. Nothing on this machine is copied, and there is no token to paste:
+
+```bash
+boss connect codex     # or: boss connect claude, boss connect grok
+```
+
+BOSS prints the link and one-time code the provider's login shows. Open the link, sign in, and enter the code (Claude Code shows a code for you to paste back instead). BOSS then proves the connection with one test turn. When a login was already made inside the BOSS container, record it without signing in again:
 
 ```bash
 ./install.sh --dir "$PWD" --connect-claude-local
-./install.sh --dir "$PWD" --connect-codex
 ./install.sh --dir "$PWD" --connect-grok-local
 ```
 
-These flags only record an existing login. They do not sign you in. For the sign-in steps, see [model connections](MODEL_CONNECTIONS.md) and [Grok CLI](GROK_CLI.md).
+These flags only record an existing login. For the steps and limits, see [model connections](MODEL_CONNECTIONS.md#sign-a-subscription-in-inside-boss) and [Grok CLI](GROK_CLI.md).

@@ -237,6 +237,30 @@ class ModelConnectBody(_Body):
     scope: Optional[Literal["org", "project"]] = None
 
 
+class SignInBody(_Body):
+    """Start the provider's own login inside the BOSS server (codex | claude_code | grok)."""
+    provider: str
+
+
+class SignInCodeBody(_Body):
+    """The code a sign-in page showed, handed to the provider's own login. Never stored."""
+    code: str = Field(min_length=1, max_length=512, json_schema_extra={"writeOnly": True})
+
+
+class SignInSession(BaseModel):
+    """One in-container sign-in (subscription_sign_in.view): only the URL and code the CLI
+    printed for the person, never anything else from its output."""
+    sign_in_id: str
+    provider: Literal["codex", "claude_code", "grok"]
+    state: Literal["starting", "waiting", "signed_in", "failed", "expired", "cancelled"]
+    verification_url: Optional[str] = None
+    user_code: Optional[str] = None
+    needs_code_input: bool = False
+    expires_at: Optional[str] = None
+    headline: str
+    fix: str
+
+
 class SourceModelBody(_Body):
     model: str
 

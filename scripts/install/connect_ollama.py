@@ -36,6 +36,7 @@ import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from boss_refusal import from_body  # noqa: E402
 from discover_models import MODEL_NAME, ollama_model_names  # noqa: E402
 from model_status import (  # noqa: E402
     ROLE_ENGINES, hosted_connected, ollama_connection, role_settings, sources,
@@ -60,8 +61,13 @@ def _request(url: str, api_key: str, payload: dict | None = None, method: str = 
         with urllib.request.urlopen(request, timeout=60) as response:
             body = json.loads(response.read().decode() or "{}")
     except urllib.error.HTTPError as exc:
-        # The body is not echoed: keep this output to what BOSS itself decided.
-        raise ConnectError(f"BOSS refused the request: HTTP {exc.code}") from None
+        # BOSS's own refusal ("headline — fix", never a credential), and nothing added to it.
+        # Any other body is not echoed: keep this output to what BOSS itself decided.
+        try:
+            reason = from_body(exc.read())
+        except OSError:
+            reason = ""
+        raise ConnectError(f"BOSS refused the request: {reason or f'HTTP {exc.code}'}") from None
     except (OSError, ValueError) as exc:
         raise ConnectError("BOSS did not answer; is it running? Try: boss status") from exc
     return body if isinstance(body, dict) else {}

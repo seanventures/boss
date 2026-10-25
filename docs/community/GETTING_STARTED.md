@@ -143,7 +143,7 @@ With only the free local model, the table ends like this (the model is the one t
 
 ```text
     API keys     not found. Export a key, then: boss connect keys
-    Codex        not found. Sign in with codex login --device-auth, then: boss connect codex
+    Codex        not found. Sign in inside BOSS: boss connect codex
     Claude Code  not found. Sign in inside BOSS: boss connect claude
     Grok Build   not found. Sign in inside BOSS: boss connect grok
     Ollama       connected: qwen2.5-coder:7b

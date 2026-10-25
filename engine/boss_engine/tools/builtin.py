@@ -3507,10 +3507,10 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
 
     @reg.tool(
         "detect_coding_agents",
-        "Which coding-agent CLIs (Codex, Cursor, Aider, Claude Code) are installed on this "
-        "machine and signed in. A subscription has no credential to paste — the CLI holds its "
-        "own OAuth session — so this is how BOSS finds one. Reports the exact next command "
-        "for anything not ready yet.",
+        "Which subscription CLIs (codex, claude_code, grok) are installed inside the BOSS "
+        "server and signed in through their own login. A subscription has no credential to "
+        "paste: it signs in inside BOSS (`boss connect codex|claude|grok`, or the console's "
+        "+ Add model › Subscription › Sign in). Reports the next step for anything not ready.",
         _obj({}, []), permission="setup:read")
     def detect_coding_agents(ctx, *, project_id, actor, args):
         from ..services.setup_service import list_coding_agents
@@ -3523,11 +3523,13 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
 
     @reg.tool(
         "connect_coding_agent",
-        "Import a coding-agent subscription the operator already has (e.g. Codex via their "
-        "ChatGPT login) into BOSS. Community can record an eligible CLI with prove=false; "
-        "live proof is paused until model turns have budget, lease, and receipt tracking.",
+        "Connect a subscription that is already signed in inside the BOSS server through "
+        "its own login (codex, claude_code or grok), and prove it with one governed test "
+        "turn (reserved and receipted, in every edition). Nothing is imported or pasted: "
+        "when the CLI is not signed in, the answer says to sign in first with "
+        "`boss connect codex|claude|grok` or the console's Sign in.",
         _obj({"provider": {"type": "string",
-                           "description": "codex | cursor | aider"},
+                           "description": "codex | claude_code | grok"},
               "prove": {"type": "boolean", "default": True,
                         "description": "run one real turn before recording it (recommended)"}},
              ["provider"]),

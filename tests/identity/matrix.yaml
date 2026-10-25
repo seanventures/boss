@@ -3,7 +3,7 @@
 # One line per operation: its declaration, then the built-in roles allowed
 # (O owner, A admin, P operator, V viewer, U auditor; '-' none). Every other role is denied
 # 403, or 404 when the operation names an object the role cannot even read.
-# 1650 operations.
+# 1653 operations.
 "GET /.well-known/boss-jwks.json": ["public:jwks", "OAPVU"]
 "GET /docs": ["public:api_description", "OAPVU"]
 "GET /docs/oauth2-redirect": ["public:api_description", "OAPVU"]
@@ -1436,7 +1436,6 @@
 "POST /v1/setup/checks": ["permit setup:manage @ project(body=project_id)", "OA"]
 "GET /v1/setup/coding-agents": ["permit setup:read @ project(query=project_id)|org", "OAPVU"]
 "POST /v1/setup/coding-agents/connect": ["permit model_provider:manage @ project(body=project_id)", "OA"]
-"POST /v1/setup/coding-agents/credential": ["permit model_provider:manage @ project(body=project_id)", "OA"]
 "GET /v1/setup/decision-model": ["permit setup:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/setup/decision-model/key": ["permit model_provider:manage @ project(body=project_id)", "OA"]
 "POST /v1/setup/decisions/key": ["permit model_provider:manage @ project(body=project_id)", "OA"]
@@ -1464,6 +1463,10 @@
 "POST /v1/setup/repository/{binding_id}/default": ["permit repository:manage @ project(query=project_id)", "OA"]
 "PUT /v1/setup/routing": ["permit setup:manage @ project(body=project_id)", "OA"]
 "POST /v1/setup/routing/catalogue": ["permit model_provider:manage @ project(body=project_id)", "OA"]
+"POST /v1/setup/sign-in": ["permit model_provider:manage @ project(body=project_id)", "OA"]
+"DELETE /v1/setup/sign-in/{sign_in_id}": ["permit model_provider:manage @ project(query=project_id)", "OA"]
+"GET /v1/setup/sign-in/{sign_in_id}": ["permit model_provider:manage @ project(query=project_id)", "OA"]
+"POST /v1/setup/sign-in/{sign_in_id}/code": ["permit model_provider:manage @ project(body=project_id)", "OA"]
 "GET /v1/setup/status": ["permit setup:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/setup/try": ["permit workflow_run:start @ project(body=project_id)", "OAP"]
 "POST /v1/shepherd/autopilot": ["permit autopilot:operate @ project(body=project_id)", "OAP"]

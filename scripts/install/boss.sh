@@ -48,10 +48,14 @@ Commands:
                                 restart api and worker (OPENAI_, ANTHROPIC_, GOOGLE_, XAI_,
                                 OPENROUTER_API_KEY; values are never printed or taken as
                                 arguments)
-                        codex   copy the Codex ChatGPT login into BOSS
+                        codex   sign Codex in inside the BOSS container (terminal)
                         claude  sign Claude Code in inside the BOSS container (terminal)
                         grok    sign Grok Build in inside the BOSS container (terminal)
                         ollama  connect the Ollama on this machine as a BOSS model
+                      A subscription signs in through the provider's own login inside
+                      BOSS: open the link it prints and enter the code (Claude Code shows
+                      a code to paste back). Then BOSS proves it with one test turn.
+                      Nothing is copied from this machine.
                       --connect-found answers yes for everything found; a sign-in that
                       needs a person is still skipped without a terminal. --yes asks
                       nothing and installs nothing unless --install-ollama is given.
@@ -503,25 +507,6 @@ run_subscriptions() {
      --api-url "$(api_url)" "$@" </dev/null)
 }
 
-connect_codex() {
-  local assume="$1" args=(--connect-codex)
-  if [[ "$(env_value BOSS_COMMUNITY_SECRET_STORE)" != infisical ]]; then
-    if [[ "$assume" -eq 1 && "${ACCEPT_DB:-0}" -ne 1 ]]; then
-      printf '  skipped   Codex: this install keeps credentials in its database. Add --accept-database-fallback to allow that.\n'
-      return 0
-    fi
-    if [[ "$assume" -eq 0 ]] && ! ask_yes "Copy your Codex ChatGPT login (~/.codex/auth.json) into BOSS's own database on this machine?"; then
-      printf '  skipped   Codex (nothing was copied)\n'
-      return 0
-    fi
-    args+=(--accept-database-fallback)
-  elif [[ "$assume" -eq 0 ]] && ! ask_yes "Copy your Codex ChatGPT login (~/.codex/auth.json) into this install's secret store?"; then
-    printf '  skipped   Codex (nothing was copied)\n'
-    return 0
-  fi
-  run_subscriptions "${args[@]}"
-}
-
 PROVIDER_KEYS=(OPENAI_API_KEY ANTHROPIC_API_KEY GOOGLE_API_KEY XAI_API_KEY OPENROUTER_API_KEY)
 
 # Write the provider keys exported in this shell into the install's private .env. Values pass
@@ -644,45 +629,43 @@ container_login_state() {
   return "$rc"
 }
 
-# Claude Code and Grok sign in inside the BOSS container, as the boss user, through the
-# provider's own flow. No host login file or token passes through BOSS, and nothing is printed
-# from the session. Status: 0 connected, 1 failed, 2 skipped (needs a person at a terminal).
+provider_label() {
+  case "$1" in codex) printf 'Codex' ;; claude) printf 'Claude Code' ;; grok) printf 'Grok Build' ;; esac
+}
+
+# THE ONE SUBSCRIPTION ROUTE (BOSSAPP-769). Codex, Claude Code and Grok Build sign in inside the
+# BOSS container, as the boss user, through the provider's own login: coding_subscriptions.py
+# --sign-in asks BOSS to start it (POST /v1/setup/sign-in), prints the link and code, waits, and
+# then connects and proves it (POST /v1/setup/models). No host login file or token passes
+# through BOSS, and nothing from the session is printed. Status: 0 connected and proved,
+# 1 failed, 2 skipped (needs a person at a terminal).
 sign_in() {
-  local name="$1" label flag state=0
-  local login=()
-  case "$name" in
-    claude) label="Claude Code"; flag=--connect-claude-local; login=(claude auth login) ;;
-    grok) label="Grok Build"; flag=--connect-grok-local; login=(grok login --device-auth) ;;
-  esac
+  local name="$1" label state=0 rc=0
+  label="$(provider_label "$name")"
   if [[ "$name" == claude ]] && claude_blocked; then
     return 1
   fi
-  container_login_state "$name" || state=$?
-  if [[ "$state" -ne 0 ]]; then
-    if ! have_tty; then
+  if ! have_tty; then
+    container_login_state "$name" || state=$?
+    if [[ "$state" -ne 0 ]]; then
       printf '  skipped   %s sign-in needs a person at a terminal. Run: boss connect %s\n' "$label" "$name"
       return 2
     fi
-    printf 'Signing %s in inside the BOSS API container. %s runs its own login; nothing is copied from this machine.\n' "$label" "$label"
-    if ! compose exec -u boss api "${login[@]}" </dev/tty >/dev/tty; then
-      printf '  ✗ %s sign-in did not finish; nothing was recorded. Retry: boss connect %s\n' "$label" "$name"
-      return 1
-    fi
-  else
-    printf '  %s is already signed in inside BOSS; recording it.\n' "$label"
   fi
-  if ! run_subscriptions "$flag"; then
-    printf '  ✗ %s was not recorded; the reason is above. Retry: boss connect %s\n' "$label" "$name"
-    return 1
-  fi
-  printf '  ✓ %s signed in inside BOSS and recorded (model use is verified by the first governed job)\n' "$label"
+  run_subscriptions --sign-in "$name" || rc=$?
+  case "$rc" in
+    0) printf '  ✓ %s is signed in inside BOSS and connected: it answered one test turn\n' "$label" ;;
+    2) return 2 ;;
+    *) printf '  ✗ %s was not connected; the reason is above. Retry: boss connect %s\n' "$label" "$name"
+       return 1 ;;
+  esac
 }
 
 # A login found on this machine: one question, then the in-container sign-in. Already signed in
 # inside BOSS means nothing to ask. $2 is 1 when --connect-found (or --yes) answered for the user.
 offer_sign_in() {
   local name="$1" assume="$2" label state=0
-  case "$name" in claude) label="Claude Code" ;; grok) label="Grok Build" ;; esac
+  label="$(provider_label "$name")"
   if [[ "$name" == claude ]] && claude_blocked; then
     return 1
   fi
@@ -1150,9 +1133,11 @@ models_step() {
         break
       fi
     done
-    if [[ "$(state codex_login)" == found ]]; then
-      connect_codex "$ASSUME" || printf '  ✗ Codex login not connected; the reason is above. Retry: boss connect codex\n'
-    fi
+  fi
+  # A Codex, Claude Code or Grok Build login on this machine says which subscription you use.
+  # Nothing is copied from it: BOSS offers to sign that subscription in inside BOSS.
+  if [[ "$(state codex_login)" == found ]]; then
+    offer_sign_in codex "$ASSUME" || true
   fi
   if [[ "$(state claude_login)" == found ]]; then
     offer_sign_in claude "$ASSUME" || true
@@ -1175,9 +1160,9 @@ models_step() {
   usable_model || rc=$?
   if [[ "$rc" -eq 3 ]]; then
     printf '\nNo model is connected yet, so BOSS cannot run model work.\n'
-    for key in claude grok; do
+    for key in codex claude grok; do
       [[ "$(state "${key}_login")" != found ]] || continue  # already offered above
-      if have_tty && ask "Sign in to $([[ $key == claude ]] && echo 'Claude Code' || echo 'Grok Build') inside BOSS now? It runs the provider's own login in the BOSS container; you need that subscription."; then
+      if have_tty && ask "Sign in to $(provider_label "$key") inside BOSS now? It runs the provider's own login in the BOSS container; you need that subscription."; then
         if sign_in "$key" && usable_model; then
           break
         fi
@@ -1196,8 +1181,8 @@ models_step() {
     fi
   fi
   if [[ "$FROM_INSTALLER" -eq 0 ]]; then
-    if [[ "$(state codex_cli)" != found && "$(state codex_login)" != found ]]; then
-      printf '  next      Codex: install the CLI with boss update --install-coding-clis, sign in with codex login --device-auth, then: boss connect codex\n'
+    if [[ "$(state codex_login)" != found ]]; then
+      printf '  next      Codex: boss connect codex  (signs in inside BOSS through Codex'"'"'s own login)\n'
     fi
     printf '\nModels\n'
     print_model_rows "$summary" || true
@@ -1209,14 +1194,14 @@ models_step() {
 
 cmd_connect() {
   local what="" offer=0 mode=steps summary
-  ACCEPT_DB=0
   need_install
   while [[ $# -gt 0 ]]; do
     case "$1" in
       codex|claude|grok|ollama|keys) what="$1"; shift ;;
       --connect-found) ASSUME=1; shift ;;
       --yes|-y) ASSUME=1; NO_QUESTIONS=1; shift ;;
-      --accept-database-fallback) ACCEPT_DB=1; shift ;;
+      --accept-database-fallback)
+        die "--accept-database-fallback is not needed: a subscription signs in inside BOSS through its own login (boss connect codex|claude|grok); nothing is copied or stored from this machine." ;;
       --install-ollama) INSTALL_OLLAMA=1; shift ;;
       --local-model)
         LOCAL_MODEL="${2:-}"; LOCAL_MODEL_SET=1; shift 2 || die "--local-model needs a model name"
@@ -1246,7 +1231,6 @@ cmd_connect() {
       return ;;
   esac
   case "$what" in
-    codex) connect_codex "$ASSUME"; return ;;
     keys) connect_keys; return ;;
     ollama)
       if [[ "$INSTALL_OLLAMA" -eq 1 ]]; then
@@ -1257,7 +1241,7 @@ cmd_connect() {
         connect_ollama 1 "$([[ "${LOCAL_MODEL_SET:-0}" -eq 1 ]] && printf '%s' "$LOCAL_MODEL")"
       fi
       return ;;
-    claude|grok)
+    codex|claude|grok)
       if [[ "$offer" -eq 1 ]]; then
         offer_sign_in "$what" "$ASSUME"
       else
