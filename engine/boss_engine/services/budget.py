@@ -9,7 +9,7 @@ from sqlalchemy.engine import Connection
 
 from ..config import Settings
 from .included_spend import INCLUDED_SQL, MONEY_SQL
-from .model_failures import cap_used_sentence, resets_sentence
+from .model_failures import cap_refusal_sentence, cap_used_sentence, resets_sentence
 from .core import (
     create_blocking_decision,
     emit_event,
@@ -1284,7 +1284,8 @@ class BudgetGovernor:
                 "resets_at": refusal["resets_at"],
                 # "Budget cap exceeded: today's budget is 98% used ($9.80 of $10). It resets
                 # at 00:00 UTC, or raise the daily cap in Govern › Limits. Decision created."
-                "message": (f"Budget cap exceeded: {cap_used_sentence(refusal)}. "
+                "message": (f"Budget cap exceeded: "
+                            f"{cap_refusal_sentence(refusal, amount_usd_micros)}. "
                             f"{resets_sentence(refusal)} Decision created."),
             }
             record_refusal(connection, project_id, refused, category=category, reason=reason,

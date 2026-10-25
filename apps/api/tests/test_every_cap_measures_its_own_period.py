@@ -151,12 +151,13 @@ def test_reserve_refuses_on_the_period_cap_and_says_when_it_resets(engine, caps)
     assert refused["period"] == "month"
     month = budget_period("month")
     assert refused["message"].startswith(
-        "Budget cap exceeded: this month's budget is 95% used ($19 of $20). "
+        "Budget cap exceeded: this needs $2 reserved and this month's budget has $1.00 left "
+        "($19 of $20 used). "
         f"It resets at 00:00 UTC on 1 {month['end']:%B}, or raise the monthly cap in Govern › Limits.")
     said = explain(refused["message"])
     assert said["kind"] == "budget_refused"
-    assert said["headline"] == ("The budget refused this work. This month's budget is 95% used "
-                                "($19 of $20).")
+    assert said["headline"] == ("The budget refused this work. This needs $2 reserved and this "
+                                "month's budget has $1.00 left ($19 of $20 used).")
     assert said["action"].startswith(f"It resets at 00:00 UTC on 1 {month['end']:%B}")
 
     # A day's cap is today's money: what fits today is reserved.

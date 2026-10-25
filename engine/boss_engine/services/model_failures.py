@@ -82,6 +82,26 @@ def cap_used_sentence(period: Mapping[str, Any]) -> str:
     return f"{whose} budget is {used} ({_usd(committed)} of {_usd(cap)})"
 
 
+def cap_refusal_sentence(period: Mapping[str, Any], requested_usd_micros: int) -> str:
+    """Why a reservation did not fit, naming WHAT WAS ASKED (brec_bd2a474ed4eb4537a373: a $10
+    self-fix was refused "today's budget is 0% used ($0.000012 of $10)" — true, and no reason
+    at all). A used-up period says so; otherwise the sentence is the reservation against what is
+    left, or against the whole cap when one reservation is bigger than the cap itself."""
+    cap = int(period.get("cap_usd_micros") or 0)
+    committed = int(period.get("committed_usd_micros") or 0)
+    if float(period.get("utilization_ratio") or 0) >= 1 or not requested_usd_micros:
+        return cap_used_sentence(period)
+    whose = period.get("whose") or "the"
+    if requested_usd_micros > cap:
+        return (f"this needs {_usd(requested_usd_micros)} reserved, more than {whose} whole "
+                f"budget of {_usd(cap)}")
+    # What is left, rounded DOWN to the cent: "$10.00 left" beside "needs $10" reads as a
+    # contradiction when $9.999988 is left.
+    left_cents = max(cap - committed, 0) // 10_000
+    return (f"this needs {_usd(requested_usd_micros)} reserved and {whose} budget has "
+            f"${left_cents / 100:,.2f} left ({_usd(committed)} of {_usd(cap)} used)")
+
+
 def resets_sentence(period: Mapping[str, Any]) -> str:
     """"It resets at 00:00 UTC, or raise the daily cap in Govern › Limits." — every cap measures its own
     period, so the first way out is waiting for it to turn over."""
