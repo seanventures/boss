@@ -973,6 +973,74 @@
       checks: {never_execute: [record_learning]}
       expected: "New work: offers a build (or asks one question). It may mention the earlier learning; it records nothing on its own."
 
+- id: finds-a-learning-by-its-incident-id
+  covers: [agent-finds-a-learning-by-its-incident-id]
+  surface: talk_to_boss
+  # What the fixed kg_search and kg_precedent return for INC-2041 (engine/tests/
+  # test_knowledge_agent_search_db.py proves the real tools do): the root cause carries the id in
+  # its evidence; the investigation and precedent came from the conversation whose brief names it.
+  tools:
+    kg_search:
+      hits:
+        - {node_id: kgn_bt_rc_2041, node_key: "learning:root_cause:bt2041", kind: root_cause, match: id,
+           trust_tier: inferred, via: [written],
+           name: "Standard strategy (mifos-standard-strategy) overbooks principal by the interest amount on every repayment",
+           body: "FineractStyleLoanRepaymentScheduleTransactionProcessor.handleTransactionThatIsOnTimePaymentOfInstallment computes interestPortion = currentInstallment.payInterestComponent(transactionDate, transactionAmountRemaining) but never does transactionAmountRemaining = transactionAmountRemaining.minus(interestPortion), so principal is paid from the pre-interest amount. Evidence: INC-2041 reconciliation report."}
+        - {node_id: kgn_bt_prec_2041, node_key: "learning:precedent:bt2041", kind: precedent, match: run,
+           trust_tier: inferred, via: [written],
+           name: "Allocator that skips the remaining-amount decrement after one component overpays every component after it",
+           body: "When a repayment handler computes a component against a running remaining amount but omits remaining = remaining.minus(component), every later component is sized against cash already spoken for."}
+        - {node_id: kgn_bt_inv_2041, node_key: "learning:investigation:bt2041", kind: investigation, match: run,
+           trust_tier: inferred, via: [written],
+           name: "On-time repayment branch is the sole cause; waiver and charge-payment branches ruled out",
+           body: "Only the final else branch of handleTransactionThatIsOnTimePaymentOfInstallment fails to decrement transactionAmountRemaining by interestPortion."}
+      retrieval: {mode: hybrid, lists: {text: 0, written: 4, graph: 3, vector: 3}}
+    kg_precedent:
+      cited_fact_ids: [kgn_bt_rc_2041, kgn_bt_prec_2041, kgn_bt_inv_2041]
+      learned:
+        - {id: kgn_bt_rc_2041, kind: root_cause, title: "Standard strategy (mifos-standard-strategy) overbooks principal by the interest amount on every repayment",
+           statement: "FineractStyleLoanRepaymentScheduleTransactionProcessor.handleTransactionThatIsOnTimePaymentOfInstallment never does transactionAmountRemaining = transactionAmountRemaining.minus(interestPortion) after paying interest.",
+           by: Site Reliability Engineer, run: "run:athr_bt_b3", at: "2026-10-25", confidence: 0.9}
+        - {id: kgn_bt_prec_2041, kind: precedent, title: "Allocator that skips the remaining-amount decrement overpays every later component",
+           statement: "Insert the missing decrement immediately after the component is computed.",
+           by: Site Reliability Engineer, run: "run:athr_bt_b3", at: "2026-10-25", confidence: 0.8}
+        - {id: kgn_bt_inv_2041, kind: investigation, title: "On-time repayment branch is the sole cause",
+           statement: "Only the normal-payment else branch fails to decrement transactionAmountRemaining by interestPortion.",
+           by: Site Reliability Engineer, run: "run:athr_bt_b3", at: "2026-10-25", confidence: 0.85}
+      section: |-
+        - [L:kgn_bt_rc_2041] (root cause) Standard strategy (mifos-standard-strategy) overbooks principal by the interest amount on every repayment: FineractStyleLoanRepaymentScheduleTransactionProcessor.handleTransactionThatIsOnTimePaymentOfInstallment never does transactionAmountRemaining = transactionAmountRemaining.minus(interestPortion) after paying interest. (learned by Site Reliability Engineer in run:athr_bt_b3)
+        - [L:kgn_bt_prec_2041] (precedent) Allocator that skips the remaining-amount decrement overpays every later component: Insert the missing decrement immediately after the component is computed. (learned by Site Reliability Engineer in run:athr_bt_b3)
+        - [L:kgn_bt_inv_2041] (investigation) On-time repayment branch is the sole cause: Only the normal-payment else branch fails to decrement transactionAmountRemaining by interestPortion. (learned by Site Reliability Engineer in run:athr_bt_b3)
+  checks:
+    any_of: [kg_search, kg_precedent, kg_why]
+    no_writes: true
+    mentions_any: [kgn_bt_rc_2041]
+  expected: >-
+    Looks INC-2041 up in the knowledge graph (kg_search or kg_precedent), cites the root cause
+    [L:kgn_bt_rc_2041] and answers: the standard strategy (mifos-standard-strategy), implemented
+    by FineractStyleLoanRepaymentScheduleTransactionProcessor — its on-time branch is missing
+    transactionAmountRemaining = transactionAmountRemaining.minus(interestPortion), so principal is
+    overbooked by the interest. It presents this as an earlier agent's finding (inferred) to check
+    against the code.
+  must_not:
+    - say kg_search, kg_precedent or the graph returned nothing or zero hits for INC-2041
+    - name any strategy other than the standard / FineractStyle one (for example the advance-payment or due-penalty strategies)
+    - answer without citing the root cause kgn_bt_rc_2041
+    - present the learning as an approved rule
+  phrasings:
+    - "Which repayment strategy did INC-2041 affect?"
+    - "which strategy did INC-2041 affect?"
+    - "INC-2041 — what strategy broke, and what was the cause?"
+    - "Remind me: what was the root cause of INC-2041 and which repayment strategy was it in?"
+    - "Did INC-2041 hit the advance-payment strategy or a different one?"
+    - "What did we learn from incident INC-2041?"
+    - "Before we close INC-2088, what was INC-2041 about — which processor was wrong?"
+    - "pls look up INC-2041 in the graph, which repayment strategy"
+  negatives:
+    - input: "Fix the strategy INC-2041 affected again, it regressed."
+      checks: {never_execute: [record_learning]}
+      expected: "New work: it may cite the INC-2041 root cause, and offers a fix (a build) or asks one question; it records nothing on its own."
+
 - id: turns-a-diagnosed-platform-gap-into-a-self-fix-request
   covers: [agent-turns-a-diagnosed-platform-gap-into-a-self-fix-request]
   surface: talk_to_boss

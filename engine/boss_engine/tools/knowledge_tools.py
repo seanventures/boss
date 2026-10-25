@@ -64,7 +64,23 @@ def _search(ctx, *, project_id, actor, args, policy=None, mode="on"):
         found = _SERVICE.search(connection, project_id=project_id, query=query, policy=policy, mode=mode)
         # A rule or learning a search returned to a run or a conversation is "consulted" (§2.5).
         _log_consulted(connection, project_id, [hit.get("node_id") for hit in found.get("hits") or []])
+        if not found.get("hits"):
+            found["searched"] = _searched(policy, mode, query, "kg_search", found)
         return found
+
+
+def _searched(policy, mode, query, tool, found=None) -> dict:
+    """What an empty answer covered (find.searched): layers, fields, meaning — so an agent says
+    "nothing in these fields", never "the graph holds nothing"."""
+    from ..services.knowledge.find import searched
+    from ..services.knowledge.scopes import KEYWORD_EXCLUDED_LAYERS, LAYERS
+
+    layers = set(policy.layers if policy is not None else LAYERS)
+    if mode == "keyword":
+        layers -= set(KEYWORD_EXCLUDED_LAYERS)
+    retrieval = (found or {}).get("retrieval") or {}
+    meaning = None if not retrieval else retrieval.get("mode") == "hybrid"
+    return searched(layers=layers, meaning=meaning, query=query, tool=tool)
 
 
 def _symbol(ctx, *, project_id, actor, args, policy=None, mode="on"):
@@ -99,7 +115,16 @@ def _why(ctx, *, project_id, actor, args, policy=None, mode="on"):
         try:
             found = _SERVICE.why(connection, project_id=project_id, node_id=node_id, policy=policy)
         except LookupError:
-            return {"error": "node not found"}
+            # Not a node id: an incident or ticket key (INC-2041), a run id, words. Say which
+            # nodes carry it (the one written-item search), so the agent asks kg_why of those.
+            hits = _SERVICE.search(connection, project_id=project_id, query=node_id, limit=8,
+                                   policy=policy, mode=mode).get("hits") or []
+            if not hits:
+                return {"error": f"{node_id!r} is not a node id, and no node mentions it.",
+                        "searched": _searched(policy, mode, node_id, "kg_why")}
+            return {"error": f"{node_id!r} is not a node id. These nodes carry it: call kg_why with one of their ids.",
+                    "matches": [{"node_id": h["node_id"], "kind": h.get("kind"), "name": h.get("name"),
+                                 "match": h.get("match")} for h in hits]}
         _log_consulted(connection, project_id, [hit.get("node_id") for hit in found.get("why") or []])
         return found
 
@@ -133,6 +158,8 @@ def _precedent(ctx, *, project_id, actor, args, policy=None, mode="on"):
         # conversation: "consulted" (spec §2.5), its edge now.
         _log_consulted(connection, project_id, list(found.get("cited_fact_ids") or [])
                        or [item["id"] for item in found.get("learned") or []])
+        if not found.get("cited_fact_ids") and not found.get("learned"):
+            found["searched"] = _searched(policy, mode, query, "kg_precedent")
         return found
 
 
@@ -258,8 +285,20 @@ def _rules(ctx, *, project_id, actor, args, policy=None, mode="on"):
             # What a tool returned is "consulted" (spec §2.5): the run's (or conversation's) edge
             # to the rule. A proposed rule is untrusted and is not "used".
             _log_consulted(connection, project_id, [r["id"] for r in rules])
-    return {"status": status, "trust": _APPROVED if status == "approved" else _PROPOSED,
-            "rules": rules, "count": len(rules)}
+    out = {"status": status, "trust": _APPROVED if status == "approved" else _PROPOSED,
+           "rules": rules, "count": len(rules)}
+    if not rules:
+        named = [f"{k}: {', '.join(_strings(args.get(k)))}" for k in ("symbols", "packages", "areas")
+                 if _strings(args.get(k))]
+        out["searched"] = {
+            "layers": ["rules"], "status": status,
+            "note": (f"No {status} rule " + ("governs " + "; ".join(named) if named else "") +
+                     (" or " if named and args.get("query") else "") +
+                     (f"matches {args.get('query')!r} (id, title, statement, attributes)" if args.get("query") else "") +
+                     ". This covers rules only: learnings (root causes, precedents) are in kg_search "
+                     "and kg_precedent."),
+        }
+    return out
 
 
 def _propose_rule(ctx, *, project_id, actor, args, policy=None, mode="on"):
@@ -295,12 +334,19 @@ def _propose_rule(ctx, *, project_id, actor, args, policy=None, mode="on"):
 
 def register_knowledge_tools(reg) -> None:
     specs = [
-        ("kg_search", "Search knowledge facts in this project.", _props("query"), _search, "read"),
+        ("kg_search", "Search this project's knowledge graph: code, rules and what agents learned (root "
+         "causes, precedents, investigations, fixes) by exact id (an incident or ticket key like INC-2041, a "
+         "kgn_ node id), words and meaning — in titles, bodies and attributes (evidence), and the learnings "
+         "a run or conversation whose brief names it produced. The same search as the console's Graph.",
+         _props("query"), _search, "read"),
         ("kg_symbol", "Look up a code symbol by name.", _props("name"), _symbol, "read"),
         ("kg_callers", "List symbols that call a node, directly or by dispatch through a supertype.", _props("node_id"), _callers, "read"),
         ("kg_blast_radius", "Walk call edges out from a symbol.", _props("node_id"), _blast, "read"),
-        ("kg_why", "Facts that cite a node.", _props("node_id"), _why, "read"),
-        ("kg_precedent", "Similar past facts for a decision, with ids to cite.", _props("query"), _precedent, "read"),
+        ("kg_why", "Facts that cite a node. Given an id that is not a node (INC-2041), lists the nodes "
+         "that carry it.", _props("node_id"), _why, "read"),
+        ("kg_precedent", "What earlier runs learned and decided that matches a symptom, an incident id "
+         "(INC-2041) or a decision — precedents, root causes, investigations, fixes — with ids to cite.",
+         _props("query"), _precedent, "read"),
         (
             "kg_schema",
             "What this project's knowledge graph holds, counted from its rows: vertex labels and node "

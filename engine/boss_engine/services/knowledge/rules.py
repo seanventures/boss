@@ -494,11 +494,22 @@ def rules_for(
             ORDER BY n.first_seen DESC LIMIT :n
             """), params).scalars().all())
     if query.strip():
+        # The one written-item search (find.find_written, as the console and kg_search): an id,
+        # the phrase, or what a matching run produced, first; then every word in search_tsv; then
+        # any of the words in a rule's text and attributes.
+        from .find import find_written
+
+        written = find_written(connection, project_id, query, kinds=["rule"], limit=200)
+        allowed = set(connection.execute(text(f"SELECT id FROM kg_nodes WHERE {base()} AND id = ANY(:ids)"),
+                                         {**params, "ids": [w["id"] for w in written]}).scalars().all())
+        written = [w for w in written if w["id"] in allowed]
+        matches.extend(w["id"] for w in written if w["match"] != "words" and w["id"] not in matches)
         found = connection.execute(text(
             f"SELECT id FROM kg_nodes WHERE {base()} AND search_tsv @@ plainto_tsquery('english', :q) "
             "ORDER BY ts_rank(search_tsv, plainto_tsquery('english', :q)) DESC LIMIT :n"),
             {**params, "q": query}).scalars().all()
         matches.extend(i for i in found if i not in matches)
+        matches.extend(w["id"] for w in written if w["id"] not in matches)
     if not named and not query.strip():
         matches = list(connection.execute(text(
             f"SELECT id FROM kg_nodes WHERE {base()} ORDER BY first_seen DESC LIMIT :n"), params).scalars().all())

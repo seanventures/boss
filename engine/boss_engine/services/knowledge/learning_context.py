@@ -33,6 +33,7 @@ from typing import Any, Iterable, Optional, Sequence
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
+from .find import find_written, or_query as _or_query, pinned
 from .learning import apply_learning
 from .store import RRF_K
 from .learning_writeback import INJECT_BELOW, LEARNING_KINDS
@@ -48,31 +49,12 @@ MAX_LEARNED = 8
 #: not near the task by meaning at all.
 VECTOR_TOP = 20
 VECTOR_FLOOR = 0.3
-_WORD = re.compile(r"[A-Za-z][A-Za-z0-9_]{3,}")
 _IDENT = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+\b|\b[a-z]+[A-Z][A-Za-z0-9]+\b|"
                     r"\b[A-Z][a-z0-9]+[A-Z][A-Za-z0-9]+\b")
-#: Words too common in a brief to say what it is about (English function words only).
-_COMMON = frozenset("""
-this that with from into when then than they them their there these those which what will would
-should could have has had been being were also only must make made does done each very just more
-most some such your yours ours about over under after before while where here other same like
-""".split())
 
 
 def _tokens(value: str) -> int:
     return max(1, math.ceil(len(value) / 4)) if value else 0
-
-
-def _or_query(query: str, limit: int = 24) -> Optional[str]:
-    """A to_tsquery of the task's words, OR-ed: a long brief ANDed matches nothing."""
-    words = []
-    for word in _WORD.findall(query or ""):
-        low = word.lower()
-        if low not in _COMMON and low not in words:
-            words.append(low)
-        if len(words) >= limit:
-            break
-    return " | ".join(words) if words else None
 
 
 def code_seeds(connection: Connection, project_id: str, query: str, seeds: Sequence[str] = (),
@@ -201,18 +183,23 @@ def learned_before(connection: Connection, project_id: str, *, query: str = "", 
     kinds = _readable_kinds(policy)
     if not kinds:
         return []
-    q = _or_query(query)
+    # The words and ids of the task, through the one search the console and kg_search use
+    # (find.find_written): exact ids (INC-2041) in text or attributes, what a run or conversation
+    # carrying them produced, the phrase, then any of its words — a symptom in other words.
+    found = find_written(connection, project_id, query, kinds=kinds, limit=200) if str(query or "").strip() else []
+    matched = [f["id"] for f in found]
+    lead = {nid: i for i, nid in enumerate(pinned(found))}
     targets = list(dict.fromkeys([*seeds, *rule_ids]))
     near = _learned_vectors(connection, project_id, kinds, query, embedder) if str(query or "").strip() else []
     cosine = dict(near)
-    if not (q or targets or near):
+    if not (matched or targets or near):
         return []
     # Learned items are few beside the code graph: their text is read on the fly with paths,
     # dots and underscores as word breaks ("/orders", "test_disburse"), which search_tsv keeps whole.
     rows = connection.execute(text(
         """
         WITH learned AS (
-          SELECT n.*, to_tsvector('english', regexp_replace(n.name || ' ' || n.body, '[^A-Za-z0-9]+', ' ', 'g')) AS doc
+          SELECT n.*
           FROM kg_nodes n
           WHERE n.project_id = :p AND n.kind = ANY(:kinds) AND n.trust_tier IN ('inferred', 'governed', 'approved')
             AND n.valid_to IS NULL AND n.node_key LIKE 'learning:%'
@@ -223,18 +210,16 @@ def learned_before(connection: Connection, project_id: str, *, query: str = "", 
         SELECT n.id, n.kind, n.name, n.body, n.attrs, n.trust_tier, n.first_seen, n.last_seen,
                coalesce(s.success_count, 0) AS success_count, coalesce(s.failure_count, 0) AS failure_count,
                s.last_used_at,
-               CASE WHEN CAST(:q AS TEXT) IS NULL THEN 0
-                    ELSE ts_rank_cd(n.doc, to_tsquery('english', coalesce(CAST(:q AS TEXT), ''))) END AS rank,
                EXISTS (SELECT 1 FROM kg_edges e WHERE e.src_id = n.id AND e.kind = 'about'
                          AND e.dst_id = ANY(:targets) AND e.valid_to IS NULL) AS about_seed
         FROM learned n
         LEFT JOIN kg_fact_stats s ON s.fact_id = n.id
         WHERE EXISTS (SELECT 1 FROM kg_edges e WHERE e.src_id = n.id AND e.kind = 'about'
                         AND e.dst_id = ANY(:targets) AND e.valid_to IS NULL)
-           OR (CAST(:q AS TEXT) IS NOT NULL AND n.doc @@ to_tsquery('english', coalesce(CAST(:q AS TEXT), '')))
+           OR n.id = ANY(:matched)
            OR n.id = ANY(:near)
         LIMIT 200
-        """), {"p": project_id, "kinds": kinds, "q": q, "targets": targets, "floor": INJECT_BELOW,
+        """), {"p": project_id, "kinds": kinds, "matched": matched, "targets": targets, "floor": INJECT_BELOW,
                "skip": exclude_run, "near": list(cosine)}).mappings().all()
     now = now or datetime.now(timezone.utc)
     kept = []
@@ -250,7 +235,7 @@ def learned_before(connection: Connection, project_id: str, *, query: str = "", 
         kept.append((row, stat["weight"], age_days))
     by_id = lambda pairs: [i for _k, i in sorted(pairs)]  # noqa: E731 — (sort key, id) → ids
     score = _fuse({
-        "text": by_id((-float(r["rank"] or 0), r["id"]) for r, _w, _a in kept if float(r["rank"] or 0) > 0),
+        "text": [i for i in matched if i in {r["id"] for r, _w, _a in kept}],
         "code": by_id((-w, r["id"]) for r, w, _a in kept if r["about_seed"]),
         "vector": by_id((-cosine[r["id"]], r["id"]) for r, _w, _a in kept if r["id"] in cosine),
         "usefulness": by_id((-w, r["id"]) for r, w, _a in kept),
@@ -269,7 +254,8 @@ def learned_before(connection: Connection, project_id: str, *, query: str = "", 
             "at": str(prov.get("at") or "")[:10], "confidence": float(attrs.get("confidence") or 0.0),
             "score": round(score.get(row["id"], 0.0), 6),
         })
-    scored.sort(key=lambda item: (-item["score"], item["id"]))
+    # An exact id the task named leads: the items that carry it, then what its run produced.
+    scored.sort(key=lambda item: (lead.get(item["id"], len(lead)), -item["score"], item["id"]))
     return scored[:limit]
 
 
