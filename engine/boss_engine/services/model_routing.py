@@ -825,8 +825,17 @@ def project_embedder(connection: Any, settings: Any, project_id: str, slot: dict
     key = None
     if slot.get("secret_ref_id"):
         key = resolve_secret_ref(connection, str(slot["secret_ref_id"]), settings, project_id=project_id)
+    # Resolve the Ollama host at call time, like every other Ollama lane
+    # (`found.base_url or setup_service.ollama_base_url(settings)`): an empty slot URL means the
+    # setting, so inside a Community container the embedder reaches the host's Ollama rather than
+    # the adapter's hardcoded localhost. The host only — the key still comes from the vault.
+    base_url = str(slot.get("base_url") or "")
+    if provider == "ollama" and not base_url:
+        from . import setup_service
+
+        base_url = setup_service.ollama_base_url(settings)
     adapter = EmbeddingAdapter(provider, str(slot.get("model") or ""), int(slot.get("dimension") or 0),
-                               base_url=str(slot.get("base_url") or ""),
+                               base_url=base_url,
                                endpoint=str(slot.get("endpoint") or ""),
                                deployment=str(slot.get("deployment") or ""),
                                api_version=str(slot.get("api_version") or ""), api_key=key,
