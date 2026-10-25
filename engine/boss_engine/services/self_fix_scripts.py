@@ -39,6 +39,9 @@ THE SCRIPTS (each must end in the same BOSS state on every run):
                           next turn writes it without one                  → awaiting_approval
     review_test_finding   the first regression review finds fault with the NEW test; the round
                           writes the test again from the base, then the fix → awaiting_approval
+    test_wrong            the first fix turn changes nothing and answers TEST_WRONG (the test
+                          cannot pass however BOSS is fixed); the round writes the test again
+                          from the base, then the fix                     → awaiting_approval
 """
 from __future__ import annotations
 
@@ -51,7 +54,7 @@ ENV = "BOSS_SCRIPTED_SELF_FIX"
 SCRIPTS = ("good_fix", "same_cause", "breaks_health", "weakens_test", "protected_path",
            "protected_diagnosis", "protected_then_outside", "protected_once", "out_of_scope",
            "injection_follower", "no_red", "review_blocker", "review_test_finding",
-           "secret_in_test", "review_asks_for_test", "fix_writes_test")
+           "secret_in_test", "review_asks_for_test", "fix_writes_test", "test_wrong")
 
 
 def selected() -> tuple[str, Optional[Path]]:
@@ -121,6 +124,11 @@ def play(stage: str, prompt: str, root: Path, *, read_only: bool, state: Any
                 with (root / rel).open("a", encoding="utf-8") as f:
                     f.write('\nAPPLY_TOKEN = "example-token"\n')
         return "TEST: " + ", ".join(written), written
+    if stage == "self_fix_implement" and not read_only and script == "test_wrong" \
+            and "test_wrong" not in state.fired:
+        state.fired.add("test_wrong")
+        return ("TEST_WRONG: scripted fault: the test asserts ok=True through the identity gate, "
+                "which a unit test never passes; assert what the diagnosed code decides."), written
     if stage == "self_fix_implement" and not read_only:
         # Every writing turn starts from what is in the workspace (a repair round may start from
         # the base again): the fix is applied when it is not already there.
