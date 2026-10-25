@@ -221,6 +221,9 @@ textarea.idn-input { min-height: 74px; line-height: 1.45; color: var(--ink-soft)
 .idn-segs button[aria-disabled="true"] { opacity: 0.4; border-style: dashed; cursor: not-allowed; }
 .idn-check { display: flex; align-items: center; gap: 9px; font-size: 0.68421rem; color: var(--ink-soft); cursor: pointer; }
 .idn-check input { width: 18px; height: 18px; accent-color: var(--teal); }
+/* Let an agent act for me: the picked projects' repositories, each ticked unless the person unticks it. */
+.idn-repos { display: flex; flex-direction: column; gap: 6px; margin: 4px 0 2px; }
+.idn-repos .idn-check { font-family: var(--font-mono, ui-monospace, monospace); font-size: 0.65789rem; }
 .idn-note { display: flex; gap: 10px; align-items: flex-start; font-size: 0.65789rem; line-height: 1.45; border-radius: 12px; padding: 10px 12px; color: var(--idn-ink-warn); background: var(--amber-soft); border: 1px solid color-mix(in srgb, var(--amber) 28%, transparent); }
 .idn-note.info { color: var(--ink-soft); background: color-mix(in srgb, var(--idn-sky) 8%, transparent); border-color: color-mix(in srgb, var(--idn-sky) 28%, transparent); }
 .idn-note.bad { color: var(--idn-ink-bad); background: var(--red-soft); border-color: color-mix(in srgb, var(--red) 30%, transparent); }

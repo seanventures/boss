@@ -153,7 +153,7 @@ def require_authority(*, org_id: Optional[str], project_id: Optional[str], role_
             return None
         # No sheet to show a key: say what is missing and where to grant it. Never a task-bound
         # pending grant (that needs a person at a console).
-        raise ConsentRequired({
+        raise ConsentRequired(offer_link(db, ctx, {
             "error": "consent_required", "task": task[:200], "task_run_id": None,
             "agents": [{"id": p.agent_id, "name": _name(db, p.agent_id), "role_key": p.role_key} for p in agents],
             "permissions": sorted(needed), "projects": [project_id] if project_id else [],
@@ -161,10 +161,10 @@ def require_authority(*, org_id: Optional[str], project_id: Optional[str], role_
             "durations": [{"kind": "standing", "label": f"For {int(pol.delegation_default_days)} days",
                            "days": int(pol.delegation_default_days)}],
             "max_days": int(pol.delegation_max_days),
-            "hint": "No grant of yours covers this. Create one in the console (My account > Agents acting "
-                    "for me), then retry with the same key.",
-        })
-    raise ConsentRequired({
+            "hint": "No grant of yours covers this. Open the link to give consent in the console, then "
+                    "retry with the same key.",
+        }))
+    raise ConsentRequired(offer_link(db, ctx, {
         "error": "consent_required",
         "task": task[:200],
         "task_run_id": grants.PENDING_PREFIX + secrets.token_urlsafe(12),
@@ -177,7 +177,76 @@ def require_authority(*, org_id: Optional[str], project_id: Optional[str], role_
                       {"kind": "standing", "label": f"For {int(pol.delegation_default_days)} days",
                        "days": int(pol.delegation_default_days)}],
         "max_days": int(pol.delegation_max_days),
-    })
+    }))
+
+
+# ---- consent asked where no sheet can open ---------------------------------------------------------
+#
+# An agent turn (console chat, Metatron), an MCP call and a key-authenticated start all meet the
+# same 409, and none of them can show the sheet in place. So every consent request carries a LINK
+# that opens the very same sheet in the console: `consent_id` names a short-lived record of this
+# body (identity_pending_consents), which only the person it was raised for may read. The link holds
+# nothing but the id. Kept in its own transaction: the start that raised it is rolled back.
+
+PENDING_CONSENT_TTL_SECONDS = 3600
+GRANT_PATH = "/account/agents?consent="
+
+
+def offer_link(db: Any, ctx: Any, body: dict[str, Any]) -> dict[str, Any]:
+    """`body` plus `consent_id`, `grant_href` (console path) and, with a public origin, `grant_url`.
+    Unchanged when the record cannot be written (the sheet in the console still works)."""
+    try:
+        consent_id = remember_pending(db, org_id=ctx.principal.org_id, principal_id=ctx.principal.id, body=body)
+    except Exception:  # noqa: BLE001 — a missing link must never hide the consent request itself
+        import logging
+
+        logging.getLogger("boss.identity.consent").warning("[identity] pending consent not recorded", exc_info=True)
+        return body
+    href = GRANT_PATH + consent_id
+    out = {**body, "consent_id": consent_id, "grant_href": href}
+    try:
+        from .authn_support import public_origin
+
+        origin = public_origin(db, ctx.principal.org_id)
+    except Exception:  # noqa: BLE001
+        origin = None
+    if origin:
+        out["grant_url"] = origin.rstrip("/") + href
+    return out
+
+
+def remember_pending(db: Any, *, org_id: str, principal_id: str, body: dict[str, Any]) -> str:
+    import json
+
+    from sqlalchemy import text
+
+    from .ids import new_id
+
+    consent_id = new_id("pcn")
+    stored = {k: v for k, v in body.items() if k not in ("consent_id", "grant_href", "grant_url")}
+    engine = getattr(db, "engine", None)
+    with engine.begin() as own:
+        own.execute(text("DELETE FROM identity_pending_consents WHERE expires_at < now()"))
+        own.execute(text(
+            "INSERT INTO identity_pending_consents (id, org_id, principal_id, body, expires_at) "
+            "VALUES (:id, :org, :who, CAST(:body AS JSONB), now() + make_interval(secs => :ttl))"),
+            {"id": consent_id, "org": org_id, "who": principal_id, "body": json.dumps(stored, default=str),
+             "ttl": PENDING_CONSENT_TTL_SECONDS})
+    return consent_id
+
+
+def pending_consent(db: Any, consent_id: str, *, principal_id: str) -> Optional[dict[str, Any]]:
+    """The consent request behind a link, for the person it was raised for; None when it is not
+    theirs, never existed or has expired (all three look the same to the caller)."""
+    from sqlalchemy import text
+
+    row = db.execute(text(
+        "SELECT body FROM identity_pending_consents WHERE id = :id AND principal_id = :who "
+        "AND expires_at > now()"), {"id": str(consent_id or ""), "who": principal_id}).scalar()
+    if row is None:
+        return None
+    body = dict(row) if isinstance(row, dict) else __import__("json").loads(row)
+    return {**body, "consent_id": consent_id, "grant_href": GRANT_PATH + consent_id}
 
 
 def _name(db: Any, principal_id: str) -> str:

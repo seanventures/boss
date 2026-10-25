@@ -16,7 +16,7 @@ import { LedgerStrip } from "./memory-ui";
 import { apiWrite } from "../lib/api-write";
 
 import { callAction } from "../lib/call-action";
-import { askConsent, consentFromBody } from "../lib/identity/consent";
+import { askConsent, consentFromBody, withConsentResult, type ConsentLink } from "../lib/identity/consent";
 import { GatedButton, useGate } from "../components/gated";
 // Agent World (S-runs): the agent's face, its live state, and the work it cites.
 import { CitedActs, citedIds, DockAgentHead, DockGutterFace, dockFaceKey, dockRoleKey, useDockSpeech } from "./agents/dock-agent";
@@ -207,6 +207,8 @@ type ProposedAction = {
   args: Record<string, unknown>;
   label: string;
   why?: string;
+  /** Set when the call was refused for want of your consent: pressing it opens the consent sheet. */
+  consent?: ConsentLink | null;
 };
 
 /**
@@ -1055,13 +1057,11 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
       const press = () => callAction(runAgentActionAction, undefined, "assistant:chat")(
         projectId, actor, action.tool, action.args, threadId ?? undefined,
         action.id, action.label);
-      let r = await press();
       // A BUTTON THAT NEEDS YOUR GRANT ASKS FOR IT, the same way a turn does (runTurn): a 409
       // consent_required opens the consent sheet and, once granted, the same press is sent once
-      // more. Read as a failure it showed "Needs your consent" and started a repair turn.
-      const asked = !r.ok
-        ? consentFromBody((r.data as Record<string, unknown> | undefined)?.consent) : null;
-      if (asked && await askConsent(asked)) r = await press();
+      // more. Read as a failure it showed "Needs your consent" and started a repair turn. A
+      // "Give consent" offer (a call refused for want of consent in the turn) is exactly this.
+      const r = await withConsentResult(press);
       const payload = (r.data ?? {}) as Record<string, unknown>;
       const ok = r.ok && payload?.ok !== false;
       // BOSS CHANGED SOMETHING THE OTHER PANELS ARE SHOWING. Clicking "Create the target" here
@@ -1522,6 +1522,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
                     className="button agent-proposal-btn"
                     disabled={busy}
                     data-testid={`agent-proposal-${a.tool}`}
+                    data-consent={a.consent ? "needed" : undefined}
                     onClick={() => acceptAction(a)}
                   >
                     {busy && ranAction === a.id ? "…" : a.label}

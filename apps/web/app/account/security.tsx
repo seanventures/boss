@@ -10,7 +10,7 @@ import { avatarTone } from "../../lib/identity/avatar";
 import React, { useEffect, useState } from "react";
 import { DeviceMobile, Fingerprint, Key, LinkSimple, LockSimple, PencilSimple, Plus, ShieldCheck, Trash } from "@phosphor-icons/react";
 
-import { IdentityError, idDelete, idGet, idPatch, idPost } from "../../lib/identity/api";
+import { IdentityError, idDelete, idGet, idPatch, idPost, refusalSentence } from "../../lib/identity/api";
 import type { MeResponse } from "../../lib/identity/contract";
 import type { AuthOptions, Factor } from "../../lib/identity/types";
 import { probeSsoLink, ssoLinkStartPath } from "../../lib/identity/sso-link";
@@ -29,7 +29,7 @@ function said(e: unknown): string {
   const passkey = passkeyFailureWords(e);
   if (passkey) return passkey;
   if (e instanceof IdentityError) return PASSKEY_CODES[e.code] ?? e.message;
-  return `That didn't work · ${e instanceof Error && e.message ? e.message : "no answer"}`;
+  return refusalSentence(e);
 }
 
 /** The API's passkey refusals, in the same words the sign-in screens use. */

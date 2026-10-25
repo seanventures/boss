@@ -129,13 +129,22 @@ export function Sheet({ title, icon, onClose, wide = false, side = false, locked
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const titleId = useId();
+  // FOCUS ONCE, ON OPEN. The effect depended on [onClose, locked]: a parent that passes a new
+  // inline onClose each render (and IdentityProvider re-checks identity every 30 s and on window
+  // focus) re-ran it, which focused the first control again and scrolled the sheet back to the
+  // top while the person was scrolling or typing (operator, Let an agent act for me). The latest
+  // onClose/locked are read through refs instead.
+  const closeRef = useRef(onClose);
+  const lockedRef = useRef(locked);
+  closeRef.current = onClose;
+  lockedRef.current = locked;
   useEffect(() => {
     const opener = document.activeElement as HTMLElement | null;
     const root = ref.current;
     const first = root?.querySelector<HTMLElement>("[data-autofocus], input, button, [href], textarea, select");
-    first?.focus();
+    first?.focus({ preventScroll: true });
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !locked) { e.preventDefault(); onClose(); }
+      if (e.key === "Escape" && !lockedRef.current) { e.preventDefault(); closeRef.current(); }
       if (e.key === "Tab" && root) {
         const items = [...root.querySelectorAll<HTMLElement>("input, button, [href], textarea, select, [tabindex]:not([tabindex='-1'])")]
           .filter((el) => !el.hasAttribute("disabled"));
@@ -146,8 +155,8 @@ export function Sheet({ title, icon, onClose, wide = false, side = false, locked
       }
     };
     document.addEventListener("keydown", onKey);
-    return () => { document.removeEventListener("keydown", onKey); opener?.focus?.(); };
-  }, [onClose, locked]);
+    return () => { document.removeEventListener("keydown", onKey); opener?.focus?.({ preventScroll: true }); };
+  }, []);
   return (
     <div className={`idn-sheet-wrap${side ? " side" : ""}`} onMouseDown={(e) => { if (e.target === e.currentTarget && !locked) onClose(); }}>
       <div ref={ref} className={`idn-sheet${wide ? " wide" : ""}${side ? " side" : ""}`} role="dialog" aria-modal="true" aria-labelledby={titleId} data-testid={testId}>

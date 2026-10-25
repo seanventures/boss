@@ -34,6 +34,7 @@ import { DefaultAgentPicker } from "./default-agent-picker";
 import { SplitAction } from "./split-action";
 import { HelpTip } from "./help-tip";
 import { askBossAction, runAgentActionAction } from "./actions";
+import { withConsentResult } from "../lib/identity/consent";
 import { apiWrite } from "../lib/api-write";
 import { StartRefusal, asReadiness, type PendingRefusal } from "./workflow-readiness-ui";
 import { openDockAbout } from "../lib/dock-subject";
@@ -1362,7 +1363,9 @@ export function AskBossHero({
   const accept = useCallback((a: ProposedAction) => {
     setRanAction(a.id);
     startTransition(async () => {
-      const r = await callAction(runAgentActionAction, undefined, "assistant:chat")(projectId, actor, a.tool, a.args, threadId ?? undefined);
+      // A press that needs your grant opens the consent sheet, then runs once more (as the dock).
+      const r = await withConsentResult(() =>
+        callAction(runAgentActionAction, undefined, "assistant:chat")(projectId, actor, a.tool, a.args, threadId ?? undefined));
       const data = r.data as Record<string, unknown> | undefined;
       const ok = r.ok && data?.ok !== false;
       // The Factory card, the Workflows screen and the monitoring panel render the rows this

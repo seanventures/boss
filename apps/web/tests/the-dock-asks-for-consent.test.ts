@@ -28,7 +28,12 @@ describe("the BOSS agent dock asks for consent instead of failing", () => {
   it("asks for consent when a pressed button needs a grant, then presses it once more", () => {
     const accept = DOCK.slice(DOCK.indexOf("const acceptAction = useCallback"),
                               DOCK.indexOf("const payload", DOCK.indexOf("const acceptAction = useCallback")));
-    expect(accept).toContain("consentFromBody(");
-    expect(accept).toMatch(/await askConsent\(asked\)\) r = await press\(\)/);
+    expect(accept).toContain("await withConsentResult(press)");
+  });
+
+  it("Ask BOSS on the Command Center presses through the same consent path", () => {
+    const HERO = codeOnly("app/ask-boss-hero.tsx");
+    const accept = HERO.slice(HERO.indexOf("const accept = useCallback"), HERO.indexOf("const data = r.data", HERO.indexOf("const accept = useCallback")));
+    expect(accept).toContain("withConsentResult(");
   });
 });

@@ -70,7 +70,7 @@ _TRUNCATE = ("identity_security_events", "identity_egress_log", "identity_egress
              "identity_vault_keks", "identity_sessions", "identity_api_credentials", "identity_principals",
              "code_task_stop_requests", "code_task_runs", "workflow_runs", "workflow_schedules", "roles", "jobs",
              "identity_legacy_mappings", "projects", "workspaces", "identity_revocation_notices", "identity_rate_limits",
-             "identity_github_app")
+             "identity_github_app", "identity_pending_consents")
 
 _schema_ready = False
 

@@ -26,7 +26,7 @@ import type { ProjectChoice } from "../../../../lib/identity/types-people";
 import { ProjectPicker } from "../../groups/group-sheets";
 import { ExpiryField, expiresAt, type ExpiryChoice } from "../expiry";
 import { grantReach } from "../../../../lib/identity/grant-limit";
-import { IdentityError, idDelete, idPost } from "../../../../lib/identity/api";
+import { IdentityError, idDelete, idPost, refusalSentence } from "../../../../lib/identity/api";
 import { PERMISSION_META, PERMISSIONS, type Permission } from "../../../../lib/identity/permissions.gen";
 import type {
   AccessRole, ApiKey, AuditEvent, Binding, CascadePreview, Delegation, EffectiveAccess, EffectiveEntry, Factor, Person, SessionRow, WhyStep,
@@ -58,8 +58,8 @@ type Props = {
 export type PersonFailures = Partial<Record<"factors" | "sessions" | "effective" | "delegations" | "keys" | "events", ReadFailure>>;
 
 function refusal(e: unknown): string {
-  if (e instanceof IdentityError) return e.code === "step_up_cancelled" ? "Not confirmed" : e.message;
-  return "That didn't work";
+  if (e instanceof IdentityError && e.code === "step_up_cancelled") return "Not confirmed";
+  return refusalSentence(e);
 }
 
 /** A write from this page: step-up when asked, a ≤4-word toast either way, then a fresh render. */

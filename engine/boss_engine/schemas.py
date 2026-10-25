@@ -882,6 +882,9 @@ class ProposedAction(BaseModel):
     #: button caption. A nameless button is a cosmetic problem; dropping the answer is not.
     label: str = ""
     why: str = ""
+    #: An offer of a call that was refused for want of the person's consent: where to give it
+    #: ({consent_id, grant_href, grant_url?}; agent/engine_agent._consent_offer). None otherwise.
+    consent: Optional[dict[str, str]] = None
 
     @field_validator("label", "why", mode="before")
     @classmethod

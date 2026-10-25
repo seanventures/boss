@@ -823,7 +823,37 @@ def format_agent_turn(payload: Any, choices: list[dict[str, Any]]) -> str:
             why = str(choice.get("why") or "").strip()
             tool = f" [{choice['tool']}]" if choice.get("kind") == "action" else ""
             lines.append(f"  {number}. {label}{tool}" + (f" — {why}" if why else ""))
+            if choice.get("consent_where"):
+                lines.append(f"     {choice['consent_where']}, then /pick {number} again.")
     return "\n".join(lines) if lines else format_payload(payload)
+
+
+def consent_where(consent: Mapping[str, Any]) -> str:
+    """Where to give a consent the API asked for: the console link that opens the consent sheet
+    pre-filled (identity/consent.offer_link). A terminal cannot show the sheet; the link can."""
+    url = str(consent.get("grant_url") or "").strip()
+    href = str(consent.get("grant_href") or "").strip()
+    if url:
+        return f"Give consent in the console: {url}"
+    if href:
+        return f"Give consent in the BOSS console at {href}"
+    return "Give consent in the BOSS console (My account > Agents acting for me)"
+
+
+def consent_refusal(body: str) -> Optional[str]:
+    """A 409 consent_required, said as what to do: who needs to act for you, and the link."""
+    try:
+        data = json.loads(body)
+    except (TypeError, ValueError):
+        return None
+    if isinstance(data, dict) and isinstance(data.get("detail"), dict):
+        data = data["detail"]
+    if not isinstance(data, dict) or data.get("error") != "consent_required":
+        return None
+    agents = ", ".join(str(a.get("name") or a.get("id")) for a in data.get("agents") or []
+                       if isinstance(a, dict)) or "The agents"
+    return (f"Nothing ran: {agents} need your consent to act for you on {data.get('task') or 'this'}.\n"
+            f"{consent_where(data)}, then run the same command (or /pick) again.")
 
 
 def format_action_result(payload: Mapping[str, Any]) -> str:
@@ -1505,7 +1535,10 @@ class MetatronClient:
         out: list[dict[str, Any]] = []
         for offer in turn.get("proposed_actions") or []:
             if isinstance(offer, dict) and offer.get("tool"):
-                out.append({"kind": "action", **offer})
+                out.append({"kind": "action", **offer,
+                            # A "Give consent" offer: the console link that opens the sheet.
+                            **({"consent_where": consent_where(offer["consent"])}
+                               if isinstance(offer.get("consent"), Mapping) else {})})
         for step in turn.get("next_steps") or []:
             if isinstance(step, dict) and step.get("message"):
                 out.append({"kind": "next_step", **step})
@@ -2332,6 +2365,9 @@ class MetatronClient:
             if "still_running" in payload or payload.get("__turn_dropped__"):
                 # Sent and not answered in time is not a failure of the server: no "HTTP 0".
                 return f"Still working: {body}"
+            consent = consent_refusal(str(payload.get("body") or "")) if status == 409 else None
+            if consent:
+                return redact(consent, self.config.api_key)
             if status == 401 and "step_up_required" in body:
                 return ("This needs you to confirm it is you (step-up). Sign in again in the "
                         "console — My account — then run the same command here.\n"

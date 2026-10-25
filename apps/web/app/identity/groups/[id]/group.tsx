@@ -13,7 +13,7 @@ import { ArrowsClockwise, Info, PencilSimple, Plus, Trash, UsersThree } from "@p
 import { showToast } from "../../../client-forms";
 import { CanButton, useGuardedCall } from "../../../../components/identity/identity-provider";
 import { Ago, Face, RoleChip, Sheet } from "../../../../components/identity/kit";
-import { IdentityError, idDelete, idPost } from "../../../../lib/identity/api";
+import { IdentityError, idDelete, idPost, refusalSentence } from "../../../../lib/identity/api";
 import type { AccessRole, Binding, Group, Person } from "../../../../lib/identity/types";
 import type { ProjectChoice } from "../../../../lib/identity/types-people";
 import { EmptyState } from "../../../../components/identity/states";
@@ -31,7 +31,7 @@ function useAct() {
       refresh("now");
       return true;
     } catch (e) {
-      showToast("error", e instanceof IdentityError ? (e.code === "step_up_cancelled" ? "Not confirmed" : e.message) : "That didn't work");
+      showToast("error", e instanceof IdentityError ? (e.code === "step_up_cancelled" ? "Not confirmed" : refusalSentence(e)) : refusalSentence(e));
       return false;
     }
   };

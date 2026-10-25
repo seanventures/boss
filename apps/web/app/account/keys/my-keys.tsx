@@ -9,7 +9,7 @@
 import React, { useMemo, useState } from "react";
 import { ArrowsClockwise, Key, MagnifyingGlass, Plus, Prohibit } from "@phosphor-icons/react";
 
-import { IdentityError, idGet, idPost } from "../../../lib/identity/api";
+import { IdentityError, idGet, idPost, refusalSentence } from "../../../lib/identity/api";
 import { PERMISSION_META, PERMISSIONS, type Permission } from "../../../lib/identity/permissions.gen";
 import type { ApiKey, IssuedSecret } from "../../../lib/identity/types";
 import { CanButton, useGuardedCall, useIdentity } from "../../../components/identity/identity-provider";
@@ -38,7 +38,7 @@ export function presetScopes(preset: Preset, held: readonly Permission[]): Permi
 }
 
 function said(e: unknown): string {
-  return e instanceof IdentityError ? e.message : "That didn't work";
+  return refusalSentence(e);
 }
 
 function keyStatus(k: ApiKey, now: number) {

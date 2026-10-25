@@ -9,7 +9,7 @@ import secrets
 
 PREFIXES = frozenset({
     "usr", "sva", "agt", "sys", "grp", "arl", "rbd", "ses", "key", "pky", "inv", "idp", "dlg", "acr",
-    "rt", "vlt", "egr", "evt",
+    "rt", "vlt", "egr", "evt", "pcn",
 })
 
 

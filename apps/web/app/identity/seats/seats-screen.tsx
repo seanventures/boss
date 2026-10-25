@@ -13,15 +13,15 @@ import { useConsoleRefresh } from "../../use-console-refresh";
 import { CanButton, useCan, useGuardedCall } from "../../../components/identity/identity-provider";
 import { ErrorLine, Face, Pill } from "../../../components/identity/kit";
 import { ErrorState, type ReadFailure } from "../../../components/identity/states";
-import { IdentityError, enc, idPut } from "../../../lib/identity/api";
+import { IdentityError, enc, idPut, refusalSentence } from "../../../lib/identity/api";
 import { hueOf } from "../../../lib/identity/adapt-people";
 import { nextHolders, seatCards, tiersWords, type SeatCard, type SeatsResponse } from "../../../lib/identity/seats";
 
 type PersonOption = { id: string; name: string };
 
 function words(e: unknown): string {
-  if (e instanceof IdentityError) return e.code === "step_up_cancelled" ? "Not confirmed" : e.message;
-  return "That didn't work";
+  if (e instanceof IdentityError && e.code === "step_up_cancelled") return "Not confirmed";
+  return refusalSentence(e);
 }
 
 function SeatCardView({ card, twoPerson, people }: { card: SeatCard; twoPerson: number[]; people: PersonOption[] }) {

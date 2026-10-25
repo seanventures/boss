@@ -418,6 +418,9 @@ class ToolRegistry:
         except ToolError:
             raise
         except Exception as exc:  # normalize handler failures into a tool result
+            consent = consent_result(name, safe_args, exc)
+            if consent is not None:
+                return consent
             return {"ok": False, "tool": name, "error": f"{type(exc).__name__}: {exc}"}
         finally:
             if auth_token is not None:
@@ -427,6 +430,34 @@ class ToolRegistry:
         result.setdefault("ok", True)
         result.setdefault("tool", name)
         return result
+
+
+def consent_result(name: str, args: dict, exc: BaseException) -> Optional[dict]:
+    """A tool refused for want of the person's consent (identity/consent.ConsentRequired), as a
+    STRUCTURED result, not an exception's text. Every caller of a tool reads the same shape: the
+    agent turn turns it into a "Give consent" offer of this exact call, the press answers it as the
+    409 the console's consent sheet opens on, and an MCP client gets the console link to grant at.
+    It was `"ConsentRequired: 409: {...}"`, which the agent printed as a raw refusal."""
+    from ..identity.consent import ConsentRequired
+
+    if not isinstance(exc, ConsentRequired):
+        return None
+    body = dict(getattr(exc, "body", None) or {})
+    agents = [str(a.get("name") or a.get("id")) for a in body.get("agents") or [] if isinstance(a, dict)]
+    who = ", ".join(agents) or "The agents"
+    where = body.get("grant_url") or body.get("grant_href")
+    return {
+        "ok": False, "tool": name, "error": "consent_required",
+        "consent": body,
+        "consent_id": body.get("consent_id"),
+        "grant_href": body.get("grant_href"),
+        **({"grant_url": body["grant_url"]} if body.get("grant_url") else {}),
+        "args": {k: v for k, v in (args or {}).items() if not str(k).startswith("_")},
+        "message": (
+            f"{who} need your consent to act for you on {body.get('task') or 'this'}. Nothing ran. "
+            + (f"Give it at {where}, then run the same call again." if where
+               else "Give it in the console (My account > Agents acting for me), then run the same call again.")),
+    }
 
 
 def acting_project(spec: "ToolSpec", session_project: Optional[str], args: dict) -> Optional[str]:
