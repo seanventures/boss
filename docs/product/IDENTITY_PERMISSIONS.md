@@ -700,7 +700,10 @@ The rules are a first pass. During the build every route gets a hand-checked `@p
 | `model_provider:read` | GET | `/v1/model-route-decisions` | main.py |
 | `model_provider:read` | GET | `/v1/model-gateway/leases` | main.py |
 | `model_provider:manage` | POST | `/v1/model-route-decisions/simulate` | main.py |
-| `model_provider:manage` | POST | `/v1/setup/coding-agents/credential` | main.py |
+| `model_provider:manage` | POST | `/v1/setup/sign-in` | setup.py |
+| `model_provider:manage` | GET | `/v1/setup/sign-in/{sign_in_id}` | setup.py |
+| `model_provider:manage` | POST | `/v1/setup/sign-in/{sign_in_id}/code` | setup.py |
+| `model_provider:manage` | DELETE | `/v1/setup/sign-in/{sign_in_id}` | setup.py |
 | `model_provider:manage` | POST | `/v1/setup/decision-model/key` | main.py |
 | `model_provider:rotate` | POST | `/v1/providers/{provider_account_id}/rotate` | main.py |
 | `entitlement:read` | GET | `/v1/entitlements` | main.py |

@@ -17,7 +17,8 @@ from boss_engine.db import begin
 
 from ..schemas_setup import (
     BudgetBody, ChecksBody, JobBody, ModelConnectBody, ReleaseHoldBody, RepositoryAppBody, RepositorySelectBody, RepositorySigninBody,
-    RepositoryTokenBody, RoutingBody, SetupView, SourceModelBody, TryBody, dump,
+    RepositoryTokenBody, RoutingBody, SetupView, SignInBody, SignInCodeBody, SignInSession,
+    SourceModelBody, TryBody, dump,
 )
 
 
@@ -231,6 +232,88 @@ def build_setup_router(
                 fail(error)
         mirror(target)
         return fresh_view(body.project_id)
+
+    # ── Subscription sign-in inside the BOSS server (subscription_sign_in) ────────────────────
+    # The ONE subscription route: the provider's own login runs here as the API process user;
+    # the person opens the printed link and enters the printed code. Connect (POST
+    # /v1/setup/models, kind subscription, no credential) then proves it. Same permission as
+    # that connect: signing a subscription in changes what this install's models can run on.
+
+    def sign_in_failed(error) -> None:
+        raise HTTPException(status_code=error.status, detail=error.detail) from error
+
+    @router.post("/v1/setup/sign-in", response_model=SignInSession)
+    @permit(P.MODEL_PROVIDER_MANAGE, scope=Scope.project(body="project_id"))
+    def post_sign_in(body: SignInBody) -> dict[str, Any]:
+        """Start the provider's own login (codex | claude_code | grok) inside BOSS, or return
+        the live one. Already signed in answers `signed_in` at once."""
+        from boss_engine.services import subscription_sign_in as sign_in
+
+        actor = actor_for(body.actor)
+        try:
+            provider = sign_in.normalize_provider(body.provider)
+        except sign_in.SignInError as error:
+            sign_in_failed(error)
+        with begin(engine) as connection:
+            require_actor(connection, body.project_id, actor, "entitlement_manage")
+            # The org's model home holds the connection (read only: never sets a home).
+            try:
+                from boss_engine.services import org_models
+
+                home = org_models.home_project(connection,
+                                               org_models.org_of(connection, body.project_id))
+            except Exception:  # noqa: BLE001
+                home = None
+            rejected = sign_in.last_login_rejected(connection, [body.project_id, home or ""],
+                                                   provider, get_settings())
+        try:
+            return sign_in.start(provider, project_id=body.project_id, actor=actor,
+                                 settings=get_settings(), login_rejected=rejected)
+        except sign_in.SignInError as error:
+            sign_in_failed(error)
+        raise AssertionError("unreachable")
+
+    @router.get("/v1/setup/sign-in/{sign_in_id}", response_model=SignInSession)
+    @permit(P.MODEL_PROVIDER_MANAGE, scope=Scope.project(query="project_id"))
+    def get_sign_in(sign_in_id: str, project_id: str) -> dict[str, Any]:
+        from boss_engine.services import subscription_sign_in as sign_in
+
+        with begin(engine) as connection:
+            require_actor(connection, project_id, actor_for(None), "entitlement_manage")
+        try:
+            return sign_in.status(sign_in_id)
+        except sign_in.SignInError as error:
+            sign_in_failed(error)
+        raise AssertionError("unreachable")
+
+    @router.post("/v1/setup/sign-in/{sign_in_id}/code", response_model=SignInSession)
+    @permit(P.MODEL_PROVIDER_MANAGE, scope=Scope.project(body="project_id"))
+    def post_sign_in_code(sign_in_id: str, body: SignInCodeBody) -> dict[str, Any]:
+        """The code the sign-in page showed (Claude), handed to the provider's own login."""
+        from boss_engine.services import subscription_sign_in as sign_in
+
+        with begin(engine) as connection:
+            require_actor(connection, body.project_id, actor_for(body.actor),
+                          "entitlement_manage")
+        try:
+            return sign_in.submit_code(sign_in_id, body.code)
+        except sign_in.SignInError as error:
+            sign_in_failed(error)
+        raise AssertionError("unreachable")
+
+    @router.delete("/v1/setup/sign-in/{sign_in_id}", response_model=SignInSession)
+    @permit(P.MODEL_PROVIDER_MANAGE, scope=Scope.project(query="project_id"))
+    def delete_sign_in(sign_in_id: str, project_id: str,
+                       actor: Optional[str] = None) -> dict[str, Any]:
+        from boss_engine.services import subscription_sign_in as sign_in
+
+        with begin(engine) as connection:
+            require_actor(connection, project_id, actor_for(actor), "entitlement_manage")
+        try:
+            return sign_in.cancel(sign_in_id)
+        except sign_in.SignInError as error:
+            sign_in_failed(error)
+        raise AssertionError("unreachable")
 
     @router.post("/v1/setup/holds/{receipt_id}/release", response_model=SetupView,
                  response_model_by_alias=True)

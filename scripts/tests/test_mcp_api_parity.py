@@ -152,5 +152,9 @@ def test_operator_boundary_preserves_human_and_api_policy_gates():
     for action in ("approve", "edit", "reject"):
         assert rows[("POST", f"/v1/knowledge/view/rules/{{rule_id}}/{action}")]["mcp_status"] == (
             "operator_only_unavailable")
+    # +1 operator-only: DELETE /v1/setup/sign-in/{sign_in_id} (cancel an in-container
+    # subscription sign-in, BOSSAPP-769); starting and polling one stay api_policy_gated.
+    assert rows[("DELETE", "/v1/setup/sign-in/{sign_in_id}")]["mcp_status"] == (
+        "operator_only_unavailable")
     assert sum(row["mcp_status"] == "operator_only_unavailable"
-               for row in community["operations"]) == 71
+               for row in community["operations"]) == 72
