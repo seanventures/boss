@@ -31,7 +31,7 @@ import { GatedButton, useGate } from "../../components/gated";
 import { useGuardedCall } from "../../components/identity/identity-provider";
 import { openAgent } from "../../lib/agent-world";
 import { INDEX_NOW, indexNow } from "../../lib/kg-view";
-import { SETUP_STEPS, setProjectTeam, stepsLeftWords, type KgSetupCandidate, type KgSetupResponse, type KgSetupStepKey } from "../../lib/kg-setup";
+import { SETUP_STEPS, blockedBy, hasIndexedCode, setProjectTeam, stepsLeftWords, type KgSetupCandidate, type KgSetupResponse, type KgSetupStepKey } from "../../lib/kg-setup";
 import { MULTIREPO_PLACES, multirepo, refusalMessage, type ProjectRepos } from "../../lib/multirepo";
 import { areaHref } from "../factory/cockpit-util";
 import { ScanForRules } from "./node-panel";
@@ -107,7 +107,7 @@ export function KgSetupStrip({ setup, onOpen }: { setup: KgSetupResponse; onOpen
 
 // ── the stepper ─────────────────────────────────────────────────────────────────────────────
 
-const STATE_WORD: Record<string, string> = { done: "Done", working: "Working", current: "Next", waiting: "Waiting" };
+const STATE_WORD: Record<string, string> = { done: "Done", working: "Working", current: "Next", ready: "Ready", waiting: "Waiting" };
 
 export function KgSetup({ w, setup, error, onReload, onOpenTab, archived }: {
   w: Who; setup: KgSetupResponse | null; error: string | null; onReload: () => void;
@@ -139,14 +139,20 @@ export function KgSetup({ w, setup, error, onReload, onOpenTab, archived }: {
       <ol className="kg-setup-steps">
         {SETUP_STEPS.map((def, i) => {
           const step = setup.steps.find((s) => s.key === def.key)!;
+          // Blocked only by what blockedBy says (the one "is there code?" answer): a scan with
+          // code in is never shown as waiting, and opens with its button, cost and cap.
+          const blocked = blockedBy(def.key, setup);
+          const waiting = step.state === "waiting" && blocked !== null;
+          const stateShown = step.state === "waiting" && !waiting ? "ready" : step.state;
           const expanded = open === def.key || (open === null && step.state === "current")
+            || (open === null && def.key === "scan" && !step.done && step.state !== "working" && blocked === null && hasIndexedCode(setup))
             || (open === null && step.state === "working" && def.key === "import" && setup.next === "import");
           return (
-            <li key={def.key} className="kg-setup-row" data-testid={`kg-step-${def.key}`} data-state={step.state} data-open={expanded || undefined}>
+            <li key={def.key} className="kg-setup-row" data-testid={`kg-step-${def.key}`} data-state={stateShown} data-open={expanded || undefined}>
               <div className="kg-setup-label">
                 <span className="kg-setup-num" aria-hidden>{step.done ? <Check size={14} weight="bold" /> : step.state === "working" ? <CircleNotch size={14} weight="bold" className="kg-spin" /> : CIRCLED[i]}</span>
                 <SectionLabel as="span" tip={def.line}>{def.label}</SectionLabel>
-                <span className="kg-setup-state" data-state={step.state}>{STATE_WORD[step.state]}</span>
+                <span className="kg-setup-state" data-state={stateShown}>{STATE_WORD[stateShown]}</span>
               </div>
               <div className="kg-setup-body">
                 <p className="kg-setup-summary" data-testid={`kg-step-${def.key}-summary`}>{step.summary}</p>
@@ -158,13 +164,15 @@ export function KgSetup({ w, setup, error, onReload, onOpenTab, archived }: {
                     {def.key === "scan" ? <ScanStep w={w} setup={setup} archived={archived} onStarted={onReload} /> : null}
                     {def.key === "review" ? <ReviewStep setup={setup} onOpen={() => onOpenTab("rules")} /> : null}
                   </div>
-                ) : step.state === "waiting" ? (
-                  <p className="kg-quiet" data-testid={`kg-step-${def.key}-why`}>{waitingWhy(def.key, setup)}</p>
+                ) : waiting ? (
+                  <p className="kg-quiet" data-testid={`kg-step-${def.key}-why`}>{waitingWhy(blocked, setup)}</p>
+                ) : def.key === "team" && step.state !== "done" ? (
+                  <p className="kg-quiet" data-testid="kg-step-team-why">Choose the agents once the code is on its way in, or now.</p>
                 ) : null}
               </div>
               <div className="kg-setup-aside">
                 {/* Waiting on nothing but its turn (the team), a step opens anyway. */}
-                {!expanded && (step.state !== "waiting" || def.key === "team") ? (
+                {!expanded && (!waiting || def.key === "team") ? (
                   <button type="button" className="inf-link" data-testid={`kg-step-${def.key}-open`} onClick={() => setOpen(def.key)}>
                     {step.done ? "Change" : "Open"}
                   </button>
@@ -187,7 +195,7 @@ export function KgSetup({ w, setup, error, onReload, onOpenTab, archived }: {
           </div>
           <div className="kg-setup-aside">
             <button type="button" className={allDone ? "ag-btn ag-btn-primary" : "ag-btn"} data-testid="kg-setup-open-graph"
-                    disabled={!setup.has_graph} title={setup.has_graph ? "Open the Knowledge Graph" : "The graph opens once the code is indexed"}
+                    disabled={!hasIndexedCode(setup)} title={hasIndexedCode(setup) ? "Open the Knowledge Graph" : "The graph opens once the code is indexed"}
                     onClick={() => onOpenTab("graph")}>Open the Knowledge Graph</button>
           </div>
         </li>
@@ -196,10 +204,11 @@ export function KgSetup({ w, setup, error, onReload, onOpenTab, archived }: {
   );
 }
 
-function waitingWhy(key: KgSetupStepKey, setup: KgSetupResponse): string {
-  if (key === "scan") return setup.steps[0].state === "working" ? "Starts when the code is indexed. Indexing is running." : "Needs indexed code: import a repository first.";
-  if (key === "review") return "Rules arrive here from the first scan.";
-  if (key === "team") return "Choose the agents once the code is on its way in, or now.";
+/** Why a step waits, from what it waits FOR (blockedBy), never from its position. */
+function waitingWhy(on: KgSetupStepKey | null, setup: KgSetupResponse): string {
+  if (on === "import") return setup.steps.find((s) => s.key === "import")?.state === "working"
+    ? "Starts when the code is indexed. Indexing is running." : "Needs indexed code: import a repository first.";
+  if (on === "scan") return "Rules arrive here from the first scan.";
   return "";
 }
 
@@ -404,7 +413,8 @@ function ScanStep({ w, setup, archived, onStarted }: { w: Who; setup: KgSetupRes
           </div>
           {chosen ? (
             <ScanForRules w={w} node={{ id: chosen.key, key: chosen.key, label: chosen.label, kind: "area" }} archived={archived}
-                          archivedWhy={ARCHIVED_WHY} compact onStarted={onStarted} reader={scanner?.display_name} />
+                          archivedWhy={ARCHIVED_WHY} compact onStarted={onStarted} reader={scanner?.display_name}
+                          limits={setup.scan_defaults} />
           ) : null}
         </>
       ) : (

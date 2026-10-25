@@ -167,7 +167,7 @@ export function ComponentsScreen() {
 
       {/* MODAL */}
       {modalOpen && (
-        <div onClick={() => setModalOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 100, background: "rgba(5,8,15,0.74)", backdropFilter: "blur(5px)", display: "flex", alignItems: "center", justifyContent: "center", padding: "24px" }}>
+        <div onClick={() => setModalOpen(false)} style={{ position: "fixed", inset: 0, zIndex: "var(--z-page)", background: "rgba(5,8,15,0.74)", backdropFilter: "blur(5px)", display: "flex", alignItems: "center", justifyContent: "center", padding: "24px" }}>
           <div onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" data-testid="ds-modal" style={{ width: "440px", maxWidth: "100%", borderRadius: "12px", overflow: "hidden", border: "1px solid #2b3c63", background: "#0e1730", boxShadow: "0 40px 100px rgba(0,0,0,0.7)", animation: "bpModal 0.22s ease" }}>
             <div style={{ padding: "22px 24px 6px" }}><div style={{ display: "flex", alignItems: "center", gap: "11px" }}><span style={{ width: "38px", height: "38px", borderRadius: "9px", background: "rgba(242,100,122,0.10)", border: "1px solid rgba(242,100,122,0.4)", display: "flex", alignItems: "center", justifyContent: "center" }}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#f2647a" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" /></svg></span><span style={{ fontFamily: "'Sora',sans-serif", fontWeight: 700, fontSize: "17px" }}>Halt this agent?</span></div></div>
             <div style={{ padding: "12px 24px 20px", fontSize: "14px", lineHeight: 1.6, color: "#9fb0ce" }}>Halting <span style={{ fontFamily: "'JetBrains Mono',monospace", color: "#2ec5c5" }}>Backend Engineer</span> stops its current task immediately. In-flight work is checkpointed and a receipt is written. You stay in control.</div>
@@ -178,7 +178,7 @@ export function ComponentsScreen() {
 
       {/* TOAST */}
       {toastVisible && (
-        <div style={{ position: "fixed", bottom: "26px", right: "26px", zIndex: 120, display: "flex", alignItems: "center", gap: "13px", padding: "14px 18px", borderRadius: "10px", border: "1px solid rgba(52,211,153,0.4)", background: "#0f2436", boxShadow: "0 24px 60px rgba(0,0,0,0.6)", animation: "bpToast 0.28s ease" }}>
+        <div style={{ position: "fixed", bottom: "26px", right: "26px", zIndex: "var(--z-toast)", display: "flex", alignItems: "center", gap: "13px", padding: "14px 18px", borderRadius: "10px", border: "1px solid rgba(52,211,153,0.4)", background: "#0f2436", boxShadow: "0 24px 60px rgba(0,0,0,0.6)", animation: "bpToast 0.28s ease" }}>
           <span style={{ width: "30px", height: "30px", borderRadius: "50%", background: "rgba(52,211,153,0.14)", display: "flex", alignItems: "center", justifyContent: "center" }}><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#34d399" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12l5 5 9-11" /></svg></span>
           <div><div style={{ fontSize: "14px", fontWeight: 700, color: "#eef3fb" }}>Outcome verified</div><div style={{ fontSize: "12.5px", color: "#8fb8b0", marginTop: "2px" }}>Architect signed off — receipt written.</div></div>
         </div>

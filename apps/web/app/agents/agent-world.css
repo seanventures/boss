@@ -492,7 +492,7 @@
 .ag-ln-acts { margin-top: 12px; }
 
 /* Share card. */
-.ag-share-backdrop { position: fixed; inset: 0; z-index: 1200; display: grid; place-items: center; padding: 16px;
+.ag-share-backdrop { position: fixed; inset: 0; z-index: var(--z-dialog); display: grid; place-items: center; padding: 16px;
   background: color-mix(in srgb, var(--bg) 78%, transparent); }
 .ag-share { width: min(760px, 100%); display: flex; flex-direction: column; gap: 12px; padding: 14px;
   border: 1px solid var(--border-strong); border-radius: var(--r-xl); background: var(--surface); box-shadow: var(--shadow-lg); }
@@ -726,7 +726,7 @@
 
 /* Talk (1:1 and plan), the room, the start card, the picker. A face's state is a ring AND a
  * word; only live states move (thinking, speaking), and only while they are true. */
-.ag-converse { --ag-z: 260; }
+.ag-converse { --ag-z: var(--z-over-page); }
 .ag-converse .tone-accent { --ag-tone: var(--teal); }
 .ag-converse .tone-blue { --ag-tone: var(--blue); }
 .ag-converse .tone-pink { --ag-tone: var(--red); }
@@ -1432,7 +1432,7 @@
   .ld-ins-row { grid-template-columns: auto minmax(0, 1fr) auto; }
   .ld-ins-meta { grid-column: 2 / span 2; grid-row: 2; }
   /* A popover is a bottom sheet on a phone. */
-  .kit-pop.ld-pop, .kit-pop.ld-pop[data-align="left"] { position: fixed; left: 0; right: 0; bottom: 0; top: auto; z-index: 270; width: auto; max-width: none; max-height: 70vh; border-radius: var(--r-xl) var(--r-xl) 0 0; }
+  .kit-pop.ld-pop, .kit-pop.ld-pop[data-align="left"] { position: fixed; left: 0; right: 0; bottom: 0; top: auto; z-index: var(--z-over-page-pop); width: auto; max-width: none; max-height: 70vh; border-radius: var(--r-xl) var(--r-xl) 0 0; }
 }
 
 /* The console is Paused: the pill holds still (its faces keep their state, the motion stops). */

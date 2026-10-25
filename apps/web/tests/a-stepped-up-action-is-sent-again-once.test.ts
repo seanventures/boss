@@ -21,7 +21,7 @@ vi.mock("../app/press-relay", () => ({
   }),
 }));
 
-const { callAction } = await import("../lib/call-action");
+const { callAction, STEP_UP_CANCELLED, STEP_UP_REFUSED } = await import("../lib/call-action");
 const { INTENT_FIELD } = await import("../lib/api-write");
 const { installMirror } = await import("../lib/identity/mirror");
 
@@ -88,7 +88,7 @@ describe("a step-up answer", () => {
   it("is re-sent only once: a second step_up_required comes back to the caller", async () => {
     const stepUp = mirrorWith(async () => true);
     const retry = vi.fn(async () => STEP_UP);
-    expect(await callAction(retry, undefined, "decision:approve")()).toEqual(STEP_UP);
+    expect(await callAction(retry, undefined, "decision:approve")()).toEqual({ ...STEP_UP, error: STEP_UP_REFUSED });
     expect(stepUp).toHaveBeenCalledTimes(1);
     expect(retry).toHaveBeenCalledTimes(2);
   });
@@ -96,7 +96,7 @@ describe("a step-up answer", () => {
   it("cancelled: nothing is re-sent", async () => {
     mirrorWith(async () => false);
     const approve = vi.fn(async () => STEP_UP);
-    expect(await callAction(approve, undefined, "decision:approve")()).toEqual(STEP_UP);
+    expect(await callAction(approve, undefined, "decision:approve")()).toEqual({ ...STEP_UP, error: STEP_UP_CANCELLED });
     expect(approve).toHaveBeenCalledTimes(1);
   });
 });

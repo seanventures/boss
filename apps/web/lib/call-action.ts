@@ -78,6 +78,14 @@ function argsForPress<A extends unknown[]>(args: A, key: string): A {
   }) as A;
 }
 
+/** WHY NOTHING HAPPENED, after "Confirm it's you" (BOSSAPP-768 round 4): the button that asked
+ *  resets, and its error line says which of the two it was — never a bare "try again". */
+export const STEP_UP_CANCELLED = "Not done: “Confirm it's you” was cancelled, so nothing changed. Press the button again to confirm and continue.";
+export const STEP_UP_REFUSED = "Not done: your confirmation was not accepted, so nothing changed. Press the button again and confirm once more.";
+function said(value: unknown, error: string): unknown {
+  return { ...(value as object), error };
+}
+
 /** Whether a call's answer — a result, or a thrown refusal carrying `identity` — asks for a fresh
  *  second factor. */
 function askedForStepUp(outcome: { value?: unknown; error?: unknown }): boolean {
@@ -119,8 +127,11 @@ export function callAction<A extends unknown[], R>(
       if (await mirror.stepUp(reason)) {
         const again = await once(...args);
         noteDecisionResult(again);
-        return again;
+        // Confirmed, and the API still wants a fresh check: the confirmation did not take.
+        return wantsStepUp(again) ? said(again, STEP_UP_REFUSED) as R : again;
       }
+      // Cancelled (or a write nobody pressed): the caller's button resets and says why.
+      if (!("error" in first) && wantsStepUp(first.value)) return said(first.value, STEP_UP_CANCELLED) as R;
     } else if (mirror && !("error" in first) && wasForbidden(first.value)) {
       mirror.refresh().catch(() => undefined);
     }

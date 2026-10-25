@@ -439,7 +439,7 @@
 .kg-setup-pips i { display: block; width: 18px; height: 4px; border-radius: 2px; background: var(--surface-3); }
 .kg-setup-pips i[data-state="done"] { background: var(--green); }
 .kg-setup-pips i[data-state="working"] { background: var(--accent-text); }
-.kg-setup-pips i[data-state="current"] { background: var(--accent); }
+.kg-setup-pips i[data-state="current"], .kg-setup-pips i[data-state="ready"] { background: var(--accent); }
 .kg-setup-steps { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
 .kg-setup-row {
   display: grid; grid-template-columns: 13.5rem minmax(0, 1fr) auto; gap: 12px; align-items: start;
@@ -455,7 +455,7 @@
 }
 .kg-setup-row[data-state="done"] .kg-setup-num { color: var(--green); }
 .kg-setup-state { font-size: 0.7rem; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--faint); }
-.kg-setup-state[data-state="current"] { color: var(--accent-text); }
+.kg-setup-state[data-state="current"], .kg-setup-state[data-state="ready"] { color: var(--accent-text); }
 .kg-setup-state[data-state="working"] { color: var(--accent-text); }
 .kg-setup-state[data-state="done"] { color: var(--green); }
 .kg-setup-body { display: flex; flex-direction: column; gap: 10px; min-width: 0; }

@@ -223,6 +223,13 @@ def node_payload(row: Mapping[str, Any]) -> dict[str, Any]:
         out["status"] = status
         category = attrs.get("category")
         out["sub"] = f"{status} · {category}" if category else status
+    elif kind == "person":
+        # Tester round 4: an "Approved by" node literally named "ceo" (the legacy member key).
+        named = str(attrs.get("name") or "").strip()
+        if named:
+            out["label"] = named
+        elif name == str(attrs.get("ref") or name) or name.startswith(("usr_", "prn_")) or name == "ceo":
+            out["label"] = OPERATOR
     elif kind == "run" and attrs.get("subtype") == "conversation":
         # A conversation is a run of its own (learning_conversations), named after its question
         # and when it started: "Conversation with Site Reliability Engineer".
@@ -539,7 +546,6 @@ class _Walk:
         if "code" not in self.layers:
             self._finish_rollup(level)
             return
-        per_hop = max(1, self.limit // self.depth)
         frontier = {center_key}
         for hop in range(1, self.depth + 1):
             if not frontier or self.room <= 0:
@@ -550,6 +556,9 @@ class _Walk:
                 "SELECT src_key, dst_key, kind, weight FROM kg_view_edges WHERE project_id = :p "
                 "AND level = :l AND dst_key = ANY(:f) AND NOT (src_key = ANY(:f))"),
                 {"p": self.p, "l": level, "f": list(frontier)}).all()]
+            # What a hop leaves unused is the next hop's (tester round 4: Show 200 read 147 of 809
+            # because each of 2 hops was held to 100 while the first had only 47).
+            per_hop = max(1, self.room // (self.depth - hop + 1))
             frontier = set(self._keep(frontier, found, hop, rollup=True, per_hop=per_hop))
         self._finish_rollup(level)
 
@@ -637,7 +646,6 @@ class _Walk:
                 self.hops[context] = 1
                 self.payloads[context] = node_payload(owner)
                 self._edge(context, cid, "defines", 1, rollup=False)
-        per_hop = max(1, self.limit // self.depth)
         frontier = {cid}
         kind_sql = "AND e.kind = ANY(:k)" if kinds else ""
         for hop in range(1, self.depth + 1):
@@ -657,6 +665,9 @@ class _Walk:
             found = [(s, d, k, max(1, int(round(float(w or 1)))))
                      for s, d, k, w, other in rows if _readable(other, self.layers, self.withheld)
                      or (s in frontier and d in frontier)]
+            # What a hop leaves unused is the next hop's (tester round 4: Show 200 read 147 of 809
+            # because each of 2 hops was held to 100 while the first had only 47).
+            per_hop = max(1, self.room // (self.depth - hop + 1))
             frontier = set(self._keep(frontier, found, hop, rollup=False, per_hop=per_hop))
         missing = [i for i in self.hops if i not in self.payloads]
         for nid, row in _nodes_by_id(self.c, self.p, missing).items():
@@ -912,8 +923,13 @@ _DONE_WORD = {"record": "recorded", "propose": "proposed", "approve": "approved"
               "index_failed": "failed to index"}
 #: The audit actions that ARE the creation the first event already says.
 _CREATION = frozenset({"record", "propose", "index", "indexed"})
-#: Said for an item recorded before BOSS kept who recorded it (BOSSAPP-768 round 2).
-NOT_RECORDED = "an agent (not recorded)"
+#: Said for an item recorded before BOSS kept who recorded it (BOSSAPP-768 round 2; round 4:
+#: in words, never "(not recorded)").
+NOT_RECORDED = "an agent, before BOSS kept agents' names"
+#: A person whose display name was never recorded (a legacy "ceo" review): never the key.
+OPERATOR = "the operator"
+#: Who indexed code, when the repository's index record is gone.
+CODE_WHO = "BOSS, from the repository"
 
 
 def action_words(action: str) -> str:
@@ -922,12 +938,12 @@ def action_words(action: str) -> str:
 
 
 def _who(layer: Optional[str], by_kind: str, prov: Mapping[str, Any], created_by: str) -> str:
-    """WHO ADDED IT, in words, for every layer: the code index for code; an agent by its name
+    """WHO ADDED IT, in words, for every layer: BOSS from the repository for code; an agent by its name
     (and role) for what an agent wrote — "BOSS (general)" when nobody was addressed, "an agent (not
     recorded)" for an item written before BOSS kept the name; a person otherwise. Never an event
-    key, and never "the code index" for a rule or a learning."""
+    key, and never the indexer for a rule or a learning."""
     if layer == "code":
-        return "the code index"
+        return CODE_WHO
     name = str(prov.get("agent_name") or "").strip()
     role = str(prov.get("agent_role") or "").strip()
     if by_kind == "person":
@@ -958,6 +974,7 @@ def _provenance(connection: Connection, project_id: str, row: Mapping[str, Any],
     events: list[dict[str, Any]] = [{
         "at": at, "by": None if layer == "code" else who,
         "what": "indexed" if layer == "code" else "proposed" if layer == "rules" else "recorded"}]
+    reviewed = str(review.get("decision") or rule_status(row)) if review.get("at") else None
     for action, when, detail, actor in connection.execute(text(
             "SELECT action, created_at, detail, actor_kind FROM kg_audit WHERE project_id = :p AND entity_id = :id "
             "ORDER BY created_at LIMIT 50"), {"p": project_id, "id": row["id"]}).all():
@@ -965,10 +982,18 @@ def _provenance(connection: Connection, project_id: str, row: Mapping[str, Any],
             continue
         detail = _attrs(detail)
         by = detail.get("actor_ref") or detail.get("actor")
-        events.append({"at": _iso(when), "what": action_words(str(action)),
-                       "by": by if by and by != "system" else (who if actor in ("agent", "system") else actor)})
-    if review.get("at") and not any(e["at"] == review.get("at") for e in events):
-        events.append({"at": review.get("at"), "what": str(review.get("decision") or rule_status(row)),
+        what = action_words(str(action))
+        event = {"at": _iso(when), "what": what,
+                 # A kind ("person", "agent") is never a name: a person's event without its ref is
+                 # the review's person when it is the review; otherwise unnamed.
+                 "by": by if by and by != "system" else (who if actor in ("agent", "system") else None)}
+        if what == reviewed and (event["by"] in (None, review.get("by"))):
+            event.update(by=review.get("by"), by_name=review.get("by_name"))
+        events.append(event)
+    # The review once: "approved by person" and then "approved by an owner" were the same act
+    # (tester round 4) — the audit row and the review record.
+    if reviewed and not any(e["at"] == review.get("at") or e["what"] == reviewed for e in events):
+        events.append({"at": review.get("at"), "what": reviewed,
                        "by": review.get("by"), "by_name": review.get("by_name")})
     events.sort(key=lambda e: str(e["at"] or ""))
     approved = layer == "rules" and rule_status(row) == "approved"
@@ -977,6 +1002,7 @@ def _provenance(connection: Connection, project_id: str, row: Mapping[str, Any],
     for key in ("agent_role", "agent_name", "agent_id", "run_id", "workflow_run_id", "code_task_run_id", "step", "model_id"):
         if prov.get(key) is not None:
             out[key] = prov.get(key)
+    out.update(_where_from(connection, project_id, row, prov, layer))
     if approved:
         out["approved_by"] = review.get("by")
         out["approved_by_name"] = review.get("by_name")
@@ -987,11 +1013,58 @@ def _provenance(connection: Connection, project_id: str, row: Mapping[str, Any],
     return out
 
 
+def _where_from(connection: Connection, project_id: str, row: Mapping[str, Any], prov: Mapping[str, Any],
+                layer: Optional[str]) -> dict[str, Any]:
+    """WHERE IT CAME FROM, as the words need it (tester round 4: "Indexed by the code index",
+    "Run wfr_6267c5d3… ↗"): for code, the repository, commit and time of the index that wrote it;
+    for an agent's item, the run's title and start, or the conversation's title and start."""
+    out: dict[str, Any] = {}
+    if layer == "code":
+        repo = row.get("repo")
+        if repo:
+            src = None
+            try:
+                with connection.begin_nested():
+                    src = connection.execute(text(
+                        "SELECT repo, branch, indexed_sha, indexed_at FROM kg_repo_index "
+                        "WHERE project_id = :p AND repo = :r ORDER BY indexed_at DESC NULLS LAST LIMIT 1"),
+                        {"p": project_id, "r": repo}).mappings().first()
+            except Exception:  # noqa: BLE001 — provenance is words, never a reason to refuse
+                src = None
+            out["source"] = {"repo": repo, "branch": (src or {}).get("branch") or None,
+                             "sha": str((src or {}).get("indexed_sha") or "")[:7] or None,
+                             "at": _iso((src or {}).get("indexed_at")) or _iso(row.get("first_seen"))}
+        return out
+    from .learning_writeback import run_name
+
+    ref = prov.get("code_task_run_id") or prov.get("workflow_run_id") or prov.get("run_id")
+    if ref:
+        title, started = run_name(connection, str(ref))
+        out["run_title"] = title
+        out["run_at"] = _iso(started)
+    thread = prov.get("agent_thread_id")
+    if thread and not ref:
+        found = None
+        try:
+            with connection.begin_nested():
+                found = connection.execute(text(
+                    "SELECT name, attrs->>'started_at' AS at FROM kg_nodes WHERE project_id = :p AND kind = 'run' "
+                    "AND node_key = :k AND valid_to IS NULL LIMIT 1"), {"p": project_id, "k": f"run:{thread}"}).mappings().first()
+        except Exception:  # noqa: BLE001
+            found = None
+        if found:
+            # The conversation node is named "<its question> · Oct 25, 07:13" (UTC): the words
+            # say its question; the console shows the time in the viewer's zone.
+            out["conversation_title"] = str(found["name"]).rsplit(" · ", 1)[0] if " · " in str(found["name"]) else found["name"]
+            out["conversation_at"] = found["at"]
+    return out
+
+
 def _lineage(connection: Connection, project_id: str, node_id: str, attrs: Mapping[str, Any]) -> dict[str, Any]:
     prov = _attrs(attrs.get("provenance"))
     used = []
-    for kind, eattrs, at, run_key, run_attrs in connection.execute(text(
-            "SELECT e.kind, e.attrs, e.recorded_at, s.node_key, s.attrs FROM kg_edges e "
+    for kind, eattrs, at, run_key, run_attrs, run_name in connection.execute(text(
+            "SELECT e.kind, e.attrs, e.recorded_at, s.node_key, s.attrs, s.name FROM kg_edges e "
             "JOIN kg_nodes s ON s.id = e.src_id WHERE e.project_id = :p AND e.dst_id = :id "
             "AND e.kind IN ('consulted', 'reused') AND e.valid_to IS NULL ORDER BY e.recorded_at LIMIT 100"),
             {"p": project_id, "id": node_id}).all():
@@ -1000,6 +1073,9 @@ def _lineage(connection: Connection, project_id: str, node_id: str, attrs: Mappi
         used.append({"run_id": str(ea.get("run_id") or ra.get("run_id") or str(run_key).split(":", 1)[-1]),
                      "agent_role": ea.get("agent_role") or ra.get("agent_role") or ra.get("role"),
                      "agent_name": ea.get("agent_name") or ra.get("agent_name"),
+                     # The run by its name ("<title> · <when>", its time dropped: the console
+                     # shows times in the viewer's zone), never its id (tester round 4).
+                     "run_title": str(run_name or "").rsplit(" · ", 1)[0] or None,
                      "how": how, "at": _iso(at)})
     return {"learned": {k: prov.get(k) for k in ("run_id", "agent_role", "agent_name", "step")} | {"at": prov.get("at")},
             "used": used}
@@ -1258,6 +1334,46 @@ def search(connection: Connection, project_id: str, q: str, *, layers: Iterable[
                      coalesce(n.path, '') ~ :test, ts_rank(n.search_tsv, tq) DESC, length(n.name), n.id
             LIMIT :room
             """), {**params, "room": limit - len(rows)}).all()
+    # 3. Room left: what agents and people WROTE — a rule's or a learning's text and attributes
+    #    (an incident id like INC-2041 sits in a root cause's evidence, not its name), and the
+    #    learnings a run produced when the run matches: a conversation by its brief ("Incident
+    #    INC-2088 · Severity 2" is the operator's question, never copied into the root cause the
+    #    agent recorded from it). Tester round 4: neither id was found.
+    written = sorted(set(kinds) & ({"rule", *LEARNED_KINDS} | set(ANCHOR_KINDS)))
+    if len(rows) < limit and written:
+        seen = {r[0] for r in rows}
+        rows += [r for r in connection.execute(text(
+            r"""
+            WITH runs AS (
+              SELECT r.id FROM kg_nodes r
+              WHERE r.project_id = :p AND r.valid_to IS NULL AND r.kind = ANY(:anchors)
+                AND (r.name ILIKE :contains ESCAPE '' OR r.body ILIKE :contains ESCAPE ''
+                     OR (r.attrs - 'provenance')::text ILIKE :contains ESCAPE ''
+                     OR (r.attrs->>'thread_id' IS NOT NULL AND EXISTS (
+                           SELECT 1 FROM agent_messages m WHERE m.thread_id = r.attrs->>'thread_id'
+                             AND m.role = 'user' AND m.content ILIKE :contains ESCAPE '')))
+            ), direct AS (
+              SELECT n.id, 0 AS via FROM kg_nodes n
+              WHERE n.project_id = :p AND n.valid_to IS NULL AND n.kind = ANY(:written)
+                AND NOT (n.kind = ANY(:anchors))
+                AND (n.body ILIKE :contains ESCAPE '' OR (n.attrs - 'provenance')::text ILIKE :contains ESCAPE '')
+            ), produced AS (
+              SELECT e.dst_id AS id, 1 AS via FROM kg_edges e JOIN runs ON runs.id = e.src_id
+              JOIN kg_nodes n ON n.id = e.dst_id
+              WHERE e.project_id = :p AND e.valid_to IS NULL AND e.kind = 'produced'
+                AND n.valid_to IS NULL AND n.kind = ANY(:written)
+            )
+            SELECT h.id, 2 FROM (
+              SELECT id, min(via) AS via FROM (
+                SELECT id, via FROM direct UNION ALL SELECT id, via FROM produced
+                UNION ALL SELECT id, 2 FROM runs WHERE id IN (SELECT id FROM kg_nodes WHERE kind = ANY(:written))
+              ) u GROUP BY id
+            ) h JOIN kg_nodes n ON n.id = h.id
+            ORDER BY h.via, CASE WHEN n.kind = 'rule' THEN 1 WHEN n.kind = ANY(:anchors) THEN 2 ELSE 0 END,
+                     n.last_seen DESC, n.id
+            LIMIT :room
+            """), {**params, "written": written, "anchors": sorted(set(ANCHOR_KINDS) & set(written)),
+                   "room": limit - len(rows) + len(seen)}).all() if r[0] not in seen][:limit - len(rows)]
     nodes = _nodes_by_id(connection, project_id, [r[0] for r in rows])
     hits = []
     n = len(rows)

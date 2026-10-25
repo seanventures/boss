@@ -18,11 +18,11 @@ import { useGate } from "../../components/gated";
 import { useOnScreen } from "../../lib/area-shown";
 import { useAreaKeydown } from "../../lib/area-keys";
 import {
-  FOCUS_CEILING, FOCUS_RING_CAP, MORE_ID, OVERVIEW_AREAS, fitTransform, focusLayout, isBubble, kindName, kindToken, legendKey, overviewLayout,
+  FOCUS_CEILING, FOCUS_RING_CAP, MORE_ID, OVERVIEW_AREAS, fitTransform, focusEdges, focusKeepLabels, focusLayout, isBubble, kindName, kindToken, legendKey, overviewLayout,
   groupFocus, pickEdges, pickOverview, placeNear, type Pt,
 } from "../../lib/kg-layout";
 import {
-  INDEX_NOW, distinctPaths, getLive, getNeighbourhood, getOverview, getSearch, indexNow, layersParam, rankHits,
+  INDEX_NOW, distinctPaths, focusCounts, focusNote, getLive, getNeighbourhood, getOverview, getSearch, indexNow, layersParam, rankHits,
   type KgRepository,
 } from "../../lib/kg-view";
 import type {
@@ -309,7 +309,8 @@ export function GraphView({ projectId, actor, orgId, repos, onReposChanged, rule
         counts: { [noun]: folded.length },
       } as KgViewNode), per);
       const pos = overviewLayout(pick.nodes.map((n) => ({ id: n.id, key: n.key, w: boxWidth(n) })), pick.edges, pinned, aspect);
-      const nodes = pick.nodes.map((n) => toCanvas(n, true));
+      // Every Whole-repo bubble is named, the Rules and Learning bubbles included (round 4).
+      const nodes = pick.nodes.map((n) => ({ ...toCanvas(n, true), keepLabel: true }));
       return { pick, pos, nodes, k: fittedScale(pos, nodes, "overview", stageSize.w, stageSize.h) };
     };
     let best = lay(OVERVIEW_AREAS);
@@ -369,9 +370,16 @@ export function GraphView({ projectId, actor, orgId, repos, onReposChanged, rule
       const next = lay(scale);
       if (next.k > best.k) best = next;
     }
-    const { grouped, nodes, canvasNodes } = best;
+    const { grouped, nodes } = best;
     const { pos, rings } = best.laid;
     const edges = grouped.edges;
+    // What is drawn and named (tester round 4 P0, the 2-hop knot): every edge to the centre, each
+    // outer node's strongest way in, and the selection's own edges; the first ring and the
+    // selection's neighbours always named, the rest on hover or zoom (lib/kg-layout.ts).
+    const hops = new Map(nodes.map((n) => [n.id, n.id === h.center.id ? 0 : n.hop]));
+    const drawnEdges = focusEdges(h.center.id, hops, edges, selected?.id ?? null);
+    const keep = focusKeepLabels(h.center.id, hops, edges, selected?.id ?? null);
+    const canvasNodes = best.canvasNodes.map((n) => ({ ...n, keepLabel: keep.has(n.id) }));
     const ids = new Set(nodes.map((n) => n.id));
     const raw: KgViewNode[] = [...nodes];
     const extra: CanvasNode[] = [];
@@ -388,10 +396,10 @@ export function GraphView({ projectId, actor, orgId, repos, onReposChanged, rule
     }
     for (const e of liveAdds.edges) if (ids.has(e.src) && ids.has(e.dst)) extraEdges.push(e);
     // Weight labels on the strongest dozen; the rest on hover (P1-3).
-    const strongest = new Set([...edges].filter((e) => e.weight > 1).sort((a, b) => b.weight - a.weight).slice(0, 12).map(edgeKey));
+    const strongest = new Set([...drawnEdges].filter((e) => e.weight > 1).sort((a, b) => b.weight - a.weight).slice(0, 12).map(edgeKey));
     const all = [...edges, ...extraEdges];
     return {
-      nodes: [...canvasNodes, ...extra], raw, edges: all, allEdges: all, pos, rings, ringAspect: best.laid.aspect, center: h.center.id, labelled: strongest,
+      nodes: [...canvasNodes, ...extra], raw, edges: [...drawnEdges, ...extraEdges], allEdges: all, pos, rings, ringAspect: best.laid.aspect, center: h.center.id, labelled: strongest,
       groups: grouped.members as Map<string, KgViewNode[]>, readCount: read.length - 1,
       folded: [] as KgViewNode[], pages: 1, page: 0, pageOf: new Map<string, number>(), total: 0, noun: "", drawnCount: all.length, edgeTotal: all.length,
     };
@@ -463,6 +471,10 @@ export function GraphView({ projectId, actor, orgId, repos, onReposChanged, rule
   }, [selected, view.mode, picture, rawById]);
 
   // The canvas's own edges for the selected node: the panel lists them (P1-5).
+  // ONE count source for the Focus header, the truncation banner and the panel (round 4).
+  const counts = view.mode === "focus" && hood.data
+    ? focusCounts(hood.data, picture && view.mode === "focus" ? picture : null, { max: FOCUS_MORE, asked: Math.min(view.limit * view.depth, FOCUS_MORE) })
+    : null;
   const viewEdges = useMemo(() => {
     if (!selected || !picture || view.mode !== "focus") return null;
     // One row per neighbour (tester round 2: a node joined by two edges was listed twice).
@@ -645,6 +657,8 @@ export function GraphView({ projectId, actor, orgId, repos, onReposChanged, rule
                onEditRule={onEditRule}
                onClose={() => setPanelOpen(false)}
                viewEdges={viewEdges}
+               viewNote={counts && selected && hood.data?.center.id === selected.id && counts.groups
+                 ? `${counts.drawn.toLocaleString("en-US")} drawn, ${counts.grouped.toLocaleString("en-US")} in ${counts.groups} ${counts.groups === 1 ? "group" : "groups"}` : null}
                onChanged={() => { setNonce((n) => n + 1); setTreeKey((k) => k + 1); }} />
   );
 
@@ -772,8 +786,7 @@ export function GraphView({ projectId, actor, orgId, repos, onReposChanged, rule
         ) : null}
         {view.mode === "focus" && focusCenter ? (
           <span className="kg-view-note" data-testid="kg-view-note">
-            {focusCenter.label} and {(picture?.readCount ?? hood.data!.nodes.length - 1).toLocaleString("en-US")} connected within {view.depth} {view.depth === 1 ? "hop" : "hops"}
-            {picture && picture.groups.size ? ` · ${picture.nodes.length - 1 - picture.groups.size} drawn, the rest in ${picture.groups.size} ${picture.groups.size === 1 ? "group" : "groups"}` : ""}
+            {counts ? focusNote(focusCenter.label, view.depth, counts) : focusCenter.label}
             {history.current.length ? <> · <button type="button" className="inf-link" onClick={back}>Back</button></> : null}
           </span>
         ) : null}
@@ -791,8 +804,9 @@ export function GraphView({ projectId, actor, orgId, repos, onReposChanged, rule
           <button type="button" className="inf-link" data-testid="kg-first-page" onClick={() => go({ mode: "overview", area, page: 0 })}>Back to the largest</button>
         ) : null}
         {view.mode === "focus" && hood.data?.truncated ? (
-          <KgTruncation shown={hood.data.nodes.length - 1} hidden={hood.data.hidden.nodes} level={hood.data.level}
-                        max={FOCUS_MORE} maxed={view.limit >= FOCUS_MORE} onMore={() => setView({ ...view, limit: FOCUS_MORE })} />
+          <KgTruncation shown={hood.data.nodes.length - 1} hidden={hood.data.hidden.nodes} level={hood.data.level} counts={counts}
+                        max={FOCUS_MORE} maxed={view.limit >= FOCUS_MORE}
+                        onMore={Math.min(view.limit * view.depth, FOCUS_MORE) < FOCUS_MORE ? () => setView({ ...view, limit: FOCUS_MORE }) : undefined} />
         ) : null}
         {view.mode === "focus" && hood.data && hood.data.nodes.length <= 1 && !emptyLayer ? (
           <span className="kg-view-note" data-testid="kg-focus-alone">{(() => {

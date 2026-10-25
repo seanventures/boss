@@ -111,7 +111,7 @@
 /* ── Floating overlays: the drawer as a sheet, portalled to <body> (overlay.tsx) ─────────── */
 .kit-sheet-layer { position: fixed; inset: 0; z-index: 70; }
 /* Over a full-screen page (the agent Passport is `.tpl-page`, z 200): above it, under toasts. */
-.kit-sheet-layer[data-over="page"], .kit-modal[data-over="page"] { z-index: 260; }
+.kit-sheet-layer[data-over="page"], .kit-modal[data-over="page"] { z-index: var(--z-over-page); }
 .kit-drawer[data-floating] { position: fixed; top: 64px; right: 12px; bottom: 12px; z-index: 1; width: min(420px, calc(100vw - 24px)); max-height: none; box-shadow: var(--shadow-lg); }
 
 /* ── Drawer: right column, a bottom sheet on a phone ────────────────────────────────────── */

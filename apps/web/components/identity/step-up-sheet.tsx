@@ -45,7 +45,7 @@ export function StepUpSheet({ reason, me, onDone }: { reason: string; me: MeResp
   const withPassword = () => finish(() => idPost("/v1/auth/step-up", { method: "password", password }));
 
   return (
-    <Sheet title="Confirm it's you" icon={<Key size={18} className="idn-warn" aria-hidden />} onClose={() => onDone(false)} testId="step-up-sheet">
+    <Sheet title="Confirm it's you" icon={<Key size={18} className="idn-warn" aria-hidden />} onClose={() => onDone(false)} testId="step-up-sheet" layer="step-up">
       <p className="idn-lede2" data-copy="prose">{reason} Sensitive actions need a fresh check, at most every 10 minutes.</p>
       {passwordOnly ? (
         <form onSubmit={(e) => { e.preventDefault(); withPassword(); }}>

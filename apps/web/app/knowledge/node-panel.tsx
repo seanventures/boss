@@ -11,8 +11,8 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Copy, X } from "@phosphor-icons/react";
 
 import { GatedButton } from "../../components/gated";
-import { roleWords } from "../agents/chain-model";
-import { actorWords, reviewerWords } from "../../lib/actor-words";
+import { openAgent } from "../../lib/agent-world";
+import { agentName, approvalWords, eventWords, isWordsAttr, provenanceLines, stepWords, useWords, type ProvLine } from "../../lib/kg-provenance";
 import { scanReader, sentenceStart } from "../../lib/kg-scan";
 import { isLearnedKind, type KgConnectionGroup, type KgNodeDetailResponse, type KgProvenance, type KgViewEdge, type KgViewNode } from "../../lib/kg-view-types";
 import { kindName, kindToken } from "../../lib/kg-layout";
@@ -38,26 +38,23 @@ const LAYER_NAME: Record<string, string> = { code: "Code", rules: "Rules", learn
 /** One formatter for the area: the viewer's own zone, labelled (lib/kg-view.ts kgWhen). */
 const when = kgWhen;
 
-function agentWords(p: { agent_name?: string | null; agent_role?: string | null }): string {
-  // BOSS itself, when no agent was addressed in the turn: its name says so ("BOSS (general)").
-  const role = p.agent_role && p.agent_role !== "boss" ? roleWords(p.agent_role) : "";
-  if (p.agent_name && role && p.agent_name.toLowerCase() !== role.toLowerCase()) return `${p.agent_name} (${role})`;
-  // An item recorded before BOSS kept who recorded it says so (BOSSAPP-768 round 2).
-  return p.agent_name || role || "an agent (not recorded)";
-}
-
-/** Who added it: the server's words for every layer (view._who), the agent's name and role
- *  for what an agent wrote; "the code index" only ever for code. */
-function who(p: KgProvenance): string {
-  if (p.created_by_kind === "agent" && (p.agent_name || p.agent_role)) return agentWords(p);
-  if (p.who) return p.created_by_kind === "person" ? actorWords(p.who) : p.who;
-  if (p.created_by_kind === "system") return "the code index";
-  if (p.created_by_kind === "agent") return agentWords(p);
-  return actorWords(p.created_by);
+/** One provenance line's parts (lib/kg-provenance.ts): words, a run link, an agent's Passport. */
+export function ProvLineView({ line }: { line: ProvLine }) {
+  return <>{line.map((part, i) => {
+    if (part.kind === "link") return <a key={i} className="inf-link" href={part.href} data-testid={part.testId}>{part.text}</a>;
+    if (part.kind === "passport") {
+      return (
+        <button key={i} type="button" className="inf-link" data-testid="kg-panel-passport" data-passport={part.agentId ?? undefined}
+                title={`${part.name}'s Passport: who it is, what it may do, and its record${part.agentId ? ` (${part.agentId})` : ""}`}
+                onClick={() => openAgent(part.roleKey)}>Passport</button>
+      );
+    }
+    return part.strong ? <strong key={i} data-testid={part.testId}>{part.text}</strong> : <React.Fragment key={i}>{part.text}</React.Fragment>;
+  })}</>;
 }
 
 export function NodePanel({ projectId, actor, orgId, nodeId, preview, bubble, archived, rulesLocked,
-  onFocusNode, onShowConnected, onDrill, onEditRule, onClose, onChanged, viewEdges, onDetail }: {
+  onFocusNode, onShowConnected, onDrill, onEditRule, onClose, onChanged, viewEdges, onDetail, viewNote }: {
   projectId: string; actor: string; orgId?: string | null;
   nodeId: string | null;
   /** What the canvas already knows (label, kind), shown while the detail loads. */
@@ -78,6 +75,9 @@ export function NodePanel({ projectId, actor, orgId, nodeId, preview, bubble, ar
   viewEdges?: Array<{ edge: KgViewEdge; other: KgViewNode; out: boolean }> | null;
   /** The detail, once read: the canvas draws the connections it lists (one source of truth). */
   onDetail?: (d: KgNodeDetailResponse) => void;
+  /** The Focus header's own words for what is drawn ("31 drawn, 9 in 3 groups"), shown as the
+   *  centre's "In this view" count so the two never disagree (lib/kg-view.ts focusCounts). */
+  viewNote?: string | null;
 }) {
   const w = useMemo(() => ({ projectId, actor }), [projectId, actor]);
   const [detail, setDetail] = useState<KgNodeDetailResponse | null>(null);
@@ -169,7 +169,7 @@ export function NodePanel({ projectId, actor, orgId, nodeId, preview, bubble, ar
         </div>
       ) : null}
       {!isBubble && detail ? (
-        <DetailBody d={detail} w={w} orgId={orgId} onFocusNode={onFocusNode} viewEdges={viewEdges ?? null} />
+        <DetailBody d={detail} w={w} orgId={orgId} onFocusNode={onFocusNode} viewEdges={viewEdges ?? null} viewNote={viewNote ?? null} />
       ) : null}
 
       <PanelActions w={w} node={node} detail={detail} archived={!!archived} rulesLocked={rulesLocked ?? null}
@@ -264,7 +264,7 @@ function BubbleBody({ b, onFocusNode }: { b: BubbleSummary; onFocusNode: (id: st
         <p className="kg-quiet">{b.node.kind === "layer" ? "Each item in this layer carries its own vector when an embedding model is set (Settings); open one to see its model and nearest items." : `${b.node.kind === "package" ? "A package" : b.node.kind === "group" ? "A group" : "An area"} is a summary of what it holds; code symbols are matched by structure, not meaning.`}</p>
       </Section>
       <Section title="Provenance" testId="kg-panel-provenance">
-        <p className="kg-quiet">{b.node.kind === "layer" ? (b.node.id === "layer:rules" ? "Proposed by agents, approved by people in Rules review." : "Written by agents while they work, with the run and step that wrote it.") : "Rolled up from the code index after each index."}</p>
+        <p className="kg-quiet">{b.node.kind === "layer" ? (b.node.id === "layer:rules" ? "Proposed by agents, approved by people in Rules review." : "Written by agents while they work, with the run or conversation that wrote it.") : "Rolled up from the repository's code each time BOSS indexes it."}</p>
       </Section>
     </>
   );
@@ -272,19 +272,24 @@ function BubbleBody({ b, onFocusNode }: { b: BubbleSummary; onFocusNode: (id: st
 
 const ATTR_SKIP = new Set(["line", "end_line", "module", "lang", "language", "symbol_kind", "type_kind", "kind", "statement", "provenance", "review", "scope", "detail", "about", "evidence", "category", "confidence", "status"]);
 
-function DetailBody({ d, w, orgId, onFocusNode, viewEdges }: {
+function DetailBody({ d, w, orgId, onFocusNode, viewEdges, viewNote = null }: {
   d: KgNodeDetailResponse; w: { projectId: string; actor: string }; orgId?: string | null;
   onFocusNode: (id: string, n?: KgViewNode) => void;
   viewEdges: Array<{ edge: KgViewEdge; other: KgViewNode; out: boolean }> | null;
+  viewNote?: string | null;
 }) {
   const a = d.attrs ?? {};
   const href = codeHref(d.repo, d.path, d.line && d.end_line ? [d.line, d.end_line] : d.line);
   const isRule = d.node.kind === "rule";
   const statusWord = d.node.status ?? (typeof a.status === "string" ? a.status : null);
-  const trust = isRule && d.provenance.approved_by
-    ? `Approved by ${reviewerWords(d.provenance.approved_by, d.provenance.approved_by_name)}${d.provenance.approved_at ? ` · ${when(d.provenance.approved_at)}` : ""}`
+  const trust = isRule && approvalWords(d.provenance)
+    ? approvalWords(d.provenance)
     : isRule ? `${cap(statusWord ?? "proposed")} · not yet trusted by agents` : d.node.trust_tier === "inferred" ? "Inferred by an agent · not reviewed" : null;
-  const extra = Object.entries(a).filter(([k, v]) => !ATTR_SKIP.has(k) && (typeof v === "string" || typeof v === "number" || typeof v === "boolean"));
+  // Words only: a scan id, a content key or any id-shaped value is a record, never an attribute
+  // a person reads (tester round 4: "scan id rscan_…", "content key d376f6deefbc3548").
+  const extra = Object.entries(a).filter(([k, v]) => !ATTR_SKIP.has(k) && isWordsAttr(k, v));
+  const evidence = Array.isArray(a.evidence)
+    ? (a.evidence as Array<Record<string, unknown>>).map((e) => String(e?.ref ?? "").trim()).filter(Boolean) : [];
   const detail = (a.detail && typeof a.detail === "object") ? (a.detail as Record<string, unknown>) : null;
   return (
     <>
@@ -313,14 +318,19 @@ function DetailBody({ d, w, orgId, onFocusNode, viewEdges }: {
           {typeof a.confidence === "number" ? <div className="kg-attr"><dt>confidence</dt><dd>{Math.round(a.confidence * 100)}%</dd></div> : null}
           {d.repo ? <div className="kg-attr"><dt>repository</dt><dd className="inf-mono">{d.repo}</dd></div> : null}
           <div className="kg-attr"><dt>trust</dt><dd>{d.node.trust_tier}</dd></div>
-          {detail ? Object.entries(detail).filter(([, v]) => typeof v === "string" || typeof v === "number").map(([k, v]) => (
+          {evidence.length ? (
+            <div className="kg-attr" data-testid="kg-panel-evidence"><dt>evidence</dt><dd data-user-text>
+              {evidence.map((ref, i) => <React.Fragment key={i}>{i ? <br /> : null}<InlineCode text={ref} /></React.Fragment>)}
+            </dd></div>
+          ) : null}
+          {detail ? Object.entries(detail).filter(([k, v]) => isWordsAttr(k, v) && (typeof v === "string" || typeof v === "number")).map(([k, v]) => (
             <div key={`d-${k}`} className="kg-attr"><dt>{k.replace(/_/g, " ")}</dt><dd data-user-text><InlineCode text={String(v)} /></dd></div>
           )) : null}
           {extra.map(([k, v]) => <div key={k} className="kg-attr"><dt>{k.replace(/_/g, " ")}</dt><dd className="inf-mono">{String(v)}</dd></div>)}
         </dl>
       </Section>
       {isType(d.node) ? <Members d={d} w={w} onFocusNode={onFocusNode} /> : null}
-      <Connections d={d} w={w} onFocusNode={onFocusNode} viewEdges={viewEdges} />
+      <Connections d={d} w={w} onFocusNode={onFocusNode} viewEdges={viewEdges} viewNote={viewNote} />
       <Section title="Vector" testId="kg-panel-vector">
         {d.vector.embedded ? (
           <>
@@ -339,7 +349,7 @@ function DetailBody({ d, w, orgId, onFocusNode, viewEdges }: {
           {d.usage.reused_runs ? `reused by ${d.usage.reused_runs.toLocaleString("en-US")}` : ""}
         </p>
       ) : null}
-      <Provenance p={d.provenance} orgId={orgId} />
+      <Provenance p={d.provenance} layer={d.node.layer} orgId={orgId} />
       {d.node.layer === "code" ? <WhyAndBlast w={w} nodeId={d.node.id} detail={d} onFocusNode={onFocusNode} /> : null}
     </>
   );
@@ -431,9 +441,10 @@ function MemberRow({ m, w, onFocusNode }: { m: KgViewNode; w: { projectId: strin
   );
 }
 
-function Connections({ d, w, onFocusNode, viewEdges }: {
+function Connections({ d, w, onFocusNode, viewEdges, viewNote = null }: {
   d: KgNodeDetailResponse; w: { projectId: string; actor: string }; onFocusNode: (id: string, n?: KgViewNode) => void;
   viewEdges: Array<{ edge: KgViewEdge; other: KgViewNode; out: boolean }> | null;
+  viewNote?: string | null;
 }) {
   // A type's own members are listed under Methods (round 2), not again here.
   const own = (gs: KgConnectionGroup[]) => (isType(d.node) ? gs.filter((g) => !(g.kind === "defines" && g.direction === "out")) : gs);
@@ -461,7 +472,7 @@ function Connections({ d, w, onFocusNode, viewEdges }: {
         // What the canvas draws for it right now — class calls rolled up from its methods
         // included — so a line on the canvas is always a row here.
         <div className="kg-group" data-testid="kg-conn-view">
-          <h5 className="kg-group-head" title="The connections drawn on the canvas now">In this view <span>{viewEdges.length.toLocaleString("en-US")}</span></h5>
+          <h5 className="kg-group-head" title="The connections drawn on the canvas now" data-testid="kg-conn-view-count">In this view <span>{viewNote ?? viewEdges.length.toLocaleString("en-US")}</span></h5>
           <ul className="kg-conn-list">
             {viewEdges.map(({ edge, other, out }) => (
               <NodeRow key={`v-${other.id}-${edge.kind}-${out}`} n={other}
@@ -497,14 +508,16 @@ function Lineage({ d, orgId }: { d: KgNodeDetailResponse; orgId?: string | null 
   return (
     <Section title="Learned → used" testId="kg-panel-lineage">
       <p className="kg-lineage">
-        Learned by <strong>{agentWords(l.learned)}</strong>
-        {l.learned.run_id ? <> in {learnedRun ? <a className="inf-link" href={learnedRun}>run {short(l.learned.run_id)}</a> : <>run {short(l.learned.run_id)}</>}</> : null}
-        {l.learned.step || l.learned.at ? ` (${[l.learned.step ? `step ${l.learned.step}` : "", when(l.learned.at)].filter(Boolean).join(", ")})` : ""}
+        Learned by <strong>{agentName(l.learned) ?? agentName(d.provenance) ?? "an agent, before BOSS kept agents' names"}</strong>
+        {d.provenance.run_title || learnedRun ? <> in {learnedRun
+          ? <a className="inf-link" href={learnedRun}>{d.provenance.run_title ? `“${d.provenance.run_title}”` : "its run"}</a>
+          : <>“{d.provenance.run_title}”</>}</> : d.provenance.conversation_title ? <> in the conversation “{d.provenance.conversation_title}”</> : null}
+        {stepWords(l.learned.step) || l.learned.at ? ` (${[stepWords(l.learned.step), when(l.learned.at)].filter(Boolean).join(", ")})` : ""}
         {l.used.length ? " → used by " : " · not used by a later run yet"}
         {l.used.map((u, i) => (
           <React.Fragment key={`${u.run_id}-${i}`}>
             {i ? ", " : ""}
-            <strong>{agentWords(u)}</strong> in run {short(u.run_id)} ({u.how}, {when(u.at)})
+            {useWords(u)}
           </React.Fragment>
         ))}
       </p>
@@ -525,26 +538,16 @@ function groupCount(n: KgViewNode | null | undefined): string {
   return typeof c === "number" ? `${c.toLocaleString("en-US")} item${c === 1 ? "" : "s"}` : "The items";
 }
 
-function short(id: string): string {
-  return id.length > 14 ? `${id.slice(0, 12)}…` : id;
-}
-
-function Provenance({ p, orgId }: { p: KgProvenance; orgId?: string | null }) {
-  const run = kgRunHref(p, orgId);
-  const lines: React.ReactNode[] = [];
-  lines.push(<>{p.created_by_kind === "system" ? "Indexed by" : p.created_by_kind === "agent" ? "Written by" : "Added by"} <strong data-testid="kg-panel-who">{who(p)}</strong>
-    {p.agent_id ? <> · <span className="inf-mono" title="The agent's Passport id">{short(p.agent_id)}</span></> : null}{p.at ? ` · ${when(p.at)}` : ""}</>);
-  if (p.run_id || run) lines.push(<>Run {run ? <a className="inf-link" href={run} data-testid="kg-panel-run-link">{short(p.code_task_run_id ?? p.workflow_run_id ?? p.run_id ?? "")} ↗</a> : short(p.run_id ?? "")}{p.step ? ` · step ${p.step}` : ""}</>);
-  if (p.model_id) lines.push(<>Model {p.model_id}</>);
-  if (p.approved_by) lines.push(<>Approved by <strong>{reviewerWords(p.approved_by, p.approved_by_name)}</strong>{p.approved_at ? ` · ${when(p.approved_at)}` : ""}</>);
-  if (p.version && p.version > 1) lines.push(<>Version {p.version}, edited from v{p.version - 1}</>);
+/** WHERE IT CAME FROM, in words, from the one formatter the rule and learning panels share. */
+function Provenance({ p, layer, orgId }: { p: KgProvenance; layer: string; orgId?: string | null }) {
+  const lines = provenanceLines(p, { layer, orgId });
   return (
     <Section title="Provenance" testId="kg-panel-provenance">
-      <ul className="kg-prov">{lines.map((l, i) => <li key={i}>{l}</li>)}</ul>
+      <ul className="kg-prov">{lines.map((l, i) => <li key={i}><ProvLineView line={l} /></li>)}</ul>
       {p.events.length > 1 ? (
         <ol className="kg-timeline" data-testid="kg-panel-timeline">
           {p.events.map((e, i) => (
-            <li key={i}><span className="kg-timeline-at">{when(e.at)}</span> {e.what}{e.by ? ` by ${reviewerWords(e.by, e.by_name)}` : ""}</li>
+            <li key={i}><span className="kg-timeline-at">{when(e.at)}</span> {eventWords(e)}</li>
           ))}
         </ol>
       ) : null}
@@ -687,16 +690,20 @@ function PanelActions({ w, node, detail, archived, rulesLocked, onEditRule, onCh
 }
 
 /** "Scan for rules here" (§4.5): a cost preview first, then the business_rules_scan workflow. */
-export function ScanForRules({ w, node, archived, archivedWhy, compact, onStarted, reader = scanReader() }: {
+export function ScanForRules({ w, node, archived, archivedWhy, compact, onStarted, reader = scanReader(), limits }: {
   w: { projectId: string; actor: string }; node: Pick<KgViewNode, "id" | "key" | "label" | "kind">;
   archived?: boolean; archivedWhy?: string; compact?: boolean;
   /** Told once the scan started (the Knowledge Graph setup re-reads its step). */
   onStarted?: () => void;
   /** Who reads the code, by name (the setup names the team's scanner). */
   reader?: string;
+  /** The scan's cap and default spend (the setup's `scan_defaults`); BOSS's defaults otherwise. */
+  limits?: { max_files: number; max_rules: number; budget_usd: number };
 }) {
+  const maxFiles = limits?.max_files ?? 60;
+  const maxRules = limits?.max_rules ?? 25;
   const [open, setOpen] = useState(false);
-  const [budget, setBudget] = useState("2.00");
+  const [budget, setBudget] = useState((limits?.budget_usd ?? 2).toFixed(2));
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const amount = Number(budget);
@@ -706,7 +713,7 @@ export function ScanForRules({ w, node, archived, archivedWhy, compact, onStarte
     setBusy(true); setMsg(null); setRefusal(null);
     const r = await post("start", {
       project_id: w.projectId, workflow_key: "business_rules_scan", actor: w.actor,
-      input: { scope: [node.key || node.id], max_files: 60, max_rules: 25, budget_usd: amount },
+      input: { scope: [node.key || node.id], max_files: maxFiles, max_rules: maxRules, budget_usd: amount },
       ...(startAnyway.length ? { start_anyway: startAnyway } : {}),
     });
     setBusy(false);
@@ -722,6 +729,10 @@ export function ScanForRules({ w, node, archived, archivedWhy, compact, onStarte
         <GatedButton permission={SCAN_START} className={compact ? "ag-btn ag-btn-primary" : "ag-btn"} data-testid="kg-scan"
                      disabled={archived} title={archived ? archivedWhy : `${sentenceStart(reader)} reads ${node.label} and proposes the business rules it finds`}
                      onClick={() => setOpen(true)}>Scan for rules here</GatedButton>
+        {/* The cost and the cap, before the press (tester round 4: no cost was ever shown). */}
+        <p className="kg-quiet" data-testid="kg-scan-cost">
+          Spends at most ${(valid ? amount : (limits?.budget_usd ?? 2)).toFixed(2)} from the knowledge budget · reads up to {maxFiles} files · proposes up to {maxRules} rules
+        </p>
         {msg ? <p className={msg.ok ? "kg-ok" : "kg-inline-err"} role={msg.ok ? "status" : "alert"} data-testid="kg-scan-msg">{msg.text}</p> : null}
       </div>
     );
@@ -730,8 +741,8 @@ export function ScanForRules({ w, node, archived, archivedWhy, compact, onStarte
     <form className="kg-scan-preview" data-testid="kg-scan-preview" noValidate onSubmit={(e) => { e.preventDefault(); if (valid) void start(); }}>
       <p className="kg-scan-what">
         {sentenceStart(reader)} reads {node.kind === "symbol" ? <><span data-user-text>{node.label}</span> and the code it calls</> : <>the code in <span data-user-text>{node.label}</span></>}
-        — up to <strong>60 files</strong>, the most connected first — and proposes up to
-        <strong> 25 rules</strong>, each with the lines that show it. It stops at whichever limit comes first. No rule is trusted until
+        — up to <strong>{maxFiles} files</strong>, the most connected first — and proposes up to
+        <strong> {maxRules} rules</strong>, each with the lines that show it. It stops at whichever limit comes first. No rule is trusted until
         a person approves it.</p>
       <label className="kg-field">
         <span>Spend at most (USD)</span>

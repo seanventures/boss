@@ -448,10 +448,9 @@ def _anchor(connection: Connection, project_id: str, kind: str, key: str, name: 
                               attrs=attrs or {})
 
 
-def run_title(connection: Connection, ref: str) -> str:
-    """A RUN BY ITS NAME, never its id (tester round 2: the tree, the canvas and the panel said
-    "Run wfr_6267…"): a workflow run's title (else its workflow's name), a build's title, then
-    when it started — "Business rules scan: loan repayment… · Oct 25, 02:50"."""
+def run_name(connection: Connection, ref: str) -> tuple[Optional[str], Any]:
+    """A run's own title (a workflow run's title, else its workflow's name; a build's title) and
+    when it started, or (None, None) when there is no such run. Never its id."""
     ref = str(ref or "")
     row = None
     try:
@@ -466,11 +465,22 @@ def run_title(connection: Connection, ref: str) -> str:
                     "SELECT title, created_at FROM code_task_runs WHERE id = :r"), {"r": ref}).mappings().first()
     except Exception:  # noqa: BLE001 — a name is a label, never a reason to refuse
         row = None
-    if not row or not row["title"]:
-        return "A run" + (f" · {row['created_at']:%b %d, %H:%M}" if row and row.get("created_at") else "")
-    title = " ".join(str(row["title"]).split())
-    title = title if len(title) <= 90 else title[:89].rstrip() + "…"
-    return f"{title} · {row['created_at']:%b %d, %H:%M}" if row.get("created_at") else title
+    if not row:
+        return None, None
+    title = " ".join(str(row["title"] or "").split()) or None
+    if title and len(title) > 90:
+        title = title[:89].rstrip() + "…"
+    return title, row.get("created_at")
+
+
+def run_title(connection: Connection, ref: str) -> str:
+    """A RUN BY ITS NAME, never its id (tester round 2: the tree, the canvas and the panel said
+    "Run wfr_6267…"): a workflow run's title (else its workflow's name), a build's title, then
+    when it started — "Business rules scan: loan repayment… · Oct 25, 02:50"."""
+    title, started = run_name(connection, ref)
+    if not title:
+        return "A run" + (f" · {started:%b %d, %H:%M}" if started else "")
+    return f"{title} · {started:%b %d, %H:%M}" if started else title
 
 
 def run_anchor(connection: Connection, project_id: str, ref: str) -> str:

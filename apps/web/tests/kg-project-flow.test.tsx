@@ -19,7 +19,7 @@ import type { KgSetupResponse } from "@boss/api-client";
 import { GraphArea } from "../app/knowledge/graph-area";
 import { KgLifecycleCard } from "../app/knowledge/kg-lifecycle";
 import { PROJECT_TYPES, knowledgeSetupHref, projectTypeBadge } from "../app/project-menu";
-import { setupOpens } from "../lib/kg-setup";
+import { blockedBy, hasIndexedCode, setupOpens } from "../lib/kg-setup";
 import { calls, mockKgFetch } from "./_helpers/kg-fetch";
 import { $, $$, mount, settle, unmount } from "./_helpers/live-render";
 
@@ -103,7 +103,7 @@ describe("Knowledge Graph › Setup", () => {
     expect($('[data-testid="kg-head"] h2')?.textContent).toBe("Knowledge Graph");
     expect($(".kg-setup-title")?.textContent).toBe("Set up the knowledge graph for Fineract map");
     expect($('[data-testid="kg-setup-progress"]')?.textContent).toBe("0 of 4 steps done");
-    expect([state("import"), state("team"), state("scan"), state("review")]).toEqual(["current", "waiting", "waiting", "waiting"]);
+    expect([state("import"), state("team"), state("scan"), state("review")]).toEqual(["current", "ready", "waiting", "waiting"]);
     expect($('[data-testid="kg-step-scan-why"]')?.textContent).toBe("Needs indexed code: import a repository first.");
     // ① is open: the allowed repositories to add, and where to allow more.
     const pick = $('[data-testid="kg-import-pick"]') as HTMLSelectElement;
@@ -288,5 +288,52 @@ describe("the project home's lifecycle card", () => {
     expect($('[data-testid="kg-lifecycle-continue"]')?.textContent).toBe("Continue: Review rules");
     const href = new URLSearchParams(($('[data-testid="kg-lifecycle-continue"]') as HTMLAnchorElement).getAttribute("href")!.slice(1));
     expect([href.get("area"), href.get("kg_tab")]).toEqual(["knowledge", "setup"]);
+  });
+});
+
+describe("one answer to 'is there indexed code?' (tester round 4)", () => {
+  const indexedTeamOpen = (scan: KgSetupResponse["steps"][number]) => setupFx({
+    repositories: [INDEXED_REPO], has_graph: true, code_nodes: 1625, done_count: 1, next: "team", areas: AREAS,
+    steps: [
+      { key: "import", state: "done", done: true, summary: "1 of 1 repositories indexed · 1,625 code nodes" },
+      { key: "team", state: "current", done: false, summary: "Not chosen yet" },
+      scan,
+      { key: "review", state: "waiting", done: false, summary: "0 waiting · 0 approved · 0 rejected", blocked_by: "scan" },
+    ],
+  });
+
+  const cases: [string, KgSetupResponse][] = [
+    ["the API's ready scan", { ...indexedTeamOpen({ key: "scan", state: "ready", done: false, summary: "No scan yet", blocked_by: null }), has_code: true }],
+    // What the tester saw: Import code DONE beside a scan "waiting" only for its turn.
+    ["an older API's waiting scan", indexedTeamOpen({ key: "scan", state: "waiting", done: false, summary: "No scan yet" })],
+  ];
+  for (const [name, fx] of cases) {
+    it(`Import code done never sits beside "Needs indexed code" (${name}); the scan offers its button, cost and cap`, async () => {
+      mockKgFetch(routes(fx));
+      await open();
+      await click("kg-tab-setup");
+      expect(state("import")).toBe("done");
+      expect(state("scan")).toBe("ready");
+      expect($('[data-testid="kg-step-scan"] .kg-setup-state')?.textContent).toBe("Ready");
+      expect(document.body.textContent).not.toContain("Needs indexed code");
+      expect($('[data-testid="kg-step-scan-why"]')).toBeNull();
+      expect($('[data-testid="kg-step-scan"] [data-testid="kg-scan"]')?.textContent).toBe("Scan for rules here");
+      expect($('[data-testid="kg-step-scan"] [data-testid="kg-scan-cost"]')?.textContent)
+        .toBe("Spends at most $2.00 from the knowledge budget · reads up to 60 files · proposes up to 25 rules");
+      // The review still says what it waits for.
+      expect($('[data-testid="kg-step-review-why"]')?.textContent).toBe("Rules arrive here from the first scan.");
+    });
+  }
+
+  it("the shared answer: has_code first, then the graph, then Import code's Done", () => {
+    const fx = setupFx();
+    expect(hasIndexedCode(fx)).toBe(false);
+    expect(hasIndexedCode({ ...fx, has_code: true })).toBe(true);
+    expect(hasIndexedCode({ ...fx, has_graph: true })).toBe(true);
+    expect(hasIndexedCode({ ...fx, has_graph: undefined as never, steps: [{ ...fx.steps[0], done: true }] })).toBe(true);
+    expect(hasIndexedCode({ ...fx, has_code: false, has_graph: true })).toBe(false);
+    expect(blockedBy("scan", fx)).toBe("import");
+    expect(blockedBy("scan", { ...fx, has_code: true })).toBeNull();
+    expect(blockedBy("review", fx)).toBe("scan");
   });
 });

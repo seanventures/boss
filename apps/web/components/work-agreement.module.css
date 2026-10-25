@@ -1,4 +1,4 @@
-.backdrop { position: fixed; inset: 0; z-index: 1400; display: grid; place-items: center; padding: 24px; background: rgb(0 0 0 / .6); }
+.backdrop { position: fixed; inset: 0; z-index: var(--z-modal); display: grid; place-items: center; padding: 24px; background: rgb(0 0 0 / .6); }
 .sheet { width: min(780px, 100%); max-height: 92dvh; display: flex; flex-direction: column; background: var(--panel, #171b23); color: var(--text, #eef1f7); border: 1px solid var(--border, #39414e); border-radius: 16px; box-shadow: 0 24px 90px #0008; outline-offset: 3px; }
 .header { padding: 24px 28px 18px; border-bottom: 1px solid var(--border, #39414e); }
 .header p { color: var(--muted, #b1bac9); margin: 0 0 6px; font-size: 0.68421rem; }

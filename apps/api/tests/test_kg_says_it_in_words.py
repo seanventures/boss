@@ -62,8 +62,9 @@ def test_words_for_who_added_it_and_what_was_done():
     assert view.action_words("knowledge.rule.approve") == "approved"
     assert view.action_words("knowledge.repository.index_failed") == "failed to index"
     blank = {"agent_role": None, "agent_name": None}
-    assert view._who("learning", "agent", blank, "system") == view.NOT_RECORDED == "an agent (not recorded)"
-    assert view._who("code", "system", blank, "system") == "the code index"
+    assert view._who("learning", "agent", blank, "system") == view.NOT_RECORDED == "an agent, before BOSS kept agents' names"
+    assert view._who("code", "system", blank, "system") == view.CODE_WHO
+    assert "code index" not in view.CODE_WHO and "not recorded" not in view.NOT_RECORDED
     assert view._who("learning", "agent", {"agent_role": "sre", "agent_name": "Beacon"}, "sre") == "Beacon"
     assert view._who("rules", "agent", {"agent_role": "boss", "agent_name": "BOSS (general)"}, "boss") == "BOSS (general)"
 
@@ -80,3 +81,29 @@ def test_a_scan_is_listed_by_what_it_read_and_when(engine, run):
     found = labels[f"rscan_{rid[-12:]}_scan"]
     assert found["label"].startswith("Business rules scan: loan repayment schedule · ")
     assert "rscan_" not in found["label"] and found["rules"] >= 1
+
+
+def test_provenance_names_the_run_the_reviewer_once_and_never_a_key(engine, run):
+    """Tester round 4: "Run wfr_6267c5d3… ↗ · step scan", "approved by person" then "approved by
+    an owner (legacy record)", and an "Approved by" node named "ceo". The provenance carries the
+    run's title and start, the review once, and a person node named for a person."""
+    pid, rid = run
+    store = KnowledgeStore()
+    with engine.begin() as db:
+        rule = store.upsert_node(db, project_id=pid, kind="rule", node_key=f"rule:t{uuid.uuid4().hex[:12]}",
+                                 name="Charge-payment allocation is capped", body="Statement", trust_tier="inferred",
+                                 actor_kind="agent", actor_ref="chief_architect", source="rules",
+                                 attrs={"status": "proposed", "category": "limit",
+                                        "provenance": {"workflow_run_id": rid, "step": "scan", "agent_role": "chief_architect",
+                                                       "agent_name": "Chief Architect", "agent_id": "agt_test123"}})
+        rules.approve_rule(db, project_id=pid, rule_id=rule, actor_ref="ceo", actor_kind="person")
+        detail = view.node_detail(db, pid, rule)
+        prov = detail["provenance"]
+        assert prov["run_title"] == "Business rules scan: loan repayment schedule" and prov["run_at"]
+        approvals = [e for e in prov["events"] if e["what"] == "approved"]
+        assert len(approvals) == 1 and approvals[0]["by"] == "ceo", prov["events"]
+        assert all(e["by"] not in ("person", "agent") for e in prov["events"])
+        people = [n for g in detail["connections"] for n in g["items"] if n["kind"] == "person"]
+        assert people and {n["label"] for n in people} == {view.OPERATOR}
+        db.execute(text("DELETE FROM kg_nodes WHERE project_id = :p AND (id = :r OR node_key = 'person:ceo')"),
+                   {"p": pid, "r": rule})

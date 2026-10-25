@@ -481,6 +481,50 @@ def test_search_ranks_exact_then_prefix_then_text_classes_before_methods(connect
         view.search(connection, P, "  ")
 
 
+def test_search_finds_a_learning_by_an_incident_id_in_its_evidence_or_its_conversation(connection):
+    """Tester round 4: "INC-2041" and "INC-2088" found nothing. INC-2041 sat in a root cause's
+    evidence (attrs, not its name); INC-2088 only in the operator's brief — the conversation the
+    root cause was recorded from — never in the root cause itself. No code index needed."""
+    _raw_node(connection, "kgn_rc_2041", "root_cause", "Standard strategy overbooks principal",
+              body="principal is paid from the pre-interest amount",
+              attrs={"learning_kind": "root_cause",
+                     "evidence": [{"ref": "INC-2041 reconciliation rows", "type": "metric"}]})
+    rc = _raw_node(connection, "kgn_rc_2088", "root_cause", "Advance-payment handler never decrements the remaining amount",
+                   attrs={"learning_kind": "root_cause"})
+    connection.execute(text("INSERT INTO agent_threads (id, project_id, actor) VALUES ('athr_kgv', :p, 'ceo')"), {"p": P})
+    connection.execute(text(
+        "INSERT INTO agent_messages (id, thread_id, role, content) VALUES "
+        "('amsg_kgv1', 'athr_kgv', 'user', '# B4 · Incident: early repayments\n**Incident INC-2088 · Severity 2**')"))
+    conv = _raw_node(connection, "kgn_conv_b4", "run", "B4 · Incident: early repayments · Oct 25, 07:13", trust="observed",
+                     attrs={"subtype": "conversation", "thread_id": "athr_kgv", "source_id": "athr_kgv"})
+    _raw_edge(connection, conv, rc, "produced")
+
+    by_evidence = view.search(connection, P, "INC-2041")
+    assert [h["node"]["id"] for h in by_evidence["hits"]][:1] == ["kgn_rc_2041"]
+    by_brief = [h["node"]["id"] for h in view.search(connection, P, "inc-2088")["hits"]]
+    assert by_brief[0] == rc and conv in by_brief          # the learning first, then where it came from
+    # Their text, not only code symbols: a body's words find it.
+    assert "kgn_rc_2041" in [h["node"]["id"] for h in view.search(connection, P, "pre-interest")["hits"]]
+    # A layer turned off stays off, and provenance is never what matches.
+    assert view.search(connection, P, "INC-2041", layers={"code"})["hits"] == []
+
+
+def test_a_hop_that_needs_less_than_its_share_leaves_the_rest_to_the_next(connection):
+    """Tester round 4: Show 200 at 2 hops read 147 of 809 — each hop was held to 100 although the
+    first had only 47. The limit is the whole view's: what one hop leaves, the next may use."""
+    centre = _raw_node(connection, "kgn_hop_c", "investigation", "Why the allocator overbooks", attrs={})
+    for i in range(3):
+        a = _raw_node(connection, f"kgn_hop_a{i}", "investigation", f"First {i}", attrs={})
+        _raw_edge(connection, centre, a, "about")
+        for j in range(6):
+            b = _raw_node(connection, f"kgn_hop_b{i}{j}", "investigation", f"Second {i}{j}", attrs={})
+            _raw_edge(connection, a, b, "about")
+    out = view.neighbourhood(connection, P, centre, depth=2, limit=10)
+    hops = [n.get("hop") for n in out["nodes"] if n["id"] != centre]
+    assert len(hops) == 10 and hops.count(1) == 3 and hops.count(2) == 7
+    assert out["truncated"] and out["hidden"]["nodes"] == 18 - 7
+
+
 # ── the wire contract ───────────────────────────────────────────────────────────────────────
 
 _NODE_KEYS = {"id", "key", "kind", "symbol_kind", "layer", "label", "sub", "trust_tier", "status", "counts"}
