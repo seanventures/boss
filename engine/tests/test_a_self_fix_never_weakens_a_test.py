@@ -210,6 +210,10 @@ def test_a_code_reference_on_an_added_line_is_not_a_secret(line):
     ("engine/boss_engine/tools/builtin.py", "client_secret='Zq8vT4mN2pW6rX1y'\n"),
     ("engine/boss_engine/tools/builtin.py", 'headers = {"token": "Zq8vT4mN2pW6rX1y"}\n'),
     ("engine/boss_engine/tools/builtin.py", "x = 'sk-ant-" + "a" * 24 + "'\n"),         # token shape
+    ("engine/boss_engine/tools/builtin.py", 'password = derive("hunter2")\n'),         # literal arg
+    ("engine/boss_engine/tools/builtin.py",
+     'api_key = os.getenv("X", "literal-default-secret")\n'),
+    ("engine/boss_engine/tools/builtin.py", "secret = b64decode('c2VjcmV0LXZhbHVl')\n"),
     ("scripts/install/example.env", "OPENAI_API_KEY=Zq8vT4mN2pW6rX1y\n"),               # env literal
     ("scripts/install/deploy.sh", "export API_TOKEN=Zq8vT4mN2pW6rX1y\n"),
 ])

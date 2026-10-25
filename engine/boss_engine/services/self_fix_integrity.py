@@ -368,8 +368,9 @@ def _without_code_references(line: str, path: str) -> str:
     source, `workflow_key = _workflow_key_for(name)`, `{"workflow_key": workflow_key}` and
     `f"workflow_key='{workflow_key}'"` hold no value at all — a self-fix was refused 'secrets'
     for exactly those three lines. Such references are blanked before the scan; a quoted
-    literal (`api_key = "sk-…"`), any provider token shape, and every value in a non-code file
-    are still scanned unchanged."""
+    literal (`api_key = "sk-…"`), a call or index with a quoted argument
+    (`password = derive("hunter2")`), any provider token shape, and every value in a non-code
+    file are still scanned unchanged."""
     from .redaction import _SECRET_PATTERNS
 
     code = PurePosixPath(path).suffix.lower() in _CODE_SUFFIXES
@@ -380,8 +381,13 @@ def _without_code_references(line: str, path: str) -> str:
         def _blank(m: "re.Match[str]") -> str:
             value, sep = m.group("value"), m.group("sep")
             quoted = sep.rstrip().endswith(("'", '"'))
+            # A call or index can carry a literal in its arguments (`derive("hunter2")`,
+            # `os.getenv("X", "default")`); the value group stops at the quote, so the rest of
+            # the line is what says. Any quote after the reference keeps the line scanned.
+            rest = m.string[m.start("value"):]
+            argues = any(ch in value for ch in "([") and any(q in rest for q in "'\"")
             if _PLACEHOLDER.fullmatch(value) or (
-                    code and not quoted and _CODE_REFERENCE.fullmatch(value)):
+                    code and not quoted and not argues and _CODE_REFERENCE.fullmatch(value)):
                 return m.group("name") + m.group("sep") + "_"
             return m.group(0)
 
