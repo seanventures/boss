@@ -927,7 +927,7 @@ def _provenance(connection: Connection, project_id: str, row: Mapping[str, Any],
     events.sort(key=lambda e: str(e["at"] or ""))
     approved = layer == "rules" and rule_status(row) == "approved"
     out: dict[str, Any] = {"created_by": created_by, "created_by_kind": by_kind, "at": at, "events": events}
-    for key in ("agent_role", "agent_name", "run_id", "workflow_run_id", "code_task_run_id", "step", "model_id"):
+    for key in ("agent_role", "agent_name", "agent_id", "run_id", "workflow_run_id", "code_task_run_id", "step", "model_id"):
         if prov.get(key) is not None:
             out[key] = prov.get(key)
     if approved:

@@ -38,6 +38,8 @@ installs:
     - frontend_engineer
     - operations_engineer
     - sre
+    # Runs an incident on one timeline, reading the knowledge graph's precedent first.
+    - incident_commander
     # OWNS THE PUBLIC CHANNELS. Captain for the `social_publish` step, and the role a
     # per-platform publishing agent reports to — a credential that reaches a real audience
     # belongs to somebody whose remit is the audience, not to whichever step needed it.

@@ -38,7 +38,8 @@ const LAYER_NAME: Record<string, string> = { code: "Code", rules: "Rules", learn
 const when = kgWhen;
 
 function agentWords(p: { agent_name?: string | null; agent_role?: string | null }): string {
-  const role = p.agent_role ? roleWords(p.agent_role) : "";
+  // BOSS itself, when no agent was addressed in the turn: its name says so ("BOSS (general)").
+  const role = p.agent_role && p.agent_role !== "boss" ? roleWords(p.agent_role) : "";
   if (p.agent_name && role) return `${p.agent_name} (${role})`;
   return p.agent_name || role || "an agent";
 }

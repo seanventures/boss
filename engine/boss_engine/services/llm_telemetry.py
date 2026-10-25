@@ -43,6 +43,24 @@ def set_llm_context(**kwargs) -> None:
     _llm_ctx.set(ctx)
 
 
+#: WHO SPEAKS IN A TURN NO AGENT WAS ADDRESSED IN: BOSS itself, said so (never a blank name on a
+#: rule, a learning or a decision recorded in that turn). An addressed turn names its agent.
+GENERAL_ROLE = "boss"
+GENERAL_NAME = "BOSS (general)"
+
+
+def speaker() -> dict:
+    """Who is speaking in the call in progress, for provenance: the addressed agent of a chat
+    turn (`speaker_role`, `agent_name`, `agent_id`, set by AgentService.chat), else the stage's
+    agent (`role_key`), with its name and Passport id when the caller knows them. Empty when
+    nothing set either: a worker's own provenance rules apply then."""
+    ctx = dict(_llm_ctx.get())
+    role = ctx.get("speaker_role") or ctx.get("role_key")
+    return {"agent_role": role or None,
+            "agent_name": ctx.get("agent_name"),
+            "agent_id": ctx.get("agent_id")}
+
+
 def clear_llm_context() -> None:
     """Reset the context. Job handlers MUST call this in their ``finally`` — request/worker
     threads are pooled and reused, and a stale run_id would mis-attribute later calls."""

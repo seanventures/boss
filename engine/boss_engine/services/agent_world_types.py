@@ -59,6 +59,8 @@ CANONICAL_ROLE_KEYS: frozenset[str] = frozenset({
     # new in Agent World (§0.1 cast, §4.4 chief_architect)
     "chief_architect", "engineering_captain", "backend_engineer", "frontend_engineer",
     "operations_engineer", "sre",
+    # runs an incident on one timeline (BOSSAPP-768: the knowledge-graph project's cast)
+    "incident_commander",
     # archetypes, "thinks like" agents (§0.1.3, §8)
     "first_principles_researcher", "visionary_founder", "relentless_operator",
     "teacher_who_simplifies",

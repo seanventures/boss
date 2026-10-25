@@ -144,7 +144,7 @@ passport_presets:
     external_ceiling: {github: {contents: read, issues: write}}
   - key: operator_agent
     name: Operator agent
-    agents: [harbor, pilot, bedrock, relay, beacon]
+    agents: [harbor, pilot, bedrock, relay, beacon, anchor]
     permissions: [knowledge:read, deployment:read, deployment:create, host:read, infra:read, observability:read,
                   reliability:read, reliability:respond, preview:read, preview:manage, workflow_run:read,
                   workflow_run:control, spend:reserve, secret:lease,

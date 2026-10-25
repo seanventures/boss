@@ -5506,6 +5506,8 @@ export type KgProvenance = {
   created_by_kind: "agent" | "person" | "system";
   agent_role?: string | null;
   agent_name?: string | null;
+  /** The agent's Passport id (roles.agent_id); absent for BOSS itself ("BOSS (general)"). */
+  agent_id?: string | null;
   run_id?: string | null;
   workflow_run_id?: string | null;
   code_task_run_id?: string | null;
