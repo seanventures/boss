@@ -17,8 +17,13 @@ export function safeHref(href: string): boolean {
   return /^[/#]/.test(h) && !/[\u0000-\u001f\\]/.test(h);
 }
 
-function renderInline(text: string, keyPrefix: string): React.ReactNode[] {
+/** Plain text (and an inline code span, `code: true`) handed to the caller before it is shown:
+ *  the conversation view turns the ids in an answer into chips. Returns what to render. */
+export type InlineText = (text: string, key: string, code?: boolean) => React.ReactNode;
+
+function renderInline(text: string, keyPrefix: string, hook?: InlineText): React.ReactNode[] {
   const nodes: React.ReactNode[] = [];
+  const plain = (t: string, k: string) => nodes.push(hook ? <React.Fragment key={k}>{hook(t, k)}</React.Fragment> : t);
   // UNDERSCORES INSIDE A WORD ARE NOT EMPHASIS (CommonMark's rule). Without the lookarounds
   // `BOSS_AGENT_HOST_SHELL` rendered as "BOSSAGENTHOSTSHELL" and `run_on_host` as "runonhost" —
   // an operator was told to set a setting whose name the console had just destroyed.
@@ -28,13 +33,14 @@ function renderInline(text: string, keyPrefix: string): React.ReactNode[] {
   let m: RegExpExecArray | null;
   let i = 0;
   while ((m = pattern.exec(text)) !== null) {
-    if (m.index > last) nodes.push(text.slice(last, m.index));
+    if (m.index > last) plain(text.slice(last, m.index), `${keyPrefix}-t${i}`);
     const tok = m[0];
     const key = `${keyPrefix}-${i}`;
     if (tok.startsWith("`")) {
-      nodes.push(<code key={key}>{tok.slice(1, -1)}</code>);
+      nodes.push(hook ? <React.Fragment key={key}>{hook(tok.slice(1, -1), key, true)}</React.Fragment>
+        : <code key={key}>{tok.slice(1, -1)}</code>);
     } else if (tok.startsWith("**") || tok.startsWith("__")) {
-      nodes.push(<strong key={key}>{tok.slice(2, -2)}</strong>);
+      nodes.push(<strong key={key}>{hook ? hook(tok.slice(2, -2), key) : tok.slice(2, -2)}</strong>);
     } else if (tok.startsWith("[")) {
       const mm = /^\[([^\]]+)\]\(([^)\s]+)\)$/.exec(tok);
       if (mm && safeHref(mm[2])) {
@@ -50,12 +56,12 @@ function renderInline(text: string, keyPrefix: string): React.ReactNode[] {
         nodes.push(tok);
       }
     } else {
-      nodes.push(<em key={key}>{tok.slice(1, -1)}</em>);
+      nodes.push(<em key={key}>{hook ? hook(tok.slice(1, -1), key) : tok.slice(1, -1)}</em>);
     }
     last = m.index + tok.length;
     i++;
   }
-  if (last < text.length) nodes.push(text.slice(last));
+  if (last < text.length) plain(text.slice(last), `${keyPrefix}-t${i}`);
   return nodes;
 }
 
@@ -80,9 +86,12 @@ function isTableSeparator(line: string): boolean {
 export function Markdown({
   text,
   className,
+  inline,
 }: {
   text?: string | null;
   className?: string;
+  /** See InlineText. */
+  inline?: InlineText;
 }) {
   if (!text) return null;
   const lines = text.replace(/\r\n/g, "\n").split("\n");
@@ -120,7 +129,7 @@ export function Markdown({
       const hid = k++;
       blocks.push(
         <Tag key={hid} className="md-h">
-          {renderInline(h[2], `h${hid}`)}
+          {renderInline(h[2], `h${hid}`, inline)}
         </Tag>,
       );
       i++;
@@ -149,7 +158,7 @@ export function Markdown({
             <thead>
               <tr>
                 {header.map((h, ci) => (
-                  <th key={ci}>{renderInline(h, `th${tk}-${ci}`)}</th>
+                  <th key={ci}>{renderInline(h, `th${tk}-${ci}`, inline)}</th>
                 ))}
               </tr>
             </thead>
@@ -157,7 +166,7 @@ export function Markdown({
               {rows.map((r, ri) => (
                 <tr key={ri}>
                   {r.map((c, ci) => (
-                    <td key={ci}>{renderInline(c, `td${tk}-${ri}-${ci}`)}</td>
+                    <td key={ci}>{renderInline(c, `td${tk}-${ri}-${ci}`, inline)}</td>
                   ))}
                 </tr>
               ))}
@@ -173,7 +182,7 @@ export function Markdown({
       while (i < lines.length && /^\s*[-*+]\s+/.test(lines[i])) {
         items.push(
           <li key={items.length}>
-            {renderInline(lines[i].replace(/^\s*[-*+]\s+/, ""), `ul${k}-${items.length}`)}
+            {renderInline(lines[i].replace(/^\s*[-*+]\s+/, ""), `ul${k}-${items.length}`, inline)}
           </li>,
         );
         i++;
@@ -191,7 +200,7 @@ export function Markdown({
       while (i < lines.length && /^\s*\d+[.)]\s+/.test(lines[i])) {
         items.push(
           <li key={items.length}>
-            {renderInline(lines[i].replace(/^\s*\d+[.)]\s+/, ""), `ol${k}-${items.length}`)}
+            {renderInline(lines[i].replace(/^\s*\d+[.)]\s+/, ""), `ol${k}-${items.length}`, inline)}
           </li>,
         );
         i++;
@@ -217,7 +226,7 @@ export function Markdown({
     const pid = k++;
     blocks.push(
       <p key={pid} className="md-p">
-        {renderInline(para.join(" "), `p${pid}`)}
+        {renderInline(para.join(" "), `p${pid}`, inline)}
       </p>,
     );
   }

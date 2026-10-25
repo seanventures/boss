@@ -89,3 +89,63 @@ def test_a_press_in_an_agents_thread_credits_that_agent_and_the_proof_scores_the
     run = proof.json()["run"]
     assert run["kind"] == "conversation" and run["learned"] == 1 and run["agent_role"] == "sre"
     assert run["time_to_root_cause_seconds"] is not None
+
+
+def test_the_conversation_route_names_what_a_conversation_wrote(client, engine):
+    """GET /v1/knowledge/view/conversation (KG-V2): the console's conversation view reads what one
+    conversation wrote, the earlier items it used and the title of every id it names; a thread
+    that is not one is 404, and who asked is a kind and a name, never the raw actor."""
+    from apps.api.app.config import get_settings
+    from boss_engine.services.agent_service import AgentService
+
+    service = AgentService(get_settings())
+    with begin(engine) as connection:
+        thread_id = service.start_or_load_thread(connection, project_id=PROJECT_ID, actor=ACTOR,
+                                                 agent_role="sre", new_thread=True)["id"]
+        service.append_message(connection, thread_id=thread_id, role="user", content="# INC-2099 · pool exhausted")
+    pressed = client.post("/v1/engine/agent/action", json={
+        "project_id": PROJECT_ID, "actor": ACTOR, "thread_id": thread_id, "tool": "record_learning",
+        "label": "Record learning", "args": {
+            "learning_kind": "root_cause", "title": "Pool of 5 exhausted at 8am",
+            "statement": "The pool of 5 is exhausted under the 8am load.", "detail": {}, "about": {},
+            "confidence": 0.7, "evidence": [{"type": "log", "ref": "api.log", "excerpt": "QueuePool limit"}]}})
+    assert pressed.status_code == 200 and pressed.json()["ok"] is True, pressed.text
+    node_id = pressed.json()["result"]["learning"]["id"]
+    base = {"project_id": PROJECT_ID, "actor": ACTOR}
+    got = client.get("/v1/knowledge/view/conversation", params={**base, "thread": thread_id})
+    assert got.status_code == 200, got.text
+    body = got.json()
+    assert body["title"] == "INC-2099 · pool exhausted" and body["agent"]["role"] == "sre"
+    assert [p["id"] for p in body["produced"]] == [node_id] and body["learned"] == 1
+    assert body["names"][node_id]["title"] == "Pool of 5 exhausted at 8am"
+    assert body["asked_by"]["kind"] in {"console", "person", "service", "unknown"}
+    assert body["asked_by"].get("name") != ACTOR
+    missing = client.get("/v1/knowledge/view/conversation", params={**base, "thread": "athr_no_such_thread"})
+    assert missing.status_code == 404
+
+
+def test_the_transcript_reads_a_console_conversation_and_never_another_persons(client, engine):
+    """GET /v1/agent/threads/{id}/transcript (KG-V2): a conversation held under the console's
+    shared identity is read back with its tool calls; another person's private thread is 404."""
+    from apps.api.app.config import get_settings
+    from boss_engine.services.agent_service import AgentService
+
+    service = AgentService(get_settings())
+    with begin(engine) as connection:
+        console = service.start_or_load_thread(connection, project_id=PROJECT_ID, actor="executive_console",
+                                               agent_role="sre", new_thread=True)["id"]
+        service.append_message(connection, thread_id=console, role="user", content="# INC-2100 · brief")
+        service.append_message(connection, thread_id=console, role="assistant", content="Found it.",
+                               agent_role="sre", tool_calls=[{"tool": "kg_precedent", "ok": True,
+                                                              "args": {"query": "x"}, "refs": []}])
+        private = service.start_or_load_thread(connection, project_id=PROJECT_ID, actor="cto",
+                                               agent_role="sre", new_thread=True)["id"]
+    got = client.get(f"/v1/agent/threads/{console}/transcript", params={"project_id": PROJECT_ID, "actor": ACTOR})
+    assert got.status_code == 200, got.text
+    messages = got.json()["messages"]
+    assert [m["role"] for m in messages] == ["user", "assistant"]
+    assert messages[1]["tool_calls"][0]["tool"] == "kg_precedent"
+    hidden = client.get(f"/v1/agent/threads/{private}/transcript", params={"project_id": PROJECT_ID, "actor": ACTOR})
+    assert hidden.status_code == 404
+    elsewhere = client.get(f"/v1/agent/threads/{console}/transcript", params={"project_id": "no-such-project", "actor": ACTOR})
+    assert elsewhere.status_code in (403, 404)

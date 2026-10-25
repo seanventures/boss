@@ -393,3 +393,42 @@ def test_a_placeholder_is_named_on_read_renamed_at_turn_end_and_backfilled(conne
     assert lc.backfill(connection, P, thread_ids=[FRESH])["renamed"] == []
     # A real name is never taken for a placeholder.
     assert not lc.is_placeholder("Conversation about the allocator · Oct 25, 16:15")
+
+
+# --- the console's conversation view (KG-V2) ------------------------------------------------------
+def test_the_conversation_view_names_what_it_wrote_and_the_earlier_items_it_used(connection):
+    with _in(connection, EARLIER):
+        precedent = _precedent(connection)
+    with _in(connection, LATER):
+        cause = lw.record(connection, project_id=P, learning_kind="root_cause", title="Advance handler skips the decrement",
+                          statement=f"Same class as [L:{precedent}].", detail={}, about={},
+                          evidence=[{"type": "file", "ref": "Adv.java:159", "excerpt": "no minus"}],
+                          confidence=0.7)["node"]["id"]
+    _message(connection, LATER, "assistant", f"Same class [L:{precedent}]; recorded as [L:{cause}].",
+             "2026-10-25T07:17:00Z", agent_role="sre",
+             tool_calls=[{"tool": "kg_precedent", "args": {"query": "early"}, "ok": True, "refs": [precedent]}])
+    view = lc.conversation_knowledge(connection, P, LATER)
+    assert view["title"] == "B4 · Incident: early repayments post more than the customer paid"
+    assert view["agent"]["role"] == "sre" and view["agent"]["name"] == "Site Reliability Engineer"
+    assert [p["id"] for p in view["produced"]] == [cause] and view["learned"] == 1
+    # Its own learning is written, not "used"; the earlier precedent is used (cited and reused).
+    assert [u["id"] for u in view["used"]] == [precedent] and view["used_earlier"] == 1
+    assert set(view["used"][0]["hows"]) == {"reused", "cited"}
+    assert view["names"][precedent]["title"] == "Allocator skips the remaining-amount decrement"
+    assert view["names"][cause]["kind"] == "root_cause"
+    # A kind the reader may not see is absent everywhere, its name too.
+    hidden = lc.conversation_knowledge(connection, P, LATER, withheld={"precedent"})
+    assert hidden["used"] == [] and precedent not in hidden["names"]
+    with pytest.raises(LookupError):
+        lc.conversation_knowledge(connection, P, "athr_no_such_thread")
+
+
+def test_who_asked_is_a_name_never_the_consoles_actor(connection):
+    connection.execute(text(
+        "INSERT INTO project_members (id, project_id, member_id, display_name, member_type) VALUES "
+        f"('pm_kgc_1', '{P}', 'executive_console', 'Executive Console Operator', 'system'), "
+        f"('pm_kgc_2', '{P}', 'release_manager', 'Release Manager', 'human')"))
+    assert lc.asked_by(connection, P, "executive_console") == {"kind": "console", "name": None}
+    assert lc.asked_by(connection, P, "metatron") == {"kind": "console", "name": None}
+    assert lc.asked_by(connection, P, "release_manager") == {"kind": "person", "name": "Release Manager"}
+    assert lc.asked_by(connection, P, "usr_nobody") == {"kind": "unknown", "name": None}

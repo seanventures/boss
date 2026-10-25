@@ -380,6 +380,114 @@ def scorecard(connection: Connection, project_id: str, thread_id: str, *,
     }
 
 
+#: Who asks through the console or Metatron: the signed-in operator, never named by this id.
+CONSOLE_ACTORS = frozenset({"executive_console", "metatron", "coo"})
+_KGN = re.compile(r"kgn_[A-Za-z0-9]+")
+
+
+def asked_by(connection: Connection, project_id: str, actor: Any) -> dict[str, Any]:
+    """Who opened the conversation, in words: ``console`` (the console's or Metatron's operator:
+    the reader names the signed-in person), a ``person`` or ``service`` by display name, or
+    ``unknown``. Never the raw actor id as a name."""
+    actor = str(actor or "")
+    if actor in CONSOLE_ACTORS:
+        return {"kind": "console", "name": None}
+    name = None
+    kind = "person"
+    try:
+        with connection.begin_nested():
+            row = connection.execute(text(
+                "SELECT kind, display_name FROM identity_principals WHERE id = :a"), {"a": actor}).mappings().first()
+            if row and row["display_name"]:
+                name = str(row["display_name"])
+                kind = "service" if str(row["kind"] or "") not in ("user", "person", "human") else "person"
+    except Exception:  # noqa: BLE001 — an install without principals: the member list names them
+        pass
+    if name is None:
+        try:
+            with connection.begin_nested():
+                row = connection.execute(text(
+                    "SELECT member_type, display_name FROM project_members WHERE project_id = :p AND member_id = :a"),
+                    {"p": project_id, "a": actor}).mappings().first()
+            if row and row["member_type"] == "system":
+                return {"kind": "console", "name": None}
+            if row and row["display_name"]:
+                name = str(row["display_name"])
+        except Exception:  # noqa: BLE001
+            pass
+    return {"kind": kind if name else "unknown", "name": name}
+
+
+def conversation_knowledge(connection: Connection, project_id: str, thread_id: str, *,
+                           withheld: Iterable[str] = ()) -> dict[str, Any]:
+    """What one conversation wrote to and took from the graph, for the console's conversation view
+    (read-only): its header (title, agent, who asked, when), the learnings it ``produced``, the
+    EARLIER items it consulted, cited or reused (not its own), and the title of every graph item
+    its transcript names — so an ``[L:kgn_…]`` or a quoted id is shown by name, never as an id.
+    Items of a kind the reader may not see are left out (``withheld``)."""
+    from .learning_live import _used
+    from .learning_writeback import LEARNING_KINDS
+
+    thread_id = str(thread_id or "").strip()
+    row = thread_row(connection, None, thread_id) if is_conversation(thread_id) else None
+    if row is None or (row["project_id"] != project_id and not connection.execute(text(
+            "SELECT 1 FROM kg_nodes WHERE project_id = :p AND kind = 'run' AND node_key = :k"),
+            {"p": project_id, "k": f"run:{thread_id}"}).first()):
+        raise LookupError(f"conversation not found: {thread_id}")
+    hidden = frozenset(withheld)
+    key = f"run:{thread_id}"
+    produced = [dict(r) for r in connection.execute(text(
+        """
+        SELECT d.id, d.kind, d.name AS title, d.first_seen FROM kg_edges e
+        JOIN kg_nodes s ON s.id = e.src_id JOIN kg_nodes d ON d.id = e.dst_id
+        WHERE e.project_id = :p AND e.kind = 'produced' AND s.node_key = :k AND e.valid_to IS NULL
+        ORDER BY d.first_seen, d.id
+        """), {"p": project_id, "k": key}).mappings()]
+    produced = [{"id": p["id"], "kind": p["kind"], "title": p["title"]} for p in produced
+                if p["kind"] not in hidden]
+    mine = {p["id"] for p in produced}
+    consulted, reused, _ = _used(connection, project_id, [key], hidden)
+    used: dict[str, dict[str, Any]] = {}
+    for edge, item in [("reused", i) for i in reused] + [("consulted", i) for i in consulted]:
+        if item["id"] in mine:
+            continue
+        seen = used.setdefault(item["id"], {**item, "hows": []})
+        how = "reused" if edge == "reused" else ("cited" if item.get("how") == "cited" else "consulted")
+        if how not in seen["hows"]:
+            seen["hows"].append(how)
+    raw = connection.execute(text(
+        "SELECT role, agent_role, content, tool_calls FROM agent_messages WHERE thread_id = :t "
+        "ORDER BY created_at, id"), {"t": thread_id}).mappings().all()
+    ids: list[str] = []
+    for message in raw:
+        ids += _KGN.findall(str(message["content"] or ""))
+        ids += _KGN.findall(json.dumps(_jsonish(message["tool_calls"]) or [], default=str))
+    ids = list(dict.fromkeys(ids + [p["id"] for p in produced] + list(used)))
+    names: dict[str, dict[str, Any]] = {}
+    if ids:
+        for n in connection.execute(text(
+                "SELECT id, kind, name FROM kg_nodes WHERE project_id = :p AND id = ANY(:i)"),
+                {"p": project_id, "i": ids}).mappings():
+            if n["kind"] not in hidden:
+                names[n["id"]] = {"title": n["name"], "kind": n["kind"]}
+    who = speaker_of(connection, row["project_id"], row.get("agent_role"))
+    actor = connection.execute(text("SELECT actor FROM agent_threads WHERE id = :t"), {"t": thread_id}).scalar()
+    learning = sorted(LEARNING_KINDS)
+    return {
+        "thread_id": thread_id,
+        "title": title_of(connection, thread_id),
+        "started_at": _iso(row.get("created_at")),
+        "agent": {"role": who["agent_role"], "name": who["agent_name"], "agent_id": who.get("agent_id"),
+                  "addressed": bool(who.get("addressed"))},
+        "asked_by": asked_by(connection, row["project_id"], actor),
+        "produced": produced,
+        "used": list(used.values()),
+        "names": names,
+        "learned": sum(1 for p in produced if p["kind"] in learning),
+        "used_earlier": len(used),
+    }
+
+
 def _is_press(message: Mapping[str, Any]) -> bool:
     """A press outcome (record_action_outcome): the operator's click, not an agent's reply."""
     content = str(message.get("content") or "")

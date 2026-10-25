@@ -24,6 +24,8 @@ import { identitiesProject } from "../../lib/agent-identity";
 import { instructionsApi, type VersionDoc } from "../../lib/agent-instructions";
 import { logHref } from "../../lib/log-url";
 import { usd } from "../../lib/money";
+import { isConsoleActor } from "../../lib/agent-conversation";
+import { useIdentity } from "../../components/identity/identity-provider";
 
 /** A URL in this console with `patch` applied, keeping the org and project the page is on. */
 export function consoleHref(patch: Record<string, string>): string {
@@ -146,9 +148,11 @@ export function ActCard({ act, viewer, inline, onClose, askless }: {
   const who = whoDid(act, viewer);
   const named = nameOf(who.roleKey, who.variant, who.personId, who.name);
   const state = actState(act);
+  const signedIn = useIdentity().me?.display_name || "The operator";
+  const personWord = (id: string | null | undefined) => (isConsoleActor(id) ? signedIn : id);
   const handedName = act.handedBy.kind === "boss" ? "BOSS"
     : act.handedBy.kind === "person"
-      ? (act.handedBy.id && act.handedBy.id === viewer ? "You" : act.handedBy.id || "A person")
+      ? (act.handedBy.id && act.handedBy.id === viewer ? "You" : personWord(act.handedBy.id) || "A person")
       : nameOf(act.handedBy.id ?? null).name;
   const handedVariant = act.handedBy.kind === "boss" ? "boss"
     : act.handedBy.kind === "person" ? (act.handedBy.id === viewer ? "you" : "person") : "agent";
@@ -217,7 +221,7 @@ export function ActCard({ act, viewer, inline, onClose, askless }: {
         ) : null}
         {act.accountable ? (
           <Row label="Accountable" tip="The person this work answers to.">
-            {act.accountable === viewer ? "You" : act.accountable}
+            {act.accountable === viewer ? "You" : personWord(act.accountable)}
           </Row>
         ) : null}
         {took || cost ? (

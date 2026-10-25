@@ -197,6 +197,8 @@ export type ActivityItem = {
   how: string; edgeLabel: string; label: string; verb: string;
   parentActId?: string; rootActId?: string;
   workflowRunId?: string;
+  /** A talk's conversation (links.thread_id): its row opens the conversation. */
+  threadId?: string;
   from?: { kind: string; id?: string; roleKey?: string };
   children: number;
   toolCalls: number;
@@ -369,6 +371,7 @@ export function parseActivity(w: unknown): ActivityPage {
         how: str(x.how), edgeLabel: str(x.edge_label), label: str(x.label), verb: str(x.verb, "Working"),
         parentActId: opt(x.parent_act_id), rootActId: opt(x.root_act_id),
         workflowRunId: opt(links.workflow_run_id ?? x.workflow_run_id),
+        threadId: opt(links.thread_id ?? x.thread_id),
         from: from ? { kind: str(from.kind), id: opt(from.id), roleKey: opt(from.role_key) } : undefined,
         children: num(obj(x.children).count ?? x.children),
         toolCalls: num(obj(x.turns).tool_calls),

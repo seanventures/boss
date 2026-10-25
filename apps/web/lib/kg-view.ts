@@ -162,6 +162,12 @@ export function getProof(w: Who, run: string, baseline?: string | null, signal?:
   return kgRead<KgRunProofResponse>(`${KG_VIEW_BASE}/proof`, { project_id: w.projectId, actor: w.actor, run, baseline }, signal);
 }
 
+/** What one conversation wrote to the graph and the earlier items it used, and the title of every
+ *  graph item its transcript names (lib/agent-conversation.ts parses it). */
+export function getConversationKnowledge(w: Who, thread: string, signal?: AbortSignal) {
+  return kgRead<unknown>(`${KG_VIEW_BASE}/conversation`, { project_id: w.projectId, actor: w.actor, thread }, signal);
+}
+
 export function getRules(w: Who, o: { status?: KgRuleStatus | null; scan_id?: string | null; area?: string | null } = {}, signal?: AbortSignal) {
   return kgRead<KgRulesResponse>(`${KG_VIEW_BASE}/rules`, { project_id: w.projectId, actor: w.actor, status: o.status, scan_id: o.scan_id, area: o.area }, signal);
 }

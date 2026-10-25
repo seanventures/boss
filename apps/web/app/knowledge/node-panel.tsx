@@ -11,6 +11,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Copy, X } from "@phosphor-icons/react";
 
 import { GatedButton } from "../../components/gated";
+import { conversationHref } from "../../lib/agent-conversation";
 import { openAgent } from "../../lib/agent-world";
 import { RUN_TITLE_MAX, agentName, approvalWords, eventWords, isWordsAttr, provenanceLines, stepWords, storyWords, useWords, type ProvLine } from "../../lib/kg-provenance";
 import { wordCut } from "../../lib/word-cut";
@@ -806,7 +807,7 @@ function WhyAndBlast({ w, nodeId, detail, onFocusNode }: { w: { projectId: strin
   );
 }
 
-function PanelActions({ w, node, detail, archived, rulesLocked, onEditRule, onChanged, orgId }: {
+export function PanelActions({ w, node, detail, archived, rulesLocked, onEditRule, onChanged, orgId }: {
   w: { projectId: string; actor: string }; node: KgViewNode | null; detail: KgNodeDetailResponse | null;
   archived: boolean; rulesLocked: string | null; onEditRule?: (id: string) => void; onChanged: () => void; orgId?: string | null;
 }) {
@@ -820,13 +821,15 @@ function PanelActions({ w, node, detail, archived, rulesLocked, onEditRule, onCh
   const proposedRule = node.kind === "rule" && (node.status ?? detail?.node.status) === "proposed";
   const learned = node.layer === "learning" && detail;
   const run = learned ? kgRunHref(detail.provenance, orgId) : null;
+  // A conversation's node (run:athr_…): read the conversation itself, brief to answer.
+  const thread = node.kind === "run" && /^run:athr_[A-Za-z0-9]+$/.test(node.key ?? "") ? (node.key as string).slice(4) : null;
   const act = async (label: string, fn: () => Promise<{ ok: boolean; error?: string }>, done: string) => {
     setBusy(label); setMsg(null);
     const r = await fn();
     setBusy(null);
     if (r.ok) { setMsg({ ok: true, text: done }); onChanged(); } else setMsg({ ok: false, text: r.error ?? "It did not go through." });
   };
-  if (!scannable && !proposedRule && !run && node.kind !== "fact") return null;
+  if (!scannable && !proposedRule && !run && !thread && node.kind !== "fact") return null;
   return (
     <section className="kg-sec kg-sec-actions" data-testid="kg-panel-actions">
       <h4 className="kg-eyebrow">Actions</h4>
@@ -849,6 +852,10 @@ function PanelActions({ w, node, detail, archived, rulesLocked, onEditRule, onCh
         </div>
       ) : null}
       {run ? <a className="ag-btn" href={run} data-testid="kg-panel-open-run">Open in Factory run</a> : null}
+      {thread ? (
+        <a className="ag-btn" href={conversationHref(thread, orgId)} data-testid="kg-panel-open-conversation"
+           title="The brief, the agent's answer and what it did">Open conversation</a>
+      ) : null}
       {node.kind === "fact" ? (
         confirmForget ? (
           <span className="kg-confirm" role="alertdialog" aria-label="Forget this fact?">
