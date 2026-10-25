@@ -2518,6 +2518,37 @@ _FREE_TEXT_ARGS = frozenset({
 })
 
 
+def _workflow_key_for_proposed_name(name: str, reg: "ToolRegistry") -> str | None:
+    """The single catalogue workflow a proposed name refers to, or None if it is not one.
+
+    All workflow work runs through start_workflow(workflow_key=…); the names an agent reaches for
+    are a template KEY ('business_rules_scan') or a step's CAPABILITY ('scan_business_rules').
+    This returns the workflow_key to start, and ONLY when the name unambiguously names a workflow:
+
+    - A registered tool is never a workflow. A read tool behind a button (query_db), or one whose
+      canonical name happens to equal a step capability (security_report), must stay a dead button,
+      not be hijacked into a costly workflow run.
+    - A template KEY resolves to itself.
+    - A CAPABILITY resolves only when EXACTLY ONE template binds it. A capability shared by many
+      templates ('report' is a step in 13) identifies no single workflow, so it is left to dead-end
+      rather than silently rewritten to whichever template comes first — an operator's one click
+      must not kick off a bigger workflow than the offer described.
+    """
+    if name in reg.names():
+        return None
+    from ..services.workflow_catalogue import CATALOGUE
+
+    for entry in CATALOGUE:
+        if entry.get("key") == name:
+            return entry.get("key")
+    bound = {entry.get("key") for entry in CATALOGUE
+             for step in (entry.get("steps") or [])
+             if ((step.get("binding") or {}).get("capability")) == name}
+    if len(bound) == 1:
+        return next(iter(bound))
+    return None
+
+
 def _placeholder_argument(args: dict) -> str:
     """The first argument that looks invented, described for the model, or ''."""
     for key, value in (args or {}).items():
@@ -2823,17 +2854,29 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
     def propose_action(ctx, *, project_id, actor, args):
         """Records an offer. Executing it is the operator's click, not this call."""
         name = ToolRegistry.canonical_tool_name(str(args.get("tool") or ""))
+        call_args = dict(args.get("args") or {})
         if name not in _DISCUSS_OPERATIONS_TOOLS:
-            return {"ok": False,
-                    "error": f"cannot propose {name!r}: not an action BOSS can run",
-                    "available": sorted(_DISCUSS_OPERATIONS_TOOLS)}
+            # A workflow is not a directly runnable tool: all workflow work goes through the one
+            # generic tool start_workflow(workflow_key=…). The names an agent actually reaches for
+            # are a workflow's template KEY or a step's CAPABILITY, neither of which is a registered
+            # tool. If the name resolves to exactly one catalogue workflow, REWRITE the offer to a
+            # start_workflow proposal and fall through to the SAME action_unavailable and
+            # _placeholder_argument gates every other proposal passes — so an invented argument via
+            # a capability/template name is refused exactly as it is via start_workflow directly,
+            # and so a registered read tool or an ambiguous capability is never silently hijacked.
+            workflow_key = _workflow_key_for_proposed_name(name, reg)
+            if not workflow_key:
+                return {"ok": False,
+                        "error": f"cannot propose {name!r}: not an action BOSS can run",
+                        "available": sorted(_DISCUSS_OPERATIONS_TOOLS)}
+            name = "start_workflow"
+            call_args["workflow_key"] = workflow_key
         unavailable = action_unavailable(name, getattr(ctx, "settings", None))
         if unavailable:
             return {"ok": False,
                     "error": f"cannot propose {name!r} here: {unavailable} Offer what BOSS "
                              "can run instead (for a deploy: a retry or `redeploy`), and ask the "
                              "operator to act by hand only if nothing in BOSS can."}
-        call_args = args.get("args") or {}
         placeholder = _placeholder_argument(call_args)
         if placeholder:
             # A BUTTON WITH AN INVENTED ARGUMENT IS A BUTTON THAT FAILS ON CLICK.
