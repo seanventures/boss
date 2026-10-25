@@ -1643,7 +1643,7 @@ def test_yes_alone_never_installs_a_local_model(world, boss_api) -> None:
     assert "A free local model: boss connect --install-ollama" in out
     # The card: one row per source, each with its fix.
     assert "API keys     not found. Export a key, then: boss connect keys" in out
-    assert "Codex        not found. Sign in with codex login --device-auth" in out
+    assert "Codex        not found. Sign in inside BOSS: boss connect codex" in out
     assert "Claude Code  not found. Sign in inside BOSS: boss connect claude" in out
     assert "Ollama       not found. Set it up: boss connect --install-ollama" in out
     assert "Default      none. Model calls fail closed until one is connected: boss connect" in out

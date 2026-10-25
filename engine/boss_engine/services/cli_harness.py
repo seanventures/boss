@@ -347,9 +347,9 @@ BUILTIN_CLI_HARNESSES: dict[str, CliHarnessSpec] = {
         install_hint="npm install -g @anthropic-ai/claude-code",
         token_env="CLAUDE_CODE_OAUTH_TOKEN",
         # No token_login_args: the variable is the login. See the field's own note.
-        token_hint="sign Claude Code in inside BOSS through its own login: boss connect "
-                   "claude (or the console's + Add model › Subscription › Claude Code › "
-                   "Sign in)",
+        # THE ONE SUBSCRIPTION ROUTE: Claude's own login, run inside BOSS. Nothing is pasted.
+        token_hint="sign in inside BOSS: run `boss connect claude`, or press Sign in in Repo "
+                   "and models",
         home_env="CLAUDE_CONFIG_DIR",
         default_home="~/.claude",
         docs_url="https://docs.claude.com/en/docs/claude-code/setup",
@@ -409,8 +409,10 @@ BUILTIN_CLI_HARNESSES: dict[str, CliHarnessSpec] = {
         home_env="CODEX_HOME",
         default_home="~/.codex",
         auth_file_name="auth.json",
-        token_hint="sign Codex in inside BOSS through its own login: boss connect codex "
-                   "(or the console's + Add model › Subscription › Codex › Sign in)",
+        # THE ONE SUBSCRIPTION ROUTE: Codex's own device login, run inside BOSS. Nothing is
+        # pasted, dropped or imported.
+        token_hint="sign in inside BOSS: run `boss connect codex`, or press Sign in in Repo "
+                   "and models",
         token_source_file="~/.codex/auth.json",
         docs_url="https://developers.openai.com/codex/cli",
         entitlement_source_id="openai_codex_chatgpt",
@@ -874,6 +876,44 @@ def _grok_catalog(spec: CliHarnessSpec, binary: str) -> tuple[str, ...]:
                  re.finditer(r"(?m)^\s*[*-]\s+(\S+)", listed))
 
 
+#: `boss connect <name>` for each subscription CLI (setup_pills.CONNECT_NAME is the same map).
+_CONNECT_NAME = {"claude_code": "claude", "codex": "codex", "grok": "grok"}
+
+#: How a legacy stored Claude token goes: the governed Disconnect of the Claude Code source
+#: (entitlements.disconnect_source → claude_credential.forget_subscription_login), which
+#: revokes the stored token and deletes it from its store. Then the in-BOSS sign-in.
+LEGACY_TOKEN_FIX = (
+    "Remove it with Repo and models › Sources › Claude Code › Disconnect (POST "
+    "/v1/entitlements/sources/anthropic_claude_code/disconnect), then run `boss connect claude`.")
+
+
+def legacy_token_stored(spec: "CliHarnessSpec", settings) -> bool:
+    """Does BOSS's secret store hold this CLI's token from the retired import (a Claude
+    setup-token), as opposed to the CLI being signed in inside BOSS?
+
+    Such a token is not a sign-in. `claude` reads CLAUDE_CODE_OAUTH_TOKEN ahead of its own
+    login, so while it is stored every run — and every proof — uses it, whatever login the
+    operator makes. One set in this process's environment (the install's .env) is the
+    install's own choice and is not counted here. Never raises; never returns the value."""
+    token_env = getattr(spec, "token_env", "")
+    if settings is None or not token_env or getattr(spec, "token_login_args", ()) \
+            or getattr(spec, "auth_file_secret", "") or os.environ.get(token_env):
+        return False
+    try:
+        return bool(stored_credential(settings, token_env, include_env=False))
+    except Exception:  # noqa: BLE001 — an unreachable store is "absent", not a crash
+        return False
+
+
+def _sign_in_step(spec: "CliHarnessSpec") -> str:
+    name = _CONNECT_NAME.get(spec.name)
+    if name:
+        return (f"sign in inside BOSS: run `boss connect {name}` on the BOSS host, or press "
+                f"Sign in in Repo and models (it runs {spec.signin_hint.split(' (')[0]} as the "
+                "BOSS user)")
+    return f"sign in with: {spec.signin_hint}"
+
+
 def detect(spec: CliHarnessSpec, settings=None) -> dict:
     """Is this coding agent installed on THIS machine, and is it signed in?
 
@@ -921,20 +961,16 @@ def detect(spec: CliHarnessSpec, settings=None) -> dict:
     #: connected" and "is the CLI signed in right now" cannot be shown as the separate
     #: questions they are — and a completed setup reads as an untouched one after a refresh.
     result["entitlement_source_id"] = spec.entitlement_source_id
-    # A STORED CREDENTIAL COUNTS AS PRESENT. The environment is only one of the two places
-    # it legitimately lives; the other is whatever secret store this install has, which is
-    # where BOSS's own API puts it.
+    # A STORED TOKEN IS NOT A SIGN-IN. It is what the retired setup-token import left in the
+    # secret store, and it used to be injected into the auth probe, so `claude auth status`
+    # said signed in while the CLI itself was signed out — and `boss connect claude` was told
+    # "already signed in" and then refused. It is reported as `legacy_token`, with the one
+    # governed way to remove it, and never counted as signed in.
     probe_env: dict = {}
-    stored_token = None
-    if settings is not None and _uses_env_route(spec):
-        try:
-            stored_token = GenericCliCodeAgent(settings, spec)._resolve_secret(spec.token_env)
-        except Exception:  # noqa: BLE001 — an unreachable store is "absent", not a crash
-            stored_token = None
-        if stored_token:
-            probe_env[spec.token_env] = stored_token
-    result["token_present"] = bool(
-        credential and (os.environ.get(credential) or stored_token))
+    legacy = legacy_token_stored(spec, settings)
+    result["legacy_token"] = legacy
+    result["legacy_token_fix"] = LEGACY_TOKEN_FIX if legacy else None
+    result["token_present"] = bool(credential and (os.environ.get(credential) or legacy))
     # CAN THIS SUBSCRIPTION BE USED FROM A SERVER AT ALL? Detection answers "is the CLI here";
     # this answers "could it be, on a machine the operator does not sit at". A CLI with no
     # token route can only ever be used where its login lives, and saying so is the difference
@@ -970,7 +1006,7 @@ def detect(spec: CliHarnessSpec, settings=None) -> dict:
         if not local_session:
             result["authenticated"] = False
             result["auth_detail"] = "No readable, service-user-owned private CLI session (mode 0600)."
-            result["next_step"] = f"sign in with: {spec.signin_hint}"
+            result["next_step"] = _sign_in_step(spec)
             return result
         if spec.name == "grok":
             config_problem = _grok_subscription_config_problem(Path(home))
@@ -1016,10 +1052,12 @@ def detect(spec: CliHarnessSpec, settings=None) -> dict:
                      and bool(_re.search(spec.auth_ok_pattern, out or "")))
     result["authenticated"] = signed_in
     result["ready"] = signed_in
-    if not signed_in:
-        # A subscription signs in INSIDE BOSS through its own login (BOSSAPP-769): nothing is
-        # set, pasted or imported, so the next step is that sign-in, never a credential.
-        result["next_step"] = spec.token_hint or f"sign in with: {spec.signin_hint}"
+    if legacy:
+        result["next_step"] = f"BOSS holds a legacy Claude token. {LEGACY_TOKEN_FIX}"
+    elif not signed_in:
+        # ONE ROUTE: the provider's own login, inside BOSS. Never "set a token" or "copy a
+        # file" — those imports are refused (setup_actions.subscription_import_refusal).
+        result["next_step"] = _sign_in_step(spec)
     return result
 
 

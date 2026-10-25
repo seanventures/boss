@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
 """What this install can use as a model: one row per source, with the command that fixes it.
 
-`boss connect --summary` and the installer's summary card print these rows. Each source is
-connected, found but not connected, or not found:
+`boss connect --summary` and the installer's summary card print these rows. They come from
+BOSS's own answer, GET /v1/setup — the view Repo and models renders — so the CLI says exactly
+what the console says:
 
-- API keys: the provider key names present in the install's private .env (never the values)
-- Codex, Claude Code, Grok Build: the subscription BOSS recorded (entitlement sources), or a
-  login found on this machine
-- Ollama: the "Anything OpenAI-compatible" connection that points at host.docker.internal, or
-  an Ollama found running or installed on this machine
-- Default: which model the project's roles use, read from /v1/settings
+- every model BOSS holds (a console-stored key, a key from the install's .env, a subscription,
+  a local model), with its pill from the LAST REAL PROOF: Working, Login expired, Key
+  rejected, Not checked... A login the provider refused is never "connected".
+- each subscription BOSS does not hold yet: signed in inside BOSS, needs sign-in, or not in
+  this image (and a legacy stored Claude token, with how to remove it)
+- Ollama when nothing local is connected: found or installed on this machine
+- Default: which engine and source the Build job actually resolves to, then the other jobs
 
-Read only. Talks to this install's own API on this machine. When the API does not answer, the
-rows say so and fall back to what this machine has.
+Read only. Talks to this install's own API on this machine. When /v1/setup does not answer,
+the rows fall back to what the .env, the recorded sources and this machine say, and say so.
 """
 from __future__ import annotations
 
@@ -33,6 +35,19 @@ SUBSCRIPTIONS = (
     ("claude", "Claude Code", "anthropic_claude_code", "claude_login"),
     ("grok", "Grok Build", "xai_grok_build", "grok_login"),
 )
+#: `boss connect <name>` -> the provider GET /v1/setup names it by.
+SETUP_PROVIDER = {"codex": "codex", "claude": "claude_code", "grok": "grok"}
+#: Pill states a job can still run on — setup_view.USABLE_MODEL (a test holds them equal).
+USABLE_STATES = frozenset({"working", "not_checked", "rate_limited", "paused_budget",
+                           "unreachable"})
+LOCAL_PROVIDERS = ("ollama", "vllm")
+#: engine -> the name an operator knows it by (setup_view.ENGINE_LABELS, the ones jobs use).
+ENGINE_LABELS = {
+    "claude_code": "Claude Code", "codex": "Codex", "grok": "Grok Build", "cursor": "Cursor",
+    "native": "OpenAI-compatible", "openrouter": "OpenRouter", "gemini": "Gemini", "xai": "xAI",
+    "ollama": "Ollama", "vllm": "Local model", "typesafe": "TypeSafe Jev",
+    "claude_agent_sdk": "Claude Agent SDK",
+}
 HOSTED_SETUP = ("setup-openai", "setup-anthropic", "setup-gemini", "setup-xai", "setup-openrouter")
 ROLE_ENGINES = ("code_agent_engine", "code_review_engine", "code_agent_strong_engine",
                 "code_agent_low_cost_engine")
@@ -124,7 +139,11 @@ def hosted_sources(items: list[dict]) -> list[str]:
 
 
 def hosted_connected(api_url: str, api_key: str, env_file: Path) -> bool | None:
-    """True when any hosted or public model is connected. None when BOSS cannot say."""
+    """True when a hosted or public model BOSS can use is connected — from its proof, when
+    BOSS's setup view answers (a refused login is not usable). None when BOSS cannot say."""
+    view = setup_view(api_url, api_key)
+    if view is not None:
+        return any(usable(m) and not is_local(m) for m in _models(view))
     if env_key_names(env_file):
         return True
     items = sources(api_url, api_key)
@@ -142,6 +161,121 @@ def role_settings(api_url: str, api_key: str) -> dict[str, dict] | None:
         if isinstance(knobs, list) else {}
 
 
+# ── From BOSS's own view (GET /v1/setup) ──────────────────────────────────────────────────────
+
+def setup_view(api_url: str, api_key: str) -> dict | None:
+    """GET /v1/setup, or None when BOSS did not answer with a view."""
+    if not api_key:
+        return None
+    body = api_get(api_url, api_key, f"/v1/setup?project_id={PROJECT}")
+    return body if body is not None and isinstance(body.get("models"), list) else None
+
+
+def _models(view: dict) -> list[dict]:
+    return [m for m in view.get("models") or [] if isinstance(m, dict)]
+
+
+def _pill(model: dict) -> dict:
+    pill = model.get("pill")
+    return pill if isinstance(pill, dict) else {}
+
+
+def is_local(model: dict) -> bool:
+    """A model on this machine: Ollama or a local URL, or the OpenAI-compatible connection
+    `boss connect ollama` makes at host.docker.internal."""
+    if model.get("provider") in LOCAL_PROVIDERS or model.get("kind") == "local":
+        return True
+    host = urllib.parse.urlparse(str(model.get("base_url") or "")).hostname
+    return model.get("provider") == "custom" and host == LOCAL_HOST
+
+
+def usable(model: dict) -> bool:
+    return _pill(model).get("state") in USABLE_STATES
+
+
+def _origin(model: dict) -> str:
+    if model.get("kind") == "subscription":
+        return "subscription"
+    if is_local(model):
+        return "local"
+    return "install key" if model.get("source") == "install" else "console key"
+
+
+def _model_text(model: dict) -> str:
+    pill = _pill(model)
+    text = str(pill.get("label") or pill.get("state") or "unknown")
+    if model.get("model") and model.get("kind") != "subscription":
+        text += f" ({model['model']})"
+    tip = str(pill.get("tip") or "").strip()
+    return f"{text}. {tip}" if tip else text
+
+
+def _detected_text(entry: dict | None, name: str, found_here: bool, detecting: bool) -> str:
+    if entry and entry.get("legacy_token"):
+        return f"BOSS holds a legacy Claude token. {entry.get('fix') or ''}".strip()
+    state = (entry or {}).get("found")
+    if state == "signed_in":
+        return f"signed in inside BOSS, not connected yet: boss connect {name}"
+    if state == "needs_sign_in" or (detecting and not state):
+        return f"not signed in inside BOSS. Sign in there: boss connect {name}"
+    if found_here:
+        return (f"signed in on this machine, not inside BOSS. Sign in there: "
+                f"boss connect {name}")
+    return f"not connected. Sign in inside BOSS: boss connect {name}"
+
+
+def _job_text(job: dict) -> str:
+    resolved = job.get("resolved") if isinstance(job.get("resolved"), dict) else None
+    if not resolved or not resolved.get("engine"):
+        return f"{job.get('label') or job.get('job')} → nothing"
+    engine = str(resolved["engine"])
+    name = ENGINE_LABELS.get(engine, engine)
+    model = f" · {resolved['model']}" if resolved.get("model") else ""
+    source = f" on {resolved['source_id']}" if resolved.get("source_id") else ""
+    return f"{job.get('label') or job.get('job')} → {name}{model}{source}"
+
+
+def view_rows(view: dict, env_file: Path, found: dict[str, bool]) -> list[tuple[str, str]]:
+    """The rows, from BOSS's own view: every pill is the console's."""
+    out: list[tuple[str, str]] = []
+    models = _models(view)
+    for model in models:
+        out.append((f"{model.get('label') or model.get('provider')} ({_origin(model)})",
+                    _model_text(model)))
+    held = {m.get("provider") for m in models}
+    detected = {d.get("provider"): d for d in view.get("detected") or [] if isinstance(d, dict)}
+    for name, label, _source_id, found_key in SUBSCRIPTIONS:
+        provider = SETUP_PROVIDER[name]
+        if provider in held:
+            continue
+        out.append((label, _detected_text(detected.get(provider), name,
+                                          bool(found.get(found_key)),
+                                          bool(view.get("detecting")))))
+    if not any(is_local(m) for m in models):
+        if found.get("ollama"):
+            out.append(("Ollama", "found, not connected: boss connect ollama"))
+        elif found.get("ollama_installed"):
+            out.append(("Ollama", "installed, not running: boss connect --install-ollama"))
+        else:
+            out.append(("Ollama", "not found. Set it up: boss connect --install-ollama"))
+    jobs = [j for j in view.get("jobs") or [] if isinstance(j, dict)]
+    build = next((j for j in jobs if j.get("job") == "build"), None)
+    if build is not None and (build.get("resolved") or {}).get("engine"):
+        out.append(("Default", _job_text(build)))
+    elif not any(usable(m) for m in models):
+        out.append(("Default", "none. Model calls fail closed until one is connected: "
+                               "boss connect"))
+    else:
+        out.append(("Default", "nothing resolves for Build. Choose one in Repo and models, "
+                               "Who does what"))
+    others = [_job_text(j) for j in jobs if j.get("job") != "build"]
+    if others:
+        out.append(("Jobs", "; ".join(others)))
+    if chat_is_local(env_file):
+        out.append(("Chat", "the local Ollama model (OPENAI_* in .env point at it)"))
+    return out
+
+
 def read_found(path: Path | None) -> dict[str, bool]:
     if path is None:
         return {}
@@ -153,21 +287,31 @@ def read_found(path: Path | None) -> dict[str, bool]:
 
 
 def rows(api_url: str, api_key: str, env_file: Path, found: dict[str, bool]) -> list[tuple[str, str]]:
+    view = setup_view(api_url, api_key)
+    if view is not None:
+        return view_rows(view, env_file, found)
+    return fallback_rows(api_url, api_key, env_file, found)
+
+
+def fallback_rows(api_url: str, api_key: str, env_file: Path,
+                  found: dict[str, bool]) -> list[tuple[str, str]]:
+    """When /v1/setup does not answer: the .env, the recorded sources and this machine. No
+    pill is known, so nothing here is called Working."""
     out: list[tuple[str, str]] = []
     items = sources(api_url, api_key) if api_key else None
     keys = env_key_names(env_file)
     out.append(("API keys", f"connected: {' '.join(keys)} (values not shown)" if keys else
                 "not found. Export a key, then: boss connect keys"))
     for name, label, source_id, found_key in SUBSCRIPTIONS:
-        if items is not None and any(item.get("source_id") == source_id and
-                                     item.get("connection_status") == "connected"
-                                     for item in items):
-            out.append((label, "connected"))
+        item = next((i for i in items or [] if i.get("source_id") == source_id), None)
+        pill = item.get("pill") if item and isinstance(item.get("pill"), dict) else None
+        if pill:
+            out.append((label, str(pill.get("label") or pill.get("state"))))
+        elif item is not None and item.get("connection_status") == "connected":
+            out.append((label, "connected (recorded; its last proof is not known here — "
+                               "see Repo and models)"))
         elif found.get(found_key):
             out.append((label, f"found, not connected: boss connect {name}"))
-        elif name == "codex":
-            out.append((label, "not found. Sign in with codex login --device-auth, "
-                               "then: boss connect codex"))
         else:
             out.append((label, f"not found. Sign in inside BOSS: boss connect {name}"))
     model = ollama_connection(items) if items is not None else None
@@ -184,6 +328,9 @@ def rows(api_url: str, api_key: str, env_file: Path, found: dict[str, bool]) -> 
         out.append(("Chat", "the local Ollama model (OPENAI_* in .env point at it)"))
     if items is None:
         out.append(("Note", "BOSS did not answer, so connected subscriptions are not shown. "
+                            "Try: boss status"))
+    else:
+        out.append(("Note", "BOSS's setup view did not answer; these rows are unproven. "
                             "Try: boss status"))
     return out
 
@@ -219,6 +366,9 @@ def main() -> int:
     args = parser.parse_args()
     api_key = os.environ.get("BOSS_API_KEY", "")
     if args.local:
+        view = setup_view(args.api_url, api_key)
+        if view is not None:
+            return 0 if any(usable(m) and is_local(m) for m in _models(view)) else 3
         items = sources(args.api_url, api_key) if api_key else None
         if items is None:
             return 4
@@ -226,8 +376,10 @@ def main() -> int:
     if args.hosted:
         state = hosted_connected(args.api_url, api_key, args.env_file)
         return 0 if state is True else 3 if state is False else 4
-    for label, text in rows(args.api_url, api_key, args.env_file, read_found(args.found)):
-        print(f"    {label:<12} {text}")
+    shown = rows(args.api_url, api_key, args.env_file, read_found(args.found))
+    width = max([12, *(len(label) for label, _ in shown)])
+    for label, text in shown:
+        print(f"    {label:<{width}} {text}")
     return 0
 
 

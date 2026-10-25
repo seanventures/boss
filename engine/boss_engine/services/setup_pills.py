@@ -19,7 +19,9 @@ from typing import Any, Optional
 TONES = ("green", "amber", "red", "grey", "busy")
 
 #: Actions a pill may offer. The console maps each to one control.
-ACTIONS = ("connect", "test", "replace", "fix_link", "budget", "default_model")
+#: "sign_in" opens the in-BOSS sign-in for a subscription (its provider's own login, run inside
+#: the BOSS server); nothing is pasted, so a subscription is never offered "replace".
+ACTIONS = ("connect", "test", "replace", "sign_in", "fix_link", "budget", "default_model")
 
 #: GitHub pages a fix links to. The token list is where a fine-grained token's permissions and
 #: repositories are edited; the org page is where an owner approves a pending token request.
@@ -89,9 +91,11 @@ MODEL: dict[str, dict[str, Any]] = {
     "key_rejected": {"label": "Key rejected", "tone": "red",
                      "tip": "The provider refused this key.",
                      "action": "replace"},
+    # Only a subscription's login expires (an API key is "Key rejected"), and a subscription
+    # is never pasted: the fix is to sign in again inside BOSS, so the action is Sign in.
     "login_expired": {"label": "Login expired", "tone": "red",
                       "tip": "{provider_fix}",
-                      "action": "replace"},
+                      "action": "sign_in"},
     # BOSS's own failure, never the provider's: the stored key could not be decrypted (a changed
     # master key). The provider was not asked, so it is not "Key rejected".
     "key_unreadable": {"label": "Can't read key", "tone": "red",
@@ -130,17 +134,32 @@ MODEL: dict[str, dict[str, Any]] = {
                     "action": "fix_link", "fix_url": _decision_link},
     "not_on_server": {"label": "Not on server", "tone": "grey",
                       "tip": "Install and sign in on the BOSS server first."},
+    # A Claude token the retired setup-token import stored. `claude` would run on it instead
+    # of the login made inside BOSS, so Connect refuses until it is removed (cli_harness
+    # LEGACY_TOKEN_FIX: the governed Disconnect of Claude Code, which forgets it).
+    "legacy_token": {"label": "Old token stored", "tone": "red",
+                     "tip": "Disconnect Claude Code in Sources to remove it, then sign in."},
     # A check that failed for a reason none of the above names. Still one pill, still a fix.
     "failed": {"label": "Check failed", "tone": "red",
                "tip": "The test question failed. Press Test to retry.",
                "action": "test"},
 }
 
-#: Per-provider fix for an expired subscription login (the `login_expired` tip).
+#: The `boss connect <name>` that signs each subscription in inside BOSS.
+CONNECT_NAME = {"claude_code": "claude", "codex": "codex", "grok": "grok"}
+
+
+def _sign_in_fix(provider: str) -> str:
+    return (f"Run `boss connect {CONNECT_NAME[provider]}` (signs in inside BOSS) or press "
+            "Sign in, then Test.")
+
+
+#: Per-provider fix for an expired subscription login (the `login_expired` tip). THE ONE
+#: SUBSCRIPTION ROUTE: the provider's own login runs inside BOSS (`boss connect <provider>` or
+#: the console's Sign in), then Test proves it. Never a token, a file or an import — those are
+#: refused (`test_no_fix_offers_a_refused_import`).
 LOGIN_FIX = {
-    "claude_code": "Make a new token with claude setup-token.",
-    "codex": "Run codex login on your computer, then drop auth.json.",
-    "grok": "Sign in to Grok on the BOSS server again.",
+    **{provider: _sign_in_fix(provider) for provider in CONNECT_NAME},
     "cursor": "Sign in to Cursor on the BOSS server again.",
 }
 DEFAULT_LOGIN_FIX = "Sign in again, then press Test."

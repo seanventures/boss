@@ -151,16 +151,19 @@ def test_a_stored_token_reaches_the_cli_on_every_run():
     assert "self._resolve_secret(self.spec.token_env)" in source
 
 
-def test_and_detection_sees_it_too():
-    """Otherwise the operator who has just handed the token over is told it did not arrive:
-    the probe runs in a process whose environment does not contain what BOSS stored."""
+def test_and_detection_reports_it_as_legacy_not_signed_in():
+    """A token BOSS stored is the retired setup-token import, not a sign-in. Detection used to
+    inject it into the auth probe, so a signed-out `claude` reported signed in and
+    `boss connect claude` was told "already signed in" and then refused (BOSSAPP-769, P1-6).
+    It is now reported as `legacy_token` (with the governed removal), never injected."""
     import inspect
 
     from boss_engine.services import cli_harness
 
     source = inspect.getsource(cli_harness.detect)
-    assert "extra_env=probe_env" in source
-    assert "_resolve_secret(spec.token_env)" in source
+    assert "legacy_token_stored(spec, settings)" in source
+    assert "_resolve_secret(spec.token_env)" not in source
+    assert "probe_env[" not in source
     # And `detect_all` supplies the settings that lookup needs.
     assert "detect(spec, settings)" in inspect.getsource(cli_harness.detect_all)
 

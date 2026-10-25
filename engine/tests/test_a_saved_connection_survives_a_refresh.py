@@ -83,7 +83,9 @@ def test_a_connected_subscription_is_a_connected_model(connection):
          connection_status="connected")
 
     [model] = _models(connection)
-    assert model["kind"] == "subscription" and model["pill"]["label"] == "Working"
+    # Listed and usable — but NOT "Working": nothing has proved it yet (BOSSAPP-769, a session
+    # recorded without a proof is Not checked; the page's Test settles it).
+    assert model["kind"] == "subscription" and model["pill"]["label"] == "Not checked"
     assert setup_view.basics(_view(connection))["model"] is True
 
 
@@ -135,7 +137,8 @@ def test_the_view_says_which_one_was_saved_and_when(connection):
     [model] = _models(connection)
     assert model["source_id"] == "openai_codex_chatgpt"
     assert model["provider"] == "codex" and model["label"] == "Codex"
-    assert model["checked_at"].startswith("2026-09-18")
+    # Saved, never proved: no check time is invented from when the row was written.
+    assert model["checked_at"] is None and model["pill"]["state"] == "not_checked"
 
 
 def test_rows_keep_their_order_when_a_check_updates_one(connection):

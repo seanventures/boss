@@ -585,6 +585,9 @@ class EntitlementBrokerService:
             connection_denial = self._connection_policy_denial(row)
             if connection_denial:
                 return connection_denial
+            refused = self._credential_refused(row)
+            if refused:
+                return refused
             return "active"
         if runtime_supported and not credential_present:
             if self._requires_official_oauth(row):
@@ -595,6 +598,26 @@ class EntitlementBrokerService:
         if stored_status == "missing_credentials" and credential_present and runtime_supported:
             return "active"
         return stored_status
+
+    @staticmethod
+    def _credential_refused(row: dict[str, Any]) -> Optional[str]:
+        """"login_rejected" / "key_rejected" when this source's last real proof (or call) was
+        refused by the provider, else None. Decided by `setup_view.source_state` — the one
+        answer the Models pill, the Sources pill and every other surface read — so a source
+        whose login the provider refused is never "active" (the live bug: Codex refused 401,
+        Models said Login expired, Sources said Active · Available)."""
+        from .setup_checks import now_utc
+        from .setup_view import CREDENTIAL_REFUSED, _obj, source_state
+
+        subscription = row.get("cost_mode") == "subscription"
+        state, _checked, _retry = source_state(
+            kind="subscription" if subscription else "metered",
+            metadata=_obj(row.get("connection_metadata")),
+            capacity=_obj(row.get("observed_capacity")),
+            budget_spent=False, now=now_utc())
+        if state not in CREDENTIAL_REFUSED:
+            return None
+        return "login_rejected" if subscription else "key_rejected"
 
     def _runtime_context(self, row: dict[str, Any]) -> tuple[bool, bool]:
         computed_runtime_supported, computed_credential_present = self._runtime_flags(
@@ -1025,7 +1048,9 @@ class EntitlementBrokerService:
                 "credential_present": credential_present,
                 "runtime_supported": runtime_supported,
                 "capacity_state": (
-                    (payload.get("observed_capacity") or {}).get("capacity_state")
+                    "unavailable"
+                    if payload["effective_status"] in ("login_rejected", "key_rejected")
+                    else (payload.get("observed_capacity") or {}).get("capacity_state")
                     or ("available" if credential_present else "unknown")
                 ),
                 "official_oauth_connected": bool(
