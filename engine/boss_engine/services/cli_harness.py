@@ -347,9 +347,9 @@ BUILTIN_CLI_HARNESSES: dict[str, CliHarnessSpec] = {
         install_hint="npm install -g @anthropic-ai/claude-code",
         token_env="CLAUDE_CODE_OAUTH_TOKEN",
         # No token_login_args: the variable is the login. See the field's own note.
-        token_hint="run `claude setup-token` on a machine where you are signed in — it mints "
-                   "a long-lived token meant for exactly this, and does not disturb the "
-                   "session you use yourself",
+        token_hint="sign Claude Code in inside BOSS through its own login: boss connect "
+                   "claude (or the console's + Add model › Subscription › Claude Code › "
+                   "Sign in)",
         home_env="CLAUDE_CONFIG_DIR",
         default_home="~/.claude",
         docs_url="https://docs.claude.com/en/docs/claude-code/setup",
@@ -409,9 +409,8 @@ BUILTIN_CLI_HARNESSES: dict[str, CliHarnessSpec] = {
         home_env="CODEX_HOME",
         default_home="~/.codex",
         auth_file_name="auth.json",
-        token_hint="on a machine where you are signed in, run "
-                   "scripts/store_subscription_token.py codex — it stores the Codex CLI's own "
-                   "credential file so nobody has to handle a credential by hand",
+        token_hint="sign Codex in inside BOSS through its own login: boss connect codex "
+                   "(or the console's + Add model › Subscription › Codex › Sign in)",
         token_source_file="~/.codex/auth.json",
         docs_url="https://developers.openai.com/codex/cli",
         entitlement_source_id="openai_codex_chatgpt",
@@ -1018,12 +1017,9 @@ def detect(spec: CliHarnessSpec, settings=None) -> dict:
     result["authenticated"] = signed_in
     result["ready"] = signed_in
     if not signed_in:
-        # A token already set and still not signed in means the token is the thing to fix,
-        # not the browser login — different problem, different command.
-        result["next_step"] = (
-            f"set {credential} on this install ({spec.token_hint})"
-            if credential and not result["token_present"] and not _is_interactive_host()
-            else f"sign in with: {spec.signin_hint}")
+        # A subscription signs in INSIDE BOSS through its own login (BOSSAPP-769): nothing is
+        # set, pasted or imported, so the next step is that sign-in, never a credential.
+        result["next_step"] = spec.token_hint or f"sign in with: {spec.signin_hint}"
     return result
 
 

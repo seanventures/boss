@@ -38,9 +38,7 @@ MODEL_API_KEY=""
 MODEL_NAME=""
 MODEL_BASE_URL=""
 PROJECT_ID="boss-dogfood"
-SUB_TOKEN=""
 SECRET_STORE=""
-ACCEPT_DB_FALLBACK=0
 EXTRA_INSTALL_ARGS=()
 REMOTE_DOCKER="docker"
 
@@ -67,7 +65,8 @@ commands:
   smoke        prove the install works: API, database, console, model wiring
   status       containers, ports and disk on the host
   model        connect an API KEY to the remote install — one command, no tunnel
-  subscription connect a Claude/Codex SUBSCRIPTION token — pipe one line on stdin
+  subscription sign a Codex / Claude Code / Grok SUBSCRIPTION in inside BOSS on the host,
+               through the provider's own login (open the link it prints), then prove it
   env          print export lines for BOSS_API / BOSS_API_KEY (the host tools' key) / PROJECT
   tunnel       forward the host's API and console to this laptop over SSH
   logs         tail a service's logs (--service api|worker|web|db)
@@ -94,18 +93,16 @@ options:
                        fix something in the engine.
   --all-services       update: rebuild every service
   --provider NAME      model: openrouter | openai | anthropic | gemini | xai | custom
+                       subscription: codex | claude_code | grok
   --model NAME         model: which model, e.g. anthropic/claude-sonnet-4.5
   --base-url URL       model: required for a custom OpenAI-compatible provider
   --project ID         model/env: project id (default boss-dogfood)
   --secret-store WHICH install: database (default, 4 containers) or infisical (6 containers,
                        ~400MB more, a real secret store). Both stay on the server
-  --accept-database-fallback
-                       subscription: store the credential in Postgres when the install has
-                       no secret store. Say yes deliberately; it is a live credential
   --                   everything after this is passed through to install.sh
 
-Model keys and subscription tokens are read from a hidden prompt or stdin.
-Do not pass them as arguments; the shell saves those in history.
+Model keys are read from a hidden prompt or stdin. Do not pass them as arguments; the
+shell saves those in history. A subscription is never pasted: it signs in inside BOSS.
 
 examples:
   scripts/install/remote.sh --host root@192.0.2.202 --key ~/.config/boss/deploy_key install --yes
@@ -113,9 +110,8 @@ examples:
   scripts/install/remote.sh --host root@192.0.2.202 --key ~/.config/boss/deploy_key tunnel
   scripts/install/remote.sh --host root@192.0.2.202 --key ~/.config/boss/deploy_key \
       model --provider openrouter --model anthropic/claude-sonnet-4.5
-  claude setup-token | scripts/install/remote.sh --host root@192.0.2.202 \
-      --key ~/.config/boss/deploy_key subscription --provider claude_code
-  # Codex auth file: remote.sh ... subscription --provider codex
+  scripts/install/remote.sh --host root@192.0.2.202 --key ~/.config/boss/deploy_key \
+      subscription --provider codex
   scripts/install/remote.sh --host root@192.0.2.202 --key ~/.config/boss/deploy_key uninstall --yes
 USAGE
 }
@@ -127,7 +123,8 @@ while [[ $# -gt 0 ]]; do
     --token|--token=*|--api-key|--api-key=*)
       die "Refusing a secret on the command line. It would be saved in shell history and process listings. Use the hidden prompt or pipe one line on stdin." ;;
     --secret-store) SECRET_STORE="${2:-}"; shift 2 ;;
-    --accept-database-fallback) ACCEPT_DB_FALLBACK=1; shift ;;
+    --accept-database-fallback)
+      die "--accept-database-fallback is gone: a subscription signs in inside BOSS (subscription --provider codex|claude_code|grok); nothing is stored from this laptop." ;;
     --purge-data) PURGE_DATA=1; shift ;;
     --skip-backup) SKIP_BACKUP=1; shift ;;
     --confirm-purge) CONFIRM_PURGE="${2:-}"; shift 2 ;;
@@ -316,10 +313,7 @@ cmd_install() {
   printf "\n${B}What next${N}\n\n"
   say "Check it:        ${D}$(again) smoke${N}"
   say "An API key:      ${D}$(again) model --provider openrouter${N} (hidden prompt)"
-  say "A subscription:  ${D}claude setup-token${N}, then ${D}read -rs T && printf %s \"\$T\" | $(again) subscription --provider claude_code; unset T${N}"
-  say "Codex subscription: ${D}$(again) subscription --provider codex < ~/.codex/auth.json${N}"
-  say "Claude CLI login: claude auth login inside the API container, then --connect-claude-local"
-  say "Grok CLI login: grok login --device-auth inside the API container, then --connect-grok-local"
+  say "A subscription:  ${D}$(again) subscription --provider codex${N} (or claude_code, grok): signs in inside BOSS through the provider's own login"
   say "Shell variables: ${D}eval \"\$($(again) env)\"${N}"
   printf "\n"
 }
@@ -652,108 +646,31 @@ except (ValueError, TypeError):
       ok "model key stored; live provider call has not been verified"
     fi
   else
-    warn "the API did not accept the model connection; inspect setup status and API logs"
+    # BOSS's own refusal, "headline — fix", and nothing added to it (boss_refusal.py).
+    warn "$(printf '%s' "$out" | python3 "$REPO_ROOT/scripts/install/boss_refusal.py" \
+      "the API did not accept the model connection (no reason was given)")"
     return 1
   fi
 }
 
-# THE SUBSCRIPTION EQUIVALENT OF `model`.
+# THE SUBSCRIPTION EQUIVALENT OF `model` (BOSSAPP-769).
 #
-# The documented route was: run store_subscription_token.py on your laptop, then curl
-# /v1/setup/coding-agents/connect with $BOSS_API and $BOSS_API_KEY — two variables nobody had
-# been told how to set for a remote install, and a script that stores the token in the WRONG
-# install because it writes to whichever BOSS is local. Both calls belong on the server.
+# A subscription is never carried from this laptop: no token, no auth file. It signs in INSIDE
+# the BOSS server through the provider's own login — the host's `boss connect PROVIDER`, which
+# asks BOSS to start that login, prints the link and code for you to open here, waits, then
+# connects and proves it with one governed turn. This runs exactly that, over `ssh -t`.
 cmd_subscription() {
-  [[ -n "$PROVIDER" ]] || die "--provider is required (claude_code | codex)"
-  local token="$SUB_TOKEN"
-  if [[ -z "$token" ]]; then
-    [[ ! -t 0 ]] || die "no token: pipe one in (claude setup-token | … subscription --provider claude_code). Do not pass it as an argument; that stores it in shell history."
-    token="$(cat)"
-  fi
-  token="${token//$'\n'/}"
-  [[ -n "$token" ]] || die "the token was empty"
-  head_ "Connecting a $PROVIDER subscription on $HOST"
+  local word
+  case "$PROVIDER" in
+    codex) word=codex ;;
+    claude|claude_code) word=claude ;;
+    grok) word=grok ;;
+    *) die "--provider is required (codex | claude_code | grok)" ;;
+  esac
+  [[ -t 0 && -t 1 ]] || die "a subscription signs in inside BOSS through its own login, which needs you at a terminal (you open the link it prints). Run this from a terminal, or on the host: boss connect $word"
+  head_ "Signing $PROVIDER in inside BOSS on $HOST"
   preflight
-
-  local payload
-  payload="$(PROJ="$PROJECT_ID" PROV="$PROVIDER" TOK="$token" ACC="$ACCEPT_DB_FALLBACK" \
-    python3 -c 'import json,os
-print(json.dumps({"project_id":os.environ["PROJ"],"actor":"ceo",
-  "provider":os.environ["PROV"],"credential":os.environ["TOK"],
-  "accept_database_fallback":os.environ["ACC"]=="1"}))')" || die "could not build the request"
-
-  say "provider: $PROVIDER   project: $PROJECT_ID   token: ${#token} chars (not shown)"
-
-  # THE SCRIPT GOES OVER ARGV, THE CREDENTIAL OVER STDIN.
-  #
-  # Written as one quoted ssh string first, and three levels of shell quoting later `$K` was
-  # expanding on the wrong machine. The script is base64'd instead — it holds no secret, so
-  # argv is fine for it — while the payload, which does, stays on stdin.
-  local remote_script encoded out
-  IFS= read -r -d '' remote_script <<'EOS' || true
-set -eu
-DIR="$1"; PORT="$2"; PROJ="$3"; PROV="$4"
-# the host tools' key (boss identity host-key), else the shared key while it still works
-K=$(grep '^BOSS_HOST_API_KEY=' "$DIR/.env" 2>/dev/null | head -1 | cut -d= -f2- || true)
-if [ -z "${K:-}" ]; then
-  bash "$DIR/scripts/install/boss.sh" --dir "$DIR" identity host-key >/dev/null 2>&1 || true
-  K=$(grep '^BOSS_HOST_API_KEY=' "$DIR/.env" 2>/dev/null | head -1 | cut -d= -f2- || true)
-fi
-[ -n "${K:-}" ] || K=$(grep '^BOSS_API_KEY=' "$DIR/.env" 2>/dev/null | head -1 | cut -d= -f2- || true)
-[ -n "${K:-}" ] || { echo NOKEY; exit 1; }
-B="http://127.0.0.1:$PORT"
-STORE=$(curl -sS -X POST "$B/v1/setup/coding-agents/credential" \
-  -H "x-boss-api-key: $K" -H 'Content-Type: application/json' --data-binary @- || true)
-echo "STORE:$STORE"
-case "$STORE" in *secret_store_fallback_not_accepted*) exit 0 ;; esac
-CONNECT=$(curl -sS -X POST "$B/v1/setup/coding-agents/connect" \
-  -H "x-boss-api-key: $K" -H 'Content-Type: application/json' \
-  -d "{\"project_id\":\"$PROJ\",\"actor\":\"ceo\",\"provider\":\"$PROV\",\"prove\":true}" || true)
-echo "CONNECT:$CONNECT"
-EOS
-  encoded=$(printf '%s' "$remote_script" | base64 | tr -d '\n')
-  out="$(printf '%s' "$payload" | ssh "${SSH_OPTS[@]}" "$HOST" \
-      "printf %s '$encoded' | base64 -d > /tmp/boss-sub.\$\$ && \
-       bash /tmp/boss-sub.\$\$ '$DIR' '$API_PORT' '$PROJECT_ID' '$PROVIDER'; \
-       rc=\$?; rm -f /tmp/boss-sub.\$\$; exit \$rc" 2>&1)" || true
-
-  [[ "$out" == *NOKEY* ]] && die "no API key in $DIR/.env on $HOST — is BOSS installed there?"
-  if printf '%s' "$out" | grep -q 'secret_store_fallback_not_accepted'; then
-    warn "this install has no secret store, so BOSS stopped rather than putting a live"
-    say  "  credential in its database. Re-run with --accept-database-fallback to allow it."
-    return 1
-  fi
-  if ! printf '%s' "$out" | sed -n 's/^STORE://p' | python3 -c 'import json,sys
-try:
-    data=json.load(sys.stdin)
-except (ValueError, TypeError):
-    sys.exit(1)
-sys.exit(0 if data.get("ok") is True else 1)' 2>/dev/null; then
-    warn "BOSS did not store the subscription credential; inspect API logs"
-    return 1
-  fi
-  # PROVED, NOT ASSUMED: BOSS answers one trivial, reserved and receipted turn on the
-  # subscription before it calls it connected, and explains why when it cannot.
-  if printf '%s' "$out" | sed -n 's/^CONNECT://p' | python3 -c 'import json,sys
-try:
-    data=json.load(sys.stdin)
-except (ValueError, TypeError):
-    sys.exit(1)
-proof=data.get("proof") if isinstance(data.get("proof"), dict) else {}
-sys.exit(0 if data.get("ok") is True and data.get("connected") is True
-         and data.get("entitlement_recorded") is True
-         and proof.get("ok") is True and not proof.get("skipped") else 1)' 2>/dev/null; then
-    ok "subscription connected — it answered a test turn"
-  else
-    # BOSS's own explanation (it never contains the credential): what was wrong, what to do.
-    reason="$(printf '%s' "$out" | sed -n 's/^CONNECT://p' | python3 -c 'import json,sys
-try:
-    print(json.load(sys.stdin).get("detail") or "")
-except (ValueError, TypeError):
-    print("")' 2>/dev/null)"
-    warn "${reason:-the subscription was not connected; inspect BOSS setup status and API logs}"
-    return 1
-  fi
+  ssh "${SSH_OPTS[@]}" -t "$HOST" "bash '$DIR/scripts/install/boss.sh' --dir '$DIR' connect $word"
 }
 
 # For when you do want the shell variables — with the right key, which is the server's.
