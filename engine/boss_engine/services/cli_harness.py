@@ -1033,8 +1033,13 @@ def detect(spec: CliHarnessSpec, settings=None) -> dict:
         if not isinstance(status, dict):
             status = {}
         method = status.get("authMethod")
-        method = (method if isinstance(method, str) and method in
-                  {"claude_ai", "oauth", "oauth_token", "api_key"} else "unknown")
+        # The CLI's own words, mapped to BOSS's: a subscription login prints "claude.ai"
+        # (2.1.x), never "claude_ai" — matching only the underscore read every real
+        # subscription sign-in as "unknown", so the console's Sign in failed after the login
+        # had succeeded and Try again then signed it out. Anything unrecognised stays
+        # "unknown" (and is never echoed).
+        method = (CLAUDE_AUTH_METHODS.get(method, "unknown") if isinstance(method, str)
+                  else "unknown")
         signed_in = code == 0 and status.get("loggedIn") is True and method != "unknown"
         result["auth_method"] = method
         result["auth_detail"] = (
@@ -1143,6 +1148,14 @@ def _auth_detail(spec: CliHarnessSpec, out: str) -> str:
     return lines[0][:200]
 
 
+#: `claude auth status` authMethod → BOSS's name for it. "claude.ai" is what a subscription
+#: login prints; "claude_ai" is kept so records written with BOSS's name still read.
+CLAUDE_AUTH_METHODS: dict[str, str] = {
+    "claude.ai": "claude_ai", "claude_ai": "claude_ai", "oauth": "oauth",
+    "oauth_token": "oauth_token", "api_key": "api_key",
+}
+
+
 def _spoken_auth_detail(out: str) -> str:
     """Turn a JSON auth status into the sentence a person would say about it."""
     try:
@@ -1154,7 +1167,8 @@ def _spoken_auth_detail(out: str) -> str:
     if not parsed.get("loggedIn"):
         return "Not signed in."
     method = {"oauth_token": "a long-lived token", "api_key": "an API key",
-              "oauth": "a subscription login"}.get(str(parsed.get("authMethod") or ""), "")
+              "oauth": "a subscription login", "claude_ai": "a Claude subscription"}.get(
+        CLAUDE_AUTH_METHODS.get(str(parsed.get("authMethod") or ""), ""), "")
     source = parsed.get("apiKeySource")
     if method and source:
         return f"Signed in with {method} ({source})."

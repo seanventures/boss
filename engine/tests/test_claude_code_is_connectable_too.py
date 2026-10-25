@@ -84,7 +84,7 @@ def test_claude_detection_returns_only_safe_status_fields(monkeypatch):
         cli_harness, "_run_probe",
         lambda _binary, args, **_kwargs: (
             (0, "2.1.197 (Claude Code)") if args == ("--version",) else
-            (0, '{"loggedIn": true, "authMethod": "claude_ai", '
+            (0, '{"loggedIn": true, "authMethod": "claude.ai", '
                 f'"email": "{private}"}}')
         ),
     )
@@ -231,3 +231,23 @@ def test_the_prompt_travels_on_stdin_because_tools_is_variadic():
     # The trap is the combination, so the guard is too: any spec whose last read-only
     # argument is a variadic flag's value cannot append its prompt to argv.
     assert CLAUDE.read_only_args[0] == "--tools"
+
+
+def test_a_real_subscription_login_reads_as_signed_in(monkeypatch):
+    """`claude auth status` after `claude auth login --claudeai` (2.1.x) says
+    `"authMethod": "claude.ai"` — with a dot. BOSS matched only "claude_ai", so a real
+    subscription sign-in in the console succeeded and was then reported as failed."""
+    from boss_engine.services import cli_harness
+
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    monkeypatch.setattr(cli_harness.shutil, "which", lambda _binary: "/usr/bin/claude")
+    real = ('{"loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", '
+            '"subscriptionType": "max"}')
+    monkeypatch.setattr(cli_harness, "_run_probe", lambda _binary, args, **_kwargs: (
+        (0, "2.1.197 (Claude Code)") if args == ("--version",) else (0, real)))
+
+    found = cli_harness.detect(CLAUDE)
+    assert found["authenticated"] is True
+    assert found["ready"] is True
+    assert found["auth_method"] == "claude_ai"
+    assert cli_harness._spoken_auth_detail(real) == "Signed in with a Claude subscription."

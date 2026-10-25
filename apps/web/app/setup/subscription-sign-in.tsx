@@ -10,7 +10,7 @@
  * Signed in, and the drawer's Connect proves it. Cancel — or closing the drawer — kills the login.
  */
 import React, { useEffect, useRef, useState } from "react";
-import { CircleNotch, Copy } from "@phosphor-icons/react";
+import { ArrowSquareOut, CircleNotch, Copy } from "@phosphor-icons/react";
 import type { SignInSession, SignInState } from "@boss/api-client";
 
 import { GatedButton } from "../../components/gated";
@@ -186,41 +186,70 @@ export function SubscriptionSignIn({ provider, label, autoStart = false, fresh =
     };
     return (
       <div className="su-signin" data-testid="su-signin" data-state="waiting">
-        <div className="su-line">
-          {session.verification_url ? (
-            <Out href={session.verification_url} testid="su-signin-open"
-                 tip={`Opens ${label}'s sign-in page in a new tab.`}>Open sign-in page</Out>
-          ) : null}
-          {session.user_code ? (
-            <button type="button" className="su-copy su-signin-code" data-testid="su-signin-code"
-                    title="Enter this code on the sign-in page. Click to copy."
-                    data-tip="Enter this code on the sign-in page. Click to copy." onClick={copy}>
-              <code>{session.user_code}</code><Copy size={14} aria-label="copy" />
-            </button>
-          ) : null}
-        </div>
         {session.needs_code_input ? (
-          <p className="su-line su-faint" data-testid="su-signin-code-help">
-            Approve on the sign-in page. It then shows a code: copy it, paste it here, and press Submit.
-          </p>
-        ) : null}
-        {session.needs_code_input ? (
-          <form className="su-line" data-testid="su-signin-code-form"
-                onSubmit={(e) => { e.preventDefault(); void submit(); }}>
-            <label className="su-field su-field-inline su-signin-code-field">
-              <span className="su-field-label">Code</span>
-              <input type="text" autoComplete="one-time-code" spellCheck={false} value={code}
-                     aria-label="Code" placeholder="Paste the code here"
-                     data-testid="su-signin-code-input" onChange={(e) => setCode(e.target.value)} />
-            </label>
-            <GatedButton permission="model_provider:manage" type="submit" className="su-btn su-btn-sm"
-                         disabled={sending || !code.trim()} data-testid="su-signin-code-submit"
-                         title="Hands the code to the provider's sign-in. Never stored."
-                         data-tip="Hands the code to the provider's sign-in. Never stored.">
-              {sending ? "Sending…" : "Submit"}
-            </GatedButton>
-          </form>
-        ) : null}
+          // Paste-back (Claude): the provider's page shows a code the person brings back here.
+          // Three numbered steps, so nobody has to guess where "paste it into Claude Code" goes.
+          <ol className="su-signin-steps" data-testid="su-signin-steps">
+            <li>
+              <span className="su-signin-step-n" aria-hidden>1</span>
+              <div className="su-signin-step">
+                <span className="su-signin-step-title">Approve on {label}&apos;s sign-in page</span>
+                {session.verification_url ? (
+                  <a className="su-btn su-btn-primary su-signin-open" href={session.verification_url}
+                     target="_blank" rel="noopener noreferrer" data-testid="su-signin-open"
+                     title={`Opens ${label}'s sign-in page in a new tab.`}>
+                    Open sign-in page<ArrowSquareOut size={14} aria-hidden />
+                  </a>
+                ) : null}
+              </div>
+            </li>
+            <li>
+              <span className="su-signin-step-n" aria-hidden>2</span>
+              <div className="su-signin-step">
+                <span className="su-signin-step-title">Copy the code the page shows</span>
+                <span className="su-signin-step-hint" data-testid="su-signin-code-help">
+                  The page says to paste it into {label}: paste it here instead.
+                </span>
+              </div>
+            </li>
+            <li>
+              <span className="su-signin-step-n" aria-hidden>3</span>
+              <form className="su-signin-step" data-testid="su-signin-code-form"
+                    onSubmit={(e) => { e.preventDefault(); void submit(); }}>
+                <label className="su-signin-step-title" htmlFor="su-signin-code-input">
+                  Paste the code and submit
+                </label>
+                <div className="su-signin-paste">
+                  <input id="su-signin-code-input" type="text" autoComplete="one-time-code"
+                         spellCheck={false} value={code} aria-label="Code"
+                         placeholder="Paste the code here" data-testid="su-signin-code-input"
+                         onChange={(e) => setCode(e.target.value)} />
+                  <GatedButton permission="model_provider:manage" type="submit"
+                               className="su-btn su-btn-primary"
+                               disabled={sending || !code.trim()} data-testid="su-signin-code-submit"
+                               title="Hands the code to the provider's sign-in. Never stored."
+                               data-tip="Hands the code to the provider's sign-in. Never stored.">
+                    {sending ? "Sending…" : "Submit"}
+                  </GatedButton>
+                </div>
+              </form>
+            </li>
+          </ol>
+        ) : (
+          <div className="su-line">
+            {session.verification_url ? (
+              <Out href={session.verification_url} testid="su-signin-open"
+                   tip={`Opens ${label}'s sign-in page in a new tab.`}>Open sign-in page</Out>
+            ) : null}
+            {session.user_code ? (
+              <button type="button" className="su-copy su-signin-code" data-testid="su-signin-code"
+                      title="Enter this code on the sign-in page. Click to copy."
+                      data-tip="Enter this code on the sign-in page. Click to copy." onClick={copy}>
+                <code>{session.user_code}</code><Copy size={14} aria-label="copy" />
+              </button>
+            ) : null}
+          </div>
+        )}
         {refusal ? <Stopped tone="red" headline={refusal.headline} fix={refusal.fix} state={refusal.state} /> : null}
         <div className="su-line">
           <Tip tip={session.headline || "Approve the sign-in in your browser."} className="su-line su-faint"

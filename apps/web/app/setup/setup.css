@@ -652,3 +652,23 @@ svg.su-dot { background: none; width: 12px; height: 12px; color: var(--muted); }
 .su-signin-code-field input { width: 220px; font-family: var(--mono); }
 .su-signin-stopped { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-width: 0; }
 .su-signin-fix { font-size: 0.8125rem; line-height: 1.4; overflow-wrap: anywhere; }
+
+/* Paste-back sign-in (Claude Code): three numbered steps, the action in each one obvious. */
+.su-signin-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 14px; }
+.su-signin-steps > li { display: grid; grid-template-columns: 26px 1fr; gap: 12px; align-items: start; }
+.su-signin-step-n {
+  display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: 50%;
+  border: 1px solid var(--accent); color: var(--accent); font: 700 0.8125rem/1 var(--sans);
+}
+.su-signin-step { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; min-width: 0; }
+.su-signin-step-title { color: var(--ink); font: 600 0.875rem/1.35 var(--sans); padding-top: 4px; }
+.su-signin-step-hint { color: var(--muted); font-size: 0.8125rem; line-height: 1.4; }
+.su-signin-open { text-decoration: none; }
+.su-signin-paste { display: flex; gap: 8px; width: 100%; min-width: 0; }
+.su-signin-paste input {
+  flex: 1; min-width: 0; height: 36px; padding: 0 10px; border: 1px solid var(--border);
+  border-radius: var(--r); background: var(--surface); color: var(--ink);
+  font: 500 0.875rem var(--mono);
+}
+.su-signin-paste input:focus { outline: 0; border-color: var(--accent); }
+.su-signin-paste .su-btn { height: 36px; }
