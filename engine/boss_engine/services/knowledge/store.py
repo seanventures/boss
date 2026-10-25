@@ -160,6 +160,9 @@ CREATE TABLE IF NOT EXISTS kg_usage (
   code_task_run_id TEXT,
   agent_role TEXT
 );
+ALTER TABLE kg_usage ADD COLUMN IF NOT EXISTS agent_thread_id TEXT;
+ALTER TABLE kg_usage ADD COLUMN IF NOT EXISTS act_id TEXT;
+ALTER TABLE kg_usage ADD COLUMN IF NOT EXISTS message_id TEXT;
 CREATE TABLE IF NOT EXISTS kg_fact_stats (
   fact_id TEXT PRIMARY KEY REFERENCES kg_nodes(id) ON DELETE CASCADE,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -1545,9 +1548,15 @@ class PostgresKnowledgeStore:
         workflow_run_id: Optional[str] = None,
         code_task_run_id: Optional[str] = None,
         agent_role: Optional[str] = None,
+        agent_thread_id: Optional[str] = None,
+        act_id: Optional[str] = None,
+        message_id: Optional[str] = None,
+        at: Optional[Any] = None,
     ) -> int:
         """Record that a run used these items (spec §2.5): ``shown`` (in the injected pack, no
-        edge), ``consulted`` (a tool returned it), ``cited`` (the output named it), ``reused``."""
+        edge), ``consulted`` (a tool returned it), ``cited`` (the output named it), ``reused``.
+        A conversation's use names its thread, turn (act) and answering message instead of a
+        run; ``run_id`` is then the thread id."""
         self.ensure_schema(connection)
         self._org_id(connection, project_id, None)
         if use_kind not in USE_KINDS:
@@ -1559,9 +1568,12 @@ class PostgresKnowledgeStore:
                 text(
                     """
                     INSERT INTO kg_usage (id, project_id, run_id, step, fact_id, use_kind,
-                                          workflow_run_id, code_task_run_id, agent_role)
+                                          workflow_run_id, code_task_run_id, agent_role,
+                                          agent_thread_id, act_id, message_id, created_at)
                     VALUES (:id, :project_id, :run_id, :step, :fact_id, :use_kind,
-                            :workflow_run_id, :code_task_run_id, :agent_role)
+                            :workflow_run_id, :code_task_run_id, :agent_role,
+                            :agent_thread_id, :act_id, :message_id,
+                            coalesce(CAST(:at AS TIMESTAMPTZ), now()))
                     """
                 ),
                 {
@@ -1574,6 +1586,10 @@ class PostgresKnowledgeStore:
                     "workflow_run_id": workflow_run_id,
                     "code_task_run_id": code_task_run_id,
                     "agent_role": agent_role,
+                    "agent_thread_id": agent_thread_id,
+                    "act_id": act_id,
+                    "message_id": message_id,
+                    "at": at,
                 },
             )
             connection.execute(

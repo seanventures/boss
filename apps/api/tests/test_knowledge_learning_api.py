@@ -54,3 +54,38 @@ def test_the_proof_route_scores_a_run_and_compares_a_pair(client, engine):
     assert pair["comparison"]["attributed"] is False and pair["run"] is None
     missing = client.get("/v1/knowledge/view/proof", params={**base, "run": "crun_no_such_run"})
     assert missing.status_code == 404
+
+
+def test_a_press_in_an_agents_thread_credits_that_agent_and_the_proof_scores_the_conversation(client, engine):
+    """The press path (POST /v1/engine/agent/action) carries the thread's addressed agent: a
+    learning recorded by pressing "Record learning" in the SRE's thread is the SRE's, produced by
+    that conversation (northpeak-bank, 2026-10-25: it was credited to "BOSS (general)")."""
+    from apps.api.app.config import get_settings
+    from boss_engine.services.agent_service import AgentService
+
+    service = AgentService(get_settings())
+    with begin(engine) as connection:
+        thread_id = service.start_or_load_thread(connection, project_id=PROJECT_ID, actor=ACTOR,
+                                                 agent_role="sre", new_thread=True)["id"]
+        service.append_message(connection, thread_id=thread_id, role="user",
+                               content="# INC-2088 · early repayments post more than paid")
+    pressed = client.post("/v1/engine/agent/action", json={
+        "project_id": PROJECT_ID, "actor": ACTOR, "thread_id": thread_id, "tool": "record_learning",
+        "label": "Record learning", "args": {
+            "learning_kind": "root_cause", "title": "Advance handler skips the decrement",
+            "statement": "The advance-payment branch never decrements the remaining amount.",
+            "detail": {}, "about": {}, "confidence": 0.7,
+            "evidence": [{"type": "file", "ref": "Adv.java:159", "excerpt": "no minus after principal"}]}})
+    assert pressed.status_code == 200, pressed.text
+    body = pressed.json()
+    assert body["ok"] is True, body
+    node_id = body["result"]["learning"]["id"]
+    with begin(engine) as connection:
+        prov = lw.item_payload(connection, PROJECT_ID, node_id)["provenance"]
+    assert prov["agent_role"] == "sre" and prov["agent_name"] not in (None, "BOSS (general)")
+    proof = client.get("/v1/knowledge/view/proof", params={"project_id": PROJECT_ID, "actor": ACTOR,
+                                                           "run": thread_id})
+    assert proof.status_code == 200, proof.text
+    run = proof.json()["run"]
+    assert run["kind"] == "conversation" and run["learned"] == 1 and run["agent_role"] == "sre"
+    assert run["time_to_root_cause_seconds"] is not None

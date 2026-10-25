@@ -208,10 +208,20 @@ def live(connection: Connection, project_id: str, *, since: Optional[str] = None
 def run_proof(connection: Connection, project_id: str, run: str, *,
               withheld: Iterable[str] = ()) -> dict[str, Any]:
     """One run's scorecard for the before/after comparison: steps (model calls), model turns,
-    tokens, cost, wall time, repair rounds, and the items it consulted / reused / learned."""
+    tokens, cost, wall time, repair rounds, and the items it consulted / reused / learned.
+
+    A conversation (``athr_…``: an agent asked in chat, e.g. an incident sent to the SRE) is
+    scored the same way from its own record (learning_conversations.scorecard): its tool calls,
+    replies, metered tokens, wall time and time to the root cause it recorded."""
+    from .learning_conversations import is_conversation, scorecard
+
     family = run_family(connection, project_id, run)
     if not family:
         raise LookupError("run is required")
+    if is_conversation(run):
+        consulted, reused, learned = _used(connection, project_id, [f"run:{run}"], withheld)
+        return scorecard(connection, project_id, str(run).strip(), consulted=consulted, reused=reused,
+                         learned=learned)
     builds = connection.execute(text(
         "SELECT id, status, created_at, updated_at, state FROM code_task_runs WHERE project_id = :p "
         "AND id = ANY(:f)"), {"p": project_id, "f": family}).mappings().all()
@@ -236,7 +246,29 @@ def run_proof(connection: Connection, project_id: str, run: str, *,
             repairs += int(state.get("repair_attempts") or 0)
         except (TypeError, ValueError):
             pass
-    anchors = [f"run:{r}" for r in family]
+    consulted, reused, learned = _used(connection, project_id, [f"run:{r}" for r in family], withheld)
+    from .runtime import knowledge_mode
+
+    return {
+        "run_id": run,
+        "status": (flow["status"] if flow else (builds[0]["status"] if builds else None)),
+        "knowledge_graph": knowledge_mode(connection, project_id),
+        "steps": int(calls["steps"] or 0),
+        "turns": int(calls["turns"] or 0),
+        "tokens": int(calls["tokens"] or 0),
+        "cost_usd": round(int(calls["cost"] or 0) / 1e6, 4),
+        "wall_seconds": round(wall, 1) if wall is not None else None,
+        "repair_rounds": repairs,
+        "learned": learned,
+        "consulted": consulted,
+        "reused": reused,
+    }
+
+
+def _used(connection: Connection, project_id: str, anchors: list[str],
+          withheld: Iterable[str] = ()) -> tuple[list[dict[str, Any]], list[dict[str, Any]], int]:
+    """What the run (or conversation) nodes ``anchors`` consulted and reused, and how many
+    learned items they produced."""
     used = connection.execute(text(
         """
         SELECT e.kind, e.attrs->>'how' AS how, d.id, d.kind AS item_kind, d.name, d.attrs->'provenance' AS prov,
@@ -259,23 +291,10 @@ def run_proof(connection: Connection, project_id: str, run: str, *,
                 "learned_in": src.split(":", 1)[-1] if src.startswith("run:") else None,
                 "learned_by": prov.get("agent_name") or prov.get("agent_role")}
 
-    from .runtime import knowledge_mode
-
     hidden = frozenset(withheld)
-    return {
-        "run_id": run,
-        "status": (flow["status"] if flow else (builds[0]["status"] if builds else None)),
-        "knowledge_graph": knowledge_mode(connection, project_id),
-        "steps": int(calls["steps"] or 0),
-        "turns": int(calls["turns"] or 0),
-        "tokens": int(calls["tokens"] or 0),
-        "cost_usd": round(int(calls["cost"] or 0) / 1e6, 4),
-        "wall_seconds": round(wall, 1) if wall is not None else None,
-        "repair_rounds": repairs,
-        "learned": int(learned or 0),
-        "consulted": [item(r) for r in used if r["kind"] == "consulted" and r["item_kind"] not in hidden],
-        "reused": [item(r) for r in used if r["kind"] == "reused" and r["item_kind"] not in hidden],
-    }
+    return ([item(r) for r in used if r["kind"] == "consulted" and r["item_kind"] not in hidden],
+            [item(r) for r in used if r["kind"] == "reused" and r["item_kind"] not in hidden],
+            int(learned or 0))
 
 
 def compare(connection: Connection, project_id: str, *, run: str, baseline: str,
@@ -291,6 +310,13 @@ def compare(connection: Connection, project_id: str, *, run: str, baseline: str,
     for key in ("steps", "turns", "tokens", "cost_usd", "wall_seconds", "repair_rounds"):
         a, b = earlier.get(key), later.get(key)
         delta[key] = None if a is None or b is None else round(b - a, 4)
+    if "time_to_root_cause_seconds" in later or "time_to_root_cause_seconds" in earlier:
+        # A conversation's: from the question to the root cause it recorded.
+        a, b = earlier.get("time_to_root_cause_seconds"), later.get("time_to_root_cause_seconds")
+        delta["time_to_root_cause_seconds"] = None if a is None or b is None else round(b - a, 1)
+    if not (later.get("tokens_measured", True) and earlier.get("tokens_measured", True)):
+        # Unmetered model calls are not "no tokens": no difference is claimed either way.
+        delta["tokens"] = delta["cost_usd"] = None
     better = [k for k in ("steps", "turns", "tokens", "repair_rounds") if delta[k] is not None and delta[k] < 0]
     worse = [k for k in ("steps", "turns", "tokens", "repair_rounds") if delta[k] is not None and delta[k] > 0]
     return {"run": later, "baseline": earlier, "delta": delta, "carried": carried,

@@ -13513,13 +13513,22 @@ def agent_action(payload: AgentActionRunRequest, request: Request) -> AgentActio
                     if not str(k).startswith("_")}
     if payload.thread_id:
         pressed_args["_thread_id"] = payload.thread_id
-    result = registry.invoke(
-        spec.name, ctx, project_id=payload.project_id, actor=payload.actor,
-        args=pressed_args, operator_confirmed=True,
-        # IDENTITY (S2): the person who pressed it must hold the TOOL's permission too
-        # (`run_on_host` is host:exec), not only assistant:chat.
-        auth=_request_identity(request),
-    )
+    # THE PRESS SPEAKS FOR THE AGENT THE CONVERSATION IS ADDRESSED TO. A learning recorded by
+    # pressing "Record learning" in the Site Reliability Engineer's thread was credited to
+    # "BOSS (general)" (northpeak-bank, 2026-10-25): the turn carried its speaker, the press did
+    # not. The same context as the turn (agent_identity.speaking), for every press path.
+    from boss_engine.services import agent_identity
+
+    with agent_identity.speaking(
+            agent_identity.addressed_in_thread(engine, payload.project_id, payload.thread_id),
+            thread_id=payload.thread_id):
+        result = registry.invoke(
+            spec.name, ctx, project_id=payload.project_id, actor=payload.actor,
+            args=pressed_args, operator_confirmed=True,
+            # IDENTITY (S2): the person who pressed it must hold the TOOL's permission too
+            # (`run_on_host` is host:exec), not only assistant:chat.
+            auth=_request_identity(request),
+        )
     # NEEDS YOUR CONSENT IS A QUESTION, NOT AN OUTCOME (registry.consent_result). Raised again, it
     # is answered as the flat 409 every start answers (install_consent_handler): the console's
     # button path opens the consent sheet and presses once more after the grant, and Metatron

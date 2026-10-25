@@ -120,6 +120,18 @@ def _cmd_status(args) -> int:
     return 0
 
 
+def _cmd_kg_backfill_conversations(args) -> int:
+    """One-time, idempotent: derive conversations' graph usage and produced edges from their
+    transcripts (knowledge/learning_conversations.backfill). Reports only, unless --apply."""
+    from .services.knowledge.learning_conversations import backfill
+
+    with _ctx().begin() as connection:
+        report = backfill(connection, args.project, apply=bool(args.apply),
+                          thread_ids=list(args.thread or []) or None)
+    print(json.dumps(report, indent=2, default=str))
+    return 0
+
+
 def _cmd_call(args) -> int:
     from .tools import build_default_registry
 
@@ -212,8 +224,14 @@ def _cmd_chat_pipeline(ctx, args) -> int:
             if ans not in ("y", "yes"):
                 print("  ✗ skipped")
                 continue
-            result = registry.invoke(offer["tool"], ctx, project_id=args.project, actor="cli",
-                                     args=dict(offer.get("args") or {}), operator_confirmed=True)
+            from .services import agent_identity
+
+            # The press speaks for the conversation's addressed agent, as in the console.
+            with agent_identity.speaking(
+                    agent_identity.addressed_in_thread(ctx.engine, args.project, thread_id),
+                    thread_id=thread_id):
+                result = registry.invoke(offer["tool"], ctx, project_id=args.project, actor="cli",
+                                         args=dict(offer.get("args") or {}), operator_confirmed=True)
             ok = bool(result.get("ok", True))
             with ctx.begin() as connection:
                 AgentService(ctx.settings).record_action_outcome(
@@ -481,6 +499,12 @@ def build_parser() -> argparse.ArgumentParser:
     ).set_defaults(func=_cmd_bootstrap)
     sub.add_parser("tools", help="list the engine tool layer").set_defaults(func=_cmd_tools)
     sub.add_parser("status", help="project snapshot").set_defaults(func=_cmd_status)
+
+    kb = sub.add_parser("kg-backfill-conversations",
+                        help="derive conversations' knowledge-graph usage from their transcripts")
+    kb.add_argument("--apply", action="store_true", help="write it (default: report only)")
+    kb.add_argument("--thread", action="append", default=[], help="only this thread (repeatable)")
+    kb.set_defaults(func=_cmd_kg_backfill_conversations)
 
     c = sub.add_parser("call", help="invoke one tool")
     c.add_argument("name")

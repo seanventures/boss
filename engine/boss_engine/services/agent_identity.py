@@ -527,6 +527,56 @@ def addressed(connection: Connection, project_id: str, key_or_name: Optional[str
             "agent_id": row["agent_id"], "fingerprint": row["fingerprint"]}
 
 
+def addressed_in_thread(target: Any, project_id: str, thread_id: Optional[str]) -> Optional[dict[str, Any]]:
+    """Who a conversation is addressed to (its thread's agent, or BOSS itself), for a press made
+    in it; None with no thread, or a thread of another project. ``target`` is a connection or an
+    engine (its own short read). Never raises."""
+    if not str(thread_id or "").strip():
+        return None
+
+    def read(connection: Connection) -> Optional[dict[str, Any]]:
+        row = connection.execute(
+            text("SELECT agent_role FROM agent_threads WHERE id = :t AND project_id = :p"),
+            {"t": thread_id, "p": project_id}).first()
+        return addressed(connection, project_id, row[0] or None) if row is not None else None
+
+    try:
+        if hasattr(target, "execute") and hasattr(target, "begin_nested"):
+            with target.begin_nested():
+                return read(target)
+        with target.connect() as connection:
+            return read(connection)
+    except Exception:  # noqa: BLE001 — a name is a label, never a reason to refuse a press
+        _log.info("could not read who %s is addressed to", thread_id, exc_info=True)
+        return None
+
+
+@contextlib.contextmanager
+def speaking(speaker: Optional[dict[str, Any]], *, thread_id: Optional[str] = None,
+             act_id: Optional[str] = None) -> Iterator[None]:
+    """THE TURN'S SPEAKER, for what is recorded while it speaks — one context for every path
+    that records in a conversation (a chat turn, a press of one of its buttons in the console,
+    Metatron or the CLI): a rule, learning or decision written names the addressed agent (its
+    name and Passport id) or "BOSS (general)" — never a blank provenance — and a rule or learning
+    a tool returns is "consulted" in that conversation (knowledge/learning_conversations).
+    Speaker keys only: cost attribution (`role_key`, `act_id`) is left as it was; everything set
+    is restored after."""
+    from .llm_telemetry import get_llm_context, set_llm_context
+
+    if speaker is None:
+        yield
+        return
+    keys = ("speaker_role", "agent_name", "agent_id", "agent_thread_id", "agent_act_id")
+    held = get_llm_context()
+    restore = {k: held.get(k) for k in keys}
+    set_llm_context(speaker_role=speaker.get("agent_role"), agent_name=speaker.get("agent_name"),
+                    agent_id=speaker.get("agent_id"), agent_thread_id=thread_id, agent_act_id=act_id)
+    try:
+        yield
+    finally:
+        set_llm_context(**restore)
+
+
 def _persona(spec: Any) -> dict[str, Any]:
     persona = (spec or {}).get("persona") if isinstance(spec, dict) else None
     return persona if isinstance(persona, dict) else {}

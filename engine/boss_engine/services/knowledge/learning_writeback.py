@@ -422,14 +422,20 @@ def provenance(connection: Connection, project_id: str,
         "code_task_run_id": seen.get("code_task_run_id") or ctx.get("code_task_run_id") or refs["code_task_run_id"],
         "step": str(stage) if stage else None,
         "model_id": seen.get("model_id") or ctx.get("model_id") or ctx.get("model"),
+        # The conversation it was said in (a chat turn or a press in that thread: AgentService),
+        # the anchor when there is no run (learning_conversations).
+        "agent_thread_id": seen.get("agent_thread_id") or ctx.get("agent_thread_id"),
+        "act_id": seen.get("act_id") or ctx.get("agent_act_id"),
         "at": _now_iso(),
     }
 
 
 def anchor_ref(prov: Mapping[str, Any]) -> Optional[str]:
     """The run a learning or a use hangs on: the build (code task run) when there is one — the
-    run node ingest captures — else the workflow run, else the agent run."""
-    return (prov.get("code_task_run_id") or prov.get("workflow_run_id") or prov.get("run_id")) or None
+    run node ingest captures — else the workflow run, else the agent run, else the conversation
+    it was said in (learning_conversations)."""
+    return (prov.get("code_task_run_id") or prov.get("workflow_run_id") or prov.get("run_id")
+            or prov.get("agent_thread_id")) or None
 
 
 def _anchor(connection: Connection, project_id: str, kind: str, key: str, name: str,
@@ -469,7 +475,13 @@ def run_title(connection: Connection, ref: str) -> str:
 
 def run_anchor(connection: Connection, project_id: str, ref: str) -> str:
     """The run node a learning or a use hangs on (``run:<id>``, the key ingest captures under),
-    named for the run (run_title). One still named by its raw id is renamed."""
+    named for the run (run_title). One still named by its raw id is renamed. A conversation
+    (``athr_…``) is a run node of subtype conversation, named after its question, with its
+    addressed agent (learning_conversations)."""
+    from .learning_conversations import anchor as conversation_anchor, is_conversation
+
+    if is_conversation(ref):
+        return conversation_anchor(connection, project_id, ref)
     node_id = _anchor(connection, project_id, "run", f"run:{ref}", run_title(connection, ref), {"source_id": ref})
     rename_raw_run(connection, project_id, node_id, ref)
     return node_id
@@ -593,8 +605,11 @@ def record(
                                      actor_kind=actor_kind, actor_ref=who, attrs=attrs, source="learning")
 
     edge_attrs = {"step": prov["step"], "at": prov["at"], "run_id": run_ref}
-    if run_ref:
-        run_id = run_anchor(connection, project_id, run_ref)
+    try:
+        run_id = run_anchor(connection, project_id, run_ref) if run_ref else None
+    except (LookupError, PermissionError):             # a conversation that no longer exists
+        run_id = None
+    if run_id:
         _STORE.upsert_edge(connection, project_id=project_id, src_id=run_id, dst_id=node_id, kind="produced",
                            actor_kind=actor_kind, actor_ref=who, attrs=edge_attrs)
     if role and not repeat:
@@ -621,6 +636,18 @@ def record(
             continue
     if not repeat:
         _contradicted(connection, project_id, node_id, kind, subject_key, supersedes, actor_kind)
+    # What the learning cites ([L:…] / [R:…] in its words) was used to learn it: `cited` (a cited
+    # precedent or fix `reused`), on the same anchor — a run, or the conversation.
+    cited = [i for i in citations(title, statement, clean_detail) if i != node_id]
+    if cited and run_ref:
+        try:
+            with connection.begin_nested():
+                conversation = prov.get("agent_thread_id") if run_ref == prov.get("agent_thread_id") else None
+                log_use(connection, project_id=project_id, ids=cited, use_kind="cited",
+                        run_id=None if conversation else run_ref, thread_id=conversation,
+                        act_id=prov.get("act_id"), step=prov["step"], agent_role=prov["agent_role"])
+        except Exception:  # noqa: BLE001 — a citation is a label, never a reason to refuse
+            LOG.info("learning %s: citations not logged", node_id, exc_info=True)
     _STORE.audit(connection, project_id=project_id, action="knowledge.learning.record", entity_id=node_id,
                  actor_kind=actor_kind, actor_ref=who,
                  detail={"learning_kind": kind, "repeat": repeat, "run_id": run_ref, "step": prov["step"]})
@@ -769,15 +796,27 @@ def log_use(
     run_id: Optional[str] = None,
     step: Optional[str] = None,
     agent_role: Optional[str] = None,
+    thread_id: Optional[str] = None,
+    act_id: Optional[str] = None,
+    message_id: Optional[str] = None,
 ) -> list[str]:
     """Record that a run used these items (``kg_usage``, spec §2.5) and draw the run's edges to
     them now. Ids that are not rules, learnings or facts of this project are ignored (a cited id
-    is the model's word). A cited precedent or fix is also ``reused``. Returns the ids logged."""
+    is the model's word). A cited precedent or fix is also ``reused``. Returns the ids logged.
+
+    With no run, the use is the conversation's (a chat turn, or a press in its thread): the
+    thread (``thread_id`` or the LLM context's ``agent_thread_id``) is the anchor, with the turn's
+    act and, when known, the message that answered (learning_conversations). With neither, nothing
+    is logged: a use nobody can be shown to have made is not recorded."""
     ctx = _context()
     refs = run_refs(connection, run_id or ctx.get("run_id"))
+    thread = None
+    if not refs["run_id"]:
+        thread = str(thread_id or ctx.get("agent_thread_id") or "").strip() or None
+        if not thread:
+            return []
+        refs["run_id"] = thread
     ref = refs["run_id"]
-    if not ref:
-        return []
     wanted = [str(i).strip() for i in ids if str(i or "").strip()]
     if not wanted:
         return []
@@ -789,11 +828,14 @@ def log_use(
     found = [i for i in dict.fromkeys(wanted) if i in kinds]
     if not found:
         return []
-    stage = str(step or ctx.get("step") or ctx.get("stage") or "agent")
-    role = agent_role or ctx.get("role_key")
+    stage = str(step or ctx.get("step") or ctx.get("stage") or ("chat" if thread else "agent"))
+    # The addressed agent of a chat turn (speaker_role) before the stage's cost role.
+    role = agent_role or ctx.get("speaker_role") or ctx.get("role_key")
     common = dict(project_id=project_id, run_id=ref, step=stage,
-                  workflow_run_id=refs["workflow_run_id"] or ctx.get("workflow_run_id"),
-                  code_task_run_id=refs["code_task_run_id"], agent_role=role)
+                  workflow_run_id=None if thread else (refs["workflow_run_id"] or ctx.get("workflow_run_id")),
+                  code_task_run_id=refs["code_task_run_id"], agent_role=role,
+                  agent_thread_id=thread, act_id=(act_id or ctx.get("agent_act_id")) if thread else None,
+                  message_id=message_id if thread else None)
     _STORE.log_usage(connection, fact_ids=found, use_kind=use_kind, **common)
     if use_kind == "cited":
         reused = [i for i in found if kinds[i] in ("precedent", "fix")]
@@ -819,7 +861,7 @@ def sync_usage_edges(connection: Connection, *, project_id: str, run_ref: Option
         SELECT coalesce(u.code_task_run_id, CASE WHEN u.run_id LIKE 'crun%' THEN u.run_id END,
                         u.workflow_run_id, u.run_id) AS ref,
                u.fact_id, u.use_kind, min(u.step) AS step, max(u.agent_role) AS agent_role,
-               max(u.created_at) AS at
+               max(u.created_at) AS at, max(u.agent_thread_id) AS thread_id, max(u.message_id) AS message_id
         FROM kg_usage u WHERE {where}
         GROUP BY 1, 2, 3
         """), params).mappings().all()
@@ -830,13 +872,21 @@ def sync_usage_edges(connection: Connection, *, project_id: str, run_ref: Option
         if not ref:
             continue
         if ref not in anchors:
-            anchors[ref] = run_anchor(connection, project_id, ref)
+            try:
+                anchors[ref] = run_anchor(connection, project_id, ref)
+            except (LookupError, PermissionError):     # a conversation that no longer exists
+                anchors[ref] = None
+        if not anchors[ref]:
+            continue
         kind = "reused" if row["use_kind"] == "reused" else "consulted"
         how = {"consulted": "tool", "cited": "cited", "reused": "cited"}[row["use_kind"]]
         role = row["agent_role"]
         attrs = {"how": how, "step": row["step"], "run_id": ref, "agent_role": role,
-                 "agent_name": _agent_name(connection, project_id, role) if role else None,
+                 "agent_name": _use_name(connection, project_id, role),
                  "at": _iso(row["at"])}
+        if row["thread_id"]:
+            # Used in a conversation: "used by <agent> in conversation <title> (when)".
+            attrs.update({"conversation": True, "thread_id": row["thread_id"], "message_id": row["message_id"]})
         if kind == "consulted":
             # A citation outranks a tool hit: "cited" stays once a run cited it.
             prior = connection.execute(text(
@@ -851,6 +901,14 @@ def sync_usage_edges(connection: Connection, *, project_id: str, run_ref: Option
         except (LookupError, PermissionError):
             continue
     return written
+
+
+def _use_name(connection: Connection, project_id: str, role: Optional[str]) -> Optional[str]:
+    if not role:
+        return None
+    from ..llm_telemetry import GENERAL_NAME, GENERAL_ROLE
+
+    return GENERAL_NAME if role == GENERAL_ROLE else _agent_name(connection, project_id, role)
 
 
 # --- the hooks ------------------------------------------------------------------------------------

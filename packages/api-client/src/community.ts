@@ -5766,13 +5766,26 @@ export type KgRunProof = {
   learned: number;
   consulted: KgRunProofItem[];
   reused: KgRunProofItem[];
+  /** A conversation (run_id athr_…: an agent asked in chat) is scored too: steps are its tool
+   *  calls, turns its replies; tokens/cost only when its model calls were metered. */
+  kind?: "conversation";
+  title?: string;
+  agent_role?: string | null;
+  agent_name?: string | null;
+  started_at?: string | null;
+  tokens_measured?: boolean;
+  /** From the question to the root cause the conversation recorded. */
+  time_to_root_cause_seconds?: number | null;
+  tool_calls?: number;
+  knowledge_calls?: { tool: string; ok: boolean; query: string | null; refs: string[] }[];
 };
 
 export type KgRunComparison = {
   run: KgRunProof;
   baseline: KgRunProof;
   /** run − baseline, per metric; negative is better. */
-  delta: Record<"steps" | "turns" | "tokens" | "cost_usd" | "wall_seconds" | "repair_rounds", number | null>;
+  delta: Record<"steps" | "turns" | "tokens" | "cost_usd" | "wall_seconds" | "repair_rounds", number | null>
+    & { time_to_root_cause_seconds?: number | null };
   /** What `run` consulted or reused that `baseline` learned. */
   carried: KgRunProofItem[];
   /** Better, AND it carried the edge to the baseline's learning (the claim rule). */
