@@ -14,7 +14,7 @@
   "dependencies": {
     "@boss/api-client": "workspace:*",
     "@phosphor-icons/react": "^2.1.10",
-    "next": "16.4.0",
+    "next": "16.4.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
