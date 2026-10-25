@@ -20,6 +20,7 @@ import {
   rruleWord, secondsWord, useContactPoints, useNotifications, usePolicies, useSilences,
   type ContactPoint, type Matcher, type Policy, type Preview,
 } from "../../lib/monitoring";
+import { actorWords } from "../../lib/actor-words";
 import { useLocalTime } from "../../lib/local-time";
 import { showToast } from "../client-forms";
 import { notifyChanged } from "../changed";
@@ -540,7 +541,7 @@ function SilencesZone({ projectId, actor }: Zone) {
                   <span className="inf-mono" data-copy="data">{matchersWord(x.matchers)}</span>
                   <span className="inf-muted" data-user-text>{x.reason}</span>
                   {x.endsAt ? <span className="inf-faint" title={lt.full(x.endsAt)}>until {whenWord(x.endsAt, lt)}</span> : null}
-                  {x.createdBy ? <span className="inf-faint">by {x.createdBy}</span> : null}
+                  {x.createdBy ? <span className="inf-faint">by {actorWords(x.createdBy)}</span> : null}
                   <span className="ag-spacer" />
                   <GatedButton permission="observability:manage" type="button" className="inf-link" data-testid="obs-sil-end"
                                onClick={() => void end(x.id)}>End</GatedButton>
