@@ -4,6 +4,8 @@ GET /v1/knowledge/view/live    what agents learned, the rules they proposed and 
                                reused edges they drew since a cursor, for one run or the project
                                (KgLiveResponse). The Graph area and every run's "Learned so far"
                                strip poll it only while visible and while a run is writing.
+GET /v1/knowledge/view/conversation  one conversation's learnings written and used, and the
+                               names of the graph items its transcript cites (read-only).
 GET /v1/knowledge/view/proof   one run's scorecard (steps, turns, tokens, cost, wall time, repair
                                rounds, what it consulted and reused), or a pair compared: the
                                later run against a baseline, attributed to learning only when it
@@ -77,3 +79,20 @@ def proof(
                 "run": learning_live.run_proof(connection, project_id, run, withheld=withheld)}
 
     return _read(request, project_id, actor, read)
+
+
+@router.get("/conversation")
+@permit(P.KNOWLEDGE_READ, scope=Scope.project(query="project_id"))
+def conversation(
+    request: Request,
+    project_id: str = Query(...),
+    actor: str = Query(...),
+    thread: str = Query(..., description="The conversation (athr_…)."),
+) -> dict[str, Any]:
+    """KgConversationKnowledge: what one conversation wrote to the graph and the earlier items it
+    used, and the title of every graph item its transcript names (read-only; the console's
+    conversation view). Withheld kinds are absent, as everywhere in the Graph area."""
+    from boss_engine.services.knowledge.learning_conversations import conversation_knowledge
+
+    return _read(request, project_id, actor, lambda c, withheld: conversation_knowledge(
+        c, project_id, thread, withheld=withheld))

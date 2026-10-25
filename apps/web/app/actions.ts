@@ -336,6 +336,15 @@ export async function loadThreadMessagesAction(threadId: string, projectId: stri
     `?project_id=${encodeURIComponent(projectId)}&actor=${encodeURIComponent(actor)}`);
 }
 
+/** One conversation, read back (Agent Studio's conversation view, read-only): the reader's own,
+ *  a task's, or one held under the console's shared identity. Anyone else's private thread is
+ *  404, as the API decides (GET /v1/agent/threads/{id}/transcript). */
+export async function loadConversationMessagesAction(threadId: string, projectId: string, actor: string): Promise<ActionResult> {
+  return getJsonReturn(
+    `/v1/agent/threads/${encodeURIComponent(threadId)}/transcript` +
+    `?project_id=${encodeURIComponent(projectId)}&actor=${encodeURIComponent(actor)}`);
+}
+
 export async function loadTaskContextAction(taskId: string, projectId: string): Promise<ActionResult> {
   const p = encodeURIComponent(projectId);
   const [task, codeTasks] = await Promise.all([

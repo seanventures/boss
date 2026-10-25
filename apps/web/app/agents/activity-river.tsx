@@ -43,6 +43,8 @@ export type ActivityRiverProps = {
   viewer?: string;
   /** A link's window (`&days=`; Organization's edges): 1 or 7, the river's own windows. */
   initialDays?: 1 | 7;
+  /** A talk's row opens its conversation (Agent Studio's `?conversation=` sheet). */
+  onOpenConversation?: (threadId: string) => void;
 };
 
 export const RIVER_POLL_MS = 8000;
@@ -142,7 +144,7 @@ function isHandoff(item: ActivityItem): boolean {
 }
 
 export function ActivityRiver({ projectId, roleKey, runId, onClearRun, paused, runLabel, viewer = "",
-                               initialDays = 1 }: ActivityRiverProps) {
+                               initialDays = 1, onOpenConversation }: ActivityRiverProps) {
   useIdentityVersion();
   const [filter, setFilter] = useState<ActivityFilter>("all");
   const [days, setDays] = useState<1 | 7>(initialDays);
@@ -233,7 +235,7 @@ export function ActivityRiver({ projectId, roleKey, runId, onClearRun, paused, r
               <ul className="ag-river-list">
                 {g.rows.map((item) => (
                   <RiverRow key={item.actId} item={item} projectId={projectId} viewer={viewer}
-                            filter={filter} days={days} />
+                            filter={filter} days={days} onOpenConversation={onOpenConversation} />
                 ))}
               </ul>
             </section>
@@ -248,8 +250,9 @@ export function ActivityRiver({ projectId, roleKey, runId, onClearRun, paused, r
   );
 }
 
-function RiverRow({ item, projectId, viewer, filter, days, nested = false }: {
+function RiverRow({ item, projectId, viewer, filter, days, nested = false, onOpenConversation }: {
   item: ActivityItem; projectId: string; viewer: string; filter: ActivityFilter; days: 1 | 7; nested?: boolean;
+  onOpenConversation?: (threadId: string) => void;
 }) {
   useIdentityVersion(); // the name is resolved at render
   const { who, verb: sentence } = sentenceOf(item);
@@ -262,11 +265,15 @@ function RiverRow({ item, projectId, viewer, filter, days, nested = false }: {
   const [toolsOpen, setToolsOpen] = useState(false);
   const took = duration(item);
 
+  // A TALK OPENS ITS CONVERSATION: the brief, the answer and what the agent did — never a card
+  // naming the console's own actor.
+  const conversation = item.kind === "chat" && item.threadId && onOpenConversation ? item.threadId : null;
   const openCard = useCallback(async () => {
+    if (conversation) { onOpenConversation?.(conversation); return; }
     if (card) { setCard(null); return; }
     const r = await getAct(projectId, item.actId);
     if (r.ok) setCard(r.data);
-  }, [card, projectId, item.actId]);
+  }, [card, projectId, item.actId, conversation, onOpenConversation]);
 
   const toggleKids = async () => {
     const opening = !kidsOpen;
@@ -288,7 +295,9 @@ function RiverRow({ item, projectId, viewer, filter, days, nested = false }: {
   return (
     <li className="ag-river-item" data-nested={nested || undefined}>
       <div className="ag-river-row" role="button" tabIndex={0} data-testid={`ag-river-row-${item.actId}`}
-           data-state={state} aria-expanded={!!card}
+           data-state={state} aria-expanded={conversation ? undefined : !!card}
+           aria-haspopup={conversation ? "dialog" : undefined} data-conversation={conversation ? "true" : undefined}
+           title={conversation ? "Open the conversation" : undefined}
            onClick={(e) => { if (!(e.target as Element).closest("button, a")) void openCard(); }}
            onKeyDown={(e) => { if (e.key === "Enter" && e.target === e.currentTarget) void openCard(); }}>
         <time className="ag-river-time" dateTime={item.startedAt} title={utcTitle(item.startedAt)}>{clock(item.startedAt)}</time>
@@ -354,7 +363,8 @@ function RiverRow({ item, projectId, viewer, filter, days, nested = false }: {
       {kidsOpen && kids ? (
         <ul className="ag-river-list ag-river-kids">
           {kids.map((k) => (
-            <RiverRow key={k.actId} item={k} projectId={projectId} viewer={viewer} filter={filter} days={days} nested />
+            <RiverRow key={k.actId} item={k} projectId={projectId} viewer={viewer} filter={filter} days={days} nested
+                      onOpenConversation={onOpenConversation} />
           ))}
         </ul>
       ) : null}

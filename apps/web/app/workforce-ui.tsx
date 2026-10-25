@@ -23,6 +23,8 @@ import { PlanVsWork } from "./agents/org-drift";
 import type { OrgDrift } from "../lib/agents-org-board";
 import { notifyChanged } from "./changed";
 import { ActivityRiver } from "./agents/activity-river";
+import { ConversationSheet } from "./agents/conversation-sheet";
+import { isThreadId } from "../lib/agent-conversation";
 import { openRoom } from "../lib/agent-converse";
 import { useAreaKeydown } from "../lib/area-keys";
 
@@ -128,6 +130,9 @@ export function WorkforceArea(
   const [activityAgent, setActivityAgent] = useState<string | null>(null);
   const [activityDays, setActivityDays] = useState<1 | 7>(1);
   const [orgId, setOrgId] = useState<string | null>(null);
+  // `?conversation=<thread>`: one agent conversation, read back over any view (a Talks row, the
+  // Knowledge Graph's "Open conversation", or a link).
+  const [conversation, setConversation] = useState<string | null>(null);
   useEffect(() => {
     const sync = () => {
       try {
@@ -145,6 +150,8 @@ export function WorkforceArea(
         setActivityAgent(url.searchParams.get("agent"));
         setActivityDays(Number(url.searchParams.get("days")) >= 7 ? 7 : 1);
         setOrgId(url.searchParams.get("org"));
+        const thread = url.searchParams.get("conversation");
+        setConversation(isThreadId(thread) ? thread : null);
       } catch { /* non-browser */ }
     };
     sync();
@@ -178,6 +185,16 @@ export function WorkforceArea(
       url.searchParams.delete("role");
       // replace, not back(): back() would leave the site for anyone who arrived on the link.
       window.history.replaceState(null, "", url.toString());
+    } catch { /* non-browser */ }
+  }, []);
+  const openConversation = useCallback((thread: string | null) => {
+    setConversation(thread);
+    try {
+      const url = new URL(window.location.href);
+      if (thread) url.searchParams.set("conversation", thread); else url.searchParams.delete("conversation");
+      // Opening is a step Back undoes; closing replaces, so Back never reopens what was closed.
+      if (thread) window.history.pushState(null, "", url.toString());
+      else window.history.replaceState(null, "", url.toString());
     } catch { /* non-browser */ }
   }, []);
   // DELETED HERE, GONE HERE. The roster is server data refreshed on an interval; without this a
@@ -376,7 +393,8 @@ export function WorkforceArea(
         <ActivityRiver projectId={projectId} roleKey={searchedRole ?? activityAgent} runId={focusRun}
                        key={`${activityAgent ?? ""}:${activityDays}`} initialDays={activityDays}
                        runLabel={board.board?.missions.find((m) => m.runId === focusRun)?.subject || undefined}
-                       onClearRun={() => setView("activity", { run: null })} paused={!consoleLive} />
+                       onClearRun={() => setView("activity", { run: null })} paused={!consoleLive}
+                       onOpenConversation={openConversation} />
       ) : view === "panels" && studio ? (
         <PanelsView feed={studio} actor={actor} />
       ) : (
@@ -386,6 +404,10 @@ export function WorkforceArea(
 
       {/* The detail view, over every view. Rendered here rather than as a route because the
           console mounts every area at once and a route would be a second place agents live. */}
+      {conversation && !openRole ? (
+        <ConversationSheet projectId={projectId} actor={actor} threadId={conversation}
+                           onClose={() => openConversation(null)} />
+      ) : null}
       {openRole ? (
         <AgentDetail projectId={projectId} roleKey={openRole} actor={actor}
                      studio={studio} onClose={closeAgent}

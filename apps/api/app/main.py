@@ -14010,6 +14010,36 @@ def get_agent_thread_messages_endpoint(thread_id: str, project_id: str, actor: s
         }
 
 
+#: The console's and Metatron's shared identities. A conversation held under one of them was the
+#: operators' (the console key, Metatron, MCP clients acting as the console), never one person's.
+SHARED_THREAD_ACTORS = frozenset({"executive_console", "metatron", "coo"})
+
+
+@app.get("/v1/agent/threads/{thread_id}/transcript")
+@permit(P.AGENT_READ, scope=Scope.project(query="project_id"))
+def get_agent_thread_transcript_endpoint(thread_id: str, project_id: str, actor: Optional[str] = None):
+    """One conversation, read back for the console's conversation view and for an audit (KG-V2):
+    every message with its stored tool calls, read-only.
+
+    Read under agent:read (the right that already lists the conversation in Activity › Talks), for
+    a conversation the reader may see: their own, a task's (shared, external_ref set), or one held
+    under the console's shared identity. Anyone else's private thread is 404, never 403, exactly as
+    GET /messages answers it."""
+    with begin(engine) as connection:
+        require_project_reader(connection, project_id)
+        row = connection.execute(
+            text("SELECT project_id, actor, external_ref FROM agent_threads WHERE id = :id"),
+            {"id": thread_id},
+        ).mappings().first()
+        if not row or row["project_id"] != project_id:
+            raise HTTPException(status_code=404, detail="Agent thread not found.")
+        reader = identity_guard.request_actor() or actor or current_api_principal.get() or ""
+        owner = str(row["actor"] or "")
+        if not (row["external_ref"] or owner in SHARED_THREAD_ACTORS or owner == str(reader)):
+            raise HTTPException(status_code=404, detail="Agent thread not found.")
+        return {"thread_id": thread_id, "messages": orchestration_agent.list_messages(connection, thread_id)}
+
+
 @app.get("/v1/tasks", response_model=TaskListResponse)
 @permit(P.WORK_ITEM_READ, scope=Scope.project_or_org(query="project_id"))
 def list_tasks(
