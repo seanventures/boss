@@ -609,9 +609,15 @@ export function readAreaUrl(search: string): { tab: AreaTab; wf: string | null }
 }
 
 /** The query string with `tab=` corrected to the tab actually shown, or null when it already
- *  says so (or names none). */
+ *  says so (or names none).
+ *
+ *  ONLY WHILE THE URL IS THIS AREA'S. The console keeps every area it has loaded mounted, and
+ *  each one hears every popstate. `tab=` is a word every area uses for its own tabs, so a
+ *  mounted Workflows "corrected" Govern's `?area=budget&tab=selffix` to `tab=runs` a few
+ *  seconds after the click, and Govern followed the URL back to Limits (brec_4cafbcc6). */
 export function urlWithTab(search: string, shown: AreaTab): string | null {
   const params = new URLSearchParams(search);
+  if (params.get("area") !== "delivery_workflows") return null;
   const named = params.get("tab");
   if (named === null || named === shown) return null;
   params.set("tab", shown);
