@@ -12,7 +12,7 @@
  * connections and the same selection; the work area fits the viewport and the canvas gets the room.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ListBullets, MagnifyingGlass, TreeStructure, X } from "@phosphor-icons/react";
+import { CornersIn, CornersOut, ListBullets, MagnifyingGlass, TreeStructure, X } from "@phosphor-icons/react";
 
 import { useGate } from "../../components/gated";
 import { useOnScreen } from "../../lib/area-shown";
@@ -178,8 +178,9 @@ function treeTabFor(layer: string): KgTreeTab {
 }
 
 /** The work area fits the viewport: from its top to the window's bottom (P1-11), never shorter than
- *  a usable canvas. */
-function useFitHeight(): [React.RefObject<HTMLDivElement | null>, number | null] {
+ *  a usable canvas — the height is the window's less the chrome above and below it, measured, never
+ *  a fixed number. Full screen (round 6), it is the window less the toolbar and the status line. */
+function useFitHeight(full = false): [React.RefObject<HTMLDivElement | null>, number | null] {
   const ref = useRef<HTMLDivElement>(null);
   const [h, setH] = useState<number | null>(null);
   useEffect(() => {
@@ -190,6 +191,7 @@ function useFitHeight(): [React.RefObject<HTMLDivElement | null>, number | null]
       // Everything above the work area and everything the page draws below it (its card's padding,
       // the page's own) fits in the window with it: the document is never taller than the viewport.
       const r = el.getBoundingClientRect();
+      if (full) { setH(Math.max(260, Math.round(window.innerHeight - r.top))); return; }
       const top = r.top + window.scrollY;
       // What the page draws under the work area: the rest of its card, then the page's own padding.
       const card = el.closest("section") ?? el.parentElement;
@@ -239,7 +241,26 @@ export function GraphView({ projectId, actor, orgId, repos, onReposChanged, rule
   const [treeKey, setTreeKey] = useState(0);
   const bubbleCache = useRef(new Map<string, BubbleSummary>());
   const canvasRef = useRef<CanvasHandle>(null);
-  const [workRef, workHeight] = useFitHeight();
+  // Full screen (round 6, the demo's centrepiece): the graph over the whole window; Esc exits.
+  const [full, setFull] = useState(false);
+  const [workRef, workHeight] = useFitHeight(full);
+  useEffect(() => {
+    if (!full) return undefined;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      // Esc in the search box clears it first; anywhere else it leaves full screen.
+      if ((e.target as HTMLElement | null)?.closest?.("input, textarea, select")) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setFull(false);
+    };
+    document.addEventListener("keydown", onKey, true);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { document.removeEventListener("keydown", onKey, true); document.body.style.overflow = prev; };
+  }, [full]);
+  // Another tab of the area: never left covering the window.
+  useEffect(() => { if (inactive) setFull(false); }, [inactive]);
   // The drawer over the canvas's right edge: the selection is panned out from under it.
   const [occlude, setOcclude] = useState(0);
   // The canvas's size (to 20 px) and the drawer's width: every picture is laid out to what the
@@ -778,7 +799,8 @@ export function GraphView({ projectId, actor, orgId, repos, onReposChanged, rule
 
   const folded = picture?.folded.length ?? 0;
   return (
-    <div className="kg-graph" data-testid="kg-graph" data-mode={view.mode}>
+    <div className="kg-graph" data-testid="kg-graph" data-mode={view.mode} data-full={full || undefined}
+         role={full ? "dialog" : undefined} aria-modal={full || undefined} aria-label={full ? "Knowledge graph, full screen" : undefined}>
       <div className="kg-toolbar" role="toolbar" aria-label="Graph controls">
         <button type="button" className="ag-btn kg-tree-toggle" aria-expanded={treeOpen || !treeCollapsed}
                 onClick={() => {
@@ -883,6 +905,10 @@ export function GraphView({ projectId, actor, orgId, repos, onReposChanged, rule
                 aria-label={listView ? "Graph view" : "List view"} title={listView ? "Back to the graph" : "List view: the current view as a table of nodes and edges"}>
           <ListBullets size={15} aria-hidden />
         </button>
+        <button type="button" className="ag-btn ag-btn-icon" aria-pressed={full} data-testid="kg-fullscreen" onClick={() => setFull((v) => !v)}
+                aria-label={full ? "Exit full screen" : "Full screen"} title={full ? "Exit full screen (Esc)" : "Full screen: the graph over the whole window (Esc exits)"}>
+          {full ? <CornersIn size={15} aria-hidden /> : <CornersOut size={15} aria-hidden />}
+        </button>
         <button type="button" className="ag-btn" aria-expanded={panelOpen && !!selected} aria-controls="kg-details"
                 data-testid="kg-details-toggle" disabled={!selected}
                 title={selected ? (panelOpen ? "Hide the details (Esc)" : "Show the details of the selection") : "Select a node to see its details"}
@@ -898,12 +924,16 @@ export function GraphView({ projectId, actor, orgId, repos, onReposChanged, rule
             <span aria-current="page">{o.parent?.split(":").pop() ?? area?.split(":").pop()}</span>
           </nav>
         ) : null}
-        {view.mode === "focus" && focusCenter ? (
-          <span className="kg-view-note" data-testid="kg-view-note">
-            {counts ? focusNote(focusCenter.label, view.depth, counts) : focusCenter.label}
-            {history.current.length ? <> · <button type="button" className="inf-link" onClick={back}>Back</button></> : null}
-          </span>
-        ) : null}
+        {view.mode === "focus" && focusCenter ? (() => {
+          const note = counts ? focusNote(focusCenter.label, view.depth, counts) : focusCenter.label;
+          return (
+            <>
+              {/* One status line (round 6): the sentence ellipsizes, all of it is the tooltip. */}
+              <span className="kg-view-note" data-testid="kg-view-note" title={note}>{note}</span>
+              {history.current.length ? <button type="button" className="inf-link kg-back" data-testid="kg-back" onClick={back}>Back</button> : null}
+            </>
+          );
+        })() : null}
         {view.mode === "overview" && o && picture ? (
           (() => {
             const drawnAreas = picture.raw.filter((n) => n.kind !== "layer" && n.kind !== "more").length;
@@ -934,7 +964,7 @@ export function GraphView({ projectId, actor, orgId, repos, onReposChanged, rule
           })()}</span>
         ) : null}
         {live.active > 0 ? <span className="kg-live" data-testid="kg-live"><span className="kg-live-dot" aria-hidden />{live.active} {live.active === 1 ? "run" : "runs"} writing</span> : null}
-        {notice ? <span className={notice.ok ? "kg-ok" : "kg-inline-err"} role={notice.ok ? "status" : "alert"} data-testid="kg-notice">{notice.text}</span> : null}
+        {notice ? <span className={`kg-notice-line ${notice.ok ? "kg-ok" : "kg-inline-err"}`} title={notice.text} role={notice.ok ? "status" : "alert"} data-testid="kg-notice">{notice.text}</span> : null}
         <span className="ag-spacer" />
         {o ? <KgBuilt builtAt={o.built_at} stale={o.stale} onRebuild={() => void rebuild()} busy={rebuilding || archived} indexing={indexingNow} /> : null}
       </div>

@@ -173,6 +173,35 @@ describe("GitHub access", () => {
     await click(document.querySelector('[data-testid="gh-app-verify"]'));
     expect(api.calls.filter((c) => c.url.endsWith("/app/verify")).length).toBe(2);
   });
+
+  it("never asks on its own while Setup is hidden, and an unasked failure is never a toast (KG round 6)", async () => {
+    // "Reload and retry" over the Knowledge Graph: this card, mounted hidden in Setup, asked
+    // GitHub on its own, the write was refused, and the refusal became a toast on another area.
+    const api = fakeApi(board());
+    api.answer = (call) => {
+      if (!call.url.includes("/v1/identity/github")) return null;
+      if (call.method === "POST" && call.url.endsWith("/app/verify")) return { status: 403, body: { error: "csrf_failed" } };
+      return { status: 200, body: installedPersonal(null) };
+    };
+    const toasts: string[] = [];
+    const on = (e: Event) => toasts.push(String((e as CustomEvent<{ message: string }>).detail.message));
+    window.addEventListener("boss:toast", on);
+    try {
+      mounted = await mountBoard(board(), "?area=knowledge", false);
+      await flush();
+      expect(api.calls.filter((c) => c.url.endsWith("/app/verify"))).toEqual([]);
+      mounted.unmount();
+      mounted = await mountBoard(board());
+      await flush();
+      expect(api.calls.filter((c) => c.url.endsWith("/app/verify")).length).toBe(1);
+      expect(toasts).toEqual([]);
+      // A press is answered, refusal and all.
+      await click(document.querySelector('[data-testid="gh-app-verify"]'));
+      expect(toasts.length).toBe(1);
+    } finally {
+      window.removeEventListener("boss:toast", on);
+    }
+  });
 });
 
 

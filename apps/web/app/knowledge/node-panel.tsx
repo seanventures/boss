@@ -12,7 +12,8 @@ import { Copy, X } from "@phosphor-icons/react";
 
 import { GatedButton } from "../../components/gated";
 import { openAgent } from "../../lib/agent-world";
-import { agentName, approvalWords, eventWords, isWordsAttr, provenanceLines, stepWords, useWords, type ProvLine } from "../../lib/kg-provenance";
+import { RUN_TITLE_MAX, agentName, approvalWords, eventWords, isWordsAttr, provenanceLines, stepWords, useWords, type ProvLine } from "../../lib/kg-provenance";
+import { wordCut } from "../../lib/word-cut";
 import { scanReader, sentenceStart } from "../../lib/kg-scan";
 import { isLearnedKind, type KgConnectionGroup, type KgNodeDetailResponse, type KgProvenance, type KgViewEdge, type KgViewNode } from "../../lib/kg-view-types";
 import { kindName, kindToken } from "../../lib/kg-layout";
@@ -41,7 +42,7 @@ const when = kgWhen;
 /** One provenance line's parts (lib/kg-provenance.ts): words, a run link, an agent's Passport. */
 export function ProvLineView({ line }: { line: ProvLine }) {
   return <>{line.map((part, i) => {
-    if (part.kind === "link") return <a key={i} className="inf-link" href={part.href} data-testid={part.testId}>{part.text}</a>;
+    if (part.kind === "link") return <a key={i} className="inf-link" href={part.href} data-testid={part.testId} title={part.title}>{part.text}</a>;
     if (part.kind === "passport") {
       return (
         <button key={i} type="button" className="inf-link" data-testid="kg-panel-passport" data-passport={part.agentId ?? undefined}
@@ -49,7 +50,8 @@ export function ProvLineView({ line }: { line: ProvLine }) {
                 onClick={() => openAgent(part.roleKey)}>Passport</button>
       );
     }
-    return part.strong ? <strong key={i} data-testid={part.testId}>{part.text}</strong> : <React.Fragment key={i}>{part.text}</React.Fragment>;
+    if (part.strong) return <strong key={i} data-testid={part.testId} title={part.title}>{part.text}</strong>;
+    return part.title ? <span key={i} title={part.title}>{part.text}</span> : <React.Fragment key={i}>{part.text}</React.Fragment>;
   })}</>;
 }
 
@@ -519,19 +521,20 @@ function Connections({ d, w, onFocusNode, viewEdges, viewNote = null }: {
 function Lineage({ d, orgId }: { d: KgNodeDetailResponse; orgId?: string | null }) {
   const l = d.lineage!;
   const learnedRun = kgRunHref(d.provenance, orgId);
+  const runCut = d.provenance.run_title ? wordCut(d.provenance.run_title, RUN_TITLE_MAX) : null;
   return (
     <Section title="Learned → used" testId="kg-panel-lineage">
       <p className="kg-lineage">
         Learned by <strong>{agentName(l.learned) ?? agentName(d.provenance) ?? "an agent, before BOSS kept agents' names"}</strong>
         {d.provenance.run_title || learnedRun ? <> in {learnedRun
-          ? <a className="inf-link" href={learnedRun}>{d.provenance.run_title ? `“${d.provenance.run_title}”` : "its run"}</a>
-          : <>“{d.provenance.run_title}”</>}</> : d.provenance.conversation_title ? <> in the conversation “{d.provenance.conversation_title}”</> : null}
+          ? <a className="inf-link" href={learnedRun} title={runCut?.cut ? runCut.full : undefined}>{runCut ? `“${runCut.text}”` : "its run"}</a>
+          : <span title={runCut?.cut ? runCut.full : undefined}>“{runCut?.text}”</span>}</> : d.provenance.conversation_title ? <> in the conversation “{d.provenance.conversation_title}”</> : null}
         {stepWords(l.learned.step) || l.learned.at ? ` (${[stepWords(l.learned.step), when(l.learned.at)].filter(Boolean).join(", ")})` : ""}
         {l.used.length ? " → used by " : " · not used by a later run yet"}
         {l.used.map((u, i) => (
           <React.Fragment key={`${u.run_id}-${i}`}>
             {i ? ", " : ""}
-            {useWords(u)}
+            <span title={u.run_title ?? undefined}>{useWords(u)}</span>
           </React.Fragment>
         ))}
       </p>

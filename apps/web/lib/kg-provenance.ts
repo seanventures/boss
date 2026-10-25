@@ -11,6 +11,7 @@
  * (RAW_ID_PATTERNS, enforced by tests/kg-provenance-in-words.test.tsx) ever reaches the words.
  */
 import type { KgLineageUse, KgProvenance, KgProvenanceEvent } from "@boss/api-client";
+import { wordCut } from "./word-cut";
 
 import { roleWords } from "../app/agents/chain-model";
 import { actorWords, looksLikeAnId } from "./actor-words";
@@ -35,12 +36,14 @@ export function rawIdsIn(text: string): string[] {
 
 /** A piece of a provenance line: words, a link, or an agent's Passport. */
 export type ProvPart =
-  | { kind: "text"; text: string; strong?: boolean; testId?: string }
-  | { kind: "link"; text: string; href: string; testId?: string }
+  | { kind: "text"; text: string; strong?: boolean; testId?: string; title?: string }
+  | { kind: "link"; text: string; href: string; testId?: string; title?: string }
   | { kind: "passport"; roleKey: string; agentId: string | null; name: string };
 export type ProvLine = ProvPart[];
 
 const OPERATOR = "the operator";
+/** A run's title in a provenance line: whole words up to this many characters, then "…". */
+export const RUN_TITLE_MAX = 60;
 const GENERAL = "BOSS, the general agent";
 
 type AgentRef = { agent_name?: string | null; agent_role?: string | null };
@@ -92,7 +95,7 @@ export function stepWords(step: string | null | undefined): string | null {
   return `its “${s.replace(/[-_]+/g, " ")}” step`;
 }
 
-function words(text: string, extra: Partial<{ strong: boolean; testId: string }> = {}): ProvPart {
+function words(text: string, extra: Partial<{ strong: boolean; testId: string; title: string }> = {}): ProvPart {
   return { kind: "text", text, ...extra };
 }
 
@@ -128,9 +131,12 @@ export function provenanceLines(p: KgProvenance, { layer, orgId }: { layer: stri
   const href = kgRunHref(p, orgId);
   const step = stepWords(p.step);
   if (p.run_title || href || p.run_id) {
-    const title = p.run_title ? `“${p.run_title}”` : "its run";
+    // Cut at a word with an ellipsis; the whole title is the tooltip (round 6).
+    const cut = p.run_title ? wordCut(p.run_title, RUN_TITLE_MAX) : null;
+    const title = cut ? `“${cut.text}”` : "its run";
+    const tip = cut?.cut ? cut.full : undefined;
     const line: ProvLine = [words("In ")];
-    line.push(href ? { kind: "link", text: `${title} ↗`, href, testId: "kg-panel-run-link" } : words(title));
+    line.push(href ? { kind: "link", text: `${title} ↗`, href, testId: "kg-panel-run-link", title: tip } : words(title, tip ? { title: tip } : {}));
     if (p.run_at) line.push(words(` · started ${kgWhen(p.run_at)}`));
     if (step) line.push(words(` · ${step}`));
     lines.push(line);
@@ -158,7 +164,7 @@ export function approvalWords(p: KgProvenance): string | null {
 /** A later run that used it: "Site Reliability Engineer in “B4 · Incident…” (cited, Oct 25, 07:20 PDT)". */
 export function useWords(u: KgLineageUse): string {
   const who = agentName(u) ?? "an agent";
-  const where = u.run_title && !rawIdsIn(u.run_title).length ? `“${u.run_title}”` : "a later run";
+  const where = u.run_title && !rawIdsIn(u.run_title).length ? `“${wordCut(u.run_title, RUN_TITLE_MAX).text}”` : "a later run";
   return `${who} in ${where} (${u.how}${u.at ? `, ${kgWhen(u.at)}` : ""})`;
 }
 

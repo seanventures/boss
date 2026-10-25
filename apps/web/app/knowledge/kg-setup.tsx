@@ -23,7 +23,7 @@
  * without one, and the "continue setup" strip over the graph.
  */
 import React, { useCallback, useEffect, useState } from "react";
-import { Check, CircleNotch, X } from "@phosphor-icons/react";
+import { Check, CircleNotch, Question, X } from "@phosphor-icons/react";
 
 import { AgentAvatar } from "../agent-avatar";
 import { SectionLabel } from "../section-label";
@@ -45,34 +45,64 @@ type Who = { projectId: string; actor: string };
 // ── the intro strip ─────────────────────────────────────────────────────────────────────────
 
 const INTRO_KEY = "boss.kg.intro.dismissed";
+/** Remembered per person (round 6): one browser shared by two people shows each their own. */
+export const introKey = (actor: string) => `${INTRO_KEY}:${actor}`;
+/** The "Continue setup" strip, put away for this person and project (it leaves a chip). */
+export const setupStripKey = (actor: string, projectId: string) => `boss.kg.setup-strip.dismissed:${actor}:${projectId}`;
 
-function introDismissed(): boolean {
-  try { return window.localStorage.getItem(INTRO_KEY) === "1"; } catch { return false; }
+/** A per-person "put away" flag: null until read after hydration (nothing flashes), then the
+ *  stored answer. A private window that refuses storage hides it for now. */
+export function useDismissed(key: string): [boolean | null, (gone: boolean) => void] {
+  const [gone, setGone] = useState<boolean | null>(null);
+  useEffect(() => {
+    try { setGone(window.localStorage.getItem(key) === "1"); } catch { setGone(false); }
+  }, [key]);
+  const set = useCallback((next: boolean) => {
+    try {
+      if (next) window.localStorage.setItem(key, "1"); else window.localStorage.removeItem(key);
+    } catch { /* private window: for now only */ }
+    setGone(next);
+  }, [key]);
+  return [gone, set];
 }
 
-/** What a knowledge graph IS, said once on a first visit and dismissible (per browser). */
-export function KgIntro() {
-  const [shown, setShown] = useState(false);
-  useEffect(() => setShown(!introDismissed()), []);
-  if (!shown) return null;
-  const dismiss = () => {
-    try { window.localStorage.setItem(INTRO_KEY, "1"); } catch { /* private window: hide for now */ }
-    setShown(false);
-  };
+const LAYER_LINES = [
+  { key: "code", name: "Code", line: "indexed from the repository", tip: "Areas, packages, classes and calls, indexed from the repository" },
+  { key: "rules", name: "Rules", line: "agents find, a person approves", tip: "Business rules agents find in the code, trusted once a person approves them" },
+  { key: "learning", name: "Learning", line: "agents record as they work", tip: "What agents learn while they work: failures, causes, fixes, precedents" },
+] as const;
+
+/** What a knowledge graph IS, said on a first visit; dismissing it leaves KgIntroLegend. */
+export function KgIntro({ onDismiss }: { onDismiss: () => void }) {
   return (
     <aside className="kg-intro" data-testid="kg-intro" aria-label="What the knowledge graph is">
       <div className="kg-intro-body">
         <ul className="kg-intro-layers">
-          <li title="Areas, packages, classes and calls, indexed from the repository"><span className="kg-dot" data-layer="code" aria-hidden /><b>Code</b> indexed from the repository</li>
-          <li title="Business rules agents find in the code, trusted once a person approves them"><span className="kg-dot" data-layer="rules" aria-hidden /><b>Rules</b> agents find, a person approves</li>
-          <li title="What agents learn while they work: failures, causes, fixes, precedents"><span className="kg-dot" data-layer="learning" aria-hidden /><b>Learning</b> agents record as they work</li>
+          {LAYER_LINES.map((l) => (
+            <li key={l.key} title={l.tip}><span className="kg-dot" data-layer={l.key} aria-hidden /><b>{l.name}</b> {l.line}</li>
+          ))}
         </ul>
         <p className="kg-quiet">Every node says which agent added it and who approved it.</p>
       </div>
-      <button type="button" className="kg-intro-close" aria-label="Dismiss the introduction" title="Got it" data-testid="kg-intro-dismiss" onClick={dismiss}>
+      <button type="button" className="kg-intro-close" aria-label="Dismiss the introduction" title="Got it" data-testid="kg-intro-dismiss" onClick={onDismiss}>
         <X size={14} weight="bold" aria-hidden />
       </button>
     </aside>
+  );
+}
+
+/** The intro, put away: one line in the tab row — the three layers, and "?" to read it again. */
+export function KgIntroLegend({ onOpen }: { onOpen: () => void }) {
+  return (
+    <span className="kg-intro-legend" data-testid="kg-intro-legend">
+      {LAYER_LINES.map((l) => (
+        <span key={l.key} className="kg-intro-legend-item" title={`${l.name}: ${l.line}`}><span className="kg-dot" data-layer={l.key} aria-hidden />{l.name}</span>
+      ))}
+      <button type="button" className="kg-intro-help" data-testid="kg-intro-open" onClick={onOpen}
+              aria-label="What the knowledge graph is" title="Code, rules and learning: what each layer is, and who adds it">
+        <Question size={14} weight="bold" aria-hidden />
+      </button>
+    </span>
   );
 }
 
@@ -92,15 +122,34 @@ export function KgStart({ onStart, archived }: { onStart: () => void; archived?:
   );
 }
 
-/** Over the graph while steps are left: how far, and Continue. */
-export function KgSetupStrip({ setup, onOpen }: { setup: KgSetupResponse; onOpen: () => void }) {
+/** Over the graph while steps are left: how far, and Continue. Put away, it is KgSetupChip. */
+export function KgSetupStrip({ setup, onOpen, onDismiss }: { setup: KgSetupResponse; onOpen: () => void; onDismiss?: () => void }) {
   const next = SETUP_STEPS.find((s) => s.key === setup.next);
   if (!next) return null;
   return (
     <p className="kg-banner kg-setup-strip" role="note" data-testid="kg-setup-strip">
       <span className="kg-banner-text">Setup · {stepsLeftWords(setup)}. Next: <b>{next.label}</b></span>
       <button type="button" className="ag-btn" data-testid="kg-setup-continue" onClick={onOpen}>Continue setup</button>
+      {onDismiss ? (
+        <button type="button" className="kg-intro-close" aria-label="Put the setup strip away" title="Put away: Setup stays one press away in the tab row"
+                data-testid="kg-setup-strip-dismiss" onClick={onDismiss}>
+          <X size={14} weight="bold" aria-hidden />
+        </button>
+      ) : null}
     </p>
+  );
+}
+
+/** The setup, once finished or put away: a chip in the tab row that opens it. */
+export function KgSetupChip({ setup, onOpen }: { setup: KgSetupResponse; onOpen: () => void }) {
+  const done = setup.next === null;
+  const next = SETUP_STEPS.find((s) => s.key === setup.next);
+  return (
+    <button type="button" className="kg-setup-chip" data-testid="kg-setup-chip" data-done={done || undefined} onClick={onOpen}
+            title={done ? "The knowledge graph is set up: open Setup" : `Setup · ${stepsLeftWords(setup)}. Next: ${next?.label ?? ""}`}>
+      {done ? <Check size={12} weight="bold" aria-hidden /> : null}
+      {done ? "Set up" : `Setup ${setup.done_count}/${setup.steps.length}`}
+    </button>
   );
 }
 

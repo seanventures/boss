@@ -81,17 +81,23 @@ describe("no New build door opens the agent chat", () => {
       "app/factory/apps-tab.tsx", "app/delivery-workflows-ui.tsx"]) expect(where).toContain(f);
   });
 
-  it("calls the composer New build everywhere: New project is only the project menu's", () => {
+  it("calls the composer New build everywhere: New project is only the project menu's and its sheet's", () => {
     // Operator-approved rename: the build composer's doors, the Workflows tab and the composer's
-    // own heading read "New build". "New project" is the top bar's PROJECT MENU alone — it makes
-    // a BOSS project in the org (POST /v1/projects, project:create), not a build
-    // (tests/new-project-in-the-org.test.tsx holds it).
+    // own heading read "New build". "New project" is the top bar's PROJECT MENU door and the
+    // sheet it opens (new-project-sheet.tsx, BOSSAPP-768 round 2: the form moved out of the
+    // dropdown into a sheet) — it makes a BOSS project in the org (POST /v1/projects,
+    // project:create), not a build (tests/new-project-in-the-org.test.tsx holds it).
+    const PROJECT_DOORS = ["app/project-menu.tsx", "app/new-project-sheet.tsx"];
     const labels = newProjectLabels();
-    expect(labels.map((l) => l.split(":")[0]).every((f) => f === "app/project-menu.tsx"), labels.join(", "))
+    expect(labels.map((l) => l.split(":")[0]).every((f) => PROJECT_DOORS.includes(f)), labels.join(", "))
       .toBe(true);
-    expect(labels.length).toBeGreaterThan(0);
+    expect(labels.some((l) => l.startsWith("app/project-menu.tsx:"))).toBe(true);
     const menu = readFileSync(join(ROOT, "app", "project-menu.tsx"), "utf8");
-    expect(menu).not.toMatch(/openNewProject|compose=/);
+    // The menu's New project door opens the project sheet, never the build composer.
+    expect(menu).toMatch(/<NewProjectSheet\b/);
+    for (const f of PROJECT_DOORS) {
+      expect(readFileSync(join(ROOT, f), "utf8"), f).not.toMatch(/openNewProject|compose=/);
+    }
     const workflows = readFileSync(join(ROOT, "app", "delivery-workflows-ui.tsx"), "utf8");
     expect(workflows).toContain('key === "new" ? <>New build</>');
     const composer = readFileSync(join(ROOT, "app", "workflows", "new-project-composer.tsx"), "utf8");

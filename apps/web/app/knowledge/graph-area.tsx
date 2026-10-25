@@ -26,7 +26,7 @@ import { INDEX_NOW, getGraphStatus, getRepositories, indexNow, rulesLock, type K
 import { getSetup, hasIndexedCode, setupOpens, type KgSetupResponse } from "../../lib/kg-setup";
 import type { ProjectType } from "@boss/api-client";
 import { GraphView } from "./graph-view";
-import { KgIntro, KgSetup, KgSetupStrip, KgStart } from "./kg-setup";
+import { KgIntro, KgIntroLegend, KgSetup, KgSetupChip, KgSetupStrip, KgStart, introKey, setupStripKey, useDismissed } from "./kg-setup";
 import { KgArchived, KgIndexing, KgLoading } from "./kg-states";
 import { KgSettings } from "./kg-settings";
 import { RulesReview } from "./rules-review";
@@ -73,6 +73,10 @@ export function GraphArea({ projectId, actor, orgId, archived = false, projectTy
   const [setup, setSetup] = useState<{ data: KgSetupResponse | null; error: string | null }>({ data: null, error: null });
   const seq = useRef(1);
   const urlRead = useRef(false);
+  // Round 6: the canvas gets the height. The intro and the setup strip are put away per person
+  // (the intro leaves a one-line legend with "?", the strip a chip, both in the tab row).
+  const [introGone, setIntroGone] = useDismissed(introKey(actor));
+  const [stripGone, setStripGone] = useDismissed(setupStripKey(actor, projectId));
 
   // Deep links arrive on load and on every in-console navigation (ConsoleShell dispatches popstate).
   useEffect(() => {
@@ -214,15 +218,22 @@ export function GraphArea({ projectId, actor, orgId, archived = false, projectTy
     );
   }
 
+  const overGraph = tab === "graph" && anyIndexed;
+  const setupShown = overGraph && (isKgProject || hasGraph) && !!setup.data;
+  const stripShown = setupShown && !!setup.data?.next && stripGone === false;
+  const chipShown = setupShown && (setup.data?.next === null || stripGone === true);
   return (
     <div className="kg" data-testid="kg" data-project={projectId} data-actor={actor} data-tab={tab}>
       <AreaHead area="kg" title="Knowledge Graph" tabs={TABS} active={tab} onTab={(k) => changeTab(k as GraphTab)}
-                counts={totalNodes ? <span>{totalNodes.toLocaleString("en-US")} code nodes</span> : undefined} />
+                counts={totalNodes ? <span>{totalNodes.toLocaleString("en-US")} code nodes</span> : undefined}>
+        {chipShown && setup.data ? <KgSetupChip setup={setup.data} onOpen={() => changeTab("setup")} /> : null}
+        {overGraph && introGone === true ? <KgIntroLegend onOpen={() => setIntroGone(false)} /> : null}
+      </AreaHead>
       {archived ? <KgArchived /> : null}
       {/* Over a graph only: the Start card already says what the three layers are. */}
-      {tab === "graph" && anyIndexed ? <KgIntro /> : null}
-      {tab === "graph" && (isKgProject || hasGraph) && setup.data?.next && anyIndexed ? (
-        <KgSetupStrip setup={setup.data} onOpen={() => changeTab("setup")} />
+      {overGraph && introGone === false ? <KgIntro onDismiss={() => setIntroGone(true)} /> : null}
+      {stripShown && setup.data ? (
+        <KgSetupStrip setup={setup.data} onOpen={() => changeTab("setup")} onDismiss={() => setStripGone(true)} />
       ) : null}
       {repos.error && !repos.data && tab === "graph" ? (
         <div className="kg-banner" data-tone="red" role="alert" data-testid="kg-repos-error">

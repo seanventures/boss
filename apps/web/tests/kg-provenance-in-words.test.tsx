@@ -137,7 +137,17 @@ describe("the Rules review card says who in words", () => {
     const metas = $$('[data-testid="kg-rule-card"] .kg-card-meta').map((m) => m.textContent ?? "");
     expect(metas.length).toBeGreaterThan(0);
     for (const m of metas) expect(rawIdsIn(m)).toEqual([]);
-    expect(metas.join(" ")).toContain("Reviewed by the operator");
+    expect(metas.join(" ")).toMatch(/(Approved|Rejected|Reviewed) by the operator/);
+  });
+
+  it("names the approver: the person's display name, else 'the operator' (round 6)", async () => {
+    const items = FX.rules.items.slice(0, 2).map((r, i) => ({ ...r, status: "approved",
+      review: { by: i === 0 ? "usr_example1abc" : "ceo", by_name: i === 0 ? "Example Person" : null, at: "2026-10-25T03:00:00Z", decision_id: null, note: null } }));
+    mockKgFetch({ "/view/rules$": { body: { ...FX.rules, items } } });
+    await mount(<RulesReview projectId="p" actor="ceo" onFocusNode={() => {}} />);
+    await settle();
+    expect($$('[data-testid="kg-rule-approver"]').map((e) => e.textContent?.split(" · ")[0]))
+      .toEqual(["Approved by Example Person", "Approved by the operator"]);
   });
 });
 

@@ -272,6 +272,68 @@ describe("the Knowledge Graph says what it is", () => {
   });
 });
 
+describe("round 6: the canvas gets the height", () => {
+  const steps = (doneCount: number) => (["import", "team", "scan", "review"] as const).map((key, i) => (
+    { key, state: i < doneCount ? "done" : i === doneCount ? "current" : "waiting", done: i < doneCount, summary: "" }));
+  const withCode = (over: Over = {}) => setupFx({ repositories: [INDEXED_REPO], has_graph: true, code_nodes: 51319, ...over } as Over);
+
+  it("the dismissed intro leaves a one-line legend whose ? brings it back, remembered per person", async () => {
+    const done = () => routes(withCode({ next: null, done_count: 4, steps: steps(4) } as Over));
+    mockKgFetch(done());
+    await open();
+    expect($('[data-testid="kg-intro-legend"]')).toBeNull();
+    await click("kg-intro-dismiss");
+    expect($('[data-testid="kg-intro"]')).toBeNull();
+    const legend = $('[data-testid="kg-intro-legend"]');
+    expect(legend?.closest(".inf-head")).not.toBeNull();
+    expect(legend?.textContent).toBe("CodeRulesLearning");
+    expect(window.localStorage.getItem("boss.kg.intro.dismissed:ceo")).toBe("1");
+    unmount();
+    // Another person on the same browser still gets the introduction.
+    mockKgFetch(done());
+    await open({ actor: "usr_other" });
+    expect($('[data-testid="kg-intro"]')).not.toBeNull();
+    unmount();
+    mockKgFetch(done());
+    await open();
+    expect($('[data-testid="kg-intro"]')).toBeNull();
+    await click("kg-intro-open");
+    expect($('[data-testid="kg-intro"]')).not.toBeNull();
+    expect($('[data-testid="kg-intro-legend"]')).toBeNull();
+  });
+
+  it("the setup strip collapses to a chip when put away, and is a chip once setup is done", async () => {
+    mockKgFetch(routes(withCode({ next: "team", done_count: 1, steps: steps(1) } as Over)));
+    await open();
+    expect($('[data-testid="kg-setup-strip"]')).not.toBeNull();
+    expect($('[data-testid="kg-setup-chip"]')).toBeNull();
+    await click("kg-setup-strip-dismiss");
+    expect($('[data-testid="kg-setup-strip"]')).toBeNull();
+    expect($('[data-testid="kg-setup-chip"]')?.textContent).toBe("Setup 1/4");
+    await click("kg-setup-chip");
+    expect($('[data-testid="kg-tab-setup"]')?.getAttribute("aria-selected")).toBe("true");
+    unmount();
+    window.history.replaceState(null, "", "/?org=o1&project_id=fineract-map&area=knowledge");
+    mockKgFetch(routes(withCode({ next: null, done_count: 4, steps: steps(4) } as Over)));
+    await open();
+    expect($('[data-testid="kg-setup-strip"]')).toBeNull();
+    expect($('[data-testid="kg-setup-chip"]')?.textContent).toBe("Set up");
+  });
+
+  it("Full screen covers the window and Esc leaves it", async () => {
+    mockKgFetch(routes(withCode({ next: null, done_count: 4, steps: steps(4) } as Over)));
+    await open();
+    const graph = () => $('[data-testid="kg-graph"]');
+    expect(graph()?.hasAttribute("data-full")).toBe(false);
+    await click("kg-fullscreen");
+    expect(graph()?.hasAttribute("data-full")).toBe(true);
+    expect($('[data-testid="kg-fullscreen"]')?.getAttribute("aria-label")).toBe("Exit full screen");
+    await act(async () => { document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+    await settle();
+    expect(graph()?.hasAttribute("data-full")).toBe(false);
+  });
+});
+
 describe("the project home's lifecycle card", () => {
   it("indexed → rules → learnings with real counts, the team, and the next thing to do", async () => {
     mockKgFetch(routes(setupFx({

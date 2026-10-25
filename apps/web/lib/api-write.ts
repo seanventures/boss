@@ -87,6 +87,11 @@ export class WriteInFlightError extends Error {
   }
 }
 
+/** A request its caller abandoned (an unmount, a newer request): never a failure to announce. */
+export function isAborted(error: unknown): boolean {
+  return !!error && typeof error === "object" && (error as { name?: unknown }).name === "AbortError";
+}
+
 /** The console-wide toast (app/client-forms.tsx `Toaster`, mounted in the layout). Dispatched
  *  here rather than imported so this module stays importable by middleware and server code. */
 export const TOAST_EVENT = "boss:toast";

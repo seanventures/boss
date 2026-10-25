@@ -6,7 +6,7 @@
  */
 import { CSRF_HEADER, ME_PATH } from "./contract";
 import { isPermission, type Permission } from "./permissions.gen";
-import { apiWrite, type WriteMethod } from "../api-write";
+import { apiWrite, isAborted, type WriteMethod } from "../api-write";
 import { sendToEnrolment } from "./enrolment";
 import { humanise, needsWords, permissionName } from "./words";
 import { refusalCode } from "./refusal-code";
@@ -218,7 +218,9 @@ async function idFetchOnce<T>(method: string, path: string, body?: unknown, init
       // useGuardedCall answers step_up_required for identity writes (with its own reason).
       ? await apiWrite(path, { method: method as WriteMethod, headers, body: payload, credentials: "same-origin", cache: "no-store", signal: init.signal }, { noStepUp: true })
       : await fetch(path, { headers, credentials: "same-origin", cache: "no-store", signal: init.signal });
-  } catch {
+  } catch (error) {
+    // An abandoned request (the caller unmounted, or asked again) is not "identity unavailable".
+    if (isAborted(error) || init.signal?.aborted) throw error;
     throw new IdentityError(0, "identity_unavailable");
   }
   if (res.status === 204) return undefined as T;
