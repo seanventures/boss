@@ -1,11 +1,12 @@
 // @vitest-environment happy-dom
 /**
- * Repo and models › Capacity holds what System Configuration › AI Capacity did (spec §2.3,
- * P-S-46, P-S-47, P-S-49; operator decision §11.2), without a second key form beside the Model
- * row: every source with its state, `Store credential` (with the secret backend) for a source
- * with no key, `Replace ↗` into the Model row for one that has a row there, `Start official
- * session` / `Disconnect session` for a plan login, and `Complete session` from FIELDS — the
- * observed capacity is assembled, never typed as JSON. Broker skills are a link into Skills.
+ * Repo and models › Models holds what System Configuration › AI Capacity did (spec §2.3,
+ * P-S-46, P-S-47, P-S-49; operator decision §11.2), in ONE list with no second key form: every
+ * source with its state, `Store credential` (with the secret backend) for a source with no key,
+ * `Replace key` (the Add a model drawer) for one that is a Models row, `Start official session` /
+ * `Disconnect session` for a plan login, and `Complete session` from FIELDS — the observed
+ * capacity is assembled, never typed as JSON. Unused catalogue sources are offered in the drawer
+ * under "More sources". Broker skills are a link into Skills.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
@@ -46,6 +47,10 @@ function withAnthropicRow(): SetupView {
   return view;
 }
 const src = (id: string) => document.querySelector(`[data-testid="setup-cap-source"][data-source="${id}"]`) as HTMLElement;
+/** Writes only: opening Add a model on a found Ollama lists its models (a background read). */
+const writes = (calls: Rec[]) => calls.filter((x) => x.method !== "GET" && x.body.op !== "model_catalogue");
+/** A row's ⋯ menu, opened. */
+async function menu(row: HTMLElement) { await click(q(row, "su-model-menu")); }
 
 describe("Capacity on Repo and models", () => {
   it("lists every source with its state, and links Broker skills into Skills", async () => {
@@ -54,7 +59,8 @@ describe("Capacity on Repo and models", () => {
     expect(q(document.body, "setup-entitlements")).not.toBeNull();
     const ids = [...document.querySelectorAll('[data-testid="setup-cap-source"]')].map((e) => e.getAttribute("data-source"));
     expect(ids).toEqual(["anthropic_api", "openai_gateway", "claude_max", "chatgpt_pro"]);
-    expect(src("anthropic_api").querySelector(".su-pill")?.textContent).toBe("Active");
+    // The Models row's pill (the last real proof), not the record's "Active".
+    expect(src("anthropic_api").querySelector(".su-pill")?.textContent).toBe("Working");
     expect(src("openai_gateway").querySelector(".su-pill")?.textContent).toBe("Blocked");
     expect(src("claude_max").querySelector(".su-pill")?.textContent).toBe("Needs sign-in");
     expect(q(document.body, "setup-entitlement-session")?.textContent).toContain("1 · 1 waiting");
@@ -63,23 +69,28 @@ describe("Capacity on Repo and models", () => {
     expect((document.body.textContent ?? "").toLowerCase()).not.toContain("entitlement");
   });
 
-  it("uses source names for disclosure while keeping exact identity and every model available", async () => {
+  it("names each source in words, with its ids in a tooltip and its details in words", async () => {
     const sources = entitlementSourcesWire();
     sources.items[0].supported_models = ["claude-sonnet", "claude-opus"];
     sources.items[1].source_id = "constructor";
-    api(withAnthropicRow(), sources);
-    mounted = await mountBoard(withAnthropicRow());
+    const view = board();
+    view.models = [];
+    api(view, sources);
+    mounted = await mountBoard(view);
     const row = src("anthropic_api");
-    const details = row.querySelector("details")!;
-    expect(details.open).toBe(false);
-    expect(details.querySelector("summary")?.textContent).toBe("Anthropic API details");
-    expect(details.textContent).toContain("Source ID: anthropic_api");
-    expect(details.textContent).toContain("Provider: anthropic");
-    expect(details.textContent).toContain("Models: claude-sonnet, claude-opus");
-    expect(row.querySelector('[role="status"]')?.closest("details")).toBeNull();
-    expect(row.querySelector('[data-testid="setup-cap-replace"]')?.closest("details")).toBeNull();
+    const name = row.querySelector(".su-src-name")!;
+    expect(name.textContent).toBe("Anthropic API");
+    expect(name.getAttribute("data-tip")).toContain("anthropic_api");
+    expect(q(row, "setup-cap-details-panel")).toBeNull();
+    await click(q(row, "setup-cap-details"));
+    const details = q(row, "setup-cap-details-panel")!;
+    expect(details.textContent).toContain("Anthropic");
+    expect(details.textContent).toContain("Claude Sonnet, Claude Opus");
+    expect(details.textContent).not.toContain("Source ID");
+    expect(details.querySelector('[data-tip="claude-sonnet, claude-opus"]')).not.toBeNull();
+    expect(row.querySelector('[role="status"]')?.closest('[data-testid="setup-cap-details-panel"]')).toBeNull();
     // Unknown sources keep their actual names; they are never mapped to a different source.
-    expect(src("constructor").querySelector("summary")?.textContent).toBe("constructor details");
+    expect(src("constructor").querySelector(".su-src-name")?.textContent).toBe("constructor");
   });
 
   it("keeps blocked, limited, exhausted and session controls outside optional metadata", async () => {
@@ -97,7 +108,8 @@ describe("Capacity on Repo and models", () => {
     }
     expect(src("openai_gateway").querySelector('[role="status"]')?.textContent).toBe("Blocked");
     expect(src("chatgpt_pro").querySelector('[role="status"]')?.textContent).toBe("Unsupported");
-    expect(q(src("chatgpt_pro"), "setup-cap-disconnect")?.closest("details")).toBeNull();
+    await menu(src("chatgpt_pro"));
+    expect(q(src("chatgpt_pro"), "setup-cap-disconnect")?.textContent).toBe("Disconnect session");
     const session = q(document.body, "setup-cap-session-row")!;
     expect(session.closest("details")).toBeNull();
     expect(session.textContent).toContain("Waiting on you");
@@ -115,7 +127,7 @@ describe("Capacity on Repo and models", () => {
     const calls = api(board(), sources);
     mounted = await mountBoard(board());
     const row = src("xai_grok_build");
-    expect(row.querySelector("summary")?.textContent).toBe("Grok Build details");
+    expect(row.querySelector(".su-src-name")?.textContent).toBe("Grok Build");
     await click(row.querySelector('[data-testid="setup-cap-start-open"]'));
     const form = q(row, "setup-cap-start-form")!;
     expect(form.closest("details")).toBeNull();
@@ -130,12 +142,17 @@ describe("Capacity on Repo and models", () => {
     }]);
   });
 
-  it("a key already on the Model row is replaced there, not in a second form", async () => {
+  it("a key that is a Models row is replaced in the Add a model drawer, not in a second form", async () => {
     api(withAnthropicRow());
     mounted = await mountBoard(withAnthropicRow());
     const row = src("anthropic_api");
+    expect(document.querySelectorAll('[data-testid="setup-cap-source"][data-source="anthropic_api"]')).toHaveLength(1);
     expect(row.querySelector('[data-testid="setup-cap-key-open"]')).toBeNull();
-    expect(row.querySelector('[data-testid="setup-cap-replace"]')?.getAttribute("href")).toBe("?area=setup&source=anthropic_api");
+    await menu(row);
+    await click(q(row, "su-menu-replace"));
+    const sheet = q(document.body, "su-model-drawer")!;
+    expect(sheet.getAttribute("aria-label")).toBe("Replace key");
+    expect(q(row, "su-model-pill")?.textContent).toBe("Editing…");
   });
 
   it("a source with no key stores one into the backend you pick", async () => {
@@ -171,6 +188,7 @@ describe("Capacity on Repo and models", () => {
     });
 
     const before = calls.filter((c) => c.method === "POST").length;
+    await menu(src("chatgpt_pro"));
     await click(src("chatgpt_pro").querySelector('[data-testid="setup-cap-disconnect"]'));
     expect(calls.filter((c) => c.method === "POST")).toHaveLength(before);
     await click(q(document.body, "setup-cap-disconnect-yes"));
@@ -188,8 +206,10 @@ describe("Capacity on Repo and models", () => {
     mounted = await mountBoard(board());
     const key = src("anthropic_api");
     expect(key.querySelector('[role="status"]')?.textContent).toBe("Connected");
-    expect(q(key, "setup-cap-claude")?.textContent).toBe("Used for: builds, agents, meetings · Billed to your API account");
-    expect(q(src("anthropic_claude_code"), "setup-cap-claude")?.textContent).toBe("Claude runs on: Anthropic API key");
+    expect(q(key, "setup-cap-claude")?.textContent).toBe("Claude runs on this key.");
+    await click(q(key, "setup-cap-details"));
+    expect(q(key, "setup-cap-details-panel")?.textContent).toContain("Billed to your API account");
+    expect(q(src("anthropic_claude_code"), "setup-cap-claude")?.textContent).toBe("Claude runs on the API key.");
     expect(src("openai_gateway").querySelector('[data-testid="setup-cap-claude"]')).toBeNull();
     expect(overBudget(q(document.body, "setup-entitlements") as HTMLElement)).toEqual([]);
     mounted.unmount(); mounted = null;
@@ -203,7 +223,7 @@ describe("Capacity on Repo and models", () => {
     api(board(), again, { items: [] });
     mounted = await mountBoard(board());
     expect(src("anthropic_api").querySelector('[data-testid="setup-cap-claude"]')).toBeNull();
-    expect(q(src("anthropic_claude_code"), "setup-cap-claude")?.textContent).toBe("Claude runs on: this subscription");
+    expect(q(src("anthropic_claude_code"), "setup-cap-claude")?.textContent).toBe("Claude runs on this subscription.");
   });
 
   it("Complete session refuses what is not a reference or a real time", () => {
@@ -250,7 +270,12 @@ const unusedKeySources = (ids: string[]) => ({ project_id: "p", items: ids.map((
   connection_status: "not_connected", observed_capacity: { credential_present: false, capacity_state: "unknown" },
   credential_ref: "OPENAI_API_KEY", connection_ref: "OPENAI_API_KEY", credential_secret_ref_id: null as string | null,
 })) });
+/** "+ Add a model" → the drawer's More sources. */
+async function openAdd() {
+  if (!q(document.body, "su-model-drawer") && !q(document.body, "setup-cap-chooser")) await click(q(document.body, "su-add-model-open"));
+}
 async function choose(id: string) {
+  await openAdd();
   const select = q(document.body, "setup-cap-chooser") as HTMLSelectElement;
   select.value = id;
   await act(async () => { select.dispatchEvent(new Event("change", { bubbles: true })); });
@@ -262,28 +287,27 @@ describe("unused model sources", () => {
     const ids = sources.items.slice(0, 11).map(x => x.source_id);
     const calls = api(firstRunView(), sources, { items: [] });
     mounted = await mountBoard(firstRunView());
-    expect(q(document.body, "su-row-capacity")?.getAttribute("aria-label")).toBe("Source connections");
+    expect(q(document.body, "su-row-capacity")?.getAttribute("aria-label")).toBe("Model sources");
     expect([...document.querySelectorAll('[data-testid="setup-cap-source"]')].map(x => x.getAttribute("data-source")))
       .toEqual(["approved_local_model_host", "managed_cloud_model_gateway"]);
-    expect((q(document.body, "setup-cap-add") as HTMLDetailsElement).open).toBe(false);
+    // Offered in the Add a model drawer, under More sources — not among the rows.
+    expect(q(document.body, "setup-cap-add")).toBeNull();
+    await openAdd();
     const chooser = q(document.body, "setup-cap-chooser") as HTMLSelectElement;
     expect(chooser.value).toBe("");
     expect([...chooser.options].map(x => x.value)).toEqual(["", ...ids]);
     expect(chooser.options[1].textContent).toBe("Codex (ChatGPT)");
-    await click(q(document.body, "setup-cap-add")?.querySelector("summary") ?? null);
     await choose("openai_api");
     expect([...document.querySelectorAll('[data-testid="setup-cap-source"]')].map(x => x.getAttribute("data-source"))).toEqual(["openai_api", "approved_local_model_host", "managed_cloud_model_gateway"]);
     expect(q(src("openai_api"), "setup-cap-key-open")?.textContent).toBe("Add key");
-    expect(calls.filter(x => x.method !== "GET")).toEqual([]);
+    expect(writes(calls)).toEqual([]);
     await click(q(src("openai_api"), "setup-cap-key-open"));
     await type(q(src("openai_api"), "setup-cap-key"), "entered-value");
     const field = q(src("openai_api"), "setup-cap-key");
-    await click(q(document.body, "setup-cap-add")?.querySelector("summary") ?? null);
-    await click(q(document.body, "setup-cap-add")?.querySelector("summary") ?? null);
     await choose("anthropic_api");
     expect(q(src("openai_api"), "setup-cap-key")).toBe(field);
     expect((field as HTMLInputElement).value).toBe("entered-value");
-    expect(calls.filter(x => x.method !== "GET")).toEqual([]);
+    expect(writes(calls)).toEqual([]);
   });
 
   for (const id of ["openai_codex_chatgpt", "anthropic_claude_code", "google_gemini_cli", "cursor_cli", "xai_grok_build"]) {
@@ -292,26 +316,25 @@ describe("unused model sources", () => {
       const expected = sources.items.find(x => x.source_id === id)!;
       const calls = api(firstRunView(), sources, { items: [] });
       mounted = await mountBoard(firstRunView());
-      await click(q(document.body, "setup-cap-add")?.querySelector("summary") ?? null);
-      await choose(id);
+        await choose(id);
       const row = src(id);
       expect(q(row, "setup-cap-key-open")).toBeNull();
       expect(q(row, "setup-cap-start-open")?.textContent).toBe("Sign in");
-      expect(calls.filter(x => x.method !== "GET")).toEqual([]);
+      expect(writes(calls)).toEqual([]);
       await click(q(row, "setup-cap-start-open"));
       const form = q(row, "setup-cap-start-form")!;
       const modes = form.querySelector('[aria-label="Login"]') as HTMLSelectElement;
       const scopes = form.querySelector('[aria-label="Scopes"]') as HTMLInputElement;
       expect([...modes.options].map(x => x.value)).toEqual(expected.connection_metadata.supported_connection_modes);
       expect(scopes.value).toBe(expected.oauth_scopes.join(", "));
-      expect(calls.filter(x => x.method !== "GET")).toEqual([]);
+      expect(writes(calls)).toEqual([]);
       if (id === "xai_grok_build") {
         modes.value = "device_oauth";
         await act(async () => { modes.dispatchEvent(new Event("change", { bubbles: true })); });
       }
-      expect(calls.filter(x => x.method !== "GET")).toEqual([]);
+      expect(writes(calls)).toEqual([]);
       await click(q(row, "setup-cap-start"));
-      expect(calls.filter(x => x.method !== "GET")).toEqual([{
+      expect(writes(calls)).toEqual([{
         url: `/v1/entitlements/sources/${id}/connection-sessions`, method: "POST",
         body: { project_id: "p", connection_mode: id === "xai_grok_build" ? "device_oauth" : "browser_oauth",
           requested_scopes: expected.oauth_scopes, actor: "ceo" },
@@ -322,6 +345,7 @@ describe("unused model sources", () => {
   it("does not add hosted capability when the returned catalog omits its gateway", async () => {
     api(firstRunView(), freshCatalogSources(false), { items: [] });
     mounted = await mountBoard(firstRunView());
+    await openAdd();
     const chooser = q(document.body, "setup-cap-chooser") as HTMLSelectElement;
     expect(chooser.options).toHaveLength(12); // Empty choice plus eleven key/OAuth actions.
     expect([...chooser.options].map(x => x.value)).not.toContain("managed_cloud_model_gateway");
@@ -346,8 +370,10 @@ describe("unused model sources", () => {
     view.models = [{ ...board().models[0], source_id: "model" }];
     api(view, sources, { items: [] });
     mounted = await mountBoard(view);
-    expect([...document.querySelectorAll('[data-testid="setup-cap-source"]')].map(x => x.getAttribute("data-source"))).toEqual(ids.slice(0, -1));
-    expect(q(src("model"), "setup-cap-replace")).not.toBeNull();
+    // Connected (a Models row) first, then the rest in the API's order.
+    expect([...document.querySelectorAll('[data-testid="setup-cap-source"]')].map(x => x.getAttribute("data-source")))
+      .toEqual(["model", ...ids.slice(0, -1).filter((id) => id !== "model")]);
+    expect(q(src("model"), "su-model-menu")).not.toBeNull();
   });
 
   for (const failure of ["failed", "network failure", "malformed", "full page"] as const) {
@@ -359,6 +385,7 @@ describe("unused model sources", () => {
       api(firstRunView(), sources, sessions, failure === "failed" ? 503 : failure === "network failure" ? 0 : 200);
       mounted = await mountBoard(firstRunView());
       expect(src("unused")).not.toBeNull();
+      await openAdd();
       expect(q(document.body, "setup-cap-add")).toBeNull();
       if (failure !== "full page") expect(q(document.body, "setup-entitlement-session")?.textContent).toContain("Can't load sessions");
     });
@@ -368,6 +395,7 @@ describe("unused model sources", () => {
     api(firstRunView(), unusedKeySources(["unused"]), { items: [] }, 200, 503);
     mounted = await mountBoard(firstRunView());
     expect(q(document.body, "setup-entitlements")?.textContent).toContain("Can't load model sources");
+    await openAdd();
     expect(q(document.body, "setup-cap-add")).toBeNull();
   });
 
@@ -379,6 +407,7 @@ describe("unused model sources", () => {
     expect(document.querySelectorAll('[data-testid="setup-cap-source"]')).toHaveLength(4);
     expect(document.querySelectorAll('[data-testid="setup-cap-session-row"]')).toHaveLength(4);
     expect(q(src("operator_action_required"), "setup-cap-complete")).not.toBeNull();
+    await openAdd();
     expect(q(document.body, "setup-cap-add")).toBeNull();
   });
 });
@@ -467,10 +496,9 @@ describe("model and source anchors share the model section", () => {
         expect(capacity.closest('[data-testid="su-row-models"]')).toBe(models);
         expect(landed[0]).toBe(focus === "models" ? models : capacity);
         expect(models.getAttribute("data-focused")).toBe("true");
-        await click(q(document.body, "setup-cap-add")?.querySelector("summary") ?? null);
-        await choose("openai_codex_chatgpt");
+            await choose("openai_codex_chatgpt");
         expect(q(src("openai_codex_chatgpt"), "setup-cap-start-open")?.textContent).toBe("Sign in");
-        expect(calls.filter(x => x.method !== "GET")).toEqual([]);
+        expect(writes(calls)).toEqual([]);
       } finally { scroll.mockRestore(); }
     });
   }
@@ -488,12 +516,11 @@ describe("compact Models waiting summary", () => {
     expect(document.querySelector(".su-model-sources [data-connection-summary]")).not.toBeNull();
     const local = src("approved_local_model_host");
     expect(local.querySelector('[role="status"]')?.textContent).toBe("Not configured");
-    expect(local.querySelector(".su-cap-head")?.firstElementChild?.tagName).toBe("DETAILS");
-    await click(q(document.body, "setup-cap-add")?.querySelector("summary") ?? null);
+    expect(local.querySelector(".su-src-line")?.firstElementChild?.textContent).toBe("Local model");
     await choose("anthropic_api");
     expect(src("anthropic_api").querySelector('[role="status"]')?.textContent).toBe("Needs key");
     expect(q(src("anthropic_api"), "setup-cap-key-open")?.closest("details")).toBeNull();
-    expect(calls.filter(x => x.method !== "GET")).toEqual([]);
+    expect(writes(calls)).toEqual([]);
   });
 
   for (const state of ["unknown", "blocked", "unsupported", "failed"] as const) {

@@ -14,10 +14,11 @@ import type { SignInSession } from "@boss/api-client";
 
 import { SetupFailure, fetchSetup, setupWrite } from "../../lib/setup-client";
 import type {
-  CatalogueEntry, Detected, Found, HeldProof, ModelEntry, SetupRefusal, SetupView,
+  CatalogueEntry, Detected, HeldProof, ModelEntry, SetupRefusal, SetupView,
 } from "../../lib/setup-types";
 import { Consent, toast, useBoard } from "./parts";
-import { Out, Pill, Refusal, Tip } from "./pill";
+import { chipStatus, cliSignedIn, providerRow, refusedPill } from "./model-status";
+import { Dot, Out, Pill, Refusal, Tip } from "./pill";
 import { SIGN_IN_PROVIDERS, SubscriptionSignIn } from "./subscription-sign-in";
 
 /** Where Local › Ollama looks when the URL is left empty, if the server did not say: the host's
@@ -35,15 +36,6 @@ const TILES: Array<{ tile: Tile; label: string; tip: string }> = [
   { tile: "api_key", label: "API key", tip: "Billed per call to your key. Counts toward the budget." },
   { tile: "local", label: "Local", tip: "Runs on your hardware. Free." },
 ];
-
-const FOUND_LABEL: Record<Found, string> = {
-  signed_in: "Signed in", found: "Found", needs_sign_in: "Sign in", not_on_server: "Not on server",
-};
-const FOUND_TIP: Record<Found, string> = {
-  signed_in: "Already signed in on the BOSS server.", found: "Found on this server.",
-  needs_sign_in: "Sign in below. Runs on the BOSS server.",
-  not_on_server: "Install it on the BOSS server first.",
-};
 
 function refusalOf(error: unknown): SetupRefusal {
   if (error instanceof SetupFailure && error.refusal) return error.refusal;
@@ -149,13 +141,17 @@ export function AddModelPanel({ initialTile, initialProvider, onDone, replaceSou
   const chips = view.catalogue.filter((c) => c.kind === tile);
   // Codex, Claude Code and Grok sign in here (the only subscriptions the catalogue offers).
   const signsIn = tile === "subscription" && SIGN_IN_PROVIDERS.has(provider);
-  // A LOGIN THE LAST PROOF REFUSED IS NOT A SIGN-IN, whatever `<cli> login status` says (the
-  // live Codex loop: "Signed in on server" → Connect → Login expired → Connect …). The row's own
-  // pill decides, as everywhere; the Sign in that follows replaces the dead session (fresh).
-  const refusedLogin = view.models.some((m) => m.provider === provider
-    && (m.pill.state === "login_expired" || m.pill.state === "key_rejected"));
-  const detectedIn = detected?.found === "signed_in" && !refusedLogin;
-  const signedIn = session?.state === "signed_in" || (detectedIn && !again);
+  // WHAT THE ROWS SAY, read the same way (model-status): the provider's Models row is its
+  // last real proof; the CLI's own "signed in" only decides that Connect — which proves it and
+  // signs nothing out — comes before Sign in. A login the last proof refused says so beside
+  // Connect ("Check refused"), and Sign in again (which replaces the login) stays one click
+  // away; it is never pressed for the person (2026-10-25: a fresh Claude login was at risk).
+  const row = providerRow(view, provider);
+  const rowWorks = tile === "subscription" && row?.pill.tone === "green";
+  const refusedLogin = view.models.some((m) => m.provider === provider && refusedPill(m.pill));
+  const detectedIn = cliSignedIn(view, provider);
+  const usable = (detectedIn || rowWorks) && !again;
+  const signedIn = session?.state === "signed_in" || usable;
   const notOnServer = detected?.found === "not_on_server";
 
   useEffect(() => {
@@ -279,6 +275,39 @@ export function AddModelPanel({ initialTile, initialProvider, onDone, replaceSou
     }
   };
 
+  /** The subscription's state, LEFT OF its Connect: signed in by this drawer, signed in on the
+   *  server, refused at its last check, or working. Nothing while it still has to sign in. */
+  function subscriptionStatus(): React.ReactNode {
+    if (session?.state === "signed_in") {
+      return (
+        <span className="su-pill su-tone-green" role="status" data-testid="su-signin-done"
+              title={session.headline} data-tip={session.headline}>
+          <Dot tone="green" />Signed in
+        </span>
+      );
+    }
+    if (!usable || session) return null;
+    if (detectedIn && refusedLogin) {
+      const tip = "The CLI says signed in, but the last check was refused. Connect re-checks.";
+      return (
+        <span className="su-pill su-tone-amber" role="status" data-testid="su-signed-in-on-server"
+              data-state="refused" title={tip} data-tip={tip}>
+          <Dot tone="amber" />Check refused
+        </span>
+      );
+    }
+    if (rowWorks && row) {
+      return <span data-testid="su-signed-in-on-server"><Pill pill={row.pill} /></span>;
+    }
+    const tip = "Signed in on the BOSS server. Connect checks it.";
+    return (
+      <span className="su-pill su-tone-green" role="status" data-testid="su-signed-in-on-server"
+            title={tip} data-tip={tip}>
+        <Dot tone="green" />Signed in
+      </span>
+    );
+  }
+
   return (
     <div className="su-add-model" data-testid="su-add-model">
       <div className="su-tiles" role="tablist" aria-label="Add a model">
@@ -297,16 +326,22 @@ export function AddModelPanel({ initialTile, initialProvider, onDone, replaceSou
       </div>
       <div className="su-chips" role="radiogroup" aria-label="Provider">
         {chips.map((c) => {
-          const d = view.detected.find((x) => x.provider === c.provider);
+          // THE ROW'S OWN STATUS when it has a row, else what the server found — the same
+          // answer the list shows (a "Sign in" chip sat beside a "Working" row).
+          const st = chipStatus(view, c.provider);
+          const show = !!st && (!!st.pill || tile === "subscription" || st.found === "found");
           return (
             <button key={c.provider} type="button" role="radio" aria-checked={provider === c.provider}
                     className="su-provider" data-testid={`su-provider-${c.provider}`}
                     onClick={() => setProvider(c.provider)}>
               {c.label}
-              {d && (tile === "subscription" || d.found === "found") && FOUND_LABEL[d.found] ? (
-                <Tip tip={FOUND_TIP[d.found]} className={`su-found su-found-${d.found}`}>
-                  {FOUND_LABEL[d.found]}
-                </Tip>
+              {show && st!.pill ? (
+                <span className="su-found su-found-pill" data-tip={st!.tip} title={st!.tip}
+                      data-state={st!.pill.state} data-testid="su-provider-status">
+                  <Dot tone={st!.pill.tone} />{st!.label}
+                </span>
+              ) : show ? (
+                <Tip tip={st!.tip} className={`su-found su-found-${st!.found}`} testid="su-provider-status">{st!.label}</Tip>
               ) : null}
             </button>
           );
@@ -318,22 +353,10 @@ export function AddModelPanel({ initialTile, initialProvider, onDone, replaceSou
           <Tip tip="Install it on the BOSS server, then sign in here." className="su-faint"
                testid="su-not-on-server">Not on server</Tip>
         ) : null}
-        {tile === "subscription" && !notOnServer && detectedIn && !again && !session ? (
-          <span className="su-line" data-testid="su-signed-in-on-server">
-            <Tip tip="Already signed in on the BOSS server. Connect checks it." className="su-faint">
-              Signed in on server
-            </Tip>
-            {signsIn ? (
-              <button type="button" className="su-link" data-testid="su-signin-again"
-                      title="Runs the provider's sign-in again on the BOSS server."
-                      onClick={() => setAgain(true)}>Sign in again</button>
-            ) : null}
-          </span>
-        ) : null}
         {tile === "subscription" && !signsIn && !notOnServer && !detectedIn ? (
           <Tip tip="Sign in on the BOSS server, then Connect." className="su-faint">Not signed in</Tip>
         ) : null}
-        {signsIn && !notOnServer && (!detectedIn || again || session) ? (
+        {signsIn && !notOnServer && (!usable || session) && session?.state !== "signed_in" ? (
           <SubscriptionSignIn key={`${provider}:${attempt}`} provider={provider}
                               label={entry?.label ?? provider}
                               autoStart={startSignIn && attempt === 0}
@@ -374,7 +397,8 @@ export function AddModelPanel({ initialTile, initialProvider, onDone, replaceSou
         ) : null}
         {entry?.key_url ? <Out href={entry.key_url}>Get a key</Out> : null}
         {needsConsent ? <Consent checked={consent} onChange={setConsent} /> : null}
-        <div className="su-line">
+        <div className="su-line su-connect-bar">
+          {tile === "subscription" && !notOnServer ? subscriptionStatus() : null}
           <GatedButton permission="model_provider:manage" type="button" className="su-btn su-btn-primary" disabled={!ready}
                   data-testid="su-model-connect"
                   title={whyNotReady() || "Saves it, then asks one tiny question. Budgeted and receipted."}
@@ -382,6 +406,12 @@ export function AddModelPanel({ initialTile, initialProvider, onDone, replaceSou
                   onClick={connect}>
             {busy ? "Checking…" : "Connect"}
           </GatedButton>
+          {tile === "subscription" && signsIn && usable && !session ? (
+            <button type="button" className="su-link" data-testid="su-signin-again"
+                    title="Signs the current login out, then runs the provider's sign-in."
+                    data-tip="Signs the current login out, then runs the provider's sign-in."
+                    onClick={() => setAgain(true)}>Sign in again</button>
+          ) : null}
           {refusal ? <Refusal headline={refusal.headline} fix={refusal.fix} /> : null}
         </div>
         {refusal?.summary && !held.length ? (

@@ -34,6 +34,10 @@ function view(patch: (v: SetupView) => void = () => undefined): SetupView {
   patch(v);
   return v;
 }
+/** The same board with no subscription connected yet (the fixture's Claude Code row works). */
+function unconnected(): SetupView {
+  return view((v) => { v.models = v.models.filter((m) => !SUBS.includes(m.provider as never)); });
+}
 const drawer = () => q(document.body, "su-model-drawer") as HTMLElement;
 const connect = () => q(document.body, "su-model-connect") as HTMLButtonElement;
 const isSignInPoll = (c: Call) => c.method === "GET" && c.url.includes("sign_in=");
@@ -62,8 +66,8 @@ async function settle(until: () => boolean, rounds = 12) {
 describe("the subscription tab asks for nothing to paste", () => {
   for (const provider of SUBS) {
     it(`${provider}: no password field, no file drop, no setup-token or auth.json; Sign in instead`, async () => {
-      fakeApi(view());
-      mounted = await mountBoard(view(), `?area=setup&add=${provider}`);
+      fakeApi(unconnected());
+      mounted = await mountBoard(unconnected(), `?area=setup&add=${provider}`);
       const sheet = drawer();
       expect(sheet).not.toBeNull();
       expect(sheet.querySelectorAll('input[type="password"]').length).toBe(0);
@@ -134,11 +138,11 @@ describe("Sign in → the URL and code → polled to signed in → Connect sends
 
 describe("a CLI that asks for a code pasted back", () => {
   it("shows one plain code box; Submit hands it to the sign-in and clears the box", async () => {
-    const api = fakeApi(view());
+    const api = fakeApi(unconnected());
     script(api, { start: S.waiting_for_code, polls: [S.waiting_for_code],
                   code: { ...S.signed_in, sign_in_id: "si_claude_1", provider: "claude_code" } });
     signInTiming.pollMs = 60_000;
-    mounted = await mountBoard(view(), "?area=setup&add=claude_code");
+    mounted = await mountBoard(unconnected(), "?area=setup&add=claude_code");
     await click(q(drawer(), "su-signin-start"));
     const box = q(drawer(), "su-signin-code-input") as HTMLInputElement;
     // It says where the provider's code goes: the provider's page says "paste into Claude Code".
@@ -323,7 +327,7 @@ describe("the Sources badge is the Models row's pill", () => {
     return api;
   }
   const badge = (id: string) => document.querySelector(
-    `[data-testid="setup-cap-source"][data-source="${id}"] [data-testid="setup-cap-badge"]`) as HTMLElement;
+    `[data-testid="setup-cap-source"][data-source="${id}"] [data-testid="su-model-pill"]`) as HTMLElement;
 
   it("a login_expired pill reads Login expired in red, never Active · Available", async () => {
     sourcesApi(board());
@@ -374,32 +378,53 @@ describe("the live stale Codex login is fixable from the console alone (2026-10-
   const source = (id: string) => document.querySelector(
     `[data-testid="setup-cap-source"][data-source="${id}"]`) as HTMLElement;
 
-  it("the drawer never calls a refused login 'Signed in on server'; Sign in replaces it", async () => {
+  it("the drawer says the last check was refused beside Connect; Sign in again replaces the login", async () => {
     const api = fakeApi(staleView());
     script(api, { start: S.waiting, polls: [S.waiting] });
     signInTiming.pollMs = 60_000;
     mounted = await mountBoard(staleView(), "?area=setup&add=codex");
-    expect(q(drawer(), "su-signed-in-on-server")).toBeNull();
+    const status = q(drawer(), "su-signed-in-on-server")!;
+    expect(status.textContent).toBe("Check refused");
+    expect(status.getAttribute("data-state")).toBe("refused");
+    // Left of Connect, on Connect's own line.
+    expect(status.parentElement).toBe(connect().parentElement);
+    expect(connect().disabled).toBe(false);
+    expect(api.calls.some((c) => c.op === "sign_in_start")).toBe(false);
+    await click(q(drawer(), "su-signin-again"));
     await click(q(drawer(), "su-signin-start"));
     expect(api.calls.find((c) => c.op === "sign_in_start")!.body)
       .toMatchObject({ provider: "codex", fresh: true });
   });
 
-  it("the Sources row of a Login expired subscription offers Sign in, which runs the same flow", async () => {
+  it("a Login expired row whose CLI says signed in offers Connect — it never signs the login out", async () => {
     const api = sourcesApi(staleView());
     script(api, { start: S.waiting, polls: [S.waiting] });
     signInTiming.pollMs = 60_000;
     mounted = await mountBoard(staleView());
     await settle(() => !!source("openai_codex_chatgpt"));
     const codex = source("openai_codex_chatgpt");
-    expect(codex.querySelector('[data-testid="setup-cap-badge"]')!.textContent).toBe("Login expired");
-    const signIn = q(codex, "setup-cap-sign-in")!;
-    expect(signIn.textContent).toBe("Sign in");
+    expect(codex.querySelector('[data-testid="su-model-pill"]')!.textContent).toBe("Login expired");
+    expect(q(codex, "su-model-sign-in")).toBeNull();
     // Not the official-session form (Complete session would mark it connected with no proof).
     expect(q(codex, "setup-cap-start-open")).toBeNull();
-    await click(signIn);
-    const sheet = q(document.body, "setup-cap-sign-in-drawer")!;
-    expect(sheet).not.toBeNull();
+    await click(q(codex, "su-model-connect-row"));
+    const sheet = drawer();
+    expect(sheet.getAttribute("aria-label")).toBe("Connect");
+    expect(api.calls.some((c) => c.op === "sign_in_start")).toBe(false);
+    await click(connect());
+    expect(api.calls.find((c) => c.op === "models")!.body)
+      .toEqual({ op: "models", project_id: "p", provider: "codex", kind: "subscription" });
+  });
+
+  it("a Login expired row whose CLI is signed out offers Sign in, which replaces the dead session", async () => {
+    const v = () => { const x = staleView(); x.detected = x.detected.map((d) => d.provider === "codex" ? { ...d, found: "needs_sign_in" } : d); return x; };
+    const api = sourcesApi(v());
+    script(api, { start: S.waiting, polls: [S.waiting] });
+    signInTiming.pollMs = 60_000;
+    mounted = await mountBoard(v());
+    await settle(() => !!source("openai_codex_chatgpt"));
+    await click(q(source("openai_codex_chatgpt"), "su-model-sign-in"));
+    const sheet = drawer();
     expect(api.calls.find((c) => c.op === "sign_in_start")!.body)
       .toMatchObject({ provider: "codex", fresh: true });
     expect(q(sheet, "su-signin-open")!.getAttribute("href")).toBe("https://auth.openai.com/codex/device");

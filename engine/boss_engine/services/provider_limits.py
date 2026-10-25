@@ -233,6 +233,32 @@ def source_ids_for_engine(settings, engine_name: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(ids))
 
 
+def _paying_sources(connection, settings, project_id: str, engine_name: str) -> tuple[str, ...]:
+    """`source_ids_for_engine`, with Claude booked on the credential it ACTUALLY ran on.
+
+    `claude` runs on the subscription or, when that is gone, on the Anthropic key — a
+    `setup-anthropic[-n]` source on most installs. Booking every Claude outcome on the
+    subscription (and every agent-SDK outcome on `anthropic_api`) left the key that was refusing
+    "Credit balance is too low" reading Working (2026-10-25). The active credential's source
+    (`claude_credential.active_source_id`, no secret read) takes the place of the default one.
+    """
+    ids = list(source_ids_for_engine(settings, engine_name))
+    if engine_name not in ("claude_code", "claude_agent_sdk"):
+        return tuple(ids)
+    try:
+        from . import claude_credential as cc
+        if settings is None:
+            from ..config import get_settings
+            settings = get_settings()
+        active = cc.active_source_id(connection, settings, project_id)
+    except Exception:  # noqa: BLE001 — telemetry must never break the call it reports
+        return tuple(ids)
+    default = cc.SUBSCRIPTION_SOURCE_ID if engine_name == "claude_code" else cc.API_KEY_SOURCE_ID
+    if engine_name == "claude_agent_sdk" and active == cc.SUBSCRIPTION_SOURCE_ID:
+        return tuple(ids)                        # the SDK never runs on the subscription
+    return tuple(dict.fromkeys(active if i == default else i for i in ids))
+
+
 def record_call_outcome(connection, settings, project_id: str, engine_name: str,
                         *, ok: bool, error: Optional[str]) -> Optional[LimitSignal]:
     """Fold one call's outcome into what BOSS knows about this provider's capacity.
@@ -257,7 +283,7 @@ def record_call_outcome(connection, settings, project_id: str, engine_name: str,
         else:
             return None
 
-        for source_id in source_ids_for_engine(settings, engine_name):
+        for source_id in _paying_sources(connection, settings, project_id, engine_name):
             connection.execute(
                 _sql("UPDATE entitlement_sources "
                      "   SET observed_capacity = COALESCE(observed_capacity, '{}'::jsonb) "

@@ -532,7 +532,7 @@ def source_state(*, kind: str, metadata: dict[str, Any], capacity: dict[str, Any
     refused 401 and the Models row said Login expired, while Sources said Active · Available
     and the CLI summary said Codex connected.)
     """
-    from .provider_limits import is_available
+    from .provider_limits import credit_exhausted, is_available
 
     last = metadata.get("last_check") if isinstance(metadata.get("last_check"), dict) else {}
     checked_at = last.get("at") or metadata.get("checked_at")
@@ -545,7 +545,13 @@ def source_state(*, kind: str, metadata: dict[str, Any], capacity: dict[str, Any
     retry_at = last.get("retry_at") if state == "rate_limited" else None
     if capacity.get("exhausted") and not is_available(capacity, now=now) \
             and state in ("working", "not_checked", "rate_limited"):
-        state, retry_at = "rate_limited", capacity.get("retry_at") or retry_at
+        # OUT OF CREDIT IS NOT A WINDOW: a real call the provider refused for money ("Credit
+        # balance is too low") stays red until a person tops up and a call succeeds again. It
+        # read "Working · Available" while every run on the key failed (2026-10-25).
+        if credit_exhausted(str(capacity.get("detail") or "")):
+            state, retry_at = "no_credit", None
+        else:
+            state, retry_at = "rate_limited", capacity.get("retry_at") or retry_at
     if state == "rate_limited" and retry_at and parse_time(retry_at) \
             and parse_time(retry_at) <= now:
         state = "working" if last.get("ok") or not last else "not_checked"
