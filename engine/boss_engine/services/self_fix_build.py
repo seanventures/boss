@@ -746,6 +746,19 @@ class Build:
                      "The fix is kept and still needs your approval.")
 
     # -- an engine turn -----------------------------------------------------------------------
+    def turn_budget_usd(self, agent: Any) -> Optional[float]:
+        """THE CAP BOUNDS EACH TURN WHILE IT RUNS (operator: caps count and STOP spend): what is
+        left of this self-fix's budget, for an engine that can stop itself at a ceiling
+        (engine_contract budget_limit). sfx_3f2fb90a spent $15.64 of a $10 cap inside one
+        diagnosis turn, because the cap was only checked at stage boundaries. An engine without
+        the capability is still stopped at the next boundary. None when there is no cap."""
+        from .engine_contract import capabilities_of
+
+        budget = int(self.sfx().get("budget_usd_micros") or 0)
+        if not budget or not capabilities_of(agent).budget_limit:
+            return None
+        return max(budget - int(self.cost_micros), 0) / 1e6
+
     def turn(self, agent: Any, stage: str, prompt: str, cwd: Path, *, read_only: bool,
              model: Optional[str] = None) -> str:
         from .llm_telemetry import clear_llm_context, set_llm_context
@@ -754,9 +767,11 @@ class Build:
         set_llm_context(project_id=sfx["project_id"], run_id=self.sfx_id, stage=stage,
                         role_key=sf.ACTOR_AGENT, workflow_run_id=sfx.get("run_id"),
                         db_engine=self.engine)
+        limit = self.turn_budget_usd(agent)
         try:
             result = agent.run_role(prompt, cwd, read_only=read_only, max_turns=60,
-                                    model=model)
+                                    model=model,
+                                    **({"max_budget_usd": limit} if limit is not None else {}))
         except Exception as error:  # noqa: BLE001 — an engine failing is a refusal, said so
             raise Stop("engine", f"{getattr(agent, 'engine', 'the engine')} failed at {stage}: "
                                  f"{type(error).__name__}: {str(error)[:300]}") from error

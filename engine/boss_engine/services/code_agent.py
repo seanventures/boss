@@ -937,7 +937,8 @@ class ClaudeCodeAgent:
 
     engine = "claude_code"
     capabilities = EngineCapabilities(resume=True, read_only=True, effort=True, sub_agents=True,
-                                      turn_limit=True, reports_cost=True, streams_turns=True)
+                                      turn_limit=True, reports_cost=True, streams_turns=True,
+                                      budget_limit=True)
     #: `_invoke` appends the working rules and sandbox facts itself (engine_contract).
     adds_working_rules = True
 
@@ -1075,6 +1076,7 @@ class ClaudeCodeAgent:
         allowed_tools: Optional[str] = None, resume_session_id: Optional[str] = None,
         max_turns: Optional[int] = None, seat: str = "agent",
         on_turn: Optional[Callable[[dict], None]] = None, parallel_agents: int = 0,
+        max_budget_usd: Optional[float] = None,
     ) -> dict:
         # A run whose engine already could not run starts no new session (harness_failures).
         harness_failures.raise_if_tripped()
@@ -1147,6 +1149,10 @@ class ClaudeCodeAgent:
                 *(("--output-format", "stream-json", "--verbose", "--include-partial-messages")
                   if stream else ("--output-format", "json")),
                 "--max-turns", str(_max_turns),
+                # A SPEND CEILING FOR THIS SESSION (engine_contract budget_limit): the CLI stops
+                # itself there, so a caller's cap bounds the turn while it runs, not after it.
+                *(("--max-budget-usd", f"{max(float(max_budget_usd), 0.01):.2f}")
+                  if max_budget_usd is not None else ()),
                 "--allowedTools", allowed,
                 "--permission-mode", permission,
             ]
@@ -1468,7 +1474,7 @@ class ClaudeCodeAgent:
     def run_role(
         self, prompt: str, cwd: Path, *, read_only: bool = False, model: Optional[str] = None,
         resume_session_id: Optional[str] = None, max_turns: Optional[int] = None,
-        parallel_agents: int = 0,
+        parallel_agents: int = 0, max_budget_usd: Optional[float] = None,
     ) -> dict:
         """Run a single role-scoped agent invocation against an existing workdir and
         return {summary, usage, cost_usd_micros, turns, model, session_id}. Used by the
@@ -1487,7 +1493,9 @@ class ClaudeCodeAgent:
             data = self._invoke(prompt, cwd, read_only=read_only, model=model,
                                 resume_session_id=resume_session_id, max_turns=max_turns,
                                 seat=("review" if read_only else "agent"),
-                                parallel_agents=0 if read_only else int(parallel_agents or 0))
+                                parallel_agents=0 if read_only else int(parallel_agents or 0),
+                                **({"max_budget_usd": max_budget_usd}
+                                   if max_budget_usd is not None else {}))
         except Exception as exc:
             failed_model = model or getattr(self.settings, "claude_cli_model", None) or ""
             record_llm_call(engine_name=self.engine, usage={"model": failed_model},

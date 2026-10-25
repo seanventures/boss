@@ -231,6 +231,9 @@ class EngineCapabilities:
     reports_cost: bool = False
     #: Emits one transcript row per turn/tool call.
     streams_turns: bool = False
+    #: Stops itself when a session's spend reaches a ceiling it is given (`max_budget_usd`).
+    #: Without it the ceiling is enforced at the caller's next stage boundary.
+    budget_limit: bool = False
 
     def as_dict(self) -> dict[str, bool]:
         return {k: bool(getattr(self, k)) for k in self.__dataclass_fields__}
