@@ -23,6 +23,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from . import view_rollup
+from .titles import repair_cut
 
 PRODUCT_LAYERS = ("code", "rules", "learning", "domain")
 DEFAULT_LAYERS = frozenset({"code", "rules", "learning"})
@@ -240,6 +241,9 @@ def node_payload(row: Mapping[str, Any]) -> dict[str, Any]:
         who = prov.get("agent_name") or prov.get("agent_role")
         parts = [str(p) for p in (who, prov.get("step")) if p]
         out["sub"] = " · ".join(parts) if parts else kind.replace("_", " ")
+    if kind == "run":
+        # A run node keeps the name it was given: one the old builder cut mid-word is mended.
+        out["label"] = repair_cut(name)
     return out
 
 
@@ -1055,7 +1059,8 @@ def _where_from(connection: Connection, project_id: str, row: Mapping[str, Any],
         if found:
             # The conversation node is named "<its question> · Oct 25, 07:13" (UTC): the words
             # say its question; the console shows the time in the viewer's zone.
-            out["conversation_title"] = str(found["name"]).rsplit(" · ", 1)[0] if " · " in str(found["name"]) else found["name"]
+            mended = repair_cut(str(found["name"]))
+            out["conversation_title"] = mended.rsplit(" · ", 1)[0] if " · " in mended else mended
             out["conversation_at"] = found["at"]
     return out
 
@@ -1075,7 +1080,7 @@ def _lineage(connection: Connection, project_id: str, node_id: str, attrs: Mappi
                      "agent_name": ea.get("agent_name") or ra.get("agent_name"),
                      # The run by its name ("<title> · <when>", its time dropped: the console
                      # shows times in the viewer's zone), never its id (tester round 4).
-                     "run_title": str(run_name or "").rsplit(" · ", 1)[0] or None,
+                     "run_title": repair_cut(str(run_name or "")).rsplit(" · ", 1)[0] or None,
                      "how": how, "at": _iso(at)})
     return {"learned": {k: prov.get(k) for k in ("run_id", "agent_role", "agent_name", "step")} | {"at": prov.get("at")},
             "used": used}
@@ -1241,7 +1246,8 @@ def _item_tree(connection: Connection, project_id: str, tab: str, parent: Option
 
     def item_row(r: Mapping[str, Any], match: Optional[bool]) -> dict[str, Any]:
         out = {"key": r["node_key"], "parent_key": group_of(r)[-1], "level": "item", "node_id": r["id"],
-               "label": r["name"], "kind": r["kind"], "layer": layer, "count": 0, "has_children": False}
+               "label": repair_cut(r["name"]) if r["kind"] == "run" else r["name"], "kind": r["kind"], "layer": layer,
+               "count": 0, "has_children": False}
         if match is not None:
             out["match"] = match
         return out

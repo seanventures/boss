@@ -186,9 +186,13 @@ export function GraphArea({ projectId, actor, orgId, archived = false, projectTy
 
   // The Graph tab stays mounted while another tab shows (tester round 2: Rules review and back
   // dropped the focus, the search and the selection); only its key handling pauses.
+  // The graph waits for the setup too, and the dismissed flags (tester round 6: the setup strip
+  // arrived a second after the canvas and pushed it 55 px down). The intro, the strip and the
+  // canvas appear together, in one paint, so nothing moves once the canvas is drawn.
+  const aboveKnown = !!(setup.data || setup.error) && introGone !== null && stripGone !== null;
   let graphBody: React.ReactNode = null;
   {
-    if (!repos.data && !repos.error) graphBody = <KgLoading nodes={totalNodes || null} />;
+    if ((!repos.data && !repos.error) || !aboveKnown) graphBody = <KgLoading nodes={totalNodes || null} />;
     else if (repos.data && repos.data.length === 0) graphBody = <KgStart archived={archived} onStart={() => changeTab("setup")} />;
     else if (repos.data && !anyIndexed && working) graphBody = <KgIndexing repos={repos.data} />;
     else if (repos.data && !anyIndexed) {
@@ -218,7 +222,7 @@ export function GraphArea({ projectId, actor, orgId, archived = false, projectTy
     );
   }
 
-  const overGraph = tab === "graph" && anyIndexed;
+  const overGraph = tab === "graph" && anyIndexed && aboveKnown;
   const setupShown = overGraph && (isKgProject || hasGraph) && !!setup.data;
   const stripShown = setupShown && !!setup.data?.next && stripGone === false;
   const chipShown = setupShown && (setup.data?.next === null || stripGone === true);

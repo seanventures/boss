@@ -12,14 +12,14 @@
  * connections and the same selection; the work area fits the viewport and the canvas gets the room.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CornersIn, CornersOut, ListBullets, MagnifyingGlass, TreeStructure, X } from "@phosphor-icons/react";
+import { CaretDown, CornersIn, CornersOut, ListBullets, MagnifyingGlass, TreeStructure, X } from "@phosphor-icons/react";
 
 import { useGate } from "../../components/gated";
 import { useOnScreen } from "../../lib/area-shown";
 import { useAreaKeydown } from "../../lib/area-keys";
 import {
   CLUSTER_ARC, CLUSTER_R, FOCUS_CEILING, LABEL_ARC, FOCUS_CLUSTERS, FOCUS_RING_CAP, MORE_ID, OVERVIEW_AREAS, RING_ASPECT_MAX, RING_ASPECT_MIN, fitTransform, focusEdges, focusKeepLabels, focusLayout, isBubble, kindName, kindToken, legendKey, overviewLayout,
-  groupFocus, pickEdges, pickOverview, placeMembers, placeNear, slotMeasure, type Pt,
+  charEllipsis, groupFocus, pickEdges, pickOverview, placeMembers, placeNear, slotMeasure, type Pt,
 } from "../../lib/kg-layout";
 import {
   INDEX_NOW, distinctPaths, focusCounts, focusNote, getLive, getNeighbourhood, getOverview, getSearch, indexNow, layersParam, rankHits,
@@ -122,10 +122,14 @@ export function layFocus(center: string, read: Array<KgViewNode & { hop: number 
   // Between two rings: a first-ring label beside its node (about 150 px at the sides, a row at
   // the top and bottom) and the cluster bubble beyond it — labels never lie on a ring.
   const gap = Math.max(92, 190 / Math.min(RING_ASPECT_MAX, Math.max(RING_ASPECT_MIN, ringAspect)));
+  // With an outer ring (2 hops and more) the first ring opens wider (tester round 6: at 2 hops it
+  // was about 280 px across, its labels cut or missing): it takes the room between the centre and
+  // the clusters that was empty, so its names fit where they sit.
+  const first = read.some((n) => n.hop >= 2) ? 120 : 90;
   const one = (cap1: number, clusters: number) => {
     const grouped = groupFocus(center, read, inView, { 1: cap1 }, { clusterFrom: 2, clusters });
     const nodes = grouped.nodes as Array<KgViewNode & { hop: number; cluster?: boolean }>;
-    const laid = focusLayout(center, nodes, grouped.edges, { aspect: ringAspect, gap, first: 90, slot: (hop) => (hop <= 1 ? RING_SLOT : CLUSTER_SLOT) });
+    const laid = focusLayout(center, nodes, grouped.edges, { aspect: ringAspect, gap, first, slot: (hop) => (hop <= 1 ? RING_SLOT : CLUSTER_SLOT) });
     const canvasNodes: CanvasNode[] = nodes.map((n) => {
       const count = (grouped.members.get(n.id) ?? []).length;
       const c: CanvasNode = n.cluster
@@ -804,9 +808,10 @@ export function GraphView({ projectId, actor, orgId, repos, onReposChanged, rule
       <div className="kg-toolbar" role="toolbar" aria-label="Graph controls">
         <button type="button" className="ag-btn kg-tree-toggle" aria-expanded={treeOpen || !treeCollapsed}
                 onClick={() => {
-                  // A drawer below 860 px of graph, a column above it.
+                  // Always a column (round 6): shown by default on a wide graph (Tree collapses it),
+                  // put away on a narrower one (Tree opens it, pushing the canvas over).
                   const col = workRef.current?.querySelector<HTMLElement>(".kg-col-tree");
-                  if (col && getComputedStyle(col).position === "absolute") setTreeOpen((v) => !v);
+                  if (col && getComputedStyle(col).getPropertyValue("--kg-tree-mode").trim() === "opens") setTreeOpen((v) => !v);
                   else setTreeCollapsed((v) => !v);
                 }}
                 data-testid="kg-tree-toggle" aria-label="Project tree" title={treeCollapsed ? "Show the project tree" : "Hide the project tree"}>
@@ -838,11 +843,11 @@ export function GraphView({ projectId, actor, orgId, repos, onReposChanged, rule
               {hits.map((h, i) => (
                 <button key={h.node.id} id={`kg-hit-${i}`} type="button" role="option" aria-selected={i === active} className="kg-hit"
                         data-testid="kg-search-hit" onMouseDown={(e) => e.preventDefault()} onClick={() => pick(h)} onMouseEnter={() => setActive(i)}
-                        title={h.path ?? h.node.sub ?? h.node.label}>
+                        title={hitTip(h.node.label, h.path ?? h.node.sub ?? null)}>
                   <span className="kg-dot" style={{ background: `var(${kindToken(h.node.kind, h.node.symbol_kind, h.node.id)})` }} aria-hidden />
                   <span className="kg-hit-text">
                     <span className="kg-hit-line">
-                      <span className="kg-hit-label">{h.node.label}</span>
+                      <FitTitle label={h.node.label} />
                       <span className="kg-hit-kind">{kindName(h.node.kind, h.node.symbol_kind, h.node.id)}</span>
                     </span>
                     {hitPaths[i] ? <span className="kg-hit-path inf-mono" data-testid="kg-hit-path">{hitPaths[i]}</span> : null}
@@ -895,16 +900,13 @@ export function GraphView({ projectId, actor, orgId, repos, onReposChanged, rule
             </select>
           </label>
         ) : null}
-        <div className="kg-zoom" role="group" aria-label="Zoom">
-          <button type="button" className="ag-btn ag-btn-icon" aria-label="Zoom out" data-testid="kg-zoom-out" onClick={() => canvasRef.current?.zoomOut()} disabled={listView}>−</button>
-          <span className="kg-zoom-pct" data-testid="kg-zoom-pct" aria-live="off">{Math.round(zoom * 100)}%</span>
-          <button type="button" className="ag-btn ag-btn-icon" aria-label="Zoom in" data-testid="kg-zoom-in" onClick={() => canvasRef.current?.zoomIn()} disabled={listView}>+</button>
-          <button type="button" className="ag-btn" data-testid="kg-fit" onClick={() => canvasRef.current?.fit()} disabled={listView}>Fit</button>
-        </div>
-        <button type="button" className="ag-btn ag-btn-icon" aria-pressed={listView} data-testid="kg-list-toggle" onClick={() => setListView((v) => !v)}
-                aria-label={listView ? "Graph view" : "List view"} title={listView ? "Back to the graph" : "List view: the current view as a table of nodes and edges"}>
-          <ListBullets size={15} aria-hidden />
-        </button>
+        {/* One row at 1333 px in Focus (tester round 6: the toolbar wrapped to two rows): zoom
+            steps and List view, the rarely used ones, are in the zoom menu; Fit stays a button. */}
+        <ViewMenu zoom={zoom} listView={listView}
+                  onZoomIn={() => canvasRef.current?.zoomIn()} onZoomOut={() => canvasRef.current?.zoomOut()}
+                  onList={() => setListView((v) => !v)} />
+        <button type="button" className="ag-btn" data-testid="kg-fit" onClick={() => canvasRef.current?.fit()} disabled={listView}
+                title="Fit: the whole picture in view">Fit</button>
         <button type="button" className="ag-btn ag-btn-icon" aria-pressed={full} data-testid="kg-fullscreen" onClick={() => setFull((v) => !v)}
                 aria-label={full ? "Exit full screen" : "Full screen"} title={full ? "Exit full screen (Esc)" : "Full screen: the graph over the whole window (Esc exits)"}>
           {full ? <CornersIn size={15} aria-hidden /> : <CornersOut size={15} aria-hidden />}
@@ -973,7 +975,7 @@ export function GraphView({ projectId, actor, orgId, repos, onReposChanged, rule
            style={{ ...(workHeight ? { height: workHeight } : {}), ["--kg-occlude" as string]: `${occlude}px` }}>
         <div className="kg-col-tree" data-testid="kg-col-tree">
           <ProjectTree projectId={projectId} actor={actor} tab={treeTab} onTab={setTreeTab} query={query}
-                       selectedId={selected?.id ?? null} onPick={(p) => { onTreePick(p); setTreeOpen(false); }}
+                       selectedId={selected?.id ?? null} onPick={onTreePick}
                        refreshKey={treeKey} reveal={reveal} />
         </div>
         <div className="kg-col-canvas" data-testid="kg-col-canvas">{stage}</div>
@@ -993,3 +995,88 @@ export function GraphView({ projectId, actor, orgId, repos, onReposChanged, rule
   );
 }
 
+/** The zoom menu (tester round 6): the trigger says the zoom; in it, Zoom in, Zoom out and List
+ *  view. The wheel, a pinch and the + / − keys zoom the canvas too. Esc and an outside press close it. */
+function ViewMenu({ zoom, listView, onZoomIn, onZoomOut, onList }: {
+  zoom: number; listView: boolean; onZoomIn: () => void; onZoomOut: () => void; onList: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const box = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    if (!open) return undefined;
+    const onDown = (e: MouseEvent) => { if (box.current && !box.current.contains(e.target as Node)) setOpen(false); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); setOpen(false); } };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey, true);
+    return () => { document.removeEventListener("mousedown", onDown); document.removeEventListener("keydown", onKey, true); };
+  }, [open]);
+  const pct = `${Math.round(zoom * 100)}%`;
+  return (
+    <span className="inf-pop kg-view-menu" ref={box}>
+      <button type="button" className="ag-btn kg-view-menu-btn" aria-haspopup="menu" aria-expanded={open} data-testid="kg-view-menu"
+              aria-label={listView ? "List view: back to the graph, or zoom" : `Zoom ${pct}: zoom in or out, or List view`}
+              title="Zoom in or out, or show the view as a list" onClick={() => setOpen((v) => !v)}>
+        <span className="kg-zoom-pct" data-testid="kg-zoom-pct">{listView ? "List" : pct}</span>
+        <CaretDown size={11} weight="bold" aria-hidden />
+      </button>
+      {open ? (
+        <span className="inf-menu kg-view-menu-list" role="menu" aria-label="Zoom and view">
+          {/* Zoom steps keep the menu open, so a few presses in a row need no reopening. */}
+          <button type="button" role="menuitem" data-testid="kg-zoom-in" disabled={listView} onClick={onZoomIn}>
+            <span>Zoom in</span><kbd aria-hidden>+</kbd>
+          </button>
+          <button type="button" role="menuitem" data-testid="kg-zoom-out" disabled={listView} onClick={onZoomOut}>
+            <span>Zoom out</span><kbd aria-hidden>−</kbd>
+          </button>
+          <button type="button" role="menuitem" data-testid="kg-list-toggle" aria-pressed={listView} onClick={() => { onList(); setOpen(false); }}
+                  title={listView ? "Back to the graph" : "The current view as a table of nodes and edges"}>
+            <span>{listView ? "Graph view" : "List view"}</span><ListBullets size={14} aria-hidden />
+          </button>
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+/** A search result's title (tester round 6: "Allocator that skips the remaining-amount dec…", cut
+ *  mid-word by CSS with no tooltip): up to two lines, cut at a word; the whole of it is the row's
+ *  tooltip, with where it is. */
+export const HIT_TITLE_MAX = 96;
+export function hitTitle(label: string): string {
+  return charEllipsis(label, HIT_TITLE_MAX);
+}
+export function hitTip(label: string, where: string | null): string {
+  return where && where !== label ? `${label}\n${where}` : label;
+}
+/** A long identifier wraps at its words — camelCase humps, ".", "/", "_", "-" — never mid-word
+ *  ("…TransactionProc / essor"): a word-break opportunity at each. */
+export function breakParts(text: string): string[] {
+  return text.split(/(?<=[a-z0-9])(?=[A-Z])|(?<=[./_-])(?=[^\s])/);
+}
+
+/** A search result's title in at most two lines, cut at a word (hitTitle): shortened a few
+ *  characters at a time, at words, until it fits its two lines — the CSS clamp alone cut
+ *  mid-word ("…the interest amount o…"). The whole title is the row's tooltip. */
+function FitTitle({ label }: { label: string }) {
+  const ref = useRef<HTMLSpanElement>(null);
+  // The span's text is this effect's own (React renders it empty): set, measured and shortened in
+  // one pass before paint, and again whenever the row's width changes (the list's scrollbar).
+  React.useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return undefined;
+    const fit = () => {
+      for (let max = HIT_TITLE_MAX; ; max -= 4) {
+        const text = charEllipsis(label, Math.max(24, max));
+        el.replaceChildren(...breakParts(text).flatMap((p, i) => (i ? [document.createElement("wbr"), p] : [p])));
+        if (max <= 24 || el.scrollHeight <= el.clientHeight + 1) break;
+      }
+    };
+    fit();
+    if (typeof ResizeObserver === "undefined") return undefined;
+    let w = el.clientWidth;
+    const ro = new ResizeObserver(() => { if (el.clientWidth !== w) { w = el.clientWidth; fit(); } });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [label]);
+  return <span ref={ref} className="kg-hit-label" />;
+}

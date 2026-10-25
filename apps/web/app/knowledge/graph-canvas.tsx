@@ -377,6 +377,7 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(function GraphCanvas(
       const subSize = big ? fs(13) : fs(12);
       const name = (m: number) => (n.bubble ? wordEllipsis(n.label, m) : charEllipsis(n.label, m));
       const wrap = twoLines(n.label, Math.min(max, 18));
+      const narrow = n.bubble ? [] : twoLines(n.label, 12);
       const variants: Line[][] = n.bubble
         ? [
           [line(name(max), nameSize, 600), ...(n.sub ? [line(n.sub, subSize, 400, true)] : [])],
@@ -387,6 +388,9 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(function GraphCanvas(
         : [
           [line(charEllipsis(n.label, max), fs(14))],
           ...(wrap.length === 2 ? [[line(wrap[0], fs(13)), line(wrap[1], fs(13))]] : []),
+          // A crowded ring (tester round 6: 2 hops): a narrower two-line form before a shorter
+          // one, so a name keeps its words where there is height but little width.
+          ...(narrow.length === 2 ? [[line(narrow[0], fs(12)), line(narrow[1], fs(12))]] : []),
           [line(charEllipsis(n.label, 14), fs(13))],
           ...(n.short ? [[line(n.short, fs(12))]] : []),
         ];

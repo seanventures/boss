@@ -1222,10 +1222,22 @@ export function ringLabelCapacity(radius: number, aspect: number, k: number, lab
   return Math.max(4, Math.floor(per / ((labelW + rowH) / 2)));
 }
 
-/** Cut on CHARACTER width with an ellipsis (tester round 5: never down to a single word). */
+/** Cut at a WORD with an ellipsis (tester round 6: "+2 in core/se…", "On-time repayment bra…"):
+ *  at the last camelCase hump, "-", "_", ".", "/" or space that keeps at least 40% of the room;
+ *  only a name whose first word alone is longer than that is cut by character (round 5: never
+ *  down to a lone short word — "Early…", "Creo…"). A "/" stays: it says the name is a path. */
 export function charEllipsis(text: string, max: number): string {
   if (text.length <= max) return text;
-  return `${text.slice(0, Math.max(1, max - 1)).replace(/[-_./\s]+$/, "")}…`;
+  const room = Math.max(1, max - 1);
+  const words = text.match(/[A-Z]+(?![a-z])|[A-Z]?[a-z0-9]+|[^A-Za-z0-9]+|[A-Z]/g) ?? [text];
+  let head = "";
+  for (const w of words) {
+    if ((head + w).length > room) break;
+    head += w;
+  }
+  head = head.replace(/[-_.\s]+$/, "");
+  if (head.length >= room * 0.4) return `${head}…`;
+  return `${text.slice(0, room).replace(/[-_./\s]+$/, "")}…`;
 }
 
 /**
