@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
-"""Discover VM coding CLIs; record a subscription only on an explicit request.
+"""Sign a coding subscription in inside BOSS, then prove it; discover VM coding CLIs read only.
 
-The installer and worker run in different containers/accounts. Host login discovery is
-informational. An operator can sign Claude Code in directly as the container's boss user,
-then record that local CLI connection without passing OAuth material through this script.
-An explicit --connect-claude imports a setup token the operator supplies and stores it
-only in the local secret store. Codex auth-file import and Grok's CLI login stay separate.
-None of these setup actions call a model.
+THE ONE SUBSCRIPTION ROUTE (BOSSAPP-769). Codex, Claude Code and Grok Build are authorised by
+their own CLI login, held inside the BOSS API container as its boss user. `--sign-in PROVIDER`
+asks BOSS to start that provider's own login there (POST /v1/setup/sign-in), prints the link
+and code the login printed, waits while the person finishes it in a browser (a code is asked
+for on the terminal only when the login wants one pasted back), then connects it with POST
+/v1/setup/models (kind subscription, no credential), which proves it with one governed turn.
+Nothing is pasted, copied or imported: no token, no auth.json.
+
+Host login discovery is informational only. None of the discovery calls a model.
 """
 from __future__ import annotations
 
@@ -15,27 +18,33 @@ import getpass
 import json
 import os
 import shutil
-import stat
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-try:
-    from store_subscription_token import read_whole_file, send_to_boss  # noqa: E402
-except ImportError as _import_error:  # e.g. a host Python older than the engine needs
-    # Discovery (detect_logins) must still work; only a credential import needs the engine.
-    _IMPORT_PROBLEM = f"{type(_import_error).__name__}: {_import_error}"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from boss_refusal import from_body  # noqa: E402
 
-    def read_whole_file(path: Path) -> str:
-        raise RuntimeError("This machine's python3 cannot load the BOSS credential helper "
-                           f"({_IMPORT_PROBLEM}). It needs a BOSS checkout and Python 3.11 "
-                           "or newer. Nothing was stored.")
+PROJECT = "boss-dogfood"
+#: boss.sh's provider names -> BOSS's.
+PROVIDERS = {"codex": "codex", "claude": "claude_code", "claude_code": "claude_code",
+             "grok": "grok"}
+LABELS = {"codex": "Codex", "claude_code": "Claude Code", "grok": "Grok Build"}
+#: The `boss connect` word for each, for the next step a person is told.
+COMMAND = {"codex": "codex", "claude_code": "claude", "grok": "grok"}
+POLL_SECONDS = 2.0
 
-    def send_to_boss(*_args, **_kwargs):
-        read_whole_file(Path())
+
+def refusal(exc: urllib.error.HTTPError) -> str:
+    """BOSS's own words for a refusal ("headline — fix"), else the status. Never `None`."""
+    try:
+        body = exc.read()
+    except OSError:
+        body = b""
+    return from_body(body) or f"HTTP {exc.code}"
 
 
 def checked_output(argv: list[str], timeout: int = 15) -> tuple[int, str]:
@@ -84,54 +93,13 @@ def discover() -> dict[str, bool]:
             "grok": found["grok"]}
 
 
-def codex_credential() -> str:
-    rc, output = checked_output(["codex", "login", "status"])
-    if rc != 0 or "logged in using chatgpt" not in output.lower():
-        raise RuntimeError("Sign in with ChatGPT on this VM first: codex login --device-auth")
-    auth = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex") / "auth.json"
-    if auth.is_symlink() or not auth.is_file():
-        raise RuntimeError("Codex auth file is missing or is a symlink; sign in on this VM first")
-    info = auth.stat()
-    if info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) & 0o077:
-        raise RuntimeError("Codex auth file must be owned by this VM user and mode 0600")
-    return read_whole_file(auth)
-
-
-def claude_credential() -> str:
-    """Operator-supplied setup token. Never print it. Empty input is an error."""
-    token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip()
-    if token:
-        return token
-    if not shutil.which("claude"):
-        raise RuntimeError(
-            "No Claude setup token was provided, and the Claude CLI is missing. "
-            "Set CLAUDE_CODE_OAUTH_TOKEN or install the CLI with --install-coding-clis. "
-            "Nothing was stored."
-        )
-    print("Run `claude setup-token` in another terminal, then paste its token here.")
-    print("The official CLI handles browser/device prompts; BOSS never displays the token.")
-    try:
-        with open("/dev/tty", "r"):
-            pass
-        token = getpass.getpass("Claude setup token (hidden): ").strip()
-    except (EOFError, OSError) as exc:
-        raise RuntimeError(
-            "No Claude setup token was provided and no terminal is available. "
-            "Set CLAUDE_CODE_OAUTH_TOKEN for this command. Nothing was stored."
-        ) from exc
-    if len(token) < 16 or any(char.isspace() for char in token) or \
-            token.startswith(("http://", "https://", "<")):
-        raise RuntimeError("No usable Claude setup token was entered. Nothing was stored.")
-    return token
-
-
 def connect(api_url: str, api_key: str, provider: str) -> None:
     # PROVED, NOT ASSUMED. Repo and models' one connect (POST /v1/setup/models) runs one trivial
     # turn on the subscription — reserved and receipted like any model call — before it calls
     # it connected, and answers with the whole setup view.
     request = urllib.request.Request(
         f"{api_url.rstrip('/')}/v1/setup/models", method="POST",
-        data=json.dumps({"project_id": "boss-dogfood", "actor": "ceo",
+        data=json.dumps({"project_id": PROJECT, "actor": "ceo",
                          "provider": provider, "kind": "subscription"}).encode(),
         headers={"x-boss-api-key": api_key, "Content-Type": "application/json"},
     )
@@ -140,16 +108,8 @@ def connect(api_url: str, api_key: str, provider: str) -> None:
             view = json.loads(response.read().decode() or "{}")
     except urllib.error.HTTPError as exc:
         # BOSS's own refusal is one pill — what is wrong and the fix — and never contains the
-        # credential. Any other body is not echoed: a provider error could hold private data.
-        detail = ""
-        if exc.code in (409, 422):
-            try:
-                body = json.loads(exc.read().decode() or "{}").get("detail")
-                detail = (f"{body.get('headline')} — {body.get('fix')}"
-                          if isinstance(body, dict) else str(body or ""))
-            except (ValueError, OSError, AttributeError):
-                detail = ""
-        raise RuntimeError(f"BOSS did not connect {provider}: {detail or f'HTTP {exc.code}'}") from None
+        # credential. Nothing is added to it.
+        raise RuntimeError(f"BOSS did not connect {provider}: {refusal(exc)}") from None
     except (OSError, ValueError) as exc:
         raise RuntimeError(f"BOSS connection check could not finish for {provider}") from exc
     row = next((m for m in view.get("models") or [] if m.get("provider") == provider), None)
@@ -221,7 +181,7 @@ def local_session_signed_in(api_url: str, api_key: str, provider: str) -> bool |
 
     Reads only BOSS's sanitized status; never opens a CLI auth file or calls a model.
     """
-    name = {"claude": "claude_code", "grok": "grok"}[provider]
+    name = PROVIDERS[provider]
     request = urllib.request.Request(
         f"{api_url.rstrip('/')}/v1/setup/coding-agents?project_id=boss-dogfood",
         headers={"x-boss-api-key": api_key},
@@ -242,15 +202,127 @@ def local_session_signed_in(api_url: str, api_key: str, provider: str) -> bool |
     return row.get("authenticated") is True
 
 
+# ---- the one subscription route: sign in inside BOSS, then prove ----------------------------
+
+def _call(api_url: str, api_key: str, method: str, path: str,
+          body: dict | None = None) -> dict:
+    request = urllib.request.Request(
+        f"{api_url.rstrip('/')}{path}", method=method,
+        data=json.dumps(body).encode() if body is not None else None,
+        headers={"x-boss-api-key": api_key, "Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            answer = json.loads(response.read().decode() or "{}")
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(refusal(exc)) from None
+    except (OSError, ValueError) as exc:
+        raise RuntimeError("BOSS did not answer; is it running? Try: boss status") from exc
+    return answer if isinstance(answer, dict) else {}
+
+
+def _terminal():
+    """The person's terminal, or None (a pipe, CI, an unattended install)."""
+    try:
+        return open("/dev/tty", "r")  # noqa: SIM115 — held for the session's prompts
+    except OSError:
+        return None
+
+
+class NeedsPerson(RuntimeError):
+    """The sign-in needs a person at a terminal; nothing was changed."""
+
+
+def sign_in(api_url: str, api_key: str, provider: str, *, out=None,
+            terminal=None, poll_seconds: float = POLL_SECONDS) -> None:
+    """Sign `provider` in inside BOSS through its own login. Returns once it is signed in."""
+    out = out or sys.stdout
+    label, word = LABELS[provider], COMMAND[provider]
+    path = "/v1/setup/sign-in"
+    session = _call(api_url, api_key, "POST", path,
+                    {"project_id": PROJECT, "actor": "ceo", "provider": provider})
+    if session.get("state") == "signed_in":
+        print(f"  {label} is already signed in inside BOSS.", file=out)
+        return
+    sign_in_id = str(session.get("sign_in_id") or "")
+    where = f"{path}/{sign_in_id}?project_id={PROJECT}"
+    tty = terminal if terminal is not None else _terminal()
+    if session.get("state") in ("starting", "waiting") and tty is None:
+        _cancel(api_url, api_key, where)
+        raise NeedsPerson(f"{label} sign-in needs a person at a terminal. "
+                          f"Run: boss connect {word}")
+    print(f"Signing {label} in inside BOSS. {label} runs its own login there; "
+          "nothing is copied from this machine.", file=out)
+    shown = False
+    asked = False
+    try:
+        while session.get("state") in ("starting", "waiting"):
+            if not shown and session.get("verification_url"):
+                print(f"  1. Open  {session['verification_url']}", file=out)
+                if session.get("user_code"):
+                    print(f"  2. Enter the code  {session['user_code']}", file=out)
+                elif session.get("needs_code_input"):
+                    print("  2. Sign in, then paste the code the page shows below.", file=out)
+                print("  Waiting for the sign-in (it expires in 15 minutes; Ctrl-C cancels)...",
+                      file=out)
+                out.flush()
+                shown = True
+            if session.get("needs_code_input") and not asked:
+                asked = True
+                code = _ask_code(tty)
+                if not code:
+                    _cancel(api_url, api_key, where)
+                    raise RuntimeError(f"No code was entered; the {label} sign-in was "
+                                       f"cancelled. Retry: boss connect {word}")
+                session = _call(api_url, api_key, "POST", f"{path}/{sign_in_id}/code",
+                                {"project_id": PROJECT, "code": code})
+                continue
+            time.sleep(poll_seconds)
+            session = _call(api_url, api_key, "GET", where)
+    except KeyboardInterrupt:
+        _cancel(api_url, api_key, where)
+        raise RuntimeError(f"{label} sign-in cancelled. Retry: boss connect {word}") from None
+    if session.get("state") != "signed_in":
+        raise RuntimeError(f"{session.get('headline') or 'Sign-in failed'} — "
+                           f"{session.get('fix') or f'Retry: boss connect {word}'}")
+    print(f"  ✓ {label} is signed in inside BOSS", file=out)
+
+
+def _ask_code(tty) -> str:
+    try:
+        return getpass.getpass("  Code from the sign-in page (hidden): ", stream=tty).strip() \
+            if hasattr(tty, "fileno") else ""
+    except (EOFError, OSError):
+        return ""
+
+
+def _cancel(api_url: str, api_key: str, where: str) -> None:
+    try:
+        _call(api_url, api_key, "DELETE", where)
+    except RuntimeError:
+        pass
+
+
+def sign_in_and_connect(api_url: str, api_key: str, provider: str) -> None:
+    sign_in(api_url, api_key, provider)
+    connect(api_url, api_key, provider)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--api-url", default="http://127.0.0.1:8000")
-    parser.add_argument("--connect-codex", action="store_true")
-    parser.add_argument("--connect-claude", action="store_true")
-    parser.add_argument("--connect-claude-local", action="store_true")
-    parser.add_argument("--connect-grok-local", action="store_true")
-    parser.add_argument("--accept-database-fallback", action="store_true")
-    parser.add_argument("--local-status", choices=("claude", "grok"),
+    parser.add_argument("--sign-in", choices=("codex", "claude", "grok"),
+                        help="sign that subscription in inside BOSS through its own login "
+                             "(prints the link and code), then connect and prove it")
+    parser.add_argument("--connect-codex", action="store_true",
+                        help="the same as --sign-in codex")
+    parser.add_argument("--connect-claude", action="store_true",
+                        help="the same as --sign-in claude")
+    parser.add_argument("--connect-claude-local", action="store_true",
+                        help="record the Claude Code login already made inside BOSS")
+    parser.add_argument("--connect-grok-local", action="store_true",
+                        help="record the Grok Build login already made inside BOSS")
+    parser.add_argument("--local-status", choices=("codex", "claude", "grok"),
                         help="exit 0 when that CLI is already signed in inside the BOSS API "
                              "container, 3 when it is not, 4 when BOSS cannot say; prints nothing")
     args = parser.parse_args()
@@ -259,26 +331,17 @@ def main() -> int:
         state = local_session_signed_in(args.api_url, api_key, args.local_status) \
             if api_key else None
         return 0 if state is True else 3 if state is False else 4
+    wanted = [PROVIDERS[args.sign_in]] if args.sign_in else []
+    if args.connect_codex and "codex" not in wanted:
+        wanted.append("codex")
+    if args.connect_claude and "claude_code" not in wanted:
+        wanted.append("claude_code")
     if args.connect_claude and args.connect_claude_local:
         raise RuntimeError("Choose one Claude connection path for this run")
-    # A container-owned login has nothing to do with this VM user's CLI home. In
-    # particular, do not ask the host Claude CLI to read its own session for it.
-    local_only = ((args.connect_claude_local or args.connect_grok_local)
-                  and not args.connect_codex and not args.connect_claude)
-    found = {} if local_only else discover()
-    if not (args.connect_codex or args.connect_claude or args.connect_claude_local
-            or args.connect_grok_local):
-        print("To authenticate Codex on a headless VM: codex login --device-auth")
-        print("Then import that CLI auth file with --connect-codex.")
-        print("For Grok: docker compose -f scripts/install/community-compose.yml "
-              "--env-file .env exec -u boss api grok login --device-auth")
-        print("Then rerun the installer with --connect-grok-local. "
-              "BOSS does not copy auth.json and does not call the model.")
-        print("For Claude local login: run `claude auth login` as boss inside the API container")
-        print("Then rerun the installer with --connect-claude-local; no token is copied "
-              "and no model call is made.")
-        print("To import a Claude setup token you supply, rerun with --connect-claude. "
-              "It is stored encrypted, with its key outside BOSS's database.")
+    if not (wanted or args.connect_claude_local or args.connect_grok_local):
+        discover()
+        print("To connect a subscription, sign it in inside BOSS (its own login; nothing is "
+              "copied): boss connect codex | boss connect claude | boss connect grok")
         return 0
     api_key = os.environ.get("BOSS_API_KEY", "")
     if not api_key:
@@ -289,34 +352,17 @@ def main() -> int:
     if args.connect_grok_local:
         grok_local_session_ready(args.api_url, api_key)
         connect(args.api_url, api_key, "grok")
-    for provider, wanted in (("codex", args.connect_codex),
-                             ("claude_code", args.connect_claude)):
-        if not wanted:
-            continue
-        if provider == "codex" and not found["codex"]:
-            raise RuntimeError("Codex ChatGPT login was not detected on this VM")
-        credential = codex_credential() if provider == "codex" else claude_credential()
-        fallback = False if provider == "claude_code" else args.accept_database_fallback
-        result = send_to_boss(args.api_url, api_key, "boss-dogfood", provider, credential,
-                              accept_database_fallback=fallback)
-        # THE SERVER DECIDES WHERE A CLAUDE TOKEN MAY LIVE (setup_service.
-        # store_coding_agent_credential): a secret store, or the database store only when its
-        # key is outside the database. This demanded "local_vault" exactly, so a token the
-        # server had correctly stored was reported as a failure and the connection was never
-        # recorded. Only a reply that does not say where the token went is refused.
-        if provider == "claude_code" and not result.get("backend"):
-            raise RuntimeError(
-                "BOSS did not confirm where it stored the Claude setup token. "
-                "Nothing else was accepted."
-            )
-        print(f"  {provider}: credential stored by BOSS (value never displayed)")
-        connect(args.api_url, api_key, provider)
+    for provider in wanted:
+        sign_in_and_connect(args.api_url, api_key, provider)
     return 0
 
 
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
+    except NeedsPerson as error:
+        print(f"  next      {error}")
+        raise SystemExit(2) from None
     except RuntimeError as error:
         print(f"Coding subscription setup: {error}", file=sys.stderr)
         raise SystemExit(1) from None

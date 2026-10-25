@@ -283,7 +283,13 @@ def test_remote_model_error_with_provider_field_is_not_success(tmp_path: Path) -
     assert "stored" not in result.stdout
 
 
-def test_remote_claude_setup_token_missing_fails_before_contact(tmp_path: Path) -> None:
+@pytest.mark.parametrize("extra, said", [
+    ((), "needs you at a terminal"),
+    (("--accept-database-fallback",), "--accept-database-fallback is gone"),
+])
+def test_remote_subscription_never_carries_a_credential(tmp_path: Path, extra, said) -> None:
+    """A subscription signs in inside BOSS on the host (BOSSAPP-769). Nothing is read from
+    stdin and nothing reaches the host without a person at a terminal."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     ssh_log = tmp_path / "ssh.log"
@@ -291,16 +297,14 @@ def test_remote_claude_setup_token_missing_fails_before_contact(tmp_path: Path) 
     fake.write_text(
         "#!/bin/sh\n"
         f"printf '%s\\n' \"$*\" >> {ssh_log}\n"
-        "echo STORE:should-not-run\n"
     )
     fake.chmod(0o700)
     result = subprocess.run(
         [
             "bash", str(ROOT / "scripts/install/remote.sh"),
-            "--host", "example.invalid", "subscription", "--provider", "claude_code",
-            "--accept-database-fallback",
+            "--host", "example.invalid", "subscription", "--provider", "claude_code", *extra,
         ],
-        input="\n",
+        input="test-claude-token\n",
         env={**os.environ, "PATH": str(bin_dir) + os.pathsep + os.environ["PATH"]},
         capture_output=True,
         text=True,
@@ -308,7 +312,7 @@ def test_remote_claude_setup_token_missing_fails_before_contact(tmp_path: Path) 
         check=False,
     )
     assert result.returncode != 0
-    assert "empty" in result.stderr
+    assert said in result.stderr
     assert "test-claude-token" not in result.stdout + result.stderr
     assert not ssh_log.exists()
 

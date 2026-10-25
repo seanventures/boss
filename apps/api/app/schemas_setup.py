@@ -21,7 +21,7 @@ class Pill(_Open):
     tone: Tone
     label: str
     tip: str
-    action: Optional[Literal["connect", "test", "replace", "fix_link", "budget",
+    action: Optional[Literal["connect", "test", "replace", "sign_in", "fix_link", "budget",
                              "default_model"]] = None
     fix_url: Optional[str] = None
 
@@ -81,8 +81,12 @@ class Detected(_Open):
     provider: str
     label: str
     kind: Literal["subscription", "local"]
-    found: Literal["signed_in", "needs_token", "needs_file", "not_on_server", "found"]
+    # A subscription: signed in inside BOSS, needs the in-BOSS sign-in, or not in this image.
+    found: Literal["signed_in", "needs_sign_in", "not_on_server", "found"]
     base_url: Optional[str] = None
+    # A Claude token the retired setup-token import stored (never a sign-in), with its removal.
+    legacy_token: Optional[bool] = None
+    fix: Optional[str] = None
 
 
 class CatalogueEntry(_Open):
@@ -235,6 +239,30 @@ class ModelConnectBody(_Body):
     source_id: Optional[str] = None
     #: 'org' (the default: every project of the org) or 'project' (this project's own).
     scope: Optional[Literal["org", "project"]] = None
+
+
+class SignInBody(_Body):
+    """Start the provider's own login inside the BOSS server (codex | claude_code | grok)."""
+    provider: str
+
+
+class SignInCodeBody(_Body):
+    """The code a sign-in page showed, handed to the provider's own login. Never stored."""
+    code: str = Field(min_length=1, max_length=512, json_schema_extra={"writeOnly": True})
+
+
+class SignInSession(BaseModel):
+    """One in-container sign-in (subscription_sign_in.view): only the URL and code the CLI
+    printed for the person, never anything else from its output."""
+    sign_in_id: str
+    provider: Literal["codex", "claude_code", "grok"]
+    state: Literal["starting", "waiting", "signed_in", "failed", "expired", "cancelled"]
+    verification_url: Optional[str] = None
+    user_code: Optional[str] = None
+    needs_code_input: bool = False
+    expires_at: Optional[str] = None
+    headline: str
+    fix: str
 
 
 class SourceModelBody(_Body):

@@ -129,10 +129,12 @@ def test_replaying_an_old_intent_cannot_restore_a_replaced_key(client, engine, o
 
 
 @pytest.mark.parametrize("provider", ["codex", "claude_code"])
-@pytest.mark.parametrize("route", ["/v1/setup/models", "/v1/setup/coding-agents/credential"])
 def test_supplied_subscription_material_is_held_before_mutation_or_contact(
-    client, engine, owner, monkeypatch, provider, route
+    client, engine, owner, monkeypatch, provider
 ):
+    # The retired import door (/v1/setup/coding-agents/credential) is gone; the one connect
+    # still holds supplied material (test_subscription_sign_in_routes covers the removal).
+    route = "/v1/setup/models"
     from boss_engine.config import Settings
     from boss_engine.services import setup_service
     from boss_engine.services.secrets_service import put_secret, resolve_secret_ref
@@ -168,8 +170,6 @@ def test_supplied_subscription_material_is_held_before_mutation_or_contact(
             assert response.status_code == 409, response.text
             assert response.json()["detail"]["headline"] == "CLI credential import held"
             assert value not in response.text
-            if route.endswith("/credential"):
-                assert response.headers["Deprecation"] == "true"
     with engine.begin() as c:
         assert (
             resolve_secret_ref(c, original["secret_ref_id"], Settings()) == "owned-working-session"

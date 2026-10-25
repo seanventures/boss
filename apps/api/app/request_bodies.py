@@ -895,15 +895,6 @@ class ChannelConnectBody(OpenRequestBody):
     actor: SkipValidation[str | None] = None
     connection_key: SkipValidation[str | None] = None
 
-class CodingAgentCredentialBody(OpenRequestBody):
-    model_config = ConfigDict(json_schema_extra={"required": ['project_id', 'provider']})
-
-    project_id: SkipValidation[str | None] = None
-    actor: SkipValidation[str | None] = None
-    provider: SkipValidation[str | None] = None
-    credential: SkipValidation[str | None] = Field(default=None, json_schema_extra={"writeOnly": True})
-    accept_database_fallback: SkipValidation[bool | None] = None
-
 class CodingAgentConnectBody(OpenRequestBody):
     model_config = ConfigDict(json_schema_extra={"required": ['project_id', 'provider']})
 

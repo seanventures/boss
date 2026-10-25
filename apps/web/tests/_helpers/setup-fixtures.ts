@@ -15,6 +15,8 @@ export const PILLS = {
                fix_url: "https://github.com/settings/personal-access-tokens" },
   modelWorking: { state: "working", tone: "green", label: "Working",
                   tip: "Answered a test question 5m ago." },
+  loginExpired: { state: "login_expired", tone: "red", label: "Login expired",
+                  tip: "The provider refused this login. Sign in again.", action: "sign_in" },
   keyRejected: { state: "key_rejected", tone: "red", label: "Key rejected",
                  tip: "The provider refused this key.", action: "replace" },
   limited: { state: "rate_limited", tone: "amber", label: "Limited · 14:20",
@@ -25,10 +27,9 @@ export const PILLS = {
 } satisfies Record<string, Pill>;
 
 const CATALOGUE: SetupView["catalogue"] = [
-  { provider: "claude_code", label: "Claude Code", kind: "subscription", fields: ["token"],
-    command: "claude setup-token" },
-  { provider: "codex", label: "Codex", kind: "subscription", fields: ["file"],
-    command: "~/.codex/auth.json" },
+  // A subscription takes no field: it signs in on the BOSS server (BOSSAPP-769).
+  { provider: "claude_code", label: "Claude Code", kind: "subscription", fields: [] },
+  { provider: "codex", label: "Codex", kind: "subscription", fields: [] },
   { provider: "grok", label: "Grok Build", kind: "subscription", fields: [] },
   { provider: "cursor", label: "Cursor", kind: "subscription", fields: [] },
   { provider: "openrouter", label: "OpenRouter", kind: "api_key", fields: ["api_key", "model"],
@@ -45,8 +46,8 @@ const CATALOGUE: SetupView["catalogue"] = [
 ];
 
 const DETECTED: SetupView["detected"] = [
-  { provider: "claude_code", label: "Claude Code", kind: "subscription", found: "needs_token" },
-  { provider: "codex", label: "Codex", kind: "subscription", found: "needs_file" },
+  { provider: "claude_code", label: "Claude Code", kind: "subscription", found: "needs_sign_in" },
+  { provider: "codex", label: "Codex", kind: "subscription", found: "needs_sign_in" },
   { provider: "grok", label: "Grok Build", kind: "subscription", found: "not_on_server" },
   { provider: "cursor", label: "Cursor", kind: "subscription", found: "not_on_server" },
   { provider: "ollama", label: "Ollama", kind: "local", found: "found",

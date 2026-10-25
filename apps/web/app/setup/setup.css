@@ -643,3 +643,12 @@ svg.su-dot { background: none; width: 12px; height: 12px; color: var(--muted); }
 .su-held-review dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0; }
 .su-held-review dt { color: var(--faint); }
 .su-held-review dd { margin: 0; overflow-wrap: anywhere; }
+
+/* Add model › Subscription › Sign in (BOSSAPP-769): the provider's URL and one-time code. */
+.su-signin { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.su-signin-code { height: auto; padding: 6px 10px; cursor: copy; }
+.su-signin-code code { font: 600 1.25rem var(--mono); letter-spacing: .14em; }
+.su-signin-code:hover { border-color: var(--accent); }
+.su-signin-code-field input { width: 220px; font-family: var(--mono); }
+.su-signin-stopped { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-width: 0; }
+.su-signin-fix { font-size: 0.8125rem; line-height: 1.4; overflow-wrap: anywhere; }

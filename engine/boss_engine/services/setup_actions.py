@@ -763,7 +763,12 @@ def _subscription_proof(connection: Connection, settings: Any, project_id: str, 
     elif proof.get("legacy_hold"):
         proof["state"] = "legacy_hold"
     else:
+        # A CLI whose own sign-in failed before any model call comes back HTTP-401-shaped
+        # (setup_service.prove_coding_agent): a known rejection, so Login expired.
+        status = proof.get("status")
+        status = status if isinstance(status, int) and not isinstance(status, bool) else None
         proof["state"] = setup_checks.classify_model_failure(
+            status if status is not None else
             0 if "could not reach" in str(proof.get("error") or "").lower() else -1,
             str(proof.get("error") or ""), subscription=True)
         if proof["state"] == "unreachable":
@@ -851,7 +856,9 @@ def _connect_subscription(connection: Connection, settings: Any, project_id: str
     except SetupError as exc:
         message = str(exc)
         lowered = message.lower()
-        if "not installed" in lowered:
+        if "legacy claude token" in lowered:
+            state = "legacy_token"
+        elif "not installed" in lowered:
             state = "not_on_server"
         elif "budget" in lowered:
             state = "paused_budget"
@@ -877,9 +884,8 @@ def _connect_subscription(connection: Connection, settings: Any, project_id: str
 def subscription_import_refusal() -> SetupActionError:
     """Modern and deprecated HTTP doors share the same safe import boundary."""
     return SetupActionError(409, "failed", "CLI credential import held",
-        "Sign this CLI in as the BOSS service user, then Connect without pasted "
-        "credential material. Candidate-only subscription import is not yet supported; "
-        "the existing stored session was left unchanged. An API-key model is another option.")
+        "Nothing pasted is used: sign in inside BOSS (boss connect <provider>, or Sign in "
+        "in the console), then Connect. The existing stored session was left unchanged.")
 
 
 def _first_sentence(message: str) -> str:

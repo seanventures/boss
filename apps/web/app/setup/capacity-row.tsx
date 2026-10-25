@@ -25,6 +25,7 @@ import { apiWrite } from "../../lib/api-write";
 import { fetchSetup } from "../../lib/setup-client";
 import { toast, useBoard } from "./parts";
 import { Dot, Tip } from "./pill";
+import type { Tone } from "../../lib/setup-types";
 import { useLocalTime } from "../../lib/local-time";
 
 // ── the wire, parsed ────────────────────────────────────────────────────────────────────────
@@ -39,7 +40,19 @@ export type CapSource = {
   credentialPresent: boolean; credentialAbsent: boolean; capacity: string; models: string[]; modes: string[]; scopes: string[]; pooled: boolean;
   /** Anthropic rows only: which Anthropic credential `claude` runs on (never a value). */
   claudeActive?: string | null;
+  /** The Models row's own pill for this source, from its last real proof (BOSSAPP-769). When
+   *  present it IS the badge: a failed proof never reads "Active · Available". */
+  pill?: SourcePill | null;
 };
+export type SourcePill = { state: string; label: string; tone: Tone; checked_at: string | null };
+const TONES: readonly Tone[] = ["green", "amber", "red", "grey", "busy"];
+function parsePill(v: unknown): SourcePill | null {
+  const p = o(v);
+  const label = s(p.label);
+  const tone = TONES.find((t) => t === p.tone);
+  if (!label || !tone) return null;
+  return { state: s(p.state), label, tone, checked_at: s(p.checked_at) || null };
+}
 export type CapSession = {
   id: string; sourceId: string; mode: string; status: string; scopes: string[]; login: string | null; action: string | null; at: string;
 };
@@ -57,6 +70,7 @@ export function parseSources(w: unknown): CapSource[] {
       modes: list(o(r.connection_metadata).supported_connection_modes), scopes: list(r.oauth_scopes),
       pooled: r.multi_tenant_allowed === true,
       claudeActive: s(o(r.claude_credential).active) || null,
+      pill: parsePill(r.pill),
     };
   }).filter((x) => x.sourceId);
 }
@@ -82,11 +96,19 @@ const SOURCE_NAMES: Record<string, string> = {
 };
 const sourceName = (id: string) => Object.hasOwn(SOURCE_NAMES, id) ? SOURCE_NAMES[id] : id;
 const KIND: Record<string, string> = { api_key: "key", gateway: "gateway", subscription: "plan", local_capacity: "local", local: "local" };
+/** The badge: the source's proven pill when the API sends one, else its connection record. */
+export function badgeOf(src: CapSource): { label: string; tone: Tone; proven: boolean } {
+  if (src.pill) return { label: src.pill.label, tone: src.pill.tone, proven: true };
+  return { ...stateOf(src), proven: false };
+}
 export function stateOf(src: CapSource): { label: string; tone: "green" | "amber" | "red" | "grey" } {
   // A stored key reads as what it is: connected. The key itself is never shown.
   if (src.effective === "active" && takesKey(src) && src.connection === "connected") return { label: "Connected", tone: "green" };
   if (src.effective === "active") return { label: "Active", tone: "green" };
   if (src.effective === "blocked") return { label: "Blocked", tone: "red" };
+  // The last proof refused this source's login or key (the API's one status): red, never Active.
+  if (src.effective === "login_rejected") return { label: "Login expired", tone: "red" };
+  if (src.effective === "key_rejected") return { label: "Key rejected", tone: "red" };
   // A disconnected flag must not replace an unknown, unsupported or failed verdict.
   const unused = ["declared", "needs_connection", "missing_credentials", "missing_oauth_connection"].includes(src.effective);
   if (unused && src.connection === "not_connected") {
@@ -349,7 +371,9 @@ export const CapacityRow = forwardRef<HTMLElement, { actor?: string; focused: bo
           </details>
         ) : null}
         {shown.map((src) => {
-          const st = stateOf(src);
+          const st = badgeOf(src);
+          // A capacity word beside a failed proof would read "Available" on a dead login.
+          const showCapacity = src.capacity !== "unknown" && (!st.proven || st.tone === "green");
           const mine = sessions.filter((x) => x.sourceId === src.sourceId);
           const editing = open === src.sourceId;
           return (
@@ -364,11 +388,13 @@ export const CapacityRow = forwardRef<HTMLElement, { actor?: string; focused: bo
                     {src.models.length ? <span>Models: <span className="su-mono" data-user-text>{src.models.join(", ")}</span></span> : null}
                   </div>
                 </details>
-                <span className={`su-pill su-tone-${st.tone}`} role="status"
+                <span className={`su-pill su-tone-${st.tone}`} role="status" data-testid="setup-cap-badge"
+                      data-state={src.pill?.state || undefined}
+                      title={src.pill ? (src.pill.checked_at ? `As the Models row says. Checked ${lt.full(src.pill.checked_at)}.` : "As the Models row says. Not checked yet.") : undefined}
                       data-connection-summary={["Needs key", "Needs sign-in", "Not configured", "Not connected"].includes(st.label) || undefined}>
                   <Dot tone={st.tone} />{st.label}
                 </span>
-                {src.capacity !== "unknown" ? <Tip tip="The capacity this source last reported." className="su-faint">{words(src.capacity)}</Tip> : null}
+                {showCapacity ? <Tip tip="The capacity this source last reported." className="su-faint">{words(src.capacity)}</Tip> : null}
                 {(() => {
                   const said = claudeCopy(src);
                   return said ? (
@@ -450,9 +476,12 @@ export const CapacityRow = forwardRef<HTMLElement, { actor?: string; focused: bo
         })}
         <div className="su-line" data-testid="setup-entitlement-session">
           <Tip tip="Official logins started from a plan above." className="su-faint su-cap-label">Sessions</Tip>
-          <span className="su-faint">
+          <span className="su-faint" data-testid="setup-entitlement-session-count">
             {sessionError ? <Tip tip={sessionError}>Can&apos;t load sessions</Tip>
-              : sessions.length ? `${sessions.length} · ${sessions.filter((x) => x.status === "operator_action_required").length} waiting` : "None"}
+              : sessions.length ? `${sessions.length} · ${sessions.filter((x) => x.status === "operator_action_required").length} waiting`
+              // HONEST "NONE": a subscription signed in on the BOSS server is not a session here;
+              // its state is the source's own badge above.
+              : <Tip tip="None started here. Server sign-ins show on their source above.">None started here</Tip>}
           </span>
           <span className="su-spacer" />
           <a className="su-link" href="?area=skills" data-testid="setup-broker-skills-link">Skills ↗</a>

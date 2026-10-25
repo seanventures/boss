@@ -23,6 +23,7 @@ HELPERS = (
     "community-compose.yml", "restore_preserved_env.sh", "reconcile_api_credentials.py",
     "boss.sh", "upgrade.sh", "uninstall.sh", "discover_models.py", "coding_subscriptions.py",
     "console_password.py", "connect_ollama.py", "model_status.py", "local_model.py",
+    "boss_refusal.py",
 )
 # What `docker compose config --format json` would say about the build services (install.sh
 # builds them one image at a time from this answer). Kept equal to the real compose file below.
@@ -610,21 +611,24 @@ def test_yes_reports_a_found_login_without_copying_it(world) -> None:
     assert CODEX_SECRET not in rendered
 
 
-def test_connect_found_uses_the_existing_import_path_and_reports_failure(world) -> None:
+def test_connect_found_never_copies_a_host_codex_login(world) -> None:
+    """A Codex login on this machine only says which subscription you use. Nothing is copied
+    from it (BOSSAPP-769): Codex signs in inside BOSS, which needs a person at a terminal."""
     _codex_login(world)
-    database_only = _install(world, "--connect-found")
-    assert database_only.returncode == 0, database_only.stdout + database_only.stderr
-    assert "also needs --accept-database-fallback" in database_only.stdout
-    assert "Connecting the Codex ChatGPT login" not in database_only.stdout
-
-    # Consent given. Nothing listens on the API port, so the import fails visibly and BOSS
-    # itself is still reported as running.
-    result = _install(world, "--connect-found", "--accept-database-fallback")
+    result = _install(world, "--connect-found")
     rendered = result.stdout + result.stderr
     assert result.returncode == 0, rendered
-    assert "Connecting the Codex ChatGPT login" in rendered
-    assert "✗ Codex login not connected: boss connect codex" in rendered
+    assert "Codex: signing in needs a person at a terminal. Run: boss connect codex" in rendered
+    assert "accept-database-fallback" not in rendered
+    assert "Connecting the Codex ChatGPT login" not in rendered
     assert CODEX_SECRET not in rendered
+
+
+def test_an_old_accept_database_fallback_flag_is_ignored_not_fatal(world) -> None:
+    result = _install(world, "--accept-database-fallback")
+    rendered = result.stdout + result.stderr
+    assert result.returncode == 0, rendered
+    assert "Ignoring --accept-database-fallback" in rendered
 
 
 def test_boss_connect_without_a_terminal_copies_nothing(world) -> None:
@@ -633,7 +637,7 @@ def test_boss_connect_without_a_terminal_copies_nothing(world) -> None:
     result = _run(boss, "connect", env=world["env"])
     assert result.returncode == 0, result.stdout + result.stderr
     assert "found      Codex ChatGPT login" in result.stdout
-    assert "skipped   Codex (nothing was copied)" in result.stdout
+    assert "Codex: signing in needs a person at a terminal. Run: boss connect codex" in result.stdout
     assert CODEX_SECRET not in result.stdout + result.stderr
 
 
@@ -745,6 +749,8 @@ class _FakeBoss:
                  "code_agent_low_cost_engine", "code_agent_low_cost_model")
     SUBSCRIPTION_SOURCES = {"claude_code": "anthropic_claude_code", "grok": "xai_grok_build",
                             "codex": "openai_codex_chatgpt"}
+    #: The container-side login each sign-in leaves behind (read by GET coding-agents).
+    STATE_FILE = {"claude_code": "claude", "grok": "grok", "codex": "codex"}
 
     def __init__(self, state: Path, models: tuple[str, ...] = ("llama3.2:latest",)) -> None:
         import http.server
@@ -760,6 +766,8 @@ class _FakeBoss:
             key: {"key": key, "value": "claude_code" if key.endswith("_engine") else "",
                   "source": "deployment default"} for key in self.ROLE_KEYS}
         self.requests: list[tuple[str, str, dict | None]] = []
+        self.sign_ins: dict[str, dict] = {}
+        self.sign_in_fails = False
         outer = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -793,7 +801,18 @@ class _FakeBoss:
                          "authenticated": claude, "auth_method": "claude_ai" if claude else None},
                         {"name": "grok", "installed": True,
                          "authenticated": (outer.state / "grok").exists()},
+                        {"name": "codex", "installed": True,
+                         "authenticated": (outer.state / "codex").exists()},
                     ]})
+                if self.path.startswith("/v1/setup/sign-in/"):
+                    # The person finished the provider's own login in their browser.
+                    session = outer.sign_ins[self.path.split("/")[4].split("?")[0]]
+                    if outer.sign_in_fails:
+                        return self._reply(200, {**session, "state": "failed",
+                                                 "headline": "Sign-in failed",
+                                                 "fix": "The login stopped. Start it again."})
+                    (outer.state / outer.STATE_FILE[session["provider"]]).touch()
+                    return self._reply(200, {**session, "state": "signed_in"})
                 if self.path.startswith("/v1/entitlements/sources"):
                     return self._reply(200, {"project_id": "boss-dogfood", "items": outer.sources})
                 if self.path.startswith("/v1/settings"):
@@ -809,9 +828,25 @@ class _FakeBoss:
                 outer.settings[key] = {"key": key, "value": body["value"], "source": "project"}
                 return self._reply(200, {"key": key, "value": body["value"], "source": "project"})
 
+            def do_DELETE(self):  # noqa: N802
+                outer.requests.append(("DELETE", self.path, None))
+                return self._reply(200, {"state": "cancelled"})
+
             def do_POST(self):  # noqa: N802
                 body = self._body()
                 outer.requests.append(("POST", self.path, body))
+                if self.path == "/v1/setup/sign-in":
+                    provider = body["provider"]
+                    signed_in = (outer.state / outer.STATE_FILE[provider]).exists()
+                    session = {"sign_in_id": f"si_{len(outer.sign_ins)}", "provider": provider,
+                               "state": "signed_in" if signed_in else "waiting",
+                               "verification_url": None if signed_in else
+                               "https://auth.openai.com/codex/device",
+                               "user_code": None if signed_in else "ABCD-EFGH1",
+                               "needs_code_input": False, "expires_at": None,
+                               "headline": "h", "fix": "f"}
+                    outer.sign_ins[session["sign_in_id"]] = session
+                    return self._reply(200, session)
                 if self.path == "/v1/setup/models" and body.get("kind") == "subscription":
                     outer.sources.append({"source_id": outer.SUBSCRIPTION_SOURCES[body["provider"]],
                                           "connection_status": "connected"})
@@ -985,9 +1020,9 @@ def test_connect_found_at_a_terminal_signs_in_inside_the_container(world, boss_a
     code, output = _run_tty("bash", REPO / "install.sh", "--dir", world["install"], "--yes",
                             "--no-install-deps", "--no-web", "--connect-found", env=world["env"])
     assert code == 0, output
-    calls = _docker_calls(world)
-    assert "exec -u boss api claude auth login" in calls
-    assert "exec -u boss api grok login --device-auth" in calls
+    assert "login" not in _docker_calls(world)
+    started = [body["provider"] for body in boss_api.posts("/v1/setup/sign-in")]
+    assert started == ["claude_code", "grok"]
     recorded = [body["provider"] for body in boss_api.posts("/v1/setup/models")]
     assert recorded == ["claude_code", "grok"]
     assert "Claude Code  connected" in output
@@ -1006,8 +1041,8 @@ def test_boss_connect_asks_once_per_found_login_and_no_changes_nothing(world, bo
     assert code == 0, output
     assert output.count("[y/N]") == 3
     calls = _docker_calls(world)
-    assert "claude auth login" in calls
-    assert "grok login" not in calls
+    assert [b["provider"] for b in boss_api.posts("/v1/setup/sign-in")] == ["claude_code"]
+    assert "login" not in calls
     assert "host.docker.internal" not in calls
     assert "skipped   Grok Build. Later: boss connect grok" in output
     assert "skipped   Ollama (nothing was changed)" in output
@@ -1018,26 +1053,83 @@ def test_boss_connect_asks_once_per_found_login_and_no_changes_nothing(world, bo
     again_code, again = _run_tty(boss, "connect", env=world["env"], answers="n\nn\n")
     assert again_code == 0, again
     assert "Claude Code is already signed in inside BOSS" in again
-    assert _docker_calls(world).count("claude auth login") == 1
+    assert len(boss_api.posts("/v1/setup/sign-in")) == 1
 
 
 def test_boss_connect_claude_and_grok_at_a_terminal(world, boss_api) -> None:
     boss = _installed(world)
     code, output = _run_tty(boss, "connect", "grok", env=world["env"])
     assert code == 0, output
-    assert "exec -u boss api grok login --device-auth" in _docker_calls(world)
-    assert "✓ Grok Build signed in inside BOSS and recorded" in output
+    assert "1. Open  https://auth.openai.com/codex/device" in output
+    assert "2. Enter the code  ABCD-EFGH1" in output
+    assert "✓ Grok Build is signed in inside BOSS and connected: it answered one test turn" in output
 
     code, output = _run_tty(boss, "connect", "claude", env=world["env"])
     assert code == 0, output
-    assert "✓ Claude Code signed in inside BOSS and recorded" in output
+    assert "✓ Claude Code is signed in inside BOSS and connected" in output
 
-    # A second explicit run only records the existing container login.
+    # A second explicit run: BOSS answers "signed in" at once and the proof runs again.
     code, output = _run_tty(boss, "connect", "claude", env=world["env"])
     assert code == 0, output
-    assert "already signed in inside BOSS; recording it" in output
-    assert _docker_calls(world).count("claude auth login") == 1
+    assert "Claude Code is already signed in inside BOSS." in output
+    assert "login" not in _docker_calls(world)
+    assert [b["provider"] for b in boss_api.posts("/v1/setup/sign-in")] == [
+        "grok", "claude_code", "claude_code"]
     assert len(boss_api.posts("/v1/setup/models")) == 3
+
+
+def test_boss_connect_codex_signed_in_inside_boss_connects_and_proves_once(world, boss_api) -> None:
+    """P0-1 (c): Codex already signed in inside the container: exactly one POST
+    /v1/setup/models, exit 0 on a working pill; no import, no credential route."""
+    boss = _installed(world)
+    (boss_api.state / "codex").touch()
+    result = _run(boss, "connect", "codex", env=world["env"])
+    rendered = result.stdout + result.stderr
+    assert result.returncode == 0, rendered
+    assert boss_api.posts("/v1/setup/models") == [{
+        "project_id": "boss-dogfood", "actor": "ceo", "provider": "codex",
+        "kind": "subscription"}]
+    assert not any("credential" in where for _m, where, _b in boss_api.requests)
+    assert "✓ Codex is signed in inside BOSS and connected" in rendered
+    assert "None" not in rendered
+
+
+def test_boss_connect_codex_at_a_terminal_signs_in_through_its_own_login(world, boss_api) -> None:
+    boss = _installed(world)
+    code, output = _run_tty(boss, "connect", "codex", env=world["env"])
+    assert code == 0, output
+    assert "Signing Codex in inside BOSS" in output
+    assert "ABCD-EFGH1" in output
+    assert [b["provider"] for b in boss_api.posts("/v1/setup/sign-in")] == ["codex"]
+    assert len(boss_api.posts("/v1/setup/models")) == 1
+    assert "login" not in _docker_calls(world)
+
+
+def test_a_failed_codex_sign_in_says_why_and_records_nothing(world, boss_api) -> None:
+    boss = _installed(world)
+    boss_api.sign_in_fails = True
+    code, output = _run_tty(boss, "connect", "codex", env=world["env"])
+    assert code == 1, output
+    assert "Sign-in failed — The login stopped. Start it again." in output
+    assert "✗ Codex was not connected; the reason is above. Retry: boss connect codex" in output
+    assert boss_api.posts("/v1/setup/models") == []
+
+
+def test_install_connect_codex_never_dies_after_boss_is_up(world, boss_api) -> None:
+    """P0-1 (d): --connect-codex unattended names the next step; at a terminal a failed
+    sign-in is reported. Either way the install finishes."""
+    unattended = _install(world, "--connect-codex")
+    rendered = unattended.stdout + unattended.stderr
+    assert unattended.returncode == 0, rendered
+    assert "Next: boss connect codex" in rendered
+    assert boss_api.posts("/v1/setup/sign-in") == []
+
+    boss_api.sign_in_fails = True
+    code, output = _run_tty("bash", REPO / "install.sh", "--dir", world["install"], "--yes",
+                            "--no-install-deps", "--no-web", "--connect-codex", env=world["env"])
+    assert code == 0, output
+    assert "Codex was not connected; the reason is above. BOSS is running." in output
+    assert boss_api.posts("/v1/setup/models") == []
 
 
 def test_boss_connect_claude_without_a_terminal_or_with_an_api_key_signs_nothing_in(
@@ -1526,15 +1618,15 @@ def test_boss_connect_offers_a_local_model_with_yes_as_the_default(world, boss_a
     env = dict(world["env"], BOSS_TEST_UNAME="Linux")
 
     suppressed_code, suppressed = _run_tty(boss, "connect", "--no-local-model", env=env,
-                                           answers="n\nn\n")
+                                           answers="n\nn\nn\n")
     assert suppressed_code == 0, suppressed
     assert "[Y/n]" not in suppressed
     assert "ollama.com" not in _curl_urls(world)
 
-    # Claude: no. Grok: no. Local model: Enter, which is yes.
-    code, output = _run_tty(boss, "connect", env=env, answers="n\nn\n\n", timeout=180)
+    # Codex: no. Claude: no. Grok: no. Local model: Enter, which is yes.
+    code, output = _run_tty(boss, "connect", env=env, answers="n\nn\nn\n\n", timeout=180)
     assert code == 0, output
-    assert output.count("[y/N]") == 2 and output.count("[Y/n]") == 1
+    assert output.count("[y/N]") == 3 and output.count("[Y/n]") == 1
     assert f"downloads {DEFAULT_LOCAL} (about 4.4 GB)" in output
     assert "https://ollama.com/install.sh" in _curl_urls(world)
     assert f"Ollama       connected: {DEFAULT_LOCAL}" in output
@@ -1551,7 +1643,7 @@ def test_yes_alone_never_installs_a_local_model(world, boss_api) -> None:
     assert "A free local model: boss connect --install-ollama" in out
     # The card: one row per source, each with its fix.
     assert "API keys     not found. Export a key, then: boss connect keys" in out
-    assert "Codex        not found. Sign in with codex login --device-auth" in out
+    assert "Codex        not found. Sign in inside BOSS: boss connect codex" in out
     assert "Claude Code  not found. Sign in inside BOSS: boss connect claude" in out
     assert "Ollama       not found. Set it up: boss connect --install-ollama" in out
     assert "Default      none. Model calls fail closed until one is connected: boss connect" in out
@@ -1606,8 +1698,8 @@ def test_an_existing_ollama_is_moved_only_with_consent(world, boss_api) -> None:
     assert boss_api.posts("/v1/setup/model") == []
 
     # At a terminal the question defaults to no.
-    # Rebind: Enter (no). Then Claude and Grok sign-in offers: no.
-    code, output = _run_tty(boss, "connect", "--install-ollama", env=env, answers="\nn\nn\n")
+    # Rebind: Enter (no). Then the Codex, Claude Code and Grok sign-in offers: no.
+    code, output = _run_tty(boss, "connect", "--install-ollama", env=env, answers="\nn\nn\nn\n")
     assert code == 1, output
     assert "Move it to the Docker bridge address" in output and "[y/N]" in output
     assert not dropin.exists()

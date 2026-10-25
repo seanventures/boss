@@ -504,16 +504,25 @@ def chat_engine_for(
 
 def with_recorded_connections(
     agents: list[dict[str, Any]], connection: Connection, project_id: str,
+    settings: Optional[Settings] = None,
 ) -> list[dict[str, Any]]:
-    """Add what was RECORDED to what detection found. Mutates and returns the agents.
+    """Add what was RECORDED — and what its last proof said — to what detection found.
+    Mutates and returns the agents.
 
     Two different questions, and the wizard needs both answers. Detection says whether a build
     could run this minute; the record says whether anybody ever finished the step. Reporting
     only the first made a completed connection look undone — after a refresh or a redeploy the
     operator saw the same Connect button as on a fresh install, with nothing on screen saying
     the work had already been done, and reasonably concluded it had not been saved.
+
+    THE RECORD IS NOT THE VERDICT. A connection whose last real proof the provider refused
+    (`setup_view.source_state`: login expired, key rejected, check failed) is not `connected`
+    and not `ready`, whatever the CLI's own `login status` says — the live Codex case: the CLI
+    said "Logged in", its refresh token was refused 401, and this list said connected. Each
+    agent carries `pill`, the same pill its Models row shows (None when it has none).
     """
     recorded: dict[str, dict[str, Any]] = {}
+    pills: dict[str, dict[str, Any]] = {}
     if project_id:
         rows = connection.execute(
             # connection_status, NOT the row's existence. A project is SEEDED with a catalogue
@@ -526,11 +535,29 @@ def with_recorded_connections(
             {"p": project_id},
         ).mappings().all()
         recorded = {r["source_id"]: dict(r) for r in rows}
+        if recorded:
+            from . import setup_view
+            from ..config import get_settings
+
+            pills = setup_view.source_pills(connection, settings or get_settings(), project_id)
     for agent in agents:
-        row = recorded.get(agent.get("entitlement_source_id") or "")
-        agent["connected"] = bool(row)
+        source_id = agent.get("entitlement_source_id") or ""
+        row = recorded.get(source_id)
+        pill = pills.get(source_id) if row else None
+        broken = bool(pill and pill.get("tone") == "red")
+        agent["pill"] = pill
+        agent["connected"] = bool(row) and not broken
         agent["connected_at"] = str(row["updated_at"]) if row else None
         agent["connected_status"] = row["connection_status"] if row else None
+        if broken:
+            from .setup_pills import CONNECT_NAME
+
+            agent["ready"] = False
+            name = CONNECT_NAME.get(str(agent.get("name") or ""))
+            agent["next_step"] = (
+                f"{pill['label']}: sign in inside BOSS with `boss connect {name}` (or press "
+                "Sign in in Repo and models), then Test" if name else
+                f"{pill['label']}: fix it in Repo and models, then Test")
     return agents
 
 
@@ -689,6 +716,37 @@ def store_coding_agent_credential(
             "fallback_accepted": backend == "database"}
 
 
+#: The reply a proof turn must contain. Exit 0 alone is not proof: a CLI that printed an error
+#: and exited 0 answered nothing.
+PROOF_REPLY = "BOSS_OK"
+
+#: A CLI that failed its OWN sign-in before any model call — a refresh token refused, "not
+#: logged in" — says so in these words (model_failures.is_login_rejected covers the rest).
+#: Explicit no-completion evidence: nothing was sent to a model, so nothing can be owed.
+_CLI_AUTH_FAILED = re.compile(
+    r"(?i)invalid_refresh_token|failed to refresh (?:the )?token|refresh token (?:was|has been)"
+    r" (?:revoked|invalidated|already used)|not (?:logged|signed) in|please (?:run )?/?login"
+    r"|you are not authenticated|no auth credentials")
+
+
+def cli_auth_failed(text_out: object) -> bool:
+    """Did this CLI fail to authenticate before any model call?"""
+    from .model_failures import is_login_rejected
+
+    said = str(text_out or "")
+    return bool(_CLI_AUTH_FAILED.search(said)) or is_login_rejected(said)
+
+
+def _auth_refusal(text_out: str, *, exit_code: Any = None,
+                  read_only: Optional[bool] = None) -> dict[str, Any]:
+    """A proof the CLI's own sign-in refused: HTTP-401-shaped, so the governed proof treats it
+    as a known rejection (reservation released, nothing held) and the pill says Login
+    expired. The CLI's words are kept short; `connection_spend` redacts them again."""
+    return {"ok": False, "status": 401, "state": "login_expired", "exit_code": exit_code,
+            "read_only_probe": read_only,
+            "error": f"login rejected before any model call: {text_out[:240]}"}
+
+
 def prove_coding_agent(settings: Settings, provider: str, timeout: int = 90) -> dict[str, Any]:
     """Make the agent complete one real turn before calling it connected.
 
@@ -698,6 +756,11 @@ def prove_coding_agent(settings: Settings, provider: str, timeout: int = 90) -> 
     model. One trivial turn costs nothing against a subscription and turns "signed in" into
     "working".
 
+    PROOF MEANS THE REPLY. Exit 0 AND `BOSS_OK` in what it said; a CLI that exits 0 having
+    printed an error is not Working. A CLI whose own sign-in failed before any model call
+    (Codex's `401 invalid_refresh_token`, "not logged in") is a KNOWN rejection, never an
+    unknown outcome held for review: nothing reached a model.
+
     Run in an empty directory with the read-only sandbox where the CLI has one, so proving
     the connection can never edit anything.
     """
@@ -705,6 +768,7 @@ def prove_coding_agent(settings: Settings, provider: str, timeout: int = 90) -> 
     import tempfile
 
     from .cli_harness import CliHarnessUnavailable, GenericCliCodeAgent, load_specs
+    from .harness_failures import HarnessFailure
 
     spec = load_specs(settings).get(provider)
     if spec is None:
@@ -714,21 +778,33 @@ def prove_coding_agent(settings: Settings, provider: str, timeout: int = 90) -> 
     with tempfile.TemporaryDirectory(prefix="boss-agent-probe-") as work:
         try:
             out = agent.run_role(
-                "Reply with exactly: BOSS_OK. Do not create or modify any file.",
+                f"Reply with exactly: {PROOF_REPLY}. Do not create or modify any file.",
                 pathlib_Path(work), read_only=read_only,
             )
-        except CliHarnessUnavailable as exc:
+        except (CliHarnessUnavailable, HarnessFailure) as exc:
+            if cli_auth_failed(exc):
+                return _auth_refusal(str(exc), read_only=read_only)
+            if isinstance(exc, HarnessFailure):
+                raise                    # the harness could not run: its outcome is unknown
             return {"ok": False, "error": str(exc)}
         except subprocess.SubprocessError as exc:  # noqa: PERF203 - narrow, reported not raised
             return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
     text_out = (out.get("summary") or "")
-    ok = out.get("exit_code") == 0
+    exited_ok = out.get("exit_code") == 0
+    replied = PROOF_REPLY in text_out
+    if not replied and cli_auth_failed(text_out):
+        return _auth_refusal(text_out, exit_code=out.get("exit_code"), read_only=read_only)
+    ok = exited_ok and replied
+    error = None
+    if not ok:
+        error = (text_out[:300] or "the agent exited non-zero") if not exited_ok else (
+            f"the agent exited 0 but did not reply {PROOF_REPLY}: {text_out[:240]}")
     return {
         "ok": ok,
         "exit_code": out.get("exit_code"),
         "read_only_probe": read_only,
         "replied": text_out[:200],
-        "error": None if ok else (text_out[:300] or "the agent exited non-zero"),
+        "error": error,
     }
 
 
@@ -814,11 +890,12 @@ def connect_coding_agent(
     connection: Connection, settings: Settings, project_id: str, provider: str, *,
     actor: str = "ceo", prove: bool = True, prove_with=None, intent: str = "",
 ) -> dict[str, Any]:
-    """Import a coding-agent subscription the customer already has, into BOSS.
+    """Connect a coding-agent subscription the customer has signed in to INSIDE BOSS.
 
-    There is nothing to paste. A Codex or Cursor subscription is an OAuth session held by that
-    CLI, so configuration finds the CLI, confirms it is signed in, and records the entitlement.
-    Paid editions also prove it answers before recording. Anything else is asking the operator to
+    Nothing is imported and there is nothing to paste. A Codex, Claude or Grok subscription is
+    an OAuth session held by that CLI, signed in inside the BOSS container (`boss connect
+    <provider>`, or the console's Sign in), so this finds the CLI, confirms it is signed in,
+    proves it with one governed turn and records the entitlement. Anything else is asking the operator to
     transcribe a credential that does not exist.
 
     Refuses rather than half-succeeds: not installed and signed-out are different problems with
@@ -839,6 +916,15 @@ def connect_coding_agent(
         raise SetupError(
             f"the {provider} CLI is not installed on this machine. "
             f"{found['next_step']}")
+    from .cli_harness import LEGACY_TOKEN_FIX, legacy_token_stored
+
+    if legacy_token_stored(spec, settings):
+        # A RETIRED IMPORT IS NOT A SIGN-IN. `claude` reads a stored CLAUDE_CODE_OAUTH_TOKEN
+        # ahead of its own login, so proving now would prove that token, not the login the
+        # operator just made — and record it as the subscription.
+        raise SetupError(
+            f"the {provider} CLI is not signed in inside BOSS: BOSS holds a legacy Claude "
+            f"token from the retired setup-token import. {LEGACY_TOKEN_FIX}")
     if found["authenticated"] is False:
         if spec.require_local_session_file:
             raise SetupError(

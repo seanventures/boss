@@ -14,7 +14,7 @@ import { overBudget } from "./_helpers/copy-budget";
 import { entitlementSessionsWire, entitlementSourcesWire } from "./_helpers/obs-fixtures";
 import { board, firstRun } from "./_helpers/setup-fixtures";
 import { click, mountBoard, q, type, type Mounted } from "./_helpers/setup-board";
-import { completeBody, stateOf, type CapSource } from "../app/setup/capacity-row";
+import { badgeOf, completeBody, stateOf, type CapSource } from "../app/setup/capacity-row";
 import type { SetupView } from "../lib/setup-types";
 
 let mounted: Mounted | null = null;
@@ -410,9 +410,9 @@ describe("source verdict precedence", () => {
     [{ connection: "failed" }, "Failed"],
     [{ connection: "expired", auth: "official_cli_oauth" }, "Expired"],
     [{ connection: "revoked", auth: "official_cli_oauth" }, "Revoked"],
-    // A stored key reads Connected (BOSSAPP-530); a connected plan login stays Active.
+    // A stored key reads Connected (BOSSAPP-530). A connected plan login with NO proof on record
+    // (no Models row, so no pill) falls back to its record; with a pill, see badgeOf below.
     [{ effective: "active", connection: "connected", credentialPresent: true, credentialAbsent: false }, "Connected"],
-    [{ effective: "active", connection: "connected", auth: "official_cli_oauth" }, "Active"],
     [{ effective: "active", connection: "configured", credentialPresent: true, credentialAbsent: false }, "Active"],
   ];
   for (const [patch, label] of cases) {
@@ -420,6 +420,33 @@ describe("source verdict precedence", () => {
       expect(stateOf({ ...base, ...patch }).label).toBe(label);
     });
   }
+});
+
+// STATUS MEANS PROVEN (BOSSAPP-769 P0-3). This used to lock in the bug: a connected plan login
+// read green "Active" — beside "Available" — while the same source's last proof had failed
+// (the live Codex "Login expired"). The badge is now the Models row's own pill when there is one.
+describe("the badge is the source's proven pill", () => {
+  const codex: CapSource = {
+    sourceId: "openai_codex_chatgpt", provider: "openai", kind: "subscription", effective: "active",
+    auth: "official_cli_oauth", connection: "connected", credentialPresent: true, credentialAbsent: false,
+    capacity: "available", models: [], modes: [], scopes: [], pooled: false,
+  };
+  it("a connected login whose proof failed reads the failed pill, not Active", () => {
+    const pill = { state: "login_expired", label: "Login expired", tone: "red" as const, checked_at: null };
+    expect(badgeOf({ ...codex, pill })).toEqual({ label: "Login expired", tone: "red", proven: true });
+  });
+  it("a working proof reads Working", () => {
+    const pill = { state: "working", label: "Working", tone: "green" as const, checked_at: null };
+    expect(badgeOf({ ...codex, pill }).label).toBe("Working");
+  });
+  it("no Models row (pill null) falls back to the record, marked unproven", () => {
+    expect(badgeOf({ ...codex, pill: null })).toEqual({ label: "Active", tone: "green", proven: false });
+  });
+  it("a record whose login or key was refused reads red without a pill", () => {
+    expect(badgeOf({ ...codex, pill: null, effective: "login_rejected" }))
+      .toEqual({ label: "Login expired", tone: "red", proven: false });
+    expect(badgeOf({ ...codex, pill: null, effective: "key_rejected" }).tone).toBe("red");
+  });
 });
 
 describe("model and source anchors share the model section", () => {

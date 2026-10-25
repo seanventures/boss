@@ -244,12 +244,10 @@ Options:
   --backup-dir PATH       Private recovery backup location for an upgrade
   --skip-model-key        Do not ask for a model key (API starts; model calls fail closed)
   --no-install-deps       Do not install missing VM packages
-  --connect-found         Connect what was found on this machine without asking: a Codex
-                          login, a Claude Code or Grok Build sign-in inside the BOSS
-                          container, and Ollama. Needed for --yes to connect anything.
-                          A sign-in needs a person at a terminal and is skipped without
-                          one; a Codex login on the database store also needs
-                          --accept-database-fallback
+  --connect-found         Connect what was found on this machine without asking: a Codex,
+                          Claude Code or Grok Build sign-in inside the BOSS container, and
+                          Ollama. Needed for --yes to connect anything. A sign-in needs a
+                          person at a terminal and is skipped without one
   --install-ollama        Set up a free local model without asking: install Ollama if
                           missing, start it, make it reachable from the BOSS containers,
                           pull the model, connect it. When no hosted model is connected it
@@ -264,15 +262,15 @@ Options:
   --no-boss-command       Do not install the \`boss\` command on PATH
   --discover-subscriptions  Check Claude, Codex and Grok CLIs on this VM (no credential transfer)
   --install-coding-clis  Install missing official Claude, Codex and Grok coding CLIs on this VM
-  --connect-codex        Explicitly import this VM user's Codex ChatGPT login into BOSS
-  --connect-claude       Import an operator-supplied Claude setup token into the local secret store
+  --connect-codex        Sign Codex in inside BOSS through its own login (you open the link
+                          it prints and enter the code), then prove it. Needs a terminal;
+                          without one the installer says to run: boss connect codex
+  --connect-claude       The same for Claude Code (you paste back the code its page shows)
   --connect-claude-local Record the CLI-owned Claude login made inside the API container
   --connect-grok-local   Record the CLI-owned Grok login made inside the API container
-  --accept-database-fallback  Allow a subscription credential in Postgres if no secret store
   --secret-store WHICH    database (default) or infisical. Both stay on your own machine:
                             database   4 containers. Credentials are held by BOSS's own
-                                       Postgres. Lean; storing a SUBSCRIPTION token asks you
-                                       to confirm the database is an acceptable home for it.
+                                       Postgres. Lean.
                             infisical  6 containers, ~400MB more. Bundled Infisical secret
                                        store, bootstrapped and wired up for you. Credentials
                                        are referenced rather than held, and rotate cleanly.
@@ -310,6 +308,7 @@ while [[ $# -gt 0 ]]; do
     --connect-claude) CONNECT_CLAUDE=1; DISCOVER_SUBSCRIPTIONS=1; shift ;;
     --connect-claude-local) CONNECT_CLAUDE_LOCAL=1; DISCOVER_SUBSCRIPTIONS=1; shift ;;
     --connect-grok-local) CONNECT_GROK_LOCAL=1; DISCOVER_SUBSCRIPTIONS=1; shift ;;
+    # Retired: a subscription signs in inside BOSS, so there is no credential to store.
     --accept-database-fallback) ACCEPT_DATABASE_FALLBACK=1; shift ;;
     --connect-found) CONNECT_FOUND=1; shift ;;
     --install-ollama) INSTALL_OLLAMA=1; shift ;;
@@ -365,8 +364,9 @@ done
 if [[ "$CONNECT_CLAUDE" -eq 1 && "$CONNECT_CLAUDE_LOCAL" -eq 1 ]]; then
   die "Choose --connect-claude or --connect-claude-local, not both."
 fi
-if [[ "$CONNECT_CLAUDE" -eq 1 && "$NONINTERACTIVE" -eq 1 && -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]]; then
-  die "No Claude setup token was provided. Set CLAUDE_CODE_OAUTH_TOKEN for this command, or run it in a terminal and paste the token from \`claude setup-token\`. Nothing was stored."
+
+if [[ "$ACCEPT_DATABASE_FALLBACK" -eq 1 ]]; then
+  ui_warn 'Ignoring --accept-database-fallback: a subscription signs in inside BOSS through its own login, so nothing is stored from this machine.'
 fi
 
 if [[ -n "${BOSS_PREUPGRADE_BACKUP_DIR:-}" ]]; then
@@ -401,9 +401,6 @@ fi
 # In unattended shells, choose safe defaults rather than reading the rest of install.sh.
 if [[ "$NONINTERACTIVE" -eq 0 ]] && ! (: </dev/tty) 2>/dev/null; then
   NONINTERACTIVE=1
-fi
-if [[ "$CONNECT_CLAUDE" -eq 1 && "$NONINTERACTIVE" -eq 1 && -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]]; then
-  die "No Claude setup token was provided. Set CLAUDE_CODE_OAUTH_TOKEN for this command, or run it in a terminal and paste the token from \`claude setup-token\`. Nothing was stored."
 fi
 
 # ask_yes "Question" -> status 0 only for an explicit yes typed at the terminal.
@@ -1614,12 +1611,10 @@ rm -f "$EDITION_BODY"
 
 # ---- models and subscriptions already on this machine ----------------------
 # Finding is read only and prints found / not found, never a value. Exported API keys were
-# already saved above. A Codex login file is copied only after a yes at the prompt, or with
-# --connect-found. Everything else (Claude Code and Grok Build sign-in inside the BOSS
-# container, Ollama, and the offers when no model is usable) is the Models step below, which
-# is this install's own `boss connect`.
+# already saved above. Nothing is copied from a login found here: Codex, Claude Code and Grok
+# Build sign in inside the BOSS container, Ollama is connected, and the offers when no model
+# is usable are made, all by the Models step below, which is this install's own `boss connect`.
 MODEL_NOTES=()
-CODEX_FROM_DISCOVERY=0
 _found=""
 if [[ "$AUTO_DISCOVER" -eq 1 && -f scripts/install/discover_models.py ]]; then
   ui_step "Looking for models and subscriptions on this machine (read only)"
@@ -1633,26 +1628,7 @@ if [[ "$AUTO_DISCOVER" -eq 1 && -f scripts/install/discover_models.py ]]; then
     [[ -z "$_ollama_hostport" ]] || _ollama_url="http://$_ollama_hostport"
   fi
   if BOSS_OLLAMA_URL="${_ollama_url:-${BOSS_OLLAMA_URL:-}}" python3 scripts/install/discover_models.py --summary "$_found" </dev/null; then
-    found() { [[ "$(grep -m 1 "^$1=" "$_found" | cut -d= -f2-)" == found ]]; }
-    if found codex_login && [[ "$CONNECT_CODEX" -eq 0 ]]; then
-      _codex_home="BOSS's own database on this machine"
-      [[ "$SECRET_STORE" != infisical ]] || _codex_home="this install's secret store"
-      if [[ "$CONNECT_FOUND" -eq 1 ]]; then
-        if [[ "$SECRET_STORE" == infisical || "$ACCEPT_DATABASE_FALLBACK" -eq 1 ]]; then
-          CODEX_FROM_DISCOVERY=1
-        else
-          ui_warn "Codex login found and not copied: the database store also needs --accept-database-fallback."
-        fi
-      elif ask_yes "Connect your Codex ChatGPT login? This copies ~/.codex/auth.json into ${_codex_home}."; then
-        CODEX_FROM_DISCOVERY=1
-      else
-        if [[ "$NONINTERACTIVE" -eq 1 ]]; then
-          ui_info "Codex login left alone (--yes copies nothing without --connect-found). Connect it later: boss connect codex"
-        else
-          ui_info "Codex login left alone. Connect it later: boss connect codex"
-        fi
-      fi
-    fi
+    :
   else
     ui_warn "Model discovery did not finish; nothing was connected. Retry later: boss connect"
     rm -f "$_found"
@@ -1660,41 +1636,58 @@ if [[ "$AUTO_DISCOVER" -eq 1 && -f scripts/install/discover_models.py ]]; then
   fi
 fi
 
+# BOSS is already up here, so nothing below `die`s: a subscription that does not connect is
+# reported with its reason and the next step, and the install still finishes.
 if [[ "$DISCOVER_SUBSCRIPTIONS" -eq 1 ]]; then
   ui_step "Checking coding subscription connections"
-  if [[ "$CONNECT_CLAUDE" -eq 1 || "$CONNECT_CLAUDE_LOCAL" -eq 1 ]] &&
-     [[ -n "$(env_value ANTHROPIC_API_KEY)" ]]; then
-    die "Claude subscription connection would use ANTHROPIC_API_KEY for headless work. Remove that key from .env, then rerun the selected Claude connection option."
+  _subscriptions() {
+    BOSS_API_KEY="$BOSS_API_KEY" python3 scripts/install/coding_subscriptions.py --api-url "$API_URL" "$@" </dev/null
+  }
+  _claude_ok=1
+  if [[ "$CONNECT_CLAUDE" -eq 1 || "$CONNECT_CLAUDE_LOCAL" -eq 1 ]]; then
+    if [[ -n "$(env_value ANTHROPIC_API_KEY)" ]]; then
+      ui_err "Claude Code not connected: .env holds ANTHROPIC_API_KEY, which headless work would use instead of the subscription. Remove it from .env, then: boss connect claude"
+      MODEL_NOTES+=("✗ Claude Code not connected: remove ANTHROPIC_API_KEY from .env, then boss connect claude")
+      _claude_ok=0
+    elif [[ -n "$(env_value CLAUDE_CODE_OAUTH_TOKEN)" ]]; then
+      ui_err "Claude Code not connected: .env holds a legacy CLAUDE_CODE_OAUTH_TOKEN. Remove it from .env, then: boss connect claude"
+      MODEL_NOTES+=("✗ Claude Code not connected: remove CLAUDE_CODE_OAUTH_TOKEN from .env, then boss connect claude")
+      _claude_ok=0
+    fi
   fi
-  if [[ "$CONNECT_CLAUDE_LOCAL" -eq 1 ]] && [[ -n "$(env_value CLAUDE_CODE_OAUTH_TOKEN)" ]]; then
-    die "The CLI-owned Claude login requires an empty CLAUDE_CODE_OAUTH_TOKEN. Remove the legacy token from .env first."
+  if [[ "$CONNECT_CODEX$CONNECT_CLAUDE$CONNECT_CLAUDE_LOCAL$CONNECT_GROK_LOCAL" == 0000 ]]; then
+    _subscriptions || ui_warn "Coding CLI discovery did not finish; BOSS is running."
   fi
-  _subscription_args=(--api-url "$API_URL")
-  [[ "$CONNECT_CODEX" -eq 1 ]] && _subscription_args+=(--connect-codex)
-  [[ "$CONNECT_CLAUDE" -eq 1 ]] && _subscription_args+=(--connect-claude)
-  [[ "$CONNECT_CLAUDE_LOCAL" -eq 1 ]] && _subscription_args+=(--connect-claude-local)
-  [[ "$CONNECT_GROK_LOCAL" -eq 1 ]] && _subscription_args+=(--connect-grok-local)
-  [[ "$ACCEPT_DATABASE_FALLBACK" -eq 1 ]] && _subscription_args+=(--accept-database-fallback)
-  BOSS_API_KEY="$BOSS_API_KEY" python3 scripts/install/coding_subscriptions.py "${_subscription_args[@]}" </dev/null ||
-    die "Coding subscription discovery/connection failed; BOSS core remains available."
-  [[ "$CONNECT_CODEX" -eq 0 ]] || MODEL_NOTES+=("✓ Codex ChatGPT login connected")
-  [[ "$CONNECT_CLAUDE" -eq 0 && "$CONNECT_CLAUDE_LOCAL" -eq 0 ]] || MODEL_NOTES+=("✓ Claude Code connected")
-  [[ "$CONNECT_GROK_LOCAL" -eq 0 ]] || MODEL_NOTES+=("✓ Grok Build connected")
-fi
-
-# A login found and consented to above goes through the same reviewed import path as
-# --connect-codex. Its failure is reported, not fatal: BOSS itself is already running.
-if [[ "$CODEX_FROM_DISCOVERY" -eq 1 ]]; then
-  ui_step "Connecting the Codex ChatGPT login"
-  _codex_args=(--api-url "$API_URL" --connect-codex)
-  [[ "$SECRET_STORE" == infisical ]] || _codex_args+=(--accept-database-fallback)
-  if BOSS_API_KEY="$BOSS_API_KEY" python3 scripts/install/coding_subscriptions.py "${_codex_args[@]}" </dev/null; then
-    ui_ok "Codex ChatGPT login connected (value never displayed)"
-    MODEL_NOTES+=("✓ Codex ChatGPT login connected")
-  else
-    ui_err "Codex login was not connected; the reason is above. BOSS is running. Retry: boss connect codex"
-    MODEL_NOTES+=("✗ Codex login not connected: boss connect codex")
+  if [[ "$CONNECT_CLAUDE_LOCAL" -eq 1 && "$_claude_ok" -eq 1 ]]; then
+    if _subscriptions --connect-claude-local; then MODEL_NOTES+=("✓ Claude Code connected")
+    else MODEL_NOTES+=("✗ Claude Code not connected: boss connect claude"); fi
   fi
+  if [[ "$CONNECT_GROK_LOCAL" -eq 1 ]]; then
+    if _subscriptions --connect-grok-local; then MODEL_NOTES+=("✓ Grok Build connected")
+    else MODEL_NOTES+=("✗ Grok Build not connected: boss connect grok"); fi
+  fi
+  # --connect-codex / --connect-claude: the provider's own login inside BOSS, then the proof.
+  # The flag is the consent. The link needs a person, so without a terminal the installer
+  # only says what to run (with --yes at a terminal, the person is there and it signs in).
+  for _sub in codex claude; do
+    case "$_sub" in
+      codex) [[ "$CONNECT_CODEX" -eq 1 ]] || continue; _label=Codex ;;
+      claude) [[ "$CONNECT_CLAUDE" -eq 1 && "$_claude_ok" -eq 1 ]] || continue; _label="Claude Code" ;;
+    esac
+    if ! (: </dev/tty) 2>/dev/null; then
+      ui_info "$_label signs in inside BOSS through its own login, which needs a person at a terminal. Next: boss connect $_sub"
+      MODEL_NOTES+=("… $_label not signed in yet: boss connect $_sub")
+      continue
+    fi
+    _rc=0
+    _subscriptions --sign-in "$_sub" || _rc=$?
+    case "$_rc" in
+      0) MODEL_NOTES+=("✓ $_label signed in inside BOSS and connected") ;;
+      2) MODEL_NOTES+=("… $_label not signed in yet: boss connect $_sub") ;;
+      *) ui_err "$_label was not connected; the reason is above. BOSS is running. Retry: boss connect $_sub"
+         MODEL_NOTES+=("✗ $_label not connected: boss connect $_sub") ;;
+    esac
+  done
 fi
 
 # ---- the Models step -------------------------------------------------------
@@ -1702,16 +1695,6 @@ fi
 # offer to sign in to a subscription or set up a free local model. This is `boss connect`, so
 # a later `boss connect` repeats exactly this step. --yes asks nothing; it installs Ollama
 # only with --install-ollama.
-model_usable() {
-  local check rc
-  for check in --hosted --local; do
-    rc=0
-    BOSS_API_KEY="$BOSS_API_KEY" python3 scripts/install/model_status.py --api-url "$API_URL" \
-      --env-file "$ENV_FILE" "$check" </dev/null >/dev/null 2>&1 || rc=$?
-    [[ "$rc" -ne 0 && "$rc" -ne 4 ]] || return 0   # usable, or BOSS cannot say
-  done
-  return 1
-}
 if [[ -f "$INSTALL_DIR/scripts/install/boss.sh" ]] &&
    [[ ( "$AUTO_DISCOVER" -eq 1 && -n "$_found" ) || "$INSTALL_OLLAMA" -eq 1 ]]; then
   ui_step "Models"
@@ -1725,16 +1708,6 @@ if [[ -f "$INSTALL_DIR/scripts/install/boss.sh" ]] &&
   [[ "$REBIND_OLLAMA" -eq 0 ]] || _models_args+=(--rebind-ollama)
   bash "$INSTALL_DIR/scripts/install/boss.sh" "${_models_args[@]}" ||
     ui_warn "The Models step did not finish; BOSS is running. Retry: boss connect"
-  # Codex signs in on this machine, so it needs the CLI here. Offered only at a terminal and
-  # only while no model is usable; --install-coding-clis does it unattended.
-  if [[ "$INSTALL_CODING_CLIS" -eq 0 && "$NONINTERACTIVE" -eq 0 ]] && ! model_usable &&
-     ask_yes "Install the official coding CLIs on this machine (Claude Code, Codex CLI, Grok Build)? Codex needs its CLI here to sign in; Claude Code and Grok Build already run inside BOSS."; then
-    if ( INSTALL_CODING_CLIS=1; install_coding_clis ); then
-      ui_info "Sign in to Codex with: codex login --device-auth   then: boss connect codex"
-    else
-      ui_warn "The coding CLIs were not all installed; the reason is above. BOSS is running."
-    fi
-  fi
 fi
 [[ -z "$_found" ]] || rm -f "$_found"
 

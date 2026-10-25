@@ -116,6 +116,7 @@ _RESEARCH_SOURCE_STATUS_WORDS = {
     "not_declared": "this install does not declare it",
     "runtime_unavailable": "the Claude CLI is not available to this install",
     "login_rejected": "its login was rejected",
+    "key_rejected": "its key was rejected",
 }
 
 
