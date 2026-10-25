@@ -50,10 +50,13 @@ function Stopped({ tone, headline, fix, state }: {
   );
 }
 
-export function SubscriptionSignIn({ provider, label, autoStart = false, onSession }: {
+export function SubscriptionSignIn({ provider, label, autoStart = false, fresh = false, onSession }: {
   provider: string; label: string;
   /** Opened from a row's Sign in: start at once (one press, one effect). */
   autoStart?: boolean;
+  /** Replace the CLI's current session: BOSS signs it out and starts a new login even if the
+   *  CLI says it is signed in (a refused login — "Login expired" — or "Sign in again"). */
+  fresh?: boolean;
   onSession: (session: SignInSession | null) => void;
 }) {
   const { projectId } = useBoard();
@@ -75,7 +78,8 @@ export function SubscriptionSignIn({ provider, label, autoStart = false, onSessi
     setRefusal(null);
     setSession(null);
     try {
-      const started = await setupWrite<SignInSession>(projectId, "sign_in_start", { provider },
+      const started = await setupWrite<SignInSession>(projectId, "sign_in_start",
+                                                      fresh ? { provider, fresh: true } : { provider },
                                                       { label: "Sign in" });
       if (alive.current) setSession(started);
     } catch (error) {

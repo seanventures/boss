@@ -279,7 +279,8 @@ describe("a row whose login failed signs in, never Replace", () => {
     expect(drawer()).not.toBeNull();
     // One press: the drawer opens on Codex and the sign-in has started.
     const start = api.calls.find((c) => c.op === "sign_in_start")!;
-    expect(start.body).toMatchObject({ provider: "codex" });
+    // A refused login is replaced, not trusted: BOSS signs the stale session out first.
+    expect(start.body).toMatchObject({ provider: "codex", fresh: true });
     expect(q(drawer(), "su-signin-open")!.getAttribute("href")).toBe("https://auth.openai.com/codex/device");
     expect(q(row, "su-model-pill")!.textContent).toBe("Signing in…");
     expect(drawer().querySelectorAll('input[type="password"], input[type="file"]').length).toBe(0);
@@ -344,5 +345,67 @@ describe("the Sources badge is the Models row's pill", () => {
     const count = q(document.body, "setup-entitlement-session-count")!;
     expect(count.textContent).toBe("None started here");
     expect(count.querySelector("[data-tip]")!.getAttribute("data-tip")).toMatch(/sign-ins show on their source/);
+  });
+});
+
+
+describe("the live stale Codex login is fixable from the console alone (2026-10-25)", () => {
+  function staleView(): SetupView {
+    // `codex login status` says signed in; the last proof says Login expired.
+    return view((x) => {
+      x.detected = x.detected.map((d) => d.provider === "codex" ? { ...d, found: "signed_in" } : d);
+      x.models = [{ source_id: "openai_codex_chatgpt", provider: "codex", label: "Codex",
+        kind: "subscription", model: null, used_for: ["Build"], pill: PILLS.loginExpired,
+        checked_at: null, source: "connected", retry_at: null }, ...x.models.slice(1)];
+    });
+  }
+  function sourcesApi(v: SetupView) {
+    const api = fakeApi(v);
+    const before = api.answer;
+    api.answer = (call) => call.url.startsWith("/v1/entitlements/sources?") ? { status: 200, body: SOURCES }
+      : call.url.startsWith("/v1/entitlement-connection-sessions?") ? { status: 200, body: { items: [] } }
+      : before(call);
+    return api;
+  }
+  const source = (id: string) => document.querySelector(
+    `[data-testid="setup-cap-source"][data-source="${id}"]`) as HTMLElement;
+
+  it("the drawer never calls a refused login 'Signed in on server'; Sign in replaces it", async () => {
+    const api = fakeApi(staleView());
+    script(api, { start: S.waiting, polls: [S.waiting] });
+    signInTiming.pollMs = 60_000;
+    mounted = await mountBoard(staleView(), "?area=setup&add=codex");
+    expect(q(drawer(), "su-signed-in-on-server")).toBeNull();
+    await click(q(drawer(), "su-signin-start"));
+    expect(api.calls.find((c) => c.op === "sign_in_start")!.body)
+      .toMatchObject({ provider: "codex", fresh: true });
+  });
+
+  it("the Sources row of a Login expired subscription offers Sign in, which runs the same flow", async () => {
+    const api = sourcesApi(staleView());
+    script(api, { start: S.waiting, polls: [S.waiting] });
+    signInTiming.pollMs = 60_000;
+    mounted = await mountBoard(staleView());
+    await settle(() => !!source("openai_codex_chatgpt"));
+    const codex = source("openai_codex_chatgpt");
+    expect(codex.querySelector('[data-testid="setup-cap-badge"]')!.textContent).toBe("Login expired");
+    const signIn = q(codex, "setup-cap-sign-in")!;
+    expect(signIn.textContent).toBe("Sign in");
+    // Not the official-session form (Complete session would mark it connected with no proof).
+    expect(q(codex, "setup-cap-start-open")).toBeNull();
+    await click(signIn);
+    const sheet = q(document.body, "setup-cap-sign-in-drawer")!;
+    expect(sheet).not.toBeNull();
+    expect(api.calls.find((c) => c.op === "sign_in_start")!.body)
+      .toMatchObject({ provider: "codex", fresh: true });
+    expect(q(sheet, "su-signin-open")!.getAttribute("href")).toBe("https://auth.openai.com/codex/device");
+    expect(sheet.querySelectorAll('input[type="password"], input[type="file"]').length).toBe(0);
+  });
+
+  it("a healthy connected subscription offers no Sign in", async () => {
+    sourcesApi(staleView());
+    mounted = await mountBoard(staleView());
+    await settle(() => !!source("xai_grok_build"));
+    expect(q(source("xai_grok_build"), "setup-cap-sign-in")).toBeNull();
   });
 });

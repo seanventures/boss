@@ -25,6 +25,9 @@ import { apiWrite } from "../../lib/api-write";
 import { fetchSetup } from "../../lib/setup-client";
 import { toast, useBoard } from "./parts";
 import { Dot, Tip } from "./pill";
+import { AddModelPanel } from "./add-model-drawer";
+import { Drawer } from "./drawer";
+import { tileOf } from "../../lib/setup-stepper";
 import type { Tone } from "../../lib/setup-types";
 import { useLocalTime } from "../../lib/local-time";
 
@@ -43,6 +46,9 @@ export type CapSource = {
   /** The Models row's own pill for this source, from its last real proof (BOSSAPP-769). When
    *  present it IS the badge: a failed proof never reads "Active · Available". */
   pill?: SourcePill | null;
+  /** The subscription BOSS signs in INSIDE the server for this source (codex | claude_code |
+   *  grok), from the API — its Sign in runs that login, never the official-session form. */
+  signInProvider?: string | null;
 };
 export type SourcePill = { state: string; label: string; tone: Tone; checked_at: string | null };
 const TONES: readonly Tone[] = ["green", "amber", "red", "grey", "busy"];
@@ -71,6 +77,7 @@ export function parseSources(w: unknown): CapSource[] {
       pooled: r.multi_tenant_allowed === true,
       claudeActive: s(o(r.claude_credential).active) || null,
       pill: parsePill(r.pill),
+      signInProvider: s(r.sign_in_provider) || null,
     };
   }).filter((x) => x.sourceId);
 }
@@ -100,6 +107,15 @@ const KIND: Record<string, string> = { api_key: "key", gateway: "gateway", subsc
 export function badgeOf(src: CapSource): { label: string; tone: Tone; proven: boolean } {
   if (src.pill) return { label: src.pill.label, tone: src.pill.tone, proven: true };
   return { ...stateOf(src), proven: false };
+}
+/** A subscription BOSS signs in inside the server, whose login is missing or refused: its row
+ *  offers Sign in (a fresh in-container login — the stale session is signed out first). */
+export function offersSignIn(src: CapSource): boolean {
+  if (!src.signInProvider) return false;
+  const state = src.pill?.state ?? "";
+  if (["login_expired", "key_rejected", "needs_sign_in", "not_checked", "legacy_token"].includes(state)) return true;
+  if (["login_rejected", "key_rejected"].includes(src.effective)) return true;
+  return src.connection !== "connected";
 }
 export function stateOf(src: CapSource): { label: string; tone: "green" | "amber" | "red" | "grey" } {
   // A stored key reads as what it is: connected. The key itself is never shown.
@@ -285,6 +301,7 @@ export const CapacityRow = forwardRef<HTMLElement, { actor?: string; focused: bo
   const [locked, setLocked] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
   const [disconnecting, setDisconnecting] = useState<string | null>(null);
+  const [signingIn, setSigningIn] = useState<string | null>(null);
   const who = actor || "ceo";
 
   const load = useCallback(async () => {
@@ -414,11 +431,17 @@ export const CapacityRow = forwardRef<HTMLElement, { actor?: string; focused: bo
                     {src.credentialPresent ? "Replace key" : "Add key"}
                   </GatedButton>
                 ) : null}
+                {offersSignIn(src) ? (
+                  <GatedButton permission="model_provider:manage" type="button" className="su-btn su-btn-sm" data-testid="setup-cap-sign-in"
+                          title="Signs this subscription in again on the BOSS server: the old session is signed out, you open the link and enter the code, then Connect proves it."
+                          data-tip="Signs this subscription in again on the BOSS server: the old session is signed out, you open the link and enter the code, then Connect proves it."
+                          onClick={() => setSigningIn(src.signInProvider!)}>Sign in</GatedButton>
+                ) : null}
                 {isLogin(src) && src.connection === "connected" ? (
                   <GatedButton permission="entitlement:manage" type="button" className="su-btn su-btn-sm" data-testid="setup-cap-disconnect"
                           onClick={() => setDisconnecting(src.sourceId)}>Disconnect session</GatedButton>
                 ) : null}
-                {isLogin(src) && src.connection !== "connected" ? (
+                {isLogin(src) && src.connection !== "connected" && !src.signInProvider ? (
                   <GatedButton permission="entitlement:manage" type="button" className="su-btn su-btn-sm" aria-expanded={editing} data-testid="setup-cap-start-open"
                           onClick={() => edit(src.sourceId, editing)}>Sign in</GatedButton>
                 ) : null}
@@ -430,7 +453,7 @@ export const CapacityRow = forwardRef<HTMLElement, { actor?: string; focused: bo
                              `setup:cap:${src.sourceId}`),
                   src.credentialPresent ? "Credential rotated" : "Credential stored")} />
               ) : null}
-              {editing && isLogin(src) && src.connection !== "connected" ? (
+              {editing && isLogin(src) && src.connection !== "connected" && !src.signInProvider ? (
                 <StartForm src={src} onStart={async (mode, scopes) => { await after(
                   await post(`/v1/entitlements/sources/${encodeURIComponent(src.sourceId)}/connection-sessions`,
                              { project_id: projectId, connection_mode: mode || undefined, requested_scopes: scopes, actor: who },
@@ -487,6 +510,15 @@ export const CapacityRow = forwardRef<HTMLElement, { actor?: string; focused: bo
           <a className="su-link" href="?area=skills" data-testid="setup-broker-skills-link">Skills ↗</a>
         </div>
       </div>
+      {signingIn ? (
+        // THE SAME SIGN IN AS THE MODELS ROW: the provider's own login inside BOSS (link + code),
+        // then Connect proves it — fixable from the console alone, no terminal.
+        <Drawer title="Sign in" onClose={() => { setSigningIn(null); void load(); }} testid="setup-cap-sign-in-drawer">
+          <AddModelPanel key={`cap-sign-in:${signingIn}`} initialTile={tileOf(view, signingIn)}
+                         initialProvider={signingIn} startSignIn
+                         onDone={() => { setSigningIn(null); void load(); }} />
+        </Drawer>
+      ) : null}
     </section>
   );
 });

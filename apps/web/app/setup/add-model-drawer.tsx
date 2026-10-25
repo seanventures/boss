@@ -141,7 +141,12 @@ export function AddModelPanel({ initialTile, initialProvider, onDone, replaceSou
   const chips = view.catalogue.filter((c) => c.kind === tile);
   // Codex, Claude Code and Grok sign in here; another subscription (Cursor) is detected only.
   const signsIn = tile === "subscription" && SIGN_IN_PROVIDERS.has(provider);
-  const detectedIn = detected?.found === "signed_in";
+  // A LOGIN THE LAST PROOF REFUSED IS NOT A SIGN-IN, whatever `<cli> login status` says (the
+  // live Codex loop: "Signed in on server" → Connect → Login expired → Connect …). The row's own
+  // pill decides, as everywhere; the Sign in that follows replaces the dead session (fresh).
+  const refusedLogin = view.models.some((m) => m.provider === provider
+    && (m.pill.state === "login_expired" || m.pill.state === "key_rejected"));
+  const detectedIn = detected?.found === "signed_in" && !refusedLogin;
   const signedIn = session?.state === "signed_in" || (detectedIn && !again);
   const notOnServer = detected?.found === "not_on_server";
 
@@ -325,7 +330,8 @@ export function AddModelPanel({ initialTile, initialProvider, onDone, replaceSou
         {signsIn && !notOnServer && (!detectedIn || again || session) ? (
           <SubscriptionSignIn key={`${provider}:${attempt}`} provider={provider}
                               label={entry?.label ?? provider}
-                              autoStart={startSignIn && attempt === 0} onSession={setSession} />
+                              autoStart={startSignIn && attempt === 0}
+                              fresh={startSignIn || again || refusedLogin} onSession={setSession} />
         ) : null}
         {result ? <Pill pill={result} testid="su-connect-result" /> : null}
 
