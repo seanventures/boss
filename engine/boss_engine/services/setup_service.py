@@ -926,6 +926,19 @@ def connect_coding_agent(
             f"{found['next_step']}")
     from .cli_harness import LEGACY_TOKEN_FIX, legacy_token_stored
 
+    if legacy_token_stored(spec, settings) and found.get("authenticated") is True:
+        # THE OPERATOR SIGNED IN AND PRESSED CONNECT: the CLI's own login supersedes the
+        # imported token, which would otherwise shadow it in every run. Retire it here
+        # (recorded), instead of sending them to a Disconnect that only covers one project
+        # and then to a terminal command for a sign-in they have just made.
+        from .claude_credential import retire_legacy_token
+        from .core import emit_event
+
+        retired = retire_legacy_token(connection, settings, actor=actor)
+        emit_event(connection, project_id, "entitlement.legacy_token_retired", actor,
+                   "entitlement_source", spec.entitlement_source_id or provider,
+                   {"provider": provider, "references_revoked": retired,
+                    "reason": "superseded by the CLI's own sign-in inside BOSS"})
     if legacy_token_stored(spec, settings):
         # A RETIRED IMPORT IS NOT A SIGN-IN. `claude` reads a stored CLAUDE_CODE_OAUTH_TOKEN
         # ahead of its own login, so proving now would prove that token, not the login the

@@ -443,3 +443,46 @@ def forget_subscription_login(connection: Any, settings: Any, project_id: str, *
                 "could not delete the stored %s from its store: %s", TOKEN_NAME,
                 type(exc).__name__)
     return len(rows)
+
+
+def retire_legacy_token(connection: Any, settings: Any, *, actor: str) -> int:
+    """Retire the token the retired setup-token import stored, EVERYWHERE it is stored.
+
+    Called when the operator presses Connect after signing the CLI in inside BOSS: that login
+    supersedes the imported token, but `claude` reads a stored CLAUDE_CODE_OAUTH_TOKEN ahead
+    of its own login, so while the token is stored the new login can never be proved. The
+    token is install-wide (looked up by name), so every project's reference goes, under both
+    names it was written with; a per-project Disconnect from another project left it in place
+    and the console's Connect refused forever. Returns how many references were revoked.
+    Never logs a value.
+    """
+    import logging
+
+    from sqlalchemy import text
+
+    from .cli_harness import SUBSCRIPTION_SECRET_SCOPE
+    from .secret_backends import SecretNotFound, backend_for, pick_default_backend
+    from .secrets_service import ref_key_for
+
+    keys = (TOKEN_NAME, ref_key_for(SUBSCRIPTION_SECRET_SCOPE, TOKEN_NAME))
+    rows = connection.execute(text(
+        "UPDATE secret_refs SET status = 'revoked', revoked_at = now(), revoked_by = :a "
+        "WHERE ref_key = ANY(:k) AND status <> 'revoked' "
+        "RETURNING id, project_id, ref_key, storage_backend, ref_kind"),
+        {"a": actor, "k": list(keys)}).mappings().all()
+    stores = {str(row["storage_backend"] or row["ref_kind"]) for row in rows}
+    try:
+        stores.add(pick_default_backend(settings)[0])
+    except Exception:  # noqa: BLE001 — the rows above are revoked either way
+        pass
+    for kind in stores:
+        for key in keys:
+            try:
+                backend_for(kind, settings).delete(key)
+            except SecretNotFound:
+                continue
+            except Exception as exc:  # noqa: BLE001 — revoked in BOSS either way
+                logging.getLogger(__name__).warning(
+                    "could not delete the stored %s from %s: %s", TOKEN_NAME, kind,
+                    type(exc).__name__)
+    return len(rows)

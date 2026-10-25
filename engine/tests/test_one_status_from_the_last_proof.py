@@ -502,3 +502,43 @@ def test_disconnect_removes_the_legacy_token(scope, monkeypatch):
     with e.begin() as c:
         broker.disconnect_source(c, p, "anthropic_claude_code", actor="usr_owned_owner")
     assert cli_harness.legacy_token_stored(spec, s) is False
+
+
+def test_connect_after_a_fresh_sign_in_retires_the_legacy_token(monkeypatch):
+    """Signed in inside BOSS (the CLI's own login: "claude.ai") with a legacy token still
+    stored: Connect retires the token, recorded, and goes on to prove the login. It used to
+    refuse and send the operator to a per-project Disconnect plus a terminal command."""
+    spec = cli_harness.BUILTIN_CLI_HARNESSES["claude_code"]
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    monkeypatch.setattr(cli_harness.shutil, "which", lambda _b: "/usr/bin/claude")
+    monkeypatch.setattr(cli_harness, "_run_probe", lambda _b, args, **_k: (
+        (0, "2.1.197 (Claude Code)") if args == spec.version_args else
+        (0, json.dumps({"loggedIn": True, "authMethod": "claude.ai"}))))
+    stored = {"token": True}
+    monkeypatch.setattr(cli_harness, "stored_credential",
+                        lambda _s, _n, **_k: "legacy-token-value" if stored["token"] else None)
+    retired, events = [], []
+
+    from boss_engine.services import claude_credential, core
+
+    def retire(_c, _s, *, actor):
+        retired.append(actor)
+        stored["token"] = False
+        return 2
+
+    monkeypatch.setattr(claude_credential, "retire_legacy_token", retire)
+    monkeypatch.setattr(core, "emit_event", lambda *a, **_k: events.append(a[2]) or "evt")
+
+    class Proved(Exception):
+        pass
+
+    def prove():
+        raise Proved()
+
+    # Past the legacy gate it reaches the proof (which needs a real database connection).
+    with pytest.raises((Proved, setup_service.SetupError)) as caught:
+        setup_service.connect_coding_agent(None, Settings(), "p", "claude_code",
+                                           actor="operator", prove_with=prove)
+    assert "legacy" not in str(caught.value)
+    assert retired == ["operator"]
+    assert events == ["entitlement.legacy_token_retired"]
