@@ -256,14 +256,15 @@ def prepare(engine, settings, scenario: dict, model_settings: dict) -> str:
                             "workflow_versions v ON v.workflow_definition_id = d.id "
                             "LIMIT 1")).mappings().first()
         # The world, fresh: this scenario's rows only.
-        for table in ("workflow_step_runs", "workflow_runs", "code_task_runs", "decisions",
-                      "deployment_targets", "plans"):
+        for table in CLEARED_TABLES:
             c.execute(text(f"DELETE FROM {table} WHERE project_id = :p"), {"p": pid})
         c.execute(text("DELETE FROM events WHERE project_id = :p AND actor = 'battle'"),
                   {"p": pid})
         seed = scenario.get("seed") or {}
-        for table in ("deployment_targets", "workflow_runs", "workflow_step_runs",
-                      "code_task_runs", "decisions", "events", "plans"):
+        unknown = sorted(set(seed) - set(SEED_TABLES))
+        if unknown:
+            raise ValueError(f"{scenario.get('id')}: the runner does not seed {unknown}")
+        for table in SEED_TABLES:
             for raw in seed.get(table) or []:
                 row = {**raw, "project_id": pid}
                 if table == "workflow_runs":
@@ -281,6 +282,14 @@ def prepare(engine, settings, scenario: dict, model_settings: dict) -> str:
                 c.execute(text(f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({values})"),
                           _jsonable(row))
     return pid
+
+
+#: The tables a scenario's `seed` may write, in insert order (a seed naming any other table
+#: is refused, never silently ignored), and the ones cleared before each scenario.
+SEED_TABLES = ("deployment_targets", "workflow_runs", "workflow_step_runs", "code_task_runs",
+               "decisions", "events", "plans", "boss_recommendations")
+CLEARED_TABLES = ("workflow_step_runs", "workflow_runs", "code_task_runs", "decisions",
+                  "deployment_targets", "plans", "boss_recommendations")
 
 
 # ── The surfaces ──────────────────────────────────────────────────────────────────────────────

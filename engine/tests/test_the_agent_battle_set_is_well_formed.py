@@ -40,3 +40,15 @@ def test_every_recorded_misbehaviour_is_battle_tested_with_many_phrasings():
         assert len(asked or []) >= 8, (b["id"], "needs at least 8 phrasings/variants")
         for neg in b.get("negatives") or []:
             assert neg.get("expected") and (neg.get("input") or neg.get("variant")), b["id"]
+
+
+def test_every_seeded_table_is_one_the_runner_seeds():
+    """A seed the runner ignores tests nothing: boss_recommendations rows were not seeded."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "agent_battle", Path(__file__).resolve().parents[2] / "scripts" / "agent_battle.py")
+    runner = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(runner)
+    for b in yaml.safe_load(BATTLE.read_text()):
+        assert set(b.get("seed") or {}) <= set(runner.SEED_TABLES), (b["id"], b.get("seed"))

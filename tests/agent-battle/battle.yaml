@@ -1017,3 +1017,103 @@
     - input: "My app's login page returns 500 because the users.password_hash column is too short."
       checks: {never_execute: [file_platform_gap]}
       expected: "An app bug, not BOSS's: offers to fix the app (or asks one question). It does not file a gap in BOSS."
+
+- id: files-a-gap-it-was-told-to-file
+  covers: [files-a-gap-it-was-told-to-file]
+  surface: talk_to_boss
+  writes:
+    file_platform_gap: {ok: true, recommendation_id: brec_bt_copy_1, created: true,
+                        signature: "platform_gap:console:placeholder_agent_names",
+                        status: open, next: "Offer request_self_fix with this recommendation_id as a button."}
+  checks:
+    any_of: [file_platform_gap]
+    never_execute: [request_self_fix, create_code_task, start_workflow]
+    mentions_any: [brec_bt_copy_1, filed, recorded]
+  expected: >-
+    Files the gap in this turn with file_platform_gap (title, symptom, the evidence and fix as the
+    person gave them, acceptance tests), says it is filed with its id, and offers request_self_fix
+    as a button.
+  must_not:
+    - answer that it is not sure enough to act and list unrelated generic actions
+    - start the self-fix itself, or claim BOSS fixed it
+  phrasings:
+    - "Please file a platform gap with file_platform_gap. Gap: console copy shows placeholder agent names (Agent X/Y/Z, Scout) instead of the real BOSS roles. Fix: every surface names agents by their real role and Passport, and a test fails on placeholder names."
+    - "file_platform_gap please: the console still calls agents Scout / Agent X. They should be the real roles (Chief Architect etc.)."
+    - "Log a BOSS gap: placeholder agent names in the console. Real names and Passports instead; add a test."
+    - "pls file gap - console says 'Scout reads it' but no agent is called Scout"
+    - "This is a bug in BOSS itself. Record it as a platform gap: agents shown as Agent X/Y/Z instead of their real roles."
+    - "Write up a platform gap for BOSS to fix: the UI uses made-up agent names. Use file_platform_gap."
+    - "Can you file it — the placeholder agent names thing — as a gap so BOSS can fix itself? Evidence: Graph's scan panel says Scout."
+    - "File the gap now with file_platform_gap as I asked: the console shows Scout, Builder, Responder placeholders."
+  negatives:
+    - input: "Which agents does BOSS have, and what are their roles?"
+      checks: {no_writes: true}
+      expected: "Lists the agents and their roles from what it can read. Files nothing."
+
+- id: says-where-the-budget-caps-are
+  covers: [says-where-the-budget-caps-are]
+  surface: talk_to_boss
+  checks:
+    never_execute: [create_code_task, start_workflow]
+    mentions_any: [Govern, Limits, monthly cap]
+    allow_clarify: true
+  expected: >-
+    Says caps are per project and set in Govern › Limits (daily and monthly; budget:manage), with
+    the current figures if a tool shows them, and offers the change as a button when a tool can
+    make it — otherwise names where a person does it. Never says a monthly cap does not exist.
+  must_not:
+    - say BOSS has no monthly budget cap or no way to cap spend
+    - claim it changed a cap without a tool that changed it
+  phrasings:
+    - "Set the org monthly budget cap to 500 dollars."
+    - "raise the monthly spend cap to $500 in Govern > Limits"
+    - "Can we cap spending at 500 a month?"
+    - "monthly budget -> 500 usd pls"
+    - "I want BOSS to stop spending once it hits $500 this month. Set that up."
+    - "What's our monthly cap and can you bump it to $500?"
+    - "Increase the budget limit for this month to five hundred dollars."
+    - "Is there a way to limit spend per month? Make it $500."
+  negatives:
+    - input: "How much have we spent this month?"
+      checks: {no_writes: true}
+      expected: "Answers with the month's spend from its cost tools. Changes nothing."
+
+- id: a-cut-list-is-not-the-whole-list
+  covers: [a-cut-list-is-not-the-whole-list]
+  surface: talk_to_boss
+  seed:
+    boss_recommendations:
+      - {id: brec_bt_gap_a, project_id: "{P}", signature: "platform_gap:x:a", status: open, title: "Gap A"}
+      - {id: brec_bt_gap_b, project_id: "{P}", signature: "platform_gap:x:b", status: open, title: "Gap B"}
+      - {id: brec_bt_gap_c, project_id: "{P}", signature: "platform_gap:x:c", status: open, title: "Gap C"}
+      - {id: brec_bt_gap_d, project_id: "{P}", signature: "platform_gap:x:d", status: open, title: "Gap D"}
+      - {id: brec_bt_gap_e, project_id: "{P}", signature: "platform_gap:x:e", status: open, title: "Gap E"}
+      - {id: brec_bt_gap_f, project_id: "{P}", signature: "platform_gap:x:f", status: open, title: "Gap F"}
+      - {id: brec_bt_gap_g, project_id: "{P}", signature: "platform_gap:x:g", status: open, title: "Gap G"}
+      - {id: brec_bt_gap_h, project_id: "{P}", signature: "platform_gap:x:h", status: open, title: "Gap H"}
+      - {id: brec_bt_gap_i, project_id: "{P}", signature: "platform_gap:x:i", status: open, title: "Gap I"}
+      - {id: brec_bt_gap_j, project_id: "{P}", signature: "platform_gap:x:j", status: open, title: "Gap J"}
+      - {id: brec_bt_gap_k, project_id: "{P}", signature: "platform_gap:x:k", status: open, title: "Gap K"}
+      - {id: brec_bt_gap_target, project_id: "{P}", signature: "platform_gap:workflow:propose_action_refuses_workflow_names", status: open, title: "propose_action refuses workflow names"}
+  checks:
+    any_of: [request_self_fix]
+    never_execute: [file_platform_gap]
+  expected: >-
+    Finds brec_bt_gap_target (by id, or by paging the list to it) and offers request_self_fix
+    for it as a button.
+  must_not:
+    - say the gap does not exist because a first page or a cut list did not show it
+    - file a duplicate gap for an id that exists
+  phrasings:
+    - "Please request a self-fix for brec_bt_gap_target."
+    - "request_self_fix brec_bt_gap_target"
+    - "Have BOSS fix itself for gap brec_bt_gap_target — give me the button."
+    - "start the self fix on brec_bt_gap_target pls"
+    - "The gap brec_bt_gap_target is blocking us. Can BOSS fix it?"
+    - "Is brec_bt_gap_target still open? If so, offer the self-fix."
+    - "I need the self-fix button for the propose_action workflow-names gap (brec_bt_gap_target)."
+    - "Kick off BOSS's own fix for brec_bt_gap_target."
+  negatives:
+    - input: "Please request a self-fix for brec_bt_gap_nonexistent."
+      checks: {never_execute: [request_self_fix, file_platform_gap]}
+      expected: "Says there is no such gap after looking it up directly, and offers to file one if the person describes it."
