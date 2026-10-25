@@ -136,4 +136,6 @@ def register_captain_tools(reg) -> None:
             # A drive may start a build, which spends; the rest are redone by running again.
             reversibility="costs_money" if operator_only else "safe",
             requires_durable_workspace=True, permission=permission,
-            operator_only=operator_only))
+            operator_only=operator_only,
+            offer_note=("it applies moves a person has not seen one by one, and a build may "
+                        "start" if operator_only else "")))

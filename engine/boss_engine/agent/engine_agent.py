@@ -32,6 +32,7 @@ from typing import Any, Callable, Optional
 from .._compat import services_module
 from ..services import protocol_reply
 from ..tools import ToolError, ToolRegistry, build_discuss_read_registry
+from ..tools.registry import offer_warning
 
 
 _UNSCOPED_SQL_TOOLS = frozenset({"query_db", "write_db"})
@@ -351,12 +352,6 @@ def _step_label(name: str, args: dict) -> str:
     return f"{friendly} — {subject}" if subject else friendly
 
 
-#: Why a tool came back as an offer, in the words the operator should read.
-_WHY_NOT_SELF_EXECUTED = {
-    "destroys_work": "throws away work in flight, or removes a control — the operator decides",
-    "irreversible": "cannot be undone once done — the operator decides",
-    "grants_authority": "gives an agent reach on somebody's account — the operator decides",
-}
 
 
 class StreamedAnswer:
@@ -946,9 +941,8 @@ class EngineAgent:
             return {
                 "ok": True, "proposed": True, "tool": name, "args": args,
                 "label": _propose_label(name, args),
-                "why": _WHY_NOT_SELF_EXECUTED.get(
-                    spec.reversibility,
-                    "destroys work or removes a safeguard — the operator decides"),
+                # One true sentence per reversibility class (registry.offer_warning).
+                "why": offer_warning(spec),
                 "note": (f"NOT run. {name} is declared '{spec.reversibility}', so it is ALWAYS "
                          "offered as a button and never performed by you, whatever was asked. "
                          "Say plainly what you are offering and why you think it is right — and "

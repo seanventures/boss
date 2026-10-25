@@ -593,7 +593,9 @@ def _register_read_tools(reg: ToolRegistry) -> None:
         _obj({"recommendation_id": {"type": "string", "description": "brec_… of an open gap"}},
              ["recommendation_id"]),
         kind="write", reversibility="costs_money", permission="improvement:manage",
-        operator_only=True)
+        operator_only=True,
+        offer_note="it only diagnoses and proposes a fix, and nothing installs without a "
+                   "person's approval of the diff")
     def request_self_fix(ctx, *, project_id, actor, args):
         sf = services_module("self_fix")
         rec_id = str(args.get("recommendation_id") or "").strip()
@@ -8620,6 +8622,8 @@ def build_discuss_read_registry(*, edition: str | None = None) -> ToolRegistry:
                 # registry path) and a second key a route checks were never asked for.
                 permission_by_arg=spec.permission_by_arg,
                 also_requires=spec.also_requires,
+                # ...AND THE TOOL'S OWN TRUE WORDS ON ITS BUTTON (offer_warning).
+                offer_note=spec.offer_note,
             )
         )
     return reg
