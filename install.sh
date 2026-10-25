@@ -1425,6 +1425,20 @@ fi
 # directory exists before Compose mounts it, so Docker never creates it as root. Empty until
 # `boss self-fix seed`; nothing in it is secret.
 mkdir -p .boss/selfsrc && chmod 755 .boss .boss/selfsrc
+# >>> self-fix mirror refresh
+# A SEEDED MIRROR FOLLOWS THE RELEASE (brec_069e56332d714ad08c01): an upgrade reruns this
+# installer at the new commit, and a mirror left on the old one makes a self-fix diagnose and
+# patch code that is no longer running. Only a mirror someone seeded is refreshed; failing to
+# refresh it never stops the install.
+if [[ -f .boss/selfsrc/boss.git/HEAD ]]; then
+  if command -v python3 >/dev/null 2>&1 &&
+     python3 scripts/install/self_fix_installer.py --dir "$PWD" seed </dev/null >/dev/null 2>&1; then
+    ui_ok "Self-fix source mirror refreshed to $(git rev-parse --short=12 HEAD 2>/dev/null)"
+  else
+    ui_warn "Self-fix source mirror was not refreshed; a self-fix may read older code. Run: boss self-fix seed"
+  fi
+fi
+# <<< self-fix mirror refresh
 
 # Start only the database and API for bootstrap. A fresh worker cannot poll
 # before the default project and its actor memberships exist.
