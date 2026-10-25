@@ -3710,7 +3710,50 @@ export type EntitlementSourceSummary = {
   runtime_supported: boolean;
   created_at: string;
   updated_at: string;
+  /** The SAME pill the Models row shows for this source, decided from its last real proof
+   *  (BOSSAPP-769). null when the source has no Models row; absent on an older API. */
+  pill?: EntitlementSourcePill | null;
 };
+
+/** A source's proven state, as the Models row shows it (GET /v1/entitlements/sources `pill`). */
+export type EntitlementSourcePill = {
+  state: string;
+  label: string;
+  tone: "green" | "amber" | "red" | "grey" | "busy";
+  checked_at: string | null;
+};
+
+// ── SUBSCRIPTION SIGN-IN (BOSSAPP-769) ──────────────────────────────────────────────────────
+// The provider's own login runs inside the BOSS server; nothing is pasted, dropped or imported.
+// POST /v1/setup/sign-in, GET|DELETE /v1/setup/sign-in/{id}, POST /v1/setup/sign-in/{id}/code.
+
+export type SignInProvider = "codex" | "claude_code" | "grok";
+
+export type SignInState = "starting" | "waiting" | "signed_in" | "failed" | "expired" | "cancelled";
+
+export type SignInSession = {
+  sign_in_id: string;
+  provider: SignInProvider;
+  state: SignInState;
+  /** The URL the provider's CLI printed (open in a browser). */
+  verification_url: string | null;
+  /** The one-time code it printed (not a credential). */
+  user_code: string | null;
+  /** True when the CLI waits for a code pasted back. */
+  needs_code_input: boolean;
+  /** ISO. */
+  expires_at: string | null;
+  /** One plain sentence each, always set. */
+  headline: string;
+  fix: string;
+};
+
+export type SignInStartRequest = { project_id: string; actor?: string; provider: SignInProvider };
+export type SignInCodeRequest = { project_id: string; code: string };
+
+/** GET /v1/setup `detected[].found`: a subscription is signed in, needs a sign-in, or its CLI is
+ *  not on the server; a local model is found or not. */
+export type SetupDetectedFound = "signed_in" | "needs_sign_in" | "not_on_server" | "found";
 
 export type EntitlementSourceListResponse = {
   project_id: string;

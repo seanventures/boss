@@ -1,0 +1,45 @@
+{
+  "_about": "SignInSession answers of /v1/setup/sign-in (BOSSAPP-769 contract), one per state the console draws.",
+  "starting": {
+    "sign_in_id": "si_codex_1", "provider": "codex", "state": "starting",
+    "verification_url": null, "user_code": null, "needs_code_input": false,
+    "expires_at": "2026-10-04T12:15:00Z",
+    "headline": "Starting the Codex sign-in", "fix": "Wait a moment."
+  },
+  "waiting": {
+    "sign_in_id": "si_codex_1", "provider": "codex", "state": "waiting",
+    "verification_url": "https://auth.openai.com/codex/device", "user_code": "ABCD-1234",
+    "needs_code_input": false, "expires_at": "2026-10-04T12:15:00Z",
+    "headline": "Waiting for you to approve", "fix": "Open the page, enter the code, approve."
+  },
+  "waiting_for_code": {
+    "sign_in_id": "si_claude_1", "provider": "claude_code", "state": "waiting",
+    "verification_url": "https://claude.ai/oauth/authorize?code=true", "user_code": null,
+    "needs_code_input": true, "expires_at": "2026-10-04T12:15:00Z",
+    "headline": "Waiting for the code", "fix": "Approve in the browser, then paste the code it shows."
+  },
+  "signed_in": {
+    "sign_in_id": "si_codex_1", "provider": "codex", "state": "signed_in",
+    "verification_url": null, "user_code": null, "needs_code_input": false, "expires_at": null,
+    "headline": "Signed in on the BOSS server", "fix": "Press Connect to check it."
+  },
+  "failed": {
+    "sign_in_id": "si_codex_1", "provider": "codex", "state": "failed",
+    "verification_url": null, "user_code": null, "needs_code_input": false, "expires_at": null,
+    "headline": "Codex refused the sign-in", "fix": "Sign in again with the ChatGPT account that has Codex."
+  },
+  "expired": {
+    "sign_in_id": "si_codex_1", "provider": "codex", "state": "expired",
+    "verification_url": null, "user_code": null, "needs_code_input": false, "expires_at": "2026-10-04T12:15:00Z",
+    "headline": "The code expired", "fix": "Press Try again for a new code."
+  },
+  "cancelled": {
+    "sign_in_id": "si_codex_1", "provider": "codex", "state": "cancelled",
+    "verification_url": null, "user_code": null, "needs_code_input": false, "expires_at": null,
+    "headline": "Sign-in cancelled", "fix": "Press Sign in to start again."
+  },
+  "refused_not_installed": {
+    "state": "cli_missing", "headline": "Grok is not on the BOSS server",
+    "fix": "Install the grok CLI on the server, then sign in."
+  }
+}

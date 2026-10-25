@@ -1,0 +1,25 @@
+{
+  "_about": "GET /v1/entitlements/sources on the live install of 2026-10-24 (model-connection-audit.md): the Codex login is dead, its record still reads active/available, and the row's pill carries the proof.",
+  "project_id": "p",
+  "items": [
+    { "id": "es_codex", "project_id": "p", "provider": "openai", "source_id": "openai_codex_chatgpt",
+      "source_kind": "subscription", "status": "active", "effective_status": "active",
+      "auth_method": "official_cli_oauth", "connection_status": "connected", "oauth_scopes": [],
+      "connection_metadata": {}, "runtime_supported": true, "multi_tenant_allowed": false,
+      "observed_capacity": { "credential_present": true, "capacity_state": "available" },
+      "supported_models": ["gpt-5-codex"],
+      "pill": { "state": "login_expired", "label": "Login expired", "tone": "red", "checked_at": "2026-10-04T11:00:00Z" } },
+    { "id": "es_anthropic", "project_id": "p", "provider": "anthropic", "source_id": "anthropic_api",
+      "source_kind": "api_key", "status": "active", "effective_status": "active",
+      "auth_method": "api_key", "connection_status": "configured", "oauth_scopes": [],
+      "connection_metadata": {}, "runtime_supported": true, "multi_tenant_allowed": true,
+      "observed_capacity": { "credential_present": true, "capacity_state": "available" },
+      "supported_models": ["claude-sonnet-4-5"],
+      "pill": { "state": "working", "label": "Working", "tone": "green", "checked_at": "2026-10-04T11:00:00Z" } },
+    { "id": "es_grok", "project_id": "p", "provider": "xai", "source_id": "xai_grok_build",
+      "source_kind": "subscription", "status": "active", "effective_status": "active",
+      "auth_method": "official_cli_oauth", "connection_status": "connected", "oauth_scopes": [],
+      "connection_metadata": {}, "runtime_supported": true, "multi_tenant_allowed": false,
+      "observed_capacity": { "capacity_state": "available" }, "supported_models": [], "pill": null }
+  ]
+}

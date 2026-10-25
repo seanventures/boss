@@ -147,6 +147,9 @@ export const WRITE_OPS: Readonly<Record<string, Readonly<Record<string, WriteGat
     ci_workflows: "github:connect", build_database: "settings:update", build_speed: "settings:update",
     release_hold: "entitlement:manage", embedding_model: "model_provider:manage",
     embedding_model_check: "model_provider:manage", embedding_model_remove: "model_provider:manage",
+    // Subscription Sign in (BOSSAPP-769): the same permission as POST /v1/setup/models.
+    sign_in_start: "model_provider:manage", sign_in_code: "model_provider:manage",
+    sign_in_cancel: "model_provider:manage",
   },
   // lib/improve.ts `improveWrite(op, …)` → /api/improve (lib/improve-ops.ts)
   "lib/improve.ts#improveWrite": {
