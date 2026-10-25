@@ -401,6 +401,31 @@ def test_node_detail_groups_connections_pages_them_and_names_what_is_not_embedde
     assert all(i["kind"] != "decision" for g in hidden["connections"] for i in g["items"])
 
 
+def test_a_class_detail_lists_its_members_from_the_tree_and_its_methods_edges_rolled_up(connection, built):
+    """The index draws ``defines`` file -> symbol only: a class's members come from the tree
+    rollup and its calls from the class-level rollup (tester round 3: "declares no methods")."""
+    ledger = _id(connection, "core/src/bank/core/Ledger.java", "Ledger")
+    d = view.node_detail(connection, P, ledger)
+    groups = {(g["kind"], g["direction"]): g for g in d["connections"]}
+    members = groups[("defines", "out")]
+    assert members["total"] == 2 and [i["label"] for i in members["items"]] == ["post()", "validate()"]
+    assert all(i["symbol_kind"] == "method" for i in members["items"])
+    called = groups[("calls", "in")]
+    assert called["label"] == "Called by" and {i["label"] for i in called["items"]} == {"Disbursement"}
+    # The file that defines it is still there; no group is listed twice.
+    assert ("defines", "in") in groups
+    assert len(groups) == len(d["connections"])
+    page = view.node_detail(connection, P, ledger, edge="defines", direction="out", offset=1)
+    assert [g["kind"] for g in page["connections"]] == ["defines"]
+    assert [i["label"] for i in page["connections"][0]["items"]] == ["validate()"]
+    plan = view.node_detail(connection, P, _id(connection, "loan/src/bank/loan/DisbursementPlan.java", "DisbursementPlan"))
+    plan_groups = {(g["kind"], g["direction"]): g for g in plan["connections"]}
+    assert {i["label"] for i in plan_groups[("calls", "out")]["items"]} == {"Disbursement"}
+    assert {i["label"] for i in plan_groups[("extends", "out")]["items"]} == {"Disbursement"}
+    focus = view.neighbourhood(connection, P, ledger)
+    assert focus["center"]["counts"] == {"methods": 2}
+
+
 # ── tree ────────────────────────────────────────────────────────────────────────────────────
 
 def test_the_tree_loads_lazily_and_a_search_opens_to_its_matches(connection, built):

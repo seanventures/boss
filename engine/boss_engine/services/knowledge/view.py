@@ -457,7 +457,14 @@ def neighbourhood(connection: Connection, project_id: str, node: str, *, depth: 
     if tree and tree["level"] == "class":
         walk.rollup("class", tree["key"], center)
         walk.attached(tree, center["id"])
-        return walk.result(center, "class")
+        out = walk.result(center, "class")
+        # What it holds, so a class whose methods only call each other still says so.
+        counts = {"methods": int(tree.get("method_count") or 0)}
+        out["center"]["counts"] = counts
+        for n in out["nodes"]:
+            if n["id"] == center["id"]:
+                n["counts"] = counts
+        return out
     if tree and tree["level"] == "method":
         owner = None
         if tree["parent_key"] and not _is_rollup_key(tree["parent_key"]):
@@ -703,8 +710,11 @@ def node_detail(connection: Connection, project_id: str, node_id: str, *, edge: 
         "area": tree["area"] if tree else None,
         "package": (tree["package"] if tree else None) or (attrs.get("module") if layer == "code" else None),
         "language": attrs.get("lang") or attrs.get("language"),
-        "connections": _connections(connection, project_id, node_id, edge=edge, direction=direction,
-                                    offset=offset, withheld=withheld),
+        "connections": _class_connections(connection, project_id, tree, node_id, edge=edge, direction=direction,
+                                          offset=offset, withheld=withheld)
+        if tree and tree["level"] == "class" else
+        _connections(connection, project_id, node_id, edge=edge, direction=direction,
+                     offset=offset, withheld=withheld),
         "vector": _vector(connection, project_id, row, layer, withheld, settings),
         "usage": _usage(connection, project_id, node_id),
         "provenance": _provenance(connection, project_id, row, attrs),
@@ -762,6 +772,74 @@ def _connections(connection: Connection, project_id: str, node_id: str, *, edge:
             items[(r["edge_kind"], way)].append(node_payload(r))
     return [{"kind": kind, "direction": way, "label": _group_label(kind, way),
              "total": totals[(kind, way)], "items": items.get((kind, way), [])} for kind, way in wanted]
+
+
+#: The class-level rollup kinds and the direct edge kinds each one already counts.
+_ROLLED_UP = {"calls": ("calls", "dispatches_to"), "imports": ("imports",), "extends": ("extends", "implements")}
+
+
+def _class_connections(connection: Connection, project_id: str, tree: Mapping[str, Any], node_id: str, *,
+                       edge: Optional[str], direction: Optional[str], offset: int,
+                       withheld: frozenset[str]) -> list[dict[str, Any]]:
+    """A class's (interface's, enum's, record's) connections, from what it CONTAINS.
+
+    The index draws ``defines`` from the file to every symbol, never from a class to its methods
+    (code_index.py), and a class's calls are its methods' calls. So a class's panel reads its
+    members from the tree rollup (``kg_view_tree.parent_key``: the "Defines" group, in source
+    order) and its calls, imports and subtypes from the class-level rollup (``kg_view_edges``,
+    method edges rolled up to their classes), the same rows its Focus walks. Direct edges the
+    rollup does not cover (references, rules, learnings, the file that defines it) stay as
+    ``_connections`` reads them. Paging one group is ``edge`` + ``direction`` + ``offset``.
+    """
+    key = tree["key"]
+    lo = offset if edge else 0
+    hi = lo + CONNECTION_PAGE
+    wanted = (edge, direction) if edge else None
+    groups: list[dict[str, Any]] = []
+    # 1. Its members: the tree's children of this class row.
+    if wanted in (None, ("defines", "out")):
+        total = int(connection.execute(text(
+            "SELECT count(*) FROM kg_view_tree WHERE project_id = :p AND parent_key = :k AND level = 'method'"),
+            {"p": project_id, "k": key}).scalar() or 0)
+        rows = connection.execute(text(
+            f"SELECT {_NODE_COLS} FROM kg_view_tree t JOIN kg_nodes n ON n.id = t.node_id AND n.valid_to IS NULL "
+            "WHERE t.project_id = :p AND t.parent_key = :k AND t.level = 'method' "
+            "ORDER BY t.sort_key, t.key OFFSET :lo LIMIT :n"),
+            {"p": project_id, "k": key, "lo": lo, "n": CONNECTION_PAGE}).mappings().all() if total else []
+        if total or wanted:
+            groups.append({"kind": "defines", "direction": "out", "label": _group_label("defines", "out"),
+                           "total": total, "items": [node_payload(r) for r in rows]})
+    # 2. Its methods' calls, imports and subtypes, rolled up to the classes at the other end.
+    rolled: set[tuple[str, str]] = set()
+    if "symbol" not in withheld:
+        totals: dict[tuple[str, str], int] = {}
+        for kind, way, n in connection.execute(text(
+                "SELECT kind, 'out', count(*) FROM kg_view_edges WHERE project_id = :p AND level = 'class' "
+                "AND src_key = :k GROUP BY kind UNION ALL "
+                "SELECT kind, 'in', count(*) FROM kg_view_edges WHERE project_id = :p AND level = 'class' "
+                "AND dst_key = :k GROUP BY kind"), {"p": project_id, "k": key}).all():
+            totals[(kind, way)] = int(n)
+        for (kind, way), total in sorted(totals.items(), key=lambda g: (g[0][1] != "out", -g[1], g[0][0])):
+            if wanted and wanted != (kind, way):
+                continue
+            near, far = ("src_key", "dst_key") if way == "out" else ("dst_key", "src_key")
+            rows = connection.execute(text(
+                f"SELECT {_NODE_COLS} FROM kg_view_edges e "
+                f"JOIN kg_view_tree t ON t.project_id = e.project_id AND t.key = e.{far} "
+                "JOIN kg_nodes n ON n.id = t.node_id AND n.valid_to IS NULL "
+                f"WHERE e.project_id = :p AND e.level = 'class' AND e.kind = :kind AND e.{near} = :k "
+                f"ORDER BY e.weight DESC, n.name, n.id OFFSET :lo LIMIT :n"),
+                {"p": project_id, "k": key, "kind": kind, "lo": lo, "n": CONNECTION_PAGE}).mappings().all()
+            groups.append({"kind": kind, "direction": way, "label": _group_label(kind, way), "total": total,
+                           "items": [node_payload(r) for r in rows]})
+            rolled.update((k, way) for k in _ROLLED_UP.get(kind, (kind,)))
+    if wanted and any((g["kind"], g["direction"]) == wanted for g in groups):
+        return [g for g in groups if (g["kind"], g["direction"]) == wanted]
+    # 3. Everything else it touches directly (rules, learnings, references, its file).
+    direct = _connections(connection, project_id, node_id, edge=edge, direction=direction,
+                          offset=offset, withheld=withheld)
+    return groups + [g for g in direct if (g["kind"], g["direction"]) not in rolled
+                     and (g["kind"], g["direction"]) != ("defines", "out")]
 
 
 def _vector(connection: Connection, project_id: str, row: Mapping[str, Any], layer: str,
