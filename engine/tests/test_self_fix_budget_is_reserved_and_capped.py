@@ -81,3 +81,45 @@ def test_a_finished_fix_holds_what_it_cost_not_its_reservation(harness):
         c.execute(text("UPDATE self_fixes SET status = 'awaiting_approval' WHERE id = :i"),
                   {"i": sfx["id"]})
         assert sf.month_spent(c) == reserved  # repair rounds may still spend
+
+
+def test_a_fix_every_reviewer_passed_is_kept_when_its_last_review_overran(harness):
+    """sfx_5fa667f3 (brec_c15618): every gate and all four reviewers passed, then the build was
+    refused 'budget' at $11.70 of $10 — the review round's own spend, already sunk. The caps
+    stop new spending; delivering spends nothing. The overrun is recorded, the card is put up,
+    and a person still approves."""
+    harness.script("good_fix")
+    sfx = harness.propose()["self_fix"]
+    real_review = self_fix_build.Build.review
+
+    def review_that_overruns(self, *a, **k):
+        findings = real_review(self, *a, **k)
+        self.cost_micros = int(self.sfx()["budget_usd_micros"]) + 1_700_000
+        return findings
+
+    harness.mp.setattr(self_fix_build.Build, "review", review_that_overruns)
+    self_fix_build.Build(engine=harness.eng, settings=harness.settings, sfx_id=sfx["id"],
+                         source=harness.mirror).run()
+    with harness.eng.begin() as c:
+        row = sf.get(c, sfx["id"])
+    assert row["status"] == sf.AWAITING_APPROVAL, (row["refusal"], row["refusal_detail"])
+    assert row["decision_id"], "a person still approves it"
+    assert row["review"]["overrun"]["budget"]["spent_micros"] > row["budget_usd_micros"]
+
+
+def test_an_overrun_before_a_stage_that_spends_still_refuses(harness):
+    """The other half: once over the cap, no new stage starts (a review round's findings need
+    a fix round, which spends)."""
+    harness.script("review_blocker")
+    sfx = harness.propose()["self_fix"]
+    real_review = self_fix_build.Build.review
+
+    def review_that_overruns(self, *a, **k):
+        findings = real_review(self, *a, **k)
+        self.cost_micros = int(self.sfx()["budget_usd_micros"]) + 1
+        return findings
+
+    harness.mp.setattr(self_fix_build.Build, "review", review_that_overruns)
+    out = self_fix_build.Build(engine=harness.eng, settings=harness.settings, sfx_id=sfx["id"],
+                               source=harness.mirror).run()
+    assert out["refusal"] == "budget"

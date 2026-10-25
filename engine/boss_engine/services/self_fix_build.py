@@ -703,8 +703,14 @@ class Build:
         with self.engine.begin() as c:
             sf.update(c, self.sfx_id, cost_micros=self.cost_micros, **fields)
 
-    def boundary(self) -> None:
-        """The kill switch, the cost cap and the time cap, at every stage boundary."""
+    def boundary(self, *, spends: bool = True) -> None:
+        """The kill switch, the cost cap and the time cap, at every stage boundary.
+
+        The caps stop NEW spending, so they are checked before a stage that spends (`spends`).
+        A fix that has passed every gate and every reviewer is never thrown away for what its
+        last review cost (sfx_5fa667f3: all four reviewers PASS, then refused 'budget' at
+        $11.70 of $10): delivering it spends nothing, the overrun is recorded on the card, and
+        a person still approves it."""
         sfx = self.sfx()
         if sfx["status"] in sf.TERMINAL:
             raise Stop("policy", f"the self-fix is already {sfx['status']}", cancel=True)
@@ -715,14 +721,29 @@ class Build:
         if not ok:
             raise Stop("switched_off", why, cancel=True)
         budget = int(sfx.get("budget_usd_micros") or 0)
+        over: dict[str, Any] = {}
         if budget and self.cost_micros >= budget:
-            raise Stop("budget", f"spent ${self.cost_micros / 1e6:.2f} of "
-                                 f"${budget / 1e6:.2f}")
+            if spends:
+                raise Stop("budget", f"spent ${self.cost_micros / 1e6:.2f} of "
+                                     f"${budget / 1e6:.2f}")
+            over["budget"] = {"spent_micros": self.cost_micros, "cap_micros": budget}
         started = sfx.get("started_at") or sfx.get("created_at")
         if started:
             age = (sf.now_utc() - datetime.fromisoformat(str(started))).total_seconds()
             if age > cap_minutes * 60:
-                raise Stop("time", f"{int(age // 60)} minutes (the most is {cap_minutes})")
+                if spends:
+                    raise Stop("time", f"{int(age // 60)} minutes (the most is {cap_minutes})")
+                over["time"] = {"minutes": int(age // 60), "cap_minutes": cap_minutes}
+        if over:
+            said = []
+            if "budget" in over:
+                said.append(f"spent ${self.cost_micros / 1e6:.2f} of its ${budget / 1e6:.2f} cap")
+            if "time" in over:
+                said.append(f"ran {over['time']['minutes']} of its {cap_minutes} minutes")
+            words = " and ".join(said)
+            self.write(review={**(sfx.get("review") or {}), "overrun": over})
+            self.say(f"{sf.AGENT_NAME}: every gate and reviewer passed; the last review {words}. "
+                     "The fix is kept and still needs your approval.")
 
     # -- an engine turn -----------------------------------------------------------------------
     def turn(self, agent: Any, stage: str, prompt: str, cwd: Path, *, read_only: bool,
@@ -1339,7 +1360,7 @@ class Build:
                 tests: dict[str, str], source: Path) -> dict[str, Any]:
         from . import self_fix_install
 
-        self.boundary()
+        self.boundary(spends=False)
         sfx = self.sfx()
         diff = src.diff_text(work, base_sha)
         stat = src.diff_stat(work, base_sha)
