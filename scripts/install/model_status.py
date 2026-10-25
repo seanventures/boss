@@ -40,6 +40,9 @@ SETUP_PROVIDER = {"codex": "codex", "claude": "claude_code", "grok": "grok"}
 #: Pill states a job can still run on — setup_view.USABLE_MODEL (a test holds them equal).
 USABLE_STATES = frozenset({"working", "not_checked", "rate_limited", "paused_budget",
                            "unreachable"})
+#: ...except on this machine: a local model that does not answer is the wrong address or a
+#: stopped server, not an outage (setup_view.USABLE_LOCAL_MODEL; the same test holds them).
+USABLE_LOCAL_STATES = USABLE_STATES - {"unreachable"}
 LOCAL_PROVIDERS = ("ollama", "vllm")
 #: engine -> the name an operator knows it by (setup_view.ENGINE_LABELS, the ones jobs use).
 ENGINE_LABELS = {
@@ -190,7 +193,7 @@ def is_local(model: dict) -> bool:
 
 
 def usable(model: dict) -> bool:
-    return _pill(model).get("state") in USABLE_STATES
+    return _pill(model).get("state") in (USABLE_LOCAL_STATES if is_local(model) else USABLE_STATES)
 
 
 def _origin(model: dict) -> str:

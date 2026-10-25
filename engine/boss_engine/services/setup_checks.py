@@ -362,6 +362,33 @@ def provider_error(answer: HttpAnswer) -> tuple[str, str]:
     return "", str(body or answer.error or "")[:300]
 
 
+#: OpenAI's reasoning models (o1, o3, o4-mini, …) and the gpt-5 family refuse `max_tokens`
+#: with a 400 that names `max_completion_tokens`; an OpenAI-compatible server may name either.
+_COMPLETION_TOKENS_MODEL = re.compile(r"^(?:[\w.-]+/)?(?:o\d|gpt-5)", re.I)
+_TOKEN_FIELDS = ("max_tokens", "max_completion_tokens")
+
+
+def output_cap_field(api: str, model: str) -> str:
+    """Which output-cap field a one-turn proof sends: Anthropic always `max_tokens`; an
+    OpenAI-style API `max_completion_tokens` for the models that only accept it."""
+    if api != "anthropic" and _COMPLETION_TOKENS_MODEL.match((model or "").strip()):
+        return "max_completion_tokens"
+    return "max_tokens"
+
+
+def _names_other_cap_field(answer: HttpAnswer, sent: str) -> Optional[str]:
+    """The other cap field, when a 400 is about the cap field: OpenAI's reasoning models say
+    "'max_tokens' is not supported … Use 'max_completion_tokens'", an older compatible server
+    "Unrecognized request argument supplied: max_completion_tokens"."""
+    if answer.status != 400:
+        return None
+    other = _TOKEN_FIELDS[1] if sent == _TOKEN_FIELDS[0] else _TOKEN_FIELDS[0]
+    error_type, message = provider_error(answer)
+    said = f"{error_type} {message}"
+    named = any(re.search(rf"(?<!\w){field}(?!\w)", said) for field in _TOKEN_FIELDS)
+    return other if named else None
+
+
 def complete_once(*, api: str, endpoint: str, api_key: str, model: str,
                   http: Optional[Http] = None, timeout: float = 30.0) -> dict[str, Any]:
     """One tiny completion. {ok, state, status, latency_ms, usage, retry_at, host}."""
@@ -373,10 +400,18 @@ def complete_once(*, api: str, endpoint: str, api_key: str, model: str,
         headers = {"content-type": "application/json"}
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
-    body = {"model": model, "max_tokens": 5,
+    cap = output_cap_field(api, model)
+    body = {"model": model, cap: 5,
             "messages": [{"role": "user", "content": "Reply with OK"}]}
     started = time.monotonic()
     answer = http("POST", endpoint, headers=headers, json_body=body, timeout=timeout)
+    other = _names_other_cap_field(answer, cap) if api != "anthropic" else None
+    if other:
+        # ONE RETRY, WITH THE FIELD THE PROVIDER NAMED: a 400 that rejects the cap field is not
+        # a bad key or model (and costs nothing), so a new model family never reads "Check
+        # failed" only because of which output-cap field it accepts.
+        body = {"model": model, other: 5, "messages": body["messages"]}
+        answer = http("POST", endpoint, headers=headers, json_body=body, timeout=timeout)
     latency = int((time.monotonic() - started) * 1000)
     host = urlparse(endpoint).hostname or endpoint
     if answer.status in (200, 201):

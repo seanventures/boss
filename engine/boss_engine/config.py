@@ -527,6 +527,9 @@ class Settings(BaseSettings):
     # zero-config lane on a dev box. vllm: no conventional port/host exists, so
     # the base URL must be configured explicitly (e.g. http://gpubox:8000/v1).
     # Local inference is $0 — zero-price the models via BOSS_MODEL_PRICES_JSON.
+    # localhost is right only for a dev run on the host: inside a container it is the
+    # container itself. The Community compose therefore sets OLLAMA_BASE_URL to
+    # http://host.docker.internal:11434/v1 for api and worker (a compose test holds it).
     ollama_api_key: str = Field(default="ollama", alias="OLLAMA_API_KEY")
     ollama_base_url: str = Field(
         default="http://localhost:11434/v1", alias="OLLAMA_BASE_URL"

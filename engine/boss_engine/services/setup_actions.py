@@ -976,13 +976,24 @@ def _connect_key(connection: Connection, settings: Any, project_id: str, provide
     if not local and not api_key:
         raise SetupActionError(422, "key_rejected", "API key", "Paste the provider's API key.")
     if provider == "ollama" and not base_url:
+        from .setup_service import ollama_base_url
+
         found = setup_view.local_found("ollama")
-        base_url = (found or {}).get("base_url") or ""
+        base_url = (found or {}).get("base_url") or ollama_base_url(settings)
     if api_key:
         # Asked before the provider is called: a refusal sends nothing anywhere.
         require_store(connection, settings, project_id, accept, actor)
     from .setup_service import model_key_details
-    details = model_key_details(provider=provider, base_url=base_url, model=model)
+    try:
+        details = model_key_details(provider=provider, base_url=base_url, model=model)
+    except SetupError as exc:
+        # A FORM MISTAKE IS A PILL, NOT A 500: "api.example.com/v1" (no scheme), a file: URL or
+        # a missing model is refused before anything is stored or any provider is called.
+        if "url" in str(exc).lower():
+            raise SetupActionError(422, "failed", "Base URL",
+                "Use the full address, starting with https:// "
+                "(for example https://api.example.com/v1).") from None
+        raise SetupActionError(422, "failed", "Model", "Name the model first.") from None
     existing_id = replace_source_id or _same_connection(connection, project_id, provider,
         base_url=details["base_url"], model=details["model"]) or ""
     capacity_group = existing_id
@@ -1294,6 +1305,10 @@ def model_catalogue(connection: Connection, settings: Any, project_id: str, prov
                 key = ""
         if row and not base_url:
             base_url = str(setup_view._obj(row["connection_metadata"]).get("base_url") or "")
+    if not base_url and provider == "ollama":
+        from .setup_service import ollama_base_url
+
+        base_url = ollama_base_url(settings)
     base = (base_url or spec.get("base_url") or "").strip()
     if not base:
         return []
@@ -1306,8 +1321,11 @@ def model_catalogue(connection: Connection, settings: Any, project_id: str, prov
 
 
 def detect_local(settings: Any, http: Optional[Http] = None) -> None:
-    """Look for an Ollama on its usual address (part of `Test all`, never of a read)."""
-    base = str(getattr(settings, "ollama_base_url", "") or "http://127.0.0.1:11434/v1")
+    """Look for an Ollama where this BOSS is configured to find it (part of `Test all`, never
+    of a read): OLLAMA_BASE_URL, the host's Ollama under the Community compose."""
+    from .setup_service import ollama_base_url
+
+    base = ollama_base_url(settings)
     try:
         names = setup_checks.list_models(api="openai", base_url=base, local_ollama=True,
                                          http=http)
