@@ -93,6 +93,22 @@ def discover() -> dict[str, bool]:
             "grok": found["grok"]}
 
 
+#: Pill states that mean the CLI's session inside BOSS was refused (setup_pills).
+LOGIN_REFUSED = frozenset({"login_expired", "key_rejected"})
+
+
+class LoginRefused(RuntimeError):
+    """Connect's proof was refused for the subscription's LOGIN: a new sign-in is the fix."""
+
+
+def _refusal_state(body: bytes) -> str:
+    try:
+        detail = json.loads((body or b"{}").decode("utf-8", "replace")).get("detail")
+    except (ValueError, AttributeError):
+        return ""
+    return str(detail.get("state") or "") if isinstance(detail, dict) else ""
+
+
 def connect(api_url: str, api_key: str, provider: str) -> None:
     # PROVED, NOT ASSUMED. Repo and models' one connect (POST /v1/setup/models) runs one trivial
     # turn on the subscription — reserved and receipted like any model call — before it calls
@@ -109,13 +125,24 @@ def connect(api_url: str, api_key: str, provider: str) -> None:
     except urllib.error.HTTPError as exc:
         # BOSS's own refusal is one pill — what is wrong and the fix — and never contains the
         # credential. Nothing is added to it.
-        raise RuntimeError(f"BOSS did not connect {provider}: {refusal(exc)}") from None
+        try:
+            body = exc.read()
+        except OSError:
+            body = b""
+        said = f"BOSS did not connect {provider}: {from_body(body) or f'HTTP {exc.code}'}"
+        if _refusal_state(body) in LOGIN_REFUSED:
+            raise LoginRefused(said) from None
+        raise RuntimeError(said) from None
     except (OSError, ValueError) as exc:
         raise RuntimeError(f"BOSS connection check could not finish for {provider}") from exc
     row = next((m for m in view.get("models") or [] if m.get("provider") == provider), None)
     if row is None:
         raise RuntimeError(f"BOSS did not record the {provider} connection")
-    if (row.get("pill") or {}).get("state") != "working":
+    pill = row.get("pill") or {}
+    if pill.get("state") in LOGIN_REFUSED:
+        raise LoginRefused(f"BOSS did not prove the {provider} connection with a live turn: "
+                           f"{pill.get('label') or 'its login was refused'}")
+    if pill.get("state") != "working":
         raise RuntimeError(f"BOSS did not prove the {provider} connection with a live turn")
     print(f"  {provider}: connected — it answered a test turn")
 
@@ -234,13 +261,15 @@ class NeedsPerson(RuntimeError):
 
 
 def sign_in(api_url: str, api_key: str, provider: str, *, out=None,
-            terminal=None, poll_seconds: float = POLL_SECONDS) -> None:
-    """Sign `provider` in inside BOSS through its own login. Returns once it is signed in."""
+            terminal=None, poll_seconds: float = POLL_SECONDS, fresh: bool = False) -> None:
+    """Sign `provider` in inside BOSS through its own login. Returns once it is signed in.
+    `fresh`: sign the current session out first and log in again, whatever the CLI says."""
     out = out or sys.stdout
     label, word = LABELS[provider], COMMAND[provider]
     path = "/v1/setup/sign-in"
     session = _call(api_url, api_key, "POST", path,
-                    {"project_id": PROJECT, "actor": "ceo", "provider": provider})
+                    {"project_id": PROJECT, "actor": "ceo", "provider": provider,
+                     **({"fresh": True} if fresh else {})})
     if session.get("state") == "signed_in":
         print(f"  {label} is already signed in inside BOSS.", file=out)
         return
@@ -303,9 +332,27 @@ def _cancel(api_url: str, api_key: str, where: str) -> None:
         pass
 
 
-def sign_in_and_connect(api_url: str, api_key: str, provider: str) -> None:
-    sign_in(api_url, api_key, provider)
-    connect(api_url, api_key, provider)
+def sign_in_and_connect(api_url: str, api_key: str, provider: str, *, out=None,
+                        terminal=None, poll_seconds: float = POLL_SECONDS) -> None:
+    """Sign in, connect, prove. A proof refused for the LOGIN means the CLI's session is dead
+    however `<cli> login status` reports it: sign it out, sign in again, and connect once more —
+    never advice that sends the person back to this same command."""
+    out = out or sys.stdout
+    sign_in(api_url, api_key, provider, out=out, terminal=terminal, poll_seconds=poll_seconds)
+    try:
+        connect(api_url, api_key, provider)
+        return
+    except LoginRefused as refused:
+        print(f"  {refused}", file=out)
+        print(f"  The {LABELS[provider]} login inside BOSS was refused; signing it out and "
+              "signing in again.", file=out)
+    sign_in(api_url, api_key, provider, out=out, terminal=terminal, poll_seconds=poll_seconds,
+            fresh=True)
+    try:
+        connect(api_url, api_key, provider)
+    except LoginRefused as refused:
+        raise RuntimeError(f"{refused}. The new sign-in was refused too: check the account "
+                           f"has a {LABELS[provider]} plan.") from None
 
 
 def main() -> int:

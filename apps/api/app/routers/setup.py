@@ -268,7 +268,8 @@ def build_setup_router(
                                                    provider, get_settings())
         try:
             return sign_in.start(provider, project_id=body.project_id, actor=actor,
-                                 settings=get_settings(), login_rejected=rejected)
+                                 settings=get_settings(), login_rejected=rejected,
+                                 fresh=bool(body.fresh))
         except sign_in.SignInError as error:
             sign_in_failed(error)
         raise AssertionError("unreachable")

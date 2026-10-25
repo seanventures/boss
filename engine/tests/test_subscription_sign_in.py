@@ -244,3 +244,84 @@ def test_a_missing_cli_fails_with_a_plain_fix(tmp_path):
                             argv=(str(tmp_path / "no-such-grok"),), signed_in=lambda: False)
     assert session["state"] == "failed"
     assert "not installed" in session["fix"]
+
+
+# ── the live loop, 2026-10-25: `boss connect codex` → "already signed in" → Login expired ──────
+#
+# The Codex row on the laptop: last_check.state == "failed" (the 401 proof), observed_capacity
+# .credential_state == "rejected", and `codex login status` still "Logged in using ChatGPT".
+# Every surface read Login expired (setup_view.source_state); the sign-in asked only
+# last_check.state == "login_expired", said "already signed in", Connect failed again: a loop.
+
+LIVE_CODEX_METADATA = {"last_check": {"ok": False, "state": "failed",
+                                      "at": "2026-10-24T05:21:30+00:00",
+                                      "receipt_id": "rcpt_example"}}
+LIVE_CODEX_CAPACITY = {"credential_state": "rejected", "credential_present": True}
+
+
+class _Rows:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def mappings(self):
+        return self
+
+    def all(self):
+        return self._rows
+
+
+class _Conn:
+    """The one SELECT last_login_rejected runs, answered with the live Codex row."""
+
+    def __init__(self, rows):
+        self.rows = rows
+
+    def begin_nested(self):
+        import contextlib
+        return contextlib.nullcontext()
+
+    def execute(self, *_a, **_k):
+        return _Rows(self.rows)
+
+
+def test_the_live_stale_codex_row_reads_as_a_refused_login():
+    import json as _json
+
+    for metadata, capacity in ((LIVE_CODEX_METADATA, LIVE_CODEX_CAPACITY),
+                               (_json.dumps(LIVE_CODEX_METADATA), _json.dumps(LIVE_CODEX_CAPACITY))):
+        conn = _Conn([{"connection_metadata": metadata, "observed_capacity": capacity}])
+        assert sign_in.last_login_rejected(conn, ["p1"], "codex", None) is True
+    working = _Conn([{"connection_metadata": {"last_check": {"ok": True, "state": "working"}},
+                      "observed_capacity": {}}])
+    assert sign_in.last_login_rejected(working, ["p1"], "codex", None) is False
+
+
+def test_a_refused_login_is_signed_out_then_signed_in_fresh(tmp_path):
+    """The CLI says signed in; the login was refused (or the person asked fresh): BOSS runs the
+    CLI's own sign-out first, then a new device login — never 'already signed in'."""
+    cli = _device_cli(tmp_path)
+    (tmp_path / "done").touch()                       # `codex login status`: logged in
+    logout = _stub(tmp_path, "codex-logout", f'touch "{tmp_path}/logged_out"\n')
+    for kw in ({"login_rejected": True}, {"fresh": True}):
+        sign_in.reset_for_tests()
+        (tmp_path / "logged_out").unlink(missing_ok=True)
+        session = _start("codex", cli, tmp_path, logout_argv=(str(logout),), **kw)
+        assert session["state"] == "waiting", (kw, session)
+        assert session["user_code"] == "ABCD-EFGH1"
+        assert (tmp_path / "logged_out").exists(), "the stale session is signed out first"
+        sign_in.cancel(session["sign_in_id"])
+
+
+def test_without_a_refusal_a_signed_in_cli_is_left_alone(tmp_path):
+    cli = _device_cli(tmp_path)
+    (tmp_path / "done").touch()
+    logout = _stub(tmp_path, "codex-logout", f'touch "{tmp_path}/logged_out"\n')
+    session = _start("codex", cli, tmp_path, logout_argv=(str(logout),))
+    assert session["state"] == "signed_in"
+    assert not (tmp_path / "logged_out").exists()
+
+
+def test_every_provider_signs_out_with_its_own_cli():
+    assert sign_in.LOGINS["codex"].logout == ("codex", "logout")
+    assert sign_in.LOGINS["grok"].logout == ("grok", "logout")
+    assert sign_in.LOGINS["claude_code"].logout == ("claude", "auth", "logout")

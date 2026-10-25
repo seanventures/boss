@@ -3748,7 +3748,7 @@ export type SignInSession = {
   fix: string;
 };
 
-export type SignInStartRequest = { project_id: string; actor?: string; provider: SignInProvider };
+export type SignInStartRequest = { project_id: string; actor?: string; provider: SignInProvider; fresh?: boolean };
 export type SignInCodeRequest = { project_id: string; code: string };
 
 /** GET /v1/setup `detected[].found`: a subscription is signed in, needs a sign-in, or its CLI is

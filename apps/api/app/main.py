@@ -3727,6 +3727,7 @@ def entitlement_source_summary_from_service(
         updated_at=payload["updated_at"],
         claude_credential=payload.get("claude_credential"),
         pill=payload.get("pill"),
+        sign_in_provider=payload.get("sign_in_provider"),
     )
 
 
@@ -18423,6 +18424,7 @@ def setup_model_endpoint(payload: open_bodies.ModelSetupBody, response: Response
 @permit(P.ENTITLEMENT_READ, scope=Scope.project(query="project_id"))
 def list_entitlement_sources(project_id: str) -> EntitlementSourceListResponse:
     from .services.setup_view import source_pills
+    from .services.subscription_sign_in import sign_in_sources
 
     with begin(engine) as connection:
         items = entitlements.list_sources(connection, project_id)
@@ -18433,8 +18435,10 @@ def list_entitlement_sources(project_id: str) -> EntitlementSourceListResponse:
                 pills = source_pills(connection, get_settings(), project_id)
         except Exception:  # noqa: BLE001 — the list stands without the pill
             pills = {}
+        signs_in = sign_in_sources(get_settings())
         for item in items:
             item["pill"] = pills.get(item["source_id"])
+            item["sign_in_provider"] = signs_in.get(item["source_id"])
         return EntitlementSourceListResponse(
             project_id=project_id,
             items=[entitlement_source_summary_from_service(item) for item in items],

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import io
 import json
+import urllib.error
 import sys
 from pathlib import Path
 
@@ -266,3 +267,52 @@ def test_a_refused_start_is_rendered_as_headline_and_fix(monkeypatch):
                                      terminal=io.StringIO())
     assert str(refused.value) == ("Not a subscription — Sign-in works for codex, claude_code "
                                   "and grok.")
+
+
+class _StaleLoginBoss(_FakeBoss):
+    """The live loop (2026-10-25): the first sign-in answers signed_in (the CLI's status says
+    logged in), and Connect is refused Login expired. The fix: sign out, sign in fresh, Connect."""
+
+    def __init__(self, *, refuse_again=False):
+        super().__init__()
+        self.connects = 0
+        self.refuse_again = refuse_again
+
+    def __call__(self, request, timeout):
+        body = json.loads(request.data) if request.data else None
+        path = request.full_url.split("8000", 1)[1]
+        if path == "/v1/setup/sign-in" and not (body or {}).get("fresh"):
+            self.sent.append((request.get_method(), path, body))
+            return _Response(json.dumps({**self.session("signed_in"), "sign_in_id": "si_0"})
+                             .encode())
+        if path == "/v1/setup/models":
+            self.connects += 1
+            if self.connects == 1 or self.refuse_again:
+                self.sent.append((request.get_method(), path, body))
+                raise urllib.error.HTTPError(
+                    request.full_url, 409, "refused", {}, io.BytesIO(json.dumps({"detail": {
+                        "state": "login_expired", "headline": "Login expired",
+                        "fix": "Run `boss connect codex` (signs in inside BOSS) or press Sign "
+                               "in, then Test."}}).encode()))
+        return super().__call__(request, timeout)
+
+
+def test_a_stale_login_is_signed_out_and_signed_in_fresh_never_a_loop(monkeypatch, capsys):
+    fake = _StaleLoginBoss()
+    assert _main(monkeypatch, fake, "--sign-in", "codex") == 0
+    out = capsys.readouterr().out
+    starts = [b for m, p, b in fake.sent if p == "/v1/setup/sign-in"]
+    assert starts == [{"project_id": "boss-dogfood", "actor": "ceo", "provider": "codex"},
+                      {"project_id": "boss-dogfood", "actor": "ceo", "provider": "codex",
+                       "fresh": True}]
+    assert fake.connects == 2
+    assert "signing it out and signing in again" in out
+    assert "ABCD-EFGH1" in out and "answered a test turn" in out
+
+
+def test_a_fresh_sign_in_refused_again_says_why_and_stops(monkeypatch):
+    fake = _StaleLoginBoss(refuse_again=True)
+    with pytest.raises(RuntimeError) as failed:
+        _main(monkeypatch, fake, "--sign-in", "codex")
+    assert "The new sign-in was refused too" in str(failed.value)
+    assert fake.connects == 2, "one fresh sign-in, never a loop"

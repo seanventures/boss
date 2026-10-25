@@ -242,8 +242,12 @@ class ModelConnectBody(_Body):
 
 
 class SignInBody(_Body):
-    """Start the provider's own login inside the BOSS server (codex | claude_code | grok)."""
+    """Start the provider's own login inside the BOSS server (codex | claude_code | grok).
+    `fresh`: sign the CLI's current session out and start a new login even if the CLI says it
+    is signed in (a refused login; BOSS also does this by itself when the source's status is
+    Login expired)."""
     provider: str
+    fresh: bool = False
 
 
 class SignInCodeBody(_Body):

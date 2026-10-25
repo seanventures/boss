@@ -26,6 +26,7 @@ shutdown.
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import secrets
@@ -65,18 +66,22 @@ class _Login:
     device_code: bool
     #: Variables that would make the CLI use something other than its own login.
     drop_env: tuple[str, ...] = ()
+    #: The CLI's own sign-out, run before a fresh sign-in replaces a refused session.
+    logout: tuple[str, ...] = ()
 
 
 LOGINS: dict[str, _Login] = {
     "codex": _Login("Codex", ("codex", "login", "--device-auth"),
                     ("auth.openai.com", "chatgpt.com", "openai.com"), True,
-                    ("OPENAI_API_KEY", "CODEX_ACCESS_TOKEN")),
+                    ("OPENAI_API_KEY", "CODEX_ACCESS_TOKEN"), ("codex", "logout")),
     "grok": _Login("Grok Build", ("grok", "login", "--device-auth"),
                    ("accounts.x.ai", "x.ai", "grok.com"), True,
-                   ("XAI_API_KEY", "GROK_MODELS_BASE_URL", "GROK_CLI_CHAT_PROXY_BASE_URL")),
+                   ("XAI_API_KEY", "GROK_MODELS_BASE_URL", "GROK_CLI_CHAT_PROXY_BASE_URL"),
+                   ("grok", "logout")),
     "claude_code": _Login("Claude Code", ("claude", "auth", "login", "--claudeai"),
                           ("claude.com", "claude.ai", "anthropic.com"), False,
-                          ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY")),
+                          ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"),
+                          ("claude", "auth", "logout")),
 }
 
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*(?:\x07|\x1b\\)")
@@ -336,17 +341,37 @@ def _signed_in_check(provider: str, settings: Any) -> Callable[[], bool]:
     return check
 
 
+def _sign_out(login: _Login, argv: Optional[tuple[str, ...]] = None) -> None:
+    """THE REFUSED SESSION GOES FIRST: the CLI's own sign-out, so the fresh login replaces it and
+    nothing reads the dead one in between. Its output is never kept; failing is harmless (the
+    login that follows writes a new session either way)."""
+    command = tuple(argv if argv is not None else login.logout)
+    binary = shutil.which(command[0]) if command else None
+    if binary is None:
+        return
+    try:
+        subprocess.run((binary, *command[1:]), stdin=subprocess.DEVNULL,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                       env=_login_env(login), timeout=30, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+
 def start(provider: str, *, project_id: str, actor: str, settings: Any = None,
-          login_rejected: bool = False,
+          login_rejected: bool = False, fresh: bool = False,
           signed_in: Optional[Callable[[], bool]] = None,
-          argv: Optional[tuple[str, ...]] = None) -> dict[str, Any]:
+          argv: Optional[tuple[str, ...]] = None,
+          logout_argv: Optional[tuple[str, ...]] = None) -> dict[str, Any]:
     """Start (or return the live) sign-in for one provider.
 
     `login_rejected` is True when this install's last proof of that subscription was refused
     for its login (expired / revoked): the CLI may still say "logged in" about a dead session,
-    so a fresh sign-in starts instead of answering signed_in. `signed_in` and `argv` exist for
-    tests (a stub CLI); production uses the provider's real login and status check.
+    so the session is signed out and a fresh sign-in starts instead of answering signed_in.
+    `fresh` asks for the same explicitly (the console's Sign in on a refused row, `boss connect`
+    after Connect was refused for the login). `signed_in`, `argv` and `logout_argv` exist for
+    tests (a stub CLI); production uses the provider's real login, sign-out and status check.
     """
+    replace = login_rejected or fresh
     name = normalize_provider(provider)
     login = LOGINS[name]
     check = signed_in or _signed_in_check(name, settings)
@@ -362,7 +387,7 @@ def start(provider: str, *, project_id: str, actor: str, settings: Any = None,
         session = _Session(sign_in_id=f"si_{secrets.token_hex(10)}", provider=name,
                            project_id=project_id, actor=actor, started=now,
                            expires=now + SESSION_TTL_SECONDS)
-        if not login_rejected and _safe(check):
+        if not replace and _safe(check):
             session.state = "signed_in"
             session.expires = None
             session.finished = now
@@ -376,6 +401,8 @@ def start(provider: str, *, project_id: str, actor: str, settings: Any = None,
             session.finished = now
             _SESSIONS[session.sign_in_id] = session
             return view(session)
+        if replace:
+            _sign_out(login, logout_argv)
         try:
             process = subprocess.Popen(
                 (binary, *command[1:]), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -474,10 +501,18 @@ def reset_for_tests() -> None:
 
 
 def last_login_rejected(connection, project_ids: list[str], provider: str, settings: Any) -> bool:
-    """Did this install's last proof of that subscription fail on its login?"""
+    """Was this subscription's login refused? THE SAME ANSWER every surface shows: the one status
+    function (setup_view.source_state — last real proof, then the credential a real call refused).
+
+    The live loop (2026-10-25): Codex's last proof was recorded `failed` while the credential a
+    real call had refused said `rejected`; the Models row read Login expired, but this asked only
+    `last_check.state == login_expired`, answered "not refused", the sign-in reported "already
+    signed in" on `codex login status`, and Connect failed again — `boss connect codex` looped."""
     from sqlalchemy import text
 
     from .cli_harness import load_specs
+    from .core import now_utc
+    from .setup_view import source_state
 
     spec = load_specs(settings).get(normalize_provider(provider))
     source_id = getattr(spec, "entitlement_source_id", "") if spec else ""
@@ -486,10 +521,43 @@ def last_login_rejected(connection, project_ids: list[str], provider: str, setti
     try:
         with connection.begin_nested():
             rows = connection.execute(text(
-                "SELECT connection_metadata->'last_check'->>'state' FROM entitlement_sources "
+                "SELECT connection_metadata, observed_capacity FROM entitlement_sources "
                 "WHERE source_id = :s AND project_id = ANY(:p)"),
                 {"s": source_id,
-                 "p": list(dict.fromkeys(p for p in project_ids if p))}).fetchall()
+                 "p": list(dict.fromkeys(p for p in project_ids if p))}).mappings().all()
     except Exception:  # noqa: BLE001 — no record is "not rejected"
         return False
-    return any(row[0] in ("login_expired", "key_rejected") for row in rows)
+    now = now_utc()
+
+    def _obj(value: Any) -> dict:
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except ValueError:
+                return {}
+        return value if isinstance(value, dict) else {}
+
+    for row in rows:
+        metadata, capacity = _obj(row["connection_metadata"]), _obj(row["observed_capacity"])
+        state, _, _ = source_state(kind="subscription", metadata=metadata, capacity=capacity,
+                                   budget_spent=False, now=now)
+        if state in REFUSED_LOGIN_STATES:
+            return True
+    return False
+
+
+#: The status-function states that mean the CLI's session is not usable however it reports.
+REFUSED_LOGIN_STATES = frozenset({"login_expired", "key_rejected"})
+
+
+def sign_in_sources(settings: Any = None) -> dict[str, str]:
+    """{entitlement source id: the provider BOSS signs in inside the server} — from the CLI
+    harness specs, so a Sources row knows its Sign in without a list of ids in the console."""
+    try:
+        from .cli_harness import load_specs
+
+        specs = load_specs(settings)
+    except Exception:  # noqa: BLE001 — no specs, no Sign in offered
+        return {}
+    return {str(spec.entitlement_source_id): name for name, spec in specs.items()
+            if name in LOGINS and getattr(spec, "entitlement_source_id", "")}

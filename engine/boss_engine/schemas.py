@@ -4138,6 +4138,9 @@ class EntitlementSourceSummary(BaseModel):
     # setup_view.source_state: last real proof first, then credential). None when the source
     # has no Models row. The Sources badge reads it, so the two can never disagree.
     pill: Optional[dict[str, Any]] = None
+    # The subscription BOSS signs in INSIDE the server for this source (codex | claude_code |
+    # grok — subscription_sign_in), or None. The Sources row offers that Sign in on it.
+    sign_in_provider: Optional[str] = None
 
 
 class EntitlementSourceListResponse(BaseModel):
