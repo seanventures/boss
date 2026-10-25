@@ -57,8 +57,9 @@ function capIn(seconds: number | null): string {
 }
 
 /** Money spent this period, the same figure get_costs gives (included_spend.ledger_spend): what
- *  the caps count plus build money no cap counts (Community builds are not metered), and what
- *  subscription calls ran beside it — at list price, never money. */
+ *  the caps count (settled, and running builds' money not settled yet), plus what no cap counts —
+ *  builds from before builds were metered, and self-fixes (their own budget), said apart only
+ *  while there are any — and what subscription calls ran beside it, at list price, never money. */
 function Spent({ ledger, fallbackIncluded }: { ledger?: MeterData["ledger"]; fallbackIncluded: number }) {
   const included = ledger ? ledger.included_usd_micros : fallbackIncluded;
   if (!ledger && included <= 0) return null;
@@ -66,13 +67,13 @@ function Spent({ ledger, fallbackIncluded }: { ledger?: MeterData["ledger"]; fal
     <div className="gv-included" data-testid="gv-spent">
       {ledger ? (
         <span data-testid="gv-spent-money"
-              title={`On API keys: ${ledger.metered_calls} calls. Counted by caps ${money(ledger.under_cap_usd_micros)}.`}>
+              title={`On API keys: ${ledger.metered_calls} calls. Counted by caps ${money(ledger.under_cap_usd_micros + (ledger.in_flight_usd_micros ?? 0))}.`}>
           Spent {money(ledger.money_usd_micros)}
         </span>
       ) : null}
       {ledger && ledger.not_under_cap_usd_micros > 0 ? (
-        <span data-testid="gv-spent-uncapped" title="Build spend this install's budget does not meter, so no cap stops it">
-          {" · "}Builds {money(ledger.not_under_cap_usd_micros)} not capped ⓘ
+        <span data-testid="gv-spent-uncapped" title="Spent outside the caps: builds that ran before caps counted builds, and BOSS's self-fixes (they keep their own budget). New builds are under the caps.">
+          {" · "}Outside caps {money(ledger.not_under_cap_usd_micros)} ⓘ
         </span>
       ) : null}
       {included > 0 ? (

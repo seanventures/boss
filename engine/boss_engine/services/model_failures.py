@@ -56,8 +56,8 @@ BUDGET_HOLD_REASONS = (
 )
 _HELD_PREFIX = "held — the budget is"
 _HELD_DETAIL = re.compile(r"held — the budget is (\w+) \(([^)]*)\)", re.I)
-#: "It resets at 00:00 UTC, or raise the daily cap in Budget." — the way out of a period cap.
-_RESETS = re.compile(r"It resets at [^.]*? in Budget\.")
+#: "It resets at 00:00 UTC, or raise the daily cap in Govern › Limits." — the way out of a period cap.
+_RESETS = re.compile(r"It resets at [^.]*? in Govern › Limits\.")
 _REFUSED_BY_CAP = re.compile(r"budget cap exceeded: (.+?)\. It resets at", re.I)
 
 
@@ -83,10 +83,10 @@ def cap_used_sentence(period: Mapping[str, Any]) -> str:
 
 
 def resets_sentence(period: Mapping[str, Any]) -> str:
-    """"It resets at 00:00 UTC, or raise the daily cap in Budget." — every cap measures its own
+    """"It resets at 00:00 UTC, or raise the daily cap in Govern › Limits." — every cap measures its own
     period, so the first way out is waiting for it to turn over."""
     return (f"It resets at {period.get('resets_at_label') or '00:00 UTC'}, "
-            f"or raise the {period.get('cap_name') or 'cap'} in Budget.")
+            f"or raise the {period.get('cap_name') or 'cap'} in Govern › Limits.")
 
 
 def budget_hold_sentence(budget_state: str, utilization_ratio: Optional[float],
@@ -97,7 +97,7 @@ def budget_hold_sentence(budget_state: str, utilization_ratio: Optional[float],
 
     With the budget's `period` (the status snapshot, BudgetGovernor.status_for_project):
     "Held — the budget is red (95% of today's $10 used), so only P0 work runs. It resets at
-    00:00 UTC, or raise the daily cap in Budget."
+    00:00 UTC, or raise the daily cap in Govern › Limits."
 
     The money it counts is money: a subscription's calls are not in it (included_spend.py), and
     only the money of the cap's own period (budget.period_spend)."""
@@ -111,7 +111,7 @@ def budget_hold_sentence(budget_state: str, utilization_ratio: Optional[float],
     only = {"orange": ", so only P0 and P1 work runs",
             "red": ", so only P0 work runs"}.get(state, "")
     way_out = (resets_sentence(period) if period and period.get("resets_at_label")
-               else "Raise the cap in Budget to let it run.")
+               else "Raise the cap in Govern › Limits to let it run.")
     return f"Held — the budget is {state}{used}{only}. {way_out}"
 
 
@@ -345,7 +345,7 @@ def explain(error: object, *, source_id: Optional[str] = None) -> dict:
         return {
             "kind": "budget_hold",
             "headline": headline,
-            "action": ((resets.group(0) + " " if resets else "Raise the cap in Budget to let it "
+            "action": ((resets.group(0) + " " if resets else "Raise the cap in Govern › Limits to let it "
                         "run. ") + "Work on a subscription costs no money and does not count "
                        "against it."),
             "href": BUDGET_HREF, "retry": False,
@@ -366,7 +366,7 @@ def explain(error: object, *, source_id: Optional[str] = None) -> dict:
             "kind": "budget_wait",
             "headline": "Waiting for other work to release the budget it is holding.",
             "action": "Nothing to do — it resumes by itself when the work holding the budget "
-                      "finishes. Raise the daily or monthly cap in Budget if this happens often.",
+                      "finishes. Raise the daily or monthly cap in Govern › Limits if this happens often.",
             "href": "/?area=budget", "retry": True,
         }
     if "burst cap" in lowered or "waiting for the per-minute budget" in lowered:
@@ -374,7 +374,7 @@ def explain(error: object, *, source_id: Optional[str] = None) -> dict:
             "kind": "budget_wait",
             "headline": "Waiting for the per-minute budget to free up.",
             "action": "Nothing to do — it resumes by itself within about a minute. Raise the "
-                      "per-minute cap in Budget if this happens often.",
+                      "per-minute cap in Govern › Limits if this happens often.",
             "href": "/?area=budget", "retry": True,
         }
     if any(term in lowered for term in ("budget cap", "daily cap", "monthly cap",
@@ -394,7 +394,7 @@ def explain(error: object, *, source_id: Optional[str] = None) -> dict:
         return {
             "kind": "budget_refused",
             "headline": "The budget refused this work.",
-            "action": "Raise the daily or monthly cap in Budget, or wait for the period to reset, "
+            "action": "Raise the daily or monthly cap in Govern › Limits, or wait for the period to reset, "
                       "then retry.",
             "href": "/?area=budget", "retry": False,
         }

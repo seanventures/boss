@@ -32,9 +32,14 @@ def build_ports(settings: Any, engine: Any = None) -> EnginePorts:
     and an open-source BOSS that cannot do it is not a product. They are Postgres-backed
     wherever a database exists, in every edition.
 
-    What stays paid is governance ON TOP of that runtime: budget enforcement and entitlement
-    checks. Community gets no-op versions — no spend caps, no entitlement gating — which is a
-    coherent free tier rather than a crippled one.
+    SPEND CAPS ARE PART OF RUNNING IT TOO. Community used to get the no-op budget port here,
+    while chat, meetings and connection proofs were governed by the same caps through
+    BudgetGovernor directly — so builds were the ONE spend no cap could stop: their calls were
+    recorded and never reserved or settled ("Builds $284.01 not capped" in Govern while the caps
+    counted $8.36). Every edition with a database meters builds now (services/build_budget.py).
+
+    What stays paid is entitlement gating ON TOP of that runtime. Community gets allow-all
+    entitlements — a coherent free tier rather than a crippled one.
 
     With no engine at all (the OSS engine used standalone as a library, no database) the
     in-memory defaults still apply. That is the only case they were ever right for.
@@ -50,14 +55,15 @@ def build_ports(settings: Any, engine: Any = None) -> EnginePorts:
         PostgresEventSink,
         PostgresPersistence,
     )
-    from boss_engine.defaults import AllowAllEntitlementPort, NoopBudgetPort
+    from boss_engine.defaults import AllowAllEntitlementPort
 
     edition = str(getattr(settings, "boss_edition", "community")).strip().lower()
     paid = edition in ENTERPRISE_EDITIONS
 
     return EnginePorts(
-        # Paid: spend enforcement and entitlement checks.
-        budget=PostgresBudgetPort(settings) if paid else NoopBudgetPort(),
+        # Every edition: the project's caps count and stop build spend like any other spend.
+        budget=PostgresBudgetPort(settings),
+        # Paid: entitlement checks.
         entitlement=(
             PostgresEntitlementPort(settings) if paid
             else AllowAllEntitlementPort(

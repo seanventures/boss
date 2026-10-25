@@ -34,6 +34,9 @@ from .core import (
 # hold messages speak for. A project has no timezone of its own, so a period's boundary is
 # midnight UTC — said wherever a hold is ("It resets at 00:00 UTC").
 
+#: The category a build's reservation and its settlement carry (build_budget.CATEGORY).
+BUILD_CATEGORY = "code_task"
+
 #: The timezone budget periods turn over in. Projects carry no timezone of their own.
 BUDGET_TIMEZONE = "UTC"
 
@@ -1001,9 +1004,14 @@ class BudgetGovernor:
                 "FROM cost_receipts "
                 "WHERE project_id = :p "
                 "  AND created_at >= clock_timestamp() - make_interval(secs => :w) "
+                # A BUILD'S SETTLEMENT IS NOT A BURST. It books, in one receipt, the money a
+                # build spent over its whole run (build_budget.settle_or_release); counted
+                # here, a $5 build froze every chat turn and reservation for a minute after it
+                # finished. The daily and monthly caps count it in full.
+                "  AND category IS DISTINCT FROM :build "
                 "ORDER BY created_at"
             ),
-            {"p": project_id, "w": BURST_WINDOW_SECONDS},
+            {"p": project_id, "w": BURST_WINDOW_SECONDS, "build": BUILD_CATEGORY},
         ).mappings().all()
         spent = sum(int(row["amount"] or 0) for row in rows)
         remaining, frees_in = spent, 0.0
@@ -1262,7 +1270,7 @@ class BudgetGovernor:
                 "period": refusal["period"],
                 "resets_at": refusal["resets_at"],
                 # "Budget cap exceeded: today's budget is 98% used ($9.80 of $10). It resets
-                # at 00:00 UTC, or raise the daily cap in Budget. Decision created."
+                # at 00:00 UTC, or raise the daily cap in Govern › Limits. Decision created."
                 "message": (f"Budget cap exceeded: {cap_used_sentence(refusal)}. "
                             f"{resets_sentence(refusal)} Decision created."),
             }
@@ -1814,6 +1822,17 @@ class BudgetGovernor:
             reservation_id,
             {"job_id": job_id},
         )
+
+    def extend(self, connection: Connection, project_id: str, reservation_id: str,
+               expires_in_minutes: int) -> bool:
+        """Renew an ACTIVE reservation's expiry: the work it holds for is still running (a
+        build at a stage boundary, build_budget.renew). Never extends a settled, released or
+        expired one, and never shortens one. True when the hold was renewed."""
+        renewed = connection.execute(
+            text("UPDATE budget_reservations SET expires_at = GREATEST(expires_at, :at) "
+                 "WHERE id = :id AND project_id = :p AND status = 'active'"),
+            {"id": reservation_id, "p": project_id, "at": expires_at(expires_in_minutes)})
+        return bool(getattr(renewed, "rowcount", 0))
 
     def assert_active_reservation(
         self, connection: Connection, project_id: str, reservation_id: str

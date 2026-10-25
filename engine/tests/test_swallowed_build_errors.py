@@ -24,6 +24,7 @@ import json
 import logging
 import re
 from pathlib import Path
+from typing import Optional
 from uuid import uuid4
 
 import pytest
@@ -88,15 +89,68 @@ def _calls_on(scope: ast.AST, holders: set) -> list[tuple[str, int]]:
     return out
 
 
+#: The module each module-level function is defined in (its file stem), and for each module
+#: the names it imports `from .<module> import name`.
+_MODULE_OF: dict[int, str] = {}
+_IMPORTS: dict[str, dict[str, str]] = {}
+
+
+def _callee(call: ast.Call) -> tuple[Optional[str], Optional[str]]:
+    """(function, module) for `f(...)` (any module) or `mod.f(...)` / `_mod.f(...)`, a helper
+    module imported by name such as `_build_budget` (that module only)."""
+    if isinstance(call.func, ast.Name):
+        return call.func.id, None
+    if isinstance(call.func, ast.Attribute) and isinstance(call.func.value, ast.Name):
+        return call.func.attr, call.func.value.id.lstrip("_")
+    return None, None
+
+
+def _followed(fn, held: set, rel: str, functions: dict, seen: set,
+              here: Optional[str] = None) -> list[tuple[str, str, int]]:
+    """Calls on the holder inside every module-level function it is passed to, TRANSITIVELY:
+    `_release(budget, …)` hands it on to build_budget.settle_or_release, which settles it."""
+    out: list[tuple[str, str, int]] = []
+    for call in [n for n in ast.walk(fn) if isinstance(n, ast.Call)]:
+        name, module = _callee(call)
+        if name not in functions:
+            continue
+        for i, arg in enumerate(call.args):
+            if not (_is_port_budget(arg) or (isinstance(arg, ast.Name) and arg.id in held)):
+                continue
+            # `mod.f` is that module's f; a bare `f` is this module's own f, or the f it
+            # imports (names repeat across modules: app_alerts' `_release(connection, …)` is
+            # not code_task_service's `_release(budget, …)`).
+            if module is None:
+                module = here if any(_MODULE_OF.get(id(t)) == here for t in functions[name]) \
+                    else _IMPORTS.get(here or "", {}).get(name)
+            for target in functions[name]:
+                if module is not None and _MODULE_OF.get(id(target)) != module:
+                    continue
+                params = [a.arg for a in target.args.args]
+                if i >= len(params) or (name, i) in seen:
+                    continue
+                inner = {params[i]}
+                out += [(m, f"{rel} -> {target.name}", ln) for m, ln in _calls_on(target, inner)]
+                out += _followed(target, inner, rel, functions, seen | {(name, i)},
+                                 _MODULE_OF.get(id(target)))
+    return out
+
+
 def budget_port_call_sites() -> list[tuple[str, str, int]]:
     """(method, file, line) for every call made on something that holds `ports.budget`,
     following a holder passed positionally into a module-level function (`_release(budget, …)`)."""
     trees = list(_sources())
     functions: dict[str, list[ast.FunctionDef]] = {}
-    for _, tree in trees:
+    for source, tree in trees:
         for node in tree.body:
             if isinstance(node, ast.FunctionDef):
                 functions.setdefault(node.name, []).append(node)
+                _MODULE_OF[id(node)] = source.stem
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module:
+                for alias in node.names:
+                    _IMPORTS.setdefault(source.stem, {})[alias.asname or alias.name] = \
+                        node.module.rsplit(".", 1)[-1]
     sites: list[tuple[str, str, int]] = []
     for path, tree in trees:
         rel = str(path.relative_to(ROOT))
@@ -111,16 +165,7 @@ def budget_port_call_sites() -> list[tuple[str, str, int]]:
             held = {t.id for n in ast.walk(fn) if isinstance(n, ast.Assign) and _is_port_budget(n.value)
                     for t in n.targets if isinstance(t, ast.Name)}
             scopes.append((fn, held))
-            for call in [n for n in ast.walk(fn) if isinstance(n, ast.Call)
-                         and isinstance(n.func, ast.Name) and n.func.id in functions]:
-                for i, arg in enumerate(call.args):
-                    if not (_is_port_budget(arg) or (isinstance(arg, ast.Name) and arg.id in held)):
-                        continue
-                    for target in functions[call.func.id]:
-                        params = [a.arg for a in target.args.args]
-                        if i < len(params):
-                            sites += [(m, f"{rel} -> {target.name}", ln)
-                                      for m, ln in _calls_on(target, {params[i]})]
+            sites += _followed(fn, held, rel, functions, set(), path.stem)
         for scope, held in scopes:
             sites += [(m, rel, ln) for m, ln in _calls_on(scope, held)]
     return sites
@@ -131,7 +176,9 @@ def test_the_scan_sees_the_known_call_sites():
     found = {(m, f.split(" ->")[0]) for m, f, _ in budget_port_call_sites()}
     assert ("status_for_project", "engine/boss_engine/services/governed_code_task_service.py") in found
     assert ("reserve", "engine/boss_engine/services/code_task_service.py") in found
-    assert ("settle", "engine/boss_engine/services/governed_code_task_service.py") in found  # via _release
+    # via _release -> build_budget.settle_or_release (followed transitively)
+    assert ("settle", "engine/boss_engine/services/governed_code_task_service.py") in found
+    assert ("extend", "engine/boss_engine/services/governed_code_task_service.py") in found
     assert ("assert_active_reservation", "engine/boss_engine/services/software_factory.py") in found
 
 

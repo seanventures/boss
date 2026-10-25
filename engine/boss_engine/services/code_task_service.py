@@ -31,6 +31,7 @@ from typing import Any, Optional
 from ..config import Settings
 from ..ports import get_engine_ports, sql
 from .code_agent import CodeTaskSpec, RepoContext, make_code_agent
+from . import build_budget as _build_budget
 from .run_terminal import on_status_written
 from .jobs import JOB_PRIORITY_BACKGROUND, JOB_PRIORITY_REQUESTED
 from .core import emit_event
@@ -1676,8 +1677,11 @@ def redeliver_code_task(engine, settings: Settings, run_id: str, *, automatic: b
     project_id = run["project_id"]
     with _transaction(engine) as c:
         reservation = ports.budget.reserve(
-            c, project_id, category="code_task", amount_usd_micros=200_000,
+            c, project_id, category="code_task",
+            amount_usd_micros=_build_budget.reservation_estimate(
+                c, settings, project_id, _build_budget.DELIVERY_ESTIMATE_USD_MICROS),
             reason=f"deliver {run_id[:12]}: push and pull request only", expires_in_minutes=15)
+        _build_budget.bind(c, run_id, None)
         _set_phase(c, run_id, "opening_pr")
         emit_event(c, project_id, "code_task.delivery_retried", "boss", "code_task_run", run_id,
                    {"files": len(files), "automatic": automatic,
@@ -2108,7 +2112,10 @@ def override_code_task(engine, settings: Settings, jobs, run_id: str, *,
     qg = fctx.get("quality_gate_id")
     with _transaction(engine) as c:
         reservation = budget.reserve(c, project_id, category="code_task",
-            amount_usd_micros=200_000, reason=f"gate-override PR {run_id[:12]}", expires_in_minutes=15)
+            amount_usd_micros=_build_budget.reservation_estimate(
+                c, settings, project_id, _build_budget.DELIVERY_ESTIMATE_USD_MICROS),
+            reason=f"gate-override PR {run_id[:12]}", expires_in_minutes=15)
+        _build_budget.bind(c, run_id, None)
         _set_phase(c, run_id, "opening_pr")
         # Use the root-run branch so a waived iteration lands on the SAME branch/PR the
         # iteration chain has been accumulating (create_pull_request reuses the open PR).
@@ -2116,7 +2123,7 @@ def override_code_task(engine, settings: Settings, jobs, run_id: str, *,
         proposal = sf.propose_pull_request(
             c, project_id, task_id, reservation_id=reservation.get("reservation_id"),
             dedupe_key=f"code:task:{run_id}", title=run["title"],
-            branch_name=f"boss/code/{root_run}",
+            branch_name=f"boss/code/{root_run}", settle_run_id=run_id,
             summary=(f"⚠️ GATE OVERRIDE by {actor}: waived {waive_gates} (QualityGate {qg}).\n"
                      f"Reason: {reason or '(none given)'}\n\n{fctx.get('pr_summary', '')}"),
             files=files, created_by_job_id=fctx.get("created_by_job_id"))
@@ -2244,8 +2251,10 @@ def open_parked_with_checks_failing(engine, settings: Settings, jobs, run_id: st
     else:
         with _transaction(engine) as c:
             reservation = budget.reserve(c, project_id, category="code_task",
-                amount_usd_micros=200_000, reason=f"checks-failing PR {run_id[:12]}",
-                expires_in_minutes=15)
+                amount_usd_micros=_build_budget.reservation_estimate(
+                    c, settings, project_id, _build_budget.DELIVERY_ESTIMATE_USD_MICROS),
+                reason=f"checks-failing PR {run_id[:12]}", expires_in_minutes=15)
+            _build_budget.bind(c, run_id, None)
             _set_phase(c, run_id, "opening_pr")
             proposal = sf.propose_pull_request(
                 c, project_id, task_id, reservation_id=reservation.get("reservation_id"),
@@ -2329,61 +2338,13 @@ def _release(
     run_id: Optional[str] = None,
 ) -> None:
     """Settle-then-release (BOSS-280): money already burned on model calls is REAL even when
-    the run failed — sum the run's llm_calls and settle it as an actual cost receipt, so the
-    budget ledger reconciles with true LLM spend instead of silently dropping every failed
-    run's cost. Only a run with zero recorded spend releases cleanly. Always fail-soft.
+    the run failed, so the run's unsettled money is settled as a cost receipt and only a run
+    with none releases cleanly. ONE rule for every build exit: build_budget.settle_or_release
+    (money from the run's llm_calls, subscription calls $0, the delta only — plan-approval
+    pauses already settled theirs under ``code_task:{run_id}``)."""
+    from .build_budget import settle_or_release
 
-    Settles the *unsettled* delta only: plan-approval pauses (and any earlier reservation for
-    the same run) already wrote cost_receipts under skill_or_model_id ``code_task:{run_id}``,
-    so a later settle on resume must not re-bill that spend or the ledger double-counts."""
-    if not reservation_id:
-        return
-    try:
-        actual = 0
-        if run_id and hasattr(connection, "execute"):
-            gross = int(connection.execute(
-                # Money only: a call a subscription or local model answered is worth its
-                # cost_usd_micros at list price but costs nothing (included_spend.py).
-                sql("SELECT COALESCE(SUM(cost_usd_micros), 0) FROM llm_calls "
-                    "WHERE code_task_run_id = :r AND NOT included_in_subscription"),
-                {"r": run_id}).scalar() or 0)
-            already = int(connection.execute(
-                sql("SELECT COALESCE(SUM(actual_usd_micros), 0) FROM cost_receipts "
-                    "WHERE project_id = :p AND skill_or_model_id = :sid"),
-                {"p": project_id, "sid": f"code_task:{run_id}"}).scalar() or 0)
-            actual = max(0, gross - already)
-        if actual > 0:
-            # consume() requires a governance receipt (every settled effect gets one).
-            from .receipts import ReceiptService
-            scope = connection.execute(
-                sql("SELECT p.workspace_id, w.org_id FROM projects p "
-                    "JOIN workspaces w ON w.id = p.workspace_id WHERE p.id = :p"),
-                {"p": project_id}).mappings().first()
-            receipt, _created = ReceiptService().create_or_reuse(
-                connection, scope["org_id"], scope["workspace_id"], project_id,
-                dedupe_key=f"budget:settle:{run_id}:{reservation_id}",
-                effect_kind="budget.llm_spend.settle",
-                effect_scope={"run_id": run_id, "reservation_id": reservation_id},
-                payload={"actual_usd_micros": actual, "reason": reason},
-            )
-            # settle(), not consume(): `budget` is the BudgetPort, and the port has no
-            # consume — the call raised AttributeError and the spend was released unrecorded.
-            budget.settle(
-                connection, project_id, reservation_id,
-                receipt_id=receipt["id"], category="code_task",
-                skill_or_model_id=f"code_task:{run_id}",
-                estimated_usd_micros=actual, actual_usd_micros=actual,
-            )
-        else:
-            budget.release(connection, project_id, reservation_id, reason)
-    except Exception:  # noqa: BLE001 — always fail-soft, but an unsettled spend is never silent
-        from .crash_frames import record_swallowed
-        record_swallowed(logger, "release_budget", project_id=project_id, run_id=run_id,
-                         connection=connection if hasattr(connection, "begin_nested") else None)
-        try:
-            budget.release(connection, project_id, reservation_id, reason)
-        except Exception:
-            pass
+    settle_or_release(budget, connection, project_id, reservation_id, reason, run_id=run_id)
 
 
 def _set_phase(connection, run_id: str, phase: str) -> None:
@@ -2907,23 +2868,23 @@ def _run_code_task(engine, settings: Settings, jobs, run_id: str,
 
     # 1) Reserve budget for this code task's model spend.
     with _transaction(engine) as c:
-        from .included_spend import routed_reservation_estimate
-
+        if run.get("reservation_id"):  # a re-entry settles the earlier attempt's hold first
+            _release(budget, c, project_id, run["reservation_id"],
+                     "re-entry: the earlier attempt's hold settled", run_id=run_id)
         reservation = budget.reserve(
             c, project_id, category="code_task",
             # Marginal cost: $0 held on subscription capacity (included_spend).
-            amount_usd_micros=routed_reservation_estimate(
-                c, settings, project_id, int(settings.code_task_budget_usd_micros)),
+            amount_usd_micros=_build_budget.reservation_estimate(c, settings, project_id),
             reason=f"code task: {run['title'][:80]}",
-            expires_in_minutes=30, job_id=fctx.get("created_by_job_id"),
+            expires_in_minutes=_build_budget.RESERVATION_MINUTES,
+            job_id=fctx.get("created_by_job_id"),
         )
     if reservation.get("status") != "reserved":
         return refused_reservation(engine, jobs, run_id=run_id, project_id=project_id,
                                    reservation=reservation, fencing_token=fencing_token)
     reservation_id = reservation["reservation_id"]
     with _transaction(engine) as c:
-        c.execute(sql("UPDATE code_task_runs SET reservation_id=:r WHERE id=:id"),
-                  {"r": reservation_id, "id": run_id})
+        _build_budget.bind(c, run_id, reservation_id)
 
     # 2) Resolve a clone token: prefer a short-lived GitHub-App installation token
     #    (Phase 2 impersonation); fall back to the PAT (Phase 0).
@@ -3126,6 +3087,7 @@ def _run_code_task(engine, settings: Settings, jobs, run_id: str,
                 summary=result.summary + _pr_trailers(c, run_id),
                 files=result.diff,
                 created_by_job_id=fctx.get("created_by_job_id"),
+                settle_run_id=run_id,
             )
 
         status = proposal.get("status")

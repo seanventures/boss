@@ -850,7 +850,7 @@ def status(*, counts: Mapping[str, Any], attention: list[Mapping[str, Any]],
     if refused and (state == "red" or refusal is not None):
         over = str((refusal or {}).get("period") or period)
         return {"key": "budget_stopped", "text": "Budget stopped work", "tone": "red",
-                "tip": f"Over the {over} cap. Raise it in Budget."}
+                "tip": f"Over the {over} cap. Raise it in Govern › Limits."}
     if host.get("show") and host.get("severity") == "critical":
         return {"key": "host_critical", "text": "Host struggling", "tone": "red",
                 "tip": _clip(str(host.get("headline") or "The host needs attention"))}

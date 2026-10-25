@@ -69,6 +69,9 @@ class PostgresBudgetPort:
         skill_or_model_id: str,
         estimated_usd_micros: int,
         actual_usd_micros: Optional[int],
+        *,
+        included_in_subscription: bool = False,
+        allow_expired: bool = False,
     ) -> str:
         return self.governor.settle(
             connection,
@@ -79,4 +82,15 @@ class PostgresBudgetPort:
             skill_or_model_id,
             estimated_usd_micros,
             actual_usd_micros,
+            included_in_subscription=included_in_subscription,
+            allow_expired=allow_expired,
         )
+
+    def extend(
+        self,
+        connection: Any,
+        project_id: str,
+        reservation_id: str,
+        expires_in_minutes: int,
+    ) -> bool:
+        return self.governor.extend(connection, project_id, reservation_id, expires_in_minutes)

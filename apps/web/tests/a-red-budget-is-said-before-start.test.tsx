@@ -21,7 +21,7 @@ const RED: Readiness = {
   checked: [],
   missing: [{
     key: "budget", label: "Budget is red — work will be held",
-    fix: "Raise the cap in Budget. Calls on a subscription cost no money and do not count "
+    fix: "Raise the cap in Govern › Limits. Calls on a subscription cost no money and do not count "
          + "against it; only metered API spend does.",
     area: "budget", ok: false,
     detail: "Held — the budget is red (95% of $10 used), so only P0 work runs",
@@ -38,7 +38,7 @@ const ORANGE: Readiness = {
   missing: [],
   notes: [{ key: "budget", level: "orange", area: "budget",
             text: "Held — the budget is orange (87% of $10 used), so only P0 and P1 work runs. "
-                  + "Raise the cap in Budget to let it run." }],
+                  + "Raise the cap in Govern › Limits to let it run." }],
 };
 
 describe("readiness at Start reads the budget", () => {

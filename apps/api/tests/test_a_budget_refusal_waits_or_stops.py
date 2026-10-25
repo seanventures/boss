@@ -375,7 +375,7 @@ def test_a_step_refused_by_the_cap_stops_once_with_the_reason_and_the_action(
     assert "budget denied: denied" not in error
     assert error.startswith(f"'{LABEL}' could not start: The budget refused this work"), error
     # The cap is today's money: the way out names the period's reset and its cap.
-    assert "budget cap" in error and "It resets at 00:00 UTC, or raise the daily cap in Budget" in error
+    assert "budget cap" in error and "It resets at 00:00 UTC, or raise the daily cap in Govern › Limits" in error
     assert "Decision created" not in error, "that decision is rolled back with the step"
     assert state["run"]["status"] in {"failed", "deadlettered"}
     assert (state["run"]["blocked_reason"] or "").startswith(f"Stopped at {LABEL}: "), (
@@ -599,7 +599,7 @@ def test_a_typed_decision_refused_by_the_cap_stops_once_with_one_decision(
     assert refusals == 1, "one refusal, one decision"
     error = state["step"]["last_error"] or ""
     assert error.startswith("The budget refused this work"), error
-    assert "It resets at 00:00 UTC, or raise the daily cap in Budget" in error
+    assert "It resets at 00:00 UTC, or raise the daily cap in Govern › Limits" in error
 
 
 def test_a_code_task_refused_for_a_moment_is_handed_back_to_the_queue_not_blocked(eng, project):

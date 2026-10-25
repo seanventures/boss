@@ -57,4 +57,21 @@ class BudgetPort(Protocol):
         skill_or_model_id: str,
         estimated_usd_micros: int,
         actual_usd_micros: Optional[int],
-    ) -> str: ...
+        *,
+        included_in_subscription: bool = False,
+        allow_expired: bool = False,
+    ) -> str:
+        """Record the cost receipt and consume the reservation. `included_in_subscription`:
+        the money settled is $0 and the amount is kept as its list-price equivalent.
+        `allow_expired`: a $0 hold that lapsed while its work ran may still be settled."""
+        ...
+
+    def extend(
+        self,
+        connection: Any,
+        project_id: str,
+        reservation_id: str,
+        expires_in_minutes: int,
+    ) -> bool:
+        """Renew an active reservation's expiry while its work is still running."""
+        ...

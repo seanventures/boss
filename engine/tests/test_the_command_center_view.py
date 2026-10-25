@@ -233,7 +233,7 @@ def test_a_refusal_at_the_door_is_budget_stopped_work_without_a_build_row():
     """The budget refuses new work before any build exists, so no budget_refused card does."""
     got = status(budget=RED, refusal=REFUSAL, counts=counts(running=2))
     assert (got["key"], got["text"]) == ("budget_stopped", "Budget stopped work")
-    assert got["tip"] == "Over the day cap. Raise it in Budget."
+    assert got["tip"] == "Over the day cap. Raise it in Govern › Limits."
     # The budget's own state need not be red: the refusal is the budget's rule.
     assert status(budget=ORANGE, refusal=REFUSAL)["key"] == "budget_stopped"
 

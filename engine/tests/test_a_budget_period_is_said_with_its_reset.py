@@ -53,16 +53,16 @@ def test_a_hold_names_the_period_and_when_it_resets():
     period = {"whose": "today's", "resets_at_label": "00:00 UTC", "cap_name": "daily cap"}
     sentence = budget_hold_sentence("red", 0.95, 10_000_000, period)
     assert sentence == ("Held — the budget is red (95% of today's $10 used), so only P0 work "
-                        "runs. It resets at 00:00 UTC, or raise the daily cap in Budget.")
+                        "runs. It resets at 00:00 UTC, or raise the daily cap in Govern › Limits.")
     assert held_headline(sentence) == ("Held — the budget is red (95% of today's $10 used), "
                                        "so only P0 work runs")
     said = explain(f"{sentence} (job discovery.run, priority p2, risk 0; red_halts_non_p0_work)")
     assert said["kind"] == "budget_hold"
     assert said["headline"] == held_headline(sentence) + "."
-    assert said["action"].startswith("It resets at 00:00 UTC, or raise the daily cap in Budget.")
+    assert said["action"].startswith("It resets at 00:00 UTC, or raise the daily cap in Govern › Limits.")
 
     month = {"whose": "this month's", "resets_at_label": "00:00 UTC on 1 June",
              "cap_name": "monthly cap"}
     assert budget_hold_sentence("orange", 0.87, 200_000_000, month).endswith(
         "(87% of this month's $200 used), so only P0 and P1 work runs. It resets at "
-        "00:00 UTC on 1 June, or raise the monthly cap in Budget.")
+        "00:00 UTC on 1 June, or raise the monthly cap in Govern › Limits.")
