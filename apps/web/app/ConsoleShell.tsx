@@ -20,6 +20,7 @@ import { dockChatKey, dockSpeaker } from "../lib/dock-subject";
 import { dockWidthFor, railForDock } from "../lib/shell-rail";
 import { ProjectStrip } from "./project-strip";
 import { ProjectMenu, type ProjectMenuItem } from "./project-menu";
+import { useDetailsDismiss } from "../lib/details-dismiss";
 import { PresencePill } from "./agents/presence-pill";
 import { NEW_BUILD_TIP, openNewProject } from "../lib/compose-links";
 import { setConsoleLive } from "../lib/console-live";
@@ -1573,7 +1574,7 @@ function ConsoleShellInner({
           </button>
           <PresencePill projectId={scope.projectId ?? scope.project} />
           <AccountMenu />
-          <details className="bx-system-menu">
+          <MenuDetails className="bx-system-menu">
             <summary aria-label="System details">System</summary>
             <div className="bx-system-panel">
               <div><span>Edition</span><EditionChip editionId={resolvedEdition} /></div>
@@ -1590,7 +1591,7 @@ function ConsoleShellInner({
                 </div>
               ) : null}
             </div>
-          </details>
+          </MenuDetails>
         </header>
 
         {/* EVERY PROJECT, WITHOUT LEAVING THE AREA YOU ARE IN.
@@ -1827,4 +1828,12 @@ function ConsoleShellInner({
       ) : null}
     </div>
   );
+}
+
+
+/** A header menu on <details> that closes on Esc and on a press outside it (lib/details-dismiss). */
+function MenuDetails({ className, children }: { className: string; children: React.ReactNode }) {
+  const ref = React.useRef<HTMLDetailsElement>(null);
+  const { onToggle } = useDetailsDismiss(ref);
+  return <details ref={ref} className={className} onToggle={onToggle}>{children}</details>;
 }

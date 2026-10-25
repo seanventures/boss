@@ -16,8 +16,8 @@
 import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 
 import {
-  BEND, BUBBLE_R, LABEL_ARC, LABEL_MAX, LOOP_EDGES, NODE_R, arrowRim, bidirectional, distanceToEdge, edgeGeometry, edgeWidth,
-  LABEL_ZOOM_OUTER, fitTransform, kindName, layerToken, nodeAt, placeLabels, placeNodeLabels, revealPan, toScreen, toWorld, weightOrder, wordEllipsis,
+  BEND, BUBBLE_R, FIT_PADDING, LABEL_ARC, LABEL_MAX, LOOP_EDGES, NODE_R, arrowRim, bidirectional, distanceToEdge, edgeGeometry, edgeWidth,
+  LABEL_ZOOM_OUTER, charEllipsis, fitTransform, kindName, layerToken, nodeAt, placeLabels, placeNodeLabels, revealPan, toScreen, toWorld, twoLines, weightOrder, wordEllipsis,
   zoomAt,
   type EdgeGeometry, type LabelBox, type LabelItem, type Pt, type Transform,
 } from "../../lib/kg-layout";
@@ -50,6 +50,11 @@ export type CanvasNode = {
    *  neighbours, a Whole-repo bubble): moved outward on a leader line when there is no room. A
    *  ring node without it is named on hover, when selected, or from LABEL_ZOOM_OUTER up. */
   keepLabel?: boolean;
+  /** Past its ring's label capacity (tester round 5): named on hover, when selected, or from
+   *  LABEL_ZOOM_OUTER up — never crowding the ones that fit. */
+  labelCull?: boolean;
+  /** Its screen radius when it is neither a class (14) nor an area bubble (28): a cluster. */
+  radius?: number;
 };
 
 /** One edge's identity on the canvas: hover, labels and the strongest-edge set use it. */
@@ -142,11 +147,18 @@ export function frameExtent(nodes: Array<Pick<CanvasNode, "label" | "labelMax" |
     const widest = Math.max(160, ...nodes.map((n) => estimateLabel(n, scale)));
     return { x: Math.min(170, widest / 2 + 12), top: BUBBLE_R + 6, bottom: BUBBLE_R + 50 };
   }
-  // A side label past the outer ring may shorten or move above/below (the placement does), so
-  // the frame keeps room for most of one, not the longest name at full length.
+  // A side label past the outer ring keeps its two-line form at least (about 18 characters, the
+  // canvas's twoLines): the frame reserves that much beside the outer nodes (round 5: 70 px cut
+  // the side labels of a Focus to nothing), up to a fifth of a narrow view.
   const side = Math.max(60, ...nodes.filter((n) => n.labelMode === "out").map((n) => estimateLabel(n, scale)));
-  // In a narrow view the labels give way (shorter, above or below) before the picture does.
-  return { x: Math.min(NODE_R + 10 + Math.min(130, side * 0.7), viewW * 0.12), top: NODE_R + 30, bottom: NODE_R + 30 };
+  return { x: Math.min(NODE_R + 8 + Math.min(150, side), viewW * 0.22), top: NODE_R + 26, bottom: NODE_R + 26 };
+}
+
+/** The empty margin a fitted picture keeps inside the canvas, past its labels' room: a Focus is
+ *  rings whose labels already reserve their own room (round 5: 48 px a side left a 2-hop Focus a
+ *  third of a 1280 × 800 canvas). One value for the frame and for the layouts that predict it. */
+export function framePadding(mode: "overview" | "focus"): number {
+  return mode === "focus" ? 14 : FIT_PADDING;
 }
 
 const TOKENS = ["--graph", "--ink", "--ink-soft", "--muted", "--faint", "--border-strong", "--surface", "--sans"] as const;
@@ -233,13 +245,15 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(function GraphCanvas(
     // past the arc they share, so they never touch like beads (tester round 3 P0).
     const margin = 160;
     const screen = new Map<string, Drawn>();
-    const ringCap = mode === "focus" ? Math.max(5, (LABEL_ARC * tr.k - 8) / 2) : Infinity;
+    // A ring node never outgrows the room between it and its neighbour at the ring's sides (a
+    // label row, 36 px at 100%: graph-view RING_SLOT).
+    const ringCap = mode === "focus" ? Math.max(5, (36 * tr.k - 6) / 2) : Infinity;
     for (const n of nodes) {
       const p = posOf(n.id);
       if (!p) continue;
       const s = toScreen(tr, p);
-      const full = (n.bubble ? BUBBLE_R : NODE_R) * Math.min(1, tr.k * 1.25);
-      const r = n.bubble ? Math.max(12, full) : Math.max(5, Math.min(full, n.ring !== undefined ? ringCap : full));
+      const full = (n.radius ?? (n.bubble ? BUBBLE_R : NODE_R)) * Math.min(1, tr.k * 1.25);
+      const r = n.bubble ? Math.max(10, full) : Math.max(5, Math.min(full, n.ring !== undefined ? ringCap : full));
       screen.set(n.id, { id: n.id, x: s.x, y: s.y, r });
     }
     const visible = (d: Drawn) => d.x > -margin && d.x < w + margin && d.y > -margin && d.y < h + margin;
@@ -277,12 +291,16 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(function GraphCanvas(
       ctx.fillStyle = stroke;
       ctx.lineWidth = edgeWidth(e.weight, maxW);
       ctx.setLineDash(e.kind === "dispatches_to" ? [6, 5] : []);
+      // An opened cluster's spoke to each member: a quiet dotted line, no arrow (it is not a call).
+      const member = e.kind === "member";
+      if (member) { ctx.setLineDash([2, 4]); ctx.globalAlpha = alpha * 0.7; ctx.lineWidth = 1; }
       ctx.beginPath();
       ctx.moveTo(geo.start.x, geo.start.y);
       if (bend) ctx.quadraticCurveTo(geo.ctrl.x, geo.ctrl.y, geo.end.x, geo.end.y);
-      else ctx.lineTo(geo.end.x, geo.end.y);
+      else ctx.lineTo(member ? geo.tip.x : geo.end.x, member ? geo.tip.y : geo.end.y);
       ctx.stroke();
       ctx.setLineDash([]);
+      if (member) continue;
       ctx.beginPath();
       ctx.moveTo(geo.tip.x, geo.tip.y);
       ctx.lineTo(geo.left.x, geo.left.y);
@@ -346,25 +364,31 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(function GraphCanvas(
       ctx.restore();
       // LABEL CULLING BY ZOOM AND PRIORITY (tester round 4 P0): an outer-ring node that is not
       // kept is named on hover, when selected, or once zoomed in — never fighting the first ring.
-      const culled = mode === "focus" && !isSel && !isHover && d.id !== centerId && !n.keepLabel
-        && (n.ring ?? 0) >= 1 && tr.k < LABEL_ZOOM_OUTER;
+      // Past its ring's label capacity (tester round 5): named on hover, selection or zoom only.
+      const culled = mode === "focus" && !isSel && !isHover && d.id !== centerId && !!n.labelCull && tr.k < LABEL_ZOOM_OUTER;
       if (culled) continue;
       const max = n.labelMax ?? LABEL_MAX;
-      // Cut at word boundaries, never mid-word (round 4: "Creo…sor").
-      const name = (m: number) => wordEllipsis(n.label, m);
       const weight = isSel ? 600 : 400;
-      // The full name first; shorter middle-ellipsised names (and a bubble without its second
-      // line) when it would collide or leave the canvas.
+      // The full name first; then two lines at a word boundary; then one line cut on character
+      // width with an ellipsis — never a lone first word (tester round 5: "Creocore…", "Early…").
+      const line = (text: string, size: number, w = weight, muted = false): Line => ({ text, size, weight: w, muted });
+      const big = n.bubble && !n.radius;
+      const nameSize = big ? fs(16) : fs(14);
+      const subSize = big ? fs(13) : fs(12);
+      const name = (m: number) => (n.bubble ? wordEllipsis(n.label, m) : charEllipsis(n.label, m));
+      const wrap = twoLines(n.label, Math.min(max, 18));
       const variants: Line[][] = n.bubble
         ? [
-          [{ text: name(max), size: fs(16), weight: 600, muted: false }, ...(n.sub ? [{ text: n.sub, size: fs(13), weight: 400, muted: true }] : [])],
-          [{ text: name(Math.min(max, 16)), size: fs(16), weight: 600, muted: false }],
-          [{ text: n.short ?? name(10), size: fs(14), weight: 600, muted: false }],
+          [line(name(max), nameSize, 600), ...(n.sub ? [line(n.sub, subSize, 400, true)] : [])],
+          ...(wrap.length === 2 && n.radius ? [[line(wrap[0], nameSize, 600), line(wrap[1], nameSize, 600), ...(n.sub ? [line(n.sub, subSize, 400, true)] : [])]] : []),
+          [line(name(Math.min(max, 16)), nameSize, 600)],
+          [line(n.short ?? name(12), fs(13), 600)],
         ]
         : [
-          [{ text: name(max), size: fs(14), weight, muted: false }],
-          ...(n.short ? [] : [[{ text: name(Math.min(max, 14)), size: fs(14), weight, muted: false }]]),
-          [{ text: n.short ?? name(8), size: fs(12), weight, muted: false }],
+          [line(charEllipsis(n.label, max), fs(14))],
+          ...(wrap.length === 2 ? [[line(wrap[0], fs(13)), line(wrap[1], fs(13))]] : []),
+          [line(charEllipsis(n.label, 14), fs(13))],
+          ...(n.short ? [[line(n.short, fs(12))]] : []),
         ];
       const sized = variants.map((lines) => {
         let tw = 0;
@@ -484,7 +508,7 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(function GraphCanvas(
     // A new picture is framed in the part the details drawer leaves visible.
     const view = { w: visibleWidth(size.current.w, occludeRef.current), h: size.current.h };
     const ext = frameExtent(nodes, mode, rootScale(), view.w);
-    const fitted = fitTransform(pts, view, { extent: ext });
+    const fitted = fitTransform(pts, view, { extent: ext, padding: framePadding(mode) });
     // The opening view never cuts anything off (tester round 3 P1: a page or a Focus opened
     // clipped, labels clamped over nodes, until Fit): everything is framed, at 100% at most;
     // the layouts are sized to the canvas so that is a readable scale.
@@ -514,7 +538,9 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(function GraphCanvas(
   // the picture (the pinned Rules and Learning bubbles) comes out too where it can (round 3).
   useEffect(() => {
     // The Focus centre: the whole ring is re-framed beside the drawer.
-    if (mode === "focus" && selectedId && selectedId === centerId) { home(); return; }
+    // A selection never re-frames the picture (round 5) — only a drawer over the canvas (a
+    // narrow graph) pans what it would cover out from under it.
+    if (occludeRight && mode === "focus" && selectedId && selectedId === centerId) { home(); return; }
     if (!occludeRight || !selectedId) {
       // The drawer closed: the picture goes back to where it was before it was moved out from
       // under it (tester round 4: the overview kept its shifted positions after a deselect).
@@ -717,7 +743,8 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(function GraphCanvas(
 
 /** The tooltip beside the pointer, flipped to stay inside the canvas near its right and bottom edges. */
 export function tipPlace(at: { x: number; y: number }, view: { w: number; h: number }): React.CSSProperties {
-  const right = at.x > view.w - 300;
+  // The tooltip is at most 340 px wide (kg.css): flipped before it would reach the edge.
+  const right = at.x > view.w - 360;
   const below = at.y < view.h - 90;
   return {
     left: right ? undefined : at.x + 14, right: right ? Math.max(8, view.w - at.x + 14) : undefined,

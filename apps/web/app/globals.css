@@ -6467,6 +6467,10 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 
 /* Command Center shell: one clear location, one action, quiet system details. */
 .bx-topbar { gap: 14px; }
+/* The page never scrolls sideways (KG tester round 5: at 1422 px the top bar's last button ran
+   9 px past the window, so a click or a focus scrolled the whole page left under the pointer).
+   Clip, not hidden: no scroll container, and the header's menus still drop below it. */
+.bx-main { overflow-x: clip; }
 .bx-topbar-title {
   position: static; width: auto; height: auto; margin: 0; padding: 0;
   overflow: visible; clip: auto; clip-path: none;

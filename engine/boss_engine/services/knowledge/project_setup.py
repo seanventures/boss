@@ -63,6 +63,28 @@ def _project(connection: Connection, project_id: str) -> Optional[dict[str, Any]
     return dict(row) if row else None
 
 
+_WORK_REF = ("coalesce(attrs->'provenance'->>'workflow_run_id', attrs->'provenance'->>'run_id', "
+             "attrs->'provenance'->>'thread_id')")
+
+
+def _work_counts(connection: Connection, project_id: str) -> dict[str, int]:
+    """WHAT EACH AGENT DID HERE, counted (KG tester round 5: "Trust 50 · 0 runs" on the Chief
+    Architect, who proposed all 41 rules, and on the SRE, who wrote the INC-2088 root cause):
+    `roles.successful_runs` grows only with a governance review, so a card also counts each
+    conversation the agent held in this project and each run in which it wrote to the graph —
+    once each, however often it is seen."""
+    rows = connection.execute(text(
+        "SELECT r, count(*) AS n FROM ("
+        "  SELECT agent_role AS r, 'thread:' || id AS ref FROM agent_threads "
+        "   WHERE project_id = :p AND coalesce(agent_role, '') <> '' "
+        "  UNION "
+        f"  SELECT attrs->'provenance'->>'agent_role', 'run:' || {_WORK_REF} FROM kg_nodes "
+        "   WHERE project_id = :p AND coalesce(attrs->'provenance'->>'agent_role', '') <> '' "
+        f"     AND {_WORK_REF} IS NOT NULL"
+        ") x GROUP BY r"), {"p": project_id}).mappings().all()
+    return {str(r["r"]): int(r["n"]) for r in rows}
+
+
 def _candidates(connection: Connection, project_id: str) -> list[dict[str, Any]]:
     """The project's agents, the recommended ones first, each with its Passport's essentials
     (who it is, its mission, trust, runs, and the fingerprint its Passport carries)."""
@@ -72,6 +94,7 @@ def _candidates(connection: Connection, project_id: str) -> list[dict[str, Any]]
         "FROM roles WHERE project_id = :p AND coalesce(lifecycle, 'active') <> 'retired' "
         "ORDER BY display_name"), {"p": project_id}).mappings().all()
     order = {k: i for i, (k, _j, _l) in enumerate(TEAM_JOBS)}
+    work = _work_counts(connection, project_id)
     out = []
     for r in rows:
         job = JOB_OF.get(r["role_key"])
@@ -80,7 +103,7 @@ def _candidates(connection: Connection, project_id: str) -> list[dict[str, Any]]
             "job": job[0] if job else None, "does": job[1] if job else None,
             "recommended": job is not None,
             "mission": r["mission"], "trust": int(r["trust_score"] or 0),
-            "runs": int(r["successful_runs"] or 0), "autonomy": int(r["autonomy_level"] or 0),
+            "runs": int(r["successful_runs"] or 0) + work.get(r["role_key"], 0), "autonomy": int(r["autonomy_level"] or 0),
             "passport": (r["fingerprint"] or "")[:12] or None,
         })
     out.sort(key=lambda c: (order.get(c["role_key"], len(order)), c["display_name"] or ""))

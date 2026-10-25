@@ -245,7 +245,8 @@ function BubbleBody({ b, onFocusNode }: { b: BubbleSummary; onFocusNode: (id: st
       {b.members?.length ? (
         <Section title={`In "${b.node.label}"`} testId="kg-panel-members">
           <ul className="kg-conn-list">
-            {b.members.map((m) => <NodeRow key={m.id} n={m} note={m.sub} onPick={() => onFocusNode(m.id, m)} />)}
+            {/* The package is the section's title: each member says only its own file. */}
+            {b.members.map((m) => <NodeRow key={m.id} n={m} note={m.sub?.split("/").pop()} onPick={() => onFocusNode(m.id, m)} />)}
           </ul>
         </Section>
       ) : null}
@@ -268,6 +269,19 @@ function BubbleBody({ b, onFocusNode }: { b: BubbleSummary; onFocusNode: (id: st
       </Section>
     </>
   );
+}
+
+/** A time attribute (`last_seen_at`, any ISO timestamp): said by the area's one formatter, in the
+ *  viewer's zone (tester round 5: "last seen at 2026-10-25T07:20:40Z" beside "00:13 PDT"). */
+export function isTimeAttr(k: string, v: unknown): boolean {
+  return typeof v === "string" && (/_at$/.test(k) || /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(v)) && !Number.isNaN(Date.parse(v));
+}
+
+/** An attribute's value in words: a time by kgWhen, a snake_case enum ("root_cause") spaced. */
+export function attrText(k: string, v: unknown): string {
+  if (isTimeAttr(k, v)) return when(String(v));
+  const s = String(v);
+  return /^[a-z]+(_[a-z]+)+$/.test(s) ? s.replace(/_/g, " ") : s;
 }
 
 const ATTR_SKIP = new Set(["line", "end_line", "module", "lang", "language", "symbol_kind", "type_kind", "kind", "statement", "provenance", "review", "scope", "detail", "about", "evidence", "category", "confidence", "status"]);
@@ -326,7 +340,7 @@ function DetailBody({ d, w, orgId, onFocusNode, viewEdges, viewNote = null }: {
           {detail ? Object.entries(detail).filter(([k, v]) => isWordsAttr(k, v) && (typeof v === "string" || typeof v === "number")).map(([k, v]) => (
             <div key={`d-${k}`} className="kg-attr"><dt>{k.replace(/_/g, " ")}</dt><dd data-user-text><InlineCode text={String(v)} /></dd></div>
           )) : null}
-          {extra.map(([k, v]) => <div key={k} className="kg-attr"><dt>{k.replace(/_/g, " ")}</dt><dd className="inf-mono">{String(v)}</dd></div>)}
+          {extra.map(([k, v]) => <div key={k} className="kg-attr"><dt>{k.replace(/_/g, " ")}</dt><dd className={isTimeAttr(k, v) ? undefined : "inf-mono"}>{attrText(k, v)}</dd></div>)}
         </dl>
       </Section>
       {isType(d.node) ? <Members d={d} w={w} onFocusNode={onFocusNode} /> : null}

@@ -75,7 +75,8 @@ describe("3. the details panel is a drawer", () => {
     expect(work.hasAttribute("data-panel-open")).toBe(true);
     expect(window.sessionStorage.getItem(PANEL_KEY)).toBe("open");
     expect(css).toMatch(/\.kg-col-panel \{\s*position: absolute;[^}]*transform: translateX\(105%\)/);
-    expect(css).toMatch(/\.kg-work \{[^}]*grid-template-columns: 14\.21053rem minmax\(0, 1fr\);/);
+    // Round 5: the panel reserves its own column; the canvas is what is left.
+    expect(css).toMatch(/\.kg-work \{[^}]*grid-template-columns: 14\.21053rem minmax\(0, 1fr\) var\(--kg-panel-w\);/);
   });
 
   it("a deep link keeps the drawer closed when this session closed it", async () => {

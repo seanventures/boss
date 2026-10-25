@@ -83,7 +83,8 @@ describe("a scan by what it read and when", () => {
     await mount(<RulesReview projectId="p" actor="ceo" onFocusNode={() => {}} />);
     await settle();
     const options = [...($('[data-testid="kg-review-scan"]') as HTMLSelectElement).options].map((o) => o.textContent ?? "");
-    expect(options).toContain("Business rules scan: loan repayment schedule transaction processors · Oct 25, 02:50 (11 rules)");
+    // The engine's UTC time is re-said in the viewer's zone, labelled (round 5: one formatter).
+    expect(options.some((o) => /^Business rules scan: loan repayment schedule transaction processors · Oct 2[45], \d\d:50 \S+ \(11 rules\)$/.test(o))).toBe(true);
     expect(options.some((o) => /rscan_/.test(o))).toBe(false);
   });
 });

@@ -60,16 +60,19 @@ export function GraphArea({ projectId, actor, orgId, archived = false, projectTy
 }) {
   const w = useMemo(() => ({ projectId, actor }), [projectId, actor]);
   const onScreen = useOnScreen();
-  const [deep, setDeep] = useState<Deep>(() => readDeep());
-  const [tab, setTab] = useState<GraphTab>(() => deep.tab ?? "graph");
+  // The URL is read AFTER hydration (tester round 5: React #418): the server has no location, so
+  // the first render is the same on both sides and the link's tab and node apply in a mount effect.
+  const [deep, setDeep] = useState<Deep>({ tab: null, node: null, scan: null, sub: null });
+  const [tab, setTab] = useState<GraphTab>("graph");
   const [repos, setRepos] = useState<{ data: KgRepository[] | null; error: string | null }>({ data: null, error: null });
   const [status, setStatus] = useState<KgGraphStatus | null>(null);
   const [proposed, setProposed] = useState<number | null>(null);
   const [editId, setEditId] = useState<string | null>(null);
-  const [focus, setFocus] = useState<{ id: string; seq: number } | null>(() => (deep.node ? { id: deep.node, seq: 1 } : null));
+  const [focus, setFocus] = useState<{ id: string; seq: number } | null>(null);
   const [indexing, setIndexing] = useState(false);
   const [setup, setSetup] = useState<{ data: KgSetupResponse | null; error: string | null }>({ data: null, error: null });
   const seq = useRef(1);
+  const urlRead = useRef(false);
 
   // Deep links arrive on load and on every in-console navigation (ConsoleShell dispatches popstate).
   useEffect(() => {
@@ -79,9 +82,26 @@ export function GraphArea({ projectId, actor, orgId, archived = false, projectTy
       if (d.tab) setTab(d.tab);
       if (d.node) { seq.current += 1; setFocus({ id: d.node, seq: seq.current }); }
     };
+    on();
+    urlRead.current = true;
     window.addEventListener("popstate", on);
     return () => window.removeEventListener("popstate", on);
   }, []);
+  // The tab on screen IS the URL's ?kg_tab= (round 5: kg_tab=setup stayed while Graph showed, so a
+  // reload opened Setup) — whichever way it changed: a press, a deep link, the setup auto-route.
+  // null, not Next's own history state: with its markers the router would keep, and later write
+  // back, the old URL (ConsoleShell's own replaceState calls pass null too).
+  useEffect(() => {
+    if (!urlRead.current) return;
+    try {
+      const url = new URL(window.location.href);
+      if (url.searchParams.get("area") !== "knowledge") return;
+      const want = tab === "graph" ? null : tab;
+      if (url.searchParams.get("kg_tab") === want) return;
+      if (want) url.searchParams.set("kg_tab", want); else url.searchParams.delete("kg_tab");
+      window.history.replaceState(null, "", url.toString());
+    } catch { /* no location */ }
+  }, [tab]);
 
   const seen = useRef(false);
   if (onScreen) seen.current = true;
@@ -141,16 +161,7 @@ export function GraphArea({ projectId, actor, orgId, archived = false, projectTy
   };
 
   /** A tab is also the URL's (?kg_tab=), so a reload or a shared link opens the same tab. */
-  const changeTab = (next: GraphTab) => {
-    setTab(next);
-    try {
-      const url = new URL(window.location.href);
-      if (url.searchParams.get("area") === "knowledge") {
-        if (next === "graph") url.searchParams.delete("kg_tab"); else url.searchParams.set("kg_tab", next);
-        window.history.replaceState(window.history.state, "", url.toString());
-      }
-    } catch { /* no location */ }
-  };
+  const changeTab = (next: GraphTab) => { setTab(next); };
 
   const rulesLocked = rulesLock(status);
   const anyIndexed = (repos.data ?? []).some((r) => r.status === "indexed" || (r.graph?.nodes ?? 0) > 0);

@@ -62,11 +62,10 @@ export function KgIntro() {
   return (
     <aside className="kg-intro" data-testid="kg-intro" aria-label="What the knowledge graph is">
       <div className="kg-intro-body">
-        <strong className="kg-intro-title">A knowledge graph of this project&apos;s code, and of what its agents know about it.</strong>
         <ul className="kg-intro-layers">
-          <li><span className="kg-dot" data-layer="code" aria-hidden /><b>Code</b> — areas, packages, classes and calls, indexed from the repository.</li>
-          <li><span className="kg-dot" data-layer="rules" aria-hidden /><b>Rules</b> — business rules agents find in the code, trusted once a person approves them.</li>
-          <li><span className="kg-dot" data-layer="learning" aria-hidden /><b>Learning</b> — what agents learn while they work: failures, causes, fixes, precedents.</li>
+          <li title="Areas, packages, classes and calls, indexed from the repository"><span className="kg-dot" data-layer="code" aria-hidden /><b>Code</b> indexed from the repository</li>
+          <li title="Business rules agents find in the code, trusted once a person approves them"><span className="kg-dot" data-layer="rules" aria-hidden /><b>Rules</b> agents find, a person approves</li>
+          <li title="What agents learn while they work: failures, causes, fixes, precedents"><span className="kg-dot" data-layer="learning" aria-hidden /><b>Learning</b> agents record as they work</li>
         </ul>
         <p className="kg-quiet">Every node says which agent added it and who approved it.</p>
       </div>

@@ -353,6 +353,65 @@ function alongEllipse(a: number, b: number, count: number, from: number): Pt[] {
   return out;
 }
 
+/** The room one node's label takes along its ring (tester round 5): `row` at the ring's sides,
+ *  where labels stack one per row beside their nodes, and `w` at its top and bottom, where they sit
+ *  side by side above or below them. */
+export type LabelSlot = { row: number; w: number };
+
+/** The arc between two ring nodes that keeps their labels apart (tester round 5), at polar angle
+ *  `phi` where the ring runs along unit tangent (tx, ty). A label goes beside its node where the
+ *  ring faces sideways (|cos φ| ≥ 0.4, graph-canvas sidesFor), so two neighbours need `row` of
+ *  VERTICAL separation; elsewhere it goes above or below, so they need `w` of HORIZONTAL
+ *  separation. Never less than two nodes' width. */
+export function slotAt(slot: LabelSlot, phi: number, tx = 0, ty = 1): number {
+  const side = Math.abs(Math.cos(phi)) >= 0.4;
+  const need = side ? slot.row / Math.max(0.3, Math.abs(ty)) : slot.w / Math.max(0.3, Math.abs(tx));
+  return Math.max(NODE_R * 2 + 6, need);
+}
+
+const SLOT_STEPS = 1440;
+
+/** How many label slots an ellipse (a × b) holds: ∮ ds / slot(φ). Linear in its size. */
+export function slotMeasure(a: number, b: number, slot: LabelSlot): number {
+  let m = 0;
+  let px = a; let py = 0;
+  for (let i = 1; i <= SLOT_STEPS; i += 1) {
+    const t = (i / SLOT_STEPS) * Math.PI * 2;
+    const x = a * Math.cos(t); const y = b * Math.sin(t);
+    const d = Math.hypot(x - px, y - py) || 1e-9;
+    m += d / slotAt(slot, Math.atan2(y, x), (x - px) / d, (y - py) / d);
+    px = x; py = y;
+  }
+  return m;
+}
+
+/** Points along an ellipse at equal SLOT measure: nodes closer at the sides (one label row
+ *  each), wider apart at the top and bottom (a label's width each). `from` is a polar angle. */
+export function alongEllipseSlots(a: number, b: number, count: number, from: number, slot: LabelSlot): Pt[] {
+  const cum: number[] = [0];
+  const pts: Pt[] = [{ x: a, y: 0 }];
+  for (let i = 1; i <= SLOT_STEPS; i += 1) {
+    const t = (i / SLOT_STEPS) * Math.PI * 2;
+    const p = { x: a * Math.cos(t), y: b * Math.sin(t) };
+    const d = Math.hypot(p.x - pts[i - 1].x, p.y - pts[i - 1].y) || 1e-9;
+    cum.push(cum[i - 1] + d / slotAt(slot, Math.atan2(p.y, p.x), (p.x - pts[i - 1].x) / d, (p.y - pts[i - 1].y) / d));
+    pts.push(p);
+  }
+  const total = cum[SLOT_STEPS];
+  const t0 = (Math.atan2(a * Math.sin(from), b * Math.cos(from)) + Math.PI * 4) % (Math.PI * 2);
+  const s0 = cum[Math.round((t0 / (Math.PI * 2)) * SLOT_STEPS) % SLOT_STEPS];
+  const out: Pt[] = [];
+  for (let j = 0; j < count; j += 1) {
+    const want = (s0 + (j * total) / count) % total;
+    let lo = 0; let hi = SLOT_STEPS;
+    while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (cum[mid] <= want) lo = mid; else hi = mid; }
+    const seg = cum[hi] - cum[lo] || 1;
+    const f = (want - cum[lo]) / seg;
+    out.push({ x: pts[lo].x + (pts[hi].x - pts[lo].x) * f, y: pts[lo].y + (pts[hi].y - pts[lo].y) * f });
+  }
+  return out;
+}
+
 /**
  * Focus (§5.4; tester rounds 1-3): radial by hop, ONE ring per hop, each ring an ellipse as wide
  * as the canvas is (`aspect`, at most RING_ASPECT_MAX) and long enough that every neighbour has
@@ -361,7 +420,11 @@ function alongEllipse(a: number, b: number, count: number, from: number): Pt[] {
  * connects to. Returns positions, each ring's half-height (its half-width is `aspect` times it),
  * each node's polar angle (where its label goes: outward) and its ring.
  */
-export function focusLayout(centerId: string, nodes: FocusNode[], edges: LayoutEdge[], opts: { aspect?: number } = {}): {
+export function focusLayout(centerId: string, nodes: FocusNode[], edges: LayoutEdge[], opts: {
+  aspect?: number; gap?: number; first?: number; arc?: (id: string) => number;
+  /** A hop's label slot (screen px at 100%): `row` along the ring at its sides, `w` at its top. */
+  slot?: (hop: number) => LabelSlot | undefined;
+} = {}): {
   pos: Map<string, Pt>; rings: number[]; aspect: number; angle: Map<string, number>; ring: Map<string, number>;
 } {
   // Wider than tall in a wide canvas; taller than wide (down to RING_ASPECT_MIN) in a narrow one
@@ -393,15 +456,47 @@ export function focusLayout(centerId: string, nodes: FocusNode[], edges: LayoutE
       ordered = [...list].sort((a, b) => w(b.id) - w(a.id) || (a.id < b.id ? -1 : 1)).map((nd) => ({ id: nd.id, want: 0 }));
     } else {
       ordered = list.map((nd) => {
-        const parents = (neighbours.get(nd.id) ?? []).filter((x) => angle.has(x.id));
-        const want = parents.length ? circularMean(parents.map((p) => angle.get(p.id)!)) : (hashSeed(nd.id) / 4294967296) * Math.PI * 2;
+        // Beside its STRONGEST way in — the one edge a Focus draws for it (focusEdges) — so that
+        // edge stays short (tester round 5: a cluster at the mean of many parents drew its edge
+        // across the whole first ring). The centre is no parent here: it sits at no angle.
+        const parents = (neighbours.get(nd.id) ?? []).filter((x) => angle.has(x.id) && x.id !== centerId);
+        const top = parents.reduce((m, p) => Math.max(m, p.w), 0);
+        const strongest = parents.filter((p) => p.w === top);
+        const want = parents.length ? circularMean(strongest.map((p) => angle.get(p.id)!)) : (hashSeed(nd.id) / 4294967296) * Math.PI * 2;
         return { id: nd.id, want: (want + Math.PI * 4) % (Math.PI * 2) };
       }).sort((a, b) => a.want - b.want || (a.id < b.id ? -1 : 1));
     }
-    const need = (ordered.length * LABEL_ARC) / unitPerimeter;
-    const radius = round(Math.max(prev ? prev + RING_GAP : RING_FIRST, need));
     const start = h === hops[0] ? -Math.PI / 2 : ordered[0].want;
-    const at = alongEllipse(radius * ax, radius, ordered.length, start);
+    const slot = opts.slot?.(h);
+    let at: Pt[];
+    let radius: number;
+    if (slot) {
+      // LABEL SLOTS BY ARC LENGTH (tester round 5): a label beside a node at the ring's side needs
+      // one row of the arc; one above or below it at the top needs its width. Nodes are spaced by
+      // the room their LABEL needs where they sit, so every one on the ring has its slot.
+      const per = slotMeasure(ax, 1, slot);
+      radius = round(Math.max(prev ? prev + (opts.gap ?? RING_GAP) : (opts.first ?? RING_FIRST), ordered.length / per));
+      at = alongEllipseSlots(radius * ax, radius, ordered.length, start, slot);
+      if (h !== hops[0]) {
+        // An outer ring turned so each node (cluster) sits as near as it can to what it hangs on:
+        // its one edge in stays short and crosses no other node's label (tester round 5).
+        const dist = (p: Pt, want: number) => { const d = Math.abs(Math.atan2(p.y, p.x) - want) % (Math.PI * 2); return Math.min(d, Math.PI * 2 - d); };
+        const cost = (pts: Pt[]) => pts.reduce((s, p, j) => s + dist(p, ordered[j].want), 0);
+        let best = cost(at);
+        for (let k = 1; k < 72; k += 1) {
+          const cand = alongEllipseSlots(radius * ax, radius, ordered.length, start + (k / 72) * Math.PI * 2, slot);
+          const c = cost(cand);
+          if (c < best - 1e-9) { best = c; at = cand; }
+        }
+      }
+    } else {
+      // Each node's share of its ring: LABEL_ARC, or what `arc` says (a cluster bubble and its
+      // two-line label take more than a class).
+      const arcSum = ordered.reduce((s, t) => s + (opts.arc ? opts.arc(t.id) : LABEL_ARC), 0);
+      const need = arcSum / unitPerimeter;
+      radius = round(Math.max(prev ? prev + (opts.gap ?? RING_GAP) : (opts.first ?? RING_FIRST), need));
+      at = alongEllipse(radius * ax, radius, ordered.length, start);
+    }
     ordered.forEach((t, j) => {
       const p = { x: round(at[j].x), y: round(at[j].y) };
       angle.set(t.id, Math.atan2(p.y, p.x));
@@ -907,10 +1002,30 @@ export function tailEllipsis(text: string, max: number): string {
 export const FOCUS_RING_CAP: Record<number, number> = { 1: 28, 2: 32, 3: 32 };
 /** At most this many group bubbles per hop; anything beyond joins one "+N more" group. */
 export const FOCUS_GROUPS = 6;
+/** At most this many cluster bubbles on an outer ring (the rest share "other packages"). */
+export const FOCUS_CLUSTERS = 8;
+/** An outer hop with at most this many nodes draws them as themselves, not clusters. */
+export const CLUSTER_MIN_HOP = 3;
+/** A cluster bubble's screen radius: between a class (14) and an area (28). */
+export const CLUSTER_R = 19;
+/** The arc a cluster bubble and its two-line label take along its ring. */
+export const CLUSTER_ARC = 104;
 /** A group's package name is shortened from its start past this (its label is never cut). */
 export const GROUP_NAME_MAX = 20;
 
-export type GroupNode = { id: string; key: string; kind: string; label: string; layer: "code" | "rules" | "learning"; trust_tier: "observed"; sub?: string; hop: number };
+export type GroupNode = { id: string; key: string; kind: string; label: string; layer: "code" | "rules" | "learning"; trust_tier: "observed"; sub?: string; hop: number;
+  /** An outer hop's package cluster (opens on click), not an overflow group of the first ring. */
+  cluster?: boolean };
+
+/** The shortest folder tails (two folders at least) that tell a set of package paths apart. */
+export function distinctTails(paths: string[]): string[] {
+  const parts = paths.map((p) => p.split("/").filter(Boolean));
+  const tail = (ps: string[]) => ps.slice(-2).join("/") || "elsewhere";
+  const count = new Map<string, number>();
+  for (const ps of parts) count.set(tail(ps), (count.get(tail(ps)) ?? 0) + 1);
+  // A shared tail: the module (the path's first folder) says which one — "fineract-loan/…/service".
+  return parts.map((ps) => (count.get(tail(ps))! > 1 && ps.length > 2 ? `${ps[0]}/…/${ps.slice(-2).join("/")}` : tail(ps)));
+}
 
 /** What a neighbour is grouped under: its package (the folder its file is in), or its layer. */
 export function groupKey(n: { layer: string; sub?: string; key: string }): { key: string; label: string } {
@@ -929,6 +1044,7 @@ export function groupKey(n: { layer: string; sub?: string; key: string }): { key
 export function groupFocus<N extends { id: string; key: string; layer: string; sub?: string; hop: number; label: string },
   E extends { src: string; dst: string; kind: string; weight: number; label: string | null }>(
   centerId: string, nodes: N[], edges: E[], caps: Record<number, number> = FOCUS_RING_CAP,
+  opts: { clusterFrom?: number; clusters?: number } = {},
 ): { nodes: Array<N | GroupNode>; edges: E[]; members: Map<string, N[]> } {
   const weight = new Map<string, number>();
   for (const e of edges) {
@@ -942,6 +1058,41 @@ export function groupFocus<N extends { id: string; key: string; layer: string; s
   for (const h of hops) {
     const list = nodes.filter((n) => n.hop === h);
     if (h === 0 || list.some((n) => n.id === centerId)) { out.push(...list); continue; }
+    if (opts.clusterFrom !== undefined && h >= opts.clusterFrom && list.length > CLUSTER_MIN_HOP) {
+      // TESTER ROUND 5 P1: an outer hop is never a ring of single classes. Every node of it goes
+      // into its package's cluster bubble ("loanaccount/domain · 37 classes"), drawn one per
+      // package; a cluster opens on click. Lone packages share one "other packages" cluster.
+      const byPkg = new Map<string, { label: string; items: N[] }>();
+      for (const n of list) {
+        const g = groupKey(n);
+        const cur = byPkg.get(g.key) ?? { label: g.label, items: [] };
+        cur.items.push(n);
+        byPkg.set(g.key, cur);
+      }
+      const rankOf = (items: N[]) => items.reduce((s, n) => s + (weight.get(n.id) ?? 0), 0);
+      const sized = [...byPkg.entries()].filter(([, g]) => g.items.length >= 2)
+        .sort((a, b) => b[1].items.length - a[1].items.length || rankOf(b[1].items) - rankOf(a[1].items) || (a[0] < b[0] ? -1 : 1));
+      const max = Math.max(1, opts.clusters ?? FOCUS_CLUSTERS);
+      const named = sized.slice(0, sized.length > max ? max - 1 : max);
+      const namedKeys = new Set(named.map(([k]) => k));
+      const rest = [...byPkg.entries()].filter(([k]) => !namedKeys.has(k)).sort((a, b) => (a[0] < b[0] ? -1 : 1));
+      const restItems = rest.flatMap(([, g]) => g.items);
+      const add = (key: string, label: string, items: N[], packages: number) => {
+        const id = `group:${h}:${key}`;
+        const sorted = [...items].sort((a, b) => (weight.get(b.id) ?? 0) - (weight.get(a.id) ?? 0) || (a.id < b.id ? -1 : 1));
+        members.set(id, sorted);
+        for (const n of items) into.set(n.id, id);
+        const noun = items[0].layer === "code" ? (items.length === 1 ? "class" : "classes") : (items.length === 1 ? "item" : "items");
+        out.push({ id, key: id, kind: "group", label, layer: items[0].layer === "code" ? "code" : items[0].layer as "rules" | "learning",
+          trust_tier: "observed", sub: packages > 1 ? `${items.length} ${noun} · ${packages} packages` : `${items.length} ${noun}`, hop: h, cluster: true });
+      };
+      // Two packages with the same last two folders ("loanaccount/service" in two modules) are
+      // told apart by as many more folders as it takes.
+      const names = distinctTails(named.map(([key]) => key));
+      named.forEach(([key, g], i) => add(key, names[i], g.items, 1));
+      if (restItems.length) add("other", rest.length === 1 ? tailEllipsis(rest[0][1].label, GROUP_NAME_MAX) : "other packages", restItems, rest.length);
+      continue;
+    }
     const cap = caps[h] ?? FOCUS_RING_CAP[h] ?? 32;
     const ranked = [...list].sort((a, b) => (weight.get(b.id) ?? 0) - (weight.get(a.id) ?? 0) || (a.id < b.id ? -1 : 1));
     if (ranked.length <= cap + 2) { out.push(...ranked); continue; }
@@ -990,7 +1141,7 @@ export function groupFocus<N extends { id: string; key: string; layer: string; s
 
 /** A ring node's label is shown only from this zoom up (or on hover, or when it is the selection
  *  or one hop from it): 2 hops / Show 200 name the first ring, the rest on hover or zoom. */
-export const LABEL_ZOOM_OUTER = 1;
+export const LABEL_ZOOM_OUTER = 1.35;
 
 /**
  * WHAT A FOCUS DRAWS (tester round 4 P0: 2 hops and Show 200 were a solid knot of edges at the
@@ -1029,4 +1180,67 @@ export function focusKeepLabels(centerId: string, hops: Map<string, number>, edg
   }
   out.add(centerId);
   return out;
+}
+
+// ── tester round 5: outer hops as clusters, members fanned out, labels that read ─────────────
+
+/**
+ * Where an OPENED cluster's members go: on an arc beyond the outermost ring, centred on the
+ * cluster's own angle, LABEL_ARC apart (a further row out when one row would pass a quarter of
+ * the ring). Nothing already drawn moves: opening a cluster is never a re-layout.
+ */
+export function placeMembers(at: Pt, outer: number, aspect: number, ids: string[], gap = 80): Map<string, Pt> {
+  const out = new Map<string, Pt>();
+  if (!ids.length) return out;
+  const theta = Math.atan2(at.y * aspect, at.x);   // the ellipse parameter of the cluster's angle
+  let row = 0; let i = 0;
+  while (i < ids.length) {
+    const r = outer + gap + row * 52;
+    const per = Math.max(3, Math.floor((ellipsePerimeter(r * aspect, r) / 4) / LABEL_ARC));
+    const take = ids.slice(i, i + per);
+    // The arc step as a parameter step: the ellipse's local speed at theta.
+    const local = Math.hypot(r * aspect * Math.sin(theta), r * Math.cos(theta)) || r;
+    const step = LABEL_ARC / local;
+    take.forEach((id, j) => {
+      const t = theta + (j - (take.length - 1) / 2) * step + (row % 2 ? step / 2 : 0);
+      out.set(id, { x: round(Math.cos(t) * r * aspect), y: round(Math.sin(t) * r) });
+    });
+    i += take.length;
+    row += 1;
+  }
+  return out;
+}
+
+/**
+ * How many labels a ring shows (tester round 5: cap visible labels per ring by available arc
+ * length): its screen perimeter over the room one label takes along it. A ring's top and bottom
+ * hold labels side by side (`labelW` each), its sides stack them a row apart, so the room per
+ * label is the mean of the two.
+ */
+export function ringLabelCapacity(radius: number, aspect: number, k: number, labelW = 96, rowH = 24): number {
+  const per = ellipsePerimeter(radius * aspect * k, radius * k);
+  return Math.max(4, Math.floor(per / ((labelW + rowH) / 2)));
+}
+
+/** Cut on CHARACTER width with an ellipsis (tester round 5: never down to a single word). */
+export function charEllipsis(text: string, max: number): string {
+  if (text.length <= max) return text;
+  return `${text.slice(0, Math.max(1, max - 1)).replace(/[-_./\s]+$/, "")}…`;
+}
+
+/**
+ * A name on two lines at a word boundary (camelCase humps, "-", "_", ".", "/", spaces), each at
+ * most `max` characters; what does not fit is cut on the second line by character, with an
+ * ellipsis. One line when it fits: "AdvancedPaymentScheduleTransactionProcessor" at 18 →
+ * ["AdvancedPayment", "ScheduleTransacti…"].
+ */
+export function twoLines(text: string, max: number): string[] {
+  if (text.length <= max) return [text];
+  const words = text.match(/[A-Z]+(?![a-z])|[A-Z]?[a-z0-9]+|[^A-Za-z0-9]+|[A-Z]/g) ?? [text];
+  let first = "";
+  let i = 0;
+  while (i < words.length && (first + words[i]).length <= max) { first += words[i]; i += 1; }
+  if (!first || first.length < 4) return [charEllipsis(text, max)];
+  const rest = words.slice(i).join("").replace(/^\s+/, "");
+  return rest ? [first.replace(/\s+$/, ""), charEllipsis(rest, max)] : [first];
 }

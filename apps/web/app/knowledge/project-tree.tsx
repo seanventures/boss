@@ -13,8 +13,25 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { kindName, kindToken } from "../../lib/kg-layout";
-import { getTreeChildren } from "../../lib/kg-view";
-import type { KgTreeRow, KgTreeTab } from "../../lib/kg-view-types";
+import { getSearch, getTreeChildren } from "../../lib/kg-view";
+import type { KgSearchHit, KgTreeRow, KgTreeTab } from "../../lib/kg-view-types";
+
+/** The graph layer a tree tab lists (its search is asked for that layer only). */
+const TAB_LAYER: Record<KgTreeTab, string> = { project: "code", rules: "rules", learning: "learning" };
+
+/** The tree's own matches, then each search hit of the tab's layer the tree did not find, as a
+ *  match row at the top level (its node one press away). Deterministic: the search's order. */
+export function withSearchHits(rows: KgTreeRow[], hits: KgSearchHit[], tab: KgTreeTab): KgTreeRow[] {
+  const layer = TAB_LAYER[tab];
+  // Code the tree found is already shown where it lives; search adds code only when it found none.
+  if (tab === "project" && rows.some((r) => r.match)) return rows;
+  const have = new Set(rows.map((r) => r.node_id).filter(Boolean));
+  const extra: KgTreeRow[] = hits.filter((h) => h.node.layer === layer && !have.has(h.node.id)).map((h) => ({
+    key: `hit:${h.node.id}`, parent_key: null, level: "item", node_id: h.node.id, label: h.node.label,
+    kind: h.node.kind as KgTreeRow["kind"], layer: h.node.layer as KgTreeRow["layer"], count: 0, has_children: false, match: true,
+  }));
+  return [...rows, ...extra];
+}
 
 const ROW_H = 28;
 const OVERSCAN = 12;
@@ -110,8 +127,15 @@ export function ProjectTree({ projectId, actor, tab, onTab, query, selectedId, o
     const ctl = typeof AbortController !== "undefined" ? new AbortController() : null;
     const timer = setTimeout(async () => {
       setFiltered((f) => ({ q, rows: f?.q === q ? f.rows : [], loading: true, error: null }));
-      const r = await getTreeChildren(who, { tab, q }, ctl?.signal);
-      if (r.ok) setFiltered({ q, rows: r.data.rows, loading: false, error: null });
+      // ONE SEARCH SOURCE (tester round 5: the box found INC-2088 while the tree said "Nothing in
+      // Learning matches"): the tree's matches are the tree's own (with their ancestors) plus every
+      // hit the graph search finds in this tab's layer — matched on what search reads (the run, its
+      // conversation, the attributes), not only on names.
+      const [r, s] = await Promise.all([
+        getTreeChildren(who, { tab, q }, ctl?.signal),
+        getSearch(who, q, { layers: TAB_LAYER[tab], limit: 20 }, ctl?.signal),
+      ]);
+      if (r.ok) setFiltered({ q, rows: withSearchHits(r.data.rows, s.ok ? s.data.hits : [], tab), loading: false, error: null });
       else if (r.status !== -1) setFiltered({ q, rows: [], loading: false, error: r.error });
     }, 150);
     return () => { clearTimeout(timer); ctl?.abort(); };
@@ -251,7 +275,7 @@ export function ProjectTree({ projectId, actor, tab, onTab, query, selectedId, o
   useEffect(() => {
     if (!focusWanted.current || !cursor) return;
     const el = scroller.current?.querySelector<HTMLElement>(`[data-key="${typeof CSS !== "undefined" && CSS.escape ? CSS.escape(cursor) : cursor}"]`);
-    if (el) { focusWanted.current = false; el.focus(); }
+    if (el) { focusWanted.current = false; el.focus({ preventScroll: true }); }
   });
 
   const onKey = (e: React.KeyboardEvent, key: string) => {
