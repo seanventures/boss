@@ -1527,10 +1527,13 @@ function ConsoleShellInner({
             type="button"
             className="bx-new-project"
             data-testid="topbar-new-project"
+            aria-label="New build"
             title={NEW_BUILD_TIP}
             onClick={() => openNewProject()}
           >
-            <span aria-hidden>+</span> New build
+            {/* Below 1480 px the label goes and the + stays, with the tooltip (KG round 6:
+                at 1280-1440 the button ran past the window's edge). */}
+            <span aria-hidden>+</span><span className="bx-new-label">New build</span>
           </GatedButton> : null}
 
           <div className="bx-topbar-title" id="boss-console-title">

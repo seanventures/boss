@@ -22,6 +22,8 @@ import { HANDOFF_KEY, HANDOFF_PATH } from "../../lib/identity/github-manifest";
 import { useGuardedCall } from "../../components/identity/identity-provider";
 import { SectionLabel } from "../section-label";
 import { toast, useBoard } from "./parts";
+import { useOnScreen } from "../../lib/area-shown";
+import { isAborted } from "../../lib/api-write";
 import { Dot, Out, Tip } from "./pill";
 
 export type GitHubMode = "app" | "token" | "as_me" | "none";
@@ -213,15 +215,21 @@ function AppCard({ status, reload, back = false, repos = [] }: {
   const links: AppLinks = { ...(app.links ?? {}), ...(verified?.links ?? {}) };
   useEffect(() => { setVerified(status.app.verified ?? null); }, [status.app.verified]);
 
-  const verify = useCallback(async () => {
+  // `quiet`: an ask nobody pressed for (on open, a repository change, coming back to the tab).
+  // Its failure stays in the card's own lines — never a toast over whatever area is on screen
+  // (KG round 6: "Reload and retry" over the Knowledge Graph came from this card, mounted hidden
+  // in Setup, asking GitHub on its own). An aborted request is never a failure.
+  const verify = useCallback(async (quiet = false) => {
     setChecking(true);
     try {
       setVerified(await idPost<Verified>("/v1/identity/github/app/verify", {}));
       sayVerified("access");
     } catch (error) {
-      toast(sentence(error), "error");
+      if (!quiet && !isAborted(error)) toast(sentence(error), "error");
     } finally { setChecking(false); }
   }, []);
+  // Asked on its own only while Setup is the area on screen (every area stays mounted hidden).
+  const onScreen = useOnScreen();
   // ASKED AGAIN when GitHub sends the person back, when Test all runs, and once when the App is
   // installed but GitHub was never asked — never trusted from what BOSS requested.
   const installed = app.installed && app.source === "setup";
@@ -232,22 +240,22 @@ function AppCard({ status, reload, back = false, repos = [] }: {
     || !stored.checked_at || Date.now() / 1000 - stored.checked_at > VERIFY_STALE_S;
   const asked = useRef(false);
   useEffect(() => {
-    if (!installed) return;
-    if (back || (needsAsking && !asked.current)) { asked.current = true; void verify(); }
+    if (!installed || !onScreen) return;
+    if (back || (needsAsking && !asked.current)) { asked.current = true; void verify(!back); }
     const again = () => { void verify(); };
     const other = (e: Event) => { if ((e as CustomEvent<{ from?: string }>).detail?.from !== "access") reload(); };
     window.addEventListener(SETUP_TESTED_EVENT, again);
     window.addEventListener(GITHUB_VERIFIED_EVENT, other);
     return () => { window.removeEventListener(SETUP_TESTED_EVENT, again); window.removeEventListener(GITHUB_VERIFIED_EVENT, other); };
-  }, [installed, verify, needsAsking, back, reload]);
+  }, [installed, onScreen, verify, needsAsking, back, reload]);
   // A REPOSITORY REGISTERED OR REMOVED: whether the App is installed on it is asked at once.
   const repoKey = repos.join(",");
   const lastRepos = useRef(repoKey);
   useEffect(() => {
-    if (!installed || lastRepos.current === repoKey) return;
+    if (!installed || !onScreen || lastRepos.current === repoKey) return;
     lastRepos.current = repoKey;
-    void verify();
-  }, [installed, repoKey, verify]);
+    void verify(true);
+  }, [installed, onScreen, repoKey, verify]);
   // A GAP IS FIXED ON GITHUB, in another tab: coming back to this one asks again (at most every 10s).
   const gap = installed && verified !== null && verified.ok === false;
   useEffect(() => {
@@ -256,7 +264,7 @@ function AppCard({ status, reload, back = false, repos = [] }: {
     const onFocus = () => {
       if (document.visibilityState !== "visible" || Date.now() - last < 10_000) return;
       last = Date.now();
-      void verify();
+      void verify(true);
     };
     window.addEventListener("focus", onFocus);
     document.addEventListener("visibilitychange", onFocus);

@@ -14,6 +14,7 @@ import { GatedButton } from "../../components/gated";
 import { LockedPanel } from "../../components/locked-panel";
 import { KgReadError } from "./kg-states";
 import { agentName, personName } from "../../lib/kg-provenance";
+import { splitWhen, wordCut } from "../../lib/word-cut";
 import {
   FACT_MANAGE, RULE_REVIEW, approveRule, codeHref, editRule, getGraphStatus, getRules, kgRunHref, promoteFact,
   rejectFact, rejectRule,
@@ -90,9 +91,14 @@ export function RulesReview({ projectId, actor, orgId, archived, locked, initial
   const scans = [...new Set([...(data?.scans ?? []).map((x) => x.id),
     ...(data?.items ?? []).map((r) => r.scan_id).filter((s): s is string => !!s), ...(scan ? [scan] : [])])];
   // A scan by what it read and when (the server's words), never its raw id.
+  // A run's title is cut at a word (round 6), the whole of it the option's tooltip.
   const scanLabel = (id: string) => {
     const known = data?.scans?.find((x) => x.id === id);
-    return known ? `${known.label} (${known.rules} rule${known.rules === 1 ? "" : "s"})` : "A scan";
+    if (!known) return { text: "A scan", full: "A scan" };
+    const n = ` (${known.rules} rule${known.rules === 1 ? "" : "s"})`;
+    const [title, at] = splitWhen(known.label);
+    const cut = wordCut(title, 72);
+    return { text: `${cut.text}${at}${n}`, full: `${cut.full}${at}${n}` };
   };
   const areas = [...new Set((data?.items ?? []).flatMap((r) => r.scope.areas))].sort();
   const proposedShown = items.filter((r) => r.status === "proposed");
@@ -137,7 +143,7 @@ export function RulesReview({ projectId, actor, orgId, archived, locked, initial
               <span>Scan</span>
               <select value={scan} onChange={(e) => setScan(e.target.value)} data-testid="kg-review-scan" aria-label="Filter by scan">
                 <option value="">Every scan</option>
-                {scans.map((s) => <option key={s} value={s}>{scanLabel(s)}</option>)}
+                {scans.map((s) => { const l = scanLabel(s); return <option key={s} value={s} title={l.full}>{l.text}</option>; })}
               </select>
             </label>
             <label className="kg-select">
@@ -282,7 +288,8 @@ function RuleCard({ r, w, orgId, archived, archivedWhy, picked, editing, onPick,
         <span title="How sure the proposing agent was, capped by its evidence">{Math.round(r.confidence * 100)}% confident</span>
         <span>Proposed by <strong>{by}</strong>{r.provenance.at ? ` · ${when(r.provenance.at)}` : ""}</span>
         {run ? <a className="inf-link" href={run} data-testid="kg-rule-run">its run ↗</a> : null}
-        {r.review ? <span>{r.status === "rejected" ? "Rejected" : "Reviewed"} by <strong>{personName(r.review.by, r.review.by_name)}</strong> · {when(r.review.at)}{r.review.note ? ` — “${r.review.note}”` : ""}</span> : null}
+        {/* Names the approver (round 6): the person's display name, else "the operator". */}
+        {r.review ? <span data-testid="kg-rule-approver">{r.status === "rejected" ? "Rejected" : r.status === "approved" ? "Approved" : "Reviewed"} by <strong>{personName(r.review.by, r.review.by_name)}</strong> · {when(r.review.at)}{r.review.note ? ` — “${r.review.note}”` : ""}</span> : null}
         {r.version > 1 ? <span>version {r.version}</span> : null}
       </div>
       <ul className="kg-evidence" aria-label="Evidence">

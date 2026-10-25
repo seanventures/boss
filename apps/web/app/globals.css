@@ -6493,10 +6493,28 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 .bx-org-chip { display: inline-flex; align-items: center; gap: 4px; max-width: 220px; }
 .bx-org-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .bx-new-project { padding-inline: 12px; }
+.bx-new-label { margin-left: 6px; }
 @media (max-width: 1279px) {
   .bx-topbar { padding: 0 16px; gap: 10px; }
   .bx-org-chip { max-width: 120px; }
   .bx-kbd > span { display: none; }
+}
+/* THE TOP BAR FITS AT EVERY DESKTOP WIDTH (KG round 6: at 1280-1440 "+ New build" ran past the
+   window's edge with the rail open). Up to 1480 px the quieter words go first — "Jump to" keeps
+   its ⌘K, the account its name without the role — and New build becomes its + (named by its
+   aria-label, explained by its tooltip). */
+@media (max-width: 1480px) {
+  .bx-topbar { gap: 10px; padding-inline: 18px; }
+  .bx-kbd > span { display: none; }
+  .bx-topbar .idn-me-role { display: none; }
+  .bx-new-project { width: 32px; padding: 0; justify-content: center; font-size: 1.05rem; }
+  .bx-new-project .bx-new-label { display: none; }
+  .bx-topbar-title { text-overflow: ellipsis; }
+}
+/* Narrower still, the area's name leaves the bar rather than shrink to a sliver: the rail's
+   highlight and the area's own header already say where you are. */
+@media (max-width: 1199px) {
+  .bx-topbar-title { display: none; }
 }
 .bx-topbar-spacer { order: 1; }
 .bx-org-chip {
