@@ -23,7 +23,7 @@ import { AreaHead, type HeadTab } from "../infra/kit";
 import { useOnScreen } from "../../lib/area-shown";
 import { useGate } from "../../components/gated";
 import { INDEX_NOW, getGraphStatus, getRepositories, indexNow, rulesLock, type KgGraphStatus, type KgRepository } from "../../lib/kg-view";
-import { getSetup, setupOpens, type KgSetupResponse } from "../../lib/kg-setup";
+import { getSetup, hasIndexedCode, setupOpens, type KgSetupResponse } from "../../lib/kg-setup";
 import type { ProjectType } from "@boss/api-client";
 import { GraphView } from "./graph-view";
 import { KgIntro, KgSetup, KgSetupStrip, KgStart } from "./kg-setup";
@@ -159,7 +159,7 @@ export function GraphArea({ projectId, actor, orgId, archived = false, projectTy
   const stepsLeft = setup.data ? setup.data.steps.length - setup.data.done_count : 0;
   // Any project with a graph has a setup to finish (its team, a first scan), not only one created
   // as a knowledge-graph project (tester round 2: NorthPeak Bank had no strip).
-  const hasGraph = !!setup.data?.has_graph;
+  const hasGraph = hasIndexedCode(setup.data);
   const showSetupTab = isKgProject || hasGraph || tab === "setup";
   const TABS: HeadTab[] = [
     ...(showSetupTab ? [{ key: "setup", label: "Setup", tip: "Import code, assign the team, a first scan, review: this project's knowledge graph, in order",

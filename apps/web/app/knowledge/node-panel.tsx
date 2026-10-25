@@ -687,16 +687,20 @@ function PanelActions({ w, node, detail, archived, rulesLocked, onEditRule, onCh
 }
 
 /** "Scan for rules here" (§4.5): a cost preview first, then the business_rules_scan workflow. */
-export function ScanForRules({ w, node, archived, archivedWhy, compact, onStarted, reader = scanReader() }: {
+export function ScanForRules({ w, node, archived, archivedWhy, compact, onStarted, reader = scanReader(), limits }: {
   w: { projectId: string; actor: string }; node: Pick<KgViewNode, "id" | "key" | "label" | "kind">;
   archived?: boolean; archivedWhy?: string; compact?: boolean;
   /** Told once the scan started (the Knowledge Graph setup re-reads its step). */
   onStarted?: () => void;
   /** Who reads the code, by name (the setup names the team's scanner). */
   reader?: string;
+  /** The scan's cap and default spend (the setup's `scan_defaults`); BOSS's defaults otherwise. */
+  limits?: { max_files: number; max_rules: number; budget_usd: number };
 }) {
+  const maxFiles = limits?.max_files ?? 60;
+  const maxRules = limits?.max_rules ?? 25;
   const [open, setOpen] = useState(false);
-  const [budget, setBudget] = useState("2.00");
+  const [budget, setBudget] = useState((limits?.budget_usd ?? 2).toFixed(2));
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const amount = Number(budget);
@@ -706,7 +710,7 @@ export function ScanForRules({ w, node, archived, archivedWhy, compact, onStarte
     setBusy(true); setMsg(null); setRefusal(null);
     const r = await post("start", {
       project_id: w.projectId, workflow_key: "business_rules_scan", actor: w.actor,
-      input: { scope: [node.key || node.id], max_files: 60, max_rules: 25, budget_usd: amount },
+      input: { scope: [node.key || node.id], max_files: maxFiles, max_rules: maxRules, budget_usd: amount },
       ...(startAnyway.length ? { start_anyway: startAnyway } : {}),
     });
     setBusy(false);
@@ -722,6 +726,10 @@ export function ScanForRules({ w, node, archived, archivedWhy, compact, onStarte
         <GatedButton permission={SCAN_START} className={compact ? "ag-btn ag-btn-primary" : "ag-btn"} data-testid="kg-scan"
                      disabled={archived} title={archived ? archivedWhy : `${sentenceStart(reader)} reads ${node.label} and proposes the business rules it finds`}
                      onClick={() => setOpen(true)}>Scan for rules here</GatedButton>
+        {/* The cost and the cap, before the press (tester round 4: no cost was ever shown). */}
+        <p className="kg-quiet" data-testid="kg-scan-cost">
+          Spends at most ${(valid ? amount : (limits?.budget_usd ?? 2)).toFixed(2)} from the knowledge budget · reads up to {maxFiles} files · proposes up to {maxRules} rules
+        </p>
         {msg ? <p className={msg.ok ? "kg-ok" : "kg-inline-err"} role={msg.ok ? "status" : "alert"} data-testid="kg-scan-msg">{msg.text}</p> : null}
       </div>
     );
@@ -730,8 +738,8 @@ export function ScanForRules({ w, node, archived, archivedWhy, compact, onStarte
     <form className="kg-scan-preview" data-testid="kg-scan-preview" noValidate onSubmit={(e) => { e.preventDefault(); if (valid) void start(); }}>
       <p className="kg-scan-what">
         {sentenceStart(reader)} reads {node.kind === "symbol" ? <><span data-user-text>{node.label}</span> and the code it calls</> : <>the code in <span data-user-text>{node.label}</span></>}
-        — up to <strong>60 files</strong>, the most connected first — and proposes up to
-        <strong> 25 rules</strong>, each with the lines that show it. It stops at whichever limit comes first. No rule is trusted until
+        — up to <strong>{maxFiles} files</strong>, the most connected first — and proposes up to
+        <strong> {maxRules} rules</strong>, each with the lines that show it. It stops at whichever limit comes first. No rule is trusted until
         a person approves it.</p>
       <label className="kg-field">
         <span>Spend at most (USD)</span>

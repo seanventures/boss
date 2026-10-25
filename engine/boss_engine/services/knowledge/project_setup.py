@@ -167,13 +167,17 @@ def status(connection: Connection, project_id: str) -> dict[str, Any]:
     indexed = [r for r in repos if r["status"] == "indexed" and ((r.get("graph") or {}).get("nodes") or 0) > 0]
     indexing = [r for r in repos if r["status"] in ("queued", "running", "pending")]
     nodes = sum(((r.get("graph") or {}).get("nodes") or 0) for r in repos)
+    # THE ONE ANSWER TO "IS THERE INDEXED CODE?" (KG tester round 4). Import code's Done, the scan
+    # gate, the graph's Open button and the console's strip all read this, so the stepper can
+    # never say "1 of 1 repositories indexed" beside "Needs indexed code".
+    has_code = bool(indexed) or nodes > 0
     team = _team(connection, project_id)
     scans = _scans(connection, project_id)
     rules = _rules(connection, project_id)
     learned = _learnings(connection, project_id)
 
     done = {
-        "import": bool(indexed),
+        "import": has_code,
         "team": team["chosen"],
         "scan": scans["count"] > 0,
         # Reviewed: nothing waiting, and something was decided or a scan finished with nothing
@@ -189,21 +193,27 @@ def status(connection: Connection, project_id: str) -> dict[str, Any]:
     }
     # A step that needs an earlier one waits for it: no scan before there is code to scan, and no
     # review before there is a scan.
+    # A step whose earlier step is done but is not the first left is READY, never "waiting": with
+    # code indexed and the team still open, the first scan can start now (the default team scans).
+    # `blocked_by` names the step it really waits for, so the console says the true reason.
     needs = {"scan": "import", "review": "scan"}
     states: dict[str, str] = {}
+    blocked: dict[str, Optional[str]] = {}
     current: Optional[str] = None
     for key in STEPS:
+        blocked[key] = None
         if done[key]:
             states[key] = "done"
         elif working[key]:
             states[key] = "working"
         elif key in needs and not done[needs[key]]:
             states[key] = "waiting"
+            blocked[key] = needs[key]
         elif current is None:
             current = key
             states[key] = "current"
         else:
-            states[key] = "waiting"
+            states[key] = "ready"
     nxt = next((k for k in STEPS if not done[k]), None)
 
     summaries = {
@@ -217,13 +227,13 @@ def status(connection: Connection, project_id: str) -> dict[str, Any]:
         "review": (f"{rules['proposed']} waiting · {rules['approved']} approved · "
                    f"{rules['rejected']} rejected"),
     }
-    steps = [{"key": k, "state": states[k], "done": done[k], "summary": summaries[k]}
-             for k in STEPS]
+    steps = [{"key": k, "state": states[k], "done": done[k], "summary": summaries[k],
+              "blocked_by": blocked[k]} for k in STEPS]
     return {
         "project_id": project_id, "name": project["name"],
         "project_type": project.get("project_type") or "app",
         "archived": project.get("archived_at") is not None,
-        "has_graph": nodes > 0,
+        "has_code": has_code, "has_graph": has_code,
         "steps": steps, "next": nxt, "done_count": sum(1 for k in STEPS if done[k]),
         "repositories": repos, "code_nodes": nodes,
         "team": {**team, "candidates": _candidates(connection, project_id)},

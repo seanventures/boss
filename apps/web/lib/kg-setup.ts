@@ -47,11 +47,33 @@ export const SETUP_STEPS: { key: KgSetupStepKey; label: string; line: string }[]
   { key: "review", label: "Review rules", line: "A person approves, edits or rejects each proposed rule. Only approved rules guide agents." },
 ];
 
+/** IS THERE INDEXED CODE? One answer (the API's `has_code`, read once in project_setup.py) for
+ *  Import code's Done, the first scan's gate, the graph's Open button and the "continue setup"
+ *  strip — so the stepper can never say "1 of 1 repositories indexed" next to "Needs indexed
+ *  code" (KG tester round 4). An older API without `has_code`: its graph, or Import code's Done. */
+export function hasIndexedCode(setup: Pick<KgSetupResponse, "steps" | "has_code" | "has_graph"> | null | undefined): boolean {
+  if (!setup) return false;
+  if (typeof setup.has_code === "boolean") return setup.has_code;
+  if (typeof setup.has_graph === "boolean") return setup.has_graph;
+  return !!setup.steps.find((s) => s.key === "import")?.done;
+}
+
+/** What a step really waits for, or null when it can be done now. */
+export function blockedBy(key: KgSetupStepKey, setup: Pick<KgSetupResponse, "steps" | "has_code" | "has_graph">): KgSetupStepKey | null {
+  const step = setup.steps.find((s) => s.key === key);
+  if (!step || step.done || step.state === "working") return null;
+  if (step.blocked_by !== undefined) return step.blocked_by ?? null;
+  // An older API: the scan needs code, the review needs a scan; nothing else waits.
+  if (key === "scan") return hasIndexedCode(setup) ? null : "import";
+  if (key === "review") return setup.steps.find((s) => s.key === "scan")?.done ? null : "scan";
+  return null;
+}
+
 /** The tab the area opens on. A knowledge-graph project whose code is not in yet opens on its
  *  setup (never an empty canvas); once code is in, the graph — with a "continue setup" strip. */
-export function setupOpens(setup: Pick<KgSetupResponse, "project_type" | "steps"> | null): boolean {
+export function setupOpens(setup: Pick<KgSetupResponse, "project_type" | "steps" | "has_code" | "has_graph"> | null): boolean {
   if (!setup || setup.project_type !== "knowledge_graph") return false;
-  return !setup.steps.find((s) => s.key === "import")?.done;
+  return !hasIndexedCode(setup);
 }
 
 /** "2 of 4 steps done". */

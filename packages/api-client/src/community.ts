@@ -5799,8 +5799,14 @@ export type KgRunProofResponse = { run: KgRunProof | null; comparison: KgRunComp
 /** GET /v1/knowledge/setup?project_id&actor — a knowledge-graph project's guided setup
  *  (engine services/knowledge/project_setup.py): each step's state with its real counts. */
 export type KgSetupStepKey = "import" | "team" | "scan" | "review";
-export type KgSetupStepState = "done" | "working" | "current" | "waiting";
-export type KgSetupStep = { key: KgSetupStepKey; state: KgSetupStepState; done: boolean; summary: string };
+/** `ready`: what it needs is done, and it is not the first step left (the scan, with code in and
+ *  the team still open). `waiting`: it needs `blocked_by` first. */
+export type KgSetupStepState = "done" | "working" | "current" | "ready" | "waiting";
+export type KgSetupStep = {
+  key: KgSetupStepKey; state: KgSetupStepState; done: boolean; summary: string;
+  /** The step this one really waits for, or null. */
+  blocked_by?: KgSetupStepKey | null;
+};
 export type KgSetupRepository = {
   repo: string; branch?: string | null; status: string; summary?: string | null; error?: string | null;
   files?: number | null; parsed?: number | null; indexed_at?: string | null; graph?: { nodes: number; edges: number } | null;
@@ -5816,6 +5822,8 @@ export type KgSetupCandidate = {
 export type KgSetupArea = { key: string; label: string; repo: string; classes: number; packages: number };
 export type KgSetupResponse = {
   project_id: string; name: string; project_type: ProjectType; archived: boolean; has_graph: boolean;
+  /** THE answer to "is there indexed code?": Import code's Done, the scan gate and the strip. */
+  has_code?: boolean;
   steps: KgSetupStep[]; next: KgSetupStepKey | null; done_count: number;
   repositories: KgSetupRepository[]; code_nodes: number;
   team: { chosen: boolean; role_keys: string[]; candidates: KgSetupCandidate[] };

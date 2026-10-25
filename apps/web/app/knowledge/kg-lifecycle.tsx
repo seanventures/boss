@@ -10,7 +10,7 @@ import React, { useEffect, useMemo, useState } from "react";
 
 import { AgentAvatar } from "../agent-avatar";
 import { consoleHref } from "../console-href";
-import { getSetup, SETUP_STEPS, stepsLeftWords, type KgSetupResponse } from "../../lib/kg-setup";
+import { getSetup, hasIndexedCode, SETUP_STEPS, stepsLeftWords, type KgSetupResponse } from "../../lib/kg-setup";
 import "./kg.css";
 
 function n(v: number): string { return v.toLocaleString("en-US"); }
@@ -37,7 +37,7 @@ export function KgLifecycleCard({ projectId, actor, orgId, projectType }: {
   // SHOWN FOR ANY PROJECT WITH A CODE GRAPH (tester round 2: NorthPeak Bank had 51k nodes and no
   // card): a knowledge-graph project always, an app project once something is indexed.
   const isKg = (setup?.project_type ?? projectType) === "knowledge_graph";
-  if (setup ? !(isKg || setup.has_graph) : !isKg) return null;
+  if (setup ? !(isKg || hasIndexedCode(setup)) : !isKg) return null;
   if (!setup) {
     return (
       <section className="kg-life" data-testid="kg-lifecycle" aria-busy={!error}>

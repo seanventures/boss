@@ -81,7 +81,9 @@ def test_a_knowledge_graph_project_is_made_listed_and_set_up_in_steps(world, own
         state = _setup(client, slug)
         assert state["project_type"] == "knowledge_graph" and state["next"] == "import"
         assert [(s["key"], s["state"]) for s in state["steps"]] == [
-            ("import", "current"), ("team", "waiting"), ("scan", "waiting"), ("review", "waiting")]
+            ("import", "current"), ("team", "ready"), ("scan", "waiting"), ("review", "waiting")]
+        assert [s["blocked_by"] for s in state["steps"]] == [None, None, "import", "scan"]
+        assert state["has_code"] is False and state["has_graph"] is False
         assert state["steps"][0]["summary"] == "No repository yet"
         # The team's candidates are the project's REAL agents, the recommended ones first, each
         # with its job here and its Passport's essentials.
@@ -135,8 +137,20 @@ def test_the_steps_follow_the_records_so_the_setup_resumes(world, engine, monkey
                      "graph": {"nodes": 4200, "edges": 9000}, "summary": "4,200 nodes"}]
         state = project_setup.status(db, world.project_a)
         assert state["steps"][0] == {"key": "import", "state": "done", "done": True,
-                                     "summary": "1 of 1 repositories indexed · 4,200 code nodes"}
+                                     "summary": "1 of 1 repositories indexed · 4,200 code nodes",
+                                     "blocked_by": None}
         assert state["has_graph"] is True and state["code_nodes"] == 4200
+        # ONE ANSWER TO "IS THERE INDEXED CODE?" (tester round 4): with code in and the team still
+        # open, the first scan is READY, never "waiting · import a repository first".
+        assert state["has_code"] is True
+        steps = {s["key"]: (s["state"], s["blocked_by"]) for s in state["steps"]}
+        assert steps["scan"] == ("ready", None) and steps["team"] == ("current", None)
+        # A re-index running over code already in keeps the code in: the scan stays open.
+        repos[:] = [{"repo": "acme/core", "status": "running", "files": 900, "parsed": 10,
+                     "graph": {"nodes": 4200, "edges": 9000}, "summary": "Indexing main (running)."}]
+        state = project_setup.status(db, world.project_a)
+        assert state["has_code"] is True and state["steps"][0]["done"] is True
+        assert state["steps"][2]["blocked_by"] is None
         assert state["tools"]["next"].startswith("set_project_team")
 
 
