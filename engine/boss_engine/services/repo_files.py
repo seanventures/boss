@@ -159,8 +159,8 @@ class RepoFiles:
         except OSError as exc:
             raise _refused(path) from exc
 
-    def entries(self, path: str = ".", *, skip: set[str] | frozenset[str] = frozenset()
-                ) -> list[tuple[str, bool]]:
+    def entries(self, path: str = ".", *, skip: set[str] | frozenset[str] = frozenset(),
+                surface_special: bool = False) -> list[tuple[str, bool]]:
         parts = _parts(path, directory=True)
         try:
             with self._directory(parts) as parent:
@@ -173,7 +173,14 @@ class RepoFiles:
                             raise RepoFileRefused("repository directory exceeds entry limit")
                         mode = entry.stat(follow_symlinks=False).st_mode
                         if not (stat.S_ISDIR(mode) or stat.S_ISREG(mode)):
-                            raise _refused("/".join((*parts, entry.name)))
+                            if not surface_special:
+                                raise _refused("/".join((*parts, entry.name)))
+                            # Surface a symlink/special entry as a non-directory leaf so a
+                            # scanning caller can decide whether it would even read it. It is
+                            # never followed (reported as a leaf, not a directory) and the read
+                            # boundary (read_text, O_NOFOLLOW) still refuses it if the caller reads.
+                            rows.append((entry.name, False))
+                            continue
                         rows.append((entry.name, stat.S_ISDIR(mode)))
                 return sorted(rows)
         except FileNotFoundError:
@@ -181,14 +188,15 @@ class RepoFiles:
         except OSError as exc:
             raise _refused(path) from exc
 
-    def walk(self, path: str = ".", *, skip: set[str] | frozenset[str] = frozenset()
-             ) -> Iterator[str]:
+    def walk(self, path: str = ".", *, skip: set[str] | frozenset[str] = frozenset(),
+             surface_special: bool = False) -> Iterator[str]:
         parts = _parts(path, directory=True)
         pending = ["/".join(parts)]
         count = 0
         while pending:
             rel = pending.pop()
-            for name, directory in self.entries(rel or ".", skip=skip):
+            for name, directory in self.entries(rel or ".", skip=skip,
+                                                surface_special=surface_special):
                 count += 1
                 if count > MAX_ENTRIES:
                     raise RepoFileRefused("repository scan exceeds entry limit")

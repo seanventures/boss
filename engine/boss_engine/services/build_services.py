@@ -181,7 +181,7 @@ def detect_in_code(root: Any) -> list[str]:
     remaining = _SCAN_TOTAL_BYTES
     try:
         with RepoFiles(Path(str(root))) as repo:
-            for seen, rel in enumerate(repo.walk(skip=_SKIP_DIRS), 1):
+            for seen, rel in enumerate(repo.walk(skip=_SKIP_DIRS, surface_special=True), 1):
                 if seen > _SCAN_FILES or len(found) >= 3 or remaining <= 0:
                     break
                 name = Path(rel).name.lower()
