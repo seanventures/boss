@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "distribution": "BOSS Community",
-  "release": "v1.0-rc10.9",
+  "release": "v1.0-rc10.10",
   "public_baseline": {
     "tag": "v1.0-rc8",
     "commit": "cb278010b4cef68c55a9684c3e9bd74b14c8b520"

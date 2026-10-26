@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/seanventures/boss/releases/tag/v1.0-rc10.9"><img alt="Release v1.0-rc10.9" src="https://img.shields.io/badge/release-v1.0--rc10.9-1aa89a?style=flat-square"></a>
+  <a href="https://github.com/seanventures/boss/releases/tag/v1.0-rc10.10"><img alt="Release v1.0-rc10.10" src="https://img.shields.io/badge/release-v1.0--rc10.10-1aa89a?style=flat-square"></a>
   <a href="LICENSE"><img alt="License: Apache 2.0" src="https://img.shields.io/badge/license-Apache%202.0-101820?style=flat-square"></a>
   <img alt="Self-hosted" src="https://img.shields.io/badge/deploy-self--hosted-101820?style=flat-square">
   <img alt="Interfaces: web, terminal, CLI, MCP" src="https://img.shields.io/badge/interfaces-web%20%C2%B7%20terminal%20%C2%B7%20CLI%20%C2%B7%20MCP-101820?style=flat-square">
@@ -28,7 +28,7 @@
 
 AI agents can write code, open pull requests, call paid APIs, and touch infrastructure. BOSS is the layer that decides whether they should, and keeps the proof when they do.
 
-Governed workflows turn a goal into a plan you can read, budget reservations, leased jobs, required decisions and effect receipts. Drive them from the web console, the Metatron terminal, or your coding agents over MCP. It runs on hardware you control. Credentials are stored locally; connecting or using a hosted model sends authentication and the selected task data to that provider. This candidate's qualified paths and remaining limits are recorded in the [release notes](docs/community/RELEASE_NOTES_v1.0-rc10.9.md).
+Governed workflows turn a goal into a plan you can read, budget reservations, leased jobs, required decisions and effect receipts. Drive them from the web console, the Metatron terminal, or your coding agents over MCP. It runs on hardware you control. Credentials are stored locally; connecting or using a hosted model sends authentication and the selected task data to that provider. This candidate's qualified paths and remaining limits are recorded in the [release notes](docs/community/RELEASE_NOTES_v1.0-rc10.10.md).
 
 ```text
 Goal  →  Plan  →  Budget  →  Work  →  Evidence  →  Decision  →  Receipt
@@ -72,14 +72,14 @@ BOSS runs on a server you control, and your team reaches Mission Control over HT
 ```sh
 (
   set -e
-  git clone --branch v1.0-rc10.9 https://github.com/seanventures/boss.git boss-rc10.9
-  cd boss-rc10.9
+  git clone --branch v1.0-rc10.10 https://github.com/seanventures/boss.git boss-rc10.10
+  cd boss-rc10.10
   BOSS_RELEASE_COMMIT="$(git rev-parse HEAD)"
   ./install.sh --dir "$PWD" --ref "$BOSS_RELEASE_COMMIT" --console-origin https://boss.example.com
 )
 ```
 
-Use a new directory named `boss-rc10.9`. The command stops if cloning fails, and pins the install to the exact release commit. Continue from `cd boss-rc10.9` afterward. `boss upgrade --to REF` selects a later release deliberately.
+Use a new directory named `boss-rc10.10`. The command stops if cloning fails, and pins the install to the exact release commit. Continue from `cd boss-rc10.10` afterward. `boss upgrade --to REF` selects a later release deliberately.
 
 Use `--console-origin https://192.168.1.50` for a private IP, and add `--yes` to skip the optional model-key question. The installer writes that address to `.env` as `BOSS_CONSOLE_PUBLIC_ORIGIN`, and BOSS uses it as its public address (a `BOSS_PUBLIC_URL` you set yourself takes precedence). Email links, passkeys and SSO redirects use that configured address. Setup shows the URL BOSS uses.
 
@@ -211,7 +211,7 @@ Remote MCP over HTTP requires a bearer token in `BOSS_MCP_HTTP_TOKEN`. The [MCP 
 The complete, status-tagged list is in [Features](docs/community/FEATURES.md).
 
 > [!NOTE]
-> **About this release candidate.** `v1.0-rc10.9` follows rc10.8 and adds BOSS's monitoring and alerting: connect any app (OpenTelemetry, Prometheus, a URL, or alerts from Alertmanager, Grafana, Sentry, Datadog, CloudWatch), PromQL rules with SEV1–SEV4 and a rule builder, a bundled Prometheus and Grafana, email/Slack/webhook notification with ack, a "Set up monitoring" step where the SRE agent writes an app's rules, runbooks and dashboard before release, and agent triage you can answer with one click. Releases now list every commit they ship, and a promised spec approval holds the build. See the [release notes](docs/community/RELEASE_NOTES_v1.0-rc10.9.md) for what changed and what is still unverified. Named Owner accounts and the governed approval path remain in place; upgrading from rc5 still requires [claiming the install](docs/community/IDENTITY_UPGRADE.md).
+> **About this release candidate.** `v1.0-rc10.10` follows rc10.9 and adds BOSS's knowledge graph: a code graph and learned facts in BOSS's own database, fused text, graph and vector retrieval, and a knowledge setting of on, keyword or off. The default database image is now Postgres 16 on Alpine with pgvector and Apache AGE; upgrading swaps the image after the protected backup. Metatron and the console now talk to the same BOSS agent through one pipeline, and the captain autopilot is retired. You can create projects from the console, the API or the agent. Email (SMTP) is a connector, and the Mailpit test inbox is opt-in. Alerting keeps an app's monitoring through a change and settles after a verified fix. See the [release notes](docs/community/RELEASE_NOTES_v1.0-rc10.10.md) for what changed and what is still unverified. Named Owner accounts and the governed approval path remain in place; upgrading from rc5 still requires [claiming the install](docs/community/IDENTITY_UPGRADE.md).
 
 ## Documentation
 
