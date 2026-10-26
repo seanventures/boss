@@ -30,6 +30,7 @@ from __future__ import annotations
 import contextlib
 import fcntl
 import hashlib
+import json
 import logging
 import os
 import shutil
@@ -400,6 +401,38 @@ def _seed_cli_logins(ident: SandboxIdentity) -> None:
             if os.path.isfile(path):
                 shutil.copyfile(path, dst / name)
                 os.chmod(dst / name, 0o644)
+    _seed_claude_login(ident)
+
+
+def _seed_claude_login(ident: SandboxIdentity) -> None:
+    """The Claude CLI's own login (`claude auth login` -> $CLAUDE_CONFIG_DIR/.credentials.json),
+    copied into the run's CLAUDE_CONFIG_DIR, which env() points at {home}/.claude. Without it a
+    sandboxed claude_code run on the cli_login credential starts "Not logged in".
+
+    The copy carries the access token WITHOUT the refresh token: a run that refreshed would rotate
+    the refresh token and sign the control plane's own login out. A run that outlives the access
+    token fails as signed out; the control plane keeps refreshing its own copy."""
+    from .claude_credential import cli_login_present
+
+    if not cli_login_present():
+        return
+    home = os.path.expanduser(os.environ.get("CLAUDE_CONFIG_DIR", "") or "~/.claude")
+    try:
+        with open(os.path.join(home, ".credentials.json"), encoding="utf-8") as fh:
+            doc = json.load(fh)
+    except (OSError, ValueError):
+        return
+    oauth = doc.get("claudeAiOauth") if isinstance(doc, dict) else None
+    if not isinstance(oauth, dict) or not oauth.get("accessToken"):
+        return
+    dst = ident.home / ".claude"
+    dst.mkdir(exist_ok=True)
+    os.chmod(dst, 0o2777)
+    path = dst / ".credentials.json"
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o644)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        json.dump({"claudeAiOauth": {k: v for k, v in oauth.items() if k != "refreshToken"}}, fh)
+    os.chmod(path, 0o644)
 
 
 def _seed_toolchains(ident: SandboxIdentity, project_id: Optional[str]) -> None:
