@@ -457,14 +457,14 @@ def run_due(
             with engine.begin() as connection:
                 still = describe(connection, wakeup_id=row["id"])
                 if still["status"] != "active":
-                    ran.append({"id": row["id"], "outcome": still["status"]})
+                    ran.append({"project_id": row["project_id"], "outcome": still["status"]})
                     continue
                 outcome = advance(connection, wakeup_id=row["id"], ok=True, result=reply)
-            ran.append({"id": row["id"], "kind": row["kind"], **outcome})
+            ran.append({"project_id": row["project_id"], "kind": row["kind"], **outcome})
         except Exception as error:  # noqa: BLE001 — one bad loop must not stop the sweep
             with engine.begin() as connection:
                 outcome = advance(connection, wakeup_id=row["id"], ok=False,
                                   result=f"{type(error).__name__}: {str(error)[:400]}")
-            ran.append({"id": row["id"], "kind": row["kind"], "error": type(error).__name__,
-                        **outcome})
+            ran.append({"project_id": row["project_id"], "kind": row["kind"],
+                        "error": type(error).__name__, **outcome})
     return {"due": len(pending), "ran": ran}

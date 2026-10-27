@@ -84,6 +84,21 @@ def seeded_database(engine):
     except SQLAlchemyError:
         pytest.skip("Postgres is not available for API tests.")
     seed()
+    # A non-default, non-boss-platform project for tests that exercise behavior across project
+    # boundaries (e.g. the wake tick fix, which must sweep every live project, not just the
+    # worker's own default one). Mirrors apps/api/tests/infra_seed.py's `_ensure_project`.
+    with engine.begin() as connection:
+        connection.execute(text(
+            "INSERT INTO orgs (id, name) VALUES ('org_northpeak_bank_b', 'Northpeak Bank B') "
+            "ON CONFLICT DO NOTHING"))
+        connection.execute(text(
+            "INSERT INTO workspaces (id, org_id, name) VALUES "
+            "('ws_northpeak_bank_b', 'org_northpeak_bank_b', 'Northpeak Bank B') "
+            "ON CONFLICT DO NOTHING"))
+        connection.execute(text(
+            "INSERT INTO projects (id, workspace_id, name, slug) VALUES "
+            "('northpeak-bank-b', 'ws_northpeak_bank_b', 'Northpeak Bank B', 'northpeak-bank-b') "
+            "ON CONFLICT DO NOTHING"))
     yield
 
 

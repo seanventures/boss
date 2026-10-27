@@ -445,17 +445,20 @@ def _tick_agent_wakeups(client: ControlPlaneClient, settings) -> None:
     now = time.monotonic()
     if now - _last_agent_wakeups_monotonic < AGENT_WAKEUPS_INTERVAL_SECONDS:
         return
-    project_id = (
-        getattr(settings, "default_project_id", None)
-        or getattr(settings, "project_id", None)
-        or "boss-dogfood"
-    )
     try:
-        result = client.tick_agent_wakeups(str(project_id))
+        # "" sweeps every live project — a monitor armed outside the worker's own default
+        # project (boss-platform, a customer project) must still fire.
+        result = client.tick_agent_wakeups("")
         _last_agent_wakeups_monotonic = now
         if isinstance(result, dict) and result.get("ran"):
-            LOGGER.info("agent_wakeups due=%s ran=%s",
-                        result.get("due"), len(result.get("ran") or []))
+            by_project: dict[str, list[dict]] = {}
+            for entry in result.get("ran") or []:
+                by_project.setdefault(str(entry.get("project_id") or ""), []).append(entry)
+            for project, entries in by_project.items():
+                ok = sum(1 for e in entries if not e.get("error"))
+                LOGGER.info("wake_tick_projects_ticked_total project=%s result=%s count=%d",
+                            project, "ok" if ok == len(entries) else "partial", len(entries))
+            LOGGER.info("wake_tick_duration_seconds %.3f", time.monotonic() - now)
     except Exception:  # noqa: BLE001
         LOGGER.debug("agent_wakeups_failed", exc_info=True)
 
