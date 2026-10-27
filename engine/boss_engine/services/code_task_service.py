@@ -718,9 +718,11 @@ def start_code_task(
     if simulated:
         run_finalize["simulated"] = True
         run_finalize["fixture"] = True
-    if continuation and identity_acting is None and authority_gap:
-        # Read back by the refusal (authority_refusal_words): the blocked follow-up names the
-        # grant that is missing rather than the generic "started by BOSS itself (or a key)".
+    if identity_acting is None and authority_gap:
+        # Read back by the refusal (authority_refusal_words): the blocked follow-up or BOSS's
+        # retry (an agent under the install key) names the grant that is missing rather than
+        # the generic "started by BOSS itself (or a key)". A person's own call never gets here
+        # without a grant: it is asked to consent first.
         run_finalize["authority_gap"] = authority_gap[-1]
     # WHICH WORKFLOW GOVERNS THIS, recorded at creation.
     #

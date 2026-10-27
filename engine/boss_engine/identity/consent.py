@@ -81,7 +81,21 @@ def carry_retry_authority(db: Any, *, parent_run_id: str, new_run_id: str, proje
             gap.append(reason)
         return None
 
+    ctx = lineage.current_context()
+    ambient = lineage.current()
+    # BOSS's own key calling in (a BOSS agent over MCP under the install key, the console's or
+    # the worker's legacy key: a SYSTEM principal, no run token) is BOSS deciding, not a person:
+    # crun_ef2252c5 (2026-10-27), the Engineering Captain's retry of a follow-up, under
+    # `sys_legacy_console`, was refused by the person-caller check below.
+    by_boss = by_boss or (ctx is not None and ctx.run_token is None and _is_system(ctx.principal))
     parent = runs.original_build_authority(db, parent_run_id)
+    origin_run = parent_run_id
+    if by_boss and _carries_nothing(parent):
+        # A run BOSS itself stamped (a follow-up created before 0e74dffb, a key's retry of it):
+        # the authority is the lineage's — the nearest ancestor a PERSON started, under the
+        # same rules below. A lineage with no person at its root carries nothing.
+        origin_run, parent = _lineage_person(db, parent_run_id)
+        origin_run = origin_run or parent_run_id
     if (by_boss and workflow_run_id and parent is not None and parent.chain
             and not getattr(parent, "system", False)):
         recorded = acting_for_workflow_run(db, workflow_run_id)
@@ -89,11 +103,10 @@ def carry_retry_authority(db: Any, *, parent_run_id: str, new_run_id: str, proje
             parent = recorded
     if parent is None or not parent.grant_id or getattr(parent, "system", False) or parent.chain:
         who = getattr(parent, "principal_id", None) if parent is not None else None
-        return _no(f"the build it continues ({parent_run_id}) was started by BOSS itself or a key"
-                   + (f" ({who})" if who else "") + " under no person's grant, so there is no "
-                   "person's authority to carry")
-    ctx = lineage.current_context()
-    ambient = lineage.current()
+        return _no(f"the build it continues ({origin_run}) was started by BOSS itself or a key"
+                   + (f" ({who})" if who else "") + (" and so was every build before it in its "
+                                                     "lineage" if by_boss else "")
+                   + " under no person's grant, so there is no person's authority to carry")
     if not by_boss:
         if ctx is not None and ctx.run_token is None and ctx.principal.id != parent.principal_id:
             return None                                       # someone else's build: their own grant
@@ -101,14 +114,16 @@ def carry_retry_authority(db: Any, *, parent_run_id: str, new_run_id: str, proje
                 ambient.system or str(ambient.principal_id).startswith("sys_")
                 or ambient.principal_id == parent.principal_id):
             return None
+    whose = ("the build it continues" if origin_run == parent_run_id
+             else f"its lineage's person-started build ({origin_run})")
     g = grants.load(parent.grant_id, db=db)
     if by_boss and g is not None and str(g.task_run_id or "").startswith("run_ct:"):
         return _no(f"grant {g.id} was given for build {str(g.task_run_id)[len('run_ct:'):]} only "
                    "and does not extend past it")             # "this build only": not past it
     if g is None or g.user_principal_id != parent.principal_id:
-        return _no(f"grant {parent.grant_id}, which the build it continues ran under, is gone")
+        return _no(f"grant {parent.grant_id}, which {whose} ran under, is gone")
     if not grants.is_live(g):
-        return _no(f"grant {g.id}, which the build it continues ran under, is "
+        return _no(f"grant {g.id}, which {whose} ran under, is "
                    f"{getattr(g.status, 'value', g.status)} or expired")
     agent_ids = []
     for rk in role_keys:
@@ -116,7 +131,7 @@ def carry_retry_authority(db: Any, *, parent_run_id: str, new_run_id: str, proje
         if not aid or passports.get(aid, db=db) is None:
             return _no(f"its builder ({rk}) has no Passport in this project")
         agent_ids.append(aid)
-    base = parent.run_id or f"run_ct:{parent_run_id}"
+    base = parent.run_id or f"run_ct:{origin_run}"
     run_id = f"{base}/retry:{new_run_id}"
     needed = frozenset(k for k in permissions if catalogue.is_known(k) and catalogue.meta(k).delegable)
     if not grants.covers(g, agent_ids=agent_ids, permissions=needed, project_id=project_id,
@@ -127,6 +142,50 @@ def carry_retry_authority(db: Any, *, parent_run_id: str, new_run_id: str, proje
                       f": project {project_id}, repositories {', '.join(repos) or '-'} or its "
                       "permissions are outside it"))
     return Acting(principal_id=parent.principal_id, org_id=parent.org_id, grant_id=g.id, run_id=run_id)
+
+
+def _is_system(principal: Any) -> bool:
+    kind = getattr(getattr(principal, "kind", None), "value", getattr(principal, "kind", None))
+    return str(kind or "") == "system" or str(getattr(principal, "id", "")).startswith("sys_")
+
+
+def _carries_nothing(acting: Optional[Acting]) -> bool:
+    """Stamped as BOSS's own work or a key's: no person, no grant."""
+    return acting is None or not acting.grant_id or bool(getattr(acting, "system", False)) \
+        or str(acting.principal_id or "").startswith("sys_")
+
+
+#: How far up a lineage BOSS looks for its person (retries, repairs and follow-ups are shallow).
+LINEAGE_WALK_LIMIT = 32
+
+
+def _lineage_person(db: Any, run_id: str) -> tuple[Optional[str], Optional[Acting]]:
+    """The nearest ancestor of `run_id` (by parent_run_id, else root_run_id) whose build a PERSON
+    started, and that authority — or (None, None) when the lineage has no person behind it. A
+    person-stamped ancestor with no grant ends the walk (nothing to carry): BOSS never skips past
+    a person to an older one's grant."""
+    from sqlalchemy import text
+
+    from . import runs
+
+    seen = {run_id}
+    current = run_id
+    for _ in range(LINEAGE_WALK_LIMIT):
+        try:
+            fc = db.execute(text("SELECT finalize_ctx FROM code_task_runs WHERE id = :i"),
+                            {"i": current}).scalar() or {}
+        except Exception:  # noqa: BLE001 — unreadable lineage: nothing is carried
+            return None, None
+        nxt = str(fc.get("parent_run_id") or fc.get("root_run_id") or "").strip()
+        if not nxt or nxt in seen:
+            return None, None
+        seen.add(nxt)
+        auth = runs.original_build_authority(db, nxt)
+        if auth is not None and not getattr(auth, "system", False) \
+                and not str(auth.principal_id or "").startswith("sys_"):
+            return nxt, auth                                  # the lineage's person (grant or not)
+        current = nxt
+    return None, None
 
 
 def require_authority(*, org_id: Optional[str], project_id: Optional[str], role_keys: Iterable[str],
