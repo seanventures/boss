@@ -1050,18 +1050,21 @@ GROUPS = {"role": "role_key", "workflow": "workflow_key", "harness": "harness", 
 WINDOWS = {"7d": 7, "30d": 30, "90d": 90}
 
 
-def _href(kind: str, unit_id: str, run_id: Optional[str]) -> str:
+def _href(project_id: str, kind: str, unit_id: str, run_id: Optional[str]) -> str:
     """The console's own address for the unit (the same links the Factory, Workflows, Panels
     and Research screens use)."""
+    from ..app_links.console import build_console_link
+
     if kind in CODE_KINDS:
-        return f"/?area=code_tasks&build={unit_id}"
+        return build_console_link("code_tasks", project_id=project_id, build=unit_id)
     if kind == "workflow_run":
-        return f"/?area=delivery_workflows&wfr={unit_id}"
+        return build_console_link("delivery_workflows", project_id=project_id, wfr=unit_id)
     if kind == "step":
-        return f"/?area=delivery_workflows&wfr={run_id}" if run_id else "/?area=delivery_workflows"
+        return (build_console_link("delivery_workflows", project_id=project_id, wfr=run_id)
+                if run_id else build_console_link("delivery_workflows", project_id=project_id))
     if kind == "panel":
-        return f"/?area=meetings&meeting={unit_id}"
-    return f"/?area=discovery&run={unit_id}"
+        return build_console_link("meetings", project_id=project_id, meeting=unit_id)
+    return build_console_link("discovery", project_id=project_id, run=unit_id)
 
 
 def _title(connection, kind: str, unit_id: str) -> str:
@@ -1148,7 +1151,8 @@ def view(connection, project_id: str, *, group: str = "role", win: str = "30d",
                 "cost_usd": float(r["cost_usd"] or 0), "role_key": r["role_key"],
                 "role_name": role_names.get(r["role_key"]) if r["role_key"] else None,
                 "state": r["terminal_state"], "error_class": r["error_class"],
-                "ended_at": r["ended_at"], "href": _href(r["unit_kind"], r["unit_id"], r["run_id"])}
+                "ended_at": r["ended_at"],
+                "href": _href(project_id, r["unit_kind"], r["unit_id"], r["run_id"])}
 
     costing: list[dict[str, Any]] = []
     seen: set[str] = set()

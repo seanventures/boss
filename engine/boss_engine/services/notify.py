@@ -675,7 +675,12 @@ def _send(connection, settings, project_id, cp, gk, kind, alerts, names, inciden
                                       incident_id=(incident or {}).get("id"),
                                       contact_point_id=cp["id"], now=now)
         ack_url = f"{base}/v1/alert-actions/{token}"
-    console_url = f"{base}/?area=observability&view=alerts" if base else None
+    console_url = None
+    if base:
+        from ..app_links.console import build_console_link
+
+        console_url = build_console_link("observability", project_id=project_id, base=base,
+                                          view="alerts")
     subject, body = _render(kind, alerts, names, incident, ack_url=ack_url,
                             console_url=console_url)
     hold = quiet_now(eff.get("quiet_hours"), now) if urgency == "low" else None

@@ -206,7 +206,9 @@ def test_backfill_and_the_scorecards_view(engine, client):
     assert body["total"]["n"] == 4 and body["total"]["backfilled"] == 4
     assert body["rows"][0]["key"] == "claude_code" and body["rows"][0]["n"] == 4
     assert body["costing"] and body["costing"][0]["state"] == "failed"
-    assert body["costing"][0]["href"].startswith("/?area=code_tasks&build=")
+    assert body["costing"][0]["href"].startswith("/?area=code_tasks&project_id=")
+    assert f"project_id={project()}" in body["costing"][0]["href"]
+    assert "build=" in body["costing"][0]["href"]
     assert {w["key"] for w in body["weights"]} >= {"tests", "merged_bonus", "cost_penalty"}
     assert client.get(f"/v1/scorecards?project_id={project()}&group=nope").status_code == 422
 

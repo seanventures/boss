@@ -266,6 +266,8 @@ KINDS: tuple[ObjectKind, ...] = (
     ObjectKind("app_link", "app_links"),
     ObjectKind("oidc_client", "oidc_clients"),
     AccessRequestKind(),
+    # Build L: console deep links resolve a self-fix to its own project before rendering.
+    ObjectKind("self_fix", "self_fixes"),
 )
 
 _BY_KIND: dict[str, ObjectKind] = {}

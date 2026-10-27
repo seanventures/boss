@@ -43,6 +43,8 @@ import {
   upsertOrgMemberAction,
 } from "./actions";
 import ConsoleShell from "./ConsoleShell";
+import { OwnerSwitchBanner } from "./owner-switch-banner";
+import { resolveDeepLinkOwnerOnServer } from "../lib/console-owner-server";
 import {
   CommunityIncludedBadge,
   SurfaceHeading,
@@ -607,7 +609,19 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   // only the org's own project reachable, its run was in no Workflows or Factory anyone could
   // open. Honoured only for a project the person can list in this org; anything else is the
   // org's own project, as before.
-  const askedProjectId = getParam(resolvedSearchParams?.project_id)?.trim() || null;
+  // Build L: RESOLVE BEFORE FETCH. A deep link that opens an object by id (?build=, ?meeting=,
+  // ?wfr=/?run=, ?decision=, ?self_fix=, ?escalation=, ?thread=) used to render against whichever
+  // project happened to be selected — the wrong one — and then flip to "Can't reach BOSS" when
+  // that object's feeds 404'd. Before the fan-out below reads activeProjectId, ask the control
+  // plane which project the object actually belongs to and switch to it. Fails open (keeps the
+  // current project) so a resolver hiccup never blocks the console.
+  const explicitProjectId = getParam(resolvedSearchParams?.project_id)?.trim() || null;
+  const currentSearch = `?${new URLSearchParams(resolvedSearchParams).toString()}`;
+  const ownerResolution = await resolveDeepLinkOwnerOnServer(
+    currentSearch, explicitProjectId ?? selectedOrg.project_id);
+  const resolvedOwnerId = ownerResolution.switched && ownerResolution.projectId
+    ? ownerResolution.projectId : null;
+  const askedProjectId = resolvedOwnerId ?? explicitProjectId;
   const otherProjectFeed = askedProjectId && askedProjectId !== selectedOrg.project_id
     ? await fetchProjectFeed(askedProjectId) : null;
   const otherProject = otherProjectFeed?.items.find(
@@ -1001,6 +1015,13 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       renderToken={`${Date.now().toString(36)}.${Math.random().toString(36).slice(2, 8)}`}
     >
       <AreaFrame>
+        {resolvedOwnerId ? (
+          <OwnerSwitchBanner
+            projectId={resolvedOwnerId}
+            projectName={otherProject?.name ?? null}
+            objectType={ownerResolution.target?.type ?? "object"}
+          />
+        ) : null}
         {otherProject ? (
           <ProjectAway name={otherProject.name}
                        homeName={otherProjectFeed?.items.find((p) => p.id === selectedOrg.project_id)?.name

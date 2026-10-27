@@ -133,6 +133,10 @@ def render(*, title: str, evidence: dict, gates: dict, paths: Iterable[str] = ()
     return "\n".join(out).strip() + "\n"
 
 
-def build_url(settings: Any, run_id: str) -> str:
+def build_url(settings: Any, run_id: str, project_id: str) -> str:
     base = str(getattr(settings, "public_url", "") or "").rstrip("/")
-    return f"{base}/?area=code_tasks&build={run_id}" if base else ""
+    if not base:
+        return ""
+    from ..app_links.console import build_console_link
+
+    return build_console_link("code_tasks", project_id=project_id, base=base, build=run_id)

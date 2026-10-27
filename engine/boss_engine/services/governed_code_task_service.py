@@ -2310,7 +2310,7 @@ def _generated_pr_summary(engine, settings, run_id: str, project_id: str, *, tit
         title=title, evidence=evidence, gates=gates, paths=paths,
         additions=evidence.get("additions"), deletions=evidence.get("deletions"),
         rounds=rounds, comments=comments, deferred=evidence.get("deferred_findings") or [],
-        build_url=pr_description.build_url(settings, run_id), run_id=run_id,
+        build_url=pr_description.build_url(settings, run_id, project_id), run_id=run_id,
         quality_gate_id=qg_id or "")
 
 

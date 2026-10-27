@@ -15235,6 +15235,31 @@ def create_deployment_endpoint(payload: FirstDeployBody = Body(...)) -> dict:
     return result
 
 
+@app.get("/v1/console/resolve-owner")
+@authenticated(note="checks the resolved object's own project read permission dynamically, not "
+                     "a static scope — see boss_engine.services.console_links.resolve_owner")
+def console_resolve_owner_endpoint(type: str, id: str, project_id: Optional[str] = None) -> dict:
+    """Build L: the one 'who owns this deep link' lookup the console resolves BEFORE rendering an
+    object, so opening a build/meeting/etc. id while a different project is selected lands on the
+    object's own project instead of flickering through a 404. `project_id` (the currently selected
+    project) is accepted for logging only; it never narrows which object is looked up.
+
+    Not-found and access-denied answer with the identical shape (N5, anti-enumeration): no raw id
+    or project name ever appears in a denial, and the two cases cannot be told apart from here.
+    """
+    from boss_engine.services import console_links
+
+    if type not in console_links.CONSOLE_OBJECT_KINDS:
+        raise HTTPException(status_code=404, detail="Unknown console object type.")
+    ctx = identity_guard.REQUEST_IDENTITY.get()
+    if ctx is None:
+        raise HTTPException(status_code=401, detail="unauthenticated")
+    with begin(engine) as connection:
+        result = console_links.resolve_owner(connection, ctx, type, id)
+    return {"project_id": result.project_id, "project_name": result.project_name,
+            "can_view": result.can_view}
+
+
 @app.get("/v1/console/command-center")
 @permit(P.PROJECT_READ, scope=Scope.project(query="project_id"))
 def console_command_center_endpoint(project_id: str, request: Request) -> dict:

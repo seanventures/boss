@@ -10587,3 +10587,4 @@ ALTER TABLE kg_usage ADD COLUMN IF NOT EXISTS message_id TEXT;
 CREATE INDEX IF NOT EXISTS idx_kg_usage_thread ON kg_usage(project_id, agent_thread_id)
   WHERE agent_thread_id IS NOT NULL;
 -- ============================ end BOSSAPP-768 S2c ============================================
+
