@@ -20,6 +20,10 @@ gate does not. So the repo declares them, at its root:
         paths: ["apps/web/**"]
         run: ["npx vitest run {tests}"]
         select: {tests_glob: "apps/web/tests/**/*.test.*"}
+      - name: data                          # tests_glob may also be a list of globs
+        paths: ["packages/specpack/**"]
+        run: ["python3 -m pytest -q {tests}"]
+        select: {by: all, tests_glob: ["engine/tests/test_a.py", "engine/tests/test_b_*.py"]}
     timeout_seconds: 900
     services: [postgres]                    # optional: a throwaway Postgres for this run
                                             # (build_services: DATABASE_URL + PG* injected)
@@ -87,7 +91,8 @@ class VerifySuite:
     name: str
     paths: tuple[str, ...]
     run: tuple[str, ...]
-    tests_glob: str = ""
+    #: One glob, or a tuple of them (``tests_glob: [a, b]``): the suite's tests are their union.
+    tests_glob: str | tuple[str, ...] = ""
     by: str = "imports"
     fallback: str = "skip"
     setup: tuple[str, ...] = ()
@@ -227,7 +232,14 @@ def parse_verify_manifest(text: str) -> VerifyManifest:
         fallback = str(select.get("fallback") or "skip")
         if fallback not in _FALLBACK:
             raise VerifyManifestError(f"{where}.select.fallback must be one of {list(_FALLBACK)}")
-        tests_glob = str(select.get("tests_glob") or "").strip()
+        raw_glob = select.get("tests_glob")
+        if isinstance(raw_glob, list):
+            # A suite whose tests are not one directory (the engine tests that check the
+            # shipped specpack) names them as a list of globs.
+            globs = _string_list(raw_glob, f"{where}.select.tests_glob")
+            tests_glob: str | tuple[str, ...] = globs[0] if len(globs) == 1 else globs
+        else:
+            tests_glob = str(raw_glob or "").strip()
         cwd = str(raw.get("cwd") or ".").strip().strip("/") or "."
         if Path(cwd).is_absolute() or ".." in Path(cwd).parts:
             raise VerifyManifestError(f"{where}.cwd must be a directory inside the repository")
@@ -426,23 +438,30 @@ def select_tests(root: Path | str, suite: VerifySuite, changed: list[str],
     return tests, reason
 
 
+def _globs(suite: VerifySuite) -> tuple[str, ...]:
+    """The suite's test globs: ``tests_glob`` as one string or a list."""
+    raw = suite.tests_glob
+    return tuple(g for g in ((raw,) if isinstance(raw, str) else raw) if g)
+
+
 def _select(root: Path | str, suite: VerifySuite, changed: list[str],
             packages: dict[str, str] | None) -> tuple[list[str], str, set[str]]:
     """``select_tests`` plus the changed files the selection covers."""
     base = Path(root)
-    pattern = suite.tests_glob
-    all_tests = sorted(
+    patterns = _globs(suite)
+    all_tests = sorted({
         p.relative_to(base).as_posix()
+        for pattern in patterns
         for p in base.glob(pattern)
         if p.is_file()
-    ) if pattern else []
+    })
     if suite.by == "all":
         return all_tests, "all tests", set(changed) if all_tests else set()
     changed_set = {c for c in changed}
     picked = {t for t in all_tests if t in changed_set}
     by_stem: dict[str, set[str]] = {}
     for c in changed:
-        if not glob_match(c, pattern):
+        if not any(glob_match(c, pattern) for pattern in patterns):
             by_stem.setdefault(_stem(c), set()).add(c)
     stems = set(by_stem)
     covered = set(picked)

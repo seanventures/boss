@@ -2,10 +2,12 @@
 # Contract: docs/community/DEPLOY_A_STACK.md. Commands run WITHOUT a shell, one per entry.
 #
 # Only the suites a change touches run, and in each only the tests that import or name a
-# changed file (a changed test always runs). The apps/api suite is not here on purpose: it
-# needs a live Postgres, which the code-task sandbox does not have. So a code task that changes
-# apps/api (or any other code no suite covers) fails the gate with "no test covers ..." and
-# needs a human waiver; it is never passed on zero tests.
+# changed file (a changed test always runs). The apps/api suite is not here on purpose: its
+# conftest refuses a database not named like a test one (the run's build-services database is
+# boss_run_<hex>), the schema needs extensions a run's role cannot create, and declaring
+# `services: [postgres]` here would make EVERY BOSS code task need the build-services server.
+# So a code task that changes apps/api (or any other code no suite covers) fails the gate with
+# "no test covers ..." and needs a human waiver; it is never passed on zero tests.
 #
 # The gate reads this file from the base commit; a code task cannot change it.
 version: 1
@@ -14,6 +16,49 @@ suites:
     paths: ["engine/**"]
     run: ["python3 -m pytest -q -p no:cacheprovider --rootdir . -o pythonpath=engine {tests}"]
     select: {tests_glob: "engine/tests/test_*.py", by: imports}
+  - name: worker
+    # The worker imports apps.worker.* (repo root) and boss_engine (engine/); its own modules
+    # also import boss_worker directly (apps/worker). One pythonpath entry per root.
+    paths: ["apps/worker/**"]
+    run: ["python3 -m pytest -q -p no:cacheprovider --rootdir . -o \"pythonpath=. engine apps/worker\" {tests}"]
+    select: {tests_glob: "apps/worker/tests/test_*.py", by: imports}
+  - name: specpack
+    # Shipped roles, skills, workflows, kits and policies are data the engine loads by
+    # directory, so no test imports one file: every change runs the engine tests that load and
+    # validate the shipped specpack (by: all over this list).
+    paths: ["packages/specpack/**"]
+    run: ["python3 -m pytest -q -p no:cacheprovider --rootdir . -o pythonpath=engine {tests}"]
+    select:
+      by: all
+      tests_glob:
+        - "engine/tests/test_a_condition_path_may_rejoin_the_other.py"
+        - "engine/tests/test_a_refused_tool_call_is_not_the_end_of_the_work.py"
+        - "engine/tests/test_a_self_fix_never_touches_a_protected_path.py"
+        - "engine/tests/test_a_stopped_run_is_the_operators.py"
+        - "engine/tests/test_a_template_that_cannot_run_here_is_not_started.py"
+        - "engine/tests/test_a_video_can_be_edited_without_google.py"
+        - "engine/tests/test_agent_world_names_resolve_to_one_agent.py"
+        - "engine/tests/test_an_agent_speaks_in_its_own_voice.py"
+        - "engine/tests/test_an_unchanged_reseed_adds_no_agent_audit_artifacts.py"
+        - "engine/tests/test_an_operator_cannot_rewrite_bosss_own_workflows.py"
+        - "engine/tests/test_community_agent_organization_counts.py"
+        - "engine/tests/test_every_agent_holds_the_baseline.py"
+        - "engine/tests/test_every_kit_skill_has_an_executor.py"
+        - "engine/tests/test_every_capability_runs_as_a_role_that_holds_its_tools.py"
+        - "engine/tests/test_every_roster_write_is_held_like_post_roles.py"
+        - "engine/tests/test_every_role_has_a_team.py"
+        - "engine/tests/test_every_shipped_role_has_a_voice.py"
+        - "engine/tests/test_every_role_skill_exists.py"
+        - "engine/tests/test_example_workflow_definitions.py"
+        - "engine/tests/test_every_shipped_agent_has_the_same_base.py"
+        - "engine/tests/test_every_step_has_a_captain.py"
+        - "engine/tests/test_knowledge_pipeline.py"
+        - "engine/tests/test_no_advice_points_at_a_retired_console_surface.py"
+        - "engine/tests/test_no_step_is_blocked_by_consent.py"
+        - "engine/tests/test_org_models.py"
+        - "engine/tests/test_protected_symbols_still_exist.py"
+        - "engine/tests/test_role_registration.py"
+        - "engine/tests/test_the_seed_never_undoes_an_operator.py"
   - name: web
     paths: ["apps/web/**", "packages/api-client/**"]
     cwd: apps/web

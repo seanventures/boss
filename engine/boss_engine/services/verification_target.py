@@ -622,6 +622,31 @@ def verify_manifest_tampered(pinned: PinnedVerifyManifest, root: Path | str) -> 
             "change to the verify declaration is its own reviewed pull request.")
 
 
+#: What the web package contract reports when the repository's own boss.verify.yaml governs.
+REPO_DEFINES_VERIFICATION = "repo defines its own verification (boss.verify.yaml)"
+
+
+def manifest_governs(spec: dict[str, Any], pinned: PinnedVerifyManifest | None,
+                     app_id: str | None = None) -> bool:
+    """Is the base commit's boss.verify.yaml the authority for this run's verification?
+
+    True when the repo declares one (valid or not: an invalid one fails closed on its own
+    terms), no official app is pinned, and the task gave no explicit test_commands. Then the
+    greenfield web contract (vite/playwright in a root package.json, the default npm command)
+    is not this repository's contract and must not be applied to it."""
+    if pinned is None or pinned.text is None or app_id:
+        return False
+    raw = (spec or {}).get("test_commands")
+    explicit = (isinstance(raw, str) and raw.strip()) or (isinstance(raw, (list, tuple)) and raw)
+    return not explicit
+
+
+def manifest_web_contract() -> dict[str, Any]:
+    """The web_package_contract evidence for a repo whose boss.verify.yaml governs: skipped."""
+    return {"ok": True, "skipped": True, "reason": REPO_DEFINES_VERIFICATION,
+            "stubs": [], "missing_runners": []}
+
+
 @dataclass
 class GatePlan:
     """What the authoritative verify runs, where, and why. One decision for every caller.
@@ -724,7 +749,34 @@ def resolve_gate_plan(
     named = app_id or app_scope(spec, None)
     where = app_root.resolve(base, app_id=named, recorded=recorded, changed=changed,
                              lineage=lineage)
+    raw = spec.get("test_commands")
+    explicit = (isinstance(raw, str) and raw.strip()) or (isinstance(raw, (list, tuple)) and raw)
+
+    def _manifest_plan() -> GatePlan | None:
+        # A repository that DECLARES its suites (boss.verify.yaml, scoped by the changed files)
+        # is followed wherever its app lives: the repo's own declaration beats BOSS's inference.
+        nonlocal pinned
+        if pinned is None:
+            pinned = pin_verify_manifest(base)
+        if pinned.error:
+            return GatePlan([], base, "manifest_error", pinned.error, error=pinned.error)
+        if pinned.manifest is not None:
+            plan = verify_manifest.plan_verify(pinned.manifest, base, changed)
+            return GatePlan(plan.commands, base, "manifest", plan.describe(),
+                            timeout_seconds=plan.timeout_seconds, suites=plan.suites,
+                            steps=[(c, base / d if d != "." else base) for c, d in plan.steps],
+                            uncovered=list(plan.uncovered))
+        return None
+
     if where.path is None:
+        # A MONOREPO THAT DECLARES ITS OWN VERIFICATION is never "an app BOSS cannot place":
+        # BOSS itself holds several apps, so its first plan (made before any file changed)
+        # was refused here, the run fell back to the greenfield npm contract at the root, and
+        # web_package_honest failed on a root package.json without vite (crun_de5f077a).
+        if not explicit and not app_id:
+            declared = _manifest_plan()
+            if declared is not None:
+                return declared
         return GatePlan([], base, "app_unknown", where.refusal or "", error=where.refusal)
     # Every branch below plans in the app's folder: the resolved folder IS the named app.
     # A Python command keeps its own rule (it stays at the root it was written for) unless the
@@ -744,8 +796,7 @@ def resolve_gate_plan(
                                   changed=changed if npm else None,
                                   lineage=lineage if npm else None)
 
-    raw = spec.get("test_commands")
-    if (isinstance(raw, str) and raw.strip()) or (isinstance(raw, (list, tuple)) and raw):
+    if explicit:
         commands = resolve_authoritative_test_commands(spec, title)
         # A COMMAND THAT NAMES ITS OWN DIRECTORY RUNS FROM THE ROOT IT WAS WRITTEN FOR.
         # `npm --prefix notes-lite test` was run INSIDE notes-lite/, so npm looked for
@@ -758,16 +809,9 @@ def resolve_gate_plan(
     # (boss.verify.yaml, scoped by the changed files) is followed wherever its app lives: the
     # repo's own declaration beats BOSS's inference.
     if not app_id:
-        if pinned is None:
-            pinned = pin_verify_manifest(base)
-        if pinned.error:
-            return GatePlan([], base, "manifest_error", pinned.error, error=pinned.error)
-        if pinned.manifest is not None:
-            plan = verify_manifest.plan_verify(pinned.manifest, base, changed)
-            return GatePlan(plan.commands, base, "manifest", plan.describe(),
-                            timeout_seconds=plan.timeout_seconds, suites=plan.suites,
-                            steps=[(c, base / d if d != "." else base) for c, d in plan.steps],
-                            uncovered=list(plan.uncovered))
+        declared = _manifest_plan()
+        if declared is not None:
+            return declared
     # A MULTI-SERVICE APP (services.stacks): a backend and a web front end — or two backends —
     # each in its own directory with its own manifest. Each is installed, built and unit-tested
     # in its own toolchain, then the backend is started and the e2e runs against it. Treating

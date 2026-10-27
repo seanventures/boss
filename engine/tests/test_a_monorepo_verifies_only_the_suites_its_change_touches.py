@@ -353,7 +353,7 @@ def test_boss_declares_its_engine_and_console_suites_but_not_the_postgres_ones()
     manifest = _boss_manifest()
 
     names = {s.name for s in manifest.suites}
-    assert names == {"engine", "web"}
+    assert names == {"engine", "worker", "specpack", "web"}
     globs = [p for s in manifest.suites for p in s.paths]
     assert not any(g.startswith("apps/api") for g in globs)
 
@@ -423,3 +423,146 @@ def test_every_command_boss_declares_exists_where_the_gate_runs_it():
 
     for command in commands:
         assert command.split()[0] in provided, command
+
+
+# ------------------------------------- the worker and the shipped specpack (crun_de5f077a)
+def test_a_worker_change_in_boss_selects_the_worker_tests_that_import_it():
+    plan = vm.plan_verify(_boss_manifest(), REPO, ["apps/worker/boss_worker/main.py"])
+
+    assert [s["name"] for s in plan.suites] == ["worker"]
+    assert "apps/worker/tests/test_worker.py" in plan.commands[-1]
+    # Only the tests that import main: never the whole worker suite.
+    assert "apps/worker/tests/test_worker_credentials.py" not in plan.commands[-1]
+    assert plan.uncovered == []
+
+
+def test_a_changed_worker_test_in_boss_runs_and_covers_itself():
+    test = "apps/worker/tests/test_worker_stops_cleanly.py"
+    plan = vm.plan_verify(_boss_manifest(), REPO, [test])
+
+    assert test in plan.commands[-1]
+    assert plan.uncovered == []
+
+
+def test_a_specpack_change_in_boss_runs_the_tests_that_check_the_shipped_specpack():
+    plan = vm.plan_verify(_boss_manifest(), REPO,
+                          ["packages/specpack/roles/engineering_captain.yaml"])
+
+    assert [s["name"] for s in plan.suites] == ["specpack"]
+    for test in ("engine/tests/test_every_role_has_a_team.py",
+                 "engine/tests/test_every_role_skill_exists.py",
+                 "engine/tests/test_example_workflow_definitions.py"):
+        assert test in plan.commands[-1]
+    assert plan.uncovered == []
+
+
+def test_every_specpack_test_boss_names_exists():
+    suite = next(s for s in _boss_manifest().suites if s.name == "specpack")
+
+    for pattern in vm._globs(suite):
+        assert list(REPO.glob(pattern)), f"{pattern} names no test file"
+
+
+def test_the_crun_de5f077a_change_is_covered_except_apps_api():
+    """The change that needed a waiver: only its apps/api files are left uncovered now."""
+    changed = ["apps/api/tests/conftest.py", "apps/worker/boss_worker/main.py",
+               "apps/worker/tests/test_worker.py",
+               "packages/specpack/roles/engineering_captain.yaml"]
+    plan = vm.plan_verify(_boss_manifest(), REPO, changed)
+
+    assert {s["name"] for s in plan.suites if s["ran"]} == {"worker", "specpack"}
+    assert plan.uncovered == ["apps/api/tests/conftest.py"]
+
+
+def test_a_suite_may_name_its_tests_as_a_list_of_globs(tmp_path):
+    _write(tmp_path, "boss.verify.yaml", """
+version: 1
+suites:
+  - name: data
+    paths: ["data/**"]
+    run: ["python3 -m pytest -q {tests}"]
+    select: {by: all, tests_glob: ["tests/test_a.py", "tests/test_b*.py"]}
+""")
+    _write(tmp_path, "data/role.yaml", "x: 1\n")
+    for name in ("test_a.py", "test_b1.py", "test_c.py"):
+        _write(tmp_path, f"tests/{name}", "")
+    manifest = vm.load_verify_manifest(tmp_path)
+    plan = vm.plan_verify(manifest, tmp_path, ["data/role.yaml"])
+
+    assert plan.commands == ["python3 -m pytest -q tests/test_a.py tests/test_b1.py"]
+    assert plan.uncovered == []
+
+
+def test_a_list_of_globs_must_hold_strings():
+    with pytest.raises(vm.VerifyManifestError, match="tests_glob"):
+        vm.parse_verify_manifest("""
+version: 1
+suites:
+  - name: data
+    paths: ["data/**"]
+    run: ["python3 -m pytest -q {tests}"]
+    select: {tests_glob: [1, 2]}
+""")
+
+
+# ------------------------- the repo's manifest governs a multi-app repo before anything changed
+def _multi_app_repo(root: Path, *, manifest: bool) -> Path:
+    if manifest:
+        _write(root, "boss.verify.yaml", MANIFEST)
+    _write(root, "package.json", '{"name": "root", "workspaces": ["apps/*"]}')
+    for app in ("apps/web", "apps/docs", "apps/admin"):
+        _write(root, f"{app}/package.json", "{}")
+    _write(root, "engine/tests/test_alpha.py", "")
+    return root
+
+
+def test_a_multi_app_repo_with_a_manifest_plans_from_it_before_any_file_changed(tmp_path):
+    """crun_de5f077a: BOSS holds several apps, so its first plan (no change yet) was refused as
+    "which app?", and the run fell back to the greenfield npm contract at the root."""
+    root = _multi_app_repo(tmp_path, manifest=True)
+    plan = vt.resolve_gate_plan({}, "wake tick", root, pinned=vt.pin_verify_manifest(root))
+
+    assert plan.source == "manifest"
+    assert plan.runs_steps
+    assert not any(c.startswith("npm ") for c in plan.commands)
+
+
+def test_a_multi_app_repo_without_a_manifest_is_still_refused(tmp_path):
+    root = _multi_app_repo(tmp_path, manifest=False)
+    plan = vt.resolve_gate_plan({}, "wake tick", root, pinned=vt.pin_verify_manifest(root))
+
+    assert plan.source == "app_unknown"
+
+
+def test_the_manifest_governs_unless_the_task_or_an_app_says_otherwise(tmp_path):
+    root = _multi_app_repo(tmp_path, manifest=True)
+    pinned = vt.pin_verify_manifest(root)
+
+    assert vt.manifest_governs({}, pinned)
+    assert not vt.manifest_governs({"test_commands": ["npm test"]}, pinned)
+    assert not vt.manifest_governs({}, pinned, app_id="apps/web")
+    assert not vt.manifest_governs({}, vt.pin_verify_manifest(root / "apps/web"))
+
+
+def test_the_web_contract_is_skipped_where_the_repo_defines_its_own_verification():
+    contract = vt.manifest_web_contract()
+    assert contract["ok"] is True and contract["skipped"] is True
+    assert contract["reason"] == "repo defines its own verification (boss.verify.yaml)"
+
+    from boss_engine.services import governed_code_task_service as g
+
+    src = " ".join(code_only(g).split())
+    assert ("_manifest_governs = verification_target.manifest_governs(spec, _pinned_manifest, "
+            "_app_id)") in src
+    assert "_stack_layout is None and not _manifest_governs" in src
+    assert ("if _manifest_governs: _web_contract = verification_target.manifest_web_contract() "
+            "elif _last_stack_plan[0] is not None:") in src
+
+
+def test_the_web_contract_still_judges_a_repo_without_a_manifest(tmp_path):
+    _write(tmp_path, "package.json", '{"scripts": {"test": "echo no tests"}}')
+
+    assert not vt.manifest_governs({}, vt.pin_verify_manifest(tmp_path))
+    contract = vt.evaluate_web_package_contract(tmp_path)
+    assert contract["ok"] is False
+    assert "vite" in contract["missing_runners"]

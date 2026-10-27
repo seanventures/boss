@@ -1,3 +1,4 @@
+import os
 import subprocess
 import sys
 from types import SimpleNamespace
@@ -276,11 +277,17 @@ class FakeControlPlaneClient:
 
 
 def test_worker_starts_and_exits_cleanly():
+    # The child gets THIS process's import path. The code-task gate puts the repo and engine/
+    # on sys.path with pytest's `pythonpath` option and never passes PYTHONPATH through, so a
+    # bare child could not import boss_engine there (boss.verify.yaml's worker suite).
+    env = {**os.environ,
+           "PYTHONPATH": os.pathsep.join(p for p in sys.path if p and os.path.isdir(p))}
     result = subprocess.run(
         [sys.executable, "-m", "apps.worker.boss_worker.main", "--once"],
         capture_output=True,
         text=True,
         check=False,
+        env=env,
     )
 
     assert result.returncode == 0

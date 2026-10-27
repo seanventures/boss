@@ -4937,11 +4937,17 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         f"then the backend started from {_stack_layout.backend_dir}/"
                         f"boss.preview.command and `npm run test:e2e` in "
                         f"{_stack_layout.frontend_dir}/ against it")
+        # THE REPO'S boss.verify.yaml IS THE AUTHORITY when it declares one: never the greenfield
+        # web contract nor the default npm command at the root (crun_de5f077a, a BOSS change,
+        # was gated on a root package.json "missing vite").
+        _manifest_governs = verification_target.manifest_governs(spec, _pinned_manifest, _app_id)
+        if _manifest_governs and not _gate_plan0.from_manifest:
+            test_cmd = verification_target.manifest_display(root, _pinned_manifest) or test_cmd
         _web_verify = (
             verification_target.detect_kind(spec, title) == "web"
             or str(test_cmd or "").startswith("npm ")
             or bool(_app_id)
-        ) and not _gate_plan0.runs_steps and _stack_layout is None
+        ) and not _gate_plan0.runs_steps and _stack_layout is None and not _manifest_governs
         last_verify_cwd = None
         last_verify_output = ""
 
@@ -6985,7 +6991,10 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # recorded below whether allowed or not, so the PR always states what went
         }
         _web_contract: dict | None = None
-        if _last_stack_plan[0] is not None:
+        if _manifest_governs:
+            # The repo defines its own verification (boss.verify.yaml): its suites ran above.
+            _web_contract = verification_target.manifest_web_contract()
+        elif _last_stack_plan[0] is not None:
             # A MULTI-SERVICE APP: the contract is the FRONT END's package.json, not the app
             # directory's (which, laid out right, has none). No front end, no web package.
             _sp = _last_stack_plan[0]
