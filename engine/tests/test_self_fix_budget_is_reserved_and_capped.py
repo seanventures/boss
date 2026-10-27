@@ -13,6 +13,10 @@ from .test_workflow_capability_runner import eng, project  # noqa: F401
 
 
 def test_the_budget_is_reserved_under_its_own_category(harness):
+    # A PAID engine (the Agent SDK runs on the API key only), so the hold is the whole budget
+    # whatever login this host has; a subscription engine holds $0 (test_a_self_fix_on_a_
+    # subscription_fits_a_small_daily_cap).
+    harness.mp.setenv("BOSS_SELF_FIX_ENGINE", "claude_agent_sdk")
     out = harness.propose()
     sfx = out["self_fix"]
     with harness.eng.begin() as c:

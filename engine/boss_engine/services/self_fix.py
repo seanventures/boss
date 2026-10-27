@@ -554,16 +554,57 @@ def attempts_for(connection: Connection, klass: str) -> int:
              "fp": gate_fingerprint()}).scalar() or 0)
 
 
+#: Engines whose calls cost no per-call money once their credential is known: a local model.
+_LOCAL_ENGINES = frozenset({"ollama", "vllm"})
+
+
+def runs_on_included_capacity(connection: Connection, settings: Any, project_id: str) -> bool:
+    """Whether EVERY engine a self-fix runs on (Mender's and the security reviewer's) answers on
+    included capacity — a Claude subscription login or a local model — so the fix spends no
+    money (included_spend.py). Decided by the credential the engine will actually run on, never
+    its name: claude_code on an API key is money. Codex, the Agent SDK and every API engine are
+    money. Unknown, or a lookup that fails, is money (the safe side)."""
+    from .claude_credential import KIND_CLI_LOGIN, KIND_SUBSCRIPTION, resolve_claude_credential
+    from .self_fix_build import engine_names
+
+    try:
+        engines = {str(e or "").strip().lower() for e in engine_names(connection, settings,
+                                                                       project_id)}
+        for name in engines:
+            if name in _LOCAL_ENGINES:
+                continue
+            if name != "claude_code":
+                return False
+            with connection.begin_nested():
+                cred = resolve_claude_credential(settings, connection=connection,
+                                                 project_id=project_id)
+            if cred.kind not in (KIND_SUBSCRIPTION, KIND_CLI_LOGIN):
+                return False
+        return bool(engines)
+    except Exception:  # noqa: BLE001 — unknown is money
+        return False
+
+
 def _reserve(connection: Connection, settings: Any, project_id: str, sfx_id: str,
              micros: int, minutes: int) -> tuple[Optional[str], str]:
     """(reservation id, why not). `budget.reserve(category="self_fix")`: BOSS's spend on itself,
-    never charged to the step's recovery budget."""
+    never charged to the step's recovery budget.
+
+    THE HOLD IS THE FIX'S MARGINAL MONEY (included_spend.routed_reservation_estimate, as builds
+    and meetings already reserve). On a subscription or local engine a self-fix spends no money,
+    so it reserves $0: the reservation is a GATE, still refused once the project's real money has
+    used the cap. Holding the per-fix budget ($20) against a $10 daily cap refused every self-fix
+    in such a project, for money that would never be spent (boss-platform, 2026-10-26). The fix
+    stays bounded by its own budget either way (self_fix_build: refused 'budget' at
+    `budget_usd_micros`, and each turn's ceiling) and by the month (`month_spent`). A paid
+    engine reserves the full per-fix budget, so paid spend never exceeds a cap."""
     from .budget import BudgetGovernor
 
+    hold = 0 if runs_on_included_capacity(connection, settings, project_id) else int(micros)
     try:
         with connection.begin_nested():
             got = BudgetGovernor(settings).reserve(
-                connection, project_id, "self_fix", micros,
+                connection, project_id, "self_fix", hold,
                 f"self-fix {sfx_id}: diagnosis, build and reviews", minutes + 30, risk_tier=2)
     except Exception as error:  # noqa: BLE001 — no budget answer: no self-fix (fail closed)
         return None, f"the self-fix budget could not be reserved ({type(error).__name__})"
