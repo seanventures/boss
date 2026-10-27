@@ -1340,6 +1340,13 @@ class Settings(BaseSettings):
     code_agent_review_timeout_seconds: int = Field(
         default=420, alias="BOSS_CODE_AGENT_REVIEW_TIMEOUT_SECONDS"
     )
+    # Wall-clock cap for a single read-only PLANNING invocation (design, standards, spec, plan,
+    # review_plan). Those read the whole repository, not a diff, so the review cap above is too
+    # tight: design timed out at 420 s on the BOSS repo (crun_23d665a9). Review seats keep the
+    # review cap; this never lengthens a reviewer.
+    code_agent_design_timeout_seconds: int = Field(
+        default=1200, alias="BOSS_CODE_AGENT_DESIGN_TIMEOUT_SECONDS"
+    )
     # Wall-clock cap for a single CodeAgent invocation. Sized for the raised guest turn cap
     # (~120 turns at ~20s/turn ≈ 2400s + headroom); the sandbox-service scales the VM TTL to
     # this value (VMs live up to 7200s), so a high max_turns is not killed mid-build.

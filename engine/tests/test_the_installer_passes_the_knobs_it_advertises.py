@@ -45,6 +45,7 @@ DEFAULT_MUST_MATCH = {
     "BOSS_CODE_AGENT_MAX_TURNS": "code_agent_max_turns",
     "BOSS_CODE_AGENT_REVIEW_MAX_TURNS": "code_agent_review_max_turns",
     "BOSS_CODE_AGENT_REVIEW_TIMEOUT_SECONDS": "code_agent_review_timeout_seconds",
+    "BOSS_CODE_AGENT_DESIGN_TIMEOUT_SECONDS": "code_agent_design_timeout_seconds",
     "BOSS_CODE_REPAIR_MAX_RETRIES": "code_repair_max_retries",
     "BOSS_SANDBOX_CI_TIMEOUT_SECONDS": "sandbox_ci_timeout_seconds",
     "BOSS_SANDBOX_CI_POLL_INTERVAL_SECONDS": "sandbox_ci_poll_interval_seconds",

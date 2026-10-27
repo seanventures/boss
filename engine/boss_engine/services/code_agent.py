@@ -217,6 +217,24 @@ def _current_stage() -> str:
     return str(get_llm_context().get("stage") or "").strip().lower()
 
 
+#: Read-only stages that PLAN rather than judge. They read the whole repository to write the
+#: standards/spec/plan, so on a large repo they need far longer than a reviewer reading a diff
+#: (design hit the 420 s review cap on the BOSS repo, crun_23d665a9). They get their own cap.
+PLANNING_STAGES = frozenset({"design", "standards", "spec", "plan", "review_plan"})
+
+
+def read_only_timeout(settings: Any, timeout: int, stage: Optional[str] = None) -> int:
+    """A read-only session's timeout: a planning stage is capped by
+    `code_agent_design_timeout_seconds`, every other read-only seat (a reviewer) by
+    `code_agent_review_timeout_seconds`. `stage` defaults to the thread's llm context."""
+    st = (stage if stage is not None else _current_stage()).strip().lower()
+    if st in PLANNING_STAGES:
+        cap = int(getattr(settings, "code_agent_design_timeout_seconds", 1200) or 1200)
+    else:
+        cap = int(getattr(settings, "code_agent_review_timeout_seconds", 420) or 420)
+    return min(int(timeout), cap)
+
+
 def _current_effort() -> Optional[str]:
     """The effort for the stage this thread is running (llm_telemetry context)."""
     from .llm_telemetry import get_llm_context
@@ -1088,8 +1106,9 @@ class ClaudeCodeAgent:
             timeout = max(timeout, 2400)
         if read_only:
             # A review shouldn't run as long as an implementation — cap it tighter so a slow
-            # reviewer can't stall the panel.
-            timeout = min(timeout, int(getattr(self.settings, "code_agent_review_timeout_seconds", 420) or 420))
+            # reviewer can't stall the panel. Planning stages (design/spec/plan) read the whole
+            # repo and get their own, longer cap.
+            timeout = read_only_timeout(self.settings, timeout)
         # Review stages run read-only (no Edit/Write tools, no auto-accept) so a reviewer
         # cannot mutate the change it is judging. `allowed_tools` lets non-coding callers
         # (e.g. the Discovery research pipeline) opt into WebSearch/WebFetch instead.

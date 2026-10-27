@@ -518,8 +518,7 @@ def build_agent_class():
             if not read_only:
                 timeout = max(timeout, 2400)
             else:
-                timeout = min(timeout, int(getattr(s, "code_agent_review_timeout_seconds", 420)
-                                           or 420))
+                timeout = ca.read_only_timeout(s, timeout)
             if allowed_tools is not None:
                 allowed = allowed_tools
             else:
