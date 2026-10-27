@@ -3,7 +3,9 @@
 Each component is opened relative to a pinned directory descriptor, with O_NOFOLLOW.
 Checking resolve() and subsequently opening a pathname is not a sandbox boundary: the
 workload can replace a checked component between those operations. Symlinks, hardlinks,
-special files and Git metadata are refused, including for read-only model tools.
+special files and Git metadata are never read or written, including by read-only model tools.
+A walk reports a symlink or special entry as a leaf it never follows or descends: its
+existence does not refuse the walk, reading it does.
 """
 from __future__ import annotations
 
@@ -159,12 +161,19 @@ class RepoFiles:
         except OSError as exc:
             raise _refused(path) from exc
 
-    def entries(self, path: str = ".", *, skip: set[str] | frozenset[str] = frozenset(),
-                surface_special: bool = False) -> list[tuple[str, bool]]:
+    def listing(self, path: str = ".", *, skip: set[str] | frozenset[str] = frozenset(),
+                surface_special: bool = True) -> list[tuple[str, str]]:
+        """One directory's rows as (name, kind), kind "dir", "file" or "special".
+
+        A symlink or special entry (fifo, socket, device) is reported as "special": it is never
+        followed or descended, and read_text (O_NOFOLLOW + S_ISREG) still refuses to read it.
+        Its mere EXISTENCE does not refuse the listing: a repository that tracks one symlink
+        (BOSS's own tests/e2e/stubs/ssh-only/ssh) failed every walk of its tree and so every
+        build (crun_0cd67b0a). surface_special=False restores the strict refusal."""
         parts = _parts(path, directory=True)
         try:
             with self._directory(parts) as parent:
-                rows = []
+                rows: list[tuple[str, str]] = []
                 with os.scandir(parent) as entries:
                     for entry in entries:
                         if entry.name in skip or entry.name.casefold() == ".git":
@@ -172,36 +181,59 @@ class RepoFiles:
                         if len(rows) >= MAX_ENTRIES:
                             raise RepoFileRefused("repository directory exceeds entry limit")
                         mode = entry.stat(follow_symlinks=False).st_mode
-                        if not (stat.S_ISDIR(mode) or stat.S_ISREG(mode)):
-                            if not surface_special:
-                                raise _refused("/".join((*parts, entry.name)))
-                            # Surface a symlink/special entry as a non-directory leaf so a
-                            # scanning caller can decide whether it would even read it. It is
-                            # never followed (reported as a leaf, not a directory) and the read
-                            # boundary (read_text, O_NOFOLLOW) still refuses it if the caller reads.
-                            rows.append((entry.name, False))
-                            continue
-                        rows.append((entry.name, stat.S_ISDIR(mode)))
+                        if stat.S_ISDIR(mode):
+                            rows.append((entry.name, "dir"))
+                        elif stat.S_ISREG(mode):
+                            rows.append((entry.name, "file"))
+                        elif surface_special:
+                            rows.append((entry.name, "special"))
+                        else:
+                            raise _refused("/".join((*parts, entry.name)))
                 return sorted(rows)
         except FileNotFoundError:
             raise
         except OSError as exc:
             raise _refused(path) from exc
 
-    def walk(self, path: str = ".", *, skip: set[str] | frozenset[str] = frozenset(),
-             surface_special: bool = False) -> Iterator[str]:
+    def entries(self, path: str = ".", *, skip: set[str] | frozenset[str] = frozenset(),
+                surface_special: bool = True) -> list[tuple[str, bool]]:
+        """(name, is_directory) rows; a symlink/special entry is a non-directory leaf."""
+        return [(name, kind == "dir") for name, kind in
+                self.listing(path, skip=skip, surface_special=surface_special)]
+
+    def walk_kinds(self, path: str = ".", *, skip: set[str] | frozenset[str] = frozenset(),
+                   surface_special: bool = True) -> Iterator[tuple[str, str]]:
+        """Every non-directory leaf under `path` as (rel, kind), kind "file" or "special".
+
+        Only real directories are descended (each opened O_NOFOLLOW|O_DIRECTORY), so a symlink
+        to a directory, inside or outside the root, is a leaf and never a way out."""
         parts = _parts(path, directory=True)
         pending = ["/".join(parts)]
         count = 0
         while pending:
             rel = pending.pop()
-            for name, directory in self.entries(rel or ".", skip=skip,
-                                                surface_special=surface_special):
+            for name, kind in self.listing(rel or ".", skip=skip,
+                                           surface_special=surface_special):
                 count += 1
                 if count > MAX_ENTRIES:
                     raise RepoFileRefused("repository scan exceeds entry limit")
                 child = f"{rel}/{name}" if rel else name
-                if directory:
+                if kind == "dir":
                     pending.append(child)
                 else:
-                    yield child
+                    yield child, kind
+
+    def walk(self, path: str = ".", *, skip: set[str] | frozenset[str] = frozenset(),
+             surface_special: bool = True) -> Iterator[str]:
+        """Every non-directory leaf under `path`, symlink/special leaves included by name."""
+        for rel, _kind in self.walk_kinds(path, skip=skip, surface_special=surface_special):
+            yield rel
+
+    def regular_files(self, path: str = ".", *,
+                      skip: set[str] | frozenset[str] = frozenset()) -> Iterator[str]:
+        """The leaves a scan may READ: regular files only. A symlink/special entry is skipped
+        unopened, so a caller that reads what it walks never aborts because one exists. A file
+        swapped for a link after this listing is still refused by read_text."""
+        for rel, kind in self.walk_kinds(path, skip=skip):
+            if kind == "file":
+                yield rel

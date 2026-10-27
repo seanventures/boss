@@ -23,8 +23,14 @@ def repo(tmp_path):
 @pytest.mark.parametrize("name", ["README.md", "AGENTS.md", "src/linked.py"])
 def test_context_and_guides_never_follow_a_repository_symlink(repo, name):
     (repo / name).symlink_to(repo.parent / "outside.txt")
-    with pytest.raises(RepoFileRefused):
-        build_repo_context(repo)
+    # The packer lists the link by name and never opens it (crun_0cd67b0a: a tracked symlink
+    # must not fail the stage); the target's content never reaches the context.
+    context = build_repo_context(repo)
+    assert "OUTSIDE_MARKER" not in context
+    assert "INSIDE_MARKER" in context
+    with RepoFiles(repo) as files:
+        with pytest.raises(RepoFileRefused):
+            files.read_text(name)
     if name == "AGENTS.md":
         with pytest.raises(RepoFileRefused):
             load_repo_guide(repo)
@@ -34,8 +40,12 @@ def test_context_and_guides_never_follow_a_repository_symlink(repo, name):
 def test_read_only_grep_never_returns_a_link_target(repo, path):
     (repo / "src" / "link.py").symlink_to(repo.parent / "outside.txt")
     result = SandboxToolset(repo, read_only=True).call("grep", {"pattern": "MARKER", "path": path})
-    assert result.is_error
     assert "OUTSIDE_MARKER" not in result.text
+    if path == "src/link.py":
+        assert result.is_error  # naming the link is reading it: refused
+    else:
+        # A directory search skips the link unopened and still finds the real file.
+        assert not result.is_error and "src/app.py:1:" in result.text
 
 
 def test_symlink_directory_is_refused_before_descent(repo):
@@ -44,7 +54,12 @@ def test_symlink_directory_is_refused_before_descent(repo):
         with pytest.raises(RepoFileRefused):
             files.read_text("escape/outside.txt")
         with pytest.raises(RepoFileRefused):
-            list(files.walk())
+            files.entries("escape")
+        # The link is a leaf, never descended: nothing under it is ever listed.
+        assert sorted(files.walk()) == ["escape", "src/app.py"]
+        assert list(files.regular_files()) == ["src/app.py"]
+        with pytest.raises(RepoFileRefused):
+            list(files.walk(surface_special=False))  # the strict mode still refuses
 
 
 def test_root_descriptor_survives_a_root_path_replacement(repo):
@@ -158,9 +173,19 @@ def test_diff_export_refuses_link_targets_and_accepts_regular_text(repo, monkeyp
 def test_context_scan_has_an_aggregate_budget(repo, monkeypatch):
     from boss_engine.services import code_agent
 
+    reads = []
+    original = RepoFiles.read_text
+
+    def counting(self, path, **kw):
+        reads.append(kw.get("max_bytes"))
+        return original(self, path, **kw)
+
+    monkeypatch.setattr(RepoFiles, "read_text", counting)
     monkeypatch.setattr(code_agent, "MAX_SCAN_BYTES", 1)
-    with pytest.raises(RepoFileRefused, match="read budget"):
-        build_repo_context(repo)
+    # Past the budget nothing more is read; the stage still gets its (name-only) context.
+    context = build_repo_context(repo)
+    assert "src/app.py" in context and "INSIDE_MARKER" not in context
+    assert reads == [1]
 
 
 def test_deep_traversal_is_refused_before_opening_components(repo):

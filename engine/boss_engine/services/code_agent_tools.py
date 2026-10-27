@@ -163,9 +163,11 @@ class SandboxToolset:
         return _truncate(f"{header}\n{body}", _MAX_READ_BYTES)
 
     def list_dir(self, path: str = ".") -> str:
-        entries = self._files.entries(path, skip=SKIP_DIRS)
-        rows = [f"{name}/" if directory else name
-                for name, directory in sorted(entries, key=lambda item: (not item[1], item[0]))]
+        entries = self._files.listing(path, skip=SKIP_DIRS)
+        # `name@` (as ls -F) marks a symlink/special entry: listed, never followed or read.
+        mark = {"dir": "/", "file": "", "special": "@"}
+        rows = [f"{name}{mark[kind]}"
+                for name, kind in sorted(entries, key=lambda item: (item[1] != "dir", item[0]))]
         if len(rows) > _MAX_LIST_ENTRIES:
             rows = rows[:_MAX_LIST_ENTRIES] + [f"…[truncated at {_MAX_LIST_ENTRIES} entries]"]
         return f"{path}/\n" + "\n".join(rows or ["(empty)"])
@@ -199,7 +201,9 @@ class SandboxToolset:
         # use the same pinned root; neither follows a link checked earlier by resolve().
         try:
             self._files.entries(path, skip=SKIP_DIRS)
-            paths = self._files.walk(path, skip=SKIP_DIRS)
+            # Search what can be read: a symlink/special leaf in the tree is skipped unopened
+            # rather than failing the whole search. Naming one as `path` is still refused.
+            paths = self._files.regular_files(path, skip=SKIP_DIRS)
         except RepoFileRefused as exc:
             # ENOTDIR is also a refusal at the FD boundary. A regular file is the only
             # alternative accepted here; read_text still refuses symlinks and special files.

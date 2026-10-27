@@ -871,14 +871,22 @@ def _pack(
     entries: list[dict] = []
     scanned_bytes = 0
     with RepoFiles(cwd) as reader:
-        for rel in sorted(reader.walk(skip=skip)):
+        # A symlink/special leaf is listed by name but never opened: its existence must not
+        # abort the context pack (and so the stage) - crun_0cd67b0a died here on BOSS's own
+        # tests/e2e/stubs/ssh-only/ssh. A regular file that read_text refuses still raises.
+        for rel, kind in sorted(reader.walk_kinds(skip=skip)):
             files.append(rel)
-            if Path(rel).suffix not in exts:
+            if kind != "file" or Path(rel).suffix not in exts:
                 continue
-            content = reader.read_text(rel, max_bytes=head_bytes, truncate=True, errors="ignore")
+            # The read budget bounds what is READ, not whether the stage may run: past it,
+            # files are listed by name only. (BOSS's own tree holds ~40 MB of source heads; a
+            # refusal here failed its implement stage once the symlink no longer did.)
+            remaining = MAX_SCAN_BYTES - scanned_bytes
+            if remaining <= 0:
+                continue
+            content = reader.read_text(rel, max_bytes=min(head_bytes, remaining), truncate=True,
+                                       errors="ignore")
             scanned_bytes += len(content.encode("utf-8"))
-            if scanned_bytes > MAX_SCAN_BYTES:
-                raise RepoFileRefused("repository context exceeds read budget; narrow the repository")
             entries.append({"rel": rel, "content": content, "size": len(content.encode("utf-8"))})
     # Pin the design-system source of truth (when the repo has one) so a UI task always sees the
     # tokens + component kit; Terraform core stays pinned too. The 40/20KB caps are gone as the
