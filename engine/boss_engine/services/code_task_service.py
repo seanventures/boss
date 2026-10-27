@@ -386,7 +386,8 @@ def _in_flight_via_port(project_id: str, *, repo: Optional[str] = None) -> list[
 
 
 def active_duplicate(connection, project_id: str, fingerprint: str,
-                     exclude: Optional[str] = None) -> Optional[str]:
+                     exclude: Optional[str] = None,
+                     lineage_root: Optional[str] = None) -> Optional[str]:
     """The id of an identical run that is STILL IN FLIGHT, if there is one.
 
     In flight only. Running the same task again after it finished is a legitimate act — that
@@ -395,14 +396,19 @@ def active_duplicate(connection, project_id: str, fingerprint: str,
     first was not already producing, and each one is a full budgeted pipeline.
     """
     if not hasattr(connection, "execute"):
-        return _active_duplicate_via_port(project_id, fingerprint, exclude)
+        return _active_duplicate_via_port(project_id, fingerprint, exclude, lineage_root)
     try:
+        # ``lineage_root``: only a run of that lineage (the root itself, or one whose
+        # root_run_id names it) is this request's duplicate (in_flight_same_work).
         row = connection.execute(
             sql("SELECT id FROM code_task_runs "
                 "WHERE project_id = :p AND status IN ('running', 'queued') "
                 "  AND spec->>'work_fingerprint' = :fp AND id <> :x "
+                "  AND (CAST(:root AS TEXT) IS NULL OR id = :root "
+                "       OR finalize_ctx->>'root_run_id' = :root) "
                 "ORDER BY created_at ASC LIMIT 1"),
-            {"p": project_id, "fp": fingerprint, "x": exclude or ""}).first()
+            {"p": project_id, "fp": fingerprint, "x": exclude or "",
+             "root": lineage_root or None}).first()
     except RuntimeError:
         # HAVING `execute` IS NOT THE SAME AS BEING ABLE TO RUN SQL.
         #
@@ -413,12 +419,13 @@ def active_duplicate(connection, project_id: str, fingerprint: str,
         # Falling back to the port keeps the protection working there rather than switching it
         # off, which matters: without it the OSS path would happily start the same pipeline
         # twice, and each one is a full budget.
-        return _active_duplicate_via_port(project_id, fingerprint, exclude)
+        return _active_duplicate_via_port(project_id, fingerprint, exclude, lineage_root)
     return row[0] if row else None
 
 
 def _active_duplicate_via_port(project_id: str, fingerprint: str,
-                               exclude: Optional[str] = None) -> Optional[str]:
+                               exclude: Optional[str] = None,
+                               lineage_root: Optional[str] = None) -> Optional[str]:
     """The same question, asked of a store that cannot run SQL.
 
     Returns None when the store cannot answer at all — an unanswerable duplicate check must not
@@ -428,13 +435,16 @@ def _active_duplicate_via_port(project_id: str, fingerprint: str,
         r for r in _in_flight_via_port(project_id)
         if (r.get("spec") or {}).get("work_fingerprint") == fingerprint
         and not (exclude and str(r.get("id")) == exclude)
+        and (not lineage_root or str(r.get("id")) == lineage_root
+             or str((r.get("finalize_ctx") or {}).get("root_run_id") or "") == lineage_root)
     ]
     return str(matching[0].get("id")) if matching else None
 
 
 def in_flight_same_work(connection, project_id: str, *, fingerprint: Optional[str],
                         repo: Optional[str], title: Optional[str],
-                        exclude: Optional[str] = None) -> Optional[str]:
+                        exclude: Optional[str] = None,
+                        lineage_root: Optional[str] = None) -> Optional[str]:
     """THE ONE "SAME WORK" RULE: an in-flight run doing this work, if there is one.
 
     The exact work fingerprint first, then the same app in the same repo. start_code_task
@@ -442,7 +452,17 @@ def in_flight_same_work(connection, project_id: str, *, fingerprint: Optional[st
     they used two rules, so the shepherd retried crun_37f4ccef every two minutes while each
     retry was deduped onto the live crun_247435e1 (17 retries + 17 duplicate_suppressed in half
     an hour): the start said "that work is running", supersession said "nothing newer exists".
+
+    ``lineage_root``: the request CONTINUES a lineage (a retry, a follow-up, a repair: it has a
+    parent run). Its duplicate is then only an in-flight run of THE SAME LINEAGE with THE SAME
+    work fingerprint — never another lineage's run, and never by app name. crun_ef2252c5's retry
+    (build E, 2026-10-27) was "deduped" onto crun_6ddf545b, build L's follow-up: both titles are
+    "Follow-up: checks failing — …", so the app-name rule read both as the app "Checks Failing",
+    and E's retry was dropped while the tool reported it queued under L's run id.
     """
+    if lineage_root:
+        return (active_duplicate(connection, project_id, fingerprint, exclude,
+                                 lineage_root=lineage_root) if fingerprint else None)
     existing = active_duplicate(connection, project_id, fingerprint, exclude) if fingerprint else None
     if not existing and repo and title:
         # Second, coarser guard. The fingerprint is exact by design — reword one sentence
@@ -565,8 +585,14 @@ def start_code_task(
         # `running`; without `supersedes` the child was deduped onto its own parent
         # (code_task.duplicate_suppressed on crun_f18bdf2db6144534ac27), the parent went to
         # `repairing` with no child, and the build stopped for good.
+        # A CONTINUATION'S DUPLICATE IS IN ITS OWN LINEAGE (in_flight_same_work): a retry or a
+        # follow-up (it has a parent run) is never "deduped" onto another lineage's run.
+        _fc = finalize_ctx or {}
+        _lineage = (str(_fc.get("root_run_id") or _fc.get("parent_run_id") or "").strip() or None
+                    if str(_fc.get("parent_run_id") or "").strip() else None)
         existing = in_flight_same_work(connection, project_id, fingerprint=fingerprint,
-                                       repo=repo, title=title, exclude=supersedes)
+                                       repo=repo, title=title, exclude=supersedes,
+                                       lineage_root=_lineage)
         if existing:
             # Idempotent, not an error: the caller wanted this work running, and it is.
             # Raising would make an impatient second click look like a broken button, which

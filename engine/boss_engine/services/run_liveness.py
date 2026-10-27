@@ -190,11 +190,17 @@ def same_work_in_flight(connection, run_id: str) -> Optional[str]:
 
     me = connection.execute(sql(
         "SELECT project_id, status, title, created_at, spec->>'work_fingerprint' AS fp, "
-        "spec->>'repo' AS repo FROM code_task_runs WHERE id = :r"), {"r": str(run_id)}).mappings().first()
+        "spec->>'repo' AS repo, finalize_ctx->>'parent_run_id' AS parent, "
+        "finalize_ctx->>'root_run_id' AS root FROM code_task_runs WHERE id = :r"),
+        {"r": str(run_id)}).mappings().first()
     if me is None:
         return None
+    # The same lineage rule start_code_task dedupes a continuation on: a retry or follow-up is
+    # only ever the same work as a run of its own lineage.
+    lineage_root = (str(me["root"] or me["parent"]) if me["parent"] else None)
     other = in_flight_same_work(connection, me["project_id"], fingerprint=me["fp"],
-                                repo=me["repo"], title=me["title"], exclude=str(run_id))
+                                repo=me["repo"], title=me["title"], exclude=str(run_id),
+                                lineage_root=lineage_root)
     if not other:
         return None
     if str(me["status"] or "") in IN_FLIGHT:
