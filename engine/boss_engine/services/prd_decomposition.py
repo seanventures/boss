@@ -143,7 +143,7 @@ def decompose_prd_into_tasks(settings: Settings, prd_or_directive: str, *,
 
 def start_decomposed_build(engine, settings: Settings, jobs, *, project_id: str,
                            task_id: Optional[str], prd_or_directive: str, owner: str, repo: str,
-                           base_branch: str = "main", profile: Optional[str] = None,
+                           base_branch: Optional[str] = None, profile: Optional[str] = None,
                            risk_tier: Optional[int] = None, max_tasks: int = 6,
                            seed_scaffold: bool = True, origin: Optional[dict] = None) -> dict:
     """Decompose the PRD and START the build as one lineage. For a WEB APP, first SEED a
@@ -358,7 +358,7 @@ def advance_decomposition(engine, settings: Settings, jobs, run_id: str) -> Opti
             test_commands=(["npm run build"] if fctx.get("web_app_build") else []),
             owner=spec.get("owner") or settings.target_github_owner,
             repo=spec.get("repo") or settings.target_github_repo,
-            base_branch=spec.get("base_branch") or "main",
+            base_branch=spec.get("base_branch") or None,
             finalize_ctx={"decomposition_plan": remaining, "decomposition_index": idx,
                           "decomposition_total": total, "root_run_id": root,
                           # carry the web-app flag down the chain so every slice skips write_tests

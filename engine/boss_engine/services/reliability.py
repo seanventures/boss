@@ -375,7 +375,7 @@ class ReliabilityService:
     # --- remediate (RB-7 — diagnosed incident → governed fix PR) -------------
     def remediate(self, connection: Connection, project_id: str, incident_id: str, *, jobs,
                   owner: Optional[str] = None, repo: Optional[str] = None,
-                  base_branch: str = "main", actor: str = "system") -> Optional[dict[str, Any]]:
+                  base_branch: Optional[str] = None, actor: str = "system") -> Optional[dict[str, Any]]:
         """Turn a diagnosed incident into a **bug-framed governed code task** → gated PR. The fix runs
         through the same design→tests→implement→review→gate pipeline as any code task — this is the wedge
         (we ship the tested, governed fix, not just a plan)."""

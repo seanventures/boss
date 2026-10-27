@@ -50,6 +50,17 @@ REVIEW_PACKET_MAX_FILES = 40
 REVIEW_PACKET_MAX_CHARS = 12_000
 
 
+def _accepts_kwarg(func: Any, name: str) -> bool:
+    """Whether ``func`` takes keyword ``name`` (directly or through ``**kwargs``)."""
+    import inspect
+
+    try:
+        params = inspect.signature(func).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(p.name == name or p.kind is inspect.Parameter.VAR_KEYWORD for p in params)
+
+
 def review_packet_file_summaries(files: list[FileChange]) -> list[dict[str, Any]]:
     """Path + size + short preview. Never the full diff."""
     summaries: list[dict[str, Any]] = []
@@ -1881,7 +1892,11 @@ class SoftwareFactoryService:
                     review_text,
                 ]
             )
-            _base = {"base": pr_base} if pr_base else {}
+            # The build's resolved base (build_base_branch) reaches every host that takes one;
+            # a host whose create_pull_request has no `base` (Bitbucket, MCP) keeps its own.
+            _base = ({"base": pr_base}
+                     if pr_base and _accepts_kwarg(self.github.create_pull_request, "base")
+                     else {})
             if checks_failing and getattr(self.github, "supports_draft_pull_requests", False):
                 # A DRAFT where the host has drafts: GitHub itself then refuses a merge until
                 # it is marked ready, which BOSS does only for a person's approved merge.

@@ -1411,7 +1411,7 @@ class MetatronCaptain:
                     test_commands=["npm run verify"] if not self_mod else [],
                     owner=owner,
                     repo=repo,
-                    base_branch="main",
+                    base_branch=None,
                     finalize_ctx={
                         "source": "metatron_captain",
                         "actor": actor,

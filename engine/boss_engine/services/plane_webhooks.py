@@ -357,7 +357,7 @@ class PlaneWebhookService:
             test_commands=[],
             owner=decision["owner"],
             repo=decision["repo"],
-            base_branch="main",
+            base_branch=None,
             risk_tier=decision.get("risk_tier"),                  # P3: priority -> risk hint
             finalize_ctx={
                 "source": "plane",

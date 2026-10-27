@@ -3401,7 +3401,7 @@ class IntentRouter:
                 test_commands=(["npm run build"] if extend else []),
                 owner=self.settings.target_github_owner,
                 repo=self.settings.target_github_repo,
-                base_branch=base_branch or "main",
+                base_branch=base_branch or None,
                 finalize_ctx=({"source": "orchestration_agent", "actor": actor,
                                "web_app_build": True, "root_run_id": root} if extend
                               else {"source": "orchestration_agent", "actor": actor}),

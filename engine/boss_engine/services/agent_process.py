@@ -729,7 +729,7 @@ class AgentProcessService:
                 test_commands=["npm run verify"],
                 owner=self.settings.target_github_owner,
                 repo=self.settings.target_github_repo,
-                base_branch="main",
+                base_branch=None,
                 finalize_ctx=fctx,
                 jobs=JobLeaseService(self.settings),
                 open_pr=True,

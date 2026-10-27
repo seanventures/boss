@@ -7276,7 +7276,7 @@ def start_code_task_endpoint(payload: CodeTaskStartBody):
                 repo=payload.get("repo") or (
                     "_fixture" if simulated else settings.target_github_repo
                 ),
-                base_branch=payload.get("base_branch") or "main",
+                base_branch=payload.get("base_branch") or None,
                 # THE WORKFLOW THE OPERATOR PICKED, if they picked one. Carried on
                 # finalize_ctx rather than a new parameter: start_code_task already threads
                 # that dict through to the run row, and the engine pops the id, resolves it
@@ -7397,7 +7397,7 @@ def decompose_prd_endpoint(payload: PrdDecomposeBody):
         prd_or_directive=prd,
         owner=payload.get("owner") or settings.target_github_owner,
         repo=payload.get("repo") or settings.target_github_repo,
-        base_branch=payload.get("base_branch") or "main",
+        base_branch=payload.get("base_branch") or None,
         profile=payload.get("profile"), risk_tier=payload.get("risk_tier"), max_tasks=max_tasks)
     if not result.get("started"):
         raise HTTPException(status_code=422, detail=result.get("reason") or "decomposition failed.")
@@ -7631,7 +7631,7 @@ def start_qa_benchmark_app_endpoint(benchmark_id: str, payload: open_bodies.Benc
                 repo=(payload or {}).get("repo") or (
                     "_fixture" if simulated else settings.target_github_repo
                 ),
-                base_branch=(payload or {}).get("base_branch") or "main",
+                base_branch=(payload or {}).get("base_branch") or None,
                 finalize_ctx=finalize_ctx,
                 jobs=jobs,
                 # A benchmark is machine evaluation work: nobody is sitting in front of it.

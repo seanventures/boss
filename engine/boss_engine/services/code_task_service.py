@@ -42,6 +42,7 @@ from .llm_telemetry import clear_llm_context, record_llm_call, set_llm_context
 from .agent_acts import pr_trailers as _pr_trailers
 from .sandbox import SandboxError
 from .sandbox_provider import make_sandbox_provider
+from . import build_base_branch as _build_base
 from .software_factory import SoftwareFactoryService
 
 logger = logging.getLogger(__name__)
@@ -301,7 +302,7 @@ def work_fingerprint(*, project_id: str, owner: str, repo: str, base_branch: str
     stable_instr = instructions
     for marker in _APPENDED_BLOCKS:
         stable_instr = stable_instr.split(marker)[0]
-    parts = [project_id, owner, repo, base_branch, stable_title,
+    parts = [project_id, owner, repo, base_branch or "", stable_title,
              " ".join(stable_instr.split())]
     return hashlib.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()[:32]
 
@@ -470,7 +471,7 @@ def is_simulated_run(run: Optional[dict]) -> bool:
 def start_code_task(
     connection, *, project_id: str, task_id: Optional[str], title: str,
     instructions: str, acceptance_criteria: list[str], test_commands: list[str],
-    owner: str, repo: str, base_branch: str, finalize_ctx: Optional[dict],
+    owner: str, repo: str, base_branch: Optional[str], finalize_ctx: Optional[dict],
     jobs, profile: Optional[str] = None, risk_tier: Optional[int] = None,
     model_config: Optional[dict] = None, open_pr: Optional[bool] = None,
     repair_retries: Optional[int] = None, review_panel_size: Optional[int] = None,
@@ -545,6 +546,9 @@ def start_code_task(
             fctx["app_id"] = derived
     finalize_ctx = fctx
 
+    # NO BRANCH GIVEN STAYS NONE: the pipeline resolves it (build_base_branch) — the project's
+    # bound branch, else the host default. A "main" written here shadowed the project's branch.
+    base_branch = str(base_branch or "").strip() or None
     fingerprint = work_fingerprint(project_id=project_id, owner=owner, repo=repo,
                                    base_branch=base_branch, title=title,
                                    instructions=instructions.replace(_DEPLOYABILITY_NOTE, ""))
@@ -1692,7 +1696,8 @@ def redeliver_code_task(engine, settings: Settings, run_id: str, *, automatic: b
             branch_name=held.get("branch") or f"boss/code/{fctx.get('root_run_id') or run_id}",
             summary=str(held.get("summary") or ""), files=files,
             created_by_job_id=fctx.get("created_by_job_id"),
-            quality_gate_id=held.get("quality_gate_id"), run_id=run_id)
+            quality_gate_id=held.get("quality_gate_id"), run_id=run_id,
+            pr_base=_build_base.pr_base_for_run(c, run, getattr(sf, "github", None)))
     status = proposal.get("status")
     if status not in ("created", "succeeded") and not (
             status == "reused" and proposal.get("pull_request_url")):
@@ -1942,7 +1947,7 @@ def retry_code_task(
             test_commands=spec.get("test_commands") or [],
             owner=spec.get("owner") or settings.target_github_owner,
             repo=spec.get("repo") or settings.target_github_repo,
-            base_branch=spec.get("base_branch") or "main",
+            base_branch=spec.get("base_branch") or None,
             role_key=spec.get("role_key"),
             finalize_ctx={"parent_run_id": run_id, "root_run_id": root, "attempt": attempt,
                           # A fresh build of the same brief, not a repair (see `fresh` above).
@@ -2126,7 +2131,8 @@ def override_code_task(engine, settings: Settings, jobs, run_id: str, *,
             branch_name=f"boss/code/{root_run}", settle_run_id=run_id,
             summary=(f"⚠️ GATE OVERRIDE by {actor}: waived {waive_gates} (QualityGate {qg}).\n"
                      f"Reason: {reason or '(none given)'}\n\n{fctx.get('pr_summary', '')}"),
-            files=files, created_by_job_id=fctx.get("created_by_job_id"))
+            files=files, created_by_job_id=fctx.get("created_by_job_id"),
+            pr_base=_build_base.pr_base_for_run(c, run, getattr(sf, "github", None)))
     status = proposal.get("status")
     # `reused`: this build's PR effect already happened (a prior receipt) — the PR is open.
     if status not in ("created", "succeeded", "reused"):
@@ -2262,7 +2268,8 @@ def open_parked_with_checks_failing(engine, settings: Settings, jobs, run_id: st
                 summary=cf.pr_section(record) + str(fctx.get("pr_summary") or ""),
                 files=files, created_by_job_id=fctx.get("created_by_job_id"),
                 evidence=evidence, quality_gate_id=fctx.get("quality_gate_id"), run_id=run_id,
-                checks_failing=record)
+                checks_failing=record,
+                pr_base=_build_base.pr_base_for_run(c, run, getattr(sf, "github", None)))
     status = proposal.get("status")
     if status not in ("created", "succeeded", "reused") or not proposal.get("pull_request_url"):
         with _transaction(engine) as c:
@@ -2890,10 +2897,23 @@ def _run_code_task(engine, settings: Settings, jobs, run_id: str,
     #    (Phase 2 impersonation); fall back to the PAT (Phase 0).
     owner = spec.get("owner") or settings.target_github_owner
     repo = spec.get("repo") or settings.target_github_repo
-    base_branch = spec.get("base_branch") or "main"
     # BOSS-267: per-task repo host (spec.repo_host) else the project setting; github default.
     from .repo_host import resolve_repo_host_kind
     repo_host_kind = resolve_repo_host_kind(settings, spec)
+    # ONE BASE FOR THE CLONE AND THE PR (build_base_branch): explicit spec base, else the
+    # project's bound branch, else the host's default — never a bare "main" placeholder.
+    def _host_default():
+        # The adapter the PR is opened through, so the fallback is that repo's default.
+        return _build_base.host_default_branch(sf.github) if repo_host_kind == "github" else None
+
+    with _transaction(engine) as c:
+        _bases = _build_base.resolve_build_base(
+            c, project_id=project_id, owner=owner, repo=repo,
+            explicit=spec.get("base_branch"), host_default=_host_default, run_id=run_id)
+        emit_event(c, project_id, "code_task.base_branch_resolved", "boss", "code_task_run",
+                   run_id, _bases.as_event())
+    base_branch = _bases.clone     # may advance to work_branch below (a repair)
+    repo_base_branch = _bases.pr   # the PR's base
     if repo_host_kind == "bitbucket":
         token = settings.bitbucket_token or ""
     else:
@@ -3088,6 +3108,7 @@ def _run_code_task(engine, settings: Settings, jobs, run_id: str,
                 files=result.diff,
                 created_by_job_id=fctx.get("created_by_job_id"),
                 settle_run_id=run_id,
+                pr_base=repo_base_branch,
             )
 
         status = proposal.get("status")

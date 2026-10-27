@@ -3858,7 +3858,21 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         _build_budget.bind(c, run_id, reservation_id)
 
     owner, repo = _owner, _repo
-    base_branch = spec.get("base_branch") or "main"
+    # ONE BASE FOR THE CLONE AND THE PR (build_base_branch): the task's explicit base, else
+    # the project's bound branch for this repo, else the host's default. It used to be
+    # `spec.base_branch or "main"` for the clone and the GitHub default for the PR, so a
+    # project bound to rel/rc10.10-kg built on main and opened PRs against main.
+    from . import build_base_branch as _bbb
+
+    with _transaction(engine) as c:
+        _bases = _bbb.resolve_build_base(
+            c, project_id=project_id, owner=owner, repo=repo,
+            explicit=spec.get("base_branch"),
+            host_default=lambda: _bbb.host_default_branch(sf.github), run_id=run_id)
+        emit_event(c, project_id, "code_task.base_branch_resolved", "boss", "code_task_run",
+                   run_id, _bases.as_event())
+    base_branch = _bases.clone     # may advance to work_branch below (a repair, a release)
+    repo_base_branch = _bases.pr   # the PR base
     # Feedback-iteration: attempts after the first share ONE branch derived from the root
     # run and clone the prior attempt's code, so the model builds ON prior work instead of
     # regenerating from base. The PR on that branch is reused (see create_pull_request).
@@ -4652,7 +4666,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                             for p, content in accumulated.items()]
                            if use_microvm else sandbox.diff()),
                     created_by_job_id=job_id, actual_usd_micros=cost,
-                    **({"pr_base": _release_target["pr_base"]} if _release_target else {}),
+                    pr_base=(_release_target["pr_base"] if _release_target else repo_base_branch),
                     monitoring_removals=_monitoring_removals(spec))
                 if pr.get("status") in ("created", "succeeded"):
                     url = pr.get("pull_request_url") or pr.get("url")
@@ -8377,7 +8391,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 files=_pr_files,
                 created_by_job_id=job_id, actual_usd_micros=cost,
                 evidence=evidence, quality_gate_id=qg_id, run_id=run_id,
-                **({"pr_base": _release_target["pr_base"]} if _release_target else {}),
+                pr_base=(_release_target["pr_base"] if _release_target else repo_base_branch),
                 **({"checks_failing": _checks} if _checks else {}),
                 monitoring_removals=_monitoring_removals(spec))
 
@@ -8429,7 +8443,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         files=_pr_files,
                         created_by_job_id=job_id, actual_usd_micros=cost,
                         evidence=evidence, quality_gate_id=qg_id, run_id=run_id,
-                        **({"pr_base": _release_target["pr_base"]} if _release_target else {}),
+                        pr_base=(_release_target["pr_base"] if _release_target else repo_base_branch),
                         **({"checks_failing": _checks} if _checks else {}),
                         monitoring_removals=_monitoring_removals(spec))
                     status = proposal.get("status")

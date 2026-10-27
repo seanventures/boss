@@ -374,7 +374,7 @@ class OrchestratorNextMoveService:
                     test_commands=[],
                     owner=owner,
                     repo=repo,
-                    base_branch="main",
+                    base_branch=None,
                     finalize_ctx={
                         "source": "orchestrator.next_move",
                         "plan_id": plan["id"],
