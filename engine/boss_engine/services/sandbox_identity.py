@@ -410,29 +410,56 @@ def _seed_claude_login(ident: SandboxIdentity) -> None:
     sandboxed claude_code run on the cli_login credential starts "Not logged in".
 
     The copy carries the access token WITHOUT the refresh token: a run that refreshed would rotate
-    the refresh token and sign the control plane's own login out. A run that outlives the access
-    token fails as signed out; the control plane keeps refreshing its own copy."""
+    the refresh token and sign the control plane's own login out. So the copy cannot refresh, and
+    must outlive a stage: a token with less than claude_login.SEED_MIN_VALID_SECONDS left is
+    refreshed first, by the one owner, under its lock (claude_login.ensure_fresh). A token that
+    cannot be made fresh is NOT copied (crun_50cf77b8 got a dead one and failed "401 OAuth access
+    token has expired"); the run's first `claude` start then fails with "Claude sign-in needed"
+    (claude_login.before_cli_start), and a run that never starts Claude is not held up by it.
+    Every later `claude` start in the run re-copies the current token, so a long build follows
+    the control plane's refreshes."""
+    from . import claude_login
     from .claude_credential import cli_login_present
 
     if not cli_login_present():
         return
+    ok, why = claude_login.ensure_fresh(claude_login.SEED_MIN_VALID_SECONDS)
+    if not ok:
+        log.warning("sandbox %s: the Claude login is not copied: %s", ident.key, why)
+        return
+    copy_claude_access_token(ident)
+
+
+def copy_claude_access_token(ident: Any) -> bool:
+    """Copy the control plane's CURRENT Claude access token (never the refresh token) into the
+    run's config dir, replacing an earlier copy. Never follows a symlink the run planted."""
+    from .claude_credential import cli_login_present
+
+    if not cli_login_present():
+        return False
     home = os.path.expanduser(os.environ.get("CLAUDE_CONFIG_DIR", "") or "~/.claude")
     try:
         with open(os.path.join(home, ".credentials.json"), encoding="utf-8") as fh:
             doc = json.load(fh)
     except (OSError, ValueError):
-        return
+        return False
     oauth = doc.get("claudeAiOauth") if isinstance(doc, dict) else None
     if not isinstance(oauth, dict) or not oauth.get("accessToken"):
-        return
+        return False
     dst = ident.home / ".claude"
     dst.mkdir(exist_ok=True)
-    os.chmod(dst, 0o2777)
+    with contextlib.suppress(OSError):
+        os.chmod(dst, 0o2777)
     path = dst / ".credentials.json"
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o644)
+    tmp = dst / f".credentials.json.boss-{os.getpid()}-{threading.get_ident()}.tmp"
+    with contextlib.suppress(FileNotFoundError):
+        os.unlink(tmp)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
         json.dump({"claudeAiOauth": {k: v for k, v in oauth.items() if k != "refreshToken"}}, fh)
-    os.chmod(path, 0o644)
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, path)          # rename replaces a planted symlink itself, never its target
+    return True
 
 
 def _seed_toolchains(ident: SandboxIdentity, project_id: Optional[str]) -> None:

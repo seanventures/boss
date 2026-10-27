@@ -39,7 +39,7 @@ SUBSCRIPTIONS = (
 SETUP_PROVIDER = {"codex": "codex", "claude": "claude_code", "grok": "grok"}
 #: Pill states a job can still run on — setup_view.USABLE_MODEL (a test holds them equal).
 USABLE_STATES = frozenset({"working", "not_checked", "rate_limited", "paused_budget",
-                           "unreachable"})
+                           "unreachable", "login_expiring", "login_refresh_failed"})
 #: ...except on this machine: a local model that does not answer is the wrong address or a
 #: stopped server, not an outage (setup_view.USABLE_LOCAL_MODEL; the same test holds them).
 USABLE_LOCAL_STATES = USABLE_STATES - {"unreachable"}

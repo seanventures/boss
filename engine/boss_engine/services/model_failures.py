@@ -26,6 +26,7 @@ _LOGIN_REJECTED = (
     "invalid bearer token", "failed to authenticate", "authentication_error",
     "invalid api key", "invalid x-api-key", "not logged in", "please run /login",
     "oauth token has expired", "token has expired", "login was rejected",
+    "claude sign-in needed",          # claude_login.ClaudeSignInNeeded
 )
 _HTTP_401 = re.compile(r"(?<![\w.])401(?![\w.])")
 _PROVIDER_NAMES = {

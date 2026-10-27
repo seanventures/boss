@@ -67,7 +67,7 @@ OFFERED_OPTIONS = frozenset({
     "queue_new_builds", "pause_largest_build", "keep_going", "one_build_at_a_time",
     "docker_memory_guide", "dismiss_today", "free_disk_now", "remind_at_90", "restart_step",
     "cancel_build", "wait_15", "hold_updates", "keep_updating", "build_one_at_a_time",
-    "use_bigger_place", "acknowledge", "answer_escalation",
+    "use_bigger_place", "acknowledge", "answer_escalation", "claude_sign_in",
 })
 DESTRUCTIVE = frozenset({"pause_largest_build", "cancel_build", "restart_step",
                          "free_disk_now"})
@@ -99,6 +99,8 @@ class Signals:
     reclaimable_disk_gb: Optional[float] = None
     biggest_request_mb: float = 0.0
     docker: bool = False
+    #: claude_login.status(): the Claude CLI login's expiry and its last refresh (no secret).
+    claude_login: dict[str, Any] = field(default_factory=dict)
 
 
 _VM_LAST: dict[str, Any] = {}
@@ -230,6 +232,12 @@ def collect(engine: Any) -> Signals:
     from .resource_reaper import docker_available
 
     sig.docker = docker_available()
+    try:
+        from . import claude_login
+
+        sig.claude_login = claude_login.status()
+    except Exception:  # noqa: BLE001
+        sig.claude_login = {}
     if sig.docker and cap.disk_used_pct > 80:
         sig.reclaimable_disk_gb = _docker_reclaimable_gb()
     return sig
@@ -410,6 +418,29 @@ def diagnose(sig: Signals) -> list[dict[str, Any]]:
                              "BOSS runs one build at a time and lets it use what there is."),
                         _opt("use_bigger_place", "Use a bigger place",
                              "Opens Places, to build on a machine with more memory.")],
+            "needs_choice": True, "auto": [],
+        })
+
+    # THE CLAUDE LOGIN CANNOT BE KEPT FRESH (claude_login): its refresh was refused, or it has
+    # expired. BOSS kept the login file as it was; only a person can sign in again.
+    login = sig.claude_login or {}
+    if login.get("state") in ("refresh_failed", "expired"):
+        left = login.get("seconds_left")
+        when = ("has expired" if login.get("state") == "expired" or (left is not None and left <= 0)
+                else f"expires in {max(0, int(left) // 60)} min" if left is not None
+                else "will expire")
+        error = login.get("error")
+        out.append({
+            "kind": "claude_signed_out", "severity": "critical",
+            "title": "Claude sign-in needed",
+            "detail": (f"The Claude subscription's login {when} and BOSS could not refresh it"
+                       + (f" ({error})" if error else "") + ". Builds on Claude cannot start "
+                       "until you sign in again in Repo and models (Claude Code, Sign in) or "
+                       "run `boss connect claude`."),
+            "evidence": {k: login.get(k) for k in ("state", "seconds_left", "error")},
+            "options": [_opt("claude_sign_in", "Sign in again",
+                             "Opens Repo and models, where Claude Code signs in."),
+                        _opt("wait_15", "Remind me in 15 min", "BOSS asks again.")],
             "needs_choice": True, "auto": [],
         })
 
@@ -1135,6 +1166,7 @@ _CHOICES: dict[str, Callable[..., dict[str, Any]]] = {
     "acknowledge": lambda e, s, r, ev, a: {"result": "Noted.", "status": "resolved"},
     "docker_memory_guide": _guide(DOCKER_MEMORY_GUIDE, "Opened the Docker Desktop guide."),
     "use_bigger_place": _guide("?area=places", "Opened Places."),
+    "claude_sign_in": _guide("?area=setup", "Opened Repo and models: press Sign in on Claude Code."),
     "free_disk_now": _free_disk,
     "restart_step": _restart_step,
     "cancel_build": _cancel_build,

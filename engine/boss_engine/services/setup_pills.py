@@ -96,6 +96,15 @@ MODEL: dict[str, dict[str, Any]] = {
     "login_expired": {"label": "Login expired", "tone": "red",
                       "tip": "{provider_fix}",
                       "action": "sign_in"},
+    # THE CLAUDE CLI LOGIN'S REAL EXPIRY (claude_login.status), not only the last check: a
+    # login inside its refresh window, and one whose refresh was refused while its token still
+    # works. Neither is "Working" (2026-10-27: the pill said Working five minutes after the
+    # token had expired).
+    "login_expiring": {"label": "Expiring", "tone": "amber",
+                       "tip": "Sign-in expires in {n} min. BOSS renews it automatically."},
+    "login_refresh_failed": {"label": "Renewal failed", "tone": "red",
+                             "tip": "BOSS could not renew the sign-in. Sign in again.",
+                             "action": "sign_in"},
     # BOSS's own failure, never the provider's: the stored key could not be decrypted (a changed
     # master key). The provider was not asked, so it is not "Key rejected".
     "key_unreadable": {"label": "Can't read key", "tone": "red",

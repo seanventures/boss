@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import stat
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -26,7 +27,7 @@ def _login(tmp_path: Path, monkeypatch) -> Path:
     src = conf / ".credentials.json"
     src.write_text(json.dumps({"claudeAiOauth": {
         "accessToken": "ACCESS_MARKER", "refreshToken": "REFRESH_MARKER",
-        "expiresAt": 1, "scopes": ["user:inference"], "subscriptionType": "max"}}))
+        "expiresAt": int((time.time() + 8 * 3600) * 1000), "scopes": ["user:inference"], "subscriptionType": "max"}}))
     os.chmod(src, 0o600)
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(conf))
     return src

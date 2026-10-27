@@ -750,6 +750,12 @@ def _subscription_proof(connection: Connection, settings: Any, project_id: str, 
     from .setup_service import governed_proof, prove_coding_agent
 
     started = time.monotonic()
+    refused = _claude_login_refused(provider) if prove_with is None else None
+    if refused is not None:
+        # The CLI is never started on an expired login BOSS could not refresh: it would try
+        # itself, be refused, and wipe the login (claude_login).
+        refused["latency_ms"] = int((time.monotonic() - started) * 1000)
+        return refused
     proof = governed_proof(_engine(connection), settings, project_id, provider, actor,
                            prove=prove_with or (lambda: prove_coding_agent(settings, provider)),
                            amount=0)
@@ -777,7 +783,33 @@ def _subscription_proof(connection: Connection, settings: Any, project_id: str, 
             # The CLI names when the plan resets ("Try again at …"): the pill shows it, and
             # Auto knows when to come back.
             proof["retry_at"] = setup_checks._retry_after({}, str(proof.get("error") or ""))
+    if proof.get("state") == "working":
+        # Answered, but the login's real expiry still decides: Expiring / Renewal failed.
+        proof["state"], _ = setup_view.claude_login_state(
+            "working", provider=provider, kind="subscription")
     return proof
+
+
+def _claude_login_refused(provider: str) -> Optional[dict[str, Any]]:
+    """For Claude Code on the CLI's own login: refresh a token about to expire first, and
+    answer Login expired — without starting the CLI — when it has expired and cannot be
+    refreshed. None when the check should go ahead."""
+    if provider != "claude_code":
+        return None
+    try:
+        from . import claude_login
+        from .claude_credential import cli_login_present
+
+        if not cli_login_present():
+            return None
+        ok, why = claude_login.ensure_fresh(claude_login.CLI_START_MIN_VALID_SECONDS)
+        left = claude_login.seconds_left(claude_login.read_oauth())
+    except Exception:  # noqa: BLE001 — the check itself will say what is wrong
+        return None
+    if ok or left is None or left > 0:
+        return None
+    return {"ok": False, "state": "login_expired", "status": 401,
+            "error": claude_login.sign_in_words(why)}
 
 
 def _failure(provider: str, state: str, model: Optional[str] = None,

@@ -100,6 +100,8 @@ EXEMPT: dict[str, str] = {
     "services/owned_process.py::sweep_orphans": _CLEANUP,
     "services/preview_service.py::sweep_preview_workdirs": _CLEANUP,
     "services/resource_reaper.py::tick": _CLEANUP,
+    "services/claude_login.py::refresh_if_due": "install-wide: refreshes the Claude CLI login",
+    "services/claude_login.py::tick": "install-wide: refreshes the Claude CLI login",
     "services/scorecards.py::sweep": "records scorecards for units that already finished",
     "services/shepherd_service.py::sweep": _RECOVERY,
     "services/shepherd_service.py::sweep_stale_previews": _CLEANUP,

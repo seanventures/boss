@@ -8,6 +8,8 @@ a job and is blind while one runs, which is exactly when the host needs watching
 * the reaper: expired, idle and orphaned previews, orphaned process trees, unclaimed temp
   directories, BOSS's unowned containers and images, the disk prune, table retention
   (resource_reaper);
+* the Claude login refresher: the ONE owner that refreshes the Claude CLI's own login, well
+  before it expires, so no `claude` process ever refreshes (and wipes) it (claude_login);
 * the system doctor: signals → findings → safe automatic fixes, choices on a card, the
   degradation rung admission and Metatron obey (system_doctor).
 """
@@ -55,6 +57,14 @@ def start_all(engine: Any, settings: Any) -> dict[str, bool]:
     except Exception:  # noqa: BLE001
         _log.warning("reaper not started", exc_info=True)
         started["reaper"] = False
+    try:
+        from . import claude_login
+
+        claude_login.start()
+        started["claude_login"] = True
+    except Exception:  # noqa: BLE001
+        _log.warning("Claude login refresher not started", exc_info=True)
+        started["claude_login"] = False
     try:
         from . import system_doctor
 

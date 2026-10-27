@@ -78,7 +78,16 @@ class ClaudeCredential:
 
     def apply(self, env: dict) -> dict:
         """Put exactly this credential in a CLI child's environment, and no other Anthropic
-        credential: an inherited key next to a login would leave the CLI to choose who pays."""
+        credential: an inherited key next to a login would leave the CLI to choose who pays.
+
+        On the CLI's own login this is also where the CLI is kept from refreshing it
+        (claude_login.before_cli_start): a token about to expire is refreshed by BOSS first, a
+        refresh in progress is waited out, and an expired login BOSS could not refresh raises
+        ClaudeSignInNeeded instead of starting a CLI that would wipe it."""
+        if self.kind == KIND_CLI_LOGIN:
+            from .claude_login import before_cli_start
+
+            before_cli_start()
         env.pop(TOKEN_NAME, None)
         env.pop(STORED_KEY_NAME, None)
         if self.value and self.env_name:

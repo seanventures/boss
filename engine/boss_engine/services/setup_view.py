@@ -456,7 +456,7 @@ def _repo_entry(*, binding_id: Optional[str], full_name: str, default: bool,
 USABLE_REPOSITORY = frozenset({"working", "expiring", "checking", "rate_limited", "unreachable"})
 #: Model states a job can still run on (a busy or unreachable provider recovers by itself).
 USABLE_MODEL = frozenset({"working", "not_checked", "rate_limited", "paused_budget",
-                          "unreachable"})
+                          "unreachable", "login_expiring", "login_refresh_failed"})
 #: A MODEL ON THIS MACHINE THAT DOES NOT ANSWER IS NOT AN OUTAGE, it is the wrong address (the
 #: container's own 127.0.0.1) or a stopped server: it does not recover by itself, so Auto never
 #: picks it. Applies to the Local kinds and to an OpenAI-compatible URL on the install machine
@@ -466,7 +466,7 @@ USABLE_LOCAL_MODEL = USABLE_MODEL - {"unreachable"}
 #: has answered: a busy or unreachable GitHub, a check not yet run and a model nobody has tried
 #: are still usable (a build may start) but they are not Ready.
 PROVEN_REPOSITORY = frozenset({"working", "expiring"})
-PROVEN_MODEL = frozenset({"working", "rate_limited", "paused_budget"})
+PROVEN_MODEL = frozenset({"working", "rate_limited", "paused_budget", "login_expiring"})
 
 
 def repository_working(view_repo: dict[str, Any]) -> bool:
@@ -560,6 +560,46 @@ def source_state(*, kind: str, metadata: dict[str, Any], capacity: dict[str, Any
     return state, checked_at, retry_at
 
 
+#: The states a live Claude login expiry may replace: the ones that would otherwise say the
+#: login works, or has not been tried.
+_LOGIN_EXPIRY_REPLACES = frozenset({"working", "not_checked", "rate_limited", "login_expiring",
+                                    "login_refresh_failed"})
+
+
+def claude_login_state(state: str, *, provider: str, kind: str,
+                       login: Optional[dict[str, Any]] = None) -> tuple[str, Optional[int]]:
+    """THE CLAUDE CLI LOGIN'S REAL EXPIRY over the last check: (state, minutes left).
+
+    Only for the Claude Code subscription on the CLI's own login (claude_login.status): an
+    expired token is Login expired, a refused renewal Renewal failed, a token inside the
+    refresh window Expiring — never "Working"."""
+    import os
+
+    if provider != "claude_code" or kind != "subscription" or state not in _LOGIN_EXPIRY_REPLACES:
+        return state, None
+    if login is None and (os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") or "").strip():
+        return state, None                 # the CLI runs on that token, not on its own login
+    if login is None:
+        try:
+            from . import claude_login
+
+            login = claude_login.status()
+        except Exception:  # noqa: BLE001 — unknown expiry leaves the check's answer
+            return state, None
+    live = str((login or {}).get("state") or "")
+    left = (login or {}).get("seconds_left")
+    minutes = None if left is None else max(0, int(left) // 60)
+    if live == "expired":
+        return "login_expired", 0
+    if live == "refresh_failed":
+        return "login_refresh_failed", minutes
+    if live == "expiring":
+        return "login_expiring", minutes
+    if state in ("login_expiring", "login_refresh_failed"):
+        return "working", minutes
+    return state, minutes
+
+
 def _source_kind(provider: str, row: Any) -> str:
     connected = row["connection_status"] == "connected"
     if provider in SUBSCRIPTIONS and (row["cost_mode"] == "subscription" or connected) \
@@ -598,6 +638,7 @@ def source_entry(row: Any, *, by_entitlement: dict[str, str], now: datetime,
     kind = _source_kind(provider, row)
     state, checked_at, retry_at = source_state(
         kind=kind, metadata=metadata, capacity=capacity, budget_spent=budget_spent, now=now)
+    state, minutes_left = claude_login_state(state, provider=provider, kind=kind)
     if checked_at is None and state == "working":
         checked_at = _iso(row["updated_at"])
     models = [m for m in _list(row["supported_models"]) if isinstance(m, str) and m.strip()]
@@ -607,7 +648,8 @@ def source_entry(row: Any, *, by_entitlement: dict[str, str], now: datetime,
         source_id=source_id, provider=provider, kind=kind, model=model, state=state,
         checked_at=checked_at, retry_at=retry_at, source="connected", now=now,
         host=last.get("host") or "", latency_ms=last.get("latency_ms"),
-        base_url=str(metadata.get("base_url") or ""), budget_period=budget_period)
+        base_url=str(metadata.get("base_url") or ""), budget_period=budget_period,
+        minutes_left=minutes_left)
 
 
 def source_pills(connection: Connection, settings: Any, project_id: str, *,
@@ -689,10 +731,12 @@ def _models(connection: Connection, settings: Any, project_id: str, now: datetim
 def _model_entry(*, source_id: str, provider: str, kind: str, model: Optional[str], state: str,
                  checked_at: Optional[str], retry_at: Optional[str], source: str,
                  now: datetime, host: str, latency_ms: Any, base_url: str = "",
-                 budget_period: str = "month") -> dict[str, Any]:
+                 budget_period: str = "month", minutes_left: Optional[int] = None
+                 ) -> dict[str, Any]:
     entry = CATALOGUE_BY_PROVIDER.get(provider) or {}
     pill = setup_pills.pill(
-        "model", state, age=_age(checked_at, now) or "a moment", time=_hhmm(retry_at),
+        "model", state, n="" if minutes_left is None else minutes_left,
+        age=_age(checked_at, now) or "a moment", time=_hhmm(retry_at),
         at=_iso(retry_at),
         model=model or "That model", host=host or "the provider",
         provider_fix=setup_pills.LOGIN_FIX.get(provider, setup_pills.DEFAULT_LOGIN_FIX),
