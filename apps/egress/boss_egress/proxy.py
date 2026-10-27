@@ -115,6 +115,39 @@ def _credential(req: EgressRequest) -> Optional[str]:
 _UNCOVERED = ("github_not_connected", "app_not_installed", "repo_outside_org_token")
 
 
+#: How long after it is minted an installation token may still be unknown to GitHub's git and
+#: API front ends, and the pauses between re-sending a read in that window (~15 s in all).
+FRESH_TOKEN_SECONDS = 60
+FRESH_TOKEN_BACKOFF = (0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0)
+#: An installation token lives one hour from its minting (GitHub's fixed lifetime).
+_INSTALLATION_TOKEN_LIFETIME = 3600
+
+
+def _sleep(seconds: float) -> None:
+    import time
+
+    time.sleep(seconds)
+
+
+def _is_read(provider: str, rest: str, method: str) -> bool:
+    """A request that changes nothing at GitHub: safe to send again."""
+    m = method.upper()
+    if provider == "github":
+        return m == "GET" or (m == "POST" and rest.endswith("/git-upload-pack"))
+    return provider == "github-api" and m in ("GET", "HEAD")
+
+
+def _token_is_fresh(run_id: str, token: str) -> bool:
+    """`token` is an installation token THIS process minted for `run_id` under a minute ago."""
+    from datetime import datetime, timezone
+
+    tok = github_app.cached_for_run(run_id)
+    if tok is None or tok.token != token or tok.kind != "installation":
+        return False
+    remaining = (tok.expires_at - datetime.now(timezone.utc)).total_seconds()
+    return _INSTALLATION_TOKEN_LIFETIME - remaining < FRESH_TOKEN_SECONDS
+
+
 def anonymous_read_allowed(provider: str, decision: Any, code: str, perms: Mapping[str, str]) -> bool:
     """A READ-ONLY run's git read (upload-pack: clone/fetch) of a repository no credential of the
     org covers goes to GitHub with no credential: what anyone on the internet may read, nothing
@@ -222,6 +255,8 @@ class EgressProxy:
         # Upstream call outside the DB transaction.
         try:
             resp = self.upstream(req.method.upper(), url, headers, req.body)
+            resp = self._settle_fresh_token(provider, rest, req, url, headers, token,
+                                            claims.task.run_id, resp)
         except Exception:  # noqa: BLE001
             resp = EgressResponse(502, {}, b'{"error":"upstream_unreachable"}')
         with self.engine.begin() as db:
@@ -231,6 +266,32 @@ class EgressProxy:
         return EgressResponse(resp.status, out_headers, resp.body)
 
     # ---- pieces -----------------------------------------------------------------------------------
+    def _settle_fresh_token(self, provider: str, rest: str, req: EgressRequest, url: str,
+                            headers: Mapping[str, str], token: str, run_id: str,
+                            resp: EgressResponse) -> EgressResponse:
+        """A JUST-MINTED installation token is not usable at GitHub at once.
+
+        crun_4e4b5828, crun_ada5fe88 and crun_a1a0a5a4 (2026-10-27) each failed their clone with
+        "Repository not found": the run's first git read went to GitHub with an installation
+        token minted milliseconds earlier and GitHub answered 404 (the token was valid; measured
+        from the egress container, a fresh token for paramg/boss answered 404 for up to ~5 s in
+        one mint of six, then 200). git takes the 404 as final. So a READ (a git fetch/clone, a
+        REST GET) that GitHub answers 401/404 while the token is still fresh is re-sent — the
+        same request, the same token, nothing wider — until GitHub has it or the window ends."""
+        if resp.status not in (401, 404) or not token or not _is_read(provider, rest, req.method):
+            return resp
+        waited = 0.0
+        for pause in FRESH_TOKEN_BACKOFF:
+            if not _token_is_fresh(run_id, token):
+                break
+            _sleep(pause)
+            waited += pause
+            resp = self.upstream(req.method.upper(), url, headers, req.body)
+            if resp.status not in (401, 404):
+                log.info("egress: a fresh GitHub token for %s was usable after %.1fs", run_id, waited)
+                break
+        return resp
+
     def _installation_token(self, claims: RunTokenClaims, db: Any) -> str:
         cached = github_app.cached_for_run(claims.task.run_id)
         if cached is not None:
