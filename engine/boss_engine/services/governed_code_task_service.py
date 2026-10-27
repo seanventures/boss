@@ -2934,6 +2934,9 @@ def _spawn_deferred_findings_task(
                           # root_run_id note above: lineage must survive the hop.
                           **({"origin": parent_origin} if parent_origin else {})},
             jobs=jobs, profile=spec.get("profile"),
+            # BOSS ITSELF continues this lineage: it acts under the person and grant the lineage
+            # was started under (a standing grant, or the workflow run's), never the worker key's.
+            continuation=True,
         )
 
 

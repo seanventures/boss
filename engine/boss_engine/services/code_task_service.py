@@ -482,6 +482,7 @@ def start_code_task(
     reference_links: Optional[list[str]] = None,
     role_key: Optional[str] = None,
     automatic_retry: bool = False,
+    continuation: bool = False,
     outcome: Optional[dict] = None,
 ) -> str:
     """Create the durable run row and enqueue the single `code.task` job.
@@ -492,6 +493,12 @@ def start_code_task(
 
     ``automatic_retry``: BOSS itself is starting this attempt (retry_code_task(automatic=True)).
     It runs under the parent's carried grant or is not started at all (RetryNeedsPerson).
+
+    ``continuation``: BOSS itself continues the lineage of ``finalize_ctx["parent_run_id"]`` (a
+    "Follow-up: checks failing" / deferred-findings task). Like an automatic retry it acts under
+    the lineage's ORIGINAL person and grant while that grant still covers the builder — whoever
+    is calling in (the worker's key) is not the one asking. When nothing covers it, it is still
+    created (it is the tracked fix) and blocks naming the missing grant (``authority_gap``).
 
     ``role_key`` runs the task AS that agent: its held MCP servers reach the harness
     (code_task_mcp). It must name an agent of this project.
@@ -609,6 +616,7 @@ def start_code_task(
     # the builder answers 409 consent_required BEFORE anything is written; the covering grant is
     # stamped on the build's job so the run executes as "<agent> for <person>" under it.
     identity_acting = None
+    authority_gap: list[str] = []
     if not simulated:
         from boss_engine.identity import consent as _consent
 
@@ -617,12 +625,18 @@ def start_code_task(
         builder = _identity_runs.resolved_builder({"role_key": role}, finalize_ctx)
         parent_run = str((finalize_ctx or {}).get("parent_run_id") or "").strip()
         if parent_run:
-            # A retry keeps the grant its parent ran under (never the re-enqueuer's identity).
+            # A retry keeps the grant its parent ran under (never the re-enqueuer's identity);
+            # so does a continuation BOSS starts for the lineage (a follow-up): crun_97784316
+            # (2026-10-27) was a "Follow-up: checks failing" started from the worker's key, which
+            # the caller check refused, so a 30-day grant the person gave was never consulted.
+            _wf = str((finalize_ctx or {}).get("workflow_run_id") or "") or None
+            if continuation and not _wf:
+                _wf = _parent_workflow_run(connection, parent_run)
             identity_acting = _consent.carry_retry_authority(
                 connection, parent_run_id=parent_run, new_run_id=run_id, project_id=project_id,
                 role_keys=[builder], permissions=_consent.CODE_TASK_PERMISSIONS,
-                repos=_consent_repos(owner, repo, repo_host), by_boss=automatic_retry,
-                workflow_run_id=str((finalize_ctx or {}).get("workflow_run_id") or "") or None)
+                repos=_consent_repos(owner, repo, repo_host), by_boss=automatic_retry or continuation,
+                workflow_run_id=_wf, gap=authority_gap)
         if automatic_retry and identity_acting is None:
             # NOT STARTED rather than started to be refused: no person's grant covers this
             # attempt, so identity would block it the moment it ran (crun_da5f6f72: "No one's
@@ -700,9 +714,14 @@ def start_code_task(
     )
     run_usage = {"cost_usd_micros": 0, "simulated": True, "model": None} if simulated else {}
     run_finalize = dict(finalize_ctx or {})
+    run_finalize.pop("authority_gap", None)   # only ever BOSS's own finding, never the caller's
     if simulated:
         run_finalize["simulated"] = True
         run_finalize["fixture"] = True
+    if continuation and identity_acting is None and authority_gap:
+        # Read back by the refusal (authority_refusal_words): the blocked follow-up names the
+        # grant that is missing rather than the generic "started by BOSS itself (or a key)".
+        run_finalize["authority_gap"] = authority_gap[-1]
     # WHICH WORKFLOW GOVERNS THIS, recorded at creation.
     #
     # The workflow runtime and the coding pipeline were built as separate systems. The console
@@ -2638,6 +2657,17 @@ def refused_reservation(engine, jobs, *, run_id: str, project_id: str, reservati
 # --------------------------------------------------------------------------- #
 #  The job handler                                                            #
 # --------------------------------------------------------------------------- #
+def _parent_workflow_run(connection, parent_run_id: str) -> Optional[str]:
+    """The workflow run a lineage's parent build belongs to (its finalize_ctx), or None."""
+    try:
+        wf = connection.execute(sql(
+            "SELECT finalize_ctx->>'workflow_run_id' FROM code_task_runs WHERE id = :id"),
+            {"id": parent_run_id}).scalar()
+    except Exception:  # noqa: BLE001 — no workflow run: the parent's own authority decides
+        return None
+    return str(wf) if wf else None
+
+
 def _consent_repos(owner: Optional[str], repo: Optional[str], repo_host: Optional[str]) -> list[str]:
     """The GitHub repositories a build's grant must cover: `owner/repo` when the build names one on
     GitHub, else none. A build with no repository asked for consent on a repo called "/" (round 3
@@ -2782,6 +2812,14 @@ def _run_code_task_once(engine, settings: Settings, jobs, run_id: str,
         words = authority_refusal_words(exc.reason, _refused_agent_name(engine, exc.reason))
         with _transaction(engine) as c:
             run = load_code_task_run(c, run_id)
+            gap = str(((run or {}).get("finalize_ctx") or {}).get("authority_gap") or "")
+            if gap:
+                # A continuation BOSS started for a lineage (a follow-up): say exactly which
+                # grant is missing, found when it was created (start_code_task(continuation)).
+                words = (f"BOSS started this to continue an earlier build, but no person's "
+                         f"authority carries over: {gap}. Start it again from the console as a "
+                         "person (you will be asked to consent), or give the builder a standing "
+                         "grant under My account ▸ Agents acting for me.")
             if run is not None and run["status"] not in ("completed", "failed", "cancelled", "blocked"):
                 _fail(c, run_id, run["project_id"], words, status="blocked", failure_class="needs_human",
                       reason_code="no_authority")

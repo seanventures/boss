@@ -47,8 +47,8 @@ def _github_summary(needs: dict[str, str], pattern: str) -> str:
 
 def carry_retry_authority(db: Any, *, parent_run_id: str, new_run_id: str, project_id: Optional[str],
                           role_keys: Iterable[str], permissions: Iterable[str], repos: Iterable[str] = (),
-                          by_boss: bool = False, workflow_run_id: Optional[str] = None
-                          ) -> Optional[Acting]:
+                          by_boss: bool = False, workflow_run_id: Optional[str] = None,
+                          gap: Optional[list[str]] = None) -> Optional[Acting]:
     """A RETRY KEEPS ITS GRANT (R2): the authority the parent build was started under (its first
     code.task job), carried to the retry as a child run of the parent's (`<parent run>/retry:<new>`),
     so a task-bound grant covers the retry exactly as it covered the parent — and nothing else.
@@ -67,8 +67,19 @@ def carry_retry_authority(db: Any, *, parent_run_id: str, new_run_id: str, proje
       stamped as BOSS's own work has no person behind it, so nothing is carried;
     * still live, still covering the builder, permissions and repos, and bound to the same run
       (`<run>/retry:<new>`);
-    * never a "this build only" grant (`run_ct:`): it ends with the build it was given for."""
+    * never a "this build only" grant (`run_ct:`): it ends with the build it was given for.
+
+    The same rule carries a lineage's CONTINUATION that BOSS starts: a "Follow-up: checks
+    failing" / deferred-findings task (start_code_task(continuation=True) -> `by_boss=True`).
+
+    `gap`: when given and nothing is carried, the exact reason is appended (which grant, which
+    agent, why), so the blocked build names what is missing instead of a generic refusal."""
     from . import grants, lineage, passports, runs
+
+    def _no(reason: str) -> None:
+        if gap is not None:
+            gap.append(reason)
+        return None
 
     parent = runs.original_build_authority(db, parent_run_id)
     if (by_boss and workflow_run_id and parent is not None and parent.chain
@@ -77,7 +88,10 @@ def carry_retry_authority(db: Any, *, parent_run_id: str, new_run_id: str, proje
         if recorded is not None and parent.principal_id == recorded.principal_id:
             parent = recorded
     if parent is None or not parent.grant_id or getattr(parent, "system", False) or parent.chain:
-        return None
+        who = getattr(parent, "principal_id", None) if parent is not None else None
+        return _no(f"the build it continues ({parent_run_id}) was started by BOSS itself or a key"
+                   + (f" ({who})" if who else "") + " under no person's grant, so there is no "
+                   "person's authority to carry")
     ctx = lineage.current_context()
     ambient = lineage.current()
     if not by_boss:
@@ -89,21 +103,29 @@ def carry_retry_authority(db: Any, *, parent_run_id: str, new_run_id: str, proje
             return None
     g = grants.load(parent.grant_id, db=db)
     if by_boss and g is not None and str(g.task_run_id or "").startswith("run_ct:"):
-        return None                                           # "this build only": not past it
+        return _no(f"grant {g.id} was given for build {str(g.task_run_id)[len('run_ct:'):]} only "
+                   "and does not extend past it")             # "this build only": not past it
     if g is None or g.user_principal_id != parent.principal_id:
-        return None
+        return _no(f"grant {parent.grant_id}, which the build it continues ran under, is gone")
+    if not grants.is_live(g):
+        return _no(f"grant {g.id}, which the build it continues ran under, is "
+                   f"{getattr(g.status, 'value', g.status)} or expired")
     agent_ids = []
     for rk in role_keys:
         aid = runs.agent_for_role(db, project_id, rk)
         if not aid or passports.get(aid, db=db) is None:
-            return None
+            return _no(f"its builder ({rk}) has no Passport in this project")
         agent_ids.append(aid)
     base = parent.run_id or f"run_ct:{parent_run_id}"
     run_id = f"{base}/retry:{new_run_id}"
     needed = frozenset(k for k in permissions if catalogue.is_known(k) and catalogue.meta(k).delegable)
     if not grants.covers(g, agent_ids=agent_ids, permissions=needed, project_id=project_id,
                          repos=list(repos), run_id=run_id):
-        return None
+        missing = [a for a in agent_ids if a not in set(g.agent_ids)]
+        return _no(f"grant {g.id} does not cover it"
+                   + (f": it does not name the builder ({', '.join(missing)})" if missing else
+                      f": project {project_id}, repositories {', '.join(repos) or '-'} or its "
+                      "permissions are outside it"))
     return Acting(principal_id=parent.principal_id, org_id=parent.org_id, grant_id=g.id, run_id=run_id)
 
 
