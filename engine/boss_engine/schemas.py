@@ -6979,7 +6979,7 @@ class ReliabilityRemediateRequest(BaseModel):
     actor: str = "system"
     owner: Optional[str] = None
     repo: Optional[str] = None
-    base_branch: str = "main"
+    base_branch: Optional[str] = None  # None: the project's branch (build_base_branch)
 
     @model_validator(mode="after")
     def _validate(self) -> "ReliabilityRemediateRequest":

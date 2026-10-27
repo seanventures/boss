@@ -9842,7 +9842,16 @@ def plan_manual_deploy(payload: dict) -> dict:
             spec_row = connection.execute(
                 text("SELECT spec FROM code_task_runs WHERE id = :i"),
                 {"i": source_run}).mappings().first()
-            ref = ((spec_row or {}).get("spec") or {}).get("base_branch") or "main"
+            _spec = (spec_row or {}).get("spec") or {}
+            # The run's own base, else the project's bound branch (build_base_branch): a
+            # build that named no branch stores None, and "main" is the GitHub default, not
+            # necessarily the project's.
+            from boss_engine.services.build_base_branch import resolve_build_base
+
+            ref = resolve_build_base(
+                connection, project_id=target["project_id"], owner=_spec.get("owner") or "",
+                repo=_spec.get("repo") or "", explicit=_spec.get("base_branch"),
+                run_id=source_run).clone
         ref = ref or "main"
 
         from .services.governed_host_deploy import GovernedHostDeployError

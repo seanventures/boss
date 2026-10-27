@@ -74,7 +74,8 @@ def _shape(row: dict[str, Any]) -> dict[str, Any]:
             "access": row.get("access") or "write", "kind": row.get("kind") or "code",
             "depends_on": list(row.get("depends_on") or []),
             "ship_target": jload(row.get("ship_target"), {}) or {},
-            "base_branch": row.get("default_branch") or "main",
+            # The binding's branch, else None: a lane's build resolves it (build_base_branch).
+            "base_branch": row.get("default_branch") or None,
             "repository_active": row.get("binding_status") == "active"}
 
 

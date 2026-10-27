@@ -526,7 +526,7 @@ def _start_lane(db: Any, settings: Any, jobs: Any, cs: dict[str, Any], lane: dic
             instructions=_lane_brief(db, cs, lane, lanes, plan, deps),
             acceptance_criteria=list(opts.get("acceptance_criteria") or []),
             test_commands=list(opts.get("test_commands") or []), owner=owner, repo=repo,
-            base_branch=lane.get("base_branch") or "main", finalize_ctx=fctx, jobs=jobs,
+            base_branch=lane.get("base_branch") or None, finalize_ctx=fctx, jobs=jobs,
             allow_duplicate=True)
     db.execute(sql("UPDATE change_set_prs SET code_task_run_id = :r, lane_state = 'building', error = NULL, "
                    "updated_at = now() WHERE id = :i"), {"r": run_id, "i": lane["id"]})

@@ -1419,7 +1419,9 @@ def _open_fix_task(engine, settings, jobs, run_id: str, p: dict, remedy, note: s
                 test_commands=list(spec.get("test_commands") or []),
                 owner=spec.get("owner") or settings.target_github_owner,
                 repo=spec.get("repo") or settings.target_github_repo,
-                base_branch=spec.get("base_branch") or "main",
+                # The failed run's own base, else None: the pipeline resolves the project's
+                # branch (build_base_branch), never a "main" placeholder.
+                base_branch=spec.get("base_branch") or None,
                 finalize_ctx={"source": "shepherd"},
                 jobs=jobs, open_pr=True, job_priority=JOB_PRIORITY_BACKGROUND,
             )

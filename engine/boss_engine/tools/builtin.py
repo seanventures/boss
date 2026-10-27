@@ -1336,7 +1336,11 @@ def _register_write_tools(reg: ToolRegistry) -> None:
         cts = services_module("code_task_service")
         task_id = args.get("task_id")
         instructions = args.get("instructions") or ""
-        base_branch = args.get("base_branch") or "main"
+        # NO BRANCH ASKED FOR STAYS NONE: the pipeline resolves it (build_base_branch) — the
+        # project's bound branch, else the host default. A "main" here was written into the spec
+        # as if chosen, so every workflow build step cloned main and PR'd into it
+        # (crun_809fad7f, boss-platform bound to rel/rc10.10-kg).
+        base_branch = str(args.get("base_branch") or "").strip() or None
         # ALREADY GOVERNED. When a workflow step creates this task, the run that governs it
         # exists — naming it here stops start_code_task opening a SECOND one, which would put
         # a whole nine-step pipeline inside a step of the pipeline that created it.
