@@ -22,9 +22,13 @@ ROOT = Path(__file__).resolve().parents[2]
 DOCS = sorted({*ROOT.glob("docs/community/*.md"), ROOT / "README.md",
                ROOT / "scripts/install/README.md"})
 
+#: `claude setup-token` may be named only as what BOSS ITSELF runs on its server (the console's
+#: Sign in, 2026-10-27) — never as a command a person runs to paste its token somewhere.
+SETUP_TOKEN = re.compile(r"setup-token")
+RUN_BY_BOSS = re.compile(r"(?i)BOSS runs `claude setup-token` inside BOSS")
 #: Phrases that only ever described the retired import.
 BANNED = (
-    (re.compile(r"setup-token"), "a Claude setup token is never pasted"),
+    (SETUP_TOKEN, "a Claude setup token is never pasted"),
     (re.compile(r"store_subscription_token"), "the import script is retired"),
     (re.compile(r"accept-database-fallback"), "a subscription stores no credential"),
     (re.compile(r"coding-agents/credential"), "the import route is gone"),
@@ -43,7 +47,7 @@ def _problems(name: str, text: str) -> list[str]:
     found = []
     for number, line in enumerate(text.splitlines(), 1):
         for pattern, why in BANNED:
-            if pattern.search(line):
+            if pattern.search(line) and not (pattern is SETUP_TOKEN and RUN_BY_BOSS.search(line)):
                 found.append(f"{name}:{number}: {why}: {line.strip()[:160]}")
         if AUTH_FILE.search(line) and AUTH_FILE_VERB.search(line) and not NEGATION.search(line):
             found.append(f"{name}:{number}: auth.json is never moved: {line.strip()[:160]}")

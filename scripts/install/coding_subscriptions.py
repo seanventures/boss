@@ -165,11 +165,13 @@ def claude_local_session_ready(api_url: str, api_key: str) -> None:
                    and row.get("name") == "claude_code"), None) if isinstance(agents, list) else None
     if not claude or claude.get("installed") is not True:
         raise RuntimeError("Claude Code is not installed in the BOSS API container")
-    if claude.get("token_present"):
-        raise RuntimeError("BOSS already holds a Claude setup token. Remove that legacy "
+    # A token BOSS's own Sign in obtained (`long_lived_token`) is the subscription, not legacy.
+    if claude.get("legacy_token") or (claude.get("token_present")
+                                      and not claude.get("long_lived_token")):
+        raise RuntimeError("BOSS already holds a legacy Claude token. Remove that legacy "
                            "credential before selecting the CLI-owned login path")
     if claude.get("authenticated") is not True or claude.get("auth_method") not in {
-            "claude_ai", "oauth", "oauth_token"}:
+            "claude_ai", "oauth", "oauth_token", "long_lived_token"}:
         raise RuntimeError("Claude Code is not signed in with a subscription in the BOSS API "
                            "container. Run the provider's login as the boss user there first")
 
@@ -224,7 +226,7 @@ def local_session_signed_in(api_url: str, api_key: str, provider: str) -> bool |
     if not row or row.get("installed") is not True:
         return None
     if provider == "claude" and row.get("authenticated") is True and \
-            row.get("auth_method") not in {"claude_ai", "oauth", "oauth_token"}:
+            row.get("auth_method") not in {"claude_ai", "oauth", "oauth_token", "long_lived_token"}:
         return False
     return row.get("authenticated") is True
 

@@ -750,7 +750,13 @@ def _subscription_proof(connection: Connection, settings: Any, project_id: str, 
     from .setup_service import governed_proof, prove_coding_agent
 
     started = time.monotonic()
-    refused = _claude_login_refused(provider) if prove_with is None else None
+    # On BOSS's long-lived token the CLI login's expiry is not what runs (claude_credential).
+    long_lived = False
+    if provider == "claude_code":
+        from .claude_credential import long_lived_token_info
+
+        long_lived = long_lived_token_info(connection, project_id) is not None
+    refused = _claude_login_refused(provider) if prove_with is None and not long_lived else None
     if refused is not None:
         # The CLI is never started on an expired login BOSS could not refresh: it would try
         # itself, be refused, and wipe the login (claude_login).
@@ -786,7 +792,7 @@ def _subscription_proof(connection: Connection, settings: Any, project_id: str, 
     if proof.get("state") == "working":
         # Answered, but the login's real expiry still decides: Expiring / Renewal failed.
         proof["state"], _ = setup_view.claude_login_state(
-            "working", provider=provider, kind="subscription")
+            "working", provider=provider, kind="subscription", long_lived=long_lived)
     return proof
 
 

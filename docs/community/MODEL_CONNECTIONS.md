@@ -46,7 +46,7 @@ The table lists every model path BOSS currently supports, with its present limit
 | OpenAI-compatible API | **API key → Other** with a reachable base URL, model and key | Console **Connect** runs a governed proof. For an unauthenticated local server, use **Local** instead. |
 | Ollama or a local compatible model | **Local** in the console; `boss connect ollama` for a running Ollama; `boss connect --install-ollama` to install one | Console **Connect** runs a governed proof. The CLI Ollama path checks reachability and model presence without a completion. Its local endpoint is priced at zero, and fallback role assignment is described below. |
 | Codex ChatGPT subscription | `boss connect codex`, or **Subscription → Codex → Sign in** in the console | Codex's own device login runs inside BOSS: open the link it prints and enter the code. BOSS then proves it with one governed turn. |
-| Claude Code subscription | `boss connect claude`, or **Subscription → Claude Code → Sign in** | Claude Code's own login runs inside BOSS: open the link, sign in, and paste back the code the page shows (Claude Code reads it; BOSS never keeps it). BOSS then proves it with one governed turn. |
+| Claude Code subscription | `boss connect claude`, or **Subscription → Claude Code → Sign in** | BOSS runs `claude setup-token` inside BOSS, on the BOSS server: open the link, sign in, and paste back the code the page shows. Claude Code then gives BOSS a long-lived (1-year) subscription token on the server. BOSS stores it in its secret store; it is never shown, logged or sent to your browser. BOSS then proves it with one governed turn. |
 | Grok Build subscription | `boss connect grok`, or **Subscription → Grok Build → Sign in**; see [Grok CLI](GROK_CLI.md) | Grok's own device login runs inside BOSS. BOSS does not copy `auth.json`. Connecting runs one governed test turn. |
 
 **What research needs.** Discovery web research, including the research step that opens Build's default workflow, runs on the Claude Code subscription: the Claude CLI does the web search, and each research stage is a governed call with its own budget reservation, model lease, and receipt. A local Ollama model or an API key cannot stand in. Without a usable Claude Code subscription, Build's research step is recorded as skipped with the reason, and the run goes on to the panel. See [Getting started](GETTING_STARTED.md#6-follow-the-governed-path).
@@ -136,10 +136,18 @@ boss connect codex     # or: boss connect claude, boss connect grok
 ```
 
 1. BOSS starts the provider's own login inside the container and prints the link and one-time code it shows.
-2. Open the link in any browser, sign in, and enter the code. Claude Code works the other way round: its page shows a code, and you paste it at the hidden prompt. Claude Code reads it inside BOSS; BOSS never keeps it.
+2. Open the link in any browser, sign in, and enter the code. Claude Code works the other way round: its page shows a code, and you paste it at the hidden prompt (or in the console's code box).
+   For Claude Code, BOSS runs `claude setup-token` inside BOSS, not `claude auth login`. That gives BOSS a long-lived (1-year) subscription token instead of the CLI's 8-hour login, which can be lost when a refresh fails. The token is read from the CLI's output on the BOSS server and stored in BOSS's secret store as the Claude subscription. It is never printed, logged or sent to the browser.
 3. BOSS connects the subscription and proves it with one governed test turn. The command ends with `✓ Codex is signed in inside BOSS and connected: it answered one test turn`, or with BOSS's own reason and fix.
 
 An unused link expires after 15 minutes, and Ctrl-C cancels the sign-in. If the subscription is already signed in inside BOSS, step 1 is skipped. A login whose last test was refused (for example, an expired Codex login) signs in again. Without a terminal, nothing is started and BOSS says to run `boss connect <provider>`. The console's **+ Add model › Subscription › Sign in** runs the same sign-in, and `remote.sh subscription --provider codex` runs it on a server over SSH. Claude Code is refused while `.env` holds `ANTHROPIC_API_KEY` or a legacy `CLAUDE_CODE_OAUTH_TOKEN`.
+
+What Claude Code runs on, in order:
+
+1. **The long-lived subscription token BOSS obtained** from that sign-in. Every `claude` that BOSS starts, sandboxed builds included, gets it in its environment. **Repo and models** shows `Claude Code · long-lived subscription token (renews <date>)`. Sign in again before that date.
+2. **The CLI's own login**, if one is still signed in inside BOSS from an earlier install. It lasts about 8 hours and BOSS renews it, and the row says `CLI login (expires in X h)`. Press **Sign in** to move to the long-lived token.
+
+**Connect** proves whichever one is active. It never removes a token BOSS obtained itself. Only a token from the retired paste import counts as a legacy token. **Disconnect** forgets the stored token.
 
 The CLI homes are named volumes shared by the API and worker. Safe uninstalls and upgrades keep them, while an explicit data purge removes them. Moving to another machine requires signing in with the provider again.
 

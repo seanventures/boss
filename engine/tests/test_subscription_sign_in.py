@@ -47,17 +47,47 @@ exit {exit_code}
 """)
 
 
+#: What the fake `claude setup-token` prints on success. Not a real credential.
+FAKE_TOKEN = "sk-ant-oat01-" + "FakeT0ken_-x" * 8
+
+
 def _claude_cli(tmp_path: Path) -> Path:
+    """A fake `claude setup-token`, shaped like 2.1.197's Ink output (measured 2026-10-27 in a
+    throwaway container): it refuses a pipe, moves the cursor where text has spaces, prints the
+    authorize URL and the paste prompt, reads the code, and on a good one prints the long-lived
+    token on its own line and exits 0. A refused code prints OAuth error and waits for Enter."""
     return _stub(tmp_path, "claude", f"""
-echo 'Opening browser to sign in...'
-echo "If the browser didn't open, visit: https://claude.com/cai/oauth/authorize?code=true&state=s1"
+[ -t 0 ] || {{ echo 'Raw mode is not supported on the current process.stdin'; exit 1; }}
+printf 'Welcome\\033[9Gto\\033[12GClaude\\033[19GCode\\r\\n'
+printf "Browser didn't open?\\033[23GUse the url below to sign in\\r\\n\\r\\n"
+printf 'https://claude.com/cai/oauth/authorize?code=true&state=s1\\r\\n'
 echo 'Org: {ACCOUNT}'
-printf 'Paste code here if prompted > '
+printf '\\033[2GPaste\\033[8Gcode\\033[13Ghere\\033[18Gif\\033[21Gprompted\\033[30G>\\r\\n'
 read code
-if [ "$code" = "good#s1" ]; then touch "{tmp_path}/done"; exit 0; fi
-echo 'Login failed: Request failed with status code 400'
-exit 1
+if [ "$code" = "good#s1" ]; then
+  printf '\\033[32m\\342\\234\\223 Long-lived authentication token created successfully!\\033[39m\\r\\n'
+  printf 'Your OAuth token (valid for 1 year):\\r\\n'
+  printf '\\033[33m{FAKE_TOKEN}\\033[39m\\r\\n'
+  printf "Store this token securely. You won't be able to see it again.\\r\\n"
+  exit 0
+fi
+printf 'OAuth error: Requ\\033[20Gst failed with status code 400\\r\\n'
+printf 'Press\\033[8GEnter\\033[14Gto retry.\\r\\n'
+sleep 30
 """)
+
+
+class _Store:
+    """The server-side store the API hands a Claude sign-in (claude_credential.sign_in_store)."""
+
+    def __init__(self, raises: Exception | None = None):
+        self.calls: list[tuple[str, object]] = []
+        self.raises = raises
+
+    def __call__(self, token, *, valid_days=None):
+        self.calls.append((token, valid_days))
+        if self.raises is not None:
+            raise self.raises
 
 
 def _until(predicate, timeout: float = 10.0):
@@ -123,12 +153,24 @@ def test_a_login_that_exits_non_zero_fails_with_a_plain_fix(tmp_path):
     _no_account_data(failed)
 
 
-def test_claude_takes_the_pasted_code_through_its_own_stdin(tmp_path):
-    session = _start("claude_code", _claude_cli(tmp_path), tmp_path)
-    assert session["state"] == "waiting"
+def test_claude_runs_setup_token_not_the_short_lived_login():
+    login = sign_in.LOGINS["claude_code"]
+    assert login.argv == ("claude", "setup-token")
+    assert login.pty and login.captures_token
+    assert login.logout == ()                  # the CLI's own login (the fallback) is left alone
+
+
+def test_claude_setup_token_is_stored_on_the_server_and_never_returned(tmp_path, caplog):
+    import logging
+
+    caplog.set_level(logging.DEBUG)
+    store = _Store()
+    session = _start("claude_code", _claude_cli(tmp_path), tmp_path, store=store)
+    assert session["state"] == "waiting", session
     assert session["verification_url"].startswith("https://claude.com/cai/oauth/authorize")
     assert session["user_code"] is None
     assert session["needs_code_input"] is True
+    assert "long-lived" in session["fix"]
     _no_account_data(session)
 
     sent = sign_in.submit_code(session["sign_in_id"], "good#s1")
@@ -136,20 +178,64 @@ def test_claude_takes_the_pasted_code_through_its_own_stdin(tmp_path):
     assert "good#s1" not in str(sent)
     done = _until(lambda: (s := sign_in.status(session["sign_in_id"]))["state"] == "signed_in" and s)
     _no_account_data(done)
+    # The whole token, once, to the server-side store; 1 year as the CLI said.
+    assert store.calls == [(FAKE_TOKEN, 365)]
+    # Never in what the client sees, never kept on the session, never logged.
+    assert FAKE_TOKEN not in str(done) and "sk-ant-" not in str(done)
+    kept = sign_in._SESSIONS[session["sign_in_id"]]
+    assert FAKE_TOKEN not in kept.output and FAKE_TOKEN not in repr(kept)
+    assert FAKE_TOKEN not in caplog.text and "sk-ant-oat" not in caplog.text
+    _until(lambda: _process(session["sign_in_id"]).poll() is not None)
 
 
 def test_claude_wrong_code_fails_and_a_code_is_refused_when_not_expected(tmp_path):
-    session = _start("claude_code", _claude_cli(tmp_path), tmp_path)
+    store = _Store()
+    session = _start("claude_code", _claude_cli(tmp_path), tmp_path, store=store)
     with pytest.raises(sign_in.SignInError) as bad:
         sign_in.submit_code(session["sign_in_id"], "two\nlines")
     assert bad.value.status == 422
     sign_in.submit_code(session["sign_in_id"], "wrong")
     failed = _until(lambda: (s := sign_in.status(session["sign_in_id"]))["state"] == "failed" and s)
     assert "paste the code exactly" in failed["fix"]
+    # setup-token waits for Enter after a refused code: BOSS ends it.
+    _until(lambda: _process(session["sign_in_id"]).poll() is not None)
+    assert store.calls == []
     with pytest.raises(sign_in.SignInError) as refused:
         sign_in.submit_code(session["sign_in_id"], "good#s1")
     assert refused.value.status == 409
     assert set(refused.value.detail) == {"state", "headline", "fix"}
+
+
+def test_a_store_that_fails_fails_the_sign_in_without_echoing_anything(tmp_path):
+    for raises, said in ((sign_in.StoreRefused("Re-run the installer."), "Re-run the installer."),
+                         (RuntimeError(f"driver said {FAKE_TOKEN}"), "RuntimeError")):
+        sign_in.reset_for_tests()
+        session = _start("claude_code", _claude_cli(tmp_path), tmp_path, store=_Store(raises))
+        sign_in.submit_code(session["sign_in_id"], "good#s1")
+        failed = _until(lambda: (s := sign_in.status(session["sign_in_id"]))["state"] == "failed"
+                        and s)
+        assert said in failed["fix"]
+        assert FAKE_TOKEN not in str(failed) and "sk-ant-" not in str(failed)
+
+
+def test_claude_is_signed_in_when_boss_holds_the_token_it_obtained(monkeypatch, tmp_path):
+    """The shortcut asks the store for BOSS's own long-lived token — never the CLI's login."""
+    from boss_engine.services import claude_credential
+
+    marker = tmp_path / "ran"
+    cli = _stub(tmp_path, "claude", f"touch '{marker}'\nsleep 5\n")
+    monkeypatch.setattr(claude_credential, "boss_obtained_token_stored", lambda _s: True)
+    session = sign_in.start("claude_code", project_id="p1", actor="ceo", argv=(str(cli),),
+                            settings=object())
+    assert session["state"] == "signed_in"
+    time.sleep(0.3)
+    assert not marker.exists()
+    monkeypatch.setattr(claude_credential, "boss_obtained_token_stored", lambda _s: False)
+    sign_in.reset_for_tests()
+    session = sign_in.start("claude_code", project_id="p1", actor="ceo",
+                            argv=(str(_claude_cli(tmp_path)),), settings=object(),
+                            store=_Store())
+    assert session["state"] == "waiting"
 
 
 def test_device_flow_never_asks_for_a_code(tmp_path):
@@ -324,4 +410,5 @@ def test_without_a_refusal_a_signed_in_cli_is_left_alone(tmp_path):
 def test_every_provider_signs_out_with_its_own_cli():
     assert sign_in.LOGINS["codex"].logout == ("codex", "logout")
     assert sign_in.LOGINS["grok"].logout == ("grok", "logout")
-    assert sign_in.LOGINS["claude_code"].logout == ("claude", "auth", "logout")
+    # Claude's sign-in mints a token and never touches the CLI's own login (claude_code above).
+    assert sign_in.LOGINS["claude_code"].logout == ()

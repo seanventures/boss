@@ -894,13 +894,21 @@ def legacy_token_stored(spec: "CliHarnessSpec", settings) -> bool:
     Such a token is not a sign-in. `claude` reads CLAUDE_CODE_OAUTH_TOKEN ahead of its own
     login, so while it is stored every run — and every proof — uses it, whatever login the
     operator makes. One set in this process's environment (the install's .env) is the
-    install's own choice and is not counted here. Never raises; never returns the value."""
+    install's own choice and is not counted here. Never raises; never returns the value.
+
+    The long-lived token BOSS's own Sign in obtained (`claude setup-token` run on the server,
+    claude_credential.store_long_lived_token) is stored under the same name and is NOT legacy:
+    it is the subscription. Its origin marker tells the two apart."""
     token_env = getattr(spec, "token_env", "")
     if settings is None or not token_env or getattr(spec, "token_login_args", ()) \
             or getattr(spec, "auth_file_secret", "") or os.environ.get(token_env):
         return False
     try:
-        return bool(stored_credential(settings, token_env, include_env=False))
+        if not stored_credential(settings, token_env, include_env=False):
+            return False
+        from .claude_credential import TOKEN_NAME, boss_obtained_token_stored
+
+        return not (token_env == TOKEN_NAME and boss_obtained_token_stored(settings))
     except Exception:  # noqa: BLE001 — an unreachable store is "absent", not a crash
         return False
 
@@ -970,7 +978,14 @@ def detect(spec: CliHarnessSpec, settings=None) -> dict:
     legacy = legacy_token_stored(spec, settings)
     result["legacy_token"] = legacy
     result["legacy_token_fix"] = LEGACY_TOKEN_FIX if legacy else None
-    result["token_present"] = bool(credential and (os.environ.get(credential) or legacy))
+    boss_token = False
+    if spec.name == "claude_code" and settings is not None and not legacy:
+        from .claude_credential import boss_obtained_token_stored
+
+        boss_token = boss_obtained_token_stored(settings)
+    result["long_lived_token"] = boss_token
+    result["token_present"] = bool(credential and (os.environ.get(credential) or legacy
+                                                   or boss_token))
     # CAN THIS SUBSCRIPTION BE USED FROM A SERVER AT ALL? Detection answers "is the CLI here";
     # this answers "could it be, on a machine the operator does not sit at". A CLI with no
     # token route can only ever be used where its login lives, and saying so is the difference
@@ -1047,6 +1062,12 @@ def detect(spec: CliHarnessSpec, settings=None) -> dict:
             "Not signed in." if status.get("loggedIn") is False else
             "Claude Code authentication status unavailable."
         )
+        if boss_token:
+            # THE LONG-LIVED TOKEN BOSS OBTAINED (`claude setup-token` on this server) is what
+            # every `claude` child runs on — ahead of the CLI's own login — so it is the answer.
+            signed_in = True
+            result["auth_method"] = "long_lived_token"
+            result["auth_detail"] = "BOSS holds a long-lived Claude subscription token."
     else:
         detail = _auth_detail(spec, out)
         result["auth_detail"] = detail or None

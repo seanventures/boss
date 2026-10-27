@@ -226,6 +226,29 @@ describe("Capacity on Repo and models", () => {
     expect(q(src("anthropic_claude_code"), "setup-cap-claude")?.textContent).toBe("Claude runs on this subscription.");
   });
 
+  it("says whether Claude Code runs on BOSS's long-lived token or the CLI login", async () => {
+    const view = (credential: unknown) => {
+      const v = board();
+      v.models = [{ ...v.models[0], source_id: "anthropic_claude_code", provider: "claude_code",
+        label: "Claude Code", kind: "subscription", credential } as never];
+      return v;
+    };
+    for (const [credential, text] of [
+      [{ kind: "long_lived_token", label: "long-lived subscription token (renews Oct 27, 2027)", expires_at: "2027-10-27T10:00:00+00:00" },
+        "· long-lived subscription token (renews Oct 27, 2027)"],
+      [{ kind: "cli_login", label: "CLI login (expires in 7 h)", expires_at: null }, "· CLI login (expires in 7 h)"],
+    ] as const) {
+      api(view(credential));
+      mounted = await mountBoard(view(credential));
+      expect(q(src("anthropic_claude_code"), "su-model-credential")?.textContent).toBe(text);
+      expect(document.body.textContent).not.toContain("sk-ant-");
+      mounted.unmount(); mounted = null;
+    }
+    api(view(null));
+    mounted = await mountBoard(view(null));
+    expect(q(src("anthropic_claude_code"), "su-model-credential")).toBeNull();
+  });
+
   it("Complete session refuses what is not a reference or a real time", () => {
     expect(completeBody({ ref: " ", scopes: "", state: "available", resetAt: "" })).toBeNull();
     expect(completeBody({ ref: "r", scopes: "", state: "plenty", resetAt: "" })).toBeNull();

@@ -567,7 +567,8 @@ _LOGIN_EXPIRY_REPLACES = frozenset({"working", "not_checked", "rate_limited", "l
 
 
 def claude_login_state(state: str, *, provider: str, kind: str,
-                       login: Optional[dict[str, Any]] = None) -> tuple[str, Optional[int]]:
+                       login: Optional[dict[str, Any]] = None,
+                       long_lived: bool = False) -> tuple[str, Optional[int]]:
     """THE CLAUDE CLI LOGIN'S REAL EXPIRY over the last check: (state, minutes left).
 
     Only for the Claude Code subscription on the CLI's own login (claude_login.status): an
@@ -577,6 +578,8 @@ def claude_login_state(state: str, *, provider: str, kind: str,
 
     if provider != "claude_code" or kind != "subscription" or state not in _LOGIN_EXPIRY_REPLACES:
         return state, None
+    if long_lived:
+        return state, None                 # runs on BOSS's long-lived token, not the CLI login
     if login is None and (os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") or "").strip():
         return state, None                 # the CLI runs on that token, not on its own login
     if login is None:
@@ -625,7 +628,8 @@ def _model_rows(connection: Connection, project_id: str) -> list[Any]:
 
 
 def source_entry(row: Any, *, by_entitlement: dict[str, str], now: datetime,
-                 budget_spent: bool = False, budget_period: str = "month"
+                 budget_spent: bool = False, budget_period: str = "month",
+                 claude: Optional[dict[str, Any]] = None
                  ) -> Optional[dict[str, Any]]:
     """One Models row — its pill decided by `source_state` — or None when the source is not
     a model this page lists (a retired connection proof)."""
@@ -638,7 +642,12 @@ def source_entry(row: Any, *, by_entitlement: dict[str, str], now: datetime,
     kind = _source_kind(provider, row)
     state, checked_at, retry_at = source_state(
         kind=kind, metadata=metadata, capacity=capacity, budget_spent=budget_spent, now=now)
-    state, minutes_left = claude_login_state(state, provider=provider, kind=kind)
+    # What Claude Code runs on (claude_credential.credential_summary): BOSS's long-lived token
+    # never expires in hours, so the CLI login's expiry does not decide its pill.
+    claude = claude if provider == "claude_code" and kind == "subscription" else None
+    state, minutes_left = claude_login_state(
+        state, provider=provider, kind=kind,
+        long_lived=bool(claude and claude.get("kind") == "long_lived_token"))
     if checked_at is None and state == "working":
         checked_at = _iso(row["updated_at"])
     models = [m for m in _list(row["supported_models"]) if isinstance(m, str) and m.strip()]
@@ -649,7 +658,16 @@ def source_entry(row: Any, *, by_entitlement: dict[str, str], now: datetime,
         checked_at=checked_at, retry_at=retry_at, source="connected", now=now,
         host=last.get("host") or "", latency_ms=last.get("latency_ms"),
         base_url=str(metadata.get("base_url") or ""), budget_period=budget_period,
-        minutes_left=minutes_left)
+        minutes_left=minutes_left, credential=claude)
+
+
+def _claude_summary(connection: Connection, project_id: str) -> Optional[dict[str, Any]]:
+    try:
+        from .claude_credential import credential_summary
+
+        return credential_summary(connection, project_id)
+    except Exception:  # noqa: BLE001 — unknown says nothing extra
+        return None
 
 
 def source_pills(connection: Connection, settings: Any, project_id: str, *,
@@ -664,10 +682,12 @@ def source_pills(connection: Connection, settings: Any, project_id: str, *,
         budget = {"state": "ok", "period": "month"}
     by_entitlement = _by_entitlement(settings)
     out: dict[str, dict[str, Any]] = {}
+    claude = _claude_summary(connection, project_id)
     for row in _model_rows(connection, project_id):
         entry = source_entry(row, by_entitlement=by_entitlement, now=now,
                              budget_spent=budget["state"] == "spent",
-                             budget_period=budget["period"])
+                             budget_period=budget["period"],
+                             claude=claude)
         if entry is None:
             continue
         out[entry["source_id"]] = {"state": entry["pill"]["state"],
@@ -684,6 +704,7 @@ def _models(connection: Connection, settings: Any, project_id: str, now: datetim
     by_entitlement = _by_entitlement(settings)
     out: list[dict[str, Any]] = []
     engines_seen: set[str] = set()
+    claude = _claude_summary(connection, project_id)
     try:
         from .org_models import home_for
 
@@ -692,7 +713,8 @@ def _models(connection: Connection, settings: Any, project_id: str, now: datetim
         is_home = False
     for row in _model_rows(connection, project_id):
         entry = source_entry(row, by_entitlement=by_entitlement, now=now,
-                             budget_spent=budget_spent, budget_period=budget_period)
+                             budget_spent=budget_spent, budget_period=budget_period,
+                             claude=claude)
         if entry is None:
             continue
         engines_seen.add(engine_for_provider(entry["provider"]))
@@ -731,8 +753,8 @@ def _models(connection: Connection, settings: Any, project_id: str, now: datetim
 def _model_entry(*, source_id: str, provider: str, kind: str, model: Optional[str], state: str,
                  checked_at: Optional[str], retry_at: Optional[str], source: str,
                  now: datetime, host: str, latency_ms: Any, base_url: str = "",
-                 budget_period: str = "month", minutes_left: Optional[int] = None
-                 ) -> dict[str, Any]:
+                 budget_period: str = "month", minutes_left: Optional[int] = None,
+                 credential: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     entry = CATALOGUE_BY_PROVIDER.get(provider) or {}
     pill = setup_pills.pill(
         "model", state, n="" if minutes_left is None else minutes_left,
@@ -755,6 +777,10 @@ def _model_entry(*, source_id: str, provider: str, kind: str, model: Optional[st
         # Replace asks for the KEY only: the form keeps where it points (never a password that
         # was written into the URL).
         "base_url": _without_userinfo(base_url) or None,
+        # Claude Code only: what it runs on — "long-lived subscription token (renews …)" or
+        # "CLI login (expires in X h)". Never a secret.
+        **({"credential": {"kind": credential.get("kind"), "label": credential.get("label"),
+                           "expires_at": credential.get("expires_at")}} if credential else {}),
     }
 
 

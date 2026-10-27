@@ -17,6 +17,9 @@ from sqlalchemy import text
 from apps.api.tests.setup_helpers import AUTH, PROJECT, as_ceo, fakes
 from boss_engine.services import subscription_sign_in as sign_in
 
+#: What the fake `claude setup-token` prints. Not a real credential.
+FAKE_TOKEN = "sk-ant-oat01-" + "FakeRouteT0ken_" * 6
+
 
 @pytest.fixture(autouse=True)
 def _clean():
@@ -29,9 +32,12 @@ def _cli(tmp_path: Path, provider: str, monkeypatch) -> None:
     """Point the provider's login at a stub that prints a link + code and waits for approval."""
     path = tmp_path / provider
     if provider == "claude_code":
-        body = ("echo 'visit: https://claude.com/cai/oauth/authorize?code=true&state=s'\n"
+        # A fake `claude setup-token`: needs a terminal, prints the token on a good code.
+        body = ("[ -t 0 ] || exit 1\n"
+                "printf 'visit:\\r\\nhttps://claude.com/cai/oauth/authorize?code=true&state=s\\r\\n'\n"
                 "printf 'Paste code here if prompted > '\nread c\n"
-                f"[ \"$c\" = ok#s ] && touch '{tmp_path}/done' && exit 0\nexit 1\n")
+                "[ \"$c\" = ok#s ] && printf 'Your OAuth token (valid for 1 year):\\r\\n"
+                f"{FAKE_TOKEN}\\r\\n' && exit 0\nexit 1\n")
     else:
         body = ("echo 'https://auth.openai.com/codex/device'\necho '   WXYZ-12345'\n"
                 f"while [ ! -e '{tmp_path}/approve' ]; do sleep 0.05; done\n"
@@ -40,7 +46,8 @@ def _cli(tmp_path: Path, provider: str, monkeypatch) -> None:
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
     login = sign_in.LOGINS[provider]
     monkeypatch.setitem(sign_in.LOGINS, provider, sign_in._Login(
-        login.label, (str(path),), login.url_hosts, login.device_code, login.drop_env))
+        login.label, (str(path),), login.url_hosts, login.device_code, login.drop_env,
+        pty=login.pty, captures_token=login.captures_token))
     monkeypatch.setattr(sign_in, "_signed_in_check",
                         lambda _p, _s: (lambda: (tmp_path / "done").exists()))
 
@@ -77,6 +84,16 @@ def test_claude_code_is_pasted_back_and_cancel_kills(client, monkeypatch, tmp_pa
     as_ceo(monkeypatch)
     fakes(monkeypatch)
     _cli(tmp_path, "claude_code", monkeypatch)
+    # The route hands the printed token to the server-side store (claude_credential).
+    from boss_engine.services import claude_credential
+
+    stored, bound = [], []
+
+    def sign_in_store(_engine, _settings, project_id, actor):
+        bound.append((project_id, actor))
+        return lambda token, *, valid_days=None: stored.append((token, valid_days))
+
+    monkeypatch.setattr(claude_credential, "sign_in_store", sign_in_store)
     session = client.post("/v1/setup/sign-in", headers=AUTH,
                           json={"project_id": PROJECT, "provider": "claude_code"}).json()
     assert session["needs_code_input"] is True
@@ -84,7 +101,9 @@ def test_claude_code_is_pasted_back_and_cancel_kills(client, monkeypatch, tmp_pa
                        json={"project_id": PROJECT, "code": "ok#s"})
     assert sent.status_code == 200, sent.text
     assert "ok#s" not in sent.text
-    _poll(client, session["sign_in_id"], "signed_in")
+    done = _poll(client, session["sign_in_id"], "signed_in")
+    assert stored == [(FAKE_TOKEN, 365)] and len(bound) == 1
+    assert FAKE_TOKEN not in json.dumps(done) and FAKE_TOKEN not in sent.text
 
     # A code when none is expected is a {state, headline, fix} refusal.
     again = client.post(f"/v1/setup/sign-in/{session['sign_in_id']}/code", headers=AUTH,

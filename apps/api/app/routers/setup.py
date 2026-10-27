@@ -276,10 +276,17 @@ def build_setup_router(
                 home = None
             rejected = sign_in.last_login_rejected(connection, [body.project_id, home or ""],
                                                    provider, get_settings())
+        # Claude Code's sign-in (`claude setup-token`) PRINTS a long-lived token: it is stored
+        # here on the server, under the org's model home, and never reaches the browser.
+        store = None
+        if sign_in.LOGINS[provider].captures_token:
+            from boss_engine.services.claude_credential import sign_in_store
+
+            store = sign_in_store(engine, get_settings(), home or body.project_id, actor)
         try:
             return sign_in.start(provider, project_id=body.project_id, actor=actor,
                                  settings=get_settings(), login_rejected=rejected,
-                                 fresh=bool(body.fresh))
+                                 fresh=bool(body.fresh), store=store)
         except sign_in.SignInError as error:
             sign_in_failed(error)
         raise AssertionError("unreachable")

@@ -64,6 +64,9 @@ export type ModelEntry = {
   base_url?: string | null;
   /** The org's connection (every project holds it) or one this project made itself. */
   scope?: "org" | "project";
+  /** Claude Code only: what it runs on — "long-lived subscription token (renews …)" or
+   *  "CLI login (expires in X h)". Never a secret. */
+  credential?: { kind: "long_lived_token" | "cli_login"; label: string; expires_at: string | null } | null;
 };
 
 /** Subscriptions: signed_in | needs_sign_in | not_on_server (nothing is pasted any more). Local:

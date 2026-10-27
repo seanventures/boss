@@ -456,6 +456,14 @@ function SourceRow({ item, sessions, onBoard, formOpen, onForm, actions }: {
     <div className="su-src" data-testid="setup-cap-source" data-source={id} data-tone={pill.tone}>
       <div className="su-src-line" data-testid={entry ? `su-model-${id}` : undefined}>
         <Tip tip={ids} className="su-src-name su-strong"><span data-user-text>{name}</span></Tip>
+        {entry?.credential?.label ? (
+          <Tip tip={entry.credential.kind === "long_lived_token"
+                 ? "BOSS's own sign-in obtained this token on the BOSS server. Every Claude run uses it."
+                 : "Claude Code's own short-lived login. Sign in again for a long-lived token."}
+               className="su-faint su-src-credential" testid="su-model-credential">
+            · {entry.credential.label}
+          </Tip>
+        ) : null}
         <span className={`su-pill su-tone-${pill.tone}`} role="status" data-testid="su-model-pill"
               data-state={pill.state || undefined} data-tip={pill.tip} title={pill.tip}
               data-connection-summary={!entry && ["Needs key", "Needs sign-in", "Not configured", "Not connected"].includes(pill.label) || undefined}>

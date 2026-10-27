@@ -421,13 +421,28 @@ def _seed_claude_login(ident: SandboxIdentity) -> None:
     from . import claude_login
     from .claude_credential import cli_login_present
 
-    if not cli_login_present():
+    if not cli_login_present() or runs_on_long_lived_token():
+        # THE FALLBACK ONLY. A run on the long-lived subscription token (the console's Sign in
+        # stores it; claude_credential) gets it in its environment, ahead of any login file.
         return
     ok, why = claude_login.ensure_fresh(claude_login.SEED_MIN_VALID_SECONDS)
     if not ok:
         log.warning("sandbox %s: the Claude login is not copied: %s", ident.key, why)
         return
     copy_claude_access_token(ident)
+
+
+def runs_on_long_lived_token() -> bool:
+    """Does a `claude` child resolve to the subscription's long-lived token (kind subscription)
+    rather than the CLI's own login? The same resolution the child runs. Never raises: a store
+    that did not answer is "no" (the login copy is the safe fallback)."""
+    try:
+        from ..config import get_settings
+        from .claude_credential import KIND_SUBSCRIPTION, resolve_claude_credential
+
+        return resolve_claude_credential(get_settings()).kind == KIND_SUBSCRIPTION
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def copy_claude_access_token(ident: Any) -> bool:

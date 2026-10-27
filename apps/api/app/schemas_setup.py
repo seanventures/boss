@@ -75,6 +75,8 @@ class ModelEntry(_Open):
     checked_at: Optional[str] = None
     source: Literal["connected", "install"]
     retry_at: Optional[str] = None
+    # Claude Code only: {kind: long_lived_token | cli_login, label, expires_at}. Never a secret.
+    credential: Optional[dict[str, Any]] = None
 
 
 class Detected(_Open):

@@ -5,7 +5,11 @@ lane, research, the chat adapter, typed decisions — asks THIS module, so they 
 
 There are three credentials, in this order by default ("subscription first"):
 
-  (a) the Claude subscription's login (CLAUDE_CODE_OAUTH_TOKEN) — included capacity;
+  (a) the Claude subscription's long-lived token (CLAUDE_CODE_OAUTH_TOKEN) — included
+      capacity. BOSS obtains it itself: the console's Sign in runs `claude setup-token` on the
+      server (subscription_sign_in) and stores what it prints (`store_long_lived_token`);
+      (a') the Claude CLI's own login (KIND_CLI_LOGIN, ~8 h, refreshed by claude_login) — the
+      fallback when no token is held;
   (b) the Anthropic API key the operator stored in the console (Repo and models -> Anthropic
       API -> Store credential), read from the secret store exactly as the login is;
   (c) ANTHROPIC_API_KEY from this install's own environment.
@@ -42,6 +46,18 @@ API_KEY_SOURCE_ID = "anthropic_api"
 #: connection — the sandboxed agent, the chat adapter — reads it the same way it reads the login.
 STORED_KEY_NAME = "ANTHROPIC_API_KEY"
 TOKEN_NAME = "CLAUDE_CODE_OAUTH_TOKEN"
+#: WHERE THE STORED TOKEN CAME FROM (BOSSAPP-769 follow-up, 2026-10-27). The console's Sign in
+#: runs `claude setup-token` on the BOSS server and stores the long-lived (1-year) token it
+#: prints under TOKEN_NAME — the name every reader already uses, sandboxes included. Next to it,
+#: in the same store, BOSS writes this marker: ORIGIN_BOSS_SETUP_TOKEN and the token's SHA-256
+#: (never the token). A stored token whose hash matches is BOSS's own and is never "legacy";
+#: anything else under TOKEN_NAME is the retired paste import (cli_harness.legacy_token_stored),
+#: which Connect may still retire.
+ORIGIN_NAME = "CLAUDE_CODE_OAUTH_TOKEN_ORIGIN"
+ORIGIN_BOSS_SETUP_TOKEN = "boss_setup_token"
+#: How long `claude setup-token` makes its token last when it does not say (2.1.x prints
+#: "valid for 1 year").
+LONG_LIVED_DAYS = 365
 
 KIND_SUBSCRIPTION = "subscription"
 KIND_STORED_KEY = "stored_key"
@@ -474,12 +490,14 @@ def forget_subscription_login(connection: Any, settings: Any, project_id: str, *
         "RETURNING id, storage_backend, ref_kind"),
         {"a": actor, "p": project_id, "k": key}).mappings().all()
     for row in rows:
-        try:
-            backend_for(row["storage_backend"] or row["ref_kind"], settings).delete(key)
-        except Exception as exc:  # noqa: BLE001 — revoked in BOSS either way
-            logging.getLogger(__name__).warning(
-                "could not delete the stored %s from its store: %s", TOKEN_NAME,
-                type(exc).__name__)
+        # The origin marker goes with the token it describes.
+        for name in (key, ref_key_for(SUBSCRIPTION_SECRET_SCOPE, ORIGIN_NAME)):
+            try:
+                backend_for(row["storage_backend"] or row["ref_kind"], settings).delete(name)
+            except Exception as exc:  # noqa: BLE001 — revoked in BOSS either way
+                logging.getLogger(__name__).warning(
+                    "could not delete the stored %s from its store: %s", TOKEN_NAME,
+                    type(exc).__name__)
     return len(rows)
 
 
@@ -502,6 +520,10 @@ def retire_legacy_token(connection: Any, settings: Any, *, actor: str) -> int:
     from .secret_backends import SecretNotFound, backend_for, pick_default_backend
     from .secrets_service import ref_key_for
 
+    if boss_obtained_token_stored(settings):
+        # A TOKEN BOSS OBTAINED ITSELF (`claude setup-token` run by the console's Sign in) is
+        # the subscription, never a legacy import: Connect proves it and nothing retires it.
+        return 0
     keys = (TOKEN_NAME, ref_key_for(SUBSCRIPTION_SECRET_SCOPE, TOKEN_NAME))
     rows = connection.execute(text(
         "UPDATE secret_refs SET status = 'revoked', revoked_at = now(), revoked_by = :a "
@@ -524,3 +546,169 @@ def retire_legacy_token(connection: Any, settings: Any, *, actor: str) -> int:
                     "could not delete the stored %s from %s: %s", TOKEN_NAME, kind,
                     type(exc).__name__)
     return len(rows)
+
+
+# ---- the long-lived token BOSS obtains itself (`claude setup-token` on the server) ----------
+
+def token_fingerprint(value: str) -> str:
+    """SHA-256 of a token: enough to tell whether the stored token is the one BOSS obtained,
+    never enough to be it."""
+    import hashlib
+
+    return hashlib.sha256((value or "").strip().encode()).hexdigest()
+
+
+def _origin_marker(value: str) -> str:
+    return f"{ORIGIN_BOSS_SETUP_TOKEN}:{token_fingerprint(value)}"
+
+
+def boss_obtained_token_stored(settings: Any) -> bool:
+    """Is the token stored under TOKEN_NAME the one BOSS's own sign-in obtained? Reads the
+    store only (an install's .env token is its own choice). Never raises; never returns or
+    logs the value."""
+    if settings is None:
+        return False
+    try:
+        from .cli_harness import stored_credential
+
+        token = stored_credential(settings, TOKEN_NAME, include_env=False) or ""
+        marker = stored_credential(settings, ORIGIN_NAME, include_env=False) or ""
+    except Exception:  # noqa: BLE001 — an unreadable store is "not BOSS's"
+        return False
+    return bool(token) and marker == _origin_marker(token)
+
+
+def store_long_lived_token(connection: Any, settings: Any, project_id: str, token: str, *,
+                           actor: str, valid_days: Optional[int] = None) -> dict[str, Any]:
+    """Store the token `claude setup-token` printed on the BOSS server as THE subscription
+    credential (kind subscription), and record that BOSS obtained it.
+
+    Whatever the retired import left under TOKEN_NAME goes first (under the plain name it would
+    shadow this one). The value goes to the secret store only; the reference keeps origin,
+    obtained_at and expires_at — never the value or any part of it. Returns metadata only."""
+    import json
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import text
+
+    from .cli_harness import SUBSCRIPTION_SECRET_SCOPE
+    from .core import emit_event
+    from .secret_backends import backend_for
+    from .secrets_service import ref_key_for
+    from .setup_service import store_coding_agent_credential
+
+    token = (token or "").strip()
+    retired = 0 if boss_obtained_token_stored(settings) else \
+        retire_legacy_token(connection, settings, actor=actor)
+    stored = store_coding_agent_credential(connection, settings, project_id, "claude_code",
+                                           token, actor=actor)
+    backend_for(stored["backend"], settings).put(
+        ref_key_for(SUBSCRIPTION_SECRET_SCOPE, ORIGIN_NAME), _origin_marker(token))
+    now = datetime.now(timezone.utc)
+    origin = {"origin": ORIGIN_BOSS_SETUP_TOKEN, "obtained_at": now.isoformat(),
+              "expires_at": (now + timedelta(days=int(valid_days or LONG_LIVED_DAYS))).isoformat(),
+              "last4": None}
+    connection.execute(text(
+        "UPDATE secret_refs SET metadata = COALESCE(metadata, '{}'::jsonb) || CAST(:m AS JSONB) "
+        "WHERE project_id = :p AND ref_key = :k"),
+        {"m": json.dumps(origin), "p": project_id, "k": stored["ref_key"]})
+    emit_event(connection, project_id, "entitlement.subscription_token_obtained", actor,
+               "entitlement_source", SUBSCRIPTION_SOURCE_ID,
+               {"provider": "claude_code", "origin": ORIGIN_BOSS_SETUP_TOKEN,
+                "expires_at": origin["expires_at"], "legacy_references_revoked": retired})
+    return {"ok": True, "origin": ORIGIN_BOSS_SETUP_TOKEN, "expires_at": origin["expires_at"],
+            "backend": stored["backend"]}
+
+
+def sign_in_store(db_engine: Any, settings: Any, project_id: str, actor: str):
+    """The `store` the server-side Claude sign-in hands the printed token to
+    (subscription_sign_in.start): `store_long_lived_token` in its own transaction. A refusal
+    in BOSS's own words (e.g. a database store whose key lives in the database) is shown as
+    the sign-in's fix; anything else is named by type only."""
+    def store(token: str, *, valid_days: Optional[int] = None) -> None:
+        from ..db import begin
+        from .setup_service import SetupError
+        from .subscription_sign_in import StoreRefused
+
+        try:
+            with begin(db_engine) as connection:
+                store_long_lived_token(connection, settings, project_id, token, actor=actor,
+                                       valid_days=valid_days)
+        except SetupError as exc:
+            raise StoreRefused(str(exc)) from None
+    return store
+
+
+def long_lived_token_info(connection: Any, project_id: Optional[str]) -> Optional[dict]:
+    """{origin, obtained_at, expires_at} of the long-lived token BOSS obtained for this project
+    (or its org's model home), or None. Reads the reference's metadata, never the value."""
+    if connection is None or not project_id:
+        return None
+    try:
+        from sqlalchemy import text
+
+        from .cli_harness import SUBSCRIPTION_SECRET_SCOPE
+        from .org_models import home_for
+        from .secrets_service import ref_key_for
+
+        with connection.begin_nested():
+            home = home_for(connection, project_id) or project_id
+            row = connection.execute(text(
+                "SELECT metadata FROM secret_refs WHERE project_id IN (:p, :h) AND ref_key = :k "
+                "AND status IN ('active', 'rotating', 'rotation_due') "
+                "ORDER BY (project_id = :p) DESC, updated_at DESC NULLS LAST LIMIT 1"),
+                {"p": project_id, "h": home,
+                 "k": ref_key_for(SUBSCRIPTION_SECRET_SCOPE, TOKEN_NAME)}).first()
+    except Exception:  # noqa: BLE001 — unknown is "none"
+        return None
+    meta = row[0] if row else None
+    if isinstance(meta, str):
+        import json
+
+        try:
+            meta = json.loads(meta)
+        except ValueError:
+            meta = None
+    if not isinstance(meta, dict) or meta.get("origin") != ORIGIN_BOSS_SETUP_TOKEN:
+        return None
+    return {k: meta.get(k) for k in ("origin", "obtained_at", "expires_at")}
+
+
+def credential_summary(connection: Any, project_id: Optional[str], *,
+                       login: Optional[dict] = None) -> Optional[dict[str, Any]]:
+    """What the Claude Code subscription row says it runs on, reading no secret:
+
+    - {"kind": "long_lived_token", "label": "long-lived subscription token (renews Oct 27, 2027)"}
+    - {"kind": "cli_login", "label": "CLI login (expires in 7 h)"}
+
+    or None when neither is held. Same order as the resolution: the token wins."""
+    from datetime import datetime
+
+    info = long_lived_token_info(connection, project_id)
+    if info is not None:
+        label = "long-lived subscription token"
+        try:
+            expires = datetime.fromisoformat(str(info.get("expires_at") or ""))
+            label += f" (renews {expires.strftime('%b')} {expires.day}, {expires.year})"
+        except ValueError:
+            pass
+        return {"kind": "long_lived_token", "label": label,
+                "expires_at": info.get("expires_at")}
+    if login is None:
+        if not cli_login_present():
+            return None
+        try:
+            from . import claude_login
+
+            login = claude_login.status()
+        except Exception:  # noqa: BLE001
+            login = {}
+    if str((login or {}).get("state") or "") in ("", "absent"):
+        return None
+    left = (login or {}).get("seconds_left")
+    if left is None:
+        return {"kind": "cli_login", "label": "CLI login", "expires_at": None}
+    left = max(0, int(left))
+    when = (f"expires in {left // 3600} h" if left >= 3600 else
+            f"expires in {left // 60} min" if left > 0 else "expired")
+    return {"kind": "cli_login", "label": f"CLI login ({when})", "expires_at": None}
