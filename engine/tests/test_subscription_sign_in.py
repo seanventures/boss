@@ -412,3 +412,115 @@ def test_every_provider_signs_out_with_its_own_cli():
     assert sign_in.LOGINS["grok"].logout == ("grok", "logout")
     # Claude's sign-in mints a token and never touches the CLI's own login (claude_code above).
     assert sign_in.LOGINS["claude_code"].logout == ()
+
+
+# ── the live failure, 2026-10-27: a good code, then "waiting" forever ─────────────────────────
+#
+# si_7bb5e3329f6676e1d118: the code went in, no token was captured, no refusal matched, and the
+# session sat in "waiting" (still asking for a code it then refused with 409) until expiry. Ink
+# redraws by rewriting only the CELLS that changed, and wraps a long token at the terminal's
+# width, so the token never arrives as one run of characters.
+
+#: Not a real credential: 13 + 95 characters, like a real one.
+LONG_TOKEN = "sk-ant-oat01-" + ("Q7z_K-" * 16)[:95]
+
+
+def _ink_token_output(width: int = 80) -> bytes:
+    """What Ink sends after a good code: it climbs back over the prompt line, which held text
+    with some characters in the very cells the token now needs, writes only the cells that
+    differ (cursor jumps over the rest), colours it, and wraps it at `width`."""
+    t = LONG_TOKEN
+    first, rest = t[:width - 2], t[width - 2:]
+    out = "\x1b[4A\r\x1b[2K\x1b[32m✓ Long-lived authentication token created successfully!\x1b[39m\r\n"
+    out += "Your OAuth token (valid for 1 year):\x1b[K\r\n"
+    # Cells 20..29 (1-based col 23..32) already show the right characters (see the stub).
+    out += "\x1b[33m  " + first[:20] + "\x1b[33G" + first[30:] + "\r\n"
+    out += "\x1b[K" + rest + "\x1b[39m\r\n"
+    out += "\x1b[2mStore\x1b[7Gthis token securely. You won't be able to see it again.\x1b[22m\r\n"
+    return out.encode()
+
+
+def _ink_cli(tmp_path: Path, after_code: bytes, *, then: str = "exit 0") -> Path:
+    (tmp_path / "after.bin").write_bytes(after_code)
+    pre = "  " + "#" * 20 + LONG_TOKEN[20:30] + "#" * 40
+    return _stub(tmp_path, "claude", f"""
+[ -t 0 ] || exit 1
+printf 'https://claude.com/cai/oauth/authorize?code=true&state=s1\\r\\n'
+printf 'Your OAuth token (valid for 1 year):\\r\\n{pre}\\r\\n'
+printf 'Paste code here if prompted > '
+read code
+cat "{tmp_path}/after.bin"
+{then}
+""")
+
+
+def test_a_token_wrapped_and_redrawn_by_ink_is_read_whole(tmp_path, caplog):
+    import logging
+
+    caplog.set_level(logging.DEBUG)
+    store = _Store()
+    session = _start("claude_code", _ink_cli(tmp_path, _ink_token_output()), tmp_path,
+                     store=store)
+    sign_in.submit_code(session["sign_in_id"], "good#s1")
+    done = _until(lambda: (s := sign_in.status(session["sign_in_id"]))["state"] != "waiting"
+                  and s)
+    assert done["state"] == "signed_in", done["fix"]
+    assert store.calls == [(LONG_TOKEN, 365)]
+    assert LONG_TOKEN not in str(done) and LONG_TOKEN not in caplog.text
+
+
+def test_the_screen_rebuilds_what_spacing_or_deleting_escapes_cannot():
+    import re as _re
+
+    screen = sign_in._Screen(80)
+    screen.feed(b"https://claude.com/x\r\nYour OAuth token (valid for 1 year):\r\n"
+                + ("  " + "#" * 20 + LONG_TOKEN[20:30] + "#" * 40).encode()
+                + b"\r\nPaste code here if prompted > good#s1\r\n")
+    screen.feed(_ink_token_output()[:37])               # an escape cut at a read boundary
+    screen.feed(_ink_token_output()[37:])
+    assert sign_in._token_on_screen(screen.lines()) == LONG_TOKEN
+    raw = _ink_token_output().decode()
+    deleted = _re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", raw)
+    assert LONG_TOKEN not in deleted                    # the old parse could never have matched
+    # A token cut short (no wrapped rest) is never taken as whole by the screen either way
+    # once the line after it is missing: _take_token waits for "Store this token".
+    partial = sign_in._Screen(80)
+    partial.feed(("  " + LONG_TOKEN[:30]).encode())
+    assert sign_in._token_on_screen(partial.lines()) is None
+
+
+def test_a_code_with_no_answer_fails_instead_of_hanging(tmp_path, monkeypatch):
+    monkeypatch.setattr(sign_in, "CODE_ANSWER_SECONDS", 1.0)
+    session = _start("claude_code", _ink_cli(tmp_path, b"\x1b[2K\r", then="sleep 30"), tmp_path,
+                     store=_Store())
+    sent = sign_in.submit_code(session["sign_in_id"], "good#s1")
+    assert sent["headline"] == "Finishing sign-in" and "paste" not in sent["fix"].lower()
+    failed = _until(lambda: (s := sign_in.status(session["sign_in_id"]))["state"] == "failed"
+                    and s)
+    assert "did not answer the code" in failed["fix"]
+    _until(lambda: _process(session["sign_in_id"]).poll() is not None)
+
+
+def test_an_exit_0_without_a_token_says_so(tmp_path):
+    session = _start("claude_code", _ink_cli(tmp_path, b"done\r\n"), tmp_path, store=_Store())
+    sign_in.submit_code(session["sign_in_id"], "good#s1")
+    failed = _until(lambda: (s := sign_in.status(session["sign_in_id"]))["state"] == "failed"
+                    and s)
+    assert "did not receive a token" in failed["fix"]
+
+
+def test_a_stuck_session_is_replaced_never_returned(tmp_path, monkeypatch):
+    monkeypatch.setattr(sign_in, "STUCK_AFTER_CODE_SECONDS", 0.0)
+    cli = _ink_cli(tmp_path, b"\x1b[2K\r", then="sleep 30")
+    first = _start("claude_code", cli, tmp_path, store=_Store())
+    sign_in.submit_code(first["sign_in_id"], "good#s1")
+    old = _process(first["sign_in_id"])
+    second = _start("claude_code", cli, tmp_path, store=_Store())
+    assert second["sign_in_id"] != first["sign_in_id"]
+    assert second["state"] == "waiting" and second["needs_code_input"] is True
+    assert sign_in.status(first["sign_in_id"])["state"] == "cancelled"
+    _until(lambda: old.poll() is not None)
+    # Not stuck (no code yet): the same session again — unless the person asks to start over.
+    assert _start("claude_code", cli, tmp_path, store=_Store())["sign_in_id"] == second["sign_in_id"]
+    third = _start("claude_code", cli, tmp_path, store=_Store(), fresh=True)
+    assert third["sign_in_id"] != second["sign_in_id"]

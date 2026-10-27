@@ -107,9 +107,17 @@ _URL = re.compile(r"https://[^\s<>\"'\x1b]+")
 #: The device codes both CLIs print: `ABCD-EFGH1` (letters and digits around one dash).
 _DEVICE_CODE = re.compile(r"(?m)^\s*([A-Z0-9]{4,5}-[A-Z0-9]{4,6})\s*$")
 _PASTE_PROMPT = re.compile(r"(?i)paste\s+(?:the\s+)?code")
-#: The long-lived token `claude setup-token` prints — whole, so followed by whitespace (a
-#: token cut at a read boundary is never taken).
-_TOKEN = re.compile(r"(?<![A-Za-z0-9_\-])sk-ant-[A-Za-z0-9_\-]{40,}(?=\s)")
+#: The long-lived token `claude setup-token` prints: this prefix and charset only.
+_TOKEN_START = "sk-ant-"
+_TOKEN_CHARS = re.compile(r"[A-Za-z0-9_\-]+")
+_TOKEN_WHOLE = re.compile(r"sk-ant-[A-Za-z0-9_\-]{40,}")
+#: What setup-token prints AFTER the token: only then is the token on screen complete.
+_TOKEN_DONE = re.compile(r"(?i)store\s+this\s+token|see\s+it\s+again|export\s+CLAUDE_CODE_OAUTH_TOKEN")
+#: How long a pasted code may go unanswered (neither a token nor a refusal) before the
+#: session ends as failed instead of hanging until it expires.
+CODE_ANSWER_SECONDS = 30.0
+#: A live session whose code was sent this long ago is replaced by a new Sign in.
+STUCK_AFTER_CODE_SECONDS = 10.0
 #: "(valid for 1 year)" / "(valid for 30 days)".
 _VALID_FOR = re.compile(r"(?i)valid\s+for\s+(\d+)\s*(year|month|day)s?")
 #: What setup-token says when the pasted code was refused (it then waits for Enter to retry).
@@ -165,6 +173,162 @@ class _Session:
     store: Optional[Callable[..., Any]] = field(default=None, repr=False)
     token_stored: bool = False
     reader: Optional[threading.Thread] = field(default=None, repr=False)
+    #: What the terminal SHOWS (a `pty` login), rebuilt from the CLI's cursor moves. Never
+    #: returned; dropped when the session ends.
+    screen: Any = field(default=None, repr=False)
+    code_sent_at: Optional[float] = None
+
+
+class _Screen:
+    """A minimal terminal: what an Ink app's output looks like ON SCREEN.
+
+    Ink redraws by moving the cursor and rewriting only the cells that changed (measured on
+    2.1.197: "OAuth error: Requ\\x1b[20Gst" kept the "e" already on screen). So the text is not
+    in the byte stream in order — a token printed over an earlier line arrives with cursor
+    jumps where characters matched — and neither deleting nor spacing the escapes recovers it.
+    Applying them to a grid does. Handles what Ink emits: CR/LF/BS/TAB, CUU/CUD/CUF/CUB, CNL/CPL,
+    CHA, CUP, EL, ED, save/restore cursor; everything else (colours, modes, OSC links) is
+    dropped. Wraps at `cols`."""
+
+    _SEQ = re.compile(r"\x1b\[([0-9;?<>=]*)[ -/]*([@-~])|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)"
+                      r"|\x1b[78]|\x1b[()][0-9A-Za-z]|\x1b[=>c]")
+    _MAX_ROWS = 2000
+
+    def __init__(self, cols: int = _PTY_COLS):
+        import codecs
+
+        self.cols = max(1, int(cols))
+        self.rows: list[list[str]] = [[]]
+        self.r = self.c = 0
+        self.saved = (0, 0)
+        self.pending = ""
+        self.decoder = codecs.getincrementaldecoder("utf-8")("replace")
+
+    def _row(self) -> list[str]:
+        while len(self.rows) <= self.r:
+            self.rows.append([])
+        if len(self.rows) > self._MAX_ROWS:      # the oldest lines go; the cursor follows
+            drop = len(self.rows) - self._MAX_ROWS
+            del self.rows[:drop]
+            self.r = max(0, self.r - drop)
+        return self.rows[self.r]
+
+    def _put(self, ch: str) -> None:
+        if self.c >= self.cols:
+            self.r, self.c = self.r + 1, 0
+        row = self._row()
+        if len(row) <= self.c:
+            row.extend(" " * (self.c - len(row) + 1))
+        row[self.c] = ch
+        self.c += 1
+
+    def _csi(self, params: str, final: str) -> None:
+        nums = [int(p) if p.isdigit() else 0 for p in params.lstrip("?<>=").split(";")] or [0]
+        n = nums[0] or 1
+        if params[:1] in "?<>=" and params:
+            return                                 # private modes: nothing on screen
+        if final == "A":
+            self.r = max(0, self.r - n)
+        elif final == "B":
+            self.r += n
+        elif final == "C":
+            self.c += n
+        elif final == "D":
+            self.c = max(0, self.c - n)
+        elif final == "E":
+            self.r, self.c = self.r + n, 0
+        elif final == "F":
+            self.r, self.c = max(0, self.r - n), 0
+        elif final == "G":
+            self.c = max(0, n - 1)
+        elif final in "Hf":
+            self.r = max(0, (nums[0] or 1) - 1)
+            self.c = max(0, ((nums[1] if len(nums) > 1 else 0) or 1) - 1)
+        elif final == "K":
+            row = self._row()
+            mode = nums[0]
+            if mode == 0:
+                del row[self.c:]
+            elif mode == 1:
+                row[:self.c + 1] = [" "] * min(len(row), self.c + 1)
+            else:
+                row.clear()
+        elif final == "J":
+            mode = nums[0]
+            if mode == 0:
+                del self._row()[self.c:]
+                del self.rows[self.r + 1:]
+            elif mode == 1:
+                for i in range(min(self.r, len(self.rows))):
+                    self.rows[i] = []
+            else:
+                self.rows = [[] for _ in self.rows]
+
+    def feed(self, data: bytes) -> None:
+        text = self.pending + self.decoder.decode(data)
+        self.pending = ""
+        # An escape cut at a read boundary waits for the rest.
+        cut = text.rfind("\x1b")
+        if cut != -1 and not self._SEQ.match(text, cut) and len(text) - cut < 64:
+            text, self.pending = text[:cut], text[cut:]
+        i = 0
+        while i < len(text):
+            ch = text[i]
+            if ch == "\x1b":
+                m = self._SEQ.match(text, i)
+                if m is None:
+                    i += 1
+                    continue
+                if m.group(2):
+                    self._csi(m.group(1) or "", m.group(2))
+                elif m.group(0) == "\x1b7":
+                    self.saved = (self.r, self.c)
+                elif m.group(0) == "\x1b8":
+                    self.r, self.c = self.saved
+                i = m.end()
+                continue
+            if ch == "\r":
+                self.c = 0
+            elif ch == "\n":
+                self.r += 1
+            elif ch == "\b":
+                self.c = max(0, self.c - 1)
+            elif ch == "\t":
+                self.c = (self.c // 8 + 1) * 8
+            elif ch >= " " and ch != "\x7f":
+                self._put(ch)
+            i += 1
+
+    def lines(self) -> list[str]:
+        return ["".join(row).rstrip() for row in self.rows]
+
+    def clear(self) -> None:
+        self.rows, self.r, self.c, self.pending = [[]], 0, 0, ""
+
+
+def _token_on_screen(lines: list[str]) -> Optional[str]:
+    """The token as the terminal shows it: from `sk-ant-` to the end of its run, continued on
+    the next lines while it filled its line (a wrap) and the next line is token characters
+    only. Exact prefix and charset; None when it is not whole."""
+    for i, line in enumerate(lines):
+        at = line.find(_TOKEN_START)
+        if at == -1 or (at and _TOKEN_CHARS.fullmatch(line[at - 1])):
+            continue
+        run = _TOKEN_CHARS.match(line, at)
+        token = run.group(0) if run else ""
+        end = run.end() if run else at
+        j = i
+        # A wrap: the run reached the end of its line, and the next line is one more run.
+        while end == len(line) and j + 1 < len(lines):
+            nxt = lines[j + 1].strip()
+            if not nxt or not _TOKEN_CHARS.fullmatch(nxt):
+                break
+            token += nxt
+            j += 1
+            line, end = lines[j], len(lines[j])
+        if _TOKEN_WHOLE.fullmatch(token):
+            return token
+    return None
 
 
 _SESSIONS: dict[str, _Session] = {}
@@ -189,6 +353,14 @@ def _words(session: _Session) -> tuple[str, str]:
         return (f"Starting {label} sign-in",
                 f"BOSS is starting {label}'s own login inside the BOSS server.")
     if session.state == "waiting":
+        # The code went in: say so (the live session of 2026-10-27 kept asking for a code it
+        # would then refuse with "No code expected").
+        if session.code_sent and login.captures_token:
+            return ("Finishing sign-in",
+                    f"{label} is checking the code inside BOSS and creating the long-lived "
+                    "token. This takes a few seconds.")
+        if session.code_sent:
+            return ("Finishing sign-in", f"{label} is checking the code inside BOSS.")
         if session.needs_code_input and login.captures_token:
             return ("Open the link and sign in",
                     f"Sign in to {label} at the link, then paste the code it shows you here. "
@@ -277,21 +449,28 @@ def _clean(output: str) -> str:
     return _ANSI.sub(" ", output).replace("\r", "")
 
 
-def _take_token(session: _Session) -> Optional[tuple[str, Optional[int]]]:
+def _take_token(session: _Session, *, exited: bool = False
+                ) -> Optional[tuple[str, Optional[int]]]:
     """The whole token a `captures_token` login printed, and how many days it says it lasts —
-    or None. The caller holds session.lock; nothing here keeps the value."""
-    if not LOGINS[session.provider].captures_token or session.token_stored:
+    or None. Read off the rebuilt SCREEN, once the line after it is shown (or the CLI has
+    exited), so a half-drawn token is never taken. The caller holds session.lock; nothing here
+    keeps the value."""
+    if not LOGINS[session.provider].captures_token or session.token_stored \
+            or session.screen is None:
         return None
-    text = _clean(session.output)
-    match = _TOKEN.search(text)
-    if match is None:
+    lines = session.screen.lines()
+    text = "\n".join(lines)
+    if not exited and not _TOKEN_DONE.search(text):
+        return None
+    token = _token_on_screen(lines)
+    if token is None:
         return None
     days = None
     valid = _VALID_FOR.search(text)
     if valid:
         n, unit = int(valid.group(1)), valid.group(2).lower()
         days = n * (365 if unit == "year" else 30 if unit == "month" else 1)
-    return match.group(0), days
+    return token, days
 
 
 def _store_token(session: _Session, token: str, days: Optional[int]) -> None:
@@ -311,6 +490,8 @@ def _store_token(session: _Session, token: str, days: Optional[int]) -> None:
     del token
     with session.lock:
         session.output = ""
+        if session.screen is not None:
+            session.screen.clear()
         if error:
             _finish(session, "failed",
                     f"{label} signed in, but BOSS could not store its token: {error}")
@@ -333,12 +514,16 @@ def _read(session: _Session, stream) -> None:
                 # The LATEST output, not the first 32 KiB: the token is printed at the end, after
                 # the banner, the spinner and the prompt.
                 session.output = (session.output + chunk.decode("utf-8", "replace"))[-_OUTPUT_CAP:]
+                if session.screen is not None:
+                    session.screen.feed(chunk)
                 _parse(session)
                 if session.state in LIVE:
                     taken = _take_token(session)
                     refused = (taken is None and session.code_sent
                                and LOGINS[session.provider].captures_token
-                               and bool(_LOGIN_REFUSED.search(_clean(session.output))))
+                               and bool(_LOGIN_REFUSED.search(_clean(session.output))
+                                        or (session.screen is not None and _LOGIN_REFUSED.search(
+                                            " ".join(session.screen.lines()[-40:])))))
                     if refused:
                         _finish(session, "failed",
                                 f"{LOGINS[session.provider].label} refused that code. Start the "
@@ -395,6 +580,8 @@ def _finish(session: _Session, state: str, reason: str = "") -> None:
     session.reason = reason
     session.finished = time.time()
     session.output = ""
+    if session.screen is not None:
+        session.screen.clear()
 
 
 def _wait(session: _Session, still_signed_in: Callable[[], bool]) -> None:
@@ -409,7 +596,24 @@ def _wait(session: _Session, still_signed_in: Callable[[], bool]) -> None:
         if session.reader is not None:
             session.reader.join(timeout=10)
         _close_terminal(session)
+        with session.lock:
+            # It exited: whatever the screen shows is all there will be.
+            taken = _take_token(session, exited=True) if session.state in LIVE else None
+        if taken is not None:
+            _store_token(session, *taken)
+            del taken
         signed_in = session.token_stored
+        if not signed_in:
+            with session.lock:
+                session.exit_code = code
+                label = login.label
+                _finish(session, "failed",
+                        f"{label} finished, but BOSS did not receive a token from it. Start "
+                        "the sign-in again." if code == 0 else
+                        f"{label}'s sign-in inside BOSS stopped (exit {code}) without a token. "
+                        "Start the sign-in again"
+                        + (" and paste the code exactly as shown." if session.code_sent else "."))
+            return
     else:
         signed_in = code == 0 and _safe(still_signed_in)
     with session.lock:
@@ -554,7 +758,16 @@ def start(provider: str, *, project_id: str, actor: str, settings: Any = None,
                     None)
         if live is not None:
             with live.lock:
-                return view(live)
+                # NEVER HAND BACK A STUCK SESSION. A code that went in and got no answer, or an
+                # explicit fresh start, replaces the live one (its login is killed); otherwise
+                # the same session is shown again (a reopened drawer).
+                stuck = (live.code_sent and live.code_sent_at is not None
+                         and now - live.code_sent_at >= STUCK_AFTER_CODE_SECONDS)
+                if not (stuck or fresh):
+                    return view(live)
+                _finish(live, "cancelled")
+                old = live.process
+            _kill(old)
         session = _Session(sign_in_id=f"si_{secrets.token_hex(10)}", provider=name,
                            project_id=project_id, actor=actor, started=now,
                            expires=now + SESSION_TTL_SECONDS)
@@ -575,6 +788,8 @@ def start(provider: str, *, project_id: str, actor: str, settings: Any = None,
         if replace and (logout_argv or login.logout):
             _sign_out(login, logout_argv)
         session.store = store
+        if login.captures_token:
+            session.screen = _Screen(_PTY_COLS)
         try:
             if login.pty:
                 process, terminal = _spawn_on_terminal((binary, *command[1:]), _login_env(login))
@@ -641,9 +856,12 @@ def submit_code(sign_in_id: str, code: str) -> dict[str, Any]:
         process = session.process
         try:
             if session.terminal is not None:
-                # Typed, then Enter (a terminal in raw mode reads CR). The output so far is
-                # dropped: whatever follows is the answer to this code.
-                session.terminal.write(value.encode() + b"\r")
+                # Typed, then Enter on its own (a terminal in raw mode reads CR; one chunk
+                # ending in CR can be taken as pasted text). The output so far is dropped:
+                # whatever follows is the answer to this code.
+                session.terminal.write(value.encode())
+                time.sleep(0.2)
+                session.terminal.write(b"\r")
                 session.output = ""
             else:
                 assert process is not None and process.stdin is not None
@@ -654,7 +872,29 @@ def submit_code(sign_in_id: str, code: str) -> dict[str, Any]:
                                        "Start the sign-in again.")
             return view(session)
         session.code_sent = True
+        session.code_sent_at = time.time()
+        if LOGINS[session.provider].captures_token:
+            _answer_within(session, CODE_ANSWER_SECONDS)
         return view(session)
+
+
+def _answer_within(session: _Session, seconds: float) -> None:
+    """A code with no answer — neither a token nor a refusal — ends the session as failed
+    after `seconds`, with what to do; it never hangs until the link expires."""
+    def give_up() -> None:
+        with session.lock:
+            if session.state not in LIVE or session.token_stored:
+                return
+            label = LOGINS[session.provider].label
+            _finish(session, "failed",
+                    f"{label} did not answer the code within {int(seconds)} s: BOSS received "
+                    "neither a token nor a refusal. Start the sign-in again with a new code.")
+            process = session.process
+        _kill(process)
+
+    timer = threading.Timer(seconds, give_up)
+    timer.daemon = True
+    timer.start()
 
 
 def cancel(sign_in_id: str) -> dict[str, Any]:
