@@ -390,7 +390,11 @@ def _seed_cli_logins(ident: SandboxIdentity) -> None:
     model credential is the one secret an agent is meant to hold (agent_env), and the control
     plane's own CLI homes stay 0700 to the boss uid. Readable inside the run directory only."""
     for env_name, sub in (("CODEX_HOME", ".codex"), ("GROK_HOME", ".grok")):
-        src = (os.environ.get(env_name) or "").strip()
+        # The CLI's own default when the variable is unset: an install that never sets CODEX_HOME
+        # (boss-1 and the laptop, 2026-10-28) keeps the login in ~/.codex, and skipping it left
+        # every build's codex signed out, falling back to an API key it did not have:
+        # "401 Unauthorized, wss://api.openai.com/v1/responses" while Setup's check said working.
+        src = (os.environ.get(env_name) or "").strip() or os.path.expanduser(f"~/{sub}")
         if not src or not os.path.isdir(src):
             continue
         dst = ident.home / sub
