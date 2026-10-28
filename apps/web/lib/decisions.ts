@@ -19,6 +19,12 @@ export type DecisionFeedItem = {
   approvedBy?: string;
   /** Who approved it, by name (the server resolves it): the card never shows an actor id. */
   approvedByName?: string | null;
+  /** Answered by the approver's approval delegate (IDENTITY.md §6.15): the delegate's name, and
+   *  the grant. approvedBy stays the person the delegate answered for. */
+  viaDelegate?: string | null;
+  viaDelegateName?: string | null;
+  viaDelegation?: string | null;
+  viaForName?: string | null;
   approvedAt?: string;
   delegatedTo?: string;
   delegatedBy?: string;
@@ -195,6 +201,10 @@ function mapDecision(payload: ApiDecisionCard): DecisionFeedItem {
     deadlineAt: payload.deadline_at,
     approvedBy: payload.approved_by,
     approvedByName: (payload as { approved_by_name?: string | null }).approved_by_name ?? null,
+    viaDelegate: (payload as { via_delegate?: string | null }).via_delegate ?? null,
+    viaDelegateName: (payload as { via_delegate_name?: string | null }).via_delegate_name ?? null,
+    viaDelegation: (payload as { via_delegation?: string | null }).via_delegation ?? null,
+    viaForName: (payload as { via_for_name?: string | null }).via_for_name ?? null,
     approvedAt: payload.approved_at,
     delegatedTo: payload.delegated_to,
     delegatedBy: payload.delegated_by,

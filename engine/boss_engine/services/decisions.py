@@ -255,7 +255,7 @@ class DecisionService:
                        recommendation, options, cost_summary, deadline_at,
                        approved_by, approved_at, delegated_to, delegated_by,
                        delegated_at, revision_requested_by, revision_requested_at,
-                       executed_by, executed_at, resolution_note, external_ref,
+                       executed_by, executed_at, resolution_note, external_ref, via_delegate, via_delegation,
                        created_at, updated_at
                 FROM decisions
                 WHERE id = :decision_id
@@ -339,6 +339,20 @@ class DecisionService:
         row = self.get_row(connection, decision_id, for_update=True)
         current_status = row["status"]
         timestamp = now_utc()
+        # AN APPROVAL DELEGATE (identity/approval_delegations.py, IDENTITY.md §6.15) answers FOR a
+        # person: its grant, scope, cap and the hard limits are checked here, before anything
+        # else, and from here on the actor is the PERSON (approved_by records them; via_delegate
+        # names the delegate). Any other caller is untouched.
+        delegated = None
+        if not system_policy:
+            _early_ctx = _identity_decides(connection, row)
+            if _early_ctx is not None:
+                from ..identity import approval_delegations as _approval_delegations
+
+                if _approval_delegations.is_delegate_context(connection, _early_ctx):
+                    delegated = _approval_delegations.authorize(connection, _early_ctx, row,
+                                                                action=action)
+                    actor = delegated.person_actor
         # A policy resolving a gate is not a person acting, and member validation asks the
         # wrong question of it: SYSTEM_ACTOR is deliberately not an org member, so requiring
         # membership would have silently disabled every policy-driven approval.
@@ -477,7 +491,8 @@ class DecisionService:
 
             try:
                 ci_gate.refuse_approval(connection, row, actor, identity_ctx=identity_ctx,
-                                        system_policy=system_policy, force=force)
+                                        system_policy=system_policy, force=force,
+                                        delegated=delegated)
             except ci_gate.CiGateRefused as refused:
                 raise InvalidDecisionTransitionError(refused.message) from refused
             # A RELEASE CARD IS APPROVED AS SHOWN (release_scope): only with the hash of the
@@ -525,7 +540,8 @@ class DecisionService:
             if identity_ctx is not None:
                 from ..identity import approvals as _approvals
 
-                _approvals.require_approval(connection, identity_ctx, row, content_hash=current_hash)
+                _approvals.require_approval(connection, identity_ctx, row, content_hash=current_hash,
+                                            delegated=delegated)
             connection.execute(
                 text(
                     """
@@ -563,8 +579,15 @@ class DecisionService:
                     "to_status": "approved",
                     "note": note,
                     "default_action": row["default_action"] or "hold",
+                    # Activity says "by <delegate>, for <person>" (approval_delegations).
+                    **(_delegate_words(delegated) if delegated is not None else {}),
                 },
             )
+            if delegated is not None:
+                from ..identity import approval_delegations as _approval_delegations
+
+                _approval_delegations.record_use(connection, identity_ctx, delegated, row,
+                                                 action="approve", note=note)
             refreshed = self.get_row(connection, decision_id)
             self._handle_approved_follow_on(
                 connection, refreshed, actor, note=note, force=force
@@ -604,8 +627,15 @@ class DecisionService:
                     "to_status": "rejected",
                     "note": note,
                     "default_action": row["default_action"] or "hold",
+                    # Activity says "by <delegate>, for <person>" (approval_delegations).
+                    **(_delegate_words(delegated) if delegated is not None else {}),
                 },
             )
+            if delegated is not None:
+                from ..identity import approval_delegations as _approval_delegations
+
+                _approval_delegations.record_use(connection, identity_ctx, delegated, row,
+                                                 action="reject", note=note)
             refreshed = self.get_row(connection, decision_id)
             self._handle_non_approved_follow_on(
                 connection, refreshed, action="reject", actor=actor, note=note
@@ -2356,6 +2386,15 @@ def approve_by_policy(connection: Connection, decision_id: str, *, project_id: s
         "resolution_note = :note WHERE id = :id AND project_id = :p AND status = 'pending' "
         "RETURNING id"), {"id": decision_id, "p": project_id, "actor": actor, "note": note}).first()
     return done is not None
+
+
+def _delegate_words(delegated: Any) -> dict:
+    """The event fields a delegate's answer carries: who answered, for whom, under which grant."""
+    return {"via_delegate": delegated.delegate_principal_id,
+            "via_delegate_name": delegated.delegate_name,
+            "via_delegation": delegated.delegation_id,
+            "for_person": delegated.person_principal_id,
+            "for_person_name": delegated.person_name}
 
 
 def _identity_decides(connection: Connection, row: dict) -> Any:

@@ -363,6 +363,11 @@ export function approverName(decision: Pick<DecisionFeedItem, "approvedBy" | "ap
   return /^[a-z]{2,6}_[A-Za-z0-9]+$/.test(by) ? "a person" : by;
 }
 
+/** The approval delegate who answered a decision, by name: "their approval delegate" without one. */
+export function delegateName(decision: Pick<DecisionFeedItem, "viaDelegateName">): string {
+  return decision.viaDelegateName || "their approval delegate";
+}
+
 /** Reason codes a decision carries, in words. A bare code (`host_deploy_requires_approval`,
  *  `missing_reservation`) is the machine's; the card says what it means. */
 const REASON_WORDS: Record<string, string> = {
@@ -380,7 +385,7 @@ export function reasonInWords(reason: string | null | undefined): string {
   return REASON_WORDS[r] ?? r.replace(/[_.:-]+/g, " ");
 }
 
-function decisionStatusDetail(decision: DecisionFeedItem): string {
+export function decisionStatusDetail(decision: DecisionFeedItem): string {
   if (decision.status === "delegated" && decision.delegatedTo) {
     return `Delegated to ${decision.delegatedTo}${
       decision.delegatedBy ? ` by ${decision.delegatedBy}` : ""
@@ -410,6 +415,13 @@ function decisionStatusDetail(decision: DecisionFeedItem): string {
   }
   if (decision.approvedBy?.startsWith("policy:")) {
     return `Approved by this environment's deploy rule at ${formatDeadline(decision.approvedAt)}.`;
+  }
+  if (decision.viaDelegate) {
+    // AN APPROVAL DELEGATE answered it FOR the person (IDENTITY.md §6.15): both are named.
+    const verb = decision.status === "rejected" ? "Rejected" : "Approved";
+    const when = decision.approvedAt ? ` at ${formatDeadline(decision.approvedAt)}` : "";
+    const person = decision.viaForName || (decision.approvedBy ? approverName(decision) : "the person who delegated it");
+    return `${verb} by ${delegateName(decision)}, for ${person}${when}.`;
   }
   if (decision.approvedBy) {
     // A NAME, NEVER AN ID: "Approved by usr_kdzh…" and "Approved by ceo" were what cards said.

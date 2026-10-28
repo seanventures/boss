@@ -2243,6 +2243,9 @@ class SoftwareFactoryService:
                 "receipt_id": pr_receipt["id"],
                 "pull_request_url": pr.url,
                 "branch_name": branch_name,
+                # The branch the PR merges INTO (None: the host's default). An approval delegate
+                # merges only into the project's bound release branch (approval_delegations).
+                "pr_base": pr_base,
                 "title": title,
                 "validation_status": validation_status,
                 "validation_summary": validation_summary,

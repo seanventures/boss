@@ -84,6 +84,9 @@ EVENT_TYPES: frozenset[str] = frozenset({
     "access.requested", "access.request_granted", "access.request_declined",
     # approvals and seats (§6.13)
     "decision.approval_recorded", "decision.approval_voided", "approval_seat.changed",
+    # approval delegations (§6.15): the grant, and each answer a delegate gave or was refused
+    "approval_delegation.created", "approval_delegation.revoked", "decision.approved_by_delegate",
+    "decision.rejected_by_delegate", "decision.delegate_refused",
     # notices (who was told what; never the content)
     "notice.mfa_reset", "notice.grant_expiring", "notice.invitation",
     # policy and system

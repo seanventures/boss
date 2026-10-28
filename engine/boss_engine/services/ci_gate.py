@@ -1146,7 +1146,7 @@ def actor_is_person(connection: Any, project_id: str, actor: str) -> bool:
 
 def refuse_approval(connection: Any, row: Mapping[str, Any], actor: str, *,
                     identity_ctx: Any = None, system_policy: bool = False,
-                    force: bool = False) -> None:
+                    force: bool = False, delegated: Any = None) -> None:
     """Raise CiGateRefused when this approval may not be given. Called on every approve
     (decisions.transition) and on every policy approval (approve_by_policy, system_policy=True)."""
     rec = _rec(row)
@@ -1172,8 +1172,14 @@ def refuse_approval(connection: Any, row: Mapping[str, Any], actor: str, *,
         from .checks_failing import merge_refusal, of_decision
 
         failing = of_decision(row)
+        # A person's approval delegate (identity/approval_delegations.py) decides this merge FOR
+        # them only when the grant carries `merge_to_release_branch` and the PR's base is the
+        # project's bound release branch — both checked by its authorize() before this runs.
+        by_delegate = (delegated is not None
+                       and getattr(delegated, "kind", None) == "merge_to_release_branch")
         if failing is not None:
-            if system_policy or not is_person(connection, project_id, actor, identity_ctx):
+            if system_policy or not (by_delegate or is_person(connection, project_id, actor,
+                                                              identity_ctx)):
                 raise CiGateRefused(
                     "person_approval_required",
                     merge_refusal(failing) + " Only a person signed in to BOSS can decide it.",

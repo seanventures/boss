@@ -3193,6 +3193,18 @@ def principal_display_name(principal_id: Optional[str]) -> Optional[str]:
         return None
 
 
+def _delegation_person_name(delegation_id: str) -> Optional[str]:
+    """The person an approval delegation answers for, by name (IDENTITY.md §6.15)."""
+    try:
+        with engine.connect() as connection:
+            person = connection.execute(text(
+                "SELECT person_principal_id FROM identity_approval_delegations WHERE id = :d"),
+                {"d": delegation_id}).scalar()
+    except Exception:  # noqa: BLE001 — a name is a nicety; the card still shows without it
+        return None
+    return principal_display_name(person) if person else None
+
+
 def decision_card_from_row(row) -> DecisionCard:
     from boss_engine.services import decision_actions
     from boss_engine.services.core import decision_reason_from_payload
@@ -3226,6 +3238,12 @@ def decision_card_from_row(row) -> DecisionCard:
         executed_at=row["executed_at"].isoformat() if row.get("executed_at") else None,
         resolution_note=row.get("resolution_note"),
         external_ref=row.get("external_ref"),
+        via_delegate=row.get("via_delegate"),
+        via_delegate_name=(principal_display_name(row["via_delegate"])
+                           if row.get("via_delegate") else None),
+        via_delegation=row.get("via_delegation"),
+        via_for_name=(_delegation_person_name(row["via_delegation"])
+                      if row.get("via_delegation") else None),
         created_at=row["created_at"].isoformat(),
         updated_at=row["updated_at"].isoformat(),
         **decision_actions.describe(row),
@@ -23897,7 +23915,7 @@ def decision_inbox(
                        recommendation, options, cost_summary, deadline_at,
                        approved_by, approved_at, delegated_to, delegated_by,
                        delegated_at, revision_requested_by, revision_requested_at,
-                       executed_by, executed_at, resolution_note, external_ref,
+                       executed_by, executed_at, resolution_note, external_ref, via_delegate, via_delegation,
                        created_at, updated_at
                 FROM decisions
                 WHERE project_id = :project_id
@@ -23940,7 +23958,7 @@ def get_decision(decision_id: str, project_id: Optional[str] = None) -> Decision
                        recommendation, options, cost_summary, deadline_at,
                        approved_by, approved_at, delegated_to, delegated_by,
                        delegated_at, revision_requested_by, revision_requested_at,
-                       executed_by, executed_at, resolution_note, external_ref,
+                       executed_by, executed_at, resolution_note, external_ref, via_delegate, via_delegation,
                        created_at, updated_at
                 FROM decisions
                 WHERE id = :decision_id

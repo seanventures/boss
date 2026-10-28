@@ -9,7 +9,9 @@ passes through (decisions.transition), whatever the path (the HTTP route, the MC
      is VACANT, and the org's active Owners act in it until an Owner assigns it (no install is left
      unable to approve after an upgrade; posture names vacant seats);
   3. a HUMAN session — API keys and run tokens cannot approve. An MCP confirmation keeps its
-     human-approval flow: the person who approved the confirmation is the approver;
+     human-approval flow: the person who approved the confirmation is the approver. The one
+     exception is a person's own APPROVAL DELEGATE (approval_delegations.py, §6.15): its key
+     approves as that person, inside the grant, never past the hard limits;
   4. for tier 3, TWO DISTINCT PEOPLE, unless the org policy `single_operator_waiver` is on (D29:
      automatic = on exactly while the org has one active person). The first approval is recorded
      in `identity_decision_approvals` and the decision stays pending (ApprovalPending -> HTTP 202).
@@ -275,7 +277,7 @@ def _still_counts(db: Any, org: str, row: dict[str, Any], wanted: tuple[str, ...
 
 
 def require_approval(db: Any, ctx: AuthContext, decision: dict[str, Any], *,
-                     content_hash: Optional[str] = None) -> Approval:
+                     content_hash: Optional[str] = None, delegated: Any = None) -> Approval:
     """Conditions 2-4 for one approve. Returns the Approval when the decision may now be approved;
     raises ApprovalRefused (403/409) or ApprovalPending (the first of two, recorded).
 
@@ -286,7 +288,9 @@ def require_approval(db: Any, ctx: AuthContext, decision: dict[str, Any], *,
     from .audit import Outcome, SecurityEvent, record
 
     org = ctx.principal.org_id
-    approver = _approver(db, ctx)
+    # §6.15: a delegate approves AS the person whose live delegation `approval_delegations.authorize`
+    # already checked for this decision; the seat and two-person rules are then that person's.
+    approver = delegated.person_principal_id if delegated is not None else _approver(db, ctx)
     tier = int(decision.get("risk_tier") or 0)
     wanted = seats_for_tier(tier)
     seat: Optional[str] = None

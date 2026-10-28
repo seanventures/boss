@@ -522,11 +522,21 @@ def _raw(row: Mapping[str, Any]) -> dict[str, Any]:
     return _as_mapping(row.get("raw"))
 
 
+def _delegate_line(data: Mapping[str, Any]) -> str:
+    """A decision a person's approval delegate answered (IDENTITY.md §6.15): who, for whom."""
+    if not data.get("via_delegate"):
+        return ""
+    who = _text(data.get("via_delegate_name")) or "their approval delegate"
+    person = _text(data.get("for_person_name")) or "the person who delegated it"
+    return f"By {who} (approval delegate), for {person}."
+
+
 def _build_event(row: Mapping[str, Any]) -> dict[str, Any]:
     raw = _raw(row)
     event_type = _text(raw.get("event_type"))
     entity_id = _text(raw.get("entity_id"))
     return _item(
+        body=_delegate_line(_as_mapping(raw.get("data"))),
         id=_text(row.get("id")), source="event", kind=event_type,
         actor=_text(raw.get("actor")), entity_type=_text(raw.get("entity_type")),
         entity_id=entity_id, created_at=row.get("ts"), data=_as_mapping(raw.get("data")),

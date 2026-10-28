@@ -628,6 +628,14 @@ def check(ctx: AuthContext, permission: str, scope: ResolvedScope, *, db: Any = 
                 return _finish(ctx, deny(meta.key, scope, DenyReason.CREDENTIAL_INVALID))
         if scope.kind == ScopeKind.PROJECT and not _project_in_org(conn, p.org_id, scope.project_id or ""):
             return _finish(ctx, deny(meta.key, scope, DenyReason.NOT_FOUND))
+        if cred is not None and p.kind == PrincipalKind.SERVICE_ACCOUNT:  # 3b. approval delegates
+            # A delegate key's whole authority is its approval delegation (§6.15): decision read
+            # and approve at the grant's projects, on the delegate routes, nothing else.
+            from . import approval_delegations
+
+            delegated = approval_delegations.pdp_decision(conn, ctx, meta.key, scope)
+            if delegated is not None:
+                return _finish(ctx, delegated)
         if ctx.run_token is not None:                                   # 3a. agent runs: S3
             delegated = _delegate_run_token(ctx, meta.key, scope, conn)
             if delegated is not None:

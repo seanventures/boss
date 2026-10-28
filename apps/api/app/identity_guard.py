@@ -230,6 +230,17 @@ def identity_enforced() -> bool:
     return IDENTITY_ENFORCED.get()
 
 
+def _is_delegate_key(ctx: Any) -> bool:
+    """The request's credential is an approval-delegate key (identity/approval_delegations.py)."""
+    if getattr(ctx, "credential", None) is None or ctx.principal.kind.value != "service_account":
+        return False
+    from boss_engine.db import get_engine
+    from boss_engine.identity import approval_delegations
+
+    with get_engine().connect() as db:
+        return approval_delegations.is_delegate_context(db, ctx)
+
+
 async def enforce_access(conn: HTTPConnection) -> None:
     """The dependency. Never raises in shadow mode; in enforce mode raises AccessRefused."""
     from .request_metrics import auth_span
@@ -261,6 +272,12 @@ async def _enforce_access(conn: HTTPConnection) -> None:
     creds = _credentials(conn)
     path_params = dict(conn.path_params)
     query = dict(conn.query_params)
+    # The route an approval-delegate key may use is decided by the PDP from this (§6.15): a
+    # delegate key answers decisions on its routes and reaches nothing else.
+    from boss_engine.identity import approval_delegations as _approval_delegations
+
+    _approval_delegations.CURRENT_ROUTE.set(
+        ((conn.scope.get("method") or "WS").upper(), getattr(route, "path", None) or ""))
 
     outcome: Outcome = await run_in_threadpool(
         evaluate, access,
@@ -289,6 +306,20 @@ async def _enforce_access(conn: HTTPConnection) -> None:
                 org_locations=_org_id_locations(route))
             if refused is not None:
                 outcome = refused
+    if (outcome.allowed and ctx is not None and not isinstance(access, Public)
+            and _approval_delegations.CURRENT_ROUTE.get() not in _approval_delegations.DELEGATE_ROUTES
+            and await run_in_threadpool(_is_delegate_key, ctx)):
+        # An approval-delegate key reaches its decision routes and nothing else — not even an
+        # `authenticated` route (§6.15). Refused in every mode but off.
+        outcome = Outcome(False, authz.DenyReason.MISSING_PERMISSION,
+                          getattr(access, "permission", "") or "",
+                          access.describe() if access is not None else "undeclared",
+                          ctx.principal.kind.value, detail="approval delegate: route not delegable")
+        method = conn.scope.get("method") or "WS"
+        LEDGER.record(router_key=router_key, method=method,
+                      path_template=getattr(route, "path", None) or conn.scope.get("path", ""),
+                      outcome=outcome, mode=AuthzMode.ENFORCE)
+        raise AccessRefused(outcome)
     if not outcome.allowed and outcome.authn_code == authn.ENROLMENT_REQUIRED:
         # H1, not a mode question: an enrolment-only session (MFA required, no factor yet) is
         # refused everything but enrolment, sign-out and "me" in shadow too.

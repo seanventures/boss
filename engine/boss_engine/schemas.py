@@ -2783,6 +2783,12 @@ class DecisionCard(BaseModel):
     executed_at: Optional[str] = None
     resolution_note: Optional[str] = None
     external_ref: Optional[str] = None
+    # Answered by the person's approval delegate (IDENTITY.md §6.15): approved_by is the person,
+    # via_delegate the delegate service account (and its name), via_delegation the grant.
+    via_delegate: Optional[str] = None
+    via_delegate_name: Optional[str] = None
+    via_delegation: Optional[str] = None
+    via_for_name: Optional[str] = None      # the person the delegate answered for, by name
     created_at: str
     updated_at: str
     # What a person can do with it, decided by the engine (services/decision_actions.py) so the

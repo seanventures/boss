@@ -43,6 +43,8 @@ STRONG = "violet-otter-harbour-1987"
 SECRET_KEY_RE = re.compile(r"token|secret|password|code|assertion|credential", re.I)
 IDENTITY_TABLES_CHILD_FIRST = [
     # S3's delegation grants name a person: other suites' run tokens leave them behind
+    # approval delegations name a person, a service account and its key (§6.15)
+    "identity_approval_delegation_uses", "identity_approval_delegations",
     "identity_decision_approvals", "identity_delegation_grant_permissions", "identity_delegation_grants",
     "identity_recovery_codes", "identity_totp", "identity_webauthn_credentials",
     "identity_user_identities", "identity_provider_group_mappings", "identity_providers",

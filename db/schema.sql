@@ -8050,6 +8050,7 @@ CREATE TABLE IF NOT EXISTS identity_decision_approvals (
 );
 ALTER TABLE identity_decision_approvals ADD COLUMN IF NOT EXISTS content_hash TEXT;
 
+
 CREATE TABLE IF NOT EXISTS identity_service_accounts (
   principal_id        TEXT PRIMARY KEY REFERENCES identity_principals(id),
   description         TEXT,
@@ -8101,6 +8102,42 @@ CREATE TABLE IF NOT EXISTS identity_agent_ceilings (
   permission_key TEXT NOT NULL REFERENCES identity_permissions(key),   -- trigger: must be delegable
   PRIMARY KEY (agent_id, permission_key)
 );
+
+-- APPROVAL DELEGATIONS (IDENTITY.md §6.15; identity/approval_delegations.py): a person's named
+-- delegate (a service account with one boss_sak_ key) approves or rejects the decisions the grant
+-- covers, unattended. Its authority is this row, read at every request; the hard limits are code.
+CREATE TABLE IF NOT EXISTS identity_approval_delegations (
+  id                    TEXT PRIMARY KEY,                -- apd_…
+  org_id                TEXT NOT NULL REFERENCES orgs(id),
+  person_principal_id   TEXT NOT NULL REFERENCES identity_principals(id),
+  delegate_principal_id TEXT NOT NULL REFERENCES identity_principals(id),
+  credential_id         TEXT UNIQUE REFERENCES identity_api_credentials(id),
+  decision_kinds        TEXT[] NOT NULL CHECK (cardinality(decision_kinds) >= 1),
+  project_ids           TEXT[] NOT NULL CHECK (cardinality(project_ids) >= 1),
+  extra_risk_tiers      INTEGER[] NOT NULL DEFAULT '{}',  -- tiers above the configured one, listed explicitly
+  daily_cap             INTEGER CHECK (daily_cap IS NULL OR daily_cap >= 1),
+  status                TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'revoked')),
+  purpose               TEXT,
+  created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at            TIMESTAMPTZ NOT NULL,
+  revoked_at            TIMESTAMPTZ,
+  revoked_by            TEXT,
+  last_used_at          TIMESTAMPTZ,
+  CHECK (expires_at <= created_at + interval '90 days 1 minute')
+);
+CREATE INDEX IF NOT EXISTS identity_approval_delegations_person
+  ON identity_approval_delegations (person_principal_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS identity_approval_delegation_uses (
+  delegation_id TEXT NOT NULL REFERENCES identity_approval_delegations(id),
+  decision_id   TEXT NOT NULL,
+  action        TEXT NOT NULL CHECK (action IN ('approve', 'reject')),
+  used_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS identity_approval_delegation_uses_day
+  ON identity_approval_delegation_uses (delegation_id, used_at);
+-- Who answered a decision FOR its approver: the delegate and the grant (approved_by stays the person).
+ALTER TABLE decisions ADD COLUMN IF NOT EXISTS via_delegate TEXT;
+ALTER TABLE decisions ADD COLUMN IF NOT EXISTS via_delegation TEXT;
 
 CREATE TABLE IF NOT EXISTS identity_delegation_grants (
   id                  TEXT PRIMARY KEY,                  -- dlg_

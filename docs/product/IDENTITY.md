@@ -585,7 +585,7 @@ All of these checks run in the API, in the same transaction as the write.
 To approve a decision, all four of these must hold:
 1. **`decision:approve`.** It is not delegable, so agents can never approve, including their own step-up requests.
 2. **The seat the risk tier requires**, from `approval_seats`, mapped from today's `ceo` and `cao` role keys.
-3. **A human session.** API keys and run tokens cannot approve. MCP confirmations keep their human-approval flow.
+3. **A human session.** API keys and run tokens cannot approve. MCP confirmations keep their human-approval flow. The one exception is the person's own approval delegate (§6.15).
 4. **For tier 3, two distinct people.** The exception is when the org policy `single_operator_waiver` is on. It defaults to on while the org has exactly one active person, and posture shows it (kept by operator decision D29).
 
 ### 6.14 Naming
@@ -595,6 +595,28 @@ To approve a decision, all four of these must hold:
 - Code and copy never write "role" alone in identity contexts.
 - The permission for agent definitions is `agent:*`, not `role:*`.
 - The new tables are prefixed `identity_`, so nothing collides with the existing `roles` table.
+
+
+### 6.15 Approval delegations ("Approve on my behalf")
+
+Condition 3 of §6.13 has one bounded exception: a person's own **approval delegate**, so an unattended run is not stopped at every gate while its operator is away. Code: `engine/boss_engine/identity/approval_delegations.py`.
+
+- **The grant, once.** An Owner or Admin, in a human session with a fresh step-up (`POST /v1/identity/me/approval-delegations` declares `service_account:manage`), names the decision **kinds** (`prd`, `architecture`, `workflow_gate`, `merge_to_release_branch`), the **projects** (each one where they hold `decision:approve` themselves), the **expiry** (1–90 days) and an optional **per-day cap**. Tiers above the install's `BOSS_DELEGATED_APPROVAL_MAX_TIER` (default 2) need `extra_risk_tiers` to list them. Step-up happens here and never at approve time. Console: My account › Agents acting for me › **Approve on my behalf**.
+- **The delegate and its key.** Creating the grant creates a service account ("Approves for <person>", owned by the person) and one `boss_sak_` key: scopes `decision:read` and `decision:approve`, limited to the grant's projects, expiring with the grant. The response shows the key **once** (`secret`, `shown_once`), the same way every key is shown (§5.2). BOSS stores only its hash. The person puts it where the unattended caller reads it, for example the install's host-tools env file as `BOSS_API_KEY`. BOSS does not write it anywhere itself.
+- **Its whole authority is the grant.** The service account holds no role binding. The PDP (`authz.check`, step 3b) gives a delegate key `decision:read` and `decision:approve` at the grant's projects, on `POST /v1/decisions/{id}/approve`, `…/reject`, `GET /v1/decisions/{id}` and `GET /v1/decisions/inbox` only. Every other route is refused, including MCP, revise, delegate, the autonomy policy and `authenticated` routes.
+- **Checked at approve time** (`authorize`, first in `decisions.transition`): the grant is live (not revoked, not expired), the person is active, the decision's project and kind are in scope, its tier is allowed, and the day's cap is not spent. Then the person's seat and two-person rules apply as if the person approved.
+- **Hard limits, in code, that no grant lifts** (`hard_limit`):
+  - a merge to main or the default branch, including a PR card with no recorded base, a multi-repo change set, or a merge authorization (a merge into the project's bound release branch is the `merge_to_release_branch` kind);
+  - any deploy, because BOSS cannot always tell a deploy's environment, so it refuses every one rather than risk a production deploy;
+  - any budget or spend card, refusal or reconciliation;
+  - any identity, security or settings change (autonomy, self-improvement, self-fix installs, policies, credentials, a CI change, a security review);
+  - a release card.
+
+  A "Checks failing — decide the merge" card into the bound branch is in scope only with `merge_to_release_branch`, sent as the person's merge would be (`force` plus a note).
+- **The record.** `approved_by` is the person. `decisions.via_delegate` and `decisions.via_delegation` name the delegate and the grant, and the note is kept. The `decision.approved` and `decision.rejected` events carry both identities, and Activity shows "By <delegate> (approval delegate), for <person>". The security audit records the delegate as the actor and the person as `on_behalf_of` (`decision.approved_by_delegate`, `decision.rejected_by_delegate`). Every refusal is recorded as `decision.delegate_refused`.
+- **Revoke and expiry.** `POST /v1/identity/me/approval-delegations/{id}/revoke` needs no step-up, because stopping a delegate is never harder than starting one. It takes effect on the next request, since the PDP reads the grant on every request. An approve then answers `403 delegation_revoked`, and expiry answers `403 delegation_expired`. To remove the key itself, disable the service account (Identity › Service accounts).
+
+Any other API key is unchanged and still gets `403 human_session_required`.
 
 ---
 

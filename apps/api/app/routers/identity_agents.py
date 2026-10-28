@@ -588,6 +588,68 @@ def build_identity_agents_router() -> APIRouter:
         except Exception as exc:  # noqa: BLE001
             return _map(exc)
 
+    # ---- approval delegations (§6.15): "Approve on my behalf" -------------------------------------
+    @router.get("/v1/identity/me/approval-delegations")
+    @authenticated(self_only=True)
+    def my_approval_delegations(request: Request):
+        from boss_engine.identity import approval_delegations as ad
+
+        ctx = _ctx(request)
+        with _engine().begin() as db:
+            return {"approval_delegations": [ad.view(db, g) for g in ad.for_person(db, ctx.principal.id)],
+                    "kinds": [{"id": k, "label": ad.KIND_LABELS[k]} for k in ad.DELEGABLE_KINDS],
+                    "max_days": ad.MAX_DAYS, "max_risk_tier": ad.configured_max_tier()}
+
+    @router.post("/v1/identity/me/approval-delegations")
+    @permit(P.SERVICE_ACCOUNT_MANAGE, scope=Scope.org())
+    async def create_approval_delegation(request: Request):
+        """{kinds, projects, days (<= 90), daily_cap?, extra_risk_tiers?, purpose?, name?}. Owner or
+        Admin, in a human session with a fresh step-up (the declaration). Answers the grant and the
+        delegate's key, ONCE (`secret`, `shown_once`): BOSS keeps only its hash."""
+        from boss_engine.identity import api_keys
+        from boss_engine.identity import approval_delegations as ad
+
+        body = await request.json()
+        known = {"kinds", "projects", "days", "daily_cap", "extra_risk_tiers", "purpose", "name"}
+        if not isinstance(body, dict) or set(body) - known:
+            return _err("unknown_fields", 422)
+        try:
+            with _engine().begin() as db:
+                grant, created = ad.create(
+                    db, _ctx(request), kinds=body.get("kinds") or (), projects=body.get("projects") or (),
+                    days=body.get("days"), daily_cap=body.get("daily_cap"),
+                    extra_risk_tiers=body.get("extra_risk_tiers") or (), purpose=str(body.get("purpose") or ""),
+                    name=body.get("name"))
+                issued = api_keys.issued(db, created)
+                return JSONResponse({"approval_delegation": ad.view(db, grant), "key": issued["key"],
+                                     "secret": issued["secret"], "shown_once": True,
+                                     "use": "Send it as the X-BOSS-API-Key header (or Bearer) to "
+                                            "POST /v1/decisions/{id}/approve or /reject."},
+                                    status_code=201)
+        except ad.DelegationRefused as exc:
+            return JSONResponse(status_code=exc.status, content=exc.body())
+        except api_keys.KeyRefused as exc:
+            return _err(exc.code, exc.status)
+        except (TypeError, ValueError):
+            return _err("invalid_request", 422)
+
+    @router.post("/v1/identity/me/approval-delegations/{delegation_id}/revoke")
+    @authenticated(self_only=True)
+    def revoke_my_approval_delegation(delegation_id: str, request: Request):
+        """The person ends their delegation now. No step-up: stopping a delegate is never harder
+        than starting one."""
+        from boss_engine.identity import approval_delegations as ad
+
+        ctx = _ctx(request)
+        with _engine().begin() as db:
+            grant = ad.get(db, delegation_id)
+            if grant is None or grant.person_principal_id != ctx.principal.id:
+                return _err("not_found", 404)
+            try:
+                return {"approval_delegation": ad.view(db, ad.revoke(db, ctx, delegation_id))}
+            except ad.DelegationRefused as exc:
+                return JSONResponse(status_code=exc.status, content=exc.body())
+
     @router.get("/v1/identity/delegations")
     @permit(P.DELEGATION_READ_ALL, scope=Scope.org())
     def all_delegations(request: Request, user: Optional[str] = None):
