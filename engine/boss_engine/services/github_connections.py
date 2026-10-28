@@ -1761,9 +1761,23 @@ class GitHubConnectionService:
             )
         return f"{parsed.scheme}://{parsed.netloc}{parsed.path}".rstrip("/")
 
-    @staticmethod
-    def _capabilities(granted_permissions: list[str]) -> list[str]:
-        granted = set(granted_permissions)
+    @classmethod
+    def capabilities_for(cls, granted_permissions: list[str]) -> list[str]:
+        """Deterministic map from GitHub repository permissions to BOSS capabilities.
+
+        The connection test records this on the binding and the setup UI shows it, so both
+        surfaces need to answer "what can this token actually do" in BOSS's own vocabulary and
+        get the SAME answer. Exposing the mapping as a named, public method — rather than
+        leaving it private to ``test_connection`` — is what lets every caller ask once.
+
+        Permissions are normalized the same way the connection stores them, so a caller may
+        pass GitHub's raw permission names in any case without changing the result.
+        """
+        granted = {
+            str(permission).strip().lower()
+            for permission in (granted_permissions or [])
+            if str(permission).strip()
+        }
         capabilities = ["repository.read"]
         if granted.intersection({"push", "maintain", "admin"}):
             capabilities.extend(
@@ -1781,6 +1795,10 @@ class GitHubConnectionService:
         if "admin" in granted:
             capabilities.append("repository.admin")
         return sorted(set(capabilities))
+
+    @staticmethod
+    def _capabilities(granted_permissions: list[str]) -> list[str]:
+        return GitHubConnectionService.capabilities_for(granted_permissions)
 
     @staticmethod
     def _required_text(value: Optional[str], field: str) -> str:
