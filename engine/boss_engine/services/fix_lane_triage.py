@@ -189,7 +189,14 @@ def classify(
     touched_paths = list(_field(diff_estimate, "touched_paths") or [])
     signals.update({"files": files, "lines": lines})
 
-    if (files is not None and files > MAX_FILES) or (lines is not None and lines > MAX_LINES):
+    # A diff estimate that cannot report both its file and line counts is not an estimate we
+    # can size against the fix-lane caps, so it fails toward the full lane (same posture as a
+    # wholly-missing estimate). Without this, a mapping/object that omits ``files`` or ``lines``
+    # would read ``None`` for the missing field, skip the size check, and route to ``fix``.
+    if files is None or lines is None:
+        return TriageVerdict(lane=LANE_FULL, reason="incomplete_diff_estimate", signals=signals)
+
+    if files > MAX_FILES or lines > MAX_LINES:
         return TriageVerdict(lane=LANE_FULL, reason="diff_too_large", signals=signals)
 
     protected = _touches_protected_path(touched_paths)
