@@ -275,6 +275,10 @@ class EphemeralSandbox:
         self._provisioning = False
         self._private_staging: Optional[Path] = None
         self._repo_files: Optional[RepoFiles] = None
+        # Set True only when `provision()` actually fetched+reset an existing warm
+        # checkout instead of cloning — the lineage-sandbox cost claim must follow what
+        # happened here, not what was merely requested.
+        self.warm_reused = False
 
     # -- lifecycle ----------------------------------------------------------
     def __enter__(self) -> "EphemeralSandbox":
@@ -296,6 +300,7 @@ class EphemeralSandbox:
         self, owner: str, repo: str, *, base_branch: str = "main",
         work_branch: Optional[str] = None, token: Optional[str] = None,
         repo_host: str = "github", egress: Optional[Any] = None,
+        warm_dir: Optional[Any] = None, reuse_warm: bool = False,
     ) -> Path:
         """Credentialed Git sees only a private checkout, before any workload can touch it.
 
@@ -303,9 +308,19 @@ class EphemeralSandbox:
         always runs with the workload's authority and never receives BOSS's Git credentials.
         A config blacklist is not sufficient: filters, includes, hooks and fsmonitor all
         execute commands, and the workload is allowed to mutate its own Git metadata.
+
+        ``warm_dir`` (the lineage's claimed sandbox path — `lineage_sandbox.claim().run_dir`)
+        pins where this clone lands so a later round of the SAME lineage can find it again.
+        ``reuse_warm`` says that round found the path already live: fetch+reset it in place
+        instead of paying for a fresh clone.
         """
         if self.path is not None:
             raise SandboxError("Sandbox already provisioned.")
+        if reuse_warm and warm_dir and (Path(warm_dir) / ".git").exists():
+            return self._provision_warm(
+                owner, repo, base_branch=base_branch, work_branch=work_branch,
+                token=token, repo_host=repo_host, egress=egress, warm_dir=Path(warm_dir),
+            )
         from .sandbox_identity import current, mode
 
         self._sandbox = current()
@@ -314,6 +329,11 @@ class EphemeralSandbox:
             raise SandboxError("sandbox isolation requires an active run identity")
         root = self._sandbox.run_dir.parent if self._sandbox is not None else self._root()
         staging = Path(tempfile.mkdtemp(prefix=".boss-git-", dir=root))
+        # mkdtemp honors the requested 0o700 bits, but a parent directory with the
+        # setgid bit set (e.g. a shared sandbox root) still forces setgid onto this
+        # new directory regardless of the mode passed to mkdir(2). Strip it explicitly
+        # so private staging is never group-executable beyond the owning process.
+        os.chmod(staging, 0o700)
         from .resource_ledger import claim_dir, release_dir
 
         claim_dir(staging)
@@ -330,8 +350,16 @@ class EphemeralSandbox:
             # Pin the verified directory before publication; later reads never reopen an
             # attacker-replaced workspace pathname. The staging parent remains private.
             self._repo_files = RepoFiles(self.path)
-            destination_root = self._sandbox.run_dir if self._sandbox is not None else self._root()
-            destination = Path(tempfile.mkdtemp(prefix=f"{self.task_id}-", dir=destination_root))
+            if warm_dir is not None:
+                # Land ON the lineage's claimed path (not a random tempdir) so the next round
+                # of this same lineage finds a live checkout here and can reuse it.
+                destination = Path(warm_dir)
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                if destination.exists():
+                    shutil.rmtree(destination, ignore_errors=True)
+            else:
+                destination_root = self._sandbox.run_dir if self._sandbox is not None else self._root()
+                destination = Path(tempfile.mkdtemp(prefix=f"{self.task_id}-", dir=destination_root))
             os.chmod(self.path, 0o2777 if self._sandbox is not None else 0o700)
             try:
                 # Replaces only an empty directory, never follows a planted destination link.
@@ -341,6 +369,9 @@ class EphemeralSandbox:
                     destination.rmdir()
                 raise
             self.path = destination
+            # A lineage's claimed path outlives this run — teardown must never rmtree it;
+            # purge() (lineage_sandbox's one teardown path) owns that lifecycle instead.
+            self._owns_dir = warm_dir is None
             claim_dir(self.path)
             return self.path
         except Exception:
@@ -378,6 +409,7 @@ class EphemeralSandbox:
             raise SandboxError("private Git provisioning is required")
         self.path = self._private_staging / "checkout"
         self.path.mkdir(mode=0o700)
+        os.chmod(self.path, 0o700)  # strip any inherited setgid bit, see staging above
         self._owns_dir = True
         self.base_branch = base_branch
 
@@ -488,6 +520,42 @@ class EphemeralSandbox:
                 )
             else:
                 self._git(["checkout", "-b", self.work_branch])
+        return self.path
+
+    def _provision_warm(
+        self, owner: str, repo: str, *, base_branch: str, work_branch: Optional[str],
+        token: Optional[str], repo_host: str, egress: Optional[Any], warm_dir: Path,
+    ) -> Path:
+        """Reuse a lineage's already-cloned checkout: fetch+reset in place, no `git clone`,
+        no fresh install/DB provisioning — that is the whole point of a warm sandbox."""
+        from .repo_host import git_access
+        from .resource_ledger import claim_dir
+
+        self.path = warm_dir
+        self._owns_dir = False  # the lineage, not this run, owns this directory's lifetime
+        self.base_branch = base_branch
+        self.warm_reused = True
+        legacy_access = git_access(repo_host, owner, repo, token or "")
+        self._git_env = dict(legacy_access.env)
+        self._git_own_config: list[str] = []
+        if egress is not None:
+            token = None
+            own = getattr(egress, "own_git", None)
+            if own is not None:
+                self._git_env = dict(own.env)
+                self._git_own_config = list(own.config)
+        self.work_branch = work_branch or f"boss/{self.task_id}"
+        fetch_ref = self.work_branch if self.work_branch != base_branch else base_branch
+        self._git(["fetch", "origin", fetch_ref], redact=token)
+        self._git(["checkout", "-B", self.work_branch, f"origin/{fetch_ref}"])
+        self._git(["reset", "--hard", f"origin/{fetch_ref}"])
+        self._git(["clean", "-fdx"])
+        self.base_sha = self._git(["rev-parse", "HEAD"]).strip() or None
+        self.diff_base_sha = self.base_sha
+        self.resumed_from_checkpoint = True
+        self._write_local_excludes()
+        self._repo_files = RepoFiles(self.path)
+        claim_dir(self.path)
         return self.path
 
     def _remote_branch_exists(self, branch: str, *, token: Optional[str]) -> bool:

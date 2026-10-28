@@ -111,6 +111,13 @@ def kept_stations(fctx: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
         out["tests"] = {"from_run": parent, "attempt": n,
                         "tip": f"The tests {('#' + str(n)) if n else 'the last attempt'} wrote, "
                                "not re-written"}
+    sandbox_round = fctx.get("sandbox_round")
+    if isinstance(sandbox_round, dict):
+        out["sandbox"] = {
+            "reused": bool(sandbox_round.get("reused")),
+            "provisioning_seconds": sandbox_round.get("provisioning_seconds"),
+            "stages_skipped": list(sandbox_round.get("stages_skipped") or []),
+        }
     return out
 
 

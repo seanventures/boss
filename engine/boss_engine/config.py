@@ -35,6 +35,14 @@ class Settings(BaseSettings):
     a2a_dispatch_max_attempts: int = Field(
         default=5, alias="BOSS_A2A_DISPATCH_MAX_ATTEMPTS", ge=1, le=20
     )
+    sandbox_reuse_enabled: bool = Field(default=False, alias="BOSS_SANDBOX_REUSE_ENABLED")
+    resume_stage_enabled: bool = Field(default=False, alias="BOSS_RESUME_STAGE_ENABLED")
+    # Idle lineage sandboxes are purged after this long with no claim. 24h is a hard ceiling
+    # enforced here, not just a suggested default, so a misconfigured env can't keep a warm
+    # checkout (and its credentials) alive indefinitely.
+    sandbox_idle_ttl_hours: int = Field(
+        default=6, alias="BOSS_SANDBOX_IDLE_TTL_HOURS", ge=1, le=24
+    )
     sentry_dsn: Optional[str] = Field(default=None, alias="SENTRY_DSN")
     supabase_url: Optional[str] = Field(default=None, alias="SUPABASE_URL")
     supabase_anon_key: Optional[str] = Field(default=None, alias="SUPABASE_ANON_KEY")

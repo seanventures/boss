@@ -10588,3 +10588,28 @@ CREATE INDEX IF NOT EXISTS idx_kg_usage_thread ON kg_usage(project_id, agent_thr
   WHERE agent_thread_id IS NOT NULL;
 -- ============================ end BOSSAPP-768 S2c ============================================
 
+-- ============================ Build E: lineage sandboxes =====================================
+-- One warm sandbox per lineage (boss_engine.services.lineage_sandbox), reused by fetch+reset
+-- across repair rounds/follow-ups/retries of the same root_run_id instead of a fresh clone.
+CREATE TABLE IF NOT EXISTS lineage_sandboxes (
+    lineage_id TEXT PRIMARY KEY,
+    project_id TEXT,
+    run_dir TEXT NOT NULL,
+    uid INTEGER NOT NULL,
+    database_name TEXT,
+    status TEXT NOT NULL DEFAULT 'warm',
+    stage_hashes TEXT NOT NULL DEFAULT '{}',
+    dependency_manifest_hash TEXT,
+    current_run_id TEXT,
+    created_at TEXT,
+    last_used_at TEXT,
+    purged_at TEXT,
+    release_reason TEXT
+);
+-- A forged cross-lineage claim (wrong uid for a live sandbox) is refused and counted here,
+-- never granted — two lineages never share a sandbox.
+CREATE TABLE IF NOT EXISTS sandbox_violation_counts (
+    lineage_id TEXT PRIMARY KEY,
+    count INTEGER NOT NULL DEFAULT 0
+);
+-- ============================ end Build E: lineage sandboxes =================================

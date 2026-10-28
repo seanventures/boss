@@ -162,6 +162,8 @@ class Sandbox(Protocol):
         base_branch: str = "main",
         work_branch: Optional[str] = None,
         token: Optional[str] = None,
+        warm_dir: Optional[object] = None,
+        reuse_warm: bool = False,
     ) -> object: ...
 
     def run(self, command: str, *, timeout: Optional[int] = None): ...

@@ -42,6 +42,7 @@ from .llm_telemetry import clear_llm_context, record_llm_call, set_llm_context
 from .agent_acts import pr_trailers as _pr_trailers
 from .sandbox import SandboxError
 from .sandbox_provider import make_sandbox_provider
+from . import lineage_sandbox
 from . import build_base_branch as _build_base
 from .software_factory import SoftwareFactoryService
 
@@ -1268,6 +1269,26 @@ def _is_system_failure(error) -> bool:
     return is_system_failure(error)
 
 
+def _resume_stages_after_steer(
+    completed_stages: list, *, stage_hashes: dict, brief_text: str, steer_notes: list,
+) -> list:
+    """A retry starts at the first stage `lineage_sandbox.stage_needs_rerun` says is stale.
+
+    A carried stage is kept as resumable only while nothing new has been said about scope
+    since it last passed; the first stage whose input hash moved, and everything after it,
+    is dropped so the retry re-runs from there instead of resuming past stale work.
+    """
+    kept: list = []
+    for stage in completed_stages:
+        if lineage_sandbox.stage_needs_rerun(
+            recorded_hash=stage_hashes.get(stage), brief_text=brief_text,
+            steer_notes=steer_notes,
+        ):
+            break
+        kept.append(stage)
+    return kept
+
+
 def _prior_failing_gates(fctx_prev: dict, state: dict) -> list[str]:
     """Which gates the previous attempt failed — from whichever path recorded them.
 
@@ -2079,7 +2100,11 @@ def retry_code_task(
                           # after a real code verdict the stages must re-run, because their
                           # output is what was judged wanting.
                           **({"resume_completed_stages":
-                              list((fctx_prev.get("completed_stages") or []))}
+                              _resume_stages_after_steer(
+                                  list((fctx_prev.get("completed_stages") or [])),
+                                  stage_hashes=fctx_prev.get("stage_hashes") or {},
+                                  brief_text=augmented,
+                                  steer_notes=fctx_prev.get("steer_notes") or [])}
                              if (fctx_prev.get("completed_stages") and not fresh
                                  and _is_system_failure(prev.get("error"))) else {})},
             jobs=jobs, profile=profile or spec.get("profile"), risk_tier=spec.get("risk_tier"),
@@ -3007,6 +3032,21 @@ def _run_code_task(engine, settings: Settings, jobs, run_id: str,
     #  - microVM/container provider: the whole pipeline runs guest-side; we send a
     #    spec and collect the result (run_code_task).
     #  - local provider: the control plane drives the agent against a host sandbox.
+    # ONE WARM SANDBOX PER LINEAGE (Build E): a repair round, retry or follow-up of this
+    # same root_run_id claims the lineage's sandbox row instead of provisioning fresh each
+    # time — fetch+reset cost, not clone+install cost, and no two lineages ever share one.
+    sandbox_claim = lineage_sandbox.claim(
+        engine, settings, lineage_id=root_run, run_id=run_id, project_id=project_id,
+        owner=owner,
+    )
+    with _transaction(engine) as c:
+        c.execute(
+            sql("UPDATE code_task_runs SET finalize_ctx=COALESCE(finalize_ctx, '{}'::jsonb) "
+                 "|| jsonb_build_object('lineage_sandbox_reused', CAST(:r AS boolean)), "
+                 "updated_at=now() WHERE id=:id"),
+            {"r": bool(sandbox_claim.reused), "id": run_id},
+        )
+
     provider = make_sandbox_provider(settings)
     # Persist the resolved provider, rather than re-deriving it from mutable settings
     # when an operator later asks where this run actually executed.
@@ -3090,7 +3130,21 @@ def _run_code_task(engine, settings: Settings, jobs, run_id: str,
             sandbox.provision(owner, repo, base_branch=base_branch,
                               work_branch=work_branch, token=token,
                               repo_host=repo_host_kind,
-                              egress=identity_run[1] if identity_run is not None else None)
+                              egress=identity_run[1] if identity_run is not None else None,
+                              warm_dir=sandbox_claim.run_dir, reuse_warm=sandbox_claim.reused)
+            # The claim was a reservation; this is whether provisioning actually fetched+reset
+            # the warm checkout instead of cloning. They can differ (a claimed-but-missing
+            # checkout falls back to a fresh clone inside `provision`) — the recorded flag must
+            # track what happened, not what was merely requested.
+            actually_reused = bool(getattr(sandbox, "warm_reused", False))
+            if actually_reused != sandbox_claim.reused:
+                with _transaction(engine) as c:
+                    c.execute(
+                        sql("UPDATE code_task_runs SET finalize_ctx=COALESCE(finalize_ctx, '{}'::jsonb) "
+                             "|| jsonb_build_object('lineage_sandbox_reused', CAST(:r AS boolean)), "
+                             "updated_at=now() WHERE id=:id"),
+                        {"r": actually_reused, "id": run_id},
+                    )
             with _transaction(engine) as c:
                 _set_phase(c, run_id, "coding")
             # VAG Phase 0: attribute the host agent's model calls to this run.
@@ -3160,6 +3214,8 @@ def _run_code_task(engine, settings: Settings, jobs, run_id: str,
             # opened is honoured here, before any GitHub write.
             if pending_stop(c, run_id):
                 honour_stop_request(c, run_id)
+                lineage_sandbox.purge(engine, settings, lineage_id=root_run,
+                                       reason="cancelled")
                 return {"status": "cancelled", "done": True,
                         "reason": "stopped before the PR was opened"}
             _set_phase(c, run_id, "opening_pr")
