@@ -4446,7 +4446,7 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
                 with ctx.begin() as c:
                     row = svc.create_repository_binding(
                         c, project_id=pid, connection_id=args["connection_id"],
-                        repository=args["repository"], role=args.get("role") or "secondary",
+                        repository=args["repository"], role=args.get("role") or "source",
                         default_branch=base_branch, metadata={}, actor=actor,
                     )
             except Exception as exc:
