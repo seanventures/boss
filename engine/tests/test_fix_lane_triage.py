@@ -71,6 +71,43 @@ class TestFixLaneTriage(unittest.TestCase):
         verdict = classify(spec, diff_estimate=None)
         self.assertEqual(verdict.lane, "full")
 
+    def test_p1_kindless_chat_report_with_failure_phrasing_routes_to_fix_lane(self):
+        spec = {
+            "message": "the save button stopped working after the last deploy",
+        }
+        verdict = classify(spec, diff_estimate=DiffEstimate(files=1, lines=5))
+        self.assertEqual(verdict.lane, "fix")
+
+    def test_p1_kindless_feature_request_with_evidence_key_routes_to_full_pipeline(self):
+        spec = {
+            "description": "add a dark mode toggle to settings",
+            "evidence": "mockup.png",
+        }
+        verdict = classify(spec, diff_estimate=DiffEstimate(files=1, lines=5))
+        self.assertEqual(verdict.lane, "full")
+
+    def test_p1_oversized_diff_by_lines_alone_routes_to_full_pipeline(self):
+        spec = {
+            "kind": "bug",
+            "repro": "search results are duplicated",
+            "instructions": "dedupe the search results",
+        }
+        verdict = classify(spec, diff_estimate=DiffEstimate(files=1, lines=200))
+        self.assertEqual(verdict.lane, "full")
+
+    def test_p1_mapping_diff_estimate_is_read_correctly_not_defaulted_to_fix(self):
+        spec = {
+            "kind": "bug",
+            "repro": "checkout double-charges on retry",
+            "instructions": "fix the double charge",
+        }
+        verdict = classify(
+            spec,
+            diff_estimate={"files": 10, "lines": 900, "touched_paths": []},
+        )
+        self.assertEqual(verdict.lane, "full")
+        self.assertEqual(verdict.reason, "diff_too_large")
+
 
 if __name__ == "__main__":
     unittest.main()
