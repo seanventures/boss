@@ -466,9 +466,10 @@ def _select(root: Path | str, suite: VerifySuite, changed: list[str],
     stems = set(by_stem)
     covered = set(picked)
     if stems:
+        # A test in the change counts too: a new module and its new test arrive together, and
+        # skipping changed tests here left the module "uncovered" for good (crun_f1c382, 2026-10-28:
+        # fix_lane_triage.py and test_fix_lane_triage.py, repair rounds chasing an unfixable gate).
         for rel in all_tests:
-            if rel in picked:
-                continue
             try:
                 text = (base / rel).read_text(encoding="utf-8", errors="replace")
             except OSError:

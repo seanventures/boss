@@ -113,6 +113,20 @@ def test_a_changed_test_file_always_runs(repo):
     assert plan.commands[-1] == "python3 -m pytest -q engine/tests/test_unrelated.py"
 
 
+def test_a_new_module_and_its_new_test_in_one_change_are_covered(repo):
+    """crun_f1c382 (2026-10-28): fix_lane_triage.py arrived with test_fix_lane_triage.py. Changed
+    tests were skipped when reading references, so the module stayed "uncovered" and every repair
+    round chased a gate that could not pass."""
+    _write(repo, "engine/boss_engine/services/gamma.py", "Z = 3\n")
+    _write(repo, "engine/tests/test_gamma.py", "from boss_engine.services.gamma import Z\n")
+
+    plan = vm.plan_verify(vm.load_verify_manifest(repo), repo,
+                          ["engine/boss_engine/services/gamma.py", "engine/tests/test_gamma.py"])
+
+    assert "engine/tests/test_gamma.py" in plan.commands[-1]
+    assert plan.uncovered == []
+
+
 def test_a_change_no_suite_covers_runs_nothing_and_says_so(repo):
     plan = vm.plan_verify(vm.load_verify_manifest(repo), repo, ["README.md"])
 
