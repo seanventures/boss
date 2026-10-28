@@ -165,6 +165,7 @@ def auto_preview_after_pr(engine, settings: Settings, *, project_id: str, run_id
                                    "exercise it via tests or a container deploy in CI/CD"})
             return None
     except Exception as exc:  # noqa: BLE001 — never let a preview affect the PR
+        _log_caught(logger)
         _record_auto_preview_failure(engine, project_id, run_id, exc)
         return None
 
@@ -180,6 +181,7 @@ def auto_preview_after_pr(engine, settings: Settings, *, project_id: str, run_id
                                     **({"error": str(_pv.get("error"))[:300]}
                                        if _pv.get("error") else {})})
         except Exception as exc:  # noqa: BLE001 — a thread's exception reaches nobody else
+            _log_caught(logger)
             _record_auto_preview_failure(engine, project_id, run_id, exc)
 
     import contextvars
@@ -191,12 +193,12 @@ def auto_preview_after_pr(engine, settings: Settings, *, project_id: str, run_id
 
 
 def _record_auto_preview_failure(engine, project_id: str, run_id: str, exc: BaseException) -> None:
-    _log_caught(logger)
     try:
         with _transaction(engine) as c:
             emit_event(c, project_id, "code_task.auto_preview_failed", "boss",
                        "code_task_run", run_id, {"error": f"{type(exc).__name__}: {exc}"[:200]})
     except Exception:  # noqa: BLE001
+        _log_caught(logger)
         logger.warning("auto-preview failure not recorded for %s", run_id, exc_info=True)
 
 
@@ -1378,6 +1380,7 @@ def delivery_credential_facts(connection, run_id: str) -> Optional[dict]:
                 "token_asks": github_setup.control_plane_permissions(connection, full),
                 "installation_grants": grants}
     except Exception:  # noqa: BLE001
+        _log_caught(logger)
         return None
 
 
@@ -5438,11 +5441,24 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # suite, so a secret-gate finding in a test file is QA's to repair (fixture_secret_repair),
         # including on a repair/retry that skips write_tests and reuses the lineage's suite.
         _qa_authors_tests = do_separate_tests
+        # FIX LANE (triage, acceptance criterion #1): a small, evidenced bug fix — or an
+        # operator/Shepherd `forced_lane` — never runs the design chain or the full review
+        # panel below. Decided once, here, from the caller's size estimate; re-checked
+        # against the REAL diff once the fix lane has written one (see the escalation check
+        # near the review panel).
+        from . import fix_lane_runner, fix_lane_triage
+        lane = fix_lane_triage.classify(
+            spec, diff_estimate=spec.get("diff_estimate"),
+            forced_lane=spec.get("forced_lane") or fctx.get("forced_lane"),
+        ).lane
+        fctx["lane"] = lane
         # DESIGN PHASE (tier >= 2): standards -> spec -> plan -> review plan, BEFORE any code.
         # Spec-driven: the refined spec + plan are fed into the downstream coding steps. (The human
         # approve-plan gate is Wire-Phase 2b; for now review plan records a PLAN: OK/REVISE note.)
         design: dict = {}
         do_design = risk_tier >= 2 and not is_web_app and not _seeded
+        if do_design and fix_lane_runner.skips_design(lane):
+            do_design = False
         if not do_design:
             # Official follow-ups are risk-tier 1 and skip the design chain.
             # The frozen benchmark PRD / inherited parent plan is still the plan.
@@ -6677,6 +6693,27 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             _review_change = _review_change_now()
             change_block = _review_change.block()
 
+            # AUTO-ESCALATION (acceptance criterion #3): the pre-flight estimate can be
+            # wrong — re-check the SAME caps against the real diff now that the fix lane
+            # has actually written one, and hand off to the full pipeline's review panel
+            # if it blew the budget, carrying the fix lane's red test forward.
+            if lane == fix_lane_triage.LANE_FIX:
+                _esc = fix_lane_runner.check_escalation(
+                    spec, files=len(_review_change.paths),
+                    lines=sum(c.count("\n") + 1 for c in _review_change.files.values()),
+                    touched_paths=_review_change.paths,
+                    carried_test=fctx.get("red_first"))
+                if _esc.escalated:
+                    lane = fix_lane_triage.LANE_FULL
+                    fctx["lane"] = lane
+                    fctx["lane_escalated"] = True
+                    fctx["lane_escalation_reason"] = _esc.reason
+                    fctx["carried_failing_test"] = _esc.carried_test
+                    with _transaction(engine) as c:
+                        emit_event(c, project_id, "code_task.fix_lane_escalated", "boss",
+                                   "code_task_run", run_id,
+                                   {"reason": _esc.reason, "files": len(_review_change.paths)})
+
             def _make_review(seat, seat_agent, seat_model):
                 def _run():
                     # Each seat of a real panel signs its own act (factory §6.4); a panel of
@@ -6684,10 +6721,16 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     set_llm_context(routes=_route_ids(), db_engine=engine, project_id=project_id, run_id=run_id,
                                     stage="review_code",
                                     seat=(seat + 1) if panel_size > 1 else None)
+                    _seat_prompt = _review_prompt(title, criteria, instructions=instructions,
+                                                  ui=ui_task, change=change_block)
+                    if lane == fix_lane_triage.LANE_FIX:
+                        # ONE combined correctness+security reviewer (acceptance criterion
+                        # #2) instead of separate review_code/security_check seats.
+                        _seat_prompt = fix_lane_runner.combined_review_prompt(
+                            _seat_prompt, _security_prompt(title, instructions=instructions,
+                                                           criteria=criteria, change=change_block))
                     rr, hollow = _judge_seat("review_code", lambda pre: seat_agent.run_role(
-                        pre + _review_prompt(title, criteria, instructions=instructions, ui=ui_task,
-                                             change=change_block),
-                        review_root, read_only=True, model=seat_model))
+                        pre + _seat_prompt, review_root, read_only=True, model=seat_model))
                     with lock:
                         panel_cost["v"] += int(rr.get("cost_usd_micros") or 0)
                         if hollow:
@@ -6759,9 +6802,10 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # seat list survived that override, `lean` would become a way to ship credential
             # handling with no security review at all. Above tier 1 the full panel is restored
             # no matter what the profile asked for.
-            enabled_seats = set(
+            enabled_seats = set(fix_lane_runner.review_seats_for(
+                lane,
                 _ALL_PANEL_SEATS if risk_tier >= 2
-                else (profile.get("panel_checks") or _ALL_PANEL_SEATS))
+                else (profile.get("panel_checks") or _ALL_PANEL_SEATS)))
             if _ci_files:
                 enabled_seats |= {"review_code", "security_check"}
             # TESTS THAT STILL FAIL AFTER THE FIX ROUND END THE BUILD; THEY ARE NOT REVIEWED.
