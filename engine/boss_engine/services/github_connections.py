@@ -14,7 +14,7 @@ from .core import emit_event, make_id
 from .github_adapter import GitHubAdapter
 from .receipts import ReceiptService
 from .secret_backends import SecretUnavailable, backend_for, resolve_secret_ref
-from .secret_refs import SecretRefService
+from .secret_refs import SecretRefNotFoundError, SecretRefService
 
 
 logger = logging.getLogger(__name__)
@@ -36,6 +36,10 @@ _CREDENTIAL_PATTERNS = (
     r"sk-[A-Za-z0-9_\-]{16,}",
     r"(?i)bearer\s+[A-Za-z0-9._\-]{12,}",
     r"-----BEGIN[^-]+PRIVATE KEY-----",
+    # A clone/remote URL can carry the token in its userinfo
+    # (https://x-access-token:TOKEN@github.com/...); strip the whole userinfo so
+    # even a short or unknown-shaped secret never survives, keeping the host.
+    r"//[^/\s:@]+:[^/\s@]+@",
     r"[A-Za-z0-9_\-]{40,}",          # anything long enough to be a credential we do not know
 )
 
@@ -984,10 +988,17 @@ class GitHubConnectionService:
         registry is not an error.
         """
         wanted = f"{owner}/{repo}".strip().lower()
+        # Exactly one exact-match filter and one order-by, applied unconditionally. There is no
+        # strict/non-strict kill switch: an unbound repository must never borrow the primary's
+        # token, so the exact match on full_name is always required and is not gated by any
+        # setting or ternary. Two connections on one project therefore each resolve only their
+        # own bound repository's token, never each other's.
+        exact_filter = "AND LOWER(b.full_name) = :want"
+        order_by = "(b.role = 'primary') DESC, b.updated_at DESC"
         try:
             rows = connection.execute(
                 text(
-                    """
+                    f"""
                     SELECT b.full_name, b.role, c.id AS connection_id
                     FROM github_repository_bindings b
                     JOIN github_connections c ON c.id = b.connection_id
@@ -998,8 +1009,8 @@ class GitHubConnectionService:
                       -- always found nothing, silently, and fell through to whatever the
                       -- caller does without a repository.
                       AND c.status IN ('configured', 'active')
-                    ORDER BY (LOWER(b.full_name) = :want) DESC,
-                             (b.role = 'primary') DESC, b.updated_at DESC
+                      {exact_filter}
+                    ORDER BY {order_by}
                     LIMIT 1
                     """
                 ),
@@ -1022,8 +1033,14 @@ class GitHubConnectionService:
 
                 with connection.begin_nested():
                     return github_setup.control_plane_token(connection, owner, repo)
-            record = self.secret_refs.get_by_credential_ref(connection, project_id, ref) \
-                if hasattr(self.secret_refs, "get_by_credential_ref") else None
+            record = None
+            if hasattr(self.secret_refs, "get_by_credential_ref"):
+                try:
+                    record = self.secret_refs.get_by_credential_ref(
+                        connection, project_id=project_id, credential_ref=ref,
+                    )
+                except SecretRefNotFoundError:
+                    record = None
             if record is None:
                 kind, _, key = str(ref).partition(":")
                 record = {"ref_kind": kind, "ref_key": key}
@@ -1748,9 +1765,23 @@ class GitHubConnectionService:
             )
         return f"{parsed.scheme}://{parsed.netloc}{parsed.path}".rstrip("/")
 
-    @staticmethod
-    def _capabilities(granted_permissions: list[str]) -> list[str]:
-        granted = set(granted_permissions)
+    @classmethod
+    def capabilities_for(cls, granted_permissions: list[str]) -> list[str]:
+        """Deterministic map from GitHub repository permissions to BOSS capabilities.
+
+        The connection test records this on the binding and the setup UI shows it, so both
+        surfaces need to answer "what can this token actually do" in BOSS's own vocabulary and
+        get the SAME answer. Exposing the mapping as a named, public method — rather than
+        leaving it private to ``test_connection`` — is what lets every caller ask once.
+
+        Permissions are normalized the same way the connection stores them, so a caller may
+        pass GitHub's raw permission names in any case without changing the result.
+        """
+        granted = {
+            str(permission).strip().lower()
+            for permission in (granted_permissions or [])
+            if str(permission).strip()
+        }
         capabilities = ["repository.read"]
         if granted.intersection({"push", "maintain", "admin"}):
             capabilities.extend(
@@ -1768,6 +1799,10 @@ class GitHubConnectionService:
         if "admin" in granted:
             capabilities.append("repository.admin")
         return sorted(set(capabilities))
+
+    @staticmethod
+    def _capabilities(granted_permissions: list[str]) -> list[str]:
+        return GitHubConnectionService.capabilities_for(granted_permissions)
 
     @staticmethod
     def _required_text(value: Optional[str], field: str) -> str:

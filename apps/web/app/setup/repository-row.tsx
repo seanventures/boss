@@ -331,7 +331,7 @@ function Checks({ checks }: { checks: RepoEntry["checks"] }) {
   );
 }
 
-function RepoLine({ repo, onReplace }: { repo: RepoEntry; onReplace: () => void }) {
+function RepoLine({ repo, onReplace, single }: { repo: RepoEntry; onReplace: () => void; single: boolean }) {
   const { projectId, view, apply, checking, setChecking } = useBoard();
   const key = `repository:${repo.binding_id ?? "install"}`;
   const busy = checking.has(key) || checking.has("all");
@@ -398,10 +398,10 @@ function RepoLine({ repo, onReplace }: { repo: RepoEntry; onReplace: () => void 
       <RowMenu label={`${repo.full_name} actions`} testid="su-repo-menu" items={[
         { label: "Test", onSelect: test, testid: "su-menu-test" },
         { label: "Replace token", onSelect: onReplace, testid: "su-menu-replace" },
-        ...(!repo.default && repo.binding_id ? [{
+        ...(!single && !repo.default && repo.binding_id ? [{
           label: "Make default", testid: "su-menu-default",
           onSelect: () => run("repo_default", { binding_id: repo.binding_id }, "Make default") }] : []),
-        ...(repo.binding_id ? [{
+        ...(!single && repo.binding_id ? [{
           label: "Remove", danger: true, testid: "su-menu-remove",
           onSelect: () => setConfirming(true) }] : []),
       ]} />
@@ -462,28 +462,11 @@ export const RepositoryRow = forwardRef<HTMLElement, {
   const connection = view.repository.connection;
   const [drawer, setDrawer] = useState<null | "connect" | "replace">(null);
   const [adding, setAdding] = useState(false);
-  const first = repos.find((r) => r.default) ?? repos[0];
   const close = () => setDrawer(null);
   const replaceId = connection?.source === "connected" ? connection.id : null;
 
   let body: React.ReactNode;
-  if (mode === "done" && first) {
-    // One line, but still reachable: a token can need replacing before the first PR.
-    body = (
-      <div className="su-line">
-        <span className="su-mono" data-user-text>{first.full_name}</span>
-        <Pill pill={first.pill} testid="su-repo-pill" />
-        {connection?.source === "install" ? (
-          <Tip tip="Set in the server's settings file. Replace here to manage it in BOSS."
-               className="su-chip">From install</Tip>
-        ) : null}
-        <RowMenu label={`${first.full_name} actions`} testid="su-repo-menu" items={[
-          { label: "Replace token", onSelect: () => setDrawer("replace"), testid: "su-menu-replace" },
-        ]} />
-      </div>
-    );
-    // The CI setting lives in Advanced › CI permission: asked for only when a build needs it.
-  } else if (mode === "waiting") {
+  if (mode === "waiting") {
     body = <span className="su-faint">Not connected</span>;
   } else if (repos.length === 0) {
     body = mode === "current" ? (
@@ -503,7 +486,7 @@ export const RepositoryRow = forwardRef<HTMLElement, {
     body = (
       <div className="su-stack">
         {repos.map((repo) => (
-          <RepoLine key={repo.binding_id ?? repo.full_name} repo={repo}
+          <RepoLine key={repo.binding_id ?? repo.full_name} repo={repo} single={repos.length === 1}
                     onReplace={() => setDrawer("replace")} />
         ))}
         {mode === "current" && drawer === "replace" ? (

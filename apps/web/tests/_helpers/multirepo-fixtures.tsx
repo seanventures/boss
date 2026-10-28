@@ -279,7 +279,7 @@ export function stubFetch(answer: (c: Call) => Answer): Call[] {
 let root: Root | null = null;
 let host: HTMLElement | null = null;
 
-export async function mountAs(node: React.ReactElement, role: Role): Promise<HTMLElement> {
+export async function mountAs(node: React.ReactElement, role: Role = "owner"): Promise<HTMLElement> {
   host = document.createElement("div");
   document.body.appendChild(host);
   root = createRoot(host);

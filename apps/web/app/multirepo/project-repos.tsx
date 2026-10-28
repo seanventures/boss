@@ -149,6 +149,15 @@ export function ProjectRepositories({ projectId }: { projectId: string }) {
                         </td>
                         <td><StatePill state={r.state} /></td>
                         <td className="end">
+                          {!r.is_default ? (
+                            <GatedButton permission="repository:manage" className="ag-btn" disabled={!!busy}
+                                         title={`Build in ${r.full_name} unless a run picks another`}
+                                         data-testid={`mr-prj-default-${r.binding_id}`}
+                                         onClick={() => void write(`default:${r.binding_id}`, "Set this project's default repository.",
+                                           () => multirepo.makeDefaultRepo(projectId, r.binding_id), `Made ${r.full_name} default`)}>
+                              Make default
+                            </GatedButton>
+                          ) : null}
                           <GatedButton permission="repository:manage" className="ag-btn" disabled={!!busy}
                                        title={used.length ? `Used by ${used.map((a) => a.app_name).join(", ")}: remove it from those apps first`
                                          : "Remove from this project. Blocked while an app uses it."}
