@@ -15,6 +15,7 @@ import type { IssuedSecret } from "../../../lib/identity/types";
 import { CanButton, useGuardedCall } from "../../../components/identity/identity-provider";
 import { Ago, ErrorLine, Pill, Sheet, shortDate } from "../../../components/identity/kit";
 import { ListHeader } from "../../../components/identity/list-header";
+import { EmptyState } from "../../../components/identity/states";
 import { ShownOnce } from "../../identity/service-accounts/service-accounts";
 import { showToast } from "../../client-forms";
 
@@ -59,7 +60,15 @@ export function ApproveOnMyBehalf({ initial, projects }: {
     <section className="idn-card" aria-labelledby="aomb-h" data-testid="approve-on-my-behalf">
       <ListHeader level={2} id="aomb-h" title="Approve on my behalf" sub={`${live.length} active`}
         empty={!answer.approval_delegations.length} create={create} />
-      <p className="idn-dim" data-copy="prose">A delegate key clears the gates you choose while you are away. {NEVER}</p>
+      {answer.approval_delegations.length ? (
+        <p className="idn-dim" data-copy="prose">A delegate key clears the gates you choose while you are away. {NEVER}</p>
+      ) : (
+        // ListHeader hides `create` while the list is empty: the empty state carries it, or the
+        // first grant cannot be made at all (2026-10-28, boss-1: the card showed no button).
+        <EmptyState icon={<Stamp size={20} />} title="No delegate approves for you yet" testId="approval-delegations-empty" action={create}>
+          A delegate key clears the gates you choose while you are away. {NEVER}
+        </EmptyState>
+      )}
       {answer.approval_delegations.map((d) => (
         <article key={d.id} className="idn-dg" data-status={d.status} data-testid={`approval-delegation-${d.id}`}>
           <div className="idn-top">
