@@ -105,6 +105,19 @@ def _touches_protected_path(touched_paths: list[str]) -> Optional[str]:
     return None
 
 
+def _field(diff_estimate: Any, name: str) -> Any:
+    """Read ``name`` from ``diff_estimate`` whether it is an object or a mapping.
+
+    The contract allows ``diff_estimate`` to be an object (attributes) or a mapping (keys);
+    a plain ``getattr`` would silently read ``None`` for every key of a dict and so route an
+    oversized dict-shaped estimate to the fix lane by mistake. Reading both keeps the
+    fail-toward-full guard honest for either shape.
+    """
+    if isinstance(diff_estimate, dict):
+        return diff_estimate.get(name)
+    return getattr(diff_estimate, name, None)
+
+
 def _model_classify(spec: dict, signals: dict) -> Optional[str]:
     """A fast-model tie-breaker for genuinely ambiguous requests.
 
@@ -144,9 +157,9 @@ def classify(
         return TriageVerdict(lane=LANE_FULL, reason="no_diff_estimate",
                              signals={"diff_estimate": None})
 
-    files = getattr(diff_estimate, "files", None)
-    lines = getattr(diff_estimate, "lines", None)
-    touched_paths = list(getattr(diff_estimate, "touched_paths", None) or [])
+    files = _field(diff_estimate, "files")
+    lines = _field(diff_estimate, "lines")
+    touched_paths = list(_field(diff_estimate, "touched_paths") or [])
     signals.update({"files": files, "lines": lines})
 
     if (files is not None and files > MAX_FILES) or (lines is not None and lines > MAX_LINES):
