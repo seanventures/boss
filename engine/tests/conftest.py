@@ -22,6 +22,20 @@ import os
 # EXPLICITLY; identity tests set the mode they test on the one settings object.
 os.environ.setdefault("BOSS_AUTHZ_MODE", "shadow")
 
+# A code task's build database arrives as a plain postgresql:// URL (build-services serves every
+# language, and node/psql want that form). SQLAlchemy reads that scheme as psycopg2, which BOSS
+# does not ship (psycopg 3 only), so every DB test in a build errored "No module named
+# 'psycopg2'" (PR #7 follow-up, 2026-10-28) and repair rounds chased it. Name the driver here,
+# once, for the variables the tests read.
+def name_the_driver(environ) -> None:
+    for name in ("DATABASE_URL", "BOSS_TEST_DATABASE_URL"):
+        url = environ.get(name, "")
+        if url.startswith(("postgresql://", "postgres://")):
+            environ[name] = "postgresql+psycopg://" + url.split("://", 1)[1]
+
+
+name_the_driver(os.environ)
+
 from sqlalchemy import text
 
 # Identity needs a PERSISTENT server key and refuses to run without one (F3/L2). Tests get a fixed,
