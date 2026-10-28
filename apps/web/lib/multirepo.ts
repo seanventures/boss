@@ -202,6 +202,10 @@ export const multirepo = {
     shaped(idPut(`/v1/projects/${enc(projectId)}/repos/${enc(id)}`, body), asProjectRepos),
   removeProjectRepo: (projectId: string, id: string) =>
     shaped(idDelete(`/v1/projects/${enc(projectId)}/repos/${enc(id)}`), asProjectRepos),
+  makeDefaultRepo: async (projectId: string, bindingId: string) => {
+    await idPost(`/v1/setup/repository/${enc(bindingId)}/default?project_id=${enc(projectId)}`, {});
+    return shaped(idGet(`/v1/projects/${enc(projectId)}/repos`), asProjectRepos);
+  },
   setRepoMode: (projectId: string, mode: "single" | "multi") =>
     shaped(idPut(`/v1/projects/${enc(projectId)}/repo-mode`, { repo_mode: mode }), asProjectRepos),
 
