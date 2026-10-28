@@ -36,6 +36,10 @@ _CREDENTIAL_PATTERNS = (
     r"sk-[A-Za-z0-9_\-]{16,}",
     r"(?i)bearer\s+[A-Za-z0-9._\-]{12,}",
     r"-----BEGIN[^-]+PRIVATE KEY-----",
+    # A clone/remote URL can carry the token in its userinfo
+    # (https://x-access-token:TOKEN@github.com/...); strip the whole userinfo so
+    # even a short or unknown-shaped secret never survives, keeping the host.
+    r"//[^/\s:@]+:[^/\s@]+@",
     r"[A-Za-z0-9_\-]{40,}",          # anything long enough to be a credential we do not know
 )
 
