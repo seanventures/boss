@@ -984,6 +984,11 @@ class GitHubConnectionService:
         registry is not an error.
         """
         wanted = f"{owner}/{repo}".strip().lower()
+        # Exactly one exact-match filter and one order-by, applied unconditionally. There is no
+        # strict/non-strict kill switch: an unbound repository must never borrow the primary's
+        # token, so the exact match on full_name is always required and is not gated by any
+        # setting or ternary. Two connections on one project therefore each resolve only their
+        # own bound repository's token, never each other's.
         exact_filter = "AND LOWER(b.full_name) = :want"
         order_by = "(b.role = 'primary') DESC, b.updated_at DESC"
         try:
