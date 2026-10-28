@@ -660,6 +660,13 @@ class Settings(BaseSettings):
     github_app_bot_login: str = Field(
         default="boss[bot]", alias="BOSS_GITHUB_APP_BOT_LOGIN"
     )
+    # token_for_repository matches the binding's full_name exactly, so a build never gets a
+    # sibling repository's token. Off (False) restores the prior fallback — the project's
+    # primary repo's token when no binding matches the requested owner/repo exactly — for
+    # installations that relied on that looseness.
+    github_strict_repository_token_scope: bool = Field(
+        default=True, alias="BOSS_GITHUB_STRICT_REPOSITORY_TOKEN_SCOPE"
+    )
     github_community_model_review_enabled: bool = Field(
         default=False, alias="BOSS_GITHUB_COMMUNITY_MODEL_REVIEW_ENABLED"
     )
