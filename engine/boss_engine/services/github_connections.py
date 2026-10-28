@@ -14,7 +14,7 @@ from .core import emit_event, make_id
 from .github_adapter import GitHubAdapter
 from .receipts import ReceiptService
 from .secret_backends import SecretUnavailable, backend_for, resolve_secret_ref
-from .secret_refs import SecretRefService
+from .secret_refs import SecretRefNotFoundError, SecretRefService
 
 
 logger = logging.getLogger(__name__)
@@ -984,13 +984,8 @@ class GitHubConnectionService:
         registry is not an error.
         """
         wanted = f"{owner}/{repo}".strip().lower()
-        strict = self.settings.github_strict_repository_token_scope
-        exact_filter = "AND LOWER(b.full_name) = :want" if strict else ""
-        order_by = (
-            "(b.role = 'primary') DESC, b.updated_at DESC"
-            if strict
-            else "(LOWER(b.full_name) = :want) DESC, (b.role = 'primary') DESC, b.updated_at DESC"
-        )
+        exact_filter = "AND LOWER(b.full_name) = :want"
+        order_by = "(b.role = 'primary') DESC, b.updated_at DESC"
         try:
             rows = connection.execute(
                 text(
@@ -1029,8 +1024,14 @@ class GitHubConnectionService:
 
                 with connection.begin_nested():
                     return github_setup.control_plane_token(connection, owner, repo)
-            record = self.secret_refs.get_by_credential_ref(connection, project_id, ref) \
-                if hasattr(self.secret_refs, "get_by_credential_ref") else None
+            record = None
+            if hasattr(self.secret_refs, "get_by_credential_ref"):
+                try:
+                    record = self.secret_refs.get_by_credential_ref(
+                        connection, project_id=project_id, credential_ref=ref,
+                    )
+                except SecretRefNotFoundError:
+                    record = None
             if record is None:
                 kind, _, key = str(ref).partition(":")
                 record = {"ref_kind": kind, "ref_key": key}
