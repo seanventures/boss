@@ -170,6 +170,8 @@ def test_revoked_and_expired_delegations_are_403(world, owner):
     ({"action": "approve_initiative_budget"}, "budget_never_delegated"),
     ({"action": "budget_denied"}, "budget_never_delegated"),
     ({"action": "role.autonomy_change"}, "governance_never_delegated"),
+    ({"action": "resume_workflow", "capability": "security_review"}, "governance_never_delegated"),
+    ({"action": "resume_workflow", "reason_code": "identity_policy_change"}, "governance_never_delegated"),
 ])
 def test_main_merge_deploy_budget_and_governance_cards_are_403_always(world, owner, rec, code):
     # The widest grant there is: every kind, every tier.
@@ -179,6 +181,31 @@ def test_main_merge_deploy_budget_and_governance_cards_are_403_always(world, own
     out = _as(world, _delegate_ctx(world, data), "approve", did, force=True)
     assert out.status_code == 403 and out.json()["error"] == code, out.text
     assert _row(world, did)["status"] == "pending"
+
+
+#: A PRD gate exactly as BOSS writes it (boss-1, dec_26d1f0b5, 2026-10-28): its reason, and a
+#: reason_code holding the same sentence, say "identity" and "person". Reading that prose refused
+#: every PRD gate as an identity change; the hard limits read the card's machine words only.
+REAL_PRD_GATE = {
+    "reason": "The panel's PRD is approved before anything is built: by a person with the ceo seat on the "
+              "Approvals page when identity is enforced, automatically when BOSS_MEETING_PRD_AUTO_APPROVE "
+              "is on (the default without enforcement).",
+    "step_id": "spec_review", "capability": "spec_review", "step_label": "PRD approval (automatic)",
+    "workflow_key": "standard_product_delivery", "approver_role": "pm", "gate_completes_step": True,
+    "workflow_run_id": "wfr_7c33408a557b46b4a5e8",
+}
+REAL_PRD_GATE["reason_code"] = REAL_PRD_GATE["reason"]
+
+
+def test_a_real_prd_gate_whose_prose_says_identity_passes_the_hard_limits(world):
+    from boss_engine.identity.approval_delegations import hard_limit
+
+    row = {"project_id": world.project_a, "risk_tier": 2, "recommendation": REAL_PRD_GATE}
+    with world.engine.connect() as db:
+        assert hard_limit(db, row) is None
+        # The same card on a security step is still the person's: the machine words decide.
+        security = {**REAL_PRD_GATE, "step_id": "security_review", "capability": "security_review"}
+        assert hard_limit(db, {**row, "recommendation": security})[0] == "governance_never_delegated"
 
 
 def _bind_release_branch(world, branch: str) -> None:

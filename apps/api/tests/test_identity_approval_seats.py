@@ -216,3 +216,22 @@ def test_the_first_owner_is_seated_at_the_claim(engine):
         approvals.seat_the_first_owner(db, world.org, owner.id)
         seated = {r["seat_key"] for r in approvals.seat_rows(db, world.org)}
     assert {"ceo", "cao"} <= seated
+
+
+def test_an_inactive_holder_already_seated_never_blocks_editing_the_seat(world, people):
+    # boss-1, 2026-10-28: a migrated "Founder / CEO" that was never activated sat in the ceo seat,
+    # and the console's PUT (the whole list) was refused not_a_person, so the owner could not be
+    # added and the seat could not be fixed at all.
+    ghost = world.person("Founder")
+    with world.engine.begin() as db:
+        db.execute(text("UPDATE identity_principals SET status = 'pending' WHERE id = :p"), {"p": ghost.id})
+        db.execute(text("INSERT INTO identity_approval_seats (org_id, seat_key, principal_id, assigned_by) "
+                        "VALUES (:o, 'ceo', :p, 'migration')"), {"o": world.org, "p": ghost.id})
+    owner = world.ctx(people["owner"])
+    kept = _put(world, owner, "ceo", [ghost.id, people["alice"].id, people["owner"].id])
+    assert kept.status_code == 200, kept.text
+    out = _put(world, owner, "ceo", [people["alice"].id, people["owner"].id])
+    assert out.status_code == 200, out.text
+    assert {h["principal_id"] for h in out.json()["holders"]} == {people["alice"].id, people["owner"].id}
+    again = _put(world, owner, "ceo", [ghost.id, people["alice"].id])     # adding them back still refuses
+    assert again.status_code == 422 and again.json()["error"] == "not_a_person"

@@ -363,11 +363,17 @@ def set_seat(db: Any, ctx: AuthContext, seat_key: str, principal_ids: list[str])
         raise AccessError(422, "unknown_seat", "BOSS has no such approval seat.")
     wanted = list(dict.fromkeys(str(p) for p in principal_ids))
     people = set(_active_people(db, org))
+    current = set(holders(db, org).get(seat_key, ()))
+    seated = set(db.execute(text(
+        "SELECT principal_id FROM identity_approval_seats WHERE org_id = :o AND seat_key = :s"),
+        {"o": org, "s": seat_key}).scalars().all())   # whatever their status: holders() is active only
+    # Only the people being ADDED must be active. The console sends the whole list, so checking
+    # the holders already there let one inactive leftover (boss-1, 2026-10-28: a migrated
+    # "Founder / CEO" never activated) refuse every edit of the seat — adding the owner too.
     for pid in wanted:
-        if pid not in people:
+        if pid not in people and pid not in seated:
             raise AccessError(422, "not_a_person", "A seat is held by an active person in this org.",
                               {"principal_id": pid[:80]})
-    current = set(holders(db, org).get(seat_key, ()))
     if not wanted:
         for tier, seats in sorted(tier_seats().items()):
             if seat_key in seats and not any(holders(db, org).get(s) for s in seats if s != seat_key):

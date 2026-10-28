@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import contextvars
 import os
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Mapping, Optional
@@ -243,6 +244,22 @@ def bound_branches(db: Any, project_id: str) -> set[str]:
     return {str(b).strip() for b in rows if str(b or "").strip()}
 
 
+_IDENTIFIER = re.compile(r"^[a-z0-9_.:/-]+$")
+
+
+def _identifier_blob(rec: Mapping[str, Any]) -> str:
+    """The card's machine words, which the hard limits read: action, capability, step and a
+    reason_code that is a code. NEVER the prose (reason, or a reason_code holding a sentence):
+    every PRD gate explains itself as "approved by a person with the ceo seat … when identity
+    is enforced", so reading prose refused every PRD gate as an identity change (2026-10-28,
+    boss-1, dec_26d1f0b5: governance_never_delegated on a plain PRD approval)."""
+    words = [_word(rec.get(k)) for k in ("action", "capability", "step_id")]
+    code = _word(rec.get("reason_code"))
+    if _IDENTIFIER.match(code):
+        words.append(code)
+    return " ".join(w for w in words if w)
+
+
 def hard_limit(db: Any, row: Mapping[str, Any]) -> Optional[tuple[str, str]]:
     """(code, sentence) when NO grant may let a delegate answer this decision, else None.
     Enforced in code; nothing in a grant, a setting or the request lifts it."""
@@ -253,7 +270,7 @@ def hard_limit(db: Any, row: Mapping[str, Any]) -> Optional[tuple[str, str]]:
     raw_action = str(rec.get("action") or "")
     kind = decision_actions.kind_of({**row, "recommendation": rec})
     capability = _word(rec.get("capability"))
-    blob = " ".join(_word(rec.get(k)) for k in ("action", "reason", "reason_code", "capability"))
+    blob = _identifier_blob(rec)
     if kind == "refusal" or "budget" in blob or "spend" in blob or raw_action in _SPEND_ACTIONS:
         return ("budget_never_delegated",
                 "A delegate never answers a budget or spend decision. The person decides it.")
