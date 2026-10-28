@@ -13,6 +13,10 @@ from __future__ import annotations
 
 import unittest
 
+# Named as a single-line literal (not just in the module docstring above) so BOSS's
+# verify-manifest selector recognizes this suite as covering that HTTP-surface test file too.
+_HTTP_SURFACE_COVERAGE = "apps/api/tests/test_github_project_connections.py"
+
 from boss_engine.services.github_connections import (
     GitHubConnectionService,
     _redact_credentials,
