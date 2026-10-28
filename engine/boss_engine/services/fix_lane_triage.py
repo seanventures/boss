@@ -15,6 +15,7 @@ ambiguous. See the fix-lane spec's acceptance criterion #1:
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -45,6 +46,19 @@ PROTECTED_PATH_MARKERS = (
 #: Framings that signal a bug/regression rather than a feature request.
 BUG_KINDS = frozenset({"bug", "regression", "defect", "fix", "hotfix"})
 
+#: Free-text keys a chat report's message may arrive under (the "this link fails on first
+#: click" entry point has no ``kind`` at all — the message itself is the only signal).
+CHAT_REPORT_TEXT_KEYS = ("description", "report", "message", "text")
+
+#: Phrases in a kind-less chat report's text that mark it as a failure report rather than a
+#: feature ask. Deliberately narrow: a feature request that happens to carry unrelated
+#: "evidence" (e.g. a screenshot) must not be swept into the fix lane by that key's mere
+#: presence (see acceptance criterion #1's "fail toward the safer, fuller lane").
+BUG_REPORT_PHRASES = (
+    "fail", "broken", "break", "bug", "error", "crash", "hang", "regression",
+    "doesn't work", "stopped working", "drops", "loses", "wrong", "incorrect",
+)
+
 
 @dataclass(frozen=True)
 class TriageVerdict:
@@ -56,14 +70,27 @@ class TriageVerdict:
 
 
 def _is_bug(spec: dict) -> bool:
-    """True when the request is framed as a bug/regression (not a feature)."""
+    """True when the request is framed as a bug/regression (not a feature).
+
+    An explicit ``kind`` always decides. A chat report has no ``kind`` at all (the
+    "this link fails on first click" entry point) — there, the message text itself is the
+    only framing signal, so it is read for failure phrasing. A kind-less request is NOT
+    inferred to be a bug merely because it carries a ``repro``/``evidence`` key: a feature
+    request can carry unrelated evidence (e.g. a screenshot) and must still fail toward the
+    full lane.
+    """
     kind = str(spec.get("kind") or "").strip().lower()
-    return kind in BUG_KINDS
+    if kind:
+        return kind in BUG_KINDS
+    text = " ".join(
+        str(spec.get(key) or "") for key in CHAT_REPORT_TEXT_KEYS
+    ).lower()
+    return any(phrase in text for phrase in BUG_REPORT_PHRASES)
 
 
 def _has_repro(spec: dict) -> bool:
     """True when the request carries a reproduction or evidence the red test can key off."""
-    for key in ("repro", "reproduction", "evidence", "failing_test", "carried_test"):
+    for key in ("repro", "reproduction", "evidence", "failing_test", "carried_test", *CHAT_REPORT_TEXT_KEYS):
         value = spec.get(key)
         if isinstance(value, str) and value.strip():
             return True
@@ -108,12 +135,12 @@ def _touches_protected_path(touched_paths: list[str]) -> Optional[str]:
 def _field(diff_estimate: Any, name: str) -> Any:
     """Read ``name`` from ``diff_estimate`` whether it is an object or a mapping.
 
-    The contract allows ``diff_estimate`` to be an object (attributes) or a mapping (keys);
-    a plain ``getattr`` would silently read ``None`` for every key of a dict and so route an
-    oversized dict-shaped estimate to the fix lane by mistake. Reading both keeps the
-    fail-toward-full guard honest for either shape.
+    The contract allows ``diff_estimate`` to be an object (attributes) or any mapping (keys,
+    including non-``dict`` mappings like ``UserDict``); a plain ``getattr`` silently reads
+    ``None`` for every key of a mapping and so routes an oversized mapping-shaped estimate to
+    the fix lane by mistake.
     """
-    if isinstance(diff_estimate, dict):
+    if isinstance(diff_estimate, Mapping):
         return diff_estimate.get(name)
     return getattr(diff_estimate, name, None)
 
