@@ -984,10 +984,17 @@ class GitHubConnectionService:
         registry is not an error.
         """
         wanted = f"{owner}/{repo}".strip().lower()
+        strict = self.settings.github_strict_repository_token_scope
+        exact_filter = "AND LOWER(b.full_name) = :want" if strict else ""
+        order_by = (
+            "(b.role = 'primary') DESC, b.updated_at DESC"
+            if strict
+            else "(LOWER(b.full_name) = :want) DESC, (b.role = 'primary') DESC, b.updated_at DESC"
+        )
         try:
             rows = connection.execute(
                 text(
-                    """
+                    f"""
                     SELECT b.full_name, b.role, c.id AS connection_id
                     FROM github_repository_bindings b
                     JOIN github_connections c ON c.id = b.connection_id
@@ -998,8 +1005,8 @@ class GitHubConnectionService:
                       -- always found nothing, silently, and fell through to whatever the
                       -- caller does without a repository.
                       AND c.status IN ('configured', 'active')
-                    ORDER BY (LOWER(b.full_name) = :want) DESC,
-                             (b.role = 'primary') DESC, b.updated_at DESC
+                      {exact_filter}
+                    ORDER BY {order_by}
                     LIMIT 1
                     """
                 ),
