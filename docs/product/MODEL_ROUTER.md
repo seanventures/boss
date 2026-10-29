@@ -128,16 +128,18 @@ and it always answers. The chain is a cascade, cheapest first:
 1. **Cache.** Results are keyed by a fingerprint of the step kind, task kind, size buckets and
    normalised task text (first 4,000 characters). Build stages share the task, so a build
    classifies once, not once per stage.
-2. **Jev** (TypeSafe), used only when it is chosen, a key is held and live Jev calls are not held:
+2. **Jev** (TypeSafe), used only when it is chosen and a key is held
+   (`typed_decisions.typesafe_decides` — the environment variable or one stored through Setup's
+   vault):
    - **The call.** One typed decision with three options whose descriptions are the operator's
      editable tier criteria. The same call also answers the rigor questions `model_risk_tier`
      already asks, so routing and rigor share one context.
-   - **The hold.** Live Jev calls are held by default (BOSS-451, `typed_decisions.GOVERNANCE_HOLD`),
-     and the UI shows *Jev · paused*. `BOSS_ROUTER_JEV_LIVE=true` lifts the hold for the router
-     (BOSSAPP-579). Lifted, every call goes through the governed typed-decision path
+   - **Always governed.** Every call goes through the governed typed-decision path
      (`store.GovernedJevDecider` on `TypedDecisionBatchSpend`): a committed budget reservation,
      a job and model lease on TypeSafe's own source, one receipt per attempt, settlement with
      the actual cost. A missing one refuses the call, records why, and the rules answer.
+     BOSSAPP-579 lifted the router's leftover hold — there is no "held" `jev_state`, and the
+     console never shows *Jev · paused*.
    - **The timeout.** 800 ms by default. A slower answer falls through to the next step.
 3. **Rules** (the deterministic heuristic), which always answer. They read:
    - the step kind (review, facilitation, docs, chat…);
@@ -395,8 +397,8 @@ is the A/B LangChain ran by hand, as a product feature.
 
 Schema (all additive, applied by `ensure_schema`): `model_routing_policies`, `model_routes`,
 `provider_model_catalog`, `subscription_accounts`, `llm_calls.route_id`, `run_scorecards.route_mode / route_tier /
-routing`. Settings: `BOSS_MODEL_ROUTING_MODE` (default `fixed`), `BOSS_ROUTER_JEV_LIVE`
-(default off; on, the router's Jev calls run on the governed typed-decision path, BOSSAPP-579).
+routing`. Settings: `BOSS_MODEL_ROUTING_MODE` (default `fixed`). The router's Jev calls always
+run on the governed typed-decision path (`store.GovernedJevDecider`, BOSSAPP-579).
 
 ### Where headroom is read from
 
@@ -475,12 +477,13 @@ from Monday to Sunday:
    - With Jev: Jev, then the rules if it fails or times out.
    - Without Jev: the rules, then a cheap model only when the rules are unsure and the operator
      turned it on.
-   Routing therefore works with Jev held (today), absent (most installs) or slow.
-9. **Respect the Jev hold.** Live Jev calls are paused under BOSS-451 until the operator sets
-   `BOSS_ROUTER_JEV_LIVE`. Held, the router shows *Jev · paused* and uses the rules. Lifted, it
-   never makes a direct HTTP call: each classification is one governed typed-decision attempt,
-   reserved, leased, receipted and settled, and the same task replays from its receipt. The
-   cheap-model classifier goes through the governed chat adapter the same way. Both have a
+   Routing therefore works with Jev ready, absent (most installs) or slow.
+9. **Every Jev call is governed, never a bare client.** Jev is "ready" once a key is held
+   (`typesafe_decides`) — BOSSAPP-579 removed the router's leftover "held" state, so there is
+   no separate switch to lift. Ready, it never makes a direct HTTP call: each classification is
+   one governed typed-decision attempt, reserved, leased, receipted and settled, and the same
+   task replays from its receipt. The cheap-model classifier goes through the governed chat
+   adapter the same way. Both have a
    one-minute cooldown after a timeout or failure, so a down source never costs every route its
    timeout.
 10. **Escalation is generic and recorded.** The two hard-coded escalations become rules over named
