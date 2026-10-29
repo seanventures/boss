@@ -1,18 +1,19 @@
-"""KG P5a: the two deterministic graph steps (design: ~/boss-ops design §4.4).
+"""KG P5a: the `kg_investigation_pipeline` template run end to end through the real workflow
+runtime (design: ~/boss-ops design §4.4).
 
-`boss_engine.services.knowledge.graph_steps` runs a FIXED knowledge-graph query per step --
-never a model call -- and writes its outputs through the existing Context Graph primitives
-(context_graph.write_agent_decision / write_coverage_gap, already shipped in Build B).
+This REPLACES the earlier helper-level test, which called `knowledge.graph_steps` functions
+directly and so never proved any of it was wired into a real run. Here the template is started
+twice through `workflows`/`workflow_capability_runner` against a seeded graph, with a scripted
+stand-in only for the `task`-kind agent placeholders (P5b's wiring, out of scope for P5a):
 
-- Context Enrichment: within a hop cap, collect what is connected to a subject node; what the
-  cap couldn't reach becomes a CoverageGap, never a silent omission.
-- Historical Pattern: find prior incidents/precedents that share the subject's links, and link
-  them with `correlates_with` (an existing core edge kind -- no new ontology grant needed) so a
-  later run's Historical Pattern step can find what an earlier run's Closure wrote (the learning
-  loop the design calls for).
+ - run 1's deterministic steps (`context_enrichment`, `historical_pattern`) run for $0 and their
+   AgentDecision/CoverageGap writes land in the Context Graph;
+ - the bounded `evidence_loop` runs at most twice (`max_iterations`);
+ - run 1's Closure writes a Precedent through `workflow_capability_runner.execute_graph_step` —
+   the SAME dispatcher the deterministic steps use, not a one-off call;
+ - run 2's `historical_pattern` step finds that Precedent.
 
-Both run at $0: no governed agent, no model spend. Runs against a real, disposable postgres
-(DATABASE_URL), like test_regulatory_trace.py.
+Runs against a real, disposable postgres (DATABASE_URL), like test_regulatory_trace.py.
 """
 from __future__ import annotations
 
@@ -24,10 +25,13 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
 
 from boss_engine.db import ensure_schema
-from boss_engine.services.knowledge import graph_steps
+from boss_engine.services import workflow_capability_runner as runner
+from boss_engine.services import workflow_catalogue as catalogue
+from boss_engine.services import workflows
 from boss_engine.services.knowledge.store import PostgresKnowledgeStore
 
 STORE = PostgresKnowledgeStore()
+TEMPLATE_KEY = "kg_investigation_pipeline"
 
 
 def _database_url() -> str:
@@ -49,127 +53,259 @@ def pg_engine():
     return engine
 
 
+class Ctx:
+    """Minimal engine context: the tools under test only need a transaction."""
+
+    def __init__(self, engine):
+        self._engine = engine
+
+    def begin(self):
+        return self._engine.begin()
+
+
 @pytest.fixture()
-def connection(pg_engine):
-    with pg_engine.connect() as conn:
-        transaction = conn.begin()
-        org = f"org_kggraph_{uuid.uuid4().hex[:8]}"
-        ws = f"ws_kggraph_{uuid.uuid4().hex[:8]}"
-        project = f"p_kggraph_{uuid.uuid4().hex[:8]}"
-        try:
-            conn.execute(text("INSERT INTO orgs (id, name) VALUES (:i, 'KG Graph Steps')"), {"i": org})
-            conn.execute(text(
-                "INSERT INTO workspaces (id, org_id, name) VALUES (:i, :o, 'KG Graph Steps')"),
-                {"i": ws, "o": org})
-            conn.execute(text(
-                "INSERT INTO projects (id, workspace_id, name, slug) VALUES "
-                "(:i, :w, 'KG Graph Steps', :s)"), {"i": project, "w": ws, "s": project})
-            conn.project_id = project  # type: ignore[attr-defined]
-            yield conn
-        finally:
-            transaction.rollback()
+def project(pg_engine):
+    org = f"org_kggraph_{uuid.uuid4().hex[:8]}"
+    ws = f"ws_kggraph_{uuid.uuid4().hex[:8]}"
+    pid = f"p_kggraph_{uuid.uuid4().hex[:8]}"
+    with pg_engine.begin() as c:
+        c.execute(text("INSERT INTO orgs (id, name) VALUES (:i, 'KG Graph Steps')"), {"i": org})
+        c.execute(text("INSERT INTO workspaces (id, org_id, name) VALUES (:i, :o, 'KG Graph Steps')"),
+                  {"i": ws, "o": org})
+        c.execute(text("INSERT INTO projects (id, workspace_id, name, slug) VALUES "
+                       "(:i, :w, 'KG Graph Steps', :s)"), {"i": pid, "w": ws, "s": pid})
+    yield pid
+    with pg_engine.begin() as c:
+        for table in ("workflow_step_runs", "workflow_runs", "workflow_mappings",
+                      "workflow_versions", "workflow_definitions", "decisions", "events",
+                      "kg_edges", "kg_nodes"):
+            try:
+                with c.begin_nested():
+                    c.execute(text(f"DELETE FROM {table} WHERE project_id=:p"), {"p": pid})
+            except Exception:
+                pass
+        c.execute(text("DELETE FROM projects WHERE id=:p"), {"p": pid})
 
 
-def _rule(connection, name: str) -> str:
-    return STORE.upsert_node(
-        connection, project_id=connection.project_id, kind="rule", node_key=f"rule:{name}",
-        name=name, body=f"{name} body", trust_tier="governed", actor_kind="person",
-        actor_ref="qa@example.com")
+def _rule(c, project_id, name):
+    return STORE.upsert_node(c, project_id=project_id, kind="rule", node_key=f"rule:{name}",
+                             name=name, body=f"{name} body", trust_tier="governed",
+                             actor_kind="person", actor_ref="qa@example.com")
 
 
-def _symbol(connection, name: str) -> str:
-    return STORE.upsert_node(
-        connection, project_id=connection.project_id, kind="symbol", node_key=f"symbol:{name}",
-        name=name, body="", trust_tier="observed", actor_kind="agent", actor_ref="indexer")
+def _symbol(c, project_id, name):
+    return STORE.upsert_node(c, project_id=project_id, kind="symbol", node_key=f"symbol:{name}",
+                             name=name, body="", trust_tier="observed", actor_kind="agent",
+                             actor_ref="indexer")
 
 
-def _incident(connection, name: str) -> str:
-    return STORE.upsert_node(
-        connection, project_id=connection.project_id, kind="incident", node_key=f"incident:{name}",
-        name=name, body=f"{name} body", trust_tier="observed", actor_kind="agent",
-        actor_ref="ingest")
+def _incident(c, project_id, name):
+    return STORE.upsert_node(c, project_id=project_id, kind="incident", node_key=f"incident:{name}",
+                             name=name, body=f"{name} body", trust_tier="observed",
+                             actor_kind="agent", actor_ref="ingest")
 
 
-def _link(connection, src: str, dst: str) -> None:
-    STORE.upsert_edge(connection, project_id=connection.project_id, src_id=src, dst_id=dst,
-                       kind="about", actor_kind="agent", actor_ref="qa@example.com")
+def _link(c, project_id, src, dst):
+    STORE.upsert_edge(c, project_id=project_id, src_id=src, dst_id=dst, kind="about",
+                      actor_kind="agent", actor_ref="qa@example.com")
 
 
-# ── P1: Context Enrichment collects within the hop cap and reports what it couldn't reach ─────
-
-def test_p1_context_enrichment_writes_an_assembled_decision_and_a_gap_for_what_the_hop_cap_missed(
-        connection):
-    subject = _rule(connection, "subject-rule")
-    within_cap = _symbol(connection, "within-cap-symbol")
-    beyond_cap = _incident(connection, "beyond-cap-incident")
-    _link(connection, subject, within_cap)
-    _link(connection, within_cap, beyond_cap)  # 2 hops from subject
-
-    outcome = graph_steps.run_context_enrichment(
-        connection, project_id=connection.project_id, run_id="wfr_ctx_1", step_id="context_enrichment",
-        subject_id=subject, max_hops=1, expected_kinds=("symbol", "incident"))
-
-    assert outcome["cost_usd_micros"] == 0, "a deterministic step must never spend"
-    decision = connection.execute(
-        text("SELECT attrs FROM kg_nodes WHERE project_id = :p AND kind = 'agent_decision' "
-             "AND attrs->>'run_id' = 'wfr_ctx_1'"),
-        {"p": connection.project_id}).mappings().first()
-    assert decision is not None, "Context Enrichment must write an AgentDecision"
-    assert decision["attrs"]["decision_type"] == "ContextAssembled"
-
-    gap = connection.execute(
-        text("SELECT body FROM kg_nodes WHERE project_id = :p AND kind = 'coverage_gap' "
-             "AND attrs->>'run_id' = 'wfr_ctx_1'"),
-        {"p": connection.project_id}).mappings().first()
-    assert gap is not None, "the incident beyond the 1-hop cap must be reported as a CoverageGap"
+def _publish_template(c, project_id):
+    catalogue.seed(c, project_id, actor="test")
+    definition = c.execute(
+        text("SELECT id FROM workflow_definitions WHERE project_id=:p AND workflow_key=:k"),
+        {"p": project_id, "k": TEMPLATE_KEY}).mappings().one()
+    version = c.execute(
+        text("SELECT id FROM workflow_versions WHERE definition_id=:d "
+             "ORDER BY created_at DESC LIMIT 1"),
+        {"d": definition["id"]}).mappings().one()
+    return version["id"]
 
 
-# ── P1: Historical Pattern links the subject to a matching precedent ──────────────────────────
-
-def test_p1_historical_pattern_links_the_subject_to_a_sibling_incident(connection):
-    subject = _rule(connection, "pattern-subject-rule")
-    shared_symbol = _symbol(connection, "pattern-shared-symbol")
-    sibling_incident = _incident(connection, "pattern-sibling-incident")
-    _link(connection, subject, shared_symbol)
-    _link(connection, sibling_incident, shared_symbol)
-
-    outcome = graph_steps.run_historical_pattern(
-        connection, project_id=connection.project_id, run_id="wfr_hist_1",
-        step_id="historical_pattern", subject_id=subject)
-
-    assert outcome["cost_usd_micros"] == 0, "a deterministic step must never spend"
-    edge = connection.execute(
-        text("SELECT src_id, dst_id FROM kg_edges WHERE project_id = :p AND kind = 'correlates_with' "
-             "AND valid_to IS NULL AND (src_id = :sib OR dst_id = :sib)"),
-        {"p": connection.project_id, "sib": sibling_incident}).mappings().first()
-    assert edge is not None, "a sibling incident sharing the subject's link must be correlated"
-    assert subject in (edge["src_id"], edge["dst_id"])
+def _start(c, project_id, version_id, subject_id):
+    return workflows.start_run(
+        c, project_id=project_id, actor="test",
+        input_data={"directive": "investigate", "subject_id": subject_id, "max_hops": 1},
+        dedupe_key=f"dk_{uuid.uuid4().hex[:10]}", workflow_version_id=version_id,
+    )
 
 
-# ── P1: the learning loop — a second run's Historical Pattern finds what Closure wrote ────────
+def _run_task_step(c, project_id, run_id, step_id, *, subject_id):
+    """The scripted stand-in for the `task`-kind agent placeholders (P5b's wiring). `closure`
+    writes its Precedent through `runner.execute_graph_step` — the SAME dispatcher the
+    deterministic steps use — never a one-off node insert of its own."""
+    claimed = workflows.claim_step(c, project_id=project_id, run_id=run_id,
+                                   worker_id="scripted-task", lease_seconds=60)
+    assert claimed is not None and claimed["step_id"] == step_id, (claimed, step_id)
+    if step_id == "closure":
+        result = runner.execute_graph_step(
+            c, project_id=project_id, run_id=run_id, step_id="closure",
+            inputs={"subject_id": subject_id, "symptom": "pattern-subject-rule is unowned",
+                    "cause_summary": "no owner rule linked", "fix_summary": "assigned an owner"})
+        output = {"status": "completed", **result}
+    elif step_id == "orchestrator":
+        output = {"status": "completed", "finding_families": []}
+    else:
+        output = {"status": "completed"}
+    result = workflows.complete_step(c, project_id=project_id, step_run_id=claimed["id"],
+                                     worker_id="scripted-task", output=output, evidence=[])
+    if step_id == "intake":
+        # THE FIRST ENRICHMENT ROUND. `evidence_loop` is a "while" (checked before every
+        # iteration, including the first): its `missing_kinds` expression cannot be true until
+        # `context_enrichment` has run once, so nothing in the template itself starts that
+        # first round (the template is P5a's, unchanged here). The P5b analysis agent that owns
+        # this decision does not exist yet, so the scripted stand-in starts it exactly as that
+        # agent would — by activating the step and running it through the SAME dispatcher
+        # (`execute_graph_step`) a real deterministic step uses, never a direct node write.
+        _run_context_enrichment(c, project_id, run_id, subject_id=subject_id)
+        workflows._activate_step(c, run_id, "evidence_loop", 0)
+    return result
 
-def test_p1_a_later_runs_historical_pattern_finds_a_precedent_an_earlier_closure_wrote(connection):
-    earlier_subject = _rule(connection, "closure-earlier-rule")
-    written_precedent = STORE.upsert_node(
-        connection, project_id=connection.project_id, kind="precedent",
-        node_key="precedent:closure-written", name="closure-written",
-        body="resolved by closure", trust_tier="inferred", actor_kind="agent",
-        actor_ref="closure")
-    shared_symbol = _symbol(connection, "closure-shared-symbol")
-    _link(connection, earlier_subject, shared_symbol)
-    _link(connection, written_precedent, shared_symbol)
 
-    new_subject = _rule(connection, "closure-later-rule")
-    _link(connection, new_subject, shared_symbol)
+def _run_context_enrichment(c, project_id, run_id, *, subject_id):
+    workflows._activate_step(c, run_id, "context_enrichment", 0)
+    claimed = workflows.claim_step(c, project_id=project_id, run_id=run_id,
+                                   worker_id="scripted-task", lease_seconds=60)
+    assert claimed is not None and claimed["step_id"] == "context_enrichment", claimed
+    result = runner.execute_graph_step(
+        c, project_id=project_id, run_id=run_id, step_id="context_enrichment",
+        inputs={"subject_id": subject_id, "max_hops": 1})
+    return workflows.complete_step(
+        c, project_id=project_id, step_run_id=claimed["id"], worker_id="scripted-task",
+        output={"kind": "deterministic", **result}, evidence=[])
 
-    outcome = graph_steps.run_historical_pattern(
-        connection, project_id=connection.project_id, run_id="wfr_hist_2",
-        step_id="historical_pattern", subject_id=new_subject)
 
-    assert outcome["cost_usd_micros"] == 0
-    edge = connection.execute(
-        text("SELECT src_id, dst_id FROM kg_edges WHERE project_id = :p AND kind = 'correlates_with' "
-             "AND valid_to IS NULL AND (src_id = :prec OR dst_id = :prec)"),
-        {"p": connection.project_id, "prec": written_precedent}).mappings().first()
-    assert edge is not None, "the second run must find the precedent the first run's Closure wrote"
-    assert new_subject in (edge["src_id"], edge["dst_id"])
+def _approve_pending_decision(c, project_id, run_id):
+    row = c.execute(
+        text("SELECT decision_id FROM workflow_step_runs WHERE workflow_run_id=:r "
+             "AND status='waiting' AND decision_id IS NOT NULL"),
+        {"r": run_id}).mappings().first()
+    if not row:
+        return False
+    c.execute(text("UPDATE decisions SET status='approved', approved_by='qa' WHERE id=:d"),
+             {"d": row["decision_id"]})
+    workflows.advance_run(c, project_id, run_id)
+    return True
+
+
+_TASK_KINDS = frozenset({"task"})
+_CONTROL_KINDS = frozenset({"condition", "parallel", "join", "bounded_loop", "for_each",
+                           "decision", "timer", "subworkflow"})
+
+
+def _drive(eng, project_id, run_id, *, subject_id):
+    """Advance the run to completion: `tick()` for capability/deterministic work, the scripted
+    stand-in for `task` steps, and an approval for the one human gate."""
+    context_enrichment_runs = 0
+    for _ in range(100):
+        with eng.begin() as c:
+            status = c.execute(text("SELECT status FROM workflow_runs WHERE id=:r"),
+                               {"r": run_id}).scalar()
+            if status in workflows.TERMINAL_RUN_STATES:
+                return
+            next_row = c.execute(
+                text("SELECT step_id, step_kind FROM workflow_step_runs "
+                     "WHERE workflow_run_id=:r AND status='ready' "
+                     "ORDER BY run_after, created_at, iteration, step_id LIMIT 1"),
+                {"r": run_id}).mappings().first()
+            if next_row and next_row["step_kind"] in _TASK_KINDS:
+                _run_task_step(c, project_id, run_id, next_row["step_id"], subject_id=subject_id)
+                continue
+        with eng.begin() as c:
+            result = runner.tick(c, Ctx(eng), project_id=project_id)
+            for item in result["performed"]:
+                if item.get("step_id") == "context_enrichment":
+                    context_enrichment_runs += 1
+            if result["count"] or result["performed"]:
+                continue
+        with eng.begin() as c:
+            if _approve_pending_decision(c, project_id, run_id):
+                continue
+    raise AssertionError(f"run {run_id} never finished")
+
+
+# ── P1: run 1's deterministic steps run for $0, bounded, and write to the Context Graph ───────
+
+def test_p1_a_run_executes_its_deterministic_steps_and_closure_writes_a_precedent(
+        pg_engine, project):
+    with pg_engine.begin() as c:
+        subject = _rule(c, project, "pattern-subject-rule")
+        shared_symbol = _symbol(c, project, "pattern-shared-symbol")
+        sibling_incident = _incident(c, project, "pattern-sibling-incident")
+        _link(c, project, subject, shared_symbol)
+        _link(c, project, sibling_incident, shared_symbol)
+        version_id = _publish_template(c, project)
+        run = _start(c, project, version_id, subject)
+    run_id = run["id"]
+
+    _drive(pg_engine, project, run_id, subject_id=subject)
+
+    with pg_engine.connect() as c:
+        run_status = c.execute(text("SELECT status FROM workflow_runs WHERE id=:r"),
+                               {"r": run_id}).scalar()
+        assert run_status == "completed", run_status
+
+        det_steps = c.execute(
+            text("SELECT step_id, output FROM workflow_step_runs WHERE workflow_run_id=:r "
+                 "AND step_id IN ('context_enrichment', 'historical_pattern')"),
+            {"r": run_id}).mappings().all()
+        by_id = {r["step_id"]: r["output"] for r in det_steps}
+        assert by_id["context_enrichment"]["cost_usd_micros"] == 0
+        assert by_id["historical_pattern"]["cost_usd_micros"] == 0
+
+        decisions = c.execute(
+            text("SELECT attrs FROM kg_nodes WHERE project_id=:p AND kind='agent_decision' "
+                 "AND attrs->>'run_id'=:r"),
+            {"p": project, "r": run_id}).mappings().all()
+        decision_types = {d["attrs"]["decision_type"] for d in decisions}
+        assert "ContextAssembled" in decision_types, "Context Enrichment's write did not land"
+        assert "HistoricalPatternMatched" in decision_types, (
+            "Historical Pattern's write did not land")
+        assert "PrecedentRecorded" in decision_types, "Closure's write did not land"
+
+        precedent = c.execute(
+            text("SELECT id FROM kg_nodes WHERE project_id=:p AND kind='precedent' "
+                 "AND attrs->>'run_id'=:r"),
+            {"p": project, "r": run_id}).mappings().first()
+        assert precedent is not None, "Closure never wrote a Precedent node"
+
+        loop_row = c.execute(
+            text("SELECT iteration FROM workflow_step_runs WHERE workflow_run_id=:r "
+                 "AND step_id='context_enrichment' ORDER BY iteration DESC LIMIT 1"),
+            {"r": run_id}).scalar()
+        assert int(loop_row) < 2, "the bounded evidence_loop exceeded its max_iterations of 2"
+
+
+# ── P1: the learning loop — run 2's Historical Pattern finds run 1's Closure's Precedent ──────
+
+def test_p1_a_second_runs_historical_pattern_finds_the_first_runs_closure_precedent(
+        pg_engine, project):
+    with pg_engine.begin() as c:
+        subject = _rule(c, project, "closure-later-rule")
+        shared_symbol = _symbol(c, project, "closure-shared-symbol")
+        version_id = _publish_template(c, project)
+        run_1 = _start(c, project, version_id, subject)
+        _link(c, project, subject, shared_symbol)
+    _drive(pg_engine, project, run_1["id"], subject_id=subject)
+
+    with pg_engine.begin() as c:
+        run_2 = _start(c, project, version_id, subject)
+    _drive(pg_engine, project, run_2["id"], subject_id=subject)
+
+    with pg_engine.connect() as c:
+        status = c.execute(text("SELECT status FROM workflow_runs WHERE id=:r"),
+                           {"r": run_2["id"]}).scalar()
+        assert status == "completed", status
+
+        hist_output = c.execute(
+            text("SELECT output FROM workflow_step_runs WHERE workflow_run_id=:r "
+                 "AND step_id='historical_pattern'"),
+            {"r": run_2["id"]}).mappings().one()["output"]
+        matched = hist_output.get("matched") or []
+        precedent_from_run_1 = c.execute(
+            text("SELECT id FROM kg_nodes WHERE project_id=:p AND kind='precedent' "
+                 "AND attrs->>'run_id'=:r"),
+            {"p": project, "r": run_1["id"]}).scalar()
+        assert precedent_from_run_1 is not None
+        assert precedent_from_run_1 in matched, (
+            "run 2's historical_pattern step did not find the Precedent run 1's Closure wrote")
