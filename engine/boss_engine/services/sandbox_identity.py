@@ -353,6 +353,7 @@ def release(owner_id: str, *, project_id: Optional[str] = None) -> None:
                 _purge(orphan)
         return
     ident.killall()
+    _return_rotated_codex_login(ident)
     if project_id:
         with contextlib.suppress(Exception):
             from . import toolchains
@@ -403,37 +404,38 @@ def _seed_cli_logins(ident: SandboxIdentity) -> None:
         for name in ("auth.json", "config.toml", "config.json", "credentials.json"):
             path = os.path.join(src, name)
             if os.path.isfile(path):
-                if sub == ".codex" and name == "auth.json":
-                    _copy_codex_login_without_refresh(path, dst / name)
-                else:
-                    shutil.copyfile(path, dst / name)
+                shutil.copyfile(path, dst / name)
                 os.chmod(dst / name, 0o644)
     _seed_claude_login(ident)
 
 
-#: What a run's copy of the Codex login carries instead of the real refresh token.
-RUN_COPY_REFRESH_PLACEHOLDER = "boss-run-copy-cannot-refresh"
+_LOGIN_RETURN_LOCK = threading.Lock()
 
 
-def _copy_codex_login_without_refresh(src: str, dst: Path) -> None:
-    """Codex's ChatGPT login, copied WITHOUT its refresh token (the same rule as Claude's,
-    _seed_claude_login). Each run's codex that refreshed would rotate the ONE refresh token every
-    copy shares; OpenAI treats a reused refresh token as replay and revokes the whole login. On
-    boss-1 (2026-10-29) the control plane's Codex went login_expired while its access token was
-    valid for nine more days. The copy keeps the access token; only the control plane refreshes."""
-    try:
-        data = json.loads(Path(src).read_text())
-    except (OSError, ValueError):
-        return                                   # unreadable: copy nothing rather than guess
-    tokens = data.get("tokens")
-    if isinstance(tokens, dict) and "refresh_token" in tokens:
-        # A PLACEHOLDER, not a missing field: codex 0.158 treats a ChatGPT login with no
-        # refresh_token as signed out and falls back to API-key mode, so every run got
-        # "401 wss://api.openai.com/v1/responses" (boss-1, 2026-10-29 15:06, after e50aa0c7d
-        # dropped the field). With this placeholder it uses the valid access token, and a
-        # refresh attempt fails harmlessly instead of rotating the real token.
-        data["tokens"] = {**tokens, "refresh_token": RUN_COPY_REFRESH_PLACEHOLDER}
-    dst.write_text(json.dumps(data))
+def _return_rotated_codex_login(ident: "SandboxIdentity") -> None:
+    """A run's codex that refreshed its ChatGPT login hands the NEWER login back to the control
+    plane, so no copy goes stale. Each refresh rotates the refresh token: if the run's newer
+    login were dropped with the run, the control plane would keep a revoked one. (Runs must get
+    the FULL login: codex 0.158 treats a copy with no or a placeholder refresh_token as signed out
+    and falls back to API-key mode, "401 wss://api.openai.com/v1/responses", boss-1 2026-10-29.)
+    Only ever moves forward (a newer last_refresh), atomically, owner-only; never raises."""
+    with contextlib.suppress(Exception):
+        run_copy = ident.home / ".codex" / "auth.json"
+        target_dir = (os.environ.get("CODEX_HOME") or "").strip() or os.path.expanduser("~/.codex")
+        target = Path(target_dir) / "auth.json"
+        if not run_copy.is_file() or not target.is_file():
+            return
+        with _LOGIN_RETURN_LOCK:
+            ran, held = json.loads(run_copy.read_text()), json.loads(target.read_text())
+            if str(ran.get("last_refresh") or "") <= str(held.get("last_refresh") or ""):
+                return
+            tmp = target.with_name("auth.json.boss-return")
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w") as handle:
+                handle.write(json.dumps(ran))
+            os.replace(tmp, target)
+            log.info("sandbox %s: codex refreshed its login; the newer login returned to the "
+                     "control plane", ident.key)
 
 
 def _seed_claude_login(ident: SandboxIdentity) -> None:
