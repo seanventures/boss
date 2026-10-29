@@ -46,6 +46,7 @@ from .step_agents import (
 )
 from .typed_decisions import step_problems as typed_decision_problems
 from .knowledge import learning_writeback  # learning while executing (BOSSAPP-768)
+from .knowledge.step_contracts import contract_shape_problems, contract_assignment_problems
 
 logger = logging.getLogger(__name__)
 
@@ -781,6 +782,8 @@ def normalise_workflow_spec(
         if check_agents:
             for field, detail in step_agent_scope_problems(step):
                 bad(field, detail)
+        for detail in contract_shape_problems(step):
+            bad("contract", detail)
 
         def captain_problems() -> None:
             # The shape was said above; saying it again from validate_captain would double it.
@@ -1305,6 +1308,11 @@ def spec_problems(
             _agent_problem(detail, by_id)
             for detail in step_agent_problems(connection, project_id, {**normalized,
                                                                        "steps": clean}))
+        for step in clean:
+            if step.get("contract") is None:
+                continue
+            for detail in contract_assignment_problems(connection, project_id, step):
+                binding.append(problem(step["id"], "contract", detail))
     return normalized, shape, binding
 
 
@@ -6124,6 +6132,37 @@ def complete_step(
     )
     spec = _run_spec(connection, row["workflow_run_id"])
     template = _step_map(spec)[row["step_id"]]
+    contract_raw = template.get("contract")
+    if contract_raw:
+        from .knowledge.step_contracts import parse_contract, required_write_kinds
+
+        contract = parse_contract(row["step_id"], contract_raw)
+        required = required_write_kinds(contract)
+        produced = set((output or {}).get("produced") or {})
+        missing = sorted(required - produced)
+        if missing:
+            if row["attempt"] + 1 < row["max_attempts"]:
+                # ONE REPAIR ROUND (AC4/AC5, the AG-1 "chat only, nothing written" miss
+                # [L:kgn_a7426dae68a24130a1b2]): a required write that never landed does not
+                # complete the step on chat text alone — it goes back to the queue once, with
+                # the missing kind named, before the step is allowed to fail.
+                retried = connection.execute(
+                    text(
+                        """
+                        UPDATE workflow_step_runs
+                        SET status='ready', attempt=attempt+1, lease_owner=NULL,
+                            lease_expires_at=NULL, heartbeat_at=NULL,
+                            last_error=:err, updated_at=now()
+                        WHERE id=:id RETURNING *
+                        """
+                    ),
+                    {"id": step_run_id,
+                     "err": f"missing required write(s) {missing}; repair round"},
+                ).mappings().one()
+                return _serialize_step(retried)
+            raise WorkflowValidationError(
+                f"step '{row['step_id']}' never produced required write(s) {missing} "
+                f"after one repair round")
     learning_writeback.write_back(connection, project_id=project_id, hook="step_complete",
                                   observed={"step": dict(updated), "template": template,
                                             "context": run.get("context")})
