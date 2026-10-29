@@ -6,6 +6,7 @@ stubs, recorded-but-unenacted decisions) and gate-gaming PRs (deleted refusal
 rules, stray lockfiles, sandbox-escaping subprocess calls).
 """
 import ast
+import os
 from dataclasses import dataclass, field
 
 
@@ -192,3 +193,61 @@ def compute_integrity_evidence(changed_files, existing_files=None):
                 })
 
     return evidence
+
+
+_SKIP_DIRS = {".git", "node_modules", "__pycache__", "venv", ".venv", "dist", "build",
+              ".next", "target", ".mypy_cache", ".pytest_cache"}
+_SOURCE_EXTS = (".py",)
+
+
+def gather_existing_files(root, changed_paths, *, max_files=400, max_bytes=20000):
+    """A bounded read of the rest of the repo, for cross-referencing a diff's new functions
+    against real callers. Caps so computing evidence stays cheap on every review, never a
+    full-repo scan: a reviewer that cannot afford this is worse than one with a partial view."""
+    root = str(root)
+    changed = set(changed_paths or ())
+    out = {}
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS and not d.startswith(".")]
+        for filename in filenames:
+            if len(out) >= max_files:
+                return out
+            if not filename.endswith(_SOURCE_EXTS):
+                continue
+            full = os.path.join(dirpath, filename)
+            rel = os.path.relpath(full, root).replace(os.sep, "/")
+            if rel in changed or _is_test_path(rel):
+                continue
+            try:
+                with open(full, "r", errors="strict") as fh:
+                    text = fh.read(max_bytes)
+            except OSError:
+                continue
+            out[rel] = text
+    return out
+
+
+def render_evidence_clause(evidence):
+    """The deterministic findings above, handed to the review seat to JUDGE — never a verdict
+    on its own (see the module docstring): the agent decides which are real defects and which
+    are justified, and says why."""
+    sections = [
+        ("UNREACHABLE (no caller on a real entry path)", evidence.unreachable),
+        ("TEST-ONLY IMPLEMENTATION (stub body in production code)", evidence.test_only),
+        ("RECORDED BUT NEVER ENACTED (a write nothing reads back)", evidence.unenacted),
+        ("INTEGRITY (a removed guard, stray lockfile, or sandbox-escaping call)", evidence.integrity),
+        ("POLICY", evidence.policy),
+    ]
+    lines = [s for _, items in sections for s in items]
+    if not lines:
+        return ""
+    body = ["\n\nDETERMINISTIC INTEGRITY EVIDENCE — computed from the diff, NOT a verdict. For "
+            "each item below, judge whether it is a REAL defect (a BLOCKER finding) or justified "
+            "(say why in your response); do not treat this list as already-decided."]
+    for title, items in sections:
+        if not items:
+            continue
+        body.append(f"\n{title}:")
+        for item in items:
+            body.append(f"  - {item['path']}: {item['reason']}")
+    return "\n".join(body) + "\n"
