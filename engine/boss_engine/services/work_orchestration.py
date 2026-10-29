@@ -1383,6 +1383,12 @@ class WorkOrchestrationService:
             return False, "work_tracking_binding_required"
         if binding["provider_status"] != "active":
             return False, "work_tracker_provider_inactive"
+        if (
+            binding["enforcement_mode"] == "required"
+            and binding["sync_status"] != "synced"
+            and job_kind != "work_tracker.issue.sync"
+        ):
+            return False, "work_tracker_sync_required"
         if not allocation_id:
             return False, "resource_allocation_required"
         if already_held:
