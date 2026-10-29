@@ -37,6 +37,13 @@ KNOBS: dict[str, dict[str, Any]] = {
                 "without it. The graph keeps indexing either way.",
         "kind": "choice", "choices": ["on", "keyword", "off"],
     },
+    "run_supervisor_stall_minutes": {
+        "attr": "run_supervisor_stall_minutes",
+        "label": "Run supervisor stall minutes",
+        "help": "How long a run may sit with no caused-failure progress before the run "
+                "supervisor (L2a) treats it as stalled.",
+        "kind": "int", "min": 5, "max": 180,
+    },
     "code_agent_max_concurrency": {
         "attr": "code_agent_max_concurrency",
         "label": "Agents at once",
