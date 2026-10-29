@@ -79,8 +79,9 @@ LEARNED_KINDS = frozenset({"investigation", "test_failure", "fix", "workaround",
 #: What learned items hang on: shown in the Learning layer, never counted as learned.
 ANCHOR_KINDS = frozenset({"run", "incident", "pull_request", "release", "spec", "runbook",
                           "alert_rule", "topic"})
-#: Reserved for regulations and policy documents; not written in this build.
-DOMAIN_KINDS = frozenset({"regulation", "policy_clause", "document"})
+#: Regulations and policy documents (KG Domain layer v1, A2): the kinds an ontology pack (see
+#: knowledge/ontology_packs.py) grants a project, shown on the "domain" product-layer chip.
+DOMAIN_KINDS = frozenset({"regulation", "clause", "document"})
 
 PRODUCT_LAYER_KINDS: dict[str, frozenset[str]] = {
     "code": LAYER_KINDS["code"] | CODE_TOPOLOGY_KINDS,

@@ -1,0 +1,24 @@
+kind: ObjectSchema
+object: OntologyPack
+version: 0.1.0
+fields:
+  id: string
+  version: string
+  description: string
+  kinds:
+    array:
+      type: object
+      fields:
+        id: string
+        layer: { enum: [domain, code, rules, learning] }
+        label: string
+        color: string
+        attrs: { array: string }
+  edges:
+    array:
+      type: object
+      fields:
+        id: string
+        label: string
+        color: string
+  status: { enum: [draft, active, deprecated] }

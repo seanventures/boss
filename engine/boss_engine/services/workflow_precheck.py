@@ -185,6 +185,11 @@ CAPABILITY_PRECHECKS: dict[str, CapabilityPrecheck] = {
     "scan_business_rules": CapabilityPrecheck(("authority.consent", "github.access") + _AGENT,
                                               invokes_tools=("read_code",)),
     "rules_review": NO_CHECKS("a person's review of the proposed rules"),
+    # Trace a regulation to code (knowledge/regulatory_trace.py): reads a document's clauses and
+    # proposes the rule or code that implements each, on the review seat's engine; no repo read.
+    "trace_regulation": CapabilityPrecheck(("authority.consent",) + _AGENT),
+    "regulatory_trace_review": NO_CHECKS(
+        "a person's review of the proposed implemented_by and gap findings"),
 }
 
 #: Which route a capability's agent takes (engine_startup): the build pipeline's stages, the
@@ -197,6 +202,8 @@ AGENT_ROUTE = {
     "security_rereview": "chat", "document": "chat",
     # The scan runs on the review seat's engine, read-only (rule_scan._review_engine).
     "scan_business_rules": "review",
+    # The trace reads the document's clauses and proposes, on the same review seat, read-only.
+    "trace_regulation": "review",
 }
 
 #: Capabilities that VERIFY work. Skipping one with a deploy after it would ship unverified work,

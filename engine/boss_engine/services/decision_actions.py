@@ -131,7 +131,12 @@ REVISE_CONSUMED = frozenset({
 #: `review_proposed_rules` is the Scan for business rules workflow's review gate
 #: (knowledge/rule_scan.py): the rules themselves are answered one by one in Graph › Rules
 #: review; the gate resolves itself when that scan's queue is empty, or a person closes it here.
-WORKFLOW_GATE_ACTIONS = frozenset({"resume_workflow", "review_proposed_rules"})
+#: `review_proposed_trace` is the regulatory_trace workflow's review gate (knowledge/
+#: regulatory_trace.py): implemented_by and gap findings are answered one by one in Graph ›
+#: regulatory trace review; the gate resolves itself once that trace's queue is empty.
+WORKFLOW_GATE_ACTIONS = frozenset({
+    "resume_workflow", "review_proposed_rules", "review_proposed_trace",
+})
 
 #: Approving these RECORDS a go-ahead and starts nothing. Some are read later by the work that
 #: asked (an SRE runbook, an assurance reopen, a GitHub effect fenced to an approved decision);
@@ -443,6 +448,18 @@ def allowed_actions(decision: Mapping[str, Any]) -> list[dict[str, Any]]:
             _action("reject", "Stop the run", "reject",
                     "Fails the review step and the run stops there. Proposed rules stay in "
                     "Rules review."),
+            _delegate(),
+        ]
+    if kind == "workflow_gate" and _action_of(decision) == "review_proposed_trace":
+        # THE FINDINGS ARE ANSWERED ONE BY ONE in the regulatory trace review, never here:
+        # approving this card approves no implemented_by or gap edge.
+        return [
+            _action("approve", "Finish the review", "approve",
+                    "Ends the review and the workflow continues. Approves no finding: "
+                    "proposed links stay in regulatory trace review."),
+            _action("reject", "Stop the run", "reject",
+                    "Fails the review step and the run stops there. Proposed links stay in "
+                    "regulatory trace review."),
             _delegate(),
         ]
     if kind == "workflow_gate":

@@ -1,0 +1,54 @@
+id: banking-dq
+version: "1"
+description: >
+  Data-quality vocabulary for a bank's regulatory reporting. Schema-only this cycle: no
+  workflow or metric reads it, shipped to prove the ontology-pack mechanism generalises
+  beyond banking-regulatory.
+status: active
+kinds:
+  - id: system
+    layer: code
+    label: System
+    color: "#4a6dff"
+    attrs: [name, kind]
+  - id: data_quality_rule
+    layer: domain
+    label: Data quality rule
+    color: "#d08a2e"
+    attrs: [name, statement]
+  - id: dq_threshold
+    layer: domain
+    label: DQ threshold
+    color: "#d08a2e"
+    attrs: [metric, operator, value]
+  - id: cde
+    layer: domain
+    label: Critical data element
+    color: "#d08a2e"
+    attrs: [name, table]
+  - id: database_table
+    layer: code
+    label: Database table
+    color: "#4a6dff"
+    attrs: [name, schema]
+  - id: feed
+    layer: domain
+    label: Feed
+    color: "#d08a2e"
+    attrs: [name, source]
+  - id: regulatory_report
+    layer: domain
+    label: Regulatory report
+    color: "#a386ff"
+    attrs: [name, cadence, owner]
+  - id: issue
+    layer: domain
+    label: Issue
+    color: "#c0392b"
+    attrs: [title, status]
+  - id: examination_finding
+    layer: domain
+    label: Examination finding
+    color: "#c0392b"
+    attrs: [title, status, examiner]
+edges: []

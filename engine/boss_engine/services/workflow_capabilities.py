@@ -802,6 +802,41 @@ CAPABILITIES: dict[str, Capability] = {
             produces=("decision_id",),
             is_gate=True,
         ),
+        # ── REGULATORY TRACE (services/knowledge/regulatory_trace.py, KG Domain layer v1) ──
+        # An agent reads a document's clauses and proposes the rule or code that implements
+        # each, or a gap when nothing does. Nothing it writes is trusted until a person
+        # reviews it (domain.propose_implementation/propose_gap write `inferred`).
+        _cap(
+            key="trace_regulation",
+            family="research",
+            captain="chief_architect",
+            label="Trace regulation to code",
+            summary="Read a document's clauses and propose the rule or code that implements "
+                    "each, or a gap when nothing does.",
+            tool=None,
+            calls=(),
+            risk_tier=1,
+            required_inputs=(),
+            optional_inputs=("document_id", "directive", "budget_usd"),
+            produces=("trace_id", "clauses_traced", "implemented_count", "gap_count",
+                      "spend_usd", "stopped_by", "report", "review_link"),
+            skills=("knowledge.propose",),
+            typical_minutes=10,
+            needs_model=True,
+        ),
+        _cap(
+            key="regulatory_trace_review",
+            captain="chief_architect",
+            label="Review proposed trace",
+            summary="A person approves, edits or rejects each implemented_by or gap finding "
+                    "the trace proposed, in Graph › regulatory trace review. Ends when the "
+                    "trace's queue is empty or a person closes the review.",
+            tool=None,
+            risk_tier=2,
+            optional_inputs=("trace_id", "approver_role"),
+            produces=("decision_id",),
+            is_gate=True,
+        ),
     )
 }
 

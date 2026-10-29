@@ -88,6 +88,9 @@ DEFAULT_STEP_AGENTS: dict[str, str] = {
     "security_report": "security_reviewer",
     # THE RULES SCAN: the architect reads what the system enforces (rule_scan.DEFAULT_ROLE).
     "scan_business_rules": "chief_architect",
+    # THE REGULATORY TRACE (regulatory_trace.DEFAULT_ROLE): the architect traces a document's
+    # clauses to the rules and code that implement them.
+    "trace_regulation": "chief_architect",
 }
 
 #: WHO BUILDS IT DEPENDS ON WHAT IS BEING BUILT (§0.1 item 4: "build → Engineering Captain /
@@ -887,6 +890,29 @@ CATALOGUE: list[dict[str, Any]] = [
             _step("review", "rules_review", {"scan_id": _from("scan", "scan_id")}),
         ]),
     },
+    {
+        # TRACE A REGULATION TO CODE (KNOWLEDGE_GRAPH_PRODUCT_SPEC.md Domain layer, A2). An
+        # agent reads a document's clauses and proposes the rule or code that implements each,
+        # or a gap when nothing does. A person reviews every proposal; nothing is auto-approved.
+        "key": "regulatory_trace",
+        "name": "Trace Regulation to Code",
+        "description": "Read a document's clauses and propose the rule or code that "
+                       "implements each, or a gap when nothing does. A person reviews every "
+                       "proposal.",
+        "objective": (
+            "For each clause of the named document, find what already implements it — a "
+            "business rule or a piece of code — and propose that link with a short rationale. "
+            "A clause nothing implements is a gap, a valid and expected outcome, not an error. "
+            "Nothing proposed here is approved automatically."
+        ),
+        "work_class": "any",
+        "steps": _chain([
+            _step("trace", "trace_regulation", {
+                "document_id": _in("document_id"), "directive": _in("directive"),
+                "budget_usd": _in("budget_usd")}),
+            _step("review", "regulatory_trace_review", {"trace_id": _from("trace", "trace_id")}),
+        ]),
+    },
 ]
 
 
@@ -996,6 +1022,11 @@ _FIELD_TEXT: dict[str, dict[str, Any]] = {
                    "title": "Budget in dollars (optional)",
                    "description": "The most the scan may spend on its model, at most the "
                                   "project's cap. Default $2.00."},
+    "document_id": {"type": "string", "title": "Document (optional)",
+                    "description": "The document to trace (Graph › Knowledge Graph › "
+                                   "Documents). Leave blank and the trace reports nothing to "
+                                   "do — add a document first.",
+                    "examples": ["kgn_0123456789ab"]},
     "notify_channel": {"type": "string", "title": "Who to tell",
                        "description": "Where the outcome is posted: email:someone@example.com or "
                                       "mattermost:<channel id>. Leave blank and the notify step "
@@ -1117,6 +1148,17 @@ BRIEFS: dict[str, dict[str, Any]] = {
                                  "who may approve one.",
                     "scope": ["pkg:owner/app:core:com.example.loans.disbursement"]},
         "required": ("scope",),
+    },
+    "regulatory_trace": {
+        "directive": ("What should the trace focus on? (optional)",
+                      "The trace proposes an implemented_by link or a gap for every clause of "
+                      "the document. Name what matters most and the agent reads for that "
+                      "first."),
+        "example": {"title": "Trace Reg Z 1026.36(c) to repayment code",
+                    "directive": "Check whether our repayment service credits payments as of "
+                                 "the date of receipt and handles prepayments the way this "
+                                 "clause requires.",
+                    "document_id": "kgn_regz102636demo01"},
     },
     "data_migration": {
         "directive": ("What data changes?",

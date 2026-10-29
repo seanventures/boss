@@ -316,7 +316,13 @@ class PostgresKnowledgeStore:
         ``created_by``; without it ``created_by`` is the actor kind, as before."""
         self.ensure_schema(connection)
         if kind not in NODE_KINDS:
-            raise ValueError(f"unknown node kind {kind!r}")
+            from .ontology_packs import effective_node_kinds
+
+            if kind not in effective_node_kinds(connection, project_id=project_id):
+                raise ValueError(
+                    f"unknown node kind {kind!r}: no active ontology pack for project "
+                    f"{project_id!r} grants it (core kinds, or an assigned pack's kinds, only)"
+                )
         _assert_can_write(actor_kind, trust_tier)
         resolved_org = self._org_id(connection, project_id, org_id)
         attrs_json = json.dumps(attrs or {})
@@ -446,7 +452,13 @@ class PostgresKnowledgeStore:
         are written on insert and merged on a repeat; ``actor_ref`` becomes ``created_by``."""
         self.ensure_schema(connection)
         if kind not in EDGE_KINDS:
-            raise ValueError(f"unknown edge kind {kind!r}")
+            from .ontology_packs import effective_edge_kinds
+
+            if kind not in effective_edge_kinds(connection, project_id=project_id):
+                raise ValueError(
+                    f"unknown edge kind {kind!r}: no active ontology pack for project "
+                    f"{project_id!r} grants it (core kinds, or an assigned pack's kinds, only)"
+                )
         trust = {"system": "observed", "person": "governed", "agent": "inferred"}.get(actor_kind)
         if trust is None:
             raise ValueError(f"unknown actor_kind {actor_kind!r}")

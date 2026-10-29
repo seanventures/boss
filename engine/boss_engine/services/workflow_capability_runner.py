@@ -2632,6 +2632,12 @@ def _execute_step(
 
             if not rule_scan.has_open_proposals(connection, project_id, context):
                 return workflow_outcomes.apply(key, rule_scan.not_applicable(context), {})
+        if key == "regulatory_trace_review":
+            from .knowledge import regulatory_trace
+
+            if not regulatory_trace.has_open_proposals(connection, project_id, context):
+                return workflow_outcomes.apply(
+                    key, regulatory_trace.not_applicable(context), {})
         adopted_gate = _adopted_gate(connection, key, context)
         if adopted_gate:
             return workflow_outcomes.apply(key, {
@@ -3099,6 +3105,14 @@ def _perform_toolless(
     # SCAN FOR BUSINESS RULES (services/knowledge/rule_scan.py): reads code, proposes rules.
     if key == "scan_business_rules":
         return _scan_business_rules(connection, ctx, project_id, step, context, inputs)
+    # TRACE A REGULATION TO CODE (services/knowledge/regulatory_trace.py): reads a document's
+    # clauses, proposes implemented_by or gap findings.
+    if key == "trace_regulation":
+        from .knowledge import regulatory_trace
+
+        return regulatory_trace.run_step(
+            connection, getattr(ctx, "settings", None) or _settings(), project_id, step,
+            context, inputs)
     # Same shape as `document`: no tool because it commissions nothing — it READS what the
     # run has already recorded and leaves a document behind.
     # THE RE-REVIEW AND THE SECURITY REPORT (services/security_review_steps.py).
@@ -6176,6 +6190,11 @@ def _gate_subject(
 
             if not rule_scan.has_open_proposals(connection, project_id, context):
                 return None  # the scan proposed nothing: runs as ordinary work, says why
+        if key == "regulatory_trace_review" and context is not None:
+            from .knowledge import regulatory_trace
+
+            if not regulatory_trace.has_open_proposals(connection, project_id, context):
+                return None  # the trace proposed nothing: runs as ordinary work, says why
         if context is not None and _adopted_gate(connection, key, context):
             # Already answered. Returning None sends it down the ordinary path, where
             # execute_step records the approval it was started with.
@@ -6421,6 +6440,14 @@ def _open_gate(
         recommendation = {**recommendation,
                           **rule_scan.review_card(connection, project_id, run_context),
                           "action": "review_proposed_rules"}
+    if capability_key == "regulatory_trace_review":
+        # THE TRACE IS REVIEWED IN GRAPH › REGULATORY TRACE REVIEW; the card carries the
+        # trace, how many links wait, and the link (regulatory_trace.review_card).
+        from .knowledge import regulatory_trace
+
+        recommendation = {**recommendation,
+                          **regulatory_trace.review_card(connection, project_id, run_context),
+                          "action": "review_proposed_trace"}
     decision_id = subject.get("decision_id") or open_step_decision(
         connection,
         project_id,
