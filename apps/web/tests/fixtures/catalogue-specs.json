@@ -5766,6 +5766,9 @@
                 },
                 "budget_usd": {
                   "from_input": "budget_usd"
+                },
+                "exclude_tests": {
+                  "from_input": "exclude_tests"
                 }
               }
             },
@@ -5818,10 +5821,13 @@
                 "type": "string"
               },
               "title": "What to scan",
-              "description": "Areas or packages from the Graph's project tree (their keys: area:<repo>:<area> or pkg:<repo>:<area>:<package>). Start the scan from the tree to have this filled in.",
+              "description": "Areas, packages, classes, files or folders: a key from the Graph's project tree (area:<repo>:<area>, pkg:<repo>:<area>:<package>, module:<repo>:<package>, a class's symbol: key, file:<repo>:<path>) or a plain repository path to a file or folder. Checked when the scan starts. Start the scan from the tree to have this filled in.",
               "examples": [
                 [
                   "pkg:owner/app:core:com.example.loans"
+                ],
+                [
+                  "core/src/main/java/com/example/loans"
                 ]
               ]
             },
@@ -5849,6 +5855,107 @@
               "default": 25,
               "title": "Most rules to propose (optional)",
               "description": "The scan stops after proposing this many rules. Default 25."
+            },
+            "budget_usd": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "default": 2.0,
+              "title": "Budget in dollars (optional)",
+              "description": "The most the scan may spend on its model, at most the project's cap. Default $2.00."
+            },
+            "exclude_tests": {
+              "type": "boolean",
+              "default": true,
+              "title": "Leave test code out (optional)",
+              "description": "Test code exercises rules; it does not enforce them. On by default; turn it off to read the tests too."
+            }
+          }
+        },
+        "output_schema": {},
+        "step_agent_rules": 2
+      }
+    },
+    {
+      "workflow_key": "regulatory_trace",
+      "name": "Trace Regulation to Code",
+      "description": "Read a document's clauses and propose the rule or code that implements each, or a gap when nothing does. A person reviews every proposal.",
+      "spec": {
+        "entry_step": "trace",
+        "steps": [
+          {
+            "id": "trace",
+            "kind": "capability",
+            "binding": {
+              "capability": "trace_regulation",
+              "inputs": {
+                "document_id": {
+                  "from_input": "document_id"
+                },
+                "directive": {
+                  "from_input": "directive"
+                },
+                "budget_usd": {
+                  "from_input": "budget_usd"
+                }
+              }
+            },
+            "next": [
+              "review"
+            ],
+            "captain": "chief_architect",
+            "default_captain": "chief_architect",
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "review",
+            "kind": "capability",
+            "binding": {
+              "capability": "regulatory_trace_review",
+              "inputs": {
+                "trace_id": {
+                  "from_step": "trace",
+                  "field": "trace_id"
+                }
+              }
+            },
+            "next": [],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "manual",
+              "on_timeout": "block",
+              "risk_tier": 2,
+              "forced_manual": true
+            }
+          }
+        ],
+        "objective": "For each clause of the named document, find what already implements it — a business rule or a piece of code — and propose that link with a short rationale. A clause nothing implements is a gap, a valid and expected outcome, not an error. Nothing proposed here is approved automatically.",
+        "workflow_name": "Trace Regulation to Code",
+        "input_schema": {
+          "type": "object",
+          "required": [],
+          "properties": {
+            "document_id": {
+              "type": "string",
+              "title": "Document (optional)",
+              "description": "The document to trace (Graph › Knowledge Graph › Documents). Leave blank and the trace reports nothing to do — add a document first.",
+              "examples": [
+                "kgn_0123456789ab"
+              ]
+            },
+            "directive": {
+              "type": "string",
+              "format": "textarea",
+              "title": "What should the trace focus on? (optional)",
+              "description": "The trace proposes an implemented_by link or a gap for every clause of the document. Name what matters most and the agent reads for that first.",
+              "examples": [
+                "Check whether our repayment service credits payments as of the date of receipt and handles prepayments the way this clause requires."
+              ]
             },
             "budget_usd": {
               "type": "number",
