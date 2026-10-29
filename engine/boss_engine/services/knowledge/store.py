@@ -946,17 +946,19 @@ class PostgresKnowledgeStore:
         # A proposed (unapproved) rule is never trusted input: a stage reads approved rules only.
         # The review queue and kg_rules(status='proposed') read them explicitly, labelled.
         rules = f" AND ({col}knowledge_layer <> 'rules' OR {col}trust_tier = 'approved')"
-        kinds_sql = ""
+        # A step contract's declared `reads` narrow to exactly those kinds, beneath the layer
+        # filter — a layer is never a blanket grant for every kind inside it.
+        kinds = ""
         if policy.kinds is not None:
             params["scope_kinds"] = sorted(policy.kinds)
-            kinds_sql = f" AND {col}kind = ANY(:scope_kinds)"
+            kinds = f" AND {col}kind = ANY(:scope_kinds)"
         if policy.reads_code:
             params["scope_code_ids"] = self.code_reach(connection, project_id=project_id, policy=policy)
             return (f" AND ({col}knowledge_layer = ANY(:scope_layers) OR ({col}knowledge_layer = 'code'"
-                    f" AND {col}id = ANY(:scope_code_ids))){rules}{kinds_sql}", params)
+                    f" AND {col}id = ANY(:scope_code_ids))){rules}{kinds}", params)
         # The literal lets the planner use the partial non-code index.
         return (f" AND {col}knowledge_layer <> 'code' AND {col}knowledge_layer = ANY(:scope_layers)"
-                f"{rules}{kinds_sql}", params)
+                f"{rules}{kinds}", params)
 
     def assert_readable(
         self, connection: Connection, *, project_id: str, node_id: str, policy: Optional[StagePolicy]
@@ -967,10 +969,10 @@ class PostgresKnowledgeStore:
         row = connection.execute(
             text("SELECT knowledge_layer, kind FROM kg_nodes WHERE id = :id AND project_id = :project_id"),
             {"id": node_id, "project_id": project_id},
-        ).one_or_none()
+        ).mappings().first()
         if row is None:
             return
-        layer, kind = row.knowledge_layer, row.kind
+        layer, kind = row["knowledge_layer"], row["kind"]
         if layer == "code":
             if not policy.reads_code or node_id not in self.code_reach(
                     connection, project_id=project_id, policy=policy):
@@ -978,7 +980,7 @@ class PostgresKnowledgeStore:
         elif layer not in policy.layers:
             raise PermissionError(f"The {layer} layer isn't available in {policy.stage}.")
         if policy.kinds is not None and kind not in policy.kinds:
-            raise PermissionError(f"The '{kind}' kind isn't available in {policy.stage}.")
+            raise PermissionError(f"'{kind}' isn't among the kinds {policy.stage} declares.")
 
     def text_search(
         self,
