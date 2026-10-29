@@ -42,7 +42,7 @@ def render(*, title: str, evidence: dict, gates: dict, paths: Iterable[str] = ()
            additions: Optional[int] = None, deletions: Optional[int] = None,
            rounds: Iterable[dict] = (), comments: Iterable[dict] = (),
            deferred: Iterable[dict] = (), build_url: str = "", run_id: str = "",
-           quality_gate_id: str = "") -> str:
+           quality_gate_id: str = "", baseline: Optional[dict] = None) -> str:
     """The description. Every line comes from a record; nothing is written by a model."""
     paths = sorted({str(p) for p in paths if p})
     rounds = [r for r in rounds if isinstance(r, dict)]
@@ -122,6 +122,13 @@ def render(*, title: str, evidence: dict, gates: dict, paths: Iterable[str] = ()
     hollow = evidence.get("review_hollow") or {}
     for stage, why in hollow.items():
         out.append(f"- ⚠ {SEAT_LABELS.get(stage, stage)} did not see the change ({why}).")
+    # L1 baseline-aware verification: failures the change did not cause, named as such.
+    if baseline:
+        from . import baseline_verify
+
+        section = baseline_verify.pr_section(baseline_verify.BaselineRecord.from_dict(baseline))
+        if section:
+            out += ["", section.rstrip()]
     # Links.
     out += ["", "### In BOSS"]
     if build_url:

@@ -352,6 +352,16 @@ def prune_tables(engine: Any) -> dict[str, int]:
         "owned_resources": (
             "DELETE FROM owned_resources WHERE ctid IN (SELECT ctid FROM owned_resources "
             "WHERE released_at < now() - interval '14 days' LIMIT 5000)"),
+        # L1 baseline-aware verification: a base commit's cached outcomes are only useful while
+        # that commit is still a live build's base, and a signature's count only means something
+        # while it keeps recurring — both age out instead of growing forever.
+        "code_task_baseline_cache": (
+            "DELETE FROM code_task_baseline_cache WHERE ctid IN (SELECT ctid FROM "
+            "code_task_baseline_cache WHERE updated_at < now() - interval '14 days' LIMIT 5000)"),
+        "code_task_environment_signatures": (
+            "DELETE FROM code_task_environment_signatures WHERE ctid IN (SELECT ctid FROM "
+            "code_task_environment_signatures WHERE last_seen < now() - interval '30 days' "
+            "LIMIT 5000)"),
     }
     # The activity log's own retention runs here too: it ran only on the worker's idle path,
     # so a worker that was always busy never aged anything out.
