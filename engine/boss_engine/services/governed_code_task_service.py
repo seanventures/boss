@@ -7994,6 +7994,49 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             except Exception:  # noqa: BLE001 — the default is the rule
                 _log_caught(logger)
                 _open_when_failing = _checks_failing.enabled(None, settings, project_id)
+            # L2a run supervisor: watch this repair loop for stalled progress (same failing
+            # gate signature across rounds, environment/refusal-only failures, the 3-round
+            # cap) and, if tripped or invariant-forced, record a governed decision. Never
+            # allowed to raise or block the existing flow — a supervisor failure degrades to
+            # a no-op here, same as any other best-effort telemetry.
+            try:
+                from datetime import datetime as _datetime, timezone as _timezone
+
+                from . import run_supervisor as _supervisor
+                _history = list(fctx.get("supervisor_history") or [])
+                # This repair loop's own start marker: the first round to reach this hook
+                # stamps it, so `stall_minutes` measures wall-clock time stuck in THIS loop.
+                _started_at = fctx.get("supervisor_started_at")
+                if not _started_at:
+                    _started_at = _datetime.now(_timezone.utc).isoformat()
+                    fctx["supervisor_started_at"] = _started_at
+                _signal = _supervisor.evaluate_signal(
+                    faults=gate_faults,
+                    rounds_used=rounds_used,
+                    max_repair_rounds=max_repair_rounds,
+                    history=_history,
+                    spend_usd_micros=int(fctx.get("spend_usd_micros") or 0),
+                    started_at=_started_at,
+                )
+                if _signal.tripped or _signal.forced:
+                    # adapter=None routes through the real governed model call
+                    # (run_supervisor._model_adapter / AgentService.decide); tests inject a
+                    # stub adapter instead.
+                    _decision = _supervisor.decide(
+                        engine, settings, project_id, run_id=run_id,
+                        signal=_signal, history=_history, adapter=None,
+                    )
+                    with _transaction(engine) as _c:
+                        _supervisor.record_decision(
+                            _c, run_id=run_id, project_id=project_id,
+                            signal=_signal, decision=_decision)
+                        _supervisor.write_lesson(
+                            _c, project_id=project_id, run_id=run_id,
+                            signal=_signal, decision=_decision)
+                fctx["supervisor_history"] = _history + [{"round": rounds_used, "faults": dict(gate_faults)}]
+            except Exception:  # noqa: BLE001 — telemetry never blocks the repair loop
+                _log_caught(logger)
+
             action = resolve_gate_failure_action(
                 failing=failing,
                 advisory_gate=advisory_gate,
