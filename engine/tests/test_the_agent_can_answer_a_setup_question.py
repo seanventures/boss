@@ -146,7 +146,7 @@ def test_a_clone_uses_the_credential_the_project_connected():
     assert "token" in inspect.signature(_repo_root).parameters
     source = inspect.getsource(github_token_for)
     assert "github_connections" in source or "GitHubConnectionService" in source
-    assert "_resolve_secret(secret, connection)" in source
+    assert "token_for_repository" in source
 
 
 def test_the_preview_clone_uses_it_too():
@@ -163,7 +163,7 @@ def test_the_preview_clone_uses_it_too():
     source = inspect.getsource(preview_service)
     assert "token = settings.github_token" not in source, \
         "a preview clone is reading the install-wide setting again"
-    assert source.count("github_token_for(_c, settings, project_id)") == 3, \
+    assert source.count("github_token_for(_c, settings, project_id") == 3, \
         "all three clone paths must resolve the project's own credential"
 
 
@@ -206,7 +206,8 @@ def test_and_the_environment_still_wins_where_it_is_set():
     class Configured:
         github_token = "ghp_from_the_environment"
 
-    assert github_token_for(RefusesToBeUsed(), Configured(), "proj_x") == "ghp_from_the_environment"
+    assert github_token_for(RefusesToBeUsed(), Configured(), "proj_x", "o", "r") == \
+        "ghp_from_the_environment"
 
 
 def test_a_missing_credential_is_an_empty_string_not_a_traceback():
@@ -220,7 +221,7 @@ def test_a_missing_credential_is_an_empty_string_not_a_traceback():
     class Unset:
         github_token = ""
 
-    assert github_token_for(Exploding(), Unset(), "proj_x") == ""
+    assert github_token_for(Exploding(), Unset(), "proj_x", "o", "r") == ""
 
 
 def test_every_caller_passes_it():
@@ -229,7 +230,7 @@ def test_every_caller_passes_it():
 
     source = inspect.getsource(builtin)
     assert source.count("_repo_root(ctx.settings, repo, ref,") == 4
-    assert source.count("token=_github_token_for(ctx, project_id)") == 4
+    assert source.count("token=_github_token_for(ctx, project_id, repo)") == 4
 
 
 def test_and_a_missing_token_is_answered_not_raised():
