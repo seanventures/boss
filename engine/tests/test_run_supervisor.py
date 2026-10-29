@@ -195,6 +195,10 @@ class RunSupervisorTests(unittest.TestCase):
         """P1 -> AC7: a tripped decision writes exactly one decision record on the run and
         exactly one lesson candidate with worked=None, verified by reading both back."""
         connection = mock.MagicMock()
+        connection.get_supervisor_history.return_value = []
+        recorded: list = []
+        connection.append_supervisor_decision.side_effect = (
+            lambda run_id, record: recorded.append((run_id, record)))
         signal = _make_signal(
             tripped=True, reason="repeated_failure", forced=False,
             caused=("gate:unit_tests",), environment=(), refusals=(),
@@ -203,8 +207,7 @@ class RunSupervisorTests(unittest.TestCase):
         )
         decision = {"action": CHANGE_APPROACH, "note": "isolate gate:unit_tests"}
 
-        with mock.patch.object(run_supervisor, "record_decision") as rec, \
-             mock.patch.object(run_supervisor, "write_lesson") as lesson:
+        with mock.patch("boss_engine.services.knowledge.learning_writeback.record") as lesson:
             run_supervisor.record_decision(
                 connection, run_id="run-5", project_id="proj-1",
                 signal=signal, decision=decision, outcome="pending",
@@ -213,9 +216,14 @@ class RunSupervisorTests(unittest.TestCase):
                 connection, project_id="proj-1", run_id="run-5",
                 signal=signal, decision=decision,
             )
-            rec.assert_called_once()
             lesson.assert_called_once()
-            self.assertEqual(rec.call_args.kwargs.get("outcome", "pending"), "pending")
+
+        # Read the decision back off the connection, instead of mocking record_decision itself.
+        self.assertEqual(len(recorded), 1)
+        run_id, record = recorded[0]
+        self.assertEqual(run_id, "run-5")
+        self.assertEqual(record["outcome"], "pending")
+        self.assertEqual(record["decision"]["action"], CHANGE_APPROACH)
 
 
 if __name__ == "__main__":
