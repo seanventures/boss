@@ -30,14 +30,44 @@ _REDACTED_NOTICE = "that looked like a credential, so I didn't save it"
 
 
 def grant_scope_for_run(connection: Any, run: Mapping[str, Any]) -> dict[str, Any]:
-    """Overridden in tests; production builds the scope from the run's repo/agent/project."""
-    raise NotImplementedError
+    """The scope a grant must cover to resume this run: the same shape consent.require_authority
+    checked when the run was started (permissions/agents/repos), read back from the run's own
+    row rather than re-derived from the caller."""
+    from . import code_task_service as _cts
+    from ..identity import consent as _consent
+
+    full = _load_run(connection, run.get("run_id") or run.get("id") or "") or dict(run)
+    spec = full.get("spec") or {}
+    role_key = spec.get("role_key") or full.get("builder")
+    return {
+        "permissions": sorted(_consent.CODE_TASK_PERMISSIONS),
+        "agents": [role_key] if role_key else [],
+        "repos": _cts._consent_repos(spec.get("owner"), spec.get("repo"), spec.get("repo_host")),
+    }
 
 
 def recipient_for_run(connection: Any, run: Mapping[str, Any]) -> Optional[str]:
-    """The run's authority principal (consent Acting person / grant owner), else the project
-    owner. Overridden in tests."""
-    raise NotImplementedError
+    """The run's authority principal: whoever holds the live delegation grant this run's task
+    was started under, else the project's owner."""
+    run_id = run.get("run_id") or run.get("id") or ""
+    project_id = run.get("project_id")
+
+    held = connection.execute(
+        "SELECT user_principal_id FROM identity_delegation_grants "
+        "WHERE task_run_id = :run_id AND status = 'active' ORDER BY granted_at DESC LIMIT 1",
+        {"run_id": f"run_ct:{run_id}"},
+    ).scalar()
+    if held:
+        return str(held)
+
+    owner = connection.execute(
+        "SELECT b.subject_id FROM identity_role_bindings b JOIN projects p ON p.id = :p "
+        "JOIN workspaces w ON w.id = p.workspace_id WHERE b.subject_type = 'principal' "
+        "AND b.role_id = 'arl_owner' AND ((b.scope_type = 'org' AND b.scope_id = w.org_id) "
+        "OR (b.scope_type = 'project' AND b.scope_id = :p)) ORDER BY b.granted_at LIMIT 1",
+        {"p": project_id},
+    ).scalar()
+    return str(owner) if owner else None
 
 
 def open_thread_and_ask(
@@ -49,8 +79,44 @@ def open_thread_and_ask(
     scope: dict[str, Any],
     question: str,
 ) -> str:
-    """Opens the Captain thread with one plain-language ask. Overridden in tests."""
-    raise NotImplementedError
+    """Opens (or reuses) the Captain thread for this run and posts the one plain-language ask,
+    carrying a deep link to the run's own console screen."""
+    from ..app_links.console import build_console_link
+
+    # Area/param names the console actually reads for a build (see pr_description.py,
+    # scorecards.py): `area=code_tasks&build=<run_id>` opens straight into this run's cockpit,
+    # where the attention card holding this same ask is waiting.
+    link = build_console_link("code_tasks", project_id=project_id, build=run_id)
+    text_with_link = f"{question} {link}"
+
+    existing = connection.execute(
+        "SELECT id FROM agent_threads WHERE project_id = :project_id AND surface = 'agent' "
+        "AND external_ref = :external_ref ORDER BY updated_at DESC LIMIT 1",
+        {"project_id": project_id, "external_ref": run_id},
+    ).scalar()
+    thread_id = str(existing) if existing else make_id("thr")
+    if not existing:
+        connection.execute(
+            "INSERT INTO agent_threads (id, project_id, actor, surface, external_ref, agent_role) "
+            "VALUES (:id, :project_id, :actor, 'agent', :external_ref, 'person_wait')",
+            {"id": thread_id, "project_id": project_id, "actor": recipient_principal_id,
+             "external_ref": run_id},
+        )
+
+    connection.execute(
+        "INSERT INTO agent_messages (id, thread_id, role, agent_role, content) "
+        "VALUES (:id, :thread_id, 'assistant', 'person_wait', :content)",
+        {"id": make_id("msg"), "thread_id": thread_id, "content": text_with_link},
+    )
+
+    try:
+        from . import notify as _notify
+
+        _notify.owner_email(connection, project_id)
+    except Exception:  # noqa: BLE001 — the ask is already posted; a notification bell is best-effort
+        pass
+
+    return thread_id
 
 
 def _load_run(connection: Any, run_id: str) -> Optional[dict[str, Any]]:
@@ -112,6 +178,7 @@ def enter_waiting_on_person(
         "blocker_type": blocker_type,
         "reason": reason,
         "opened_at": opened_at,
+        "recipient_principal_id": recipient,
     }
 
     connection.execute(
@@ -176,7 +243,7 @@ def verify_and_resume(engine: Any, settings: Any, jobs: Any, *, run_id: str) -> 
     scope = person_wait_ctx.get("scope") or {}
 
     covering_grant = identity_grants.find_covering(
-        run.get("person_id"),
+        person_wait_ctx.get("recipient_principal_id") or run.get("person_id"),
         agent_ids=scope.get("agents", []),
         permissions=frozenset(scope.get("permissions", [])),
         project_id=run.get("project_id"),
@@ -242,7 +309,7 @@ def record_resolution(
     connection.execute(
         "UPDATE code_task_runs SET finalize_ctx = jsonb_set("
         "COALESCE(finalize_ctx, '{}'::jsonb), '{person_wait_history}', "
-        "COALESCE(finalize_ctx->'person_wait_history', '[]'::jsonb) || :entry::jsonb) "
+        "COALESCE(finalize_ctx->'person_wait_history', '[]'::jsonb) || CAST(:entry AS jsonb)) "
         "WHERE id = :id",
         {"entry": json.dumps([entry]), "id": run_id},
     )
