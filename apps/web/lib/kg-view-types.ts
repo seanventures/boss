@@ -91,7 +91,7 @@ export const KG_VIEW_EDGE_KINDS = [
 const CODE_TOPOLOGY = new Set(["service", "resource", "deployment", "datastore", "external", "repo"]);
 const CODE_STORAGE = new Set(["config_key", "endpoint", "file", "module", "queue", "symbol", "table"]);
 const LEARNING = new Set<string>([...KG_LEARNING_KINDS, ...KG_ANCHOR_KINDS]);
-const DOMAIN = new Set(["regulation", "policy_clause", "document"]);
+const DOMAIN = new Set(["regulation", "clause", "document"]);
 
 /** The product layer of a kg_nodes kind (or a view-only kind: area, package). Unknown → null:
  *  the caller says so rather than guessing a chip. */
