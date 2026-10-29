@@ -498,6 +498,17 @@ def tick(engine, settings: Any, *, now: Optional[datetime] = None,
     from . import bundled_monitoring
 
     out["bundled"] = guard("bundled", lambda: bundled_monitoring.tick(engine, settings, now))
+
+    # The person-wait resume sweep: re-check every run paused on a person and resume the ones
+    # whose blocking grant has since appeared. It rides on this same tick (the one the worker
+    # already calls) so a paused run resumes by itself; archived projects are skipped inside
+    # poll_due's own query. Guarded like every other sweep -- monitoring never fails its caller.
+    def person_wait_sweep():
+        from . import person_wait
+
+        with begin(engine) as c:
+            return person_wait.poll_due(c, settings, now=now)
+    out["person_wait_resumed"] = guard("person_wait", person_wait_sweep) or 0
     return out
 
 
