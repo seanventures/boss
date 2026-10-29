@@ -108,6 +108,42 @@ def run_historical_pattern(
     return {"cost_usd_micros": 0, "matched": list(matches.keys())}
 
 
+def run_closure(
+    connection: Connection, *, project_id: str, run_id: str, step_id: str, subject_id: str,
+    symptom: str, cause_summary: str, fix_summary: str = "",
+    actor_ref: str = "graph_steps:closure",
+) -> dict[str, Any]:
+    """Record this investigation's resolution as a Precedent, through the SAME write
+    primitives the deterministic steps use (``context_graph`` / the store's ``upsert_node``) —
+    never a one-off insert of its own — so a later run's Historical Pattern step
+    (`run_historical_pattern`) finds what this run's Closure wrote.
+
+    The precedent is linked to what the subject was ALREADY connected to (its out-neighbors),
+    not to the subject itself: `run_historical_pattern` matches a sibling that shares one of
+    those links, so a later investigation sharing any of the same links — on this subject or
+    one like it — finds this precedent exactly as it would find a sibling incident."""
+    node_key = f"precedent:{run_id}:{step_id}"
+    precedent_id = _STORE.upsert_node(
+        connection, project_id=project_id, kind="precedent", node_key=node_key,
+        name=f"Precedent: {symptom[:150]}", body=cause_summary or symptom,
+        trust_tier="inferred", actor_kind="agent", actor_ref=actor_ref,
+        attrs={"symptom": symptom, "cause_summary": cause_summary, "fix_summary": fix_summary,
+               "run_id": run_id, "step_id": step_id})
+    for neighbor in _STORE.neighbors(connection, project_id=project_id, node_id=subject_id,
+                                      direction="out"):
+        _STORE.upsert_edge(
+            connection, project_id=project_id, src_id=precedent_id, dst_id=neighbor["node_id"],
+            kind="about", actor_kind="agent", actor_ref=actor_ref)
+
+    statement = f"Recorded this investigation's resolution as a precedent: {symptom[:150]}."
+    context_graph.write_agent_decision(
+        connection, project_id, step_id=step_id, run_id=run_id,
+        decision_type="PrecedentRecorded", statement=statement, policy_version="",
+        workflow_version="", agent_fingerprint="deterministic", actor_ref=actor_ref)
+
+    return {"cost_usd_micros": 0, "precedent_id": precedent_id}
+
+
 def _kinds_of(connection: Connection, project_id: str, rows: Sequence[Mapping[str, Any]]
              ) -> set[str]:
     kinds: set[str] = set()
