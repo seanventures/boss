@@ -20,6 +20,11 @@ MAX_FILE_BYTES = 2 * 1024 * 1024
 MAX_SCAN_BYTES = 16 * 1024 * 1024
 MAX_ENTRIES = 20_000
 _DIR = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+# Traversing an ancestor on the way to the pinned root needs only execute ("--x"), never read:
+# opening every ancestor O_RDONLY refuses a root whose parent (e.g. a shared sandbox dir) is
+# listable but not readable. O_PATH keeps O_NOFOLLOW|O_DIRECTORY (a symlink/non-dir ancestor
+# still raises) while requiring only traverse permission. Linux-only; 0 elsewhere keeps _DIR.
+_TRAVERSE = os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC | getattr(os, "O_PATH", 0)
 _FILE = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
 
 
@@ -63,10 +68,13 @@ class RepoFiles:
                 if absolute == prefix or absolute.startswith(prefix + "/"):
                     absolute = "/private" + absolute
                     break
-        fd = os.open("/", _DIR)
+        components = Path(absolute).parts[1:]
+        fd = os.open("/", _TRAVERSE if components else _DIR)
         try:
-            for part in Path(absolute).parts[1:]:
-                next_fd = os.open(part, _DIR, dir_fd=fd)
+            for depth, part in enumerate(components):
+                # Ancestors are only traversed; the pinned root itself must be readable (scandir).
+                flags = _DIR if depth == len(components) - 1 else _TRAVERSE
+                next_fd = os.open(part, flags, dir_fd=fd)
                 os.close(fd)
                 fd = next_fd
             self._fd, fd = fd, -1
