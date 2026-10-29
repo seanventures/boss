@@ -200,6 +200,13 @@ def _default_project_exists_for_the_suite():
     url = os.environ.get("DATABASE_URL", "")
     if not url.startswith(("postgresql://", "postgresql+psycopg://")):
         return
+    # Only a database named like a test one (apps/api/tests/db_guard.py's rule): DATABASE_URL is
+    # production inside a deployed container, and a session-wide autouse fixture writing there is
+    # the 2026-09-02 incident's shape. A build's boss_run_<hex> database is not test-named either;
+    # it gets its own test database (Green the gate part 2), not an exception here.
+    name = url.rsplit("/", 1)[-1].split("?", 1)[0].lower()
+    if not any(marker in name for marker in ("test", "testing", "ci", "scratch", "tmp")):
+        return
     from sqlalchemy import create_engine
     from sqlalchemy.exc import SQLAlchemyError
 
