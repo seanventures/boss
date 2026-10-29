@@ -340,13 +340,23 @@ function SourceRow({ item, sessions, onBoard, formOpen, onForm, actions }: {
                       tip: src?.pill ? (src.pill.checked_at ? `Checked ${lt.full(src.pill.checked_at)}.` : "Not checked yet.")
                                      : "From the source's connection record." };
   const red = pill.tone === "red";
-  const needs = red || pill.tone === "amber";
+  // A bare "Working" that hasn't been proven in a while is a stale green: the pill stays green
+  // (nothing failed) but the row still owes a Test action and an honest "checked Xh ago", same
+  // as an amber/red row — a login can die silently between checks.
+  const checkedAt = serverPill?.checked_at ?? src?.pill?.checked_at ?? null;
+  const checkedAgeMs = checkedAt ? Date.now() - Date.parse(checkedAt) : null;
+  const staleGreen = pill.tone === "green" && (checkedAgeMs == null || checkedAgeMs > 2 * 3600 * 1000);
+  const needs = red || pill.tone === "amber" || staleGreen;
 
   // ONE PLAIN SENTENCE. A row that needs something says what (the server's full fix in the
   // tooltip); a working one says what it does; Claude's two rows say which one Claude runs on.
   const said = src ? claudeCopy(src) : null;
   let sentence: { text: string; tip: string; testid: string } | null = null;
   if (busy || editing) sentence = null;
+  else if (serverPill && needs && staleGreen && !red && pill.tone !== "amber") {
+    sentence = { text: checkedAt ? `checked ${ageLabel(checkedAt)} ago` : "Not checked yet.",
+                tip: serverPill.tip, testid: "su-model-said" };
+  }
   else if (serverPill && needs) sentence = { text: needsSentence(serverPill), tip: serverPill.tip, testid: "su-model-said" };
   else if (said) sentence = { text: said.line, tip: said.tip, testid: "setup-cap-claude" };
   else if (entry && entry.used_for.length) sentence = { text: `Used for ${usedForLabel(entry.used_for)}`, tip: usedForTip(entry.used_for), testid: "su-model-used" };

@@ -70,6 +70,13 @@ export function SubscriptionSignIn({ provider, label, autoStart = false, fresh =
   latest.current = session;
   const tell = useRef(onSession);
   tell.current = onSession;
+  // The device-code providers (codex, grok) print a URL the person opens; Claude's is a
+  // paste-back with nothing to open. One tab, opened synchronously in the click that starts the
+  // sign-in — not a second press — or popup blockers kill it.
+  const opensTab = provider !== "claude_code";
+  const popup = useRef<Window | null>(null);
+  const navigated = useRef(false);
+  const copied = useRef(false);
 
   useEffect(() => { tell.current(session); }, [session]);
 
@@ -77,17 +84,41 @@ export function SubscriptionSignIn({ provider, label, autoStart = false, fresh =
     setBusy(true);
     setRefusal(null);
     setSession(null);
+    navigated.current = false;
+    copied.current = false;
+    if (opensTab) popup.current = window.open("", "_blank");
     try {
       const started = await setupWrite<SignInSession>(projectId, "sign_in_start",
                                                       fresh ? { provider, fresh: true } : { provider },
                                                       { label: "Sign in" });
       if (alive.current) setSession(started);
+      if (popup.current && started.verification_url && !navigated.current) {
+        navigated.current = true;
+        try { popup.current.location.href = started.verification_url; } catch { /* closed */ }
+      }
     } catch (error) {
       if (alive.current) setRefusal(refusalOf(error));
+      popup.current?.close();
     } finally {
       if (alive.current) setBusy(false);
     }
   };
+
+  // The URL (and the code) often only arrive on the first poll after "starting": point the
+  // already-open tab at it, and copy the code, the moment either shows up.
+  useEffect(() => {
+    if (session?.verification_url && popup.current && !navigated.current) {
+      navigated.current = true;
+      try { popup.current.location.href = session.verification_url; } catch { /* closed */ }
+    }
+  }, [session?.verification_url]);
+  useEffect(() => {
+    if (opensTab && session?.state === "waiting" && session.user_code && !copied.current) {
+      copied.current = true;
+      try { void navigator.clipboard?.writeText(session.user_code).catch(() => undefined); toast("Code copied"); }
+      catch { /* no clipboard */ }
+    }
+  }, [opensTab, session?.state, session?.user_code]);
 
   // CLOSING THE DRAWER CANCELS: a login left running would hold the provider's one session.
   useEffect(() => {
@@ -248,6 +279,11 @@ export function SubscriptionSignIn({ provider, label, autoStart = false, fresh =
                 <code>{session.user_code}</code><Copy size={14} aria-label="copy" />
               </button>
             ) : null}
+            <p className="su-faint su-signin-step-hint" data-testid="su-signin-2fa-hint">
+              If {label}&apos;s page asks for a one-time password or authenticator code, that is
+              your own account&apos;s two-factor code, not the code shown here — use
+              &quot;Try another method&quot; if your usual method isn&apos;t offered.
+            </p>
           </div>
         )}
         {refusal ? <Stopped tone="red" headline={refusal.headline} fix={refusal.fix} state={refusal.state} /> : null}

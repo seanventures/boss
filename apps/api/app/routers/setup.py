@@ -112,6 +112,18 @@ def build_setup_router(
                     fail(error)
         return fresh_view(body.project_id)
 
+    @router.post("/v1/setup/subscriptions/keep-alive")
+    @permit(P.SETUP_MANAGE, scope=Scope.project(body="project_id"))
+    def post_subscription_keepalive(body: ChecksBody) -> dict[str, Any]:
+        """Hourly control-plane sweep: ping every connected subscription login, refresh one
+        near expiry, flip a dead one to login_expired, ask once."""
+        from boss_engine.services import subscription_keepalive
+
+        actor = actor_for(body.actor)
+        with begin(engine) as connection:
+            require_actor(connection, body.project_id, actor, "entitlement_manage")
+            return subscription_keepalive.sweep(engine, get_settings(), body.project_id)
+
     @router.post("/v1/setup/repository/token")
     @permit(P.GITHUB_CONNECT, scope=Scope.project(body="project_id"))
     def post_repository_token(body: RepositoryTokenBody) -> dict[str, Any]:

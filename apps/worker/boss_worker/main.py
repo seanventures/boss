@@ -323,6 +323,33 @@ def _tick_setup_checks(client: ControlPlaneClient, settings) -> None:
         LOGGER.debug("setup_recheck_failed", exc_info=True)
 
 
+#: Hourly control-plane-only keep-alive for connected subscription logins (Codex et al.): a
+#: login that just died is caught within the hour instead of a person finding it mid-build.
+SUBSCRIPTION_KEEPALIVE_INTERVAL_SECONDS = 3600
+_last_subscription_keepalive_monotonic = 0.0
+
+
+def _tick_subscription_keepalive(client: ControlPlaneClient, settings) -> None:
+    """Keep connected subscription logins (Codex et al.) alive. Never kill the worker."""
+    global _last_subscription_keepalive_monotonic
+    now = time.monotonic()
+    if _last_subscription_keepalive_monotonic and (
+        now - _last_subscription_keepalive_monotonic < SUBSCRIPTION_KEEPALIVE_INTERVAL_SECONDS
+    ):
+        return
+    _last_subscription_keepalive_monotonic = now
+    project_id = (
+        getattr(settings, "default_project_id", None)
+        or getattr(settings, "project_id", None)
+        or "boss-dogfood"
+    )
+    try:
+        result = client.tick_subscription_keepalive(str(project_id))
+        LOGGER.info("subscription_keepalive_ticked checked=%s", (result or {}).get("checked"))
+    except Exception:  # noqa: BLE001
+        LOGGER.debug("subscription_keepalive_failed", exc_info=True)
+
+
 #: Improve BOSS and run scorecards (docs/product/RUN_SCORECARDS.md). Every 10 minutes the API
 #: is asked; it does scorecard upkeep at most hourly and the one daily send only when due (a
 #: random time each UTC day). No thread, no retry: a failed send waits for tomorrow.
@@ -755,6 +782,7 @@ def main() -> None:
             _tick_focused_agents(client, settings)
             _tick_workflow_schedules(client, settings)
             _tick_setup_checks(client, settings)
+            _tick_subscription_keepalive(client, settings)
             _tick_knowledge_ingest(client)
             _tick_agent_processes(client, settings)
             _tick_process_manager(client, settings)
