@@ -3932,6 +3932,10 @@ def _recovery_begin(connection: Connection, ctx: Any, *, project_id: str, run_id
     if not step_recovery.enabled(connection, settings, project_id):
         return None
     state = step_recovery.state_of(output)
+    # Captured before any open_window call below replaces `state` with a fresh window: the
+    # signature this NEW failure cycle shares (or not) with the window that just closed.
+    _signature, _ = step_recovery.cause_signature(kind, evidence.get("failure") or {})
+    _prior_signature = step_recovery.last_decision(state).get("signature")
     if not state.get("started_at"):
         state = step_recovery.open_window(state)
     elif step_recovery.last_decision(state).get("action") == step_recovery.ASK_PERSON:
@@ -3939,6 +3943,33 @@ def _recovery_begin(connection: Connection, ctx: Any, *, project_id: str, run_id
         # a fresh window — the budget, the clock and the per-cause rule start again.
         state = step_recovery.open_window(
             state, why="the step was run again after a person was asked")
+    # L2a run supervisor: a second (or later) recovery window opened for the SAME cause is a
+    # workflow step stuck the same way the code-task repair loop gets stuck — govern it with
+    # the identical invariants (3-round cap, zero-caused-failure rule, refusal allow-list)
+    # rather than letting step_recovery's own per-cause rule be the only backstop. Never
+    # allowed to raise or block the existing flow.
+    if int(state.get("windows") or 0) >= 2 and _prior_signature and _prior_signature == _signature:
+        try:
+            from . import run_supervisor as _supervisor
+
+            _wf_signal = _supervisor.evaluate_signal(
+                faults={_signature: _supervisor.WORK}, rounds_used=int(state.get("windows") or 0),
+                max_repair_rounds=step_recovery.MAX_DECISIONS_KEPT,
+                history=[{"round": i, "faults": {_signature: _supervisor.WORK}}
+                         for i in range(1, int(state.get("windows") or 0))],
+                spend_usd_micros=step_recovery.spent(connection, state), started_at=None)
+            if _wf_signal.tripped or _wf_signal.forced:
+                _wf_decision = _supervisor.decide(
+                    connection, settings, project_id, run_id=run_id,
+                    signal=_wf_signal, history=[], adapter=None)
+                _supervisor.record_decision(
+                    connection, run_id=run_id, project_id=project_id,
+                    signal=_wf_signal, decision=_wf_decision)
+                _supervisor.write_lesson(
+                    connection, project_id=project_id, run_id=run_id,
+                    signal=_wf_signal, decision=_wf_decision)
+        except Exception:  # noqa: BLE001 — telemetry never blocks step recovery
+            pass
     spec_step = workflows._step_map(workflows._run_spec(connection, run_id)).get(step_id) or {}
     agent = step_recovery.agent_of(connection, project_id, spec_step)
     entry = step_recovery.decide(connection, settings, project_id=project_id, run_id=run_id,
