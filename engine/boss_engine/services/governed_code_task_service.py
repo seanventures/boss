@@ -7994,19 +7994,100 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             except Exception:  # noqa: BLE001 — the default is the rule
                 _log_caught(logger)
                 _open_when_failing = _checks_failing.enabled(None, settings, project_id)
-            action = resolve_gate_failure_action(
-                failing=failing,
-                advisory_gate=advisory_gate,
-                rounds_used=rounds_used,
-                max_repair_rounds=max_repair_rounds,
-                open_pr=_can_ship_pr,
-                never_block=bool(getattr(settings, "code_gate_never_block", True)),
-                faults=gate_faults,
-                template_repair_max=max_repair,
-                blockers=_blockers,
-                fix_round_ran=_fix_rounds_run > 0,
-                open_pr_when_failing=_open_when_failing,
-            )
+            # L2a run supervisor: watch this repair loop for stalled progress (same failing
+            # gate signature across rounds, environment/refusal-only failures, the 3-round
+            # cap) and, if tripped or invariant-forced, record a governed decision. Never
+            # allowed to raise or block the existing flow — a supervisor failure degrades to
+            # a no-op here, same as any other best-effort telemetry.
+            _sup_decision = None
+            try:
+                from datetime import datetime as _datetime, timezone as _timezone
+
+                from . import run_supervisor as _supervisor
+                with _transaction(engine) as _c:
+                    _signal_on = _supervisor.signal_enabled(_c, settings, project_id)
+                if _signal_on:
+                    _history = list(fctx.get("supervisor_history") or [])
+                    # This repair loop's own start marker: the first round to reach this hook
+                    # stamps it, so `stall_minutes` measures wall-clock time stuck in THIS loop.
+                    _started_at = fctx.get("supervisor_started_at")
+                    if not _started_at:
+                        _started_at = _datetime.now(_timezone.utc).isoformat()
+                        fctx["supervisor_started_at"] = _started_at
+                    _signal = _supervisor.evaluate_signal(
+                        faults=gate_faults,
+                        rounds_used=rounds_used,
+                        max_repair_rounds=max_repair_rounds,
+                        history=_history,
+                        spend_usd_micros=int(fctx.get("spend_usd_micros") or 0),
+                        started_at=_started_at,
+                    )
+                    if _signal.tripped or _signal.forced:
+                        with _transaction(engine) as _c:
+                            _judgement_on = _supervisor.judgement_enabled(_c, settings, project_id)
+                        if _judgement_on:
+                            # adapter=None routes through the real governed model call
+                            # (run_supervisor._model_adapter / AgentService.decide); tests
+                            # inject a stub adapter instead.
+                            _decision = _supervisor.decide(
+                                engine, settings, project_id, run_id=run_id,
+                                signal=_signal, history=_history, adapter=None,
+                            )
+                        else:
+                            _decision = {"action": _supervisor.STOP_REPORT,
+                                         "reason": "judgement disabled by setting"}
+                        with _transaction(engine) as _c:
+                            _supervisor.record_decision(
+                                _c, run_id=run_id, project_id=project_id,
+                                signal=_signal, decision=_decision)
+                            _supervisor.write_lesson(
+                                _c, project_id=project_id, run_id=run_id,
+                                signal=_signal, decision=_decision)
+                        with _transaction(engine) as _c:
+                            _action_on = _supervisor.action_enabled(_c, settings, project_id)
+                        if _action_on:
+                            _sup_decision = _decision
+                    fctx["supervisor_history"] = _history + [
+                        {"round": rounds_used, "faults": dict(gate_faults)}]
+            except Exception:  # noqa: BLE001 — telemetry never blocks the repair loop
+                _log_caught(logger)
+                _sup_decision = None
+
+            # THE DECISION IS ENFORCED, NOT JUST RECORDED: a round with zero caused failures
+            # never proceeds unredirected (PRD 5.3 / AC2). stop_report/degraded short-circuit
+            # straight to "block" (resolve_gate_failure_action never runs); reach_out also
+            # short-circuits to "block", carrying its question; steer/change_approach/
+            # platform_fix stash guidance for the next round's prompt but let the gates'
+            # own action stand — the supervisor redirects the NEXT attempt, it does not
+            # pre-empt THIS round's gate verdict.
+            from . import run_supervisor_types
+
+            _sup_action = (_sup_decision or {}).get("action")
+            if _sup_action in (run_supervisor_types.STOP_REPORT, run_supervisor_types.DEGRADED):
+                action = "block"
+                fctx["supervisor_decision"] = _sup_decision
+            elif _sup_action == run_supervisor_types.REACH_OUT:
+                action = "block"
+                fctx["supervisor_decision"] = _sup_decision
+                fctx["supervisor_question"] = _sup_decision.get("question")
+            else:
+                if _sup_action in (run_supervisor_types.STEER,
+                                    run_supervisor_types.CHANGE_APPROACH,
+                                    run_supervisor_types.PLATFORM_FIX):
+                    fctx["supervisor_steer"] = _sup_decision.get("note")
+                action = resolve_gate_failure_action(
+                    failing=failing,
+                    advisory_gate=advisory_gate,
+                    rounds_used=rounds_used,
+                    max_repair_rounds=max_repair_rounds,
+                    open_pr=_can_ship_pr,
+                    never_block=bool(getattr(settings, "code_gate_never_block", True)),
+                    faults=gate_faults,
+                    template_repair_max=max_repair,
+                    blockers=_blockers,
+                    fix_round_ran=_fix_rounds_run > 0,
+                    open_pr_when_failing=_open_when_failing,
+                )
             if action == "inconclusive":
                 # The checks never finished, so nothing is known about the code. Re-run the
                 # CHECK with an escalated budget — never the coding agent. Bounded; if it is

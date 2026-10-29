@@ -37,6 +37,36 @@ KNOBS: dict[str, dict[str, Any]] = {
                 "without it. The graph keeps indexing either way.",
         "kind": "choice", "choices": ["on", "keyword", "off"],
     },
+    "run_supervisor_stall_minutes": {
+        "attr": "run_supervisor_stall_minutes",
+        "label": "Run supervisor stall minutes",
+        "help": "How long a run may sit with no caused-failure progress before the run "
+                "supervisor (L2a) treats it as stalled.",
+        "kind": "int", "min": 5, "max": 180,
+    },
+    "run_supervisor_signal": {
+        "attr": "run_supervisor_signal",
+        "label": "Run supervisor: compute signal",
+        "help": "Whether the run supervisor (L2a) even computes its stalled-progress signal "
+                "for a repair round. 1 on, 0 off.",
+        "kind": "int", "min": 0, "max": 1,
+    },
+    "run_supervisor_judgement": {
+        "attr": "run_supervisor_judgement",
+        "label": "Run supervisor: call judgement",
+        "help": "Whether a tripped/forced run supervisor signal calls the governed judgement "
+                "seam. Off degrades to a deterministic stop_report with no judgement spend. "
+                "1 on, 0 off.",
+        "kind": "int", "min": 0, "max": 1,
+    },
+    "run_supervisor_action": {
+        "attr": "run_supervisor_action",
+        "label": "Run supervisor: enforce action",
+        "help": "Whether the run supervisor's decision changes what the repair loop does next. "
+                "Off still records the decision and lesson, but never changes the loop's "
+                "control flow. 1 on, 0 off.",
+        "kind": "int", "min": 0, "max": 1,
+    },
     "code_agent_max_concurrency": {
         "attr": "code_agent_max_concurrency",
         "label": "Agents at once",

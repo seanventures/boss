@@ -1151,6 +1151,17 @@ class Settings(BaseSettings):
     # on a person's stated reason. The build is never parked waiting for a waiver. 0 restores the
     # waiver stop (awaiting_gate_override). Govern/Settings sets it per project.
     open_pr_when_checks_fail: int = Field(default=1, alias="BOSS_OPEN_PR_WHEN_CHECKS_FAIL")
+    # THE RUN SUPERVISOR (L2a, services/run_supervisor.py) — three independently toggle-able
+    # flags, each read at the point it would act, so flipping one takes effect on a project's
+    # very next repair round with no restart. 1 on, 0 off; all default on.
+    # Signal: whether evaluate_signal is even computed for a repair round.
+    run_supervisor_signal: int = Field(default=1, alias="BOSS_RUN_SUPERVISOR_SIGNAL")
+    # Judgement: whether a tripped/forced signal calls the governed judgement seam at all (off
+    # degrades to a deterministic stop_report, spending no judgement call).
+    run_supervisor_judgement: int = Field(default=1, alias="BOSS_RUN_SUPERVISOR_JUDGEMENT")
+    # Action: whether the decision is enforced on the repair loop's control flow (off still
+    # records the decision/lesson for observability, but never changes what the loop does next).
+    run_supervisor_action: int = Field(default=1, alias="BOSS_RUN_SUPERVISOR_ACTION")
     # Max agent turns inside the sandbox before we stop and take the diff. 40 is fine for a module
     # but too few for APP-SCALE work (scaffolding a whole Vite/React app is more file-writes than
     # that) — a too-low cap surfaces as error_max_turns and fails the task. 90 fits real app tasks.
