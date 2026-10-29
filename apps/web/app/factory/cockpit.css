@@ -27,6 +27,7 @@
 .fx-state[data-state="failed"] .fx-state-word, .fx-state[data-state="needs_waiver"] .fx-state-word,
 .fx-state[data-state="budget_refused"] .fx-state-word { color: var(--red); }
 .fx-state[data-state="quiet"] .fx-state-word, .fx-state[data-state="needs_plan"] .fx-state-word,
+.fx-state[data-state="needs_person"] .fx-state-word,
 .fx-state[data-state="pr_open"] .fx-state-word { color: var(--amber); }
 .fx-k, .fx-elapsed, .fx-cost { color: var(--muted); }
 .fx-flag { font-size: 0.63158rem; padding: 1px 8px; border-radius: var(--r-sm); background: var(--green-soft); color: var(--ink); text-decoration: none; }
