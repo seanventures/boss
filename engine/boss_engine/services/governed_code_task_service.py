@@ -29,7 +29,8 @@ import json
 import re
 import threading
 from pathlib import Path
-from typing import Any, Callable, Optional
+import tempfile
+from typing import Any, Callable, Optional, Sequence
 
 from . import build_budget as _build_budget
 from . import parallel_build as _parallel_build
@@ -3192,20 +3193,15 @@ def failing_tests(output: str, limit: int = 20) -> list[str]:
     return seen
 
 
-#: Per-project, per-base-commit cache of (test_id -> "passed"/"failed") so a repair round never
-#: reruns the same base test twice (L1: baseline-aware verification).
-_BASELINE_CACHE: dict = {}
-_BASELINE_CACHE_LOCK = threading.Lock()
-
-
 def _base_commit_sha(root: Path, base_branch: str) -> Optional[str]:
     """The base commit a build started from, as a sha — None when it cannot be resolved (no
     git, no such ref): a classification that cannot run never blocks the build."""
-    import subprocess
+    from . import owned_process
 
     try:
-        out = subprocess.run(["git", "-C", str(root), "rev-parse", str(base_branch)],
-                             capture_output=True, text=True, timeout=30)
+        out = owned_process.boss_run(
+            ["git", "-C", str(root), "rev-parse", str(base_branch)],
+            capture_output=True, text=True, timeout=30)
         if out.returncode == 0:
             return out.stdout.strip() or None
     except Exception:  # noqa: BLE001
@@ -3213,65 +3209,128 @@ def _base_commit_sha(root: Path, base_branch: str) -> Optional[str]:
     return None
 
 
-def _rerun_test_cmd_on_base(root: Path, base_sha: str, test_cmd: str, cwd_rel: str = ".") -> str:
-    """The authoritative test command, run once more against the base commit in a disposable
-    worktree — the evidence that decides whether a failing test is caused by this change or
-    was already broken before it. Empty string ("unknown") on any failure to run it."""
-    import shutil
-    import subprocess
-    import tempfile
+def _test_cmd_without_paths(test_cmd: str) -> list[str]:
+    """``test_cmd`` (the gate's already-expanded command) with every path-like / {tests}
+    argument dropped, leaving just the runner and its flags — so a base rerun can append the
+    failing ids in their place instead of the whole suite's file list."""
+    import shlex
 
-    tmp_dir = tempfile.mkdtemp(prefix="boss-baseline-")
+    from .verify_manifest import TESTS_PLACEHOLDER
+
+    tokens = shlex.split(test_cmd or "")
+    return [t for t in tokens if t != TESTS_PLACEHOLDER and "/" not in t]
+
+
+def _rerun_test_cmd_on_base(root: Path, base_sha: str, failing_ids: Sequence[str],
+                            test_cmd: str, cwd_rel: str = ".") -> str:
+    """Only the currently-failing test ids, run once more against the base commit — in a
+    worktree created under THIS run's own sandbox directory, dispatched through the same
+    sandboxed runner (owned_process, the run's identity, no shell) the normal verify gate
+    uses. The evidence that decides whether a failure is caused by this change or was already
+    broken before it. Empty string ("unknown") on any failure to run it."""
+    import shutil
+
+    from . import owned_process, sandbox_identity
+
+    if not failing_ids:
+        return ""
+    identity = sandbox_identity.current()
+    worktree_dir = (identity.workspace("boss-baseline-") if identity is not None
+                    else Path(tempfile.mkdtemp(prefix="boss-baseline-")))
     try:
-        added = subprocess.run(
-            ["git", "-C", str(root), "worktree", "add", "--detach", tmp_dir, base_sha],
+        added = owned_process.boss_run(
+            ["git", "-C", str(root), "worktree", "add", "--detach", str(worktree_dir), base_sha],
             capture_output=True, text=True, timeout=120)
         if added.returncode != 0:
             return ""
-        run_cwd = (Path(tmp_dir) / cwd_rel) if cwd_rel not in (".", "", None) else Path(tmp_dir)
-        result = subprocess.run(
-            test_cmd, shell=True, cwd=str(run_cwd),
-            capture_output=True, text=True, timeout=900)
+        run_cwd = (worktree_dir / cwd_rel) if cwd_rel not in (".", "", None) else worktree_dir
+        argv = _test_cmd_without_paths(test_cmd) + sorted(failing_ids)
+        result = owned_process.run(argv, cwd=str(run_cwd), capture_output=True, text=True,
+                                   timeout=900)
         return (result.stdout or "") + "\n" + (result.stderr or "")
     except Exception:  # noqa: BLE001 — a base rerun that cannot run never blocks the build
         _log_caught(logger)
         return ""
     finally:
         try:
-            subprocess.run(["git", "-C", str(root), "worktree", "remove", "--force", tmp_dir],
-                           capture_output=True, text=True, timeout=60)
+            owned_process.boss_run(
+                ["git", "-C", str(root), "worktree", "remove", "--force", str(worktree_dir)],
+                capture_output=True, text=True, timeout=60)
         except Exception:  # noqa: BLE001
             _log_caught(logger)
-        shutil.rmtree(tmp_dir, ignore_errors=True)
+        shutil.rmtree(str(worktree_dir), ignore_errors=True)
+
+
+def _baseline_cache_ddl(c) -> None:
+    c.execute(sql(
+        "CREATE TABLE IF NOT EXISTS code_task_baseline_cache ("
+        "project_id TEXT NOT NULL, base_sha TEXT NOT NULL, test_id TEXT NOT NULL, "
+        "outcome TEXT NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), "
+        "PRIMARY KEY (project_id, base_sha, test_id))"))
+
+
+def _load_baseline_cache(engine, project_id: str, base_sha: str) -> dict:
+    """Every (test_id -> outcome) already known for this project's base commit, from the
+    DB — so the cache survives a process restart and never leaks across projects or base
+    commits (L1: baseline-aware verification, acceptance criterion 5)."""
+    try:
+        with _transaction(engine) as c:
+            _baseline_cache_ddl(c)
+            rows = c.execute(sql(
+                "SELECT test_id, outcome FROM code_task_baseline_cache "
+                "WHERE project_id = :p AND base_sha = :b"),
+                {"p": project_id, "b": base_sha}).all()
+        return {row[0]: row[1] for row in rows}
+    except Exception:  # noqa: BLE001 — a cache that cannot load never blocks the build
+        _log_caught(logger)
+        return {}
+
+
+def _save_baseline_cache(engine, project_id: str, base_sha: str, fresh: dict) -> None:
+    if not fresh:
+        return
+    try:
+        with _transaction(engine) as c:
+            _baseline_cache_ddl(c)
+            for test_id, outcome in fresh.items():
+                c.execute(sql(
+                    "INSERT INTO code_task_baseline_cache (project_id, base_sha, test_id, outcome) "
+                    "VALUES (:p, :b, :t, :o) ON CONFLICT (project_id, base_sha, test_id) "
+                    "DO UPDATE SET outcome = :o, updated_at = now()"),
+                    {"p": project_id, "b": base_sha, "t": test_id, "o": outcome})
+    except Exception:  # noqa: BLE001 — a cache that cannot save never blocks the build
+        _log_caught(logger)
 
 
 def classify_against_base(*, project_id: str, root: Path, base_branch: str, test_cmd: str,
                            fail_output: str, cwd_rel: str = ".",
                            cache: Optional[dict] = None,
-                           rerun: Optional[Callable[[str, str], str]] = None
+                           rerun: Optional[Callable[[str, Sequence[str]], str]] = None,
+                           engine: Any = None,
                            ) -> Optional["baseline_verify.BaselineRecord"]:
     """L1 baseline-aware verification, wired to the real verify gate: the failing test ids the
     gate just saw, reclassified against the commit the build started from, so a repair round is
     never spent on a failure the change did not cause. `cache`/`rerun` are injectable for tests;
-    production uses the per-project base-sha cache and a real git-worktree rerun."""
+    production reruns only the failing ids through the sandbox runner and caches outcomes in
+    `code_task_baseline_cache`, keyed by (project_id, base_sha, test_id)."""
     failing_ids = baseline_verify.extract_test_ids(fail_output)
     if not failing_ids:
         return None
     base_sha = _base_commit_sha(root, base_branch)
     if not base_sha:
         return None
-    rerun = rerun or (lambda sha, _ids: _rerun_test_cmd_on_base(root, sha, test_cmd, cwd_rel))
-    with _BASELINE_CACHE_LOCK:
-        bucket = cache if cache is not None else _BASELINE_CACHE.setdefault(
-            (project_id, base_sha), {})
-        uncached = [tid for tid in failing_ids if tid not in bucket]
+    rerun = rerun or (lambda sha, ids: _rerun_test_cmd_on_base(root, sha, ids, test_cmd, cwd_rel))
+    persist = cache is None and engine is not None
+    bucket = cache if cache is not None else (
+        _load_baseline_cache(engine, project_id, base_sha) if engine is not None else {})
+    uncached = [tid for tid in failing_ids if tid not in bucket]
     if uncached:
         base_output = rerun(base_sha, uncached)
         fresh = baseline_verify.base_outcomes_from_output(uncached, base_output)
-        with _BASELINE_CACHE_LOCK:
-            bucket.update(fresh)
-    with _BASELINE_CACHE_LOCK:
-        base_outcomes = {tid: bucket[tid] for tid in failing_ids if tid in bucket}
+        bucket.update(fresh)
+        if persist:
+            _save_baseline_cache(engine, project_id, base_sha, fresh)
+    base_outcomes = {tid: bucket[tid] for tid in failing_ids if tid in bucket}
     return baseline_verify.classify(
         failing_ids, fail_output, base_outcomes,
         classify_environment=baseline_verify.default_classify_environment)
@@ -6446,7 +6505,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     baseline_record = classify_against_base(
                         project_id=project_id, root=root, base_branch=base_branch,
                         test_cmd=test_cmd, fail_output=fail_output,
-                        cwd_rel=last_verify_cwd or ".")
+                        cwd_rel=last_verify_cwd or ".", engine=engine)
                 except Exception:  # noqa: BLE001 — baseline classification never blocks a build
                     _log_caught(logger)
                     baseline_record = None
