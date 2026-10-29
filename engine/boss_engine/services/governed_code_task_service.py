@@ -3302,6 +3302,44 @@ def _save_baseline_cache(engine, project_id: str, base_sha: str, fresh: dict) ->
         _log_caught(logger)
 
 
+def _environment_signature_ddl(c) -> None:
+    c.execute(sql(
+        "CREATE TABLE IF NOT EXISTS code_task_environment_signatures ("
+        "project_id TEXT NOT NULL, signature TEXT NOT NULL, seen_count INT NOT NULL DEFAULT 0, "
+        "last_seen TIMESTAMPTZ NOT NULL DEFAULT now(), "
+        "PRIMARY KEY (project_id, signature))"))
+
+
+def _record_environment_signatures(engine, project_id: str, run_id: str,
+                                   record: "baseline_verify.BaselineRecord") -> None:
+    """Every `environment`-classified failure's signature is counted per project — the same
+    infra problem (a missing driver, a collection error) recurring across different runs and
+    test ids is a platform gap, not a one-off, so a count of 2+ is raised as its own event
+    instead of staying buried inside each run's own `baseline_classified` record."""
+    if engine is None or not record.environment:
+        return
+    try:
+        for classified in record.environment:
+            signature = baseline_verify.environment_signature(classified)
+            with _transaction(engine) as c:
+                _environment_signature_ddl(c)
+                count = c.execute(sql(
+                    "INSERT INTO code_task_environment_signatures "
+                    "(project_id, signature, seen_count, last_seen) "
+                    "VALUES (:p, :s, 1, now()) "
+                    "ON CONFLICT (project_id, signature) DO UPDATE SET "
+                    "seen_count = code_task_environment_signatures.seen_count + 1, "
+                    "last_seen = now() "
+                    "RETURNING seen_count"),
+                    {"p": project_id, "s": signature}).scalar()
+                if count and count >= 2:
+                    emit_event(c, project_id, "code_task.environment_signature_recurring", "boss",
+                               "code_task_run", run_id,
+                               {"signature": signature, "seen_count": int(count)})
+    except Exception:  # noqa: BLE001 — a signature count that cannot be saved never blocks a build
+        _log_caught(logger)
+
+
 def classify_against_base(*, project_id: str, root: Path, base_branch: str, test_cmd: str,
                            fail_output: str, cwd_rel: str = ".",
                            cache: Optional[dict] = None,
@@ -6520,6 +6558,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                    {"attempt": attempt, "caused": len(baseline_record.caused),
                                     "pre_existing": len(baseline_record.pre_existing),
                                     "environment": len(baseline_record.environment)})
+                    _record_environment_signatures(engine, project_id, run_id, baseline_record)
             gate_tests_passed = tests_passed or bool(
                 baseline_record is not None and not baseline_record.caused)
             ok = gate_tests_passed and tests_untouched and bool(impl_files)
