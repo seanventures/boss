@@ -34,7 +34,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-LAYERS = ("code", "lifecycle", "ops", "knowledge", "rules")
+LAYERS = ("code", "lifecycle", "ops", "knowledge", "rules", "context")
 
 LAYER_KINDS: dict[str, frozenset[str]] = {
     "code": frozenset({"file", "module", "symbol", "endpoint", "table", "queue", "config_key"}),
@@ -45,10 +45,12 @@ LAYER_KINDS: dict[str, frozenset[str]] = {
     "knowledge": frozenset({"fact", "topic", "investigation", "test_failure", "fix", "workaround",
                             "precedent"}),
     "rules": frozenset({"rule"}),
+    # The Context Graph (Build B, §4.2): a step's own trace, written by the engine as it runs.
+    "context": frozenset({"agent_decision", "coverage_gap"}),
 }
 
 #: The layers the generated column names explicitly; every other kind is ``knowledge`` (ELSE).
-_CASE_LAYERS = ("code", "lifecycle", "ops", "rules")
+_CASE_LAYERS = ("code", "lifecycle", "ops", "rules", "context")
 
 
 def layer_of(kind: str) -> str:
@@ -121,6 +123,7 @@ class StagePolicy:
     budget_tokens: int = 1200
     tools: frozenset[str] | None = None  # None: every kg tool whose layers the stage reads
     seeds: tuple[str, ...] = field(default=())  # node ids the stage was given
+    kinds: frozenset[str] | None = None  # None: every kind in the layers above; else only these
 
     def __post_init__(self) -> None:
         unknown = set(self.layers) - set(LAYERS)
@@ -226,10 +229,18 @@ def policy_for(
         # Only when nothing names the stage: a named stage BOSS has no default for (a chat turn,
         # "converse") reads unscoped, as before, rather than as whatever the role usually does.
         kind = ROLE_FALLBACK.get(str(role).strip().lower())
+    contract_raw = (step or {}).get("contract") if step is not None else None
     declared = (step or {}).get("knowledge") if step is not None else None
-    if kind is None and not declared:
+    if kind is None and not declared and not contract_raw:
         return None
     base = DEFAULTS[kind] if kind else StagePolicy("custom", frozenset({"lifecycle", "knowledge", "ops", "rules"}))
+    if contract_raw:
+        # A `contract` block always wins over the legacy `knowledge:` block — the two are never
+        # meant to coexist, and the contract is what the engine actually enforces during the step.
+        from .step_contracts import parse_contract, policy_from_contract
+
+        contract = parse_contract(str((step or {}).get("id") or "?"), contract_raw)
+        return policy_from_contract(base, contract)
     return apply_declaration(base, declared) if declared else base
 
 
