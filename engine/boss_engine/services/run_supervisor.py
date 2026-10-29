@@ -17,14 +17,17 @@ from datetime import datetime, timezone
 from typing import Any, Mapping, Optional
 
 from .run_supervisor_types import (
+    ACTION_SETTING,
     ACTIONS,
     DECIDED_EVENT,
     DEFAULT_STALL_MINUTES,
     DEGRADED,
+    JUDGEMENT_SETTING,
     MAX_ROUNDS_WITHOUT_JUDGEMENT,
     PLATFORM_FIX,
     ProgressSignal,
     REACH_OUT,
+    SIGNAL_SETTING,
     STEER,
     STOP_REPORT,
     CHANGE_APPROACH,
@@ -90,6 +93,41 @@ def seconds_since(started_at: Optional[str]) -> int:
     if started.tzinfo is None:
         started = started.replace(tzinfo=timezone.utc)
     return max(0, int((datetime.now(timezone.utc) - started).total_seconds()))
+
+
+def _flag(connection: Any, settings: Any, project_id: Optional[str], setting: str) -> bool:
+    """One project_settings-backed on/off flag (default on). Never raises: a setting that
+    cannot be read is the default, same pattern as checks_failing.enabled."""
+    from . import project_settings
+
+    value: Any = None
+    try:
+        if connection is not None and project_id:
+            with connection.begin_nested():
+                value = project_settings.effective(connection, project_id, settings, setting)
+        else:
+            value = getattr(settings, setting, 1)
+    except Exception:  # noqa: BLE001
+        value = getattr(settings, setting, 1)
+    try:
+        return int(1 if value in (None, "") else value) == 1
+    except (TypeError, ValueError):
+        return True
+
+
+def signal_enabled(connection: Any, settings: Any, project_id: Optional[str]) -> bool:
+    """Whether the signal (evaluate_signal) should even be computed for this round."""
+    return _flag(connection, settings, project_id, SIGNAL_SETTING)
+
+
+def judgement_enabled(connection: Any, settings: Any, project_id: Optional[str]) -> bool:
+    """Whether a tripped/forced signal may call the governed judgement seam."""
+    return _flag(connection, settings, project_id, JUDGEMENT_SETTING)
+
+
+def action_enabled(connection: Any, settings: Any, project_id: Optional[str]) -> bool:
+    """Whether the decision is enforced on the caller's control flow."""
+    return _flag(connection, settings, project_id, ACTION_SETTING)
 
 
 def _classify(faults: Mapping[str, str]) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
@@ -311,7 +349,7 @@ def write_lesson(
     a lesson that can't be written is never a reason to fail the run."""
     try:
         from .knowledge import learning_writeback
-        from .security_scan.redact import redact_text
+        from ..identity.redaction import redact_text
 
         action = str(decision.get("action") or "")
         question = f"run {run_id}: {signal.reason or 'no-progress'} signature {signal.repeated_signature or 'n/a'}"
