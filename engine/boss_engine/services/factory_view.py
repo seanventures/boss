@@ -93,13 +93,14 @@ class Station(TypedDict, total=False):
 
 # ── one state per build (§4.4) ──────────────────────────────────────────────────────────────
 
-BuildStateKey = Literal["cancelled", "failed", "needs_plan", "needs_waiver", "budget_refused",
-                        "blocked", "budget_wait", "quiet", "queued", "building", "pr_open",
-                        "merged", "deployed", "done_no_pr"]
+BuildStateKey = Literal["cancelled", "failed", "needs_plan", "needs_waiver", "needs_person",
+                        "budget_refused", "blocked", "budget_wait", "quiet", "queued", "building",
+                        "pr_open", "merged", "deployed", "done_no_pr"]
 #: Which Floor section each state is drawn in (needs-you states also have a Building row).
 SECTION_OF: dict[str, str] = {
     "cancelled": "stopped", "failed": "stopped",
-    "needs_plan": "building", "needs_waiver": "building", "budget_refused": "building",
+    "needs_plan": "building", "needs_waiver": "building", "needs_person": "building",
+    "budget_refused": "building",
     "blocked": "building", "budget_wait": "building", "quiet": "building", "queued": "building",
     "building": "building",
     "pr_open": "shipped", "merged": "shipped", "deployed": "shipped", "done_no_pr": "shipped",
@@ -144,8 +145,8 @@ class PreviewFlag(TypedDict, total=False):
 
 # ── GET /v1/factory/floor (§6.2) ────────────────────────────────────────────────────────────
 
-_BUILDING_ORDER = {"needs_plan": 0, "needs_waiver": 0, "budget_refused": 0, "quiet": 1,
-                   "blocked": 1, "budget_wait": 2, "building": 2, "queued": 3}
+_BUILDING_ORDER = {"needs_plan": 0, "needs_waiver": 0, "needs_person": 0, "budget_refused": 0,
+                   "quiet": 1, "blocked": 1, "budget_wait": 2, "building": 2, "queued": 3}
 
 
 def _sort_building(rows: list[BuildRow], now: datetime) -> list[BuildRow]:
@@ -914,6 +915,14 @@ def build_state(run: Mapping[str, Any], *, acts: Optional[list[Mapping[str, Any]
     if status == "failed":
         return out("failed", f"Failed · {label}" if label else "Failed",
                    failure_line(fctx, run.get("error"))["line"], "Failed")
+    if status == "waiting_on_person":
+        # L2b (person_wait.py): paused on a person's reply, not stopped and not done -- it fell
+        # through to the Finished branch below before this (ok_deploys/pull_request_url are both
+        # unset on a pause), so the Floor said "Done · no PR" on a build that was still waiting
+        # on someone. No budget is held while it waits, and the poll_due sweep resumes it by
+        # itself once the blocker clears.
+        return out("needs_person", "Needs you · reply",
+                   "Paused for a person's reply. Costs nothing meanwhile.", "Needs you")
     if status == "blocked":
         if phase == "awaiting_plan_approval":
             return out("needs_plan", "Needs you · plan", "Approve the plan to start building",
