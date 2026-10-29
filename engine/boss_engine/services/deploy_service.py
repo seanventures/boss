@@ -1007,7 +1007,7 @@ def deploy_ssh(engine, settings: Settings, run_id: str, *, host: str, user: str 
             hint = [e, f"{e}/index.html" if e != "." else "index.html"]
             changed = hint + [c for c in (changed or []) if c not in hint]
         with begin(engine) as _c:
-            _tok = github_token_for(_c, settings, project_id)
+            _tok = github_token_for(_c, settings, project_id, owner, repo)
         work, mode, entry, sha = _build_dist(settings, owner, repo, branch,     # 1 build
                                              token=_tok, changed=changed, ref=ref)
         # The SHA that was actually checked out, captured inside _build_dist while the clone
