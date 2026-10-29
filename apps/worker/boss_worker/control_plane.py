@@ -389,6 +389,15 @@ class ControlPlaneClient:
         response.raise_for_status()
         return response.json()
 
+    def tick_subscription_keepalive(self, project_id: str) -> dict[str, Any]:
+        """Hourly keep-alive for connected subscription logins (Codex et al.)."""
+        response = self._client.post(
+            "/v1/setup/subscriptions/keep-alive",
+            json={"project_id": project_id, "actor": "system"},
+        )
+        response.raise_for_status()
+        return response.json()
+
     def tick_agent_processes(self, project_id: str, actor: str = "system") -> dict[str, Any]:
         """Advance waiting/running agent-process handoffs."""
         response = self._client.post(
