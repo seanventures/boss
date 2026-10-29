@@ -6134,18 +6134,31 @@ def complete_step(
     template = _step_map(spec)[row["step_id"]]
     contract_raw = template.get("contract")
     if contract_raw:
-        from .knowledge.step_contracts import parse_contract, required_write_kinds
+        from .knowledge import context_graph
+        from .knowledge.step_contracts import parse_contract, unsatisfied_required
 
         contract = parse_contract(row["step_id"], contract_raw)
-        required = required_write_kinds(contract)
-        produced = set((output or {}).get("produced") or {})
-        missing = sorted(required - produced)
+        produced = (output or {}).get("produced") or {}
+        # THE POSTCONDITION (§4.1 step 3): the engine writes the step's typed output to the
+        # Context Graph itself, rather than trusting the model to have called a tool. A required
+        # write that never landed is the AG-1 "chat text only, nothing written" miss
+        # [L:kgn_a7426dae68a24130a1b2]; it does not complete the step.
+        fingerprint = (context_graph.project_agent_run(
+            connection, project_id, row["workflow_run_id"]) or {}).get("fingerprint")
+        provenance = {
+            "policy_version": str((run.get("context") or {}).get("policy_version")
+                                  or spec.get("version") or ""),
+            "workflow_version": str(run.get("workflow_version_id") or spec.get("version") or ""),
+            "agent_fingerprint": str(fingerprint or ""),
+            "actor_ref": f"agent:{template.get('captain') or row['step_id']}",
+        }
+        context_graph.persist_contract_writes(
+            connection, project_id, run_id=row["workflow_run_id"], step_id=row["step_id"],
+            contract=contract, produced=produced, provenance=provenance)
+        missing = unsatisfied_required(contract, produced)
         if missing:
             if row["attempt"] + 1 < row["max_attempts"]:
-                # ONE REPAIR ROUND (AC4/AC5, the AG-1 "chat only, nothing written" miss
-                # [L:kgn_a7426dae68a24130a1b2]): a required write that never landed does not
-                # complete the step on chat text alone — it goes back to the queue once, with
-                # the missing kind named, before the step is allowed to fail.
+                # ONE REPAIR ROUND: back to the queue once, with the missing kind named.
                 retried = connection.execute(
                     text(
                         """
