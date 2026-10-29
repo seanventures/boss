@@ -234,10 +234,12 @@ def github_state(connection: Connection, settings: Any, project_id: str) -> dict
             "failing": failing, "has_connection": True}
 
 
-def github_token(connection: Connection, settings: Any, project_id: str) -> str:
+def github_token(connection: Connection, settings: Any, project_id: str,
+                 repo: str = "") -> str:
     from .github_connections import github_token_for
 
-    return github_token_for(connection, settings, project_id)
+    owner, _, name = (repo or "").partition("/")
+    return github_token_for(connection, settings, project_id, owner, name)
 
 
 def deploy_targets(connection: Connection, project_id: str) -> list[dict[str, Any]]:
@@ -517,7 +519,8 @@ def _github_test(begin: Begin, settings: Any, project_id: str, *, push: bool,
     started = time.monotonic()
     with begin() as connection:
         state = github_state(connection, settings, project_id)
-        token = github_token(connection, settings, project_id) if state["connected"] else ""
+        token = github_token(connection, settings, project_id, state.get("repo") or "") \
+            if state["connected"] else ""
     if not state["connected"] or not state["repo"]:
         return result(False, error="Connect your GitHub repo in Setup first", started=started)
     if not token:
