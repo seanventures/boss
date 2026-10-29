@@ -56,8 +56,9 @@ export type Station = {
 // ── One state per build (§4.4) ──────────────────────────────────────────────────────────────
 
 export type BuildStateKey =
-  | "cancelled" | "failed" | "needs_plan" | "needs_waiver" | "budget_refused" | "blocked"
-  | "budget_wait" | "quiet" | "queued" | "building" | "pr_open" | "merged" | "deployed" | "done_no_pr";
+  | "cancelled" | "failed" | "needs_plan" | "needs_waiver" | "needs_person" | "budget_refused"
+  | "blocked" | "budget_wait" | "quiet" | "queued" | "building" | "pr_open" | "merged"
+  | "deployed" | "done_no_pr";
 
 export type PreviewFlag = { status: "starting" | "running" | "failed"; url?: string };
 export type Origin = { kind: "workflow_run" | "meeting" | "discovery" | string; id: string; label: string };
