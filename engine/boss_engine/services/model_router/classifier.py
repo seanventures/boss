@@ -2,11 +2,11 @@
 
 A cascade, cheapest first (docs/product/MODEL_ROUTER.md, "(a) The classifier"):
 
-  cache ▸ Jev (when set up, not held, within its timeout) ▸ rules ▸ cheap model (opt-in, only
-  when the rules are unsure, within its timeout)
+  cache ▸ Jev (when set up, within its timeout) ▸ rules ▸ cheap model (opt-in, only when the
+  rules are unsure, within its timeout)
 
-The rules are deterministic and never skipped: they are the answer when Jev is held (today,
-BOSS-451), absent (most installs) or slow, and the floor under the cheap model. They read the
+The rules are deterministic and never skipped: they are the answer when Jev is absent (most
+installs) or slow, and the floor under the cheap model. They read the
 task through the SAME boilerplate-stripping, whole-word matching `infer_risk_tier` uses, so
 routing and rigor cannot disagree about what a task is.
 """
@@ -296,7 +296,7 @@ class Classifier:
     def classify(self, signal: TaskSignal, config: ClassifierConfig, *,
                  jev: Optional[Any] = None, jev_state: str = "absent",
                  model: Optional[Callable[[], Any]] = None) -> Classification:
-        """`jev` is a Decider (or None); `jev_state` is ready | held | absent. `model` builds
+        """`jev` is a Decider (or None); `jev_state` is ready | absent. `model` builds
         the cheap-model Decider on demand, so nothing is constructed when it is not asked."""
         started = time.perf_counter()
         key = f"{config.backend}|{signal.fingerprint()}"
@@ -309,9 +309,7 @@ class Classifier:
         short = False                       # cache briefly: a better answer may come soon
         questions = None
         if config.backend in ("auto", "jev"):
-            if jev_state == "held":
-                note = "Jev paused"
-            elif jev_state == "ready" and jev is not None \
+            if jev_state == "ready" and jev is not None \
                     and time.monotonic() < _JEV_COOL_UNTIL[0]:
                 note, short = "Jev slow — rules for a minute", True
             elif jev_state == "ready" and jev is not None:
@@ -401,17 +399,14 @@ CLASSIFIER = Classifier()
 
 
 def jev_state(settings: Any) -> str:
-    """ready | held | absent. Held until the install lifts BOSS-451's governance hold for the
-    router with `BOSS_ROUTER_JEV_LIVE` (off by default). Ready means every call goes through
-    the governed typed-decision path (store.GovernedJevDecider), never a bare client."""
+    """ready | absent. Ready when TypeSafe is the chosen decision backend and a key is held
+    (typed_decisions.typesafe_decides — the environment variable or one stored through Setup's
+    vault), and every call goes through the governed typed-decision path
+    (store.GovernedJevDecider), never a bare client. BOSSAPP-579 lifted the leftover router
+    hold: there is no "held" state any more."""
     try:
         from .. import typed_decisions
 
-        if not typed_decisions.typesafe_decides(settings):
-            return "absent"
-        if getattr(typed_decisions, "GOVERNANCE_HOLD", "") and \
-                not bool(getattr(settings, "router_jev_live", False)):
-            return "held"
-        return "ready"
+        return "ready" if typed_decisions.typesafe_decides(settings) else "absent"
     except Exception:  # noqa: BLE001
         return "absent"
