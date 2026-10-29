@@ -1,0 +1,49 @@
+id: banking-regulatory
+version: "1"
+description: >
+  Regulation and policy text split into clause nodes, traced to the business rules and code
+  that implement them. The KG Domain layer v1's reference pack for a bank's compliance team.
+status: active
+kinds:
+  - id: document
+    layer: domain
+    label: Document
+    color: "#6d4aff"
+    attrs: [title, source_url, citation, sensitivity, added_by, added_at]
+  - id: clause
+    layer: domain
+    label: Clause
+    color: "#8a6bff"
+    attrs: [document_id, section, text, citation, url]
+  - id: regulation
+    layer: domain
+    label: Regulation
+    color: "#6d4aff"
+    attrs: [name, jurisdiction, citation]
+  - id: regulatory_report
+    layer: domain
+    label: Regulatory report
+    color: "#a386ff"
+    attrs: [name, cadence, owner]
+  - id: system
+    layer: code
+    label: System
+    color: "#4a6dff"
+    attrs: [name, kind]
+  - id: owner
+    layer: domain
+    label: Owner
+    color: "#b79bff"
+    # Schema-only placeholder (PRD §Approved answers): its PII policy belongs to the security
+    # role and is not validated or enforced in v1.
+    attrs: [name, team, pii_policy]
+edges:
+  - id: implemented_by
+    label: implemented by
+    color: "#2e9e5b"
+  - id: gap
+    label: gap
+    color: "#c0392b"
+  - id: reported_in
+    label: reported in
+    color: "#4a6dff"
