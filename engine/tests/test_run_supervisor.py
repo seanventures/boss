@@ -150,6 +150,47 @@ class RunSupervisorTests(unittest.TestCase):
         )
         self.assertTrue(signal.forced)
 
+    def test_p0_elapsed_time_with_no_caused_failure_trips_stalled_and_changes_course(self):
+        """P0 -> AC1 (time-based variant): no WORK failure to repeat, but wall-clock time has
+        passed stall_minutes with nothing caused -- the signal trips as 'stalled' and the
+        orchestrator still returns a course-changing action rather than idling another round."""
+        signal = run_supervisor.evaluate_signal(
+            faults={},
+            rounds_used=1,
+            max_repair_rounds=3,
+            history=[{"round": 1, "faults": {}}],
+            spend_usd_micros=0,
+            started_at=None,
+            stall_minutes=15,
+            elapsed_seconds=20 * 60,
+        )
+        self.assertTrue(signal.tripped)
+        self.assertEqual(signal.reason, "stalled")
+        self.assertFalse(signal.caused)
+
+        decision = run_supervisor.decide(
+            mock.MagicMock(), mock.MagicMock(), "proj-1",
+            run_id="run-6", signal=signal, history=[],
+            adapter=mock.MagicMock(return_value={"action": CHANGE_APPROACH}),
+        )
+        self.assertEqual(decision["action"], CHANGE_APPROACH)
+
+    def test_p1_elapsed_time_under_stall_minutes_does_not_trip(self):
+        """A run that has not yet exceeded stall_minutes, with no repeated/caused failure and
+        rounds under the cap, makes genuine progress and must not be forced into judgement."""
+        signal = run_supervisor.evaluate_signal(
+            faults={},
+            rounds_used=1,
+            max_repair_rounds=3,
+            history=[],
+            spend_usd_micros=0,
+            started_at=None,
+            stall_minutes=15,
+            elapsed_seconds=5 * 60,
+        )
+        self.assertFalse(signal.tripped)
+        self.assertFalse(signal.forced)
+
     def test_p1_decision_recorded_exactly_once_with_pending_outcome(self):
         """P1 -> AC7: a tripped decision writes exactly one decision record on the run and
         exactly one lesson candidate with worked=None, verified by reading both back."""
