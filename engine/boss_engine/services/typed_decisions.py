@@ -62,7 +62,8 @@ GOVERNANCE_HOLD = (
     "Typed decision model calls stay paused (BOSS-451) unless this attempt already has a "
     "committed budget reservation, active model lease, deduplicated receipt, and cost "
     "settlement. A workflow step and a key proof carry those through TypedDecisionSpend; the "
-    "model router's Jev calls carry them too, behind BOSS_ROUTER_JEV_LIVE (off by default)."
+    "model router's Jev calls carry them too, through the same governed path "
+    "(model_router/store.GovernedJevDecider) — BOSSAPP-579 lifted the leftover router hold."
 )
 
 
