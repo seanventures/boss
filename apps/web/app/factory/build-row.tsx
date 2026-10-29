@@ -19,7 +19,7 @@ import { StationLine, WaitGlyph, activeStation, stationMoves } from "./station-l
 import { actorWords } from "../../lib/actor-words";
 
 /** States whose face never moves: motion would claim work that is not happening. */
-export const STILL_STATES = new Set(["quiet", "budget_wait", "blocked", "budget_refused", "needs_waiver", "queued"]);
+export const STILL_STATES = new Set(["quiet", "budget_wait", "blocked", "budget_refused", "needs_waiver", "needs_person", "queued"]);
 
 /** Whether this row's face would move (it counts against the Floor's ring budget). */
 export function buildAnimates(b: Build): boolean {

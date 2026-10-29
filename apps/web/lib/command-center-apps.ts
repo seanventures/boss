@@ -32,7 +32,7 @@ const arr = (w: unknown): unknown[] => (Array.isArray(w) ? w : []);
 const str = (w: unknown): string => (typeof w === "string" ? w : w == null ? "" : String(w));
 const num = (w: unknown): number => (typeof w === "number" && Number.isFinite(w) ? w : Number(w) || 0);
 
-const NEEDS = new Set(["needs_plan", "needs_waiver", "budget_refused"]);
+const NEEDS = new Set(["needs_plan", "needs_waiver", "needs_person", "budget_refused"]);
 
 export function parseCcApps(w: unknown): CcApp[] {
   return arr(obj(w).apps).map((x) => {
@@ -86,7 +86,7 @@ export function appNeed(a: CcApp, items: NeedItem[] = []): AppNeed | null {
 export function shelfState(a: CcApp, need: AppNeed | null = appNeed(a)): ShelfState {
   if (need) return "needs";
   if (a.state === "pr_open" || (a.prNumber && a.prState === "open" && /^PR open/.test(a.word))) return "pr";
-  if (a.state === "needs_plan" || a.state === "needs_waiver" || a.state === "budget_refused" || /^Needs you/.test(a.word)) return "needs";
+  if (a.state === "needs_plan" || a.state === "needs_waiver" || a.state === "needs_person" || a.state === "budget_refused" || /^Needs you/.test(a.word)) return "needs";
   if (a.state === "failed" || /^Failed/.test(a.word)) return "failed";
   if (a.state === "cancelled" || /^Stopped/.test(a.word)) return "stopped";
   if (["merged", "deployed", "done_no_pr"].includes(a.state)) return "done";

@@ -30,6 +30,7 @@ import re
 import threading
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 from typing import Any, Callable, Optional, Sequence
 
 from . import build_budget as _build_budget
@@ -8304,9 +8305,28 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 action = "block"
                 fctx["supervisor_decision"] = _sup_decision
             elif _sup_action == run_supervisor_types.REACH_OUT:
-                action = "block"
+                # The supervisor decided a person is needed -- pause and ask (L2b) instead of
+                # falling into the generic quality-gate "block" path below, which assumes a
+                # failing gate to explain and would have nothing to say for a round with zero
+                # caused failures (PRD 5.3 / AC2).
+                from . import person_wait
+
                 fctx["supervisor_decision"] = _sup_decision
-                fctx["supervisor_question"] = _sup_decision.get("question")
+                question = (_sup_decision.get("question")
+                            or "This build needs something only a person can provide.")
+                fctx["supervisor_question"] = question
+                _budget_adapter = SimpleNamespace(
+                    release=lambda **_: _release(
+                        budget, _c, project_id, reservation_id, question, run_id=run_id,
+                    ),
+                )
+                with _transaction(engine) as _c:
+                    person_wait.enter_waiting_on_person(
+                        _c, _budget_adapter, run_id=run_id, project_id=project_id,
+                        task_id=task_id, reason="supervisor_reach_out", question=question,
+                    )
+                return {"status": "waiting_on_person", "done": True,
+                        "reason": "supervisor_reach_out", "message": question}
             else:
                 if _sup_action in (run_supervisor_types.STEER,
                                     run_supervisor_types.CHANGE_APPROACH,
