@@ -187,10 +187,9 @@ def test_rules_only_never_asks_anyone():
     assert c.classifier == "rules" and jev.calls == 0
 
 
-def test_jev_is_held_while_boss_451_stands():
-    settings = SimpleNamespace(decision_backend="typesafe", typesafe_api_key="tk",
-                               router_jev_live=False)
-    assert jev_state(settings) == "held"
+def test_jev_state_is_ready_whenever_a_key_is_held_no_held_state_any_more():
+    settings = SimpleNamespace(decision_backend="typesafe", typesafe_api_key="tk")
+    assert jev_state(settings) == "ready"
     assert jev_state(SimpleNamespace(decision_backend="claude", typesafe_api_key="")) == "absent"
 
 
