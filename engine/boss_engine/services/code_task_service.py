@@ -2864,18 +2864,25 @@ def _run_code_task_once(engine, settings: Settings, jobs, run_id: str,
     except AuthorityRefused as exc:
         # A refusal, said as one: the run is blocked with what to do; the worker is answered.
         words = authority_refusal_words(exc.reason, _refused_agent_name(engine, exc.reason))
+        terminal = ("completed", "failed", "cancelled", "blocked", "waiting_on_person")
         with _transaction(engine) as c:
             run = load_code_task_run(c, run_id)
             gap = str(((run or {}).get("finalize_ctx") or {}).get("authority_gap") or "")
             if gap:
                 # A continuation BOSS started for a lineage (a follow-up): say exactly which
                 # grant is missing, found when it was created (start_code_task(continuation)).
+                # This already names the gap precisely, so it is a dead end for this lineage,
+                # not a person-wait pause -- restore the pre-existing `_fail(...blocked...)`.
                 words = (f"BOSS started this to continue an earlier build, but no person's "
                          f"authority carries over: {gap}. Start it again from the console as a "
                          "person (you will be asked to consent), or give the builder a standing "
                          "grant under My account ▸ Agents acting for me.")
-            if run is not None and run["status"] not in ("completed", "failed", "cancelled", "blocked",
-                                                           "waiting_on_person"):
+                if run is not None and run["status"] not in terminal:
+                    _fail(c, run_id, run["project_id"], words, status="blocked",
+                          failure_class="needs_human", reason_code="no_authority")
+                return {"status": "blocked", "done": True, "reason": "no_authority",
+                        "authority": exc.reason, "message": words}
+            if run is not None and run["status"] not in terminal:
                 # A no-grant/no-principal refusal is a PERSON blocker, not a dead end: pause,
                 # ask the one thing needed, and resume from here once a grant covers it
                 # (L2b) instead of failing the run outright.
