@@ -69,6 +69,9 @@ _TARGETS = "probes only the targets deployment_health.sweep picked, which skips 
 
 EXEMPT: dict[str, str] = {
     "identity/claim.py::claim": "the owner claim at install time, not a scheduler",
+    "services/lineage_sandbox.py::claim": "provisions or reuses a sandbox for a run.id already "
+                                          "started elsewhere (that start refused an archived "
+                                          "project); claim itself starts no new project work",
     "identity/github_setup.py::sweep_control_plane_tokens": _IDENTITY,
     "identity/grants.py::expire_due": _IDENTITY,
     "identity/maintenance.py::tick": _IDENTITY,
