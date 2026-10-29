@@ -403,9 +403,28 @@ def _seed_cli_logins(ident: SandboxIdentity) -> None:
         for name in ("auth.json", "config.toml", "config.json", "credentials.json"):
             path = os.path.join(src, name)
             if os.path.isfile(path):
-                shutil.copyfile(path, dst / name)
+                if sub == ".codex" and name == "auth.json":
+                    _copy_codex_login_without_refresh(path, dst / name)
+                else:
+                    shutil.copyfile(path, dst / name)
                 os.chmod(dst / name, 0o644)
     _seed_claude_login(ident)
+
+
+def _copy_codex_login_without_refresh(src: str, dst: Path) -> None:
+    """Codex's ChatGPT login, copied WITHOUT its refresh token (the same rule as Claude's,
+    _seed_claude_login). Each run's codex that refreshed would rotate the ONE refresh token every
+    copy shares; OpenAI treats a reused refresh token as replay and revokes the whole login. On
+    boss-1 (2026-10-29) the control plane's Codex went login_expired while its access token was
+    valid for nine more days. The copy keeps the access token; only the control plane refreshes."""
+    try:
+        data = json.loads(Path(src).read_text())
+    except (OSError, ValueError):
+        return                                   # unreadable: copy nothing rather than guess
+    tokens = data.get("tokens")
+    if isinstance(tokens, dict):
+        data["tokens"] = {k: v for k, v in tokens.items() if k != "refresh_token"}
+    dst.write_text(json.dumps(data))
 
 
 def _seed_claude_login(ident: SandboxIdentity) -> None:

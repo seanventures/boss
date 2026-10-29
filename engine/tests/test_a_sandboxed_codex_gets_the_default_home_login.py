@@ -64,3 +64,30 @@ def test_no_codex_login_anywhere_copies_nothing(tmp_path, monkeypatch):
     sandbox_identity._seed_cli_logins(_Ident(run_home))
 
     assert not (run_home / ".codex").exists()
+
+
+def test_the_codex_copy_never_carries_the_refresh_token(tmp_path, monkeypatch):
+    """boss-1, 2026-10-29: every run's codex held the one refresh token; a refresh in any copy
+    rotated it and OpenAI revoked the whole login (login_expired, access token still valid)."""
+    import json
+
+    _no_claude(monkeypatch)
+    service_home = tmp_path / "boss"
+    (service_home / ".codex").mkdir(parents=True)
+    src = service_home / ".codex" / "auth.json"
+    src.write_text(json.dumps({"auth_mode": "chatgpt", "last_refresh": "x",
+                               "tokens": {"access_token": "ACCESS", "id_token": "ID",
+                                          "refresh_token": "REFRESH_MARKER", "account_id": "a"}}))
+    before = src.read_text()
+    monkeypatch.setenv("HOME", str(service_home))
+    monkeypatch.delenv("CODEX_HOME", raising=False)
+    run_home = tmp_path / "run-home"
+    run_home.mkdir()
+
+    sandbox_identity._seed_cli_logins(_Ident(run_home))
+
+    copied = json.loads((run_home / ".codex" / "auth.json").read_text())
+    assert copied["tokens"]["access_token"] == "ACCESS"
+    assert "refresh_token" not in copied["tokens"]
+    assert "REFRESH_MARKER" not in (run_home / ".codex" / "auth.json").read_text()
+    assert src.read_text() == before                     # the control plane's login is untouched
