@@ -63,6 +63,7 @@ NOT_AN_AGENT_ON_A_STEP = {
     (("default_captain",), "services/workflow_catalogue.py"): "sets and re-staffs that mark",
     (("default_captain",), "services/two_pass.py"):
         "sets that mark beside the same `captain` on the steps the two-pass rule adds",
+    (("default_captain",), "services/monitoring_pack.py"): "sets that same soft-default mark",
     # An identity role binding (identity_role_bindings.role_id: an access role), not a step.
     (("binding", "role_id"), "identity/bindings.py"): "an access-role binding, not a workflow step",
     # A conversation's start card reads the Library OUTLINE of a step (workflows._step_outline:
