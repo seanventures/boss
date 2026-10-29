@@ -34,13 +34,16 @@ class TestTheBaseRerunUsesTheSandboxedRunner(unittest.TestCase):
         recorded = {}
 
         def fake_boss_run(args, **kwargs):
-            # The worktree is created/removed under the identity's own workspace, never
-            # tempfile.mkdtemp on the control-plane host.
-            if "add" in args:
-                recorded["worktree_target"] = args[args.index("add") + 2]
-            return subprocess.CompletedProcess(args, 0, "", "")
+            # boss_run (the control plane's uid) must never touch the run's checkout: its .git
+            # holds files only the run's uid/group can read (boss-1, 2026-10-29).
+            raise AssertionError(f"boss_run used for the base rerun: {args}")
 
         def fake_run(args, **kwargs):
+            if args[:1] == ["git"]:
+                # The worktree is created/removed AS THE RUN'S UID under its own workspace.
+                if "add" in args:
+                    recorded["worktree_target"] = args[args.index("add") + 2]
+                return subprocess.CompletedProcess(args, 0, "", "")
             recorded["argv"] = args
             recorded["kwargs"] = kwargs
             self.assertNotIsInstance(args, str)  # argv, never a shell string

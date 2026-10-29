@@ -3240,10 +3240,16 @@ def _rerun_test_cmd_on_base(root: Path, base_sha: str, failing_ids: Sequence[str
     worktree_dir = (identity.workspace("boss-baseline-") if identity is not None
                     else Path(tempfile.mkdtemp(prefix="boss-baseline-")))
     try:
-        added = owned_process.boss_run(
+        # AS THE RUN'S OWN SANDBOX UID (owned_process.run), never boss_run: after the agent has
+        # worked, files in the checkout's .git belong to the run's uid/group (e.g. AUTO_MERGE,
+        # 0660), and the control plane's git then says "not a git repository". Every base rerun
+        # came back empty and L1 labelled every failure "caused" (boss-1, 2026-10-29).
+        added = owned_process.run(
             ["git", "-C", str(root), "worktree", "add", "--detach", str(worktree_dir), base_sha],
             capture_output=True, text=True, timeout=120)
         if added.returncode != 0:
+            logger.warning("baseline rerun skipped: git worktree add failed (%s): %s",
+                           added.returncode, (added.stderr or "")[:300])
             return ""
         run_cwd = (worktree_dir / cwd_rel) if cwd_rel not in (".", "", None) else worktree_dir
         argv = _test_cmd_without_paths(test_cmd) + sorted(failing_ids)
@@ -3255,7 +3261,7 @@ def _rerun_test_cmd_on_base(root: Path, base_sha: str, failing_ids: Sequence[str
         return ""
     finally:
         try:
-            owned_process.boss_run(
+            owned_process.run(
                 ["git", "-C", str(root), "worktree", "remove", "--force", str(worktree_dir)],
                 capture_output=True, text=True, timeout=60)
         except Exception:  # noqa: BLE001
