@@ -30,6 +30,11 @@ STALL_MINUTES_SETTING = "run_supervisor_stall_minutes"
 DEFAULT_STALL_MINUTES = 15
 MAX_ROUNDS_WITHOUT_JUDGEMENT = 3
 
+#: The three independently toggle-able feature flags (project_settings.KNOBS / Settings).
+SIGNAL_SETTING = "run_supervisor_signal"
+JUDGEMENT_SETTING = "run_supervisor_judgement"
+ACTION_SETTING = "run_supervisor_action"
+
 
 @dataclass(frozen=True)
 class ProgressSignal:
