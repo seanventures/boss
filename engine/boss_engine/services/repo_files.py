@@ -63,10 +63,21 @@ class RepoFiles:
                 if absolute == prefix or absolute.startswith(prefix + "/"):
                     absolute = "/private" + absolute
                     break
-        fd = os.open("/", _DIR)
+        # Ancestors of the root (e.g. the sandbox's own parent directories) need only be
+        # traversed, not listed: O_PATH requires search (x) permission on each component, not
+        # read (r) — a root nested under a directory we may not read (but may enter) must still
+        # be openable. Only the root itself (opened last, with the real _DIR flags) is ever
+        # scanned, so only it needs read permission.
+        _TRAVERSE = os.O_PATH | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+        parts = Path(absolute).parts[1:]
+        fd = os.open("/", _TRAVERSE)
         try:
-            for part in Path(absolute).parts[1:]:
-                next_fd = os.open(part, _DIR, dir_fd=fd)
+            for part in parts[:-1]:
+                next_fd = os.open(part, _TRAVERSE, dir_fd=fd)
+                os.close(fd)
+                fd = next_fd
+            if parts:
+                next_fd = os.open(parts[-1], _DIR, dir_fd=fd)
                 os.close(fd)
                 fd = next_fd
             self._fd, fd = fd, -1
