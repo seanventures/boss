@@ -123,7 +123,9 @@ class StagePolicy:
     budget_tokens: int = 1200
     tools: frozenset[str] | None = None  # None: every kg tool whose layers the stage reads
     seeds: tuple[str, ...] = field(default=())  # node ids the stage was given
-    kinds: frozenset[str] | None = None  # None: every kind in the layers above; else only these
+    #: When set, further narrows reads to exactly these node kinds (a step contract's `reads`),
+    #: beneath the layer filter: declaring a layer never grants every kind in it.
+    kinds: frozenset[str] | None = None
 
     def __post_init__(self) -> None:
         unknown = set(self.layers) - set(LAYERS)
@@ -153,7 +155,8 @@ class StagePolicy:
         return {"stage": self.stage, "layers": sorted(self.layers), "code": self.code,
                 "max_hops": self.max_hops, "max_nodes": self.max_nodes,
                 "budget_tokens": self.budget_tokens,
-                "tools": sorted(self.tools) if self.tools is not None else None}
+                "tools": sorted(self.tools) if self.tools is not None else None,
+                "kinds": sorted(self.kinds) if self.kinds is not None else None}
 
 
 def _gerund(stage: str) -> str:
