@@ -4139,6 +4139,12 @@ CREATE TABLE IF NOT EXISTS workflow_versions (
   UNIQUE(workflow_definition_id, version),
   UNIQUE(workflow_definition_id, content_hash)
 );
+-- `definition_id` mirrors `workflow_definition_id` so callers (and the KG investigation
+-- pipeline's publish checks) can reference the version's definition by the short name without
+-- a rename; it is generated, so inserts keep writing `workflow_definition_id` only.
+ALTER TABLE workflow_versions
+  ADD COLUMN IF NOT EXISTS definition_id TEXT
+  GENERATED ALWAYS AS (workflow_definition_id) STORED;
 CREATE INDEX IF NOT EXISTS idx_workflow_versions_project
   ON workflow_versions(project_id, workflow_definition_id, version DESC);
 
