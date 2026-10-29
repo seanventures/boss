@@ -377,7 +377,7 @@ def _checkout(engine: Any, settings: Any, *, project_id: str, repo: str, branch:
 
     def _token() -> str:
         with engine.begin() as c:
-            return github_token_for(c, settings, project_id) or ""
+            return github_token_for(c, settings, project_id, owner, name) or ""
 
     with identity_runs.repo_access(engine, host=getattr(settings, "target_repo_host", "github") or "github",
                                    owner=owner, repo=name, project_id=project_id, token=_token) as access:

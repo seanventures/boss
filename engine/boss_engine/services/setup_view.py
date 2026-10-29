@@ -318,6 +318,7 @@ def _repository(connection: Connection, settings: Any, project_id: str, now: dat
              "   AND c.status NOT IN ('disabled', 'revoked') "
              " ORDER BY (b.role = 'primary') DESC, b.created_at"),
         {"p": project_id}).mappings().all()
+    connections = _connections(connection, project_id)
     connection_row = None
     if rows:
         connection_row = {"id": rows[0]["connection_id"], "auth_method": rows[0]["auth_method"],
@@ -341,7 +342,8 @@ def _repository(connection: Connection, settings: Any, project_id: str, now: dat
             default=row["role"] == "primary",
             private=(None if row["visibility"] is None else row["visibility"] != "public"),
             default_branch=row["default_branch"], checks=checks, state=state,
-            expires=expires, checked=checked, retry_at=checks.get("retry_at"), now=now))
+            expires=expires, checked=checked, retry_at=checks.get("retry_at"), now=now,
+            connection_id=row["connection_id"]))
 
     source = "connected"
     if not rows:
@@ -379,7 +381,39 @@ def _repository(connection: Connection, settings: Any, project_id: str, now: dat
         if source == "connected" and connection_out["auth"] == "token" and repos:
             connection_out["builds"] = _builds_reach(connection, project_id, connection_row["id"],
                                                      repos[0]["full_name"])
-    return {"connection": connection_out, "repos": repos}
+    return {"connection": connection_out, "connections": connections, "repos": repos}
+
+
+def _connections(connection: Connection, project_id: str) -> list[dict[str, Any]]:
+    """Every GitHub connection (account) that owns one of this project's repositories, for the
+    console to group repos under. `connection` (singular) stays computed above for callers that
+    have not migrated."""
+    rows = connection.execute(
+        text("SELECT DISTINCT c.id, c.connection_label, c.account_login, c.auth_method, "
+             "       c.api_base_url, c.status, c.created_at "
+             "  FROM github_connections c "
+             "  JOIN github_repository_bindings b ON b.connection_id = c.id "
+             " WHERE c.project_id = :p AND c.status NOT IN ('disabled', 'revoked') "
+             "   AND b.project_id = :p AND b.status = 'active' "
+             " ORDER BY c.created_at"),
+        {"p": project_id}).mappings().all()
+    out = []
+    for row in rows:
+        status = row["status"]
+        if status == "active":
+            kind, label = "green", "Working"
+        elif status == "error":
+            kind, label = "red", "Error"
+        else:
+            kind, label = "grey", "Not checked"
+        out.append({
+            "id": row["id"], "label": row["connection_label"],
+            "account_login": row["account_login"],
+            "auth": "app" if row["auth_method"] == "github_app" else "token",
+            "host": row["api_base_url"],
+            "pill": {"kind": kind, "label": label},
+        })
+    return out
 
 
 def _builds_reach(connection: Connection, project_id: str, connection_id: str,
@@ -428,7 +462,8 @@ def install_repository(settings: Any) -> tuple[str, str, str]:
 def _repo_entry(*, binding_id: Optional[str], full_name: str, default: bool,
                 private: Optional[bool], default_branch: Optional[str], checks: dict[str, Any],
                 state: str, expires: Optional[datetime], checked: Optional[datetime],
-                retry_at: Any, now: datetime) -> dict[str, Any]:
+                retry_at: Any, now: datetime,
+                connection_id: Optional[str] = None) -> dict[str, Any]:
     days = max(0, (expires - now).days) if expires else None
     pill = setup_pills.pill(
         "repository", state, repo=full_name, n=days,
@@ -442,6 +477,7 @@ def _repo_entry(*, binding_id: Optional[str], full_name: str, default: bool,
 
     return {
         "binding_id": binding_id, "full_name": full_name, "default": default,
+        "connection_id": connection_id,
         "private": private, "default_branch": default_branch,
         "checks": {"read": part("read"), "write": part("write"),
                    "pull_requests": part("pull_requests")},

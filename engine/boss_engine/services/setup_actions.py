@@ -117,14 +117,29 @@ def _api_base(settings: Any) -> str:
     return str(getattr(settings, "github_api_base_url", "") or "https://api.github.com")
 
 
+def _dedupe_label(connection: Connection, project_id: str, login: str) -> str:
+    """`login`, or `"{login} N"` for the first N >= 2 not already a label this project has."""
+    existing = set(connection.execute(
+        text("SELECT connection_label FROM github_connections WHERE project_id = :p"),
+        {"p": project_id}).scalars().all())
+    if login not in existing:
+        return login
+    n = 2
+    while f"{login} {n}" in existing:
+        n += 1
+    return f"{login} {n}"
+
+
 def repository_token(connection: Connection, settings: Any, project_id: str, token: str, *,
                      connection_id: Optional[str] = None, accept_database_fallback: bool = False,
                      actor: str = "ceo", http: Optional[Http] = None) -> dict[str, Any]:
     """Check a pasted token, store it, and list what it can see.
 
-    A token GitHub refuses is never stored. Pasting again — or `Replace token` — re-points the
-    one connection this project has, so its repository bindings and history stay (the old
-    "already has a GitHub connection with this label" dead end cannot happen).
+    A token GitHub refuses is never stored. Pasting with `connection_id` — `Replace token` —
+    re-points that connection, so its repository bindings and history stay. Pasting with no
+    `connection_id` ALWAYS adds another account: a project can hold several GitHub connections
+    (e.g. a personal account and an org account), each owning its own repository bindings, each
+    labelled from the paste's account login (deduped against the project's other labels).
     """
     token = (token or "").strip()
     if not token:
@@ -143,11 +158,7 @@ def repository_token(connection: Connection, settings: Any, project_id: str, tok
     credential_ref = service.store_token_credential(
         connection, project_id=project_id, token=token, auth_method="personal_access_token",
         label=GITHUB_LABEL, actor=actor)
-    existing = None
-    if connection_id:
-        existing = service.get_connection(connection, project_id, connection_id)
-    else:
-        existing = service._connection_by_label(connection, project_id, GITHUB_LABEL)
+    existing = service.get_connection(connection, project_id, connection_id) if connection_id else None
     if existing is not None:
         current = service.repoint_connection(
             connection, project_id=project_id, connection_id=existing["id"],
@@ -158,8 +169,9 @@ def repository_token(connection: Connection, settings: Any, project_id: str, tok
                                     "disabled_at = NULL, revoked_at = NULL WHERE id = :id"),
                                {"id": current["id"]})
     else:
+        label = _dedupe_label(connection, project_id, found["account_login"] or GITHUB_LABEL)
         current = service.create_connection(
-            connection, project_id=project_id, connection_label=GITHUB_LABEL,
+            connection, project_id=project_id, connection_label=label,
             auth_method="personal_access_token", credential_ref=credential_ref, app_id=None,
             installation_id=None, api_base_url=_api_base(settings),
             required_permissions=["pull", "push", "triage"],

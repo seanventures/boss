@@ -5084,7 +5084,7 @@ def _role_name_candidates(wanted: str) -> list[str]:
     return out
 
 
-def _github_token_for(ctx: Any, project_id: str) -> str:
+def _github_token_for(ctx: Any, project_id: str, repo: str = "") -> str:
     """The credential this project's repository is connected with.
 
     ONE IMPLEMENTATION, in the service layer. This used to hold the resolution itself, and
@@ -5092,12 +5092,16 @@ def _github_token_for(ctx: Any, project_id: str) -> str:
     and the bug lived there, and every preview clone of a private repository failed with git
     asking for a username on a terminal nobody is at. Both call
     `github_connections.github_token_for` now, which is where the behaviour is documented.
+
+    `repo` is "owner/name" when known — a project with several GitHub accounts must resolve
+    the token bound to THAT repository, never whichever connection was touched most recently.
     """
     from ..services.github_connections import github_token_for
 
+    owner, _, name = (repo or "").partition("/")
     try:
         with ctx.begin() as connection:
-            return github_token_for(connection, ctx.settings, project_id)
+            return github_token_for(connection, ctx.settings, project_id, owner, name)
     except Exception:  # noqa: BLE001 — no token is an answer; the clone reports it
         return ""
 
@@ -7692,7 +7696,7 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
         if err:
             return _source_refusal(ctx, args, project_id, err)
         root, err = _repo_root(ctx.settings, repo, ref,
-                               token=_github_token_for(ctx, project_id))
+                               token=_github_token_for(ctx, project_id, repo))
         if root is None:
             return {"ok": False, "error": err}
         base = _safe_path(args.get("path") or "", root)
@@ -7755,7 +7759,7 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
         if err:
             return _source_refusal(ctx, args, project_id, err)
         root, err = _repo_root(ctx.settings, repo, ref,
-                               token=_github_token_for(ctx, project_id))
+                               token=_github_token_for(ctx, project_id, repo))
         if root is None:
             return {"ok": False, "error": err}
         base = _safe_path(args.get("path") or "", root)
@@ -7804,7 +7808,7 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
         if err:
             return _source_refusal(ctx, args, project_id, err)
         root, err = _repo_root(ctx.settings, repo, ref,
-                               token=_github_token_for(ctx, project_id))
+                               token=_github_token_for(ctx, project_id, repo))
         if root is None:
             return {"ok": False, "error": err}
         path = _safe_path(args["file"], root)
@@ -8131,7 +8135,7 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
         if not run_repo and not _project_repository_bound(ctx, pid, repo_full):
             return {"ok": False, "error": "repository unavailable in this project"}
         if _community_restricted(ctx.settings):
-            token = _github_token_for(ctx, pid)
+            token = _github_token_for(ctx, pid, repo_full)
         else:
             token = getattr(ctx.settings, "github_token", "") or ""
 
@@ -8327,7 +8331,7 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
         if err:
             return _source_refusal(ctx, args, project_id, err)
         root, err = _repo_root(ctx.settings, repo, ref,
-                               token=_github_token_for(ctx, project_id))
+                               token=_github_token_for(ctx, project_id, repo))
         if root is None:
             return {"ok": False, "error": err}
         # AN IMAGE IS NOT A CHECKOUT. BOSS's own source is COPYed into the container without

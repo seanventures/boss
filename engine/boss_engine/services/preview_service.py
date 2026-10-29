@@ -2737,7 +2737,7 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
 
         def _token() -> str:
             with begin(engine) as _c:
-                return github_token_for(_c, settings, project_id) or ""
+                return github_token_for(_c, settings, project_id, owner, repo) or ""
 
         with _identity_runs.repo_access(engine, host=getattr(settings, "target_repo_host", "github") or "github",
                                         owner=owner, repo=repo, project_id=project_id, token=_token) as _access:
@@ -3066,7 +3066,7 @@ def start_container_preview(engine, settings: Settings, run_id: str, *, ttl_minu
 
     def _token() -> str:
         with begin(engine) as _c:
-            return github_token_for(_c, settings, project_id) or ""
+            return github_token_for(_c, settings, project_id, owner, repo) or ""
 
     with _identity_runs.repo_access(engine, host=getattr(settings, "target_repo_host", "github") or "github",
                                     owner=owner, repo=repo, project_id=project_id, token=_token) as _access:
@@ -3278,7 +3278,7 @@ def _respawn_process_preview(engine, settings: Settings, preview_id: str) -> Non
 
         def _token() -> str:
             with begin(engine) as _c:
-                return github_token_for(_c, settings, project_id) or ""
+                return github_token_for(_c, settings, project_id, owner, repo) or ""
 
         with _identity_runs.repo_access(engine, host=getattr(settings, "target_repo_host", "github") or "github",
                                         owner=owner, repo=repo, project_id=project_id, token=_token) as _access:

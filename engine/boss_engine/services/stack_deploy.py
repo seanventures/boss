@@ -266,7 +266,7 @@ def github_source_for(connection: Connection, settings: Settings, project_id: st
     except Exception:  # noqa: BLE001 — no token is an answer; a public repo needs none
         log.debug("stack deploy: no registered token for %s/%s", owner, repo, exc_info=True)
     if not token:
-        token = github_token_for(connection, settings, project_id)
+        token = github_token_for(connection, settings, project_id, owner, repo)
     return GitHubSource(token or "")
 
 

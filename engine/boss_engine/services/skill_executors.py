@@ -1747,8 +1747,8 @@ def execute_ci_status(context: "SkillExecutorContext", inputs: dict[str, Any]) -
     if not state["connected"] or not state["repo"]:
         raise SkillExecutorConfigurationError(
             "this project has no GitHub repository connected. Connect it in Setup.")
-    token = github_token(context.connection, context.settings, context.project_id)
     base, repo = state["api_base"], state["repo"]
+    token = github_token(context.connection, context.settings, context.project_id, repo)
     ref = str(inputs.get("ref") or "").strip()
     if not ref:
         ref = str((_http_get(f"{base}/repos/{repo}", token) or {}).get("default_branch")

@@ -162,27 +162,79 @@ def _apps_summary(db: Any, project_id: str) -> list[dict[str, Any]]:
         return []
 
 
-def _connection_for(db: Any, settings: Any, project_id: str, actor: str) -> str:
-    """The connection a new binding hangs off: the org's GitHub App (no token to paste), else the
-    project's own working connection."""
+def _connection_for(db: Any, settings: Any, project_id: str, actor: str, *,
+                    connection_id: Optional[str] = None, owner: str = "",
+                    repo: str = "") -> str:
+    """The connection a new binding hangs off.
+
+    An explicit `connection_id` wins outright — the caller's choice, surfacing GitHub's own
+    refusal if it turns out to be wrong. Otherwise: the org's GitHub App (no token to paste),
+    else whichever of the project's own connections can actually REACH `owner/repo` (probed) —
+    a project holding several accounts must not hand a new repository to "the newest working
+    connection" when that account cannot even see it."""
     from ..identity import github_setup
     from ..services import setup_actions
 
+    if connection_id:
+        row = db.execute(sql("SELECT id FROM github_connections WHERE project_id = :p AND id = :c"),
+                         {"p": project_id, "c": connection_id}).scalar()
+        if row is None:
+            raise MultiRepoError(404, "unknown_connection", "That GitHub connection is not in this project.")
+        return str(row)
+
+    full_name = f"{owner}/{repo}".strip("/") if owner and repo else ""
     org_id = org_of_project(db, project_id)
     if org_id and github_setup.app_ready(db, org_id):
-        return str(setup_actions.repository_from_app(db, settings, project_id, actor=actor,
-                                                     list_repos=False)["connection_id"])
-    row = db.execute(sql("SELECT id FROM github_connections WHERE project_id = :p AND status IN "
-                         "('active', 'configured') ORDER BY (status = 'active') DESC, created_at LIMIT 1"),
-                     {"p": project_id}).scalar()
-    if row is None:
+        app_reaches = True
+        if full_name:
+            try:
+                reachable = {r["full_name"].lower() for r in github_setup.installation_repositories(db)}
+                app_reaches = full_name.lower() in reachable
+            except Exception:  # noqa: BLE001 — an App that can't list repos can't be trusted to reach this one
+                app_reaches = False
+        if app_reaches:
+            return str(setup_actions.repository_from_app(db, settings, project_id, actor=actor,
+                                                         list_repos=False)["connection_id"])
+    rows = db.execute(sql("SELECT id FROM github_connections WHERE project_id = :p AND status IN "
+                         "('active', 'configured') ORDER BY (status = 'active') DESC, created_at"),
+                     {"p": project_id}).scalars().all()
+    if not rows:
         raise MultiRepoError(409, "github_not_connected",
                              "Connect GitHub for this project first (Setup › GitHub access).")
-    return str(row)
+    if full_name:
+        from ..services import setup_checks
+        from ..services.github_connections import GitHubConnectionService
+
+        service = GitHubConnectionService(settings)
+        for row in rows:
+            cid = str(row)
+            try:
+                ref = service._credential_ref(db, project_id, cid)  # noqa: SLF001
+                kind, _, key = str(ref).partition(":")
+                record = {"ref_kind": kind, "ref_key": key}
+                for item in service.secret_refs.list_secret_refs(db, project_id, status="active", limit=200):
+                    if item.get("ref_kind") == kind and item.get("ref_key") == key:
+                        record = item
+                        break
+                token = service._resolve_secret(record, db)  # noqa: SLF001
+                if not token:
+                    continue
+                probed = setup_checks.probe_repository(
+                    token, full_name,
+                    api_base=str(getattr(settings, "github_api_base_url", "") or
+                                 "https://api.github.com"))
+                if (probed.get("checks") or {}).get("read", {}).get("ok"):
+                    return cid
+            except Exception:  # noqa: BLE001 — a connection that cannot be probed cannot reach it either
+                continue
+        raise MultiRepoError(409, "github_repo_unreachable",
+                             "None of this project's GitHub connections can reach that repository.")
+    return str(rows[0])
 
 
 def add(db: Any, settings: Any, project_id: str, *, registry_repo_id: str, role_hint: Optional[str] = None,
-        base_branch: Optional[str] = None, actor: str = "operator", check: bool = True) -> dict[str, Any]:
+        base_branch: Optional[str] = None, actor: str = "operator", check: bool = True,
+        connection_id: Optional[str] = None) -> dict[str, Any]:
     from . import registry
     from ..services import setup_actions
 
@@ -194,7 +246,9 @@ def add(db: Any, settings: Any, project_id: str, *, registry_repo_id: str, role_
     hint = _hint(role_hint)
     has_primary = db.execute(sql("SELECT 1 FROM github_repository_bindings WHERE project_id = :p AND "
                                  "role = 'primary' AND status = 'active'"), {"p": project_id}).first()
-    connection_id = _connection_for(db, settings, project_id, actor)
+    owner, _, name = row["full_name"].partition("/")
+    connection_id = _connection_for(db, settings, project_id, actor, connection_id=connection_id,
+                                   owner=owner, repo=name)
     if check:
         binding_id = setup_actions.select_repository(db, settings, project_id, connection_id, row["full_name"],
                                                      make_default=not has_primary, actor=actor)
@@ -338,13 +392,16 @@ def binding_for(db: Any, project_id: str, ref: str) -> Optional[str]:
 
 
 def put(db: Any, settings: Any, project_id: str, ref: str, *, role_hint: Any = ...,
-        base_branch: Optional[str] = None, actor: str = "operator") -> dict[str, Any]:
-    """Add a registry repository to the project, or update the one it already has. The
-    connection is the org's (its GitHub App, else the project's own): none is named here."""
+        base_branch: Optional[str] = None, actor: str = "operator",
+        connection_id: Optional[str] = None) -> dict[str, Any]:
+    """Add a registry repository to the project, or update the one it already has. Without an
+    explicit `connection_id` the connection is the org's App, else whichever of the project's
+    own connections can reach the repository."""
     binding_id = binding_for(db, project_id, ref)
     if binding_id is None:
         add(db, settings, project_id, registry_repo_id=registry_id_for(db, project_id, ref),
-            role_hint=None if role_hint is ... else role_hint, base_branch=base_branch, actor=actor)
+            role_hint=None if role_hint is ... else role_hint, base_branch=base_branch, actor=actor,
+            connection_id=connection_id)
     else:
         update(db, project_id, binding_id, role_hint=role_hint, base_branch=base_branch or ..., actor=actor)
     return list_project_repos(db, project_id)
