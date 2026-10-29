@@ -24,7 +24,7 @@ Jev is the right tool when **all four** of these are true:
 | Use | Where | Live? |
 |---|---|---|
 | Workflow `typed_decision` step | `typed_decisions.run_step`, `workflow_capability_runner.py:2400` | Live on the governed path (`TypedDecisionSpend`) when a key is held. No shipped template uses it. |
-| Model-router tier classifier (also asks the rigor questions) | `model_router/classifier.py:311`, `:381` | Held by default; `BOSS_ROUTER_JEV_LIVE=true` lifts it onto the governed path (`store.GovernedJevDecider`, BOSSAPP-579). Held, it shows *Jev · paused* and uses the rules. |
+| Model-router tier classifier (also asks the rigor questions) | `model_router/classifier.py:311`, `:381` | Live whenever a key is held (`jev_state` == "ready"), always on the governed path (`store.GovernedJevDecider`, BOSSAPP-579 — the leftover router hold is gone). No key: "absent", and the rules answer. |
 | Rigor/sensitivity questions | `pipeline_profiles.model_risk_tier` | **Written but not wired in.** The build pipeline still calls the keyword `infer_risk_tier` (`governed_code_task_service.py:3558`). |
 | Key proof in setup | `setup_service.py:1013` | Live on the governed path (`store_decision_key`, no fallback). |
 
@@ -34,8 +34,8 @@ Jev is the right tool when **all four** of these are true:
   safety check, combine Jev with the existing rule so that Jev can only make the outcome
   **more cautious**: `refuse = regex OR jev`, never `refuse = jev`. In that direction a bad
   answer, a prompt injection or an outage costs at most one extra question to a person.
-- **The keyword rule stays as the fallback.** Use it when Jev is held, has no key, times out or
-  gives a low-confidence answer. This is already how the router works.
+- **The keyword rule stays as the fallback.** Use it when Jev has no key, times out or gives a
+  low-confidence answer. This is already how the router works.
 - **Untrusted text is advisory.** Repo content, logs, alerts, issue bodies, emails and web
   research may only feed a Jev answer that labels, skips or escalates, never one that acts.
   TypeSafe's own docs list prompt injection as a weakness.
@@ -49,17 +49,17 @@ Jev is the right tool when **all four** of these are true:
 
 ## P0: groundwork (without these, nothing below is live)
 
-### JEV-0a: Lift the BOSS-451 hold for governed typed decisions (BOSSAPP-579)
+### JEV-0a: Lift the BOSS-451 hold for governed typed decisions (BOSSAPP-579) — DONE
 **Why:** Every live Jev call was paused (`typed_decisions.GOVERNANCE_HOLD`). The spend path is
 built in `typed_decision_spend.py` (reservation, lease, receipt, settlement); the workflow step
 and the key proof already ran on it. The router's Jev classifier was the one caller that would
 have used a bare client, so it stayed held.
 **Shipped:** `TypedDecisionBatchSpend` carries several questions about one context through the
-same envelope, `store.GovernedJevDecider` puts the router's call on it, and the hold lifts for
-the router behind `BOSS_ROUTER_JEV_LIVE` (off by default). One test per condition in
-`engine/tests/test_a_router_jev_call_is_governed.py`.
-**Still to do:** set the switch on an install that holds a key and run the agent battle-test set
-(BOSSAPP-578) against it; the UI then stops showing *Jev · paused* there.
+same envelope, `store.GovernedJevDecider` puts the router's call on it. The leftover router
+hold (`BOSS_ROUTER_JEV_LIVE`, the "held" `jev_state`) is now removed entirely: `jev_state` is
+"ready" whenever a key is held (env var or Setup's vault), else "absent", and the console never
+shows *Jev · paused*. One test per condition in `engine/tests/test_a_router_jev_call_is_governed.py`
+and `engine/tests/test_jev_decides_structured_and_lifted.py`.
 
 ### JEV-0b: Check in the decision eval (`evals/task_rigor`) and add Jev to it
 **Why:** `pipeline_profiles.py:317` and `config.py:135` cite an eval saying that keyword lists

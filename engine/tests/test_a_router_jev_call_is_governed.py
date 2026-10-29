@@ -1,10 +1,10 @@
-"""The model router's Jev calls lift from BOSS-451's hold only behind a setting, and only
-through the governed typed-decision path (BOSSAPP-579).
+"""The model router's Jev calls are ALWAYS governed (BOSSAPP-579): there is no separate setting
+to lift any more — `jev_state` is "ready" whenever a key is held, else "absent", and every
+"ready" call goes through the typed-decision path. An ungoverned call is impossible.
 
 Four conditions before a live Jev call may spend, one test each: a committed budget
 reservation for the attempt, an active model lease, a deduplicated receipt, a cost settlement.
-A missing one refuses the call and records why. With `BOSS_ROUTER_JEV_LIVE` off (the default)
-nothing changes: Jev stays "held" and the rules classify.
+A missing one refuses the call and records why.
 
 The doubles are test_typed_decision_spend's: a budget that counts active reservations against
 its cap, a gateway that refuses a lease without a job lease and a reservation, receipts keyed
@@ -86,31 +86,27 @@ def _decide(world: World, *, before_provider_call=None) -> DecisionBatch:
 
 # ── The setting ────────────────────────────────────────────────────────────────────────────────
 
-def _settings(live: bool):
-    return SimpleNamespace(decision_backend="typesafe", typesafe_api_key="tk",
-                           typesafe_api_url="https://ts.invalid/v1", typesafe_model="jev",
-                           router_jev_live=live)
+def _settings(live: bool = True):
+    return SimpleNamespace(decision_backend="typesafe", typesafe_api_key="tk" if live else "",
+                           typesafe_api_url="https://ts.invalid/v1", typesafe_model="jev")
 
 
-def test_the_hold_lifts_only_behind_the_setting_which_is_off_by_default():
-    from boss_engine.config import Settings
-
-    assert Settings(_env_file=None).router_jev_live is False
-    assert jev_state(_settings(False)) == "held"
+def test_jev_state_has_no_held_state_any_more():
     assert jev_state(_settings(True)) == "ready"
-    assert jev_state(SimpleNamespace(decision_backend="claude", typesafe_api_key="",
-                                     router_jev_live=True)) == "absent", "no key is no Jev"
+    assert jev_state(_settings(False)) == "absent"
+    assert jev_state(SimpleNamespace(decision_backend="claude", typesafe_api_key="")) \
+        == "absent", "no key is no Jev"
 
 
-def test_with_the_setting_off_the_router_is_wired_exactly_as_before():
+def test_with_no_key_the_router_is_wired_with_no_jev_factory():
     snap = Snapshot(project_id="p", policy=policy(), sources={},
                     jev_state=jev_state(_settings(False)))
     _wire_deciders(snap, SimpleNamespace(engine=object()), _settings(False), "p")
-    assert snap.jev_state == "held" and snap.jev_factory is None
+    assert snap.jev_state == "absent" and snap.jev_factory is None
     assert snap.model_factory is not None
 
 
-def test_with_the_setting_on_the_router_gets_a_governed_decider_never_a_bare_client():
+def test_with_a_key_the_router_gets_a_governed_decider_never_a_bare_client():
     snap = Snapshot(project_id="p", policy=policy(), sources={},
                     jev_state=jev_state(_settings(True)))
     _wire_deciders(snap, SimpleNamespace(engine=object()), _settings(True), "p")

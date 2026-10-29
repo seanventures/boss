@@ -134,9 +134,9 @@ def test_6_a_jev_timeout_falls_back_to_the_rules():
     assert where(d) == ("fast", "claude_code", "haiku")
 
 
-def test_6b_jev_held_says_paused_and_the_rules_answer():
-    d = route(build("implement", COPY_FIX), snap(jev_state="held"))
-    assert d.classification.fallback_note == "Jev paused"
+def test_6b_jev_absent_falls_through_to_the_rules_with_no_note():
+    d = route(build("implement", COPY_FIX), snap(jev_state="absent"))
+    assert d.classification.classifier == "rules" and d.classification.fallback_note == ""
 
 
 # 7 ─ an agent pinned to a local model

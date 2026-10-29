@@ -452,11 +452,12 @@ def _wire_deciders(snap: Snapshot, connection: Any, settings: Any,
 class GovernedJevDecider:
     """The router's Jev classifier on the governed typed-decision path (BOSSAPP-579).
 
-    `jev_state` is only "ready" once the operator has lifted the hold (`BOSS_ROUTER_JEV_LIVE`),
-    and even then no call leaves this process without a committed budget reservation, a live
-    job and model lease on TypeSafe's own source, a receipt with a dedupe key for the attempt,
-    and a settlement of what it cost. A missing one refuses the call and records why; the
-    classifier then falls through to its rules as it would for any Jev failure.
+    `jev_state` is "ready" once TypeSafe is the chosen decision backend and a key is held
+    (`typed_decisions.typesafe_decides`), and no call leaves this process without a committed
+    budget reservation, a live job and model lease on TypeSafe's own source, a receipt with a
+    dedupe key for the attempt, and a settlement of what it cost. A missing one refuses the
+    call and records why; the classifier then falls through to its rules as it would for any
+    Jev failure.
 
     Only Jev answers here. The spend path's Claude fallback and second opinion stay off: the
     router's fallback is its rules, and a Claude answer would be a different classifier.

@@ -997,12 +997,6 @@ class Settings(BaseSettings):
     # headroom. A project setting of the same name overrides this; Fixed is the default so an
     # install changes nothing until someone switches.
     model_routing_mode: str = Field(default="fixed", alias="BOSS_MODEL_ROUTING_MODE")
-    # THE LIFT SWITCH FOR BOSS-451's GOVERNANCE HOLD on the router's Jev calls (BOSSAPP-579).
-    # Off (the default): the router's rules classify and the console shows Jev · paused. On:
-    # each Jev classification is reserved, leased, receipted and settled through the typed-
-    # decision spend path before it may spend (model_router/store.GovernedJevDecider). Off
-    # until an install has proved that path live against its own TypeSafe key.
-    router_jev_live: bool = Field(default=False, alias="BOSS_ROUTER_JEV_LIVE")
     # Per-step model routing for the pipeline: low-cost steps (write tests, checks) can use a
     # smaller model; hard steps (implement, review) use the strong one. Empty => use the
     # engine's default model for every step (routing is a safe no-op until configured).
