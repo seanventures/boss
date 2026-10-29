@@ -189,6 +189,46 @@ def model_probes():
     return _stub("model_probes")
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _default_project_exists_for_the_suite():
+    """Some DB tests (e.g. workflow revert tests) name the default project (`boss-dogfood`)
+    directly instead of creating their own, assuming it was seeded before the suite ran. A
+    build's throwaway database starts empty, so without this an otherwise-correct test fails
+    on a foreign key, not on the behaviour it is testing. Idempotent (ON CONFLICT DO NOTHING):
+    a real seed that already ran leaves this a no-op.
+    """
+    url = os.environ.get("DATABASE_URL", "")
+    if not url.startswith(("postgresql://", "postgresql+psycopg://")):
+        return
+    from sqlalchemy import create_engine
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from boss_engine.config import get_settings
+    from boss_engine.db import ensure_schema
+
+    settings = get_settings()
+    engine = create_engine(url, future=True)
+    try:
+        ensure_schema(engine, settings)
+        with engine.begin() as connection:
+            connection.execute(text(
+                "INSERT INTO orgs (id, name) VALUES (:id, 'BOSS') ON CONFLICT (id) DO NOTHING"),
+                {"id": settings.default_org_id})
+            connection.execute(text(
+                "INSERT INTO workspaces (id, org_id, name) VALUES (:id, :org_id, 'Default workspace') "
+                "ON CONFLICT (id) DO NOTHING"),
+                {"id": settings.default_workspace_id, "org_id": settings.default_org_id})
+            connection.execute(text(
+                "INSERT INTO projects (id, workspace_id, name, slug) "
+                "VALUES (:id, :workspace_id, 'Default project', 'boss-dogfood') "
+                "ON CONFLICT (id) DO NOTHING"),
+                {"id": settings.default_project_id, "workspace_id": settings.default_workspace_id})
+    except SQLAlchemyError:
+        pass
+    finally:
+        engine.dispose()
+
+
 @pytest.fixture(autouse=True)
 def _fresh_model_router():
     """The model router caches snapshots and classifications per process (model_router.store,

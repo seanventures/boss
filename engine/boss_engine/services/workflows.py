@@ -46,6 +46,7 @@ from .step_agents import (
 )
 from .typed_decisions import step_problems as typed_decision_problems
 from .knowledge import learning_writeback  # learning while executing (BOSSAPP-768)
+from .knowledge.step_contracts import contract_shape_problems, contract_assignment_problems
 
 logger = logging.getLogger(__name__)
 
@@ -781,6 +782,8 @@ def normalise_workflow_spec(
         if check_agents:
             for field, detail in step_agent_scope_problems(step):
                 bad(field, detail)
+        for detail in contract_shape_problems(step):
+            bad("contract", detail)
 
         def captain_problems() -> None:
             # The shape was said above; saying it again from validate_captain would double it.
@@ -1305,6 +1308,11 @@ def spec_problems(
             _agent_problem(detail, by_id)
             for detail in step_agent_problems(connection, project_id, {**normalized,
                                                                        "steps": clean}))
+        for step in clean:
+            if step.get("contract") is None:
+                continue
+            for detail in contract_assignment_problems(connection, project_id, step):
+                binding.append(problem(step["id"], "contract", detail))
     return normalized, shape, binding
 
 
@@ -6124,6 +6132,50 @@ def complete_step(
     )
     spec = _run_spec(connection, row["workflow_run_id"])
     template = _step_map(spec)[row["step_id"]]
+    contract_raw = template.get("contract")
+    if contract_raw:
+        from .knowledge import context_graph
+        from .knowledge.step_contracts import parse_contract, unsatisfied_required
+
+        contract = parse_contract(row["step_id"], contract_raw)
+        produced = (output or {}).get("produced") or {}
+        # THE POSTCONDITION (§4.1 step 3): the engine writes the step's typed output to the
+        # Context Graph itself, rather than trusting the model to have called a tool. A required
+        # write that never landed is the AG-1 "chat text only, nothing written" miss
+        # [L:kgn_a7426dae68a24130a1b2]; it does not complete the step.
+        fingerprint = (context_graph.project_agent_run(
+            connection, project_id, row["workflow_run_id"]) or {}).get("fingerprint")
+        provenance = {
+            "policy_version": str((run.get("context") or {}).get("policy_version")
+                                  or spec.get("version") or ""),
+            "workflow_version": str(run.get("workflow_version_id") or spec.get("version") or ""),
+            "agent_fingerprint": str(fingerprint or ""),
+            "actor_ref": f"agent:{template.get('captain') or row['step_id']}",
+        }
+        context_graph.persist_contract_writes(
+            connection, project_id, run_id=row["workflow_run_id"], step_id=row["step_id"],
+            contract=contract, produced=produced, provenance=provenance)
+        missing = unsatisfied_required(contract, produced)
+        if missing:
+            if row["attempt"] + 1 < row["max_attempts"]:
+                # ONE REPAIR ROUND: back to the queue once, with the missing kind named.
+                retried = connection.execute(
+                    text(
+                        """
+                        UPDATE workflow_step_runs
+                        SET status='ready', attempt=attempt+1, lease_owner=NULL,
+                            lease_expires_at=NULL, heartbeat_at=NULL,
+                            last_error=:err, updated_at=now()
+                        WHERE id=:id RETURNING *
+                        """
+                    ),
+                    {"id": step_run_id,
+                     "err": f"missing required write(s) {missing}; repair round"},
+                ).mappings().one()
+                return _serialize_step(retried)
+            raise WorkflowValidationError(
+                f"step '{row['step_id']}' never produced required write(s) {missing} "
+                f"after one repair round")
     learning_writeback.write_back(connection, project_id=project_id, hook="step_complete",
                                   observed={"step": dict(updated), "template": template,
                                             "context": run.get("context")})
