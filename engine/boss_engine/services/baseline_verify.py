@@ -196,3 +196,11 @@ def cleanup_findings(record: BaselineRecord) -> list:
         {"severity": "low", "text": f"{c.test_id}: {c.reason}"}
         for c in record.pre_existing
     ]
+
+
+def environment_signature(classified: Classified) -> str:
+    """A stable key for an `environment`-classified failure, so the SAME underlying infra
+    problem (a missing driver, a collection error) is recognised as recurring across different
+    runs and test ids rather than counted as a fresh one each time."""
+    signal = (_environment_signal(classified.evidence) or classified.reason or "").strip()
+    return signal or "unknown"
