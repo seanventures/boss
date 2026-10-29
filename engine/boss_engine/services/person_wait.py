@@ -267,9 +267,13 @@ def verify_and_resume(engine: Any, settings: Any, jobs: Any, *, run_id: str) -> 
     except InvalidDecisionTransitionError:
         return {"resumed": False}
 
-    jobs.enqueue(
+    from .jobs import enqueue_job
+
+    enqueue_job(
+        engine,
+        run.get("project_id"),
         "code.task",
-        run_id=run_id,
+        {"run_id": run_id},
         priority=JOB_PRIORITY_INTERACTIVE,
     )
 
@@ -336,13 +340,15 @@ def record_resolution(
 def poll_due(engine: Any, settings: Any, *, now: Optional[Any] = None) -> int:
     """Re-checks every run currently waiting on a person; returns the number resumed.
     An archived project's runs are never re-checked -- it takes no new work."""
+    from sqlalchemy import text
+
     from . import projects_archive
     from .jobs import JobLeaseService
 
     jobs = JobLeaseService(settings)
     rows = engine.execute(
-        "SELECT id AS run_id FROM code_task_runs WHERE status = :status AND "
-        + projects_archive.live_sql("project_id"),
+        text("SELECT id AS run_id FROM code_task_runs WHERE status = :status AND "
+             + projects_archive.live_sql("project_id")),
         {"status": STATUS_WAITING_ON_PERSON},
     ).mappings().all()
 
