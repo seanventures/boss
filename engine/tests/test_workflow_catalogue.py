@@ -152,8 +152,8 @@ def test_seeding_installs_every_workflow_as_read_only_product(eng, project):
     with eng.begin() as c:
         result = catalogue.seed(c, project)
         rows = workflows.list_definitions(c, project, namespace="product")
-    assert result["count"] == 16
-    assert len(rows) == 16
+    assert result["count"] == len(catalogue.CATALOGUE)
+    assert len(rows) == len(catalogue.CATALOGUE)
     for row in rows:
         assert row["namespace"] == "product"
         assert row["is_catalogue"] is True, f"{row['workflow_key']} is editable in place"
@@ -169,8 +169,9 @@ def test_seeding_twice_does_not_create_a_second_copy(eng, project):
         versions = c.execute(
             text("SELECT count(*) FROM workflow_versions WHERE project_id=:p"), {"p": project}
         ).scalar()
-    assert len(definitions) == 16
-    assert versions == 16, f"re-seeding published {versions - 16} redundant versions"
+    assert len(definitions) == len(catalogue.CATALOGUE)
+    n = len(catalogue.CATALOGUE)
+    assert versions == n, f"re-seeding published {versions - n} redundant versions"
 
 
 def test_a_seeded_workflow_cannot_be_edited_in_place(eng, project):
