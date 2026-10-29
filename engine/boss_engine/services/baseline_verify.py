@@ -176,6 +176,21 @@ def pr_section(record: BaselineRecord) -> str:
     return "\n".join(lines).strip() + "\n"
 
 
+def base_outcomes_from_output(ids, base_output: str) -> dict:
+    """Outcome ("failed"/"passed") for each id, read off a test run of the SAME ids against the
+    base commit: whatever still shows up in the base run's failure summary failed there too."""
+    present = set(extract_test_ids(base_output))
+    return {test_id: ("failed" if test_id in present else "passed") for test_id in ids}
+
+
+def default_classify_environment(test_id: str, slice_text: str, signal: Optional[str]) -> tuple:
+    """The production classify_environment: an environment signal (import/module/permission
+    error, a collection failure) before any assertion ran means the change did not cause it."""
+    if signal:
+        return ("environment", f"{signal} before any assertion on the change")
+    return ("caused", "new failure introduced by this change")
+
+
 def cleanup_findings(record: BaselineRecord) -> list:
     return [
         {"severity": "low", "text": f"{c.test_id}: {c.reason}"}
