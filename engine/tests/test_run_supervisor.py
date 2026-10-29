@@ -225,6 +225,66 @@ class RunSupervisorTests(unittest.TestCase):
         self.assertEqual(record["outcome"], "pending")
         self.assertEqual(record["decision"]["action"], CHANGE_APPROACH)
 
+    def test_p1_second_pending_reach_out_is_not_appended(self):
+        """record_decision keeps at most one open reach_out per run: if a prior reach_out
+        decision is still pending, a second reach_out decision is dropped rather than
+        appended, so a stalled run never accumulates duplicate asks."""
+        connection = mock.MagicMock()
+        connection.get_supervisor_history.return_value = [
+            {"decision": {"action": REACH_OUT}, "outcome": "pending"},
+        ]
+        recorded: list = []
+        connection.append_supervisor_decision.side_effect = (
+            lambda run_id, record: recorded.append((run_id, record)))
+        signal = _make_signal(
+            tripped=True, reason="refusal", forced=True,
+            caused=(), environment=(), refusals=("needs_secret:api_key",),
+            repeated_signature=None, rounds_used=1,
+            spend_usd_micros=0, elapsed_seconds=10,
+        )
+        run_supervisor.record_decision(
+            connection, run_id="run-7", project_id="proj-1",
+            signal=signal, decision={"action": REACH_OUT, "question": "which key?"},
+            outcome="pending",
+        )
+        self.assertEqual(recorded, [])
+
+    def test_p1_signal_judgement_action_flags_default_enabled_and_read_project_setting(self):
+        """The three independently toggle-able flags (signal_enabled/judgement_enabled/
+        action_enabled) default to enabled, and each reads its own named setting through
+        project_settings.effective rather than hardcoding a value."""
+        settings = mock.MagicMock()
+        connection = mock.MagicMock()
+
+        with mock.patch(
+            "boss_engine.services.project_settings.effective", return_value=1,
+        ) as effective:
+            self.assertTrue(run_supervisor.signal_enabled(connection, settings, "proj-1"))
+            self.assertTrue(run_supervisor.judgement_enabled(connection, settings, "proj-1"))
+            self.assertTrue(run_supervisor.action_enabled(connection, settings, "proj-1"))
+
+        used_settings = {call.args[3] for call in effective.call_args_list}
+        self.assertEqual(
+            used_settings,
+            {"run_supervisor_signal", "run_supervisor_judgement", "run_supervisor_action"},
+        )
+
+        with mock.patch(
+            "boss_engine.services.project_settings.effective", return_value=0,
+        ):
+            self.assertFalse(run_supervisor.signal_enabled(connection, settings, "proj-1"))
+
+    def test_p1_flag_read_failure_defaults_to_enabled_not_raise(self):
+        """A project_settings read that raises must never bubble up and never silently
+        disable the supervisor; it falls back to the settings object's own attribute (or 1)."""
+        connection = mock.MagicMock()
+        settings = mock.MagicMock(run_supervisor_signal=1)
+        with mock.patch(
+            "boss_engine.services.project_settings.effective",
+            side_effect=RuntimeError("settings store down"),
+        ):
+            self.assertTrue(run_supervisor.signal_enabled(connection, settings, "proj-1"))
+
 
 if __name__ == "__main__":
     unittest.main()
