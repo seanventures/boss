@@ -35,6 +35,8 @@ NODE_KINDS = frozenset({
     "fact", "topic",
     # The Rules layer and what agents learn while they work (KNOWLEDGE_GRAPH_PRODUCT_SPEC.md §2.2).
     "rule", "fix", "precedent", "investigation", "test_failure", "workaround",
+    # The Context Graph (Build B, §4.2): a step's own trace, written by the engine at step end.
+    "agent_decision", "coverage_gap",
 })
 EDGE_KINDS = frozenset({
     "depends_on", "runs_on", "deployed_from", "owns", "emits", "caused_by",
@@ -944,13 +946,17 @@ class PostgresKnowledgeStore:
         # A proposed (unapproved) rule is never trusted input: a stage reads approved rules only.
         # The review queue and kg_rules(status='proposed') read them explicitly, labelled.
         rules = f" AND ({col}knowledge_layer <> 'rules' OR {col}trust_tier = 'approved')"
+        kinds_sql = ""
+        if policy.kinds is not None:
+            params["scope_kinds"] = sorted(policy.kinds)
+            kinds_sql = f" AND {col}kind = ANY(:scope_kinds)"
         if policy.reads_code:
             params["scope_code_ids"] = self.code_reach(connection, project_id=project_id, policy=policy)
             return (f" AND ({col}knowledge_layer = ANY(:scope_layers) OR ({col}knowledge_layer = 'code'"
-                    f" AND {col}id = ANY(:scope_code_ids))){rules}", params)
+                    f" AND {col}id = ANY(:scope_code_ids))){rules}{kinds_sql}", params)
         # The literal lets the planner use the partial non-code index.
         return (f" AND {col}knowledge_layer <> 'code' AND {col}knowledge_layer = ANY(:scope_layers)"
-                f"{rules}", params)
+                f"{rules}{kinds_sql}", params)
 
     def assert_readable(
         self, connection: Connection, *, project_id: str, node_id: str, policy: Optional[StagePolicy]
@@ -958,18 +964,21 @@ class PostgresKnowledgeStore:
         """Refuse, in words, a node outside the stage's scope."""
         if policy is None:
             return
-        layer = connection.execute(
-            text("SELECT knowledge_layer FROM kg_nodes WHERE id = :id AND project_id = :project_id"),
+        row = connection.execute(
+            text("SELECT knowledge_layer, kind FROM kg_nodes WHERE id = :id AND project_id = :project_id"),
             {"id": node_id, "project_id": project_id},
-        ).scalar()
-        if layer is None:
+        ).one_or_none()
+        if row is None:
             return
+        layer, kind = row.knowledge_layer, row.kind
         if layer == "code":
             if not policy.reads_code or node_id not in self.code_reach(
                     connection, project_id=project_id, policy=policy):
                 raise PermissionError(policy.refusal())
         elif layer not in policy.layers:
             raise PermissionError(f"The {layer} layer isn't available in {policy.stage}.")
+        if policy.kinds is not None and kind not in policy.kinds:
+            raise PermissionError(f"The '{kind}' kind isn't available in {policy.stage}.")
 
     def text_search(
         self,
