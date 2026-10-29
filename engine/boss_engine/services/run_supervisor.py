@@ -222,7 +222,7 @@ def _model_adapter(*, connection: Any, settings: Any, project_id: str, run_id: s
     """The real judgement call (AgentService.decide — the same seam step_recovery.ask_model
     uses), built lazily so a test's injected adapter never has to import agent_service."""
     def _adapter(evidence: Mapping[str, Any]) -> dict[str, Any]:
-        from .agent_service import AgentService, Choice, ReadPhase
+        from .agent_service import AgentService, Choice
 
         choices = [Choice(a, MEANS[a], arguments=ARGUMENTS[a]) for a in ACTIONS if a in allowed]
         got = AgentService(settings).decide(
@@ -232,8 +232,9 @@ def _model_adapter(*, connection: Any, settings: Any, project_id: str, run_id: s
             message=REQUEST.format(run_id=run_id, reason=evidence.get("reason") or "no progress"),
             choices=choices, context=dict(evidence), hints=[],
             brief=SYSTEM_PROMPT.format(agent=AGENT_NAME),
-            read=ReadPhase(tools=[], run=None, max_turns=MAX_JUDGEMENT_TURNS,
-                           max_usd_micros=MAX_JUDGEMENT_USD_MICROS),
+            # No read phase: the supervisor reads nothing (no tools), and a read phase routes
+            # the decision away from Jev, the decision model (agent_decision: structured + read=None).
+            read=None,
             min_confidence=0.0, context_limit=MAX_PACK_CHARS)
         if not got.decided:
             raise ValueError(got.error or got.refused or "no decision")
