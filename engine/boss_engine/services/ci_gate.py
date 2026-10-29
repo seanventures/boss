@@ -844,7 +844,7 @@ def reader_for_project(connection: Any, settings: Any, project_id: str,
     repo = repository or state["repo"]
     return HttpCiReader(state.get("api_base") or "https://api.github.com", repo,
                         ci_token(connection, settings, project_id, repo)
-                        or github_token(connection, settings, project_id))
+                        or github_token(connection, settings, project_id, repo))
 
 
 def ci_token(connection: Any, settings: Any, project_id: str, repository: str) -> str:
