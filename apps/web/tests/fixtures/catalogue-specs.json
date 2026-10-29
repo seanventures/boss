@@ -5969,6 +5969,206 @@
         "output_schema": {},
         "step_agent_rules": 2
       }
+    },
+    {
+      "workflow_key": "kg_investigation_pipeline",
+      "name": "KG Investigation Pipeline",
+      "description": "Enrich a case's subject node from the Context Graph, match it against prior incidents, have an agent analyse the evidence, then remediate each finding family under human approval.",
+      "spec": {
+        "entry_step": "intake",
+        "steps": [
+          {
+            "id": "intake",
+            "kind": "task",
+            "binding": {
+              "inputs": {
+                "instructions": {
+                  "from_input": "directive"
+                },
+                "subject_id": {
+                  "from_input": "subject_id"
+                }
+              }
+            },
+            "next": [
+              "evidence_loop"
+            ],
+            "max_attempts": 3
+          },
+          {
+            "id": "context_enrichment",
+            "kind": "deterministic",
+            "binding": {
+              "inputs": {
+                "subject_id": {
+                  "from_input": "subject_id"
+                },
+                "max_hops": {
+                  "from_input": "max_hops"
+                }
+              }
+            },
+            "next": [],
+            "max_attempts": 3
+          },
+          {
+            "id": "evidence_loop",
+            "kind": "bounded_loop",
+            "body": "context_enrichment",
+            "max_iterations": 2,
+            "expression": {
+              "path": "steps.context_enrichment.output.missing_kinds",
+              "op": "truthy"
+            },
+            "next": [
+              "historical_pattern"
+            ],
+            "max_attempts": 3,
+            "binding": {}
+          },
+          {
+            "id": "historical_pattern",
+            "kind": "deterministic",
+            "binding": {
+              "inputs": {
+                "subject_id": {
+                  "from_input": "subject_id"
+                }
+              }
+            },
+            "next": [
+              "analysis"
+            ],
+            "max_attempts": 3
+          },
+          {
+            "id": "analysis",
+            "kind": "task",
+            "binding": {
+              "inputs": {
+                "instructions": "Read the Context Enrichment and Historical Pattern evidence for this subject. Cite the evidence for each finding, with a confidence, and group findings into families for remediation."
+              }
+            },
+            "next": [
+              "orchestrator"
+            ],
+            "max_attempts": 3
+          },
+          {
+            "id": "orchestrator",
+            "kind": "task",
+            "binding": {
+              "inputs": {
+                "instructions": "Route each finding family from Analysis to its own remediation lane."
+              }
+            },
+            "next": [
+              "lanes"
+            ],
+            "max_attempts": 3
+          },
+          {
+            "id": "lanes",
+            "kind": "for_each",
+            "items": "steps.orchestrator.output.finding_families",
+            "body": "remediation_advisor",
+            "max_items": 25,
+            "concurrency": 3,
+            "next": [
+              "human_approval"
+            ],
+            "max_attempts": 3,
+            "binding": {}
+          },
+          {
+            "id": "remediation_advisor",
+            "kind": "task",
+            "binding": {
+              "inputs": {
+                "instructions": "Propose the remediation for this finding family, citing the evidence it is based on."
+              }
+            },
+            "next": [],
+            "max_attempts": 3
+          },
+          {
+            "id": "human_approval",
+            "kind": "decision",
+            "question": "Approve the proposed remediations for execution?",
+            "guidance": "Each remediation cites the evidence Analysis and the lanes assembled; nothing here has been executed yet.",
+            "approval": {
+              "mode": "manual",
+              "approver_role": "compliance_officer"
+            },
+            "next": [
+              "execution"
+            ],
+            "max_attempts": 3,
+            "binding": {}
+          },
+          {
+            "id": "execution",
+            "kind": "task",
+            "binding": {
+              "inputs": {
+                "instructions": "Carry out the approved remediations."
+              }
+            },
+            "next": [
+              "closure"
+            ],
+            "max_attempts": 3
+          },
+          {
+            "id": "closure",
+            "kind": "task",
+            "binding": {
+              "inputs": {
+                "instructions": "Record this investigation's resolution as a precedent, so a later investigation's Historical Pattern step finds it."
+              }
+            },
+            "next": [],
+            "max_attempts": 3
+          }
+        ],
+        "objective": "Investigate the named subject node: assemble its connected rules, code, systems, owners and reports (Context Enrichment) and the incidents or precedents it resembles (Historical Pattern) — both $0 graph queries, never a model call. Analyse the assembled evidence and cite it; ask for one more enrichment round, at most twice, when the evidence is insufficient. Route each finding family to its own remediation lane, and execute nothing without a person's approval. Closure records what was found as a precedent, so the next investigation finds it too.",
+        "workflow_name": "KG Investigation Pipeline",
+        "input_schema": {
+          "type": "object",
+          "required": [
+            "subject_id"
+          ],
+          "properties": {
+            "directive": {
+              "type": "string",
+              "format": "textarea",
+              "title": "What should this investigation focus on? (optional)",
+              "description": "Context Enrichment and Historical Pattern read the subject node's own graph; say what matters most and Analysis reads for that first.",
+              "examples": [
+                "Check whether the connected repayment code and any prior incidents already cover crediting payments as of the date of receipt."
+              ]
+            },
+            "subject_id": {
+              "type": "string",
+              "title": "Subject node",
+              "description": "The case's subject node to investigate (Graph › Knowledge Graph) — a clause, an incident, or whatever this case is about.",
+              "examples": [
+                "kgn_0123456789ab"
+              ]
+            },
+            "max_hops": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 5,
+              "default": 2,
+              "title": "Hops to enrich (optional)",
+              "description": "How far Context Enrichment walks from the subject node. Default 2."
+            }
+          }
+        },
+        "output_schema": {},
+        "step_agent_rules": 2
+      }
     }
   ],
   "branched": {
