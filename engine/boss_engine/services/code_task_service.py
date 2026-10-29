@@ -26,6 +26,7 @@ import json
 import re
 import logging
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Any, Optional
 
 from ..config import Settings
@@ -2873,11 +2874,26 @@ def _run_code_task_once(engine, settings: Settings, jobs, run_id: str,
                          f"authority carries over: {gap}. Start it again from the console as a "
                          "person (you will be asked to consent), or give the builder a standing "
                          "grant under My account ▸ Agents acting for me.")
-            if run is not None and run["status"] not in ("completed", "failed", "cancelled", "blocked"):
-                _fail(c, run_id, run["project_id"], words, status="blocked", failure_class="needs_human",
-                      reason_code="no_authority")
-        return {"status": "blocked", "done": True, "reason": "no_authority", "authority": exc.reason,
-                "message": words}
+            if run is not None and run["status"] not in ("completed", "failed", "cancelled", "blocked",
+                                                           "waiting_on_person"):
+                # A no-grant/no-principal refusal is a PERSON blocker, not a dead end: pause,
+                # ask the one thing needed, and resume from here once a grant covers it
+                # (L2b) instead of failing the run outright.
+                from . import person_wait
+
+                budget = get_engine_ports().budget
+                reservation_id = run.get("reservation_id")
+                budget_adapter = SimpleNamespace(
+                    release=lambda **_: _release(
+                        budget, c, run["project_id"], reservation_id, words, run_id=run_id,
+                    ),
+                )
+                person_wait.enter_waiting_on_person(
+                    c, budget_adapter, run_id=run_id, project_id=run["project_id"],
+                    task_id=run.get("task_id"), reason=exc.reason, question=words,
+                )
+        return {"status": "waiting_on_person", "done": True, "reason": "no_authority",
+                "authority": exc.reason, "message": words}
     finally:
         owned_process.terminate_owner(run_id, reason="run_ended", grace=2.0)
 
