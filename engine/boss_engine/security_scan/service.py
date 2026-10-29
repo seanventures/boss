@@ -143,7 +143,7 @@ def checkout(engine: Any, settings: Any, src: scope.AppSource, workdir: Path) ->
 
         def _token() -> str:
             with engine.begin() as c:
-                return github_token_for(c, settings, src.project_id) or ""
+                return github_token_for(c, settings, src.project_id, src.owner, src.repo) or ""
 
         with identity_runs.repo_access(engine, host=getattr(settings, "target_repo_host", "github") or "github",
                                        owner=src.owner, repo=src.repo, project_id=src.project_id,
