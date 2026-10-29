@@ -49,6 +49,7 @@ GUARDED: dict[str, str] = {
     "services/focused_agents.py::tick_due": "tick_due",
     "services/factory_flow.py::tick": "tick",
     "services/process_manager.py::tick": "tick",
+    "services/person_wait.py::poll_due": "poll_due",
 }
 
 #: New work refused at its door (ProjectArchived -> 409), checked the same way.
