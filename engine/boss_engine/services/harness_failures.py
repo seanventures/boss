@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import contextlib
 import contextvars
+import json
 import re
 import threading
 from dataclasses import dataclass
@@ -176,6 +177,40 @@ def _tool_result_text(content: Any) -> str:
     return str(content or "")
 
 
+def _harness_said(stream: str) -> str:
+    """What the CLI itself said in a stream, without what its model wrote.
+
+    A JSON event stream (codex --json, claude stream-json) carries the model's own messages,
+    reasoning and command output alongside the CLI's errors. A model reviewing sandbox code
+    writes "failed to start sandbox" in its review, and reading that as the harness ended a
+    healthy build (crun_1be7a5f3, 2026-10-29). So an event line counts only for its error;
+    a line that is not JSON (stderr, a plain-text CLI) counts as it is."""
+    kept: list[str] = []
+    for line in stream.splitlines():
+        body = line.strip()
+        if not body.startswith("{"):
+            kept.append(line)
+            continue
+        try:
+            event = json.loads(body)
+        except ValueError:
+            kept.append(line)
+            continue
+        if not isinstance(event, Mapping):
+            continue
+        kind = str(event.get("type") or "")
+        item = event.get("item") if isinstance(event.get("item"), Mapping) else {}
+        error = event.get("error")
+        if kind in ("error", "turn.failed"):
+            said = error.get("message") if isinstance(error, Mapping) else error
+            kept.append(str(said or event.get("message") or ""))
+        elif item.get("type") == "error":
+            kept.append(str(item.get("message") or ""))
+        elif kind == "result" and event.get("is_error"):
+            kept.append(str(event.get("result") or ""))
+    return "\n".join(kept)
+
+
 def classify(text: object, *, engine: Optional[str] = None, where: str = "engine",
              ok: Optional[bool] = None) -> Optional[HarnessVerdict]:
     """The harness failure `text` reports, or None when it is ordinary output (a failing test,
@@ -183,6 +218,8 @@ def classify(text: object, *, engine: Optional[str] = None, where: str = "engine
 
     `where` ∈ WHERE. `ok`: for a tool result, whether the tool reported success."""
     raw = str(text or "")
+    if where == "stream":
+        raw = _harness_said(raw)
     if not raw.strip():
         return None
     name = str(engine or "the engine")

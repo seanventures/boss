@@ -373,3 +373,43 @@ def test_a_codex_session_whose_sandbox_failed_stops_the_stage(monkeypatch, tmp_p
     out.update(stdout=NPM_TEST_FAILED, rc=0)
     with hf.run_scope("crun_test_codex_ok"):
         assert agent.run_role("Implement it.", tmp_path)["exit_code"] == 0
+
+
+# ── the model's own words are not the harness's (crun_1be7a5f3, 2026-10-29) ──────────────────
+
+def test_a_model_writing_about_sandboxes_does_not_stop_its_build():
+    """codex reviewed sandbox code and its review said "failed to start sandbox"; BOSS read the
+    review as codex's sandbox failing and ended a healthy build. Event lines count only for
+    their errors."""
+    import json
+
+    said = "REVIEWED: sandbox_identity.py. If bwrap is absent it failed to start sandbox; ok."
+    stream = "\n".join(json.dumps(e) for e in (
+        {"type": "thread.started", "thread_id": "t1"},
+        {"type": "item.completed", "item": {"id": "i1", "type": "reasoning", "text": said}},
+        {"type": "item.completed", "item": {"id": "i2", "type": "command_execution",
+                                            "aggregated_output": said, "exit_code": 0}},
+        {"type": "item.completed", "item": {"id": "i3", "type": "agent_message", "text": said}},
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": said}]}},
+        {"type": "result", "is_error": False, "result": said},
+        {"type": "turn.completed", "usage": {}},
+    ))
+    for engine in ("codex", "claude_code", "some_new_cli"):
+        assert hf.classify(stream, engine=engine, where="stream") is None
+
+
+@pytest.mark.parametrize("event", [
+    {"type": "error", "message": "error: failed to initialize sandbox: namespaces unavailable"},
+    {"type": "turn.failed", "error": {"message": "failed to initialize sandbox: no landlock"}},
+    {"type": "item.completed", "item": {"type": "error",
+                                        "message": "failed to start sandbox: bwrap denied"}},
+    {"type": "result", "is_error": True, "result": "failed to initialize sandbox"},
+])
+def test_the_harness_own_error_events_still_stop_the_build(event):
+    import json
+
+    stream = json.dumps({"type": "item.completed",
+                         "item": {"type": "agent_message", "text": "working"}})
+    stream += "\n" + json.dumps(event)
+    said = hf.classify(stream, engine="codex", where="stream")
+    assert said is not None and said.kind == "sandbox_unavailable"
