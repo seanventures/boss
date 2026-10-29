@@ -343,9 +343,9 @@ function SourceRow({ item, sessions, onBoard, formOpen, onForm, actions }: {
   // A bare "Working" that hasn't been proven in a while is a stale green: the pill stays green
   // (nothing failed) but the row still owes a Test action and an honest "checked Xh ago", same
   // as an amber/red row — a login can die silently between checks.
-  const checkedAt = serverPill?.checked_at ?? src?.pill?.checked_at ?? null;
+  const checkedAt = serverPill?.at ?? src?.pill?.checked_at ?? null;
   const checkedAgeMs = checkedAt ? Date.now() - Date.parse(checkedAt) : null;
-  const staleGreen = pill.tone === "green" && (checkedAgeMs == null || checkedAgeMs > 2 * 3600 * 1000);
+  const staleGreen = pill.tone === "green" && checkedAgeMs != null && checkedAgeMs > 2 * 3600 * 1000;
   const needs = red || pill.tone === "amber" || staleGreen;
 
   // ONE PLAIN SENTENCE. A row that needs something says what (the server's full fix in the
