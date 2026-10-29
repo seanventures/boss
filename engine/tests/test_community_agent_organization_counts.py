@@ -61,8 +61,8 @@ def test_bundled_definitions_templates_and_examples_match_source():
     assert len(definitions) == 34
     assert [path.stem for path in definitions] == sorted(item["id"] for item in templates)
     assert len(templates) == 34
-    assert len(catalogue_keys) == 16
-    assert len(set(catalogue_keys)) == 16
+    assert len(catalogue_keys) == len(CATALOGUE)
+    assert len(set(catalogue_keys)) == len(CATALOGUE)
     assert example_dirs == sorted(examples)
     assert len(examples) == 15
 

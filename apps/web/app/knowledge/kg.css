@@ -30,6 +30,9 @@
   --kg-decision: #fda4af;
   --kg-anchor: #a5b4fc;
   --kg-fact: #d8b4fe;
+  /* KG P5b: the banking-regulatory instance's two additive ontology kinds. */
+  --kg-compliance-case: #fb7185;
+  --kg-remediation-package: #22c55e;
   /* Whole-repo bubbles and layer badges. */
   --kg-layer-code: #5b9dff;
   --kg-layer-rules: #f0a43a;

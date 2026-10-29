@@ -37,6 +37,18 @@ kinds:
     # Schema-only placeholder (PRD §Approved answers): its PII policy belongs to the security
     # role and is not validated or enforced in v1.
     attrs: [name, team, pii_policy]
+  # KG P5b: the two additive kinds the banking_regulatory_compliance instance needs and the
+  # pack did not yet grant (Q2's confirmed gap) — same shape as clause/owner, no collision.
+  - id: compliance_case
+    layer: domain
+    label: Compliance case
+    color: "#ff9f4a"
+    attrs: [clause_id, status, opened_at]
+  - id: remediation_package
+    layer: domain
+    label: Remediation package
+    color: "#ff7a4a"
+    attrs: [change_brief, test_ref, owner_team, approver_role]
 edges:
   - id: implemented_by
     label: implemented by

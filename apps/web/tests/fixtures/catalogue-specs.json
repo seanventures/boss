@@ -6169,6 +6169,291 @@
         "output_schema": {},
         "step_agent_rules": 2
       }
+    },
+    {
+      "workflow_key": "banking_regulatory_compliance",
+      "name": "Banking Regulatory Compliance",
+      "description": "Trace a pasted regulation clause to the code and prior incidents that show whether it is already handled, confirm each finding against the code, and propose a remediation under a compliance officer's approval.",
+      "spec": {
+        "entry_step": "clause_intake",
+        "steps": [
+          {
+            "id": "clause_intake",
+            "kind": "capability",
+            "binding": {
+              "capability": "clause_intake",
+              "inputs": {
+                "document_id": {
+                  "from_input": "document_id"
+                },
+                "subject_id": {
+                  "from_input": "subject_id"
+                }
+              }
+            },
+            "next": [
+              "evidence_loop"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "context_enrichment",
+            "kind": "deterministic",
+            "binding": {
+              "inputs": {
+                "subject_id": {
+                  "from_input": "subject_id"
+                },
+                "max_hops": {
+                  "from_input": "max_hops"
+                }
+              }
+            },
+            "next": [],
+            "max_attempts": 3
+          },
+          {
+            "id": "evidence_loop",
+            "kind": "bounded_loop",
+            "body": "context_enrichment",
+            "max_iterations": 2,
+            "expression": {
+              "path": "steps.context_enrichment.output.missing_kinds",
+              "op": "truthy"
+            },
+            "next": [
+              "historical_pattern"
+            ],
+            "max_attempts": 3,
+            "binding": {}
+          },
+          {
+            "id": "historical_pattern",
+            "kind": "deterministic",
+            "binding": {
+              "inputs": {
+                "subject_id": {
+                  "from_input": "subject_id"
+                }
+              }
+            },
+            "next": [
+              "compliance_assessment"
+            ],
+            "max_attempts": 3
+          },
+          {
+            "id": "compliance_assessment",
+            "kind": "capability",
+            "binding": {
+              "capability": "compliance_assessment",
+              "inputs": {
+                "subject_id": {
+                  "from_input": "subject_id"
+                }
+              }
+            },
+            "next": [
+              "compliance_orchestration"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "compliance_orchestration",
+            "kind": "capability",
+            "binding": {
+              "capability": "compliance_orchestration",
+              "inputs": {}
+            },
+            "next": [
+              "lanes"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 0,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "lanes",
+            "kind": "for_each",
+            "items": "steps.compliance_orchestration.output.finding_families",
+            "body": "lane_confirmation",
+            "max_items": 25,
+            "concurrency": 3,
+            "next": [
+              "remediation_package"
+            ],
+            "max_attempts": 3,
+            "binding": {}
+          },
+          {
+            "id": "lane_confirmation",
+            "kind": "capability",
+            "binding": {
+              "capability": "lane_confirmation",
+              "inputs": {}
+            },
+            "next": [],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "remediation_package",
+            "kind": "capability",
+            "binding": {
+              "capability": "remediation_package",
+              "inputs": {}
+            },
+            "next": [
+              "human_approval"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "human_approval",
+            "kind": "decision",
+            "question": "Approve the proposed remediation package for execution?",
+            "guidance": "The remediation cites the evidence Compliance Assessment and the lane confirmation assembled; nothing has been executed yet. Approving triggers a scoped code-change task; it does not merge it.",
+            "approval": {
+              "mode": "manual",
+              "approver_role": "compliance_officer"
+            },
+            "next": [
+              "execution"
+            ],
+            "max_attempts": 3,
+            "binding": {}
+          },
+          {
+            "id": "execution",
+            "kind": "task",
+            "binding": {
+              "inputs": {
+                "instructions": "Carry out the approved remediation package as a code task on the target repository."
+              }
+            },
+            "next": [
+              "compliance_closure"
+            ],
+            "max_attempts": 3
+          },
+          {
+            "id": "compliance_closure",
+            "kind": "capability",
+            "binding": {
+              "capability": "compliance_closure",
+              "inputs": {
+                "subject_id": {
+                  "from_input": "subject_id"
+                },
+                "symptom": {
+                  "from_input": "symptom"
+                },
+                "cause_summary": {
+                  "from_input": "cause_summary"
+                },
+                "execution_state": {
+                  "from_input": "execution_state"
+                }
+              }
+            },
+            "next": [],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 0,
+              "forced_manual": false
+            }
+          }
+        ],
+        "objective": "For each clause of the named regulation document, open a compliance case and assemble what the graph already knows about it — connected business rules, code, systems, owners and reports (Context Enrichment), and the incidents or precedents it resembles (Historical Pattern) — both $0 graph queries. Assess the evidence as implemented, partly implemented or a gap, with a confidence and a citation, citing a correlated incident's detail where one was found. Route the finding to its family's lane, confirm it against the code, and propose a remediation package. Nothing executes without the Compliance Officer's approval. Closure records the resolution as a precedent, so the next investigation finds it too.",
+        "workflow_name": "Banking Regulatory Compliance",
+        "input_schema": {
+          "type": "object",
+          "required": [
+            "subject_id"
+          ],
+          "properties": {
+            "document_id": {
+              "type": "string",
+              "title": "Document (optional)",
+              "description": "The document to trace (Graph › Knowledge Graph › Documents). Leave blank and the trace reports nothing to do — add a document first.",
+              "examples": [
+                "kgn_0123456789ab"
+              ]
+            },
+            "subject_id": {
+              "type": "string",
+              "title": "Subject node",
+              "description": "The case's subject node to investigate (Graph › Knowledge Graph) — a clause, an incident, or whatever this case is about.",
+              "examples": [
+                "kgn_0123456789ab"
+              ]
+            },
+            "max_hops": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 5,
+              "default": 2,
+              "title": "Hops to enrich (optional)",
+              "description": "How far Context Enrichment walks from the subject node. Default 2."
+            },
+            "symptom": {
+              "type": "string",
+              "title": "What went wrong (optional)",
+              "description": "A short description of the compliance gap or incident this investigation closes, for the precedent it records.",
+              "examples": [
+                "Payment misapplied to principal instead of interest-then-principal order"
+              ]
+            },
+            "cause_summary": {
+              "type": "string",
+              "title": "Root cause (optional)",
+              "description": "Why it happened, for the precedent a later investigation's Historical Pattern step will find."
+            },
+            "execution_state": {
+              "type": "string",
+              "enum": [
+                "proposed",
+                "merged",
+                "unknown"
+              ],
+              "default": "proposed",
+              "title": "Execution state (optional)",
+              "description": "Whether the remediation's code task has been merged yet — the run finishing is not the same as the fix shipping."
+            }
+          }
+        },
+        "output_schema": {},
+        "step_agent_rules": 2
+      }
     }
   ],
   "branched": {

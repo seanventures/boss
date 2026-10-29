@@ -41,6 +41,10 @@ class OntologyPack:
     edges: frozenset[str]
     kind_meta: dict[str, dict[str, Any]]
 
+    def get(self, name: str, default: Any = None) -> Any:
+        """Dict-like read of a field by name, for a caller that treats a pack as data."""
+        return getattr(self, name, default)
+
 
 def ensure_schema(connection: Connection) -> None:
     for stmt in _SCHEMA_SQL.split(";"):

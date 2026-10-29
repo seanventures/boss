@@ -1024,6 +1024,86 @@ CATALOGUE: list[dict[str, Any]] = [
             },
         ],
     },
+    {
+        # KG P5b: the banking-regulatory instance of kg_investigation_pipeline. Same ten-stage
+        # shape; context_enrichment and historical_pattern are P5a's deterministic steps,
+        # reused unmodified. The six agent stages are real capability steps (services/
+        # knowledge/banking_regulatory_pipeline.py), not `task` placeholders.
+        "key": "banking_regulatory_compliance",
+        "name": "Banking Regulatory Compliance",
+        "description": "Trace a pasted regulation clause to the code and prior incidents that "
+                       "show whether it is already handled, confirm each finding against the "
+                       "code, and propose a remediation under a compliance officer's approval.",
+        "objective": (
+            "For each clause of the named regulation document, open a compliance case and "
+            "assemble what the graph already knows about it — connected business rules, code, "
+            "systems, owners and reports (Context Enrichment), and the incidents or precedents "
+            "it resembles (Historical Pattern) — both $0 graph queries. Assess the evidence as "
+            "implemented, partly implemented or a gap, with a confidence and a citation, citing "
+            "a correlated incident's detail where one was found. Route the finding to its "
+            "family's lane, confirm it against the code, and propose a remediation package. "
+            "Nothing executes without the Compliance Officer's approval. Closure records the "
+            "resolution as a precedent, so the next investigation finds it too."
+        ),
+        "work_class": "any",
+        "steps": [
+            _step("clause_intake", "clause_intake", {
+                "document_id": _in("document_id"), "subject_id": _in("subject_id")},
+                nxt=["evidence_loop"]),
+            {
+                # LOOP BODY ONLY, same as kg_investigation_pipeline's: re-run up to twice
+                # before Historical Pattern and the Analyst see its output.
+                "id": "context_enrichment", "kind": "deterministic",
+                "binding": {"inputs": {
+                    "subject_id": _in("subject_id"), "max_hops": _in("max_hops")}},
+                "next": [],
+            },
+            {
+                "id": "evidence_loop", "kind": "bounded_loop", "body": "context_enrichment",
+                "max_iterations": 2,
+                "expression": {"path": "steps.context_enrichment.output.missing_kinds",
+                               "op": "truthy"},
+                "next": ["historical_pattern"],
+            },
+            {
+                "id": "historical_pattern", "kind": "deterministic",
+                "binding": {"inputs": {"subject_id": _in("subject_id")}},
+                "next": ["compliance_assessment"],
+            },
+            _step("compliance_assessment", "compliance_assessment",
+                 {"subject_id": _in("subject_id")}, nxt=["compliance_orchestration"]),
+            _step("compliance_orchestration", "compliance_orchestration", {},
+                 nxt=["lanes"]),
+            {
+                "id": "lanes", "kind": "for_each",
+                "items": "steps.compliance_orchestration.output.finding_families",
+                "body": "lane_confirmation", "max_items": 25, "concurrency": 3,
+                "next": ["remediation_package"],
+            },
+            _step("lane_confirmation", "lane_confirmation", {}, nxt=[]),
+            _step("remediation_package", "remediation_package", {}, nxt=["human_approval"]),
+            {
+                "id": "human_approval", "kind": "decision",
+                "question": "Approve the proposed remediation package for execution?",
+                "guidance": "The remediation cites the evidence Compliance Assessment and the "
+                           "lane confirmation assembled; nothing has been executed yet. "
+                           "Approving triggers a scoped code-change task; it does not merge it.",
+                "approval": {"mode": "manual", "approver_role": "compliance_officer"},
+                "next": ["execution"],
+            },
+            {
+                "id": "execution", "kind": "task",
+                "binding": {"inputs": {
+                    "instructions": "Carry out the approved remediation package as a code "
+                                    "task on the target repository."}},
+                "next": ["compliance_closure"],
+            },
+            _step("compliance_closure", "compliance_closure", {
+                "subject_id": _in("subject_id"), "symptom": _in("symptom"),
+                "cause_summary": _in("cause_summary"),
+                "execution_state": _in("execution_state")}, nxt=[]),
+        ],
+    },
 ]
 
 
@@ -1138,6 +1218,20 @@ _FIELD_TEXT: dict[str, dict[str, Any]] = {
                                    "Documents). Leave blank and the trace reports nothing to "
                                    "do — add a document first.",
                     "examples": ["kgn_0123456789ab"]},
+    "symptom": {"type": "string", "title": "What went wrong (optional)",
+               "description": "A short description of the compliance gap or incident this "
+                              "investigation closes, for the precedent it records.",
+               "examples": ["Payment misapplied to principal instead of interest-then-"
+                            "principal order"]},
+    "cause_summary": {"type": "string", "title": "Root cause (optional)",
+                      "description": "Why it happened, for the precedent a later "
+                                     "investigation's Historical Pattern step will find."},
+    "execution_state": {"type": "string", "enum": ["proposed", "merged", "unknown"],
+                        "default": "proposed",
+                        "title": "Execution state (optional)",
+                        "description": "Whether the remediation's code task has been merged "
+                                       "yet — the run finishing is not the same as the fix "
+                                       "shipping."},
     "notify_channel": {"type": "string", "title": "Who to tell",
                        "description": "Where the outcome is posted: email:someone@example.com or "
                                       "mattermost:<channel id>. Leave blank and the notify step "
@@ -1324,6 +1418,17 @@ BRIEFS: dict[str, dict[str, Any]] = {
                     "directive": "Check whether the connected repayment code and any prior "
                                  "incidents already cover crediting payments as of the date of "
                                  "receipt.",
+                    "subject_id": "kgn_regz102636demo01"},
+        "required": ("subject_id",),
+    },
+    "banking_regulatory_compliance": {
+        "directive": ("What should this compliance check focus on? (optional)",
+                      "Context Enrichment and Historical Pattern read the clause's own graph; "
+                      "say what matters most and the Compliance Assessment reads for that first."),
+        "example": {"title": "Reg Z 1026.36(c)(1)(i) repayment order",
+                    "directive": "Check whether the connected repayment code and INC-2088's "
+                                 "incident already cover crediting payments interest-first.",
+                    "document_id": "kgn_regz102636doc001",
                     "subject_id": "kgn_regz102636demo01"},
         "required": ("subject_id",),
     },

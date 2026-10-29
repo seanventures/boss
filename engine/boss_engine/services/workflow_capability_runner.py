@@ -3150,6 +3150,15 @@ def _perform_toolless(
         return regulatory_trace.run_step(
             connection, getattr(ctx, "settings", None) or _settings(), project_id, step,
             context, inputs)
+    # KG P5b: banking_regulatory_compliance's six thin role-agent capabilities (services/
+    # knowledge/banking_regulatory_pipeline.py), dispatched the same way as trace_regulation.
+    if key in ("clause_intake", "compliance_assessment", "compliance_orchestration",
+              "lane_confirmation", "remediation_package", "compliance_closure"):
+        from .knowledge import banking_regulatory_pipeline
+
+        func = getattr(banking_regulatory_pipeline, f"run_{key}")
+        return func(connection, getattr(ctx, "settings", None) or _settings(), project_id, step,
+                   context, inputs)
     # Same shape as `document`: no tool because it commissions nothing — it READS what the
     # run has already recorded and leaves a document behind.
     # THE RE-REVIEW AND THE SECURITY REPORT (services/security_review_steps.py).

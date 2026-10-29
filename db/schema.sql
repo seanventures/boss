@@ -10656,3 +10656,19 @@ CREATE TABLE IF NOT EXISTS sandbox_violation_counts (
     count INTEGER NOT NULL DEFAULT 0
 );
 -- ============================ end Build E: lineage sandboxes =================================
+
+-- ============================ KG P5b: banking_regulatory_compliance ==========================
+-- AgentDecision is a `context`-layer kg_nodes row (services/knowledge/context_graph.py), not a
+-- table of its own. This view projects those rows under the name a decision is queried by —
+-- additive, read-only, and the single place "a step's recorded decision" is read as a row.
+CREATE OR REPLACE VIEW agent_decisions AS
+  SELECT id,
+         project_id,
+         attrs->>'decision_type' AS decision_type,
+         attrs->>'step_id'       AS step_id,
+         attrs->>'run_id'        AS run_id,
+         name,
+         body AS statement,
+         recorded_at AS created_at
+  FROM kg_nodes
+  WHERE kind = 'agent_decision' AND valid_to IS NULL;

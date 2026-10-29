@@ -808,6 +808,7 @@ export function kindToken(kind: string, symbolKind?: string | null, id?: string)
     fact: "--kg-fact", endpoint: "--kg-endpoint", table: "--kg-table", file: "--kg-file", module: "--kg-file",
     run: "--kg-anchor", pull_request: "--kg-anchor", release: "--kg-anchor", spec: "--kg-anchor",
     runbook: "--kg-anchor", alert_rule: "--kg-anchor", topic: "--kg-anchor",
+    compliance_case: "--kg-compliance-case", remediation_package: "--kg-remediation-package",
   };
   return map[kind] ?? "--kg-function";
 }
@@ -821,6 +822,7 @@ const KIND_NAMES: Record<string, string> = {
   spec: "Spec", runbook: "Runbook", alert_rule: "Alert rule", topic: "Topic", file: "File", module: "Module",
   config_key: "Config key", queue: "Queue", service: "Service", resource: "Resource", deployment: "Deployment",
   datastore: "Datastore", external: "External", repo: "Repository", group: "Group",
+  compliance_case: "Compliance case", remediation_package: "Remediation package",
 };
 
 /** The kind in words (tooltip, legend, panel: colour is never the only signal, §5.10). */

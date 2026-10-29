@@ -190,6 +190,25 @@ CAPABILITY_PRECHECKS: dict[str, CapabilityPrecheck] = {
     "trace_regulation": CapabilityPrecheck(("authority.consent",) + _AGENT),
     "regulatory_trace_review": NO_CHECKS(
         "a person's review of the proposed implemented_by and gap findings"),
+    # KG P5b banking_regulatory_compliance: thin role-agent steps that read and write the
+    # Context Graph through the deterministic knowledge path (not a build sandbox). Two call a
+    # tool during their turn — the ITSM mock, and the repo read — declared so the consent check
+    # grants it.
+    "clause_intake": NO_CHECKS("opens a ComplianceCase per clause from the pasted document; "
+                               "writes the Context Graph, runs no sandbox"),
+    "compliance_assessment": CapabilityPrecheck(
+        none_because="classifies the assembled evidence and cites a graph node; writes the "
+                     "Context Graph, runs no sandbox",
+        invokes_tools=("itsm_mock",)),
+    "compliance_orchestration": NO_CHECKS("groups the run's findings into remediation families "
+                                          "from what the assessment recorded"),
+    "lane_confirmation": CapabilityPrecheck(
+        none_because="confirms or rules out a family's finding by reading the cited symbol",
+        invokes_tools=("read_code",)),
+    "remediation_package": NO_CHECKS("writes the change brief, test, owner and approver from "
+                                     "the confirmed finding"),
+    "compliance_closure": NO_CHECKS("records the resolution as a Precedent with an "
+                                    "execution-state marker; deterministic underneath"),
 }
 
 #: Which route a capability's agent takes (engine_startup): the build pipeline's stages, the

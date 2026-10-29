@@ -76,8 +76,8 @@ def test_every_shipped_workflow_validates():
 
 def test_there_are_twelve_and_each_has_a_stable_key():
     keys = [e["key"] for e in catalogue.CATALOGUE]
-    assert len(keys) == 18
-    assert len(set(keys)) == 18, "duplicate workflow key"
+    assert len(keys) == 19
+    assert len(set(keys)) == 19, "duplicate workflow key"
     for key in keys:
         assert key.replace("_", "").isalnum(), key
 
