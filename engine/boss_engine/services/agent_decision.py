@@ -391,6 +391,50 @@ def _jev_ready(settings: Any) -> bool:
         return False
 
 
+def _ask_structured_jev(decider: Any, adapter: Any, system: str, prompt: str,
+                        candidates: Sequence[Candidate]) -> dict:
+    """Jev picks the CHOICE (BOSSAPP-579); the routed model fills only that action's
+    arguments. A structured decision is still one decision — Jev answers a choice among
+    fixed options, never free-form arguments, so the routed model is asked for those alone,
+    narrowed to the schema of the action Jev already chose."""
+    from .typed_decisions import Question
+
+    question = Question(
+        key="action",
+        instructions="Which candidate action does the situation call for?",
+        options={c.key: c.means + ("" if c.available else f" (not available: {c.why_not})")
+                 for c in candidates})
+    batch = decider.decide(system + "\n\n" + prompt, [question])
+    by = {"backend": getattr(batch, "backend", ""), "model": getattr(batch, "model", "")}
+    cost = int(getattr(batch, "cost_usd_micros", 0) or 0)
+    got = batch.decisions.get("action")
+    if got is None or got.answer is None:
+        return {"answer": None, "refused": (got.error if got else "no answer"),
+                "cost": cost, "by": by, "turns": 1}
+    chosen = next((c for c in candidates if c.key == got.answer), None)
+    if chosen is None:
+        return {"answer": None,
+                "refused": f"'{got.answer}' is not one of the candidate actions",
+                "cost": cost, "by": by, "turns": 1}
+    confidence, reason = got.confidence if got.confidence is not None else 0.0, got.reason or ""
+    schema = dict(chosen.arguments or {})
+    if not dict(schema.get("properties") or {}):
+        answer = {"action": chosen.key, "confidence": confidence, "reason": reason,
+                  "arguments": {}, "evidence": []}
+        return {"answer": answer, "cost": cost, "by": by, "turns": 1}
+    arg_prompt = prompt + (f"\n\nThe action has been chosen: '{chosen.key}'. Answer ONLY with "
+                           "the JSON object asked for, filling that action's arguments.")
+    arg_got = _ask_model(adapter, system, arg_prompt)
+    cost += int(arg_got.get("cost") or 0)
+    raw = arg_got.get("raw") if isinstance(arg_got.get("raw"), Mapping) else {}
+    args, why = _arguments(chosen, raw)
+    if why:
+        return {"answer": None, "refused": why, "cost": cost, "by": by, "turns": 2}
+    answer = {"action": chosen.key, "confidence": confidence, "reason": reason,
+             "arguments": args, "evidence": _cited(raw.get("evidence"))}
+    return {"answer": answer, "cost": cost, "by": by, "turns": 2}
+
+
 def _ask_jev(decider: Any, prompt: str, candidates: Sequence[Candidate]) -> dict:
     from .typed_decisions import Question
 
@@ -694,7 +738,16 @@ def decide(connection: Any, settings: Any, project_id: str, *, situation: str, m
                            read_turns=read.max_turns if read is not None else 0)
     corpus = shown(context=context, hints=hints, context_limit=context_limit)
     try:
-        if not structured and envelope is None and (
+        if structured and envelope is None and read is None and (
+                decider is not None or _jev_ready(settings)):
+            if decider is None:
+                from .typed_decisions import TypeSafeDecider
+
+                decider = TypeSafeDecider(settings)
+            if adapter is None:
+                adapter, _raw = _routed(connection, settings, project_id, ref, message)
+            got = _ask_structured_jev(decider, adapter, system, prompt, candidates)
+        elif not structured and envelope is None and (
                 decider is not None or (adapter is None and _jev_ready(settings))):
             if decider is None:
                 from .typed_decisions import TypeSafeDecider
