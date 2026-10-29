@@ -4977,7 +4977,7 @@ END $kg_ext$;
 -- its cost does not grow with the code graph. Kept in step with scopes.layer_sql_case() by
 -- test_knowledge_stage_scopes_db.
 ALTER TABLE kg_nodes ADD COLUMN IF NOT EXISTS knowledge_layer TEXT
-  GENERATED ALWAYS AS (CASE WHEN kind IN ('config_key', 'endpoint', 'file', 'module', 'queue', 'symbol', 'table') THEN 'code' WHEN kind IN ('agent', 'decision', 'person', 'pull_request', 'release', 'review_finding', 'run', 'spec', 'team') THEN 'lifecycle' WHEN kind IN ('alert_rule', 'datastore', 'deployment', 'external', 'incident', 'repo', 'resource', 'root_cause', 'runbook', 'service') THEN 'ops' ELSE 'knowledge' END) STORED;
+  GENERATED ALWAYS AS (CASE WHEN kind IN ('config_key', 'endpoint', 'file', 'module', 'queue', 'symbol', 'table') THEN 'code' WHEN kind IN ('agent', 'decision', 'person', 'pull_request', 'release', 'review_finding', 'run', 'spec', 'team') THEN 'lifecycle' WHEN kind IN ('alert_rule', 'datastore', 'deployment', 'external', 'incident', 'repo', 'resource', 'root_cause', 'runbook', 'service') THEN 'ops' WHEN kind IN ('rule') THEN 'rules' WHEN kind IN ('agent_decision', 'coverage_gap') THEN 'context' ELSE 'knowledge' END) STORED;
 CREATE INDEX IF NOT EXISTS idx_kg_nodes_layer
   ON kg_nodes(project_id, knowledge_layer, kind) WHERE valid_to IS NULL;
 CREATE INDEX IF NOT EXISTS idx_kg_nodes_search_noncode
@@ -10548,7 +10548,7 @@ DECLARE
 BEGIN
   CREATE TEMP TABLE kgr_layer_probe (
     kind TEXT,
-    knowledge_layer TEXT GENERATED ALWAYS AS (CASE WHEN kind IN ('config_key', 'endpoint', 'file', 'module', 'queue', 'symbol', 'table') THEN 'code' WHEN kind IN ('agent', 'decision', 'person', 'pull_request', 'release', 'review_finding', 'run', 'spec', 'team') THEN 'lifecycle' WHEN kind IN ('alert_rule', 'datastore', 'deployment', 'external', 'incident', 'repo', 'resource', 'root_cause', 'runbook', 'service') THEN 'ops' WHEN kind IN ('rule') THEN 'rules' ELSE 'knowledge' END) STORED
+    knowledge_layer TEXT GENERATED ALWAYS AS (CASE WHEN kind IN ('config_key', 'endpoint', 'file', 'module', 'queue', 'symbol', 'table') THEN 'code' WHEN kind IN ('agent', 'decision', 'person', 'pull_request', 'release', 'review_finding', 'run', 'spec', 'team') THEN 'lifecycle' WHEN kind IN ('alert_rule', 'datastore', 'deployment', 'external', 'incident', 'repo', 'resource', 'root_cause', 'runbook', 'service') THEN 'ops' WHEN kind IN ('rule') THEN 'rules' WHEN kind IN ('agent_decision', 'coverage_gap') THEN 'context' ELSE 'knowledge' END) STORED
   );
   SELECT generation_expression INTO want FROM information_schema.columns
   WHERE table_name = 'kgr_layer_probe' AND column_name = 'knowledge_layer';
@@ -10560,7 +10560,7 @@ BEGIN
     DROP INDEX IF EXISTS idx_kg_nodes_search_noncode;
     ALTER TABLE kg_nodes DROP COLUMN IF EXISTS knowledge_layer;
     ALTER TABLE kg_nodes ADD COLUMN knowledge_layer TEXT
-      GENERATED ALWAYS AS (CASE WHEN kind IN ('config_key', 'endpoint', 'file', 'module', 'queue', 'symbol', 'table') THEN 'code' WHEN kind IN ('agent', 'decision', 'person', 'pull_request', 'release', 'review_finding', 'run', 'spec', 'team') THEN 'lifecycle' WHEN kind IN ('alert_rule', 'datastore', 'deployment', 'external', 'incident', 'repo', 'resource', 'root_cause', 'runbook', 'service') THEN 'ops' WHEN kind IN ('rule') THEN 'rules' ELSE 'knowledge' END) STORED;
+      GENERATED ALWAYS AS (CASE WHEN kind IN ('config_key', 'endpoint', 'file', 'module', 'queue', 'symbol', 'table') THEN 'code' WHEN kind IN ('agent', 'decision', 'person', 'pull_request', 'release', 'review_finding', 'run', 'spec', 'team') THEN 'lifecycle' WHEN kind IN ('alert_rule', 'datastore', 'deployment', 'external', 'incident', 'repo', 'resource', 'root_cause', 'runbook', 'service') THEN 'ops' WHEN kind IN ('rule') THEN 'rules' WHEN kind IN ('agent_decision', 'coverage_gap') THEN 'context' ELSE 'knowledge' END) STORED;
   END IF;
 END $kgr_layer$;
 CREATE INDEX IF NOT EXISTS idx_kg_nodes_layer
