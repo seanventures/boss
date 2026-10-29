@@ -900,7 +900,7 @@ class EngineAgent:
 
     def _run_tool(
         self, name: str, args: dict, *, project_id: str, actor: str,
-        allow_writes: bool, pending: list[dict],
+        pending: list[dict], **writes_kwargs: Any,
     ) -> dict:
         try:
             spec = self.registry.get(name)
@@ -962,24 +962,17 @@ class EngineAgent:
                          "plainly that this is what you are offering and why — do not describe "
                          "it as something you have already done."),
             }
-        if spec.kind == "write" and not allow_writes and not spec.queues_for_review:
-            # A write that only QUEUES for a person (spec.queues_for_review: a platform gap filed
-            # for BOSS's developers) runs in any turn: it changes nothing until a person acts.
-            # Labelled here, from the call: this is the held write whose button read only
-            # "set project setting" (no project, no key, no value).
-            proposal = {"tool": name, "args": args}
-            pending.append(proposal)
-            proposal = {**proposal, "label": _propose_label(name, args)}
-            return {
-                "ok": False,
-                "status": "confirmation_required",
-                "note": (
-                    f"'{name}' was NOT run (this turn changes nothing); it is offered as a "
-                    "button. A write never finds anything out: to check state, call a read "
-                    "tool."
-                ),
-                "proposed": proposal,
-            }
+        allow_writes = bool(writes_kwargs.get("allow_writes"))
+        if spec.kind == "write" and not allow_writes:
+            if not spec.queues_for_review:
+                proposal = {"tool": name, "args": args}
+                pending.append(proposal)
+                proposal = {**proposal, "label": _propose_label(name, args)}
+                return {
+                    "ok": False, "status": "confirmation_required",
+                    "note": f"'{name}' NOT run; a write never finds anything out.",
+                    "proposed": proposal,
+                }
         result = self.registry.invoke(
             # AMBIENT CONTEXT THE MODEL CANNOT KNOW AND MUST NOT HAVE TO GUESS.
             #

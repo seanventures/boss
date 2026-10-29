@@ -101,8 +101,14 @@ def refuse_new_work(connection: Any, project_id: Optional[str], what: str = "new
     """Raise ProjectArchived when `project_id` is archived. Call it before creating new work."""
     if not project_id:
         return
-    row = connection.execute(text(
-        "SELECT name, archived_at FROM projects WHERE id = :p"), {"p": project_id}).mappings().first()
+    try:
+        row = connection.execute(text(
+            "SELECT name, archived_at FROM projects WHERE id = :p"),
+            {"p": project_id}).mappings().first()
+    except RuntimeError:
+        # The OSS in-memory adapter runs no SQL and keeps no `projects` table at all, so it
+        # has no archived project to refuse (same reasoning as code_task_service.active_duplicate).
+        return
     if row and row["archived_at"] is not None:
         raise ProjectArchived(project_id, row["name"], what, row["archived_at"])
 

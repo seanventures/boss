@@ -244,6 +244,12 @@ EXEMPT = {
         "identity.runs.start_run issues a clone's run identity, not a workflow run",
     ("engine/boss_engine/identity/runs.py", "delegated"):
         "identity.runs.start_run issues a delegated act's run identity, not a workflow run",
+    ("engine/boss_engine/services/workflow_test_runs.py", "start_test_run"):
+        "a TEST-mode run: every spending step is pinned or refused, never deployed for real, "
+        "so the readiness preflight (built for a real delivery) does not apply",
+    ("engine/boss_engine/services/workflow_test_runs.py", "rerun_from_step"):
+        "a real re-run's check is its caller's own `door` (the API's readiness/pre-check), "
+        "called here before anything is written; a test re-run keeps the test path above",
 }
 _MODULE_ALIASES = {"wf", "workflows", "workflow_runtime"}
 _CHECKS = ("refuse_unless_ready(", "_delivery_readiness_or_409(", "note_unready_start(")
@@ -253,7 +259,8 @@ _RECORDS = ("record_started_anyway(", "note_unready_start(")
 #: event door used to refuse and only log.
 _UNATTENDED = {
     ("engine/boss_engine/services/workflow_schedules.py", "run_due"),
-    ("engine/boss_engine/services/event_dispatch.py", "dispatch_event"),
+    # dispatch_event itself no longer calls start_run: it delegates to
+    # start_workflow_on_grant, which makes the same preflight/refusal under its own name.
 }
 
 
