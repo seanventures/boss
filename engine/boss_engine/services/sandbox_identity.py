@@ -411,6 +411,10 @@ def _seed_cli_logins(ident: SandboxIdentity) -> None:
     _seed_claude_login(ident)
 
 
+#: What a run's copy of the Codex login carries instead of the real refresh token.
+RUN_COPY_REFRESH_PLACEHOLDER = "boss-run-copy-cannot-refresh"
+
+
 def _copy_codex_login_without_refresh(src: str, dst: Path) -> None:
     """Codex's ChatGPT login, copied WITHOUT its refresh token (the same rule as Claude's,
     _seed_claude_login). Each run's codex that refreshed would rotate the ONE refresh token every
@@ -422,8 +426,13 @@ def _copy_codex_login_without_refresh(src: str, dst: Path) -> None:
     except (OSError, ValueError):
         return                                   # unreadable: copy nothing rather than guess
     tokens = data.get("tokens")
-    if isinstance(tokens, dict):
-        data["tokens"] = {k: v for k, v in tokens.items() if k != "refresh_token"}
+    if isinstance(tokens, dict) and "refresh_token" in tokens:
+        # A PLACEHOLDER, not a missing field: codex 0.158 treats a ChatGPT login with no
+        # refresh_token as signed out and falls back to API-key mode, so every run got
+        # "401 wss://api.openai.com/v1/responses" (boss-1, 2026-10-29 15:06, after e50aa0c7d
+        # dropped the field). With this placeholder it uses the valid access token, and a
+        # refresh attempt fails harmlessly instead of rotating the real token.
+        data["tokens"] = {**tokens, "refresh_token": RUN_COPY_REFRESH_PLACEHOLDER}
     dst.write_text(json.dumps(data))
 
 

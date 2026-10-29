@@ -88,6 +88,7 @@ def test_the_codex_copy_never_carries_the_refresh_token(tmp_path, monkeypatch):
 
     copied = json.loads((run_home / ".codex" / "auth.json").read_text())
     assert copied["tokens"]["access_token"] == "ACCESS"
-    assert "refresh_token" not in copied["tokens"]
+    # Present (codex treats a missing one as signed out) but never the real one.
+    assert copied["tokens"]["refresh_token"] == sandbox_identity.RUN_COPY_REFRESH_PLACEHOLDER
     assert "REFRESH_MARKER" not in (run_home / ".codex" / "auth.json").read_text()
     assert src.read_text() == before                     # the control plane's login is untouched
