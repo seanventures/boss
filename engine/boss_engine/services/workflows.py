@@ -71,6 +71,11 @@ WORKFLOW_KINDS = {
     "join",
     "bounded_loop",
     "for_each",
+    # A FIXED KNOWLEDGE-GRAPH QUERY (KG P5a, design §4.4): never a model call, $0, repeatable.
+    # It runs and writes like any other work step — the Context Graph's postcondition
+    # enforcement applies unchanged — so it stays OUT of CONTROL_KINDS below; a branching or
+    # looping step has no attempts of its own, and a deterministic step is not one of those.
+    "deterministic",
 }
 CONTROL_KINDS = {
     "condition",

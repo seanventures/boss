@@ -913,6 +913,117 @@ CATALOGUE: list[dict[str, Any]] = [
             _step("review", "regulatory_trace_review", {"trace_id": _from("trace", "trace_id")}),
         ]),
     },
+    {
+        # KG P5a (design: ~/boss-ops design §4.4 and §5.1). For a case's subject node — a
+        # clause, say — gather what the graph already knows (rules, code, systems, owners,
+        # reports) and what prior incidents it resembles, BEFORE any agent reasons about it:
+        # two deterministic, $0 graph queries (`knowledge.graph_steps`), never a model call.
+        # Analysis then judges the evidence the two deterministic steps assembled; a bounded
+        # loop lets it ask for one more enrichment round, capped at 2, rather than guessing.
+        # Findings fan out over Lanes (one remediation per finding family) and nothing executes
+        # without a person's approval.
+        "key": "kg_investigation_pipeline",
+        "name": "KG Investigation Pipeline",
+        "description": "Enrich a case's subject node from the Context Graph, match it against "
+                       "prior incidents, have an agent analyse the evidence, then remediate "
+                       "each finding family under human approval.",
+        "objective": (
+            "Investigate the named subject node: assemble its connected rules, code, systems, "
+            "owners and reports (Context Enrichment) and the incidents or precedents it "
+            "resembles (Historical Pattern) — both $0 graph queries, never a model call. "
+            "Analyse the assembled evidence and cite it; ask for one more enrichment round, at "
+            "most twice, when the evidence is insufficient. Route each finding family to its "
+            "own remediation lane, and execute nothing without a person's approval. Closure "
+            "records what was found as a precedent, so the next investigation finds it too."
+        ),
+        "work_class": "any",
+        "steps": [
+            {
+                # AGENT STAGES ARE PLACEHOLDERS HERE (`task`, not an agent_work capability): the
+                # instance agents that reason over Analysis/Orchestrator/Remediation/Execution/
+                # Closure are P5b's SKILL.md roles, out of scope for P5a. A `task` step publishes
+                # into any project without needing one already on its roster; swapping it for a
+                # real agent_work or capability step is P5b's wiring, not this template's shape.
+                "id": "intake", "kind": "task",
+                "binding": {"inputs": {
+                    "instructions": _in("directive"),
+                    "subject_id": _in("subject_id")}},
+                "next": ["evidence_loop"],
+            },
+            {
+                # LOOP BODY ONLY: re-run up to twice (max_iterations) before Historical
+                # Pattern and Analysis see its output — never reached by its own `next`.
+                "id": "context_enrichment", "kind": "deterministic",
+                "binding": {"inputs": {
+                    "subject_id": _in("subject_id"), "max_hops": _in("max_hops")}},
+                "next": [],
+            },
+            {
+                "id": "evidence_loop", "kind": "bounded_loop", "body": "context_enrichment",
+                "max_iterations": 2,
+                "expression": {"path": "steps.context_enrichment.output.missing_kinds",
+                               "op": "truthy"},
+                "next": ["historical_pattern"],
+            },
+            {
+                "id": "historical_pattern", "kind": "deterministic",
+                "binding": {"inputs": {"subject_id": _in("subject_id")}},
+                "next": ["analysis"],
+            },
+            {
+                "id": "analysis", "kind": "task",
+                "binding": {"inputs": {
+                    "instructions": (
+                        "Read the Context Enrichment and Historical Pattern evidence for this "
+                        "subject. Cite the evidence for each finding, with a confidence, and "
+                        "group findings into families for remediation.")}},
+                "next": ["orchestrator"],
+            },
+            {
+                "id": "orchestrator", "kind": "task",
+                "binding": {"inputs": {
+                    "instructions": "Route each finding family from Analysis to its own "
+                                    "remediation lane."}},
+                "next": ["lanes"],
+            },
+            {
+                "id": "lanes", "kind": "for_each",
+                "items": "steps.orchestrator.output.finding_families", "body": "remediation_advisor",
+                "max_items": 25, "concurrency": 3,
+                "next": ["human_approval"],
+            },
+            {
+                # FOR_EACH BODY ONLY: one remediation per finding family, never reached by
+                # its own `next` (the for_each returns each run to `lanes`).
+                "id": "remediation_advisor", "kind": "task",
+                "binding": {"inputs": {
+                    "instructions": "Propose the remediation for this finding family, citing "
+                                    "the evidence it is based on."}},
+                "next": [],
+            },
+            {
+                "id": "human_approval", "kind": "decision",
+                "question": "Approve the proposed remediations for execution?",
+                "guidance": "Each remediation cites the evidence Analysis and the lanes "
+                           "assembled; nothing here has been executed yet.",
+                "approval": {"mode": "manual", "approver_role": "compliance_officer"},
+                "next": ["execution"],
+            },
+            {
+                "id": "execution", "kind": "task",
+                "binding": {"inputs": {
+                    "instructions": "Carry out the approved remediations."}},
+                "next": ["closure"],
+            },
+            {
+                "id": "closure", "kind": "task",
+                "binding": {"inputs": {
+                    "instructions": "Record this investigation's resolution as a precedent, so "
+                                    "a later investigation's Historical Pattern step finds it."}},
+                "next": [],
+            },
+        ],
+    },
 ]
 
 
@@ -1032,6 +1143,15 @@ _FIELD_TEXT: dict[str, dict[str, Any]] = {
                                       "mattermost:<channel id>. Leave blank and the notify step "
                                       "is skipped and says so.",
                        "examples": ["email:team@example.com"]},
+    "subject_id": {"type": "string", "title": "Subject node",
+                   "description": "The case's subject node to investigate (Graph › Knowledge "
+                                  "Graph) — a clause, an incident, or whatever this case is "
+                                  "about.",
+                   "examples": ["kgn_0123456789ab"]},
+    "max_hops": {"type": "integer", "minimum": 1, "maximum": 5, "default": 2,
+                 "title": "Hops to enrich (optional)",
+                 "description": "How far Context Enrichment walks from the subject node. "
+                                "Default 2."},
 }
 
 #: Per template: how its brief is asked for, an example that fits its purpose (the form's
@@ -1195,6 +1315,17 @@ BRIEFS: dict[str, dict[str, Any]] = {
         # THE ANNOUNCEMENT IS THE POINT. A sunset nobody was told about is the outcome this
         # workflow exists to prevent, so it cannot start without somewhere to announce.
         "required": ("notify_channel",),
+    },
+    "kg_investigation_pipeline": {
+        "directive": ("What should this investigation focus on? (optional)",
+                      "Context Enrichment and Historical Pattern read the subject node's own "
+                      "graph; say what matters most and Analysis reads for that first."),
+        "example": {"title": "Investigate Reg Z 1026.36(c) clause",
+                    "directive": "Check whether the connected repayment code and any prior "
+                                 "incidents already cover crediting payments as of the date of "
+                                 "receipt.",
+                    "subject_id": "kgn_regz102636demo01"},
+        "required": ("subject_id",),
     },
 }
 
