@@ -209,6 +209,9 @@ def step_scope(step: dict[str, Any]) -> tuple[list[str], list[str]]:
     skills = [str(s).strip() for s in (binding.get("skills") or []) if str(s).strip()]
     mcp = [str(s).strip() for s in (binding.get("mcp") or binding.get("mcp_servers") or [])
            if str(s).strip()]
+    contract = step.get("contract") if isinstance(step.get("contract"), dict) else {}
+    mcp += [str(c.get("mcp")).strip() for c in (contract.get("calls") or [])
+            if isinstance(c, dict) and str(c.get("mcp") or "").strip()]
     return list(dict.fromkeys(skills)), list(dict.fromkeys(mcp))
 
 
