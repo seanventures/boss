@@ -684,7 +684,8 @@ def _open_workspace(
     with _identity_runs.repo_access(
             connection.engine, host=getattr(settings, "target_repo_host", "github") or "github",
             owner=target["owner"], repo=target["repo"], project_id=project_id,
-            token=lambda: github_token_for(connection, settings, project_id) or "") as access:
+            token=lambda: github_token_for(
+                connection, settings, project_id, target["owner"], target["repo"]) or "") as access:
         return ensure_workspace(
             run_id,
             owner=target["owner"], repo=target["repo"], branch=target["branch"],
