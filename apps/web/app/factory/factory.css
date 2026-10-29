@@ -55,7 +55,7 @@
   border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--surface);
 }
 .fx-row:hover { border-color: var(--accent-line); }
-.fx-row[data-state="needs_plan"], .fx-row[data-state="needs_waiver"], .fx-row[data-state="budget_refused"] {
+.fx-row[data-state="needs_plan"], .fx-row[data-state="needs_waiver"], .fx-row[data-state="needs_person"], .fx-row[data-state="budget_refused"] {
   border-color: color-mix(in srgb, var(--amber) 45%, var(--border));
 }
 .fx-row[data-state="failed"], .fx-row[data-state="blocked"] { border-color: color-mix(in srgb, var(--red) 45%, var(--border)); }
@@ -73,7 +73,7 @@
 .fx-row-open:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; border-radius: 4px; }
 .fx-row-now { font-size: 0.8rem; color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .fx-kn, .fx-time { font-variant-numeric: tabular-nums; }
-.fx-word-needs_plan, .fx-word-needs_waiver, .fx-word-budget_refused, .fx-word-quiet { color: var(--amber); font-weight: 650; }
+.fx-word-needs_plan, .fx-word-needs_waiver, .fx-word-needs_person, .fx-word-budget_refused, .fx-word-quiet { color: var(--amber); font-weight: 650; }
 .fx-word-failed, .fx-word-blocked { color: var(--red); font-weight: 650; }
 .fx-word-cancelled { color: var(--muted); }
 .fx-row-cost { font-size: 0.76rem; color: var(--faint); font-variant-numeric: tabular-nums; text-align: right; }
