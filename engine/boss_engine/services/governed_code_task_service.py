@@ -34,6 +34,7 @@ from typing import Any, Callable, Optional, Sequence
 
 from . import build_budget as _build_budget
 from . import parallel_build as _parallel_build
+from . import pr_integrity_review
 from .monitoring_guard import KEEP_MONITORING_RULE as _KEEP_MONITORING
 from .review_seats import run_seats as _run_seats
 from .run_terminal import on_status_written
@@ -5187,6 +5188,20 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             return review_input.build(live, _changed_paths(), read=reader,
                                       keep=workspace_keepable)
 
+        def _change_block_with_integrity(change: review_input.ChangeUnderReview) -> str:
+            """L4: hand every reviewer seat the deterministic reachability/integrity evidence
+            alongside the diff (pr_integrity_review) — never a verdict on its own, the seat
+            judges each item. Evidence computation never blocks a review: a repo-walk failure
+            just means the seat sees the diff without it."""
+            block = change.block()
+            try:
+                existing = pr_integrity_review.gather_existing_files(root, change.paths)
+                evidence = pr_integrity_review.compute_integrity_evidence(change.files, existing)
+                block += pr_integrity_review.render_evidence_clause(evidence)
+            except Exception:  # noqa: BLE001 — evidence is an addition, never a blocker itself
+                _log_caught(logger)
+            return block
+
         def _judge_seat(stage: str, ask) -> tuple[dict, Optional[str]]:
             """Run one reviewer seat, and ask it again once if its review did not see the change.
 
@@ -6910,7 +6925,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # THE WHOLE CHANGE (review_input.build): the live diff plus every path the lineage
             # changed, so a seeded attempt's reviewer is not handed "(no file changes detected)".
             _review_change = _review_change_now()
-            change_block = _review_change.block()
+            change_block = _change_block_with_integrity(_review_change)
 
             # AUTO-ESCALATION (acceptance criterion #3): the pre-flight estimate can be
             # wrong — re-check the SAME caps against the real diff now that the fix lane
@@ -7870,7 +7885,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                             break
                         continue
                     _review_change = _review_change_now()
-                    change_block = _review_change.block()
+                    change_block = _change_block_with_integrity(_review_change)
                     impl_files = [fc.path for fc in sandbox.diff()
                                   if not _is_test_path(fc.path)] or impl_files
                     # SCOPED TO WHAT THE FIX CHANGED (_fix_round_change). With nothing recorded
@@ -8336,7 +8351,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         set_llm_context(routes=_route_ids(), db_engine=engine, project_id=project_id,
                                         run_id=run_id, stage="review_code")
                         _review_change = _review_change_now()
-                        change_block = _review_change.block()
+                        change_block = _change_block_with_integrity(_review_change)
                         rr, _hollow = _judge_seat("review_code", lambda pre: review_agent.run_role(
                             pre + _review_prompt(title, criteria, instructions=instructions,
                                                  ui=ui_task, change=change_block),
