@@ -80,7 +80,10 @@ _LAYER_FOR_TIER = {
     "inferred": "inferred",
 }
 _ACTOR_TIERS = {
-    "agent": frozenset({"inferred"}),
+    # An agent may also write "observed" for what it merely saw, not judged (e.g. an indexer
+    # agent writing a code symbol or an ingest agent writing an incident) — never "governed" or
+    # "approved", which only a person's review can confer.
+    "agent": frozenset({"inferred", "observed"}),
     "person": frozenset({"inferred", "governed", "approved"}),
     "system": frozenset({"observed", "inferred"}),
 }
