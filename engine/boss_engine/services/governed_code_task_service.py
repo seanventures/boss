@@ -3271,7 +3271,7 @@ def _rerun_test_cmd_on_base(root: Path, base_sha: str, failing_ids: Sequence[str
 
 def _baseline_cache_ddl(c) -> None:
     c.execute(sql(
-        "CREATE TABLE IF NOT EXISTS code_task_baseline_cache ("
+        "CREATE TABLE IF NOT EXISTS code_task_baseline_cache_v2 ("
         "project_id TEXT NOT NULL, base_sha TEXT NOT NULL, test_id TEXT NOT NULL, "
         "outcome TEXT NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), "
         "PRIMARY KEY (project_id, base_sha, test_id))"))
@@ -3285,7 +3285,7 @@ def _load_baseline_cache(engine, project_id: str, base_sha: str) -> dict:
         with _transaction(engine) as c:
             _baseline_cache_ddl(c)
             rows = c.execute(sql(
-                "SELECT test_id, outcome FROM code_task_baseline_cache "
+                "SELECT test_id, outcome FROM code_task_baseline_cache_v2 "
                 "WHERE project_id = :p AND base_sha = :b"),
                 {"p": project_id, "b": base_sha}).all()
         return {row[0]: row[1] for row in rows}
@@ -3302,7 +3302,7 @@ def _save_baseline_cache(engine, project_id: str, base_sha: str, fresh: dict) ->
             _baseline_cache_ddl(c)
             for test_id, outcome in fresh.items():
                 c.execute(sql(
-                    "INSERT INTO code_task_baseline_cache (project_id, base_sha, test_id, outcome) "
+                    "INSERT INTO code_task_baseline_cache_v2 (project_id, base_sha, test_id, outcome) "
                     "VALUES (:p, :b, :t, :o) ON CONFLICT (project_id, base_sha, test_id) "
                     "DO UPDATE SET outcome = :o, updated_at = now()"),
                     {"p": project_id, "b": base_sha, "t": test_id, "o": outcome})
@@ -3358,7 +3358,7 @@ def classify_against_base(*, project_id: str, root: Path, base_branch: str, test
     gate just saw, reclassified against the commit the build started from, so a repair round is
     never spent on a failure the change did not cause. `cache`/`rerun` are injectable for tests;
     production reruns only the failing ids through the sandbox runner and caches outcomes in
-    `code_task_baseline_cache`, keyed by (project_id, base_sha, test_id)."""
+    `code_task_baseline_cache_v2`, keyed by (project_id, base_sha, test_id)."""
     failing_ids = baseline_verify.extract_test_ids(fail_output)
     if not failing_ids:
         return None
@@ -3373,9 +3373,10 @@ def classify_against_base(*, project_id: str, root: Path, base_branch: str, test
     if uncached:
         base_output = rerun(base_sha, uncached)
         fresh = baseline_verify.base_outcomes_from_output(uncached, base_output)
-        bucket.update(fresh)
-        if persist:
-            _save_baseline_cache(engine, project_id, base_sha, fresh)
+        known = {tid: o for tid, o in fresh.items() if o in ("failed", "passed")}
+        bucket.update(known)
+        if persist and known:
+            _save_baseline_cache(engine, project_id, base_sha, known)
     base_outcomes = {tid: bucket[tid] for tid in failing_ids if tid in bucket}
     return baseline_verify.classify(
         failing_ids, fail_output, base_outcomes,

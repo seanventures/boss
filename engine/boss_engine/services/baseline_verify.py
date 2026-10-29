@@ -180,7 +180,23 @@ def base_outcomes_from_output(ids, base_output: str) -> dict:
     """Outcome ("failed"/"passed") for each id, read off a test run of the SAME ids against the
     base commit: whatever still shows up in the base run's failure summary failed there too."""
     present = set(extract_test_ids(base_output))
+    if not _base_run_completed(base_output):
+        # NO EVIDENCE IS NOT A PASS. An empty or unusable base run (the worktree could not be
+        # made, the runner refused, nothing was collected) said "passed" for every id, and that
+        # was cached per base SHA, so every later build labelled every failure "caused"
+        # (boss-1, 2026-10-29: 69 cached rows, all "passed").
+        return {test_id: ("failed" if test_id in present else "unknown") for test_id in ids}
     return {test_id: ("failed" if test_id in present else "passed") for test_id in ids}
+
+
+#: A test run's own closing line: pytest's "N passed/failed/error(s) in Xs", "no tests ran".
+_RUN_SUMMARY = re.compile(r"(?m)^\W*(?:\d+ (?:passed|failed|errors?|skipped|xfailed|xpassed)\b"
+                          r"|no tests ran\b|Tests\s+\d+)")
+
+
+def _base_run_completed(base_output: str) -> bool:
+    """Did the base rerun actually run tests (its summary line is there)?"""
+    return bool(_RUN_SUMMARY.search(base_output or ""))
 
 
 def default_classify_environment(test_id: str, slice_text: str, signal: Optional[str]) -> tuple:

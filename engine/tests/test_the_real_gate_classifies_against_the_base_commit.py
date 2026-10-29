@@ -37,6 +37,7 @@ class TestTheRealGateClassifiesAgainstTheBaseCommit(unittest.TestCase):
             "FAILED tests/test_a.py::test_pre1 - some failure\n"
             "FAILED tests/test_a.py::test_pre2 - some failure\n"
             "FAILED tests/test_a.py::test_pre3 - some failure\n"
+            "3 failed, 3 passed in 0.42s\n"   # a real run's summary: the evidence tests ran
         )
         rerun_calls = []
 
