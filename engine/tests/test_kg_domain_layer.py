@@ -208,3 +208,158 @@ def test_p0_proposing_trace_regulation_becomes_a_start_workflow_offer():
             f"propose_action must redirect {name!r} to start_workflow, got tool={out.get('tool')!r}")
         assert out.get("args", {}).get("workflow_key") == "regulatory_trace", (
             f"propose_action must carry the resolved workflow key for {name!r}: {out.get('args')!r}")
+
+
+# --------------------------------------------------------------------------- #
+# P1 — review actions on a trace proposal: only a person may approve/reject,
+#       approval is idempotent, and list_pending/open_proposals reflect state
+# --------------------------------------------------------------------------- #
+def test_p1_approve_link_requires_a_person_and_is_idempotent(connection):
+    from boss_engine.services.knowledge import ontology_packs
+    from boss_engine.services.knowledge.documents import add_document
+    from boss_engine.services.knowledge.domain import (
+        TraceRefused, approve_link, list_pending, open_proposals, propose_implementation,
+    )
+
+    ontology_packs.set_project_pack(connection, project_id=P, pack_id="banking-regulatory")
+
+    doc = add_document(
+        connection, project_id=P, title="Reg Z 1026.36(c) review fixture",
+        source_url="https://www.ecfr.gov/x/1026.36", citation="12 CFR 1026.36(c)",
+        clauses=[{"section": "1026.36(c)(1)(ii)", "text": "Credit payments as of date of receipt.",
+                  "citation": "12 CFR 1026.36(c)(1)(ii)", "url": "https://www.ecfr.gov/x/1026.36"}],
+        actor_kind="person", actor_ref="compliance.lead@example.com",
+    )
+    clause_id = doc["clause_ids"][0]
+    proposal = propose_implementation(
+        connection, project_id=P, clause_id=clause_id, target_id=clause_id,
+        rationale="matched for review-flow test", confidence=0.8, actor_ref="regulatory_trace",
+        trace_id="trace-1",
+    )
+    edge_id = proposal["edge_id"]
+
+    with pytest.raises(TraceRefused):
+        approve_link(connection, project_id=P, edge_id=edge_id, actor_kind="agent",
+                      actor_ref="regulatory_trace")
+
+    pending_before = list_pending(connection, project_id=P, trace_id="trace-1")
+    assert any(row["id"] == edge_id for row in pending_before), (
+        f"a freshly proposed, unreviewed edge must show up as pending: {pending_before!r}")
+    assert open_proposals(connection, project_id=P, trace_id="trace-1") == 1
+
+    result = approve_link(connection, project_id=P, edge_id=edge_id, actor_kind="person",
+                           actor_ref="compliance.lead@example.com")
+    assert result["trust_tier"] == "approved"
+    assert result["already"] is False
+
+    again = approve_link(connection, project_id=P, edge_id=edge_id, actor_kind="person",
+                          actor_ref="compliance.lead@example.com")
+    assert again["already"] is True, "approving an already-approved edge must be a no-op, not an error"
+
+    pending_after = list_pending(connection, project_id=P, trace_id="trace-1")
+    assert not any(row["id"] == edge_id for row in pending_after), (
+        f"an approved edge must no longer be pending review: {pending_after!r}")
+    assert open_proposals(connection, project_id=P, trace_id="trace-1") == 0
+
+
+def test_p1_reject_link_requires_a_person_and_closes_validity(connection):
+    from boss_engine.services.knowledge import ontology_packs
+    from boss_engine.services.knowledge.documents import add_document
+    from boss_engine.services.knowledge.domain import (
+        TraceRefused, list_pending, propose_gap, reject_link,
+    )
+
+    ontology_packs.set_project_pack(connection, project_id=P, pack_id="banking-regulatory")
+
+    doc = add_document(
+        connection, project_id=P, title="Reg Z 1026.36(c) reject fixture",
+        source_url="https://www.ecfr.gov/x/1026.36", citation="12 CFR 1026.36(c)",
+        clauses=[{"section": "1026.36(c)(1)(iii)", "text": "Credit payments as of date of receipt.",
+                  "citation": "12 CFR 1026.36(c)(1)(iii)", "url": "https://www.ecfr.gov/x/1026.36"}],
+        actor_kind="person", actor_ref="compliance.lead@example.com",
+    )
+    clause_id = doc["clause_ids"][0]
+    gap = propose_gap(
+        connection, project_id=P, clause_id=clause_id, rationale="no implementation found",
+        actor_ref="regulatory_trace", trace_id="trace-2",
+    )
+    edge_id = gap["edge_id"]
+
+    with pytest.raises(TraceRefused):
+        reject_link(connection, project_id=P, edge_id=edge_id, actor_kind="agent",
+                     actor_ref="regulatory_trace")
+
+    outcome = reject_link(connection, project_id=P, edge_id=edge_id, actor_kind="person",
+                           actor_ref="compliance.lead@example.com", note="false positive")
+    assert outcome["status"] == "rejected"
+
+    pending = list_pending(connection, project_id=P, trace_id="trace-2")
+    assert not any(row["id"] == edge_id for row in pending), (
+        f"a rejected edge must no longer be pending review: {pending!r}")
+
+
+def test_p1_review_actions_refuse_an_edge_outside_the_project_or_not_a_proposal(connection):
+    from boss_engine.services.knowledge import ontology_packs
+    from boss_engine.services.knowledge.documents import add_document
+    from boss_engine.services.knowledge.domain import TraceRefused, approve_link
+
+    ontology_packs.set_project_pack(connection, project_id=P, pack_id="banking-regulatory")
+
+    with pytest.raises(TraceRefused):
+        approve_link(connection, project_id=P, edge_id="nonexistent-edge-id",
+                      actor_kind="person", actor_ref="compliance.lead@example.com")
+
+    doc = add_document(
+        connection, project_id=P, title="Reg Z 1026.36(c) non-proposal fixture",
+        source_url="https://www.ecfr.gov/x/1026.36", citation="12 CFR 1026.36(c)",
+        clauses=[{"section": "1026.36(c)(1)(iv)", "text": "Credit payments as of date of receipt.",
+                  "citation": "12 CFR 1026.36(c)(1)(iv)", "url": "https://www.ecfr.gov/x/1026.36"}],
+        actor_kind="person", actor_ref="compliance.lead@example.com",
+    )
+    document_id = doc["document_id"]
+    clause_id = doc["clause_ids"][0]
+    non_proposal_edge_id = STORE.upsert_edge(
+        connection, project_id=P, src_id=clause_id, dst_id=document_id, kind="references",
+        actor_kind="agent", actor_ref="system",
+    )
+    with pytest.raises(TraceRefused):
+        approve_link(connection, project_id=P, edge_id=non_proposal_edge_id,
+                      actor_kind="person", actor_ref="compliance.lead@example.com")
+
+
+# --------------------------------------------------------------------------- #
+# P1 — ontology pack lifecycle: unknown pack ids are refused, and rolling
+#       back a project's pack removes its granted kinds immediately
+# --------------------------------------------------------------------------- #
+def test_p1_unknown_pack_id_is_refused_on_load_and_on_set(connection):
+    from boss_engine.services.knowledge import ontology_packs
+
+    with pytest.raises(ontology_packs.PackRefused):
+        ontology_packs.load_pack("not-a-real-pack")
+
+    with pytest.raises(ontology_packs.PackRefused):
+        ontology_packs.set_project_pack(connection, project_id=P, pack_id="not-a-real-pack")
+
+
+def test_p1_rollback_project_pack_revokes_granted_kinds_immediately(connection):
+    from boss_engine.services.knowledge import ontology_packs
+
+    ontology_packs.set_project_pack(connection, project_id=P, pack_id="banking-regulatory")
+    assert "clause" in ontology_packs.effective_node_kinds(connection, project_id=P)
+
+    STORE.upsert_node(
+        connection, project_id=P, kind="clause", node_key="clause:rollback:1",
+        name="clause", body="text", trust_tier="governed", actor_kind="person",
+    )
+
+    ontology_packs.rollback_project_pack(connection, project_id=P)
+    assert "clause" not in ontology_packs.effective_node_kinds(connection, project_id=P), (
+        "rolling back a project's pack must immediately revoke its granted kinds "
+        "(no stale cache entry)."
+    )
+
+    with pytest.raises(ValueError):
+        STORE.upsert_node(
+            connection, project_id=P, kind="clause", node_key="clause:rollback:2",
+            name="clause", body="text", trust_tier="governed", actor_kind="agent",
+        )
