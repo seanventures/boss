@@ -1873,8 +1873,13 @@ class GitHubConnectionService:
         }
 
 
-def github_token_for(connection: Connection, settings: Settings, project_id: str) -> str:
+def github_token_for(connection: Connection, settings: Settings, project_id: str, owner: str,
+                     repo: str) -> str:
     """The credential this project's repository is actually connected with.
+
+    `owner`/`repo` resolve the token through `token_for_repository`, so a project holding
+    SEVERAL GitHub connections (several accounts) hands each repository its own connection's
+    token rather than "whichever connection was updated most recently".
 
     THE ENVIRONMENT FIELD IS THE OLD WAY. `settings.github_token` configures a target repo
     install-wide, and it is empty on any install that connected one through the wizard — there
@@ -1898,18 +1903,9 @@ def github_token_for(connection: Connection, settings: Settings, project_id: str
         return configured
     try:
         service = GitHubConnectionService(settings)
-        row = connection.execute(
-            text("SELECT id FROM github_connections "
-                 " WHERE project_id = :p AND status IN ('configured', 'active') "
-                 " ORDER BY updated_at DESC LIMIT 1"),
-            {"p": project_id},
-        ).first()
-        if row is None:
-            return ""
-        ref = service._credential_ref(connection, project_id, row[0])
-        secret = service.secret_refs.require_usable(
-            connection, project_id=project_id, credential_ref=ref)
-        return service._resolve_secret(secret, connection) or ""
+        token = service.token_for_repository(
+            connection, project_id=project_id, owner=owner, repo=repo)
+        return token or ""
     except Exception:  # noqa: BLE001 — no token is an answer; the clone reports it
         logger.debug("no usable GitHub credential for %s", project_id, exc_info=True)
         return ""
