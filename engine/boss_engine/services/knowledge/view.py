@@ -35,7 +35,7 @@ RULE_KINDS = frozenset({"rule"})
 LEARNED_KINDS = ("investigation", "test_failure", "fix", "workaround", "review_finding",
                  "decision", "root_cause", "precedent", "fact")
 ANCHOR_KINDS = ("run", "incident", "pull_request", "release", "spec", "runbook", "alert_rule", "topic")
-DOMAIN_KINDS = frozenset({"regulation", "policy_clause", "document"})
+DOMAIN_KINDS = frozenset({"regulation", "clause", "document"})
 LEARNING_KINDS = frozenset(LEARNED_KINDS) | frozenset(ANCHOR_KINDS)
 
 #: The read permission a kind needs beyond knowledge:read (spec §3 "Permissions per layer").
