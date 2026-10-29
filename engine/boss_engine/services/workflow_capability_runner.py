@@ -45,6 +45,32 @@ from .workflow_capabilities import CAPABILITY_KEYS, get as get_capability
 log = logging.getLogger(__name__)
 
 
+#: KG P5a (design §4.4): the deterministic, $0 graph queries dispatched by step id/capability,
+#: never a model call. `closure` is a `task`-kind placeholder (the instance agent is P5b's
+#: wiring), reused here so its Precedent write goes through the SAME primitives as the two
+#: deterministic steps rather than a one-off call of its own.
+from .knowledge import graph_steps as _graph_steps
+
+GRAPH_STEP_EXECUTORS = {
+    "context_enrichment": _graph_steps.run_context_enrichment,
+    "historical_pattern": _graph_steps.run_historical_pattern,
+    "closure": _graph_steps.run_closure,
+}
+
+
+def execute_graph_step(
+    connection: Connection, *, project_id: str, run_id: str, step_id: str, inputs: dict[str, Any],
+) -> dict[str, Any]:
+    """Run the fixed knowledge-graph query named by `step_id` (or `inputs["capability"]`),
+    and return its $0 outputs. Every write it makes went through `context_graph`/the knowledge
+    store's own primitives inside the function itself — nothing here writes a node directly."""
+    key = step_id if step_id in GRAPH_STEP_EXECUTORS else str(inputs.pop("capability", "") or "")
+    func = GRAPH_STEP_EXECUTORS.get(key)
+    if func is None:
+        raise CapabilityExecutionError(f"no deterministic graph step registered for '{step_id}'.")
+    return func(connection, project_id=project_id, run_id=run_id, step_id=step_id, **inputs)
+
+
 def _knowledge_precedent(
     connection: Connection,
     project_id: str,
@@ -2407,6 +2433,17 @@ def _execute_step(
     stale = _approved_content_refusal(connection, project_id, step, context)
     if stale:
         raise StaleApprovalError(stale)
+
+    # A FIXED KNOWLEDGE-GRAPH QUERY (KG P5a, design §4.4): never a model call, $0, repeatable.
+    # Checked before everything else below for the same reason `agent_work` is — it binds no
+    # capability key — and its writes are made by the function itself, through `context_graph`,
+    # before this step ever reaches the engine's own postcondition enforcement over `produced`.
+    if step.get("kind") == "deterministic":
+        inputs = _resolve_inputs(binding.get("inputs") or {}, context)
+        result = execute_graph_step(
+            connection, project_id=project_id, run_id=str(context.get("run_id") or ""),
+            step_id=str(step.get("id") or ""), inputs=inputs)
+        return {"kind": "deterministic", **result}
 
     # A STEP THAT SAYS WHAT IT WANTS AND LETS AN AGENT WORK OUT HOW.
     #
@@ -7043,9 +7080,11 @@ def tick(
             )
             if claimed is None:
                 continue
-            if claimed.get("step_kind") != "capability":
+            if claimed.get("step_kind") not in ("capability", "deterministic"):
                 # Somebody else's step kind. Release it by letting the lease lapse rather than
-                # failing it — this runner is not the only possible claimant.
+                # failing it — this runner is not the only possible claimant. `deterministic`
+                # (KG P5a) runs a fixed $0 graph query and is claimed here like `capability`:
+                # it has no agent turn to wait for, so there is no other claimant for it.
                 continue
 
             spec_step = spec_steps.get(claimed["step_id"]) or {}
