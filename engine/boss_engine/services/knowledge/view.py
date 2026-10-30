@@ -131,7 +131,11 @@ def parse_layers(value: Optional[str | Iterable[str]]) -> frozenset[str]:
     names = [v.strip() for v in (value.split(",") if isinstance(value, str) else value) if v and v.strip()]
     if not names:
         return DEFAULT_LAYERS
-    unknown = sorted(set(names) - set(PRODUCT_LAYERS))
+    # Only the three selectable chips are accepted. `domain` is a real product layer
+    # internally (product_layer, DOMAIN_KINDS) but is reserved, not a chip: a caller asking
+    # for it is refused in the same words as any other unknown name, matching the message
+    # below and DEFAULT_LAYERS (which never returns domain).
+    unknown = sorted(set(names) - DEFAULT_LAYERS)
     if unknown:
         raise ValueError(f"unknown layer {', '.join(unknown)}: use code, rules or learning")
     return frozenset(names)
@@ -143,6 +147,21 @@ def kinds_of(layers: Iterable[str], withheld: Iterable[str] = ()) -> list[str]:
         out |= {"code": CODE_KINDS, "rules": RULE_KINDS, "learning": LEARNING_KINDS,
                 "domain": DOMAIN_KINDS}.get(layer, frozenset())
     return sorted(out - set(withheld))
+
+
+def withheld_for(held_permissions: Iterable[str]) -> frozenset[str]:
+    """The kinds a caller may not read, given the permissions they already hold.
+
+    A kind listed in ``KIND_PERMISSIONS`` whose required permission is absent is withheld —
+    never counted, never drawn (spec §3 "Permissions per layer"). ``knowledge:read`` is assumed
+    (the route gates on it); only the per-kind extras here withhold rows. This is the pure form
+    of the route's ``_withheld`` (apps/api/app/routers/knowledge_view.py), so the decision/
+    precedent withholding mapping is pinned under the engine suite the code-task gate runs, not
+    only in the apps/api wire test the gate cannot execute."""
+    held = set(held_permissions)
+    return frozenset(
+        kind for kind, permission in KIND_PERMISSIONS.items() if permission not in held
+    )
 
 
 def _readable(kind: str, layers: Iterable[str], withheld: Iterable[str]) -> bool:

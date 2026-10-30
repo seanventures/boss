@@ -9,6 +9,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from ..config import Settings
+from ..identity.migration import capability_permissions
 from .core import emit_event
 
 # System/default member ids installed during explicit project bootstrap.
@@ -17,6 +18,24 @@ DEFAULT_MEMBER_IDS = frozenset({
     "ceo", "cto", "cao", "vp_agents", "release_manager",
     "metatron", "coo", "executive_console", "system",
 })
+
+
+def _scoped_permissions(permissions: Any) -> list[str]:
+    """A member's permissions with the scoped equivalents of its legacy capability strings
+    folded in. Stored rows hold a mix of today's legacy capabilities (e.g. ``decision_resolve``)
+    and already-scoped catalogue permissions the seed appends directly (e.g. ``knowledge:read``).
+    Callers that gate on the scoped form — the Graph view's withholding checks ``decision:read``
+    — only see it on a legacy member once the capability is translated. Additive: every stored
+    string is kept, so checks against the legacy form keep working; unknown strings map to
+    nothing (they granted nothing before either)."""
+    held = list(permissions or [])
+    out = list(held)
+    seen = set(held)
+    for scoped in sorted(capability_permissions(held)):
+        if scoped not in seen:
+            seen.add(scoped)
+            out.append(scoped)
+    return out
 
 
 class ProjectMemberNotFoundError(RuntimeError):
@@ -868,7 +887,7 @@ class MemberDirectoryService:
             "display_name": row["display_name"],
             "member_type": row["member_type"],
             "role_keys": row.get("role_keys") or [],
-            "permissions": row.get("permissions") or [],
+            "permissions": _scoped_permissions(row.get("permissions") or []),
             "status": row["status"],
             "created_by": row["created_by"],
             "created_at": row["created_at"].isoformat(),
@@ -884,7 +903,7 @@ class MemberDirectoryService:
             "display_name": row["display_name"],
             "member_type": row["member_type"],
             "role_keys": row.get("role_keys") or [],
-            "permissions": row.get("permissions") or [],
+            "permissions": _scoped_permissions(row.get("permissions") or []),
             "status": row["status"],
             "created_by": row["created_by"],
             "created_at": row["created_at"].isoformat(),
