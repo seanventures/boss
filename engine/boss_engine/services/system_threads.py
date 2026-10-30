@@ -66,6 +66,14 @@ def start_all(engine: Any, settings: Any) -> dict[str, bool]:
         _log.warning("Claude login refresher not started", exc_info=True)
         started["claude_login"] = False
     try:
+        from . import codex_login
+
+        codex_login.start()
+        started["codex_login"] = True
+    except Exception:  # noqa: BLE001
+        _log.warning("Codex login refresher not started", exc_info=True)
+        started["codex_login"] = False
+    try:
         from . import system_doctor
 
         system_doctor.start(engine, settings)

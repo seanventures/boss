@@ -106,6 +106,10 @@ EXEMPT: dict[str, str] = {
     "services/resource_reaper.py::tick": _CLEANUP,
     "services/claude_login.py::refresh_if_due": "install-wide: refreshes the Claude CLI login",
     "services/claude_login.py::tick": "install-wide: refreshes the Claude CLI login",
+    "services/codex_login.py::refresh_if_due": "install-wide: refreshes the Codex CLI login",
+    "services/codex_login.py::tick": "install-wide: refreshes the Codex CLI login",
+    "services/subscription_keepalive.py::sweep": "pings and refreshes an existing subscription "
+                                                  "login's credentials; starts no project work",
     "services/scorecards.py::sweep": "records scorecards for units that already finished",
     "services/shepherd_service.py::sweep": _RECOVERY,
     "services/shepherd_service.py::sweep_stale_previews": _CLEANUP,
@@ -177,6 +181,8 @@ WORKER_ROUTES: dict[str, str] = {
     "/v1/process-manager/tick": "tick:services/process_manager.py::tick",
     "/v1/metatron/watch": _HOME + " (observe-only)",
     "/v1/setup/checks": "re-checks the install's connections; starts no project work",
+    "/v1/setup/subscriptions/keep-alive": "pings and refreshes an existing subscription "
+                                           "login's credentials; starts no project work",
     "/v1/shepherd/watch": _RECOVERY,
     "/v1/shepherd/autopilot": _RECOVERY,
 }

@@ -101,6 +101,8 @@ class Signals:
     docker: bool = False
     #: claude_login.status(): the Claude CLI login's expiry and its last refresh (no secret).
     claude_login: dict[str, Any] = field(default_factory=dict)
+    #: codex_login.status(): the Codex ChatGPT login's expiry and its last refresh (no secret).
+    codex_login: dict[str, Any] = field(default_factory=dict)
 
 
 _VM_LAST: dict[str, Any] = {}
@@ -238,6 +240,12 @@ def collect(engine: Any) -> Signals:
         sig.claude_login = claude_login.status()
     except Exception:  # noqa: BLE001
         sig.claude_login = {}
+    try:
+        from . import codex_login
+
+        sig.codex_login = codex_login.status()
+    except Exception:  # noqa: BLE001
+        sig.codex_login = {}
     if sig.docker and cap.disk_used_pct > 80:
         sig.reclaimable_disk_gb = _docker_reclaimable_gb()
     return sig
@@ -440,6 +448,29 @@ def diagnose(sig: Signals) -> list[dict[str, Any]]:
             "evidence": {k: login.get(k) for k in ("state", "seconds_left", "error")},
             "options": [_opt("claude_sign_in", "Sign in again",
                              "Opens Repo and models, where Claude Code signs in."),
+                        _opt("wait_15", "Remind me in 15 min", "BOSS asks again.")],
+            "needs_choice": True, "auto": [],
+        })
+
+    # THE CODEX LOGIN CANNOT BE KEPT FRESH (codex_login): its refresh was refused, or it has
+    # expired, or a run's own codex exposed a refresh — a person must sign in again.
+    codex = sig.codex_login or {}
+    if codex.get("state") in ("refresh_failed", "expired"):
+        left = codex.get("seconds_left")
+        when = ("has expired" if codex.get("state") == "expired" or (left is not None and left <= 0)
+                else f"expires in {max(0, int(left) // 60)} min" if left is not None
+                else "will expire")
+        error = codex.get("error")
+        out.append({
+            "kind": "codex_signed_out", "severity": "critical",
+            "title": "Codex sign-in needed",
+            "detail": (f"The Codex subscription's login {when} and BOSS could not refresh it"
+                       + (f" ({error})" if error else "") + ". Builds on Codex cannot start "
+                       "until you sign in again in Repo and models (Codex, Sign in) or "
+                       "run `boss connect codex`."),
+            "evidence": {k: codex.get(k) for k in ("state", "seconds_left", "error")},
+            "options": [_opt("codex_sign_in", "Sign in again",
+                             "Opens Repo and models, where Codex signs in."),
                         _opt("wait_15", "Remind me in 15 min", "BOSS asks again.")],
             "needs_choice": True, "auto": [],
         })

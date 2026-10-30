@@ -390,11 +390,7 @@ def _seed_cli_logins(ident: SandboxIdentity) -> None:
     """The coding CLIs' own logins (Codex's auth.json, Grok's), copied into the run's HOME: the
     model credential is the one secret an agent is meant to hold (agent_env), and the control
     plane's own CLI homes stay 0700 to the boss uid. Readable inside the run directory only."""
-    for env_name, sub in (("CODEX_HOME", ".codex"), ("GROK_HOME", ".grok")):
-        # The CLI's own default when the variable is unset: an install that never sets CODEX_HOME
-        # (boss-1 and the laptop, 2026-10-28) keeps the login in ~/.codex, and skipping it left
-        # every build's codex signed out, falling back to an API key it did not have:
-        # "401 Unauthorized, wss://api.openai.com/v1/responses" while Setup's check said working.
+    for env_name, sub in (("GROK_HOME", ".grok"),):
         src = (os.environ.get(env_name) or "").strip() or os.path.expanduser(f"~/{sub}")
         if not src or not os.path.isdir(src):
             continue
@@ -406,36 +402,118 @@ def _seed_cli_logins(ident: SandboxIdentity) -> None:
             if os.path.isfile(path):
                 shutil.copyfile(path, dst / name)
                 os.chmod(dst / name, 0o644)
+    _seed_codex_login(ident)
     _seed_claude_login(ident)
+
+
+def _seed_codex_login(ident: SandboxIdentity) -> None:
+    """Codex's own ChatGPT login (`$CODEX_HOME/auth.json`), copied into the run's `.codex`,
+    kept fresh enough (codex_login.SEED_MIN_VALID_SECONDS) to outlive a build stage so the run's
+    own `codex` never needs to refresh — and is never trusted to. A login that cannot be made
+    fresh is NOT copied: the run's first `codex` start then fails cleanly ("not signed in"),
+    rather than seeding something that dies mid-run."""
+    from . import codex_login
+
+    src = codex_login._path(codex_login.AUTH_NAME)
+    if not os.path.isfile(src):
+        return
+    if codex_login.read_tokens() is None:
+        # Not a ChatGPT-oauth-shaped login (no tokens block, e.g. API-key mode): copy as-is,
+        # unmanaged — there is no refresh token to protect.
+        dst = ident.home / ".codex"
+        dst.mkdir(exist_ok=True)
+        os.chmod(dst, 0o2777)
+        shutil.copyfile(src, dst / "auth.json")
+        os.chmod(dst / "auth.json", 0o644)
+        return
+    ok, why = codex_login.ensure_fresh(codex_login.SEED_MIN_VALID_SECONDS)
+    if not ok:
+        log.warning("sandbox %s: the Codex login is not copied: %s", ident.key, why)
+        return
+    if codex_login.status().get("state") == codex_login.REFRESH_FAILED:
+        # A credential already flagged dead (mark_revoked) is not re-shared with a new
+        # sandbox just because its access token has not yet expired: a revoked refresh
+        # token is a person's problem to fix, not something to hand out again.
+        log.warning("sandbox %s: the Codex login is not copied: marked revoked", ident.key)
+        return
+    copy_codex_tokens(ident)
+
+
+def copy_codex_tokens(ident: Any) -> bool:
+    """Copy the control plane's CURRENT Codex auth.json (whole file, refresh token included —
+    codex needs it to report ChatGPT auth rather than falling back to API-key mode) into the
+    run's `.codex`, replacing an earlier copy. Never follows a symlink the run planted."""
+    from . import codex_login
+
+    try:
+        with open(codex_login._path(codex_login.AUTH_NAME), encoding="utf-8") as fh:
+            doc = json.load(fh)
+    except (OSError, ValueError):
+        return False
+    if not isinstance(doc, dict) or not isinstance(doc.get("tokens"), dict):
+        return False
+    dst = ident.home / ".codex"
+    dst.mkdir(exist_ok=True)
+    with contextlib.suppress(OSError):
+        os.chmod(dst, 0o2777)
+    path = dst / "auth.json"
+    tmp = dst / f"auth.json.boss-{os.getpid()}-{threading.get_ident()}.tmp"
+    with contextlib.suppress(FileNotFoundError):
+        os.unlink(tmp)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        json.dump(doc, fh)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, path)          # rename replaces a planted symlink itself, never its target
+    return True
+
+
+def reseed_codex_login(ident: "SandboxIdentity") -> None:
+    """Re-copy the control plane's CURRENT Codex tokens into a run's home, ahead of every
+    `codex` start inside the run (not only once at acquire()) — so a long, multi-stage build
+    follows the control plane's own refreshes rather than relying on a stale seed. A no-op
+    outside a sandboxed run."""
+    if current() is not ident:
+        return
+    from . import codex_login
+
+    if codex_login.status().get("state") == codex_login.REFRESH_FAILED:
+        return
+    # Refresh an expiry- OR age-due login before copying, so a freshly reseeded run copy is never
+    # itself "due" (the same guarantee _seed_codex_login gives via ensure_fresh). Without this a
+    # reseed that ran before the background owner's tick caught an age-old login would hand the run
+    # a stale copy. ensure_fresh is a no-op when the login is already fresh.
+    codex_login.ensure_fresh(codex_login.SEED_MIN_VALID_SECONDS)
+    if codex_login.status().get("state") == codex_login.REFRESH_FAILED:
+        return
+    copy_codex_tokens(ident)
 
 
 _LOGIN_RETURN_LOCK = threading.Lock()
 
 
 def _return_rotated_codex_login(ident: "SandboxIdentity") -> None:
-    """A run's codex that refreshed its ChatGPT login hands the NEWER login back to the control
-    plane, so no copy goes stale. Each refresh rotates the refresh token: if the run's newer
-    login were dropped with the run, the control plane would keep a revoked one. (Runs must get
-    the FULL login: codex 0.158 treats a copy with no or a placeholder refresh_token as signed out
-    and falls back to API-key mode, "401 wss://api.openai.com/v1/responses", boss-1 2026-10-29.)
-    Only ever moves forward (a newer last_refresh), atomically, owner-only; never raises."""
+    """A run's copy coming back rotated (a newer `last_refresh` than what was seeded) means the
+    run's own `codex` refreshed despite the guarantees in `_seed_codex_login`/`reseed_codex_login`
+    — a containment failure, never a legitimate rotation. The control plane's own file is NEVER
+    adopted from a run: that would mean trusting a refresh token a sandboxed, untrusted process
+    held. It is only ever logged and surfaced (codex_login.mark_revoked), so a login the run
+    exposed is treated as suspect rather than silently kept as current."""
+    from . import codex_login
+
     with contextlib.suppress(Exception):
         run_copy = ident.home / ".codex" / "auth.json"
-        target_dir = (os.environ.get("CODEX_HOME") or "").strip() or os.path.expanduser("~/.codex")
-        target = Path(target_dir) / "auth.json"
+        target = Path(codex_login._path(codex_login.AUTH_NAME))
         if not run_copy.is_file() or not target.is_file():
             return
         with _LOGIN_RETURN_LOCK:
             ran, held = json.loads(run_copy.read_text()), json.loads(target.read_text())
             if str(ran.get("last_refresh") or "") <= str(held.get("last_refresh") or ""):
                 return
-            tmp = target.with_name("auth.json.boss-return")
-            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-            with os.fdopen(fd, "w") as handle:
-                handle.write(json.dumps(ran))
-            os.replace(tmp, target)
-            log.info("sandbox %s: codex refreshed its login; the newer login returned to the "
-                     "control plane", ident.key)
+            log.warning("sandbox %s: codex's run copy came back rotated; containment failure, "
+                       "the control plane's login is kept as it is and the event is surfaced",
+                       ident.key)
+            codex_login.mark_revoked("run_refreshed")
 
 
 def _seed_claude_login(ident: SandboxIdentity) -> None:

@@ -45,11 +45,13 @@ class CodexLoginRefreshTest(unittest.TestCase):
         self._tmp.cleanup()
 
     def _write_auth(self, access: str, refresh: str, exp_seconds: float) -> Path:
+        from datetime import datetime, timezone
         path = self.home / "auth.json"
         path.write_text(json.dumps({
             "auth_mode": "chatgpt",
-            "last_refresh": "2026-10-01T00:00:00Z",
-            "tokens": {"access_token": _jwt(exp_seconds), "refresh_token": refresh},
+            "last_refresh": datetime.now(timezone.utc).isoformat(),
+            "tokens": {"access_token": _jwt(exp_seconds), "refresh_token": refresh,
+                       "expires_at": int(time.time() + exp_seconds)},
         }))
         return path
 
@@ -69,7 +71,7 @@ class CodexLoginRefreshTest(unittest.TestCase):
         auth_after = codex_login.read_auth(str(self.home))
         self.assertEqual(auth_after["tokens"]["refresh_token"], "codex-refresh-rotated")
         # The refresh happened, nothing was left as a stray temp file.
-        self.assertEqual([p.name for p in self.home.iterdir()], ["auth.json"])
+        self.assertFalse(any(p.name.endswith(".tmp") for p in self.home.iterdir()))
         # No secret value anywhere in the fake network body logged by this test's own asserts.
         for body in calls:
             self.assertNotIn("sk-", json.dumps(body))

@@ -68,8 +68,9 @@ def test_no_codex_login_anywhere_copies_nothing(tmp_path, monkeypatch):
 
 def test_the_run_gets_the_full_login_and_a_newer_one_comes_back(tmp_path, monkeypatch):
     """boss-1, 2026-10-29: a copy with no (or a placeholder) refresh_token made codex fall back to
-    API-key mode, so every run failed 401. Runs get the FULL login; one the run's codex refreshed
-    is handed back to the control plane on release (never an older one)."""
+    API-key mode, so every run failed 401. Runs get the FULL login. A run's copy coming back
+    rotated is a containment failure, never a legitimate rotation (2026-10-29, one-owner-refreshes):
+    the control plane's own file is never adopted from a run, only logged/surfaced."""
     import json
 
     _no_claude(monkeypatch)
@@ -87,18 +88,19 @@ def test_the_run_gets_the_full_login_and_a_newer_one_comes_back(tmp_path, monkey
     copied = json.loads((run_home / ".codex" / "auth.json").read_text())
     assert copied["tokens"]["refresh_token"] == "R1"            # the full login, as codex needs
 
-    # The run's codex refreshed: its copy is newer and rotated.
+    # The run's codex refreshed: its copy is newer and rotated — a containment failure, not a
+    # rotation to adopt. The control plane's own file stays exactly as it was.
     (run_home / ".codex" / "auth.json").write_text(json.dumps(
         {"auth_mode": "chatgpt", "last_refresh": "2026-10-29T16:00:00Z",
          "tokens": {"access_token": "A2", "refresh_token": "R2"}}))
     ident = _Ident(run_home)
     ident.key = "run-x"
     sandbox_identity._return_rotated_codex_login(ident)
-    assert json.loads(held.read_text())["tokens"]["refresh_token"] == "R2"
+    assert json.loads(held.read_text())["tokens"]["refresh_token"] == "R1"
 
-    # An OLDER run copy never overwrites the control plane's.
+    # An older run copy is likewise never adopted.
     (run_home / ".codex" / "auth.json").write_text(json.dumps(
         {"auth_mode": "chatgpt", "last_refresh": "2026-10-29T10:00:00Z",
          "tokens": {"access_token": "A0", "refresh_token": "R0"}}))
     sandbox_identity._return_rotated_codex_login(ident)
-    assert json.loads(held.read_text())["tokens"]["refresh_token"] == "R2"
+    assert json.loads(held.read_text())["tokens"]["refresh_token"] == "R1"
