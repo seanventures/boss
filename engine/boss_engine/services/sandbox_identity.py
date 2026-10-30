@@ -460,10 +460,14 @@ def copy_codex_tokens(ident: Any) -> bool:
     tmp = dst / f"auth.json.boss-{os.getpid()}-{threading.get_ident()}.tmp"
     with contextlib.suppress(FileNotFoundError):
         os.unlink(tmp)
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    # 0644, like every other login seeded here: the run's codex runs as the run's own uid, with
+    # no groups, and BOSS (uid boss) writes this file. 0600 left the run unable to read its own
+    # login, so codex fell back to API-key mode: "401 wss://api.openai.com/v1/responses" in every
+    # build (boss-1, 2026-10-30). The run's directory (<uid>:boss 2770) is what keeps others out.
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
         json.dump(doc, fh)
-    os.chmod(tmp, 0o600)
+    os.chmod(tmp, 0o644)
     os.replace(tmp, path)          # rename replaces a planted symlink itself, never its target
     return True
 

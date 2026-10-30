@@ -177,6 +177,27 @@ def test_p1_the_seeded_run_copy_keeps_the_chatgpt_login_shape(tmp_path, monkeypa
     assert _tokens(src)["access_token"] == "ACCESS_2"
 
 
+def test_the_seeded_copy_is_readable_by_the_runs_own_uid(tmp_path, monkeypatch):
+    """The run's codex runs as the run's uid with no groups; BOSS writes the copy as itself. A
+    0600 copy left codex unable to read its login, and it fell back to API-key mode: "401
+    wss://api.openai.com/v1/responses" in every build (boss-1, 2026-10-30). Seeding and every
+    reseed must leave it world-readable, like the other seeded logins."""
+    import stat
+
+    _login(tmp_path, monkeypatch, expires_in=5 * 3600)
+    run_home = tmp_path / "run-home"
+    run_home.mkdir()
+    ident = _Ident(run_home)
+
+    sandbox_identity._seed_codex_login(ident)
+    seeded = run_home / ".codex" / "auth.json"
+    assert stat.S_IMODE(seeded.stat().st_mode) & stat.S_IROTH
+
+    os.chmod(seeded, 0o600)                       # a reseed restores it
+    assert sandbox_identity.copy_codex_tokens(ident)
+    assert stat.S_IMODE(seeded.stat().st_mode) & stat.S_IROTH
+
+
 # P1 (criterion 4): a run's copy coming back rotated is a containment failure, never a
 # legitimate rotation — the control plane's own file must not move.
 def test_p1_a_rotated_run_copy_is_never_adopted_by_the_control_plane(tmp_path, monkeypatch):
