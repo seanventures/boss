@@ -138,9 +138,14 @@ def test_a_working_login_clears_a_prior_rejection_and_allows_a_future_card(conne
     assert _credential_state(connection, source_id) == "rejected"
     assert _decision_count(connection) == 1
 
+    # A passing `codex debug models` is not proof (it answers from cache while revoked); the
+    # sweep's real question is. Here the real question comes back working.
     monkeypatch.setattr(subscription_keepalive, "_ping_codex",
                         lambda binary, spec: (True, '{"models": []}'))
     subscription_keepalive.sweep(_Same(connection), settings=None, project_id=connection.project_id)
+    assert _credential_state(connection, source_id) == "rejected", "a cached ping clears nothing"
+    from boss_engine.services import model_failures
+    model_failures.mark_login(connection, connection.project_id, source_id, rejected=False)
     assert _credential_state(connection, source_id) == "ok"
 
     monkeypatch.setattr(subscription_keepalive, "_ping_codex",
@@ -148,3 +153,65 @@ def test_a_working_login_clears_a_prior_rejection_and_allows_a_future_card(conne
     subscription_keepalive.sweep(_Same(connection), settings=None, project_id=connection.project_id)
     assert _credential_state(connection, source_id) == "rejected"
     assert _decision_count(connection) == 2, "a fresh rejection after recovery gets its own card"
+
+
+# ── the badge is re-asked, not remembered (2026-10-30) ──────────────────────────────────────
+
+from datetime import datetime, timedelta, timezone  # noqa: E402
+
+NOW = datetime(2026, 10, 30, 20, 0, tzinfo=timezone.utc)
+
+
+def _row(source_id, *, kind="subscription", tone="green", checked_hours_ago=1.0):
+    return {"source_id": source_id, "kind": kind, "source": "connected", "pill": {"tone": tone},
+            "checked_at": (NOW - timedelta(hours=checked_hours_ago)).isoformat()}
+
+
+def _asked(monkeypatch, rows):
+    from boss_engine.services import setup_actions, setup_view
+
+    monkeypatch.setattr(setup_view, "build", lambda conn, settings, project_id: {"models": rows})
+    asked = []
+    monkeypatch.setattr(setup_actions, "check_model",
+                        lambda conn, settings, project_id, source_id, **k: asked.append(source_id))
+    return asked
+
+
+def test_a_failed_subscription_badge_is_asked_again_every_sweep(connection, monkeypatch):
+    """Claude Code read "Check failed" all day on a check made while its weekly limit was spent."""
+    asked = _asked(monkeypatch, [_row("claude", tone="red", checked_hours_ago=0.5)])
+    assert subscription_keepalive._reprove(_Same(connection), None, connection.project_id,
+                                           now=NOW) == 1
+    assert asked == ["claude"]
+
+
+def test_a_working_badge_is_asked_again_once_it_is_six_hours_old(connection, monkeypatch):
+    """Codex read "Working" on a day-old check while every real request was refused."""
+    asked = _asked(monkeypatch, [_row("fresh", checked_hours_ago=1),
+                                 _row("old", checked_hours_ago=7)])
+    subscription_keepalive._reprove(_Same(connection), None, connection.project_id, now=NOW)
+    assert asked == ["old"]
+
+
+def test_a_metered_key_is_never_asked_on_a_timer(connection, monkeypatch):
+    asked = _asked(monkeypatch, [_row("key", kind="metered", tone="red", checked_hours_ago=30)])
+    subscription_keepalive._reprove(_Same(connection), None, connection.project_id, now=NOW)
+    assert asked == []
+
+
+def test_one_failing_source_does_not_stop_the_others(connection, monkeypatch):
+    from boss_engine.services import setup_actions, setup_view
+
+    monkeypatch.setattr(setup_view, "build", lambda conn, settings, project_id: {"models": [
+        _row("a", tone="red"), _row("b", tone="red")]})
+    asked = []
+
+    def check(conn, settings, project_id, source_id, **k):
+        asked.append(source_id)
+        if source_id == "a":
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(setup_actions, "check_model", check)
+    assert subscription_keepalive._reprove(_Same(connection), None, connection.project_id,
+                                           now=NOW) == 1
+    assert asked == ["a", "b"]

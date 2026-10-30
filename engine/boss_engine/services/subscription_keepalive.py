@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 import shutil
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from sqlalchemy import text
@@ -96,7 +96,10 @@ def _sweep_one(engine, settings: Any, project_id: str, source_id: str, provider:
             spec, binary = None, None
         ok, output = ping(binary, spec)
         if ok:
-            model_failures.mark_login(conn, project_id, source_id, rejected=False)
+            # NOT PROOF OF A WORKING LOGIN. `codex debug models` answered from its cache while
+            # the login was revoked (boss-1, 2026-10-30: every real request 401 "invalidated
+            # oauth token", the badge said Working). Only a real question (`_reprove`) clears a
+            # login a real call refused.
             return
         if not model_failures.is_login_rejected(output):
             return  # a transient failure (CLI missing, network blip) — leave state untouched
@@ -106,8 +109,49 @@ def _sweep_one(engine, settings: Any, project_id: str, source_id: str, provider:
             _raise_login_card(conn, project_id, source_id, provider)
 
 
+#: A subscription whose last real answer was "working" is asked again after this long; one that
+#: was not working is asked again every sweep, so a login back after a weekly limit (or a fresh
+#: sign-in) turns green within the hour instead of showing the old failure all day.
+REPROVE_WORKING_AFTER = timedelta(hours=6)
+
+
+def _reprove(engine, settings: Any, project_id: str, *, now: Optional[datetime] = None) -> int:
+    """Ask each connected subscription one real question when its badge could be wrong.
+
+    THE BADGE IS THE LAST REAL ANSWER (setup_view.source_state). Nothing re-asked it: Claude
+    Code read "Check failed" all day on a check made while its weekly limit was spent, with 40
+    successful calls since; Codex read "Working" on a day-old check while revoked. Subscriptions
+    only (a question costs nothing extra there); a metered key is never asked on a timer."""
+    from . import setup_actions, setup_view
+
+    now = now or datetime.now(timezone.utc)
+    try:
+        with engine.begin() as conn:
+            view = setup_view.build(conn, settings, project_id)
+    except Exception:  # noqa: BLE001 — no view, nothing to re-ask; the ping above still ran
+        _log.warning("keep-alive could not read the models of %s", project_id, exc_info=True)
+        return 0
+    asked = 0
+    for model in view.get("models") or []:
+        if model.get("kind") != "subscription" or model.get("source") != "connected":
+            continue
+        tone = str((model.get("pill") or {}).get("tone") or "")
+        checked = setup_view.parse_time(model.get("checked_at")) if model.get("checked_at") else None
+        due = tone != "green" or checked is None or now - checked > REPROVE_WORKING_AFTER
+        if not due:
+            continue
+        try:
+            with engine.begin() as conn:
+                setup_actions.check_model(conn, settings, project_id, str(model["source_id"]),
+                                          actor="system")
+            asked += 1
+        except Exception:  # noqa: BLE001 — one source must not stop the others
+            _log.warning("keep-alive re-proof of %s failed", model.get("source_id"), exc_info=True)
+    return asked
+
+
 def sweep(engine, settings: Any, project_id: str) -> dict[str, Any]:
-    """Check every connected subscription source this process knows how to ping."""
+    """Keep every connected subscription login alive, and its badge true."""
     sources = subscription_sign_in.sign_in_sources(settings)
     checked = 0
     for source_id, provider in sources.items():
@@ -115,4 +159,4 @@ def sweep(engine, settings: Any, project_id: str) -> dict[str, Any]:
             continue
         _sweep_one(engine, settings, project_id, source_id, provider)
         checked += 1
-    return {"checked": checked}
+    return {"checked": checked, "reproved": _reprove(engine, settings, project_id)}
