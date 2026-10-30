@@ -61,9 +61,16 @@ def test_a_review_stage_keeps_the_review_cap(agent, tmp_path, stage):
 
 
 def test_the_design_cap_never_lengthens_past_the_session_timeout():
-    s = Settings(BOSS_CODE_AGENT_DESIGN_TIMEOUT_SECONDS=5000)
+    s = Settings(BOSS_CODE_AGENT_DESIGN_TIMEOUT_SECONDS=5000,
+                 BOSS_CODE_AGENT_REVIEW_TIMEOUT_SECONDS=420)
     assert code_agent.read_only_timeout(s, 900, "design") == 900
     assert code_agent.read_only_timeout(s, 900, "review_code") == 420
+
+
+def test_a_reviewer_gets_fifteen_minutes_by_default():
+    """Every build is reviewed now; a reviewer reading an ~870-line change timed out at 420 s
+    twice (KG P6a) and the PR said "BOSS review — NOT DONE"."""
+    assert Settings().code_agent_review_timeout_seconds == 900
 
 
 def test_the_design_cap_defaults_to_twenty_minutes():

@@ -7134,7 +7134,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # seat queued behind a slow one is not charged for the wait. A seat past it has its
             # own processes ended (it is a `claude -p` subprocess; Future.cancel() never stopped
             # a running one) and its slot freed. Unfinished checks keep their safe defaults.
-            review_deadline = int(getattr(settings, "code_agent_review_timeout_seconds", 420) or 420)
+            review_deadline = int(getattr(settings, "code_agent_review_timeout_seconds", 900) or 900)
             _seat_run = _run_seats(
                 guarded, max_workers=max_workers, seat_deadline_s=review_deadline,
                 owner_id=lambda label: f"{run_id}:{label}",
@@ -7977,8 +7977,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     # (review_seats.run_seats). A re-review used to wait with no timeout at all.
                     # A seat that did not finish (deadline or error) counts as HOLLOW: recorded
                     # as not having reviewed, never as a pass.
-                    _rs_deadline = int(getattr(settings, "code_agent_review_timeout_seconds", 420)
-                                       or 420)
+                    _rs_deadline = int(getattr(settings, "code_agent_review_timeout_seconds", 900)
+                                       or 900)
                     _rs_run = _run_seats(
                         list(_wanted), max_workers=max(1, len(_wanted)),
                         seat_deadline_s=_rs_deadline,

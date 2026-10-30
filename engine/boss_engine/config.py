@@ -1350,8 +1350,12 @@ class Settings(BaseSettings):
     # invocation — so a slow/rate-limited review (e.g. an OpenAI-gateway retry storm) can't
     # blow the review phase out to 20min. On deadline a check degrades to 'not_run' (security
     # stays strict; adversarial/consistency proceed) rather than hanging or crashing.
+    # 900 s, not 420: every build is now reviewed (2026-10-30), and a Claude Code reviewer
+    # reading an ~870-line change timed out at 420 s twice (KG P6a, crun_323b97d2/5f737846),
+    # leaving the PR with "BOSS review — NOT DONE". Seats run in parallel, so this bounds the
+    # whole panel too.
     code_agent_review_timeout_seconds: int = Field(
-        default=420, alias="BOSS_CODE_AGENT_REVIEW_TIMEOUT_SECONDS"
+        default=900, alias="BOSS_CODE_AGENT_REVIEW_TIMEOUT_SECONDS"
     )
     # Wall-clock cap for a single read-only PLANNING invocation (design, standards, spec, plan,
     # review_plan). Those read the whole repository, not a diff, so the review cap above is too

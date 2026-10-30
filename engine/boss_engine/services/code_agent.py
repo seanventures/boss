@@ -231,7 +231,7 @@ def read_only_timeout(settings: Any, timeout: int, stage: Optional[str] = None) 
     if st in PLANNING_STAGES:
         cap = int(getattr(settings, "code_agent_design_timeout_seconds", 1200) or 1200)
     else:
-        cap = int(getattr(settings, "code_agent_review_timeout_seconds", 420) or 420)
+        cap = int(getattr(settings, "code_agent_review_timeout_seconds", 900) or 900)
     return min(int(timeout), cap)
 
 
