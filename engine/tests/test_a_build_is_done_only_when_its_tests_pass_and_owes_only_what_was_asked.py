@@ -77,14 +77,15 @@ def test_qa_tests_are_sized_to_the_criteria_and_planned_first():
     assert g._test_plan_note("no plan here") == ""
 
 
-def test_one_fix_round_before_review_and_failing_tests_skip_the_panel():
+def test_one_fix_round_before_review_and_failing_tests_are_still_reviewed():
     import inspect
 
     src = inspect.getsource(g)
     # The one fix round is warm and comes right after implement; the "frontier" retry on the
-    # same model is gone; a build still failing after it is not reviewed or looped.
+    # same model is gone. A build still failing after it is REVIEWED (operator, 2026-10-30:
+    # review never depends on tests) but not looped.
     assert '"instead": "warm_fix_round"' in src
-    assert '"code_task.review_skipped_tests_failing"' in src
+    assert '"code_task.review_skipped_tests_failing"' not in src
     assert "rounds = min(rounds, 0 if repair_attempts >= 1 else 1)" in src
     assert '"code_task.light_plan"' in src
 

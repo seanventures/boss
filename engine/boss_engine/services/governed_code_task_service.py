@@ -432,6 +432,28 @@ def _guidance_block(items: list[dict]) -> str:
     )
 
 
+def review_panel_seats(lane: str, risk_tier: int, profile: dict, *, ci_files: bool) -> set:
+    """Which review-panel seats sit for a build. Tests do not enter into it.
+
+    EVERY BUILD IS REVIEWED, WHATEVER ITS TESTS SAY (operator, 2026-10-30). Tests decide a
+    merge; review is the evidence that someone read the code, and the PR carries its
+    conversation. Skipping the panel when tests still failed (most often failures the change
+    did not cause) opened PRs nobody had read: KG P6a PR #25 shipped a token no endpoint ever
+    checked, CX PR #24 claimed observations it never made. A profile (`panel_checks`) or the
+    fix lane may narrow the panel, never below one code reviewer; above tier 1 it is the full
+    panel; a CI change always gets security too."""
+    from . import fix_lane_runner
+
+    seats = set(fix_lane_runner.review_seats_for(
+        lane,
+        _ALL_PANEL_SEATS if risk_tier >= 2
+        else ((profile or {}).get("panel_checks") or _ALL_PANEL_SEATS)))
+    if ci_files:
+        seats |= {"review_code", "security_check"}
+    seats |= {"review_code"}
+    return seats
+
+
 def panel_seats(enabled_seats, review_checks, *, security, regression, consistency):
     """(label, fn) for exactly the review-panel seats that are enabled, in panel order.
 
@@ -2478,13 +2500,33 @@ def _post_review_comments_to_pr(sf, proposal: dict, evidence: dict, engine, proj
         rounds = [pr_review_post.legacy_round(evidence)]
     if not comments and not any(str((s or {}).get("summary") or "").strip()
                                 for r in rounds for s in (r.get("seats") or {}).values()):
+        reason = "no reviewer produced findings or a summary"
         with _transaction(engine) as c:
             emit_event(c, project_id, "code_task.review_comments_absent", "boss",
                        "code_task_run", run_id,
-                       {"pull_request_number": number,
-                        "reason": "no reviewer produced findings or a summary",
+                       {"pull_request_number": number, "reason": reason,
                         "stages": ["review_code", "security_check", "consistency_check"]})
-        return {"posted": False, "reason": "no reviewer produced findings or a summary"}
+        # THE PR SAYS SO. A pull request with no review conversation is not evidence that a
+        # review happened; silence there read as "reviewed" (KG P6a PR #25). Once per PR.
+        if not (state or {}).get("absent_notice"):
+            seats = [f"- {name}: {(evidence.get(key) or 'not_run')}" for name, key in (
+                ("Code review", "adversarial_verdict"), ("Security review", "security_verdict"),
+                ("Consistency review", "consistency_verdict"))]
+            body = ("### BOSS review — NOT DONE\n\nNo reviewer's findings or summary reached "
+                    "this pull request, so there is no evidence it was reviewed. Do not treat "
+                    "it as reviewed.\n\n" + "\n".join(seats) +
+                    f"\n\nBuild: `{run_id}`")
+            try:
+                sf.github.create_review(int(number), body=body, event="COMMENT", comments=None)
+                state = {**(state or {}), "absent_notice": True}
+                with _transaction(engine) as c:
+                    c.execute(sql(
+                        "UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx,'{}'::jsonb) "
+                        "|| jsonb_build_object('pr_review_posts', CAST(:s AS jsonb)) WHERE id = :id"),
+                        {"s": json.dumps(state), "id": run_id})
+            except Exception:  # noqa: BLE001 — never block a PR on a comment
+                _log_caught(logger)
+        return {"posted": False, "reason": reason}
     repository = str(getattr(sf.github, "repository_full_name", "") or "")
     try:
         out = pr_review_post.post(sf.github, int(number), comments=comments, rounds=rounds,
@@ -7044,24 +7086,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # seat list survived that override, `lean` would become a way to ship credential
             # handling with no security review at all. Above tier 1 the full panel is restored
             # no matter what the profile asked for.
-            enabled_seats = set(fix_lane_runner.review_seats_for(
-                lane,
-                _ALL_PANEL_SEATS if risk_tier >= 2
-                else (profile.get("panel_checks") or _ALL_PANEL_SEATS)))
-            if _ci_files:
-                enabled_seats |= {"review_code", "security_check"}
-            # TESTS THAT STILL FAIL AFTER THE FIX ROUND END THE BUILD; THEY ARE NOT REVIEWED.
-            # Reviewing code that does not pass its own tests is time spent on a verdict the
-            # test gate already decided (fail closed, one fix round). The deterministic
-            # regression seat still runs.
-            if not official_tests_passed and repair_attempts >= 1:
-                _skipped = sorted(enabled_seats & {"review_code", "security_check",
-                                                   "consistency_check"})
-                enabled_seats -= {"review_code", "security_check", "consistency_check"}
-                if _skipped:
-                    with _transaction(engine) as c:
-                        emit_event(c, project_id, "code_task.review_skipped_tests_failing", "boss",
-                                   "code_task_run", run_id, {"seats": _skipped})
+            enabled_seats = review_panel_seats(lane, risk_tier, profile, ci_files=bool(_ci_files))
             # ONLY THE SEATS THAT ARE ENABLED RUN, and the pool is sized from them. Every seat
             # used to be handed in regardless, while the pool was sized from the enabled
             # checks: after review_skipped_tests_failing the "skipped" seats ran one after
