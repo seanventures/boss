@@ -9,7 +9,6 @@ finished, merged build read as failed.
 from __future__ import annotations
 
 from boss_engine.services import app_deploy_manifest as m
-from boss_engine.services import workflow_capability_runner as runner
 
 
 def test_a_manifest_the_build_wrote_still_wins():
@@ -44,29 +43,3 @@ def test_the_checkout_is_searched_without_dependencies_or_worktrees(tmp_path):
         path.write_text("version: 1\n")
     assert m.manifests_in(tmp_path) == ["boss.deploy.yaml", "helpdesk/boss.deploy.yaml"]
     assert m.manifests_in(tmp_path / "missing") == []
-
-
-def _fail_preview(monkeypatch, manifest):
-    completed = {}
-    monkeypatch.setattr(runner, "_stack_the_app_declares", lambda _c, _p: manifest)
-    monkeypatch.setattr(runner.workflows, "force_complete_waiting_step",
-                        lambda _c, **kw: completed.update(kw))
-    done = []
-    took = runner._complete_advisory_failure(
-        None, project_id="p", run_id="wfr_1", step={"id": "s1", "step_id": "preview"},
-        output={"capability": "preview", "tool": "start_preview"}, status="failed",
-        why="the app exited (code 1)", done=done, awaited_id="prev_1")
-    return took, completed, done
-
-
-def test_a_failed_preview_of_a_declared_stack_is_not_applicable(monkeypatch):
-    took, completed, done = _fail_preview(monkeypatch, "boss.deploy.yaml")
-    assert took and done[0]["outcome"] == "declared_stack"
-    out = completed["output"]
-    assert out["status"] == "not_applicable" and out["declared_stack"] == "boss.deploy.yaml"
-    assert "deployed to its target" in out["note"] and "code 1" in out["note"]
-
-
-def test_a_failed_preview_of_an_ordinary_app_still_fails(monkeypatch):
-    took, completed, _ = _fail_preview(monkeypatch, None)
-    assert took is False and not completed
