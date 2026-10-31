@@ -62,6 +62,7 @@ from .app_deploy_manifest import (
     DEFAULT_MANIFEST_PATH,
     DeployManifest,
     ManifestError,
+    app_manifest,
     declared_manifest,
     load_manifest,
     manifest_workdir,
@@ -2653,23 +2654,29 @@ def _same_repository(a: Optional[str], b: Optional[str]) -> bool:
 
 def declared_manifest_for_run(connection: Connection, run_id: str) -> Optional[str]:
     """The boss.deploy.yaml this build's app declares itself with (app_deploy_manifest.
-    declared_manifest), read from every file the build's LINEAGE wrote — a repair touches only
+    app_manifest), read from every file the build's LINEAGE wrote and the manifests its
+    repository already had (`repo_manifests`) — a repair touches only
     what it fixed, and the manifest was written by the first attempt."""
     run_id = str(run_id or "").strip()
     if not run_id:
         return None
     rows = connection.execute(
         text("""
-            SELECT state->'impl_files' AS f FROM code_task_runs
+            SELECT state->'impl_files' AS f, state->'repo_manifests' AS m FROM code_task_runs
             WHERE COALESCE(finalize_ctx->>'root_run_id', id) = (
                 SELECT COALESCE(finalize_ctx->>'root_run_id', id) FROM code_task_runs
                 WHERE id = :i)
         """), {"i": run_id}).mappings().all()
     files: list[str] = []
+    existing: list[str] = []
     for r in rows:
         raw = _json(r["f"]) or []
         files.extend(str(f) for f in raw if isinstance(f, str))
-    return declared_manifest(files)
+        had = _json(r["m"]) or []
+        existing.extend(str(m) for m in had if isinstance(m, str))
+    # What the repository already declared counts too (app_deploy_manifest.app_manifest): a
+    # feature added to an app that says how it runs is deployed the way it says.
+    return app_manifest(files, existing)
 
 
 def _declared_stack_target(connection: Connection, project_id: str,

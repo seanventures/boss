@@ -5270,10 +5270,49 @@ def _dossier_brief(title: Any, state: Any) -> str:
 _ADVISORY_CAPABILITIES = frozenset({"more_tests"})
 
 
+def _stack_the_app_declares(connection: Connection, preview_id: str) -> Optional[str]:
+    """The boss.deploy.yaml the previewed build's app runs from, or None."""
+    if not preview_id:
+        return None
+    try:
+        build = connection.execute(text("SELECT run_id FROM app_previews WHERE id = :i"),
+                                   {"i": preview_id}).scalar()
+        if not build:
+            return None
+        from .stack_deploy import declared_manifest_for_run
+
+        return declared_manifest_for_run(connection, str(build))
+    except Exception:  # noqa: BLE001 — unknown is "not a declared stack": the failure stands
+        log.warning("could not read the stack %s's app declares", preview_id, exc_info=True)
+        return None
+
+
 def _complete_advisory_failure(connection: Connection, *, project_id: str, run_id: str,
                                step: Any, output: dict, status: str, why: str,
-                               done: list) -> bool:
+                               done: list, awaited_id: str = "") -> bool:
     """Complete an advisory step whose work failed; True when it did."""
+    # A PREVIEW OF AN APP THAT RUNS AS A DECLARED STACK. Its boss.deploy.yaml says how it runs
+    # (several services, a VM, a compose file); a one-process preview of it cannot come up, and
+    # that says nothing about the build. BOSS's own repository failed every preview this way
+    # ("No module named 'boss_engine'", "spawn ps ENOENT") and every finished build read as
+    # failed. Said as what it is, and the run goes on to the deploy, which ships the stack the
+    # way its manifest says and asks a person first.
+    if (str((output or {}).get("capability") or "") == "preview"
+            and not (output or {}).get("advisory")):
+        manifest = _stack_the_app_declares(connection, awaited_id)
+        if manifest:
+            workflows.force_complete_waiting_step(
+                connection, project_id=project_id, step_run_id=step["id"],
+                output={**output, "status": "not_applicable", "declared_stack": manifest,
+                        "awaited_status": status,
+                        "note": (f"This app runs as the stack its {manifest} declares, not as "
+                                 "one process, so it is not previewed: the preview ended as "
+                                 f"'{status}'" + (f" ({why})" if why else "") + ". It is "
+                                 "shown running when it is deployed to its target.")[:600]},
+            )
+            done.append({"run_id": run_id, "step_id": step["step_id"],
+                         "outcome": "declared_stack", "awaited_status": status})
+            return True
     if str((output or {}).get("capability") or "") not in _ADVISORY_CAPABILITIES:
         if not (output or {}).get("advisory"):
             return False
@@ -5598,7 +5637,8 @@ def resume_awaited(
             why = _why_it_ended(connection, table, awaited_id)
             if _complete_advisory_failure(connection, project_id=project_id, run_id=run_id,
                                           step=step, output=output, status=status,
-                                          why=str(why or ""), done=done):
+                                          why=str(why or ""), done=done,
+                                          awaited_id=str(awaited_id or "")):
                 continue
             if kind == SPEC_DECISION_KIND:
                 why = ("the spec was not approved — the panel's PRD decision was answered no, "

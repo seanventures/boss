@@ -142,6 +142,43 @@ def test_a_person_starting_a_workflow_run_without_a_grant_gets_409_and_nothing_i
     assert gid == g.id and obo == ALICE and rid == f"run_wf:{run['id']}" and "_identity" not in snap
 
 
+def test_a_build_started_with_a_key_gives_its_workflow_run_the_builds_grant(env):
+    """A build asked for with an API key (or MCP, or an agent) acts under the person's grant
+    (consent.require_authority returns that Acting); its outer run is started under the same
+    Acting (code_task_service), so the run records the grant. Started bare, it recorded none, and
+    every later step on the branch ran as the worker: launch readiness and More tests were
+    refused "needs code_task:retry" on every boss-1 run for ten days (2026-10-31)."""
+    from boss_engine.identity import AuthContext, AuthMethod, Principal, PrincipalKind, PrincipalStatus
+
+    key = AuthContext(Principal(ALICE, PrincipalKind.USER, "org_boss", PrincipalStatus.ACTIVE, ALICE),
+                      AuthMethod.API_KEY)
+    with env.engine.begin() as c:
+        _, version = _workflow(c, env.project)
+        spec = c.execute(text("SELECT spec FROM workflow_versions WHERE id = :v"),
+                         {"v": version["id"]}).scalar()
+        _, needs, _ = consent.workflow_needs(c, env.project, spec, {"title": "Interview Scorecard",
+                                                                     "repository": "acme/web"})
+    needs = set(needs) | {"preview:manage"}            # the preview a build implies (start_run)
+    env.world.grant(ALICE, needs, env.project)          # what the whole workflow uses
+    req = GrantRequest(agent_ids=(FORGE,), permissions=frozenset(needs), project_ids=(env.project,),
+                       resources={"github": {"repos": ["acme/web"], "contents": "write",
+                                             "pull_requests": "write"}},
+                       purpose="via a key")
+    with env.engine.begin() as c:
+        g = grants.create_grant(session_ctx(ALICE), req, db=c)
+    build = lineage.Acting(principal_id=ALICE, org_id="org_boss", grant_id=g.id,
+                           run_id="run_ct:crun_key1")
+    with env.engine.begin() as c, lineage.acting(key):
+        bare = _start(c, env.project, version["id"], as_person=False)   # before the fix
+        with lineage.acting(build):
+            run = _start(c, env.project, version["id"], as_person=False)
+        rows = {r[0]: (r[1], r[2]) for r in c.execute(
+            text("SELECT id, grant_id, on_behalf_of FROM workflow_runs WHERE id IN (:a, :b)"),
+            {"a": bare["id"], "b": run["id"]})}
+    assert rows[bare["id"]] == (None, None)
+    assert rows[run["id"]] == (g.id, ALICE)
+
+
 def test_system_starts_are_not_asked_and_record_no_authority(env):
     with env.engine.begin() as c:
         _, version = _workflow(c, env.project)

@@ -989,27 +989,49 @@ def start_code_task(
             from .workflows import start_project_run
 
             origin = run_finalize.get("origin") or {}
-            started = start_project_run(
-                connection,
-                project_id=project_id,
-                actor="boss",
-                title=title,
-                directive=instructions,
-                # THE SAME WORKFLOW THE TASK RECORDS. It was already resolved above — honouring
-                # the picker on the New project form, then any mapping, then the default. Letting
-                # start_project_run resolve it a second time would let the two disagree: the
-                # project page naming one workflow and the run that governs it following another.
-                workflow_version_id=(run_finalize.get("workflow") or {}).get("version_id"),
-                extra_input={
-                    "acceptance_criteria": acceptance_criteria,
-                    "test_commands": test_commands,
-                    "repository": repo,
-                    "adopt_code_task_run_id": run_id,
-                    "adopt_meeting_run_id": origin.get("meeting_run_id"),
-                    "adopt_discovery_run_id": origin.get("discovery_run_id"),
-                    "adopt_decision_id": origin.get("decision_id"),
-                },
-            )
+            # UNDER THE BUILD'S OWN AUTHORITY. Started outside it, a build asked for with an API
+            # key (or by MCP or an agent) gave its outer run no recorded authority
+            # (consent.require_for_workflow sees no grant), so every later step that acts on the
+            # branch ran bare as the worker and was refused: on boss-1 all 18 launch-readiness and
+            # More tests attempts in ten days, "needs Retry builds (code_task:retry)", while the
+            # person's standing grant held it. The run now records the grant the build runs under.
+            def _start_outer_run():
+                return start_project_run(
+                    connection,
+                    project_id=project_id,
+                    actor="boss",
+                    title=title,
+                    directive=instructions,
+                    # THE SAME WORKFLOW THE TASK RECORDS. It was already resolved above —
+                    # honouring the picker on the New project form, then any mapping, then the
+                    # default. Letting start_project_run resolve it a second time would let the
+                    # two disagree: the project page naming one workflow and the run that
+                    # governs it following another.
+                    workflow_version_id=(run_finalize.get("workflow") or {}).get("version_id"),
+                    extra_input={
+                        "acceptance_criteria": acceptance_criteria,
+                        "test_commands": test_commands,
+                        "repository": repo,
+                        "adopt_code_task_run_id": run_id,
+                        "adopt_meeting_run_id": origin.get("meeting_run_id"),
+                        "adopt_discovery_run_id": origin.get("discovery_run_id"),
+                        "adopt_decision_id": origin.get("decision_id"),
+                    },
+                )
+
+            from boss_engine.identity import consent as _consent_errors
+
+            try:
+                with (_identity_lineage.acting(identity_acting) if identity_acting is not None
+                      else _identity_lineage.nullcontext()):
+                    started = _start_outer_run()
+            except (_consent_errors.ConsentRequired, _consent_errors.AuthorityLost) as exc:
+                # The build's grant does not cover every step the workflow will run (a deploy
+                # agent it never named). The build must still have its run; its later steps then
+                # ask for authority as they always did. Said, not silent.
+                logger.warning("outer run for %s starts without the build's authority: %s",
+                               run_id, type(exc).__name__)
+                started = _start_outer_run()
             if started:
                 connection.execute(
                     sql("UPDATE code_task_runs SET finalize_ctx = "

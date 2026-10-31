@@ -7869,6 +7869,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             "test_author_independent": do_separate_tests, "reviewer_independent": do_review,
             "tests_passed": official_tests_passed, "adversarial_verdict": verdict,
             "test_files": test_files, "impl_files": impl_files,
+            # What the repository already declares about how its apps run (a boss.deploy.yaml
+            # the build did not write): preview and deploy read it (app_manifest).
+            "repo_manifests": _deploy_manifests_in(root),
             "test_command": test_cmd, "test_exit_code": official_test_exit,
             "verify_cwd": last_verify_cwd,
             "last_verify_output": official_verify_output or last_verify_output,
@@ -9468,3 +9471,14 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             finally:
                 if review_sandbox is not None:
                     review_sandbox.teardown()
+
+
+def _deploy_manifests_in(root: Any) -> list[str]:
+    """The boss.deploy.yaml files in the build's checkout; [] when it cannot be read."""
+    try:
+        from .app_deploy_manifest import manifests_in
+
+        return manifests_in(root)
+    except Exception:  # noqa: BLE001 — a record of the tree must never fail a build
+        logger.warning("could not list the deploy manifests in %s", root, exc_info=True)
+        return []

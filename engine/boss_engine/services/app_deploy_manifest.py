@@ -86,6 +86,71 @@ def declared_manifest(files: Any) -> Optional[str]:
     return max(nested, key=held)
 
 
+#: Folders never searched for an app's manifest: dependencies, VCS data, agent worktrees.
+_NOT_THE_APP = frozenset({".git", "node_modules", ".venv", "venv", "__pycache__", ".claude",
+                          ".next", "dist", "build", "vendor", "third_party"})
+
+
+def manifests_in(root: Any, *, depth: int = 3) -> list[str]:
+    """Every boss.deploy.yaml in a checkout (repository-relative), at most `depth` folders down.
+
+    WHAT THE REPOSITORY ALREADY DECLARES. `declared_manifest` read only the files a build WROTE,
+    so a feature added to an app that already says how it runs (BOSS's own repo, any customer
+    app with a boss.deploy.yaml) was treated as undeclared: the preview guessed a one-process
+    entrypoint (apps/api/app/main.py: "No module named 'boss_engine'") and the deploy took the
+    one-container path. The build and the preview record what the checkout holds; `app_manifest`
+    decides which one is the app's."""
+    from pathlib import Path
+
+    base = Path(str(root or ""))
+    if not base.is_dir():
+        return []
+    found: list[str] = []
+
+    def walk(folder: Any, level: int) -> None:
+        try:
+            entries = sorted(folder.iterdir(), key=lambda e: e.name)
+        except OSError:
+            return
+        for entry in entries:
+            if entry.is_file() and entry.name == DEFAULT_MANIFEST_PATH:
+                found.append(entry.relative_to(base).as_posix())
+            elif (entry.is_dir() and not entry.is_symlink() and level < depth
+                  and entry.name not in _NOT_THE_APP):
+                walk(entry, level + 1)
+
+    walk(base, 0)
+    return found
+
+
+def app_manifest(files: Any, existing: Any = ()) -> Optional[str]:
+    """The boss.deploy.yaml this build's app is deployed from: one it WROTE (`declared_manifest`),
+    else one its repository ALREADY HAD for it.
+
+    An existing manifest in a folder is the app's only when the build wrote code in that folder
+    (a repository's other apps and its test fixtures keep theirs). An existing ROOT manifest is
+    the app's when the app lives at the root (`app_folder` is None); one that belongs to another
+    app is refused at plan time (stack_deploy.root_manifest_misfit), as for a written one."""
+    written = declared_manifest(files)
+    if written:
+        return written
+    paths = [str(f).strip().removeprefix("./").lstrip("/") for f in (files or [])
+             if str(f or "").strip()]
+    had = [str(m).strip().removeprefix("./").lstrip("/") for m in (existing or [])
+           if str(m or "").strip()]
+    nested = []
+    for manifest in (m for m in had if "/" in m):
+        directory = manifest.rsplit("/", 1)[0] + "/"
+        held = sum(1 for p in paths if p.startswith(directory))
+        if held:
+            nested.append((held, manifest.count("/"), manifest))
+    if nested:
+        return max(nested)[2]
+    if DEFAULT_MANIFEST_PATH in had and paths and app_folder(paths) is None:
+        return DEFAULT_MANIFEST_PATH
+    return None
+
+
 #: Folders that hold part of a root app, never an app of their own.
 _SOURCE_DIRS = frozenset({"src", "lib", "app", "apps", "server", "client", "web", "public", "static",
                           "test", "tests", "spec", "scripts", "migrations", "db", "config",

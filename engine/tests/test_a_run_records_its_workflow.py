@@ -244,7 +244,7 @@ def test_the_run_follows_the_workflow_the_task_records():
     start_project_run resolve it again lets the two disagree — the project page naming one
     workflow and the run that governs it following another."""
     src = inspect.getsource(code_task_service.start_code_task)
-    call = src[src.index("started = start_project_run("):]
+    call = src[src.index("return start_project_run("):]
     assert 'workflow_version_id=(run_finalize.get("workflow") or {}).get("version_id")' in call
 
 

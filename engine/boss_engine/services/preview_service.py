@@ -2650,6 +2650,27 @@ def assert_previewable(run: dict, run_id: str) -> None:
     raise PreviewNotReady(run_id, str(run.get("status") or "?"), str(run.get("phase") or "?"))
 
 
+def _record_repo_manifests(engine, run_id: str, workdir: Path) -> None:
+    """Record what the app's repository declares about how it runs, when the build did not.
+
+    Builds made before the build recorded `repo_manifests` are read here, from the same branch
+    head the preview runs, so a retried preview and the deploy after it see the app's own
+    boss.deploy.yaml (app_deploy_manifest.app_manifest). Never fails a preview."""
+    try:
+        from .app_deploy_manifest import manifests_in
+
+        found = manifests_in(workdir)
+        with begin(engine) as c:
+            c.execute(
+                text("UPDATE code_task_runs SET state = COALESCE(state, '{}'::jsonb) "
+                     "|| jsonb_build_object('repo_manifests', CAST(:m AS jsonb)) "
+                     "WHERE id = :r AND NOT (COALESCE(state, '{}'::jsonb) ? 'repo_manifests')"),
+                {"r": run_id, "m": json.dumps(found)})
+    except Exception:  # noqa: BLE001
+        logger.warning("preview could not record the deploy manifests of %s", run_id,
+                       exc_info=True)
+
+
 def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int = 60,
                   ready_timeout: Optional[float] = None) -> dict:
     """Clone the run's branch, launch the app, discover its port, register an expiring preview.
@@ -2748,6 +2769,7 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
                                **({"umask": 0} if ident is not None else {}))
         if clone.returncode != 0:
             return _fail(f"git clone failed: {(clone.stderr or '')[-300:]}")
+    _record_repo_manifests(engine, run_id, workdir)
 
     def _verify(cmd_str: str) -> dict:
         """Library/CLI/module build — there is no web server to serve. 'Run it' means run its
