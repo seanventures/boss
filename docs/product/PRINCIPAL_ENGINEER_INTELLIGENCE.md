@@ -81,7 +81,7 @@ change sets; one governed path for all surfaces. Those are kept and built on.
 
 ## 3. Design
 
-Ten workstreams, each a generic capability in the shared path with tests, never a per-app patch.
+Eleven workstreams, each a generic capability in the shared path with tests, never a per-app patch.
 
 ### A. Study before change: the protocol BOSS enforces
 
@@ -266,6 +266,34 @@ morning there is a list of PRs and evidence.
 - Add `procps` to the preview sandbox image.
 - Applicability from the manifest before launch (F), not after a failure.
 
+### L. Done contracts and a completion check (the obvious is never left undone)
+
+**Why.** The spec's own tickets were first filed as eight unlinked tickets among about 150 in
+Plane. Nothing made them a set, so no agent could tell they belonged together. The model could
+easily have linked them. Nothing asked what "done" means for a ticket set, and nothing checked
+before reporting. This is the same failure as the deadletter fix: capable models miss the obvious
+when the harness never states it.
+
+- **Done contracts per output kind**, as checkable rules, versioned like standards:
+  - **Ticket set:** one parent; every child linked; an order; spec and branch links at the top of
+    each description.
+  - **PR:** evidence per criterion; risk rating; blast radius; Study record link.
+  - **Fix:** every symptom has a reproduced cause; no failure relabelled without proof; replay
+    outcomes.
+  - **Decision:** recommendation; evidence; deadline; owner.
+  - **Doc or spec:** linked from where it will be needed (ticket, README, index).
+  - **Deploy:** health and existing-flow smoke on the target.
+- **Tools enforce what they can.** Creating two or more related tickets requires a parent, or
+  creates one. A PR cannot open without its evidence section. Making the wrong shape hard beats
+  catching it later.
+- **A completion check before anything is reported done.** A separate pass with a fresh context
+  receives the request, the outputs and the contracts, and answers: *could the next person or
+  agent pick this up and finish it without asking anything?* Each failed check goes back to the
+  producing agent. Only real ambiguity goes to a person (§3F).
+- **Corrections become contract checks.** A structural correction from a person ("these should
+  be linked", "this needs evidence") is proposed as a new check in the matching contract, extending
+  §3B. From then on it is enforced, not remembered.
+
 ## 4. Phases
 
 **Phase 1 (P1): stop shipping shallow fixes and stop stalling.**
@@ -276,6 +304,7 @@ morning there is a list of PRs and evidence.
 - F: the decision ladder with deadlines and safe defaults, applicability before the step,
   supervisor verdicts act.
 - K: the preview bugs.
+- L: done contracts, tool enforcement and the completion check.
 
 **Phase 2: the clean PR and planning.**
 - E: rebase-first, evidence, docs pass, risk rating, babysitting.
