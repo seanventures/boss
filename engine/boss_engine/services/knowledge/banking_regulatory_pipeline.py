@@ -298,13 +298,13 @@ def _connected_symbols(connection: Connection, project_id: str, node_id: str,
         return []
     if node_kind == "symbol":
         row = connection.execute(
-            text("SELECT id, name, attrs FROM kg_nodes WHERE project_id = :p AND id = :i "
+            text("SELECT id, name, node_key, attrs FROM kg_nodes WHERE project_id = :p AND id = :i "
                  "AND (valid_to IS NULL OR valid_to > now())"),
             {"p": project_id, "i": node_id},
         ).mappings().first()
         return [dict(row)] if row else []
     rows = connection.execute(
-        text("SELECT n.id, n.name, n.attrs FROM kg_edges e "
+        text("SELECT n.id, n.name, n.node_key, n.attrs FROM kg_edges e "
              "JOIN kg_nodes n ON n.id = e.dst_id "
              "WHERE e.project_id = :p AND e.src_id = :i AND e.valid_to IS NULL "
              "AND n.kind = 'symbol' AND (n.valid_to IS NULL OR n.valid_to > now()) "
@@ -318,7 +318,14 @@ def _read_symbol_source(reader: rule_scan.Reader, symbol: Mapping[str, Any]) -> 
     """Reads `symbol`'s declared line range plus a few lines of context, bounded in size.
     `{"error": ...}` when unreadable — no path, or the reader itself errors."""
     attrs = symbol.get("attrs") or {}
-    path = str(attrs.get("path") or "").strip()
+    # WHERE THE INDEXER PUT IT. code_index writes a symbol's repository and file into its node
+    # key (symbol:<repo>:<path>:<name>), not its attrs; reading attrs alone made every real
+    # symbol "has no path to read", and every lane answered cannot_verify (2026-10-31).
+    from .code_index import symbol_location
+
+    key_repo, key_path, _name = symbol_location(str(symbol.get("node_key") or ""))
+    path = str(attrs.get("path") or key_path or "").strip()
+    repo = str(attrs.get("repo") or key_repo or "")
     if not path:
         return {"error": f"symbol {symbol.get('id')} has no path to read"}
     try:
@@ -329,7 +336,7 @@ def _read_symbol_source(reader: rule_scan.Reader, symbol: Mapping[str, Any]) -> 
     start = max(1, line - _CODE_CONTEXT_LINES)
     end = end_line + _CODE_CONTEXT_LINES
     try:
-        out = reader(path, start, end, str(attrs.get("repo") or ""))
+        out = reader(path, start, end, repo)
     except Exception as error:  # noqa: BLE001 — one unreadable symbol is said, not fatal
         return {"error": f"{type(error).__name__}: {error}"[:300]}
     if not isinstance(out, Mapping) or out.get("error"):

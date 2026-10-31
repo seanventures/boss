@@ -748,6 +748,17 @@ def symbol_key(repo: str | None, path: str, qualname: str) -> str:
     return f"symbol:{_prefix(repo)}{path}:{qualname}"
 
 
+def symbol_location(key: str) -> tuple[str, str, str]:
+    """The inverse of `symbol_key`: (repo, path, qualname), with repo "" when the key has none.
+    A symbol node's file lives in its key, not its attrs; readers ask here rather than guess."""
+    body = str(key or "").removeprefix("symbol:")
+    if ":" not in body:
+        return "", "", ""
+    head, qualname = body.rsplit(":", 1)
+    repo, path = head.split(":", 1) if ":" in head else ("", head)
+    return repo, path, qualname
+
+
 def file_key(repo: str | None, path: str) -> str:
     return f"file:{_prefix(repo)}{path}"
 

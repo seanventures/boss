@@ -169,6 +169,50 @@ class LaneConfirmationReadsRealCodeTests(unittest.TestCase):
         finally:
             mp.undo()
 
+    # P0: a symbol exactly as code_index writes it -- repository and file in the node KEY
+    # (symbol:<repo>:<path>:<name>), only line numbers in attrs. Reading attrs alone made every
+    # real symbol "has no path to read" (2026-10-31, NorthPeak).
+    def test_p0_a_symbol_is_read_from_where_the_indexer_records_it(self):
+        import pytest
+        from boss_engine.services.knowledge.code_index import symbol_key
+        mp = pytest.MonkeyPatch()
+        try:
+            case_id, _ = self._add_clause_case(key="indexed", clause_text="Credit as of receipt.")
+            rule_id = STORE.upsert_node(
+                self.connection, project_id=self.project_id, kind="rule",
+                node_key="rule:indexed", name="indexed rule", body="Repayment-like classification",
+                trust_tier="governed", actor_kind="person", actor_ref="compliance.lead@example.com")
+            path = "fineract-loan/src/main/java/org/x/LoanTransactionType.java"
+            symbol_id = STORE.upsert_node(
+                self.connection, project_id=self.project_id, kind="symbol",
+                node_key=symbol_key("acme/lending", path, "LoanTransactionType.isRepaymentType"),
+                name="LoanTransactionType.isRepaymentType", body="", trust_tier="observed",
+                actor_kind="system", actor_ref="code_index",
+                attrs={"lang": "java", "line": 193, "end_line": 196, "symbol_kind": "method"})
+            STORE.upsert_edge(
+                self.connection, project_id=self.project_id, src_id=rule_id, dst_id=symbol_id,
+                kind="evidenced_by", actor_kind="person", actor_ref="compliance.lead@example.com")
+            seen = {}
+
+            def fake_read(p, start, end, repo):
+                seen.update(path=p, repo=repo, start=start, end=end)
+                return {"content": "boolean isRepaymentType() { return this == REPAYMENT; }"}
+
+            _install_fake_reader(mp, fake_read)
+            _install_fake_agent(mp, FakeAgent({"verdict": "confirmed", "reason": "it classifies"}))
+            result = pipeline.run_lane_confirmation(
+                self.connection, settings=None, project_id=self.project_id,
+                step={"id": "lane_confirmation", "run_id": "run_idx"}, context={
+                    "steps": {"compliance_assessment": {
+                        "citation": rule_id, "subject_id": case_id, "note": "gap"}}},
+                inputs={})
+            self.assertEqual(seen["path"], path)
+            self.assertEqual(seen["repo"], "acme/lending")
+            self.assertEqual((seen["start"], seen["end"]), (190, 199))
+            self.assertEqual(result["verdict"], "confirmed")
+        finally:
+            mp.undo()
+
     # P1 (AC3): the source cannot be read for any connected symbol -> cannot_verify, never
     # ruled_out, and the agent is never called.
     def test_p1_unreadable_source_yields_cannot_verify_and_never_calls_the_agent(self):
