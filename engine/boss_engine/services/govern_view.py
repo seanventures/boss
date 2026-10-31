@@ -69,6 +69,8 @@ ENFORCED: dict[str, tuple[str, str]] = {
     # Read when a build's checks still fail after its repair rounds (checks_failing.enabled):
     # on, its PR opens as a draft with the checks listed; off, it waits for a waiver.
     "open_pr_when_checks_fail": ("Each build", "each_build"),
+    # Read at every step past the build (workflow_capability_runner.ends_at_the_pr).
+    "builds_end_at_pr": ("Each build", "each_build"),
     "step_recovery": ("Each failed step", "each_failed_step"),
     "recovery_budget_cents": ("Each failed step", "each_failed_step"),
     "recovery_max_minutes": ("Each failed step", "each_failed_step"),
@@ -80,7 +82,7 @@ ENFORCED: dict[str, tuple[str, str]] = {
 
 #: The on/off controls (0 or 1), drawn as a switch.
 SWITCHES = frozenset({"captain_leads_projects", "captain_auto_improve", "step_recovery",
-                      "open_pr_when_checks_fail"})
+                      "open_pr_when_checks_fail", "builds_end_at_pr"})
 
 #: The four thresholds, as the screen names them (key, label, budget_policies column).
 THRESHOLDS = (
@@ -270,7 +272,8 @@ def build(connection: Connection, settings: Any, project_id: str, *,
     ]
     chosen = ps.get_all(connection, project_id)
     for key in ("code_agent_max_concurrency", "code_agent_max_turns",
-                "code_review_inrun_max_rounds", "captain_leads_projects", "captain_auto_improve"):
+                "code_review_inrun_max_rounds", "captain_leads_projects", "captain_auto_improve",
+                "builds_end_at_pr"):
         controls.append(_knob_control(connection, settings, project_id, key, chosen, counts))
     for key, name in (("max_concurrent_jobs", "Jobs at once"), ("max_workers_total", "Workers")):
         word, effect = ENFORCED[key]

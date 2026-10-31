@@ -33,6 +33,7 @@ const HELP: Record<string, string> = {
   code_review_inrun_max_rounds: "Times reviewers and coder go back and forth",
   captain_leads_projects: "Adds the Engineering Captain's panel to every build",
   captain_auto_improve: "Off: the Captain only proposes improve builds. On: it starts them, spending budget.",
+  builds_end_at_pr: "On: a build's workflow completes at its reviewed PR. For repos BOSS does not run as an app, like its own.",
   max_concurrent_jobs: "Seeded into job slots when the project starts",
   max_workers_total: "Upper bound for autoscaling",
 };
@@ -112,7 +113,7 @@ export const SPEND_ROWS: [string, string][] = [
 export const AGENT_ROWS: [string, string][] = [
   ["code_agent_max_concurrency", "Review lanes"], ["code_agent_max_turns", "Turn budget"],
   ["code_review_inrun_max_rounds", "Review rounds"], ["captain_leads_projects", "Captain leads"],
-  ["captain_auto_improve", "Captain self-improves"],
+  ["captain_auto_improve", "Captain self-improves"], ["builds_end_at_pr", "Ends at the PR"],
   ["max_concurrent_jobs", "Jobs at once"], ["max_workers_total", "Workers"]];
 const ROW_NAMES: Record<string, string> = Object.fromEntries([...SPEND_ROWS, ...AGENT_ROWS]);
 
