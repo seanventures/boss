@@ -6004,7 +6004,8 @@
                   "from_input": "subject_id"
                 },
                 "max_hops": {
-                  "from_input": "max_hops"
+                  "from_input": "max_hops",
+                  "default": 2
                 }
               }
             },
@@ -6215,7 +6216,8 @@
                   "from_input": "subject_id"
                 },
                 "max_hops": {
-                  "from_input": "max_hops"
+                  "from_input": "max_hops",
+                  "default": 2
                 }
               }
             },

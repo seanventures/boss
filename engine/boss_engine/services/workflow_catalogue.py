@@ -955,7 +955,8 @@ CATALOGUE: list[dict[str, Any]] = [
                 # Pattern and Analysis see its output — never reached by its own `next`.
                 "id": "context_enrichment", "kind": "deterministic",
                 "binding": {"inputs": {
-                    "subject_id": _in("subject_id"), "max_hops": _in("max_hops")}},
+                    "subject_id": _in("subject_id"),
+                    "max_hops": {**_in("max_hops"), "default": 2}}},
                 "next": [],
             },
             {
@@ -1059,7 +1060,8 @@ CATALOGUE: list[dict[str, Any]] = [
                 # before Historical Pattern and the Analyst see its output.
                 "id": "context_enrichment", "kind": "deterministic",
                 "binding": {"inputs": {
-                    "subject_id": _in("subject_id"), "max_hops": _in("max_hops")}},
+                    "subject_id": _in("subject_id"),
+                    "max_hops": {**_in("max_hops"), "default": 2}}},
                 "next": [],
             },
             {
