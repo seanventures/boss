@@ -79,16 +79,6 @@ KNOBS: dict[str, dict[str, Any]] = {
         "help": "How long one agent may keep working before it must hand back.",
         "kind": "int", "min": 10, "max": 200,
     },
-    # A PROJECT THAT IS NOT AN APP BOSS RUNS (BOSS building its own repository): the workflow
-    # ends at the build's PR (workflow_capability_runner.ends_at_the_pr). Off by default.
-    "builds_end_at_pr": {
-        "attr": "builds_end_at_pr",
-        "label": "Builds end at the PR",
-        "help": "1: a build's workflow completes once its reviewed PR is open. Preview, launch "
-                "readiness, more tests, deploy and monitoring are recorded as not applicable. "
-                "For repositories BOSS does not run as an app. 0: the full workflow.",
-        "kind": "int", "min": 0, "max": 1,
-    },
     "captain_leads_projects": {
         "attr": "captain_leads_projects",
         "label": "Captain leads every project",

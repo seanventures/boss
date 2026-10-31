@@ -1171,9 +1171,6 @@ class Settings(BaseSettings):
     # one real model spend. 0 = the Captain proposes, never starts one; Govern turns it on per
     # project (project_settings `captain_auto_improve`). Installs that predate this keep theirs on.
     captain_auto_improve: int = Field(default=0, alias="BOSS_CAPTAIN_AUTO_IMPROVE")
-    # A build's workflow ends at its PR (project_settings `builds_end_at_pr`): for repositories
-    # BOSS does not run as an app, such as its own. 0 = the full workflow.
-    builds_end_at_pr: int = Field(default=0, alias="BOSS_BUILDS_END_AT_PR")
     # BOSSAPP-622: what agents are given from the knowledge graph (project_settings `knowledge_graph`):
     # on | keyword | off (knowledge/runtime.MODES).
     knowledge_graph: str = Field(default="on", alias="BOSS_KNOWLEDGE_GRAPH")
