@@ -80,7 +80,10 @@ SERVER_URL_ENV = "BOSS_BUILD_SERVICES_PG_URL"
 PASSWORD_FILE_ENV = "BOSS_BUILD_SERVICES_PG_PASSWORD_FILE"
 RUN_HOST_ENV = "BOSS_BUILD_SERVICES_PG_RUN_HOST"     # host:port the run is told, when it differs
 PREFIX_ENV = "BOSS_BUILD_SERVICES_PREFIX"
-DEFAULT_PREFIX = "boss_run_"
+DEFAULT_PREFIX = "boss_test_run_"
+#: Prefixes used by earlier builds, kept so the reaper still recognizes and drops their
+#: leftover databases/roles after DEFAULT_PREFIX changed to read as test-named.
+LEGACY_PREFIXES = ("boss_run_",)
 SUPPORTED = ("postgres",)
 SETTING_KEY = "build_services"
 CONNECTION_LIMIT = 32
@@ -675,6 +678,7 @@ def reap(live_run_ids: Iterable[str], *, install: str = "", server_url: Optional
         live_tags |= {run_tag(r) for r in _LEASES}
         mine = {lease.name for lease in _LEASES.values()}
     pre = prefix()
+    scan_prefixes = [pre] + [p for p in LEGACY_PREFIXES if p != pre]
     dropped: list[str] = []
     failed: list[str] = []
     with _LOCK:
@@ -686,11 +690,14 @@ def reap(live_run_ids: Iterable[str], *, install: str = "", server_url: Optional
             failed.append(lease.name)
     now = time.time()
     with contextlib.closing(_connect(srv)) as conn:
+        datname_cond = " OR ".join("starts_with(datname, %s)" for _ in scan_prefixes)
+        rolname_cond = " OR ".join("starts_with(rolname, %s)" for _ in scan_prefixes)
         rows = conn.execute(
-            "SELECT datname, shobj_description(oid, 'pg_database') FROM pg_database "
-            "WHERE starts_with(datname, %s) "
-            "UNION ALL SELECT rolname, shobj_description(oid, 'pg_authid') FROM pg_roles "
-            "WHERE starts_with(rolname, %s)", (pre, pre)).fetchall()
+            f"SELECT datname, shobj_description(oid, 'pg_database') FROM pg_database "
+            f"WHERE {datname_cond} "
+            f"UNION ALL SELECT rolname, shobj_description(oid, 'pg_authid') FROM pg_roles "
+            f"WHERE {rolname_cond}",
+            tuple(scan_prefixes) + tuple(scan_prefixes)).fetchall()
         seen: dict[str, Optional[str]] = {}
         for name, comment in rows:
             if comment or name not in seen:
