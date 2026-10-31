@@ -344,16 +344,21 @@ class PostgresKnowledgeStore:
         ).mappings().first()
         now = now_utc()
         if existing is not None:
-            if actor_kind == "agent" and existing["trust_tier"] != "inferred":
-                raise PermissionError("agent cannot overwrite a non-inferred fact")
-            if actor_kind == "system" and existing["trust_tier"] in {"governed", "approved"}:
-                raise PermissionError("system cannot overwrite a governed fact")
+            # RE-RECORDING THE SAME FACT IS NOT AN OVERWRITE. A second run of any step that writes
+            # what the graph already holds (a compliance case's Historical Pattern re-finding
+            # INC-2088) was refused "agent cannot overwrite a non-inferred fact" and deadlettered
+            # the run, though it changed nothing. Identical content only refreshes last_seen;
+            # changing a fact still needs the right to.
             if existing["content_hash"] == digest:
                 connection.execute(
                     text("UPDATE kg_nodes SET last_seen = :now WHERE id = :id"),
                     {"now": now, "id": existing["id"]},
                 )
                 return existing["id"]
+            if actor_kind == "agent" and existing["trust_tier"] != "inferred":
+                raise PermissionError("agent cannot overwrite a non-inferred fact")
+            if actor_kind == "system" and existing["trust_tier"] in {"governed", "approved"}:
+                raise PermissionError("system cannot overwrite a governed fact")
             connection.execute(
                 text(
                     """

@@ -534,3 +534,26 @@ def test_the_knowledge_switch_off_gives_an_agent_no_pack_and_a_pr_no_citations(c
         connection, project_id="proj_a", source_id="pr-off", title="reserve", body="change",
         files=[SimpleNamespace(path="stock.py", content="def reserve():\n    return 1\n")])
     assert remembered["cited_fact_ids"] == [] and remembered["linked"]
+
+
+def test_an_agent_re_recording_the_same_fact_is_not_an_overwrite(connection) -> None:
+    """A second run of a step that writes what the graph already holds (Historical Pattern
+    re-finding INC-2088 on the same project) must not be refused: identical content only
+    refreshes last_seen. Changing a non-inferred fact is still refused (2026-10-31)."""
+    _projects(connection)
+    first = STORE.upsert_node(
+        connection, project_id="proj_a", kind="incident", node_key="incident:INC-2088",
+        name="INC-2088", body="Repayment misallocated", trust_tier="observed",
+        actor_kind="agent", actor_ref="graph_steps:historical_pattern",
+        attrs={"incident_id": "INC-2088"})
+    again = STORE.upsert_node(
+        connection, project_id="proj_a", kind="incident", node_key="incident:INC-2088",
+        name="INC-2088", body="Repayment misallocated", trust_tier="observed",
+        actor_kind="agent", actor_ref="graph_steps:historical_pattern",
+        attrs={"incident_id": "INC-2088"})
+    assert again == first
+    with pytest.raises(PermissionError):
+        STORE.upsert_node(
+            connection, project_id="proj_a", kind="incident", node_key="incident:INC-2088",
+            name="INC-2088", body="A different account of it", trust_tier="observed",
+            actor_kind="agent", actor_ref="graph_steps:historical_pattern")
