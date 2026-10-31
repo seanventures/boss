@@ -6045,6 +6045,7 @@
             "id": "analysis",
             "kind": "task",
             "binding": {
+              "agent_work": true,
               "inputs": {
                 "instructions": "Read the Context Enrichment and Historical Pattern evidence for this subject. Cite the evidence for each finding, with a confidence, and group findings into families for remediation."
               }
@@ -6188,6 +6189,9 @@
                 },
                 "subject_id": {
                   "from_input": "subject_id"
+                },
+                "directive": {
+                  "from_input": "directive"
                 }
               }
             },
@@ -6415,6 +6419,15 @@
               "description": "The case's subject node to investigate (Graph › Knowledge Graph) — a clause, an incident, or whatever this case is about.",
               "examples": [
                 "kgn_0123456789ab"
+              ]
+            },
+            "directive": {
+              "type": "string",
+              "format": "textarea",
+              "title": "What should this compliance check focus on? (optional)",
+              "description": "Context Enrichment and Historical Pattern read the clause's own graph; say what matters most and the Compliance Assessment reads for that first.",
+              "examples": [
+                "Check whether the connected repayment code and INC-2088's incident already cover crediting payments interest-first."
               ]
             },
             "max_hops": {

@@ -10672,3 +10672,38 @@ CREATE OR REPLACE VIEW agent_decisions AS
          recorded_at AS created_at
   FROM kg_nodes
   WHERE kind = 'agent_decision' AND valid_to IS NULL;
+
+-- ============================ KG P6a: external agents ========================================
+-- A bank's own HTTP-hosted agent, registered to run one workflow step under BOSS's contract
+-- (services/knowledge/external_agents.py). Migrated here, not by ensure_schema() in the request
+-- path: the request path only ever reads/writes rows, never converges the schema.
+CREATE TABLE IF NOT EXISTS external_agents (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  endpoint_url TEXT NOT NULL,
+  secret_ref TEXT NOT NULL,
+  sponsor_principal_id TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'suspended')),
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_external_agents_project ON external_agents(project_id, status);
+
+-- The per-execution Knowledge-Graph token handed to an external agent
+-- (services/knowledge/external_agent_tokens.py): opaque, short TTL, revocable, checked live.
+CREATE TABLE IF NOT EXISTS external_agent_kg_tokens (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  step_id TEXT NOT NULL,
+  external_agent_id TEXT NOT NULL,
+  token_hash TEXT NOT NULL UNIQUE,
+  policy JSONB NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  revoked_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_external_agent_kg_tokens_hash ON external_agent_kg_tokens(token_hash);
+CREATE INDEX IF NOT EXISTS idx_external_agent_kg_tokens_expiry ON external_agent_kg_tokens(expires_at);

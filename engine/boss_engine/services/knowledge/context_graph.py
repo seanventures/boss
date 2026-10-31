@@ -114,6 +114,88 @@ def persist_contract_writes(connection: Connection, project_id: str, *, run_id: 
     return landed
 
 
+def read_contract_writes(connection: Connection, project_id: str, *, run_id: str, step_id: str,
+                          contract: Any) -> dict[str, Any]:
+    """What a step's contract declares as writes, read back from the real ``kg_nodes`` rows —
+    never from an agent's self-reported HTTP body. A write that was never actually made through
+    the Context Graph tools is simply absent from the result, never synthesized."""
+    produced: dict[str, Any] = {}
+    for spec in getattr(contract, "writes", ()):  # WriteSpec
+        if spec.kind == "agent_decision":
+            if spec.decision_type:
+                node_key = f"context:agent_decision:{run_id}:{step_id}:{spec.decision_type}"
+            else:
+                row = connection.execute(text(
+                    "SELECT attrs FROM kg_nodes WHERE project_id = :p AND kind = 'agent_decision' "
+                    "AND node_key LIKE :prefix ORDER BY recorded_at ASC LIMIT 1"
+                ), {"p": project_id, "prefix": f"context:agent_decision:{run_id}:{step_id}:%"}).first()
+                if row is not None:
+                    attrs = row[0] or {}
+                    produced["agent_decision"] = {
+                        "decision_type": attrs.get("decision_type"), "statement": attrs.get("statement")}
+                continue
+            row = connection.execute(text(
+                "SELECT attrs FROM kg_nodes WHERE project_id = :p AND kind = 'agent_decision' "
+                "AND node_key = :nk"
+            ), {"p": project_id, "nk": node_key}).first()
+            if row is not None:
+                attrs = row[0] or {}
+                produced["agent_decision"] = {
+                    "decision_type": attrs.get("decision_type"), "statement": attrs.get("statement")}
+        elif spec.kind == "coverage_gap":
+            node_key = f"context:coverage_gap:{run_id}:{step_id}"
+            row = connection.execute(text(
+                "SELECT attrs FROM kg_nodes WHERE project_id = :p AND kind = 'coverage_gap' "
+                "AND node_key = :nk"
+            ), {"p": project_id, "nk": node_key}).first()
+            if row is not None:
+                attrs = row[0] or {}
+                produced["coverage_gap"] = {"statement": attrs.get("statement")}
+        else:
+            node_key = f"context:{spec.kind}:{run_id}:{step_id}"
+            row = connection.execute(text(
+                "SELECT attrs FROM kg_nodes WHERE project_id = :p AND kind = :k AND node_key = :nk"
+            ), {"p": project_id, "k": spec.kind, "nk": node_key}).first()
+            if row is not None:
+                attrs = row[0] or {}
+                produced[spec.kind] = {"statement": attrs.get("statement")}
+    return produced
+
+
+def find_nodes(connection: Connection, project_id: str, *, kind: str,
+               query: Optional[str] = None, limit: int = 50) -> list[dict[str, Any]]:
+    """KG P6a read-within-scope: real ``kg_nodes`` rows of one ``kind`` the caller's contract
+    grants, at most ``limit`` of them — ``limit <= 0`` means literally zero rows, same as every
+    other reader of a policy's ``max_nodes``. Never trusts a self-reported body; the kind is
+    checked against the token's policy by the caller before we are reached."""
+    if int(limit) <= 0:
+        return []
+    clauses = ["project_id = :p", "kind = :k"]
+    params: dict[str, Any] = {"p": project_id, "k": kind, "lim": int(limit)}
+    if query:
+        clauses.append("(node_key ILIKE :q OR COALESCE(attrs->>'statement','') ILIKE :q)")
+        params["q"] = f"%{query}%"
+    rows = connection.execute(text(
+        f"SELECT node_key, kind, attrs FROM kg_nodes WHERE {' AND '.join(clauses)} "
+        "ORDER BY recorded_at DESC LIMIT :lim"
+    ), params).mappings().all()
+    return [{"node_key": r["node_key"], "kind": r["kind"], "attrs": r["attrs"] or {}} for r in rows]
+
+
+def get_node(connection: Connection, project_id: str, *, node_key: str,
+             kinds: Any = None) -> Optional[dict[str, Any]]:
+    """One ``kg_nodes`` row by ``node_key``, but only if its ``kind`` is one the caller's
+    contract grants (``kinds``) — otherwise ``None``, so a token cannot read outside its scope."""
+    row = connection.execute(text(
+        "SELECT node_key, kind, attrs FROM kg_nodes WHERE project_id = :p AND node_key = :nk"
+    ), {"p": project_id, "nk": node_key}).mappings().first()
+    if row is None:
+        return None
+    if kinds is not None and row["kind"] not in kinds:
+        return None
+    return {"node_key": row["node_key"], "kind": row["kind"], "attrs": row["attrs"] or {}}
+
+
 def project_agent_run(connection: Connection, project_id: str, run_id: str) -> Optional[dict[str, Any]]:
     """``AgentRun``, projected read-only from ``agent_acts`` — never a ``kg_nodes`` row."""
     row = connection.execute(

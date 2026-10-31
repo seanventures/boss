@@ -34,6 +34,15 @@ from ..tools import ToolRegistry, build_default_registry
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_INFO = {"name": "boss-engine", "version": __version__}
 _UNSCOPED_SQL_TOOLS = frozenset({"query_db", "write_db"})
+#: KG P6a: the only WRITE tools `MCPServer.handle_external_agent_call` will ever dispatch to.
+_EXTERNAL_AGENT_WRITE_TOOLS = frozenset({"kg_write_agent_decision", "kg_write_coverage_gap"})
+#: KG P6a: the READ tools an external-agent token may use to read the evidence its contract
+#: grants ("reads within scope"). Each is bounded by the token's contract-derived policy — only
+#: the contract's read kinds, at most `max_nodes` rows — and refused in words for anything else.
+_EXTERNAL_AGENT_READ_TOOLS = frozenset({"kg_find", "kg_get_node"})
+#: The prefix of a per-execution external-agent KG token (`external_agent_tokens.py`): a
+#: deliberately separate credential system, routed around `authenticate_transport` entirely.
+_EXTERNAL_AGENT_TOKEN_PREFIX = "boss_ext_"
 
 # Shown to the client model at initialize (MCP `instructions`). This is what
 # keeps external agents (Copilot/Claude/Cursor) on BOSS's governed workflow
@@ -302,6 +311,87 @@ class MCPServer:
         except Exception:  # noqa: BLE001 — a credential that no longer verifies is no identity
             return None
 
+    # ---- external-agent entry point (KG P6a) ------------------------------
+    def handle_external_agent_call(self, token: str, request: dict) -> Optional[dict]:
+        """The ONLY entry point a ``boss_ext_...`` token may use. Verifies the token live
+        against its stored record — never cached, never from a request argument — and refuses
+        anything but a ``tools/call`` of a Context-Graph write tool the token's contract-derived
+        policy actually grants. ``run_id``/``step_id``/``project_id`` come from the verified
+        claims, never from the caller's arguments, so a token minted for one run/step cannot be
+        redirected to write into another."""
+        from ..services.knowledge import context_graph, external_agent_tokens, external_agents, scopes
+
+        rid = request.get("id") if isinstance(request, dict) else None
+        with self.ctx.begin() as connection:
+            claims = external_agent_tokens.verify(connection, token)
+            if claims is None:
+                return _err(rid, -32001, external_agents.plain_reason("token_refused"))
+            if not isinstance(request, dict) or request.get("method") != "tools/call":
+                return _err(rid, -32601, "an external agent token may only call tools/call")
+            params = request.get("params") or {}
+            if not isinstance(params, dict):
+                return _err(rid, -32602, "tools/call params must be an object")
+            name = params.get("name")
+            args = params.get("arguments") or {}
+            actor_ref = f"external_agent:{claims.external_agent_id}"
+            if name in _EXTERNAL_AGENT_READ_TOOLS:
+                # Reads within scope: only the contract's declared read kinds (`policy.kinds`),
+                # at most `policy.max_nodes` rows. A kind the contract never granted is refused
+                # in words, never silently returned empty.
+                allowed_kinds = claims.policy.kinds
+                if not allowed_kinds:
+                    return _err(rid, -32003, external_agents.plain_reason("token_refused"))
+                # max_nodes == 0 means literally zero, same as every other reader of this field
+                # (store.py:908's `[:policy.max_nodes]`) — never silently substituted for a
+                # default, or a step whose contract set no bound would read more than it declared.
+                limit = claims.policy.max_nodes
+                try:
+                    if name == "kg_find":
+                        kind = str(args.get("kind") or "").strip()
+                        if kind not in allowed_kinds:
+                            return _err(rid, -32003, external_agents.plain_reason("token_refused"))
+                        nodes = context_graph.find_nodes(
+                            connection, claims.project_id, kind=kind,
+                            query=(args.get("query") or None), limit=limit)
+                    else:  # kg_get_node
+                        node_key = str(args.get("node_key") or "").strip()
+                        if not node_key:
+                            return _err(rid, -32602, "node_key is required")
+                        node = context_graph.get_node(
+                            connection, claims.project_id, node_key=node_key,
+                            kinds=allowed_kinds)
+                        if node is None:
+                            return _err(rid, -32003, external_agents.plain_reason("token_refused"))
+                        nodes = [node]
+                except Exception as exc:  # noqa: BLE001 — surfaced to the agent as a tool error
+                    return _ok(rid, _tool_result(
+                        {"ok": False, "error": f"{type(exc).__name__}: {exc}"}, is_error=True))
+                return _ok(rid, _tool_result({"ok": True, "nodes": nodes}))
+            if (name not in _EXTERNAL_AGENT_WRITE_TOOLS
+                    or not scopes.offers_tool(claims.policy, name)):
+                return _err(rid, -32003, external_agents.plain_reason("token_refused"))
+            try:
+                if name == "kg_write_agent_decision":
+                    decision_type = str(args.get("decision_type") or "").strip()
+                    statement = str(args.get("statement") or "").strip()
+                    if not decision_type or not statement:
+                        return _err(rid, -32602, "decision_type and statement are required")
+                    result = context_graph.write_agent_decision(
+                        connection, claims.project_id, step_id=claims.step_id, run_id=claims.run_id,
+                        decision_type=decision_type, statement=statement, policy_version="",
+                        workflow_version="", agent_fingerprint="", actor_ref=actor_ref)
+                else:
+                    statement = str(args.get("statement") or "").strip()
+                    if not statement:
+                        return _err(rid, -32602, "statement is required")
+                    result = context_graph.write_coverage_gap(
+                        connection, claims.project_id, step_id=claims.step_id, run_id=claims.run_id,
+                        statement=statement, actor_ref=actor_ref)
+            except Exception as exc:  # noqa: BLE001 — surfaced to the agent as a tool error
+                return _ok(rid, _tool_result(
+                    {"ok": False, "error": f"{type(exc).__name__}: {exc}"}, is_error=True))
+        return _ok(rid, _tool_result({"ok": True, **result}))
+
     # ---- transports ------------------------------------------------------
     def serve_stdio(self, *, stdin=None, stdout=None) -> None:
         """Standard MCP stdio transport: one JSON-RPC message per line on stdin,
@@ -376,11 +466,20 @@ class MCPServer:
 
         @app.post("/mcp")
         async def mcp(request: Request):  # type: ignore[no-redef]
-            auth = await admitted(request)
+            authorization = request.headers.get("authorization", "")
+            scheme, _, bearer = authorization.partition(" ")
+            bearer = bearer.strip()
             try:
                 body = await request.json()
             except json.JSONDecodeError:
                 return _err(None, -32700, "parse error")
+            if scheme.lower() == "bearer" and bearer.startswith(_EXTERNAL_AGENT_TOKEN_PREFIX):
+                # Deliberately not part of `identity`/`authenticate_transport`: this credential
+                # is a separate, narrow system (external_agent_tokens.py) for a remote party
+                # BOSS does not run in-process.
+                resp = server.handle_external_agent_call(bearer, body)
+                return resp if resp is not None else {"jsonrpc": "2.0", "result": {}}
+            auth = await admitted(request)
             token = _REQUEST_AUTH.set(auth if auth is not None else _NO_IDENTITY)
             cred = _REQUEST_CREDENTIAL.set(
                 request.headers.get("authorization") if auth is not None else None)

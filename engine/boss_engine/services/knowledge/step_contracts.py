@@ -207,6 +207,11 @@ def policy_from_contract(base: scopes.StagePolicy, contract: StepContract) -> sc
 
     kinds = frozenset(r.kind for r in contract.reads) if contract.reads else None
     layers = frozenset(scopes.layer_of(r.kind) for r in contract.reads) if contract.reads else base.layers
+    if contract.writes:
+        # A contract that declares writes grants the Context Graph layer they land in — without
+        # this, a token minted straight from `policy_from_contract` (as the external-agent
+        # runner does) could never reach `kg_write_agent_decision`/`kg_write_coverage_gap`.
+        layers = layers | {"context"}
     max_hops = contract.policy.get("max_hops", base.max_hops)
     max_nodes = contract.policy.get("list_cap", contract.policy.get("max_nodes", base.max_nodes))
     # A declared code-layer read is honoured only if the base stage can reach code at all

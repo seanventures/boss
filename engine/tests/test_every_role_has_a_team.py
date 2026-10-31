@@ -25,7 +25,7 @@ def _shipped() -> dict[str, dict]:
 
 def test_every_shipped_role_names_a_shipped_team():
     roles = _shipped()
-    assert len(roles) == 36  # + archivist (BOSSAPP-622), + incident_commander
+    assert len(roles) == 37  # + archivist (BOSSAPP-622), + incident_commander, + compliance_officer
     shipped_teams = set(agent_identity.TEAM_KEYS) - {"yours"}
     missing = {k: r.get("team") for k, r in roles.items() if r.get("team") not in shipped_teams}
     assert not missing, f"roles with no shipped team: {missing}"

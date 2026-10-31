@@ -971,8 +971,11 @@ CATALOGUE: list[dict[str, Any]] = [
                 "next": ["analysis"],
             },
             {
+                # THE ONE REAL AGENT STAGE HERE: a model reads the two deterministic steps'
+                # evidence and reasons over it, so unlike its task-placeholder neighbours it
+                # binds `agent_work` and needs a connected model (workflow_readiness.needs_of).
                 "id": "analysis", "kind": "task",
-                "binding": {"inputs": {
+                "binding": {"agent_work": True, "inputs": {
                     "instructions": (
                         "Read the Context Enrichment and Historical Pattern evidence for this "
                         "subject. Cite the evidence for each finding, with a confidence, and "
@@ -1048,7 +1051,8 @@ CATALOGUE: list[dict[str, Any]] = [
         "work_class": "any",
         "steps": [
             _step("clause_intake", "clause_intake", {
-                "document_id": _in("document_id"), "subject_id": _in("subject_id")},
+                "document_id": _in("document_id"), "subject_id": _in("subject_id"),
+                "directive": _in("directive")},
                 nxt=["evidence_loop"]),
             {
                 # LOOP BODY ONLY, same as kg_investigation_pipeline's: re-run up to twice

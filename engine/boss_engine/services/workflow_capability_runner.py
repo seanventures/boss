@@ -2445,6 +2445,15 @@ def _execute_step(
             step_id=str(step.get("id") or ""), inputs=inputs)
         return {"kind": "deterministic", **result}
 
+    # KG P6a (design §4.5 G6): a bank's own HTTP-hosted agent runs this one step, under BOSS's
+    # contract. Binds no capability and needs no `step_agents` resolution — the "agent" is an
+    # outbound HTTP call, not a principal BOSS runs in-process.
+    if step.get("kind") == "external_agent":
+        from . import external_agent_runner
+
+        return external_agent_runner.run_step(
+            connection, ctx, project_id=project_id, step=step, context=context)
+
     # A STEP THAT SAYS WHAT IT WANTS AND LETS AN AGENT WORK OUT HOW.
     #
     # Checked before everything else because it binds nothing: no capability key, no custom step,
@@ -3152,8 +3161,9 @@ def _perform_toolless(
             context, inputs)
     # KG P5b: banking_regulatory_compliance's six thin role-agent capabilities (services/
     # knowledge/banking_regulatory_pipeline.py), dispatched the same way as trace_regulation.
-    if key in ("clause_intake", "compliance_assessment", "compliance_orchestration",
-              "lane_confirmation", "remediation_package", "compliance_closure"):
+    if key == "clause_intake" or key == "compliance_assessment" \
+            or key == "compliance_orchestration" or key == "lane_confirmation" \
+            or key == "remediation_package" or key == "compliance_closure":
         from .knowledge import banking_regulatory_pipeline
 
         func = getattr(banking_regulatory_pipeline, f"run_{key}")

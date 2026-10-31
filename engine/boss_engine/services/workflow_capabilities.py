@@ -849,7 +849,7 @@ CAPABILITIES: dict[str, Capability] = {
             summary="Open one ComplianceCase per changed clause of a pasted regulation document.",
             tool=None,
             risk_tier=1,
-            optional_inputs=("document_id", "subject_id"),
+            optional_inputs=("document_id", "subject_id", "directive"),
             produces=("compliance_case_ids",),
             typical_minutes=5,
         ),

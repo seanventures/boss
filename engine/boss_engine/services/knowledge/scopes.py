@@ -210,6 +210,10 @@ TOOL_LAYERS: dict[str, frozenset[str]] = {
     "kg_propose_rule": frozenset({"rules"}),
     "kg_cypher": frozenset(LAYERS),          # the query itself is checked against the scope (age.py)
     "kg_schema": frozenset(LAYERS),          # counts only, of the layers the stage reads
+    # Context Graph writes (KG P6a): the only tools a `boss_ext_...` external-agent token's
+    # policy is ever scoped to reach — see MCPServer.handle_external_agent_call.
+    "kg_write_agent_decision": frozenset({"context"}),
+    "kg_write_coverage_gap": frozenset({"context"}),
 }
 
 _DECLARED_KEYS = {"layers", "tools", "budget_tokens", "code_seed", "max_hops", "max_nodes"}
@@ -243,7 +247,13 @@ def policy_for(
         from .step_contracts import parse_contract, policy_from_contract
 
         contract = parse_contract(str((step or {}).get("id") or "?"), contract_raw)
-        return policy_from_contract(base, contract)
+        policy = policy_from_contract(base, contract)
+        # The `context` write layer is granted only to a per-execution external-agent token (the
+        # runner calls `policy_from_contract` directly); a normal stage's read policy never carries
+        # it, so strip it here where `policy_for` builds the stage's own reach.
+        if "context" in policy.layers:
+            policy = replace(policy, layers=policy.layers - {"context"})
+        return policy
     return apply_declaration(base, declared) if declared else base
 
 

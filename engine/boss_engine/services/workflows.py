@@ -12,6 +12,7 @@ import logging
 import re
 from datetime import datetime, timedelta
 from pathlib import Path
+from collections.abc import Mapping
 from typing import Any, Callable, Iterable, Optional
 
 import yaml
@@ -47,6 +48,7 @@ from .step_agents import (
 from .typed_decisions import step_problems as typed_decision_problems
 from .knowledge import learning_writeback  # learning while executing (BOSSAPP-768)
 from .knowledge.step_contracts import contract_shape_problems, contract_assignment_problems
+from .knowledge import external_agents as _external_agents
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +78,9 @@ WORKFLOW_KINDS = {
     # enforcement applies unchanged — so it stays OUT of CONTROL_KINDS below; a branching or
     # looping step has no attempts of its own, and a deterministic step is not one of those.
     "deterministic",
+    # A bank's own HTTP-hosted agent, running under BOSS's contract (KG P6a, design §4.5 G6):
+    # does work, like `deterministic` — never a CONTROL_KIND.
+    "external_agent",
 }
 CONTROL_KINDS = {
     "condition",
@@ -789,6 +794,8 @@ def normalise_workflow_spec(
                 bad(field, detail)
         for detail in contract_shape_problems(step):
             bad("contract", detail)
+        for field, detail in external_agent_shape_problems(step):
+            bad(field, detail)
 
         def captain_problems() -> None:
             # The shape was said above; saying it again from validate_captain would double it.
@@ -1258,6 +1265,41 @@ def _agent_problem(detail: str, steps: dict[str, dict[str, Any]]) -> dict[str, A
     return problem(step_id, field, detail)
 
 
+def external_agent_shape_problems(step: dict[str, Any]) -> list[tuple[str, str]]:
+    """What is wrong with an `external_agent` step that needs no project to see: it must declare
+    a contract, and its captain must be `{external_agent: <id>}` — never the bare role-key
+    string a step's captain is otherwise. Returns (field, detail) pairs."""
+    if step.get("kind") != "external_agent":
+        return []
+    step_id = step.get("id", "?")
+    problems: list[tuple[str, str]] = []
+    if step.get("contract") is None:
+        problems.append(("contract", f"step '{step_id}' is an external_agent step and must declare a contract."))
+    captain = step.get("captain")
+    if not isinstance(captain, dict) or not str(captain.get("external_agent") or "").strip():
+        problems.append(("captain", f"step '{step_id}' is an external_agent step; its captain "
+                                     "must be {external_agent: <id>}."))
+    return problems
+
+
+def external_agent_assignment_problems(connection: Connection, project_id: str,
+                                        spec: Mapping[str, Any]) -> list[str]:
+    """Whether each `external_agent` step names an agent THIS project holds, active. An id that
+    is unregistered and one registered to a different project are refused with identical
+    wording — neither must tell an outsider which case it is (Risk #4)."""
+    problems: list[str] = []
+    for step in (spec or {}).get("steps") or []:
+        if not isinstance(step, Mapping) or step.get("kind") != "external_agent":
+            continue
+        step_id = step.get("id", "?")
+        captain = step.get("captain") or {}
+        agent_id = str(captain.get("external_agent") or "").strip() if isinstance(captain, Mapping) else ""
+        if not agent_id or not _external_agents.active_for_project(connection, project_id, agent_id):
+            problems.append(
+                f"step '{step_id}' names external agent '{agent_id}', which this project does not hold.")
+    return problems
+
+
 def spec_problems(
     connection: Connection, project_id: str, spec: Any, *,
     namespace: str = PRODUCT_NAMESPACE,
@@ -1318,6 +1360,11 @@ def spec_problems(
                 continue
             for detail in contract_assignment_problems(connection, project_id, step):
                 binding.append(problem(step["id"], "contract", detail))
+        for detail in external_agent_assignment_problems(connection, project_id,
+                                                           {**normalized, "steps": clean}):
+            match = _PROBLEM_STEP.match(detail)
+            step_id = match.group(1) if match else None
+            binding.append(problem(step_id, "captain", detail))
     return normalized, shape, binding
 
 

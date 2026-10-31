@@ -662,6 +662,12 @@ class Settings(BaseSettings):
     repo_mcp_provider: str = Field(default="bitbucket", alias="BOSS_REPO_MCP_PROVIDER")
     # Optional JSON overrides for tool names ({"create_pull_request": "bb_pr_create", ...}).
     repo_mcp_toolmap: Optional[str] = Field(default=None, alias="BOSS_REPO_MCP_TOOLMAP")
+
+    # --- KG P6a: the external_agent step's Knowledge-Graph MCP endpoint -----------------------
+    # The real KG MCP server's URL (engine/boss_engine/mcp/server.py), handed to a bank's
+    # external agent along with its per-execution token. No invented default: a step is refused
+    # rather than pointing an external agent at a path nothing serves.
+    kg_mcp_url: Optional[str] = Field(default=None, alias="BOSS_KG_MCP_URL")
     github_webhook_secret: Optional[str] = Field(
         default=None, alias="BOSS_GITHUB_WEBHOOK_SECRET"
     )

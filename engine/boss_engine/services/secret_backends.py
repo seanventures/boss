@@ -27,6 +27,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from typing import Any, Optional, Protocol
 
 from ..config import Settings
@@ -803,6 +804,52 @@ class DatabaseBackend:
             rows = c.execute(sql("SELECT ref_key FROM secret_material "
                                  "WHERE ref_key <> '__boss_master_key__' ORDER BY ref_key")).all()
         return [r[0] for r in rows]
+
+    def store(self, connection, project_id: str, value: str, *,
+              secret_kind: str = "api_token", created_by: str = "system") -> str:
+        """Encrypts `value` and creates its own project-scoped `secret_refs` row, returning the
+        new reference id — for a caller that just needs *a* working reference backed by this
+        backend, rather than hand-building the row and the ciphertext separately.
+
+        Writes through the CALLER'S connection (never `self._conn()`/a second engine), so the
+        row and its ciphertext land in the caller's own transaction."""
+        import base64
+
+        ref_id = f"sref_{uuid.uuid4().hex[:16]}"
+        ref_key = f"db/{ref_id}"
+        if self._key is None:
+            row = connection.execute(sql(
+                "SELECT ciphertext FROM secret_material WHERE ref_key = '__boss_master_key__'"
+            )).mappings().first()
+            if row:
+                self._key = base64.urlsafe_b64decode(bytes(row["ciphertext"]))
+            else:
+                generated = os.urandom(32)
+                connection.execute(sql(
+                    "INSERT INTO secret_material (ref_key, ciphertext) "
+                    "VALUES ('__boss_master_key__', :v) ON CONFLICT (ref_key) DO NOTHING"
+                ), {"v": base64.urlsafe_b64encode(generated)})
+                # Another writer may have provisioned the key between the SELECT above and this
+                # INSERT: the ON CONFLICT DO NOTHING then silently no-ops, and `generated` is NOT
+                # what landed in the row. Re-read the authoritative row rather than trusting the
+                # value we tried to insert, so we never encrypt under a key the row doesn't hold.
+                row = connection.execute(sql(
+                    "SELECT ciphertext FROM secret_material WHERE ref_key = '__boss_master_key__'"
+                )).mappings().first()
+                self._key = base64.urlsafe_b64decode(bytes(row["ciphertext"]))
+        blob = _aes_gcm_encrypt(self._key, value.encode("utf-8"))
+        connection.execute(sql(
+            "INSERT INTO secret_material (ref_key, ciphertext, updated_at) "
+            "VALUES (:k, :v, CURRENT_TIMESTAMP) "
+            "ON CONFLICT (ref_key) DO UPDATE SET ciphertext = EXCLUDED.ciphertext, "
+            "                                    updated_at = CURRENT_TIMESTAMP"
+        ), {"k": ref_key, "v": blob})
+        connection.execute(sql(
+            "INSERT INTO secret_refs (id, project_id, scope_type, scope_id, ref_kind, ref_key, "
+            "secret_kind, storage_backend, status, created_by) "
+            "VALUES (:id, :p, 'project', :p, 'database', :key, :kind, 'database', 'active', :by)"
+        ), {"id": ref_id, "p": project_id, "key": ref_key, "kind": secret_kind, "by": created_by})
+        return ref_id
 
     def delete(self, key: str) -> None:
         if key == "__boss_master_key__":
