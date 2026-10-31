@@ -28,7 +28,7 @@ describe("the Graph area", () => {
     mockKgFetch(NO_REPO);
     await mount(<GraphArea projectId="p1" actor="ceo" orgId="o1" />);
     const tabs = $$('[role="tab"]').filter((t) => t.closest(".inf-head")).map((t) => t.textContent);
-    expect(tabs).toEqual(["Graph", "Rules review", "Settings"]);
+    expect(tabs).toEqual(["Graph", "Rules review", "Documents", "Settings"]);
     expect($('[data-testid="kg-start"]')?.className).toBe("kg-stage");
     expect($(".kg-empty-title")?.textContent).toBe("Start a knowledge graph for this project");
     expect($$(".kg-layer-name").map((n) => n.textContent)).toEqual(["Code", "Rules", "Learning"]);

@@ -51,6 +51,45 @@ def _set_team(ctx, *, project_id, actor, args):
                      "off its gates. Undo by setting the team again.")}
 
 
+def _add_regulation_document(ctx, *, project_id, actor, args):
+    from ..services.knowledge import documents
+
+    clauses = args.get("clauses") or []
+    if not isinstance(clauses, list) or not clauses:
+        return {"ok": False, "error": (
+            "a clause's text must be given, never generated: pass at least one clause as "
+            "{section, text} with the operator's exact wording.")}
+    try:
+        with ctx.begin() as c:
+            result = documents.add_document(
+                c, project_id=project_id, title=str(args.get("title") or ""),
+                source_url=str(args.get("source_url") or ""),
+                citation=str(args.get("citation") or ""), clauses=clauses,
+                sensitivity=str(args.get("sensitivity") or "public"),
+                # The clause text is the operator's own words, never generated (the permission
+                # gate already required knowledge:manage): written as the person's act, not an
+                # agent's inference.
+                actor_kind="person", actor_ref=actor,
+            )
+    except documents.DocumentRefused as refused:
+        return {"ok": False, "error": str(refused)}
+    return {"ok": True, **result}
+
+
+def _set_ontology_pack(ctx, *, project_id, actor, args):
+    from ..services.knowledge import ontology_packs
+
+    pack_id = str(args.get("pack_id") or "").strip()
+    try:
+        with ctx.begin() as c:
+            pack = ontology_packs.set_project_pack(
+                c, project_id=project_id, pack_id=pack_id, set_by=actor,
+            )
+    except ontology_packs.PackRefused as refused:
+        return {"ok": False, "error": str(refused)}
+    return {"ok": True, "pack_id": pack.pack_id, "version": pack.version}
+
+
 KNOWLEDGE_PROJECT_TOOLS: dict[str, dict] = {
     "knowledge_project_setup": {
         "description": (
@@ -80,6 +119,36 @@ KNOWLEDGE_PROJECT_TOOLS: dict[str, dict] = {
             "required": ["role_keys"], "additionalProperties": False},
         "handler": _set_team, "kind": "write", "permission": "work_item:manage",
     },
+    "add_regulation_document": {
+        "description": (
+            "Add a regulation document to this project's Knowledge Graph: a title, source URL, "
+            "citation, and its clauses (each {section, text}) — the operator's exact pasted "
+            "text, never generated. Needs an ontology pack granting 'document' "
+            "(set_ontology_pack first, e.g. banking-regulatory); refuses in words otherwise, "
+            "and refuses an empty clause list rather than inventing one."),
+        "parameters": {"type": "object", "properties": {
+            "title": {"type": "string"}, "source_url": {"type": "string"},
+            "citation": {"type": "string"},
+            "clauses": {"type": "array", "items": {"type": "object", "properties": {
+                "section": {"type": "string"}, "text": {"type": "string"},
+                "citation": {"type": "string"}, "url": {"type": "string"}},
+                "required": ["section", "text"]}, "minItems": 1}},
+            "required": ["title", "clauses"], "additionalProperties": False},
+        "handler": _add_regulation_document, "kind": "write", "permission": "knowledge:manage",
+        "operator_only": False,
+    },
+    "set_ontology_pack": {
+        "description": (
+            "SET this project's ontology pack (e.g. banking-regulatory, banking-dq): what kinds "
+            "of node and edge, beyond BOSS's core, the project's Knowledge Graph accepts — a "
+            "document and its clauses need one set first. Proposed by the model, but only an "
+            "operator presses it."),
+        "parameters": {"type": "object", "properties": {
+            "pack_id": {"type": "string"}}, "required": ["pack_id"],
+            "additionalProperties": False},
+        "handler": _set_ontology_pack, "kind": "write", "permission": "knowledge:manage",
+        "operator_only": True,
+    },
 }
 
 
@@ -89,4 +158,5 @@ def register_knowledge_project_tools(reg) -> None:
             name=name, description=spec["description"], parameters=spec["parameters"],
             handler=spec["handler"], kind=spec["kind"],
             # Setting a team is undone by setting it again; it starts and spends nothing.
-            reversibility="safe", permission=spec["permission"]))
+            reversibility="safe", permission=spec["permission"],
+            operator_only=spec.get("operator_only", False)))

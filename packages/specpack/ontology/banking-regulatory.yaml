@@ -50,6 +50,9 @@ kinds:
     color: "#ff7a4a"
     attrs: [change_brief, test_ref, owner_team, approver_role]
 edges:
+  - id: contains
+    label: contains
+    color: "#8a6bff"
   - id: implemented_by
     label: implemented by
     color: "#2e9e5b"

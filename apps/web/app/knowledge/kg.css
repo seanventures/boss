@@ -619,3 +619,25 @@
 .kg-learn-row-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; }
 .kg-learn-row-text .kg-conn-label { white-space: normal; overflow: visible; overflow-wrap: anywhere; }
 .kg-learn-row-note { font-size: 0.74rem; color: var(--muted); }
+
+/* KG P7a: Documents tab — the ontology pack row, the Add regulation form, and the document and
+   clause list. Tokens only, following .kg-setting / .kg-scan. */
+.kg-documents { display: flex; flex-direction: column; gap: 16px; padding: 4px 0; }
+.kg-doc-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--border-strong); border-radius: var(--r); background: var(--surface-2); }
+.kg-doc-pack-label { font-size: 0.78rem; color: var(--muted); }
+.kg-doc-pack-value { font-size: 0.84rem; color: var(--ink); font-weight: 600; }
+.kg-doc-pick { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.kg-doc-form { display: flex; flex-direction: column; gap: 10px; padding: 12px; border: 1px solid var(--border-strong); border-radius: var(--r); background: var(--surface-2); }
+.kg-doc-form h3 { margin: 0; font-size: 0.92rem; color: var(--ink); }
+.kg-doc-clauses { display: flex; flex-direction: column; gap: 10px; }
+.kg-doc-clause-fields { display: flex; flex-direction: column; gap: 8px; padding: 10px; border: 1px dashed var(--border-strong); border-radius: var(--r-sm); }
+.kg-doc-clause-fields textarea.input { min-height: 56px; resize: vertical; }
+.kg-doc-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 14px; }
+.kg-doc { padding: 12px; border: 1px solid var(--border-strong); border-radius: var(--r); background: var(--surface-1); }
+.kg-doc-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; margin-bottom: 8px; }
+.kg-doc-title { font-size: 0.9rem; font-weight: 600; color: var(--ink); }
+.kg-doc-clause-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.kg-doc-clause { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; padding: 8px 10px; border-left: 2px solid var(--kg-rule); background: var(--surface-2); border-radius: var(--r-sm); }
+.kg-doc-clause-section { font-weight: 600; }
+.kg-doc-clause-text { flex: 1 1 240px; font-size: 0.82rem; line-height: 1.45; color: var(--ink-soft); }
+.kg-doc-check { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; }

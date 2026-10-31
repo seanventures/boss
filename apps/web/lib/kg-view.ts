@@ -247,6 +247,47 @@ export function getBlastRadius(w: Who, nodeId: string, signal?: AbortSignal) {
   return kgRead<{ affected?: Array<{ id?: string; node_id?: string; name?: string; kind?: string }> }>("/v1/knowledge/blast-radius", { project_id: w.projectId, actor: w.actor, node_id: nodeId }, signal);
 }
 
+// ── regulation documents (KG P7a, §Documents) ───────────────────────────────────────────────
+
+/** Add a regulation document or change the project's ontology pack: both knowledge:manage. */
+export const DOCUMENT_MANAGE: Permission = "knowledge:manage";
+
+export type KgClause = { id: string; section: string; text: string; citation: string; url: string };
+export type KgDocument = {
+  id: string; title: string; source_url: string; citation: string;
+  added_by: string; added_at: string; clauses: KgClause[];
+};
+export type KgPack = { pack_id: string; version: string };
+export type KgPacksResponse = { current: KgPack | null; available: KgPack[] };
+export type KgLinkedRulesResponse = { rules: { node_id: string; title: string }[] };
+
+export function getDocuments(w: Who, signal?: AbortSignal) {
+  return kgRead<{ documents: KgDocument[] }>("/v1/knowledge/documents", { project_id: w.projectId, actor: w.actor }, signal);
+}
+
+export function getPacks(w: Who, signal?: AbortSignal) {
+  return kgRead<KgPacksResponse>("/v1/knowledge/packs", { project_id: w.projectId, actor: w.actor }, signal);
+}
+
+export function getLinkedRules(w: Who, clauseId: string, signal?: AbortSignal) {
+  return kgRead<KgLinkedRulesResponse>(`/v1/knowledge/documents/${encodeURIComponent(clauseId)}/linked-rules`, { project_id: w.projectId, actor: w.actor }, signal);
+}
+
+export async function addDocument(w: Who, body: {
+  title: string; source_url: string; citation: string;
+  clauses: { section: string; text: string }[];
+}) {
+  return send<{ document_id: string; clause_ids: string[] }>("/v1/knowledge/documents",
+    { project_id: w.projectId, actor: w.actor, step_up: "confirmed", ...body },
+    { scope: `kg-doc:${w.projectId}`, label: "Add regulation" });
+}
+
+export async function setPack(w: Who, packId: string) {
+  return send<KgPack>("/v1/knowledge/packs",
+    { project_id: w.projectId, actor: w.actor, step_up: "confirmed", pack_id: packId },
+    { scope: `kg-pack:${w.projectId}`, label: "Change pack" });
+}
+
 // ── writes ──────────────────────────────────────────────────────────────────────────────────
 
 export type Wrote<T> = { ok: true; data: T } | { ok: false; status: number; error: string };

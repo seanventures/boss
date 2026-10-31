@@ -4839,7 +4839,7 @@ CREATE INDEX IF NOT EXISTS idx_a2a_outbox_pending
 -- (derived from traces/heuristics, carries a confidence < 1).
 CREATE TABLE IF NOT EXISTS kg_nodes (
   id TEXT PRIMARY KEY,
-  project_id TEXT NOT NULL REFERENCES projects(id),
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   kind TEXT NOT NULL,               -- service|resource|repo|deployment|datastore|external|incident|root_cause
   node_key TEXT NOT NULL,           -- stable natural key within (project, kind)
   name TEXT NOT NULL,
@@ -4888,7 +4888,7 @@ CREATE INDEX IF NOT EXISTS idx_kg_nodes_search
 
 CREATE TABLE IF NOT EXISTS kg_edges (
   id TEXT PRIMARY KEY,
-  project_id TEXT NOT NULL REFERENCES projects(id),
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   src_id TEXT NOT NULL REFERENCES kg_nodes(id) ON DELETE CASCADE,
   dst_id TEXT NOT NULL REFERENCES kg_nodes(id) ON DELETE CASCADE,
   kind TEXT NOT NULL,               -- depends_on|runs_on|deployed_from|owns|emits|caused_by|correlates_with
@@ -4920,6 +4920,16 @@ CREATE INDEX IF NOT EXISTS idx_kg_nodes_repo_path ON kg_nodes(project_id, repo, 
 CREATE INDEX IF NOT EXISTS idx_kg_nodes_key ON kg_nodes(project_id, node_key) WHERE valid_to IS NULL;
 CREATE INDEX IF NOT EXISTS idx_kg_nodes_name ON kg_nodes(project_id, name) WHERE valid_to IS NULL;
 CREATE INDEX IF NOT EXISTS idx_kg_edges_src_valid ON kg_edges(src_id) WHERE valid_to IS NULL;
+
+-- KG P7a: deleting a project drops its knowledge graph with it. kg_nodes/kg_edges predate the
+-- ON DELETE CASCADE every other KG table carries on project_id; add it idempotently so an
+-- existing database gets it too (a fresh one is built with it by the CREATE TABLEs above).
+ALTER TABLE kg_nodes DROP CONSTRAINT IF EXISTS kg_nodes_project_id_fkey;
+ALTER TABLE kg_nodes ADD CONSTRAINT kg_nodes_project_id_fkey
+  FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
+ALTER TABLE kg_edges DROP CONSTRAINT IF EXISTS kg_edges_project_id_fkey;
+ALTER TABLE kg_edges ADD CONSTRAINT kg_edges_project_id_fkey
+  FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 
 -- BOSS-357: knowledge retrieval evaluation snapshots (coverage + regression alarms)
 CREATE TABLE IF NOT EXISTS kg_eval_snapshots (

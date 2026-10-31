@@ -107,6 +107,8 @@ export const WRITE_HELPERS: Readonly<Record<string, WriteGate | readonly Permiss
   "lib/kg-view.ts#editRule": "knowledge:review",      // POST /v1/knowledge/view/rules/{id}/edit
   "lib/kg-view.ts#rejectRule": "knowledge:review",    // POST /v1/knowledge/view/rules/{id}/reject
   "lib/kg-view.ts#indexNow": "knowledge:read",        // POST /v1/knowledge/repositories/index (read-safe)
+  "lib/kg-view.ts#addDocument": "knowledge:manage",   // POST /v1/knowledge/documents
+  "lib/kg-view.ts#setPack": "knowledge:manage",       // POST /v1/knowledge/packs
   "lib/kg-view.ts#promoteFact": "knowledge:manage",   // POST /v1/knowledge/facts/{id}/promote
   "lib/kg-view.ts#rejectFact": "knowledge:manage",    // POST /v1/knowledge/facts/{id}/reject
   "lib/kg-view.ts#forgetFact": "knowledge:manage",    // POST /v1/knowledge/facts/{id}/forget

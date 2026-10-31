@@ -98,7 +98,7 @@ describe("Knowledge Graph › Setup", () => {
   it("a knowledge-graph project with no code opens on Setup: ① current, the rest waiting with why", async () => {
     mockKgFetch(routes(setupFx(), { "/knowledge/repositories$": { body: { project_id: "fineract-map", repositories: [] } } }));
     await open();
-    expect(tabs()).toEqual(["Setup", "Graph", "Rules review", "Settings"]);
+    expect(tabs()).toEqual(["Setup", "Graph", "Rules review", "Documents", "Settings"]);
     expect($('[data-testid="kg-tab-setup"]')?.getAttribute("aria-selected")).toBe("true");
     expect($('[data-testid="kg-head"] h2')?.textContent).toBe("Knowledge Graph");
     expect($(".kg-setup-title")?.textContent).toBe("Set up the knowledge graph for Fineract map");
@@ -262,7 +262,7 @@ describe("the Knowledge Graph says what it is", () => {
     expect($('[data-testid="kg-intro"]')?.textContent).toContain("Every node says which agent added it and who approved it.");
     expect($$('[data-testid="kg-intro"] b').map((b) => b.textContent)).toEqual(["Code", "Rules", "Learning"]);
     // An app project with code: no Setup tab, the graph as before.
-    expect(tabs()).toEqual(["Graph", "Rules review", "Settings"]);
+    expect(tabs()).toEqual(["Graph", "Rules review", "Documents", "Settings"]);
     await click("kg-intro-dismiss");
     expect($('[data-testid="kg-intro"]')).toBeNull();
     unmount();

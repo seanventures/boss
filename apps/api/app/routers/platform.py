@@ -207,6 +207,14 @@ def mount_platform_routers(app: FastAPI) -> None:
     except ImportError:
         pass
 
+    # KG P7a — a regulation document and its project's ontology pack
+    try:
+        from .knowledge_documents import router as knowledge_documents_router
+
+        app.include_router(knowledge_documents_router)
+    except ImportError:
+        pass
+
     # BOSSAPP-768 — a knowledge-graph project's guided setup (import, team, first scan, review)
     try:
         from .knowledge_setup import router as knowledge_setup_router
