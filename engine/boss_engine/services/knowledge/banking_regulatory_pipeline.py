@@ -154,6 +154,17 @@ def run_compliance_assessment(
         if node and node["kind"] in {"rule", "symbol"} and candidate_id != subject_id:
             candidates.append({"node_id": candidate_id, "node": node})
 
+    # THE CODE THE INCIDENT HAPPENED IN joins the candidates (graph_steps.code_found_in): a
+    # regulation's rule leads to how transactions are classified, the incident to where amounts
+    # are applied, and the assessment must see both.
+    incident_code = graph_steps.code_found_in(connection, project_id=project_id,
+                                              incident_ids=matched)
+    known = {c["node_id"] for c in candidates}
+    for symbol_id in incident_code:
+        node = STORE.get_node(connection, project_id=project_id, node_id=symbol_id)
+        if node and symbol_id not in known:
+            candidates.append({"node_id": symbol_id, "node": node, "from_incident": True})
+
     cited_incident = None
     if matched:
         from tools.mcp_itsm_mock import TOOL_FNS as _itsm_tools
@@ -173,8 +184,10 @@ def run_compliance_assessment(
     confidence = 0.0
     rationale = "No connected rule or code candidate was found for this subject."
     if candidates or cited_incident:
-        listing = "\n".join(f"{i}. {c['node_id']}: {_node_summary(connection, project_id, c['node_id'])}"
-                            for i, c in enumerate(candidates))
+        listing = "\n".join(
+            f"{i}. {c['node_id']}: {_node_summary(connection, project_id, c['node_id'])}"
+            + (" (code the incident was found in)" if c.get("from_incident") else "")
+            for i, c in enumerate(candidates))
         incident_text = (
             f"Historical Pattern correlated incident {cited_incident['incident_id']}: paid down "
             f"{cited_incident['actual_paydown']:.2f} instead of "
@@ -369,6 +382,15 @@ def run_lane_confirmation(
 
     if node and node["kind"] in {"rule", "symbol"}:
         symbols = _connected_symbols(connection, project_id, citation, node["kind"])
+        # AND THE CODE THE INCIDENT HAPPENED IN: a finding is checked where the failure occurred,
+        # not only where the regulation's rule points.
+        matched = list((steps.get("historical_pattern") or {}).get("matched") or [])
+        have = {str(sym.get("id")) for sym in symbols}
+        for symbol_id in graph_steps.code_found_in(connection, project_id=project_id,
+                                                   incident_ids=matched):
+            if symbol_id not in have and len(symbols) < _MAX_CITED_SYMBOLS + 3:
+                symbols.extend(_connected_symbols(connection, project_id, symbol_id, "symbol"))
+                have.add(symbol_id)
         if not symbols:
             reason = f"{citation} has no connected code symbol to read."
         else:

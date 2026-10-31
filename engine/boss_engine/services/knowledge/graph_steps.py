@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
 
+from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from . import context_graph
@@ -163,8 +164,51 @@ def _itsm_matches(connection: Connection, *, project_id: str, subject_id: str, a
             body=str(incident.get("summary") or ""), trust_tier="observed",
             actor_kind="agent", actor_ref=actor_ref, attrs={"incident_id": incident_id})
         found[node_id] = {"node_id": node_id, "kind": "incident"}
+        # WHERE THE INCIDENT HAPPENED, IN THE CODE. A ticket names the components it touched
+        # (LoanPaymentAllocationRule); without an edge to that code the assessment and the lanes
+        # only ever saw the regulation's own rule, and the remediation said, rightly, that the
+        # allocation code "was never cited or read" (2026-10-31).
+        for component in incident.get("affected_components") or []:
+            for symbol_id in incident_code(connection, project_id=project_id,
+                                           component=str(component)):
+                _STORE.upsert_edge(
+                    connection, project_id=project_id, src_id=node_id, dst_id=symbol_id,
+                    kind="found_in", actor_kind="agent", actor_ref=actor_ref)
 
     return found
+
+
+_TEST_PATH = ("/test/", "/tests/", "/e2e", "test_", "_test.", "Test.java", "Tests.java")
+
+
+def incident_code(connection: Connection, *, project_id: str, component: str,
+                  limit: int = 3) -> list[str]:
+    """The code symbols a ticket's affected component names: an exact class or method name
+    (`LoanPaymentAllocationRule`, `LoanTransactionType.isRepaymentType`), never test code."""
+    name = component.strip()
+    if not name:
+        return []
+    rows = connection.execute(
+        text("SELECT id, node_key FROM kg_nodes WHERE project_id = :p AND kind = 'symbol' "
+             "AND (name = :n OR name LIKE :suffix) AND (valid_to IS NULL OR valid_to > now()) "
+             "ORDER BY length(name) LIMIT 40"),
+        {"p": project_id, "n": name, "suffix": f"%.{name}"},
+    ).mappings().all()
+    keep = [r["id"] for r in rows
+            if not any(t in str(r["node_key"] or "") for t in _TEST_PATH)]
+    return keep[:limit]
+
+
+def code_found_in(connection: Connection, *, project_id: str, incident_ids: Sequence[str]
+                  ) -> list[str]:
+    """The symbols the given incidents were found in (their `found_in` edges)."""
+    out: list[str] = []
+    for incident_id in incident_ids:
+        for neighbor in _STORE.neighbors(connection, project_id=project_id, node_id=incident_id,
+                                         direction="out", kind="found_in"):
+            if neighbor.get("kind") == "symbol" and neighbor["node_id"] not in out:
+                out.append(neighbor["node_id"])
+    return out
 
 
 def run_closure(

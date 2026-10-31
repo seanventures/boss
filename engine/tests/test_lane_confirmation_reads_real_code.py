@@ -213,6 +213,50 @@ class LaneConfirmationReadsRealCodeTests(unittest.TestCase):
         finally:
             mp.undo()
 
+    # P0: the lane also reads the code the correlated incident was found in, not only the code
+    # the regulation's rule points at (2026-10-31: INC-2088's allocation code was never read).
+    def test_p0_the_lane_reads_the_code_the_incident_was_found_in(self):
+        import pytest
+        from boss_engine.services.knowledge.code_index import symbol_key
+        mp = pytest.MonkeyPatch()
+        try:
+            case_id, _ = self._add_clause_case(key="incident", clause_text="Credit as of receipt.")
+            rule_id, _sym = self._add_rule_with_symbol(name="classification", body="types")
+            alloc_path = "fineract-loan/src/main/java/org/x/LoanPaymentAllocationRule.java"
+            alloc_id = STORE.upsert_node(
+                self.connection, project_id=self.project_id, kind="symbol",
+                node_key=symbol_key("acme/lending", alloc_path, "LoanPaymentAllocationRule"),
+                name="LoanPaymentAllocationRule", body="", trust_tier="observed",
+                actor_kind="system", actor_ref="code_index",
+                attrs={"line": 40, "end_line": 90, "symbol_kind": "class"})
+            incident_id = STORE.upsert_node(
+                self.connection, project_id=self.project_id, kind="incident",
+                node_key="incident:INC-2088", name="INC-2088", body="misallocated",
+                trust_tier="observed", actor_kind="agent", actor_ref="test")
+            STORE.upsert_edge(
+                self.connection, project_id=self.project_id, src_id=incident_id, dst_id=alloc_id,
+                kind="found_in", actor_kind="agent", actor_ref="test")
+            paths = []
+
+            def fake_read(p, start, end, repo):
+                paths.append(p)
+                return {"content": "class X { void apply() {} }"}
+
+            _install_fake_reader(mp, fake_read)
+            agent = FakeAgent({"verdict": "confirmed", "reason": "the allocation code shows it"})
+            _install_fake_agent(mp, agent)
+            pipeline.run_lane_confirmation(
+                self.connection, settings=None, project_id=self.project_id,
+                step={"id": "lane_confirmation", "run_id": "run_inc"}, context={
+                    "steps": {"compliance_assessment": {
+                                  "citation": rule_id, "subject_id": case_id, "note": "gap"},
+                              "historical_pattern": {"matched": [incident_id]}}},
+                inputs={})
+            self.assertIn(alloc_path, paths)
+            self.assertIn("LoanPaymentAllocationRule", agent.prompts[0])
+        finally:
+            mp.undo()
+
     # P1 (AC3): the source cannot be read for any connected symbol -> cannot_verify, never
     # ruled_out, and the agent is never called.
     def test_p1_unreadable_source_yields_cannot_verify_and_never_calls_the_agent(self):
