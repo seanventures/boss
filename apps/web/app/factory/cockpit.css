@@ -138,6 +138,10 @@ span.fx-row-face { cursor: default; }
 .fx-cmd[data-ok="false"] { color: var(--red); }
 .fx-cmt { display: flex; flex-direction: column; gap: 3px; padding: 6px 0; border-bottom: 1px solid var(--hair); }
 .fx-cmt-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.fx-pri { align-self: flex-start; font-size: 11px; font-weight: 600; padding: 0 6px; border-radius: 4px; border: 1px solid var(--hair); }
+.fx-pri[data-priority="P1"] { color: var(--bad, #e5484d); border-color: currentColor; }
+.fx-pri[data-priority="P2"] { color: var(--warn, #f5a524); border-color: currentColor; }
+.fx-pri[data-priority="P3"] { color: var(--muted, #8b8d98); }
 .fx-cmt[data-status="addressed"], .fx-cmt[data-status="dismissed"] { opacity: 0.7; }
 .fx-cost-row { display: grid; grid-template-columns: 1.05263rem minmax(0, 1fr) auto auto auto; gap: 8px; align-items: center; }
 .fx-file { display: flex; min-width: 0; }

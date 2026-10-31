@@ -44,7 +44,8 @@ def test_the_round_scopes_each_seat_and_falls_back_to_the_whole_change():
     block = src[src.index("_convergeable = _CONVERGEABLE"):src.index("rounds_used = max(0")]
     for prior in ("_rc_prior", "_r6_prior", "_r4_prior"):
         assert f"change=_seat_change({prior})" in block
-    assert "if not _fixed:\n                            return change_block" in block
+    # with nothing changed the seat judges the whole change (plus the implementer's answers)
+    assert "if not _fixed:\n                            return _answers + change_block" in block
 
 
 def test_every_review_seat_has_a_bounded_reasoning_budget():

@@ -33,6 +33,7 @@ from typing import Any, Iterable, Optional
 import httpx
 
 from . import review_comments
+from .review_comments import priority_label, priority_of
 
 SEAT_LABELS = {"review_code": "Code review (adversarial)", "security_check": "Security review",
                "consistency_check": "Consistency review"}
@@ -99,10 +100,11 @@ def round_body(entry: dict, round_comments: list[dict], *, ordinal: int, total: 
             lines += ["<details><summary>What the reviewer wrote</summary>", "",
                       excerpt, "", "</details>"]
         lines.append("")
-    sev = Counter(str(c.get("severity") or "") for c in round_comments)
+    pri = Counter(priority_of(str(c.get("severity") or "")) for c in round_comments)
     if round_comments:
-        counts = ", ".join(f"{sev[s]} {s}" for s in ("blocker", "major", "minor", "nit") if sev[s])
-        lines.append(f"**Findings this round:** {counts}.")
+        counts = ", ".join(f"{pri[p]} {p}" for p in ("P1", "P2", "P3") if pri[p])
+        lines.append(f"**Findings this round:** {counts} (P1 must be fixed before merge, "
+                     "P2 should be, P3 is optional).")
     loose = [c for c in round_comments if not (c.get("path") and c.get("line"))]
     loose += list(not_inline)
     if loose:
@@ -110,7 +112,8 @@ def round_body(entry: dict, round_comments: list[dict], *, ordinal: int, total: 
         for c in loose:
             where = (f" `{c.get('path')}:{c.get('line')}`" if c.get("path") and c.get("line")
                      else "")
-            lines.append(f"- **{str(c.get('severity') or '').upper()}**{where} — {c.get('body')}")
+            lines.append(f"- **{priority_label(str(c.get('severity') or ''))}**{where} — "
+                         f"{c.get('body')}")
             if c.get("response_kind"):
                 lines.append(f"  - {_fixed_words(c)}")
     deferred = list(deferred or [])
@@ -118,7 +121,7 @@ def round_body(entry: dict, round_comments: list[dict], *, ordinal: int, total: 
         lines += ["", "#### Deferred — below the blocking bar, recorded as follow-up work"]
         for f in deferred:
             where = f" `{f.get('path')}:{f.get('line')}`" if f.get("path") and f.get("line") else ""
-            lines.append(f"- **{str(f.get('severity') or '').upper()}**{where} — "
+            lines.append(f"- **{priority_label(str(f.get('severity') or ''))}**{where} — "
                          f"{str(f.get('text') or f.get('body') or '').strip()}")
     lines += ["", "_Posted by BOSS. This is a comment, not an approval: BOSS's quality gate "
                   "decides whether the change ships._"]
@@ -131,7 +134,7 @@ def _inline(comments: list[dict]) -> list[dict]:
         if not (c.get("path") and c.get("line")):
             continue
         item = {"path": c["path"], "line": int(c.get("end_line") or c["line"]),
-                "body": f"**{str(c.get('severity') or '').upper()}** — {c.get('body')}"}
+                "body": f"**{priority_label(str(c.get('severity') or ''))}** — {c.get('body')}"}
         if c.get("end_line") and c.get("end_line") != c.get("line"):
             item["start_line"] = int(c["line"])
         out.append(item)

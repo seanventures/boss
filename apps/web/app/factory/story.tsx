@@ -138,15 +138,28 @@ function ToolsCount({ projectId, runId, act }: { projectId: string; runId: strin
   );
 }
 
+// The priority a review finding is worked by (engine review_comments.PRIORITY, one ladder):
+// P1 must be fixed before merge, P2 should be, P3 is optional.
+const PRIORITY: Record<string, string> = { blocker: "P1", major: "P1", minor: "P2", nit: "P3" };
+const PRIORITY_TIP: Record<string, string> = {
+  P1: "Must be fixed (or disputed with evidence) before merge",
+  P2: "Should be fixed",
+  P3: "Optional",
+};
+
 function CommentList({ items }: { items: ReviewComment[] }) {
   return (
     <span className="fx-cmts">
-      {items.map((c) => (
+      {items.map((c) => {
+        const p = PRIORITY[String(c.severity || "").toLowerCase()] ?? "P2";
+        return (
         <span key={c.id} className="fx-cmt" data-severity={c.severity}>
+          <span className="fx-pri" data-priority={p} title={PRIORITY_TIP[p]}>{p}</span>
           {c.path ? <span className="fx-mono">{c.path}{c.line ? `:${c.line}` : ""}</span> : null}
           <span className="fx-clamp" title={c.body} data-user-text>{c.body}</span>
         </span>
-      ))}
+        );
+      })}
     </span>
   );
 }

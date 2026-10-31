@@ -36,6 +36,21 @@ from typing import Iterable, Optional
 #: scales that drift apart would make the gate and the comments disagree about the same finding.
 SEVERITY_ORDER = ["nit", "minor", "major", "blocker"]
 
+#: The priority the implementer and the pull request read (operator, 2026-10-30): P1 must be
+#: fixed (or disputed with evidence) before merge, P2 should be fixed, P3 is optional. Derived
+#: from the one severity ladder above, never stored separately, so the two cannot disagree.
+PRIORITY = {"blocker": "P1", "major": "P1", "minor": "P2", "nit": "P3"}
+
+
+def priority_of(severity: str) -> str:
+    return PRIORITY.get(str(severity or "").strip().lower(), "P2")
+
+
+def priority_label(severity: str) -> str:
+    """`P1 · MAJOR` — the priority first (what to do about it), the severity after (why)."""
+    sev = str(severity or "").strip().upper()
+    return f"{priority_of(severity)} · {sev}" if sev else priority_of(severity)
+
 #: Who wrote a comment. The pipeline's whole premise is that the author of something does not
 #: approve it, so the author of a comment is evidence, not decoration.
 AUTHOR_AGENT = "agent"
@@ -237,7 +252,7 @@ def render_for_implementer(comments: Iterable[ReviewComment], root=None) -> str:
               "say why it is wrong.\n"]
     for i, c in enumerate(items, start=1):
         who = "a reviewer" if c.author_kind == AUTHOR_AGENT else "the operator"
-        head = f"{i}. [{c.severity.upper()}] {c.location()} — {c.body}"
+        head = f"{i}. [{priority_label(c.severity)}] {c.location()} — {c.body}"
         blocks.append(head + f"\n    (raised by {who}"
                       + (f", {c.stage}" if c.stage else "") + ")")
         quoted = quote_source(root, c, context=3)
@@ -259,12 +274,15 @@ def implementer_order(comments: Iterable[ReviewComment]) -> list[ReviewComment]:
 
 def response_clause() -> str:
     """What the implementer is asked to say about each numbered comment."""
-    return ("After fixing, answer EVERY numbered review comment with one line, in exactly this "
+    return ("Priorities: every P1 must be fixed before merge, or DISPUTED with concrete evidence "
+            "from the code; fix every P2 unless you say why not; P3 is optional. Work P1 first.\n"
+            "After fixing, answer EVERY numbered review comment with one line, in exactly this "
             "form:\n"
             "  RESPONSE: <number> FIXED — what you changed, and where\n"
             "  RESPONSE: <number> DISPUTED — why it is not a defect in this change\n"
             "These answers are posted on the pull request beside the comment, so a person can "
-            "see what was done about each one.\n")
+            "see what was done about each one. A DISPUTED comment goes back to its reviewer, who "
+            "either accepts your reason or raises it again with theirs.\n")
 
 
 _RESPONSE_RE = re.compile(
@@ -293,7 +311,7 @@ def to_github_comments(comments: Iterable[ReviewComment]) -> list[dict]:
         item = {
             "path": c.path,
             "line": c.end_line or c.line,
-            "body": f"**{c.severity.upper()}** — {c.body}",
+            "body": f"**{priority_label(c.severity)}** — {c.body}",
         }
         if c.end_line and c.end_line != c.line:
             item["start_line"] = c.line
@@ -306,4 +324,4 @@ def unanchored_body(comments: Iterable[ReviewComment]) -> str:
     loose = [c for c in comments if not c.anchored]
     if not loose:
         return ""
-    return "\n".join(f"- **{c.severity.upper()}** — {c.body}" for c in loose)
+    return "\n".join(f"- **{priority_label(c.severity)}** — {c.body}" for c in loose)

@@ -2707,7 +2707,41 @@ def _solo_prompt(title, instructions, criteria, test_cmd, *, iac=False, web=Fals
     )
 
 
-def _fix_round_change(prior_findings: str, fixed: dict) -> str:
+def _implementer_answers(engine, run_id: str, project_id: str) -> str:
+    """THE OTHER SIDE OF THE CONVERSATION: the implementer's FIXED / DISPUTED answer to each
+    review comment, for the reviewer's next round. Without it a re-review saw only its own
+    findings, so a DISPUTED finding was never judged by anyone (CX PR #24: 7 disputed, 0
+    settled). Empty when nothing was answered."""
+    try:
+        with _transaction(engine) as c:
+            row = c.execute(sql(
+                "SELECT finalize_ctx FROM code_task_runs WHERE id=:id AND project_id=:p"),
+                {"id": run_id, "p": project_id}).mappings().first()
+    except Exception:  # noqa: BLE001 — no record, no answers to show
+        _log_caught(logger)
+        return ""
+    stored = ((row or {}).get("finalize_ctx") or {}).get("review_comments") or []
+    lines = []
+    for entry in stored:
+        if not isinstance(entry, dict) or not entry.get("response_kind"):
+            continue
+        where = (f"{entry.get('path')}:{entry.get('line')}" if entry.get("path")
+                 and entry.get("line") else "(no single line)")
+        lines.append(f"- [{review_comments.priority_label(str(entry.get('severity') or ''))}] "
+                     f"{where} — {str(entry.get('body') or '')[:400]}\n"
+                     f"    IMPLEMENTER: {str(entry.get('response_kind')).upper()} — "
+                     f"{str(entry.get('response') or '')[:600]}")
+    if not lines:
+        return ""
+    return ("THE IMPLEMENTER'S ANSWERS to the review comments. For each DISPUTED one, judge their "
+            "reason against the code: if it holds, say in one line `ACCEPTED: <path:line> — why`; "
+            "if it does not, raise the finding again in the FINDING format with your "
+            "counter-argument. A P1 is accepted only on evidence in the code, never on the "
+            "implementer's say-so. For each FIXED one, confirm it in the code.\n"
+            + "\n".join(lines)[:8000] + "\n\n")
+
+
+def _fix_round_change(prior_findings: str, fixed: dict, answers: str = "") -> str:
     """WHAT A FAILED SEAT RE-REVIEWS AFTER A FIX ROUND: its own findings, and only the files
     the fix changed. A HelpDesk-lite round re-reviewed the whole change from scratch (review_code
     5 and 3 min per round) to confirm two fixes. Unchanged code was already judged; the seat
@@ -2720,7 +2754,8 @@ def _fix_round_change(prior_findings: str, fixed: dict) -> str:
             "FINDING format, if it is not. (2) Check these changed files for a NEW blocking "
             "defect. Do not re-review unchanged code: it was judged already.\n\n"
             "YOUR PREVIOUS FINDINGS:\n" + str(prior_findings or "")[:6000] + "\n\n"
-            "WHAT THE FIX CHANGED:\n" + files)
+            + (answers or "")
+            + "WHAT THE FIX CHANGED:\n" + files)
 
 
 def _render_change_for_review(files, *, max_total: int = 48000, max_per_file: int = 12000) -> str:
@@ -2772,6 +2807,8 @@ def _review_prompt(title, criteria, *, instructions="", ui=False, change=""):
         "  FINDING: MAJOR   lib/rules.py:14 — an acceptance criterion is materially violated\n"
         "  FINDING: MINOR   ui/card.tsx:31 — a real but non-blocking defect (cosmetic, rare edge case)\n"
         "  FINDING: NIT     lib/util.py:7 — style or preference\n"
+        "The pull request shows these as priorities: BLOCKER and MAJOR are P1 (must be fixed "
+        "before merge), MINOR is P2 (should be fixed), NIT is P3 (optional).\n"
         "If a defect genuinely has no single location (something MISSING, or spread across the\n"
         "change) omit the path and say so in the text — an unanchored finding still counts.\n"
         "List MINOR/NIT findings too — they are recorded and fixed as separate follow-up work, so "
@@ -7926,10 +7963,13 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     _fixed = ({p: c for p, c in _after.items() if _before.get(p) != c}
                               if finding_bits else {})
 
+                    _answers = _implementer_answers(engine, run_id, project_id)
+
                     def _seat_change(prior: dict) -> str:
                         if not _fixed:
-                            return change_block
-                        return _fix_round_change((prior or {}).get("summary") or "", _fixed)
+                            return _answers + change_block
+                        return _fix_round_change((prior or {}).get("summary") or "", _fixed,
+                                                 _answers)
                     _rc_prior, _r6_prior, _r4_prior = dict(r3), dict(r6), dict(r4)
                     # THE FAILED SEATS RE-REVIEW SIDE BY SIDE, as the first panel does. They read
                     # the same delta and do not depend on each other; one after another, a

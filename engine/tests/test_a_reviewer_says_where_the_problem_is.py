@@ -164,7 +164,7 @@ def test_anchored_comments_become_inline_pr_comments() -> None:
         rc.ReviewComment(severity="blocker", body="double charge", path="pay.py",
                          line=88, end_line=91),
     ])
-    assert payload[0] == {"path": "rules.py", "line": 14, "body": "**MAJOR** — returns 1.0"}
+    assert payload[0] == {"path": "rules.py", "line": 14, "body": "**P1 · MAJOR** — returns 1.0"}
     assert payload[1]["start_line"] == 88 and payload[1]["line"] == 91
 
 
