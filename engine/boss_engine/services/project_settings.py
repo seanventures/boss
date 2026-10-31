@@ -725,7 +725,6 @@ GOVERN_NAMES: dict[str, str] = {
     "code_review_inrun_max_rounds": "Review rounds",
     "captain_leads_projects": "Captain leads",
     "captain_auto_improve": "Captain self-improves",
-    "builds_end_at_pr": "Ends at the PR",
 }
 
 

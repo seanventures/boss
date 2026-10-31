@@ -200,8 +200,7 @@ describe("states", () => {
     // D8: rows still read as names, never raw keys.
     expect($$("[data-testid^=gv-control-] .gv-name").map((n) => n.textContent)).toEqual([
       "Daily cap", "Monthly cap", "Burst", "Pace", "Review lanes", "Turn budget", "Review rounds",
-      "Captain leads", "Captain self-improves", "Ends at the PR", "Jobs at once", "Workers", "Project default",
-      "Per step"]);
+      "Captain leads", "Captain self-improves", "Jobs at once", "Workers", "Project default", "Per step"]);
   });
 
   it("frozen: one line above the board, with the way out", async () => {
