@@ -23,7 +23,7 @@ permissions:
   abilities: [read_repo]
   recommended_abilities: [team_chat]
   forbidden_skills: [ssh_host.workload.teardown, provider.write.direct, provider.secret.read_raw]
-output_contracts: []
+output_contracts: [ComplianceDecision]
 autonomy:
   level: 1
 cadence:

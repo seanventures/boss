@@ -242,6 +242,21 @@ def finished_tool(result: Mapping[str, Any], inputs: Mapping[str, Any]) -> Verdi
     return _refused(result) or Verdict(SUCCEEDED)
 
 
+def role_agent(result: Mapping[str, Any], inputs: Mapping[str, Any]) -> Verdict:
+    """trace_regulation and the banking_regulatory_compliance role-agent steps
+    (clause_intake, compliance_assessment, compliance_orchestration, lane_confirmation,
+    remediation_package, compliance_closure): work the runner performs itself, which writes an
+    `inferred` proposal a person later reviews. It cannot half-happen — the step either returns
+    what it produced (`status: succeeded`/`not_applicable`) or it raised and the runner recorded
+    the failure. A `failed`/`error` shape, or a refusal, is a failed step; nothing else is."""
+    refused = _refused(result)
+    if refused:
+        return refused
+    if _status(result) in ("succeeded", "not_applicable", "recorded"):
+        return Verdict(SUCCEEDED)
+    return Verdict(FAILED, _reason(result) or "the step produced nothing")
+
+
 #: Every capability in the catalogue, and how to tell whether its work happened. A capability
 #: missing from here fails `test_every_capability_has_an_outcome_verdict`.
 VERDICTS: dict[str, Callable[[Mapping[str, Any], Mapping[str, Any]], Verdict]] = {
@@ -283,6 +298,17 @@ VERDICTS: dict[str, Callable[[Mapping[str, Any], Mapping[str, Any]], Verdict]] =
     "monitoring_pack": packed,
     "scan_business_rules": scanned,
     "rules_review": answered_gate,
+    # Regulatory trace (knowledge/regulatory_trace.py) and its person-approved review gate.
+    "trace_regulation": role_agent,
+    "regulatory_trace_review": answered_gate,
+    # banking_regulatory_compliance's thin role-agent steps
+    # (knowledge/banking_regulatory_pipeline.py).
+    "clause_intake": role_agent,
+    "compliance_assessment": role_agent,
+    "compliance_orchestration": role_agent,
+    "lane_confirmation": role_agent,
+    "remediation_package": role_agent,
+    "compliance_closure": role_agent,
 }
 
 

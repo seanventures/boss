@@ -342,6 +342,14 @@ export function applyStepPatch(step: SpecStep, patch: StepPatch): SpecStep {
     const captain = (patch.captain ?? "").trim();
     out = setOrDrop(out, "captain", captain || undefined);
   }
+  if (patch.externalAgent !== undefined) {
+    const externalAgentId = (patch.externalAgent ?? "").trim();
+    if (externalAgentId) {
+      out = { ...out, captain: { external_agent: externalAgentId } };
+    } else if (typeof out.captain === "object") {
+      out = setOrDrop(out, "captain", undefined);
+    }
+  }
   if (patch.instructions && agentWork) {
     const inputs = asObj(binding.inputs);
     const current = inputs.instructions;

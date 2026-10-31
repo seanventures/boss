@@ -25,7 +25,10 @@ export type Spec = Record<string, unknown> & {
 };
 export type SpecStep = Record<string, unknown> & {
   id: string; kind: string; title?: string;
-  next?: string | string[]; captain?: string;
+  next?: string | string[];
+  /** A role key for an in-process agent, or `{external_agent: <id>}` for a connected outside
+   *  agent (KG P6b: pipeline-view.tsx's captain switcher). */
+  captain?: string | { external_agent: string };
   binding?: Record<string, unknown>; approval?: Record<string, unknown>;
 };
 
@@ -59,7 +62,7 @@ export type WorkflowSummary = { definition_id: string; workflow_key: string; nam
   is_catalogue: boolean; version: number | null; step_count: number;
   steps: { id: string; title: string; capability?: string; captain?: string; approval?: string }[];
   forked_from_workflow_key?: string | null; forked_from_name?: string | null; run_count: number;
-  last_run?: { status: string; at: string } | null; schedule?: unknown; used_for?: string[];
+  last_run?: { id?: string; status: string; at: string } | null; schedule?: unknown; used_for?: string[];
   /** The running version's id: what a "Run another workflow" step is pinned to. Null when
    *  nothing is published yet. */
   active_version_id?: string | null };
@@ -175,6 +178,10 @@ export type StepPatch = { title?: string; captain?: string | null;
   skills?: string[]; mcp?: string[]; approval?: "auto" | "manual"; approvalMore?: Record<string, unknown>;
   input?: { name: string; source: InputSource | null }; produces?: string[];
   config?: Record<string, unknown>;
+  /** KG P6b: a step's captain switched to a connected outside agent, by its id — or cleared
+   *  back to an in-process one (null). Written as `captain: {external_agent: <id>}`, the shape
+   *  `/v1/delivery-workflows` reads for an `external_agent` step's binding. */
+  externalAgent?: string | null;
   /** When it fails (lib/workflow-failure.ts). null unsets the field: a default is never written.
    *  `on_error` is not a patch: it is an arrow, made by REWIRE (kind "error") after the check. */
   max_attempts?: number | null;

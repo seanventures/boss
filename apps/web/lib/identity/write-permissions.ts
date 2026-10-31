@@ -40,6 +40,13 @@ export const WRITE_HELPERS: Readonly<Record<string, WriteGate | readonly Permiss
   "lib/agent-world.ts#forgetMemory": "memory:manage",             // POST /v1/memory/{id}/forget
   "lib/agent-world.ts#runPersonaTest": "agent:test",              // POST /v1/agents/{role}/test
 
+  // app/agents/outside-agents-actions.ts — connected outside (external) agents (KG P6b)
+  "app/agents/outside-agents-actions.ts#registerOutsideAgent": "agent:create",   // POST /v1/external-agents
+  "app/agents/outside-agents-actions.ts#testOutsideAgent": "agent:test",         // POST /v1/external-agents/{id}/test
+  "app/agents/outside-agents-actions.ts#suspendOutsideAgent": "agent:lifecycle", // POST /v1/external-agents/{id}/suspend
+  "app/agents/outside-agents-actions.ts#removeOutsideAgent": "agent:lifecycle",  // POST /v1/external-agents/{id}/remove
+  "app/agents/outside-agents-actions.ts#putOutsideAgentSecret": "secret:manage", // POST /v1/secrets
+
   // lib/agent-instructions.ts — an agent's instruction documents
   "lib/agent-instructions.ts#instructionsApi.add": "agent:update",          // POST /v1/agents/{role}/instructions
   "lib/agent-instructions.ts#instructionsApi.update": "agent:update",       // PATCH …/instructions/{id}

@@ -16,6 +16,7 @@ import { askAgent as talkTo, identityOf, openAgent } from "../../lib/agent-world
 import { openDockAbout } from "../../lib/dock-subject";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
 import { FocusedAgents } from "../focused-agents-ui";
+import { OutsideAgentsPanel } from "./outside-agents-panel";
 import { RosterZones } from "./roster-zones";
 
 /** What "N unregistered" means, and what pressing it does. */
@@ -109,6 +110,8 @@ export function DirectoryView({ projectId, actor, everyone, retired, live, searc
           </button>
         ) : null}
       </div>
+
+      {filter === "all" ? <OutsideAgentsPanel projectId={projectId} actor={actor} /> : null}
 
       {filter === "duty" ? (
         <FocusedAgents projectId={projectId} actor={actor} />

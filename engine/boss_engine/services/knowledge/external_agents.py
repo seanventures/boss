@@ -29,8 +29,14 @@ _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1"})
 
 
 def validate_endpoint(url: str) -> None:
-    """HTTPS is required, except plain HTTP to a loopback or tailnet host on a dev install."""
+    """HTTPS is required, except plain HTTP to a loopback or tailnet host on a dev install.
+    Credentials embedded in the URL (``user:pass@host``) are refused outright: they would sit in
+    the clear in `external_agents.endpoint_url`, in logs, and in every trace of this call — the
+    secret belongs only behind `secret_ref`, resolved fresh per call."""
     parsed = urlparse((url or "").strip())
+    if parsed.username or parsed.password:
+        raise ExternalAgentError(plain_reason(
+            "endpoint_rejected", expected="no embedded credentials in the URL"))
     if parsed.scheme == "https" and parsed.hostname:
         return
     if parsed.scheme == "http" and parsed.hostname:
@@ -40,23 +46,29 @@ def validate_endpoint(url: str) -> None:
     raise ExternalAgentError(plain_reason("endpoint_rejected", expected="https, or http to localhost/a tailnet host"))
 
 
-def check_endpoint_egress(url: str) -> None:
-    """Refuses an endpoint whose resolved address is private/loopback/link-local/reserved,
-    unless its hostname is one of the already-allowed loopback/tailnet exceptions
-    (:func:`validate_endpoint`'s dev-install carve-out). Called at every call, not only at
-    registration, so a host that re-resolves to a private address after registration is still
-    refused — a hostname with mixed public/private A records is refused as a whole, never
-    partially trusted."""
+def resolve_validated_address(url: str) -> Optional[str]:
+    """Resolves the endpoint's host exactly once and validates every address it returns, exactly
+    as :func:`check_endpoint_egress` always has — but, unlike that function, hands the specific
+    validated IP back so a caller can pin its actual outbound connection to it.
+
+    Without this, the validated DNS lookup and the real connection a moment later are two
+    independent resolutions of the same hostname: an attacker who controls DNS for it (a
+    short-TTL "rebinding" record) can answer the first lookup with a public address and the
+    second, at connect time, with a private/internal one (e.g. link-local metadata), landing
+    the real request somewhere the egress check never saw. Pinning to the address actually
+    validated here closes that gap. Returns ``None`` for the loopback/tailnet dev-install
+    carve-out, where the hostname is trusted directly and there is nothing to pin."""
     parsed = urlparse((url or "").strip())
     host = (parsed.hostname or "").lower()
     if not host:
         raise ExternalAgentError(plain_reason("endpoint_rejected", expected="a resolvable host"))
     if host in _LOOPBACK_HOSTS or host.endswith(_TAILNET_SUFFIX):
-        return
+        return None
     try:
         resolved = socket.getaddrinfo(host, None)
     except socket.gaierror:
         raise ExternalAgentError(plain_reason("endpoint_rejected", expected="a resolvable host")) from None
+    ips: list[str] = []
     for info in resolved:
         try:
             ip = ipaddress.ip_address(info[4][0])
@@ -64,6 +76,24 @@ def check_endpoint_egress(url: str) -> None:
             raise ExternalAgentError(plain_reason("endpoint_rejected", expected="a public host")) from None
         if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved:
             raise ExternalAgentError(plain_reason("endpoint_rejected", expected="a public, non-private endpoint"))
+        ips.append(str(ip))
+    if not ips:
+        raise ExternalAgentError(plain_reason("endpoint_rejected", expected="a resolvable host"))
+    return ips[0]
+
+
+def check_endpoint_egress(url: str) -> None:
+    """Refuses an endpoint whose resolved address is private/loopback/link-local/reserved,
+    unless its hostname is one of the already-allowed loopback/tailnet exceptions
+    (:func:`validate_endpoint`'s dev-install carve-out). Called at every call, not only at
+    registration, so a host that re-resolves to a private address after registration is still
+    refused — a hostname with mixed public/private A records is refused as a whole, never
+    partially trusted.
+
+    Callers that go on to make the real outbound call should prefer
+    :func:`resolve_validated_address` and pin their connection to the address it returns,
+    rather than re-resolving the hostname a second time (see that function's docstring)."""
+    resolve_validated_address(url)
 
 
 def plain_reason(kind: str, *, expected: str = "", actual: str = "") -> str:

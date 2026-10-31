@@ -91,6 +91,17 @@ INTERNAL = {
     "monitoring_pack": "_set_up_monitoring",
     # Scan for business rules (knowledge/rule_scan.py): a scan that cannot run fails the step.
     "scan_business_rules": "_scan_business_rules",
+    # Regulatory trace (knowledge/regulatory_trace.py) and banking_regulatory_compliance's thin
+    # role-agent steps (knowledge/banking_regulatory_pipeline.py): work the runner performs
+    # itself, reading the graph and writing an `inferred` proposal. A proposal that could not be
+    # produced is a failed step, never a green one.
+    "trace_regulation": "_trace_regulation",
+    "clause_intake": "_clause_intake",
+    "compliance_assessment": "_compliance_assessment",
+    "compliance_orchestration": "_compliance_orchestration",
+    "lane_confirmation": "_lane_confirmation",
+    "remediation_package": "_remediation_package",
+    "compliance_closure": "_compliance_closure",
 }
 
 #: Tool-less capabilities that commission NOTHING. They are honest no-ops that say so
@@ -669,6 +680,11 @@ def test_a_refused_gate_blocks_the_run_and_cannot_be_skipped(eng, project, monke
         from boss_engine.services.knowledge import rule_scan
 
         monkeypatch.setattr(rule_scan, "has_open_proposals", lambda *a, **k: True)
+    if key == "regulatory_trace_review":
+        # And the regulatory trace review is asked only when the trace left proposals open.
+        from boss_engine.services.knowledge import regulatory_trace
+
+        monkeypatch.setattr(regulatory_trace, "has_open_proposals", lambda *a, **k: True)
     with eng.begin() as c:
         run = _two_step(c, project, key)
         runner.tick(c, Ctx(eng), project_id=project)

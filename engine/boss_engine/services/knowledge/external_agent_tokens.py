@@ -146,6 +146,21 @@ def verify(connection: Connection, token: str) -> Optional[KgTokenClaims]:
         external_agent_id=row["external_agent_id"], policy=_policy_from_json(raw_policy))
 
 
+def revoke_all_for_agent(connection: Connection, project_id: str, external_agent_id: str) -> int:
+    """Suspend/remove's fail-closed guarantee: every still-live token this agent holds is
+    revoked right away, not just left to expire, so a run already in flight loses its KG access
+    at its next call rather than at the end of its TTL."""
+    rows = connection.execute(text(
+        "UPDATE external_agent_kg_tokens SET revoked_at = now() "
+        "WHERE project_id = :p AND external_agent_id = :a AND revoked_at IS NULL "
+        "RETURNING id, run_id, step_id"
+    ), {"p": project_id, "a": external_agent_id}).fetchall()
+    for row in rows:
+        _audit(connection, project_id, "external_agent.token_revoked", token_id=row[0],
+               external_agent_id=external_agent_id, run_id=row[1], step_id=row[2])
+    return len(rows)
+
+
 def revoke(connection: Connection, token_id: str) -> None:
     """Idempotent: ending an already-ended step must not raise. Only revoking a still-live token
     writes an audit event — ending an already-ended step must not duplicate it."""

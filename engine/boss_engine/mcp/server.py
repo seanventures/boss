@@ -319,7 +319,19 @@ class MCPServer:
         policy actually grants. ``run_id``/``step_id``/``project_id`` come from the verified
         claims, never from the caller's arguments, so a token minted for one run/step cannot be
         redirected to write into another."""
+        from ..services import agent_turns
         from ..services.knowledge import context_graph, external_agent_tokens, external_agents, scopes
+
+        def _record(tool_name: Optional[str], ok: bool, detail: Any) -> None:
+            # FR2's reads/writes table renders from exactly this: one row per KG tool call an
+            # external agent actually made, keyed off the token's own verified claims (never the
+            # caller's arguments), so a token cannot attribute a call to a run/step it is not
+            # scoped to.
+            agent_turns.record_turns(
+                connection,
+                [{"turn_index": 0, "direction": "tool_call", "tool_name": tool_name or "?",
+                  "content": detail, "ok": ok, "latency_ms": 0}],
+                project_id=claims.project_id, code_task_run_id=claims.run_id, stage=claims.step_id)
 
         rid = request.get("id") if isinstance(request, dict) else None
         with self.ctx.begin() as connection:
@@ -340,6 +352,7 @@ class MCPServer:
                 # in words, never silently returned empty.
                 allowed_kinds = claims.policy.kinds
                 if not allowed_kinds:
+                    _record(name, False, {"error": "token_refused"})
                     return _err(rid, -32003, external_agents.plain_reason("token_refused"))
                 # max_nodes == 0 means literally zero, same as every other reader of this field
                 # (store.py:908's `[:policy.max_nodes]`) — never silently substituted for a
@@ -349,10 +362,12 @@ class MCPServer:
                     if name == "kg_find":
                         kind = str(args.get("kind") or "").strip()
                         if kind not in allowed_kinds:
+                            _record(name, False, {"kind": kind, "error": "token_refused"})
                             return _err(rid, -32003, external_agents.plain_reason("token_refused"))
                         nodes = context_graph.find_nodes(
                             connection, claims.project_id, kind=kind,
                             query=(args.get("query") or None), limit=limit)
+                        _record(name, True, {"kind": kind, "count": len(nodes)})
                     else:  # kg_get_node
                         node_key = str(args.get("node_key") or "").strip()
                         if not node_key:
@@ -361,14 +376,18 @@ class MCPServer:
                             connection, claims.project_id, node_key=node_key,
                             kinds=allowed_kinds)
                         if node is None:
+                            _record(name, False, {"node_key": node_key, "error": "token_refused"})
                             return _err(rid, -32003, external_agents.plain_reason("token_refused"))
                         nodes = [node]
+                        _record(name, True, {"node_key": node_key})
                 except Exception as exc:  # noqa: BLE001 — surfaced to the agent as a tool error
+                    _record(name, False, {"error": f"{type(exc).__name__}: {exc}"})
                     return _ok(rid, _tool_result(
                         {"ok": False, "error": f"{type(exc).__name__}: {exc}"}, is_error=True))
                 return _ok(rid, _tool_result({"ok": True, "nodes": nodes}))
             if (name not in _EXTERNAL_AGENT_WRITE_TOOLS
                     or not scopes.offers_tool(claims.policy, name)):
+                _record(name, False, {"error": "token_refused"})
                 return _err(rid, -32003, external_agents.plain_reason("token_refused"))
             try:
                 if name == "kg_write_agent_decision":
@@ -380,6 +399,7 @@ class MCPServer:
                         connection, claims.project_id, step_id=claims.step_id, run_id=claims.run_id,
                         decision_type=decision_type, statement=statement, policy_version="",
                         workflow_version="", agent_fingerprint="", actor_ref=actor_ref)
+                    _record(name, True, {"decision_type": decision_type, "statement": statement})
                 else:
                     statement = str(args.get("statement") or "").strip()
                     if not statement:
@@ -387,7 +407,9 @@ class MCPServer:
                     result = context_graph.write_coverage_gap(
                         connection, claims.project_id, step_id=claims.step_id, run_id=claims.run_id,
                         statement=statement, actor_ref=actor_ref)
+                    _record(name, True, {"statement": statement})
             except Exception as exc:  # noqa: BLE001 — surfaced to the agent as a tool error
+                _record(name, False, {"error": f"{type(exc).__name__}: {exc}"})
                 return _ok(rid, _tool_result(
                     {"ok": False, "error": f"{type(exc).__name__}: {exc}"}, is_error=True))
         return _ok(rid, _tool_result({"ok": True, **result}))

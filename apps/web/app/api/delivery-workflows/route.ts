@@ -41,6 +41,12 @@ const VIEWS: Record<string, (project: string) => string> = {
   asks: (p) => `/v1/delivery-workflows/asks?project_id=${encodeURIComponent(p)}`,
 };
 
+/** `view=run_detail&run_id=…` — one run's steps, each with what it read and wrote (KG P6b's
+ *  Pipeline tab: "after a run, show me what each stage touched"). */
+function runDetailPath(project: string, runId: string): string {
+  return `/v1/workflow-runs/${encodeURIComponent(runId)}?project_id=${encodeURIComponent(project)}`;
+}
+
 /** `view=spec&key=…[&version=n]` — the steps a workflow currently has (or had at version n),
  *  so the editor opens with them rather than making a customer rebuild ten steps to change
  *  one. */
@@ -95,6 +101,26 @@ export async function GET(req: Request) {
       try { parsed = JSON.parse(raw); } catch { parsed = { detail: raw }; }
       return r.ok ? NextResponse.json(parsed)
         : NextResponse.json(refusal(r.status, parsed), { status: r.status });
+    } catch (e) {
+      return NextResponse.json({ error: String((e as Error)?.message ?? e) }, { status: 502 });
+    }
+  }
+  if (view === "run_detail") {
+    const runId = params.get("run_id")?.trim() ?? "";
+    if (!project || !runId) {
+      return NextResponse.json({ error: "run_detail needs project_id and run_id" }, { status: 400 });
+    }
+    try {
+      const r = await fetch(`${API_URL}${runDetailPath(project, runId)}`, {
+        headers: authHeaders({}), cache: "no-store",
+      });
+      if (!r.ok) {
+        const raw = await r.text();
+        let parsed: unknown;
+        try { parsed = JSON.parse(raw); } catch { parsed = { detail: raw }; }
+        return NextResponse.json(refusal(r.status, parsed), { status: r.status });
+      }
+      return NextResponse.json(await r.json());
     } catch (e) {
       return NextResponse.json({ error: String((e as Error)?.message ?? e) }, { status: 502 });
     }

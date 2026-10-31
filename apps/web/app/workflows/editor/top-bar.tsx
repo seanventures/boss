@@ -48,8 +48,8 @@ function Btn({ blocked, tip, onClick, className, children, testId, label, presse
 export function TopBar(p: {
   state: EditorState;
   dirty: boolean;
-  view: "visual" | "json";
-  onView(v: "visual" | "json"): void;
+  view: "visual" | "json" | "pipeline";
+  onView(v: "visual" | "json" | "pipeline"): void;
   onBack(): void;
   onName(name: string): void;
   nameError?: string | null;
@@ -162,6 +162,11 @@ export function TopBar(p: {
                    onClick={() => p.onView("visual")} testId="wf-view-visual">Visual</Btn>
               <Btn className="wf-seg-btn" pressed={view === "json"} onClick={() => p.onView("json")} testId="wf-view-json">
                 JSON
+              </Btn>
+              <Btn className="wf-seg-btn" pressed={view === "pipeline"} blocked={view === "json" && jsonLine}
+                   tip="The stage diagram, who runs each stage, and (for a contract stage) its outside agent"
+                   onClick={() => p.onView("pipeline")} testId="wf-view-pipeline">
+                Pipeline
               </Btn>
             </div>
 

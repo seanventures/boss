@@ -272,7 +272,9 @@ function toSummary(raw: unknown): WorkflowSummary {
     forked_from_name: str(w.forked_from_name) || null,
     run_count: Number(w.run_count ?? 0),
     active_version_id: str(w.active_version_id) || null,
-    last_run: str(lastRun.status) ? { status: str(lastRun.status), at: str(lastRun.at) } : null,
+    last_run: str(lastRun.status)
+      ? { ...(str(lastRun.id) ? { id: str(lastRun.id) } : {}), status: str(lastRun.status), at: str(lastRun.at) }
+      : null,
     ...(w.schedule !== undefined ? { schedule: w.schedule } : {}),
     ...(Array.isArray(w.used_for) ? { used_for: strings(w.used_for) } : {}),
   };
@@ -340,6 +342,21 @@ export async function fetchSpec(projectId: string, key: string, version?: number
       readOnlyVersion: version !== undefined && version !== active ? version : null,
     },
   };
+}
+
+/** A run's steps, each with what it read (its input) and wrote (its output) — keyed by step
+ *  id, completed steps only (KG P6b's Pipeline tab "after a run" ask). */
+export async function fetchRunTrace(projectId: string, runId: string):
+    Promise<Record<string, { reads: string[]; writes: string[] }>> {
+  const body = await getView("run_detail", { project_id: projectId, run_id: runId });
+  const trace: Record<string, { reads: string[]; writes: string[] }> = {};
+  for (const raw of list(body.steps)) {
+    const step = asObj(raw);
+    const stepId = str(step.step_id);
+    if (!stepId || step.status !== "completed") continue;
+    trace[stepId] = { reads: Object.keys(asObj(step.input)), writes: Object.keys(asObj(step.output)) };
+  }
+  return trace;
 }
 
 /** Every check Save runs, without saving. Writes nothing. */

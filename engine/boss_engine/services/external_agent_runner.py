@@ -41,8 +41,10 @@ def run_step(connection: Connection, ctx: Any, *, project_id: str, step: dict[st
     if not agent:
         raise CapabilityExecutionError(external_agents.plain_reason("unregistered_agent"))
     # Refuse cheaply, before any credential is minted, if the endpoint resolves somewhere it
-    # should not reach — checked on every call, never only at registration.
-    external_agents.check_endpoint_egress(agent["endpoint_url"])
+    # should not reach — checked on every call, never only at registration. The real call below
+    # is pinned to this exact validated address, not a fresh DNS lookup, to close the
+    # rebinding TOCTOU where a second resolution at connect time answers differently.
+    pinned_ip = external_agents.resolve_validated_address(agent["endpoint_url"])
 
     contract = parse_contract(step_id, step.get("contract"))
     # max_nodes defaults to 0 on StagePolicy, which the read path treats as literally zero
@@ -85,7 +87,7 @@ def run_step(connection: Connection, ctx: Any, *, project_id: str, step: dict[st
     call_ok = False
     error_text = None
     try:
-        output = _call_agent(agent["endpoint_url"], payload, auth_header, timeout_seconds)
+        output = _call_agent(agent["endpoint_url"], payload, auth_header, timeout_seconds, pinned_ip)
         call_ok = True
     except CapabilityWaitError as error:
         scrubbed = external_agents.scrub(str(error), issued.token, auth_header)
@@ -124,13 +126,23 @@ def run_step(connection: Connection, ctx: Any, *, project_id: str, step: dict[st
 
 
 def _call_agent(endpoint_url: str, payload: dict[str, Any], auth_header: str,
-                 timeout_seconds: int) -> dict[str, Any]:
+                 timeout_seconds: int, pinned_ip: str | None = None) -> dict[str, Any]:
     from .workflow_capability_runner import CapabilityExecutionError, CapabilityWaitError
 
     headers = {"Authorization": auth_header, "Content-Type": "application/json"}
+    request_url = endpoint_url
+    extensions: dict[str, Any] = {}
+    if pinned_ip is not None:
+        parsed = urlparse(endpoint_url)
+        host_literal = f"[{pinned_ip}]" if ":" in pinned_ip else pinned_ip
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        request_url = parsed._replace(netloc=f"{host_literal}:{port}").geturl()
+        headers["Host"] = parsed.hostname or ""
+        extensions["sni_hostname"] = parsed.hostname or ""
     try:
         with httpx.Client(timeout=timeout_seconds) as client:
-            with client.stream("POST", endpoint_url, json=payload, headers=headers) as response:
+            with client.stream("POST", request_url, json=payload, headers=headers,
+                                extensions=extensions) as response:
                 body = bytearray()
                 for chunk in response.iter_bytes():
                     body.extend(chunk)

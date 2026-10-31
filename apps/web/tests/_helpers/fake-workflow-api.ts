@@ -15,7 +15,12 @@ export type FakeWorkflow = {
   definition_id: string; workflow_key: string; name: string; is_catalogue: boolean; version: number;
   spec: Spec; versions?: { version: number; spec: Spec }[];
   copy?: { definition_id: string; workflow_key: string; name: string } | null;
+  /** The run the Pipeline tab's "after a run" trace table reads (KG P6b). */
+  last_run?: { id: string; status: string; at: string } | null;
 };
+
+/** `view=run_detail`'s steps, by run id — what `fetchRunTrace` turns into `{reads, writes}`. */
+export type FakeRunDetail = Record<string, { steps: { step_id: string; status: string; input?: Obj; output?: Obj }[] }>;
 
 export type FakeApi = {
   workflows: FakeWorkflow[];
@@ -47,7 +52,8 @@ function paletteWire(p: Palette) {
   };
 }
 
-export function fakeWorkflowApi(palette: Palette, workflows: FakeWorkflow[]): FakeApi {
+export function fakeWorkflowApi(palette: Palette, workflows: FakeWorkflow[],
+                                runDetail: FakeRunDetail = {}): FakeApi {
   const api: FakeApi = {
     workflows, palette, writes: [], problems: [], draft: null,
     fetch: async (input, init) => {
@@ -62,9 +68,16 @@ export function fakeWorkflowApi(palette: Palette, workflows: FakeWorkflow[]): Fa
           return Response.json({ items: api.workflows.map((w) => ({
             definition_id: w.definition_id, workflow_key: w.workflow_key, name: w.name,
             is_catalogue: w.is_catalogue, version: w.version, run_count: 0,
+            last_run: w.last_run ?? null,
             steps: w.spec.steps.map((s) => ({ id: s.id, title: s.title ?? s.id,
                                               capability: (s.binding as Obj | undefined)?.capability })),
           })) });
+        }
+        if (view === "run_detail") {
+          const runId = url.searchParams.get("run_id") ?? "";
+          const run = runDetail[runId];
+          if (!run) return Response.json({ error: "no such run" }, { status: 404 });
+          return Response.json({ id: runId, steps: run.steps });
         }
         if (view === "spec") {
           const w = api.workflows.find((x) => x.workflow_key === url.searchParams.get("key"));

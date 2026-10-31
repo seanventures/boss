@@ -38,6 +38,9 @@ installs:
     - sre
     # Runs an incident on one timeline, reading the knowledge graph's precedent first.
     - incident_commander
+    # Reads a regulation's clauses against the knowledge graph for banking_regulatory_compliance
+    # and kg_investigation_pipeline; named by both templates, so a default install carries it.
+    - compliance_officer
   workflows:
     - ceo_command_to_pr
     - decision_inbox

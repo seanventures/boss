@@ -786,7 +786,9 @@ def normalise_workflow_spec(
         # is `step_agents.assignment_problems`, run at publish and at start with the project in
         # hand. That used to be a hard-coded set of role keys checked here, which refused every
         # agent made in Agent Studio.
-        captain_shape = step_agent_captain_problems(step) if check_agents else []
+        captain_shape = (
+            step_agent_captain_problems(step) if check_agents and kind != "external_agent" else []
+        )
         for detail in captain_shape:
             bad("captain", detail)
         if check_agents:
@@ -1780,6 +1782,7 @@ def list_definitions(
                    -- Retire (its history must stay readable) before the operator presses it.
                    (SELECT count(*) FROM workflow_runs r
                      WHERE r.workflow_definition_id = d.id) AS run_count,
+                   last_run.id AS last_run_id,
                    last_run.status AS last_run_status,
                    last_run.created_at AS last_run_at,
                    -- The classes of work routed to it, so a card can say what it is used for.
@@ -1792,7 +1795,7 @@ def list_definitions(
             LEFT JOIN workflow_versions srcv ON srcv.id = d.forked_from_version_id
             LEFT JOIN workflow_definitions src ON src.id = srcv.workflow_definition_id
             LEFT JOIN LATERAL (
-                SELECT r.status, r.created_at FROM workflow_runs r
+                SELECT r.id, r.status, r.created_at FROM workflow_runs r
                  WHERE r.workflow_definition_id = d.id
                  ORDER BY r.created_at DESC LIMIT 1
             ) last_run ON TRUE
@@ -1839,7 +1842,8 @@ def list_definitions(
         item["forked_from_workflow_key"] = row["forked_from_workflow_key"]
         item["forked_from_name"] = row["forked_from_name"]
         item["run_count"] = int(row["run_count"] or 0)
-        item["last_run"] = ({"status": row["last_run_status"], "at": _iso(row["last_run_at"])}
+        item["last_run"] = ({"id": row["last_run_id"], "status": row["last_run_status"],
+                            "at": _iso(row["last_run_at"])}
                             if row["last_run_status"] else None)
         item["used_for"] = list(row["used_for"] or [])
         items.append(item)
@@ -6961,6 +6965,9 @@ _WORK_TABLES: dict[str, str] = {
     "ci_wait": "ci_waits",
     # The security_review workflow's scan. Its job carries {"scan_id"} (jobs.run_job_match_sql).
     "security_scan": "security_scans",
+    # Verify recovery parks on an incident_recovery_checks row that ticks on BOSS's own monitor
+    # like a CI wait; cancelling the run stops that watch so nothing keeps polling for it.
+    "recovery_check": "incident_recovery_checks",
 }
 
 #: How a table records "this was stopped", where it differs from status='cancelled' and
@@ -6968,6 +6975,9 @@ _WORK_TABLES: dict[str, str] = {
 #: the generic UPDATE fails there, and inside the cancel's transaction it would abort it.
 _WORK_CANCEL_SQL: dict[str, str] = {
     "security_scans": "status='failed', ended_at=now()",
+    # incident_recovery_checks' status is constrained to waiting/recovered/timed_out/failed —
+    # there is no 'cancelled', so stopping the watch records it as failed with updated_at.
+    "incident_recovery_checks": "status='failed', updated_at=now()",
 }
 
 _WORK_TERMINAL: frozenset[str] = frozenset(
@@ -6977,6 +6987,8 @@ _WORK_TERMINAL: frozenset[str] = frozenset(
      "deployed", "healthy", "unhealthy", "rolled_back", "rollback_pending",
      # A security scan's own finished state.
      "done",
+     # A recovery check that already settled stays settled, never relabelled by a late cancel.
+     "recovered", "timed_out",
      # An architecture a person already answered stays answered.
      "approved", "rejected"}
 )

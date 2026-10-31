@@ -31399,6 +31399,10 @@ app.include_router(build_agents_router(
     require_reader=require_project_reader,
     actor_can=project_actor_can,
 ))
+# KG P6b: connect a bank's own agent — register/list/get/test/suspend/remove (routers/external_agents.py).
+from .routers.external_agents import build_external_agents_router
+
+app.include_router(build_external_agents_router())
 # THE KIT: Skills & MCP's abilities, connections, tests, holders and tool policy (routers/kit.py).
 from .routers.kit import build_kit_router
 

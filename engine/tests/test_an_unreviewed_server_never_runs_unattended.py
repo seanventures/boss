@@ -98,7 +98,16 @@ def mcp_calls(monkeypatch):
 
 def _settings() -> Settings:
     # Threshold 1, so a tier-0 tool is far below it: nothing but the review can ask a person.
-    return Settings().model_copy(update={"agent_autonomous_risk_max": 1})
+    # Pinned to community: the review rule under test does not depend on edition, and pinning
+    # it keeps these tests from picking up an ambient BOSS_EDITION=enterprise* and failing on
+    # the proprietary enterprise_gateway module, which this checkout does not ship.
+    return Settings().model_copy(update={"agent_autonomous_risk_max": 1,
+                                         "boss_edition": "community"})
+
+
+def _community() -> Settings:
+    # Same edition pin as _settings(), for call sites that don't need the risk threshold.
+    return Settings().model_copy(update={"boss_edition": "community"})
 
 
 def _unreviewed_server(c, project) -> str:
@@ -231,7 +240,7 @@ def _step_road(binding: str):
         problems = custom_steps.validate_step(c, project, step)
         assert any("requires a person" in p and "review" in p for p in problems), problems
         try:
-            custom_steps.execute(c, Settings(), project_id=project, actor="workflow",
+            custom_steps.execute(c, _community(), project_id=project, actor="workflow",
                                  step=step, inputs={"title": "Broken build"}, run_id="wfr_t",
                                  approved_by=_approved_decision(c, project, STEP_GATE)
                                  if approved else None)
@@ -297,7 +306,7 @@ def test_once_reviewed_a_tier_zero_tool_runs_without_asking(eng, project, mcp_ca
             custom_steps.create(c, project_id=project, label=key, actor="op", step_key=key,
                                 binding_kind=binding, **target)
             assert custom_steps.get(c, project, key)["approval_forced_manual"] is False
-            custom_steps.execute(c, Settings(), project_id=project, actor="workflow",
+            custom_steps.execute(c, _community(), project_id=project, actor="workflow",
                                  step={"id": "s", "binding": {"custom_step": key}},
                                  inputs={"title": "x"}, run_id="wfr_t")
     assert len(mcp_calls) == len(ROADS)
@@ -311,8 +320,8 @@ def test_the_catalogue_and_a_skill_step_say_a_person_is_needed(eng, project):
     with eng.begin() as c:
         sid = _unreviewed_server(c, project)
         _skill_on(c, project, sid)
-        item = catalogue.entry(c, project, "file_ticket", settings=Settings())
-        bindable = next(b for b in catalogue.bindable(c, project, settings=Settings())
+        item = catalogue.entry(c, project, "file_ticket", settings=_community())
+        bindable = next(b for b in catalogue.bindable(c, project, settings=_community())
                         if b["skill_id"] == "file_ticket")
         with pytest.raises(workflows.WorkflowBindingBlockedError) as refused:
             workflows._validate_bindings(c, project, "v_t", {"steps": [
@@ -472,13 +481,13 @@ def test_a_publish_builds_the_catalogue_once_not_once_per_step(eng, project, mon
     with eng.begin() as c:
         with catalogue.one_pass(c):
             for _ in range(5):
-                catalogue.entry(c, project, "model.generate_text", settings=Settings())
+                catalogue.entry(c, project, "model.generate_text", settings=_community())
         assert len(builds) == 1
         # Outside a pass every read is fresh, so a write is seen by the next read.
         sd.save_skill(c, project_id=project, actor="op", skill_key="later", label="Later",
                       behaviour_kind="builtin", config={"executor_id": "model.generate_text"})
         before = len(builds)
-        assert catalogue.entry(c, project, "later", settings=Settings()) is not None
+        assert catalogue.entry(c, project, "later", settings=_community()) is not None
     assert len(builds) == before + 1
 
 
@@ -500,19 +509,19 @@ def test_a_meeting_never_sends_its_url_to_an_unreviewed_web_intel(eng, project, 
         seeded = mcp_registry.ensure_mcp_server(
             c, project, "web-intel", "http://127.0.0.1:8770/mcp", provenance=builtin,
             respect_operator=True)
-        kept = meeting_service._gather_research(c, Settings(), project, "https://example.com")
+        kept = meeting_service._gather_research(c, _community(), project, "https://example.com")
         assert [tool for tool, _ in mcp_calls] == ["study_site"], "the reviewed seed stopped"
         assert "pages" in kept and "research skipped" not in str(kept.get("note"))
 
         mcp_registry.update_mcp_server(c, project, seeded["id"], actor="op",
                                        url="http://elsewhere.example/mcp")
-        moved = meeting_service._gather_research(c, Settings(), project, "https://example.com")
+        moved = meeting_service._gather_research(c, _community(), project, "https://example.com")
 
         # Deleted and registered again under the same name by a person, never reviewed.
         mcp_registry.delete_mcp_server(c, project, seeded["id"], actor="op")
         mcp_registry.register_mcp_server(c, project, "web-intel", "http://other.example/mcp",
                                          actor="op", enabled=True)
-        replaced = meeting_service._gather_research(c, Settings(), project,
+        replaced = meeting_service._gather_research(c, _community(), project,
                                                     "https://example.com")
     assert [tool for tool, _ in mcp_calls] == ["study_site"], (
         "an unreviewed web-intel was sent the meeting's URL with nobody asked")
@@ -550,11 +559,11 @@ def test_an_approval_about_another_step_does_not_release_the_tool(eng, project, 
 
         with pytest.raises(mcp_registry.McpServerUnreviewed) as other:
             mcp_registry.call_tool_with_receipt(
-                c, Settings(), project, server, TOOL, {}, dedupe_key="k1",
+                c, _community(), project, server, TOOL, {}, dedupe_key="k1",
                 tenant_scope=("org", "ws"), approved_by=wrong, approval_about=STEP_GATE)
         with pytest.raises(mcp_registry.McpServerUnreviewed) as none:
             mcp_registry.call_tool_with_receipt(
-                c, Settings(), project, server, TOOL, {}, dedupe_key="k2",
+                c, _community(), project, server, TOOL, {}, dedupe_key="k2",
                 tenant_scope=("org", "ws"), approved_by=None, approval_about=None)
     assert mcp_calls == []
     assert "not an approved decision about this run or step" in str(other.value)
@@ -575,7 +584,7 @@ def test_an_unreviewed_refusal_is_recorded_as_one_attempt(eng, project, mcp_call
                             step_key="tool_step", binding_kind="mcp_tool",
                             mcp_server_id=sid, mcp_tool_name=TOOL)
         with pytest.raises(custom_steps.CustomStepError):
-            custom_steps.execute(c, Settings(), project_id=project, actor="workflow",
+            custom_steps.execute(c, _community(), project_id=project, actor="workflow",
                                  step={"id": "s1", "binding": {"custom_step": "tool_step"}},
                                  inputs={"title": "x"}, run_id="wfr_t")
         row = c.execute(text("SELECT status, attempts, max_attempts FROM skill_invocations "

@@ -653,6 +653,10 @@ def assignment_problems(connection: Connection, project_id: str,
     for step in spec.get("steps") or []:
         step_id = step.get("id", "?")
         binding = step.get("binding") if isinstance(step.get("binding"), dict) else {}
+        if step.get("kind") == "external_agent":
+            # Named as {external_agent: <id>}, not a role key — settled by
+            # `workflows.external_agent_assignment_problems`, not here.
+            continue
         named = named_agent(step)
         if legacy and not binding.get("agent_work"):
             continue

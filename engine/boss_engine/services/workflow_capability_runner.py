@@ -2987,6 +2987,79 @@ def _settings() -> Any:
     return get_settings()
 
 
+# ── REGULATORY TRACE AND BANKING REGULATORY COMPLIANCE (KG Domain layer) ──────────────────────
+# Each is a thin role-agent step the runner performs itself (no tool): it reads the knowledge
+# graph, asks a model, and writes an `inferred` proposal. A step whose work cannot be produced
+# raises, and that raise fails the step like any other — these are the INTERNAL capabilities of
+# test_a_failed_step_stops_the_run.py, each named below so its failure path is proven.
+
+def _trace_regulation(connection: Connection, ctx: Any, project_id: str, step: dict[str, Any],
+                      context: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+    from .knowledge import regulatory_trace
+
+    return regulatory_trace.run_step(
+        connection, getattr(ctx, "settings", None) or _settings(), project_id, step,
+        context, inputs)
+
+
+def _run_banking_role_capability(key: str, connection: Connection, ctx: Any, project_id: str,
+                                 step: dict[str, Any], context: dict[str, Any],
+                                 inputs: dict[str, Any]) -> dict[str, Any]:
+    from .knowledge import banking_regulatory_pipeline
+
+    func = getattr(banking_regulatory_pipeline, f"run_{key}")
+    return func(connection, getattr(ctx, "settings", None) or _settings(), project_id, step,
+                context, inputs)
+
+
+def _clause_intake(connection: Connection, ctx: Any, project_id: str, step: dict[str, Any],
+                   context: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+    return _run_banking_role_capability("clause_intake", connection, ctx, project_id, step,
+                                        context, inputs)
+
+
+def _compliance_assessment(connection: Connection, ctx: Any, project_id: str,
+                           step: dict[str, Any], context: dict[str, Any],
+                           inputs: dict[str, Any]) -> dict[str, Any]:
+    return _run_banking_role_capability("compliance_assessment", connection, ctx, project_id,
+                                        step, context, inputs)
+
+
+def _compliance_orchestration(connection: Connection, ctx: Any, project_id: str,
+                              step: dict[str, Any], context: dict[str, Any],
+                              inputs: dict[str, Any]) -> dict[str, Any]:
+    return _run_banking_role_capability("compliance_orchestration", connection, ctx, project_id,
+                                        step, context, inputs)
+
+
+def _lane_confirmation(connection: Connection, ctx: Any, project_id: str, step: dict[str, Any],
+                       context: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+    return _run_banking_role_capability("lane_confirmation", connection, ctx, project_id, step,
+                                        context, inputs)
+
+
+def _remediation_package(connection: Connection, ctx: Any, project_id: str, step: dict[str, Any],
+                         context: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+    return _run_banking_role_capability("remediation_package", connection, ctx, project_id, step,
+                                        context, inputs)
+
+
+def _compliance_closure(connection: Connection, ctx: Any, project_id: str, step: dict[str, Any],
+                        context: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+    return _run_banking_role_capability("compliance_closure", connection, ctx, project_id, step,
+                                        context, inputs)
+
+
+_BANKING_ROLE_CAPABILITIES: dict[str, str] = {
+    "clause_intake": "_clause_intake",
+    "compliance_assessment": "_compliance_assessment",
+    "compliance_orchestration": "_compliance_orchestration",
+    "lane_confirmation": "_lane_confirmation",
+    "remediation_package": "_remediation_package",
+    "compliance_closure": "_compliance_closure",
+}
+
+
 def _start_recovery_check(connection: Connection, project_id: str, context: dict[str, Any],
                           inputs: dict[str, Any]) -> dict[str, Any]:
     """`verify_recovery`: judged from the release the run shipped. Its clock starts when that
@@ -3154,21 +3227,17 @@ def _perform_toolless(
     # TRACE A REGULATION TO CODE (services/knowledge/regulatory_trace.py): reads a document's
     # clauses, proposes implemented_by or gap findings.
     if key == "trace_regulation":
-        from .knowledge import regulatory_trace
-
-        return regulatory_trace.run_step(
-            connection, getattr(ctx, "settings", None) or _settings(), project_id, step,
-            context, inputs)
+        return _trace_regulation(connection, ctx, project_id, step, context, inputs)
     # KG P5b: banking_regulatory_compliance's six thin role-agent capabilities (services/
     # knowledge/banking_regulatory_pipeline.py), dispatched the same way as trace_regulation.
-    if key == "clause_intake" or key == "compliance_assessment" \
-            or key == "compliance_orchestration" or key == "lane_confirmation" \
-            or key == "remediation_package" or key == "compliance_closure":
-        from .knowledge import banking_regulatory_pipeline
-
-        func = getattr(banking_regulatory_pipeline, f"run_{key}")
-        return func(connection, getattr(ctx, "settings", None) or _settings(), project_id, step,
-                   context, inputs)
+    # Each is work the runner does itself (no tool); a raise here is a failed step like any
+    # other, which is why each names a function in test_a_failed_step_stops_the_run.py's
+    # INTERNAL class.
+    if key in _BANKING_ROLE_CAPABILITIES:
+        # Resolve by name through the module so a test monkeypatching the function (its INTERNAL
+        # failure path) is honoured rather than a reference captured at import time.
+        return globals()[_BANKING_ROLE_CAPABILITIES[key]](
+            connection, ctx, project_id, step, context, inputs)
     # Same shape as `document`: no tool because it commissions nothing — it READS what the
     # run has already recorded and leaves a document behind.
     # THE RE-REVIEW AND THE SECURITY REPORT (services/security_review_steps.py).
