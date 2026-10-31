@@ -164,7 +164,10 @@ def evaluate_signal(
     if not elapsed_seconds and started_at:
         elapsed_seconds = seconds_since(started_at)
 
-    forced = rounds_used >= MAX_ROUNDS_WITHOUT_JUDGEMENT or (not caused and bool(faults))
+    # The round cap is a cap on FAILING rounds: with no faults there is nothing to judge. It
+    # tripped on a round that passed and its fail-closed stop parked a converged build
+    # "awaiting gate override, failing gates: []" (boss-1, crun_73e64e45, 2026-10-31).
+    forced = bool(faults) and (rounds_used >= MAX_ROUNDS_WITHOUT_JUDGEMENT or not caused)
     stalled = elapsed_seconds >= stall_minutes * 60 and not caused
 
     if repeated:

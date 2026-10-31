@@ -8316,7 +8316,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 from . import run_supervisor as _supervisor
                 with _transaction(engine) as _c:
                     _signal_on = _supervisor.signal_enabled(_c, settings, project_id)
-                if _signal_on:
+                # A round that failed nothing has nothing to supervise: judging it parked a
+                # build that had just converged (crun_73e64e45, 2026-10-31).
+                if _signal_on and gate_faults:
                     _history = list(fctx.get("supervisor_history") or [])
                     # This repair loop's own start marker: the first round to reach this hook
                     # stamps it, so `stall_minutes` measures wall-clock time stuck in THIS loop.
@@ -8339,10 +8341,15 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                             # adapter=None routes through the real governed model call
                             # (run_supervisor._model_adapter / AgentService.decide); tests
                             # inject a stub adapter instead.
-                            _decision = _supervisor.decide(
-                                engine, settings, project_id, run_id=run_id,
-                                signal=_signal, history=_history, adapter=None,
-                            )
+                            # A CONNECTION, not the engine: AgentService.decide executes on
+                            # it. Passing `engine` failed every judgement ("'Engine' object has
+                            # no attribute 'execute'") into a fail-closed stop_report, so the
+                            # supervisor never consulted a model or Jev (boss-1, crun_73e64e45).
+                            with _transaction(engine) as _jc:
+                                _decision = _supervisor.decide(
+                                    _jc, settings, project_id, run_id=run_id,
+                                    signal=_signal, history=_history, adapter=None,
+                                )
                         else:
                             _decision = {"action": _supervisor.STOP_REPORT,
                                          "reason": "judgement disabled by setting"}
