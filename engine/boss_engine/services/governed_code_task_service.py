@@ -2781,9 +2781,49 @@ def _change_clause(change: str) -> str:
             + review_input.reviewed_clause())
 
 
-def _review_prompt(title, criteria, *, instructions="", ui=False, change=""):
+def _operator_review_block(engine, run_id: str, project_id: str) -> str:
+    """WHAT THE OPERATOR ASKED FOR, handed to every reviewer as P1 checks.
+
+    Steers and fix notes reached only the implementer's prompt; the reviewers judged the
+    original brief and passed PRs the operator had sent back (KG P6a PR #25: "passed — no
+    blocking defect found" while 4 of the operator's 8 points were not done). One source: the
+    steers the run applied (`applied_guidance`) and the latest fix note (`feedback_history`)."""
+    try:
+        with _transaction(engine) as c:
+            row = c.execute(sql(
+                "SELECT finalize_ctx FROM code_task_runs WHERE id=:id AND project_id=:p"),
+                {"id": run_id, "p": project_id}).mappings().first()
+    except Exception:  # noqa: BLE001 — no record, nothing extra to judge
+        _log_caught(logger)
+        return ""
+    fctx = (row or {}).get("finalize_ctx") or {}
+    if isinstance(fctx, str):
+        try:
+            fctx = json.loads(fctx)
+        except ValueError:
+            return ""
+    points = []
+    note = str(((fctx.get("feedback_history") or [{}])[-1] or {}).get("fix_note") or "").strip()
+    if note:
+        points.append(note)
+    for item in fctx.get("applied_guidance") or []:
+        text = str((item or {}).get("text") or "").strip() if isinstance(item, dict) else ""
+        if text and text not in points:
+            points.append(text)
+    if not points:
+        return ""
+    body = "\n\n".join(f"[{i}] {p}" for i, p in enumerate(points, start=1))[:12000]
+    return ("THE FEEDBACK THIS ATTEMPT MUST ADDRESS (the operator's review and any repair note "
+            "on earlier attempts). Every point below is a P1: check each "
+            "one against the code itself, and for any point that is not done, emit a FINDING: "
+            "MAJOR (or BLOCKER) that names the point and where it is missing. A change that "
+            "leaves one undone is REFUTED, whatever else it gets right.\n" + body + "\n\n")
+
+
+def _review_prompt(title, criteria, *, instructions="", ui=False, change="", operator=""):
     return (
         _ctx_block(title, instructions, criteria)
+        + (operator or "")
         + "You are an adversarial code reviewer with FRESH context — you did NOT write this code or "
         "these tests. Try HARD to break the change: read the implementation and the tests and look "
         "for a REAL correctness or edge-case failure (invalid inputs, empty/boundary values, case "
@@ -7043,7 +7083,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                     stage="review_code",
                                     seat=(seat + 1) if panel_size > 1 else None)
                     _seat_prompt = _review_prompt(title, criteria, instructions=instructions,
-                                                  ui=ui_task, change=change_block)
+                                                  ui=ui_task, change=change_block,
+                                                  operator=_operator_review_block(
+                                                      engine, run_id, project_id))
                     if lane == fix_lane_triage.LANE_FIX:
                         # ONE combined correctness+security reviewer (acceptance criterion
                         # #2) instead of separate review_code/security_check seats.
@@ -7980,7 +8022,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                         run_id=run_id, stage="review_code")
                         rr, _hollow = _judge_seat("review_code", lambda pre: review_agent.run_role(
                             pre + _review_prompt(title, criteria, instructions=instructions,
-                                                 ui=ui_task, change=_seat_change(_rc_prior)),
+                                                 ui=ui_task, change=_seat_change(_rc_prior),
+                                                 operator=_operator_review_block(
+                                                     engine, run_id, project_id)),
                             review_root, read_only=True, model=review_model))
                         return rr, _hollow
 
@@ -8453,7 +8497,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         change_block = _change_block_with_integrity(_review_change)
                         rr, _hollow = _judge_seat("review_code", lambda pre: review_agent.run_role(
                             pre + _review_prompt(title, criteria, instructions=instructions,
-                                                 ui=ui_task, change=change_block),
+                                                 ui=ui_task, change=change_block,
+                                                 operator=_operator_review_block(
+                                                     engine, run_id, project_id)),
                             review_root, read_only=True, model=review_model,
                             max_turns=escalated))
                         cost += int(rr.get("cost_usd_micros") or 0)

@@ -67,7 +67,8 @@ class _Tx:
 
 
 def _with_record(monkeypatch, comments):
-    row = {"finalize_ctx": {"review_comments": comments}}
+    ctx = comments if isinstance(comments, dict) else {"review_comments": comments}
+    row = {"finalize_ctx": ctx}
 
     @contextmanager
     def tx(engine):
@@ -103,3 +104,36 @@ def test_with_nothing_answered_the_re_review_is_unchanged(monkeypatch):
     _with_record(monkeypatch, [{"id": "c", "severity": "minor", "body": "x"}])
     assert g._implementer_answers(None, "crun_x", "boss-platform") == ""
     assert "THE IMPLEMENTER'S ANSWERS" not in g._fix_round_change("F", {"a.py": "x"}, "")
+
+
+# ── the reviewers see what the operator asked for (2026-10-31) ──────────────────────────────
+
+def test_the_operators_feedback_reaches_every_reviewer_as_p1_checks(monkeypatch):
+    """KG P6a PR #25 passed review ("no blocking defect") while 4 of the operator's 8 points were
+    undone: steers and fix notes reached only the implementer."""
+    _with_record(monkeypatch, {"feedback_history": [
+        {"attempt": 1, "fix_note": "old note"},
+        {"attempt": 2, "fix_note": "(2) wire external_agent_tokens.verify into mcp/server.py"}],
+        "applied_guidance": [{"text": "(6) route the endpoint through egress_rules"},
+                             {"text": "(2) wire external_agent_tokens.verify into mcp/server.py"}]})
+    block = g._operator_review_block(None, "crun_x", "boss-platform")
+    assert "Every point below is a P1" in block and "REFUTED" in block
+    assert "[1] (2) wire external_agent_tokens.verify" in block
+    assert "[2] (6) route the endpoint through egress_rules" in block
+    assert "old note" not in block and block.count("wire external_agent_tokens") == 1
+    prompt = g._review_prompt("T", "C", change="x", operator=block)
+    assert prompt.index("FEEDBACK THIS ATTEMPT MUST ADDRESS") < prompt.index("adversarial code reviewer")
+
+
+def test_with_no_feedback_the_review_prompt_is_unchanged(monkeypatch):
+    _with_record(monkeypatch, {})
+    assert g._operator_review_block(None, "crun_x", "boss-platform") == ""
+    assert g._review_prompt("T", "C", change="x") == g._review_prompt("T", "C", change="x",
+                                                                      operator="")
+
+
+def test_every_review_seat_is_handed_the_feedback():
+    import inspect
+
+    src = inspect.getsource(g)
+    assert src.count("operator=_operator_review_block(") == 3
