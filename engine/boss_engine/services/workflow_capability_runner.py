@@ -2404,6 +2404,50 @@ def execute_step(
     return output
 
 
+#: What happens to a build AFTER its pull request: the app is started, extended, released or
+#: watched. A project whose builds end at their PR (`builds_end_at_pr`) has none of that.
+_PAST_THE_PR = frozenset({
+    "preview", "ux_review", "plrr", "more_tests", "release_approval", "deploy", "redeploy",
+    "smoke_test", "monitoring_pack", "monitor", "verify_recovery", "teardown_preview",
+})
+
+
+def ends_at_the_pr(connection: Connection, ctx: Any, project_id: str,
+                   step: dict[str, Any], context: Optional[dict[str, Any]]
+                   ) -> Optional[dict[str, Any]]:
+    """The step's output when this project's builds END AT THEIR PULL REQUEST, else None.
+
+    Some projects are not apps BOSS can run: BOSS building its own repository is one. Its builds
+    open a reviewed PR and a person merges it elsewhere. The workflow then went on to start a
+    preview of BOSS (no module, exit 1), extend the build for launch readiness (refused) or
+    deploy, and every finished build was shown as failed or deadlettered (2026-10-31: "if
+    everything fails, what are we building successfully?"). With the setting on, those steps are
+    recorded as not applicable and the run completes at its PR. A step BEFORE the build is never
+    touched: nothing has been built yet.
+    """
+    key = str((step.get("binding") or {}).get("capability") or "")
+    if key not in _PAST_THE_PR or not isinstance(context, dict):
+        return None
+    from . import project_settings
+
+    try:
+        on = int(project_settings.effective(connection, project_id,
+                                            getattr(ctx, "settings", None),
+                                            "builds_end_at_pr") or 0)
+    except (TypeError, ValueError):
+        on = 0
+    if not on:
+        return None
+    built = (context.get("input") or {}).get("adopt_code_task_run_id") or any(
+        isinstance(out, dict) and out.get("code_task_run_id")
+        for out in (context.get("steps") or {}).values())
+    if not built:
+        return None
+    return {"capability": key, "tool": None, "status": "not_applicable", "ends_at_pr": True,
+            "note": "This project's builds end at their pull request (setting: Builds end at "
+                    "the PR), so there is no app to preview, extend, release or watch."}
+
+
 def _execute_step(
     connection: Connection,
     ctx: Any,
@@ -2426,6 +2470,10 @@ def _execute_step(
                 "tool": None, "status": "not_applicable", "skipped_by_precheck": skip,
                 "note": (f"skipped at start by {skip.get('by') or 'the operator'}: "
                          f"{skip.get('reason') or 'no reason given'}")[:600]}
+
+    past_the_pr = ends_at_the_pr(connection, ctx, project_id, step, context)
+    if past_the_pr:
+        return past_the_pr
 
     # APPROVING SENDS EXACTLY WHAT WAS PREVIEWED. A step a gate released checks that its
     # inputs still hash to the content the approver saw; if an upstream step was re-run in
@@ -6223,6 +6271,9 @@ def _gate_subject(
 
     if _owned_by_change_set(str(binding.get("capability") or ""), context):
         # The change set's ONE approval covers it (approve and ship all); no second gate.
+        return None
+    if ends_at_the_pr(connection, None, project_id, spec_step, context):
+        # Nothing ships past the PR, so nobody is asked to approve shipping it.
         return None
 
     if binding.get("agent_work"):
