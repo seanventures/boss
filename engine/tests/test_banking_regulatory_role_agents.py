@@ -300,6 +300,38 @@ class BankingRegulatoryRoleAgentTests(unittest.TestCase):
         finally:
             mp.undo()
 
+    def test_the_advisor_sees_the_gap_the_assessment_found_and_the_lane_verdicts(self):
+        """Given only the cited code, the advisor fixed a different problem than the assessed gap
+        (2026-10-31). It now gets the clause, the assessment, the incident and the lane verdicts,
+        and the package is named from its answer, never a hard-coded title."""
+        import pytest
+        mp = pytest.MonkeyPatch()
+        try:
+            rule_id = self._add_rule(name="repayment classification", body="isRepaymentType")
+            agent = FakeAgent({"title": "Validate repayment amount against amount due",
+                               "change_brief": "Reject a down payment that exceeds the amount due.",
+                               "test_ref": "loan/test_down_payment.py::test_overpayment_refused"})
+            _install_fake(mp, agent)
+            result = pipeline.run_remediation_package(
+                self.connection, settings=None, project_id=self.project_id,
+                step={"id": "remediation_package", "run_id": "run_chain"}, context={
+                    "steps": {"compliance_assessment": {
+                                  "citation": rule_id,
+                                  "note": "gap: no check that the amount paid matches the amount due"},
+                              "lanes": {"results": [{"note": "Confirmed: repayment classification "
+                                                             "— the code only classifies types"}]},
+                              "compliance_orchestration": {"finding_families": ["payment_allocation"]}}},
+                inputs={})
+            prompt = agent.prompts[0]
+            self.assertIn("no check that the amount paid matches the amount due", prompt)
+            self.assertIn("the code only classifies types", prompt)
+            row = self.connection.execute(
+                text("SELECT name FROM kg_nodes WHERE project_id = :p AND id = :i"),
+                {"p": self.project_id, "i": result["remediation_package_id"]}).mappings().first()
+            self.assertEqual(row["name"], "Validate repayment amount against amount due")
+        finally:
+            mp.undo()
+
     def test_remediation_package_falls_back_when_the_advisor_answers_nothing_readable(self):
         class UnreadableAgent:
             def run_role(self, *a, **k):
@@ -315,7 +347,9 @@ class BankingRegulatoryRoleAgentTests(unittest.TestCase):
             result = pipeline.run_remediation_package(
                 self.connection, settings=None, project_id=self.project_id,
                 step={"id": "remediation_package", "run_id": "run_g"}, context={
-                    "steps": {"compliance_assessment": {"citation": rule_id},
+                    "steps": {"compliance_assessment": {
+                                  "citation": rule_id,
+                                  "note": "gap: a missing amount check lets 250.00 post against 218.60"},
                              "compliance_orchestration": {"finding_families": ["payment_allocation"]}}},
                 inputs={})
 
@@ -324,14 +358,11 @@ class BankingRegulatoryRoleAgentTests(unittest.TestCase):
                 text("SELECT attrs FROM kg_nodes WHERE project_id = :p AND id = :i"),
                 {"p": self.project_id, "i": package_id},
             ).mappings().first()
-            self.assertEqual(
-                row["attrs"]["change_brief"],
-                "Credit a periodic payment as of the date of receipt, applying it "
-                "interest-first then to principal, before any later-dated payment is "
-                "considered.")
-            self.assertEqual(
-                row["attrs"]["test_ref"],
-                "payments/test_repayment_order.py::test_interest_before_principal")
+            # No canned, case-specific remediation: it says none was proposed and restates the
+            # gap the assessment found; it names no test it does not have.
+            self.assertTrue(row["attrs"]["change_brief"].startswith("No remediation was proposed"))
+            self.assertIn("missing amount check", row["attrs"]["change_brief"])
+            self.assertEqual(row["attrs"]["test_ref"], "")
         finally:
             mp.undo()
 

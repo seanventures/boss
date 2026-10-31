@@ -412,10 +412,13 @@ def run_lane_confirmation(
     confirmed = verdict == "confirmed"
     decision_type = {"confirmed": "Confirmed", "ruled_out": "RuledOut",
                      "cannot_verify": "CannotVerify"}[verdict]
+    # SAID IN NAMES, WITH THE REASON. "Confirmed: clause and code both point at kgn_4793…" told a
+    # reviewer nothing they could check; the rule's name and what the source showed can be.
+    cited = (node or {}).get("name") or citation or "no citation"
     statement = {
-        "confirmed": f"Confirmed: clause and code both point at {citation}.",
-        "ruled_out": f"Ruled out: {citation or 'no citation'} — {reason}",
-        "cannot_verify": f"Cannot verify: {citation or 'no citation'} — {reason}",
+        "confirmed": f"Confirmed: {cited} — {reason}",
+        "ruled_out": f"Ruled out: {cited} — {reason}",
+        "cannot_verify": f"Cannot verify: {cited} — {reason}",
     }[verdict]
     context_graph.write_agent_decision(
         connection, project_id, step_id=step_id, run_id=run_id, decision_type=decision_type,
@@ -423,7 +426,7 @@ def run_lane_confirmation(
         agent_fingerprint="deterministic", actor_ref=actor_ref)
     return {"capability": "lane_confirmation", "tool": None, "status": "succeeded",
             "verdict": verdict, "confirmed": confirmed, "cited_node_id": citation or None,
-            "note": statement}
+            "reason": reason, "note": statement}
 
 
 def run_remediation_package(
@@ -448,21 +451,41 @@ def run_remediation_package(
     families = ((context or {}).get("steps") or {}).get("compliance_orchestration", {}).get(
         "finding_families") or []
     family = families[0] if families else ""
+    # THE WHOLE EVIDENCE CHAIN, NOT THE CITATION ALONE. Given only the cited node, the advisor
+    # proposed changing which transaction types count as repayments while the assessment's gap
+    # was a missing amount check (INC-2088: 250.00 paid against 218.60 due). A remediation must
+    # close the gap the assessment states, in the code the lane read.
+    assessment = steps.get("compliance_assessment") or {}
+    clause_text, clause_citation = _clause_text_and_citation(
+        connection, project_id, str(assessment.get("subject_id") or ""))
+    incident = str(assessment.get("cited_incident") or "")
+    lanes = [r for r in ((steps.get("lanes") or {}).get("results") or []) if isinstance(r, Mapping)]
+    if not lanes and isinstance(steps.get("lane_confirmation"), Mapping):
+        lanes = [steps["lane_confirmation"]]
+    lane_lines = "\n".join(f"- {r.get('note') or ''}" for r in lanes) or "- (no lane verdict)"
     situation = (
+        f"CLAUSE: {clause_text or '(not available)'}"
+        f"{f' — {clause_citation}' if clause_citation else ''}\n"
+        f"ASSESSMENT (the gap to close): {assessment.get('note') or '(none)'}\n"
+        f"INCIDENT: {_node_summary(connection, project_id, incident) if incident else '(none)'}\n"
+        f"LANE VERDICTS:\n{lane_lines}\n"
         f"CITED CODE: {_node_summary(connection, project_id, citation) if citation else '(none)'}\n"
         f"FAMILY: {family or '(unknown)'}")
     agent, _engine = _role_agent(connection, settings, project_id)
     judged = _ask_role(agent, _role_prompt("remediation_advisor.md", situation))
+    gap = " ".join(str(assessment.get("note") or "").split())[:600]
     change_brief = (
         " ".join(str(judged.get("change_brief") or "").split())[:1000] if judged else "") or (
-        "Credit a periodic payment as of the date of receipt, applying it interest-first then "
-        "to principal, before any later-dated payment is considered.")
-    test_ref = (str(judged.get("test_ref") or "").strip() if judged else "") or (
-        "payments/test_repayment_order.py::test_interest_before_principal")
+        f"No remediation was proposed (the advisor gave no readable answer). Close the gap the "
+        f"assessment found: {gap or 'see the assessment'}")
+    test_ref = (str(judged.get("test_ref") or "").strip() if judged else "")
+    title = (" ".join(str(judged.get("title") or "").split())[:120] if judged else "") or (
+        f"Remediation: {(STORE.get_node(connection, project_id=project_id, node_id=citation) or {}).get('name') or family or 'finding'}"
+        if citation else f"Remediation: {family or 'finding'}")
     package_key = f"remediation:{run_id}:{step_id}"
     package_id = STORE.upsert_node(
         connection, project_id=project_id, kind="remediation_package", node_key=package_key,
-        name="Remediation: repayment allocation order", body=change_brief, trust_tier="inferred",
+        name=title, body=change_brief, trust_tier="inferred",
         actor_kind="agent", actor_ref=actor_ref,
         attrs={"change_brief": change_brief, "test_ref": test_ref, "owner_team": owner_team,
               "approver_role": "compliance_officer"})
