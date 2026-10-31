@@ -1072,6 +1072,8 @@ CATALOGUE: list[dict[str, Any]] = [
             {
                 "id": "historical_pattern", "kind": "deterministic",
                 "binding": {"inputs": {"subject_id": _in("subject_id")}},
+                "contract": {"calls": [{"mcp": "itsm", "tool": "get_incident"},
+                                       {"mcp": "itsm", "tool": "list_incidents"}]},
                 "next": ["compliance_assessment"],
             },
             _step("compliance_assessment", "compliance_assessment",

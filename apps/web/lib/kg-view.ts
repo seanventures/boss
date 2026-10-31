@@ -282,6 +282,13 @@ export async function addDocument(w: Who, body: {
     { scope: `kg-doc:${w.projectId}`, label: "Add regulation" });
 }
 
+export async function linkRule(w: Who, clauseId: string, ruleId: string) {
+  return send<{ edge_id: string; kind: string }>(
+    `/v1/knowledge/documents/${encodeURIComponent(clauseId)}/link-rule`,
+    { project_id: w.projectId, actor: w.actor, step_up: "confirmed", rule_id: ruleId },
+    { scope: `kg-doc-link:${w.projectId}`, label: "Link rule" });
+}
+
 export async function setPack(w: Who, packId: string) {
   return send<KgPack>("/v1/knowledge/packs",
     { project_id: w.projectId, actor: w.actor, step_up: "confirmed", pack_id: packId },

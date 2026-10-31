@@ -15,7 +15,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 
 import { GatedButton } from "../../components/gated";
 import {
-  DOCUMENT_MANAGE, addDocument, getDocuments, getLinkedRules, getPacks, kgNodeHref, kgWhen, setPack,
+  DOCUMENT_MANAGE, addDocument, getDocuments, getLinkedRules, getPacks, getRules, getSearch, kgNodeHref, kgWhen, linkRule, setPack,
   type KgClause, type KgDocument, type KgPack,
 } from "../../lib/kg-view";
 import { SCAN_START } from "../../lib/kg-view";
@@ -25,6 +25,9 @@ type Who = { projectId: string; actor: string };
 
 /** One clause's "Check compliance": reads its implementing rules, then starts the pipeline with
  *  the single rule as subject, asks when there are several, or starts with none. */
+const NO_WORKFLOW_RE = /no delivery workflow/i;
+const NEEDS_SUBJECT_RE = /needs .* input.*subject_id/i;
+
 function CheckCompliance({ w, documentId, clauseId, archived }: {
   w: Who; documentId: string; clauseId: string; archived?: boolean;
 }) {
@@ -33,21 +36,89 @@ function CheckCompliance({ w, documentId, clauseId, archived }: {
   const [chosen, setChosen] = useState<string | "">("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [needsInstall, setNeedsInstall] = useState(false);
+  const [needsSubject, setNeedsSubject] = useState(false);
+  const [pendingSubjectId, setPendingSubjectId] = useState<string | null>(null);
+  const [candidateRules, setCandidateRules] = useState<{ node_id: string; title: string }[]>([]);
+  const [linkChosen, setLinkChosen] = useState<string | "">("");
+  const [ruleQuery, setRuleQuery] = useState("");
+  const [searching, setSearching] = useState(false);
 
   const start = useCallback(async (subjectId?: string | null) => {
     setBusy(true); setMsg(null);
+    setPendingSubjectId(subjectId ?? null);
     const input: Record<string, unknown> = { document_id: documentId };
     if (subjectId) input.subject_id = subjectId;
     const r = await post("start", {
       project_id: w.projectId, workflow_key: "banking_regulatory_compliance", actor: w.actor, input,
     });
     setBusy(false);
-    if (r.ok) { setPicking(false); setMsg({ ok: true, text: "Compliance check started. Its run opens in Workflows." }); return; }
-    setMsg({ ok: false, text: r.error ? String(r.error) : "The compliance check did not start." });
-  }, [documentId, w.projectId, w.actor]);
+    if (r.ok) {
+      setPicking(false); setNeedsInstall(false); setNeedsSubject(false);
+      setMsg({ ok: true, text: "Compliance check started. Its run opens in Workflows." });
+      return;
+    }
+    const err = r.error ? String(r.error) : "";
+    // Both of these are offered a one-press recovery that reuses an existing endpoint, rather
+    // than showing the raw error: a project predating the catalogue entry (install it), and a
+    // clause with no rule linked yet (pick one).
+    if (NO_WORKFLOW_RE.test(err)) { setNeedsInstall(true); return; }
+    if (NEEDS_SUBJECT_RE.test(err)) {
+      setNeedsSubject(true);
+      // The clause has nothing linked yet — offer the project's existing business rules to
+      // pick from, not the clause's (empty) linked-rules list.
+      const found = await getRules(w, { status: "approved" });
+      setCandidateRules(found.ok
+        ? found.data.items.map((rule) => ({ node_id: rule.node.id, title: rule.title })) : []);
+      return;
+    }
+    setMsg({ ok: false, text: err || "The compliance check did not start." });
+  }, [documentId, w]);
+
+  // The initial "approved" rules list can miss the clause's implementing rule (not yet
+  // approved, or named differently) — a free-text search over the project's rules lets the
+  // operator find it instead of being stuck with that fixed list.
+  const searchRules = useCallback(async () => {
+    const q = ruleQuery.trim();
+    if (!q) return;
+    setSearching(true);
+    const found = await getSearch(w, q, { layers: "rules" });
+    setSearching(false);
+    if (!found.ok) return;
+    const hits = found.data.hits
+      .filter((hit) => hit.node.kind === "rule" || hit.node.layer === "rules")
+      .map((hit) => ({ node_id: hit.node.id, title: hit.node.label }));
+    setCandidateRules((prev) => {
+      const byId = new Map(prev.map((r) => [r.node_id, r]));
+      for (const hit of hits) byId.set(hit.node_id, hit);
+      return [...byId.values()];
+    });
+  }, [ruleQuery, w]);
+
+  // Picking a rule must PERSIST the clause→rule link (criterion 6: a later check must find it
+  // linked), not just pass it as this one run's subject_id — so the write happens first, through
+  // the same `implemented_by` edge `regulatory_trace` proposes, and only then does start retry.
+  const linkAndStart = useCallback(async () => {
+    if (!linkChosen) return;
+    setBusy(true); setMsg(null);
+    const linked = await linkRule(w, clauseId, linkChosen);
+    setBusy(false);
+    if (!linked.ok) { setMsg({ ok: false, text: linked.error }); return; }
+    setNeedsSubject(false);
+    void start(linkChosen);
+  }, [w, clauseId, linkChosen, start]);
+
+  const installAndRetry = useCallback(async () => {
+    setBusy(true);
+    const r = await post("catalogue/install", { project_id: w.projectId });
+    setBusy(false);
+    if (r.ok) { setNeedsInstall(false); void start(pendingSubjectId); return; }
+    setMsg({ ok: false, text: r.error ? String(r.error) : "Could not install the workflow." });
+  }, [w.projectId, start, pendingSubjectId]);
 
   const onPress = async () => {
     if (archived) return;
+    setNeedsInstall(false); setNeedsSubject(false); setCandidateRules([]); setLinkChosen("");
     const r = await getLinkedRules(w, clauseId);
     const found = r.ok ? r.data.rules : [];
     setRules(found);
@@ -68,6 +139,28 @@ function CheckCompliance({ w, documentId, clauseId, archived }: {
           </select>
           <button type="button" className="ag-btn ag-btn-primary" disabled={busy || !chosen}
                   onClick={() => void start(chosen)}>Start</button>
+        </span>
+      ) : null}
+      {needsInstall ? (
+        <span className="kg-doc-install" data-testid="kg-doc-install-workflow-wrap">
+          <button type="button" className="ag-btn ag-btn-primary" data-testid="kg-doc-install-workflow"
+                  disabled={busy} title="Install banking_regulatory_compliance from the catalogue"
+                  onClick={() => void installAndRetry()}>Install from catalogue</button>
+        </span>
+      ) : null}
+      {needsSubject ? (
+        <span className="kg-doc-link" data-testid="kg-doc-link-subject">
+          <input className="input" value={ruleQuery} placeholder="Search rules by name…"
+                 data-testid="kg-doc-link-search" onChange={(e) => setRuleQuery(e.target.value)}
+                 onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void searchRules(); } }} />
+          <button type="button" className="ag-btn" data-testid="kg-doc-link-search-btn"
+                  disabled={searching || !ruleQuery.trim()} onClick={() => void searchRules()}>Search</button>
+          <select value={linkChosen} onChange={(e) => setLinkChosen(e.target.value)} aria-label="Business rule to link">
+            <option value="">Choose a rule…</option>
+            {candidateRules.map((rule) => <option key={rule.node_id} value={rule.node_id}>{rule.title}</option>)}
+          </select>
+          <button type="button" className="ag-btn ag-btn-primary" disabled={busy || !linkChosen}
+                  onClick={() => void linkAndStart()}>Link rule &amp; start</button>
         </span>
       ) : null}
       {msg ? <span className={msg.ok ? "kg-ok" : "kg-inline-err"} role={msg.ok ? "status" : "alert"} data-testid="kg-doc-check-msg">{msg.text}</span> : null}

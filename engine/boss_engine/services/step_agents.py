@@ -559,14 +559,41 @@ def _mcp_servers(connection: Connection, project_id: str) -> list[dict[str, Any]
 
 def resolve_mcp(connection: Connection, project_id: str,
                 wanted: list[str]) -> tuple[list[dict[str, Any]], list[str]]:
-    """The MCP servers a step names, by id or by name, and the names that matched nothing."""
+    """The MCP servers a step names, by id or by name, and the names that matched nothing.
+
+    A name BOSS ships (`bootstrap.BUILTIN_MCP_SERVERS`) is self-healed here before it is
+    called missing: a project created without going through the normal seed (a direct insert,
+    an older install) still gets the row a seeded project already has, the same idempotent,
+    respect_operator write the boot seed does — never resurrecting one an operator removed
+    (seed_exclusions). A server the project never shipped with, or a person's own, is still
+    only ever found by an actual registered row."""
     servers = _mcp_servers(connection, project_id)
+
+    def _match(name: str) -> Optional[dict[str, Any]]:
+        return next((s for s in servers
+                     if str(s.get("id")) == name
+                     or str(s.get("name") or "").strip().lower() == name.lower()), None)
+
     found: list[dict[str, Any]] = []
     missing: list[str] = []
     for name in wanted:
-        match = next((s for s in servers
-                      if str(s.get("id")) == name
-                      or str(s.get("name") or "").strip().lower() == name.lower()), None)
+        match = _match(name)
+        if match is None:
+            from ..bootstrap import BUILTIN_MCP_SERVERS, builtin_provenance
+            builtin = next((s for s in BUILTIN_MCP_SERVERS
+                            if s["name"].lower() == name.strip().lower()), None)
+            if builtin is not None:
+                from .mcp_registry import ensure_mcp_server
+
+                ensure_mcp_server(
+                    connection, project_id, builtin["name"], builtin["url"],
+                    risk_tier=builtin["risk_tier"], data_boundary=builtin["data_boundary"],
+                    description=builtin["description"],
+                    publisher={"id": "boss", "name": "BOSS", "kind": "system"},
+                    provenance=builtin_provenance(), respect_operator=True,
+                )
+                servers = _mcp_servers(connection, project_id)
+                match = _match(name)
         if match is None:
             missing.append(name)
         elif match not in found:

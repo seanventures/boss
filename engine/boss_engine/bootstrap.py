@@ -33,25 +33,26 @@ _log = logging.getLogger(__name__)
 MCP_TOOLS_HOST = os.environ.get("BOSS_MCP_TOOLS_HOST", "mcp-tools").strip() or "mcp-tools"
 
 
-def mcp_tools_ports() -> tuple[int, int, int]:
-    """(devops-reference, web-intel, doc-render) ports; BOSS_MCP_TOOLS_PORTS overrides them for a
-    machine where the defaults are taken. tools/mcp_tools_mux.py reads the same variable."""
+def mcp_tools_ports() -> tuple[int, int, int, int]:
+    """(devops-reference, web-intel, doc-render, itsm) ports; BOSS_MCP_TOOLS_PORTS overrides
+    them for a machine where the defaults are taken. tools/mcp_tools_mux.py reads the same
+    variable."""
     raw = os.environ.get("BOSS_MCP_TOOLS_PORTS", "").strip()
     try:
-        ports = tuple(int(p) for p in raw.split(",")) if raw else (8765, 8770, 8771)
+        ports = tuple(int(p) for p in raw.split(",")) if raw else (8765, 8770, 8771, 8772)
     except ValueError:
-        ports = (8765, 8770, 8771)
-    return ports if len(ports) == 3 else (8765, 8770, 8771)  # type: ignore[return-value]
+        ports = (8765, 8770, 8771, 8772)
+    return ports if len(ports) == 4 else (8765, 8770, 8771, 8772)  # type: ignore[return-value]
 
 
-_DEVOPS_PORT, _WEB_INTEL_PORT, _DOC_RENDER_PORT = mcp_tools_ports()
+_DEVOPS_PORT, _WEB_INTEL_PORT, _DOC_RENDER_PORT, _ITSM_PORT = mcp_tools_ports()
 
 #: The release's own review of the servers it ships, recorded as such (not as a person's).
 FIRST_PARTY_REVIEW = "boss (first-party)"
 
 #: Bumped when the seeded rows change; a row on an older version, untouched by any person, is
 #: brought up to date on the next boot (`migrate_builtin_mcp_servers`).
-BUILTIN_MCP_VERSION = "2"
+BUILTIN_MCP_VERSION = "3"
 
 BUILTIN_MCP_SERVERS = [
     {
@@ -77,6 +78,17 @@ BUILTIN_MCP_SERVERS = [
         "risk_tier": 0,
         "data_boundary": "internal",
         "description": "Render Markdown to PDF: render_markdown_pdf",
+    },
+    {
+        # KG P7b: the ITSM mock (tools/mcp_itsm_mock.py) Historical Pattern consults for prior
+        # incidents correlated with a subject's connected code — a project's REAL connected
+        # source once a real ITSM integration ships; every project is seeded with this one so
+        # the step's `contract.calls` can be enforced like any other MCP, not exempted from it.
+        "name": "itsm",
+        "url": f"http://{MCP_TOOLS_HOST}:{_ITSM_PORT}/mcp",
+        "risk_tier": 0,
+        "data_boundary": "internal",
+        "description": "Past incidents and tickets for Historical Pattern: get_incident, list_incidents",
     },
 ]
 

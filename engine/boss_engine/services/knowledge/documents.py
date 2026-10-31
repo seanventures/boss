@@ -13,6 +13,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from ..core import now_utc
+from . import domain
 from .ontology_packs import get_project_pack
 from .store import PostgresKnowledgeStore
 
@@ -162,3 +163,26 @@ def linked_rules(connection: Connection, *, project_id: str, clause_id: str) -> 
         {"project_id": project_id, "clause_id": clause_id},
     ).mappings().all()
     return [{"node_id": str(row["node_id"]), "title": row["title"]} for row in rows]
+
+
+def link_rule(
+    connection: Connection, *, project_id: str, clause_id: str, rule_id: str, actor: str,
+) -> dict[str, Any]:
+    """An operator's explicit pick (the "Check compliance" missing-subject recovery): the
+    clause is `implemented_by` `rule_id`, through the SAME edge `regulatory_trace` proposes
+    (`domain.propose_implementation`) — never a one-off edge of its own — so `linked_rules`
+    finds it on the clause's next read, same as a trace-proposed link."""
+    row = connection.execute(
+        text("SELECT id FROM kg_nodes WHERE project_id = :p AND id = :c AND kind = 'clause' "
+             "AND valid_to IS NULL"), {"p": project_id, "c": clause_id}).mappings().first()
+    if row is None:
+        raise DocumentRefused(f"no clause '{clause_id}' in this project")
+    rule_row = connection.execute(
+        text("SELECT id FROM kg_nodes WHERE project_id = :p AND id = :r AND kind = 'rule' "
+             "AND valid_to IS NULL"), {"p": project_id, "r": rule_id}).mappings().first()
+    if rule_row is None:
+        raise DocumentRefused(f"no rule '{rule_id}' in this project")
+    return domain.propose_implementation(
+        connection, project_id=project_id, clause_id=clause_id, target_id=rule_id,
+        rationale=f"{actor} linked this rule from the compliance-check setup flow.",
+        confidence=1.0, actor_ref=actor)

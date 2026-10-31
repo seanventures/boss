@@ -10,6 +10,7 @@ rendering is already there):
     devops-reference  :8765/mcp   (tools/mcp_demo_server.py)
     web-intel         :8770/mcp   (tools/mcp_web_intel_server.py)
     doc-render        :8771/mcp   (tools/mcp_doc_render_server.py)
+    itsm              :8772/mcp   (tools/mcp_itsm_mock.py)
 
 Run it locally the same way:
 
@@ -25,20 +26,20 @@ import os
 import uvicorn
 
 #: (server name as BOSS seeds it, module, port). bootstrap.BUILTIN_MCP_SERVERS points at these.
-def _ports() -> tuple[int, int, int]:
-    """BOSS_MCP_TOOLS_PORTS="a,b,c" moves them (a machine where the defaults are taken); the API
-    reads the same variable for the addresses it seeds (bootstrap.mcp_tools_ports)."""
+def _ports() -> tuple[int, int, int, int]:
+    """BOSS_MCP_TOOLS_PORTS="a,b,c,d" moves them (a machine where the defaults are taken); the
+    API reads the same variable for the addresses it seeds (bootstrap.mcp_tools_ports)."""
     raw = os.environ.get("BOSS_MCP_TOOLS_PORTS", "").strip()
     try:
-        ports = tuple(int(p) for p in raw.split(",")) if raw else (8765, 8770, 8771)
+        ports = tuple(int(p) for p in raw.split(",")) if raw else (8765, 8770, 8771, 8772)
     except ValueError:
-        ports = (8765, 8770, 8771)
-    return ports if len(ports) == 3 else (8765, 8770, 8771)  # type: ignore[return-value]
+        ports = (8765, 8770, 8771, 8772)
+    return ports if len(ports) == 4 else (8765, 8770, 8771, 8772)  # type: ignore[return-value]
 
 
-SERVERS = tuple(zip(("boss-devops-reference", "web-intel", "doc-render"),
+SERVERS = tuple(zip(("boss-devops-reference", "web-intel", "doc-render", "itsm"),
                     ("tools.mcp_demo_server", "tools.mcp_web_intel_server",
-                     "tools.mcp_doc_render_server"),
+                     "tools.mcp_doc_render_server", "tools.mcp_itsm_mock"),
                     _ports()))
 
 

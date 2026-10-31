@@ -4463,8 +4463,26 @@ def _process_control_step(connection: Connection, run: Any, row: Any) -> None:
         _after_success(connection, run["id"], row["step_id"], iteration)
         return
     if kind == "bounded_loop":
-        should_continue = evaluate_expression(template["expression"], context)
         maximum = int(template["max_iterations"])
+        if iteration == 0:
+            # The body has never run yet: its output cannot be evaluated, so the first
+            # iteration always runs the body (do-while), whatever the expression would say.
+            connection.execute(
+                text(
+                    """
+                    UPDATE workflow_step_runs SET status='waiting',
+                        output=CAST(:output AS JSONB), updated_at=now()
+                    WHERE id=:id
+                    """
+                ),
+                {
+                    "id": row["id"],
+                    "output": json.dumps({"continued": True, "iteration": iteration}),
+                },
+            )
+            _activate_step(connection, run["id"], template["body"], iteration)
+            return
+        should_continue = evaluate_expression(template["expression"], context)
         if should_continue and iteration >= maximum:
             reason = (
                 f"bounded loop '{row['step_id']}' exhausted max_iterations={maximum}."

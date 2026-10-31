@@ -92,6 +92,11 @@ def run_historical_pattern(
             if candidate["kind"] in _PATTERN_KINDS:
                 matches[candidate["node_id"]] = candidate
 
+    # Always asked, even when the graph already has a match: a new ticket touching the
+    # subject's code/systems since the last run would otherwise go unseen.
+    matches.update(_itsm_matches(connection, project_id=project_id, subject_id=subject_id,
+                                  actor_ref=actor_ref))
+
     for match_id in matches:
         _STORE.upsert_edge(
             connection, project_id=project_id, src_id=subject_id, dst_id=match_id,
@@ -106,6 +111,60 @@ def run_historical_pattern(
         workflow_version="", agent_fingerprint="deterministic", actor_ref=actor_ref)
 
     return {"cost_usd_micros": 0, "matched": list(matches.keys())}
+
+
+def _itsm_matches(connection: Connection, *, project_id: str, subject_id: str, actor_ref: str
+                  ) -> dict[str, Mapping[str, Any]]:
+    """Ask the project's REGISTERED `itsm` MCP server (bootstrap.BUILTIN_MCP_SERVERS seeds one
+    on every project, pointed at `tools/mcp_itsm_mock.py` — the step's `contract.calls` source)
+    for a past ticket that names one of the subject's connected code symbols/systems, and write
+    it in as an `incident` node — never a bespoke insert, through the same `_STORE.upsert_node`
+    every other write here uses — so the NEXT run's graph-only pass above finds it like a
+    sibling. Goes through `mcp_registry.call_tool_unattended` like any other registry server's
+    tool (no person is present during a workflow step to ask), never a direct import of the
+    mock — a re-pointed or disabled `itsm` server must be able to refuse this call exactly as
+    it would refuse any other road to a registered MCP tool."""
+    from .. import mcp_registry
+    from ...config import get_settings
+
+    server = mcp_registry.find_mcp_server(connection, project_id, "itsm")
+    if server is None or not server.get("enabled", True):
+        return {}
+
+    neighbor_names = [
+        str(n.get("name") or "").strip().lower()
+        for n in _STORE.neighbors(connection, project_id=project_id, node_id=subject_id,
+                                  direction="out")
+    ]
+    neighbor_names = [n for n in neighbor_names if n]
+    if not neighbor_names:
+        return {}
+
+    try:
+        result = mcp_registry.call_tool_unattended(get_settings(), server, "list_incidents", {})
+        incidents = (result or {}).get("incidents") or []
+    except Exception:
+        return {}
+
+    found: dict[str, Mapping[str, Any]] = {}
+    for incident in incidents:
+        incident_id = str(incident.get("incident_id") or "").strip()
+        if not incident_id:
+            continue
+        # The ticket's text and its affected components (what a real ITSM ticket records as
+        # the code or service the incident touched).
+        components = " ".join(str(c) for c in (incident.get("affected_components") or []))
+        haystack = f"{incident.get('title', '')} {incident.get('summary', '')} {components}".lower()
+        if not any(name in haystack for name in neighbor_names):
+            continue
+        node_id = _STORE.upsert_node(
+            connection, project_id=project_id, kind="incident",
+            node_key=f"incident:{incident_id}", name=incident_id,
+            body=str(incident.get("summary") or ""), trust_tier="observed",
+            actor_kind="agent", actor_ref=actor_ref, attrs={"incident_id": incident_id})
+        found[node_id] = {"node_id": node_id, "kind": "incident"}
+
+    return found
 
 
 def run_closure(

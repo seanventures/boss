@@ -60,6 +60,13 @@ class ClauseBody(BaseModel):
     url: Optional[str] = None
 
 
+class LinkRuleBody(BaseModel):
+    project_id: str
+    actor: str
+    step_up: Optional[str] = None
+    rule_id: str
+
+
 class AddDocumentBody(BaseModel):
     project_id: str
     actor: str
@@ -132,6 +139,23 @@ def linked_rules_route(
             _actor(connection, project_id, actor, READ)
             rules = documents.linked_rules(connection, project_id=project_id, clause_id=clause_id)
             return {"rules": rules}
+    except Exception as error:  # noqa: BLE001
+        raise _http(error) from error
+
+
+@router.post("/documents/{clause_id}/link-rule")
+@permit(P.KNOWLEDGE_MANAGE, scope=Scope.project(body="project_id"))
+def link_rule_route(clause_id: str, body: LinkRuleBody) -> dict[str, Any]:
+    try:
+        require_confirmation(body.step_up)
+    except PermissionError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    try:
+        with begin(_engine) as connection:
+            _actor(connection, body.project_id, body.actor, MANAGE)
+            return documents.link_rule(
+                connection, project_id=body.project_id, clause_id=clause_id,
+                rule_id=body.rule_id, actor=body.actor)
     except Exception as error:  # noqa: BLE001
         raise _http(error) from error
 

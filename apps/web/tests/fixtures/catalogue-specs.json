@@ -6247,6 +6247,18 @@
                 }
               }
             },
+            "contract": {
+              "calls": [
+                {
+                  "mcp": "itsm",
+                  "tool": "get_incident"
+                },
+                {
+                  "mcp": "itsm",
+                  "tool": "list_incidents"
+                }
+              ]
+            },
             "next": [
               "compliance_assessment"
             ],
