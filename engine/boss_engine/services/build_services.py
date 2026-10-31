@@ -15,8 +15,9 @@ WHAT A RUN GETS. At run start (after the clone, before any agent) BOSS creates, 
 build-services server, one role and one database with the same random name
 (``<prefix><16 hex>``) and a random 48-hex-char password:
 
-* the role is LOGIN only: no superuser, no createdb/createrole, no replication, no bypassrls,
-  a connection limit; it owns its database and nothing else;
+* the role is LOGIN only: no superuser, no createdb, no replication, no bypassrls, a connection
+  limit; it owns its database and nothing else. It does get CREATEROLE, scoped to its own
+  lease's lifetime: any role it creates is dropped along with it at teardown/reap;
 * CONNECT on that database is revoked from PUBLIC: no other role (another run's) may connect;
 * the server's pg_hba (compose) has ``host sameuser all all scram-sha-256``: a run role can
   authenticate only to the database named like itself, whatever grants say;
@@ -92,6 +93,11 @@ RESOURCE_KIND = "build_database"
 _NAME_OK = re.compile(r"^[a-z_][a-z0-9_]{0,40}$")
 #: The variables a run is given. Kept here so the brief, the docs and the tests name the same set.
 ENV_NAMES = ("DATABASE_URL", "PGHOST", "PGPORT", "PGUSER", "PGPASSWORD", "PGDATABASE")
+#: Extensions a build database tries to install, so its tests (AGE/pgvector) find them already
+#: there. Order is used for deterministic reporting.
+EXTENSIONS = ("vector", "age")
+#: Injected into a run's env, comma-joined, only when some of EXTENSIONS aren't on this server.
+MISSING_EXTENSIONS_ENV = "BOSS_BUILD_SERVICES_MISSING_EXTENSIONS"
 
 
 class BuildServicesUnavailable(RuntimeError):
@@ -389,12 +395,16 @@ class PostgresLease:
     port: int
     password: str = field(repr=False)
     ledger_handle: str = ""
+    missing_extensions: tuple[str, ...] = ()
 
     def env(self) -> dict[str, str]:
         url = (f"postgresql://{quote(self.name)}:{quote(self.password, safe='')}"
                f"@{self.host}:{self.port}/{quote(self.name)}")
-        return {"DATABASE_URL": url, "PGHOST": self.host, "PGPORT": str(self.port),
-                "PGUSER": self.name, "PGPASSWORD": self.password, "PGDATABASE": self.name}
+        out = {"DATABASE_URL": url, "PGHOST": self.host, "PGPORT": str(self.port),
+               "PGUSER": self.name, "PGPASSWORD": self.password, "PGDATABASE": self.name}
+        if self.missing_extensions:
+            out[MISSING_EXTENSIONS_ENV] = ",".join(self.missing_extensions)
+        return out
 
     def describe(self) -> str:
         """For the run's log and the brief: never the password."""
@@ -452,8 +462,9 @@ def provision(run_id: str, *, install: str = "", server_url: Optional[str] = Non
     try:
         with contextlib.closing(_connect(srv)) as conn:
             try:
+                _harden_shared_databases(conn)
                 conn.execute(sql.SQL(
-                    "CREATE ROLE {} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT "
+                    "CREATE ROLE {} LOGIN NOSUPERUSER NOCREATEDB CREATEROLE NOINHERIT "
                     "NOREPLICATION NOBYPASSRLS CONNECTION LIMIT {} PASSWORD {}").format(
                         ident, sql.Literal(CONNECTION_LIMIT),
                         sql.Literal(scram_verifier(password))))
@@ -476,6 +487,24 @@ def provision(run_id: str, *, install: str = "", server_url: Optional[str] = Non
                 raise BuildServicesUnavailable(
                     f"the build-services server refused to create the run's database "
                     f"({type(exc).__name__}: {scrub(str(exc))[:200]})") from None
+        db_srv = _Server(host=srv.host, port=srv.port, user=srv.user, password=srv.password,
+                         dbname=name)
+        try:
+            with contextlib.closing(_connect(db_srv)) as dconn:
+                lease.missing_extensions = _install_extensions(dconn, name, name)
+        except Exception as exc:  # noqa: BLE001
+            with contextlib.closing(_connect(srv)) as conn:
+                try:
+                    _drop(conn, name)
+                except BuildServicesUnavailable:
+                    with _LOCK:
+                        _PENDING_CLEANUP[run_id] = lease
+                    _log.warning("build-services run=%s creation cleanup pending for %s; "
+                                 "the reaper will retry", run_id, name)
+                    raise
+            raise BuildServicesUnavailable(
+                f"the build-services server refused to prepare the run's extensions "
+                f"({type(exc).__name__}: {scrub(str(exc))[:200]})") from None
     except BaseException:
         with _LOCK:
             pending = run_id in _PENDING_CLEANUP
@@ -494,11 +523,76 @@ def provision(run_id: str, *, install: str = "", server_url: Optional[str] = Non
     return lease
 
 
+def _available_extensions(conn: Any, names: Iterable[str]) -> set[str]:
+    """Which of `names` are in pg_available_extensions on this server."""
+    rows = conn.execute("SELECT name FROM pg_available_extensions WHERE name = ANY(%s)",
+                        (list(names),)).fetchall()
+    return {r[0] for r in rows}
+
+
+def _install_extensions(conn: Any, name: str, role: str) -> tuple[str, ...]:
+    """Connected to database `name` as admin. CREATE EXTENSION IF NOT EXISTS for each member of
+    EXTENSIONS this server offers; for 'age', also grant `role` USAGE/SELECT on ag_catalog.
+    Returns the extensions NOT available (never attempted)."""
+    available = _available_extensions(conn, EXTENSIONS)
+    missing = tuple(ext for ext in EXTENSIONS if ext not in available)
+    for ext in EXTENSIONS:
+        if ext not in available:
+            continue
+        conn.execute(f'CREATE EXTENSION IF NOT EXISTS "{ext}"')
+        if ext == "age":
+            conn.execute(f'GRANT USAGE ON SCHEMA ag_catalog TO "{role}"')
+            conn.execute(f'GRANT SELECT ON ALL TABLES IN SCHEMA ag_catalog TO "{role}"')
+    return missing
+
+
+#: CREATEROLE lets a run's role create a LOGIN role of any name it likes — including the name
+#: of a server-wide database such as "postgres" or "template1". Under pg_hba's `sameuser` rule
+#: that name match alone would let the new role authenticate to that shared database; revoking
+#: PUBLIC's default CONNECT there closes the escape (Postgres still checks CONNECT privilege
+#: after `sameuser` lets the authentication attempt proceed). Superuser connections (BOSS's own)
+#: are never subject to this grant. Done once per process, best-effort: it hardens a shared
+#: resource outside any one run's database and must never block a run's own provisioning.
+_SHARED_DATABASES_HARDENED = False
+
+
+def _harden_shared_databases(conn: Any) -> None:
+    global _SHARED_DATABASES_HARDENED
+    if _SHARED_DATABASES_HARDENED:
+        return
+    from psycopg import sql
+
+    for shared in ("postgres", "template1"):
+        with contextlib.suppress(Exception):
+            conn.execute(sql.SQL("REVOKE CONNECT ON DATABASE {} FROM PUBLIC").format(
+                sql.Identifier(shared)))
+    _SHARED_DATABASES_HARDENED = True
+
+
+def _created_roles(conn: Any, name: str) -> list[str]:
+    """Roles `name` holds ADMIN OPTION membership on (pg_auth_members): roles it created via its
+    CREATEROLE grant. Queried against the admin connection before `name` itself is dropped."""
+    rows = conn.execute(
+        "SELECT r.rolname FROM pg_auth_members m "
+        "JOIN pg_roles creator ON creator.oid = m.member "
+        "JOIN pg_roles r ON r.oid = m.roleid "
+        "WHERE creator.rolname = %s AND m.admin_option", (name,)).fetchall()
+    return [row[0] for row in rows]
+
+
 def _drop(conn: Any, name: str) -> None:
     from psycopg import sql
 
     ident = sql.Identifier(name)
     failures: list[str] = []
+    try:
+        for child in _created_roles(conn, name):
+            try:
+                conn.execute(sql.SQL("DROP ROLE IF EXISTS {}").format(sql.Identifier(child)))
+            except Exception as exc:  # noqa: BLE001
+                failures.append(type(exc).__name__)
+    except Exception:  # noqa: BLE001 — the role/database may not exist yet (rollback path)
+        pass
     for statement in ("DROP DATABASE IF EXISTS {} WITH (FORCE)", "DROP ROLE IF EXISTS {}"):
         try:
             conn.execute(sql.SQL(statement).format(ident))
