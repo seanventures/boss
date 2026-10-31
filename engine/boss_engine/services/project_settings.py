@@ -84,9 +84,8 @@ KNOBS: dict[str, dict[str, Any]] = {
     "builds_end_at_pr": {
         "attr": "builds_end_at_pr",
         "label": "Builds end at the PR",
-        "help": "1: a build's workflow completes once its reviewed PR and its pass-2 tests are "
-                "done. Preview, launch readiness, deploy and monitoring are recorded as not "
-                "applicable. "
+        "help": "1: a build's workflow completes once its reviewed PR is open. Preview, launch "
+                "readiness, more tests, deploy and monitoring are recorded as not applicable. "
                 "For repositories BOSS does not run as an app. 0: the full workflow.",
         "kind": "int", "min": 0, "max": 1,
     },

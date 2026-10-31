@@ -2404,12 +2404,10 @@ def execute_step(
     return output
 
 
-#: What happens to a build AFTER its pull request that needs a RUNNING app: it is started,
-#: reviewed for operability, released or watched. A project whose builds end at their PR
-#: (`builds_end_at_pr`) has none of that. NOT `more_tests`: pass 2 writes P2 tests on the same
-#: branch and needs no preview, so it still runs (and, being advisory, never holds the run up).
+#: What happens to a build AFTER its pull request: the app is started, extended, released or
+#: watched. A project whose builds end at their PR (`builds_end_at_pr`) has none of that.
 _PAST_THE_PR = frozenset({
-    "preview", "ux_review", "plrr", "release_approval", "deploy", "redeploy",
+    "preview", "ux_review", "plrr", "more_tests", "release_approval", "deploy", "redeploy",
     "smoke_test", "monitoring_pack", "monitor", "verify_recovery", "teardown_preview",
 })
 

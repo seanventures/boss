@@ -36,7 +36,7 @@ BUILT = {"input": {"adopt_code_task_run_id": "crun_1"}, "steps": {}}
 
 
 def test_every_step_past_the_pr_is_not_applicable_when_the_setting_is_on():
-    for key in ("preview", "plrr", "deploy", "monitor", "monitoring_pack"):
+    for key in ("preview", "plrr", "more_tests", "deploy", "monitor", "monitoring_pack"):
         out = runner.ends_at_the_pr(_Conn("1"), None, "p", _step(key), BUILT)
         assert out and out["status"] == "not_applicable" and out["ends_at_pr"], key
 
@@ -46,8 +46,8 @@ def test_a_build_started_by_the_workflow_counts_as_built():
     assert runner.ends_at_the_pr(_Conn(1), None, "p", _step("deploy"), ctx)
 
 
-def test_the_build_its_review_pass_2_and_the_report_still_run():
-    for key in ("build", "review", "test", "more_tests", "report", "notify", "spec_review", "meeting"):
+def test_the_build_its_review_and_the_report_still_run():
+    for key in ("build", "review", "test", "report", "notify", "spec_review", "meeting"):
         assert runner.ends_at_the_pr(_Conn("1"), None, "p", _step(key), BUILT) is None, key
 
 
