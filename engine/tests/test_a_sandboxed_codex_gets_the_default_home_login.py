@@ -66,11 +66,14 @@ def test_no_codex_login_anywhere_copies_nothing(tmp_path, monkeypatch):
     assert not (run_home / ".codex").exists()
 
 
-def test_the_run_gets_the_full_login_and_a_newer_one_comes_back(tmp_path, monkeypatch):
-    """boss-1, 2026-10-29: a copy with no (or a placeholder) refresh_token made codex fall back to
-    API-key mode, so every run failed 401. Runs get the FULL login. A run's copy coming back
-    rotated is a containment failure, never a legitimate rotation (2026-10-29, one-owner-refreshes):
-    the control plane's own file is never adopted from a run, only logged/surfaced."""
+def test_the_run_gets_the_login_without_the_real_refresh_token(tmp_path, monkeypatch):
+    """The run gets the ChatGPT login (auth mode, access token) but never the real refresh token:
+    a run's codex refreshing on a 401 rotated it and got the operator's login revoked (10-29,
+    10-30). Measured on codex-cli 0.158.0 (boss-1, 2026-10-30): a copy whose refresh token is
+    sandbox_identity.RUN_REFRESH_TOKEN answers `codex exec` with 0 refresh attempts, with a
+    fresh id_token and with an expired one. (The 10-29 belief that such a copy falls back to
+    API-key mode was not borne out.) A run's copy coming back rotated is still a containment
+    failure: the control plane's own file is never adopted from a run, only logged/surfaced."""
     import json
 
     _no_claude(monkeypatch)
@@ -86,7 +89,8 @@ def test_the_run_gets_the_full_login_and_a_newer_one_comes_back(tmp_path, monkey
 
     sandbox_identity._seed_cli_logins(_Ident(run_home))
     copied = json.loads((run_home / ".codex" / "auth.json").read_text())
-    assert copied["tokens"]["refresh_token"] == "R1"            # the full login, as codex needs
+    assert copied["auth_mode"] == "chatgpt" and copied["tokens"]["access_token"] == "A1"
+    assert copied["tokens"]["refresh_token"] == sandbox_identity.RUN_REFRESH_TOKEN
 
     # The run's codex refreshed: its copy is newer and rotated — a containment failure, not a
     # rotation to adopt. The control plane's own file stays exactly as it was.

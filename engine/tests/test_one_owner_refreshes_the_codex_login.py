@@ -173,8 +173,33 @@ def test_p1_the_seeded_run_copy_keeps_the_chatgpt_login_shape(tmp_path, monkeypa
     copied = json.loads((run_home / ".codex" / "auth.json").read_text())
     assert copied["auth_mode"] == "chatgpt"
     assert copied["tokens"]["access_token"] == "ACCESS_2"
-    assert copied["tokens"]["refresh_token"] == "REFRESH_2"
+    # the run never holds the real refresh token (only the control plane does)
+    assert copied["tokens"]["refresh_token"] == sandbox_identity.RUN_REFRESH_TOKEN
     assert _tokens(src)["access_token"] == "ACCESS_2"
+    assert _tokens(src)["refresh_token"] == "REFRESH_2"
+
+
+def test_a_run_can_never_rotate_the_operators_codex_login(tmp_path, monkeypatch):
+    """When a run's codex refreshed (it does on a 401), OpenAI rotated the token, the control
+    plane kept the old one, and its next use revoked the whole login (boss-1, 10-29 and 10-30).
+    A run's copy, seeded or reseeded, carries a refresh token that cannot rotate anything; every
+    other field codex needs (access and id tokens, account, auth mode) is the real one."""
+    src = _login(tmp_path, monkeypatch, expires_in=5 * 3600, refresh="REAL_REFRESH")
+    real = json.loads(src.read_text())
+    run_home = tmp_path / "run-home"
+    run_home.mkdir()
+    ident = _Ident(run_home)
+
+    for seed in (lambda: sandbox_identity._seed_codex_login(ident),
+                 lambda: sandbox_identity.copy_codex_tokens(ident)):
+        seed()
+        copied = json.loads((run_home / ".codex" / "auth.json").read_text())
+        assert "REAL_REFRESH" not in json.dumps(copied)
+        assert copied["tokens"]["refresh_token"] == sandbox_identity.RUN_REFRESH_TOKEN
+        for key in ("access_token", "id_token", "account_id"):
+            assert copied["tokens"].get(key) == real["tokens"].get(key)
+        assert copied["auth_mode"] == real["auth_mode"]
+    assert json.loads(src.read_text())["tokens"]["refresh_token"] == "REAL_REFRESH"
 
 
 def test_the_seeded_copy_is_readable_by_the_runs_own_uid(tmp_path, monkeypatch):

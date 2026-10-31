@@ -439,10 +439,21 @@ def _seed_codex_login(ident: SandboxIdentity) -> None:
     copy_codex_tokens(ident)
 
 
+#: What a run's copy carries in place of the real refresh token. A run must never be able to
+#: rotate the operator's Codex login: when a run's codex refreshed (it does on a 401), OpenAI
+#: rotated the token, the control plane kept the old one, and its next use revoked the whole
+#: login (boss-1, 2026-10-29 and 10-30). Measured on codex-cli 0.158.0 (boss-1, 2026-10-30),
+#: a copy with this in place of the refresh token works: `codex exec` answered with a fresh
+#: id_token (23:38 UTC) and with one expired 5 minutes (00:42 UTC), making 0 refresh attempts;
+#: a refresh it does attempt fails harmlessly with invalid_refresh_token.
+RUN_REFRESH_TOKEN = "rt_boss_run_copy_cannot_refresh"
+
+
 def copy_codex_tokens(ident: Any) -> bool:
-    """Copy the control plane's CURRENT Codex auth.json (whole file, refresh token included —
-    codex needs it to report ChatGPT auth rather than falling back to API-key mode) into the
-    run's `.codex`, replacing an earlier copy. Never follows a symlink the run planted."""
+    """Copy the control plane's CURRENT Codex login into the run's `.codex`, replacing an
+    earlier copy, with the refresh token swapped for RUN_REFRESH_TOKEN: the run gets the access
+    and id tokens it needs and nothing that can rotate the real login. Only the control plane
+    refreshes (codex_login, under its lock). Never follows a symlink the run planted."""
     from . import codex_login
 
     try:
@@ -452,6 +463,7 @@ def copy_codex_tokens(ident: Any) -> bool:
         return False
     if not isinstance(doc, dict) or not isinstance(doc.get("tokens"), dict):
         return False
+    doc = {**doc, "tokens": {**doc["tokens"], "refresh_token": RUN_REFRESH_TOKEN}}
     dst = ident.home / ".codex"
     dst.mkdir(exist_ok=True)
     with contextlib.suppress(OSError):
