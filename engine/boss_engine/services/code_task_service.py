@@ -63,7 +63,25 @@ def _engine_ports():
 
 
 def _transaction(engine):
-    return _engine_ports().persistence.transaction(engine)
+    ports = get_engine_ports()
+    if ports is not None:
+        return ports.persistence.transaction(engine)
+    # No composition root has run (a unit test calling a service function directly against a
+    # real SQLAlchemy engine/connection, as the app's own entrypoints never do). Fall back to
+    # using what was handed in rather than refusing outright — the caller already has a real
+    # engine/connection, which is all a transaction needs. `engine.begin()` works whether
+    # `engine` is actually an Engine or an already-open Connection (a nested transaction).
+    #
+    # This fallback cannot be removed in favour of the composition root here: the engine test
+    # path has NO SQL-backed persistence port (apps.api.app.adapters_postgres is not importable;
+    # the only default, InMemoryPersistence, yields the in-memory store rather than a SQL
+    # connection). The FROZEN steer tests
+    # (test_steer_follows_work_and_merged_pr_skips_followup.py,
+    # test_steer_carries_applied_guidance_and_followup_skips_already_merged_content.py) call
+    # take_pending_guidance / late_steer_response with a bare SQLAlchemy engine and no
+    # EnginePorts configured and then `c.execute(text(...))` on the yielded connection, so
+    # requiring the port makes them raise "engine ports are not configured".
+    return engine.begin()
 
 
 def _row_to_run(r) -> dict:
@@ -893,6 +911,16 @@ def start_code_task(
                 "fc": json.dumps(run_finalize),
             },
         )
+    _carry_parent = str(run_finalize.get("parent_run_id") or "").strip()
+    if _carry_parent and not simulated:
+        # STEERS FOLLOW THE WORK. A repair child / retry / follow-up is WHERE the parent's
+        # unread guidance must land — the parent is about to stop reading it forever.
+        try:
+            from .governed_code_task_service import carry_pending_guidance
+
+            carry_pending_guidance(connection, parent_run_id=_carry_parent, child_run_id=run_id)
+        except Exception:  # noqa: BLE001 — a carry failure must never block the new run
+            logger.exception("pending guidance not carried from %s to %s", _carry_parent, run_id)
     if outcome is not None:
         outcome.update({"created": True, "run_id": run_id})
     if simulated:

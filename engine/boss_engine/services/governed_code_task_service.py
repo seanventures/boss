@@ -407,9 +407,17 @@ def take_pending_guidance(engine, run_id: str, stage: Optional[str] = None) -> l
             row_p = c.execute(sql("SELECT project_id FROM code_task_runs WHERE id=:id"),
                               {"id": run_id}).scalar()
             if row_p:
-                emit_event(c, row_p, "code_task.guidance_applied", "boss", "code_task_run",
-                           run_id, {"count": len(pending), "stage": stage,
+                # A SAVEPOINT: a failed audit write must not poison the surrounding
+                # transaction (Postgres aborts the whole transaction on any error until
+                # rollback), which would then fail the guidance update right below it too.
+                try:
+                    with c.begin_nested():
+                        emit_event(c, row_p, "code_task.guidance_applied", "boss",
+                                   "code_task_run", run_id,
+                                   {"count": len(pending), "stage": stage,
                                     "act_id": (read_by or {}).get("act_id")})
+                except Exception:  # noqa: BLE001 — the audit trail never blocks the guidance
+                    _log_caught(logger)
         c.execute(sql(
             "UPDATE code_task_runs SET finalize_ctx = "
             "COALESCE(finalize_ctx,'{}'::jsonb) || jsonb_build_object("
@@ -418,6 +426,150 @@ def take_pending_guidance(engine, run_id: str, stage: Optional[str] = None) -> l
             "                      || CAST(:g AS JSONB)), updated_at=now() WHERE id=:id"),
             {"g": json.dumps(pending), "id": run_id})
     return pending
+
+
+def carry_pending_guidance(connection, *, parent_run_id: str, child_run_id: str) -> int:
+    """Move a parent's UNREAD guidance onto the child taking over its work.
+
+    Called in the same transaction that creates a repair child / retry / follow-up. Without
+    this, guidance queued on a run that then hands off its work (to a child created with
+    `parent_run_id` pointing back at it) sat in the parent's `finalize_ctx.pending_guidance`
+    forever — no stage of the parent runs again to read it, and no stage of the child ever
+    looked at its PARENT's queue. Three steers vanished this way (KG P6a, CX, 2026-10-30/31).
+
+    Each carried item gains ``carried_from`` so the child's own `take_pending_guidance` read
+    (unchanged, still pops once) can say where it came from. The parent's queue is cleared in
+    the same statement so it can never be carried twice.
+
+    The parent's APPLIED guidance (`finalize_ctx.applied_guidance`) is copied onto the
+    child's `applied_guidance` the same way — unlike `pending_guidance`, it is never cleared
+    on the parent, since it is a record of what already happened there, not a queue. Without
+    this, `_operator_review_block` (which reads `applied_guidance` to show reviewers what a
+    steer changed) saw nothing on a repair child/retry/follow-up even though its parent run
+    had steers applied to it.
+    """
+    row = connection.execute(
+        sql("SELECT finalize_ctx FROM code_task_runs WHERE id=:id"),
+        {"id": parent_run_id}).mappings().first()
+    if not row:
+        return 0
+    fctx = row["finalize_ctx"] or {}
+    if isinstance(fctx, str):
+        try:
+            fctx = json.loads(fctx)
+        except Exception:  # noqa: BLE001
+            _log_caught(logger)
+            return 0
+    pending = list(fctx.get("pending_guidance") or [])
+    applied = list(fctx.get("applied_guidance") or [])
+    if not pending and not applied:
+        return 0
+    carried = [{**item, "carried_from": parent_run_id} for item in pending]
+    carried_applied = [{**item, "carried_from": parent_run_id} for item in applied]
+    if carried or carried_applied:
+        connection.execute(sql(
+            "UPDATE code_task_runs SET finalize_ctx = "
+            "COALESCE(finalize_ctx,'{}'::jsonb) || jsonb_build_object("
+            "  'pending_guidance', "
+            "  COALESCE(finalize_ctx->'pending_guidance','[]'::jsonb) || CAST(:g AS JSONB),"
+            "  'applied_guidance', "
+            "  COALESCE(finalize_ctx->'applied_guidance','[]'::jsonb) || CAST(:a AS JSONB)"
+            "), updated_at=now() WHERE id=:id"),
+            {"g": json.dumps(carried), "a": json.dumps(carried_applied), "id": child_run_id})
+    if pending:
+        connection.execute(sql(
+            "UPDATE code_task_runs SET finalize_ctx = "
+            "COALESCE(finalize_ctx,'{}'::jsonb) || jsonb_build_object("
+            "  'pending_guidance', '[]'::jsonb"
+            "), updated_at=now() WHERE id=:id"),
+            {"id": parent_run_id})
+    return len(carried)
+
+
+def late_steer_response(connection, *, run_id: str, project_id: str, guidance: str,
+                         actor: str) -> dict:
+    """What `steer_code_task` answers once a run is past the point anything reads its queue.
+
+    A run marks `finalize_ctx.past_last_stage_boundary: true` at its last stage boundary — the
+    point `take_pending_guidance` is never called again for THIS run. Queueing a steer there is
+    a silent no-op: the operator sees "ok: true" and the guidance is never read by anything
+    (crun_e470d6dc, 2026-10-30). This decides, in words, what happens instead:
+
+    - If a follow-up/retry already exists for the run (a row whose `finalize_ctx.parent_run_id`
+      names it), the steer lands on THAT run's `pending_guidance` and the answer says so.
+    - If none exists yet, nothing is written — queuing it would be exactly the silent no-op
+      this exists to avoid — and the answer says in words that the run finished its last stage
+      and names retrying it with the guidance as the fix note.
+    """
+    from datetime import datetime, timezone
+
+    entry = {"text": str(guidance)[:4000], "actor": actor,
+              "at": datetime.now(timezone.utc).isoformat()}
+    successor = connection.execute(
+        sql("SELECT id FROM code_task_runs WHERE project_id=:p "
+            "AND finalize_ctx->>'parent_run_id' = :r ORDER BY created_at DESC LIMIT 1"),
+        {"p": project_id, "r": run_id}).scalar()
+    if successor:
+        connection.execute(sql(
+            "UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx,'{}'::jsonb) "
+            "|| jsonb_build_object('pending_guidance', "
+            "COALESCE(finalize_ctx->'pending_guidance','[]'::jsonb) || CAST(:e AS JSONB)), "
+            "updated_at=now() WHERE id=:id"),
+            {"e": json.dumps([entry]), "id": successor})
+        return {"ok": True, "run_id": run_id, "landed_on": successor,
+                "message": f"run {run_id} finished its last stage; this steer was applied "
+                           f"to its follow-up {successor} instead"}
+    return {"ok": False, "run_id": run_id,
+            "error": f"run {run_id} has already finished its last stage, so no further stage "
+                     "will ever read this guidance; retry the run and pass this as the fix "
+                     "note instead of steering it"}
+
+
+def should_create_followup_for_pr(gh, *, pull_request_number: int) -> tuple[bool, str]:
+    """Gate an automatic "checks failing" / "deferred findings" follow-up on the PR's state.
+
+    An operator who already merged or closed the PR by hand does not want a follow-up
+    re-deriving "fix the failing checks" against work that is already in — BOSS kept spawning
+    one anyway, three times in a row, on a PR the operator had merged into rel (CX PR #24,
+    crun_00301249 -> crun_b82f4275 -> crun_2640c811 -> crun_03e34f7b). Called before the spawn,
+    never after.
+
+    GitHub's own `state`/`merged_at` is not enough: an operator who squash-merges a PR's
+    branch into another branch LOCALLY (not through GitHub's merge button) leaves the PR
+    itself sitting OPEN on GitHub forever — PR #24 above stayed open while already merged
+    into `rel`. So beyond the state check, this also compares the PR's changed files' content
+    at its head against the same paths on its base branch's head: if every file already reads
+    the same on the base, the PR's change is already in, whatever GitHub's merge button says.
+    """
+    snapshot = gh.pull_request_snapshot(pull_request_number) or {}
+    state = str(snapshot.get("state") or "").strip().lower()
+    merged_at = snapshot.get("merged_at")
+    if merged_at or state == "merged":
+        return False, f"pull request #{pull_request_number} is already merged"
+    if state == "closed":
+        return False, f"pull request #{pull_request_number} is already closed"
+    base_ref = snapshot.get("base_ref")
+    head_ref = snapshot.get("head_ref")
+    if base_ref and head_ref and hasattr(gh, "pull_request_files") and hasattr(gh, "read_text_file"):
+        try:
+            files = gh.pull_request_files(pull_request_number) or []
+        except Exception:  # noqa: BLE001 — a check that cannot run must not block the follow-up
+            _log_caught(logger)
+            files = []
+        paths = [f.get("path") or f.get("filename") for f in files
+                 if (f.get("path") or f.get("filename")) and f.get("status") != "removed"]
+        if paths:
+            try:
+                already_in_base = all(
+                    gh.read_text_file(base_ref, path) == gh.read_text_file(head_ref, path)
+                    for path in paths)
+            except Exception:  # noqa: BLE001
+                _log_caught(logger)
+                already_in_base = False
+            if already_in_base:
+                return False, (f"pull request #{pull_request_number}'s change is already "
+                                f"present on its base branch {base_ref!r}")
+    return True, ""
 
 
 def _guidance_block(items: list[dict]) -> str:
@@ -8895,6 +9047,15 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             from .checks_failing import KEY as _CF_KEY, pr_section as _cf_section
 
             _checks = evidence.get(_CF_KEY) if isinstance(evidence.get(_CF_KEY), dict) else None
+            # PAST THE LAST STAGE BOUNDARY. The final `take_pending_guidance` read is behind us;
+            # from here to the terminal write no stage reads the queue again, so a steer queued
+            # now would be the silent no-op this task exists to end (crun_e470d6dc). Mark it, so
+            # `steer_code_task` answers in words / lands it on a follow-up instead of dropping it.
+            c.execute(sql(
+                "UPDATE code_task_runs SET finalize_ctx = "
+                "COALESCE(finalize_ctx,'{}'::jsonb) "
+                "|| jsonb_build_object('past_last_stage_boundary', true), updated_at=now() "
+                "WHERE id=:id"), {"id": run_id})
             _abort_if_cancelled("before opening the PR", spends=False)
             _pr_files = ([FileChange(path=p, content=content)
                           for p, content in accumulated.items()]
@@ -9069,10 +9230,26 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # DEFERRED FINDINGS → their own task on the shipped branch. After the PR exists, so a
         # bookkeeping failure can never cost the delivery; guarded so follow-ups don't recurse.
         followup_run_id = None
+        # Never a follow-up on a PR the operator already merged or closed by hand — three
+        # spawned in a row against one (CX PR #24) before this existed.
+        _followup_ok, _followup_skip_reason = True, ""
+        _pr_number = proposal.get("pull_request_number")
+        if _pr_number:
+            try:
+                _followup_ok, _followup_skip_reason = should_create_followup_for_pr(
+                    sf.github, pull_request_number=_pr_number)
+            except Exception:  # noqa: BLE001 — a check that cannot run must not block the PR
+                _log_caught(logger)
+                _followup_ok, _followup_skip_reason = True, ""
+        if not _followup_ok:
+            with _transaction(engine) as c:
+                emit_event(c, project_id, "code_task.followup_skipped", "boss",
+                           "code_task_run", run_id, {"reason": _followup_skip_reason})
         # A PR that opened with its checks failing always gets its follow-up: it is the fix.
         if (deferred_findings
                 and (getattr(settings, "code_review_followup_tasks", True) or _checks)
                 and not fctx.get("is_followup")
+                and _followup_ok
                 and not _already_spawned_followup(engine, run_id)):
             try:
                 followup_run_id = _spawn_deferred_findings_task(

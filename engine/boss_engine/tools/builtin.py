@@ -3673,6 +3673,19 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
             if row["status"] in ("completed", "failed", "cancelled"):
                 return {"ok": False,
                         "error": f"run is {row['status']}; steering applies to running tasks"}
+            row_fctx = c.execute(_text(
+                "SELECT finalize_ctx FROM code_task_runs WHERE id=:id"),
+                {"id": run_id}).scalar() or {}
+            if isinstance(row_fctx, str):
+                try:
+                    row_fctx = _json.loads(row_fctx)
+                except Exception:  # noqa: BLE001
+                    row_fctx = {}
+            if row_fctx.get("past_last_stage_boundary"):
+                from ..services.governed_code_task_service import late_steer_response
+
+                return late_steer_response(c, run_id=run_id, project_id=project_id,
+                                            guidance=guidance, actor=actor)
             c.execute(_text(
                 "UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx,'{}'::jsonb) "
                 "|| jsonb_build_object('pending_guidance', "

@@ -321,9 +321,12 @@ def test_pipeline_hot_paths_have_no_direct_database_imports_or_text_calls():
         "engine/boss_engine/services/software_factory.py",
     ):
         source = (ROOT / relative).read_text(encoding="utf-8")
+        code_lines = "\n".join(
+            line for line in source.splitlines() if not line.strip().startswith("#")
+        )
         assert "from ..db import" not in source
         assert "from sqlalchemy" not in source
-        assert re.search(r"\btext\(", source) is None
+        assert re.search(r"\btext\(", code_lines) is None
         assert "sf.budget" not in source
 
 
