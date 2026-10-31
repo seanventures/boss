@@ -220,13 +220,28 @@ class BankingRegulatoryRoleAgentTests(unittest.TestCase):
         try:
             rule_id = self._add_rule(
                 name="allocation rule", body="Apply interest before principal on each payment.")
-            agent = FakeAgent({"confirmed": True, "reason": "clause and code agree"})
+            symbol_id = STORE.upsert_node(
+                self.connection, project_id=self.project_id, kind="symbol",
+                node_key="symbol:allocation rule", name="allocation_rule_fn", body="",
+                trust_tier="governed", actor_kind="person",
+                actor_ref="compliance.lead@example.com",
+                attrs={"path": "payments/alloc.py", "line": 10, "end_line": 20})
+            STORE.upsert_edge(
+                self.connection, project_id=self.project_id, src_id=rule_id, dst_id=symbol_id,
+                kind="evidenced_by", actor_kind="person",
+                actor_ref="compliance.lead@example.com")
+            mp.setattr(pipeline, "_repo_reader", lambda *a, **k: (
+                lambda path, start, end, repo: {
+                    "content": "def allocate(payment):\n    return apply_interest_first(payment)",
+                    "start": start, "end": end}))
+            agent = FakeAgent({"verdict": "confirmed", "reason": "clause and code agree"})
             _install_fake(mp, agent)
 
             result = pipeline.run_lane_confirmation(
                 self.connection, settings=None, project_id=self.project_id,
                 step={"id": "lane_confirmation", "run_id": "run_d"}, context={
                     "steps": {"compliance_assessment": {"citation": rule_id}}}, inputs={})
+            self.assertEqual(result["verdict"], "confirmed")
             self.assertTrue(result["confirmed"])
             self.assertEqual(result["cited_node_id"], rule_id)
 
@@ -251,6 +266,7 @@ class BankingRegulatoryRoleAgentTests(unittest.TestCase):
             result = pipeline.run_lane_confirmation(
                 self.connection, settings=None, project_id=self.project_id,
                 step={"id": "lane_confirmation", "run_id": "run_e"}, context={}, inputs={})
+            self.assertEqual(result["verdict"], "cannot_verify")
             self.assertFalse(result["confirmed"])
             self.assertIsNone(result["cited_node_id"])
         finally:

@@ -20,7 +20,7 @@ from typing import Any, Mapping, Optional
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
-from . import context_graph, domain, graph_steps
+from . import context_graph, domain, graph_steps, rule_scan
 from .store import PostgresKnowledgeStore
 
 STORE = PostgresKnowledgeStore()
@@ -35,6 +35,13 @@ _ROLES_DIR = (Path(__file__).resolve().parents[4] / "packages" / "specpack" / "s
 MAX_TURNS = 4
 _MARK_OPEN = "=== JUDGEMENT ==="
 _MARK_CLOSE = "=== END JUDGEMENT ==="
+
+#: The Lane Agent's three-way outcome (KG P7c) — `cannot_verify` is forced by the code itself
+#: (no citation, no connected symbol, or an unreadable source), never by agent discretion.
+_VERDICTS = frozenset({"confirmed", "ruled_out", "cannot_verify"})
+_MAX_CITED_SYMBOLS = 5
+_CODE_CONTEXT_LINES = 3
+_CODE_MAX_CHARS = 4000
 
 
 def _run_id(step: Mapping[str, Any], context: Mapping[str, Any]) -> str:
@@ -210,7 +217,7 @@ def run_compliance_assessment(
 
     return {"capability": "compliance_assessment", "tool": None, "status": "succeeded",
             "assessment": status, "confidence": confidence, "citation": citation,
-            "cited_incident": cited_incident, "note": statement}
+            "cited_incident": cited_incident, "note": statement, "subject_id": subject_id}
 
 
 def run_compliance_orchestration(
@@ -245,40 +252,171 @@ def run_compliance_orchestration(
             "finding_families": [family] if family else []}
 
 
+def _repo_reader(connection: Connection, settings: Any, project_id: str, actor: str) -> rule_scan.Reader:
+    """A thin, monkeypatchable wrapper around the same read-only code path
+    ``scan_business_rules`` already uses — project-pinned, the project's GitHub credential,
+    never a token in a URL."""
+    return rule_scan.repo_reader(connection, settings, project_id, actor)
+
+
+def _clause_node(connection: Connection, project_id: str, node_id: str) -> Optional[dict[str, Any]]:
+    if not node_id:
+        return None
+    row = connection.execute(
+        text("SELECT kind, name, body, attrs FROM kg_nodes WHERE project_id = :p AND id = :i "
+             "AND (valid_to IS NULL OR valid_to > now())"),
+        {"p": project_id, "i": node_id},
+    ).mappings().first()
+    return dict(row) if row else None
+
+
+def _clause_text_and_citation(connection: Connection, project_id: str, subject_id: str) -> tuple[str, str]:
+    """The clause's text/citation via its `compliance_case` wrapper (`attrs.clause_id`), or
+    directly when `subject_id` already names a `clause` node. Best-effort context, not a
+    blocking requirement — callers proceed on code evidence alone when this comes back empty."""
+    node = _clause_node(connection, project_id, subject_id)
+    if not node:
+        return "", ""
+    if node["kind"] == "clause":
+        attrs = node.get("attrs") or {}
+        return str(node.get("body") or ""), str(attrs.get("citation") or "")
+    if node["kind"] == "compliance_case":
+        clause_id = str((node.get("attrs") or {}).get("clause_id") or "")
+        clause = _clause_node(connection, project_id, clause_id) if clause_id else None
+        if clause:
+            attrs = clause.get("attrs") or {}
+            return str(clause.get("body") or ""), str(attrs.get("citation") or "")
+    return "", ""
+
+
+def _connected_symbols(connection: Connection, project_id: str, node_id: str,
+                        node_kind: str) -> list[dict[str, Any]]:
+    """Symbol nodes connected to the cited node: itself when it already is a `symbol`, else
+    every `symbol`-kind neighbor an edge connects it to (e.g. a `rule`'s `evidenced_by`
+    citations). Capped so one over-connected citation can't blow up the prompt."""
+    if not node_id:
+        return []
+    if node_kind == "symbol":
+        row = connection.execute(
+            text("SELECT id, name, attrs FROM kg_nodes WHERE project_id = :p AND id = :i "
+                 "AND (valid_to IS NULL OR valid_to > now())"),
+            {"p": project_id, "i": node_id},
+        ).mappings().first()
+        return [dict(row)] if row else []
+    rows = connection.execute(
+        text("SELECT n.id, n.name, n.attrs FROM kg_edges e "
+             "JOIN kg_nodes n ON n.id = e.dst_id "
+             "WHERE e.project_id = :p AND e.src_id = :i AND e.valid_to IS NULL "
+             "AND n.kind = 'symbol' AND (n.valid_to IS NULL OR n.valid_to > now()) "
+             "ORDER BY n.name LIMIT :lim"),
+        {"p": project_id, "i": node_id, "lim": _MAX_CITED_SYMBOLS},
+    ).mappings().all()
+    return [dict(row) for row in rows]
+
+
+def _read_symbol_source(reader: rule_scan.Reader, symbol: Mapping[str, Any]) -> dict[str, Any]:
+    """Reads `symbol`'s declared line range plus a few lines of context, bounded in size.
+    `{"error": ...}` when unreadable — no path, or the reader itself errors."""
+    attrs = symbol.get("attrs") or {}
+    path = str(attrs.get("path") or "").strip()
+    if not path:
+        return {"error": f"symbol {symbol.get('id')} has no path to read"}
+    try:
+        line = int(attrs.get("line") or 1)
+        end_line = int(attrs.get("end_line") or line)
+    except (TypeError, ValueError):
+        return {"error": f"symbol {symbol.get('id')} has no readable line range"}
+    start = max(1, line - _CODE_CONTEXT_LINES)
+    end = end_line + _CODE_CONTEXT_LINES
+    try:
+        out = reader(path, start, end, str(attrs.get("repo") or ""))
+    except Exception as error:  # noqa: BLE001 — one unreadable symbol is said, not fatal
+        return {"error": f"{type(error).__name__}: {error}"[:300]}
+    if not isinstance(out, Mapping) or out.get("error"):
+        return {"error": str((out or {}).get("error") or "the file could not be read")[:300]}
+    content = str(out.get("content") or "")[:_CODE_MAX_CHARS]
+    return {"path": path, "start": start, "end": end, "content": content}
+
+
 def run_lane_confirmation(
     connection: Connection, settings: Any, project_id: str, step: Mapping[str, Any],
     context: Mapping[str, Any], inputs: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Confirm or rule out the family's finding by reading the cited symbol/file. Writes
-    AgentDecision(Confirmed) when a candidate was cited, AgentDecision(RuledOut) with a stated
-    reason when nothing could be read — never a silent skip."""
+    """Confirm, rule out, or (when nothing could be read) say so — against the clause's real
+    text, the Compliance Analyst's assessment, and the current source lines of every code
+    symbol connected to the citation (KG P7c). `cannot_verify` is forced by the code itself
+    whenever there is no citation, no connected symbol, or the source could not be read; the
+    agent is never asked to judge on name/body text alone, and only a successful code read may
+    reach a `ruled_out` verdict."""
     run_id = _run_id(step, context)
     step_id = str(step.get("id") or "lane_confirmation")
     steps = (context or {}).get("steps") or {}
-    citation = str((steps.get("compliance_assessment") or {}).get("citation") or "")
+    assessment = steps.get("compliance_assessment") or {}
+    citation = str(assessment.get("citation") or "")
+    subject_id = str(assessment.get("subject_id") or "")
     actor_ref = "banking_regulatory_pipeline:lane_confirmation"
+
     node = STORE.get_node(connection, project_id=project_id, node_id=citation) if citation else None
-    confirmed = False
+    verdict = "cannot_verify"
     reason = "no citation to read as code the subject is connected to."
+
     if node and node["kind"] in {"rule", "symbol"}:
-        situation = f"CITED NODE: {_node_summary(connection, project_id, citation)}"
-        agent, _engine = _role_agent(connection, settings, project_id)
-        judged = _ask_role(agent, _role_prompt("lane_agent.md", situation))
-        if judged is not None:
-            confirmed = bool(judged.get("confirmed"))
-            reason = " ".join(str(judged.get("reason") or "").split())[:1000] or reason
+        symbols = _connected_symbols(connection, project_id, citation, node["kind"])
+        if not symbols:
+            reason = f"{citation} has no connected code symbol to read."
         else:
-            reason = "the Lane Agent answered nothing readable for this citation"
-    decision_type = "Confirmed" if confirmed else "RuledOut"
-    statement = (
-        f"Confirmed: clause and code both point at {citation}." if confirmed else
-        f"Ruled out: {citation or 'no citation'} — {reason}")
+            reader = _repo_reader(connection, settings, project_id, actor_ref)
+            read_symbols, read_errors = [], []
+            for symbol in symbols:
+                read = _read_symbol_source(reader, symbol)
+                if read.get("error"):
+                    read_errors.append(f"{symbol.get('name')}: {read['error']}")
+                else:
+                    read_symbols.append((symbol, read))
+            if not read_symbols:
+                reason = ("the source could not be read for any connected symbol: "
+                          + "; ".join(read_errors))[:1000]
+            else:
+                clause_text, clause_citation = _clause_text_and_citation(
+                    connection, project_id, subject_id)
+                source_text = "\n\n".join(
+                    f"{symbol.get('name')} ({read['path']}, lines {read['start']}-{read['end']}):\n"
+                    f"{read['content']}" for symbol, read in read_symbols)
+                unread_note = ("\n\nCOULD NOT READ: " + "; ".join(read_errors)) if read_errors else ""
+                situation = (
+                    f"CLAUSE: {clause_text or '(not available)'}"
+                    f"{f' — {clause_citation}' if clause_citation else ''}\n\n"
+                    f"ASSESSMENT: {assessment.get('note') or '(none)'}\n\n"
+                    f"CURRENT SOURCE:\n{source_text}{unread_note}")
+                agent, _engine = _role_agent(connection, settings, project_id)
+                judged = _ask_role(agent, _role_prompt("lane_agent.md", situation))
+                answered = str((judged or {}).get("verdict") or "").strip().lower()
+                if judged is None:
+                    reason = "the Lane Agent answered nothing readable for this citation"
+                elif answered not in _VERDICTS:
+                    reason = f"the Lane Agent's answer did not name a recognised verdict: {answered or '(none)'}"
+                else:
+                    verdict = answered
+                    reason = (" ".join(str(judged.get("reason") or "").split())[:1000]
+                              or reason)
+                if read_errors and verdict != "cannot_verify":
+                    reason = f"{reason} (could not read: {'; '.join(read_errors)})"[:1000]
+
+    confirmed = verdict == "confirmed"
+    decision_type = {"confirmed": "Confirmed", "ruled_out": "RuledOut",
+                     "cannot_verify": "CannotVerify"}[verdict]
+    statement = {
+        "confirmed": f"Confirmed: clause and code both point at {citation}.",
+        "ruled_out": f"Ruled out: {citation or 'no citation'} — {reason}",
+        "cannot_verify": f"Cannot verify: {citation or 'no citation'} — {reason}",
+    }[verdict]
     context_graph.write_agent_decision(
         connection, project_id, step_id=step_id, run_id=run_id, decision_type=decision_type,
         statement=statement, policy_version="", workflow_version="",
         agent_fingerprint="deterministic", actor_ref=actor_ref)
     return {"capability": "lane_confirmation", "tool": None, "status": "succeeded",
-            "confirmed": confirmed, "cited_node_id": citation or None, "note": statement}
+            "verdict": verdict, "confirmed": confirmed, "cited_node_id": citation or None,
+            "note": statement}
 
 
 def run_remediation_package(
