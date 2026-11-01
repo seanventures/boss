@@ -139,11 +139,18 @@ def run_step(connection: Connection, ctx: Any, *, project_id: str, step: dict[st
         connection, project_id, run_id=run_id, step_id=step_id, contract=contract)
         if contract is not None else {})
 
+    # WHAT IT SAID AND WHO IT IS, in words, for the run page (it read "Ext e9286d…" and showed
+    # nothing of the review, 2026-11-01): the statement it wrote, read back from the graph.
+    said = next((str(v.get("statement")) for v in (produced or {}).values()
+                 if isinstance(v, dict) and v.get("statement")), "")
+    agent_row = external_agents.get(connection, project_id, agent_id) or {}
     return {
         "kind": "external_agent",
         "produced": produced,
+        **({"note": said} if said else {}),
         "ran_as": {"agent": agent_id, "how": "external_agent",
-                   "why": "named on the step's captain"},
+                   "why": "named on the step's captain",
+                   **({"name": agent_row["display_name"]} if agent_row.get("display_name") else {})},
     }
 
 

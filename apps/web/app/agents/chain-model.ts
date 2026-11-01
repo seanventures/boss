@@ -379,7 +379,10 @@ export function laneAgentOf(output: unknown, act: Act | null, viewer: string): L
       : !!viewer && ran.agent === viewer ? "you" : "person";
     return { roleKey: null, variant, how, edgeLabel: "", state: "idle", considered: 0 };
   }
-  return { roleKey: ran.agent, variant: "agent", how, edgeLabel: "", state: "idle", considered: 0 };
+  // A bank's own agent carries its display name (its key is `ext_…`, not a name).
+  const named = (ran as { name?: unknown }).name;
+  return { roleKey: ran.agent, variant: "agent", how, edgeLabel: "", state: "idle", considered: 0,
+           ...(typeof named === "string" && named ? { name: named } : {}) };
 }
 
 /**

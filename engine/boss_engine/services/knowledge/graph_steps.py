@@ -52,6 +52,26 @@ DESCRIPTIONS: dict[str, dict[str, str]] = {
 _EXTENDED_HOPS = 5
 
 
+def _named_summary(connection: Connection, project_id: str, node_ids: Sequence[str],
+                   *, name_kinds: Sequence[str] = (), limit: int = 3) -> str:
+    """What a set of nodes IS, in words for the run page: counts by kind, and the names of the
+    kinds a person cares about (a step's output read "Details · 3" and nothing else)."""
+    if not node_ids:
+        return "nothing"
+    rows = connection.execute(text(
+        "SELECT kind, name FROM kg_nodes WHERE project_id = :p AND id = ANY(:ids)"),
+        {"p": project_id, "ids": list(node_ids)}).mappings().all()
+    counts: dict[str, int] = {}
+    named: list[str] = []
+    for row in rows:
+        counts[row["kind"]] = counts.get(row["kind"], 0) + 1
+        if row["kind"] in name_kinds and row["name"] and len(named) < limit:
+            named.append(f"\u201c{row['name']}\u201d")
+    parts = [f"{n} {k.replace('_', ' ')}{'' if n == 1 else 's'}"
+             for k, n in sorted(counts.items(), key=lambda kv: -kv[1])[:5]]
+    return ", ".join(parts) + (f" — including {', '.join(named)}" if named else "")
+
+
 def run_context_enrichment(
     connection: Connection, *, project_id: str, run_id: str, step_id: str, subject_id: str,
     max_hops: int, expected_kinds: Sequence[str] = (),
@@ -95,11 +115,16 @@ def run_context_enrichment(
             statement=gap_statement, actor_ref=actor_ref)
         produced["coverage_gap"] = {"statement": gap_statement, "node_id": gap["id"]}
 
+    collected = [row["node_id"] for row in within]
+    note = (f"Gathered what the graph connects to the clause within {max_hops} hops, with no "
+            f"model: {_named_summary(connection, project_id, collected, name_kinds=('rule', 'owner', 'system'))}."
+            + (f" Missing: {', '.join(missing)} (recorded as a coverage gap)." if missing else ""))
     return {
         "cost_usd_micros": 0,
-        "collected": [row["node_id"] for row in within],
+        "collected": collected,
         "missing_kinds": missing,
         "produced": produced,
+        "note": note,
     }
 
 
@@ -150,8 +175,11 @@ def run_historical_pattern(
         produced["incident"] = {"statement": f"{len(from_itsm)} incident(s) from ITSM.",
                                 "node_ids": list(from_itsm)}
 
+    note = (f"Asked the ticket system and the graph for history on this subject. Found "
+            f"{_named_summary(connection, project_id, list(matches), name_kinds=('incident', 'precedent'))}."
+            if matches else "Asked the ticket system and the graph for history: nothing related found.")
     return {"cost_usd_micros": 0, "matched": list(matches.keys()), "calls": calls,
-            "produced": produced}
+            "produced": produced, "note": note}
 
 
 def _itsm_matches(connection: Connection, *, project_id: str, subject_id: str, actor_ref: str,

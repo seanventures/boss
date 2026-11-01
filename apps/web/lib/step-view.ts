@@ -159,6 +159,13 @@ function agentOf(step: SpecStep, type: StepView["type"], palette: Palette): Step
              tip: "Named by this workflow." };
   }
   if (isGateStep(step, palette)) return { kind: "person", label: "A person", tip: "Waits for a person to answer." };
+  // A STEP WHOSE WORK IS A ROLE AGENT'S JUDGEMENT (the orchestrator, the analyst) names that
+  // agent even unnamed on the step: it read "You" on the canvas (2026-11-01).
+  if (cap?.role_agent) {
+    const agent = palette.agents.find((a) => a.role_key === cap.role_agent);
+    return { kind: "named", role_key: cap.role_agent, label: agent?.name || cap.role_agent,
+             tip: "The agent whose judgement this step is." };
+  }
   if (type === "agent" || type === "custom") {
     const skills = neededSkills(step, palette);
     const mcp = neededMcp(step, palette);
