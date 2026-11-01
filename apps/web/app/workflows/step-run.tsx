@@ -53,14 +53,23 @@ export type StepActor = { roleKey: string | null; variant: AvatarVariant; ran: b
 
 /** The one answer to "who does this step": who RAN it, else who the workflow assigns it to. */
 export function stepActor(ran: LaneAgent | undefined, planned: StepView["agent"] | undefined): StepActor | null {
+  // A BANK'S OWN AGENT ran the step: its record says `ext_…`, which read "Ext e9286d…" on the
+  // run page (2026-11-01). The step's plan already knows its name.
+  const outsideName = planned && planned.kind === "named" && (planned.role_key ?? "").startsWith("outside:")
+    ? planned.label : undefined;
   if (ran) {
+    const name = ran.name ?? ((ran.roleKey ?? "").startsWith("ext_") ? outsideName : undefined);
     return { roleKey: ran.roleKey, variant: ran.variant, ran: true,
-             ...(ran.personId ? { personId: ran.personId } : {}), ...(ran.name ? { name: ran.name } : {}) };
+             ...(ran.personId ? { personId: ran.personId } : {}), ...(name ? { name } : {}) };
   }
   if (!planned) return null;
-  if (planned.kind === "named") return { roleKey: planned.role_key ?? null, variant: "agent", ran: false };
+  if (planned.kind === "named") {
+    return { roleKey: planned.role_key ?? null, variant: "agent", ran: false, ...(outsideName ? { name: outsideName } : {}) };
+  }
   if (planned.kind === "auto") {
+    // BOSS's own deterministic code says so ("BOSS · no model"), never "Auto".
     return planned.role_key ? { roleKey: planned.role_key, variant: "agent", ran: false }
+      : planned.label !== "Auto" ? { roleKey: null, variant: "boss", ran: false, name: planned.label }
       : { roleKey: null, variant: "auto", ran: false };
   }
   return { roleKey: null, variant: planned.kind === "person" ? "person" : "you", ran: false };
@@ -161,7 +170,9 @@ export function stepOutput(output: Record<string, unknown> | null | undefined,
   };
   const finished = FINISHED.has(String(opts.status ?? ""));
   if (!opts.noteShownAbove && typeof out.note === "string" && out.note.trim()) {
-    add(facts, "Note", sentenceOf(out.note.trim()), out.note.trim());
+    // The first sentence, WHOLE: a finding's verdict sentence wraps (.wf-stepout-prose) instead of
+    // being cut at 88 characters; the rest is the tooltip.
+    add(facts, "Note", out.note.trim().split(/(?<=[.!?])\s/)[0] ?? out.note.trim(), out.note.trim());
   }
   for (const [key, label] of HUMAN) add(facts, label, out[key]);
   // A preview records its branch inside itself.

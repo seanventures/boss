@@ -196,3 +196,12 @@ describe("a deterministic step says who did it", () => {
     expect(_sv({ id: "compliance_closure", kind: "capability", binding: { capability: "compliance_closure" } } as never, palette).agent.label).toBe("BOSS · no model");
   });
 });
+
+import { stepActor as _sa, actorName as _an } from "../app/workflows/step-run";
+describe("a step's actor is named, never a key", () => {
+  it("a bank's own agent by its name, BOSS's own steps as BOSS", () => {
+    const outside = { kind: "named", role_key: "outside:ext_abc", label: "NorthPeak Compliance Agent", tip: "" } as never;
+    expect(_an(_sa({ roleKey: "ext_abc", variant: "agent" } as never, outside)!)).toBe("NorthPeak Compliance Agent");
+    expect(_an(_sa(undefined, { kind: "auto", label: "BOSS · no model", tip: "" } as never)!)).toBe("BOSS · no model");
+  });
+});

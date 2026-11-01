@@ -37,6 +37,12 @@ export type FaceName = { name: string; role: string; callsign?: string; tagline?
  */
 export function nameOf(roleKey: string | null, variant: AvatarVariant = "agent", personId?: string,
                        personName?: string): FaceName {
+  // A NAME THE STEP ALREADY KNOWS wins over a guess from the key: BOSS's own no-model steps
+  // ("BOSS · no model") and a bank's own agent (its `ext_…` key is not a name).
+  if (personName && (variant === "boss" || variant === "auto"
+      || (variant === "agent" && (!roleKey || /^(ext_|outside:)/.test(roleKey))))) {
+    return { name: personName, role: personName };
+  }
   if (!roleKey || variant !== "agent") {
     if (variant === "you") return { name: "You", role: "You" };
     if (variant === "boss") return { name: "BOSS", role: "BOSS" };

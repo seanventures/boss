@@ -3384,7 +3384,10 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
             <StepIcon capability={step.capability ?? undefined} size={15} />
           </span>
         ) : null}
-        <h4>{capability?.label ?? step.capability ?? step.step_id}</h4>
+        {/* A step's NAME, never its key: a deterministic or outside-agent step has no capability
+            label and read "historical_pattern" / "bank_review" (2026-11-01). */}
+        <h4>{capability?.label ?? (step as { title?: string }).title
+          ?? String(step.capability ?? step.step_id).replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase())}</h4>
         {/* WHAT THIS STEP IS, ON A DOT. This was a permanent line under every step header —
             "The whole inner pipeline: implement, adversarial review, security check, run the
             tests, open a gated pull request. Succeeds when a PR exists." Correct, and read
