@@ -15,7 +15,7 @@ import pytest
 from boss_engine.services.knowledge import view
 
 
-def test_parse_layers_accepts_only_the_three_chips():
+def test_parse_layers_accepts_only_the_five_chips():
     assert view.parse_layers(None) == view.DEFAULT_LAYERS
     assert view.parse_layers("") == view.DEFAULT_LAYERS
     assert view.parse_layers("   ") == view.DEFAULT_LAYERS
@@ -25,10 +25,42 @@ def test_parse_layers_accepts_only_the_three_chips():
     with pytest.raises(ValueError) as unknown:
         view.parse_layers("code,secrets")
     assert "unknown layer secrets" in str(unknown.value)
-    # `domain` is a real internal product layer but a reserved, non-selectable chip: it is
-    # refused like any other unknown name, never silently accepted.
-    with pytest.raises(ValueError):
-        view.parse_layers("domain")
+    # The two graphs (design §4.2, §4.7.3): Domain and Context are chips of their own, and All
+    # is every chip.
+    assert view.parse_layers("domain,context") == frozenset({"domain", "context"})
+    assert view.DEFAULT_LAYERS == frozenset({"code", "rules", "learning", "domain", "context"})
+
+
+def test_the_context_and_domain_kinds_come_from_the_packs():
+    """Core trace kinds are Context; a pack's kinds sit where the pack says, with its words."""
+    from boss_engine.services.knowledge import view_context
+
+    assert view.product_layer("agent_decision") == "context"
+    assert view.product_layer("coverage_gap") == "context"
+    assert view.product_layer("compliance_case") == "context"      # banking-regulatory.yaml
+    assert view.product_layer("remediation_package") == "context"
+    assert view.product_layer("clause") == "domain"
+    assert view.product_layer("regulatory_report") == "domain"
+    assert "compliance_case" in view.kinds_of(["context"])
+    assert "document" in view.kinds_of(["domain"]) and "rule" not in view.kinds_of(["domain"])
+    meta = view_context.kind_meta("compliance_case")
+    assert meta["label"] == "Compliance case" and meta["color"].startswith("#")
+    # Every pack kind the legend names says its layer, label and plural.
+    for kind, m in view_context.pack_kinds().items():
+        assert m["label"] and m["plural"], kind
+
+
+def test_a_decision_is_said_in_words_never_by_its_keys():
+    from boss_engine.services.knowledge import view_context
+
+    n = view.node_payload({"id": "d1", "kind": "agent_decision", "name": "HistoricalPatternMatched (historical_pattern)",
+                           "node_key": "context:agent_decision:wfr_1:historical_pattern:HistoricalPatternMatched",
+                           "attrs": {"decision_type": "HistoricalPatternMatched", "step_id": "historical_pattern"}})
+    assert n["layer"] == "context"
+    assert n["label"] == "Historical pattern matched" and n["sub"] == "Historical pattern step"
+    assert view_context.words("RuledOut") == "Ruled out"
+    assert view_context.short_fingerprint("sha256:0123456789abcdef0123") == "0123456789ab"
+    assert view.edge_label("decided", 3, rollup=False) is None
 
 
 def test_kinds_of_unions_layers_and_drops_what_is_withheld():

@@ -29,13 +29,13 @@ import type {
   KgLiveResponse, KgNeighbourhoodResponse, KgNodeDetailResponse, KgOverviewResponse, KgSearchHit, KgSearchResponse,
   KgTreeTab, KgViewEdge, KgViewNode,
 } from "../../lib/kg-view-types";
-import { productLayerOf } from "../../lib/kg-view-types";
+import { kindStyleVars, productLayerOf } from "../../lib/kg-view-types";
 import { GraphCanvas, GraphLegend, GraphTable, READABLE, edgeKey, frameExtent, framePadding, visibleWidth, type CanvasEdge, type CanvasHandle, type CanvasNode } from "./graph-canvas";
 import { CanvasLoading, KgBuilt, KgEmptyLayer, KgError, KgIndexing, KgReadError, KgTruncation, StageCard } from "./kg-states";
 import { NodePanel, ScanForRules, type BubbleSummary } from "./node-panel";
 import { ProjectTree, type TreePick } from "./project-tree";
 
-type Layer = "code" | "rules" | "learning";
+type Layer = "code" | "rules" | "learning" | "domain" | "context";
 type View =
   | { mode: "overview"; area: string | null; page: number }
   | { mode: "focus"; node: string; depth: 1 | 2 | 3; limit: number };
@@ -49,8 +49,14 @@ export const FOCUS_MORE = FOCUS_CEILING;
 /** sessionStorage: whether the details drawer was left open. */
 export const PANEL_KEY = "boss.kg.panel";
 
-const LAYER_CHIPS: Array<{ key: Layer; label: string }> = [
-  { key: "code", label: "Code" }, { key: "rules", label: "Rules" }, { key: "learning", label: "Learning" },
+/** The two graphs on one canvas (design §4.2, §4.7.3): the Knowledge Graph's Code, Rules,
+ *  Learning and Domain, and the Context Graph — what agents did and decided. */
+const LAYER_CHIPS: Array<{ key: Layer; label: string; tip: string }> = [
+  { key: "code", label: "Code", tip: "Code, indexed from the repository" },
+  { key: "rules", label: "Rules", tip: "Business rules agents proposed and people approved" },
+  { key: "learning", label: "Learning", tip: "What agents learned while they worked" },
+  { key: "domain", label: "Domain", tip: "Regulations, clauses and documents: the reference world your ontology pack adds" },
+  { key: "context", label: "Context", tip: "The Context Graph: cases, the agents' decisions, precedents and remediation — what agents did and decided" },
 ];
 
 export type GraphViewProps = {
@@ -128,7 +134,7 @@ export function layFocus(center: string, read: Array<KgViewNode & { hop: number 
   // the clusters that was empty, so its names fit where they sit.
   // A learning at the centre (tester, KG video): its few neighbours are joined by the loop's
   // words ("produced", "reused"), which need a line long enough to sit on beside two circles.
-  const learningCentre = read.some((n) => n.id === center && productLayerOf(n.kind) === "learning");
+  const learningCentre = read.some((n) => n.id === center && (productLayerOf(n.kind) === "learning" || n.layer === "context"));
   const first = read.some((n) => n.hop >= 2) ? 120 : learningCentre ? 150 : 90;
   const one = (cap1: number, clusters: number) => {
     const grouped = groupFocus(center, read, inView, { 1: cap1 }, { clusterFrom: 2, clusters });
@@ -182,7 +188,7 @@ export function ringSlots(laid: { rings: number[]; aspect: number }, i: number, 
 }
 
 function treeTabFor(layer: string): KgTreeTab {
-  return layer === "rules" ? "rules" : layer === "learning" ? "learning" : "project";
+  return layer === "rules" || layer === "learning" || layer === "domain" || layer === "context" ? layer : "project";
 }
 
 /** The work area fits the viewport: from its top to the window's bottom (P1-11), never shorter than
@@ -687,7 +693,7 @@ export function GraphView({ projectId, actor, orgId, repos, onReposChanged, rule
     if (view.mode === "overview" && n) {
       if (id === MORE_ID) { setSelected(null); go({ mode: "overview", area, page: (picture?.page ?? 0) + 1 >= (picture?.pages ?? 1) ? 0 : (picture?.page ?? 0) + 1 }); return; }
       if (n.kind === "area") { select(id, n); go({ mode: "overview", area: id, page: 0 }); return; }
-      if (n.kind === "layer") { setTreeTab(id === "layer:rules" ? "rules" : "learning"); setTreeOpen(true); select(id, n); return; }
+      if (n.kind === "layer") { setTreeTab(treeTabFor(id.slice("layer:".length))); setTreeOpen(true); select(id, n); return; }
     }
     focusOn(id, n);
   };
@@ -716,7 +722,7 @@ export function GraphView({ projectId, actor, orgId, repos, onReposChanged, rule
     setChips((s) => {
       const n = new Set(s);
       if (n.has(k)) n.delete(k); else n.add(k);
-      return n.size === 3 ? new Set() : n;
+      return n.size === LAYER_CHIPS.length ? new Set() : n;
     });
   };
   const rebuild = async () => {
@@ -731,8 +737,8 @@ export function GraphView({ projectId, actor, orgId, repos, onReposChanged, rule
   const indexingNow = (repos ?? []).some((r) => r.status === "queued" || r.status === "running");
   const o = overview.data;
   const focusCenter = hood.data?.center;
-  const onlyLayer: "rules" | "learning" | null = chips.size === 1 && !chips.has("code") ? [...chips][0] as "rules" | "learning" : null;
-  const emptyLayer: "rules" | "learning" | null = (() => {
+  const onlyLayer: Exclude<Layer, "code"> | null = chips.size === 1 && !chips.has("code") ? [...chips][0] as Exclude<Layer, "code"> : null;
+  const emptyLayer: Exclude<Layer, "code"> | null = (() => {
     if (!onlyLayer) return null;
     if (view.mode === "focus") return hood.data && hood.data.nodes.length <= 1 ? onlyLayer : null;
     if (!o) return null;
@@ -758,6 +764,16 @@ export function GraphView({ projectId, actor, orgId, repos, onReposChanged, rule
     );
   } else if (busy) {
     stage = <CanvasLoading nodes={(repos ?? []).reduce((n, r) => n + (r.graph?.nodes ?? 0), 0) || null} />;
+  } else if (view.mode === "overview" && o && !o.areas.length && o.map && o.map.built === false && (!chips.size || chips.has("code"))) {
+    // Code in the graph, and its map could not be built (RCA 2026-10-31): said, with Rebuild —
+    // never "No code yet" over 51k code nodes.
+    stage = (
+      <StageCard testId="kg-map-error" eyebrow="Graph" tone="amber" title="The map of this code could not be built"
+                 body={<p className="kg-map-err">BOSS has {o.totals.nodes.toLocaleString("en-US")} code nodes for this project but could not group them into areas: {o.map.error ?? "the build failed"}. Rebuild indexes the code again and builds the map.</p>}>
+        <button type="button" className="ag-btn ag-btn-primary" data-testid="kg-map-rebuild" disabled={rebuilding || archived || !indexGate.allowed}
+                onClick={() => void rebuild()}>{rebuilding ? "Rebuilding…" : "Rebuild"}</button>
+      </StageCard>
+    );
   } else if (view.mode === "overview" && o && !o.areas.length && !o.layers.some((l) => Object.values(l.counts ?? {}).some(Boolean))) {
     stage = <KgIndexing repos={repos ?? []} onIndex={() => void rebuild()} busy={rebuilding} />;
   } else if (emptyLayer) {
@@ -818,8 +834,10 @@ export function GraphView({ projectId, actor, orgId, repos, onReposChanged, rule
   );
 
   const folded = picture?.folded.length ?? 0;
+  // The packs' colours as custom properties on the graph: the canvas reads them like its own.
+  const kindVars = kindStyleVars().vars as React.CSSProperties;
   return (
-    <div className="kg-graph" data-testid="kg-graph" data-mode={view.mode} data-full={full || undefined}
+    <div className="kg-graph" data-testid="kg-graph" data-mode={view.mode} data-full={full || undefined} style={kindVars}
          role={full ? "dialog" : undefined} aria-modal={full || undefined} aria-label={full ? "Knowledge graph, full screen" : undefined}>
       <div className="kg-toolbar" role="toolbar" aria-label="Graph controls">
         <button type="button" className="ag-btn kg-tree-toggle" aria-expanded={treeOpen || !treeCollapsed}
@@ -897,10 +915,10 @@ export function GraphView({ projectId, actor, orgId, repos, onReposChanged, rule
         <div className="kg-chips" role="group" aria-label="Layers">
           <button type="button" className="kg-layer-chip" aria-pressed={chips.size === 0} data-testid="kg-chip-all" onClick={() => toggleChip("all")}>All</button>
           {LAYER_CHIPS.map((c) => {
-            const locked = c.key !== "code" && rulesLocked;
+            const locked = (c.key === "rules" || c.key === "learning") && rulesLocked;
             return (
               <button key={c.key} type="button" className="kg-layer-chip" aria-pressed={chips.has(c.key)} data-layer={c.key}
-                      data-testid={`kg-chip-${c.key}`} aria-disabled={locked ? true : undefined} title={locked ? rulesLocked : `Show ${c.label}`}
+                      data-testid={`kg-chip-${c.key}`} aria-disabled={locked ? true : undefined} title={locked ? rulesLocked : c.tip}
                       onClick={() => { if (!locked) toggleChip(c.key); }}>
                 <span className="kg-dot" data-layer={c.key} aria-hidden />{c.label}{locked ? <span className="ag-sr"> (locked: {rulesLocked})</span> : null}
               </button>

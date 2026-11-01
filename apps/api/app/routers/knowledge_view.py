@@ -21,7 +21,7 @@ from boss_engine.config import get_settings
 from boss_engine.db import begin, get_engine
 from boss_engine.identity import P, Scope, permit
 from boss_engine.services.knowledge.learning_conversations import mend_names
-from boss_engine.services.knowledge import view
+from boss_engine.services.knowledge import view, view_context
 from boss_engine.services.knowledge.service import READ
 
 router = APIRouter(prefix="/v1/knowledge/view", tags=["knowledge"])
@@ -93,7 +93,9 @@ def _read(request: Request, project_id: str, actor: str, read):
         with begin(_engine) as connection:
             _actor(connection, project_id, actor)
             # A conversation still named by its thread id is named on read (mend_names).
-            return mend_names(connection, read(connection, _withheld(request, connection, project_id, actor)))
+            # A label or statement still carrying a node's id says its name (no raw ids).
+            return view_context.mend_ids(connection, project_id, mend_names(
+                connection, read(connection, _withheld(request, connection, project_id, actor))))
     except Exception as error:  # noqa: BLE001 — mapped to HTTP
         raise _http(error) from error
 

@@ -21,7 +21,7 @@ import type {
   KgRuleActionResponse, KgRuleCategory, KgRuleScope, KgRulesResponse, KgRuleStatus, KgSearchResponse,
   KgTreeChildrenResponse, KgTreeTab, KgRunProofResponse,
 } from "./kg-view-types";
-import { KG_VIEW_BASE } from "./kg-view-types";
+import { KG_VIEW_BASE, registerKinds } from "./kg-view-types";
 
 /** Rule review (§3, §5.7). The operator's decision: owners and admins only — exactly the holders
  *  of `knowledge:review` (step-up, never delegable: no agent run can hold it). */
@@ -117,7 +117,11 @@ export async function kgRead<T>(path: string, params: Record<string, string | nu
       const r = await fetch(`${API_URL}${path}?${qs(params)}`, { cache: "no-store", signal });
       status = r.status;
       try { body = await r.json(); } catch { body = null; }
-      if (r.ok) return { ok: true, data: localizeNames(body) as T };
+      if (r.ok) {
+        // The overview's Domain and Context kinds (the ontology packs' words and colours).
+        if (body && typeof body === "object" && "kinds" in (body as object)) registerKinds((body as { kinds?: never }).kinds);
+        return { ok: true, data: localizeNames(body) as T };
+      }
       if (isMissingRoute(r.status, body)) return { ok: false, status: r.status, error: UNAVAILABLE, unavailable: true };
     } catch (e) {
       if ((e as { name?: string })?.name === "AbortError") return { ok: false, status: -1, error: "cancelled" };
@@ -391,9 +395,9 @@ export function codeHref(repo: string | null | undefined, path: string | null | 
   return `${repoUrl(repo)}/blob/${encodeURIComponent(ref)}/${clean}${anchor}`;
 }
 
-/** The layers param for a chip set: All = every layer. */
+/** The layers param for a chip set: All = every layer, both graphs. */
 export function layersParam(chips: ReadonlySet<string>): string {
-  return chips.size ? [...chips].join(",") : "code,rules,learning";
+  return chips.size ? [...chips].join(",") : "code,rules,learning,domain,context";
 }
 
 /** A time in the viewer's own zone, labelled with it: "Oct 24, 09:40 PDT" (tester round 1 P1-12:

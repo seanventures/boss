@@ -39,13 +39,15 @@ kinds:
     attrs: [name, team, pii_policy]
   # KG P5b: the two additive kinds the banking_regulatory_compliance instance needs and the
   # pack did not yet grant (Q2's confirmed gap) — same shape as clause/owner, no collision.
+  # Both are what the pipeline's agents wrote (design §4.2): the Context Graph, not the reference
+  # Knowledge Graph — the canvas's Context chip shows them with the agents' decisions.
   - id: compliance_case
-    layer: domain
+    layer: context
     label: Compliance case
     color: "#ff9f4a"
     attrs: [clause_id, status, opened_at]
   - id: remediation_package
-    layer: domain
+    layer: context
     label: Remediation package
     color: "#ff7a4a"
     attrs: [change_brief, test_ref, owner_team, approver_role]

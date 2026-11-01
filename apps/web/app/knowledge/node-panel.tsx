@@ -16,7 +16,7 @@ import { openAgent } from "../../lib/agent-world";
 import { RUN_TITLE_MAX, agentName, approvalWords, eventWords, isWordsAttr, provenanceLines, stepWords, storyWords, useWords, type ProvLine } from "../../lib/kg-provenance";
 import { wordCut } from "../../lib/word-cut";
 import { scanReader, sentenceStart } from "../../lib/kg-scan";
-import { isLearnedKind, type KgConnectionGroup, type KgNodeDetailResponse, type KgProvenance, type KgRunComparison, type KgRunProof, type KgViewEdge, type KgViewNode } from "../../lib/kg-view-types";
+import { isLearnedKind, type KgConnectionGroup, type KgContextCard, type KgNodeDetailResponse, type KgProvenance, type KgRunComparison, type KgRunProof, type KgViewEdge, type KgViewNode } from "../../lib/kg-view-types";
 import { LEARNING_EDGES, kindName, kindToken, learningEdgeStyle, learningHow } from "../../lib/kg-layout";
 import {
   FACT_MANAGE, RULE_REVIEW, SCAN_START, approveRule, codeHref, forgetFact, getBlastRadius, getNode, getProof, getWhy,
@@ -35,7 +35,7 @@ export type BubbleSummary = {
   in: Array<{ edge: KgViewEdge; other: KgViewNode }>;
 };
 
-const LAYER_NAME: Record<string, string> = { code: "Code", rules: "Rules", learning: "Learning", domain: "Domain" };
+const LAYER_NAME: Record<string, string> = { code: "Code", rules: "Rules", learning: "Learning", domain: "Domain", context: "Context" };
 
 /** One formatter for the area: the viewer's own zone, labelled (lib/kg-view.ts kgWhen). */
 const when = kgWhen;
@@ -276,6 +276,74 @@ function BubbleBody({ b, onFocusNode }: { b: BubbleSummary; onFocusNode: (id: st
 
 /** A time attribute (`last_seen_at`, any ISO timestamp): said by the area's one formatter, in the
  *  viewer's zone (tester round 5: "last seen at 2026-10-25T07:20:40Z" beside "00:13 PDT"). */
+/** "Assessment · Compliance assessment step · Nov 01, 05:27 PDT". */
+export function contextFacts(c: KgContextCard): Array<{ k: string; v: string; mono?: boolean; title?: string }> {
+  const out: Array<{ k: string; v: string; mono?: boolean; title?: string }> = [];
+  if (c.step) out.push({ k: "Step", v: c.step });
+  if (c.run) out.push({ k: "Run", v: c.run.label });
+  if (c.agent) {
+    const who = c.agent.kind === "deterministic"
+      ? "BOSS · a deterministic step (no model)"
+      : c.agent.kind === "outside"
+        ? `${c.agent.name} · an outside agent`
+        : c.agent.role && c.agent.role !== c.agent.name ? `${c.agent.name} · ${c.agent.role}` : c.agent.name;
+    out.push({ k: "Agent", v: who });
+  }
+  if (c.workflow_version) out.push({ k: "Workflow", v: c.workflow_version });
+  if (c.policy_version) out.push({ k: "Policy", v: c.policy_version });
+  if (c.fingerprint && c.fingerprint !== "deterministic") out.push({ k: "Fingerprint", v: c.fingerprint, mono: true, title: "The agent's fingerprint: which exact prompt, skills and model made this decision" });
+  if (c.at) out.push({ k: "When", v: kgWhen(c.at) });
+  return out;
+}
+
+/**
+ * THE CONTEXT CARD (design §4.7.3): what an agent decided, in words; which step of which run,
+ * which agent, under which workflow and policy version and fingerprint, when — and what it hangs
+ * on: the case it belongs to, what it cited, the precedent and the remediation, each one press
+ * from its own Focus. A case lists its decisions, remediation, precedent and runs the same way.
+ */
+function ContextCard({ c, layer, orgId, onFocusNode }: {
+  c: KgContextCard; layer: string; orgId?: string | null; onFocusNode: (id: string, n?: KgViewNode) => void;
+}) {
+  const facts = contextFacts(c);
+  const runHref = c.run?.workflow_run_id ? kgRunHref({ workflow_run_id: c.run.workflow_run_id }, orgId) : null;
+  return (
+    <Section title={c.decision_type ? "Decision" : "Context"} testId="kg-panel-context">
+      <div className="kg-ctx">
+        {c.decision_type ? <span className="kg-ctx-type" data-testid="kg-ctx-type">{c.decision_type}</span> : null}
+        {c.statement ? (
+          <div className="kg-statement" data-layer={layer}>
+            <p data-user-text data-testid="kg-ctx-statement"><InlineCode text={c.statement} /></p>
+          </div>
+        ) : null}
+        {facts.length ? (
+          <dl className="kg-ctx-facts" data-testid="kg-ctx-facts">
+            {facts.map((f) => (
+              <React.Fragment key={f.k}>
+                <dt>{f.k}</dt>
+                <dd className={f.mono ? "kg-ctx-mono" : undefined} title={f.title}>{f.v}</dd>
+              </React.Fragment>
+            ))}
+          </dl>
+        ) : null}
+        {runHref ? <a className="inf-link" href={runHref} data-testid="kg-ctx-open-run">Open the run in Workflows ↗</a> : null}
+        {c.links.length ? (
+          <div className="kg-ctx-links" data-testid="kg-ctx-links">
+            {c.links.map((link) => (
+              <div key={link.key} data-link={link.key}>
+                <h5 className="kg-ctx-link-head">{link.label}{link.total > link.items.length ? ` · ${link.items.length} of ${link.total}` : link.items.length > 1 ? ` · ${link.items.length}` : ""}</h5>
+                <ul className="kg-conn-list">
+                  {link.items.map((n) => <NodeRow key={n.id} n={n} note={n.sub} onPick={() => onFocusNode(n.id, n)} />)}
+                </ul>
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    </Section>
+  );
+}
+
 export function isTimeAttr(k: string, v: unknown): boolean {
   return typeof v === "string" && (/_at$/.test(k) || /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(v)) && !Number.isNaN(Date.parse(v));
 }
@@ -287,7 +355,7 @@ export function attrText(k: string, v: unknown): string {
   return /^[a-z]+(_[a-z]+)+$/.test(s) ? s.replace(/_/g, " ") : s;
 }
 
-const ATTR_SKIP = new Set(["line", "end_line", "module", "lang", "language", "symbol_kind", "type_kind", "kind", "statement", "provenance", "review", "scope", "detail", "about", "evidence", "category", "confidence", "status"]);
+const ATTR_SKIP = new Set(["run_id", "step_id", "decision_type", "policy_version", "workflow_version", "agent_fingerprint", "clause_id", "change_brief", "line", "end_line", "module", "lang", "language", "symbol_kind", "type_kind", "kind", "statement", "provenance", "review", "scope", "detail", "about", "evidence", "category", "confidence", "status"]);
 
 function DetailBody({ d, w, orgId, onFocusNode, viewEdges, viewNote = null }: {
   d: KgNodeDetailResponse; w: { projectId: string; actor: string }; orgId?: string | null;
@@ -312,7 +380,8 @@ function DetailBody({ d, w, orgId, onFocusNode, viewEdges, viewNote = null }: {
     <>
       {/* The loop in one line, first: who learned it, where, and where it was reused since. */}
       {storyWords(d) ? <p className="kg-story" data-testid="kg-panel-story">{storyWords(d)}</p> : null}
-      {d.statement ? (
+      {d.context ? <ContextCard c={d.context} layer={d.node.layer} orgId={orgId} onFocusNode={onFocusNode} /> : null}
+      {d.statement && !d.context?.statement ? (
         <Section title={isRule ? "Rule" : isLearnedKind(d.node.kind) ? "What was learned" : "Statement"} testId="kg-panel-statement">
           <div className="kg-statement" data-layer={d.node.layer}>
             <p data-user-text><InlineCode text={d.statement} /></p>

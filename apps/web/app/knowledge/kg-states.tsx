@@ -19,6 +19,8 @@ const LAYER_LINE: Record<(typeof KG_LAYERS)[number], { name: string; what: strin
   code: { name: "Code", what: "indexed from the repository" },
   rules: { name: "Rules", what: "proposed by agents, approved by people" },
   learning: { name: "Learning", what: "written by agents as they work" },
+  domain: { name: "Domain", what: "regulations and documents, from your ontology pack" },
+  context: { name: "Context", what: "what agents did and decided: cases, decisions, fixes" },
 };
 
 /** Faint hop rings behind a card: the Focus view's motif, drawn in tokens. */
@@ -34,7 +36,7 @@ export function Rings() {
 
 export function Layers() {
   return (
-    <ul className="kg-layers" aria-label="The three layers">
+    <ul className="kg-layers" aria-label="The layers">
       {KG_LAYERS.map((l) => (
         <li key={l} className="kg-layer">
           <span className="kg-dot" data-layer={l} aria-hidden />
@@ -228,8 +230,20 @@ export function KgBuilt({ builtAt, stale, onRebuild, busy, indexing }: {
 /** Empty layer: only the Rules (or Learning) chip on and nothing of it — in the whole repo, or
  *  around the node in Focus (tester round 1 P1-6). Says what is true and offers the next step. */
 export function KgEmptyLayer({ layer, onScan, scope = "repo", children }: {
-  layer: "rules" | "learning"; onScan?: () => void; scope?: "repo" | "here"; children?: React.ReactNode;
+  layer: "rules" | "learning" | "domain" | "context"; onScan?: () => void; scope?: "repo" | "here"; children?: React.ReactNode;
 }) {
+  if (layer === "domain") {
+    return (
+      <StageCard testId="kg-empty-layer" eyebrow="Domain" title={scope === "here" ? "No regulation connects to this" : "No regulations or documents yet"}
+                 body="Add a regulation in the Documents tab: BOSS splits it into clauses, and agents trace each clause to the rules and code that implement it." />
+    );
+  }
+  if (layer === "context") {
+    return (
+      <StageCard testId="kg-empty-layer" eyebrow="Context" title={scope === "here" ? "No agent decided anything about this yet" : "No agent decisions yet"}
+                 body="The Context Graph is what agents did and decided: each case, every step's decision with the agent, workflow version and fingerprint it ran under, the precedent it set and the remediation it proposed. Run a workflow and it appears here as the steps finish." />
+    );
+  }
   return layer === "rules" ? (
     <StageCard testId="kg-empty-layer" eyebrow="Rules" title={scope === "here" ? "No rules here yet" : "No rules yet"}
                body={scope === "here"
