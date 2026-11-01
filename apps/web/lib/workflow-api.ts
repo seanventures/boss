@@ -11,6 +11,7 @@
  * field), 409 name clash → NameInUseError (with the name the API suggests instead).
  */
 import { apiWrite } from "./api-write";
+import { designsFrom, type DesignsInfo } from "./pipeline-model";
 import type {
   BlockDef, Capability, ControlDef, CheckResult, CustomStepDef, EditorMeta, Palette, Problem,
   PublishRequest, PublishResult, RosterAgent, Spec, WorkflowSummary,
@@ -391,6 +392,24 @@ export async function fetchRunContext(projectId: string, runId: string): Promise
   }
   return { run_id: str(body.run_id) || runId, status: str(body.status),
            started_at: str(body.started_at) || null, completed_at: str(body.completed_at) || null, steps };
+}
+
+/** Every stage's design status and reference, the project's Knowledge and Context Graph
+ *  versions, and the colours of the kinds the contracts name (design §4.6, `view=designs`). */
+export async function fetchDesigns(projectId: string, workflowKey: string): Promise<DesignsInfo> {
+  return designsFrom(await getView("designs", { project_id: projectId, key: workflowKey }));
+}
+
+/** A design transition on one stage: send for review, lock (a person, with a fresh second
+ *  factor), or revise. Returns the stage's new design state; a refusal throws its sentence. */
+export type DesignAction = "review" | "lock" | "revise";
+export async function designAction(projectId: string, workflowKey: string, stageId: string,
+                                   action: DesignAction, note?: string): Promise<void> {
+  await send("POST", {
+    action: `design_${action}`, project_id: projectId, key: workflowKey, stage_id: stageId,
+    ...(action === "lock" ? { step_up: "confirmed" } : {}),
+    ...(note ? { note } : {}),
+  });
 }
 
 /** Every check Save runs, without saving. Writes nothing. */

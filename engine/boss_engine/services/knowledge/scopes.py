@@ -53,12 +53,30 @@ LAYER_KINDS: dict[str, frozenset[str]] = {
 _CASE_LAYERS = ("code", "lifecycle", "ops", "rules", "context")
 
 
-def layer_of(kind: str) -> str:
-    """The layer of a node kind. A kind no layer names is knowledge, as the generated column says."""
+def core_layer_of(kind: str) -> str:
+    """The layer the core CASE gives a kind (no pack consulted): a kind no layer names is
+    knowledge."""
     for layer, kinds in LAYER_KINDS.items():
         if kind in kinds:
             return layer
     return "knowledge"
+
+
+def layer_of(kind: str) -> str:
+    """The stored layer of a node kind: the core CASE, except that a context kind an ontology
+    pack declares (compliance_case, aml_case, resolved_pattern…) is stored as context — the
+    same answer kg_nodes.knowledge_layer's trigger gives (db/schema.sql, kg_kind_layers)."""
+    layer = core_layer_of(kind)
+    if layer != "knowledge":
+        return layer
+    try:
+        from .ontology_packs import pack_context_kinds
+
+        if kind in pack_context_kinds():
+            return "context"
+    except Exception:  # noqa: BLE001 - no specpack: the core answer stands
+        pass
+    return layer
 
 
 def layer_sql_case(column: str = "kind") -> str:
@@ -250,8 +268,11 @@ def policy_for(
         policy = policy_from_contract(base, contract)
         # The `context` write layer is granted only to a per-execution external-agent token (the
         # runner calls `policy_from_contract` directly); a normal stage's read policy never carries
-        # it, so strip it here where `policy_for` builds the stage's own reach.
-        if "context" in policy.layers:
+        # it, so strip it here where `policy_for` builds the stage's own reach — unless the
+        # contract READS a context kind (a pack's compliance case, stored in the context layer):
+        # then the layer is its read, narrowed to exactly the kinds it names.
+        reads_context = any(layer_of(r.kind) == "context" for r in contract.reads)
+        if "context" in policy.layers and not reads_context:
             policy = replace(policy, layers=policy.layers - {"context"})
         return policy
     return apply_declaration(base, declared) if declared else base

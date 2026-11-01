@@ -47,8 +47,8 @@ describe("AgentContractView", () => {
     expect(decision.getAttribute("data-required")).toBe("true");
     expect(decision.textContent).toContain("ContextAssembled");
     expect(cg.querySelector('[data-testid="node-write-coveragegap"]')!.getAttribute("data-required")).toBeNull();
-    expect(host!.textContent).toContain("Knowledge Graph (read only)");
-    expect(host!.textContent).toContain("Context Graph (read & write)");
+    expect(host!.textContent).toContain("Knowledge Graph · read only");
+    expect(host!.textContent).toContain("Context Graph · read and write");
   });
 
   it("P0 draws reads, writes and MCP calls as their own kind of line", () => {

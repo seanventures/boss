@@ -2154,6 +2154,13 @@ def publish_version(
                                       problems=shape + blocked)
     if blocked:
         raise WorkflowBindingBlockedError(problems_sentence(blocked), problems=blocked)
+    # A LOCKED AGENT DESIGN DOES NOT CHANGE BY SAVING (design §4.6): a stage whose design a
+    # person locked keeps its contract until Revise opens the next version for review.
+    from .knowledge.stage_designs import publish_refusals
+
+    locked = publish_refusals(connection, project_id, definition, normalized)
+    if locked:
+        raise WorkflowValidationError(problems_sentence(locked), problems=locked)
     # STAMPED WITH THE AGENT RULES IT WAS CHECKED UNDER, so a start or a run months from now
     # applies those rules and not whatever this code says then. A step-level copy (which
     # `_run_spec` adds for the runner) is never trusted from a caller.
@@ -6527,6 +6534,19 @@ def complete_step(
             raise WorkflowValidationError(
                 f"step '{row['step_id']}' never produced required write(s) {missing} "
                 f"after one repair round")
+    # THE CONTEXT GRAPH AS REAL EDGES (§4.2): the step's decision linked to what it consulted,
+    # cited and is about. Never fails the step: a link that cannot be written is logged.
+    try:
+        from .knowledge import context_graph as _cg
+
+        with connection.begin_nested():
+            _cg.link_step_decisions(
+                connection, project_id, run_id=row["workflow_run_id"], step_id=row["step_id"],
+                output=output or {},
+                bound_input=_cg.bound_run_input(template, run.get("input") or {}))
+    except Exception:  # noqa: BLE001 - the step's result stands without its edges
+        logger.warning("context graph edges for step %s were not written", row["step_id"],
+                       exc_info=True)
     learning_writeback.write_back(connection, project_id=project_id, hook="step_complete",
                                   observed={"step": dict(updated), "template": template,
                                             "context": run.get("context")})

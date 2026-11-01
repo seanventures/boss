@@ -207,6 +207,14 @@ def mount_platform_routers(app: FastAPI) -> None:
     except ImportError:
         pass
 
+    # Agent design review and lock, per workflow stage (design §4.6)
+    try:
+        from .workflow_designs import router as workflow_designs_router
+
+        app.include_router(workflow_designs_router)
+    except ImportError:
+        pass
+
     # KG P7a — a regulation document and its project's ontology pack
     try:
         from .knowledge_documents import router as knowledge_documents_router

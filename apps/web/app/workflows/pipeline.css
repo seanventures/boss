@@ -183,6 +183,131 @@
 .pl-design-card-body { font-size: 0.8125rem; color: var(--ink-soft); }
 .pl-design-card-body ul { margin: 0; padding-left: 16px; }
 
+/* ── Design status (design §4.6): the consultant's legend — Locked filled, In review outlined in
+   blue, Not yet reviewed faint, Human step a pill, Shared service grey. ── */
+.pl-design {
+  display: inline-flex; align-items: center; padding: 1px 9px; border-radius: 6px; white-space: nowrap;
+  font: 700 0.6875rem/1.55 var(--sans); border: 1px solid var(--border-strong); color: var(--muted);
+  background: var(--surface-2);
+}
+.pl-design[data-design="locked"] { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+.pl-design[data-design="in_review"] { color: var(--accent-text); border-color: var(--accent); background: transparent; border-width: 1.5px; }
+.pl-design[data-design="not_reviewed"] { color: var(--muted); font-weight: 600; }
+.pl-design[data-design="human_step"] { border-radius: 999px; color: var(--ink-soft); border-color: var(--ink-soft); background: transparent; }
+.pl-design[data-design="shared_service"] { color: var(--ink-soft); background: color-mix(in srgb, var(--faint) 18%, transparent); border-color: transparent; }
+
+.pl-design-legend { margin-top: -4px; }
+.pl-swatch { display: inline-block; width: 30px; height: 14px; border-radius: 4px; border: 1px solid var(--border-strong); background: var(--surface-2); }
+.pl-swatch[data-design="locked"] { background: var(--ink); border-color: var(--ink); }
+.pl-swatch[data-design="in_review"] { border: 2px solid var(--accent); background: transparent; }
+.pl-swatch[data-design="human_step"] { border-radius: 999px; border-color: var(--ink-soft); background: transparent; }
+.pl-swatch[data-design="shared_service"] { background: color-mix(in srgb, var(--faint) 25%, transparent); border-color: transparent; }
+.pl-key-side { border-top-style: dashed; border-color: var(--muted); }
+
+/* A locked stage reads as the consultant's dark card; one in review is outlined in blue. */
+.pl-card[data-design="locked"] { background: var(--ink); border-color: var(--ink); }
+.pl-card[data-design="locked"] .pl-card-title { color: var(--surface); }
+.pl-card[data-design="locked"] .pl-card-contract, .pl-card[data-design="locked"] .pl-faint { color: color-mix(in srgb, var(--surface) 75%, transparent); }
+.pl-card[data-design="locked"] .pl-num { background: color-mix(in srgb, var(--surface) 18%, transparent); color: var(--surface); border-color: transparent; }
+.pl-card[data-design="locked"] .pl-design { background: var(--surface); color: var(--ink); }
+.pl-card[data-design="locked"] .pl-runs-as { background: transparent; color: var(--surface);
+  border-color: color-mix(in srgb, var(--surface) 45%, transparent); }
+.pl-card[data-design="in_review"] { border: 2px solid var(--accent); }
+.pl-card[data-design="human_step"] { border-radius: 999px / 48px; padding-inline: 18px; }
+.pl-card[data-design="shared_service"], .pl-card[data-placement="side"] { min-height: 0; width: 240px; background: var(--surface-2); }
+.pl-card[data-placement="side"] { border-style: dashed; }
+.pl-card-run { display: flex; align-items: center; gap: 6px; }
+.pl-num-none { background: transparent; color: var(--muted); }
+
+/* Shared services and side paths: under the main flow, the consultant's two areas. */
+.pl-aside { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 12px 28px; justify-content: space-between;
+  padding-top: 12px; margin-top: 4px; border-top: 1px dashed var(--border-strong); }
+.pl-aside-group { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.pl-aside-group.pl-side { align-items: flex-end; }
+.pl-aside-title { font: 700 0.6875rem var(--sans); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.pl-aside-cards { display: flex; flex-wrap: wrap; gap: 10px; }
+.pl-cell-ref { color: var(--ink-soft); min-width: 10rem; }
+
+/* The design bar in the agent view: status, reference, and the review buttons. */
+.pl-design-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 8px; }
+.pl-design-ref { font: 600 0.8125rem var(--sans); color: var(--ink-soft); }
+.pl-design-actions { display: inline-flex; gap: 8px; }
+.pl-btn {
+  min-height: 30px; padding: 0 12px; border-radius: var(--r-sm); border: 1px solid var(--border-strong);
+  background: var(--surface-2); color: var(--ink); font: 600 0.78rem var(--sans); cursor: pointer;
+}
+.pl-btn:hover { border-color: var(--accent-line); }
+.pl-btn:disabled { opacity: 0.55; cursor: progress; }
+.pl-btn-primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.pl-design-error { flex-basis: 100%; font-size: 0.8125rem; color: var(--red); }
+h3.pl-acv-title { margin: 2px 0 0; font-size: 1.35rem; line-height: 1.25; }
+
+/* Design cards: a top rule in ink, graph indigo, or muted grey, as the consultant's. */
+.pl-cards { grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: 12px; }
+.pl-design-card { background: var(--surface); border-top: 3px solid var(--ink); border-radius: var(--r); box-shadow: 0 1px 2px rgb(0 0 0 / 0.04); }
+.pl-design-card[data-tone="graph"] { border-top-color: #5b5fc7; }
+.pl-design-card[data-tone="muted"] { border-top-color: var(--faint); }
+.pl-design-card-title { font: 700 0.875rem var(--sans); color: var(--ink); text-transform: none; letter-spacing: 0; margin-bottom: 6px; }
+.pl-design-card-body { line-height: 1.5; }
+.pl-design-card-body p { margin: 0 0 4px; }
+.pl-notes { margin: 0 0 4px; }
+.pl-note-item { cursor: help; }
+.pl-note-id { font-weight: 700; color: var(--ink); }
+.pl-notes-sep { color: var(--faint); }
+.pl-kv { margin: 4px 0 0; padding-left: 16px; }
+
+/* ── The agent's steps map (editor/agent-steps-map.tsx) ── */
+.pl-steps { display: flex; flex-direction: column; gap: 8px; }
+.pl-steps-map { width: 100%; height: auto; display: block; font-family: var(--sans); border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--surface); }
+.pls-band { fill: color-mix(in srgb, var(--faint) 9%, var(--surface)); stroke: none; }
+.pls-band-label { fill: var(--muted); font-size: 12px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; }
+.pls-empty { fill: var(--faint); font-size: 13px; font-style: italic; }
+.pls-line { stroke-width: 1.4; transition: opacity 120ms, stroke-width 120ms; }
+.pls-line-read { stroke: color-mix(in srgb, var(--muted) 75%, transparent); }
+.pls-line-write { stroke: #4b4fae; stroke-width: 2; }
+.pls-line-call { stroke: var(--muted); stroke-dasharray: 2 4; stroke-width: 1.6; }
+.pls-head-read { fill: color-mix(in srgb, var(--muted) 85%, transparent); }
+.pls-head-write { fill: #4b4fae; }
+.pls-head-flow { fill: var(--ink); }
+.pls-line[data-on="false"], .pls-node[data-on="false"], .pls-step[data-on="false"] { opacity: 0.14; }
+.pls-line[data-on="true"] { stroke-width: 2.6; }
+.pls-line[data-overlay="missing"] { stroke-dasharray: 6 5; }
+.pls-flow { stroke: var(--ink); stroke-width: 1.6; }
+.pls-anchor rect { fill: var(--surface); stroke: var(--border-strong); }
+.pls-anchor text { fill: var(--ink-soft); font-size: 13px; font-weight: 600; }
+.pls-step { cursor: pointer; outline: none; }
+.pls-step circle { fill: var(--ink); stroke: var(--surface); stroke-width: 2; }
+.pls-step:hover circle, .pls-step:focus-visible circle, .pls-step[aria-pressed="true"] circle { stroke: var(--accent); stroke-width: 3.5; }
+.pls-step-n { fill: var(--surface); font-size: 16px; font-weight: 800; pointer-events: none; }
+/* A halo in the band's colour keeps a step's name legible where lines cross it. */
+.pls-step-name { fill: var(--ink); font-size: 13px; font-weight: 600; paint-order: stroke;
+  stroke: color-mix(in srgb, var(--faint) 9%, var(--surface)); stroke-width: 5px; stroke-linejoin: round; }
+.pls-step[data-run="done"] circle { stroke: var(--green); stroke-width: 3.5; }
+.pls-step[data-run="partly"] circle { stroke: var(--amber); stroke-width: 3.5; }
+.pls-step[data-run="missing"] circle { stroke: var(--red); stroke-width: 3.5; stroke-dasharray: 4 3; }
+.pls-node { cursor: pointer; outline: none; }
+.pls-node text { font-size: 13px; font-weight: 700; pointer-events: none; }
+.pls-node-kg rect { stroke: transparent; stroke-width: 2.5; }
+.pls-node-kg:hover rect, .pls-node-kg:focus-visible rect, .pls-node-kg[aria-pressed="true"] rect { stroke: var(--ink); }
+.pls-node-cg polygon { fill: #4b4fae; stroke: transparent; stroke-width: 2.5; }
+.pls-node-cg text { fill: #ffffff; }
+.pls-node-cg:hover polygon, .pls-node-cg:focus-visible polygon, .pls-node-cg[aria-pressed="true"] polygon { stroke: var(--ink); }
+.pls-node-sys rect { fill: var(--surface); stroke: var(--muted); stroke-dasharray: 4 3; stroke-width: 1.4; }
+.pls-node-sys text { fill: var(--ink); }
+.pls-node-sys:hover rect, .pls-node-sys[aria-pressed="true"] rect { stroke: var(--ink); stroke-width: 2; }
+.pls-count { fill: var(--green); font-size: 11px; font-weight: 700; }
+.pls-node[data-overlay="done"] rect, .pls-node[data-overlay="done"] polygon { stroke: var(--green); }
+.pls-node[data-overlay="missing"] rect, .pls-node[data-overlay="missing"] polygon { stroke: var(--red); stroke-dasharray: 5 4; opacity: 0.7; }
+.pls-node[data-overlay="undeclared"] rect, .pls-node[data-overlay="undeclared"] polygon { stroke: var(--amber); }
+.pls-node[data-overlay="undeclared"] .pls-count { fill: var(--amber); }
+.pls-legend i { display: inline-block; }
+.pls-key-kg { width: 30px; height: 12px; border-radius: 3px; background: #b8443a; }
+.pls-key-cg { width: 26px; height: 12px; background: #4b4fae; clip-path: polygon(20% 0, 80% 0, 100% 50%, 80% 100%, 20% 100%, 0 50%); }
+.pls-key-sys { width: 26px; height: 12px; border: 1.4px dashed var(--muted); border-radius: 2px; }
+.pls-detail p { margin: 4px 0; }
+.pls-detail ul { margin: 4px 0 0; padding-left: 18px; }
+.pls-detail-title { font-weight: 700; color: var(--ink); }
+
 @media (max-width: 639px) {
   .pl-card { width: 100%; }
   .pl-arrow { transform: rotate(90deg); width: 100%; text-align: center; }

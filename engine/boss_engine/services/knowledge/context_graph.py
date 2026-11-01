@@ -9,12 +9,14 @@ truth for the same run is the risk the brief calls out).
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping
 from typing import Any, Optional
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
+from .graph_versions import versions
 from .store import PostgresKnowledgeStore
 
 _STORE = PostgresKnowledgeStore()
@@ -29,6 +31,8 @@ def write_agent_decision(connection: Connection, project_id: str, *, step_id: st
     never creates a duplicate node — the store's existing content-hash upsert handles that.
     """
     node_key = f"context:agent_decision:{run_id}:{step_id}:{decision_type}"
+    # Which Knowledge Graph and Context Graph versions this decision was made against (§4.2).
+    graph = versions(connection, project_id)
     node_id = _STORE.upsert_node(
         connection, project_id=project_id, kind="agent_decision", node_key=node_key,
         name=f"{decision_type} ({step_id})", body=statement, trust_tier="inferred",
@@ -41,8 +45,14 @@ def write_agent_decision(connection: Connection, project_id: str, *, step_id: st
             "policy_version": policy_version,
             "workflow_version": workflow_version,
             "agent_fingerprint": agent_fingerprint,
+            **graph,
         },
     )
+    # A retry with the same content keeps the stored attrs, so the versions are stamped apart.
+    connection.execute(
+        text("UPDATE kg_nodes SET attrs = COALESCE(attrs, '{}'::jsonb) || CAST(:patch AS JSONB) "
+             "WHERE project_id = :p AND id = :i AND NOT (COALESCE(attrs, '{}'::jsonb) ? 'kg_version')"),
+        {"patch": json.dumps(graph), "p": project_id, "i": node_id})
     return {"id": node_id, "kind": "agent_decision"}
 
 
@@ -181,6 +191,181 @@ def persist_contract_writes(connection: Connection, project_id: str, *, run_id: 
         if _satisfied(spec, produced):
             landed.add(spec.kind)
     return landed
+
+
+# ── STORED CONTEXT GRAPH EDGES (§4.2): a decision linked to what its step read ───────────────
+#
+# A step's AgentDecision is linked, by real `kg_edges` rows the engine writes at step end, to:
+#   * what the step CONSULTED — the node ids its output names under a read key (`collected`,
+#     `matched`, `consulted_ids`, `evidence`, `source…`): edge `consulted` (attrs.how = "read");
+#   * what it CITED — `cited_fact_ids`, `cited_node_id`, `citation`: edge `consulted` with
+#     attrs.how = "cited" (the canvas's existing "cited" line; one edge per pair, cited wins);
+#   * what it is ABOUT — its subject (`subject_id`), the case or incident it opened or worked on
+#     (`*_case_ids`, `incident_id`, a produced `*_case`/incident node): edge `about`.
+# The run's own input ids that the step was bound to (`from_input`) count as consulted (the
+# document a clause intake read) or about (the subject). Every edge carries the run and step.
+# Idempotent: the store's upsert is unique per (src, dst, kind).
+
+_CITE_KEY = re.compile(r"cite|citation")
+_ABOUT_KEY = re.compile(r"subject|_case_id|_case_ids|^case_id|^case_ids|incident_id|alert_id")
+_CONSULT_KEY = re.compile(r"collected|matched|consult|evidence|source|read|clause|document")
+_NODE_ID = re.compile(r"^kgn_[0-9a-f]{8,}$")
+_ABOUT_KINDS = ("incident", "alert")
+
+
+def _ids(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value] if _NODE_ID.match(value) else []
+    if isinstance(value, (list, tuple)):
+        return [v for v in value if isinstance(v, str) and _NODE_ID.match(v)]
+    return []
+
+
+def classify_step_ids(output: Any, *, bound_input: Optional[Mapping[str, Any]] = None
+                      ) -> dict[str, list[str]]:
+    """{"cited": [...], "consulted": [...], "about": [...]} — the node ids a step's output (and
+    the run input it was bound to) names, by what each key says it is. Written nodes
+    (`produced.<kind>.node_ids`) are returned under "produced" with their kind for the caller."""
+    out: dict[str, list[str]] = {"cited": [], "consulted": [], "about": [], "produced": []}
+
+    def take(key: str, value: Any) -> None:
+        ids = _ids(value)
+        if not ids:
+            return
+        name = str(key).lower()
+        if _CITE_KEY.search(name):
+            out["cited"].extend(ids)
+        elif _ABOUT_KEY.search(name):
+            out["about"].extend(ids)
+        elif _CONSULT_KEY.search(name):
+            out["consulted"].extend(ids)
+
+    if isinstance(output, Mapping):
+        for key, value in output.items():
+            take(key, value)
+        produced = output.get("produced")
+        if isinstance(produced, Mapping):
+            for kind, entry in produced.items():
+                if not isinstance(entry, Mapping):
+                    continue
+                for key, value in entry.items():
+                    if key in ("node_id", "node_ids"):
+                        if kind != "agent_decision":
+                            out["produced"].extend(_ids(value))
+                    else:
+                        take(key, value)
+    for key, value in (bound_input or {}).items():
+        ids = _ids(value)
+        if not ids:
+            continue
+        (out["about"] if _ABOUT_KEY.search(str(key).lower()) else out["consulted"]).extend(ids)
+    return {k: list(dict.fromkeys(v)) for k, v in out.items()}
+
+
+def bound_run_input(step_template: Mapping[str, Any], run_input: Mapping[str, Any]) -> dict[str, Any]:
+    """The run-input values a step was bound to (`binding.inputs.<name>.from_input`), by name."""
+    inputs = ((step_template or {}).get("binding") or {}).get("inputs") or {}
+    bound: dict[str, Any] = {}
+    if not isinstance(inputs, Mapping):
+        return bound
+    for name, spec in inputs.items():
+        if isinstance(spec, Mapping) and spec.get("from_input"):
+            value = (run_input or {}).get(str(spec["from_input"]))
+            if value is not None:
+                bound[str(name)] = value
+    return bound
+
+
+def link_step_decisions(connection: Connection, project_id: str, *, run_id: str, step_id: str,
+                        output: Any, bound_input: Optional[Mapping[str, Any]] = None) -> int:
+    """Write the edges from this run step's AgentDecision(s) to what it consulted, cited and is
+    about. Returns how many edges were written or refreshed (0 when the step wrote no decision)."""
+    decisions = [str(r[0]) for r in connection.execute(text(
+        "SELECT id FROM kg_nodes WHERE project_id = :p AND kind = 'agent_decision' "
+        "AND valid_to IS NULL AND attrs->>'run_id' = :r AND attrs->>'step_id' = :s"),
+        {"p": project_id, "r": run_id, "s": step_id}).all()]
+    if not decisions:
+        return 0
+    found = classify_step_ids(output, bound_input=bound_input)
+    wanted = {i for ids in found.values() for i in ids}
+    if not wanted:
+        return 0
+    kinds = {str(r[0]): str(r[1]) for r in connection.execute(text(
+        "SELECT id, kind FROM kg_nodes WHERE project_id = :p AND id = ANY(:i)"),
+        {"p": project_id, "i": sorted(wanted)}).all()}
+
+    def is_about(node_id: str) -> bool:
+        kind = kinds.get(node_id, "")
+        return kind.endswith("_case") or kind in _ABOUT_KINDS
+
+    plan: dict[tuple[str, str], dict[str, Any]] = {}
+    for node_id in found["consulted"]:
+        plan[(node_id, "about" if is_about(node_id) else "consulted")] = {"how": "read"}
+    for node_id in found["cited"]:
+        plan[(node_id, "consulted")] = {"how": "cited"}
+    for node_id in found["about"] + [i for i in found["produced"] if is_about(i)]:
+        plan[(node_id, "about")] = {}
+    existing = {(str(s), str(d), str(k), str(h or "")) for s, d, k, h in connection.execute(text(
+        "SELECT src_id, dst_id, kind, attrs->>'how' FROM kg_edges WHERE project_id = :p "
+        "AND src_id = ANY(:s)"), {"p": project_id, "s": decisions}).all()}
+    written = 0
+    for decision in decisions:
+        for (node_id, kind), extra in plan.items():
+            if node_id == decision or node_id not in kinds or kinds[node_id] == "agent_decision":
+                continue
+            if (decision, node_id, kind, str(extra.get("how") or "")) in existing:
+                continue  # already linked: a re-run or the backfill writes nothing new
+            _STORE.upsert_edge(
+                connection, project_id=project_id, src_id=decision, dst_id=node_id, kind=kind,
+                actor_kind="system", actor_ref="context_graph",
+                attrs={"run_id": run_id, "step_id": step_id, "source": "context_graph", **extra})
+            written += 1
+    return written
+
+
+def backfill_decision_edges(connection: Connection, project_id: Optional[str] = None) -> dict[str, int]:
+    """Write the stored edges for every workflow step that already ran (§4.2 backfill): one pass
+    over the succeeded step runs that have an AgentDecision, idempotent — a second pass writes
+    nothing new. ``project_id`` limits it to one project."""
+    clauses = ["s.status = 'succeeded'"]
+    params: dict[str, Any] = {}
+    if project_id:
+        clauses.append("s.project_id = :p")
+        params["p"] = project_id
+    rows = connection.execute(text(
+        "SELECT s.project_id, s.workflow_run_id, s.step_id, s.output, r.input, v.spec "
+        "FROM workflow_step_runs s JOIN workflow_runs r ON r.id = s.workflow_run_id "
+        "LEFT JOIN workflow_versions v ON v.id = r.workflow_version_id "
+        f"WHERE {' AND '.join(clauses)} AND EXISTS (SELECT 1 FROM kg_nodes n "
+        "WHERE n.project_id = s.project_id AND n.kind = 'agent_decision' "
+        "AND n.attrs->>'run_id' = s.workflow_run_id AND n.attrs->>'step_id' = s.step_id "
+        # Only decisions not linked yet: a second pass reads nothing to do.
+        "AND NOT EXISTS (SELECT 1 FROM kg_edges e WHERE e.src_id = n.id "
+        "AND e.attrs->>'source' = 'context_graph')) "
+        "ORDER BY s.created_at ASC"), params).mappings().all()
+    before = connection.execute(text(
+        "SELECT count(*) FROM kg_edges WHERE attrs->>'source' = 'context_graph'"
+        + (" AND project_id = :p" if project_id else "")), params).scalar_one()
+    steps = 0
+    for row in rows:
+        output = row["output"]
+        if isinstance(output, str):
+            try:
+                output = json.loads(output)
+            except ValueError:
+                output = {}
+        spec = row["spec"] if isinstance(row["spec"], Mapping) else {}
+        template = next((s for s in spec.get("steps") or []
+                         if isinstance(s, Mapping) and s.get("id") == row["step_id"]), {})
+        bound = bound_run_input(template, row["input"] if isinstance(row["input"], Mapping) else {})
+        with connection.begin_nested():
+            link_step_decisions(connection, str(row["project_id"]), run_id=str(row["workflow_run_id"]),
+                                step_id=str(row["step_id"]), output=output, bound_input=bound)
+        steps += 1
+    after = connection.execute(text(
+        "SELECT count(*) FROM kg_edges WHERE attrs->>'source' = 'context_graph'"
+        + (" AND project_id = :p" if project_id else "")), params).scalar_one()
+    return {"steps": steps, "edges_added": int(after) - int(before)}
 
 
 def step_writes(connection: Connection, project_id: str, *, run_id: str,
