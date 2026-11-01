@@ -486,5 +486,15 @@ def confirm_upload(
         "UPDATE kg_document_uploads SET status = 'confirmed', confirmed_by = :by, confirmed_at = :now, "
         "document_id = :d, title = :t WHERE id = :id"),
         {"by": actor_ref, "now": now_utc(), "d": written["document_id"], "t": name, "id": upload_id})
+    # A confirmed document is what "Extract rules" reads: install whatever the project's packs
+    # now unlock (rulebook_extraction), so the press right after this one finds its workflow.
+    # The document stands either way; a failed install is the next press's own refusal.
+    from ..workflow_catalogue import seed_now_unlocked
+
+    try:
+        with connection.begin_nested():
+            seed_now_unlocked(connection, project_id, actor=actor_ref or "boss")
+    except Exception:  # noqa: BLE001
+        pass
     return {**written, "title": name, "sections": len(clauses),
             "rule_cards": sum(1 for s in sections if s["kind"] == "rule_card")}

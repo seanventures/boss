@@ -57,8 +57,10 @@ describe("Check compliance: no delivery workflow installed yet", () => {
     await press(installOffer);
 
     const posts = fn.mock.calls.filter(([u, i]) => String(u).includes("/api/delivery-workflows") && i?.method === "POST");
-    const installCall = posts.find(([, i]) => JSON.parse(String(i?.body ?? "{}")).action === "catalogue/install");
-    expect(installCall, "pressing install must call the existing catalogue/install action").toBeTruthy();
+    // The proxy's action is "install" (app/api/delivery-workflows/route.ts ACTIONS → POST
+    // /v1/delivery-workflows/catalogue/install); "catalogue/install" is refused there as unknown.
+    const installCall = posts.find(([, i]) => JSON.parse(String(i?.body ?? "{}")).action === "install");
+    expect(installCall, "pressing install must call the proxy's install action").toBeTruthy();
     expect(JSON.parse(String(installCall?.[1]?.body)).project_id).toBe("northpeak-bank-b");
 
     expect($('[data-testid="kg-doc-check-msg"]')?.textContent).toMatch(/started/i);

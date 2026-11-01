@@ -121,6 +121,15 @@ def set_pack(body: SetPackBody) -> dict[str, Any]:
             pack = ontology_packs.set_project_pack(
                 connection, project_id=body.project_id, pack_id=body.pack_id, set_by=body.actor,
             )
+            # The workflows the pack completes are installed now, as the set_ontology_pack tool
+            # does (one path): the pack is set either way; boot seeds again on a failure.
+            from boss_engine.services.workflow_catalogue import seed_now_unlocked
+
+            try:
+                with connection.begin_nested():
+                    seed_now_unlocked(connection, body.project_id, actor=body.actor)
+            except Exception:  # noqa: BLE001
+                pass
             return {"pack_id": pack.pack_id, "version": pack.version}
     except Exception as error:  # noqa: BLE001
         raise _http(error) from error

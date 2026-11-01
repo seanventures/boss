@@ -54,23 +54,14 @@ def project(eng):
         )
     yield pid
     with eng.begin() as c:
-        # Seeding installs the role agents a catalogue entry needs (rulebook_extraction's
-        # analyst everywhere; a pack's roles where the pack is): every row a project owns goes,
-        # in as many passes as the foreign keys between them need.
-        owned = [str(t) for t in c.execute(text(
-            "SELECT DISTINCT tc.table_name FROM information_schema.table_constraints tc "
-            "JOIN information_schema.constraint_column_usage cu ON cu.constraint_name = "
-            "tc.constraint_name WHERE tc.constraint_type = 'FOREIGN KEY' AND cu.table_name = "
-            "'projects' AND tc.table_name <> 'projects'")).scalars().all()]
+        # A seed into a project with no pack installs no role agent: every role-agent entry
+        # `requires` the pack (or kinds) its agents work on, so only the workflow rows go.
         for table in ("workflow_mappings", "workflow_versions", "workflow_definitions",
-                      "events", "receipts", *owned):
-            for _pass in range(3):
-                try:
-                    with c.begin_nested():
-                        c.execute(text(f"DELETE FROM {table} WHERE project_id=:p"), {"p": pid})
-                    break
-                except Exception:
-                    continue
+                      "events", "receipts"):
+            try:
+                c.execute(text(f"DELETE FROM {table} WHERE project_id=:p"), {"p": pid})
+            except Exception:
+                pass
         c.execute(text("DELETE FROM projects WHERE id=:p"), {"p": pid})
 
 
@@ -173,6 +164,49 @@ def test_seeding_installs_every_workflow_as_read_only_product(eng, project):
     for row in rows:
         assert row["namespace"] == "product"
         assert row["is_catalogue"] is True, f"{row['workflow_key']} is editable in place"
+    # A project with no pack gets no role agent: none of them has anything to work on there.
+    with eng.begin() as c:
+        roles = c.execute(text("SELECT role_key FROM roles WHERE project_id=:p"),
+                          {"p": project}).scalars().all()
+    needed = {r for e in catalogue.CATALOGUE for r in catalogue.roles_needed(e)}
+    assert not needed & set(roles), f"seeded into a pack-less project: {needed & set(roles)}"
+
+
+def test_every_role_agent_entry_installs_only_where_its_pack_is():
+    """A catalogue entry whose steps are role agents' judgement installs those agents with it
+    (seed → install_roles). Ungated, it put them — and the workflow — into every project
+    (rulebook_extraction's analyst did, 2026-11-01). Each one names what it works on."""
+    for entry in catalogue.CATALOGUE:
+        if catalogue.roles_needed(entry):
+            requires = entry.get("requires") or {}
+            assert (requires.get("ontology_pack") or requires.get("kinds")
+                    or catalogue.ONTOLOGY_PACK_BY_ENTRY.get(entry["key"])), entry["key"]
+
+
+def test_rulebook_extraction_needs_document_and_data_quality_kinds(eng, project):
+    """It reads a document's clauses and writes data_quality_rule/dq_threshold nodes: one pack
+    alone is not enough, both together install it (and its analyst)."""
+    from boss_engine.services.knowledge import ontology_packs
+
+    entry = next(e for e in catalogue.CATALOGUE if e["key"] == "rulebook_extraction")
+    with eng.begin() as c:
+        ontology_packs.set_project_pack(c, project_id=project, pack_id="banking-regulatory")
+        assert "data_quality_rule" in (catalogue._unmet(c, project, entry) or "")
+        ontology_packs.set_project_pack(c, project_id=project, pack_id="banking-dq")
+        assert catalogue._unmet(c, project, entry) is None
+        result = catalogue.seed_unlocked_by_pack(c, project, "banking-dq")
+        assert "rulebook_extraction" in {i["key"] for i in result["installed"]
+                                         if not i.get("skipped")}
+        assert c.execute(text("SELECT 1 FROM roles WHERE project_id=:p AND "
+                              "role_key='rulebook_analyst'"), {"p": project}).scalar()
+        # This test's own rows: the packs and the roles the unlocked entries installed.
+        for table in ("role_skills", "role_mcp_servers", "roles", "kg_ontology_packs"):
+            try:
+                with c.begin_nested():
+                    c.execute(text(f"DELETE FROM {table} WHERE project_id=:p"), {"p": project})
+            except Exception:
+                pass
+        ontology_packs._PROJECT_PACK_CACHE.pop(project, None)
 
 
 def test_seeding_twice_does_not_create_a_second_copy(eng, project):

@@ -139,6 +139,44 @@ describe("Documents › Upload a document", () => {
     expect($('[data-testid="kg-extract-msg"]')?.textContent).toContain("Each rule it finds waits in Rules review");
     expect($('[data-testid="kg-extract-msg"] a')?.getAttribute("href")).toContain("wfr=wfr_rbx_1");
   });
+
+  it("Extract rules installs the workflow on a project that predates it, or says why it cannot", async () => {
+    const clauses = [{ id: "kgn_c1", section: "NPB-DQ-LN-001", text: "NPB-DQ-LN-001 v1 — Rule", citation: "", url: "",
+                       page: 15, page_end: 15, kind: "rule_card", heading: "NPB-DQ-LN-001 v1 — Rule" }];
+    const docs = { documents: [{ id: "kgn_doc1", title: "Rulebook", source_url: "", citation: "", added_by: "ceo", added_at: "", filename: "rb.pdf", pages: 45, clauses }] };
+    const installs = (skipped?: string) => {
+      let n = 0;
+      return mockKgFetch({
+        "/v1/knowledge/packs$": { body: PACKS },
+        "/v1/knowledge/documents$": { body: docs },
+        // start (no workflow) → install → start again.
+        "/api/delivery-workflows$": (u) => {
+          if (u.search) return { body: {} };             // a read (?view=…), not a press
+          n += 1;
+          if (n === 1) return { status: 400, body: { error: "There is no delivery workflow 'rulebook_extraction' in this project." } };
+          if (n === 2) return { body: { installed: [{ key: "rulebook_extraction", version_id: skipped ? null : "v1", ...(skipped ? { skipped } : {}) }] } };
+          return { body: { run: { id: "wfr_rbx_2" } } };
+        },
+      });
+    };
+    const actions = (fn: ReturnType<typeof mockKgFetch>) => fn.mock.calls
+      .filter(([u, i]) => String(u).includes("/api/delivery-workflows") && i?.method === "POST")
+      .map(([, i]) => JSON.parse(String(i?.body)).action);
+
+    let fn = installs();
+    await mount(<DocumentsTab {...W} />);
+    await press($('[data-testid="kg-extract-rules"]'));
+    // "install" is the proxy's action name ("catalogue/install" was refused as unknown).
+    expect(actions(fn)).toEqual(["start", "install", "start"]);
+    expect($('[data-testid="kg-extract-msg"] a')?.getAttribute("href")).toContain("wfr=wfr_rbx_2");
+    unmount();
+
+    fn = installs("needs an ontology pack granting the 'data_quality_rule' kind(s)");
+    await mount(<DocumentsTab {...W} />);
+    await press($('[data-testid="kg-extract-rules"]'));
+    expect(actions(fn)).toEqual(["start", "install"]);
+    expect($('[data-testid="kg-extract-msg"]')?.textContent).toContain("needs an ontology pack granting the 'data_quality_rule' kind(s)");
+  });
 });
 
 describe("Documents › DQ sample", () => {

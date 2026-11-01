@@ -120,7 +120,7 @@ function CheckCompliance({ w, documentId, clauseId, archived }: {
 
   const installAndRetry = useCallback(async () => {
     setBusy(true);
-    const r = await post("catalogue/install", { project_id: w.projectId });
+    const r = await post("install", { project_id: w.projectId });
     setBusy(false);
     if (r.ok) { setNeedsInstall(false); void start(pendingSubjectId); return; }
     setMsg({ ok: false, text: r.error ? String(r.error) : "Could not install the workflow." });
@@ -153,9 +153,9 @@ function CheckCompliance({ w, documentId, clauseId, archived }: {
       ) : null}
       {needsInstall ? (
         <span className="kg-doc-install" data-testid="kg-doc-install-workflow-wrap">
-          <button type="button" className="ag-btn ag-btn-primary" data-testid="kg-doc-install-workflow"
-                  disabled={busy} title="Install banking_regulatory_compliance from the catalogue"
-                  onClick={() => void installAndRetry()}>Install from catalogue</button>
+          <GatedButton permission="workflow:install" className="ag-btn ag-btn-primary" data-testid="kg-doc-install-workflow"
+                       disabled={busy} title="Install banking_regulatory_compliance from the catalogue"
+                       onClick={() => void installAndRetry()}>Install from catalogue</GatedButton>
         </span>
       ) : null}
       {needsSubject ? (

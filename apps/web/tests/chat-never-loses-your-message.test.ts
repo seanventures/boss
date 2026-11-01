@@ -111,8 +111,13 @@ describe("chat formatting", () => {
   it("renders an assistant reply as markdown", () => {
     // "**What I found**", GFM evidence tables, `run_id` in backticks — printed raw, the table
     // that matters most became unreadable.
-    expect(UI).toContain('import { Markdown } from "./markdown"');
-    expect(UI).toContain('<Markdown className="agent-md"');
+    // Through CitedAnswer (rulebook source G6), which renders the same shared Markdown with its
+    // citations turned into named links — still the one renderer, still class agent-md.
+    expect(UI).toContain('import { CitedAnswer } from "./agents/cited-answer"');
+    expect(UI).toContain('<CitedAnswer className="agent-md"');
+    const cited = readFileSync(resolve(__dirname, "../app/agents/cited-answer.tsx"), "utf8");
+    expect(cited).toContain('import { Markdown } from "../markdown"');
+    expect(cited).toContain("<Markdown className={className}");
   });
 
   it("reuses the renderer the rest of the console already uses", () => {

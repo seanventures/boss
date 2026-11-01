@@ -17,6 +17,7 @@ import {
   DOCUMENT_MANAGE, SCAN_START, getDqPlatform, kgRunHref, loadDqPlatform, scheduleDqIntake,
   type KgDqGroup, type KgDqPlatform,
 } from "../../lib/kg-view";
+import { StartRefusal, asReadiness, type PendingRefusal } from "../workflow-readiness-ui";
 import { post } from "../workflows/delivery-api";
 
 type Who = { projectId: string; actor: string };
@@ -34,15 +35,23 @@ function GroupRow({ w, group, workflowKey, archived, onStarted }: {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string; href?: string | null } | null>(null);
   const label = `${group.eagle_rule_id} v${group.rule_version} on COB ${group.cob}`;
+  const [refusal, setRefusal] = useState<PendingRefusal | null>(null);
 
-  const start = async () => {
-    setBusy(true); setMsg(null);
+  const start = async (startAnyway: string[] = []) => {
+    setBusy(true); setMsg(null); setRefusal(null);
     const r = await post("start", {
       project_id: w.projectId, workflow_key: workflowKey, actor: w.actor,
       input: { exception_group_id: group.group_id, title: `Investigate ${label}` },
       prefer_project_copy: true,
+      ...(startAnyway.length ? { start_anyway: startAnyway } : {}),
     });
     setBusy(false);
+    // A start refused for what the project lacks: the shared checklist and "Investigate anyway".
+    const readiness = r.ok ? null : asReadiness(r.readiness);
+    if (readiness) {
+      setRefusal({ label: "Investigate", message: String(r.error ?? ""), readiness, retry: (keys) => start(keys) });
+      return;
+    }
     if (!r.ok) { setMsg({ ok: false, text: r.error ? String(r.error) : "The investigation did not start." }); return; }
     const data = (r.data ?? {}) as { run?: { id?: string }; id?: string; run_id?: string };
     const runId = data.run?.id ?? data.run_id ?? data.id ?? null;
@@ -68,6 +77,7 @@ function GroupRow({ w, group, workflowKey, archived, onStarted }: {
           </span>
         ) : null}
       </span>
+      {refusal ? <StartRefusal refusal={refusal} projectId={w.projectId} busy={busy} onDismiss={() => setRefusal(null)} /> : null}
     </li>
   );
 }

@@ -14,6 +14,8 @@
  */
 import React, { useMemo, useState } from "react";
 
+import { GatedButton } from "../../../components/gated";
+
 import {
   DESIGN_LABEL, kindKey, kindLabel, STATUS_LABEL, type ContractKind, type DesignNote, type DesignStatus,
   type KindMeta, type PipelineStage, type StageContract, type StageDesignState,
@@ -197,18 +199,18 @@ function DesignBar({ design, onAction, busy, error }: {
       {onAction ? (
         <span className="pl-design-actions">
           {design.can.send_for_review ? (
-            <button type="button" className="pl-btn" data-testid="design-send-for-review" disabled={busy}
-                    title="Ask a reviewer to check this agent's design" onClick={() => onAction("review")}>Send for review</button>
+            <GatedButton permission="workflow:create" className="pl-btn" data-testid="design-send-for-review" disabled={busy}
+                         title="Ask a reviewer to check this agent's design" onClick={() => onAction("review")}>Send for review</GatedButton>
           ) : null}
           {design.can.lock ? (
-            <button type="button" className="pl-btn pl-btn-primary" data-testid="design-lock" disabled={busy}
-                    title="Lock this design: its contract cannot change until it is revised. Asks you to confirm it is you."
-                    onClick={() => onAction("lock")}>Lock design</button>
+            <GatedButton permission="workflow:publish" className="pl-btn pl-btn-primary" data-testid="design-lock" disabled={busy}
+                         title="Lock this design: its contract cannot change until it is revised. Asks you to confirm it is you."
+                         onClick={() => onAction("lock")}>Lock design</GatedButton>
           ) : null}
           {design.can.revise ? (
-            <button type="button" className="pl-btn" data-testid="design-revise" disabled={busy}
-                    title="Open the next version of this design for review; the locked one stays on record"
-                    onClick={() => onAction("revise")}>Revise</button>
+            <GatedButton permission="workflow:create" className="pl-btn" data-testid="design-revise" disabled={busy}
+                         title="Open the next version of this design for review; the locked one stays on record"
+                         onClick={() => onAction("revise")}>Revise</GatedButton>
           ) : null}
         </span>
       ) : null}

@@ -92,6 +92,9 @@ export const WRITE_HELPERS: Readonly<Record<string, WriteGate | readonly Permiss
   "lib/workflow-api.ts#deleteWorkflow": "workflow:delete",        // DELETE /v1/delivery-workflows/{id}
   "lib/workflow-api.ts#draftFromDescription": "workflow:create",  // POST /v1/delivery-workflows/draft
   "lib/workflow-api.ts#startTestRun": "workflow_run:start",       // POST /v1/delivery-workflows/test-runs
+  // POST /v1/delivery-workflows/{key}/designs/{stage}/review|revise (workflow:create), …/lock
+  // (workflow:publish); each button gates its own (agent-contract-view.tsx DesignBar).
+  "lib/workflow-api.ts#designAction": ["workflow:create", "workflow:publish"],
 
   // lib/hardware.ts — Infra › hardware places
   "lib/hardware.ts#registerLocalPlace": "host:manage",            // POST /v1/hardware/places/local

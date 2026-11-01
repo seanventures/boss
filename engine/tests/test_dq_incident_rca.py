@@ -255,6 +255,49 @@ def test_loading_keeps_the_projects_other_packs(connection):
     del agents
 
 
+def test_extract_rules_works_right_after_the_platform_and_rulebook_loads(connection):
+    """The live walk of 2026-11-01: a project booted with no pack (the boot seed skips
+    rulebook_extraction), then the AML sample's pack, "Load the NorthPeak Bank data platform",
+    "Load the NorthPeak Bank rulebook" and Add the document — and "Extract rules" answered "no
+    delivery workflow 'rulebook_extraction'". Each load installs what it completes."""
+    from boss_engine.services.knowledge import document_upload, dq_rulebook_sample
+
+    c, project = connection, connection.project_id
+    boot = catalogue.seed(c, project)
+    assert next(i for i in boot["installed"] if i["key"] == "rulebook_extraction").get("skipped")
+    assert _version(c, project, "rulebook_extraction") is None
+    ontology_packs.set_project_pack(c, project_id=project, pack_id="banking-aml", set_by="ceo")
+    dq_platform.load_platform(c, project_id=project, actor="ceo")
+    # The pack set after boot already completes it: the platform load installed it.
+    assert _version(c, project, "rulebook_extraction") is not None
+    preview = dq_rulebook_sample.stage(c, project_id=project, actor_kind="person", actor_ref="ceo")
+    added = document_upload.confirm_upload(c, project_id=project, upload_id=preview["upload_id"],
+                                           actor_kind="person", actor_ref="ceo")
+    status = dq_rulebook_sample.status(c, project_id=project)
+    assert status["can_extract"] and status["document_id"] == added["document_id"]
+    run = workflows.start_run(c, project_id=project, actor="ceo",
+                              input_data={"document_id": added["document_id"]},
+                              dedupe_key=f"rbx_{uuid.uuid4().hex[:10]}",
+                              workflow_version_id=_version(c, project, "rulebook_extraction"))
+    assert run["id"]
+    assert c.execute(text("SELECT 1 FROM roles WHERE project_id = :p AND role_key = 'rulebook_analyst'"),
+                     {"p": project}).scalar()
+
+
+def test_the_rulebook_load_alone_installs_extraction_once_the_packs_are_there(connection):
+    """The other order: packs set by a path that seeds nothing, then the document confirmed."""
+    from boss_engine.services.knowledge import document_upload, dq_rulebook_sample
+
+    c, project = connection, connection.project_id
+    for pack in ("banking-regulatory", "banking-dq"):
+        ontology_packs.set_project_pack(c, project_id=project, pack_id=pack, set_by="ceo")
+    assert _version(c, project, "rulebook_extraction") is None
+    preview = dq_rulebook_sample.stage(c, project_id=project, actor_kind="person", actor_ref="ceo")
+    document_upload.confirm_upload(c, project_id=project, upload_id=preview["upload_id"],
+                                   actor_kind="person", actor_ref="ceo")
+    assert _version(c, project, "rulebook_extraction") is not None
+
+
 def test_loading_is_a_product_action_and_idempotent(loaded):
     c, project, result = loaded
     assert result["ok"] and result["counts"]["database_table"] == 28

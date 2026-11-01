@@ -14,12 +14,13 @@
  */
 import React, { useCallback, useEffect, useRef, useState } from "react";
 
-import { GatedButton } from "../../components/gated";
+import { GatedButton, useGate } from "../../components/gated";
 import {
   DOCUMENT_MANAGE, SCAN_START, confirmUpload, discardUpload, editUpload, fileBase64, getUploadSection,
   kgRulesHref, kgRunHref, stageUpload,
   type KgUploadEdit, type KgUploadPreview, type KgUploadSection,
 } from "../../lib/kg-view";
+import { StartRefusal, asReadiness, type PendingRefusal } from "../workflow-readiness-ui";
 import { post } from "../workflows/delivery-api";
 
 type Who = { projectId: string; actor: string };
@@ -50,23 +51,47 @@ export function ExtractRules({ w, documentId, title, disabledWhy, archived, orgI
 }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string; run?: string | null } | null>(null);
+  // A project that predates the workflow installs it from the catalogue first (workflow:install).
+  const installGate = useGate("workflow:install", w.projectId);
+  const [refusal, setRefusal] = useState<PendingRefusal | null>(null);
 
-  const start = useCallback(async (installed = false): Promise<void> => {
-    setBusy(true); setMsg(null);
+  const start = useCallback(async (installed = false, startAnyway: string[] = []): Promise<void> => {
+    setBusy(true); setMsg(null); setRefusal(null);
     const r = await post("start", {
       project_id: w.projectId, workflow_key: "rulebook_extraction", actor: w.actor,
       input: { document_id: documentId, title: `Extract the rules of ${title}` }, prefer_project_copy: true,
+      ...(startAnyway.length ? { start_anyway: startAnyway } : {}),
     });
     if (!r.ok && !installed && NO_WORKFLOW_RE.test(String(r.error ?? ""))) {
-      const done = await post("catalogue/install", { project_id: w.projectId });
+      if (!installGate.allowed) {
+        setBusy(false);
+        setMsg({ ok: false, text: `Extract Rules from a Rulebook is not installed in this project, and installing it needs another permission: ${installGate.reason}` });
+        return;
+      }
+      const done = await post("install", { project_id: w.projectId });
+      // The catalogue installs rulebook_extraction only where the project's packs grant the
+      // kinds it reads and writes; when it did not, say why instead of a second "no workflow".
+      const entry = (((done.ok ? done.data : null) ?? {}) as { installed?: { key?: string; skipped?: string }[] })
+        .installed?.find((i) => i.key === "rulebook_extraction");
+      if (entry?.skipped) {
+        setBusy(false);
+        setMsg({ ok: false, text: `Rule extraction is not available in this project: it ${entry.skipped}.` });
+        return;
+      }
       if (done.ok) return start(true);
     }
     setBusy(false);
+    // A start refused for what the project lacks: the shared checklist and "Extract anyway".
+    const readiness = r.ok ? null : asReadiness(r.readiness);
+    if (readiness) {
+      setRefusal({ label: "Extract", message: String(r.error ?? ""), readiness, retry: (keys) => start(true, keys) });
+      return;
+    }
     if (!r.ok) { setMsg({ ok: false, text: r.error ? String(r.error) : "The extraction did not start." }); return; }
     const data = (r.data ?? {}) as { run?: { id?: string }; id?: string; run_id?: string };
     const run = data.run?.id ?? data.run_id ?? data.id ?? null;
     setMsg({ ok: true, text: "The Rulebook Analyst is reading the document. Each rule it finds waits in Rules review.", run });
-  }, [w, documentId, title]);
+  }, [w, documentId, title, installGate.allowed, installGate.reason]);
 
   const blocked = !!disabledWhy;
   return (
@@ -83,6 +108,7 @@ export function ExtractRules({ w, documentId, title, disabledWhy, archived, orgI
           {msg.ok ? <> · <a className="inf-link" href={kgRulesHref({}, orgId)}>Rules review</a></> : null}
         </span>
       ) : null}
+      {refusal ? <StartRefusal refusal={refusal} projectId={w.projectId} busy={busy} onDismiss={() => setRefusal(null)} /> : null}
     </span>
   );
 }
