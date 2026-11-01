@@ -175,8 +175,8 @@ def run_historical_pattern(
         produced["incident"] = {"statement": f"{len(from_itsm)} incident(s) from ITSM.",
                                 "node_ids": list(from_itsm)}
 
-    note = (f"Asked the ticket system and the graph for history on this subject. Found "
-            f"{_named_summary(connection, project_id, list(matches), name_kinds=('incident', 'precedent'))}."
+    note = (f"Found {_named_summary(connection, project_id, list(matches), name_kinds=('incident', 'precedent'))}"
+            f" in the ticket system and the graph, with no model."
             if matches else "Asked the ticket system and the graph for history: nothing related found.")
     return {"cost_usd_micros": 0, "matched": list(matches.keys()), "calls": calls,
             "produced": produced, "note": note}

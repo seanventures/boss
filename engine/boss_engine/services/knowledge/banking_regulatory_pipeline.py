@@ -230,6 +230,17 @@ def _prior_decisions(connection: Connection, project_id: str, matched: list) -> 
             + "\n".join(lines[:3]) + "\n\n")
 
 
+def _run_clause_ids(connection: Connection, project_id: str, steps: Mapping[str, Any]) -> list[str]:
+    """The clauses this run's cases are about — what every agent step was given to read."""
+    out: list[str] = []
+    for case_id in (steps.get("clause_intake") or {}).get("compliance_case_ids") or []:
+        node = STORE.get_node(connection, project_id=project_id, node_id=str(case_id))
+        clause = str(((node or {}).get("attrs") or {}).get("clause_id") or "")
+        if clause and clause not in out:
+            out.append(clause)
+    return out
+
+
 def run_compliance_assessment(
     connection: Connection, settings: Any, project_id: str, step: Mapping[str, Any],
     context: Mapping[str, Any], inputs: Mapping[str, Any],
@@ -342,7 +353,12 @@ def run_compliance_assessment(
             "learned": _learned(run_id, step_id, kind="decision",
                                 title=f"Clause assessed as {status}", statement=statement,
                                 confidence=confidence),
-            "cited_fact_ids": [i for i in (citation, *matched) if i]}
+            "cited_fact_ids": [i for i in (citation, *matched) if i],
+            # WHAT IT WAS GIVEN TO READ: the run's clauses, the candidate rules/code and the
+            # history — the read/write view's "last run" reads it (it said "declared, not done").
+            "consulted_ids": list(dict.fromkeys(
+                [*_run_clause_ids(connection, project_id, steps),
+                 *(c["node_id"] for c in candidates), *matched]))}
 
 
 def run_compliance_orchestration(
@@ -577,6 +593,7 @@ def run_lane_confirmation(
     node = STORE.get_node(connection, project_id=project_id, node_id=citation) if citation else None
     verdict = "cannot_verify"
     reason = "no citation to read as code the subject is connected to."
+    lane_symbols: list = []
 
     if node and node["kind"] in {"rule", "symbol"}:
         symbols = _connected_symbols(connection, project_id, citation, node["kind"])
@@ -589,6 +606,7 @@ def run_lane_confirmation(
             if symbol_id not in have and len(symbols) < _MAX_CITED_SYMBOLS + 3:
                 symbols.extend(_connected_symbols(connection, project_id, symbol_id, "symbol"))
                 have.add(symbol_id)
+        lane_symbols = list(symbols)
         if not symbols:
             reason = f"{citation} has no connected code symbol to read."
         else:
@@ -654,7 +672,11 @@ def run_lane_confirmation(
                                 title=f"Lane verdict: {verdict.replace('_', ' ')}",
                                 statement=statement,
                                 confidence=0.8 if verdict != "cannot_verify" else 0.4),
-            "cited_fact_ids": [citation] if citation else []}
+            "cited_fact_ids": [citation] if citation else [],
+            "consulted_ids": list(dict.fromkeys(
+                [*_run_clause_ids(connection, project_id, steps), *([citation] if citation else []),
+                 *(str(sym.get("id")) for sym in lane_symbols if sym.get("id")),
+                 *((steps.get("historical_pattern") or {}).get("matched") or [])]))}
 
 
 def _lane_symbol_keys(connection: Connection, project_id: str, lanes: list,
@@ -744,7 +766,11 @@ def run_remediation_package(
             "ran_as": _ran_as("remediation_advisor"),
             "learned": _learned(run_id, step_id, kind="decision", title=title,
                                 statement=change_brief, confidence=0.6),
-            "cited_fact_ids": [citation] if citation else []}
+            "cited_fact_ids": [citation] if citation else [],
+            "consulted_ids": list(dict.fromkeys(
+                [*_run_clause_ids(connection, project_id, steps), *([citation] if citation else []),
+                 *([str(owner_node["id"])] if owner_node is not None else []),
+                 *((steps.get("historical_pattern") or {}).get("matched") or [])]))}
 
 
 def run_compliance_closure(

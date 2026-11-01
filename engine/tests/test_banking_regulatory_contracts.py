@@ -263,6 +263,14 @@ def test_a_full_run_writes_every_required_kind_with_provenance(connection, monke
     assert "compliance.officer@example.com" in approved["statement"]
     deterministic = {d["step_id"]: d["agent_fingerprint"] for d in decisions}
     assert deterministic["context_enrichment"] == "deterministic"
+    # WHAT EACH AGENT STEP WAS GIVEN TO READ is on its output, so the read/write view's "last
+    # run" can show the clause and the code as read (it said "declared, not done", 2026-11-01).
+    outputs = {r["step_id"]: r["output"] for r in c.execute(text(
+        "SELECT step_id, output FROM workflow_step_runs WHERE workflow_run_id = :r"),
+        {"r": run_id}).mappings().all()}
+    assert clause_id in outputs["compliance_assessment"]["consulted_ids"]
+    assert rule_id in outputs["compliance_assessment"]["consulted_ids"]
+    assert clause_id in outputs["remediation_package"]["consulted_ids"]
 
 
 def test_a_required_write_the_step_only_claims_fails_after_one_repair_round(connection):
