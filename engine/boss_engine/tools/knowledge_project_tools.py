@@ -85,6 +85,16 @@ def _set_ontology_pack(ctx, *, project_id, actor, args):
             pack = ontology_packs.set_project_pack(
                 c, project_id=project_id, pack_id=pack_id, set_by=actor,
             )
+            # THE WORKFLOWS THE PACK UNLOCKS: a catalogue entry whose step contracts name this
+            # pack's kinds (banking_regulatory_compliance) is skipped by a seed that ran before
+            # the pack was set; it is installed now. Idempotent.
+            from ..services.workflow_catalogue import seed_unlocked_by_pack
+
+            try:
+                with c.begin_nested():
+                    seed_unlocked_by_pack(c, project_id, pack.pack_id, actor=actor)
+            except Exception:  # noqa: BLE001 — the pack is set either way; boot seeds again
+                pass
     except ontology_packs.PackRefused as refused:
         return {"ok": False, "error": str(refused)}
     return {"ok": True, "pack_id": pack.pack_id, "version": pack.version}

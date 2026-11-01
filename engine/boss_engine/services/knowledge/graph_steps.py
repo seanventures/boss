@@ -55,24 +55,30 @@ def run_context_enrichment(
         f"Collected {len(within)} node(s) connected to the subject within {max_hops} hop(s): "
         f"{', '.join(sorted(within_kinds)) or 'none'}."
     )
-    context_graph.write_agent_decision(
+    decision = context_graph.write_agent_decision(
         connection, project_id, step_id=step_id, run_id=run_id,
         decision_type="ContextAssembled", statement=statement, policy_version="",
         workflow_version="", agent_fingerprint="deterministic", actor_ref=actor_ref)
+    # WHAT THE STEP WROTE, BY NODE ID, so the step's contract holds the engine to it (§4.1 step
+    # 3): the engine checks these rows exist and stamps the run's provenance on them.
+    produced: dict[str, Any] = {"agent_decision": {
+        "decision_type": "ContextAssembled", "statement": statement, "node_id": decision["id"]}}
 
     if missing:
         detail = "; ".join(
             f"{kind} found beyond the {max_hops}-hop cap" if kind in found_beyond
             else f"no {kind} found" for kind in missing)
-        context_graph.write_coverage_gap(
+        gap_statement = f"Expected but missing within the {max_hops}-hop cap: {detail}."
+        gap = context_graph.write_coverage_gap(
             connection, project_id, step_id=step_id, run_id=run_id,
-            statement=f"Expected but missing within the {max_hops}-hop cap: {detail}.",
-            actor_ref=actor_ref)
+            statement=gap_statement, actor_ref=actor_ref)
+        produced["coverage_gap"] = {"statement": gap_statement, "node_id": gap["id"]}
 
     return {
         "cost_usd_micros": 0,
         "collected": [row["node_id"] for row in within],
         "missing_kinds": missing,
+        "produced": produced,
     }
 
 
@@ -95,8 +101,9 @@ def run_historical_pattern(
 
     # Always asked, even when the graph already has a match: a new ticket touching the
     # subject's code/systems since the last run would otherwise go unseen.
-    matches.update(_itsm_matches(connection, project_id=project_id, subject_id=subject_id,
-                                  actor_ref=actor_ref))
+    from_itsm = _itsm_matches(connection, project_id=project_id, subject_id=subject_id,
+                              actor_ref=actor_ref)
+    matches.update(from_itsm)
 
     for match_id in matches:
         _STORE.upsert_edge(
@@ -106,12 +113,19 @@ def run_historical_pattern(
     statement = (
         f"Correlated {len(matches)} prior incident/precedent(s) sharing the subject's links."
         if matches else "No prior incident or precedent shares the subject's links.")
-    context_graph.write_agent_decision(
+    decision = context_graph.write_agent_decision(
         connection, project_id, step_id=step_id, run_id=run_id,
         decision_type="HistoricalPatternMatched", statement=statement, policy_version="",
         workflow_version="", agent_fingerprint="deterministic", actor_ref=actor_ref)
+    produced: dict[str, Any] = {"agent_decision": {
+        "decision_type": "HistoricalPatternMatched", "statement": statement,
+        "node_id": decision["id"]}}
+    if from_itsm:
+        # The tickets the ITSM server returned, written in as incident nodes this run.
+        produced["incident"] = {"statement": f"{len(from_itsm)} incident(s) from ITSM.",
+                                "node_ids": list(from_itsm)}
 
-    return {"cost_usd_micros": 0, "matched": list(matches.keys())}
+    return {"cost_usd_micros": 0, "matched": list(matches.keys()), "produced": produced}
 
 
 def _itsm_matches(connection: Connection, *, project_id: str, subject_id: str, actor_ref: str
@@ -239,12 +253,15 @@ def run_closure(
             kind="about", actor_kind="agent", actor_ref=actor_ref)
 
     statement = f"Recorded this investigation's resolution as a precedent: {symptom[:150]}."
-    context_graph.write_agent_decision(
+    decision = context_graph.write_agent_decision(
         connection, project_id, step_id=step_id, run_id=run_id,
         decision_type="PrecedentRecorded", statement=statement, policy_version="",
         workflow_version="", agent_fingerprint="deterministic", actor_ref=actor_ref)
 
-    return {"cost_usd_micros": 0, "precedent_id": precedent_id}
+    return {"cost_usd_micros": 0, "precedent_id": precedent_id, "produced": {
+        "precedent": {"statement": cause_summary or symptom, "node_id": precedent_id},
+        "agent_decision": {"decision_type": "PrecedentRecorded", "statement": statement,
+                           "node_id": decision["id"]}}}
 
 
 def _kinds_of(connection: Connection, project_id: str, rows: Sequence[Mapping[str, Any]]

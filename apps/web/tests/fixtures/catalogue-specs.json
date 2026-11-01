@@ -5993,6 +5993,34 @@
             "next": [
               "evidence_loop"
             ],
+            "contract": {
+              "trigger": "a person or monitoring opens a case on a subject node",
+              "reads": [
+                {
+                  "kind": "incident"
+                },
+                {
+                  "kind": "rule"
+                }
+              ],
+              "writes": [
+                {
+                  "kind": "agent_decision",
+                  "required": false,
+                  "decision_type": "CaseOpened"
+                }
+              ],
+              "handoff": {
+                "to": "evidence_loop",
+                "carries": [
+                  "subject_id"
+                ]
+              },
+              "human_review": "none",
+              "decisions": [
+                "placeholder: an instance names the agent that opens or attaches the case"
+              ]
+            },
             "max_attempts": 3
           },
           {
@@ -6010,6 +6038,59 @@
               }
             },
             "next": [],
+            "contract": {
+              "trigger": "inside evidence_loop, after intake; at most 2 rounds",
+              "reads": [
+                {
+                  "kind": "rule"
+                },
+                {
+                  "kind": "symbol"
+                },
+                {
+                  "kind": "file"
+                },
+                {
+                  "kind": "service"
+                },
+                {
+                  "kind": "datastore"
+                },
+                {
+                  "kind": "team"
+                },
+                {
+                  "kind": "incident"
+                }
+              ],
+              "writes": [
+                {
+                  "kind": "agent_decision",
+                  "required": true,
+                  "decision_type": "ContextAssembled"
+                },
+                {
+                  "kind": "coverage_gap",
+                  "required": false
+                }
+              ],
+              "handoff": {
+                "to": "historical_pattern",
+                "carries": [
+                  "collected",
+                  "missing_kinds"
+                ]
+              },
+              "human_review": "none; what the hop cap could not reach is a CoverageGap and the run continues",
+              "policy": {
+                "max_hops": 2
+              },
+              "llm": "none",
+              "decisions": [
+                "facts only: a fixed graph traversal, $0 and repeatable",
+                "missing expected kinds re-run the loop, at most twice"
+              ]
+            },
             "max_attempts": 3
           },
           {
@@ -6024,6 +6105,22 @@
             "next": [
               "historical_pattern"
             ],
+            "contract": {
+              "trigger": "after intake; re-runs context_enrichment while kinds are missing",
+              "handoff": {
+                "to": "historical_pattern",
+                "carries": [
+                  "collected"
+                ]
+              },
+              "policy": {
+                "max_iterations": 2
+              },
+              "llm": "none",
+              "decisions": [
+                "bounded: never more than 2 enrichment rounds"
+              ]
+            },
             "max_attempts": 3,
             "binding": {}
           },
@@ -6040,6 +6137,59 @@
             "next": [
               "analysis"
             ],
+            "contract": {
+              "trigger": "after the evidence loop",
+              "reads": [
+                {
+                  "kind": "incident"
+                },
+                {
+                  "kind": "precedent"
+                },
+                {
+                  "kind": "rule"
+                },
+                {
+                  "kind": "symbol"
+                }
+              ],
+              "writes": [
+                {
+                  "kind": "agent_decision",
+                  "required": true,
+                  "decision_type": "HistoricalPatternMatched"
+                },
+                {
+                  "kind": "incident",
+                  "required": false
+                }
+              ],
+              "calls": [
+                {
+                  "mcp": "itsm",
+                  "tool": "get_incident"
+                },
+                {
+                  "mcp": "itsm",
+                  "tool": "list_incidents"
+                }
+              ],
+              "handoff": {
+                "to": "analysis",
+                "carries": [
+                  "matched"
+                ]
+              },
+              "human_review": "none",
+              "policy": {
+                "max_hops": 2
+              },
+              "llm": "none",
+              "decisions": [
+                "a match shares a link with the subject; correlates_with is upserted, never duplicated",
+                "an ITSM ticket naming the subject's code becomes an incident node"
+              ]
+            },
             "max_attempts": 3
           },
           {
@@ -6054,6 +6204,44 @@
             "next": [
               "orchestrator"
             ],
+            "contract": {
+              "trigger": "after historical_pattern",
+              "reads": [
+                {
+                  "kind": "rule"
+                },
+                {
+                  "kind": "symbol"
+                },
+                {
+                  "kind": "incident"
+                },
+                {
+                  "kind": "precedent"
+                },
+                {
+                  "kind": "agent_decision"
+                }
+              ],
+              "writes": [
+                {
+                  "kind": "agent_decision",
+                  "required": false,
+                  "decision_type": "Assessment"
+                }
+              ],
+              "handoff": {
+                "to": "orchestrator",
+                "carries": [
+                  "findings",
+                  "finding_families"
+                ]
+              },
+              "human_review": "graph changes are proposals that go to review",
+              "decisions": [
+                "cites the evidence for each finding, with a confidence"
+              ]
+            },
             "max_attempts": 3
           },
           {
@@ -6067,6 +6255,31 @@
             "next": [
               "lanes"
             ],
+            "contract": {
+              "trigger": "after analysis",
+              "reads": [
+                {
+                  "kind": "agent_decision"
+                }
+              ],
+              "writes": [
+                {
+                  "kind": "agent_decision",
+                  "required": false,
+                  "decision_type": "Routed"
+                }
+              ],
+              "handoff": {
+                "to": "lanes",
+                "carries": [
+                  "finding_families"
+                ]
+              },
+              "human_review": "none",
+              "decisions": [
+                "routes each finding family to its own lane"
+              ]
+            },
             "max_attempts": 3
           },
           {
@@ -6079,6 +6292,20 @@
             "next": [
               "human_approval"
             ],
+            "contract": {
+              "trigger": "one remediation_advisor per finding family",
+              "handoff": {
+                "to": "human_approval",
+                "carries": [
+                  "results"
+                ]
+              },
+              "policy": {
+                "max_items": 25,
+                "concurrency": 3
+              },
+              "llm": "none"
+            },
             "max_attempts": 3,
             "binding": {}
           },
@@ -6091,6 +6318,37 @@
               }
             },
             "next": [],
+            "contract": {
+              "trigger": "one per finding family (lanes)",
+              "reads": [
+                {
+                  "kind": "rule"
+                },
+                {
+                  "kind": "symbol"
+                },
+                {
+                  "kind": "team"
+                },
+                {
+                  "kind": "agent_decision"
+                }
+              ],
+              "writes": [
+                {
+                  "kind": "agent_decision",
+                  "required": false,
+                  "decision_type": "RemediationProposed"
+                }
+              ],
+              "handoff": {
+                "to": "human_approval",
+                "carries": [
+                  "remediation"
+                ]
+              },
+              "human_review": "a person approves at human_approval"
+            },
             "max_attempts": 3
           },
           {
@@ -6105,6 +6363,27 @@
             "next": [
               "execution"
             ],
+            "contract": {
+              "trigger": "remediations are ready",
+              "writes": [
+                {
+                  "kind": "agent_decision",
+                  "required": true,
+                  "decision_type": "Approved|Rejected"
+                }
+              ],
+              "handoff": {
+                "to": "execution",
+                "carries": [
+                  "decision_id"
+                ]
+              },
+              "human_review": "the approver approves or rejects; a rejection stops the run",
+              "llm": "none",
+              "decisions": [
+                "nothing executes before a person approves"
+              ]
+            },
             "max_attempts": 3,
             "binding": {}
           },
@@ -6119,6 +6398,16 @@
             "next": [
               "closure"
             ],
+            "contract": {
+              "trigger": "after approval",
+              "handoff": {
+                "to": "closure",
+                "carries": [
+                  "execution_state"
+                ]
+              },
+              "human_review": "runs under the approver's grant; a different person merges"
+            },
             "max_attempts": 3
           },
           {
@@ -6130,6 +6419,38 @@
               }
             },
             "next": [],
+            "contract": {
+              "trigger": "after execution",
+              "reads": [
+                {
+                  "kind": "incident"
+                },
+                {
+                  "kind": "precedent"
+                }
+              ],
+              "writes": [
+                {
+                  "kind": "precedent",
+                  "required": false
+                },
+                {
+                  "kind": "agent_decision",
+                  "required": false,
+                  "decision_type": "PrecedentRecorded"
+                }
+              ],
+              "handoff": {
+                "to": "the next run's historical_pattern",
+                "carries": [
+                  "precedent_id"
+                ]
+              },
+              "human_review": "none",
+              "decisions": [
+                "records the resolution as a precedent the next run finds"
+              ]
+            },
             "max_attempts": 3
           }
         ],
@@ -6199,6 +6520,44 @@
             "next": [
               "evidence_loop"
             ],
+            "contract": {
+              "trigger": "a run starts on a regulation document (document_id) or a clause (subject_id)",
+              "reads": [
+                {
+                  "kind": "document"
+                },
+                {
+                  "kind": "clause"
+                },
+                {
+                  "kind": "regulation"
+                }
+              ],
+              "writes": [
+                {
+                  "kind": "compliance_case",
+                  "required": true
+                },
+                {
+                  "kind": "agent_decision",
+                  "required": true,
+                  "decision_type": "ClauseIntake"
+                }
+              ],
+              "handoff": {
+                "to": "evidence_loop",
+                "carries": [
+                  "compliance_case_ids",
+                  "subject_id"
+                ]
+              },
+              "human_review": "none; the Compliance Officer reviews the outcome at human_approval",
+              "llm": "none",
+              "decisions": [
+                "one ComplianceCase per clause of the document; with none, one for the subject",
+                "re-opening an open case is idempotent (keyed by clause)"
+              ]
+            },
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -6222,6 +6581,59 @@
               }
             },
             "next": [],
+            "contract": {
+              "trigger": "inside evidence_loop, after clause_intake; at most 2 rounds",
+              "reads": [
+                {
+                  "kind": "clause"
+                },
+                {
+                  "kind": "rule"
+                },
+                {
+                  "kind": "symbol"
+                },
+                {
+                  "kind": "file"
+                },
+                {
+                  "kind": "system"
+                },
+                {
+                  "kind": "owner"
+                },
+                {
+                  "kind": "regulatory_report"
+                }
+              ],
+              "writes": [
+                {
+                  "kind": "agent_decision",
+                  "required": true,
+                  "decision_type": "ContextAssembled"
+                },
+                {
+                  "kind": "coverage_gap",
+                  "required": false
+                }
+              ],
+              "handoff": {
+                "to": "historical_pattern",
+                "carries": [
+                  "collected",
+                  "missing_kinds"
+                ]
+              },
+              "human_review": "none; what the hop cap could not reach is a CoverageGap and the run continues",
+              "policy": {
+                "max_hops": 2
+              },
+              "llm": "none",
+              "decisions": [
+                "facts only: a fixed graph traversal, $0 and repeatable",
+                "missing expected kinds re-run the loop, at most twice"
+              ]
+            },
             "max_attempts": 3
           },
           {
@@ -6236,6 +6648,22 @@
             "next": [
               "historical_pattern"
             ],
+            "contract": {
+              "trigger": "after intake; re-runs context_enrichment while kinds are missing",
+              "handoff": {
+                "to": "historical_pattern",
+                "carries": [
+                  "collected"
+                ]
+              },
+              "policy": {
+                "max_iterations": 2
+              },
+              "llm": "none",
+              "decisions": [
+                "bounded: never more than 2 enrichment rounds"
+              ]
+            },
             "max_attempts": 3,
             "binding": {}
           },
@@ -6249,7 +6677,36 @@
                 }
               }
             },
+            "next": [
+              "compliance_assessment"
+            ],
             "contract": {
+              "trigger": "after the evidence loop",
+              "reads": [
+                {
+                  "kind": "incident"
+                },
+                {
+                  "kind": "precedent"
+                },
+                {
+                  "kind": "rule"
+                },
+                {
+                  "kind": "symbol"
+                }
+              ],
+              "writes": [
+                {
+                  "kind": "agent_decision",
+                  "required": true,
+                  "decision_type": "HistoricalPatternMatched"
+                },
+                {
+                  "kind": "incident",
+                  "required": false
+                }
+              ],
               "calls": [
                 {
                   "mcp": "itsm",
@@ -6259,11 +6716,23 @@
                   "mcp": "itsm",
                   "tool": "list_incidents"
                 }
+              ],
+              "handoff": {
+                "to": "compliance_assessment",
+                "carries": [
+                  "matched"
+                ]
+              },
+              "human_review": "none",
+              "policy": {
+                "max_hops": 2
+              },
+              "llm": "none",
+              "decisions": [
+                "a match shares a link with the subject; correlates_with is upserted, never duplicated",
+                "an ITSM ticket naming the subject's code becomes an incident node"
               ]
             },
-            "next": [
-              "compliance_assessment"
-            ],
             "max_attempts": 3
           },
           {
@@ -6280,6 +6749,48 @@
             "next": [
               "compliance_orchestration"
             ],
+            "contract": {
+              "trigger": "after historical_pattern",
+              "reads": [
+                {
+                  "kind": "clause"
+                },
+                {
+                  "kind": "rule"
+                },
+                {
+                  "kind": "symbol"
+                },
+                {
+                  "kind": "incident"
+                },
+                {
+                  "kind": "precedent"
+                }
+              ],
+              "writes": [
+                {
+                  "kind": "agent_decision",
+                  "required": true,
+                  "decision_type": "Assessment"
+                }
+              ],
+              "handoff": {
+                "to": "compliance_orchestration",
+                "carries": [
+                  "assessment",
+                  "confidence",
+                  "citation",
+                  "cited_incident"
+                ]
+              },
+              "human_review": "implemented_by / gap edges are proposals that go to review",
+              "decisions": [
+                "implemented, partly implemented or gap, with a confidence",
+                "cites only a candidate node it was offered; anything else is a gap",
+                "a correlated incident's detail (INC-2088) comes from ITSM, never invented"
+              ]
+            },
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -6298,6 +6809,38 @@
             "next": [
               "lanes"
             ],
+            "contract": {
+              "trigger": "after compliance_assessment",
+              "reads": [
+                {
+                  "kind": "agent_decision"
+                },
+                {
+                  "kind": "rule"
+                },
+                {
+                  "kind": "symbol"
+                }
+              ],
+              "writes": [
+                {
+                  "kind": "agent_decision",
+                  "required": true,
+                  "decision_type": "Routed"
+                }
+              ],
+              "handoff": {
+                "to": "lanes",
+                "carries": [
+                  "finding_families"
+                ]
+              },
+              "human_review": "none",
+              "decisions": [
+                "families: payment_crediting, payment_allocation, prepayment — the Pipeline Orchestrator's judgement, never a keyword match",
+                "no fitting family starts no lane"
+              ]
+            },
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -6316,6 +6859,20 @@
             "next": [
               "remediation_package"
             ],
+            "contract": {
+              "trigger": "one lane_confirmation per finding family",
+              "handoff": {
+                "to": "remediation_package",
+                "carries": [
+                  "results"
+                ]
+              },
+              "policy": {
+                "max_items": 25,
+                "concurrency": 3
+              },
+              "llm": "none"
+            },
             "max_attempts": 3,
             "binding": {}
           },
@@ -6327,6 +6884,50 @@
               "inputs": {}
             },
             "next": [],
+            "contract": {
+              "trigger": "one per finding family (lanes)",
+              "reads": [
+                {
+                  "kind": "clause"
+                },
+                {
+                  "kind": "rule"
+                },
+                {
+                  "kind": "symbol"
+                },
+                {
+                  "kind": "file"
+                },
+                {
+                  "kind": "incident"
+                }
+              ],
+              "writes": [
+                {
+                  "kind": "agent_decision",
+                  "required": true,
+                  "decision_type": "Confirmed|RuledOut|CannotVerify"
+                }
+              ],
+              "handoff": {
+                "to": "remediation_package",
+                "carries": [
+                  "verdict",
+                  "reason",
+                  "cited_node_id"
+                ]
+              },
+              "human_review": "none",
+              "policy": {
+                "max_cited_symbols": 5
+              },
+              "decisions": [
+                "judged against the current source lines, read-only",
+                "CannotVerify is forced by the code: no citation, no connected symbol, or unreadable source",
+                "only a successful code read may rule a finding out"
+              ]
+            },
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -6345,6 +6946,47 @@
             "next": [
               "human_approval"
             ],
+            "contract": {
+              "trigger": "after the lanes",
+              "reads": [
+                {
+                  "kind": "clause"
+                },
+                {
+                  "kind": "rule"
+                },
+                {
+                  "kind": "symbol"
+                },
+                {
+                  "kind": "owner"
+                },
+                {
+                  "kind": "incident"
+                },
+                {
+                  "kind": "agent_decision"
+                }
+              ],
+              "writes": [
+                {
+                  "kind": "remediation_package",
+                  "required": true
+                }
+              ],
+              "handoff": {
+                "to": "human_approval",
+                "carries": [
+                  "remediation_package_id",
+                  "owner_team"
+                ]
+              },
+              "human_review": "the Compliance Officer approves it at human_approval",
+              "decisions": [
+                "a change brief, a test, an owner team and an approver role",
+                "closes the gap the assessment states, in the code the lane read"
+              ]
+            },
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -6365,6 +7007,35 @@
             "next": [
               "execution"
             ],
+            "contract": {
+              "trigger": "a remediation package is ready",
+              "writes": [
+                {
+                  "kind": "agent_decision",
+                  "required": true,
+                  "decision_type": "Approved|Rejected"
+                }
+              ],
+              "handoff": {
+                "to": "execution",
+                "carries": [
+                  "decision_id"
+                ]
+              },
+              "human_review": "the Compliance Officer approves or rejects; a rejection stops the run",
+              "llm": "none",
+              "decisions": [
+                "nothing executes before a person approves"
+              ],
+              "reads": [
+                {
+                  "kind": "remediation_package"
+                },
+                {
+                  "kind": "compliance_case"
+                }
+              ]
+            },
             "max_attempts": 3,
             "binding": {}
           },
@@ -6379,6 +7050,21 @@
             "next": [
               "compliance_closure"
             ],
+            "contract": {
+              "trigger": "after approval",
+              "handoff": {
+                "to": "compliance_closure",
+                "carries": [
+                  "execution_state"
+                ]
+              },
+              "human_review": "runs under the approver's grant; a different person merges",
+              "reads": [
+                {
+                  "kind": "remediation_package"
+                }
+              ]
+            },
             "max_attempts": 3
           },
           {
@@ -6402,6 +7088,43 @@
               }
             },
             "next": [],
+            "contract": {
+              "trigger": "after execution (or approval, where execution is out of the workflow)",
+              "reads": [
+                {
+                  "kind": "compliance_case"
+                },
+                {
+                  "kind": "incident"
+                },
+                {
+                  "kind": "precedent"
+                }
+              ],
+              "writes": [
+                {
+                  "kind": "precedent",
+                  "required": true
+                },
+                {
+                  "kind": "agent_decision",
+                  "required": true,
+                  "decision_type": "PrecedentRecorded"
+                }
+              ],
+              "handoff": {
+                "to": "the next run's historical_pattern",
+                "carries": [
+                  "precedent_id"
+                ]
+              },
+              "human_review": "none",
+              "llm": "none",
+              "decisions": [
+                "the precedent links to what the subject was connected to, so the next run's Historical Pattern finds it",
+                "a reused edge back to every incident/precedent this run correlated"
+              ]
+            },
             "max_attempts": 3,
             "approval": {
               "mode": "auto",

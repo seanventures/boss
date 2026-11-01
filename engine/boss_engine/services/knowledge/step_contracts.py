@@ -253,7 +253,16 @@ def _satisfied(spec: WriteSpec, produced: Mapping[str, Any]) -> bool:
         return True
     entry = produced[spec.kind]
     produced_type = entry.get("decision_type") if isinstance(entry, Mapping) else None
-    return produced_type == spec.decision_type
+    return produced_type in decision_types(spec)
+
+
+def decision_types(spec: WriteSpec) -> tuple[str, ...]:
+    """The decision types a write accepts. `Confirmed|RuledOut|CannotVerify` names a step whose
+    one decision is any of several outcomes (a lane's verdict, a gate's answer); a single name
+    is the common case. Empty when the contract names none."""
+    if not spec.decision_type:
+        return ()
+    return tuple(t.strip() for t in spec.decision_type.split("|") if t.strip())
 
 
 class ContractWriteError(Exception):

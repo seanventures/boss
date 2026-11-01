@@ -60,6 +60,11 @@ def project(pg_engine):
         yield project_id
     finally:
         with pg_engine.begin() as connection:
+            # Setting the banking-regulatory pack installs the workflow it unlocks
+            # (workflow_catalogue.seed_unlocked_by_pack); those rows go first.
+            for table in ("workflow_versions", "workflow_definitions", "events"):
+                connection.execute(text(f"DELETE FROM {table} WHERE project_id = :p"),
+                                   {"p": project_id})
             connection.execute(text("DELETE FROM projects WHERE id = :p"), {"p": project_id})
 
 
