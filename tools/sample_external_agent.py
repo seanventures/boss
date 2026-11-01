@@ -19,7 +19,10 @@ def _post_json(url: str, payload: dict, *, headers: dict) -> dict:
     data = json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(
         url, data=data, method="POST",
-        headers={"Content-Type": "application/json", **headers})
+        # A NAMED CLIENT. Some model endpoints' edge protection refuses Python's default
+        # "Python-urllib" agent with 403 (Groq did, 2026-10-31).
+        headers={"Content-Type": "application/json", "User-Agent": "boss-sample-bank-agent/1",
+                 **headers})
     with urllib.request.urlopen(request, timeout=30) as response:
         if response.status >= 300:
             raise RuntimeError(f"{url} answered {response.status}")
@@ -32,10 +35,12 @@ def _ask_model(base_url: str, api_key: str, input_data: dict, contract: dict,
         "model": os.environ.get("MODEL_NAME", "gpt-4o-mini"),
         "messages": [
             {"role": "system", "content": "You are the bank's own regulatory compliance reviewer. "
-                                           "Judge the case from the evidence you were given and "
-                                           "answer with your review statement only: agree or "
-                                           "disagree with BOSS's finding, and why, in two "
-                                           "sentences."},
+                                           "BOSS's agents have assessed a regulation against "
+                                           "the bank's code; their decisions and the proposed "
+                                           "remediation are in the evidence. Judge them as the "
+                                           "bank: say whether you agree with BOSS's finding and "
+                                           "remediation and why, in two sentences, citing the "
+                                           "clause."},
             {"role": "user", "content": json.dumps({"input": input_data, "contract": contract,
                                                     "evidence": evidence or []})},
         ],
@@ -64,23 +69,44 @@ def _mcp_call(mcp_url: str, token: str, name: str, arguments: dict) -> dict:
     return result.get("result") or {}
 
 
-def _read_evidence(mcp_url: str, token: str, contract: dict | None) -> list:
-    """Read what the contract lets this agent read (`reads` kinds) through its own token,
-    so the review stands on BOSS's evidence and the run shows what the agent read."""
+#: How many nodes of one kind the agent takes into its judgement: a project has many rules.
+MAX_PER_KIND = 8
+
+
+def _node_text(node: dict) -> str:
+    """What a node says: its body, else the text, statement or change brief its attrs carry
+    (a clause's text and a decision's statement live in attrs, not the body)."""
+    attrs = node.get("attrs") or {}
+    for value in (node.get("body"), attrs.get("text"), attrs.get("statement"),
+                  attrs.get("change_brief")):
+        if value:
+            return str(value)[:800]
+    return ""
+
+
+def _read_evidence(mcp_url: str, token: str, contract: dict | None, run_id: str = "") -> list:
+    """Read what the contract lets this agent read (`reads` kinds) through its own token, so the
+    review stands on BOSS's evidence and the run shows what the agent read. This run's own nodes
+    first (decisions and packages are keyed by run), then the rest, at most MAX_PER_KIND each."""
     evidence: list = []
     for read in (contract or {}).get("reads") or []:
         kind = str((read or {}).get("kind") or "").strip() if isinstance(read, dict) else ""
         if not kind:
             continue
         result = _mcp_call(mcp_url, token, "kg_find", {"kind": kind})
+        nodes: list = []
         for item in result.get("content") or []:
             try:
-                payload = json.loads(item.get("text") or "{}")
+                nodes.extend(json.loads(item.get("text") or "{}").get("nodes") or [])
             except (TypeError, ValueError):
                 continue
-            for node in payload.get("nodes") or []:
-                evidence.append({"kind": kind, "name": node.get("name"),
-                                 "body": str(node.get("body") or "")[:800]})
+        mine = [n for n in nodes if run_id and (run_id in str(n.get("node_key") or "")
+                                                 or (n.get("attrs") or {}).get("run_id") == run_id)]
+        chosen = mine or nodes
+        for node in chosen[:MAX_PER_KIND]:
+            text_ = _node_text(node)
+            if text_:
+                evidence.append({"kind": kind, "name": node.get("name"), "text": text_})
     return evidence
 
 
@@ -110,7 +136,8 @@ def _handle_step(body: dict) -> tuple[int, dict]:
     if not isinstance(kg, dict) or not kg.get("mcp_url") or not kg.get("token"):
         return 400, {"error": "kg.mcp_url and kg.token are required"}
     try:
-        evidence = _read_evidence(str(kg["mcp_url"]), str(kg["token"]), body.get("contract"))
+        evidence = _read_evidence(str(kg["mcp_url"]), str(kg["token"]), body.get("contract"),
+                                  str(body.get("run_id") or ""))
         statement = _ask_model(
             base_url, os.environ.get("MODEL_API_KEY", ""),
             body.get("input") or {}, body.get("contract") or {}, evidence)
