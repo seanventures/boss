@@ -383,6 +383,8 @@ def test_alert_1_then_alert_2_reuses_the_first_determination(loaded, monkeypatch
     closure1 = _output(c, run1, "aml_closure")
     assert closure1["case_status"] == "closed_false_positive"
     assert closure1["decided_by"] == "dana.analyst"
+    # The case note it posted is recorded as a call it made, like intake's and evidence's.
+    assert closure1["calls"] == [{"mcp": "case-management", "tool": "add_case_note", "ok": True}]
     assert _output(c, run1, "narrative")["drafted"] is False
     precedent = c.execute(text("SELECT trust_tier, attrs FROM kg_nodes WHERE id = :i"),
                           {"i": closure1["precedent_id"]}).mappings().one()

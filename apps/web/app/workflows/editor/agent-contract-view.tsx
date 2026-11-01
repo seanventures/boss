@@ -26,7 +26,7 @@ type GraphNode = {
   key: string; side: Side; kind: string; label: string; sub: string;
   required: boolean; overlay: Overlay; traced?: TracedKind; declared?: ContractKind;
 };
-type CallNode = { key: string; label: string; sub: string; made: number | null };
+type CallNode = { key: string; label: string; sub: string; made: number | null; missing: boolean };
 
 const W = 920;
 const NODE_W = 140;
@@ -35,7 +35,7 @@ const GAP = 12;
 const PER_ROW = 6;
 const STEP_W = 260;
 const STEP_H = 70;
-const CALL_W = 190;
+const CALL_W = 210;
 const CALL_H = 40;
 
 function nodeSub(n: { side: Side; required: boolean; overlay: Overlay; traced?: TracedKind; declared?: ContractKind }): string {
@@ -143,12 +143,19 @@ export function AgentContractView({ stage, hasRun, onClose }: {
     [contract, overlay]);
   const calls: CallNode[] = (contract?.calls ?? []).map((c) => {
     const tool = c.tool || c.mcp;
-    const made = overlay ? (overlay.calls.find((x) => x.tool === tool)?.count ?? null) : null;
+    const made = overlay
+      ? (overlay.calls.find((x) => x.tool === tool && (!x.server || !c.mcp || x.server === c.mcp))?.count ?? null)
+      : null;
+    // A step that records its calls and has none for this one did not make it; a step with no
+    // record at all (an agent that took no turns we can read) cannot be said to have skipped it.
+    const missing = !!overlay && !made && !!overlay.callsRecorded;
     const system = c.mcp ? kindLabel(c.mcp) : "Outside system";
     return {
       key: `${c.mcp}-${c.tool}`, label: system.length <= 4 ? system.toUpperCase() : system,
-      sub: overlay ? (made ? `${humanTool(tool)} · called ${made}` : `${humanTool(tool)} · not recorded`) : humanTool(tool),
-      made,
+      sub: !overlay ? humanTool(tool)
+        : made ? `${humanTool(tool)} · called ${made}`
+        : `${humanTool(tool)} · ${missing ? "declared, not done" : "not recorded"}`,
+      made, missing,
     };
   });
 
@@ -306,12 +313,13 @@ export function AgentContractView({ stage, hasRun, onClose }: {
             return (
               <g key={c.key} data-testid={`node-call-${c.key}`} className="pl-node pl-node-call"
                  data-made={c.made ? "true" : undefined}
+                 data-overlay={c.missing ? "missing" : undefined}
                  data-highlighted={highlighted === `call-${c.key}` ? "true" : "false"}
                  data-dim={dim(`call-${c.key}`) ? "true" : undefined}
                  {...keyProps(`call-${c.key}`, `Calls ${c.label}: ${c.sub}`)}>
                 <rect x={callX} y={y} width={CALL_W} height={CALL_H} rx={8} />
                 <text x={callX + 12} y={y + 17} className="pl-node-label">{c.label}</text>
-                <text x={callX + 12} y={y + 32} className="pl-node-sub">{clip(c.sub, 30)}</text>
+                <text x={callX + 12} y={y + 32} className="pl-node-sub">{clip(c.sub, 36)}</text>
               </g>
             );
           })}

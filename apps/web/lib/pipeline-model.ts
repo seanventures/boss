@@ -292,8 +292,9 @@ export function buildPipeline(spec: Spec, palette: Palette | null,
       } else if (cap && cap.needs_model && cap.captain) {
         runsAs = { label: roleLabel(cap.captain, palette), tone: "agent", tip: "Answers for this stage." };
       } else if (cap) {
-        runsAs = { label: "Built-in · no model", tone: "builtin",
-                   tip: "BOSS does this itself, without a model." };
+        // One wording for every step that runs no model, built-in or graph query alike.
+        runsAs = { label: "Deterministic · no model", tone: "deterministic",
+                   tip: "BOSS does this itself, without a model: no cost, the same answer every time." };
       } else if (named === human) {
         runsAs = { label: "Person", tone: "person", tip: "Waits for a person." };
       } else {

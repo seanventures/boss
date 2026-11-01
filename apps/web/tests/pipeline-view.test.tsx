@@ -58,7 +58,9 @@ describe("buildPipeline", () => {
     expect(at("lane_confirmation").runsAs.label).toBe("Plumb · Lane Agent");
     expect(at("remediation_package").runsAs.label).toBe("Mend · Remediation Advisor");
     expect(at("compliance_orchestration").runsAs.label).toBe("Pipeline Orchestrator");
-    expect(at("clause_intake").runsAs.label).toBe("Built-in · no model");
+    // One wording for every no-model step, built-in or graph query.
+    expect(at("clause_intake").runsAs.label).toBe("Deterministic · no model");
+    expect(at("clause_intake").runsAs.tone).toBe("deterministic");
     expect(at("human_approval").runsAs.label).toBe("Person · Compliance Officer");
     expect(at("bank_review").runsAs.label).toBe("Outside agent · NorthPeak review agent");
     expect(at("evidence_loop").runsAs.label).toBe("Bounded loop (up to 2)");
@@ -154,6 +156,16 @@ describe("PipelineView", () => {
     act(() => by("stage-human_approval")!.click());
     expect(by("stage-captain-select-human_approval")).toBeNull();
     expect(by("outside-agent-host")!.textContent).toBe("review.northpeak.example");
+  });
+
+  it("P1 an outside agent's card is as compact as the others: one chip, its host, 'reads N · writes N'", () => {
+    mount(<PipelineView name="NorthPeak" stages={stages} run={REG_RUN} outsideAgents={[OUTSIDE]} />);
+    const card = by("stage-bank_review")!;
+    expect(card.querySelector('[data-testid="outside-agent-badge"]')).toBeNull();
+    expect(card.querySelectorAll(".pl-runs-as")).toHaveLength(1);
+    expect(card.querySelector('[data-testid="outside-agent-host"]')!.textContent).toBe("review.northpeak.example");
+    expect(by("stage-contract-bank_review")!.textContent).toBe("reads 3 · writes 1");
+    expect(card.textContent).not.toContain("reads Clause");
   });
 
   it("P1 an empty workflow says so", () => {
