@@ -3123,7 +3123,6 @@ def _sar_narrative(connection: Connection, ctx: Any, project_id: str, step: dict
                                     context, inputs)
 
 
-<<<<<<< HEAD
 def _run_dq_stage(key: str, connection: Connection, ctx: Any, project_id: str,
                   step: dict[str, Any], context: dict[str, Any],
                   inputs: dict[str, Any]) -> dict[str, Any]:
@@ -3156,10 +3155,6 @@ for _key in _DQ_STAGES:
     globals()[f"_{_key}"] = _dq_stage(_key)
 
 
-_BANKING_ROLE_CAPABILITIES: dict[str, str] = {
-    # The DQ RCA and remediation pipeline (dq_incident_rca and its side workflows).
-    **{key: f"_{key}" for key in _DQ_STAGES},
-=======
 def _extract_rulebook_rules(connection: Connection, ctx: Any, project_id: str,
                             step: dict[str, Any], context: dict[str, Any],
                             inputs: dict[str, Any]) -> dict[str, Any]:
@@ -3176,9 +3171,10 @@ def _extract_rulebook_rules(connection: Connection, ctx: Any, project_id: str,
 
 
 _BANKING_ROLE_CAPABILITIES: dict[str, str] = {
+    # The DQ RCA and remediation pipeline (dq_incident_rca and its side workflows).
+    **{key: f"_{key}" for key in _DQ_STAGES},
     # A rulebook's rules into the Knowledge Graph (rulebook source G5), dispatched the same way.
     "extract_rulebook_rules": "_extract_rulebook_rules",
->>>>>>> rel/rc10.10-kg
     "clause_intake": "_clause_intake",
     "compliance_assessment": "_compliance_assessment",
     "compliance_orchestration": "_compliance_orchestration",
