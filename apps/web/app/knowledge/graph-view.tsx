@@ -34,6 +34,7 @@ import { GraphCanvas, GraphLegend, GraphTable, READABLE, edgeKey, frameExtent, f
 import { CanvasLoading, KgBuilt, KgEmptyLayer, KgError, KgIndexing, KgReadError, KgTruncation, StageCard } from "./kg-states";
 import { NodePanel, ScanForRules, type BubbleSummary } from "./node-panel";
 import { ProjectTree, type TreePick } from "./project-tree";
+import { SearchCompare } from "./kg-search-compare";
 
 type Layer = "code" | "rules" | "learning" | "domain" | "context";
 type View =
@@ -656,6 +657,8 @@ export function GraphView({ projectId, actor, orgId, repos, onReposChanged, rule
   const [active, setActive] = useState(0);
   const searchBox = useRef<HTMLInputElement>(null);
   const [meaning, setMeaning] = useState(false);
+  // By words and by meaning side by side (rulebook source G9): the query being compared.
+  const [compare, setCompare] = useState<string | null>(null);
   useEffect(() => {
     const q = query.trim();
     if (!q) { setSearch(null); return undefined; }
@@ -893,7 +896,16 @@ export function GraphView({ projectId, actor, orgId, repos, onReposChanged, rule
                 <button type="button" className="inf-link kg-drop-meaning" data-testid="kg-search-meaning" onMouseDown={(e) => e.preventDefault()} onClick={() => setMeaning(true)}>Search by meaning</button>
               ) : null}
               {search.meaning ? <p className="kg-quiet kg-drop-meaning">Searched by meaning</p> : null}
+              {search.res?.meaning_available ? (
+                <button type="button" className="inf-link kg-drop-meaning" data-testid="kg-search-compare-open"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => { setCompare(search.q); setDropOpen(false); }}>Compare by words and by meaning</button>
+              ) : null}
             </div>
+          ) : null}
+          {compare ? (
+            <SearchCompare w={w} q={compare} layers={layers} onClose={() => setCompare(null)}
+                           onPick={(h) => { setCompare(null); pick(h); }} />
           ) : null}
         </div>
         <div className="inf-seg" role="radiogroup" aria-label="View">

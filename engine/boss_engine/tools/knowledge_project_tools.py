@@ -14,6 +14,8 @@ new project. Nothing here is a second implementation of a console button.
 """
 from __future__ import annotations
 
+from sqlalchemy import text
+
 from .registry import ToolSpec
 
 
@@ -74,6 +76,65 @@ def _add_regulation_document(ctx, *, project_id, actor, args):
     except documents.DocumentRefused as refused:
         return {"ok": False, "error": str(refused)}
     return {"ok": True, **result}
+
+
+#: What `add_document_from_file` may read without a person handing it a file: the DQ sample.
+_SAMPLE_FILES = ("northpeak_dq_rulebook", "dq_sample", "NorthPeak_Loan_DQ_Rulebook_v3.2.pdf")
+
+
+def _add_document_from_file(ctx, *, project_id, actor, args):
+    """Stage a file as a pending upload: its proposed sections, for a PERSON to confirm in
+    Knowledge Graph › Documents. Nothing is written to the graph here (rulebook source G3)."""
+    from ..services.knowledge import document_upload, dq_rulebook_sample
+    from ..services.llm_telemetry import get_llm_context
+
+    name = str(args.get("file") or "").strip()
+    if not name:
+        return {"ok": False, "error": "file is required: 'northpeak_dq_rulebook' for the DQ sample, "
+                                      "or the name of a text file attached in this conversation."}
+    try:
+        with ctx.begin() as c:
+            if name in _SAMPLE_FILES:
+                preview = dq_rulebook_sample.stage(c, project_id=project_id, actor_kind="agent",
+                                                   actor_ref=actor)
+            else:
+                thread = str((get_llm_context() or {}).get("agent_thread_id") or "").strip()
+                row = c.execute(text(
+                    "SELECT name, kind, data FROM agent_attachments WHERE project_id = :p "
+                    "AND thread_id = :t AND name = :n ORDER BY created_at DESC LIMIT 1"),
+                    {"p": project_id, "t": thread, "n": name}).mappings().first() if thread else None
+                if row is None:
+                    return {"ok": False, "error": (
+                        f"No file named {name!r} is attached in this conversation. Attach it, or ask "
+                        "the person to upload it in Knowledge Graph › Documents (PDFs go there).")}
+                if row["kind"] != "text":
+                    return {"ok": False, "error": (
+                        f"{name!r} is not a text file. A PDF is uploaded in Knowledge Graph › "
+                        "Documents › Upload a document, where its sections are previewed.")}
+                preview = document_upload.stage_upload(
+                    c, project_id=project_id, payload=str(row["data"]).encode("utf-8"),
+                    filename=name, title=str(args.get("title") or "") or None,
+                    actor_kind="agent", actor_ref=actor)
+    except (document_upload.UploadRefused, LookupError, PermissionError) as refused:
+        return {"ok": False, "error": str(refused)}
+    sections = preview["sections"]
+    return {
+        "ok": True, "status": "waiting_for_a_person", "title": preview["title"],
+        "pages": preview["pages"], "counts": preview["counts"],
+        "first_sections": [s["title"] for s in sections[:12]],
+        "href": f"/?project_id={project_id}&area=knowledge&kg_tab=documents",
+        "note": (f"Proposed {preview['counts']['sections']} sections "
+                 f"({preview['counts']['rule_cards']} rule cards) from {preview['pages']} pages. "
+                 "Nothing is in the graph yet: a person reviews the split in Knowledge Graph › "
+                 "Documents and confirms it (they may merge, split or drop sections)."),
+    }
+
+
+def _dq_rulebook_status(ctx, *, project_id, actor, args):
+    from ..services.knowledge import dq_rulebook_sample
+
+    with ctx.begin() as c:
+        return {"ok": True, **dq_rulebook_sample.status(c, project_id=project_id)}
 
 
 def _set_ontology_pack(ctx, *, project_id, actor, args):
@@ -205,6 +266,31 @@ KNOWLEDGE_PROJECT_TOOLS: dict[str, dict] = {
         "handler": _add_regulation_document, "kind": "write", "permission": "knowledge:manage",
         "operator_only": False,
     },
+    "add_document_from_file": {
+        "description": (
+            "Propose adding a document to this project's Knowledge Graph from a file: "
+            "'northpeak_dq_rulebook' (the NorthPeak Bank Loan DQ Rulebook v3.2 sample PDF), or a "
+            "text file attached in this conversation. BOSS reads it and proposes its sections "
+            "(headings and rule cards, each with its page); NOTHING is written until a person "
+            "confirms the split in Knowledge Graph › Documents. Then 'Extract rules' there has the "
+            "Rulebook Analyst propose the rules it states."),
+        "parameters": {"type": "object", "properties": {
+            "file": {"type": "string", "description": "northpeak_dq_rulebook, or an attached file's name"},
+            "title": {"type": "string"}},
+            "required": ["file"], "additionalProperties": False},
+        "handler": _add_document_from_file, "kind": "write", "permission": "knowledge:manage",
+        # It only proposes: the person's confirmation in Documents is the gate.
+        "queues_for_review": True,
+    },
+    "dq_rulebook_status": {
+        "description": (
+            "The DQ sample rulebook in this project: whether a preview waits for a person, "
+            "whether the document is confirmed (and how many sections), how many rules were "
+            "proposed from it and approved, and whether this project can hold data-quality rules."),
+        "parameters": {"type": "object", "properties": {}, "required": [],
+                       "additionalProperties": False},
+        "handler": _dq_rulebook_status, "kind": "read", "permission": "knowledge:read",
+    },
     "set_ontology_pack": {
         "description": (
             "ADD an ontology pack to this project (e.g. banking-regulatory, banking-dq, "
@@ -252,4 +338,5 @@ def register_knowledge_project_tools(reg) -> None:
             handler=spec["handler"], kind=spec["kind"],
             # Setting a team is undone by setting it again; it starts and spends nothing.
             reversibility="safe", permission=spec["permission"],
-            operator_only=spec.get("operator_only", False)))
+            operator_only=spec.get("operator_only", False),
+            queues_for_review=spec.get("queues_for_review", False)))

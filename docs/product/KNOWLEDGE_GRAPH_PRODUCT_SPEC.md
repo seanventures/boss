@@ -128,7 +128,20 @@ The product therefore reads **precomputed rollups** (§2.4), not live aggregatio
 
 **Non-goals (this build).**
 - The Domain layer and document ingestion (regulatory, AML, claims) are out. The data model
-  reserves them.
+  reserves them. (Since built: KG Domain layer v1 and the rulebook source; see "Documents"
+  below.)
+
+**Documents (KG Domain layer v1; rulebook source, 2026-11-01).** SPEC resolution #1 said BOSS
+never runs text segmentation over a pasted document: the caller splits it into clauses. That
+still holds for PASTED text. **Operator decision 2026-11-01 amends it for uploads:** an uploaded
+PDF or text file (Knowledge Graph › Documents › Upload a document, or the agent tool
+`add_document_from_file`) MAY be split into sections automatically — by its numbered headings and
+rule cards, with a title-page and contents section, each with its page — but only after a person
+confirms the split in a preview, where they may drop, merge or split sections. Nothing is written
+before that confirmation; an agent may propose an upload but never confirm one. Each confirmed
+section becomes one `clause` with its exact extracted text and a citation (document title,
+section, page). Rules are then extracted FROM THE DOCUMENT by the Rulebook Analyst
+(`rulebook_extraction`) as proposals a person reviews in Rules review.
 - Editing code nodes by hand is out.
 - A general Cypher UI is out (the `/cypher` route stays for agents).
 - Treating a re-index or a run's finish-time summary as learning is out. Learning is what agents

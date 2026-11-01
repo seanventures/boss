@@ -91,6 +91,8 @@ DEFAULT_STEP_AGENTS: dict[str, str] = {
     # THE REGULATORY TRACE (regulatory_trace.DEFAULT_ROLE): the architect traces a document's
     # clauses to the rules and code that implement them.
     "trace_regulation": "chief_architect",
+    # THE RULEBOOK EXTRACTION (rulebook_extract.ROLE): the Rulebook Analyst reads the rulebook.
+    "extract_rulebook_rules": "rulebook_analyst",
 }
 
 #: WHO BUILDS IT DEPENDS ON WHAT IS BEING BUILT (§0.1 item 4: "build → Engineering Captain /
@@ -1156,6 +1158,31 @@ CATALOGUE: list[dict[str, Any]] = [
         ]),
     },
     {
+        # EXTRACT A RULEBOOK'S RULES (rulebook source G5). A document a person uploaded and
+        # confirmed in Knowledge Graph › Documents is read by the Rulebook Analyst, a batch of
+        # sections at a time; each rule it states is proposed with its thresholds and the clause
+        # quoted as evidence, and a person approves each one in Rules review. Nothing is invented:
+        # a rule id must be printed in the clause it cites.
+        "key": "rulebook_extraction",
+        "name": "Extract Rules from a Rulebook",
+        "description": "Read a rulebook you uploaded and propose each data-quality rule it states, "
+                       "with its Warning and Error thresholds, the data it protects and the clause "
+                       "it came from. A person approves each rule.",
+        "objective": (
+            "Read every section of the named document and propose each rule in force that it "
+            "states — its id, statement, dimension, severity, check, owner, the critical data "
+            "elements and table.column values it protects, its regulatory reach, and its "
+            "Warning and Error thresholds — quoting the clause word for word. Propose nothing the "
+            "document does not print, and no retired rule. Nothing is approved automatically."
+        ),
+        "work_class": "any",
+        "steps": _chain([
+            _step("extract", "extract_rulebook_rules", {
+                "document_id": _in("document_id"), "budget_usd": _in("budget_usd")}),
+            _step("review", "rules_review", {"scan_id": _from("extract", "scan_id")}),
+        ]),
+    },
+    {
         # TRACE A REGULATION TO CODE (KNOWLEDGE_GRAPH_PRODUCT_SPEC.md Domain layer, A2). An
         # agent reads a document's clauses and proposes the rule or code that implements each,
         # or a gap when nothing does. A person reviews every proposal; nothing is auto-approved.
@@ -1896,6 +1923,16 @@ BRIEFS: dict[str, dict[str, Any]] = {
                                  "who may approve one.",
                     "scope": ["pkg:owner/app:core:com.example.loans.disbursement"]},
         "required": ("scope",),
+    },
+    "rulebook_extraction": {
+        "directive": ("Anything to read for first? (optional)",
+                      "The Rulebook Analyst proposes every rule the document states. Upload and "
+                      "confirm the document in Knowledge Graph › Documents first; Extract rules "
+                      "there starts this workflow with it."),
+        "example": {"title": "Rules of the Loan DQ Rulebook v3.2",
+                    "directive": "Read every rule card; the retired rules in the change log are "
+                                 "not in force.",
+                    "document_id": "kgn_rulebookdemo01"},
     },
     "regulatory_trace": {
         "directive": ("What should the trace focus on? (optional)",

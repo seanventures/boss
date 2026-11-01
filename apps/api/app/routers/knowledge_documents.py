@@ -2,6 +2,9 @@
 
 GET/POST /v1/knowledge/packs      the project's active ontology pack
 GET/POST /v1/knowledge/documents  a regulation document and its clauses
+POST /v1/knowledge/documents/uploads[/{id}/edit|confirm|discard]  upload a PDF or text file:
+                                  sections proposed, a person confirms before anything is written
+GET/POST /v1/knowledge/samples/dq-rulebook  the NorthPeak DQ rulebook through the same upload
 
 Manage calls require knowledge:manage and step_up=confirmed in the body, the same
 confirmation shape as routers/knowledge.py's ManageBody. Refusals are in words: no pack set,
@@ -187,6 +190,161 @@ def add_document_route(body: AddDocumentBody) -> dict[str, Any]:
         raise _http(error) from error
 
 
+# ── Upload a document (rulebook source G3): stage → preview → (edit) → a PERSON confirms ──────
+# Nothing reaches the graph before the confirmation (operator decision 2026-11-01, amending SPEC
+# resolution #1). The file travels as base64 in JSON, so the confirmation shape and the permit
+# gate read it exactly as every other manage call.
+
+class UploadBody(BaseModel):
+    project_id: str
+    actor: str
+    step_up: Optional[str] = None
+    filename: str
+    content_base64: str
+    title: Optional[str] = None
+    pattern: Optional[str] = None
+
+
+class UploadEditBody(BaseModel):
+    project_id: str
+    actor: str
+    step_up: Optional[str] = None
+    edits: list[dict] = []
+    title: Optional[str] = None
+
+
+class UploadConfirmBody(BaseModel):
+    project_id: str
+    actor: str
+    step_up: Optional[str] = None
+    title: Optional[str] = None
+
+
+def _confirmed(step_up: Optional[str]) -> None:
+    try:
+        require_confirmation(step_up)
+    except PermissionError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+def _upload_http(error: Exception) -> HTTPException:
+    from boss_engine.services.knowledge.document_upload import UploadRefused
+
+    if isinstance(error, UploadRefused):
+        return HTTPException(status_code=422, detail=str(error))
+    return _http(error)
+
+
+@router.post("/documents/uploads")
+@permit(P.KNOWLEDGE_MANAGE, scope=Scope.project(body="project_id"))
+def stage_upload_route(body: UploadBody) -> dict[str, Any]:
+    import base64
+    import binascii
+
+    from boss_engine.services.knowledge import document_upload
+
+    _confirmed(body.step_up)
+    try:
+        payload = base64.b64decode(body.content_base64 or "", validate=True)
+    except (binascii.Error, ValueError) as error:
+        raise HTTPException(status_code=422, detail="The file did not arrive whole: send it again.") from error
+    try:
+        with begin(_engine) as connection:
+            _actor(connection, body.project_id, body.actor, MANAGE)
+            return document_upload.stage_upload(
+                connection, project_id=body.project_id, payload=payload, filename=body.filename,
+                title=body.title, pattern=body.pattern, actor_kind="person", actor_ref=body.actor)
+    except Exception as error:  # noqa: BLE001
+        raise _upload_http(error) from error
+
+
+@router.get("/documents/uploads")
+@permit(P.KNOWLEDGE_READ, scope=Scope.project(query="project_id"))
+def pending_uploads_route(project_id: str = Query(...), actor: str = Query(...)) -> dict[str, Any]:
+    from boss_engine.services.knowledge import document_upload
+
+    try:
+        with begin(_engine) as connection:
+            _actor(connection, project_id, actor, READ)
+            return {"uploads": document_upload.pending_uploads(connection, project_id=project_id)}
+    except Exception as error:  # noqa: BLE001
+        raise _upload_http(error) from error
+
+
+@router.get("/documents/uploads/{upload_id}")
+@permit(P.KNOWLEDGE_READ, scope=Scope.project(query="project_id"))
+def get_upload_route(upload_id: str, project_id: str = Query(...), actor: str = Query(...)) -> dict[str, Any]:
+    from boss_engine.services.knowledge import document_upload
+
+    try:
+        with begin(_engine) as connection:
+            _actor(connection, project_id, actor, READ)
+            return document_upload.get_upload(connection, project_id=project_id, upload_id=upload_id)
+    except Exception as error:  # noqa: BLE001
+        raise _upload_http(error) from error
+
+
+@router.get("/documents/uploads/{upload_id}/sections/{key}")
+@permit(P.KNOWLEDGE_READ, scope=Scope.project(query="project_id"))
+def upload_section_route(upload_id: str, key: str, project_id: str = Query(...),
+                         actor: str = Query(...)) -> dict[str, Any]:
+    from boss_engine.services.knowledge import document_upload
+
+    try:
+        with begin(_engine) as connection:
+            _actor(connection, project_id, actor, READ)
+            return {"key": key, "lines": document_upload.section_lines(
+                connection, project_id=project_id, upload_id=upload_id, key=key)}
+    except Exception as error:  # noqa: BLE001
+        raise _upload_http(error) from error
+
+
+@router.post("/documents/uploads/{upload_id}/edit")
+@permit(P.KNOWLEDGE_MANAGE, scope=Scope.project(body="project_id"))
+def edit_upload_route(upload_id: str, body: UploadEditBody) -> dict[str, Any]:
+    from boss_engine.services.knowledge import document_upload
+
+    _confirmed(body.step_up)
+    try:
+        with begin(_engine) as connection:
+            _actor(connection, body.project_id, body.actor, MANAGE)
+            return document_upload.edit_upload(connection, project_id=body.project_id,
+                                               upload_id=upload_id, edits=body.edits, title=body.title)
+    except Exception as error:  # noqa: BLE001
+        raise _upload_http(error) from error
+
+
+@router.post("/documents/uploads/{upload_id}/confirm")
+@permit(P.KNOWLEDGE_MANAGE, scope=Scope.project(body="project_id"))
+def confirm_upload_route(upload_id: str, body: UploadConfirmBody) -> dict[str, Any]:
+    from boss_engine.services.knowledge import document_upload
+
+    _confirmed(body.step_up)
+    try:
+        with begin(_engine) as connection:
+            _actor(connection, body.project_id, body.actor, MANAGE)
+            return document_upload.confirm_upload(connection, project_id=body.project_id,
+                                                  upload_id=upload_id, actor_kind="person",
+                                                  actor_ref=body.actor, title=body.title)
+    except Exception as error:  # noqa: BLE001
+        raise _upload_http(error) from error
+
+
+@router.post("/documents/uploads/{upload_id}/discard")
+@permit(P.KNOWLEDGE_MANAGE, scope=Scope.project(body="project_id"))
+def discard_upload_route(upload_id: str, body: UploadConfirmBody) -> dict[str, Any]:
+    from boss_engine.services.knowledge import document_upload
+
+    _confirmed(body.step_up)
+    try:
+        with begin(_engine) as connection:
+            _actor(connection, body.project_id, body.actor, MANAGE)
+            return document_upload.discard_upload(connection, project_id=body.project_id,
+                                                  upload_id=upload_id, actor_ref=body.actor)
+    except Exception as error:  # noqa: BLE001
+        raise _upload_http(error) from error
+
+
 # ── Case study 4: the AML sample (services/knowledge/aml_sample.py) ──────────────────────────
 # One product action loads it: the banking-aml pack, the sample's three mock connectors, the
 # synthetic bank into the Knowledge Graph, and the aml_alert_investigation workflow installed.
@@ -229,6 +387,7 @@ def load_aml_sample(body: LoadSampleBody) -> dict[str, Any]:
         raise _http(error) from error
 
 
+<<<<<<< HEAD
 # ── The DQ case study: NorthPeak Bank's data platform (services/knowledge/dq_platform.py) ─────
 # One product action loads it: the banking-dq pack (added beside the project's other packs), the
 # Eagle and Olympus connectors, the platform into the Knowledge Graph (never the rulebook's
@@ -240,10 +399,19 @@ def load_aml_sample(body: LoadSampleBody) -> dict[str, Any]:
 def dq_platform_status(project_id: str = Query(...), actor: str = Query(...),
                        cob: Optional[str] = Query(None)) -> dict[str, Any]:
     from boss_engine.services.knowledge import dq_platform
+=======
+# ── DQ sample (rulebook source G7): the shipped rulebook through the same upload path ──────────
+
+@router.get("/samples/dq-rulebook")
+@permit(P.KNOWLEDGE_READ, scope=Scope.project(query="project_id"))
+def dq_rulebook_status(project_id: str = Query(...), actor: str = Query(...)) -> dict[str, Any]:
+    from boss_engine.services.knowledge import dq_rulebook_sample
+>>>>>>> rel/rc10.10-kg
 
     try:
         with begin(_engine) as connection:
             _actor(connection, project_id, actor, READ)
+<<<<<<< HEAD
             return dq_platform.status(connection, project_id=project_id, cob=cob or None)
     except Exception as error:  # noqa: BLE001
         raise _http(error) from error
@@ -284,3 +452,23 @@ def schedule_dq_intake(body: LoadSampleBody) -> dict[str, Any]:
                                                actor=body.actor)
     except Exception as error:  # noqa: BLE001
         raise _http(error) from error
+=======
+            return dq_rulebook_sample.status(connection, project_id=project_id)
+    except Exception as error:  # noqa: BLE001
+        raise _upload_http(error) from error
+
+
+@router.post("/samples/dq-rulebook")
+@permit(P.KNOWLEDGE_MANAGE, scope=Scope.project(body="project_id"))
+def stage_dq_rulebook(body: LoadSampleBody) -> dict[str, Any]:
+    from boss_engine.services.knowledge import dq_rulebook_sample
+
+    _confirmed(body.step_up)
+    try:
+        with begin(_engine) as connection:
+            _actor(connection, body.project_id, body.actor, MANAGE)
+            return dq_rulebook_sample.stage(connection, project_id=body.project_id,
+                                            actor_kind="person", actor_ref=body.actor)
+    except Exception as error:  # noqa: BLE001
+        raise _upload_http(error) from error
+>>>>>>> rel/rc10.10-kg

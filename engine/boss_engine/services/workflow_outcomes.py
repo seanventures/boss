@@ -311,6 +311,8 @@ VERDICTS: dict[str, Callable[[Mapping[str, Any], Mapping[str, Any]], Verdict]] =
     "compliance_closure": role_agent,
     # aml_alert_investigation's role-agent steps (knowledge/aml_alert_pipeline.py).
     "aml_network_mapping": role_agent,
+    # rulebook_extraction's role-agent step (knowledge/rulebook_extract.py).
+    "extract_rulebook_rules": role_agent,
     "aml_analysis": role_agent,
     "sar_narrative": role_agent,
     # dq_incident_rca's stages (knowledge/dq_incident_pipeline.py).

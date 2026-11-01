@@ -103,6 +103,7 @@ INTERNAL = {
     "remediation_package": "_remediation_package",
     "compliance_closure": "_compliance_closure",
     "aml_network_mapping": "_aml_network_mapping",
+    "extract_rulebook_rules": "_extract_rulebook_rules",
     "aml_analysis": "_aml_analysis",
     "sar_narrative": "_sar_narrative",
     # the DQ RCA and remediation pipeline (knowledge/dq_incident_pipeline.py)
