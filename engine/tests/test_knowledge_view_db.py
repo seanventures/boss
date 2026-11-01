@@ -454,7 +454,7 @@ def test_the_rules_and_learning_tabs_group_by_status_category_and_kind(connectio
     items = view.tree_children(connection, P, tab="rules", parent="rules:approved:validation")
     assert [r["node_id"] for r in items["rows"]] == [ids["approved"]] and items["rows"][0]["kind"] == "rule"
     learning = view.tree_children(connection, P, tab="learning")
-    assert [r["label"] for r in learning["rows"]] == ["Test failures", "Decisions", "Runs"]
+    assert [r["label"] for r in learning["rows"]] == ["Test failures", "Decisions", "Runs it came from"]
     hidden = view.tree_children(connection, P, tab="learning", withheld={"decision", "precedent"})
     assert "Decisions" not in [r["label"] for r in hidden["rows"]]
     search = view.tree_children(connection, P, tab="rules", q="ledger")
@@ -538,7 +538,7 @@ def _nodes_hold(nodes) -> None:
     for n in nodes:
         assert set(n) - {"hop"} <= _NODE_KEYS, set(n) - _NODE_KEYS
         assert {"id", "key", "kind", "layer", "label", "trust_tier"} <= set(n)
-        assert n["layer"] in ("code", "rules", "learning", "domain")
+        assert n["layer"] in ("code", "rules", "learning", "domain", "context")
 
 
 def test_every_payload_has_exactly_the_phase_0_wire_shape(connection, built):

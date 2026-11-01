@@ -14,6 +14,7 @@ node detail < 150 ms, tree children < 100 ms, search < 150 ms (test_knowledge_vi
 from __future__ import annotations
 
 import json
+import logging
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
 from datetime import datetime
@@ -22,11 +23,16 @@ from typing import Any, Optional
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
-from . import view_rollup
+from . import view_context, view_rollup
 from .titles import repair_cut
 
-PRODUCT_LAYERS = ("code", "rules", "learning", "domain")
-DEFAULT_LAYERS = frozenset({"code", "rules", "learning"})
+log = logging.getLogger(__name__)
+
+#: The chips (design §4.2, §4.7.3): the Knowledge Graph's code, rules, learning and domain
+#: (regulations, clauses, documents and a pack's other reference kinds), and the Context Graph —
+#: what agents did and decided. All of them is "All".
+PRODUCT_LAYERS = ("code", "rules", "learning", "domain", "context")
+DEFAULT_LAYERS = frozenset(PRODUCT_LAYERS)
 
 #: Product layer kinds (spec §2.1). Learned items are what agents write while they work; anchors
 #: are what they hang on (drawn, never counted as learned).
@@ -35,7 +41,7 @@ RULE_KINDS = frozenset({"rule"})
 LEARNED_KINDS = ("investigation", "test_failure", "fix", "workaround", "review_finding",
                  "decision", "root_cause", "precedent", "fact")
 ANCHOR_KINDS = ("run", "incident", "pull_request", "release", "spec", "runbook", "alert_rule", "topic")
-DOMAIN_KINDS = frozenset({"regulation", "clause", "document"})
+DOMAIN_KINDS = view_context.CORE_DOMAIN_KINDS
 LEARNING_KINDS = frozenset(LEARNED_KINDS) | frozenset(ANCHOR_KINDS)
 
 #: The read permission a kind needs beyond knowledge:read (spec §3 "Permissions per layer").
@@ -83,6 +89,13 @@ _GROUP_LABELS = {
     ("fixed_by", "out"): "Fixed by", ("fixed_by", "in"): "Fixes",
     ("ruled_out", "out"): "Ruled out", ("ruled_out", "in"): "Ruled out by",
     ("changed", "out"): "Changed", ("changed", "in"): "Changed by",
+    # The Context Graph's links (view_context.load_trace): a case file, a decision's citations.
+    ("decided", "out"): "Decisions", ("decided", "in"): "Case",
+    ("remedied_by", "out"): "Remediation", ("remedied_by", "in"): "Case",
+    ("worked_on", "out"): "Worked on", ("worked_on", "in"): "Runs that worked on it",
+    ("concerns", "out"): "Concerns", ("concerns", "in"): "Cases about it",
+    ("cites", "out"): "Cites", ("cites", "in"): "Cited by",
+    ("precedent", "out"): "Precedent", ("precedent", "in"): "Case",
 }
 #: Edge weight nouns for the pre-formatted label ("16,749 calls").
 _NOUNS = {"calls": ("call", "calls"), "imports": ("import", "imports"),
@@ -114,6 +127,11 @@ def product_layer(kind: str) -> str:
             layer = None
         if layer in PRODUCT_LAYERS:
             return layer
+    # An ontology pack's kind sits in the layer its pack names (design §4.3): a compliance case
+    # in Context, a regulatory report in Domain, a system in Code.
+    packed = (view_context.kind_meta(kind) or {}).get("layer")
+    if packed in PRODUCT_LAYERS:
+        return str(packed)
     if kind in ("area", "package") or kind in CODE_KINDS:
         return "code"
     if kind in RULE_KINDS:
@@ -124,28 +142,30 @@ def product_layer(kind: str) -> str:
 
 
 def parse_layers(value: Optional[str | Iterable[str]]) -> frozenset[str]:
-    """The `layers=` chips: a comma list of code, rules, learning (domain is reserved). Empty or
-    missing: all three. An unknown name is refused in words."""
+    """The `layers=` chips: a comma list of code, rules, learning, domain, context. Empty or
+    missing: all of them. An unknown name is refused in words."""
     if value is None:
         return DEFAULT_LAYERS
     names = [v.strip() for v in (value.split(",") if isinstance(value, str) else value) if v and v.strip()]
     if not names:
         return DEFAULT_LAYERS
-    # Only the three selectable chips are accepted. `domain` is a real product layer
-    # internally (product_layer, DOMAIN_KINDS) but is reserved, not a chip: a caller asking
-    # for it is refused in the same words as any other unknown name, matching the message
-    # below and DEFAULT_LAYERS (which never returns domain).
     unknown = sorted(set(names) - DEFAULT_LAYERS)
     if unknown:
-        raise ValueError(f"unknown layer {', '.join(unknown)}: use code, rules or learning")
+        raise ValueError(f"unknown layer {', '.join(unknown)}: use code, rules, learning, domain or context")
     return frozenset(names)
+
+
+def layer_kinds(layer: str) -> frozenset[str]:
+    """The kinds one chip shows: core kinds, and for Domain and Context every pack kind in it."""
+    if layer in ("domain", "context"):
+        return view_context.kinds_in(layer)
+    return {"code": CODE_KINDS, "rules": RULE_KINDS, "learning": LEARNING_KINDS}.get(layer, frozenset())
 
 
 def kinds_of(layers: Iterable[str], withheld: Iterable[str] = ()) -> list[str]:
     out: set[str] = set()
     for layer in layers:
-        out |= {"code": CODE_KINDS, "rules": RULE_KINDS, "learning": LEARNING_KINDS,
-                "domain": DOMAIN_KINDS}.get(layer, frozenset())
+        out |= layer_kinds(layer)
     return sorted(out - set(withheld))
 
 
@@ -165,7 +185,11 @@ def withheld_for(held_permissions: Iterable[str]) -> frozenset[str]:
 
 
 def _readable(kind: str, layers: Iterable[str], withheld: Iterable[str]) -> bool:
-    return kind not in set(withheld) and product_layer(kind) in set(layers)
+    if kind in set(withheld):
+        return False
+    layers = set(layers)
+    # The runs, precedents and incidents a trace hangs on are part of the Context picture too.
+    return product_layer(kind) in layers or ("context" in layers and kind in view_context.CONTEXT_ANCHORS)
 
 
 def _iso(value: Any) -> Optional[str]:
@@ -199,6 +223,9 @@ def edge_label(kind: str, weight: int, *, rollup: bool = True) -> Optional[str]:
     """ "16,749 calls"; None for a single raw edge, where there is nothing to say."""
     if not rollup and weight <= 1:
         return None
+    if kind in view_context.TRACE_EDGES:
+        return None     # a trace link's weight ranks it; it counts nothing
+
     one, many = _NOUNS.get(kind, (kind.replace("_", " "), kind.replace("_", " ")))
     return f"{weight:,} {one if weight == 1 else many}"
 
@@ -263,6 +290,15 @@ def node_payload(row: Mapping[str, Any]) -> dict[str, Any]:
     if kind == "run":
         # A run node keeps the name it was given: one the old builder cut mid-word is mended.
         out["label"] = repair_cut(name)
+        if out.get("sub") == "run":
+            out["sub"] = "Workflow run" if str(row.get("node_key") or "").startswith("run:wfr_") else "Run"
+    if layer == "context":
+        label, sub = view_context.display(kind, name, attrs)
+        out["label"] = label
+        if sub:
+            out["sub"] = sub
+        elif "sub" in out and out["sub"] == kind.replace("_", " "):
+            out.pop("sub")
     return out
 
 
@@ -343,6 +379,9 @@ def overview(connection: Connection, project_id: str, *, layers: Iterable[str] =
     Learning bubbles and their edges to areas. With ``area``, the packages of that area."""
     layers, withheld = frozenset(layers), frozenset(withheld)
     p = {"p": project_id}
+    # Code in the graph and no map of it (a project set up without an index's end, a rebuild that
+    # failed): the map is built now, before it is read — never "No code yet" over 51k nodes.
+    mapped = view_rollup.ensure_built(connection, project_id)
     repos = [r[0] for r in connection.execute(text(
         "SELECT repo FROM kg_view_tree WHERE project_id = :p AND parent_key IS NULL AND level = 'area' "
         "GROUP BY repo ORDER BY sum(class_count) DESC, repo"), p).all()]
@@ -404,6 +443,15 @@ def overview(connection: Connection, project_id: str, *, layers: Iterable[str] =
         edges += _layer_edges(connection, project_id, "layer:learning",
                               [k for k in LEARNING_KINDS if k not in withheld], ("about", "changed"),
                               target_sql, keys)
+    kinds = view_context.legend(connection, project_id)
+    for layer in ("domain", "context"):
+        if layer not in layers:
+            continue
+        bubble = _pack_bubble(connection, project_id, layer, withheld, kinds,
+                              alone=layers == frozenset({layer}))
+        if bubble:
+            bubbles.append(bubble)
+    edges += _bubble_links(connection, project_id, {b["id"] for b in bubbles}, withheld)
 
     sync = view_rollup.sync_row(connection, project_id)
     live = view_rollup.live_code_count(connection, project_id)
@@ -413,7 +461,78 @@ def overview(connection: Connection, project_id: str, *, layers: Iterable[str] =
             "areas": areas, "layers": bubbles, "edges": edges,
             "totals": {"nodes": live, "edges": edges_total},
             "built_at": _iso(sync["built_at"]) if sync else None,
-            "stale": (sync is None and live > 0) or (sync is not None and int(sync["nodes"]) != live)}
+            "stale": (sync is None and live > 0) or (sync is not None and int(sync["nodes"]) != live),
+            "kinds": kinds,
+            "map": mapped}
+
+
+_BUBBLE_LABEL = {"domain": "Domain", "context": "Context"}
+_BUBBLE_EMPTY = {"domain": "No regulations or documents yet", "context": "No agent decisions yet"}
+
+
+def _pack_bubble(connection: Connection, project_id: str, layer: str, withheld: frozenset[str],
+                 kinds: Mapping[str, Mapping[str, Any]], *, alone: bool) -> Optional[dict[str, Any]]:
+    """The Domain or the Context bubble: how many of each of its kinds the project holds, said
+    by the pack's plural ("2 clauses · 1 document"). Drawn when it holds something, or when it is
+    the one chip on (so the empty state can say so)."""
+    members = sorted(layer_kinds(layer) - withheld)
+    found = dict(connection.execute(text(
+        "SELECT kind, count(*) FROM kg_nodes WHERE project_id = :p AND kind = ANY(:k) "
+        "AND valid_to IS NULL GROUP BY kind"), {"p": project_id, "k": members}).all()) if members else {}
+    counts = {k: int(found[k]) for k in members if found.get(k)}
+    if not counts and not alone:
+        return None
+
+    def said(kind: str, n: int) -> str:
+        meta = kinds.get(kind) or view_context.kind_meta(kind) or {}
+        one = str(meta.get("label") or kind.replace("_", " ")).lower()
+        many = str(meta.get("plural") or one + "s").lower()
+        return f"{n:,} {one if n == 1 else many}"
+
+    # The kinds a person looks for first: cases and documents, then the rest by size.
+    order = sorted(counts, key=lambda k: (not (k.endswith("_case") or k in ("document", "regulation")), -counts[k], k))
+    sub = " · ".join(said(k, counts[k]) for k in order[:2]) or _BUBBLE_EMPTY[layer]
+    return {"id": f"layer:{layer}", "key": f"layer:{layer}", "kind": "layer", "layer": layer,
+            "label": _BUBBLE_LABEL[layer], "sub": sub, "trust_tier": "observed", "counts": counts}
+
+
+def _bubble_links(connection: Connection, project_id: str, drawn: set[str],
+                  withheld: frozenset[str]) -> list[dict[str, Any]]:
+    """The two graphs joined at Whole repo: how many links run between the Domain, Context,
+    Rules and Learning bubbles (a clause implemented by a rule, a decision citing a rule, a case
+    about a clause, a run that worked a case)."""
+    pairs = [(a, b) for a in ("domain", "context") for b in ("rules", "learning", "domain", "context")
+             if a != b and f"layer:{a}" in drawn and f"layer:{b}" in drawn]
+    if not pairs:
+        return []
+    counts: dict[tuple[str, str], int] = defaultdict(int)
+    by_kind = {k: layer for layer in ("rules", "learning", "domain", "context") for k in layer_kinds(layer) - withheld}
+    for src_kind, dst_kind, n in connection.execute(text(
+            "SELECT s.kind, d.kind, count(*) FROM kg_edges e JOIN kg_nodes s ON s.id = e.src_id AND s.valid_to IS NULL "
+            "JOIN kg_nodes d ON d.id = e.dst_id AND d.valid_to IS NULL WHERE e.project_id = :p AND e.valid_to IS NULL "
+            "AND s.kind = ANY(:k) AND d.kind = ANY(:k) GROUP BY 1, 2"), {"p": project_id, "k": sorted(by_kind)}).all():
+        a, b = by_kind.get(src_kind), by_kind.get(dst_kind)
+        if a and b and a != b and {a, b} & {"domain", "context"}:
+            counts[tuple(sorted((a, b)))] += int(n)
+    if "layer:context" in drawn:
+        trace = view_context.load_trace(connection, project_id, withheld)
+        other_ids = [d for _s, d, k, _w in trace.edges if k in ("concerns", "cites")]
+        known = dict(connection.execute(text(
+            "SELECT id, kind FROM kg_nodes WHERE project_id = :p AND id = ANY(:i)"),
+            {"p": project_id, "i": sorted(set(other_ids))}).all()) if other_ids else {}
+        for _s, d, k, _w in trace.edges:
+            b = by_kind.get(known.get(d, ""))
+            if k in ("concerns", "cites") and b and b != "context":
+                counts[tuple(sorted(("context", b)))] += 1
+            elif k == "worked_on" and "learning" in by_kind.values():
+                counts[("context", "learning")] += 1
+    out = []
+    for (a, b), n in sorted(counts.items(), key=lambda x: -x[1]):
+        if f"layer:{a}" in drawn and f"layer:{b}" in drawn and n:
+            src, dst = (f"layer:{a}", f"layer:{b}") if a in ("domain", "context") else (f"layer:{b}", f"layer:{a}")
+            out.append({"src": src, "dst": dst, "kind": "about", "weight": n,
+                        "label": f"{n:,} {'link' if n == 1 else 'links'}"})
+    return out
 
 
 def _layer_edges(connection: Connection, project_id: str, bubble: str, kinds: list[str],
@@ -483,6 +602,12 @@ def neighbourhood(connection: Connection, project_id: str, node: str, *, depth: 
         walk.attached(row, center["id"])
         return walk.result(center, row["level"])
 
+    if node.startswith(view_context.VIRTUAL_RUN):
+        center = view_context.virtual_run_payload(walk.context(), node)
+        if not center:
+            raise LookupError("that run is no longer in this project's graph")
+        walk.graph(center, kinds=None)
+        return walk.result(center, "graph")
     found = _nodes_by_id(connection, project_id, [node]).get(node)
     if not found:
         raise LookupError(f"node {node} is not in this project's graph")
@@ -526,6 +651,34 @@ class _Walk:
         self.hidden_edges = 0
         #: consulted edges whose use was a citation (attrs.how = cited): drawn as "cited".
         self.cited: set[tuple[str, str, str]] = set()
+        self._trace: Optional[view_context.Trace] = None
+
+    def context(self) -> view_context.Trace:
+        """The project's Context Graph and the links it implies, read once per walk."""
+        if self._trace is None:
+            self._trace = view_context.load_trace(self.c, self.p, self.withheld)
+        return self._trace
+
+    def _trace_rows(self, frontier: set[str]) -> list[tuple[str, str, str, int, str, None]]:
+        """The trace's links touching the frontier, as kg_edges rows (src, dst, kind, weight,
+        other kind, how): a case's runs, decisions and remediation, a decision's citations."""
+        trace = self.context()
+        rows = trace.touching(frontier)
+        if not rows:
+            return []
+        unknown = {o for s, d, _k, _w in rows for o in (s, d) if o not in trace.kinds}
+        if unknown:
+            for nid, kind in self.c.execute(text(
+                    "SELECT id, kind FROM kg_nodes WHERE project_id = :p AND id = ANY(:i) AND valid_to IS NULL"),
+                    {"p": self.p, "i": sorted(unknown)}).all():
+                trace.kinds[nid] = kind
+        out = []
+        for s, d, k, w in rows:
+            other = d if s in frontier else s
+            kind = trace.kinds.get(other)
+            if kind:
+                out.append((s, d, k, w, kind, None))
+        return out
 
     @property
     def room(self) -> int:
@@ -687,6 +840,8 @@ class _Walk:
                 WHERE e.project_id = :p AND e.valid_to IS NULL AND e.dst_id = ANY(:f)
                   AND NOT (e.src_id = ANY(:f)) {kind_sql}
                 """), {"p": self.p, "f": list(frontier), "k": list(kinds or ())}).all()
+            if kinds is None:
+                rows = list(rows) + self._trace_rows(frontier)
             # A consultation the agent CITED in its answer says so on the canvas ("cited").
             self.cited.update((s, d, k) for s, d, k, _w, _o, how in rows if k == "consulted" and how == "cited")
             found = [(s, d, k, max(1, int(round(float(w or 1)))))
@@ -697,6 +852,10 @@ class _Walk:
             per_hop = max(1, self.room // (self.depth - hop + 1))
             frontier = set(self._keep(frontier, found, hop, rollup=False, per_hop=per_hop))
         missing = [i for i in self.hops if i not in self.payloads]
+        for nid in [i for i in missing if i.startswith(view_context.VIRTUAL_RUN)]:
+            virtual = view_context.virtual_run_payload(self.context(), nid)
+            if virtual:
+                self.payloads[nid] = virtual
         for nid, row in _nodes_by_id(self.c, self.p, missing).items():
             self.payloads[nid] = node_payload(row)
 
@@ -731,6 +890,8 @@ def node_detail(connection: Connection, project_id: str, node_id: str, *, edge: 
     offset = max(0, int(offset or 0))
     if _is_rollup_key(node_id):
         return _rollup_detail(connection, project_id, node_id, edge=edge, direction=direction, offset=offset)
+    if node_id.startswith(view_context.VIRTUAL_RUN):
+        return _virtual_run_detail(connection, project_id, node_id, withheld)
     rows = connection.execute(text(
         "SELECT n.*, CASE WHEN n.kind = 'file' THEN n.attrs - 'facts' - 'names' ELSE n.attrs END AS attrs "
         "FROM kg_nodes n WHERE n.project_id = :p AND n.id = :id"),
@@ -746,7 +907,7 @@ def node_detail(connection: Connection, project_id: str, node_id: str, *, edge: 
     layer = payload["layer"]
     return {
         "node": payload,
-        "statement": (row.get("body") or None) if layer in ("rules", "learning", "domain") else None,
+        "statement": (row.get("body") or None) if layer in ("rules", "learning", "domain", "context") else None,
         "attrs": {k: v for k, v in attrs.items() if k not in _HIDDEN_ATTRS},
         "repo": row.get("repo"),
         "path": row.get("path"),
@@ -764,7 +925,58 @@ def node_detail(connection: Connection, project_id: str, node_id: str, *, edge: 
         "usage": _usage(connection, project_id, node_id),
         "provenance": _provenance(connection, project_id, row, attrs),
         "lineage": _lineage(connection, project_id, node_id, attrs) if row["kind"] in LEARNED_KINDS else None,
+        "context": _context_card(connection, project_id, row, withheld),
     }
+
+
+def _payloads(connection: Connection, project_id: str, withheld: frozenset[str]):
+    def read(ids: list[str]) -> dict[str, dict[str, Any]]:
+        return {i: node_payload(r) for i, r in _nodes_by_id(connection, project_id, ids).items()
+                if r["kind"] not in withheld and r.get("valid_to") is None}
+    return read
+
+
+def _context_card(connection: Connection, project_id: str, row: Mapping[str, Any],
+                  withheld: frozenset[str]) -> Optional[dict[str, Any]]:
+    """The Context panel (design §4.7.3) for a decision, a case, a remediation or a run of the
+    trace. Words, never a reason to refuse the panel."""
+    kind = str(row["kind"])
+    if product_layer(kind) != "context" and kind not in ("run", "precedent", "clause"):
+        return None
+    try:
+        with connection.begin_nested():
+            card = view_context.context_card(connection, project_id, {**row, "attrs": _attrs(row.get("attrs"))},
+                                             _payloads(connection, project_id, withheld), withheld)
+    except Exception:  # noqa: BLE001 - the rest of the panel still answers
+        log.exception("context card for %s in %s could not be read", row.get("id"), project_id)
+        return None
+    if card is None or (kind in ("run", "precedent", "clause") and not card.get("links")):
+        return None
+    return card
+
+
+def _virtual_run_detail(connection: Connection, project_id: str, node_id: str,
+                        withheld: frozenset[str]) -> dict[str, Any]:
+    """A run of the trace with no run node of its own: named, linked, never "not found"."""
+    trace = view_context.load_trace(connection, project_id, withheld)
+    payload = view_context.virtual_run_payload(trace, node_id)
+    if not payload:
+        raise LookupError("that run is no longer in this project's graph")
+    rid = node_id[len(view_context.VIRTUAL_RUN):]
+    run = trace.runs[rid]
+    card = view_context.context_card(connection, project_id, {"id": node_id, "kind": "run", "node_key": f"run:{rid}",
+                                                              "attrs": {}, "recorded_at": run["at"]},
+                                     _payloads(connection, project_id, withheld), withheld)
+    at = _iso(run["at"])
+    return {"node": payload, "statement": None, "attrs": {}, "repo": None, "path": None, "line": None,
+            "end_line": None, "area": None, "package": None, "language": None, "connections": [],
+            "vector": {"embedded": False, "reason": "Not embedded: a run is a record of work, not knowledge"},
+            "usage": {"shown": 0, "consulted_runs": 0, "reused_runs": 0},
+            "provenance": {"created_by": "system", "created_by_kind": "system", "at": at, "who": "BOSS",
+                           "workflow_run_id": rid if rid.startswith("wfr_") else None,
+                           "run_title": run["title"], "run_at": at,
+                           "events": [{"at": at, "what": "started", "by": None}]},
+            "lineage": None, "context": card}
 
 
 def _group_label(kind: str, direction: str) -> str:
@@ -1175,8 +1387,8 @@ def tree_children(connection: Connection, project_id: str, *, tab: str = "projec
                   withheld: Iterable[str] = ()) -> dict[str, Any]:
     """The lazy tree (KgTreeChildrenResponse): ``parent``'s children, paged 200; with ``q``, the
     matching rows plus their ancestors so the tree opens to them."""
-    if tab not in ("project", "rules", "learning"):
-        raise ValueError("tab is project, rules or learning")
+    if tab not in ("project", "rules", "learning", "domain", "context"):
+        raise ValueError("tab is project, rules, learning, domain or context")
     q = (q or "").strip() or None
     parent = parent or None
     offset = max(0, int(offset or 0))
@@ -1236,14 +1448,21 @@ def _item_tree(connection: Connection, project_id: str, tab: str, parent: Option
     """Rules: status group → category group → rule. Learning: kind group → item, newest first."""
     if tab == "rules":
         kinds, layer = ["rule"], "rules"
+    elif tab in ("domain", "context"):
+        # Cases and documents first, then the rest of the layer's kinds (the pack's order).
+        members = layer_kinds(tab) - withheld
+        kinds = sorted(members, key=lambda k: (not (k.endswith("_case") or k in ("document", "regulation")),
+                                                k != "agent_decision", k))
+        layer = tab
     else:
         kinds = [k for k in (*LEARNED_KINDS, *ANCHOR_KINDS) if k not in withheld]
         layer = "learning"
     match_sql = "AND (name ILIKE :c ESCAPE '\\' OR body ILIKE :c ESCAPE '\\')" if q else ""
     live_sql = "" if tab == "rules" else "AND valid_to IS NULL"
     rows = connection.execute(text(
-        f"SELECT id, kind, node_key, name, trust_tier, valid_to, recorded_at, "
-        f"attrs->>'status' AS status, attrs->>'category' AS category FROM kg_nodes "
+        f"SELECT id, kind, node_key, name, trust_tier, valid_to, recorded_at, attrs->>'status' AS status, "
+        f"attrs->>'category' AS category, attrs->>'decision_type' AS decision_type, "
+        f"attrs->>'step_id' AS step_id FROM kg_nodes "
         f"WHERE project_id = :p AND kind = ANY(:k) {live_sql} {match_sql} "
         f"ORDER BY recorded_at DESC, id LIMIT 5000"),
         {"p": project_id, "k": kinds, "c": f"%{_like(q or '')}%"}).mappings().all()
@@ -1254,12 +1473,15 @@ def _item_tree(connection: Connection, project_id: str, tab: str, parent: Option
                                   "trust_tier": r["trust_tier"]})
             category = r["category"] if r["category"] in RULE_CATEGORIES else "other"
             return [f"rules:{status}", f"rules:{status}:{category}"]
-        return [f"learning:{r['kind']}"]
+        return [f"{layer}:{r['kind']}"]
 
     def group_row(key: str, count: int, match: Optional[bool]) -> dict[str, Any]:
         parts = key.split(":")
         if tab == "rules" and len(parts) == 3:
             label, parent_key = parts[2].replace("_", " ").capitalize(), f"rules:{parts[1]}"
+        elif tab in ("domain", "context"):
+            meta = view_context.kind_meta(parts[1]) or {}
+            label, parent_key = str(meta.get("plural") or parts[1].replace("_", " ").capitalize()), None
         else:
             label = parts[1].capitalize() if tab == "rules" else _PLURAL.get(parts[1], parts[1])
             if tab == "learning" and parts[1] in ANCHOR_KINDS:
@@ -1274,8 +1496,13 @@ def _item_tree(connection: Connection, project_id: str, tab: str, parent: Option
         return out
 
     def item_row(r: Mapping[str, Any], match: Optional[bool]) -> dict[str, Any]:
+        label = repair_cut(r["name"]) if r["kind"] == "run" else r["name"]
+        if tab == "context":
+            words, sub = view_context.display(r["kind"], label, {"decision_type": r["decision_type"],
+                                                                  "step_id": r["step_id"], "status": r["status"]})
+            label = f"{words} · {sub}" if sub and r["kind"] == "agent_decision" else words
         out = {"key": r["node_key"], "parent_key": group_of(r)[-1], "level": "item", "node_id": r["id"],
-               "label": repair_cut(r["name"]) if r["kind"] == "run" else r["name"], "kind": r["kind"], "layer": layer,
+               "label": label, "kind": r["kind"], "layer": layer,
                "count": 0, "has_children": False}
         if match is not None:
             out["match"] = match
@@ -1286,7 +1513,7 @@ def _item_tree(connection: Connection, project_id: str, tab: str, parent: Option
         for g in group_of(r):
             counts[g] += 1
     order = (["rules:" + s for s in RULE_STATUSES] if tab == "rules"
-             else ["learning:" + k for k in kinds])
+             else [f"{layer}:" + k for k in kinds])
     if q:
         groups = [g for g in counts if g.count(":") == 1] + [g for g in counts if g.count(":") == 2]
         out = [group_row(g, counts[g], False) for g in groups]

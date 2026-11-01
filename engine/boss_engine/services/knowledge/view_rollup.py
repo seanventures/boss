@@ -26,6 +26,7 @@ Runs at the end of a successful repository index job and from the worker's recon
 """
 from __future__ import annotations
 
+import logging
 import time
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable
@@ -33,6 +34,8 @@ from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
+
+log = logging.getLogger(__name__)
 
 #: One top-level segment holding more than this share of a repo's symbols is not an area
 #: breakdown: the areas are taken one level below that segment's common prefix.
@@ -323,6 +326,9 @@ def rebuild_after_index(engine: Any, project_id: str, run: dict[str, Any] | None
                 return {"project_id": project_id, "mode": "current"}
             return rebuild(connection, project_id)
     except Exception as error:  # noqa: BLE001 - the reconcile retries it
+        # Said in the log, never swallowed (RCA 2026-10-31: a project's map was never built and
+        # nothing said why — the Graph showed "No code yet" over 51k code nodes).
+        log.exception("knowledge view rollup rebuild failed for project %s", project_id)
         return {"project_id": project_id, "error": f"{type(error).__name__}: {str(error)[:200]}"}
 
 
@@ -346,5 +352,34 @@ def reconcile(engine: Any, *, project_id: str | None = None) -> dict[str, int]:
                 rebuild(connection, pid)
             out["rebuilt"] += 1
         except Exception:  # noqa: BLE001 - one project never blocks the others
+            log.exception("knowledge view rollup reconcile failed for project %s", pid)
             out["failed"] += 1
     return out
+
+
+def ensure_built(connection: Connection, project_id: str) -> dict[str, Any] | None:
+    """THE MAP IS BUILT BEFORE IT IS READ. A project with code in the graph and no rollup of it
+    (never built: set up before an index finished, or every rebuild failed) gets one now, inside
+    a savepoint so a failure never breaks the read around it. Returns None when nothing was
+    needed, ``{"built": True, ...}`` when it was built, ``{"built": False, "error": ...}`` when the
+    build failed — logged, and said by the Graph in words, never "No code yet".
+
+    Only a missing (or empty) map is built here; a map that is merely behind the live graph is
+    the stale flag's business (Rebuild, and the worker's reconcile)."""
+    sync = sync_row(connection, project_id)
+    if sync is not None and int(sync.get("nodes") or 0) > 0:
+        return None
+    if connection.execute(text(
+            "SELECT 1 FROM kg_view_tree WHERE project_id = :p LIMIT 1"), {"p": project_id}).first():
+        return None
+    if live_code_count(connection, project_id) == 0:
+        return None
+    try:
+        with connection.begin_nested():
+            row = rebuild(connection, project_id)
+        log.info("knowledge view rollup built on first read for project %s (%s nodes, %s ms)",
+                 project_id, row.get("nodes"), row.get("ms"))
+        return {"built": True, "nodes": int(row.get("nodes") or 0)}
+    except Exception as error:  # noqa: BLE001 - the read goes on; the Graph says why
+        log.exception("knowledge view rollup could not be built for project %s", project_id)
+        return {"built": False, "error": f"{type(error).__name__}: {str(error)[:200]}"}

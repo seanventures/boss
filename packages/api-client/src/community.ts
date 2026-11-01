@@ -5400,8 +5400,14 @@ export type WorkflowWebhookDeliveryList = {
 // and their test together, never one alone.
 
 /** The product layer (spec §2.1): what a person sees on a chip. Distinct from the storage layer
- *  (`kg_nodes.knowledge_layer`). `domain` is reserved and never written in this build. */
-export type KgProductLayer = "code" | "rules" | "learning" | "domain";
+ *  (`kg_nodes.knowledge_layer`). `domain` is the reference world an ontology pack adds
+ *  (regulations, clauses, documents); `context` is the Context Graph — what agents did and
+ *  decided (design §4.2): cases, agent decisions, coverage gaps, remediation packages. */
+export type KgProductLayer = "code" | "rules" | "learning" | "domain" | "context";
+
+/** A Domain or Context kind's words and colour, from the project's ontology pack (or the core):
+ *  the canvas names, colours and lists kinds from this, so a new pack needs no console change. */
+export type KgKindMeta = { layer: KgProductLayer; label: string; plural: string; color: string | null };
 export type KgTrustTier = "observed" | "governed" | "inferred" | "approved";
 /** `class` covers the type kinds the index records as `attrs.type_kind`: the payload carries the
  *  type kind (interface, enum, record) so the canvas can colour it. */
@@ -5426,7 +5432,10 @@ export type KgViewEdgeKind =
   | "dispatches_to" | "overrides" | "implements" | "references" | "defines" | "exposes"
   | "reads" | "writes" | "about" | "changed" | "evidenced_by" | "approved_by" | "supersedes"
   | "caused_by" | "fixed_by"
-  | "consulted" | "reused" | "proposed_by" | "produced" | "ruled_out" | "corrects" | "governs";
+  | "consulted" | "reused" | "proposed_by" | "produced" | "ruled_out" | "corrects" | "governs"
+  // The Context Graph's links, read from the trace (never kg_edges rows): a case's decisions,
+  // remediation and precedent, the runs that worked on it, what it concerns, what a decision cites.
+  | "decided" | "remedied_by" | "worked_on" | "concerns" | "cites" | "precedent";
 
 /** A node as every view route returns it (spec §3). For rollup nodes (`kind` area | package) and
  *  the two layer bubbles (`kind` layer) `id` is the rollup key (`area:<repo>:<area>`,
@@ -5480,6 +5489,11 @@ export type KgOverviewResponse = {
   built_at: string | null;
   /** The rollup's node count differs from the live code count: show "Rebuild". */
   stale: boolean;
+  /** The Domain and Context kinds' words and colours (the ontology packs and the core). */
+  kinds?: Record<string, KgKindMeta>;
+  /** Code with no map of it was mapped on this read (`built`), or could not be (`error`, said in
+   *  words over the canvas, never "No code yet"). null: nothing needed. */
+  map?: { built: boolean; nodes?: number; error?: string } | null;
 };
 
 /** A node in a neighbourhood carries its hop from the centre (0 = centre) for the radial layout. */
@@ -5597,9 +5611,26 @@ export type KgNodeDetailResponse = {
   provenance: KgProvenance;
   /** Learned items only. */
   lineage: KgLineage | null;
+  /** A Context node (a decision, a case, a remediation) or a run of the trace: design §4.7.3. */
+  context?: KgContextCard | null;
 };
 
-export type KgTreeTab = "project" | "rules" | "learning";
+/** What the panel says about a Context node: the decision in words, which step of which run,
+ *  which agent, the versions and fingerprint it ran under, when — and its links. */
+export type KgContextCard = {
+  decision_type?: string | null;
+  step?: string | null;
+  statement?: string | null;
+  agent?: { name: string; kind: "agent" | "outside" | "deterministic"; role: string | null; fingerprint: string | null };
+  workflow_version?: string | null;
+  policy_version?: string | null;
+  fingerprint?: string | null;
+  run?: { label: string; at: string | null; status: string | null; node_id: string; workflow_run_id: string | null };
+  at?: string | null;
+  links: Array<{ key: string; label: string; items: KgViewNode[]; total: number }>;
+};
+
+export type KgTreeTab = "project" | "rules" | "learning" | "domain" | "context";
 
 /** A tree row. Project tab: rollup rows. Rules tab: a status group → a category group → a rule.
  *  Learning tab: a kind group → an item, newest first. */
@@ -5610,8 +5641,9 @@ export type KgTreeRow = {
   /** kg_nodes.id for class, method, rule and learned rows; null for areas, packages and groups. */
   node_id: string | null;
   label: string;
-  /** The kind dot: a symbol kind, a rule, a learning kind or an anchor kind. */
-  kind: KgSymbolKind | "area" | "package" | "rule" | KgLearningKind | KgAnchorKind | "group";
+  /** The kind dot: a symbol kind, a rule, a learning kind, an anchor kind, or a Domain or Context
+   *  kind an ontology pack names (a string: a new pack's kinds need no type change). */
+  kind: KgSymbolKind | "area" | "package" | "rule" | KgLearningKind | KgAnchorKind | "group" | (string & {});
   layer: KgProductLayer;
   /** Right-aligned count (children, or members of a class). */
   count: number;

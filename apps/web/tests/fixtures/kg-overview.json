@@ -1915,5 +1915,10 @@
   "edges": 234187
  },
  "built_at": "2026-10-24T08:52:25.977498Z",
- "stale": false
+ "stale": false,
+ "kinds": {
+  "agent_decision": {"layer": "context", "label": "Agent decision", "plural": "Agent decisions", "color": "#38bdf8"},
+  "clause": {"layer": "domain", "label": "Clause", "plural": "Clauses", "color": "#8a6bff"}
+ },
+ "map": null
 }

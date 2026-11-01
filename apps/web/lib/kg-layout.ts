@@ -12,6 +12,8 @@
  * literal colours stay in kg.css (§6.4).
  */
 
+import { kindMetaOf, kindVar } from "./kg-view-types";
+
 export type Pt = { x: number; y: number };
 export type Transform = { k: number; x: number; y: number };
 export type Viewport = { w: number; h: number };
@@ -793,7 +795,9 @@ export function weightOrder(ids: string[], edges: LayoutEdge[], first?: string |
 
 /** The kg.css custom property a node is filled with. Never a literal colour. */
 export function kindToken(kind: string, symbolKind?: string | null, id?: string): string {
-  if (kind === "layer") return id === "layer:rules" ? "--kg-layer-rules" : "--kg-layer-learning";
+  if (kind === "layer") {
+    return ({ "layer:rules": "--kg-layer-rules", "layer:domain": "--kg-layer-domain", "layer:context": "--kg-layer-context" } as Record<string, string>)[id ?? ""] ?? "--kg-layer-learning";
+  }
   if (kind === "area" || kind === "package") return "--kg-layer-code";
   if (kind === "symbol" || kind === "class" || kind === "interface" || kind === "enum" || kind === "record"
       || kind === "method" || kind === "function") {
@@ -813,8 +817,16 @@ export function kindToken(kind: string, symbolKind?: string | null, id?: string)
     customer: "--kg-customer", account: "--kg-account", counterparty: "--kg-counterparty",
     transaction: "--kg-transaction", typology: "--kg-typology", kyc_profile: "--kg-kyc-profile",
     alert: "--kg-alert", aml_case: "--kg-aml-case",
+    agent_decision: "--kg-agent-decision", coverage_gap: "--kg-coverage-gap",
+    clause: "--kg-clause", document: "--kg-document", regulation: "--kg-document",
   };
-  return map[kind] ?? "--kg-function";
+  // A pack's kind in the pack's own colour (set on the graph as --kg-kind-<kind>: kindStyleVars).
+  const meta = kindMetaOf(kind);
+  if (meta?.color) return kindVar(kind);
+  if (map[kind]) return map[kind];
+  if (meta?.layer === "context") return "--kg-layer-context";
+  if (meta?.layer === "domain") return "--kg-layer-domain";
+  return "--kg-function";
 }
 
 const KIND_NAMES: Record<string, string> = {
@@ -829,13 +841,20 @@ const KIND_NAMES: Record<string, string> = {
   compliance_case: "Compliance case", remediation_package: "Remediation package",
   customer: "Customer", account: "Account", counterparty: "Counterparty", transaction: "Transaction",
   typology: "Typology", kyc_profile: "KYC profile", alert: "Alert", aml_case: "AML case",
+  agent_decision: "Agent decision", coverage_gap: "Coverage gap", clause: "Clause", document: "Document",
+  regulation: "Regulation",
+};
+
+const LAYER_BUBBLE_NAMES: Record<string, string> = {
+  "layer:rules": "Rules layer", "layer:learning": "Learning layer", "layer:domain": "Domain layer", "layer:context": "Context layer",
 };
 
 /** The kind in words (tooltip, legend, panel: colour is never the only signal, §5.10). */
 export function kindName(kind: string, symbolKind?: string | null, id?: string): string {
-  if (kind === "layer") return id === "layer:rules" ? "Rules layer" : "Learning layer";
+  if (kind === "layer") return LAYER_BUBBLE_NAMES[id ?? ""] ?? "Learning layer";
   if (kind === "symbol") return KIND_NAMES[symbolKind ?? "class"] ?? "Symbol";
-  return KIND_NAMES[kind] ?? kind.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase());
+  // The pack's word first: a project's own vocabulary ("AML case") wins over BOSS's.
+  return kindMetaOf(kind)?.label ?? KIND_NAMES[kind] ?? kind.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase());
 }
 
 /** The legend key of a node: one row per colour+name present in the view. */
@@ -1112,7 +1131,13 @@ export function distinctTails(paths: string[]): string[] {
 }
 
 /** What a neighbour is grouped under: its package (the folder its file is in), or its layer. */
-export function groupKey(n: { layer: string; sub?: string; key: string }): { key: string; label: string } {
+export function groupKey(n: { layer: string; sub?: string; key: string; kind?: string }): { key: string; label: string } {
+  // Domain and Context (and runs, precedents) group by kind, in the pack's plural: "+12 runs",
+  // "Agent decisions · 47 items" — a case file's history reads by what it is.
+  if (n.kind && (n.layer === "context" || n.layer === "domain" || n.kind === "run" || n.kind === "precedent")) {
+    const plural = kindMetaOf(n.kind)?.plural ?? `${kindName(n.kind)}s`.replace(/ss$/, "s");
+    return { key: `${n.layer}:${n.kind}`, label: plural.toLowerCase() };
+  }
   if (n.layer !== "code") return { key: n.layer, label: n.layer === "rules" ? "rules" : "learnings" };
   const path = n.sub && n.sub.includes("/") ? n.sub : n.key.split(":")[2] ?? "";
   const dirs = path.split("/").filter(Boolean).slice(0, -1);
@@ -1173,7 +1198,7 @@ export function groupFocus<N extends { id: string; key: string; layer: string; s
       // Two packages with the same last two folders ("loanaccount/service" in two modules) are
       // told apart by as many more folders as it takes.
       const names = distinctTails(named.map(([key]) => key));
-      named.forEach(([key, g], i) => add(key, names[i], g.items, 1));
+      named.forEach(([key, g], i) => add(key, key.includes(":") ? g.label.charAt(0).toUpperCase() + g.label.slice(1) : names[i], g.items, 1));
       if (restItems.length) add("other", rest.length === 1 ? tailEllipsis(rest[0][1].label, GROUP_NAME_MAX) : "other packages", restItems, rest.length);
       continue;
     }
@@ -1201,7 +1226,7 @@ export function groupFocus<N extends { id: string; key: string; layer: string; s
       const id = `group:${h}:${key}`;
       members.set(id, items);
       for (const n of items) into.set(n.id, id);
-      out.push({ id, key: id, kind: "group", label: `+${items.length} in ${tailEllipsis(label, GROUP_NAME_MAX)}`, layer: items[0].layer === "code" ? "code" : items[0].layer as "rules" | "learning",
+      out.push({ id, key: id, kind: "group", label: key.includes(":") ? `+${items.length} ${label}` : `+${items.length} in ${tailEllipsis(label, GROUP_NAME_MAX)}`, layer: items[0].layer === "code" ? "code" : items[0].layer as "rules" | "learning",
         trust_tier: "observed", sub: `${items.length} more, grouped`, hop: h });
     };
     for (const [key, g] of named) make(key, g.label, g.items);

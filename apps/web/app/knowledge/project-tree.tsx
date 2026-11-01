@@ -17,7 +17,7 @@ import { getSearch, getTreeChildren } from "../../lib/kg-view";
 import type { KgSearchHit, KgTreeRow, KgTreeTab } from "../../lib/kg-view-types";
 
 /** The graph layer a tree tab lists (its search is asked for that layer only). */
-const TAB_LAYER: Record<KgTreeTab, string> = { project: "code", rules: "rules", learning: "learning" };
+const TAB_LAYER: Record<KgTreeTab, string> = { project: "code", rules: "rules", learning: "learning", domain: "domain", context: "context" };
 
 /** The tree's own matches, then each search hit of the tab's layer the tree did not find, as a
  *  match row at the top level (its node one press away). Deterministic: the search's order. */
@@ -45,10 +45,20 @@ const TABS: Array<{ key: KgTreeTab; label: string; tip: string }> = [
   { key: "project", label: "Project", tip: "Areas, packages, classes and methods" },
   { key: "rules", label: "Rules", tip: "Proposed, approved and rejected business rules" },
   { key: "learning", label: "Learning", tip: "What agents learned while they worked, newest first" },
+  { key: "domain", label: "Domain", tip: "Regulations, clauses and documents, by kind" },
+  { key: "context", label: "Context", tip: "The Context Graph: cases, agent decisions and remediation, newest first" },
 ];
 
+const GROUP_TOKEN: Record<string, string> = {
+  rules: "--kg-layer-rules", learning: "--kg-layer-learning", domain: "--kg-layer-domain", context: "--kg-layer-context",
+};
+
 function dotToken(row: KgTreeRow): string {
-  if (row.kind === "group") return row.layer === "rules" ? "--kg-layer-rules" : row.layer === "learning" ? "--kg-layer-learning" : "--kg-layer-code";
+  if (row.kind === "group") {
+    // A Domain or Context group is its kind's colour (the pack's): "Compliance cases" is a case's dot.
+    const kind = (row.layer === "domain" || row.layer === "context") ? row.key.split(":")[1] : null;
+    return kind ? kindToken(kind) : GROUP_TOKEN[row.layer] ?? "--kg-layer-code";
+  }
   return kindToken(row.kind);
 }
 
@@ -359,6 +369,8 @@ export function ProjectTree({ projectId, actor, tab, onTab, query, selectedId, o
             {q ? `Nothing in ${TABS.find((t) => t.key === tab)?.label} matches “${q}”.`
               : tab === "rules" ? "No rules yet. Agents propose them when they scan an area for business rules."
               : tab === "learning" ? "Nothing learned yet. Agents record what they find while they work."
+              : tab === "domain" ? "No regulations yet. Add one in the Documents tab."
+              : tab === "context" ? "No agent decisions yet. They appear as a workflow's steps finish."
               : "No code yet. Index a repository in Settings."}
           </p>
         ) : null}

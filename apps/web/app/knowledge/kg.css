@@ -42,6 +42,14 @@
   --kg-kyc-profile: #14b8a6;
   --kg-alert: #ef4444;
   --kg-aml-case: #f97316;
+  /* The two graphs (design §4.2): the Domain layer (a pack's reference kinds) and the Context
+     Graph (what agents did and decided). A pack's own colours arrive as --kg-kind-<kind>. */
+  --kg-agent-decision: #38bdf8;
+  --kg-coverage-gap: #fbbf24;
+  --kg-clause: #8a6bff;
+  --kg-document: #6d4aff;
+  --kg-layer-domain: #8a6bff;
+  --kg-layer-context: #2dd4bf;
   /* Whole-repo bubbles and layer badges. */
   --kg-layer-code: #5b9dff;
   --kg-layer-rules: #f0a43a;
@@ -66,6 +74,8 @@
 .kg-dot { display: inline-block; flex: none; width: 12px; height: 12px; border-radius: 50%; background: var(--kg-layer-code); }
 .kg-dot[data-layer="rules"] { background: var(--kg-layer-rules); }
 .kg-dot[data-layer="learning"] { background: var(--kg-layer-learning); }
+.kg-dot[data-layer="domain"] { background: var(--kg-layer-domain); }
+.kg-dot[data-layer="context"] { background: var(--kg-layer-context); }
 .kg-eyebrow { margin: 0 0 8px; font-size: 0.7rem; font-weight: 650; letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint); }
 .kg-quiet { margin: 0; font-size: 0.8rem; line-height: 1.45; color: var(--muted); }
 .kg-ok { margin: 0; font-size: 0.8rem; color: var(--green); }
@@ -286,6 +296,8 @@
 .kg-badge { padding: 2px 10px; border-radius: 999px; background: var(--kg-layer-code); color: var(--void); font-size: 0.72rem; font-weight: 700; }
 .kg-badge[data-layer="rules"] { background: var(--kg-layer-rules); }
 .kg-badge[data-layer="learning"] { background: var(--kg-layer-learning); }
+.kg-badge[data-layer="domain"] { background: var(--kg-layer-domain); }
+.kg-badge[data-layer="context"] { background: var(--kg-layer-context); }
 .kg-panel-kind { font-size: 0.78rem; color: var(--muted); }
 .kg-panel-close { display: none; }
 .kg-panel-title { margin: 0; font-family: var(--display); font-size: 1.05rem; font-weight: 600; line-height: 1.35; color: var(--ink); overflow-wrap: break-word; word-break: normal; }
@@ -296,6 +308,21 @@
 .kg-statement { padding: 12px 14px; border: 1px solid var(--kg-layer-code); border-radius: var(--r); background: var(--surface-2); }
 .kg-statement[data-layer="rules"] { border-color: var(--kg-layer-rules); }
 .kg-statement[data-layer="learning"] { border-color: var(--kg-layer-learning); }
+.kg-statement[data-layer="domain"] { border-color: var(--kg-layer-domain); }
+.kg-statement[data-layer="context"] { border-color: var(--kg-layer-context); }
+
+/* ── the Context card (design §4.7.3): a decision in words, where and who, and its links ── */
+.kg-ctx { display: flex; flex-direction: column; gap: 10px; }
+.kg-ctx-type { display: inline-flex; align-items: center; gap: 6px; align-self: flex-start; padding: 2px 10px;
+  border-radius: 999px; border: 1px solid color-mix(in srgb, var(--kg-layer-context) 55%, transparent);
+  color: var(--kg-layer-context); font-size: 0.75rem; font-weight: 650; }
+.kg-ctx-facts { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0; font-size: 0.82rem; }
+.kg-ctx-facts dt { color: var(--faint); }
+.kg-ctx-facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.kg-ctx-facts .kg-ctx-mono { font-family: var(--mono, ui-monospace, monospace); font-size: 0.78rem; }
+.kg-ctx-links { display: flex; flex-direction: column; gap: 8px; }
+.kg-ctx-link-head { margin: 0 0 2px; font-size: 0.7rem; font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase; color: var(--faint); }
+.kg-map-err { max-width: 560px; }
 .kg-statement p { margin: 0; font-size: 0.9rem; line-height: 1.5; color: var(--ink); overflow-wrap: anywhere; }
 /* A long method name never leaves its box (tester round 2). */
 .kg-attrs dd, .kg-panel-title { overflow-wrap: anywhere; min-width: 0; }
