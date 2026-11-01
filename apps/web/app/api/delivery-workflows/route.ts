@@ -47,6 +47,12 @@ function runDetailPath(project: string, runId: string): string {
   return `/v1/workflow-runs/${encodeURIComponent(runId)}?project_id=${encodeURIComponent(project)}`;
 }
 
+/** `view=context_trace&run_id=…` — what each step of the run really read and wrote in the
+ *  Knowledge and Context Graphs (§4.7 "Show the last run"), from the graph's own record. */
+function contextTracePath(project: string, runId: string): string {
+  return `/v1/workflow-runs/${encodeURIComponent(runId)}/context-trace?project_id=${encodeURIComponent(project)}`;
+}
+
 /** `view=spec&key=…[&version=n]` — the steps a workflow currently has (or had at version n),
  *  so the editor opens with them rather than making a customer rebuild ten steps to change
  *  one. */
@@ -105,13 +111,14 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: String((e as Error)?.message ?? e) }, { status: 502 });
     }
   }
-  if (view === "run_detail") {
+  if (view === "run_detail" || view === "context_trace") {
     const runId = params.get("run_id")?.trim() ?? "";
     if (!project || !runId) {
-      return NextResponse.json({ error: "run_detail needs project_id and run_id" }, { status: 400 });
+      return NextResponse.json({ error: `${view} needs project_id and run_id` }, { status: 400 });
     }
     try {
-      const r = await fetch(`${API_URL}${runDetailPath(project, runId)}`, {
+      const path = view === "context_trace" ? contextTracePath(project, runId) : runDetailPath(project, runId);
+      const r = await fetch(`${API_URL}${path}`, {
         headers: authHeaders({}), cache: "no-store",
       });
       if (!r.ok) {

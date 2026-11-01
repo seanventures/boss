@@ -128,6 +128,8 @@ function toCapability(raw: unknown): Capability {
     ...(typeof c.typical_minutes === "number" ? { typical_minutes: c.typical_minutes } : {}),
     is_gate: Boolean(c.is_gate), approval_forced_manual: Boolean(c.approval_forced_manual),
     ...(str(c.captain) ? { captain: str(c.captain) } : {}),
+    ...(str(c.role_agent) ? { role_agent: str(c.role_agent) } : {}),
+    ...(c.needs_model === true ? { needs_model: true } : {}),
   };
 }
 
@@ -210,6 +212,14 @@ export async function fetchPalette(projectId: string): Promise<Palette> {
                skills: strings(agent.holds ?? agent.skills), mcp: strings(agent.mcp) };
     }).filter((a) => a.role_key),
     humanRole: str(capabilities.human_role) || "human",
+    roleNames: Object.fromEntries(Object.entries(asObj(capabilities.role_names)).map(([key, v]) => {
+      const row = asObj(v);
+      return [key, { name: str(row.name), callsign: str(row.callsign) }];
+    })),
+    graphSteps: Object.fromEntries(Object.entries(asObj(capabilities.graph_steps)).map(([key, v]) => {
+      const row = asObj(v);
+      return [key, { label: str(row.label), summary: str(row.summary) }];
+    })),
     riskFloor: Number(capabilities.manual_approval_risk_floor ?? 2),
     bindable: {
       skills: list(bindable.skills).map((s) => {
@@ -344,19 +354,37 @@ export async function fetchSpec(projectId: string, key: string, version?: number
   };
 }
 
-/** A run's steps, each with what it read (its input) and wrote (its output) — keyed by step
- *  id, completed steps only (KG P6b's Pipeline tab "after a run" ask). */
-export async function fetchRunTrace(projectId: string, runId: string):
-    Promise<Record<string, { reads: string[]; writes: string[] }>> {
-  const body = await getView("run_detail", { project_id: projectId, run_id: runId });
-  const trace: Record<string, { reads: string[]; writes: string[] }> = {};
-  for (const raw of list(body.steps)) {
+/** One graph kind a step read or wrote on a run: how many nodes, a few of their names. */
+export type TracedKind = { kind: string; count: number; examples: string[]; decision_types: string[] };
+/** What one step did on a run, from the graph's own record (`view=context_trace`). */
+export type StepRunTrace = { status: string; reads: TracedKind[]; writes: TracedKind[];
+  calls: { tool: string; count: number }[] };
+/** A run, step by step: what each read and wrote in the Knowledge and Context Graphs. */
+export type RunContext = { run_id: string; status: string; started_at: string | null;
+  completed_at: string | null; steps: Record<string, StepRunTrace> };
+
+const tracedKinds = (value: unknown): TracedKind[] => list(value).map((raw) => {
+  const row = asObj(raw);
+  return { kind: str(row.kind), count: Number(row.count ?? 0) || 0, examples: strings(row.examples),
+           decision_types: strings(row.decision_types) };
+}).filter((k) => k.kind);
+
+/** The last run's steps, each with its latest status and the graph kinds it really read and
+ *  wrote — Context Graph rows written for the run, the nodes its output names, its recorded
+ *  usage — never its input and output keys (§4.7 "Show the last run"). */
+export async function fetchRunContext(projectId: string, runId: string): Promise<RunContext> {
+  const body = await getView("context_trace", { project_id: projectId, run_id: runId });
+  const steps: Record<string, StepRunTrace> = {};
+  for (const [stepId, raw] of Object.entries(asObj(body.steps))) {
     const step = asObj(raw);
-    const stepId = str(step.step_id);
-    if (!stepId || step.status !== "completed") continue;
-    trace[stepId] = { reads: Object.keys(asObj(step.input)), writes: Object.keys(asObj(step.output)) };
+    steps[stepId] = {
+      status: str(step.status), reads: tracedKinds(step.reads), writes: tracedKinds(step.writes),
+      calls: list(step.calls).map((c) => ({ tool: str(asObj(c).tool), count: Number(asObj(c).count ?? 0) || 0 }))
+        .filter((c) => c.tool),
+    };
   }
-  return trace;
+  return { run_id: str(body.run_id) || runId, status: str(body.status),
+           started_at: str(body.started_at) || null, completed_at: str(body.completed_at) || null, steps };
 }
 
 /** Every check Save runs, without saving. Writes nothing. */

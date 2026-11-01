@@ -87,6 +87,9 @@ describe("the Pipeline tab in the real Workflow Studio editor", () => {
     expect(document.querySelector('[data-area="pipeline-view"]')).not.toBeNull();
     expect(byTest("stage-research")).not.toBeNull();
 
+    // The switcher is on the stage in hand.
+    click(byTest("stage-research"));
+    await settle();
     const select = byTest("stage-captain-select-research") as HTMLSelectElement;
     expect(select).not.toBeNull();
     const outsideOption = [...select.options].find((o) => o.value === `outside:${OUTSIDE_AGENT.id}`);
@@ -102,7 +105,7 @@ describe("the Pipeline tab in the real Workflow Studio editor", () => {
     expect(byTest("outside-agent-host").textContent).toBe("acme-bank.example.com");
   });
 
-  it("shows a contract stage's contract on its badge, and the last run's reads/writes once it has run", async () => {
+  it("shows a contract stage's contract on its badge, the last run's status, and its read/write view", async () => {
     const withContract = {
       ...STANDARD,
       spec: linear(2, (i) => (i === 0 ? {
@@ -113,9 +116,14 @@ describe("the Pipeline tab in the real Workflow Studio editor", () => {
     api = fakeWorkflowApi(PALETTE, [{
       ...withContract, last_run: { id: "wfr_1", status: "completed", at: "2026-10-30T00:00:00Z" },
     }], {
-      wfr_1: { steps: [
-        { step_id: "research", status: "completed", input: { rule: {} }, output: { agent_decision: {} } },
-      ] },
+      // The runner's own word is "succeeded" — the old trace kept only "completed" and never filled.
+      wfr_1: { status: "running", steps: {
+        research: { status: "succeeded",
+                    reads: [{ kind: "rule", count: 2, examples: ["Payments credit on receipt"], decision_types: [] }],
+                    writes: [{ kind: "agent_decision", count: 1, examples: [], decision_types: ["Assessment"] }],
+                    calls: [] },
+        meeting: { status: "running", reads: [], writes: [], calls: [] },
+      } },
     });
     const workflowFetch = api.fetch;
     vi.stubGlobal("fetch", vi.fn((input: unknown, init?: RequestInit) => {
@@ -132,10 +140,17 @@ describe("the Pipeline tab in the real Workflow Studio editor", () => {
     click(byTest("wf-view-pipeline"));
     await settle();
 
-    expect(byTest("outside-agent-contract").textContent).toBe("reads rule · writes agent_decision");
+    expect(byTest("outside-agent-contract").textContent).toBe("reads Rule · writes Agent decision");
+    expect(byTest("stage-research").textContent).toContain("Succeeded");
+    expect(byTest("stage-meeting").textContent).toContain("Running");
+    expect(byTest("stage-row-research").textContent).toContain("Outside agent · Acme Bank review agent");
 
-    expect(byTest("pipeline-trace-table")).not.toBeNull();
-    expect(byTest("stage-trace-row-research").textContent).toContain("rule");
-    expect(byTest("stage-trace-row-research").textContent).toContain("agent_decision");
+    click(byTest("stage-research"));
+    await settle();
+    expect(byTest("pipeline-stage-detail")).not.toBeNull();
+    click(byTest("show-last-run"));
+    const rule = document.querySelector('[data-testid="node-read-rule"]')!;
+    expect(rule.getAttribute("data-overlay")).toBe("done");
+    expect(document.querySelector('[data-testid="node-write-agentdecision"]')!.getAttribute("data-overlay")).toBe("done");
   });
 });
