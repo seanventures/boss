@@ -442,6 +442,21 @@ def _stalls_between(connection: Connection, started, ended) -> dict[str, Any]:
             "longest_stall_seconds": round(max(seconds, default=0.0), 2)}
 
 
+def gate_wait_seconds(step_rows: Any, work_ends: list, started: Any, last_work: Any) -> float:
+    """How long a run sat at a person's gate BEFORE its last work: from the last work that
+    finished before the answer, to the answer. Pure, so the run report's split is testable."""
+    if not (started and last_work):
+        return 0.0
+    total = 0.0
+    for r in step_rows:
+        answered = r["completed_at"]
+        if str(r.get("step_kind") or "") != "decision" or not answered or answered > last_work:
+            continue
+        before = [w for w in work_ends if w <= answered]
+        total += max(0.0, (answered - (max(before) if before else started)).total_seconds())
+    return total
+
+
 def assemble_workflow(
     connection: Connection, project_id: str, workflow_run_id: str
 ) -> dict[str, Any]:
@@ -608,8 +623,12 @@ def assemble_workflow(
     host = host_is_degraded(_stalls_between(connection, started, ended),
                             elapsed_seconds=elapsed_s)
     stalled_s = float(host.get("stalled_seconds") or 0)
+    # A PERSON'S GATE IN THE MIDDLE IS WAITING, NOT WORK: a run whose closure ran after the
+    # approval counted the whole wait as "working" (10.8 min for 3.3 min of work, 2026-11-01).
+    # The wait runs from the last work that finished before the answer, to the answer.
+    gate_wait_s = gate_wait_seconds(step_rows, work_ends, started, last_work)
     working_s = max(0.0, ((last_work - started).total_seconds() if (last_work and started)
-                          else elapsed_s) - stalled_s)
+                          else elapsed_s) - stalled_s - gate_wait_s)
 
     run_findings = workflow_findings(steps, host)
     product = _product_and_build(connection, project_id, steps)
