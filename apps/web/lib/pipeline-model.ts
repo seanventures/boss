@@ -20,11 +20,54 @@ const list = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
 export type ContractKind = { kind: string; required?: boolean; via?: string; decision_type?: string };
 /** An external system a contract calls, over MCP. */
 export type ContractCall = { mcp: string; tool: string };
+/** A decision, policy or open question with its ID ("A-D30", "OP-ENR-01", "HP-Q1"). */
+export type DesignNote = { id: string; text: string };
+/** One of the agent's numbered internal steps (`contract.steps`). */
+export type AgentStepDef = {
+  n: number; name: string; reads: string[]; writes: string[]; calls: ContractCall[]; explain?: string;
+};
+/** The design cards a contract carries (`contract.design`). */
+export type StageDesignCards = {
+  status?: DesignStatus; reference?: string; underRevision?: string;
+  decisions: DesignNote[]; policy: DesignNote[]; openQuestions: DesignNote[];
+  appliedIn?: { kg?: string; cg?: string; items: string[] };
+};
 /** A step's `contract` block (§4.1), whatever of it the step has. */
 export type StageContract = {
   reads: ContractKind[]; writes: ContractKind[]; calls: ContractCall[];
   trigger?: string; handoff?: string; human_review?: string; llm?: string;
   policy?: [string, string][]; decisions?: string[]; open_questions?: string[];
+  /** The step the handoff names, by id, to point "To <next stage>" at. */
+  handoffTo?: string;
+  steps?: AgentStepDef[];
+  design?: StageDesignCards;
+};
+
+/** A stage design's review state (design §4.6), as the consultant's legend names it. */
+export type DesignStatus = "locked" | "in_review" | "not_reviewed" | "human_step" | "shared_service";
+export const DESIGN_STATUSES: DesignStatus[] = ["locked", "in_review", "not_reviewed", "human_step", "shared_service"];
+export const DESIGN_LABEL: Record<DesignStatus, string> = {
+  locked: "Locked", in_review: "In review", not_reviewed: "Not yet reviewed",
+  human_step: "Human step", shared_service: "Shared service",
+};
+/** What a stage's design is now: from its review record, else what its contract declares. */
+export type StageDesignState = {
+  status: DesignStatus;
+  reference: string;
+  underRevision?: string;
+  /** The version a person locked, while a later one is in review. */
+  locked?: { reference: string; by?: string; at?: string };
+  can: { send_for_review: boolean; lock: boolean; revise: boolean };
+  source: "review" | "contract" | "default";
+};
+/** One kind's words, domain colour and stored layer (the designs view's `kinds`). */
+export type KindMeta = { label: string; color: string | null; layer: string };
+/** `view=designs`: every stage's design, the graph versions and the kinds' colours. */
+export type DesignsInfo = {
+  stages: Record<string, StageDesignState>;
+  kgVersion: number | null;
+  cgVersion: number | null;
+  kinds: Record<string, KindMeta>;
 };
 
 export type RunsAsTone = "deterministic" | "agent" | "person" | "outside" | "control" | "builtin";
@@ -55,6 +98,15 @@ export type PipelineStage = {
   endpointHost?: string;
   /** What the last run recorded for this stage, when it ran. */
   trace?: StepRunTrace;
+  /** Its design status and reference (design §4.6). */
+  design: StageDesignState;
+  /** Where the diagram draws it: the main flow, the shared-services row, or a side path. */
+  placement: "main" | "shared" | "side";
+  /** A side path's area ("Rule authoring"), from its spec's `side_path`. */
+  sideLabel?: string;
+  /** The stage before and after it on the flow, by title: the read/write view's anchors. */
+  from?: string;
+  to?: string;
 };
 
 export type OutsideAgentRef = { id: string; display_name: string; endpoint_host: string };
@@ -122,6 +174,17 @@ function contractOf(step: SpecStep): StageContract | null {
   const policy = Object.entries(asObj(raw.policy))
     .map(([k, v]) => [humanise(k), typeof v === "object" ? JSON.stringify(v) : String(v)] as [string, string]);
   const strs = (value: unknown) => list(value).map((v) => String(v).trim()).filter(Boolean);
+  const steps = list(raw.steps).map((v) => {
+    const row = asObj(v);
+    const names = (value: unknown) => list(value).map((k) => String(k).trim()).filter(Boolean);
+    return {
+      n: Number(row.n) || 0, name: str(row.name),
+      reads: names(row.reads), writes: names(row.writes),
+      calls: list(row.calls).map((c) => ({ mcp: str(asObj(c).mcp), tool: str(asObj(c).tool) })).filter((c) => c.mcp),
+      ...(str(row.explain) ? { explain: str(row.explain) } : {}),
+    };
+  }).filter((s) => s.n > 0 && s.name).sort((a, b) => a.n - b.n);
+  const handoffTo = str(asObj(raw.handoff).to);
   return {
     reads: kinds(raw.reads), writes: kinds(raw.writes), calls,
     trigger: text(raw.trigger), handoff: text(raw.handoff), human_review: text(raw.human_review),
@@ -129,7 +192,80 @@ function contractOf(step: SpecStep): StageContract | null {
     ...(policy.length ? { policy } : {}),
     ...(strs(raw.decisions).length ? { decisions: strs(raw.decisions) } : {}),
     ...(strs(raw.open_questions).length ? { open_questions: strs(raw.open_questions) } : {}),
+    ...(handoffTo ? { handoffTo } : {}),
+    ...(steps.length ? { steps } : {}),
+    ...(raw.design && typeof raw.design === "object" ? { design: designCardsOf(asObj(raw.design)) } : {}),
   };
+}
+
+const notes = (value: unknown): DesignNote[] => list(value)
+  .map((v) => ({ id: str(asObj(v).id), text: str(asObj(v).text) })).filter((n) => n.id || n.text);
+
+function designCardsOf(raw: Obj): StageDesignCards {
+  const applied = asObj(raw.applied_in);
+  const version = (v: unknown) => (typeof v === "number" ? `v${v}` : str(v));
+  const status = str(raw.status) as DesignStatus;
+  return {
+    ...(DESIGN_STATUSES.includes(status) ? { status } : {}),
+    ...(str(raw.reference) ? { reference: str(raw.reference) } : {}),
+    ...(str(raw.under_revision) ? { underRevision: str(raw.under_revision) } : {}),
+    decisions: notes(raw.decisions), policy: notes(raw.policy), openQuestions: notes(raw.open_questions),
+    ...(Object.keys(applied).length ? { appliedIn: {
+      ...(version(applied.kg) ? { kg: version(applied.kg) } : {}),
+      ...(version(applied.cg) ? { cg: version(applied.cg) } : {}),
+      items: list(applied.items).map((i) => String(i).trim()).filter(Boolean),
+    } } : {}),
+  };
+}
+
+/** A stage's design state: its review record when there is one, else what its contract declares,
+ *  else a person's step is a human step and every other stage is not yet reviewed. */
+function designOf(step: SpecStep, contract: StageContract | null, record: StageDesignState | undefined,
+                  isPerson: boolean): StageDesignState {
+  if (record) return record;
+  const declared = contract?.design;
+  const status: DesignStatus = declared?.status ?? (isPerson ? "human_step" : "not_reviewed");
+  const reviewable = !!contract && ["not_reviewed", "in_review", "locked"].includes(status);
+  return {
+    status, reference: declared?.reference ?? "",
+    ...(declared?.underRevision ? { underRevision: declared.underRevision } : {}),
+    ...(status === "locked" ? { locked: { reference: declared?.reference ?? "" } } : {}),
+    can: { send_for_review: reviewable && status === "not_reviewed", lock: reviewable && status === "in_review",
+           revise: reviewable && status === "locked" },
+    source: declared?.status ? "contract" : "default",
+  };
+}
+
+/** The designs view (`view=designs`) as the pipeline reads it. */
+export function designsFrom(body: unknown): DesignsInfo {
+  const root = asObj(body);
+  const stages: Record<string, StageDesignState> = {};
+  for (const [id, raw] of Object.entries(asObj(root.stages))) {
+    const row = asObj(raw);
+    const status = str(row.status) as DesignStatus;
+    if (!DESIGN_STATUSES.includes(status)) continue;
+    const locked = asObj(row.locked);
+    const can = asObj(row.can);
+    stages[id] = {
+      status, reference: str(row.reference),
+      ...(str(row.under_revision) ? { underRevision: str(row.under_revision) } : {}),
+      ...(Object.keys(locked).length ? { locked: {
+        reference: str(locked.reference),
+        ...(str(locked.locked_by) ? { by: str(locked.locked_by) } : {}),
+        ...(str(locked.locked_at) ? { at: str(locked.locked_at) } : {}),
+      } } : {}),
+      can: { send_for_review: can.send_for_review === true, lock: can.lock === true, revise: can.revise === true },
+      source: (["review", "contract", "default"].includes(str(row.source)) ? str(row.source) : "default") as StageDesignState["source"],
+    };
+  }
+  const graph = asObj(root.graph);
+  const kinds: Record<string, KindMeta> = {};
+  for (const [kind, raw] of Object.entries(asObj(root.kinds))) {
+    const row = asObj(raw);
+    kinds[kind] = { label: str(row.label) || kindLabel(kind), color: str(row.color) || null, layer: str(row.layer) };
+  }
+  const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+  return { stages, kgVersion: num(graph.kg_version), cgVersion: num(graph.cg_version), kinds };
 }
 
 /** A role's display name alone ("Compliance Officer"), or its key made readable. */
@@ -224,12 +360,35 @@ function singular(words: string): string {
   return w.replace(/s$/, "");
 }
 
+/** The steps reached from the entry along `next`, branches and frame bodies: the main flow. */
+function reachable(spec: Spec): Set<string> {
+  const steps = spec.steps ?? [];
+  const byId = new Map(steps.map((s) => [s.id, s]));
+  const incoming = new Set(steps.flatMap((s) => [...nexts(s), ...bodiesOf(s),
+    ...(s.kind === "parallel" ? list((s as Obj).branches).map(String) : [])]));
+  const entry = str(spec.entry_step) && byId.has(str(spec.entry_step)) ? str(spec.entry_step)
+    : steps.find((s) => !incoming.has(s.id))?.id ?? steps[0]?.id;
+  const seen = new Set<string>();
+  const queue = entry ? [entry] : [];
+  while (queue.length) {
+    const id = queue.shift()!;
+    if (seen.has(id) || !byId.has(id)) continue;
+    seen.add(id);
+    const step = byId.get(id)!;
+    queue.push(...nexts(step), ...bodiesOf(step),
+      ...(step.kind === "parallel" ? list((step as Obj).branches).map(String) : []));
+  }
+  return seen;
+}
+
 export function buildPipeline(spec: Spec, palette: Palette | null,
                               outsideAgents: OutsideAgentRef[] = [],
-                              run: RunContext | null = null): PipelineStage[] {
+                              run: RunContext | null = null,
+                              designs: DesignsInfo | null = null): PipelineStage[] {
   const steps = spec.steps ?? [];
   const byId = new Map(steps.map((s) => [s.id, s]));
   const { order, groupOf } = displayOrder(spec);
+  const onMain = reachable(spec);
   const titleOf = (id: string): string => {
     const step = byId.get(id);
     if (!step) return humanise(id);
@@ -342,9 +501,17 @@ export function buildPipeline(spec: Spec, palette: Palette | null,
 
     const trace = run?.steps[id];
     const status: StageStatus = trace ? (STATUS[trace.status] ?? "pending") : "not_run";
-    if (!isControl) n += 1;
+    const design = designOf(step, contract, designs?.stages[id], runsAs.tone === "person");
+    // A SHARED SERVICE sits in its own row; a SIDE PATH (`side_path`, or a stage the flow never
+    // reaches) beside the flow, dashed. Neither takes a number on the main flow.
+    const sidePath = (step as Obj).side_path;
+    const placement: PipelineStage["placement"] = design.status === "shared_service" ? "shared"
+      : (sidePath || (!onMain.has(id) && !groupOf.has(id))) && !isControl ? "side" : "main";
+    if (!isControl && placement === "main") n += 1;
     stages.push({
-      id, kind: step.kind, number: isControl ? null : n, title, description, runsAs, status, contract,
+      id, kind: step.kind, number: isControl || placement !== "main" ? null : n, title, description, runsAs, status, contract,
+      design, placement,
+      ...(placement === "side" ? { sideLabel: typeof sidePath === "string" && sidePath.trim() ? sidePath.trim() : "Side paths" } : {}),
       ...(groupOf.has(id) ? { group: groupOf.get(id) } : {}),
       ...(members ? { members } : {}),
       ...(frameNote ? { frameNote } : {}),
@@ -355,6 +522,16 @@ export function buildPipeline(spec: Spec, palette: Palette | null,
       ...(trace ? { trace } : {}),
     });
   }
+  // THE ANCHORS of the read/write view: the stage that hands work in, and where it goes next
+  // (the handoff's named stage, else the next stage on the flow).
+  const numbered = stages.filter((s) => s.number !== null);
+  const titleById = new Map(stages.map((s) => [s.id, s.title]));
+  numbered.forEach((s, i) => {
+    if (i > 0) s.from = numbered[i - 1].title;
+    const to = s.contract?.handoffTo;
+    if (to && titleById.has(to)) s.to = titleById.get(to);
+    else if (i < numbered.length - 1) s.to = numbered[i + 1].title;
+  });
   return stages;
 }
 

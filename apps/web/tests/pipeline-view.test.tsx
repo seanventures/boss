@@ -127,7 +127,7 @@ describe("PipelineView", () => {
     act(() => by("stage-context_enrichment")!.click());
     const detail = by("pipeline-stage-detail")!;
     expect(detail.querySelector('[data-area="agent-contract-view"]')).not.toBeNull();
-    expect(detail.textContent).toContain("Knowledge Graph (read only)");
+    expect(detail.textContent).toContain("Knowledge Graph · read only");
     act(() => by("stage-context_enrichment")!.click());
     expect(by("pipeline-stage-detail")).toBeNull();
   });

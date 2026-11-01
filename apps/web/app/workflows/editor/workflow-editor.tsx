@@ -19,10 +19,10 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import type { CustomStepDef, FlowLink, PaletteItem, Spec, StepView } from "../../../lib/workflow-editor-types";
 import { TOAST_EVENT } from "../../../lib/api-write";
 import {
-  checkSpec, deleteWorkflow, draftFromDescription, fetchLibrary, fetchRunContext, fetchSpec,
-  type RunContext,
+  checkSpec, deleteWorkflow, designAction, draftFromDescription, fetchDesigns, fetchLibrary,
+  fetchRunContext, fetchSpec, type DesignAction, type RunContext,
 } from "../../../lib/workflow-api";
-import { buildPipeline } from "../../../lib/pipeline-model";
+import { buildPipeline, type DesignsInfo } from "../../../lib/pipeline-model";
 import { checkRewire } from "../../../lib/workflow-rewire";
 import { newMeta, useWorkflowEditor } from "../../../lib/workflow-editor-store";
 import { canRemove, insertStep, layoutFlow, linearOrder } from "../../../lib/workflow-graph";
@@ -220,8 +220,23 @@ export function WorkflowEditor({ projectId, workflowKey, onBack, onStart, actor,
     }, () => { if (live) setLastRun(null); });
     return () => { live = false; };
   }, [projectId, meta.workflow_key, view]);
-  const pipelineStages = useMemo(() => buildPipeline(spec, palette, outsideAgents, lastRun),
-    [spec, palette, outsideAgents, lastRun]);
+  // Each stage's design status and reference, the graph versions and the kinds' colours.
+  const [designs, setDesigns] = useState<DesignsInfo | null>(null);
+  const [designsTick, setDesignsTick] = useState(0);
+  useEffect(() => {
+    if (!projectId || !meta.workflow_key || view !== "pipeline") return;
+    let live = true;
+    void fetchDesigns(projectId, meta.workflow_key).then((d) => { if (live) setDesigns(d); },
+      () => { if (live) setDesigns(null); });
+    return () => { live = false; };
+  }, [projectId, meta.workflow_key, view, designsTick]);
+  const onDesignAction = useCallback(async (stageId: string, action: DesignAction) => {
+    if (!projectId || !meta.workflow_key) return;
+    await designAction(projectId, meta.workflow_key, stageId, action);
+    setDesignsTick((t) => t + 1);
+  }, [projectId, meta.workflow_key]);
+  const pipelineStages = useMemo(() => buildPipeline(spec, palette, outsideAgents, lastRun, designs),
+    [spec, palette, outsideAgents, lastRun, designs]);
   const assignCaptain = useCallback((stepId: string, choice: { kind: "agent" | "outside_agent"; value: string }) => {
     if (readOnly) return;
     dispatch({ type: "PATCH_STEP", id: stepId, patch: { externalAgent: choice.kind === "outside_agent" ? choice.value : null } });
@@ -615,7 +630,9 @@ export function WorkflowEditor({ projectId, workflowKey, onBack, onStart, actor,
         ) : (
           <main className="wf-stage wf-stage-pipeline" aria-label="Pipeline" data-testid="wf-pipeline-tab">
             <PipelineView name={meta.name || "Workflow"} stages={pipelineStages} run={lastRun}
-                          outsideAgents={outsideAgents} onAssignCaptain={readOnly ? undefined : assignCaptain} />
+                          outsideAgents={outsideAgents} onAssignCaptain={readOnly ? undefined : assignCaptain}
+                          designs={designs}
+                          onDesignAction={readOnly || !meta.definition_id ? undefined : onDesignAction} />
           </main>
         )}
         {inspectorOpen && palette ? (

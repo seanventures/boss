@@ -74,6 +74,13 @@ function planPath(project: string, key: string): string {
     + `?project_id=${encodeURIComponent(project)}`;
 }
 
+/** `view=designs&key=…` — every stage's design status and reference (Locked, In review…), the
+ *  project's Knowledge and Context Graph versions and the kinds' colours (design §4.6). */
+function designsPath(project: string, key: string): string {
+  return `/v1/delivery-workflows/${encodeURIComponent(key)}/designs`
+    + `?project_id=${encodeURIComponent(project)}`;
+}
+
 /** `view=readiness&key=…` — what this workflow needs from this project, each item checked,
  *  with the fix. The same answer Start gives when it refuses, asked before pressing it. */
 function readinessPath(project: string, key: string, input: string | null): string {
@@ -132,13 +139,14 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: String((e as Error)?.message ?? e) }, { status: 502 });
     }
   }
-  if (view === "spec" || view === "plan" || view === "readiness") {
+  if (view === "spec" || view === "plan" || view === "readiness" || view === "designs") {
     const key = params.get("key")?.trim() ?? "";
     if (!project || !key) {
       return NextResponse.json({ error: `${view} needs project_id and key` }, { status: 400 });
     }
     try {
       const path = view === "plan" ? planPath(project, key)
+        : view === "designs" ? designsPath(project, key)
         : view === "readiness" ? readinessPath(project, key, params.get("input"))
         : specPath(project, key, params.get("version"));
       const r = await fetch(`${API_URL}${path}`, {
@@ -277,6 +285,14 @@ const WEBHOOK_ACTIONS: Record<string, (id: string) => string> = {
   webhook_enabled: (id) => `/v1/delivery-workflows/webhooks/${encodeURIComponent(id)}/enabled`,
 };
 
+/** A stage's agent design (design §4.6): send for review, lock (a person, step-up), revise.
+ *  The workflow key and the stage live in the path. */
+const DESIGN_ACTIONS: Record<string, (key: string, stage: string) => string> = {
+  design_review: (k, s) => `/v1/delivery-workflows/${encodeURIComponent(k)}/designs/${encodeURIComponent(s)}/review`,
+  design_lock: (k, s) => `/v1/delivery-workflows/${encodeURIComponent(k)}/designs/${encodeURIComponent(s)}/lock`,
+  design_revise: (k, s) => `/v1/delivery-workflows/${encodeURIComponent(k)}/designs/${encodeURIComponent(s)}/revise`,
+};
+
 const RUN_ACTIONS: Record<string, (runId: string) => string> = {
   retry_step: (id) => `/v1/delivery-workflows/runs/${encodeURIComponent(id)}/retry-step`,
   // The other way past a failed step: go on without it. A failed step STOPS its run, for every
@@ -326,6 +342,16 @@ export async function POST(req: Request) {
     }
     const { action: _a, webhook_id: _w, ...rest } = body;
     return proxyPost(webhookAction(id), rest);
+  }
+  const designAction = DESIGN_ACTIONS[action];
+  if (designAction) {
+    const key = String((body as { key?: string }).key ?? "").trim();
+    const stage = String((body as { stage_id?: string }).stage_id ?? "").trim();
+    if (!key || !stage) {
+      return NextResponse.json({ error: `'${action}' needs a key and a stage_id` }, { status: 400 });
+    }
+    const { action: _a, key: _k, stage_id: _s, ...rest } = body;
+    return proxyPost(designAction(key, stage), rest);
   }
   const runAction = RUN_ACTIONS[action];
   const runId = String((body as { run_id?: string }).run_id ?? "");
