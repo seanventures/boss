@@ -63,11 +63,70 @@ def test_the_pack_mirrors_the_sample_world():
     assert not (pack.kinds & NODE_KINDS)
     for _src, rel, _dst, _meaning in D.RELATIONSHIPS:
         kind = dq_platform.edge_kind(rel)
-        assert kind in pack.edges or kind in {"owns", "reads", "caused_by"}, rel
+        assert kind in pack.edges or kind in {"owns", "reads", "caused_by", "fixed_by"}, rel
     assert {"matched_incident", "used_precedent"} <= pack.edges
     meta = pack.kind_meta["data_quality_rule"]
     assert meta["color"] and meta["label"] == "Data quality rule" and meta["plural"]
     assert pack.context_version == "4"
+    # v3: the kinds the consultant's designs read; the sample holds instances of some, the rest
+    # are declared and never invented.
+    assert pack.version == "3"
+    assert set(D.DECLARED_ONLY_KINDS) <= pack.kinds
+    assert {"transformation", "root_cause_category", "remediation_template"} <= set(D.KG_KINDS)
+    ds = D.generate()
+    kinds = {n["kind"] for n in ds.nodes()}
+    assert not (set(D.DECLARED_ONLY_KINDS) & kinds)
+    assert {n["key"] for n in ds.nodes() if n["kind"] == "root_cause_category"} == \
+        set(D.ROOT_CAUSE_FAMILIES)
+    templates = {n["attrs"]["pattern_id"]: n["name"] for n in ds.nodes()
+                 if n["kind"] == "remediation_template"}
+    assert templates == {p.pattern_id: p.durable_fix for p in ds.patterns}
+    transforms = [n for n in ds.nodes() if n["kind"] == "transformation"]
+    assert transforms and all(n["name"] == ds_lineage.transform for n in transforms
+                              for ds_lineage in ds.lineage
+                              if ds_lineage.lineage_id == n["attrs"]["lineage_id"])
+
+
+def test_the_designs_read_what_the_reference_draws():
+    entry = next(e for e in catalogue.CATALOGUE if e["key"] == KEY)
+    steps = {s["id"]: s for s in entry["steps"]}
+    reads = lambda sid: {r["kind"] for r in steps[sid]["contract"]["reads"]}  # noqa: E731
+    assert {"transformation", "derivation_rule", "data_concern", "adjustment",
+            "regulatory_communication", "join_path", "domain", "contract"} <= \
+        reads("context_enrichment")
+    assert {"remediation_template", "root_cause_category"} <= reads("historical_pattern")
+    pack = ontology_packs.load_pack("banking-dq")
+    for sid in ("context_enrichment", "historical_pattern"):
+        assert reads(sid) - pack.kinds - NODE_KINDS == set(), sid
+
+
+def test_a_project_already_on_v2_gets_the_new_kinds_and_its_contracts_publish(loaded):
+    """northpeak-lending holds banking-dq at v2: the kinds come from the shipped pack, so its
+    contracts are satisfied at once, and loading the platform again records v3 and seeds the
+    sample's instances."""
+    from boss_engine.services.knowledge.step_contracts import contract_assignment_problems
+
+    c, project, _ = loaded
+    c.execute(text("UPDATE kg_ontology_packs SET version = '2' WHERE project_id = :p "
+                   "AND pack_id = 'banking-dq'"), {"p": project})
+    ontology_packs._PROJECT_PACK_CACHE.pop(project, None)
+    granted = ontology_packs.effective_node_kinds(c, project_id=project)
+    assert {"join_path", "root_cause_category", "remediation_template"} <= granted
+    entry = next(e for e in catalogue.CATALOGUE if e["key"] == KEY)
+    for step in entry["steps"]:
+        if step["id"] in ("context_enrichment", "historical_pattern"):
+            problems = contract_assignment_problems(c, project, step)
+            assert not [p for p in problems if "kind" in p], problems
+    dq_platform.load_platform(c, project_id=project, actor="ceo")
+    assert c.execute(text("SELECT version FROM kg_ontology_packs WHERE project_id = :p AND "
+                          "pack_id = 'banking-dq'"), {"p": project}).scalar() == "3"
+    counts = dict(c.execute(text(
+        "SELECT kind, count(*) FROM kg_nodes WHERE project_id = :p AND valid_to IS NULL AND "
+        "kind IN ('root_cause_category', 'remediation_template', 'transformation', 'join_path') "
+        "GROUP BY kind"), {"p": project}).all())
+    assert counts.get("root_cause_category") == 5
+    assert counts.get("remediation_template", 0) >= 1 and counts.get("transformation", 0) >= 1
+    assert "join_path" not in counts
 
 
 def test_the_mocks_answer_from_the_sample_world():

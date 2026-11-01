@@ -48,7 +48,13 @@ MDRM_DISCLAIMER = ("Report line numbers and MDRM codes in this rulebook are illu
 KG_KINDS = ("system", "owner", "feed", "lineage", "database_structure", "database_table",
             "database_column", "cde", "data_quality_rule", "dq_threshold", "regulatory_report",
             "report_line", "mdrm", "business_calendar", "calendar_day", "issue",
-            "examination_finding")
+            "examination_finding", "transformation", "root_cause_category",
+            "remediation_template")
+#: Kinds the consultant's agent designs read that this sample world holds no instance of: the
+#: pack declares them (so a bank's own graph can carry them and the contracts read them), but
+#: the sample never invents one.
+DECLARED_ONLY_KINDS = ("derivation_rule", "data_concern", "adjustment",
+                       "regulatory_communication", "join_path", "domain", "contract")
 CONTEXT_KINDS = ("exception_group", "incident", "precedent", "resolved_pattern")
 
 #: Every relationship the data emits: (source kind, relationship, target kind, meaning).
@@ -71,6 +77,7 @@ RELATIONSHIPS: tuple[tuple[str, str, str, str], ...] = (
     ("lineage", "TO", "database_column", "a lineage hop lands in a column"),
     ("lineage", "TO", "report_line", "the last hop lands on a report line"),
     ("lineage", "VIA", "feed", "the feed that carries a hop"),
+    ("lineage", "APPLIES", "transformation", "the transformation a hop applies on the way"),
     ("cde", "STORED_IN", "database_column", "where a CDE's value of record lives"),
     ("cde", "REPORTED_IN", "report_line", "a report line the CDE feeds"),
     ("cde", "DERIVED_FROM", "cde", "upstream CDE (business lineage)"),
@@ -87,6 +94,8 @@ RELATIONSHIPS: tuple[tuple[str, str, str, str], ...] = (
     ("report_line", "HAS_MDRM", "mdrm", "the MDRM code of a report line"),
     ("mdrm", "DEFINED_FOR", "regulatory_report", "the report an MDRM code belongs to"),
     ("calendar_day", "IN", "business_calendar", "a day in a calendar"),
+    ("remediation_template", "FOR_CATEGORY", "root_cause_category",
+     "the root-cause family a fix template addresses"),
     ("issue", "CONCERNS", "system", "a known issue affects a system"),
     ("issue", "CONCERNS", "feed", "a known issue affects a feed"),
     ("issue", "CONCERNS", "data_quality_rule", "a known issue affects a rule"),
@@ -112,6 +121,8 @@ RELATIONSHIPS: tuple[tuple[str, str, str, str], ...] = (
     ("precedent", "FROM_INCIDENT", "incident", "the closed incident a precedent records"),
     ("precedent", "MATCHES", "resolved_pattern", "the pattern a precedent confirms"),
     ("resolved_pattern", "SEEN_ON", "data_quality_rule", "a rule the pattern has broken"),
+    ("resolved_pattern", "IN_CATEGORY", "root_cause_category", "the pattern's root-cause family"),
+    ("resolved_pattern", "FIXED_BY", "remediation_template", "the durable fix that held"),
 )
 
 DIMENSIONS = ("completeness", "validity", "accuracy", "consistency", "timeliness", "uniqueness")
@@ -122,6 +133,20 @@ ROOT_CAUSE_FAMILIES = {
     "manual_entry": "Data captured wrongly or twice by people or front-end channels.",
     "rule_config": "The DQ rule or its threshold is wrong: the data is fine (false positive).",
 }
+ROOT_CAUSE_FAMILY_NAMES = {
+    "source_processing": "Source processing", "feed_etl": "Feed or ETL",
+    "reference_data": "Reference data", "manual_entry": "Manual entry",
+    "rule_config": "Rule configuration (false positive)",
+}
+#: A lineage hop that only copies or files a value transforms nothing: no Transformation node.
+PLAIN_TRANSFORMS = frozenset({"copied", "copied as at COB", "filed on the line"})
+
+
+def remediation_template_id(pattern_id: str) -> str:
+    """RPAT-COB-ORDER's durable fix is the remediation template RTPL-COB-ORDER."""
+    return "RTPL-" + pattern_id.removeprefix("RPAT-")
+
+
 #: Pipeline lanes: one per root-cause family, plus the two side paths.
 LANES = {
     "lane_source_processing": "source_processing", "lane_feed_etl": "feed_etl",
@@ -2120,6 +2145,15 @@ class Dataset:
             add("feed", f.feed_id, f.name, f)
         for ln in self.lineage:
             add("lineage", ln.lineage_id, f"{ln.from_column} -> {ln.to}", ln)
+            if ln.transform not in PLAIN_TRANSFORMS:
+                add("transformation", f"TRF-{ln.lineage_id}", ln.transform, None,
+                    lineage_id=ln.lineage_id, description=ln.transform)
+        for family, meaning in ROOT_CAUSE_FAMILIES.items():
+            add("root_cause_category", family, ROOT_CAUSE_FAMILY_NAMES[family], None,
+                family=family, description=meaning)
+        for p in self.patterns:
+            add("remediation_template", remediation_template_id(p.pattern_id), p.durable_fix,
+                None, pattern_id=p.pattern_id, family=p.family, fix=p.durable_fix)
         for c in self.cdes:
             add("cde", c.cde_id, c.name, c)
         for r in self.rules:
@@ -2186,6 +2220,8 @@ class Dataset:
             add(("lineage", ln.lineage_id, "TO", ln.to_kind, ln.to))
             if ln.feed_id:
                 add(("lineage", ln.lineage_id, "VIA", "feed", ln.feed_id))
+            if ln.transform not in PLAIN_TRANSFORMS:
+                add(("lineage", ln.lineage_id, "APPLIES", "transformation", f"TRF-{ln.lineage_id}"))
         for c in self.cdes:
             add(("owner", c.steward_id, "STEWARDS", "cde", c.cde_id))
             add(("cde", c.cde_id, "SYSTEM_OF_RECORD", "system", c.system_of_record))
@@ -2250,6 +2286,10 @@ class Dataset:
         for p in self.patterns:
             for rid in p.rule_ids:
                 add(("resolved_pattern", p.pattern_id, "SEEN_ON", "data_quality_rule", rid))
+            template = remediation_template_id(p.pattern_id)
+            add(("resolved_pattern", p.pattern_id, "IN_CATEGORY", "root_cause_category", p.family))
+            add(("resolved_pattern", p.pattern_id, "FIXED_BY", "remediation_template", template))
+            add(("remediation_template", template, "FOR_CATEGORY", "root_cause_category", p.family))
         return e
 
     def eagle_payload(self, group_id: str) -> dict[str, Any]:
