@@ -101,7 +101,9 @@ describe("the Pipeline tab in the real Workflow Studio editor", () => {
     });
     await settle();
 
-    expect(byTest("outside-agent-badge")).not.toBeNull();
+    // One chip says who runs it; no second "Outside agent" badge.
+    expect(byTest("outside-agent-badge")).toBeNull();
+    expect(byTest("stage-runs-as-research")?.textContent).toContain("Outside agent");
     expect(byTest("outside-agent-host").textContent).toBe("acme-bank.example.com");
   });
 
@@ -140,7 +142,9 @@ describe("the Pipeline tab in the real Workflow Studio editor", () => {
     click(byTest("wf-view-pipeline"));
     await settle();
 
-    expect(byTest("outside-agent-contract").textContent).toBe("reads Rule · writes Agent decision");
+    // The same compact contract line as every other card, the kinds on hover.
+    expect(byTest("stage-contract-research").textContent).toBe("reads 1 · writes 1");
+    expect(byTest("stage-contract-research").getAttribute("title")).toBe("Reads Rule · Writes Agent decision");
     expect(byTest("stage-research").textContent).toContain("Succeeded");
     expect(byTest("stage-meeting").textContent).toContain("Running");
     expect(byTest("stage-row-research").textContent).toContain("Outside agent · Acme Bank review agent");

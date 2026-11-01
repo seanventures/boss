@@ -40,20 +40,13 @@ function RunsAsChip({ stage }: { stage: PipelineStage }) {
   );
 }
 
-/** KG P6b: `Outside agent`, its endpoint host and its contract — never its auth secret. */
-function OutsideAgentBadge({ stage }: { stage: PipelineStage }) {
-  const c = stage.contract;
-  const line = c && (c.reads.length || c.writes.length)
-    ? `reads ${c.reads.map((r) => kindLabel(r.kind)).join(", ") || "nothing"}`
-      + ` · writes ${c.writes.map((w) => kindLabel(w.kind)).join(", ") || "nothing"}`
-    : null;
+/** KG P6b: an outside agent's endpoint host — never its auth secret. Its chip already says
+ *  "Outside agent · <name>", and its contract reads like every other card's. */
+function OutsideAgentHost({ stage }: { stage: PipelineStage }) {
+  if (!stage.endpointHost) return null;
   return (
-    <span className="pl-outside">
-      <span data-testid="outside-agent-badge" className="pl-outside-badge"
-            title="Runs outside BOSS, over HTTP, under a per-run token">Outside agent</span>
-      {stage.endpointHost ? <span data-testid="outside-agent-host" className="pl-faint">{stage.endpointHost}</span> : null}
-      {line ? <span data-testid="outside-agent-contract" className="pl-faint">{line}</span> : null}
-    </span>
+    <span data-testid="outside-agent-host" className="pl-faint pl-host"
+          title="Runs outside BOSS, over HTTP, under a per-run token">{stage.endpointHost}</span>
   );
 }
 
@@ -114,15 +107,24 @@ function StageCard({ stage, selected, onSelect, outsideAgents, onAssignCaptain }
       </div>
       <div className="pl-card-title">{stage.title}</div>
       <RunsAsChip stage={stage} />
-      {stage.captainKind === "outside_agent" ? <OutsideAgentBadge stage={stage} /> : null}
-      {stage.captainKind === "outside_agent" ? null : (
-        <div className="pl-card-contract" data-empty={summary ? undefined : "true"}>
-          {summary ?? "No contract declared"}
-        </div>
-      )}
+      {stage.captainKind === "outside_agent" ? <OutsideAgentHost stage={stage} /> : null}
+      <div className="pl-card-contract" data-testid={`stage-contract-${stage.id}`}
+           data-empty={summary ? undefined : "true"}
+           title={stage.contract ? contractTip(stage.contract) : undefined}>
+        {summary ?? "No contract declared"}
+      </div>
       {switchable ? <CaptainSwitcher stage={stage} outsideAgents={outsideAgents} onAssign={onAssignCaptain!} /> : null}
     </div>
   );
+}
+
+/** The kinds behind "reads 3 · writes 2", for the hover. */
+function contractTip(c: NonNullable<PipelineStage["contract"]>): string {
+  return [
+    c.reads.length ? `Reads ${c.reads.map((r) => kindLabel(r.kind)).join(", ")}` : "",
+    c.writes.length ? `Writes ${c.writes.map((w) => kindLabel(w.kind)).join(", ")}` : "",
+    c.calls.length ? `Calls ${c.calls.map((x) => x.tool || x.mcp).join(", ")}` : "",
+  ].filter(Boolean).join(" · ");
 }
 
 function Arrow() {

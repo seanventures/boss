@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { AgentContractView } from "../app/workflows/editor/agent-contract-view";
 import { buildPipeline } from "../lib/pipeline-model";
+import type { RunContext } from "../lib/workflow-api";
 import { OUTSIDE, REG_PALETTE, REG_RUN, REG_SPEC } from "./_helpers/regulatory-pipeline-fixture";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -17,8 +18,8 @@ import { OUTSIDE, REG_PALETTE, REG_RUN, REG_SPEC } from "./_helpers/regulatory-p
 let root: Root | null = null;
 let host: HTMLElement | null = null;
 
-function mount(stageId: string, opts: { run?: boolean } = {}) {
-  const run = opts.run === false ? null : REG_RUN;
+function mount(stageId: string, opts: { run?: boolean; trace?: RunContext } = {}) {
+  const run = opts.run === false ? null : (opts.trace ?? REG_RUN);
   const stage = buildPipeline(REG_SPEC, REG_PALETTE, [OUTSIDE], run).find((s) => s.id === stageId)!;
   host = document.createElement("div");
   document.body.appendChild(host);
@@ -104,6 +105,21 @@ describe("AgentContractView", () => {
     mount("historical_pattern");
     click(by("show-last-run"));
     expect(by("node-call-itsm-get_incident")!.textContent).toContain("not recorded");
+  });
+
+  it("P1 a deterministic step that records its calls says 'called' and 'declared, not done' truthfully", () => {
+    const trace: RunContext = { ...REG_RUN, steps: { ...REG_RUN.steps, historical_pattern: {
+      ...REG_RUN.steps.historical_pattern,
+      calls: [{ tool: "list_incidents", server: "itsm", count: 1 }], callsRecorded: true } } };
+    mount("historical_pattern", { trace });
+    click(by("show-last-run"));
+    const listed = by("node-call-itsm-list_incidents")!;
+    expect(listed.textContent).toContain("list incidents · called 1");
+    expect(listed.getAttribute("data-made")).toBe("true");
+    const got = by("node-call-itsm-get_incident")!;
+    expect(got.textContent).toContain("get incident · declared, not done");
+    expect(got.getAttribute("data-overlay")).toBe("missing");
+    expect(got.textContent).not.toContain("not recorded");
   });
 
   it("P1 a stage with no contract says nothing is checked, and the run still shows what it touched", () => {

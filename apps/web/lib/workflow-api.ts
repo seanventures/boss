@@ -358,7 +358,10 @@ export async function fetchSpec(projectId: string, key: string, version?: number
 export type TracedKind = { kind: string; count: number; examples: string[]; decision_types: string[] };
 /** What one step did on a run, from the graph's own record (`view=context_trace`). */
 export type StepRunTrace = { status: string; reads: TracedKind[]; writes: TracedKind[];
-  calls: { tool: string; count: number }[] };
+  calls: { tool: string; server?: string; count: number }[];
+  /** The step records its calls (an agent's turns, or a deterministic step's own record), so a
+   *  declared call missing from `calls` was not made; without a record nothing can be said. */
+  callsRecorded?: boolean };
 /** A run, step by step: what each read and wrote in the Knowledge and Context Graphs. */
 export type RunContext = { run_id: string; status: string; started_at: string | null;
   completed_at: string | null; steps: Record<string, StepRunTrace> };
@@ -379,8 +382,10 @@ export async function fetchRunContext(projectId: string, runId: string): Promise
     const step = asObj(raw);
     steps[stepId] = {
       status: str(step.status), reads: tracedKinds(step.reads), writes: tracedKinds(step.writes),
-      calls: list(step.calls).map((c) => ({ tool: str(asObj(c).tool), count: Number(asObj(c).count ?? 0) || 0 }))
+      calls: list(step.calls).map((c) => ({ tool: str(asObj(c).tool), server: str(asObj(c).server) || undefined,
+                                            count: Number(asObj(c).count ?? 0) || 0 }))
         .filter((c) => c.tool),
+      callsRecorded: step.calls_recorded === true,
     };
   }
   return { run_id: str(body.run_id) || runId, status: str(body.status),
