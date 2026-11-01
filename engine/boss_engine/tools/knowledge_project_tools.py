@@ -165,10 +165,11 @@ KNOWLEDGE_PROJECT_TOOLS: dict[str, dict] = {
     },
     "set_ontology_pack": {
         "description": (
-            "SET this project's ontology pack (e.g. banking-regulatory, banking-dq): what kinds "
-            "of node and edge, beyond BOSS's core, the project's Knowledge Graph accepts — a "
-            "document and its clauses need one set first. Proposed by the model, but only an "
-            "operator presses it."),
+            "ADD an ontology pack to this project (e.g. banking-regulatory, banking-dq, "
+            "banking-aml): what kinds of node and edge, beyond BOSS's core, the project's "
+            "Knowledge Graph accepts — a document and its clauses need one first. A project "
+            "holds several packs; adding one never removes another's kinds. Proposed by the "
+            "model, but only an operator presses it."),
         "parameters": {"type": "object", "properties": {
             "pack_id": {"type": "string"}}, "required": ["pack_id"],
             "additionalProperties": False},

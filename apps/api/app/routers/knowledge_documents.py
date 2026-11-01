@@ -85,13 +85,18 @@ def get_packs(project_id: str = Query(...), actor: str = Query(...)) -> dict[str
         with begin(_engine) as connection:
             _actor(connection, project_id, actor, READ)
             current = ontology_packs.get_project_pack(connection, project_id=project_id)
+            held = ontology_packs.get_project_packs(connection, project_id=project_id)
             available = [
                 {"pack_id": pid, "version": pack.version}
                 for pid, pack in ontology_packs.shipped_packs().items()
             ]
             return {
+                # The pack set last (a project holds several; `packs` lists them all).
                 "current": ({"pack_id": current.pack_id, "version": current.version}
                            if current else None),
+                "packs": [{"pack_id": p.pack_id, "version": p.version,
+                           "includes": [i for i in p.pack_ids if i != p.pack_id]}
+                          for p in held],
                 "available": available,
             }
     except Exception as error:  # noqa: BLE001

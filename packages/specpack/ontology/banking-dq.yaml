@@ -1,54 +1,358 @@
 id: banking-dq
-version: "1"
+version: "2"
 description: >
-  Data-quality vocabulary for a bank's regulatory reporting. Schema-only this cycle: no
-  workflow or metric reads it, shipped to prove the ontology-pack mechanism generalises
-  beyond banking-regulatory.
+  Data quality for a bank's loan book and regulatory reporting (the banking DQ case study,
+  NorthPeak Bank on Apache Fineract): the Knowledge Graph the RCA and remediation pipeline reads
+  (systems, owners, schemas, tables and columns, feeds, column lineage, critical data elements,
+  DQ rules with Warning and Error thresholds, regulatory reports, report lines and MDRM codes,
+  the business calendar, known issues and examination findings) and the Context Graph its agents
+  write (exception groups, incidents, precedents, resolved patterns, decisions, coverage gaps,
+  remediation packages and rule proposals). Mirrors tools/dq_sample/data.py exactly; a test
+  keeps the two equal.
 status: active
+# Domain colours follow the consultant's screens: teal agent infrastructure and people, amber
+# systems and data, red rules and thresholds, green governance (CDEs), purple lineage, blue
+# regulatory reporting, slate known issues, olive the calendar, indigo the Context Graph.
+# incident, precedent, agent_decision and coverage_gap are BOSS core kinds: written, not declared.
 kinds:
+  # ── Knowledge Graph (reference world; agents read it) ──
   - id: system
-    layer: code
+    layer: domain
     label: System
-    color: "#4a6dff"
-    attrs: [name, kind]
-  - id: data_quality_rule
+    plural: Systems
+    color: "#c27c0e"
+    group: Systems and data
+    attrs: [system_id, name, tier, platform, role, owner_id, mcp_server]
+  - id: owner
     layer: domain
-    label: Data quality rule
-    color: "#d08a2e"
-    attrs: [name, statement]
-  - id: dq_threshold
-    layer: domain
-    label: DQ threshold
-    color: "#d08a2e"
-    attrs: [metric, operator, value]
-  - id: cde
-    layer: domain
-    label: Critical data element
-    color: "#d08a2e"
-    attrs: [name, table]
-  - id: database_table
-    layer: code
-    label: Database table
-    color: "#4a6dff"
-    attrs: [name, schema]
+    label: Owner
+    plural: Owners
+    color: "#1f8a9e"
+    group: People and teams
+    attrs: [owner_id, name, owner_type, title, team_id, itsm_group]
   - id: feed
     layer: domain
     label: Feed
-    color: "#d08a2e"
-    attrs: [name, source]
+    plural: Feeds
+    color: "#c27c0e"
+    group: Systems and data
+    attrs: [feed_id, name, source_system, target_system, frequency, sla, owner_id]
+  - id: lineage
+    layer: domain
+    label: Lineage hop
+    plural: Lineage hops
+    color: "#7b4fc4"
+    group: Lineage
+    attrs: [lineage_id, from_column, to, to_kind, feed_id, transform]
+  - id: database_structure
+    layer: domain
+    label: Database structure
+    plural: Database structures
+    color: "#c27c0e"
+    group: Systems and data
+    attrs: [structure_id, name, system_id, engine]
+  - id: database_table
+    layer: domain
+    label: Database table
+    plural: Database tables
+    color: "#c27c0e"
+    group: Systems and data
+    attrs: [name, structure_id, system_id, fineract, in_code_graph]
+  - id: database_column
+    layer: domain
+    label: Database column
+    plural: Database columns
+    color: "#c27c0e"
+    group: Systems and data
+    attrs: [key, table, name, data_type]
+  - id: cde
+    layer: domain
+    label: Critical data element
+    plural: Critical data elements
+    color: "#2e8b57"
+    group: Data governance
+    attrs: [cde_id, name, definition, system_of_record, steward_id]
+  - id: data_quality_rule
+    layer: domain
+    label: Data quality rule
+    plural: Data quality rules
+    color: "#b8433a"
+    group: Rules
+    attrs: [rule_id, version, eagle_id, family, title, dimension, severity, owner_id, status]
+  - id: dq_threshold
+    layer: domain
+    label: DQ threshold
+    plural: DQ thresholds
+    color: "#b8433a"
+    group: Rules
+    attrs: [threshold_id, rule_id, level, metric, value, text]
   - id: regulatory_report
     layer: domain
     label: Regulatory report
-    color: "#a386ff"
-    attrs: [name, cadence, owner]
+    plural: Regulatory reports
+    color: "#2f5fb3"
+    group: Regulatory
+    attrs: [report_id, name, form, frequency, regulator]
+  - id: report_line
+    layer: domain
+    label: Report line
+    plural: Report lines
+    color: "#2f5fb3"
+    group: Regulatory
+    attrs: [line_id, report_id, schedule, item, caption, mdrm]
+  - id: mdrm
+    layer: domain
+    label: MDRM code
+    plural: MDRM codes
+    color: "#2f5fb3"
+    group: Regulatory
+    attrs: [code, mnemonic, item_code, description, report_id, illustrative]
+  - id: business_calendar
+    layer: domain
+    label: Business calendar
+    plural: Business calendars
+    color: "#6b8e23"
+    group: Calendar
+    attrs: [start, end, holidays]
+  - id: calendar_day
+    layer: domain
+    label: Calendar day
+    plural: Calendar days
+    color: "#6b8e23"
+    group: Calendar
+    attrs: [day, weekday, business_day, holiday, quarter_end]
   - id: issue
     layer: domain
     label: Issue
-    color: "#c0392b"
-    attrs: [title, status]
+    plural: Issues
+    color: "#566273"
+    group: Known issues
+    attrs: [issue_id, title, status, opened, owner_id]
   - id: examination_finding
     layer: domain
     label: Examination finding
-    color: "#c0392b"
-    attrs: [title, status, examiner]
-edges: []
+    plural: Examination findings
+    color: "#566273"
+    group: Known issues
+    attrs: [finding_id, title, severity, regulator, issued, due, status]
+  # ── Context Graph (what the pipeline's agents did and decided) ──
+  - id: exception_group
+    layer: context
+    label: Exception group
+    plural: Exception groups
+    color: "#4b4fb8"
+    attrs: [group_id, eagle_rule_id, rule_id, rule_version, cob, platform, column, failed, population, measured, eagle_grade]
+  - id: resolved_pattern
+    layer: context
+    label: Resolved pattern
+    plural: Resolved patterns
+    color: "#4b4fb8"
+    attrs: [pattern_id, name, family, signature, durable_fix, recurrences]
+  - id: agent_run
+    layer: context
+    label: Agent run
+    plural: Agent runs
+    color: "#4b4fb8"
+    attrs: [run_id, workflow, status]
+  - id: agent_tool_call
+    layer: context
+    label: Agent tool call
+    plural: Agent tool calls
+    color: "#4b4fb8"
+    attrs: [run_id, step_id, server, tool]
+  - id: remediation_package
+    layer: context
+    label: Remediation package
+    plural: Remediation packages
+    color: "#4b4fb8"
+    attrs: [fix, target, executor, approver, change_content, status]
+  - id: rule_proposal
+    layer: context
+    label: Rule proposal
+    plural: Rule proposals
+    color: "#4b4fb8"
+    attrs: [rule_id, proposal, thresholds, status, rule_node_id]
+# Every relationship tools/dq_sample emits, lower-cased (IN/OF/FROM/TO/VIA renamed so they are
+# never a Cypher keyword), then the Context Graph relations the pipeline writes. owns, reads,
+# caused_by and references are core edge kinds and are used, not declared.
+edges:
+  - id: stewards
+    label: stewards
+    relationship: STEWARDS
+    between: [owner->cde]
+  - id: member_of
+    label: member of
+    relationship: MEMBER_OF
+    between: [owner->owner]
+  - id: hosts
+    label: hosts
+    relationship: HOSTS
+    between: [system->database_structure]
+  - id: uses_calendar
+    label: uses calendar
+    relationship: USES_CALENDAR
+    between: [system->business_calendar]
+  - id: contains
+    label: contains
+    relationship: CONTAINS
+    between: [database_structure->database_table]
+  - id: has_column
+    label: has column
+    relationship: HAS_COLUMN
+    between: [database_table->database_column]
+  - id: from_system
+    label: from system
+    relationship: FROM_SYSTEM
+    between: [feed->system]
+  - id: to_system
+    label: to system
+    relationship: TO_SYSTEM
+    between: [feed->system]
+  - id: feeds
+    label: feeds
+    relationship: FEEDS
+    between: [feed->database_table]
+  - id: lineage_from
+    label: from
+    relationship: FROM
+    between: [lineage->database_column]
+  - id: lineage_to
+    label: to
+    relationship: TO
+    between: [lineage->database_column, lineage->report_line]
+  - id: lineage_via
+    label: via
+    relationship: VIA
+    between: [lineage->feed]
+  - id: stored_in
+    label: stored in
+    relationship: STORED_IN
+    between: [cde->database_column]
+  - id: reported_in
+    label: reported in
+    relationship: REPORTED_IN
+    between: [cde->report_line]
+  - id: derived_from
+    label: derived from
+    relationship: DERIVED_FROM
+    between: [cde->cde]
+  - id: system_of_record
+    label: system of record
+    relationship: SYSTEM_OF_RECORD
+    between: [cde->system]
+  - id: checks
+    label: checks
+    relationship: CHECKS
+    between: [data_quality_rule->cde]
+  - id: applies_to
+    label: applies to
+    relationship: APPLIES_TO
+    between: [data_quality_rule->database_column, data_quality_rule->database_table]
+  - id: covers
+    label: covers
+    relationship: COVERS
+    between: [data_quality_rule->feed]
+  - id: monitored_by
+    label: monitored by
+    relationship: MONITORED_BY
+    between: [data_quality_rule->system]
+  - id: reaches
+    label: reaches
+    relationship: REACHES
+    between: [data_quality_rule->report_line]
+  - id: related_to
+    label: related to
+    relationship: RELATED_TO
+    between: [data_quality_rule->data_quality_rule]
+  - id: threshold_of
+    label: of
+    relationship: OF
+    between: [dq_threshold->data_quality_rule]
+  - id: part_of
+    label: part of
+    relationship: PART_OF
+    between: [report_line->regulatory_report]
+  - id: has_mdrm
+    label: has mdrm
+    relationship: HAS_MDRM
+    between: [report_line->mdrm]
+  - id: defined_for
+    label: defined for
+    relationship: DEFINED_FOR
+    between: [mdrm->regulatory_report]
+  - id: in_calendar
+    label: in
+    relationship: IN
+    between: [calendar_day->business_calendar]
+  - id: concerns
+    label: concerns
+    relationship: CONCERNS
+    between: [examination_finding->business_calendar, examination_finding->cde, examination_finding->data_quality_rule, examination_finding->feed, examination_finding->report_line, incident->cde, incident->data_quality_rule, issue->data_quality_rule, issue->database_table, issue->feed, issue->system]
+  - id: tracks
+    label: tracks
+    relationship: TRACKS
+    between: [issue->examination_finding]
+  - id: owned_by
+    label: owned by
+    relationship: OWNED_BY
+    between: [issue->owner]
+  - id: raised_by
+    label: raised by
+    relationship: RAISED_BY
+    between: [exception_group->data_quality_rule]
+  - id: on_cob
+    label: on cob
+    relationship: ON_COB
+    between: [exception_group->calendar_day]
+  - id: affects
+    label: affects
+    relationship: AFFECTS
+    between: [exception_group->database_column]
+  - id: emitted_by
+    label: emitted by
+    relationship: EMITTED_BY
+    between: [exception_group->system]
+  - id: raised_from
+    label: raised from
+    relationship: RAISED_FROM
+    between: [incident->exception_group]
+  - id: assigned_to
+    label: assigned to
+    relationship: ASSIGNED_TO
+    between: [incident->owner]
+  - id: correlated_with
+    label: correlated with
+    relationship: CORRELATED_WITH
+    between: [incident->incident]
+  - id: from_incident
+    label: from incident
+    relationship: FROM_INCIDENT
+    between: [precedent->incident]
+  - id: matches
+    label: matches
+    relationship: MATCHES
+    between: [precedent->resolved_pattern]
+  - id: seen_on
+    label: seen on
+    relationship: SEEN_ON
+    between: [resolved_pattern->data_quality_rule]
+  - id: matched_incident
+    label: matched incident
+    relationship: MATCHED_INCIDENT
+    between: [incident->incident]
+  - id: used_precedent
+    label: used precedent
+    relationship: USED_PRECEDENT
+    between: [incident->precedent]
+  - id: packaged_for
+    label: packaged for
+    relationship: PACKAGED_FOR
+    between: [remediation_package->incident]
+  - id: proposes_change_to
+    label: proposes change to
+    relationship: PROPOSES_CHANGE_TO
+    between: [rule_proposal->data_quality_rule]
+  - id: escalated_to
+    label: escalated to
+    relationship: ESCALATED_TO
+    between: [incident->owner]

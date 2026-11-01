@@ -2234,17 +2234,12 @@ def restaff_role_agent_entries(connection: Connection, project_id: str,
 
 
 def _has_pack(connection: Connection, project_id: str, pack_id: str) -> bool:
-    """The project's active pack is ``pack_id`` or includes it (banking-aml includes
-    banking-regulatory, so a project running both case studies keeps the regulatory workflow)."""
-    from .knowledge.ontology_packs import get_project_pack, shipped_packs
+    """``pack_id`` is among the project's packs, or one of them includes it (banking-aml
+    includes banking-regulatory, so a project running both case studies keeps the regulatory
+    workflow; adding banking-dq keeps both)."""
+    from .knowledge.ontology_packs import has_pack
 
-    pack = get_project_pack(connection, project_id=project_id)
-    if pack is None:
-        return False
-    if pack.pack_id == pack_id:
-        return True
-    wanted = shipped_packs().get(pack_id)
-    return wanted is not None and wanted.kinds <= pack.kinds
+    return has_pack(connection, project_id=project_id, pack_id=pack_id)
 
 
 def unmet_requirements(connection: Connection, project_id: str,
@@ -2253,14 +2248,11 @@ def unmet_requirements(connection: Connection, project_id: str,
     requires = entry.get("requires") or {}
     if not requires:
         return None
-    from .knowledge.ontology_packs import get_project_pack
     from .mcp_registry import find_mcp_server
 
     pack_id = requires.get("ontology_pack")
-    if pack_id:
-        pack = get_project_pack(connection, project_id=project_id)
-        if pack is None or pack.pack_id != pack_id:
-            return f"needs the {pack_id} ontology pack"
+    if pack_id and not _has_pack(connection, project_id, pack_id):
+        return f"needs the {pack_id} ontology pack"
     missing = [name for name in requires.get("mcp") or ()
                if find_mcp_server(connection, project_id, name) is None]
     if missing:
