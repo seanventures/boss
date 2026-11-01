@@ -300,5 +300,5 @@ def test_the_approval_names_the_person_never_their_internal_id(connection):
         "SELECT 'usr_test_approver_name', id, 'user', 'active', 'Dana Officer' FROM orgs LIMIT 1 "
         "ON CONFLICT (id) DO NOTHING"))
     assert _approver_name(connection, "usr_test_approver_name") == "Dana Officer"
-    assert _approver_name(connection, "usr_nobody_by_that_id") == "a person"
+    assert _approver_name(connection, "usr_0nobodybythatid0x") == "a person"
     assert _approver_name(connection, "officer@example.com") == "officer@example.com"

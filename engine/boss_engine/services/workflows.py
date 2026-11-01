@@ -3491,8 +3491,10 @@ def _approver_name(connection: Connection, principal_id: Any) -> str:
         "LIMIT 1"), {"p": str(principal_id)}).scalar()
     if got:
         return str(got)
-    # An approver recorded by e-mail is already readable; an unresolvable internal id is not.
-    return str(principal_id) if "@" in str(principal_id) else "a person"
+    # An approver recorded by name or e-mail is already readable; an unresolvable internal id
+    # (usr_…, mem_… — a short prefix and a long opaque tail) is not.
+    raw = str(principal_id)
+    return "a person" if re.fullmatch(r"[a-z]{2,6}_[a-z0-9]{12,}", raw) else raw
 
 
 def _run_row(connection: Connection, run_id: str, *, lock: bool = False) -> Any:

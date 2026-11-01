@@ -187,7 +187,11 @@ def person_determination(connection: Connection, run_id: str,
     else:
         determination, how = "escalate", ("there was no recommendation and the person's note "
                                           "named none, so the alert stays escalated")
-    return {"determination": determination, "decided_by": str(gate.get("approved_by") or ""),
+    from ..workflows import _approver_name
+
+    # The person by name, as the audit trail and the next alert's precedent read it — never an id.
+    decided_by = _approver_name(connection, gate.get("approved_by")) if gate.get("approved_by") else ""
+    return {"determination": determination, "decided_by": decided_by,
             "reason": note or "(no reason given)", "how": how,
             "agreed_with_agent": recommendation == determination if recommendation else None,
             "recommendation": recommendation, "decision_id": gate.get("decision_id")}
