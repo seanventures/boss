@@ -93,6 +93,12 @@ CALLERS = {
         "operator: Register lifts the key's exclusions, then installs the shipped role",
     "services/shipped_cast.py::_ensure_builtin_mcp_servers -> ensure_mcp_server":
         "seed path below; only a missing server, never one the operator removed",
+    # A step naming a server BOSS ships that the project has no row for at all (created without
+    # the boot seed): the same additive write the boot seed does — called only when no row of
+    # that name exists, respect_operator=True, and ensure_mcp_server asks seed_exclusions, so a
+    # server the operator removed stays removed and an edited one is never overwritten.
+    "services/step_agents.py::resolve_mcp -> ensure_mcp_server":
+        "seed path below; only a missing BOSS built-in, never one the operator removed",
     # Skills & MCP's Kit (skills-mcp spec §6.3): giving an ability is a person's press — PUT
     # holders, Apply recommended — and lifts what it grants; the seed's half (abilities a role
     # names) is _grant_quietly, below, which asks seed_exclusions and never lifts one.
