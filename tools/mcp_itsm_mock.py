@@ -29,7 +29,8 @@ INCIDENTS: dict[str, dict[str, Any]] = {
         "actual_paydown": 250.00,
         "status": "resolved",
         # What a real ticket's "affected component" field carries: the code the fix touched.
-        "affected_components": ["LoanTransactionType.isRepaymentType", "LoanPaymentAllocationRule"],
+        "affected_components": ["LoanTransactionType.isRepaymentType",
+                               "AcmeLoanRepaymentScheduleTransactionProcessor"],
     },
 }
 

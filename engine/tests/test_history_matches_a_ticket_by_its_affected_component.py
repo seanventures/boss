@@ -38,7 +38,7 @@ def test_inc_2088_is_found_through_its_affected_component(monkeypatch):
     # allocation code was otherwise never read by the assessment or the lanes).
     assert {(e["kind"], e["dst_id"]) for e in edges} == {
         ("found_in", "kgn_sym_LoanTransactionType.isRepaymentType"),
-        ("found_in", "kgn_sym_LoanPaymentAllocationRule")}
+        ("found_in", "kgn_sym_AcmeLoanRepaymentScheduleTransactionProcessor")}
 
 
 class _Rows:

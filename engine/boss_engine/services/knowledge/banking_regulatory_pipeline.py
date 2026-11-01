@@ -192,8 +192,11 @@ def run_compliance_assessment(
             f"Historical Pattern correlated incident {cited_incident['incident_id']}: paid down "
             f"{cited_incident['actual_paydown']:.2f} instead of "
             f"{cited_incident['correct_paydown']:.2f}.\n" if cited_incident else "")
+        clause_text, clause_citation = _clause_text_and_citation(
+            connection, project_id, subject_id, context)
         situation = (
-            f"CLAUSE/SUBJECT: {subject_id}\n\n{incident_text}"
+            f"CLAUSE ({clause_citation or 'no citation'}): {clause_text or '(not available)'}\n"
+            f"SUBJECT: {_node_summary(connection, project_id, subject_id)}\n\n{incident_text}"
             f"CANDIDATE RULE/CODE NODES:\n{listing or '(none)'}\n\n"
             "Cite a candidate's node_id above, or null for a gap.")
         agent, _engine = _role_agent(connection, settings, project_id)
@@ -283,23 +286,92 @@ def _clause_node(connection: Connection, project_id: str, node_id: str) -> Optio
     return dict(row) if row else None
 
 
-def _clause_text_and_citation(connection: Connection, project_id: str, subject_id: str) -> tuple[str, str]:
-    """The clause's text/citation via its `compliance_case` wrapper (`attrs.clause_id`), or
-    directly when `subject_id` already names a `clause` node. Best-effort context, not a
-    blocking requirement — callers proceed on code evidence alone when this comes back empty."""
-    node = _clause_node(connection, project_id, subject_id)
-    if not node:
-        return "", ""
-    if node["kind"] == "clause":
+def _clause_of(connection: Connection, project_id: str, node_id: str) -> tuple[str, str]:
+    """A clause's (text, citation) when `node_id` is a clause or a compliance case, else ("", "")."""
+    node = _clause_node(connection, project_id, node_id)
+    if node and node["kind"] == "compliance_case":
+        node = _clause_node(connection, project_id,
+                            str((node.get("attrs") or {}).get("clause_id") or ""))
+    if node and node["kind"] == "clause":
         attrs = node.get("attrs") or {}
-        return str(node.get("body") or ""), str(attrs.get("citation") or "")
-    if node["kind"] == "compliance_case":
-        clause_id = str((node.get("attrs") or {}).get("clause_id") or "")
-        clause = _clause_node(connection, project_id, clause_id) if clause_id else None
-        if clause:
-            attrs = clause.get("attrs") or {}
-            return str(clause.get("body") or ""), str(attrs.get("citation") or "")
+        return (str(attrs.get("text") or node.get("body") or ""),
+                str(attrs.get("citation") or ""))
     return "", ""
+
+
+def _clause_text_and_citation(connection: Connection, project_id: str, subject_id: str,
+                              context: Optional[Mapping[str, Any]] = None) -> tuple[str, str]:
+    """The clause text this run is judged against, and its citation.
+
+    WHERE THE CLAUSE IS, IN ORDER (2026-10-31, KG P7d): the subject of a case is usually the
+    business RULE, not the clause, so the lane said "the clause text itself is not provided".
+      1. the clauses of the cases this run's Clause intake opened (the document it started with);
+      2. the subject itself, when it is a clause or a compliance case;
+      3. a clause that `implemented_by` reaches the subject through (rule -> code), as the
+         assessment writes it when it finds an implementation.
+    Several clauses are joined, each with its own citation."""
+    found: list[tuple[str, str]] = []
+    steps = (context or {}).get("steps") or {}
+    for case_id in ((steps.get("clause_intake") or {}).get("compliance_case_ids") or []):
+        clause = _clause_of(connection, project_id, str(case_id))
+        if clause[0] and clause not in found:
+            found.append(clause)
+    if not found and subject_id:
+        clause = _clause_of(connection, project_id, subject_id)
+        if clause[0]:
+            found.append(clause)
+    if not found and subject_id:
+        seen, frontier = {subject_id}, [subject_id]
+        while frontier and not found:
+            node_id = frontier.pop(0)
+            for neighbor in STORE.neighbors(connection, project_id=project_id, node_id=node_id,
+                                            direction="in"):
+                if neighbor.get("edge_kind") != "implemented_by" or neighbor["node_id"] in seen:
+                    continue
+                seen.add(neighbor["node_id"])
+                clause = _clause_of(connection, project_id, neighbor["node_id"])
+                if clause[0]:
+                    found.append(clause)
+                    break
+                source = STORE.get_node(connection, project_id=project_id,
+                                        node_id=neighbor["node_id"])
+                if source and source["kind"] in {"rule", "symbol"}:
+                    frontier.append(neighbor["node_id"])
+    if not found:
+        return "", ""
+    text_ = "\n".join(f"[{cite or 'no citation'}] {body}" for body, cite in found)
+    citation = "; ".join(dict.fromkeys(cite for _body, cite in found if cite))
+    return text_, citation
+
+
+def _test_layout(connection: Connection, project_id: str, symbol_keys: list[str]) -> str:
+    """The repository's language and a real test file near the cited code, for a test name the
+    team can use (a Python name was proposed for a Java repository, 2026-10-31)."""
+    from .code_index import symbol_location
+
+    for key in symbol_keys:
+        repo, path, _name = symbol_location(key)
+        if not path or "." not in path:
+            continue
+        ext = path.rsplit(".", 1)[1]
+        rows = connection.execute(
+            text("SELECT node_key FROM kg_nodes WHERE project_id = :p AND kind = 'file' "
+                 "AND node_key LIKE :like AND (node_key LIKE '%/test/%' OR node_key LIKE '%/tests/%' "
+                 "OR node_key LIKE '%test_%' OR node_key LIKE '%Test.%') LIMIT 400"),
+            {"p": project_id, "like": f"file:{repo + ':' if repo else ''}%.{ext}"}).scalars().all()
+        if not rows:
+            return f"REPOSITORY LANGUAGE: .{ext} files (no test file found in the graph)"
+        def shared(k: str) -> int:
+            other = k.split(":", 2)[-1]
+            n = 0
+            for a, b in zip(path.split("/"), other.split("/")):
+                if a != b:
+                    break
+                n += 1
+            return n
+        best = max(rows, key=shared).split(":", 2)[-1]
+        return f"REPOSITORY LANGUAGE: .{ext} files. AN EXISTING TEST NEAR THIS CODE: {best}"
+    return ""
 
 
 def _connected_symbols(connection: Connection, project_id: str, node_id: str,
@@ -407,7 +479,7 @@ def run_lane_confirmation(
                           + "; ".join(read_errors))[:1000]
             else:
                 clause_text, clause_citation = _clause_text_and_citation(
-                    connection, project_id, subject_id)
+                    connection, project_id, subject_id, context)
                 source_text = "\n\n".join(
                     f"{symbol.get('name')} ({read['path']}, lines {read['start']}-{read['end']}):\n"
                     f"{read['content']}" for symbol, read in read_symbols)
@@ -451,6 +523,19 @@ def run_lane_confirmation(
             "reason": reason, "note": statement}
 
 
+def _lane_symbol_keys(connection: Connection, project_id: str, lanes: list,
+                      citation: str) -> list[str]:
+    """Node keys of the code the case is about: the citation's symbols, then any other symbol."""
+    keys: list[str] = []
+    for row in _connected_symbols(connection, project_id, citation,
+                                  ((STORE.get_node(connection, project_id=project_id,
+                                                   node_id=citation) or {}).get("kind") or "rule")
+                                  ) if citation else []:
+        if row.get("node_key"):
+            keys.append(str(row["node_key"]))
+    return keys
+
+
 def run_remediation_package(
     connection: Connection, settings: Any, project_id: str, step: Mapping[str, Any],
     context: Mapping[str, Any], inputs: Mapping[str, Any],
@@ -479,7 +564,7 @@ def run_remediation_package(
     # close the gap the assessment states, in the code the lane read.
     assessment = steps.get("compliance_assessment") or {}
     clause_text, clause_citation = _clause_text_and_citation(
-        connection, project_id, str(assessment.get("subject_id") or ""))
+        connection, project_id, str(assessment.get("subject_id") or citation or ""), context)
     incident = str(assessment.get("cited_incident") or "")
     lanes = [r for r in ((steps.get("lanes") or {}).get("results") or []) if isinstance(r, Mapping)]
     if not lanes and isinstance(steps.get("lane_confirmation"), Mapping):
@@ -492,7 +577,8 @@ def run_remediation_package(
         f"INCIDENT: {_node_summary(connection, project_id, incident) if incident else '(none)'}\n"
         f"LANE VERDICTS:\n{lane_lines}\n"
         f"CITED CODE: {_node_summary(connection, project_id, citation) if citation else '(none)'}\n"
-        f"FAMILY: {family or '(unknown)'}")
+        f"FAMILY: {family or '(unknown)'}\n"
+        f"{_test_layout(connection, project_id, _lane_symbol_keys(connection, project_id, lanes, citation))}")
     agent, _engine = _role_agent(connection, settings, project_id)
     judged = _ask_role(agent, _role_prompt("remediation_advisor.md", situation))
     gap = " ".join(str(assessment.get("note") or "").split())[:600]

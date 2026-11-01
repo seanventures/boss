@@ -189,7 +189,7 @@ CREATE TABLE IF NOT EXISTS kg_audit (
 """
 
 _NODE_COLUMNS = """
-id, project_id, kind, node_key, name, body, trust_tier, scope, content_hash,
+id, project_id, kind, node_key, name, body, attrs, trust_tier, scope, content_hash,
 recorded_at, valid_from, valid_to, org_id, created_by
 """
 
