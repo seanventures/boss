@@ -44,6 +44,16 @@ describe("1. it opens readable; Fit is a button; the legend has its own gutter",
   it("the legend sits in a gutter under the canvas, never over it", () => {
     expect(css).toMatch(/\.kg-canvas-wrap \{ position: absolute; inset: 0 0 var\(--kg-gutter, 34px\) 0; \}/);
     expect(css).toMatch(/\.kg-legend \{[^}]*bottom: 0;[^}]*height: var\(--kg-gutter, 34px\)/);
+    // Each item on one line; what does not fit scrolls sideways in the gutter, never clipped under it.
+    expect(css).toMatch(/\.kg-legend-item \{[^}]*white-space: nowrap;/);
+    expect(css).toMatch(/\.kg-legend \.kg-legend-item \{ flex: none; \}/);
+    expect(css).toMatch(/\.kg-legend \.kg-legend-list \{[^}]*overflow-x: auto;/);
+    expect(css).toMatch(/\.kg-legend-toggle \{[^}]*white-space: nowrap;/);
+  });
+
+  it("the tree's five tabs share its width and wrap rather than clip", () => {
+    expect(css).toMatch(/\.kg-tree-tabs \{[^}]*flex-wrap: wrap;/);
+    expect(css).toMatch(/\.kg-tree-tabs \.inf-seg-btn \{[^}]*flex: 1 1 auto;/);
   });
 });
 

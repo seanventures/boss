@@ -118,6 +118,9 @@ describe("the Context card", () => {
     await settle();
     expect($('[data-testid="kg-panel-layer"]')?.textContent).toBe("Context");
     expect($('[data-testid="kg-ctx-type"]')?.textContent).toBe("Confirmed");
+    // The sub-line is words, in the body font: monospace is for code paths only.
+    expect($('[data-testid="kg-panel-sub"]')?.textContent).toBe("Lane confirmation step");
+    expect($('[data-testid="kg-panel-sub"]')?.classList.contains("inf-mono")).toBe(false);
     expect($('[data-testid="kg-ctx-statement"]')?.textContent).toMatch(/Repayment-like transaction classification/);
     // The statement once, in the card (not again as a bare Statement section).
     expect($('[data-testid="kg-panel-statement"]')).toBeNull();
