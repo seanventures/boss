@@ -9,6 +9,8 @@ never landed) is left to the generic path every other contract step already goes
 """
 from __future__ import annotations
 
+import logging
+
 import time
 from typing import Any
 from urllib.parse import urlparse
@@ -22,6 +24,8 @@ from .knowledge.step_contracts import parse_contract, policy_from_contract
 from .secret_backends import SecretUnavailable, resolve_secret_ref
 
 #: A response body larger than this is refused while it is read, never buffered whole first.
+log = logging.getLogger(__name__)
+
 MAX_RESPONSE_BYTES = 256 * 1024
 
 DEFAULT_TIMEOUT_SECONDS = 60
@@ -66,6 +70,8 @@ def run_step(connection: Connection, ctx: Any, *, project_id: str, step: dict[st
     except SecretUnavailable:
         raise CapabilityExecutionError(external_agents.plain_reason("secret_unavailable")) from None
 
+    _phase = _phase_logger(project_id, run_id, step_id, agent_id)
+    _phase("minting a scoped knowledge-graph key")
     issued = external_agent_tokens.mint(
         connection, project_id=project_id, run_id=run_id, step_id=step_id,
         external_agent_id=agent_id, policy=policy, ttl_seconds=timeout_seconds)
@@ -86,9 +92,11 @@ def run_step(connection: Connection, ctx: Any, *, project_id: str, step: dict[st
     started_at = time.monotonic()
     call_ok = False
     error_text = None
+    _phase(f"calling the agent at {urlparse(agent['endpoint_url']).hostname}")
     try:
         output = _call_agent(agent["endpoint_url"], payload, auth_header, timeout_seconds, pinned_ip)
         call_ok = True
+        _phase("the agent answered")
     except CapabilityWaitError as error:
         scrubbed = external_agents.scrub(str(error), issued.token, auth_header)
         error_text = scrubbed
@@ -123,6 +131,17 @@ def run_step(connection: Connection, ctx: Any, *, project_id: str, step: dict[st
         "ran_as": {"agent": agent_id, "how": "external_agent",
                    "why": "named on the step's captain"},
     }
+
+
+def _phase_logger(project_id: str, run_id: str, step_id: str, agent_id: str):
+    """Each phase of an outside agent's step, timed in the log: where a step that hangs stopped
+    (a live bank-review step timed out with no trace of which phase it was in, 2026-10-31)."""
+    started = time.monotonic()
+
+    def phase(what: str) -> None:
+        log.info("external agent step %s/%s (%s): %s after %.1fs", run_id, step_id, agent_id,
+                 what, time.monotonic() - started)
+    return phase
 
 
 def _call_agent(endpoint_url: str, payload: dict[str, Any], auth_header: str,
