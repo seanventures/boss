@@ -66,7 +66,9 @@ describe("the design model", () => {
   it("P0 puts a shared service and a side path off the flow, unnumbered, and anchors each agent between its neighbours", () => {
     const list = stages();
     expect(list.filter((s) => s.number !== null).map((s) => [s.number, s.title])).toEqual([
-      [1, "Monitoring Agent"], [2, "Context Enrichment Agent"], [3, "RCA Agent"], [4, "Human approval"]]);
+      [1, "Monitoring Agent"], [2, "Context Enrichment Agent"], [3, "RCA Agent"]]);
+    // A person's step is a human step ("—"), as the consultant's table shows it.
+    expect(at("human_approval", list).number).toBeNull();
     expect(at("context_curator", list).placement).toBe("shared");
     expect(at("rule_drafting", list).placement).toBe("side");
     expect(at("rule_drafting", list).sideLabel).toBe("Rule authoring");

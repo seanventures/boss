@@ -154,6 +154,38 @@ def test_every_stage_has_a_contract_and_the_consultants_design():
     assert problems == []
 
 
+def test_the_designs_draw_as_the_consultants_reference():
+    """The run trace, the Context Graph links, the orchestrator as the entry, handoffs in full
+    sentences, the escalation band numbered 9 and the lanes named by what they fan out over."""
+    from boss_engine.services.knowledge.step_contracts import contract_shape_problems
+
+    entry = next(e for e in catalogue.CATALOGUE if e["key"] == KEY)
+    steps = {s["id"]: s for s in entry["steps"]}
+    for sid in ("monitoring", "context_enrichment", "historical_pattern"):
+        contract = steps[sid]["contract"]
+        written = {w["kind"] for w in contract["writes"]}
+        assert {"agent_run", "agent_tool_call"} <= written, sid
+        assert contract["invoked_by"] == "pipeline_orchestrator"
+        assert contract["design"]["example"].startswith(("EGL-0588", "INC-501"))
+        last = contract["steps"][-1 if sid != "historical_pattern" else 4]
+        assert {"agent_run", "agent_tool_call"} <= set(last["writes"]), sid
+    assert {(l["from"], l["to"], l["rel"]) for l in steps["monitoring"]["contract"]["links"]} == {
+        ("incident", "incident", "CORRELATED_WITH")}
+    assert {l["rel"] for l in steps["historical_pattern"]["contract"]["links"]} == {
+        "MATCHED_INCIDENT", "REFERENCES"}
+    assert {c["mcp"] for c in steps["context_enrichment"]["contract"]["calls"]} == {"olympus", "itsm"}
+    assert steps["context_enrichment"]["contract"]["handoff"]["next"] == "historical_pattern"
+    for sid, step in steps.items():
+        handoff = (step.get("contract") or {}).get("handoff")
+        if handoff:
+            text = handoff.get("text", "")
+            assert text[:1].isupper() and text.endswith("."), sid
+            assert not re.search(r"\b[a-z]+_[a-z_]+\b", text), f"{sid}: a raw id in the handoff"
+        assert contract_shape_problems(step) == [], sid
+    assert steps["escalation"]["stage_number"] == 9
+    assert steps["lanes"]["item_label"] == "root-cause family"
+
+
 # ── a real project ───────────────────────────────────────────────────────────────────────────
 
 def _database_url() -> str:

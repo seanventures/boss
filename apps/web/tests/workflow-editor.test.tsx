@@ -104,7 +104,7 @@ const nonChecks = () => api.writes.filter((w) => w.action !== "check");
 describe("the bar stays one row", () => {
   const css = () => readFileSync("app/workflows/editor.css", "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
 
-  it("holds every control in one row that does not wrap at a 1100px bar or wider", async () => {
+  it("holds every control in one row, wrapping the actions only when the whole name would not fit", async () => {
     await mount();
     const row = byTest("wf-topbar-row");
     for (const id of ["wf-back", "wf-name", "wf-version", "wf-kind", "wf-undo", "wf-view-visual", "wf-describe",
@@ -112,10 +112,8 @@ describe("the bar stays one row", () => {
       expect(row.contains(byTest(id)), id).toBe(true);
     }
     const sheet = css();
-    expect(sheet).toMatch(/\.wf-topbar-row \{[^}]*flex-wrap: nowrap;/);
-    // Nothing on the bar's row wraps outside the narrow-bar container query.
-    const outside = sheet.replace(/@container[^{]*\{[^}]*\{[^}]*\}\s*\}/g, "");
-    expect(outside).not.toMatch(/\.wf-topbar-row[^{]*\{[^}]*flex-wrap: wrap/);
+    // The row wraps (by group: identity, then the actions) rather than cut the name short.
+    expect(sheet).toMatch(/\.wf-topbar-row \{[^}]*flex-wrap: wrap;/);
     // The query is strict: a bar of exactly 1100px (its padding 2 × 12px and border 2 × 1px off,
     // 1074px of content) never matches it. `max-width: 1074px` would.
     const q = sheet.match(/@container wf-topbar \(([^)]*)\)/)![1];
@@ -143,14 +141,15 @@ describe("the bar stays one row", () => {
     expect(sheet).toMatch(/\.wf-bar-actions \{[^}]*justify-content: flex-end;[^}]*margin-left: auto;/);
   });
 
-  it("gives way at the name first: it is cut with an ellipsis and the whole name is its tooltip", async () => {
+  it("never cuts the name: the field asks for its whole name's room, and only a phone-narrow bar cuts it", async () => {
     await mount();
     const name = byTest("wf-name");
     expect(name.dataset.tip).toBe("Standard Product Delivery");
     expect(name.dataset.tipWhen).toBe("cut");
+    expect((name.parentElement as HTMLElement).style.getPropertyValue("--wf-name-ch")).toBe(String("Standard Product Delivery".length + 2));
     const sheet = css();
     expect(sheet).toMatch(/\.wf-bar-identity > \* \{ flex: none; white-space: nowrap; \}/);
-    expect(sheet).toMatch(/\.wf-bar-identity > \.wf-name \{ flex: 0 1 [^;]+; min-width: [^;]+; \}/);
+    expect(sheet).toMatch(/\.wf-bar-identity > \.wf-name \{\s*flex: 0 1 calc\(var\(--wf-name-ch[^;]+;\s*min-width: min\(calc\(var\(--wf-name-ch[^;]+, 100%\);\s*\}/);
     expect(sheet).toMatch(/\.wf-name-input \{[^}]*min-width: 0;[^}]*text-overflow: ellipsis;/);
   });
 });

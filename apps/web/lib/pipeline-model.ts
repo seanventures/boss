@@ -20,6 +20,8 @@ const list = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
 export type ContractKind = { kind: string; required?: boolean; via?: string; decision_type?: string };
 /** An external system a contract calls, over MCP. */
 export type ContractCall = { mcp: string; tool: string };
+/** A Context Graph edge between two kinds a contract names; `from === to` links a kind to itself. */
+export type ContractLink = { from: string; to: string; rel: string };
 /** A decision, policy or open question with its ID ("A-D30", "OP-ENR-01", "HP-Q1"). */
 export type DesignNote = { id: string; text: string };
 /** One of the agent's numbered internal steps (`contract.steps`). */
@@ -29,6 +31,8 @@ export type AgentStepDef = {
 /** The design cards a contract carries (`contract.design`). */
 export type StageDesignCards = {
   status?: DesignStatus; reference?: string; underRevision?: string;
+  /** The running example the design is read against ("EGL-0588 v2 on COB 2026-10-05"). */
+  example?: string;
   decisions: DesignNote[]; policy: DesignNote[]; openQuestions: DesignNote[];
   appliedIn?: { kg?: string; cg?: string; items: string[] };
 };
@@ -37,8 +41,12 @@ export type StageContract = {
   reads: ContractKind[]; writes: ContractKind[]; calls: ContractCall[];
   trigger?: string; handoff?: string; human_review?: string; llm?: string;
   policy?: [string, string][]; decisions?: string[]; open_questions?: string[];
-  /** The step the handoff names, by id, to point "To <next stage>" at. */
+  /** The step the handoff leads to, by id, to point "To <next stage>" at. */
   handoffTo?: string;
+  /** The step that starts this one, by id: the design view's entry pill. */
+  invokedBy?: string;
+  /** Context Graph edges the agent writes between kinds it names (CORRELATED_WITH…). */
+  links?: ContractLink[];
   steps?: AgentStepDef[];
   design?: StageDesignCards;
 };
@@ -65,6 +73,9 @@ export type KindMeta = { label: string; color: string | null; layer: string };
 /** `view=designs`: every stage's design, the graph versions and the kinds' colours. */
 export type DesignsInfo = {
   stages: Record<string, StageDesignState>;
+  /** The Knowledge Graph version the bands name: the version the designs are written against
+   *  (the pack's reference) when declared, else the project's live version. One number, so a
+   *  band never says v1 while the design cards say KG v16/v17. */
   kgVersion: number | null;
   cgVersion: number | null;
   kinds: Record<string, KindMeta>;
@@ -87,6 +98,8 @@ export type PipelineStage = {
   contract: StageContract | null;
   /** The loop or lane frame this stage sits in, by id. */
   group?: string;
+  /** A step that only marks where a branch ends or passes on: drawn on its condition, unnumbered. */
+  outcome?: true;
   /** A frame's members, in order. */
   members?: string[];
   /** A frame's own words: "Repeats Context enrichment up to 2× while it reports missing kinds". */
@@ -104,6 +117,8 @@ export type PipelineStage = {
   placement: "main" | "shared" | "side";
   /** A side path's area ("Rule authoring"), from its spec's `side_path`. */
   sideLabel?: string;
+  /** How the flow reaches a side path ("From Lanes: False Positive lane: rule proposal"). */
+  sideLink?: string;
   /** The stage before and after it on the flow, by title: the read/write view's anchors. */
   from?: string;
   to?: string;
@@ -146,7 +161,30 @@ export function kindKey(kind: string): string {
   return String(kind ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
-function contractOf(step: SpecStep): StageContract | null {
+/** "incident_id" → "incident ID"; "rca_verdict" → "RCA verdict": a carried field in words. */
+function fieldWords(field: string): string {
+  return String(field ?? "").split(/[_\s]+/).filter(Boolean).map((w) => {
+    const lower = w.toLowerCase();
+    return ["id", "rca", "cde", "kg", "cg", "mcp", "itsm", "cob", "dq"].includes(lower) ? lower.toUpperCase() : lower;
+  }).join(" ");
+}
+
+/** "a, b and c". */
+function andList(items: string[]): string {
+  return items.length <= 1 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
+}
+
+/** A policy value in words: "standard_profile" → "Standard profile"; numbers and text kept. */
+function policyValue(value: unknown): string {
+  if (value && typeof value === "object") {
+    return Array.isArray(value) ? value.map(policyValue).join(", ")
+      : Object.entries(value as Obj).map(([k, v]) => `${humanise(k).toLowerCase()} ${policyValue(v)}`).join(", ");
+  }
+  const text = String(value);
+  return /^[a-z0-9]+(_[a-z0-9]+)+$/.test(text) ? humanise(text) : text;
+}
+
+function contractOf(step: SpecStep, titleOf: (id: string) => string = humanise): StageContract | null {
   const raw = asObj(step.contract);
   if (!Object.keys(raw).length) return null;
   const kinds = (value: unknown): ContractKind[] => list(value).map((v) => {
@@ -166,13 +204,20 @@ function contractOf(step: SpecStep): StageContract | null {
     if (typeof value === "string") return value.trim() || undefined;
     const row = asObj(value);
     if (!Object.keys(row).length) return undefined;
+    // The handoff in a full sentence: the contract's own words, else composed from the stage
+    // it returns to (by its display name) and what it carries.
+    if (str(row.text)) return str(row.text);
     const to = str(row.to);
-    const carries = list(row.carries).map((c) => humanise(String(c))).join(", ");
-    if (to) return `To ${humanise(to)}${carries ? `, carrying ${carries.toLowerCase()}` : ""}`;
-    return undefined;
+    const next = str(row.next);
+    const carries = andList(list(row.carries).map((c) => fieldWords(String(c))).filter(Boolean));
+    if (!to && !next) return carries ? `Leaves the ${carries} for what comes next.` : undefined;
+    const target = titleOf(to || next);
+    let sentence = carries ? `Hands the ${carries} to ${target}.` : `Hands on to ${target}.`;
+    if (to && next && next !== to) sentence += ` ${target} then starts ${titleOf(next)}.`;
+    return sentence;
   };
   const policy = Object.entries(asObj(raw.policy))
-    .map(([k, v]) => [humanise(k), typeof v === "object" ? JSON.stringify(v) : String(v)] as [string, string]);
+    .map(([k, v]) => [humanise(k), policyValue(v)] as [string, string]);
   const strs = (value: unknown) => list(value).map((v) => String(v).trim()).filter(Boolean);
   const steps = list(raw.steps).map((v) => {
     const row = asObj(v);
@@ -184,7 +229,9 @@ function contractOf(step: SpecStep): StageContract | null {
       ...(str(row.explain) ? { explain: str(row.explain) } : {}),
     };
   }).filter((s) => s.n > 0 && s.name).sort((a, b) => a.n - b.n);
-  const handoffTo = str(asObj(raw.handoff).to);
+  const handoffTo = str(asObj(raw.handoff).next) || str(asObj(raw.handoff).to);
+  const links = list(raw.links).map((v) => asObj(v))
+    .map((l) => ({ from: str(l.from), to: str(l.to), rel: str(l.rel) })).filter((l) => l.from && l.to && l.rel);
   return {
     reads: kinds(raw.reads), writes: kinds(raw.writes), calls,
     trigger: text(raw.trigger), handoff: text(raw.handoff), human_review: text(raw.human_review),
@@ -193,6 +240,8 @@ function contractOf(step: SpecStep): StageContract | null {
     ...(strs(raw.decisions).length ? { decisions: strs(raw.decisions) } : {}),
     ...(strs(raw.open_questions).length ? { open_questions: strs(raw.open_questions) } : {}),
     ...(handoffTo ? { handoffTo } : {}),
+    ...(str(raw.invoked_by) ? { invokedBy: str(raw.invoked_by) } : {}),
+    ...(links.length ? { links } : {}),
     ...(steps.length ? { steps } : {}),
     ...(raw.design && typeof raw.design === "object" ? { design: designCardsOf(asObj(raw.design)) } : {}),
   };
@@ -209,6 +258,7 @@ function designCardsOf(raw: Obj): StageDesignCards {
     ...(DESIGN_STATUSES.includes(status) ? { status } : {}),
     ...(str(raw.reference) ? { reference: str(raw.reference) } : {}),
     ...(str(raw.under_revision) ? { underRevision: str(raw.under_revision) } : {}),
+    ...(str(raw.example) ? { example: str(raw.example) } : {}),
     decisions: notes(raw.decisions), policy: notes(raw.policy), openQuestions: notes(raw.open_questions),
     ...(Object.keys(applied).length ? { appliedIn: {
       ...(version(applied.kg) ? { kg: version(applied.kg) } : {}),
@@ -265,7 +315,7 @@ export function designsFrom(body: unknown): DesignsInfo {
     kinds[kind] = { label: str(row.label) || kindLabel(kind), color: str(row.color) || null, layer: str(row.layer) };
   }
   const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
-  return { stages, kgVersion: num(graph.kg_version), cgVersion: num(graph.cg_version), kinds };
+  return { stages, kgVersion: num(graph.kg_reference) ?? num(graph.kg_version), cgVersion: num(graph.cg_version), kinds };
 }
 
 /** A role's display name alone ("Compliance Officer"), or its key made readable. */
@@ -286,8 +336,23 @@ export function roleLabel(roleKey: string, palette: Palette | null): string {
   return key.split(/[_\s]+/).filter(Boolean).map((w) => w[0].toUpperCase() + w.slice(1)).join(" ");
 }
 
-const nexts = (step: SpecStep): string[] =>
-  (Array.isArray(step.next) ? step.next : step.next ? [step.next] : []).map(String);
+/** Where the flow goes after a step: its `next`, and a condition's two branches. */
+const nexts = (step: SpecStep): string[] => {
+  const own = (Array.isArray(step.next) ? step.next : step.next ? [step.next] : []).map(String);
+  if (step.kind !== "condition") return own;
+  const branches = [str((step as Obj).on_true), str((step as Obj).on_false)].filter(Boolean);
+  return [...branches, ...own.filter((n) => !branches.includes(n))];
+};
+
+/** A step that does no work and only marks how the flow ends or passes on ("Attached to an
+ *  open incident — stop"): a zero wait with nothing bound. It is drawn as the outcome of the
+ *  condition that leads to it, never as a numbered stage. */
+export function isOutcome(step: SpecStep): boolean {
+  if (step.kind !== "timer") return false;
+  const wait = Number((step as Obj).wait_seconds ?? 0) || 0;
+  const binding = asObj(step.binding);
+  return wait === 0 && !str(binding.capability) && !Object.keys(asObj(binding.inputs)).length;
+}
 const bodiesOf = (step: SpecStep): string[] => {
   const body = (step as Obj).body;
   return (Array.isArray(body) ? body : body ? [body] : []).map(String);
@@ -327,15 +392,35 @@ function displayOrder(spec: Spec): { order: string[]; groupOf: Map<string, strin
       }
     }
   };
-  const queue = entry ? [entry] : [];
-  while (queue.length) {
-    const id = queue.shift()!;
-    if (seen.has(id)) continue;
-    place(id);
+  // RUN ORDER: the top-level steps the entry reaches, each placed only once every step that
+  // leads to it is placed (a stage after a branch that rejoins comes after both arms), ties in
+  // the spec's own order. A frame stands for its members; a step a member leads out to follows
+  // the frame.
+  const top = (id: string) => groupOf.get(id) ?? id;
+  const outOf = (id: string): string[] => {
     const step = byId.get(id);
-    if (!step) continue;
-    const parallel = step.kind === "parallel" ? list((step as Obj).branches).map(String) : [];
-    queue.push(...parallel, ...nexts(step).filter((n) => !groupOf.has(n)));
+    if (!step) return [];
+    const own = [...nexts(step), ...(step.kind === "parallel" ? list((step as Obj).branches).map(String) : [])];
+    const fromMembers = steps.filter((s) => groupOf.get(s.id) === id).flatMap((s) => nexts(s));
+    return [...new Set([...own, ...fromMembers].filter((t) => byId.has(t)).map(top))].filter((t) => t !== id);
+  };
+  const onFlow = new Set<string>();
+  const walk = entry ? [top(entry)] : [];
+  while (walk.length) {
+    const id = walk.shift()!;
+    if (onFlow.has(id)) continue;
+    onFlow.add(id);
+    walk.push(...outOf(id));
+  }
+  const preds = new Map<string, Set<string>>([...onFlow].map((id) => [id, new Set<string>()]));
+  for (const id of onFlow) for (const t of outOf(id)) if (onFlow.has(t)) preds.get(t)!.add(id);
+  const index = new Map(steps.map((s, i) => [s.id, i]));
+  const pending = [...onFlow].sort((a, b) => (index.get(a) ?? 0) - (index.get(b) ?? 0));
+  while (pending.length) {
+    // The first ready step in spec order; on a cycle, the earliest step left.
+    const ready = pending.findIndex((id) => [...preds.get(id)!].every((p) => seen.has(p)));
+    const [id] = pending.splice(ready >= 0 ? ready : 0, 1);
+    place(id);
   }
   for (const s of steps) if (!groupOf.has(s.id)) place(s.id);
   for (const s of steps) if (!seen.has(s.id)) { seen.add(s.id); order.push(s.id); }
@@ -402,17 +487,29 @@ export function buildPipeline(spec: Spec, palette: Palette | null,
     return humanise(id);
   };
 
+  // How the flow reaches each side path, in the spec's own words ("False Positive lane: rule
+  // proposal", from Lanes): `pipeline.side_paths`.
+  const sideLinks = new Map<string, string>();
+  for (const raw of list(asObj(spec.pipeline).side_paths)) {
+    const row = asObj(raw);
+    const to = str(row.to);
+    if (!to || !str(row.label)) continue;
+    const from = str(row.from);
+    sideLinks.set(to, `${from && byId.has(from) ? `From ${titleOf(from)}: ` : ""}${str(row.label)}`);
+  }
+
   const stages: PipelineStage[] = [];
   let n = 0;
   for (const id of order) {
     const step = byId.get(id)!;
     const binding = asObj(step.binding);
     const cap = palette?.capabilities.find((c) => c.key === binding.capability);
-    const contract = contractOf(step);
+    const contract = contractOf(step, titleOf);
     const captain = step.captain;
     const outsideId = captain && typeof captain === "object" ? str(captain.external_agent) : "";
     const outside = outsideId ? outsideAgents.find((a) => a.id === outsideId) : undefined;
-    const isControl = CONTROL.has(step.kind);
+    const outcome = isOutcome(step);
+    const isControl = CONTROL.has(step.kind) || outcome;
     const title = titleOf(id);
 
     // WHO RUNS IT, in the chip's words.
@@ -438,6 +535,8 @@ export function buildPipeline(spec: Spec, palette: Palette | null,
       const max = Number((step as Obj).max_iterations) || 0;
       runsAs = { label: max ? `Bounded loop (up to ${max})` : "Bounded loop", tone: "control",
                  tip: "Repeats its stage while its condition holds, never more than the cap." };
+    } else if (outcome) {
+      runsAs = { label: "Outcome", tone: "control", tip: "Where a branch of the flow ends or passes on; does no work itself." };
     } else if (isControl) {
       runsAs = { label: humanise(step.kind), tone: "control", tip: "Shapes the flow; does no work itself." };
     } else {
@@ -462,7 +561,9 @@ export function buildPipeline(spec: Spec, palette: Palette | null,
     }
 
     // WHAT IT DOES, in one line.
-    const members = isControl ? steps.filter((s) => groupOf.get(s.id) === id).map((s) => s.id) : undefined;
+    // Only a loop or a lane frame holds stages; a condition routes, it holds nothing.
+    const members = step.kind === "bounded_loop" || step.kind === "for_each"
+      ? steps.filter((s) => groupOf.get(s.id) === id).map((s) => s.id) : undefined;
     let frameNote: string | undefined;
     let description = str((step as Obj).description) || str((step as Obj).summary);
     if (step.kind === "bounded_loop") {
@@ -471,19 +572,37 @@ export function buildPipeline(spec: Spec, palette: Palette | null,
       const [from, field] = pathParts(str(expression.path));
       const whose = from && byId.has(from) ? (members?.includes(from) ? "it" : titleOf(from)) : "";
       const what = field ? humanise(field.replace(/ /g, "_")).toLowerCase() : "";
-      const when = what && whose
-        ? (str(expression.op) === "falsy" ? ` until ${whose} reports ${what}` : ` while ${whose} reports ${what}`)
-        : "";
+      const value = typeof expression.value === "string" || typeof expression.value === "number"
+        ? String(expression.value) : "";
+      const when = whose && value && ["eq", "equals", "=="].includes(str(expression.op))
+        ? ` while ${whose} reports ${value}`
+        : what && whose
+          ? (str(expression.op) === "falsy" ? ` until ${whose} reports ${what}` : ` while ${whose} reports ${what}`)
+          : "";
       frameNote = `Repeats ${(members ?? []).map(titleOf).join(", ") || "its stage"}`
         + `${max ? ` up to ${max}×` : ""}${when}`;
       description = description || `${frameNote}.`;
     } else if (step.kind === "for_each") {
       const [from, field] = pathParts(str((step as Obj).items));
-      const per = field ? singular(humanise(field.replace(/ /g, "_")).toLowerCase()) : "item";
+      // What it fans out over, in the author's words when given ("root-cause family"); a field
+      // named like its own stage ("lanes" for the Lane stage) says nothing, so it is an item.
+      const memberWords = new Set((members ?? []).map((m) => singular(titleOf(m).toLowerCase())));
+      const fieldWord = field ? singular(humanise(field.replace(/ /g, "_")).toLowerCase()) : "";
+      const per = str((step as Obj).item_label)
+        || (fieldWord && !memberWords.has(fieldWord) ? fieldWord : "item");
       const at = Number((step as Obj).concurrency) || 0;
-      frameNote = `One lane per ${per}${from && byId.has(from) ? `, from ${titleOf(from)}` : ""}`
+      frameNote = `In parallel, one per ${per}${from && byId.has(from) ? `, from ${titleOf(from)}` : ""}`
         + `${at ? ` · up to ${at} at once` : ""}`;
       description = description || `Runs ${(members ?? []).map(titleOf).join(", ") || "its stage"} once per ${per}.`;
+    }
+    if (step.kind === "condition") {
+      // A condition says what it routes on and where each answer goes, by stage name.
+      const yes = str((step as Obj).on_true);
+      const no = str((step as Obj).on_false);
+      const where = (target: string) => (target && byId.has(target) ? titleOf(target) : "");
+      frameNote = [where(yes) ? `Yes: ${where(yes)}` : "", where(no) ? `No: ${where(no)}` : ""]
+        .filter(Boolean).join(" · ") || undefined;
+      description = description || [title, frameNote ? `${frameNote}.` : ""].filter(Boolean).join(" ");
     }
     if (!description && cap?.summary) description = cap.summary;
     if (!description && step.kind === "deterministic") description = palette?.graphSteps?.[step.id]?.summary ?? "";
@@ -507,11 +626,12 @@ export function buildPipeline(spec: Spec, palette: Palette | null,
     const sidePath = (step as Obj).side_path;
     const placement: PipelineStage["placement"] = design.status === "shared_service" ? "shared"
       : (sidePath || (!onMain.has(id) && !groupOf.has(id))) && !isControl ? "side" : "main";
-    if (!isControl && placement === "main") n += 1;
     stages.push({
-      id, kind: step.kind, number: isControl || placement !== "main" ? null : n, title, description, runsAs, status, contract,
+      id, kind: step.kind, number: null, title, description, runsAs, status, contract,
       design, placement,
       ...(placement === "side" ? { sideLabel: typeof sidePath === "string" && sidePath.trim() ? sidePath.trim() : "Side paths" } : {}),
+      ...(placement === "side" && sideLinks.get(id) ? { sideLink: sideLinks.get(id) } : {}),
+      ...(outcome ? { outcome: true } : {}),
       ...(groupOf.has(id) ? { group: groupOf.get(id) } : {}),
       ...(members ? { members } : {}),
       ...(frameNote ? { frameNote } : {}),
@@ -522,16 +642,42 @@ export function buildPipeline(spec: Spec, palette: Palette | null,
       ...(trace ? { trace } : {}),
     });
   }
-  // THE ANCHORS of the read/write view: the stage that hands work in, and where it goes next
-  // (the handoff's named stage, else the next stage on the flow).
-  const numbered = stages.filter((s) => s.number !== null);
+  // NUMBERS, in run order: every stage an agent or BOSS runs on the flow takes the next number;
+  // a person's step is a human step ("—"), a frame or an outcome only groups or marks. A stage
+  // may carry the number its design gives it (`stage_number`: the daily Escalation Agent is 9),
+  // and the flow's own numbering then steps over it, so 8 · Fix is followed by 10 · Closure.
+  const declared = (s: PipelineStage): number | null => {
+    const raw = Number((byId.get(s.id) as Obj | undefined)?.stage_number);
+    return Number.isInteger(raw) && raw > 0 ? raw : null;
+  };
+  const claimed = new Set(stages.map(declared).filter((v): v is number => v !== null));
+  for (const s of stages) {
+    const own = declared(s);
+    if (own !== null) { s.number = own; continue; }
+    if (s.placement !== "main" || s.runsAs.tone === "control" || s.runsAs.tone === "person") continue;
+    n += 1;
+    while (claimed.has(n)) n += 1;
+    s.number = n;
+  }
+  // THE ANCHORS of the read/write view: the stage that starts it (its contract's `invoked_by`,
+  // else the stage before it on the flow), and where it goes next (the handoff's stage, else
+  // the next stage on the flow).
+  const flow = stages.filter((s) => s.placement === "main" && s.runsAs.tone !== "control");
   const titleById = new Map(stages.map((s) => [s.id, s.title]));
-  numbered.forEach((s, i) => {
-    if (i > 0) s.from = numbered[i - 1].title;
+  flow.forEach((s, i) => {
+    const by = s.contract?.invokedBy;
+    if (by && titleById.has(by) && by !== s.id) s.from = titleById.get(by);
+    else if (i > 0) s.from = flow[i - 1].title;
     const to = s.contract?.handoffTo;
     if (to && titleById.has(to)) s.to = titleById.get(to);
-    else if (i < numbered.length - 1) s.to = numbered[i + 1].title;
+    else if (i < flow.length - 1) s.to = flow[i + 1].title;
   });
+  for (const s of stages.filter((x) => x.placement !== "main")) {
+    const by = s.contract?.invokedBy;
+    if (by && titleById.has(by) && by !== s.id) s.from = titleById.get(by);
+    const to = s.contract?.handoffTo;
+    if (to && titleById.has(to)) s.to = titleById.get(to);
+  }
   return stages;
 }
 

@@ -136,11 +136,13 @@ export function DesignCards({ contract, design }: { contract: StageContract | nu
     out.push({ title, tone: "graph", testid: "card-applied-in",
                body: applied.items.length ? <p>{applied.items.join("; ")}</p> : <p className="pl-faint">No schema changes named.</p> });
   }
+  // The design's own notes (with their IDs) are the card when it has them; the contract's plain
+  // list says the same things again, so it shows only when the design names none.
   if (cards?.policy.length || contract.policy?.length) {
     out.push({ title: "Policy", tone: "muted", testid: "card-policy", body: (
       <>
         {cards?.policy.length ? <Notes notes={cards.policy} testid="policy-notes" /> : null}
-        {contract.policy?.length ? (
+        {contract.policy?.length && !cards?.policy.length ? (
           <ul className="pl-kv">{contract.policy.map(([k, v]) => <li key={k}><b>{k}</b> {v}</li>)}</ul>
         ) : null}
       </>
@@ -150,7 +152,7 @@ export function DesignCards({ contract, design }: { contract: StageContract | nu
     out.push({ title: "Open questions", tone: "muted", testid: "card-open-questions", body: (
       <>
         {cards?.openQuestions.length ? <Notes notes={cards.openQuestions} testid="open-question-notes" /> : null}
-        {contract.open_questions?.length ? <ul>{contract.open_questions.map((d) => <li key={d}>{d}</li>)}</ul> : null}
+        {contract.open_questions?.length && !cards?.openQuestions.length ? <ul>{contract.open_questions.map((d) => <li key={d}>{d}</li>)}</ul> : null}
       </>
     ) });
   }
@@ -158,7 +160,7 @@ export function DesignCards({ contract, design }: { contract: StageContract | nu
     out.push({ title: "Decisions", tone: "ink", testid: "card-decisions", body: (
       <>
         {cards?.decisions.length ? <Notes notes={cards.decisions} testid="decision-notes" /> : null}
-        {contract.decisions?.length ? <ul>{contract.decisions.map((d) => <li key={d}>{d}</li>)}</ul> : null}
+        {contract.decisions?.length && !cards?.decisions.length ? <ul>{contract.decisions.map((d) => <li key={d}>{d}</li>)}</ul> : null}
       </>
     ) });
   }
@@ -302,6 +304,9 @@ export function AgentContractView({ stage, hasRun, onClose, graph, onDesignActio
           </div>
           <h3 className="pl-acv-title">{stage.number ? `${stage.number}. ${stage.title}` : stage.title}</h3>
           <div className="pl-acv-desc">{stage.description}</div>
+          {contract?.design?.example ? (
+            <div className="pl-acv-example" data-testid="design-example">{`Example: ${contract.design.example}`}</div>
+          ) : null}
           <DesignBar design={stage.design} onAction={onDesignAction} busy={designBusy} error={designError} />
         </div>
         <div className="pl-acv-actions">
