@@ -91,12 +91,35 @@ def test_steps_and_design_as_documented_are_accepted_and_parsed():
     (lambda c: c["design"]["policy"].append({"id": "P", "text": "t", "why": "w"}), "unknown keys ['why']"),
     (lambda c: c["design"]["applied_in"].update(dq="v1"), "applied_in has unknown keys ['dq']"),
     (lambda c: c.update(diagram={}), "contract has unknown keys ['diagram']"),
+    (lambda c: c.update(links=[{"from": "incident", "to": "precedent", "rel": "X"}]),
+     "from 'incident' is not a kind the contract reads or writes"),
+    (lambda c: c.update(links=[{"from": "agent_decision", "rel": "X"}]), "need a from, a to and a rel"),
+    (lambda c: c.update(handoff={"to": "x", "via": "y"}), "contract.handoff has unknown keys ['via']"),
+    (lambda c: c.update(invoked_by=""), "contract.invoked_by must name a step"),
+    (lambda c: c["design"].update(example=3), "contract.design.example must be text"),
 ])
 def test_a_step_or_card_outside_the_schema_is_refused(mutate, says):
     contract = copy.deepcopy(_contract())
     mutate(contract)
     problems = contract_shape_problems(_step(contract))
     assert any(says in p for p in problems), problems
+
+
+def test_links_invoked_by_handoff_and_example_as_documented_are_accepted():
+    contract = _contract()
+    kinds = [w["kind"] for w in contract["writes"]] or [r["kind"] for r in contract["reads"]]
+    contract.update(links=[{"from": kinds[0], "to": kinds[0], "rel": "CORRELATED_WITH"}],
+                    invoked_by="pipeline_orchestrator",
+                    handoff={"to": "pipeline_orchestrator", "next": "context_enrichment",
+                             "carries": ["incident_id"], "text": "Returns the incident ID."})
+    contract["design"]["example"] = "EGL-0588 v2 on COB 2026-10-05"
+    assert contract_shape_problems(_step(contract)) == []
+
+
+def test_the_design_kg_version_is_the_packs_reference():
+    from boss_engine.services.knowledge import ontology_packs
+
+    assert ontology_packs.load_pack("banking-dq").kg_reference == "KG v17"
 
 
 def test_a_step_call_matches_a_contract_call_that_names_no_tool():

@@ -38,18 +38,20 @@ describe("buildPipeline", () => {
   const stages = buildPipeline(REG_SPEC, REG_PALETTE, [OUTSIDE], REG_RUN);
   const at = (id: string) => stages.find((s) => s.id === id)!;
 
-  it("P0 numbers the ten working stages in flow order; the loop and the lanes only frame them", () => {
+  it("P0 numbers the working stages in flow order; a person's step is a human step, the loop and the lanes only frame", () => {
     expect(stages.filter((s) => s.number !== null).map((s) => [s.number, s.title])).toEqual([
       [1, "Clause intake"], [2, "Context enrichment"], [3, "Historical pattern"],
       [4, "Compliance assessment"], [5, "Compliance orchestration"], [6, "Lane confirmation"],
-      [7, "Remediation package"], [8, "Bank's own review"], [9, "Human approval"], [10, "Compliance closure"],
+      [7, "Remediation package"], [8, "Bank's own review"], [9, "Compliance closure"],
     ]);
+    expect(at("human_approval").number).toBeNull();
+    expect(at("human_approval").design.status).toBe("human_step");
     expect(at("evidence_loop").number).toBeNull();
     expect(at("evidence_loop").members).toEqual(["context_enrichment"]);
     expect(at("context_enrichment").group).toBe("evidence_loop");
     expect(at("lanes").members).toEqual(["lane_confirmation"]);
     expect(at("evidence_loop").frameNote).toBe("Repeats Context enrichment up to 2× while it reports missing kinds");
-    expect(at("lanes").frameNote).toBe("One lane per finding family, from Compliance orchestration · up to 3 at once");
+    expect(at("lanes").frameNote).toBe("In parallel, one per finding family, from Compliance orchestration · up to 3 at once");
   });
 
   it("P0 says what runs each stage, in words", () => {

@@ -10,11 +10,23 @@ THE AGENT DESIGN (design §4.1, §4.6) rides on the same block, in two optional 
   ``n`` and ``name`` are required; each step's ``reads``/``writes``/``calls`` must be a SUBSET
   of the contract's own (a step cannot read what the agent as a whole may not). A step's call
   matches a contract call on ``mcp`` and, when both name one, ``tool``.
-* ``design`` — the design record's cards: ``{status, reference, under_revision, decisions:
-  [{id, text}], policy: [{id, text}], applied_in: {kg, cg, items: [str]}, open_questions:
-  [{id, text}]}``. ``status`` is one of :data:`DESIGN_STATUSES`. The status a contract declares
+* ``design`` — the design record's cards: ``{status, reference, under_revision, example,
+  decisions: [{id, text}], policy: [{id, text}], applied_in: {kg, cg, items: [str]},
+  open_questions: [{id, text}]}``. ``example`` is the running example the design is read
+  against ("EGL-0588 v2 on COB 2026-10-05"), shown under the agent's title. ``status`` is one of :data:`DESIGN_STATUSES`. The status a contract declares
   is the stage's design status until a person reviews it in BOSS (stage_designs.py), which then
   owns it.
+
+Two more optional keys draw the design the way the consultant does:
+
+* ``invoked_by`` — the stage that starts this one (a step id: the Pipeline Orchestrator invokes
+  Monitoring, Enrichment and Historical Pattern), the design view's entry pill.
+* ``links`` — the Context Graph edges the agent writes between the kinds it names:
+  ``[{from: kind, to: kind, rel: "MATCHED_INCIDENT"}]`` (``from == to`` is a self-link, e.g.
+  CORRELATED_WITH between incidents). Both ends must be kinds the contract reads or writes.
+
+``handoff`` is ``{to, next?, carries?, text?}``: ``to`` the stage it returns to, ``next`` the
+stage that follows (when ``to`` dispatches it), ``text`` the handoff in a full sentence.
 
 Unknown keys are refused at every level, so a misspelt card never silently disappears.
 """
@@ -34,14 +46,16 @@ SUPPORTS_STEPS_AND_DESIGN = True
 
 _CONTRACT_KEYS = {
     "trigger", "reads", "writes", "calls", "handoff", "human_review", "policy", "llm",
-    "decisions", "open_questions", "steps", "design",
+    "decisions", "open_questions", "steps", "design", "invoked_by", "links",
 }
 _READ_KEYS = {"kind", "via"}
 _WRITE_KEYS = {"kind", "required", "decision_type"}
 _CALL_KEYS = {"mcp", "tool"}
 _STEP_KEYS = {"n", "name", "reads", "writes", "calls", "explain"}
 _DESIGN_KEYS = {"status", "reference", "under_revision", "decisions", "policy", "applied_in",
-                "open_questions"}
+                "open_questions", "example"}
+_LINK_KEYS = {"from", "to", "rel"}
+_HANDOFF_KEYS = {"to", "next", "carries", "text"}
 _ID_TEXT_KEYS = {"id", "text"}
 _APPLIED_KEYS = {"kg", "cg", "items"}
 #: A stage design's review state (design §4.6), in the consultant's legend's order.
@@ -246,6 +260,41 @@ def contract_shape_problems(step: Mapping[str, Any]) -> list[str]:
                 problems.append(f"step '{step_id}' contract.calls entries need an mcp name")
     problems.extend(_steps_problems(step_id, raw))
     problems.extend(_design_problems(step_id, raw.get("design")))
+    problems.extend(_links_problems(step_id, raw))
+    handoff = raw.get("handoff")
+    if isinstance(handoff, Mapping):
+        extra = set(handoff) - _HANDOFF_KEYS
+        if extra:
+            problems.append(f"step '{step_id}' contract.handoff has unknown keys {sorted(extra)}")
+    if "invoked_by" in raw and not (isinstance(raw["invoked_by"], str) and raw["invoked_by"].strip()):
+        problems.append(f"step '{step_id}' contract.invoked_by must name a step")
+    return problems
+
+
+def _links_problems(step_id: str, raw: Mapping[str, Any]) -> list[str]:
+    """`contract.links`: Context Graph edges between kinds the contract itself names."""
+    links = raw.get("links")
+    if links is None:
+        return []
+    where = f"step '{step_id}' contract.links"
+    if not isinstance(links, list):
+        return [f"{where} must be a list"]
+    named = _kinds_of(raw.get("reads")) | _kinds_of(raw.get("writes"))
+    problems: list[str] = []
+    for item in links:
+        if not isinstance(item, Mapping):
+            problems.append(f"{where} entries must be {{from, to, rel}} mappings")
+            continue
+        extra = set(item) - _LINK_KEYS
+        if extra:
+            problems.append(f"{where} has unknown keys {sorted(extra)}")
+        if not all(isinstance(item.get(k), str) and item[k].strip() for k in ("from", "to", "rel")):
+            problems.append(f"{where} entries need a from, a to and a rel")
+            continue
+        for end in ("from", "to"):
+            if item[end].strip() not in named:
+                problems.append(f"{where} {end} '{item[end]}' is not a kind the contract reads "
+                                "or writes")
     return problems
 
 
@@ -348,6 +397,8 @@ def _design_problems(step_id: str, design: Any) -> list[str]:
         problems.append(f"{where}.reference must be text")
     if design.get("under_revision") is not None and not isinstance(design["under_revision"], str):
         problems.append(f"{where}.under_revision must be text or null")
+    if design.get("example") is not None and not isinstance(design["example"], str):
+        problems.append(f"{where}.example must be text")
     for key in ("decisions", "policy", "open_questions"):
         value = design.get(key)
         if value is None:

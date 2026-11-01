@@ -71,6 +71,26 @@ def cg_version(connection: Connection, project_id: str) -> int:
         return CORE_CONTEXT_VERSION
 
 
+def kg_reference(connection: Connection, project_id: str) -> Optional[int]:
+    """The Knowledge Graph version the project's agent designs are written against ("KG v17"):
+    its ontology pack's ``knowledge_graph_reference``, or None when no pack declares one. The
+    agent design views title their Knowledge Graph band with it, so the band and the design
+    cards ("Applied in KG v16") speak of one versioning; the live ``kg_version`` stays what every
+    decision records."""
+    import re
+
+    from .ontology_packs import get_project_pack
+
+    try:
+        with connection.begin_nested():
+            pack = get_project_pack(connection, project_id=project_id)
+    except Exception:  # noqa: BLE001 - no pack table yet: no design reference
+        return None
+    raw = str(getattr(pack, "kg_reference", None) or "") if pack is not None else ""
+    match = re.search(r"(\d+)", raw)
+    return int(match.group(1)) if match else None
+
+
 def versions(connection: Connection, project_id: str) -> dict[str, int]:
     """Both, as the console and an AgentDecision's provenance carry them."""
     return {"kg_version": kg_version(connection, project_id),

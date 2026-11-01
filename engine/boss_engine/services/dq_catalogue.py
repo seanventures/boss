@@ -63,10 +63,16 @@ DQ_CONTRACTS: dict[str, dict[str, Any]] = {
                         "dq_threshold", "cde", "database_structure", "database_table",
                         "incident"),
         "writes": [_w("incident"), _w("agent_decision", False, "IncidentOpened|IncidentAttached"),
-                   _w("coverage_gap")],
+                   _w("coverage_gap"), _w("agent_run"), _w("agent_tool_call")],
+        "links": [{"from": "incident", "to": "incident", "rel": "CORRELATED_WITH"}],
+        "invoked_by": "pipeline_orchestrator",
         "calls": [_c("eagle", "get_exception_group"), _c("itsm", "list_incidents"),
                   _c("itsm", "create_incident"), _c("itsm", "attach_to_incident")],
-        "handoff": {"to": "context_enrichment", "carries": ["incident_id", "severity"]},
+        "handoff": {"to": "pipeline_orchestrator", "next": "context_enrichment",
+                    "carries": ["incident_id", "severity"],
+                    "text": "Returns the incident ID, opened or attached, and the severity to the "
+                            "Pipeline Orchestrator. A new incident goes to Context Enrichment; an "
+                            "attach does not restart the pipeline."},
         "human_review": "None in the normal path. A policy parameter missing from both the "
                         "function policy and the defaults stops the run and goes to human review.",
         "policy": {"opens_on": "Error", "severity": "only rises"},
@@ -83,9 +89,15 @@ DQ_CONTRACTS: dict[str, dict[str, Any]] = {
                         "data_quality_rule", "cde", "database_structure", "database_table",
                         "database_column", "feed", "lineage", "owner", "regulatory_report",
                         "report_line", "mdrm", "issue", "examination_finding"),
-        "writes": [_w("agent_decision", True, "ContextAssembled"), _w("coverage_gap")],
-        "calls": [_c("olympus", "get_exception_profile"), _c("olympus", "list_recent_changes")],
-        "handoff": {"to": "historical_pattern", "carries": ["decision_id", "context_pack"]},
+        "writes": [_w("agent_decision", True, "ContextAssembled"), _w("coverage_gap"),
+                   _w("agent_run"), _w("agent_tool_call")],
+        "calls": [_c("olympus", "get_exception_profile"), _c("olympus", "list_recent_changes"),
+                  _c("itsm", "get_incident")],
+        "invoked_by": "pipeline_orchestrator",
+        "handoff": {"to": "pipeline_orchestrator", "next": "historical_pattern",
+                    "carries": ["decision_id", "context_pack"],
+                    "text": "Returns the decision ID to the Pipeline Orchestrator, which invokes "
+                            "Historical Pattern. RCA reads the pack through the Context Curator."},
         "human_review": "None. Missing metadata — lineage, CDE mapping, owner, MDRM route, "
                         "profile — is recorded as a coverage gap and the run continues.",
         "policy": {"max_hops": 3, "change_lookback_days": 14, "list_cap": 25,
@@ -101,9 +113,17 @@ DQ_CONTRACTS: dict[str, dict[str, Any]] = {
         "reads": _reads("agent", "mcp_server", "system", "data_quality_rule",
                         "database_structure", "cde", "business_calendar", "calendar_day",
                         "resolved_pattern", "incident", "agent_decision", "precedent"),
-        "writes": [_w("agent_decision", True, "HistoricalPatternMatched"), _w("precedent")],
+        "writes": [_w("agent_decision", True, "HistoricalPatternMatched"), _w("precedent"),
+                   _w("agent_run"), _w("agent_tool_call")],
+        "links": [{"from": "precedent", "to": "incident", "rel": "MATCHED_INCIDENT"},
+                  {"from": "precedent", "to": "resolved_pattern", "rel": "REFERENCES"}],
         "calls": [_c("itsm", "update_incident")],
-        "handoff": {"to": "rca", "carries": ["decision_id", "matched"]},
+        "invoked_by": "pipeline_orchestrator",
+        "handoff": {"to": "pipeline_orchestrator", "next": "rca",
+                    "carries": ["decision_id", "matched"],
+                    "text": "Returns the decision ID to the Pipeline Orchestrator, which invokes "
+                            "RCA. RCA links its own USED_PRECEDENT {confidenceLift} to the "
+                            "precedents it relies on."},
         "human_review": "None. Zero matches is a fact, not InsufficientEvidence. Severity is "
                         "never changed.",
         "policy": {"lookback_days": 730, "tiers": 2, "list_cap": 25},
@@ -116,7 +136,10 @@ DQ_CONTRACTS: dict[str, dict[str, Any]] = {
         "reads": _reads("incident", "agent_decision", "coverage_gap", "precedent",
                         "resolved_pattern", "data_quality_rule", "cde"),
         "writes": [_w("agent_decision", True, "RootCauseCandidates|InsufficientEvidence")],
-        "handoff": {"to": "pipeline_orchestrator", "carries": ["candidates", "rca_verdict"]},
+        "handoff": {"to": "pipeline_orchestrator", "carries": ["candidates", "rca_verdict"],
+                    "text": "Returns the candidate root causes, or InsufficientEvidence, to the "
+                            "Pipeline Orchestrator, which re-runs Enrichment and Historical "
+                            "Pattern or routes the candidates to the lanes."},
         "human_review": "None: lanes confirm or rule out; a person approves any fix.",
         "policy": {"token_budget": 6000, "max_rounds": 3},
         "llm": "agent",
@@ -127,7 +150,9 @@ DQ_CONTRACTS: dict[str, dict[str, Any]] = {
         "trigger": "After the evidence loop ends (conclusive, or its rounds used up).",
         "reads": _reads("agent_decision", "incident"),
         "writes": [_w("agent_decision", True, "Routed")],
-        "handoff": {"to": "lanes", "carries": ["lanes"]},
+        "handoff": {"to": "lanes", "carries": ["lanes"],
+                    "text": "Starts one lane per candidate root-cause family above the routing "
+                            "floor, in parallel."},
         "human_review": "None. No candidate above the routing floor starts no lane.",
         "policy": {"min_route_confidence": 0.3},
         "llm": "none",
@@ -138,7 +163,11 @@ DQ_CONTRACTS: dict[str, dict[str, Any]] = {
         "reads": _reads("incident", "agent_decision", "precedent", "data_quality_rule",
                         "dq_threshold", "system", "feed"),
         "writes": [_w("agent_decision", True, "Confirmed|RuledOut|CannotVerify")],
-        "handoff": {"to": "rule_drafting", "carries": ["lane_verdict", "cause"]},
+        "handoff": {"to": "pipeline_orchestrator", "next": "remediation_advisor",
+                    "carries": ["lane_verdict", "cause"],
+                    "text": "Returns its verdict to the Pipeline Orchestrator. A confirmed cause "
+                            "goes to the Remediation Advisor; a confirmed false positive also "
+                            "opens a rule authoring case with Rule Drafting."},
         "human_review": "None. CannotVerify leaves the incident for a person.",
         "policy": {"token_budget": 4000},
         "llm": "agent",
@@ -150,7 +179,9 @@ DQ_CONTRACTS: dict[str, dict[str, Any]] = {
         "reads": _reads("agent_decision", "data_quality_rule", "dq_threshold", "incident"),
         "writes": [_w("agent_decision", True, "RuleProposed|NothingToDraft"),
                    _w("rule_proposal"), _w("rule")],
-        "handoff": {"to": "remediation_advisor", "carries": ["proposal"]},
+        "handoff": {"to": "remediation_advisor", "carries": ["proposal"],
+                    "text": "Leaves the rule proposal in Rules review for a person, and hands on "
+                            "to the Remediation Advisor."},
         "human_review": "Every rule change is a proposal a person approves in Rules review.",
         "policy": {"token_budget": 3000},
         "llm": "agent",
@@ -161,7 +192,9 @@ DQ_CONTRACTS: dict[str, dict[str, Any]] = {
         "reads": _reads("agent_decision", "incident", "precedent", "resolved_pattern", "owner"),
         "writes": [_w("agent_decision", True, "RemediationPrepared|NoPackage"),
                    _w("remediation_package")],
-        "handoff": {"to": "human_approval", "carries": ["remediation_package_id"]},
+        "handoff": {"to": "human_approval", "carries": ["remediation_package_id"],
+                    "text": "Hands the prepared remediation package to a person for approval; "
+                            "nothing has been done yet."},
         "human_review": "A person approves at Human approval; a different person carries it out.",
         "policy": {"token_budget": 4000, "prepare_only": True},
         "llm": "agent",
@@ -185,7 +218,9 @@ DQ_CONTRACTS: dict[str, dict[str, Any]] = {
         "reads": _reads("remediation_package", "agent_decision"),
         "writes": [_w("agent_decision", True, "FixRecorded")],
         "calls": [_c("itsm", "update_incident")],
-        "handoff": {"to": "incident_closure", "carries": ["change_ref"]},
+        "handoff": {"to": "incident_closure", "carries": ["change_ref"],
+                    "text": "Hands the change reference to Incident Closure, which re-runs the "
+                            "check before closing."},
         "human_review": "Records what the people did; refuses to run without both answers.",
         "llm": "none",
         "decisions": ["prepare-only cap: no agent executes fixes"],
@@ -197,7 +232,9 @@ DQ_CONTRACTS: dict[str, dict[str, Any]] = {
         "writes": [_w("agent_decision", True, "IncidentClosed|FixNotConfirmed|LeftOpen"),
                    _w("precedent"), _w("resolved_pattern")],
         "calls": [_c("eagle", "rerun_check"), _c("itsm", "update_incident")],
-        "handoff": {"to": "the next run's historical_pattern", "carries": ["precedent_id"]},
+        "handoff": {"carries": ["precedent_id"],
+                    "text": "Leaves the precedent for the next investigation's Historical "
+                            "Pattern to find."},
         "human_review": "Never closes on a failing re-run; an unconfirmed incident stays open.",
         "llm": "none",
         "decisions": ["re-run before closing", "maintains resolved patterns",
@@ -265,10 +302,12 @@ DQ_STAGE_DESIGNS: dict[str, dict[str, Any]] = {
                "CORRELATED_WITH earlier incidents on the rule (linkType); facts only.",
                writes=("incident",)),
             _s(9, "Write trace, hand off", "Writes the decision with gradedSeverity and "
-               "policyVersion, and hands off.", ("agent",), ("agent_decision", "coverage_gap")),
+               "policyVersion, the run and its tool calls, and hands off.", ("agent",),
+               ("agent_decision", "coverage_gap", "agent_run", "agent_tool_call")),
         ],
         "design": {
             "status": "locked", "reference": "Agent Reference v0.1",
+            "example": "EGL-0588 v2 on COB 2026-10-05 (locked running example).",
             "under_revision": "Rule authoring changed DQ grading (A-D87 to A-D89, KG v17): each "
                               "rule has its own Warning and Error conditions; Eagle grades "
                               "every run; Warning goes to the OMNIS dashboard and Monitoring "
@@ -311,10 +350,13 @@ DQ_STAGE_DESIGNS: dict[str, dict[str, Any]] = {
             _s(9, "Recent changes", "Changes on the platform, rule and feed in the look-back.",
                ("system", "feed"), calls=((_OLY, "list_recent_changes"),)),
             _s(10, "Assemble, hand off", "Writes ContextAssembled with contextPack and asOf, "
-               "and the coverage gaps.", ("agent",), ("agent_decision", "coverage_gap")),
+               "the coverage gaps, the run and its tool calls.", ("agent",),
+               ("agent_decision", "coverage_gap", "agent_run", "agent_tool_call"),
+               ((_ITSM, "get_incident"),)),
         ],
         "design": {
             "status": "locked", "reference": "Agent Reference v0.2",
+            "example": "INC-501 · EGL-0588 v2 on COB 2026-10-05 (locked running example).",
             "decisions": [_n("A-D30", "new incidents only"), _n("A-D31", "facts only"),
                           _n("A-D32", "no LLM for retrieval"),
                           _n("A-D33", "references and counts"),
@@ -343,14 +385,17 @@ DQ_STAGE_DESIGNS: dict[str, dict[str, Any]] = {
             _s(4, "find_past_incidents", "Closed incidents in two tiers: the same rule, then "
                "sibling rules or the same CDE, two years back.",
                ("incident", "resolved_pattern", "agent_decision")),
-            _s(5, "Write precedents", "Precedents, MATCHED_INCIDENT and REFERENCES.",
-               writes=("precedent", "agent_decision")),
+            _s(5, "Write precedents", "Precedents, MATCHED_INCIDENT and REFERENCES, the run "
+               "and its tool calls.",
+               writes=("precedent", "agent_decision", "agent_run", "agent_tool_call")),
             _s(6, "Post briefing", "A work note on the ticket.", ("mcp_server",),
                calls=((_ITSM, "update_incident"),)),
             _s(7, "Hand off", "Writes HistoricalPatternMatched.", writes=("agent_decision",)),
         ],
         "design": {
             "status": "locked", "reference": "Agent Reference v0.3",
+            "example": "INC-501 · EGL-0588 v2 on COB 2026-10-05 (business day 3 of Q4); "
+                       "lookback from 2024-10-05.",
             "decisions": [_n("A-D48", "facts only"), _n("A-D49", "two search tiers"),
                           _n("A-D50", "deterministic matching"),
                           _n("A-D51", "KG data passed as parameters"),
@@ -534,7 +579,8 @@ def entries(step: Callable[..., dict[str, Any]], from_input: Callable[[str], dic
             cap("pipeline_orchestrator", "dq_orchestration", "Pipeline Orchestrator", nxt=["lanes"]),
             {"id": "lanes", "kind": "for_each", "title": "Lanes",
              "items": "steps.pipeline_orchestrator.output.lanes", "body": "lane",
-             "max_items": 5, "concurrency": 3, "next": ["rule_drafting"]},
+             "max_items": 5, "concurrency": 3, "item_label": "root-cause family",
+             "next": ["rule_drafting"]},
             cap("lane", "dq_lane", "Lane", {"item": {"from_item": ""}}),
             cap("rule_drafting", "dq_rule_drafting", "Rule Drafting", nxt=["remediation_advisor"],
                 side_path="Rule authoring"),
@@ -573,7 +619,7 @@ def entries(step: Callable[..., dict[str, Any]], from_input: Callable[[str], dic
             # Drawn in the pipeline, run elsewhere: the daily Escalation Agent (its own
             # scheduled workflow) and the two shared services.
             cap("escalation", "dq_escalation", "Escalation Agent",
-                side_path="Daily over every open incident"),
+                side_path="Daily over every open incident", stage_number=9),
             {"id": "context_curator", "kind": "deterministic", "title": "Context Curator",
              "description": "Ranks and trims context to each agent's token budget; routes "
                             "nothing.",

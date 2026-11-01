@@ -101,7 +101,10 @@ export function TopBar(p: {
             <ArrowLeft size={14} weight="bold" aria-hidden />Library
           </button>
 
-          <label className="wf-name" data-error={p.nameError ? "true" : undefined}>
+          {/* The name never cuts short: the field asks for the room its whole name needs, and the
+              bar wraps its actions to the next line rather than squeeze it to "DQ RCA a…". */}
+          <label className="wf-name" data-error={p.nameError ? "true" : undefined}
+                 style={{ ["--wf-name-ch" as string]: String(Math.max(8, meta.name.trim().length + 2)) } as React.CSSProperties}>
             <input className="wf-name-input" value={meta.name} aria-label="Name" readOnly={p.readOnly}
                    autoFocus={p.autoFocusName} data-testid="wf-name" aria-invalid={p.nameError ? true : undefined}
                    data-tip={meta.name.trim() || undefined} data-tip-when="cut"

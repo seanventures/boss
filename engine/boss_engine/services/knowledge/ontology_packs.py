@@ -75,6 +75,10 @@ class OntologyPack:
     #: The schema version of the context kinds this pack declares (graph_versions.cg_version);
     #: None means the pack's own version stands for it.
     context_version: Optional[str] = None
+    #: The Knowledge Graph version the pack's agent designs are written against ("KG v17"), when
+    #: it declares one: the version the agent design views name, so a band and a design card
+    #: never disagree (graph_versions.kg_reference).
+    kg_reference: Optional[str] = None
     #: Every pack this one stands for: itself and what it includes (transitively). A project's
     #: composite pack lists every pack the project holds.
     pack_ids: tuple[str, ...] = field(default=())
@@ -137,6 +141,8 @@ def _parse_pack(pack_id: str, document: dict[str, Any]) -> OntologyPack:
         pack_id=pack_id, version=str(document.get("version") or "1"),
         kinds=kinds, edges=edges, kind_meta=kind_meta, pack_ids=tuple(pack_ids),
         context_version=(str(document["context_version"]) if document.get("context_version") else None),
+        kg_reference=(str(document["knowledge_graph_reference"])
+                      if document.get("knowledge_graph_reference") else None),
     )
 
 
@@ -244,9 +250,10 @@ def _composite(packs: list[OntologyPack]) -> Optional[OntologyPack]:
     # The Context Graph schema version: the newest pack that declares one.
     context_version = next((p.context_version for p in reversed(packs) if p.context_version),
                            None)
+    kg_reference = next((p.kg_reference for p in reversed(packs) if p.kg_reference), None)
     return OntologyPack(pack_id=newest.pack_id, version=newest.version, kinds=kinds,
                         edges=edges, kind_meta=meta, pack_ids=tuple(ids),
-                        context_version=context_version)
+                        context_version=context_version, kg_reference=kg_reference)
 
 
 def get_project_packs(connection: Connection, *, project_id: str) -> list[OntologyPack]:

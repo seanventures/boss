@@ -7945,8 +7945,24 @@
                 {
                   "kind": "coverage_gap",
                   "required": false
+                },
+                {
+                  "kind": "agent_run",
+                  "required": false
+                },
+                {
+                  "kind": "agent_tool_call",
+                  "required": false
                 }
               ],
+              "links": [
+                {
+                  "from": "incident",
+                  "to": "incident",
+                  "rel": "CORRELATED_WITH"
+                }
+              ],
+              "invoked_by": "pipeline_orchestrator",
               "calls": [
                 {
                   "mcp": "eagle",
@@ -7966,11 +7982,13 @@
                 }
               ],
               "handoff": {
-                "to": "context_enrichment",
+                "to": "pipeline_orchestrator",
+                "next": "context_enrichment",
                 "carries": [
                   "incident_id",
                   "severity"
-                ]
+                ],
+                "text": "Returns the incident ID, opened or attached, and the severity to the Pipeline Orchestrator. A new incident goes to Context Enrichment; an attach does not restart the pipeline."
               },
               "human_review": "None in the normal path. A policy parameter missing from both the function policy and the defaults stops the run and goes to human review.",
               "policy": {
@@ -8086,19 +8104,22 @@
                 {
                   "n": 9,
                   "name": "Write trace, hand off",
-                  "explain": "Writes the decision with gradedSeverity and policyVersion, and hands off.",
+                  "explain": "Writes the decision with gradedSeverity and policyVersion, the run and its tool calls, and hands off.",
                   "reads": [
                     "agent"
                   ],
                   "writes": [
                     "agent_decision",
-                    "coverage_gap"
+                    "coverage_gap",
+                    "agent_run",
+                    "agent_tool_call"
                   ]
                 }
               ],
               "design": {
                 "status": "locked",
                 "reference": "Agent Reference v0.1",
+                "example": "EGL-0588 v2 on COB 2026-10-05 (locked running example).",
                 "under_revision": "Rule authoring changed DQ grading (A-D87 to A-D89, KG v17): each rule has its own Warning and Error conditions; Eagle grades every run; Warning goes to the OMNIS dashboard and Monitoring writes nothing; only Error opens or attaches to an incident; OP-SEV-01 retired. Open: how incident severity is set, and what happens when the next COB is Warning or clean. The steps below show the locked v0.1 design.",
                 "decisions": [
                   {
@@ -8278,6 +8299,14 @@
                 {
                   "kind": "coverage_gap",
                   "required": false
+                },
+                {
+                  "kind": "agent_run",
+                  "required": false
+                },
+                {
+                  "kind": "agent_tool_call",
+                  "required": false
                 }
               ],
               "calls": [
@@ -8288,14 +8317,21 @@
                 {
                   "mcp": "olympus",
                   "tool": "list_recent_changes"
+                },
+                {
+                  "mcp": "itsm",
+                  "tool": "get_incident"
                 }
               ],
+              "invoked_by": "pipeline_orchestrator",
               "handoff": {
-                "to": "historical_pattern",
+                "to": "pipeline_orchestrator",
+                "next": "historical_pattern",
                 "carries": [
                   "decision_id",
                   "context_pack"
-                ]
+                ],
+                "text": "Returns the decision ID to the Pipeline Orchestrator, which invokes Historical Pattern. RCA reads the pack through the Context Curator."
               },
               "human_review": "None. Missing metadata — lineage, CDE mapping, owner, MDRM route, profile — is recorded as a coverage gap and the run continues.",
               "policy": {
@@ -8416,19 +8452,28 @@
                 {
                   "n": 10,
                   "name": "Assemble, hand off",
-                  "explain": "Writes ContextAssembled with contextPack and asOf, and the coverage gaps.",
+                  "explain": "Writes ContextAssembled with contextPack and asOf, the coverage gaps, the run and its tool calls.",
                   "reads": [
                     "agent"
                   ],
                   "writes": [
                     "agent_decision",
-                    "coverage_gap"
+                    "coverage_gap",
+                    "agent_run",
+                    "agent_tool_call"
+                  ],
+                  "calls": [
+                    {
+                      "mcp": "itsm",
+                      "tool": "get_incident"
+                    }
                   ]
                 }
               ],
               "design": {
                 "status": "locked",
                 "reference": "Agent Reference v0.2",
+                "example": "INC-501 · EGL-0588 v2 on COB 2026-10-05 (locked running example).",
                 "decisions": [
                   {
                     "id": "A-D30",
@@ -8564,6 +8609,26 @@
                 {
                   "kind": "precedent",
                   "required": false
+                },
+                {
+                  "kind": "agent_run",
+                  "required": false
+                },
+                {
+                  "kind": "agent_tool_call",
+                  "required": false
+                }
+              ],
+              "links": [
+                {
+                  "from": "precedent",
+                  "to": "incident",
+                  "rel": "MATCHED_INCIDENT"
+                },
+                {
+                  "from": "precedent",
+                  "to": "resolved_pattern",
+                  "rel": "REFERENCES"
                 }
               ],
               "calls": [
@@ -8572,12 +8637,15 @@
                   "tool": "update_incident"
                 }
               ],
+              "invoked_by": "pipeline_orchestrator",
               "handoff": {
-                "to": "rca",
+                "to": "pipeline_orchestrator",
+                "next": "rca",
                 "carries": [
                   "decision_id",
                   "matched"
-                ]
+                ],
+                "text": "Returns the decision ID to the Pipeline Orchestrator, which invokes RCA. RCA links its own USED_PRECEDENT {confidenceLift} to the precedents it relies on."
               },
               "human_review": "None. Zero matches is a fact, not InsufficientEvidence. Severity is never changed.",
               "policy": {
@@ -8638,10 +8706,12 @@
                 {
                   "n": 5,
                   "name": "Write precedents",
-                  "explain": "Precedents, MATCHED_INCIDENT and REFERENCES.",
+                  "explain": "Precedents, MATCHED_INCIDENT and REFERENCES, the run and its tool calls.",
                   "writes": [
                     "precedent",
-                    "agent_decision"
+                    "agent_decision",
+                    "agent_run",
+                    "agent_tool_call"
                   ]
                 },
                 {
@@ -8670,6 +8740,7 @@
               "design": {
                 "status": "locked",
                 "reference": "Agent Reference v0.3",
+                "example": "INC-501 · EGL-0588 v2 on COB 2026-10-05 (business day 3 of Q4); lookback from 2024-10-05.",
                 "decisions": [
                   {
                     "id": "A-D48",
@@ -8777,7 +8848,8 @@
                 "carries": [
                   "candidates",
                   "rca_verdict"
-                ]
+                ],
+                "text": "Returns the candidate root causes, or InsufficientEvidence, to the Pipeline Orchestrator, which re-runs Enrichment and Historical Pattern or routes the candidates to the lanes."
               },
               "human_review": "None: lanes confirm or rule out; a person approves any fix.",
               "policy": {
@@ -8898,7 +8970,8 @@
                 "to": "lanes",
                 "carries": [
                   "lanes"
-                ]
+                ],
+                "text": "Starts one lane per candidate root-cause family above the routing floor, in parallel."
               },
               "human_review": "None. No candidate above the routing floor starts no lane.",
               "policy": {
@@ -8950,6 +9023,7 @@
             "body": "lane",
             "max_items": 5,
             "concurrency": 3,
+            "item_label": "root-cause family",
             "next": [
               "rule_drafting"
             ],
@@ -9004,11 +9078,13 @@
                 }
               ],
               "handoff": {
-                "to": "rule_drafting",
+                "to": "pipeline_orchestrator",
+                "next": "remediation_advisor",
                 "carries": [
                   "lane_verdict",
                   "cause"
-                ]
+                ],
+                "text": "Returns its verdict to the Pipeline Orchestrator. A confirmed cause goes to the Remediation Advisor; a confirmed false positive also opens a rule authoring case with Rule Drafting."
               },
               "human_review": "None. CannotVerify leaves the incident for a person.",
               "policy": {
@@ -9105,7 +9181,8 @@
                 "to": "remediation_advisor",
                 "carries": [
                   "proposal"
-                ]
+                ],
+                "text": "Leaves the rule proposal in Rules review for a person, and hands on to the Remediation Advisor."
               },
               "human_review": "Every rule change is a proposal a person approves in Rules review.",
               "policy": {
@@ -9201,7 +9278,8 @@
                 "to": "human_approval",
                 "carries": [
                   "remediation_package_id"
-                ]
+                ],
+                "text": "Hands the prepared remediation package to a person for approval; nothing has been done yet."
               },
               "human_review": "A person approves at Human approval; a different person carries it out.",
               "policy": {
@@ -9397,7 +9475,8 @@
                 "to": "incident_closure",
                 "carries": [
                   "change_ref"
-                ]
+                ],
+                "text": "Hands the change reference to Incident Closure, which re-runs the check before closing."
               },
               "human_review": "Records what the people did; refuses to run without both answers.",
               "llm": "none",
@@ -9502,10 +9581,10 @@
                 }
               ],
               "handoff": {
-                "to": "the next run's historical_pattern",
                 "carries": [
                   "precedent_id"
-                ]
+                ],
+                "text": "Leaves the precedent for the next investigation's Historical Pattern to find."
               },
               "human_review": "Never closes on a failing re-run; an unconfirmed incident stays open.",
               "llm": "none",
@@ -9688,6 +9767,7 @@
               }
             },
             "side_path": "Daily over every open incident",
+            "stage_number": 9,
             "max_attempts": 3,
             "approval": {
               "mode": "auto",

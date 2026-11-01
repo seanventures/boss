@@ -95,6 +95,30 @@ function twoLines(name: string, max = 16): [string, string] {
   return [first, rest.length > max + 4 ? `${rest.slice(0, max + 3)}…` : rest];
 }
 
+/** A step's name wrapped to the room between two step circles, word by word, in up to three
+ *  lines, so neighbouring names never run into each other ("Upstream lineag|Regulatory reach").
+ *  A single word longer than the room breaks at a hyphen or underscore, else stands alone. */
+export function wrapToWidth(name: string, maxChars: number): string[] {
+  const max = Math.max(6, maxChars);
+  const words = name.split(/\s+/).filter(Boolean).flatMap((w) => {
+    if (w.length <= max) return [w];
+    const parts = w.split(/(?<=[-_])/);
+    return parts.length > 1 ? parts : [w];
+  });
+  const lines: string[] = [];
+  for (const w of words) {
+    const last = lines[lines.length - 1];
+    const joiner = last && /[-_]$/.test(last) ? "" : " ";
+    if (last !== undefined && (last + joiner + w).length <= max) lines[lines.length - 1] = last + joiner + w;
+    else lines.push(w);
+  }
+  if (lines.length <= 3) return lines;
+  return [...lines.slice(0, 2), `${lines.slice(2).join(" ").slice(0, max - 1)}…`];
+}
+
+/** How many characters of a step name fit between two circles `gap` apart. */
+const STEP_NAME_PX = 6.8;
+
 function hexagon(x: number, y: number, w: number, h: number): string {
   const d = h / 2;
   return [`${x + d},${y}`, `${x + w - d},${y}`, `${x + w},${y + h / 2}`, `${x + w - d},${y + h}`,
@@ -192,11 +216,14 @@ export function AgentStepsMap({ stage, steps, kinds, contextKinds, kgVersion, cg
     const kgAt = layoutRow(kg.map((n) => textWidth(n.label)), kgTop + 46, NODE_H, 12);
     const kgH = 46 + bandRows(kgAt) * (NODE_H + 12) + 8;
     const stTop = kgTop + kgH + BAND_GAP;
-    const stH = 136;
+    const stH = 150;
     const cy = stTop + 70;
     const cgTop = stTop + stH + BAND_GAP;
     const cgAt = layoutRow(cg.map((n) => textWidth(n.label, 13) + 16), cgTop + 56, HEX_H, 26);
-    const cgH = 56 + bandRows(cgAt) * (HEX_H + 26) + 8;
+    // A labelled Context Graph edge between two kinds (MATCHED_INCIDENT) curves under them.
+    const cgKeys = new Set(cg.map((n) => n.key));
+    const cgLinks = (contract.links ?? []).filter((l) => cgKeys.has(kindKey(l.from)) && cgKeys.has(kindKey(l.to)));
+    const cgH = 56 + bandRows(cgAt) * (HEX_H + 26) + 8 + (cgLinks.some((l) => kindKey(l.from) !== kindKey(l.to)) ? 34 : 0);
     const exTop = cgTop + cgH + BAND_GAP;
     const exAt = layoutRow(systems.map((s) => textWidth(s.label) + 6), exTop + 52, NODE_H, 40);
     const exH = systems.length ? 52 + NODE_H + 30 : 0;
@@ -206,6 +233,7 @@ export function AgentStepsMap({ stage, steps, kinds, contextKinds, kgVersion, cg
     const x1 = W - 210;
     const gap = steps.length > 1 ? (x1 - x0) / (steps.length - 1) : 0;
     const stepX = new Map(steps.map((s, i) => [s.n, steps.length > 1 ? x0 + i * gap : W / 2]));
+    const stepGap = steps.length > 1 ? gap : 0;
 
     const kgPos = new Map(kg.map((n, i) => [n.key, { ...kgAt[i], w: textWidth(n.label) }]));
     const cgPos = new Map(cg.map((n, i) => [n.key, { ...cgAt[i], w: textWidth(n.label, 13) + 16 }]));
@@ -245,7 +273,7 @@ export function AgentStepsMap({ stage, steps, kinds, contextKinds, kgVersion, cg
                      kind: "call", x1: sx + spread(bottoms.length, b++), y1: cy + R, x2: p.x + p.w / 2, y2: p.y - 2 });
       }
     }
-    return { nodes, kg, cg, systems, kgPos, cgPos, exPos, lines, stepX, kgTop, kgH, stTop, stH, cy, cgTop, cgH, exTop, exH, H };
+    return { nodes, kg, cg, systems, kgPos, cgPos, exPos, lines, stepX, stepGap, cgLinks, kgTop, kgH, stTop, stH, cy, cgTop, cgH, exTop, exH, H };
   }, [contract, steps, kinds, contextKinds, overlay]);
 
   const { lines } = model;
@@ -358,7 +386,8 @@ export function AgentStepsMap({ stage, steps, kinds, contextKinds, kgVersion, cg
           ) : null}
           {steps.map((s) => {
             const x = model.stepX.get(s.n)!;
-            const [a, b] = twoLines(s.name);
+            const room = model.stepGap ? model.stepGap - 10 : 220;
+            const nameLines = wrapToWidth(s.name, Math.floor(room / STEP_NAME_PX));
             const run = stepRun(s);
             return (
               <g key={s.n} className="pls-step" data-testid={`step-${s.n}`}
@@ -367,8 +396,10 @@ export function AgentStepsMap({ stage, steps, kinds, contextKinds, kgVersion, cg
                  {...press({ type: "step", n: s.n }, `Step ${s.n}: ${s.name}`)}>
                 <circle cx={x} cy={cy} r={R} />
                 <text x={x} y={cy + 5} textAnchor="middle" className="pls-step-n">{s.n}</text>
-                <text x={x} y={cy + R + 18} textAnchor="middle" className="pls-step-name">{a}</text>
-                {b ? <text x={x} y={cy + R + 33} textAnchor="middle" className="pls-step-name">{b}</text> : null}
+                {nameLines.map((line, i) => (
+                  <text key={i} x={x} y={cy + R + 18 + i * 14} textAnchor="middle" className="pls-step-name"
+                        data-testid={`step-name-${s.n}-${i}`}>{line}</text>
+                ))}
               </g>
             );
           })}
@@ -388,6 +419,35 @@ export function AgentStepsMap({ stage, steps, kinds, contextKinds, kgVersion, cg
                 {n.overlay === "done" || n.overlay === "undeclared" ? (
                   <text x={p.x + p.w - 2} y={p.y - 4} textAnchor="end" className="pls-count">{`read ${n.traced?.count ?? 0}`}</text>
                 ) : null}
+              </g>
+            );
+          })}
+        </g>
+
+        {/* Context Graph edges the agent writes, labelled: a self-link loops beside its node */}
+        <g data-testid="steps-cg-links">
+          {model.cgLinks.map((l) => {
+            const a = model.cgPos.get(kindKey(l.from))!;
+            const b = model.cgPos.get(kindKey(l.to))!;
+            const key = `${kindKey(l.from)}-${kindKey(l.rel)}-${kindKey(l.to)}`;
+            const on = !selected || (selected.type === "node" && [kindKey(l.from), kindKey(l.to)].includes(selected.key));
+            if (a === b) {
+              const x = a.x + 6; const top = a.y + 6; const bottom = a.y + HEX_H - 6;
+              return (
+                <g key={key} data-testid={`cg-link-${key}`} data-on={selected ? (on ? "true" : "false") : undefined}>
+                  <path className="pls-link" markerEnd="url(#pls-write)"
+                        d={`M ${x} ${top} C ${x - 46} ${top - 26}, ${x - 46} ${bottom + 26}, ${x} ${bottom}`} />
+                  <text className="pls-link-label" x={x - 44} y={a.y + HEX_H / 2 + 4} textAnchor="end">{l.rel}</text>
+                </g>
+              );
+            }
+            const x1 = a.x + a.w / 2; const x2 = b.x + b.w / 2;
+            const y1 = a.y + HEX_H; const y2 = b.y + HEX_H; const dip = Math.max(y1, y2) + 34;
+            return (
+              <g key={key} data-testid={`cg-link-${key}`} data-on={selected ? (on ? "true" : "false") : undefined}>
+                <path className="pls-link" markerEnd="url(#pls-write)"
+                      d={`M ${x1} ${y1} C ${x1} ${dip}, ${x2} ${dip}, ${x2} ${y2 + 2}`} />
+                <text className="pls-link-label" x={(x1 + x2) / 2} y={dip - 4} textAnchor="middle">{l.rel}</text>
               </g>
             );
           })}

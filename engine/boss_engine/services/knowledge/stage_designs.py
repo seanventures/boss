@@ -207,7 +207,7 @@ def stage_design(step: Mapping[str, Any], versions: list[dict]) -> dict[str, Any
 def designs(connection: Connection, project_id: str, workflow_key: str) -> Optional[dict[str, Any]]:
     """Every stage of the workflow's running version, with its design status and reference, and
     the project's graph versions for the band titles. None when there is no such workflow."""
-    from .graph_versions import versions as graph_versions
+    from .graph_versions import kg_reference, versions as graph_versions
 
     definition = _definition(connection, project_id, workflow_key=workflow_key)
     if definition is None:
@@ -217,7 +217,8 @@ def designs(connection: Connection, project_id: str, workflow_key: str) -> Optio
     return {
         "workflow_key": workflow_key,
         "stages": {str(s["id"]): stage_design(s, records.get(str(s["id"]), [])) for s in _steps(spec)},
-        "graph": graph_versions(connection, project_id),
+        "graph": {**graph_versions(connection, project_id),
+                  "kg_reference": kg_reference(connection, project_id)},
         "kinds": kinds_meta(connection, project_id, spec),
     }
 

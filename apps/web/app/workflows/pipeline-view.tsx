@@ -167,6 +167,19 @@ function Frame({ frame, members, children }: {
   );
 }
 
+/** A condition on the flow: what it routes on, and where each answer goes ("A new incident? ·
+ *  Yes: Evidence loop · No: Attached to an open incident — stop"). Never an empty box. */
+function Route({ stage }: { stage: PipelineStage }) {
+  return (
+    <div className="pl-route" data-testid={`route-${stage.id}`} title={stage.description}
+         aria-label={`Condition: ${stage.description}`}>
+      <span className="pl-route-icon" aria-hidden>◇</span>
+      <span className="pl-route-title">{stage.title}</span>
+      {stage.frameNote ? <span className="pl-route-note">{stage.frameNote}</span> : null}
+    </div>
+  );
+}
+
 /** "Agent Reference v0.1 · under revision", "—" when the design names none. */
 function referenceWords(stage: PipelineStage): string {
   const ref = stage.design.reference;
@@ -243,7 +256,9 @@ export function PipelineView({
   }
 
   const byId = new Map(stages.map((s) => [s.id, s]));
-  const top = stages.filter((s) => !s.group && s.placement === "main");
+  // An outcome ("Attached to an open incident — stop") is drawn on the condition that leads to
+  // it, not as a box of its own.
+  const top = stages.filter((s) => !s.group && s.placement === "main" && !s.outcome);
   const shared = stages.filter((s) => s.placement === "shared");
   const sideAreas = new Map<string, PipelineStage[]>();
   for (const s of stages.filter((x) => x.placement === "side")) {
@@ -290,7 +305,7 @@ export function PipelineView({
           return (
             <React.Fragment key={s.id}>
               {i > 0 ? <Arrow /> : null}
-              {s.members ? (
+              {s.kind === "condition" ? <Route stage={s} /> : s.members ? (
                 <Frame frame={s} members={members}>
                   {members.map((m, j) => (
                     <React.Fragment key={m.id}>
@@ -298,7 +313,7 @@ export function PipelineView({
                       {card(m)}
                     </React.Fragment>
                   ))}
-                  {!members.length ? <span className="pl-faint">No stage inside yet</span> : null}
+                  {!members.length ? <span className="pl-faint">Nothing to repeat yet: add a stage inside on the Visual tab</span> : null}
                 </Frame>
               ) : card(s)}
             </React.Fragment>
@@ -315,6 +330,9 @@ export function PipelineView({
             {[...sideAreas.entries()].map(([label, members]) => (
               <div key={label} className="pl-aside-group pl-side" data-testid="side-paths">
                 <div className="pl-aside-title">{label}</div>
+                {members.filter((m) => m.sideLink).map((m) => (
+                  <div key={m.id} className="pl-side-link" data-testid={`side-link-${m.id}`}>{m.sideLink}</div>
+                ))}
                 <div className="pl-aside-cards">{members.map(card)}</div>
               </div>
             ))}
@@ -349,7 +367,7 @@ export function PipelineView({
                     onClick={() => { if (!s.members) { setDesignError(null); toggle(s.id); } }}
                     className={s.members ? "pl-row-frame" : "pl-row"}>
                   <td className="pl-cell-num">{s.number ?? (s.kind === "bounded_loop" ? "↻" : s.kind === "for_each" ? "⇉"
-                    : s.placement === "shared" ? "S" : "—")}</td>
+                    : s.kind === "condition" ? "◇" : s.placement === "shared" ? "S" : "—")}</td>
                   <td className="pl-cell-stage">{s.members ? s.runsAs.label : s.title}</td>
                   <td className="pl-cell-what">{s.description}</td>
                   <td><RunsAsChip stage={s} /></td>
