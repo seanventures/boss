@@ -385,6 +385,11 @@ def test_a_steps_decision_is_linked_to_what_it_consulted_cited_and_is_about(conn
     assert (symbol, "consulted", "read") in edges
     assert (clause, "about", "") in edges, "the subject the run bound it to"
     assert (case, "about", "") in edges, "the case it worked on"
+    # The canvas's Context layer draws them as edges.
+    from boss_engine.services.knowledge import view_context
+
+    drawn = {(s, d, k) for s, d, k, _w in view_context.load_trace(c, c.project_id).edges}
+    assert (decision_ids[0], rule, "cites") in drawn and (decision_ids[0], symbol, "consulted") in drawn
     # Idempotent: the backfill finds nothing left to link, and writes nothing.
     assert context_graph.backfill_decision_edges(c, c.project_id)["edges_added"] == 0
     # The backfill writes the same edges for a step that ran before they existed.
