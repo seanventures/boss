@@ -292,6 +292,12 @@ def _install_workflows(connection: Connection, project_id: str, actor: str) -> l
             grant_mcp(connection, project_id, actor=actor, role_key=role, mcp_server_id=server,
                       tools=tools)
     result = seed(connection, project_id, actor=actor, only=frozenset(WORKFLOW_KEYS))
+    # And whatever else the banking-dq pack now completes with the project's other packs
+    # (rulebook_extraction needs its kinds and a document pack's), so "Extract rules" works
+    # the moment the rulebook is added.
+    from ..workflow_catalogue import seed_now_unlocked
+
+    seed_now_unlocked(connection, project_id, actor=actor)
     return [i for i in result.get("installed") or [] if i.get("key") in WORKFLOW_KEYS]
 
 

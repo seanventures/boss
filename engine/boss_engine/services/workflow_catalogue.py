@@ -1162,7 +1162,10 @@ CATALOGUE: list[dict[str, Any]] = [
         # confirmed in Knowledge Graph › Documents is read by the Rulebook Analyst, a batch of
         # sections at a time; each rule it states is proposed with its thresholds and the clause
         # quoted as evidence, and a person approves each one in Rules review. Nothing is invented:
-        # a rule id must be printed in the clause it cites.
+        # a rule id must be printed in the clause it cites. Installs only where the project's
+        # packs grant what it reads and writes (`requires`): document and clause (banking-
+        # regulatory) and data_quality_rule with its dq_threshold (banking-dq). No one shipped
+        # pack holds all four, so it names the kinds rather than a pack.
         "key": "rulebook_extraction",
         "name": "Extract Rules from a Rulebook",
         "description": "Read a rulebook you uploaded and propose each data-quality rule it states, "
@@ -1176,6 +1179,7 @@ CATALOGUE: list[dict[str, Any]] = [
             "document does not print, and no retired rule. Nothing is approved automatically."
         ),
         "work_class": "any",
+        "requires": {"kinds": ("document", "clause", "data_quality_rule", "dq_threshold")},
         "steps": _chain([
             _step("extract", "extract_rulebook_rules", {
                 "document_id": _in("document_id"), "budget_usd": _in("budget_usd")}),
@@ -2170,14 +2174,32 @@ def catalogue_summary(prd_auto_approve: Optional[bool] = None) -> list[dict[str,
     return out
 
 
-def seed_unlocked_by_pack(connection: Connection, project_id: str, pack_id: str,
-                          actor: str = "boss") -> dict[str, Any]:
-    """Install the catalogue entries a just-set ontology pack unlocks (their step contracts name
-    its kinds), and nothing else. Idempotent."""
-    keys = frozenset(k for k, p in ONTOLOGY_PACK_BY_ENTRY.items() if p == pack_id)
+def _gated(entry: dict[str, Any]) -> bool:
+    """The entry installs only where the project has something (`requires`, or the pack its
+    step contracts name), so a seed that ran before it arrived skipped it."""
+    return bool(entry.get("requires") or ONTOLOGY_PACK_BY_ENTRY.get(entry["key"]))
+
+
+def seed_now_unlocked(connection: Connection, project_id: str,
+                      actor: str = "boss") -> dict[str, Any]:
+    """Install every gated catalogue entry whose requirements this project NOW meets, and
+    nothing else. Called wherever a project gains what an entry needs — a pack set, a sample
+    loaded, a document confirmed — so the entry is there the moment it can run, not at the next
+    boot (2026-11-01: the DQ platform and rulebook loads left rulebook_extraction uninstalled
+    and "Extract rules" answered "no delivery workflow"). Idempotent."""
+    keys = frozenset(e["key"] for e in CATALOGUE
+                     if _gated(e) and not _unmet(connection, project_id, e))
     if not keys:
         return {"project_id": project_id, "installed": [], "count": 0, "mapped": []}
     return seed(connection, project_id, actor=actor, only=keys)
+
+
+def seed_unlocked_by_pack(connection: Connection, project_id: str, pack_id: str,
+                          actor: str = "boss") -> dict[str, Any]:
+    """Install the catalogue entries a just-set ontology pack unlocks — every gated entry the
+    project now meets (seed_now_unlocked). ``pack_id`` is the pack just set. Idempotent."""
+    del pack_id  # what it unlocks depends on every pack the project holds, not this one alone
+    return seed_now_unlocked(connection, project_id, actor=actor)
 
 
 def seed(connection: Connection, project_id: str, actor: str = "boss",
@@ -2301,7 +2323,15 @@ def unmet_requirements(connection: Connection, project_id: str,
     pack_id = requires.get("ontology_pack")
     if pack_id and not _has_pack(connection, project_id, pack_id):
         return f"needs the {pack_id} ontology pack"
-    missing = [name for name in requires.get("mcp") or ()
+    if requires.get("kinds"):
+        from .knowledge.ontology_packs import effective_node_kinds
+
+        granted = effective_node_kinds(connection, project_id=project_id)
+        lacking = [k for k in requires["kinds"] if k not in granted]
+        if lacking:
+            return ("needs an ontology pack granting the "
+                    + ", ".join(f"'{k}'" for k in lacking) + " kind(s)")
+    missing =[name for name in requires.get("mcp") or ()
                if find_mcp_server(connection, project_id, name) is None]
     if missing:
         return f"needs the {', '.join(missing)} connector(s)"
