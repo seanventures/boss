@@ -648,11 +648,11 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
-  /* "(c)" IS A LETTER IN A CITATION, NOT A COPYRIGHT SIGN. The console fonts' contextual
-     alternates drew "12 CFR 1026.36(c)(1)" as "1026.36©(1)" in every regulation and step note
-     (2026-10-31). Legal and code text must read exactly as written. */
-  font-variant-ligatures: no-contextual no-discretionary-ligatures;
-  font-feature-settings: "calt" 0, "dlig" 0;
+  /* "(c)" IS A LETTER IN A CITATION, NOT A COPYRIGHT SIGN. The console fonts'
+     ligatures drew "12 CFR 1026.36(c)(1)" as "1026.36©(1)" in every regulation and step note
+     (2026-10-31; Manrope's standard ligature, so "none", not only no-contextual). Legal and code
+     text must read exactly as written. */
+  font-variant-ligatures: none;
 }
 
 a {
