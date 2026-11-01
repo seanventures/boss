@@ -28,6 +28,10 @@ from sqlalchemy.engine import Connection
 
 from . import scopes
 
+#: A contract may carry an agent's numbered internal `steps` and its `design` record (the
+#: consultant's per-agent view). Workflows that ship designs check this before adding them.
+SUPPORTS_STEPS_AND_DESIGN = True
+
 _CONTRACT_KEYS = {
     "trigger", "reads", "writes", "calls", "handoff", "human_review", "policy", "llm",
     "decisions", "open_questions", "steps", "design",
