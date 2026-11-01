@@ -16,7 +16,7 @@ from typing import Any, Optional
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
-SHIPPED_PACK_IDS = ("banking-regulatory", "banking-dq")
+SHIPPED_PACK_IDS = ("banking-regulatory", "banking-dq", "banking-aml")
 
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS kg_ontology_packs (
@@ -77,6 +77,17 @@ def _parse_pack(pack_id: str, document: dict[str, Any]) -> OntologyPack:
                       "attrs": list(k.get("attrs") or [])}
         for k in kinds_spec
     }
+    # A PACK MAY INCLUDE ANOTHER (banking-aml includes banking-regulatory): one project runs
+    # both case studies, and a project has exactly one active pack, so switching to the AML pack
+    # must not take the regulation's kinds away from it.
+    for included_id in document.get("includes") or []:
+        included_id = str(included_id)
+        if included_id == pack_id:
+            raise PackRefused(f"pack {pack_id!r} cannot include itself")
+        included = load_pack(included_id)
+        kinds |= included.kinds
+        edges |= included.edges
+        kind_meta = {**included.kind_meta, **kind_meta}
     return OntologyPack(
         pack_id=pack_id, version=str(document.get("version") or "1"),
         kinds=kinds, edges=edges, kind_meta=kind_meta,

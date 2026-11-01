@@ -102,3 +102,23 @@ def test_list_documents_returns_what_was_added_with_its_clauses(client, engine):
     assert documents[0]["title"] == "Reg Z"
     sections = sorted(c["section"] for c in documents[0]["clauses"])
     assert sections == ["1026.36(c)(1)(i)", "1026.36(c)(2)"]
+
+
+def test_the_aml_sample_loads_through_the_api_and_reports_its_alerts(client, engine):
+    """Case study 4: the AML sample is a product action (knowledge:manage, confirmed)."""
+    project_id = _new_project(engine, "aml-sample")
+    url = "/v1/knowledge/samples/aml"
+    before = client.get(url, params={"project_id": project_id, "actor": ACTOR})
+    assert before.status_code == 200, before.text
+    assert before.json()["loaded"] is False
+
+    unconfirmed = client.post(url, json={"project_id": project_id, "actor": ACTOR})
+    assert unconfirmed.status_code == 422, unconfirmed.text
+
+    loaded = client.post(url, json={"project_id": project_id, "actor": ACTOR,
+                                    "step_up": "confirmed"})
+    assert loaded.status_code == 200, loaded.text
+    assert loaded.json()["pack_id"] == "banking-aml"
+    after = client.get(url, params={"project_id": project_id, "actor": ACTOR}).json()
+    assert after["loaded"] is True and after["pack_id"] == "banking-aml"
+    assert [a["alert_id"] for a in after["alerts"]] == ["ALERT-1", "ALERT-2", "ALERT-3"]

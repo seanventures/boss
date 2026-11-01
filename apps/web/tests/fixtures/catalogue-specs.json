@@ -7204,6 +7204,561 @@
         "output_schema": {},
         "step_agent_rules": 2
       }
+    },
+    {
+      "workflow_key": "aml_alert_investigation",
+      "name": "AML Alert Investigation",
+      "description": "Investigate a transaction-monitoring alert: gather KYC, transactions and past alerts, map the related parties, recommend close or escalate citing evidence and precedent — then a person decides, and a person files.",
+      "spec": {
+        "entry_step": "alert_intake",
+        "steps": [
+          {
+            "id": "alert_intake",
+            "kind": "deterministic",
+            "title": "Alert intake",
+            "binding": {
+              "inputs": {
+                "alert_id": {
+                  "from_input": "alert_id"
+                }
+              }
+            },
+            "contract": {
+              "trigger": "a person starts an investigation of one open alert",
+              "reads": [
+                {
+                  "kind": "alert"
+                },
+                {
+                  "kind": "account",
+                  "via": "raised_on"
+                },
+                {
+                  "kind": "customer",
+                  "via": "raised_on"
+                },
+                {
+                  "kind": "typology",
+                  "via": "matches_typology"
+                }
+              ],
+              "writes": [
+                {
+                  "kind": "aml_case",
+                  "required": false
+                },
+                {
+                  "kind": "agent_decision",
+                  "required": true,
+                  "decision_type": "AlertIntake"
+                },
+                {
+                  "kind": "coverage_gap",
+                  "required": false
+                }
+              ],
+              "calls": [
+                {
+                  "mcp": "case-management",
+                  "tool": "get_alert"
+                }
+              ],
+              "handoff": {
+                "to": "evidence_collection",
+                "carries": [
+                  "case_id",
+                  "alert_id"
+                ]
+              },
+              "human_review": "none; an alert missing from case management is a CoverageGap and the case still opens",
+              "policy": {
+                "max_hops": 1
+              },
+              "llm": "none",
+              "decisions": [
+                "one case per alert; reopening reuses it"
+              ]
+            },
+            "next": [
+              "evidence_collection"
+            ],
+            "max_attempts": 3
+          },
+          {
+            "id": "evidence_collection",
+            "kind": "deterministic",
+            "title": "Evidence collection",
+            "binding": {
+              "inputs": {
+                "case_id": {
+                  "from_step": "alert_intake",
+                  "field": "case_id"
+                },
+                "alert_id": {
+                  "from_step": "alert_intake",
+                  "field": "alert_id"
+                }
+              }
+            },
+            "contract": {
+              "trigger": "after alert_intake opens the case",
+              "reads": [
+                {
+                  "kind": "alert"
+                },
+                {
+                  "kind": "customer"
+                },
+                {
+                  "kind": "account"
+                },
+                {
+                  "kind": "kyc_profile",
+                  "via": "has_kyc"
+                },
+                {
+                  "kind": "typology"
+                },
+                {
+                  "kind": "transaction",
+                  "via": "flags"
+                }
+              ],
+              "writes": [
+                {
+                  "kind": "agent_decision",
+                  "required": true,
+                  "decision_type": "EvidenceAssembled"
+                },
+                {
+                  "kind": "coverage_gap",
+                  "required": false
+                }
+              ],
+              "calls": [
+                {
+                  "mcp": "kyc",
+                  "tool": "get_kyc_profile"
+                },
+                {
+                  "mcp": "transactions",
+                  "tool": "query_transactions"
+                },
+                {
+                  "mcp": "case-management",
+                  "tool": "list_alerts"
+                }
+              ],
+              "handoff": {
+                "to": "network_mapping",
+                "carries": [
+                  "kyc",
+                  "transactions",
+                  "past_alerts"
+                ]
+              },
+              "human_review": "none; a connector that does not answer is a CoverageGap",
+              "policy": {
+                "max_hops": 2,
+                "change_lookback_days": 90,
+                "list_cap": 500,
+                "data_access": "read_only"
+              },
+              "llm": "none",
+              "decisions": [
+                "read-only: the collector never writes to a bank system"
+              ]
+            },
+            "next": [
+              "network_mapping"
+            ],
+            "max_attempts": 3
+          },
+          {
+            "id": "network_mapping",
+            "kind": "capability",
+            "binding": {
+              "capability": "aml_network_mapping",
+              "inputs": {}
+            },
+            "next": [
+              "historical_pattern"
+            ],
+            "title": "Network mapping",
+            "contract": {
+              "trigger": "after the evidence is assembled",
+              "reads": [
+                {
+                  "kind": "customer"
+                },
+                {
+                  "kind": "account",
+                  "via": "owns"
+                },
+                {
+                  "kind": "counterparty",
+                  "via": "transfers_to"
+                },
+                {
+                  "kind": "customer",
+                  "via": "related_to"
+                }
+              ],
+              "writes": [
+                {
+                  "kind": "agent_decision",
+                  "required": true,
+                  "decision_type": "NetworkMapped"
+                }
+              ],
+              "handoff": {
+                "to": "historical_pattern",
+                "carries": [
+                  "related_party_ids"
+                ]
+              },
+              "human_review": "agent-drafted related_to links stay inferred until a person confirms them",
+              "policy": {
+                "max_hops": 2,
+                "list_cap": 60
+              },
+              "llm": "agent",
+              "decisions": [
+                "every related party cites the graph edges that show it",
+                "an unreadable answer claims no related party"
+              ]
+            },
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 0,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "historical_pattern",
+            "kind": "deterministic",
+            "title": "Historical pattern",
+            "binding": {
+              "inputs": {
+                "capability": "aml_historical_pattern",
+                "case_id": {
+                  "from_step": "alert_intake",
+                  "field": "case_id"
+                },
+                "alert_id": {
+                  "from_step": "alert_intake",
+                  "field": "alert_id"
+                },
+                "related_party_ids": {
+                  "from_step": "network_mapping",
+                  "field": "related_party_ids"
+                }
+              }
+            },
+            "contract": {
+              "trigger": "after the network is mapped",
+              "reads": [
+                {
+                  "kind": "precedent",
+                  "via": "about"
+                },
+                {
+                  "kind": "alert"
+                },
+                {
+                  "kind": "customer",
+                  "via": "related_to"
+                }
+              ],
+              "writes": [
+                {
+                  "kind": "agent_decision",
+                  "required": true,
+                  "decision_type": "HistoricalPatternMatched"
+                }
+              ],
+              "handoff": {
+                "to": "aml_analysis",
+                "carries": [
+                  "matched"
+                ]
+              },
+              "human_review": "none",
+              "policy": {
+                "list_cap": 3
+              },
+              "llm": "none",
+              "decisions": [
+                "a precedent matches on a shared network entity or typology"
+              ]
+            },
+            "next": [
+              "aml_analysis"
+            ],
+            "max_attempts": 3
+          },
+          {
+            "id": "aml_analysis",
+            "kind": "capability",
+            "binding": {
+              "capability": "aml_analysis",
+              "inputs": {}
+            },
+            "next": [
+              "analyst_decision"
+            ],
+            "title": "AML analysis",
+            "contract": {
+              "trigger": "after historical_pattern",
+              "reads": [
+                {
+                  "kind": "alert"
+                },
+                {
+                  "kind": "kyc_profile"
+                },
+                {
+                  "kind": "typology"
+                },
+                {
+                  "kind": "transaction"
+                },
+                {
+                  "kind": "precedent"
+                }
+              ],
+              "writes": [
+                {
+                  "kind": "agent_decision",
+                  "required": true,
+                  "decision_type": "Recommendation"
+                }
+              ],
+              "handoff": {
+                "to": "analyst_decision",
+                "carries": [
+                  "recommendation",
+                  "confidence",
+                  "rationale"
+                ]
+              },
+              "human_review": "analyst_decision: a person decides; this is a recommendation",
+              "llm": "agent",
+              "decisions": [
+                "close_false_positive or escalate, with a confidence",
+                "cites only evidence it was given; uncited is no recommendation",
+                "says whether each prior decision still holds"
+              ]
+            },
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 0,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "analyst_decision",
+            "kind": "decision",
+            "title": "Analyst decision",
+            "question": "Decide this alert: close it as a false positive, or escalate it?",
+            "guidance": "The AML Analyst's recommendation, its confidence and the evidence and precedent it cites are above. Approve to accept the recommendation, and write your reason in the note — it becomes the precedent later alerts are judged against. To decide otherwise, start your note with 'Escalate:' or 'Close:'. BOSS closes and files nothing on its own.",
+            "approval": {
+              "mode": "manual",
+              "approver_role": "human"
+            },
+            "recommendation": {
+              "reason_label": "Decide",
+              "reason_prompt": "Your determination and why — e.g. 'Close: documented payroll, register on file' or 'Escalate: cash just under the threshold, wired offshore'. A note that names neither accepts the AML Analyst's recommendation."
+            },
+            "next": [
+              "narrative"
+            ],
+            "max_attempts": 3,
+            "binding": {}
+          },
+          {
+            "id": "narrative",
+            "kind": "capability",
+            "binding": {
+              "capability": "sar_narrative",
+              "inputs": {}
+            },
+            "next": [
+              "filing_route"
+            ],
+            "title": "SAR narrative",
+            "contract": {
+              "trigger": "after a person's determination; drafts only when they escalated",
+              "reads": [
+                {
+                  "kind": "alert"
+                },
+                {
+                  "kind": "customer"
+                },
+                {
+                  "kind": "transaction"
+                },
+                {
+                  "kind": "aml_case"
+                }
+              ],
+              "writes": [
+                {
+                  "kind": "agent_decision",
+                  "required": false,
+                  "decision_type": "Narrative"
+                }
+              ],
+              "handoff": {
+                "to": "sar_filing",
+                "carries": [
+                  "narrative"
+                ]
+              },
+              "human_review": "sar_filing: a person reviews the draft and files it",
+              "llm": "agent",
+              "decisions": [
+                "a draft only; the agent never files"
+              ]
+            },
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 0,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "filing_route",
+            "kind": "condition",
+            "title": "Escalated?",
+            "expression": {
+              "path": "steps.narrative.output.determination",
+              "op": "eq",
+              "value": "escalate"
+            },
+            "on_true": "sar_filing",
+            "on_false": "not_escalated",
+            "next": [],
+            "max_attempts": 3,
+            "binding": {}
+          },
+          {
+            "id": "sar_filing",
+            "kind": "decision",
+            "title": "File the SAR",
+            "question": "File the suspicious activity report for this alert?",
+            "guidance": "The narrative above is an agent's DRAFT. BOSS does not file: review it, file the report yourself, then approve here with the filing reference in your note.",
+            "approval": {
+              "mode": "manual",
+              "approver_role": "human"
+            },
+            "recommendation": {
+              "reason_label": "Filed",
+              "reason_prompt": "The filing reference, once you have filed it yourself (BOSS never files)."
+            },
+            "next": [
+              "aml_closure"
+            ],
+            "max_attempts": 3,
+            "binding": {}
+          },
+          {
+            "id": "not_escalated",
+            "kind": "timer",
+            "wait_seconds": 0,
+            "binding": {},
+            "title": "Closed, nothing to file",
+            "next": [
+              "aml_closure"
+            ],
+            "max_attempts": 3
+          },
+          {
+            "id": "aml_closure",
+            "kind": "deterministic",
+            "title": "Closure",
+            "binding": {
+              "inputs": {
+                "case_id": {
+                  "from_step": "alert_intake",
+                  "field": "case_id"
+                },
+                "alert_id": {
+                  "from_step": "alert_intake",
+                  "field": "alert_id"
+                }
+              }
+            },
+            "contract": {
+              "trigger": "after a person's determination (and filing, when escalated)",
+              "reads": [
+                {
+                  "kind": "aml_case"
+                },
+                {
+                  "kind": "precedent"
+                }
+              ],
+              "writes": [
+                {
+                  "kind": "precedent",
+                  "required": false
+                },
+                {
+                  "kind": "agent_decision",
+                  "required": true,
+                  "decision_type": "PrecedentRecorded"
+                },
+                {
+                  "kind": "coverage_gap",
+                  "required": false
+                }
+              ],
+              "calls": [
+                {
+                  "mcp": "case-management",
+                  "tool": "add_case_note"
+                }
+              ],
+              "human_review": "refuses to run without the person's determination",
+              "llm": "none",
+              "decisions": [
+                "the determination becomes a governed precedent, about the alert's network and typology",
+                "consulted/reused edges record which earlier determinations this case used"
+              ]
+            },
+            "next": [],
+            "max_attempts": 3
+          }
+        ],
+        "objective": "Investigate the named alert. Open its case, collect the evidence through the case-management, KYC and transactions connectors, map the parties related to the customer from the Knowledge Graph citing the edges, and find the closest prior determinations on that network. The AML Analyst recommends closing it as a false positive or escalating it, with a confidence, citing the evidence and any precedent it relied on. A person makes the determination and says why; agents never close an alert and never file a report. An escalation gets a drafted SAR narrative that a person reviews and files. The determination is recorded as precedent for the next related alert.",
+        "workflow_name": "AML Alert Investigation",
+        "input_schema": {
+          "type": "object",
+          "required": [
+            "alert_id"
+          ],
+          "properties": {
+            "alert_id": {
+              "type": "string",
+              "title": "Alert",
+              "description": "The transaction-monitoring alert to investigate (Knowledge Graph › Documents › AML sample lists them), e.g. ALERT-1.",
+              "examples": [
+                "ALERT-1"
+              ]
+            }
+          }
+        },
+        "output_schema": {},
+        "step_agent_rules": 2
+      }
     }
   ],
   "branched": {

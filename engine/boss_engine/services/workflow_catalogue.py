@@ -1335,6 +1335,223 @@ CATALOGUE: list[dict[str, Any]] = [
                 "execution_state": _in("execution_state")}, nxt=[]),
         ],
     },
+    {
+        # CASE STUDY 4: the AML alert-investigation instance of kg_investigation_pipeline
+        # (services/knowledge/aml_alert_pipeline.py; design §5.3, mirrored for AML). One
+        # monitoring alert: intake, evidence (KYC, transactions, past alerts through the sample's
+        # connectors) and history are deterministic $0 steps; the Network Mapper, the AML Analyst
+        # and the SAR Narrator are role agents; a PERSON decides at analyst_decision and a
+        # person files at sar_filing. Closure turns the person's determination into a governed
+        # precedent, so the next related alert's analysis starts with it. Installs only where
+        # the AML sample is loaded (`requires`): its contracts name the banking-aml kinds and
+        # the sample's connectors.
+        "key": "aml_alert_investigation",
+        "name": "AML Alert Investigation",
+        "description": "Investigate a transaction-monitoring alert: gather KYC, transactions and "
+                       "past alerts, map the related parties, recommend close or escalate citing "
+                       "evidence and precedent — then a person decides, and a person files.",
+        "objective": (
+            "Investigate the named alert. Open its case, collect the evidence through the "
+            "case-management, KYC and transactions connectors, map the parties related to the "
+            "customer from the Knowledge Graph citing the edges, and find the closest prior "
+            "determinations on that network. The AML Analyst recommends closing it as a false "
+            "positive or escalating it, with a confidence, citing the evidence and any precedent "
+            "it relied on. A person makes the determination and says why; agents never close an "
+            "alert and never file a report. An escalation gets a drafted SAR narrative that a "
+            "person reviews and files. The determination is recorded as precedent for the next "
+            "related alert."
+        ),
+        "work_class": "any",
+        "requires": {"ontology_pack": "banking-aml",
+                     "mcp": ("case-management", "kyc", "transactions")},
+        "steps": [
+            {
+                "id": "alert_intake", "kind": "deterministic",
+                "title": "Alert intake",
+                "binding": {"inputs": {"alert_id": _in("alert_id")}},
+                "contract": {
+                    "trigger": "a person starts an investigation of one open alert",
+                    "reads": [{"kind": "alert"}, {"kind": "account", "via": "raised_on"},
+                              {"kind": "customer", "via": "raised_on"},
+                              {"kind": "typology", "via": "matches_typology"}],
+                    "writes": [{"kind": "aml_case", "required": False},
+                               {"kind": "agent_decision", "required": True,
+                                "decision_type": "AlertIntake"},
+                               {"kind": "coverage_gap", "required": False}],
+                    "calls": [{"mcp": "case-management", "tool": "get_alert"}],
+                    "handoff": {"to": "evidence_collection", "carries": ["case_id", "alert_id"]},
+                    "human_review": "none; an alert missing from case management is a "
+                                    "CoverageGap and the case still opens",
+                    "policy": {"max_hops": 1},
+                    "llm": "none",
+                    "decisions": ["one case per alert; reopening reuses it"],
+                },
+                "next": ["evidence_collection"],
+            },
+            {
+                "id": "evidence_collection", "kind": "deterministic",
+                "title": "Evidence collection",
+                "binding": {"inputs": {"case_id": _from("alert_intake", "case_id"),
+                                       "alert_id": _from("alert_intake", "alert_id")}},
+                "contract": {
+                    "trigger": "after alert_intake opens the case",
+                    "reads": [{"kind": "alert"}, {"kind": "customer"}, {"kind": "account"},
+                              {"kind": "kyc_profile", "via": "has_kyc"}, {"kind": "typology"},
+                              {"kind": "transaction", "via": "flags"}],
+                    "writes": [{"kind": "agent_decision", "required": True,
+                                "decision_type": "EvidenceAssembled"},
+                               {"kind": "coverage_gap", "required": False}],
+                    "calls": [{"mcp": "kyc", "tool": "get_kyc_profile"},
+                              {"mcp": "transactions", "tool": "query_transactions"},
+                              {"mcp": "case-management", "tool": "list_alerts"}],
+                    "handoff": {"to": "network_mapping", "carries": ["kyc", "transactions",
+                                                                     "past_alerts"]},
+                    "human_review": "none; a connector that does not answer is a CoverageGap",
+                    "policy": {"max_hops": 2, "change_lookback_days": 90, "list_cap": 500,
+                               "data_access": "read_only"},
+                    "llm": "none",
+                    "decisions": ["read-only: the collector never writes to a bank system"],
+                },
+                "next": ["network_mapping"],
+            },
+            {**_step("network_mapping", "aml_network_mapping", {}, nxt=["historical_pattern"]),
+             "title": "Network mapping",
+             "contract": {
+                 "trigger": "after the evidence is assembled",
+                 "reads": [{"kind": "customer"}, {"kind": "account", "via": "owns"},
+                           {"kind": "counterparty", "via": "transfers_to"},
+                           {"kind": "customer", "via": "related_to"}],
+                 "writes": [{"kind": "agent_decision", "required": True,
+                             "decision_type": "NetworkMapped"}],
+                 "handoff": {"to": "historical_pattern", "carries": ["related_party_ids"]},
+                 "human_review": "agent-drafted related_to links stay inferred until a person "
+                                 "confirms them",
+                 "policy": {"max_hops": 2, "list_cap": 60},
+                 "llm": "agent",
+                 "decisions": ["every related party cites the graph edges that show it",
+                               "an unreadable answer claims no related party"],
+             }},
+            {
+                "id": "historical_pattern", "kind": "deterministic",
+                "title": "Historical pattern",
+                "binding": {"inputs": {
+                    "capability": "aml_historical_pattern",
+                    "case_id": _from("alert_intake", "case_id"),
+                    "alert_id": _from("alert_intake", "alert_id"),
+                    "related_party_ids": _from("network_mapping", "related_party_ids")}},
+                "contract": {
+                    "trigger": "after the network is mapped",
+                    "reads": [{"kind": "precedent", "via": "about"}, {"kind": "alert"},
+                              {"kind": "customer", "via": "related_to"}],
+                    "writes": [{"kind": "agent_decision", "required": True,
+                                "decision_type": "HistoricalPatternMatched"}],
+                    "handoff": {"to": "aml_analysis", "carries": ["matched"]},
+                    "human_review": "none",
+                    "policy": {"list_cap": 3},
+                    "llm": "none",
+                    "decisions": ["a precedent matches on a shared network entity or typology"],
+                },
+                "next": ["aml_analysis"],
+            },
+            {**_step("aml_analysis", "aml_analysis", {}, nxt=["analyst_decision"]),
+             "title": "AML analysis",
+             "contract": {
+                 "trigger": "after historical_pattern",
+                 "reads": [{"kind": "alert"}, {"kind": "kyc_profile"}, {"kind": "typology"},
+                           {"kind": "transaction"}, {"kind": "precedent"}],
+                 "writes": [{"kind": "agent_decision", "required": True,
+                             "decision_type": "Recommendation"}],
+                 "handoff": {"to": "analyst_decision", "carries": ["recommendation",
+                                                                   "confidence", "rationale"]},
+                 "human_review": "analyst_decision: a person decides; this is a recommendation",
+                 "llm": "agent",
+                 "decisions": ["close_false_positive or escalate, with a confidence",
+                               "cites only evidence it was given; uncited is no recommendation",
+                               "says whether each prior decision still holds"],
+             }},
+            {
+                "id": "analyst_decision", "kind": "decision",
+                "title": "Analyst decision",
+                "question": "Decide this alert: close it as a false positive, or escalate it?",
+                "guidance": "The AML Analyst's recommendation, its confidence and the evidence "
+                            "and precedent it cites are above. Approve to accept the "
+                            "recommendation, and write your reason in the note — it becomes the "
+                            "precedent later alerts are judged against. To decide otherwise, "
+                            "start your note with 'Escalate:' or 'Close:'. BOSS closes and files "
+                            "nothing on its own.",
+                "approval": {"mode": "manual", "approver_role": "human"},
+                # The inbox draws a reason box for this gate (decision_actions): the note IS the
+                # determination's reason, and the precedent later alerts are judged against.
+                "recommendation": {
+                    "reason_label": "Decide",
+                    "reason_prompt": "Your determination and why — e.g. 'Close: documented "
+                                     "payroll, register on file' or 'Escalate: cash just "
+                                     "under the threshold, wired offshore'. A note that names "
+                                     "neither accepts the AML Analyst's recommendation."},
+                "next": ["narrative"],
+            },
+            {**_step("narrative", "sar_narrative", {}, nxt=["filing_route"]),
+             "title": "SAR narrative",
+             "contract": {
+                 "trigger": "after a person's determination; drafts only when they escalated",
+                 "reads": [{"kind": "alert"}, {"kind": "customer"}, {"kind": "transaction"},
+                           {"kind": "aml_case"}],
+                 "writes": [{"kind": "agent_decision", "required": False,
+                             "decision_type": "Narrative"}],
+                 "handoff": {"to": "sar_filing", "carries": ["narrative"]},
+                 "human_review": "sar_filing: a person reviews the draft and files it",
+                 "llm": "agent",
+                 "decisions": ["a draft only; the agent never files"],
+             }},
+            {
+                "id": "filing_route", "kind": "condition",
+                "title": "Escalated?",
+                "expression": {"path": "steps.narrative.output.determination", "op": "eq",
+                               "value": "escalate"},
+                "on_true": "sar_filing", "on_false": "not_escalated", "next": [],
+            },
+            {
+                "id": "sar_filing", "kind": "decision",
+                "title": "File the SAR",
+                "question": "File the suspicious activity report for this alert?",
+                "guidance": "The narrative above is an agent's DRAFT. BOSS does not file: review "
+                            "it, file the report yourself, then approve here with the filing "
+                            "reference in your note.",
+                "approval": {"mode": "manual", "approver_role": "human"},
+                "recommendation": {
+                    "reason_label": "Filed",
+                    "reason_prompt": "The filing reference, once you have filed it yourself "
+                                     "(BOSS never files)."},
+                "next": ["aml_closure"],
+            },
+            # ITS OWN "NO" STEP: the branch a condition does not take is marked skipped, and
+            # closure is where both paths end.
+            {"id": "not_escalated", "kind": "timer", "wait_seconds": 0, "binding": {},
+             "title": "Closed, nothing to file", "next": ["aml_closure"]},
+            {
+                "id": "aml_closure", "kind": "deterministic",
+                "title": "Closure",
+                "binding": {"inputs": {"case_id": _from("alert_intake", "case_id"),
+                                       "alert_id": _from("alert_intake", "alert_id")}},
+                "contract": {
+                    "trigger": "after a person's determination (and filing, when escalated)",
+                    "reads": [{"kind": "aml_case"}, {"kind": "precedent"}],
+                    "writes": [{"kind": "precedent", "required": False},
+                               {"kind": "agent_decision", "required": True,
+                                "decision_type": "PrecedentRecorded"},
+                               {"kind": "coverage_gap", "required": False}],
+                    "calls": [{"mcp": "case-management", "tool": "add_case_note"}],
+                    "human_review": "refuses to run without the person's determination",
+                    "llm": "none",
+                    "decisions": ["the determination becomes a governed precedent, about the "
+                                  "alert's network and typology",
+                                  "consulted/reused edges record which earlier determinations "
+                                  "this case used"],
+                },
+                "next": [],
+            },
+        ],
+    },
 ]
 
 
@@ -1498,6 +1715,10 @@ _FIELD_TEXT: dict[str, dict[str, Any]] = {
                                   "Graph) — a clause, an incident, or whatever this case is "
                                   "about.",
                    "examples": ["kgn_0123456789ab"]},
+    "alert_id": {"type": "string", "title": "Alert",
+                 "description": "The transaction-monitoring alert to investigate (Knowledge "
+                                "Graph › Documents › AML sample lists them), e.g. ALERT-1.",
+                 "examples": ["ALERT-1"]},
     "max_hops": {"type": "integer", "minimum": 1, "maximum": 5, "default": 2,
                  "title": "Hops to enrich (optional)",
                  "description": "How far Context Enrichment walks from the subject node. "
@@ -1676,6 +1897,13 @@ BRIEFS: dict[str, dict[str, Any]] = {
                                  "receipt.",
                     "subject_id": "kgn_regz102636demo01"},
         "required": ("subject_id",),
+    },
+    "aml_alert_investigation": {
+        "directive": ("What should this investigation focus on? (optional)",
+                      "The alert's own evidence is always collected; say what matters most."),
+        "example": {"title": "Investigate ALERT-1", "alert_id": "ALERT-1",
+                    "directive": "The payroll fan-out on Harbor Point Cafe's payroll account."},
+        "required": ("alert_id",),
     },
     "banking_regulatory_compliance": {
         "directive": ("What should this compliance check focus on? (optional)",
@@ -1870,10 +2098,16 @@ def seed(connection: Connection, project_id: str, actor: str = "boss",
     for entry in CATALOGUE:
         if only is not None and entry["key"] not in only:
             continue
+        unmet = unmet_requirements(connection, project_id, entry)
         needs_pack = ONTOLOGY_PACK_BY_ENTRY.get(entry["key"])
-        if needs_pack and not _has_pack(connection, project_id, needs_pack):
+        if not unmet and needs_pack and not _has_pack(connection, project_id, needs_pack):
+            unmet = f"needs the '{needs_pack}' ontology pack"
+        if unmet:
+            # NOT HERE YET, AND SAID SO. An entry whose contracts name a pack's kinds or a
+            # sample's connectors cannot publish into a project without them; it installs when
+            # they arrive (setting the pack, or the AML sample's load, seeds the catalogue again).
             installed.append({"key": entry["key"], "version_id": None, "version": None,
-                              "skipped": f"needs the '{needs_pack}' ontology pack"})
+                              "skipped": unmet})
             continue
         existing = connection.execute(
             text(
@@ -1915,10 +2149,38 @@ def seed(connection: Connection, project_id: str, actor: str = "boss",
 
 
 def _has_pack(connection: Connection, project_id: str, pack_id: str) -> bool:
-    from .knowledge.ontology_packs import get_project_pack
+    """The project's active pack is ``pack_id`` or includes it (banking-aml includes
+    banking-regulatory, so a project running both case studies keeps the regulatory workflow)."""
+    from .knowledge.ontology_packs import get_project_pack, shipped_packs
 
     pack = get_project_pack(connection, project_id=project_id)
-    return pack is not None and pack.pack_id == pack_id
+    if pack is None:
+        return False
+    if pack.pack_id == pack_id:
+        return True
+    wanted = shipped_packs().get(pack_id)
+    return wanted is not None and wanted.kinds <= pack.kinds
+
+
+def unmet_requirements(connection: Connection, project_id: str,
+                       entry: dict[str, Any]) -> Optional[str]:
+    """What a catalogue entry's `requires` asks of the project and it lacks, in words, or None."""
+    requires = entry.get("requires") or {}
+    if not requires:
+        return None
+    from .knowledge.ontology_packs import get_project_pack
+    from .mcp_registry import find_mcp_server
+
+    pack_id = requires.get("ontology_pack")
+    if pack_id:
+        pack = get_project_pack(connection, project_id=project_id)
+        if pack is None or pack.pack_id != pack_id:
+            return f"needs the {pack_id} ontology pack"
+    missing = [name for name in requires.get("mcp") or ()
+               if find_mcp_server(connection, project_id, name) is None]
+    if missing:
+        return f"needs the {', '.join(missing)} connector(s)"
+    return None
 
 
 def _staffed_for(entry: dict[str, Any], present: frozenset[str]) -> dict[str, Any]:

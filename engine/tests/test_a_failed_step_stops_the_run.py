@@ -102,6 +102,9 @@ INTERNAL = {
     "lane_confirmation": "_lane_confirmation",
     "remediation_package": "_remediation_package",
     "compliance_closure": "_compliance_closure",
+    "aml_network_mapping": "_aml_network_mapping",
+    "aml_analysis": "_aml_analysis",
+    "sar_narrative": "_sar_narrative",
 }
 
 #: Tool-less capabilities that commission NOTHING. They are honest no-ops that say so

@@ -209,6 +209,13 @@ CAPABILITY_PRECHECKS: dict[str, CapabilityPrecheck] = {
                                      "the confirmed finding"),
     "compliance_closure": NO_CHECKS("records the resolution as a Precedent with an "
                                     "execution-state marker; deterministic underneath"),
+    # Case study 4 (aml_alert_investigation): role-agent judgements over the graph and what the
+    # deterministic steps collected; no sandbox, no repository, no connector call of their own.
+    "aml_network_mapping": NO_CHECKS("names related parties from the graph edges around the "
+                                     "alert; writes the Context Graph, runs no sandbox"),
+    "aml_analysis": NO_CHECKS("recommends close or escalate from the assembled evidence; "
+                              "writes the Context Graph, runs no sandbox"),
+    "sar_narrative": NO_CHECKS("drafts a narrative after a person escalated; files nothing"),
 }
 
 #: Which route a capability's agent takes (engine_startup): the build pipeline's stages, the

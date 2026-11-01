@@ -1083,6 +1083,10 @@ export function DecisionActions({ decision, projectId, actorId }: {
   const shipsUnreviewed = Boolean(
     (decision.recommendation.release_commits as { needs_reason?: unknown } | undefined)
       ?.needs_reason);
+  // …or a workflow gate whose answer is a person's stated determination (the AML analyst
+  // decision): the step says what to write.
+  const reasonPrompt = typeof decision.recommendation.reason_prompt === "string"
+    ? decision.recommendation.reason_prompt : "";
   const revise = offers.find((a) => a.action === "revise");
   const delegate = offers.find((a) => a.action === "delegate");
   const runId = typeof decision.recommendation.workflow_run_id === "string"
@@ -1121,15 +1125,15 @@ export function DecisionActions({ decision, projectId, actorId }: {
         <div className="dq-reasoned" data-testid="decision-reasoned-approve">
           <input type="hidden" name="force" value="true" />
           <textarea
-            aria-label={shipsUnreviewed
+            aria-label={reasonPrompt ? `Your reason for ${decision.id}` : shipsUnreviewed
               ? `Why ship ${decision.id} with commits from rejected or unreviewed runs`
               : `Why merge ${decision.id} with its checks failing`}
             className="textarea decision-note"
             name="note"
             rows={2}
-            placeholder={shipsUnreviewed
+            placeholder={reasonPrompt || (shipsUnreviewed
               ? "Why ship commits from rejected or unreviewed runs? Recorded with the release."
-              : "Why merge it with its checks failing? Recorded with the merge."}
+              : "Why merge it with its checks failing? Recorded with the merge.")}
             data-testid="decision-reason"
           />
           <SubmitButton permission="decision:approve" className="dq-btn reject" name="action"

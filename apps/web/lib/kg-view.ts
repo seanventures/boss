@@ -295,6 +295,26 @@ export async function setPack(w: Who, packId: string) {
     { scope: `kg-pack:${w.projectId}`, label: "Change pack" });
 }
 
+// ── the AML sample (case study 4) ──────────────────────────────────────────────────────────
+
+export type KgAmlAlert = {
+  alert_id: string; node_id: string | null; account_id: string; customer_id: string;
+  rule: string; raised_at: string; case_id: string | null;
+  case_status: string | null; determination: string | null;
+};
+export type KgAmlSample = { loaded: boolean; pack_id: string | null; workflow_key: string; alerts: KgAmlAlert[] };
+
+export function getAmlSample(w: Who, signal?: AbortSignal) {
+  return kgRead<KgAmlSample>("/v1/knowledge/samples/aml", { project_id: w.projectId, actor: w.actor }, signal);
+}
+
+/** Load the AML sample: the banking-aml pack, its connectors, the bank, the workflow. */
+export async function loadAmlSample(w: Who) {
+  return send<{ ok: boolean; note: string; alerts: KgAmlAlert[] }>("/v1/knowledge/samples/aml",
+    { project_id: w.projectId, actor: w.actor, step_up: "confirmed" },
+    { scope: `kg-aml:${w.projectId}`, label: "Load AML sample" });
+}
+
 // ── writes ──────────────────────────────────────────────────────────────────────────────────
 
 export type Wrote<T> = { ok: true; data: T } | { ok: false; status: number; error: string };

@@ -916,6 +916,49 @@ CAPABILITIES: dict[str, Capability] = {
             produces=("remediation_package_id", "owner_team"),
             typical_minutes=10,
         ),
+        # ── Case study 4: aml_alert_investigation (services/knowledge/aml_alert_pipeline.py).
+        # Its intake, evidence, history and closure are deterministic steps; these three are
+        # the role agents' judgement calls. None closes, escalates or files: a person does.
+        _cap(
+            key="aml_network_mapping",
+            family="research",
+            captain="security_reviewer",
+            label="Map the network",
+            summary="The Network Mapper names the parties related to the alerted customer, each "
+                    "citing the graph edges that show it.",
+            tool=None,
+            risk_tier=0,
+            optional_inputs=("alert_id",),
+            produces=("related_parties", "related_party_ids"),
+            typical_minutes=3,
+            needs_model=True,
+        ),
+        _cap(
+            key="aml_analysis",
+            family="research",
+            captain="security_reviewer",
+            label="AML analysis",
+            summary="The AML Analyst recommends closing the alert as a false positive or "
+                    "escalating it, with a confidence, citing evidence and prior decisions.",
+            tool=None,
+            risk_tier=0,
+            produces=("recommendation", "confidence", "rationale", "precedents_applied"),
+            typical_minutes=3,
+            needs_model=True,
+        ),
+        _cap(
+            key="sar_narrative",
+            family="research",
+            captain="docs_writer",
+            label="Draft the SAR narrative",
+            summary="After a person escalates, the SAR Narrator drafts the report's narrative "
+                    "for a person to review and file. BOSS never files.",
+            tool=None,
+            risk_tier=0,
+            produces=("determination", "narrative", "drafted"),
+            typical_minutes=3,
+            needs_model=True,
+        ),
         _cap(
             key="compliance_closure",
             family="research",

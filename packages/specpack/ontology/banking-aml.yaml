@@ -1,0 +1,76 @@
+id: banking-aml
+version: "1"
+description: >
+  Anti-money-laundering alert investigation (case study 4): the bank's customers, their accounts
+  and counterparties, the transactions that moved between them, the typologies a monitoring rule
+  matched, KYC profiles and alerts — and the Context Graph each investigation writes (the case,
+  the role agents' decisions, and the precedent a person's determination becomes). A person makes
+  every determination; agents never close an alert or file a report.
+status: active
+# The AML domain sits beside the bank's regulatory domain in the same project (NorthPeak Lending
+# runs both case studies), so this pack grants everything banking-regulatory grants as well.
+includes: [banking-regulatory]
+kinds:
+  # ── Knowledge Graph: the bank's entities (observed, from the sample's systems of record) ──
+  - id: customer
+    layer: domain
+    label: Customer
+    color: "#0ea5e9"
+    attrs: [customer_id, name, segment, occupation, risk_rating, onboarded]
+  - id: account
+    layer: domain
+    label: Account
+    color: "#38bdf8"
+    attrs: [account_id, product, opened, status]
+  - id: counterparty
+    layer: domain
+    label: Counterparty
+    color: "#f59e0b"
+    attrs: [counterparty_id, name, kind, country, registered_address]
+  - id: transaction
+    layer: domain
+    label: Transaction
+    color: "#94a3b8"
+    # A flagged transaction an alert names; the full ledger stays in the transactions system and
+    # is read through its MCP connector, never copied whole into the graph.
+    attrs: [transaction_id, account_id, booked_at, amount, direction, channel, party]
+  - id: typology
+    layer: domain
+    label: Typology
+    color: "#a855f7"
+    attrs: [typology_id, name, red_flags]
+  - id: kyc_profile
+    layer: domain
+    label: KYC profile
+    color: "#14b8a6"
+    attrs: [customer_id, occupation, expected_activity, source_of_funds, documents, last_review]
+  - id: alert
+    layer: domain
+    label: Alert
+    color: "#ef4444"
+    attrs: [alert_id, rule, score, raised_at, status, account_id, customer_id, typology_id]
+  # ── Context Graph: what an investigation writes (agent_decision and precedent are core) ──
+  - id: aml_case
+    layer: context
+    label: AML case
+    color: "#f97316"
+    attrs: [alert_id, status, opened_run, determination, decided_by, reason]
+edges:
+  - id: transfers_to
+    label: transfers to
+    color: "#64748b"
+  - id: matches_typology
+    label: matches typology
+    color: "#a855f7"
+  - id: raised_on
+    label: raised on
+    color: "#ef4444"
+  - id: related_to
+    label: related to
+    color: "#0ea5e9"
+  - id: has_kyc
+    label: KYC profile
+    color: "#14b8a6"
+  - id: flags
+    label: flags
+    color: "#ef4444"
