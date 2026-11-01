@@ -6999,6 +6999,14 @@
             "id": "human_approval",
             "kind": "decision",
             "question": "Approve the proposed remediation package for execution?",
+            "subject": [
+              "{input.subject_id|name} against {input.document_id|attr:citation}",
+              "{input.subject_id|name}",
+              "{input.document_id|name}"
+            ],
+            "summary": [
+              "{steps.remediation_package.output.note}"
+            ],
             "guidance": "The remediation cites the evidence Compliance Assessment and the lane confirmation assembled; nothing has been executed yet. Approving triggers a scoped code-change task; it does not merge it.",
             "approval": {
               "mode": "manual",
@@ -7568,6 +7576,14 @@
             "id": "analyst_decision",
             "kind": "decision",
             "title": "Analyst decision",
+            "subject": [
+              "{steps.alert_intake.output.alert_id} · {steps.alert_intake.output.rule} on {steps.alert_intake.output.account_id} ({steps.alert_intake.output.customer_node_id|name})",
+              "{steps.alert_intake.output.alert_id} · {steps.alert_intake.output.rule} on {steps.alert_intake.output.account_id}",
+              "{input.alert_id}"
+            ],
+            "summary": [
+              "{steps.aml_analysis.output.note}"
+            ],
             "question": "Decide this alert: close it as a false positive, or escalate it?",
             "guidance": "The AML Analyst's recommendation, its confidence and the evidence and precedent it cites are above. Approve to accept the recommendation, and write your reason in the note — it becomes the precedent later alerts are judged against. To decide otherwise, start your note with 'Escalate:' or 'Close:'. BOSS closes and files nothing on its own.",
             "approval": {
@@ -7659,6 +7675,15 @@
             "id": "sar_filing",
             "kind": "decision",
             "title": "File the SAR",
+            "subject": [
+              "{steps.alert_intake.output.alert_id} · {steps.alert_intake.output.rule} on {steps.alert_intake.output.account_id} ({steps.alert_intake.output.customer_node_id|name})",
+              "{steps.alert_intake.output.alert_id} · {steps.alert_intake.output.rule} on {steps.alert_intake.output.account_id}",
+              "{input.alert_id}"
+            ],
+            "summary": [
+              "{steps.narrative.output.narrative}",
+              "{steps.narrative.output.note}"
+            ],
             "question": "File the suspicious activity report for this alert?",
             "guidance": "The narrative above is an agent's DRAFT. BOSS does not file: review it, file the report yourself, then approve here with the filing reference in your note.",
             "approval": {
