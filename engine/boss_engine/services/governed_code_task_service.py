@@ -5281,13 +5281,29 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # stack BOSS cannot build — Go, or Java on an install without the toolchain — is refused
         # here, in words, before a sandbox, an agent or a model call. Start, the panel's prompt
         # and the architecture approval are the earlier, cheaper places this is caught.
-        if not _stack_ctx["verdict"].ok:
-            raise StackUnsupportedError(_stack_ctx["verdict"].message)
+        #
+        # AN EXISTING REPOSITORY DECIDES ITS OWN STACK. The brief's words are only a request when
+        # there is no code yet: a change to BOSS's own (Python) repository whose brief describes a
+        # bank's Java codebase was refused "needs Java" three times (KG P7d, 2026-10-31). When the
+        # brief names a stack this install cannot build, the repository is cloned (no model, no
+        # agent) and judged by the languages it actually uses; an empty one keeps the refusal.
+        _brief_refused = not _stack_ctx["verdict"].ok
         sandbox = provider.acquire(task_id=run_id, tenant_id=project_id)
         with _transaction(engine) as c:
             _phase(c, "provisioning")
         sandbox.provision(owner, repo, base_branch=base_branch,
                           work_branch=work_branch, token=token, egress=egress_access)
+        if _brief_refused:
+            _repo_verdict = repository_stack_verdict(getattr(sandbox, "path", None))
+            if _repo_verdict is None or not _repo_verdict.ok:
+                raise StackUnsupportedError(
+                    (_repo_verdict.message if _repo_verdict is not None
+                     else _stack_ctx["verdict"].message))
+            with _transaction(engine) as c:
+                emit_event(c, project_id, "code_task.stack_from_repository", "boss",
+                           "code_task_run", run_id,
+                           {"brief_said": _stack_ctx["verdict"].message[:300],
+                            "repository_ok": True})
         root = sandbox.path
         # BOSS-410: with the docker command runtime selected, agent-authored commands run in
         # a network-less container with the workspace bind-mounted, rather than as a
@@ -9482,3 +9498,20 @@ def _deploy_manifests_in(root: Any) -> list[str]:
     except Exception:  # noqa: BLE001 — a record of the tree must never fail a build
         logger.warning("could not list the deploy manifests in %s", root, exc_info=True)
         return []
+
+
+def repository_stack_verdict(path: Any):
+    """The stack verdict of the code a repository already holds, or None when it holds none
+    (a new app, where the brief decides). Unsupported or switched-off languages it USES refuse."""
+    from pathlib import Path
+
+    from . import stacks
+
+    if not path or not Path(str(path)).is_dir():
+        return None
+    services = stacks.detect_services(Path(str(path)))
+    if not services:
+        return None
+    unsupported = [s.language for s in services if not s.supported]
+    off = [s.language for s in services if s.supported and not stacks.language_ready(s.language)]
+    return stacks.verdict(unsupported, off, where="This repository")
