@@ -14,6 +14,7 @@ import { ArchitectureDoc } from "./architecture-doc";
 import { ChecksFailing, checksFailingOf } from "./checks-failing";
 import { architectureDocOf } from "../lib/architecture";
 import { AreaLink } from "./area-link";
+import { linkTo } from "./agents/live-util";
 import { isAreaId } from "../lib/area-ids";
 import { displayTitle } from "../lib/directive-subject";
 import { SubmitButton } from "./submit-button";
@@ -111,6 +112,10 @@ export function formatRecommendation(decision: DecisionFeedItem): string {
       rollback,
       "Your own host: no provider cost.",
     ].filter(Boolean).join(" ");
+  }
+  if (action === "resume_workflow") {
+    const gate = workflowGateCard(r);
+    return gate ? workflowGateSubtitle(gate) : "Workflow decision";
   }
   if (action) return action.replaceAll("_", " ");
   // A WORKFLOW GATE, WHICH CARRIES NO `action`. It rendered as the bare words "review
@@ -337,6 +342,7 @@ function decisionImpact(decision: DecisionFeedItem): { label: string; tone: stri
   if (action.startsWith("self_improvement")) return { label: "rollout", tone: "teal" };
   if (action === "execute_agent_tool") return { label: "publish", tone: "teal" };
   if (action === "resume_agent_run") return { label: "agent tool", tone: "teal" };
+  if (action === "resume_workflow") return { label: "workflow decision", tone: "blue" };
   if (action === "review_architecture") return { label: "architecture", tone: "blue" };
   if (action.includes("budget") || action.includes("reservation")) return { label: "budget", tone: "amber" };
   if (action === "deploy_stack") return { label: "deploy", tone: "teal" };
@@ -378,11 +384,41 @@ const REASON_WORDS: Record<string, string> = {
   budget_exceeded: "it would go over the budget",
   live_secret_requires_approval: "a live key needs a person's approval",
 };
+/** The sentences a workflow gate wrote before it said where it was in words (engine
+ *  workflows._gate_reason): a run id and step keys, which a card that is still open shows. */
+const GATE_ID_SENTENCES = [
+  /\s*Workflow wfr_[0-9A-Za-z]+ is waiting at decision step [\w.-]+\.?/g,
+  /\s*It was produced by step '[^']*'\.?/g,
+];
 export function reasonInWords(reason: string | null | undefined): string {
-  const r = String(reason ?? "").trim();
+  let r = String(reason ?? "").trim();
+  for (const pattern of GATE_ID_SENTENCES) r = r.replace(pattern, "").trim();
   if (!r) return "";
   if (!/^[a-z0-9_.:-]+$/.test(r)) return r;
   return REASON_WORDS[r] ?? r.replace(/[_.:-]+/g, " ");
+}
+
+/** What a workflow gate's card says about itself (engine `recommendation.gate`): which case,
+ *  which workflow, what the step before produced and who produced it. Null for any other card. */
+export type WorkflowGateCard = {
+  subject: string; workflowName: string; summary: string;
+  producedByAgent: string; producedByTitle: string; runId: string;
+};
+export function workflowGateCard(rec: Record<string, unknown>): WorkflowGateCard | null {
+  if (rec.action !== "resume_workflow") return null;
+  const gate = (rec.gate && typeof rec.gate === "object" ? rec.gate : {}) as Record<string, unknown>;
+  const s = (v: unknown): string => (typeof v === "string" ? v.trim() : "");
+  return {
+    subject: s(gate.subject), workflowName: s(gate.workflow_name), summary: s(gate.summary),
+    producedByAgent: s(gate.produced_by_agent), producedByTitle: s(gate.produced_by_title),
+    runId: s(rec.workflow_run_id),
+  };
+}
+
+/** A gate card's subtitle: the workflow by name and the case it is about, never "resume
+ *  workflow". */
+export function workflowGateSubtitle(gate: WorkflowGateCard): string {
+  return [gate.workflowName || "Workflow decision", gate.subject].filter(Boolean).join(" · ");
 }
 
 export function decisionStatusDetail(decision: DecisionFeedItem): string {
@@ -814,6 +850,10 @@ function DecisionInboxRow({
   // WHAT APPROVING WILL DO, as the thing itself (action-preview.tsx). When it is there it
   // replaces the sentence about the step: the email is the explanation.
   const preview = actionPreviewOf(rec.action_preview);
+  // A WORKFLOW GATE says which case it is about and shows what it is deciding (engine
+  // recommendation.gate): two alerts at one gate read identically, and its guidance said the
+  // recommendation was "above" with nothing above it.
+  const gateCard = workflowGateCard(rec);
 
   // ONE APPROVAL FOR A MULTI-REPO CHANGE: its own card (every PR, review, cross-repo check, cost,
   // rollback) and the three answers the engine offers for a set; no per-PR approval.
@@ -894,10 +934,32 @@ function DecisionInboxRow({
             </p>
           ) : null}
           {refusal ? null : (
-            <p className="dq-rationale">
+            <p className="dq-rationale" data-testid="decision-subtitle">
               {why || (preview ? previewLead(preview) : formatRecommendation(decision))}
             </p>
           )}
+          {gateCard && (gateCard.summary || gateCard.runId) ? (
+            <div className="dq-gate-summary" data-testid="decision-gate-summary">
+              {gateCard.summary ? (
+                <>
+                  <span className="dq-gate-summary-label">
+                    {gateCard.producedByAgent
+                      ? `What the ${gateCard.producedByAgent} produced`
+                      : gateCard.producedByTitle
+                        ? `From “${gateCard.producedByTitle}”`
+                        : "What the run produced"}
+                  </span>
+                  <p>{gateCard.summary}</p>
+                </>
+              ) : null}
+              {gateCard.runId ? (
+                <a className="dq-gate-run" data-testid="decision-open-run"
+                   href={linkTo({ area: "delivery_workflows", wfr: gateCard.runId }, orgId)}>
+                  Open the run
+                </a>
+              ) : null}
+            </div>
+          ) : null}
           {preview && !refusal ? <ActionPreview preview={preview} /> : null}
           {/* THE RELEASE'S MONITORING PACK (engine monitoring_pack): approved with it. */}
           {monitoringPackOf(rec.monitoring_pack) ? <MonitoringPackCard pack={monitoringPackOf(rec.monitoring_pack)!} onCard /> : null}
@@ -947,11 +1009,6 @@ function DecisionInboxRow({
             <span className="dq-ev" data-testid="decision-default-action">
               default {decision.defaultAction ?? "hold"}
             </span>
-            {decision.reason ? (
-              <span className="dq-ev" data-testid="decision-reason">
-                why: {reasonInWords(decision.reason)}
-              </span>
-            ) : null}
             <BasedOn
               factIds={Array.isArray(rec.cited_fact_ids)
                 ? rec.cited_fact_ids.filter((item): item is string => typeof item === "string")
@@ -975,6 +1032,12 @@ function DecisionInboxRow({
               </span>
             ) : null}
           </div>
+          {/* Prose in the body font: a paragraph of guidance set as a mono chip read as a log. */}
+          {reasonInWords(decision.reason) ? (
+            <p className="dq-why" data-testid="decision-reason">
+              <span className="dq-why-label">Why</span> {reasonInWords(decision.reason)}
+            </p>
+          ) : null}
           {isPending && refusal && guidance ? (
             <div className="dq-guidance" data-testid="decision-guidance">
               <p><strong>What to do:</strong> {guidance.what_to_do}</p>

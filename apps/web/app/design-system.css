@@ -2997,6 +2997,27 @@ select.input:focus,
   font-size: 0.60526rem;
   color: var(--muted);
 }
+/* A decision's "why" is prose: the body font, not a mono evidence chip. */
+.dq-why {
+  font-size: 0.68421rem;
+  line-height: 1.55;
+  color: var(--muted);
+  margin: 10px 0 0;
+}
+.dq-why-label { font-weight: 600; color: var(--ink); margin-right: 4px; }
+/* A workflow gate's card: what the step before produced, read before answering. */
+.dq-gate-summary {
+  margin: 0 0 12px;
+  padding: 9px 12px;
+  border-left: 2px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  background: color-mix(in srgb, var(--accent) 4%, transparent);
+  font-size: 0.68421rem;
+  line-height: 1.55;
+  color: var(--ink);
+}
+.dq-gate-summary p { margin: 2px 0 6px; white-space: pre-line; overflow-wrap: anywhere; }
+.dq-gate-summary-label { font-size: 0.60526rem; font-weight: 600; color: var(--muted); }
+.dq-gate-run { font-size: 0.63158rem; color: var(--accent); }
 /* WHAT APPROVING DOES — set as the most legible line on the card, not the faintest.
    It was 11.5px in --faint, below the evidence chips, which is fine print styling for the one
    sentence the approver most needs before pressing a green irreversible button. */

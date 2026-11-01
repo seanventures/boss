@@ -253,7 +253,7 @@ describe("DecisionInbox (W1.6 actionable default)", () => {
     expect(markup).toContain("default hold");
     expect(markup).toContain('data-testid="decision-reason"');
     // The reason in words, never the raw code.
-    expect(markup).toContain("why: merge decision required");
+    expect(markup).toMatch(/Why<\/span> (<!-- -->)?merge decision required/);
     expect(markup).not.toContain("merge_decision_required<");
   });
 
