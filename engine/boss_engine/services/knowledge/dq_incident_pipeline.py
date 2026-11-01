@@ -965,8 +965,9 @@ def run_dq_historical_pattern(connection: Connection, settings: Any, project_id:
     # 7 Hand off
     statement = (f"Matched {len(matches)} closed incident(s) for {mon.get('incident_id')} "
                  f"(round {round_no}): "
-                 + ("; ".join(f"{m['incident_id']} tier {m['tier']} ({m['pattern_id'] or 'no '
-                              'pattern'}, fix {m['fix_durability']})" for m in matches[:6])
+                 + ("; ".join(f"{m['incident_id']} tier {m['tier']} "
+                              f"({m['pattern_id'] or 'no pattern'}, fix {m['fix_durability']})"
+                              for m in matches[:6])
                     or "none — zero matches is a fact, not insufficient evidence")
                  + ".")
     decision = _decide(connection, project_id, run_id=run_id, step_id=step_id,
