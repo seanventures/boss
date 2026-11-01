@@ -63,6 +63,9 @@ CANONICAL_ROLE_KEYS: frozenset[str] = frozenset({
     "incident_commander",
     # approves a regulatory remediation once its evidence stands up (KG P5b/P6a)
     "compliance_officer",
+    # the banking-regulatory pack's judging roles (2026-10-31: they were prompt files only, so
+    # every step they did read "Done by You")
+    "compliance_analyst", "lane_agent", "remediation_advisor",
     # archetypes, "thinks like" agents (§0.1.3, §8)
     "first_principles_researcher", "visionary_founder", "relentless_operator",
     "teacher_who_simplifies",

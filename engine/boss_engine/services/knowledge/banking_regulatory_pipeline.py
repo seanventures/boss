@@ -11,6 +11,8 @@ no function below executes anything an input field says to do.
 """
 from __future__ import annotations
 
+import contextlib
+
 import json
 import re
 import tempfile
@@ -86,6 +88,51 @@ def _ask_role(agent: Any, prompt: str) -> Optional[dict[str, Any]]:
     except ValueError:
         return None
     return parsed if isinstance(parsed, dict) else None
+
+
+@contextlib.contextmanager
+def _attributed(connection: Connection, project_id: str, run_id: str, step_id: str,
+                role_key: str):
+    """The role's model calls belong to THIS run, step and role (llm_telemetry), so the run
+    report counts them and the run view names who spent. Without it the four calls of a case
+    had no run, role or act, and the report read $0.00 (2026-10-31)."""
+    from ..llm_telemetry import get_llm_context, set_llm_context
+
+    before = get_llm_context()
+    try:
+        set_llm_context(db_engine=getattr(connection, "engine", None), project_id=project_id,
+                        workflow_run_id=run_id or None, run_id=run_id or None, stage=step_id,
+                        role_key=role_key)
+    except Exception:  # noqa: BLE001 — attribution never stops the judgement
+        pass
+    try:
+        yield
+    finally:
+        try:
+            from ..llm_telemetry import clear_llm_context
+            clear_llm_context()
+            if before:
+                set_llm_context(**before)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _ran_as(role_key: str) -> dict[str, str]:
+    """Who did the step, for the run view (chain-model.laneAgentOf): the pack's role agent."""
+    return {"agent": role_key, "how": "named"}
+
+
+def _learned(run_id: str, step_id: str, *, kind: str, title: str, statement: str,
+             confidence: float) -> list[dict[str, Any]]:
+    """What the step established, in record_learning's shape, so the run's 'Learned so far'
+    shows it and later runs can recall it (learning_writeback reads `learned`)."""
+    if not statement.strip():
+        return []
+    return [{"learning_kind": kind, "title": title[:160], "statement": statement[:1500],
+             "detail": "", "about": {},
+             "evidence": [{"type": "log", "ref": f"workflow_run:{run_id}/{step_id}",
+                           "excerpt": statement[:500]}],
+             "confidence": max(0.0, min(1.0, float(confidence)))}]
 
 
 def _node_summary(connection: Connection, project_id: str, node_id: str) -> str:
@@ -200,7 +247,8 @@ def run_compliance_assessment(
             f"CANDIDATE RULE/CODE NODES:\n{listing or '(none)'}\n\n"
             "Cite a candidate's node_id above, or null for a gap.")
         agent, _engine = _role_agent(connection, settings, project_id)
-        judged = _ask_role(agent, _role_prompt("compliance_analyst.md", situation))
+        with _attributed(connection, project_id, run_id, step_id, "compliance_analyst"):
+            judged = _ask_role(agent, _role_prompt("compliance_analyst.md", situation))
         by_id = {c["node_id"]: c for c in candidates}
         if judged:
             candidate_citation = str(judged.get("citation") or "")
@@ -233,7 +281,12 @@ def run_compliance_assessment(
 
     return {"capability": "compliance_assessment", "tool": None, "status": "succeeded",
             "assessment": status, "confidence": confidence, "citation": citation,
-            "cited_incident": cited_incident, "note": statement, "subject_id": subject_id}
+            "cited_incident": cited_incident, "note": statement, "subject_id": subject_id,
+            "ran_as": _ran_as("compliance_analyst"),
+            "learned": _learned(run_id, step_id, kind="decision",
+                                title=f"Clause assessed as {status}", statement=statement,
+                                confidence=confidence),
+            "cited_fact_ids": [i for i in (citation, *matched) if i]}
 
 
 def run_compliance_orchestration(
@@ -490,7 +543,8 @@ def run_lane_confirmation(
                     f"ASSESSMENT: {assessment.get('note') or '(none)'}\n\n"
                     f"CURRENT SOURCE:\n{source_text}{unread_note}")
                 agent, _engine = _role_agent(connection, settings, project_id)
-                judged = _ask_role(agent, _role_prompt("lane_agent.md", situation))
+                with _attributed(connection, project_id, run_id, step_id, "lane_agent"):
+                    judged = _ask_role(agent, _role_prompt("lane_agent.md", situation))
                 answered = str((judged or {}).get("verdict") or "").strip().lower()
                 if judged is None:
                     reason = "the Lane Agent answered nothing readable for this citation"
@@ -520,7 +574,12 @@ def run_lane_confirmation(
         agent_fingerprint="deterministic", actor_ref=actor_ref)
     return {"capability": "lane_confirmation", "tool": None, "status": "succeeded",
             "verdict": verdict, "confirmed": confirmed, "cited_node_id": citation or None,
-            "reason": reason, "note": statement}
+            "reason": reason, "note": statement, "ran_as": _ran_as("lane_agent"),
+            "learned": _learned(run_id, step_id, kind="fact",
+                                title=f"Lane verdict: {verdict.replace('_', ' ')}",
+                                statement=statement,
+                                confidence=0.8 if verdict != "cannot_verify" else 0.4),
+            "cited_fact_ids": [citation] if citation else []}
 
 
 def _lane_symbol_keys(connection: Connection, project_id: str, lanes: list,
@@ -580,7 +639,8 @@ def run_remediation_package(
         f"FAMILY: {family or '(unknown)'}\n"
         f"{_test_layout(connection, project_id, _lane_symbol_keys(connection, project_id, lanes, citation))}")
     agent, _engine = _role_agent(connection, settings, project_id)
-    judged = _ask_role(agent, _role_prompt("remediation_advisor.md", situation))
+    with _attributed(connection, project_id, run_id, step_id, "remediation_advisor"):
+        judged = _ask_role(agent, _role_prompt("remediation_advisor.md", situation))
     gap = " ".join(str(assessment.get("note") or "").split())[:600]
     change_brief = (
         " ".join(str(judged.get("change_brief") or "").split())[:1000] if judged else "") or (
@@ -603,7 +663,11 @@ def run_remediation_package(
                           actor_ref=actor_ref)
     return {"capability": "remediation_package", "tool": None, "status": "succeeded",
             "remediation_package_id": package_id, "owner_team": owner_team,
-            "note": f"Remediation package {package_id} ready for {owner_team}'s approver."}
+            "note": f"{title} — ready for {owner_team}'s approver.",
+            "ran_as": _ran_as("remediation_advisor"),
+            "learned": _learned(run_id, step_id, kind="decision", title=title,
+                                statement=change_brief, confidence=0.6),
+            "cited_fact_ids": [citation] if citation else []}
 
 
 def run_compliance_closure(
