@@ -117,6 +117,8 @@ export const WRITE_HELPERS: Readonly<Record<string, WriteGate | readonly Permiss
   "lib/kg-view.ts#addDocument": "knowledge:manage",   // POST /v1/knowledge/documents
   "lib/kg-view.ts#setPack": "knowledge:manage",       // POST /v1/knowledge/packs
   "lib/kg-view.ts#loadAmlSample": "knowledge:manage", // POST /v1/knowledge/samples/aml
+  "lib/kg-view.ts#loadDqPlatform": "knowledge:manage", // POST /v1/knowledge/samples/dq
+  "lib/kg-view.ts#scheduleDqIntake": "knowledge:manage", // POST /v1/knowledge/samples/dq/schedule
   "lib/kg-view.ts#stageUpload": "knowledge:manage",   // POST /v1/knowledge/documents/uploads
   "lib/kg-view.ts#editUpload": "knowledge:manage",    // POST /v1/knowledge/documents/uploads/{id}/edit
   "lib/kg-view.ts#confirmUpload": "knowledge:manage", // POST /v1/knowledge/documents/uploads/{id}/confirm

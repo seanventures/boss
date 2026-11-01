@@ -54,6 +54,15 @@ CALLERS = {
         "an operator's import; lifts the exclusion first",
     "services/agents.py::* -> assign_skill_to_role": "operator: the agent resource",
     "services/agents.py::* -> grant_mcp": "operator: the agent resource",
+    # A person's press of "Load the NorthPeak Bank data platform" (or the AML sample): registers
+    # the sample's connectors with respect_operator, and grants them to the stages' agents only
+    # where no grant exists and the agent was not removed.
+    "services/knowledge/dq_platform.py::load_platform -> ensure_mcp_server":
+        "operator: a person loads the DQ sample (respect_operator)",
+    "services/knowledge/dq_platform.py::_install_workflows -> grant_mcp":
+        "operator: a person loads the DQ sample; never re-grants a removed one",
+    "services/knowledge/aml_sample.py::load_sample -> ensure_mcp_server":
+        "operator: a person loads the AML sample (respect_operator)",
     "tools/agent_tools.py::* -> assign_skill_to_role": "operator: assign_skill_to_agent",
     "tools/agent_tools.py::* -> grant_mcp": "operator: assign_mcp_to_agent",
     "main.py::* -> register_mcp_server": "operator: POST /v1/mcp/servers",

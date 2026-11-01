@@ -88,13 +88,18 @@ def get_packs(project_id: str = Query(...), actor: str = Query(...)) -> dict[str
         with begin(_engine) as connection:
             _actor(connection, project_id, actor, READ)
             current = ontology_packs.get_project_pack(connection, project_id=project_id)
+            held = ontology_packs.get_project_packs(connection, project_id=project_id)
             available = [
                 {"pack_id": pid, "version": pack.version}
                 for pid, pack in ontology_packs.shipped_packs().items()
             ]
             return {
+                # The pack set last (a project holds several; `packs` lists them all).
                 "current": ({"pack_id": current.pack_id, "version": current.version}
                            if current else None),
+                "packs": [{"pack_id": p.pack_id, "version": p.version,
+                           "includes": [i for i in p.pack_ids if i != p.pack_id]}
+                          for p in held],
                 "available": available,
             }
     except Exception as error:  # noqa: BLE001
@@ -410,3 +415,60 @@ def stage_dq_rulebook(body: LoadSampleBody) -> dict[str, Any]:
                                             actor_kind="person", actor_ref=body.actor)
     except Exception as error:  # noqa: BLE001
         raise _upload_http(error) from error
+
+
+# ── The DQ case study: NorthPeak Bank's data platform (services/knowledge/dq_platform.py) ─────
+# One product action loads it: the banking-dq pack (added beside the project's other packs), the
+# Eagle and Olympus connectors, the platform into the Knowledge Graph (never the rulebook's
+# rules), the DQ workflows and the Escalation Agent's daily schedule. Same action as the agent's
+# `load_dq_platform` tool.
+
+@router.get("/samples/dq")
+@permit(P.KNOWLEDGE_READ, scope=Scope.project(query="project_id"))
+def dq_platform_status(project_id: str = Query(...), actor: str = Query(...),
+                       cob: Optional[str] = Query(None)) -> dict[str, Any]:
+    from boss_engine.services.knowledge import dq_platform
+
+    try:
+        with begin(_engine) as connection:
+            _actor(connection, project_id, actor, READ)
+            return dq_platform.status(connection, project_id=project_id, cob=cob or None)
+    except Exception as error:  # noqa: BLE001
+        raise _http(error) from error
+
+
+@router.post("/samples/dq")
+@permit(P.KNOWLEDGE_MANAGE, scope=Scope.project(body="project_id"))
+def load_dq_platform(body: LoadSampleBody) -> dict[str, Any]:
+    from boss_engine.services.knowledge import dq_platform
+
+    try:
+        require_confirmation(body.step_up)
+    except PermissionError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    try:
+        with begin(_engine) as connection:
+            _actor(connection, body.project_id, body.actor, MANAGE)
+            return dq_platform.load_platform(connection, project_id=body.project_id,
+                                             actor=body.actor)
+    except Exception as error:  # noqa: BLE001
+        raise _http(error) from error
+
+
+@router.post("/samples/dq/schedule")
+@permit(P.KNOWLEDGE_MANAGE, scope=Scope.project(body="project_id"))
+def schedule_dq_intake(body: LoadSampleBody) -> dict[str, Any]:
+    """The scheduled trigger: each morning, an RCA per exception group Eagle graded Error."""
+    from boss_engine.services.knowledge import dq_platform
+
+    try:
+        require_confirmation(body.step_up)
+    except PermissionError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    try:
+        with begin(_engine) as connection:
+            _actor(connection, body.project_id, body.actor, MANAGE)
+            return dq_platform.schedule_intake(connection, project_id=body.project_id,
+                                               actor=body.actor)
+    except Exception as error:  # noqa: BLE001
+        raise _http(error) from error

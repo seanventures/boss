@@ -189,6 +189,33 @@ def _step_map(spec: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {str(step["id"]): step for step in spec.get("steps", [])}
 
 
+def loop_body(step: dict[str, Any]) -> list[str]:
+    """The steps a bounded_loop repeats, in order. `body` is one step id, or — A MULTI-STEP BODY —
+    a list run in sequence each round: the DQ pipeline's RCA says InsufficientEvidence and
+    Context Enrichment, Historical Pattern and RCA all run again, as one round."""
+    body = step.get("body")
+    if isinstance(body, (list, tuple)):
+        return [str(b).strip() for b in body if str(b or "").strip()]
+    return [str(body).strip()] if str(body or "").strip() else []
+
+
+def loop_bodies(spec: dict[str, Any]) -> dict[str, str]:
+    """Every step some bounded_loop repeats, to the loop that repeats it."""
+    out: dict[str, str] = {}
+    for s in spec.get("steps", []) or []:
+        if isinstance(s, dict) and s.get("kind") == "bounded_loop":
+            for member in loop_body(s):
+                out.setdefault(member, str(s.get("id")))
+    return out
+
+
+#: What a bounded_loop does when its rounds are used up and its expression still says go on:
+#: `block` stops the run (the default, as before), `continue` goes on to its next steps with what
+#: the last round found (the DQ RCA loop: after two re-runs, "insufficient evidence" is itself the
+#: finding the rest of the pipeline acts on).
+LOOP_EXHAUSTED = ("block", "continue")
+
+
 def _targets(step: dict[str, Any]) -> list[str]:
     targets: list[str] = []
     next_value = step.get("next", [])
@@ -203,7 +230,9 @@ def _targets(step: dict[str, Any]) -> list[str]:
         targets.extend(str(item) for item in step.get("branches", []))
         if step.get("join"):
             targets.append(str(step["join"]))
-    elif kind in ("bounded_loop", "for_each") and step.get("body"):
+    elif kind == "bounded_loop":
+        targets.extend(loop_body(step))
+    elif kind == "for_each" and step.get("body"):
         targets.append(str(step["body"]))
     # An error path is an edge too: a step that fails terminally goes on to it. Counted here so
     # an error-only step is reachable, an error path back into the graph is a cycle, and a step
@@ -603,11 +632,11 @@ def _for_each_graph_problems(
                 found.append(problem(sid, "items", (
                     f"for_each step '{sid}' items reads step '{source}', which is not in this "
                     "workflow.")))
-        if kind == "bounded_loop" and steps.get(str(step.get("body") or ""), {}).get(
-                "kind") == "for_each":
-            found.append(problem(sid, "body", (
-                f"bounded_loop step '{sid}' repeats for_each step '{step['body']}', and a loop "
-                "cannot repeat a for_each yet. Put the for_each before or after the loop.")))
+        for member in (loop_body(step) if kind == "bounded_loop" else ()):
+            if steps.get(member, {}).get("kind") == "for_each":
+                found.append(problem(sid, "body", (
+                    f"bounded_loop step '{sid}' repeats for_each step '{member}', and a loop "
+                    "cannot repeat a for_each yet. Put the for_each before or after the loop.")))
         if sid in each_bodies:
             if step.get("next"):
                 found.append(problem(sid, "next", (
@@ -923,8 +952,26 @@ def normalise_workflow_spec(
                 bad("success_policy",
                     f"join step '{step_id}' success_policy must be all or any.")
         if kind == "bounded_loop":
-            if not str(step.get("body") or "").strip():
+            body = step.get("body")
+            members = loop_body(step)
+            if isinstance(body, (list, tuple)):
+                if not members or len(members) != len(body):
+                    bad("body", f"bounded_loop step '{step_id}' body lists the steps to repeat, "
+                                "in order, each a step id.")
+                elif len(set(members)) != len(members):
+                    bad("body", f"bounded_loop step '{step_id}' body names a step twice.")
+                elif step_id in members:
+                    bad("body", f"bounded_loop step '{step_id}' cannot repeat itself.")
+                else:
+                    step["body"] = members
+            elif not members:
                 bad("body", f"bounded_loop step '{step_id}' body is required.")
+            exhausted = str(step.get("on_exhausted") or "block").strip().lower()
+            if exhausted not in LOOP_EXHAUSTED:
+                bad("on_exhausted", f"bounded_loop step '{step_id}' on_exhausted must be "
+                                    "block or continue.")
+            elif "on_exhausted" in step:
+                step["on_exhausted"] = exhausted
             if not isinstance(step.get("expression"), dict):
                 bad("expression",
                     f"bounded_loop step '{step_id}' requires a declarative expression.")
@@ -1023,10 +1070,24 @@ def normalise_workflow_spec(
                     dangling = True
                     problems.append(problem(step["id"], "wait_for", (
                         f"join step '{step['id']}' waits for missing step '{dependency}'.")))
-    loop_bodies = {str(s.get("body")): str(s["id"]) for s in normalized_steps
-                   if s["kind"] == "bounded_loop" and s.get("body")}
+    loop_members = loop_bodies(normalized)
+    for s in normalized_steps:
+        if s["kind"] != "bounded_loop":
+            continue
+        for member in loop_body(s):
+            if member not in steps:
+                dangling = True
+                problems.append(problem(s["id"], "body", (
+                    f"bounded_loop step '{s['id']}' repeats missing step '{member}'.")))
+            elif isinstance(s.get("body"), list) and steps[member].get("next"):
+                # A MULTI-STEP BODY RUNS IN THE ORDER IT LISTS, and its last step returns to the
+                # loop: a member with its own next steps would leave the round half-way.
+                problems.append(problem(member, "next", (
+                    f"step '{member}' is repeated by bounded_loop '{s['id']}', which runs its "
+                    "body in the order it lists and then decides; it cannot have next steps. "
+                    f"Put what comes after on '{s['id']}'.")))
     each_bodies = for_each_bodies(normalized)
-    for found in _for_each_graph_problems(normalized_steps, steps, loop_bodies, each_bodies):
+    for found in _for_each_graph_problems(normalized_steps, steps, loop_members, each_bodies):
         dangling = True
         problems.append(found)
     for step in normalized_steps:
@@ -1046,11 +1107,11 @@ def normalise_workflow_spec(
         elif steps[target]["kind"] == "join":
             refusal = (f"step '{sid}' on_error goes to join step '{target}'. A join waits for "
                        "its branches; send the error path to a step that does work.")
-        elif target in loop_bodies:
+        elif target in loop_members:
             refusal = (f"step '{sid}' on_error goes to step '{target}', the body of loop "
-                       f"'{loop_bodies[target]}'. Only its loop may start it.")
-        elif sid in loop_bodies:
-            refusal = (f"step '{sid}' is the body of loop '{loop_bodies[sid]}', and a loop "
+                       f"'{loop_members[target]}'. Only its loop may start it.")
+        elif sid in loop_members:
+            refusal = (f"step '{sid}' is the body of loop '{loop_members[sid]}', and a loop "
                        "body cannot have an error path yet. Let it fail, or drop on_error.")
         elif target in each_bodies:
             refusal = (f"step '{sid}' on_error goes to step '{target}', the step for_each "
@@ -1109,9 +1170,24 @@ def normalise_workflow_spec(
     if looped:
         return normalized, problems
     for step_id in sorted(ids - reachable):
+        if described_not_run(steps[step_id]):
+            continue
         problems.append(problem(step_id, None, (
             f"step '{step_id}' cannot be reached from the entry step: no step leads to it.")))
     return normalized, problems
+
+
+def described_not_run(step: dict[str, Any]) -> bool:
+    """A stage the pipeline DRAWS but this flow never starts, so no step leads to it: a SHARED
+    SERVICE (its contract's design says `shared_service` — the Context Curator every LLM step
+    calls) or a SIDE PATH run on its own trigger (`side_path` set, e.g. the Escalation Agent's
+    daily sweep, run by its own scheduled workflow). It is part of the design and is checked like
+    any step; a run skips it. A step that is neither still has to be reachable."""
+    if str(step.get("side_path") or "").strip():
+        return True
+    design = (step.get("contract") or {}).get("design") if isinstance(step.get("contract"), dict) \
+        else None
+    return isinstance(design, dict) and design.get("status") == "shared_service"
 
 
 def _runs_before(normalized: dict[str, Any]) -> dict[str, set[str]]:
@@ -4057,6 +4133,20 @@ def _run_context(connection: Connection, run_id: str) -> dict[str, Any]:
     }
 
 
+def _latest_rounds(context: dict[str, Any]) -> dict[str, Any]:
+    """`context` with each repeated step reduced to its latest round (highest iteration, then
+    the newest row): the view a loop judges its last round by."""
+    steps = {}
+    for key, value in (context.get("steps") or {}).items():
+        if isinstance(value, list) and value:
+            steps[key] = max(enumerate(value),
+                             key=lambda pair: (int((pair[1] or {}).get("iteration") or 0),
+                                               pair[0]))[1]
+        else:
+            steps[key] = value
+    return {**context, "steps": steps}
+
+
 def _lookup_path(payload: Any, path: str) -> tuple[bool, Any]:
     parts = path.strip().lstrip("$").lstrip(".").split(".") if path else []
     value = payload
@@ -4283,7 +4373,14 @@ def _after_success(
     # A loop body returns to its controller rather than following ordinary
     # downstream edges.  Each iteration gets distinct durable step rows.
     for controller in spec["steps"]:
-        if controller["kind"] == "bounded_loop" and controller.get("body") == step_id:
+        members = loop_body(controller) if controller["kind"] == "bounded_loop" else []
+        if step_id in members and members.index(step_id) < len(members) - 1:
+            # A MULTI-STEP BODY: the round goes on to the next member, same iteration; only
+            # the last member hands back to the loop.
+            _activate_step(connection, run_id, members[members.index(step_id) + 1], iteration)
+            _drain_control_steps(connection, run_id)
+            return
+        if step_id in members:
             waiting = _step_row(connection, run_id, controller["id"], iteration)
             if waiting and waiting["status"] == "waiting":
                 _succeed_internal(
@@ -4694,9 +4791,29 @@ def _process_control_step(connection: Connection, run: Any, row: Any) -> None:
                     "output": json.dumps({"continued": True, "iteration": iteration}),
                 },
             )
-            _activate_step(connection, run["id"], template["body"], iteration)
+            _activate_step(connection, run["id"], loop_body(template)[0], iteration)
             return
-        should_continue = evaluate_expression(template["expression"], context)
+        # WHAT THE LAST ROUND SAID. After two rounds a repeated step's context entry is a LIST of
+        # rounds, and a path into it ("steps.rca.output.verdict") found nothing — so the loop
+        # quietly stopped instead of asking the last round. A multi-step body, or a loop that
+        # says what to do when exhausted, reads the latest round (older single-step loops keep
+        # their behaviour).
+        judged = (_latest_rounds(context)
+                  if isinstance(template.get("body"), list) or template.get("on_exhausted")
+                  else context)
+        should_continue = evaluate_expression(template["expression"], judged)
+        if should_continue and iteration >= maximum and template.get("on_exhausted") == "continue":
+            # The rounds are used up and the body still asks for another: go on with what the
+            # last round found, and say so on the loop.
+            _succeed_internal(
+                connection, run["id"], row["step_id"], iteration,
+                {"continued": False, "exhausted": True, "iteration": iteration,
+                 "note": f"stopped after {maximum} round(s): the loop's condition still held, "
+                         "and it goes on with what the last round found"},
+            )
+            for target in template.get("next", []):
+                _maybe_activate(connection, run["id"], target, 0)
+            return
         if should_continue and iteration >= maximum:
             reason = (
                 f"bounded loop '{row['step_id']}' exhausted max_iterations={maximum}."
@@ -4736,7 +4853,7 @@ def _process_control_step(connection: Connection, run: Any, row: Any) -> None:
                 "output": json.dumps({"continued": True, "iteration": iteration}),
             },
         )
-        _activate_step(connection, run["id"], template["body"], iteration)
+        _activate_step(connection, run["id"], loop_body(template)[0], iteration)
         return
     if kind == "for_each":
         _start_for_each(connection, run, row, template, context)
@@ -4918,6 +5035,48 @@ def _wait_outcome(
     return None
 
 
+def _person_key(connection: Connection, who: Any) -> str:
+    """One spelling for a person, however an approval recorded them (an id, a name, an e-mail)."""
+    raw = str(who or "").strip()
+    if not raw:
+        return ""
+    return _approver_name(connection, raw).strip().lower() or raw.lower()
+
+
+def separation_of_duties_refusal(connection: Connection, decision_id: str,
+                                 actor: Any) -> Optional[str]:
+    """WHY `actor` may not answer this gate, or None. A gate whose approval says
+    `distinct_from: [other gates]` must be answered by a DIFFERENT person than whoever approved
+    those gates in the same run — the person who carries a fix out is never the one who approved
+    it (the DQ pipeline's Human approval → Human execution; prepare-only: no agent executes)."""
+    row = connection.execute(text(
+        "SELECT workflow_run_id, step_id FROM workflow_step_runs WHERE decision_id = :d "
+        "ORDER BY created_at DESC LIMIT 1"), {"d": decision_id}).mappings().first()
+    if not row or not actor:
+        return None
+    template = _step_map(_run_spec(connection, str(row["workflow_run_id"]))).get(
+        str(row["step_id"])) or {}
+    distinct = (template.get("approval") or {}).get("distinct_from") or []
+    if isinstance(distinct, str):
+        distinct = [distinct]
+    me = _person_key(connection, actor)
+    for other in distinct:
+        prior = connection.execute(text(
+            "SELECT d.approved_by FROM workflow_step_runs s JOIN decisions d ON d.id = s.decision_id "
+            "WHERE s.workflow_run_id = :r AND s.step_id = :o AND d.status = 'approved' "
+            "ORDER BY s.iteration DESC, s.created_at DESC LIMIT 1"),
+            {"r": row["workflow_run_id"], "o": str(other)}).scalar()
+        if prior and _person_key(connection, prior) == me:
+            steps = _step_map(_run_spec(connection, str(row["workflow_run_id"])))
+            other_title = str((steps.get(str(other)) or {}).get("title") or other).replace("_", " ")
+            mine = str(template.get("title") or row["step_id"]).replace("_", " ")
+            return (f"A different person must carry this out: {_approver_name(connection, prior)} "
+                    f"approved it at “{other_title}”, and separation of duties means the person "
+                    f"who approves a change never also performs it. Ask a colleague to answer "
+                    f"“{mine}”.")
+    return None
+
+
 def _waiting_steps(connection: Connection, run_id: str) -> list[dict[str, Any]]:
     """A run's waiting steps, each with what `_wait_outcome` reads: its gate's and child's status."""
     return [
@@ -4976,6 +5135,24 @@ def advance_run(connection: Connection, project_id: str, run_id: str) -> dict[st
             # Still waiting. Loop steps resume only when their body completes.
             continue
         step_id, iteration = step["step_id"], int(step["iteration"])
+        if outcome == WAIT_RELEASE and step["step_kind"] == "decision":
+            # SEPARATION OF DUTIES, HELD BY THE ENGINE: an approval recorded by any road (the
+            # inbox refuses it first; a policy, a script or a direct update does not) by the
+            # person a `distinct_from` gate forbids is taken back, and the gate waits on.
+            refused = separation_of_duties_refusal(
+                connection, str(step["decision_id"]),
+                connection.execute(text("SELECT approved_by FROM decisions WHERE id = :d"),
+                                   {"d": step["decision_id"]}).scalar())
+            if refused:
+                connection.execute(text(
+                    "UPDATE decisions SET status = 'pending', approved_by = NULL, "
+                    "approved_at = NULL, resolution_note = :why, updated_at = now() "
+                    "WHERE id = :d"), {"d": step["decision_id"], "why": refused})
+                emit_event(connection, run["project_id"], "workflow.separation_of_duties_refused",
+                           "system", "workflow_run", run_id,
+                           {"step_id": step_id, "decision_id": step["decision_id"],
+                            "reason": refused})
+                continue
         if outcome == WAIT_RELEASE:
             if step["step_kind"] == "timer":
                 output: dict[str, Any] = {"woke_at": now_utc().isoformat()}
@@ -5268,8 +5445,7 @@ def _follow_edges_left_behind(connection: Connection, run_id: str) -> None:
     """
     spec = _run_spec(connection, run_id)
     steps = _step_map(spec)
-    loop_bodies = {str(s.get("body")) for s in spec.get("steps", [])
-                   if s.get("kind") == "bounded_loop" and s.get("body")}
+    repeated = set(loop_bodies(spec))
     rows = connection.execute(
         text(
             """
@@ -5293,7 +5469,7 @@ def _follow_edges_left_behind(connection: Connection, run_id: str) -> None:
         template = steps.get(str(row["step_id"])) or {}
         if template.get("kind") in {"condition", "bounded_loop", "parallel", "for_each"}:
             continue
-        if str(row["step_id"]) in loop_bodies or str(row["step_id"]) in for_each_bodies(spec):
+        if str(row["step_id"]) in repeated or str(row["step_id"]) in for_each_bodies(spec):
             continue
         for target in template.get("next", []) or []:
             if str(target) in steps:

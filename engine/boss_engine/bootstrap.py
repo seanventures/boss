@@ -52,7 +52,7 @@ FIRST_PARTY_REVIEW = "boss (first-party)"
 
 #: Bumped when the seeded rows change; a row on an older version, untouched by any person, is
 #: brought up to date on the next boot (`migrate_builtin_mcp_servers`).
-BUILTIN_MCP_VERSION = "3"
+BUILTIN_MCP_VERSION = "4"
 
 BUILTIN_MCP_SERVERS = [
     {
@@ -88,7 +88,10 @@ BUILTIN_MCP_SERVERS = [
         "url": f"http://{MCP_TOOLS_HOST}:{_ITSM_PORT}/mcp",
         "risk_tier": 0,
         "data_boundary": "internal",
-        "description": "Past incidents and tickets for Historical Pattern: get_incident, list_incidents",
+        "description": ("Past and open incidents and tickets (Historical Pattern; the DQ "
+                        "pipeline opens, attaches and updates its incidents here): "
+                        "get_incident, list_incidents, list_teams, create_incident, "
+                        "attach_to_incident, update_incident"),
     },
 ]
 

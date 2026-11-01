@@ -15,22 +15,22 @@
     "captain": "engineering_captain",
     "rack": "backend_engineer",
     "pixel": "frontend_engineer",
-    "headlamp": "operations_engineer",
-    "siren": "sre",
+    "headlamp": "remediation_advisor",
+    "siren": "dq_monitoring_agent",
     "northstar": "pm",
-    "hardhat": "chief_architect",
+    "hardhat": "dq_remediation_advisor",
     "headphones": "software_engineer",
     "rook": "adversarial_reviewer",
-    "crest": "security_reviewer",
-    "magnifier": "qa",
-    "flag": "release_manager",
-    "beret": "design_critic",
-    "quill": "docs_writer",
+    "crest": "dq_incident_closure_agent",
+    "magnifier": "dq_rca_agent",
+    "flag": "dq_escalation_agent",
+    "beret": "dq_rule_drafting_agent",
+    "quill": "sar_narrator",
     "coins": "finops_sentinel",
-    "goggles": "first_principles_researcher",
+    "goggles": "dq_lane_agent",
     "comet": "visionary_founder",
-    "headset": "relentless_operator",
-    "mortarboard": "teacher_who_simplifies",
+    "headset": "dq_pipeline_orchestrator",
+    "mortarboard": "dq_historical_pattern_agent",
     "clapper": "video_editor"
   },
   "emblems": [
@@ -387,6 +387,166 @@
       "emblem": "page",
       "palette": "slate",
       "visor": "glasses"
+    },
+    "incident_commander": {
+      "kit": "boss-v1",
+      "seed": "incident_commander",
+      "hat": "siren",
+      "emblem": "flag",
+      "palette": "coral",
+      "visor": "slit"
+    },
+    "compliance_officer": {
+      "kit": "boss-v1",
+      "seed": "compliance_officer",
+      "hat": "crest",
+      "emblem": "check",
+      "palette": "slate",
+      "visor": "glasses"
+    },
+    "compliance_analyst": {
+      "kit": "boss-v1",
+      "seed": "compliance_analyst",
+      "hat": "magnifier",
+      "emblem": "page",
+      "palette": "blue",
+      "visor": "lens"
+    },
+    "pipeline_orchestrator": {
+      "kit": "boss-v1",
+      "seed": "pipeline_orchestrator",
+      "hat": "antenna",
+      "emblem": "flag",
+      "palette": "blue",
+      "visor": "band"
+    },
+    "lane_agent": {
+      "kit": "boss-v1",
+      "seed": "lane_agent",
+      "hat": "hardhat",
+      "emblem": "braces",
+      "palette": "amber",
+      "visor": "band"
+    },
+    "remediation_advisor": {
+      "kit": "boss-v1",
+      "seed": "remediation_advisor",
+      "hat": "headlamp",
+      "emblem": "wrench",
+      "palette": "green",
+      "visor": "band"
+    },
+    "aml_network_mapper": {
+      "kit": "boss-v1",
+      "seed": "aml_network_mapper",
+      "hat": "antenna",
+      "emblem": "people",
+      "palette": "teal",
+      "visor": "scope"
+    },
+    "aml_analyst": {
+      "kit": "boss-v1",
+      "seed": "aml_analyst",
+      "hat": "magnifier",
+      "emblem": "target",
+      "palette": "purple",
+      "visor": "lens"
+    },
+    "sar_narrator": {
+      "kit": "boss-v1",
+      "seed": "sar_narrator",
+      "hat": "quill",
+      "emblem": "page",
+      "palette": "coral",
+      "visor": "glasses"
+    },
+    "dq_monitoring_agent": {
+      "kit": "boss-v1",
+      "seed": "dq_monitoring_agent",
+      "hat": "siren",
+      "emblem": "eye",
+      "palette": "amber",
+      "visor": "band"
+    },
+    "dq_context_enrichment_agent": {
+      "kit": "boss-v1",
+      "seed": "dq_context_enrichment_agent",
+      "hat": "antenna",
+      "emblem": "layers",
+      "palette": "teal",
+      "visor": "lens"
+    },
+    "dq_historical_pattern_agent": {
+      "kit": "boss-v1",
+      "seed": "dq_historical_pattern_agent",
+      "hat": "mortarboard",
+      "emblem": "cycle",
+      "palette": "slate",
+      "visor": "glasses"
+    },
+    "dq_rca_agent": {
+      "kit": "boss-v1",
+      "seed": "dq_rca_agent",
+      "hat": "magnifier",
+      "emblem": "atom",
+      "palette": "blue",
+      "visor": "scope"
+    },
+    "dq_pipeline_orchestrator": {
+      "kit": "boss-v1",
+      "seed": "dq_pipeline_orchestrator",
+      "hat": "headset",
+      "emblem": "compass",
+      "palette": "purple",
+      "visor": "band"
+    },
+    "dq_lane_agent": {
+      "kit": "boss-v1",
+      "seed": "dq_lane_agent",
+      "hat": "goggles",
+      "emblem": "check",
+      "palette": "mint",
+      "visor": "lens"
+    },
+    "dq_rule_drafting_agent": {
+      "kit": "boss-v1",
+      "seed": "dq_rule_drafting_agent",
+      "hat": "beret",
+      "emblem": "nib",
+      "palette": "pink",
+      "visor": "glasses"
+    },
+    "dq_remediation_advisor": {
+      "kit": "boss-v1",
+      "seed": "dq_remediation_advisor",
+      "hat": "hardhat",
+      "emblem": "wrench",
+      "palette": "green",
+      "visor": "slit"
+    },
+    "dq_incident_closure_agent": {
+      "kit": "boss-v1",
+      "seed": "dq_incident_closure_agent",
+      "hat": "crest",
+      "emblem": "check",
+      "palette": "teal",
+      "visor": "monocle"
+    },
+    "dq_escalation_agent": {
+      "kit": "boss-v1",
+      "seed": "dq_escalation_agent",
+      "hat": "flag",
+      "emblem": "stopwatch",
+      "palette": "coral",
+      "visor": "slit"
+    },
+    "rulebook_analyst": {
+      "kit": "boss-v1",
+      "seed": "rulebook_analyst",
+      "hat": "dome",
+      "emblem": "page",
+      "palette": "teal",
+      "visor": "lens"
     }
   }
 }

@@ -315,6 +315,11 @@ VERDICTS: dict[str, Callable[[Mapping[str, Any], Mapping[str, Any]], Verdict]] =
     "extract_rulebook_rules": role_agent,
     "aml_analysis": role_agent,
     "sar_narrative": role_agent,
+    # dq_incident_rca's stages (knowledge/dq_incident_pipeline.py).
+    **{key: role_agent for key in (
+        "dq_monitoring", "dq_context_enrichment", "dq_historical_pattern", "dq_rca",
+        "dq_orchestration", "dq_lane", "dq_rule_drafting", "dq_remediation_package",
+        "dq_remediation_fix", "dq_incident_closure", "dq_escalation", "dq_eagle_intake")},
 }
 
 

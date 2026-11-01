@@ -76,14 +76,22 @@ def project(pg_engine):
                        "(:i, :w, 'KG Graph Steps', :s)"), {"i": pid, "w": ws, "s": pid})
     yield pid
     with pg_engine.begin() as c:
-        for table in ("workflow_step_runs", "workflow_runs", "workflow_mappings",
-                      "workflow_versions", "workflow_definitions", "decisions", "events",
-                      "kg_edges", "kg_nodes"):
-            try:
-                with c.begin_nested():
-                    c.execute(text(f"DELETE FROM {table} WHERE project_id=:p"), {"p": pid})
-            except Exception:
-                pass
+        # Seeding installs role agents (rulebook_extraction's analyst in every project): every
+        # row the project owns goes, in as many passes as the foreign keys between them need.
+        owned = [str(t) for t in c.execute(text(
+            "SELECT DISTINCT tc.table_name FROM information_schema.table_constraints tc "
+            "JOIN information_schema.constraint_column_usage cu ON cu.constraint_name = "
+            "tc.constraint_name WHERE tc.constraint_type = 'FOREIGN KEY' AND cu.table_name = "
+            "'projects' AND tc.table_name <> 'projects'")).scalars().all()]
+        for _pass in range(3):
+            for table in ("workflow_step_runs", "workflow_runs", "workflow_mappings",
+                          "workflow_versions", "workflow_definitions", "decisions", "events",
+                          "kg_edges", "kg_nodes", *owned):
+                try:
+                    with c.begin_nested():
+                        c.execute(text(f"DELETE FROM {table} WHERE project_id=:p"), {"p": pid})
+                except Exception:
+                    pass
         c.execute(text("DELETE FROM projects WHERE id=:p"), {"p": pid})
 
 

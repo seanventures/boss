@@ -2,14 +2,23 @@
 Learning), declared per project from a versioned YAML pack under
 ``packages/specpack/ontology/``.
 
-A project's effective kind set is core ∪ its one active pack (``kg_ontology_packs``, one row per
-project). Before diff 2 sets any pointer, every project's effective set is core-only, so writing
-a pack kind (``document``, ``clause``, ``regulation``, …) is refused with a reason — the
-"mid-rollout" window this module is built to make safe, not merely survive.
+A PROJECT HOLDS SEVERAL PACKS AT ONCE (``kg_ontology_packs``, one row per project AND pack). Its
+effective kind set is core ∪ every pack it holds (∪ what those packs include). NorthPeak Lending
+runs the regulatory, AML and DQ case studies side by side: adding banking-dq must never take the
+AML or regulation kinds away, which one-pack-per-project did (the table's key was project_id
+alone, so setting a pack replaced the last one). Packs are additive; removing one is explicit
+(``rollback_project_pack`` with that pack's id).
+
+Where two packs a project holds declare the same kind (``system`` is in banking-regulatory and
+banking-dq), the pack set FIRST keeps its words (layer, label, colour): adding a pack never
+changes how kinds a project already had are shown or traced.
+
+With no pack, a project's effective set is core-only, so writing a pack kind (``document``,
+``clause``, …) is refused with a reason.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
@@ -18,14 +27,37 @@ from sqlalchemy.engine import Connection
 
 SHIPPED_PACK_IDS = ("banking-regulatory", "banking-dq", "banking-aml")
 
+#: New installs get the composite key. An install made while the key was project_id alone is
+#: migrated in place by `_MIGRATE_SQL` (its one row per project stays, as that project's first
+#: pack): the DO block reads the catalog and alters nothing when the key is already composite.
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS kg_ontology_packs (
-  project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   pack_id TEXT NOT NULL,
   version TEXT NOT NULL,
   set_by TEXT NOT NULL,
-  set_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
+  set_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (project_id, pack_id)
+)
+"""
+_MIGRATE_SQL = """
+DO $$
+BEGIN
+  IF (SELECT count(*) FROM pg_index i JOIN pg_attribute a
+        ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+      WHERE i.indrelid = 'kg_ontology_packs'::regclass AND i.indisprimary) = 1 THEN
+    ALTER TABLE kg_ontology_packs DROP CONSTRAINT kg_ontology_packs_pkey;
+    ALTER TABLE kg_ontology_packs ADD PRIMARY KEY (project_id, pack_id);
+  END IF;
+END $$
+"""
+#: How many columns the table's primary key has (0: no table yet). Read before any DDL, so a
+#: booted install (db/schema.sql creates and migrates the table) runs none on a read.
+_KEY_WIDTH_SQL = """
+SELECT CASE WHEN to_regclass('kg_ontology_packs') IS NULL THEN 0 ELSE
+  (SELECT count(*) FROM pg_index i JOIN pg_attribute a
+     ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+   WHERE i.indrelid = to_regclass('kg_ontology_packs') AND i.indisprimary) END
 """
 
 
@@ -43,17 +75,26 @@ class OntologyPack:
     #: The schema version of the context kinds this pack declares (graph_versions.cg_version);
     #: None means the pack's own version stands for it.
     context_version: Optional[str] = None
+    #: Every pack this one stands for: itself and what it includes (transitively). A project's
+    #: composite pack lists every pack the project holds.
+    pack_ids: tuple[str, ...] = field(default=())
 
     def get(self, name: str, default: Any = None) -> Any:
         """Dict-like read of a field by name, for a caller that treats a pack as data."""
         return getattr(self, name, default)
 
+    def includes(self, pack_id: str) -> bool:
+        return pack_id == self.pack_id or pack_id in self.pack_ids
+
 
 def ensure_schema(connection: Connection) -> None:
-    for stmt in _SCHEMA_SQL.split(";"):
-        sql = stmt.strip()
-        if sql:
-            connection.execute(text(sql))
+    """Create the table, or move an install from one pack per project to several — only when
+    the catalog says it is needed (db/schema.sql does both at boot; this is the fallback)."""
+    width = int(connection.execute(text(_KEY_WIDTH_SQL)).scalar() or 0)
+    if width == 0:
+        connection.execute(text(_SCHEMA_SQL))
+    elif width == 1:
+        connection.exec_driver_sql(_MIGRATE_SQL)
 
 
 def _ontology_root() -> Path:
@@ -77,12 +118,12 @@ def _parse_pack(pack_id: str, document: dict[str, Any]) -> OntologyPack:
         )
     kind_meta = {
         str(k["id"]): {"layer": k.get("layer"), "label": k.get("label"), "color": k.get("color"),
+                      "plural": k.get("plural"), "group": k.get("group"),
                       "attrs": list(k.get("attrs") or [])}
         for k in kinds_spec
     }
-    # A PACK MAY INCLUDE ANOTHER (banking-aml includes banking-regulatory): one project runs
-    # both case studies, and a project has exactly one active pack, so switching to the AML pack
-    # must not take the regulation's kinds away from it.
+    pack_ids = [pack_id]
+    # A PACK MAY INCLUDE ANOTHER (banking-aml includes banking-regulatory): its kinds come with it.
     for included_id in document.get("includes") or []:
         included_id = str(included_id)
         if included_id == pack_id:
@@ -91,9 +132,10 @@ def _parse_pack(pack_id: str, document: dict[str, Any]) -> OntologyPack:
         kinds |= included.kinds
         edges |= included.edges
         kind_meta = {**included.kind_meta, **kind_meta}
+        pack_ids += [p for p in (included.pack_ids or (included_id,)) if p not in pack_ids]
     return OntologyPack(
         pack_id=pack_id, version=str(document.get("version") or "1"),
-        kinds=kinds, edges=edges, kind_meta=kind_meta,
+        kinds=kinds, edges=edges, kind_meta=kind_meta, pack_ids=tuple(pack_ids),
         context_version=(str(document["context_version"]) if document.get("context_version") else None),
     )
 
@@ -130,6 +172,8 @@ def set_project_pack(
     connection: Connection, *, project_id: str, pack_id: str, version: Optional[str] = None,
     set_by: str = "system",
 ) -> OntologyPack:
+    """ADD ``pack_id`` to the project's packs (or refresh its version). Additive: every pack the
+    project already holds stays, so its kinds stay writable. Returns the pack added."""
     ensure_schema(connection)
     pack = shipped_packs().get(pack_id)
     if pack is None:
@@ -138,10 +182,9 @@ def set_project_pack(
         text(
             """
             INSERT INTO kg_ontology_packs (project_id, pack_id, version, set_by, set_at)
-            VALUES (:project_id, :pack_id, :version, :set_by, now())
-            ON CONFLICT (project_id) DO UPDATE SET
-              pack_id = EXCLUDED.pack_id, version = EXCLUDED.version,
-              set_by = EXCLUDED.set_by, set_at = EXCLUDED.set_at
+            VALUES (:project_id, :pack_id, :version, :set_by, clock_timestamp())
+            ON CONFLICT (project_id, pack_id) DO UPDATE SET
+              version = EXCLUDED.version, set_by = EXCLUDED.set_by
             """
         ),
         {"project_id": project_id, "pack_id": pack_id, "version": version or pack.version,
@@ -151,26 +194,81 @@ def set_project_pack(
     return pack
 
 
-def rollback_project_pack(connection: Connection, *, project_id: str) -> None:
+def rollback_project_pack(connection: Connection, *, project_id: str,
+                          pack_id: Optional[str] = None) -> None:
+    """Remove one pack from the project (``pack_id``), or every pack when none is named."""
     ensure_schema(connection)
-    connection.execute(
-        text("DELETE FROM kg_ontology_packs WHERE project_id = :project_id"),
-        {"project_id": project_id},
-    )
+    if pack_id:
+        connection.execute(
+            text("DELETE FROM kg_ontology_packs WHERE project_id = :project_id "
+                 "AND pack_id = :pack_id"),
+            {"project_id": project_id, "pack_id": pack_id},
+        )
+    else:
+        connection.execute(
+            text("DELETE FROM kg_ontology_packs WHERE project_id = :project_id"),
+            {"project_id": project_id},
+        )
     _PROJECT_PACK_CACHE.pop(project_id, None)
 
 
+def project_pack_ids(connection: Connection, *, project_id: str) -> list[str]:
+    """The packs the project holds, in the order they were set (not what they include)."""
+    ensure_schema(connection)
+    return [str(r) for r in connection.execute(
+        text("SELECT pack_id FROM kg_ontology_packs WHERE project_id = :project_id "
+             "ORDER BY set_at, pack_id"),
+        {"project_id": project_id},
+    ).scalars().all()]
+
+
+def _composite(packs: list[OntologyPack]) -> Optional[OntologyPack]:
+    """One pack standing for several: kinds and edges unioned; for a kind two packs declare, the
+    pack set first keeps its words. Named after the pack set last (the one a person just added),
+    so a caller asking "which pack" hears the newest."""
+    if not packs:
+        return None
+    if len(packs) == 1:
+        return packs[0]
+    kinds: frozenset[str] = frozenset()
+    edges: frozenset[str] = frozenset()
+    meta: dict[str, dict[str, Any]] = {}
+    ids: list[str] = []
+    for pack in packs:
+        kinds |= pack.kinds
+        edges |= pack.edges
+        for kid, kmeta in pack.kind_meta.items():
+            meta.setdefault(kid, kmeta)
+        ids += [p for p in (pack.pack_ids or (pack.pack_id,)) if p not in ids]
+    newest = packs[-1]
+    # The Context Graph schema version: the newest pack that declares one.
+    context_version = next((p.context_version for p in reversed(packs) if p.context_version),
+                           None)
+    return OntologyPack(pack_id=newest.pack_id, version=newest.version, kinds=kinds,
+                        edges=edges, kind_meta=meta, pack_ids=tuple(ids),
+                        context_version=context_version)
+
+
+def get_project_packs(connection: Connection, *, project_id: str) -> list[OntologyPack]:
+    """The packs the project holds, each on its own, in the order they were set."""
+    shipped = shipped_packs()
+    return [shipped[p] for p in project_pack_ids(connection, project_id=project_id)
+            if p in shipped]
+
+
 def get_project_pack(connection: Connection, *, project_id: str) -> Optional[OntologyPack]:
+    """Every pack the project holds, as one composite (None with no pack)."""
     if project_id in _PROJECT_PACK_CACHE:
         return _PROJECT_PACK_CACHE[project_id]
-    ensure_schema(connection)
-    row = connection.execute(
-        text("SELECT pack_id FROM kg_ontology_packs WHERE project_id = :project_id"),
-        {"project_id": project_id},
-    ).mappings().first()
-    pack = shipped_packs().get(str(row["pack_id"])) if row else None
+    pack = _composite(get_project_packs(connection, project_id=project_id))
     _PROJECT_PACK_CACHE[project_id] = pack
     return pack
+
+
+def has_pack(connection: Connection, *, project_id: str, pack_id: str) -> bool:
+    """The project holds ``pack_id``, directly or through a pack that includes it."""
+    pack = get_project_pack(connection, project_id=project_id)
+    return pack is not None and pack.includes(pack_id)
 
 
 _LAYERS_SYNCED = False

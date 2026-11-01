@@ -17,7 +17,7 @@ from typing import Any, Optional
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
-from . import two_pass, workflows
+from . import dq_catalogue, two_pass, workflows
 from .workflow_capabilities import CAPABILITIES, estimate_minutes, project_requirements
 
 #: Which class of work a catalogue workflow is FOR. A customer applying "Fast Fix" to every
@@ -1633,6 +1633,11 @@ CATALOGUE: list[dict[str, Any]] = [
     },
 ]
 
+# THE CONSULTANT'S DQ RCA AND REMEDIATION PIPELINE (Instance A of kg_investigation_pipeline,
+# design §5.2) and its two side workflows — dq_catalogue.py holds their stages, contracts and
+# agent designs. Each installs only where the NorthPeak Bank data platform is loaded
+# (`requires`: the banking-dq pack and the DQ sample's connectors).
+CATALOGUE.extend(dq_catalogue.entries(_step, _in))
 
 
 def _staff_builds_by_app_kind() -> None:
@@ -2005,7 +2010,9 @@ BRIEFS: dict[str, dict[str, Any]] = {
                     "subject_id": "kgn_regz102636demo01"},
         "required": ("subject_id",),
     },
+    **dq_catalogue.BRIEFS,
 }
+_FIELD_TEXT.update(dq_catalogue.FIELD_TEXT)
 
 
 def _fields_read(steps: list[dict[str, Any]]) -> tuple[list[str], set[str]]:
@@ -2071,6 +2078,10 @@ def entry_spec(entry: dict[str, Any]) -> dict[str, Any]:
     # `monitoring_gate`: block (the default) or warn (monitoring_pack.gate_mode).
     if entry.get("monitoring_gate"):
         spec["monitoring_gate"] = entry["monitoring_gate"]
+    # THE PIPELINE'S SHAPE BEYOND ITS STEPS (the DQ pipeline): the loop back, the side
+    # workflows and paths, and the shared services, so the Pipeline view can draw them.
+    if entry.get("pipeline"):
+        spec["pipeline"] = entry["pipeline"]
     return spec
 
 
@@ -2271,17 +2282,12 @@ def restaff_role_agent_entries(connection: Connection, project_id: str,
 
 
 def _has_pack(connection: Connection, project_id: str, pack_id: str) -> bool:
-    """The project's active pack is ``pack_id`` or includes it (banking-aml includes
-    banking-regulatory, so a project running both case studies keeps the regulatory workflow)."""
-    from .knowledge.ontology_packs import get_project_pack, shipped_packs
+    """``pack_id`` is among the project's packs, or one of them includes it (banking-aml
+    includes banking-regulatory, so a project running both case studies keeps the regulatory
+    workflow; adding banking-dq keeps both)."""
+    from .knowledge.ontology_packs import has_pack
 
-    pack = get_project_pack(connection, project_id=project_id)
-    if pack is None:
-        return False
-    if pack.pack_id == pack_id:
-        return True
-    wanted = shipped_packs().get(pack_id)
-    return wanted is not None and wanted.kinds <= pack.kinds
+    return has_pack(connection, project_id=project_id, pack_id=pack_id)
 
 
 def unmet_requirements(connection: Connection, project_id: str,
@@ -2290,14 +2296,11 @@ def unmet_requirements(connection: Connection, project_id: str,
     requires = entry.get("requires") or {}
     if not requires:
         return None
-    from .knowledge.ontology_packs import get_project_pack
     from .mcp_registry import find_mcp_server
 
     pack_id = requires.get("ontology_pack")
-    if pack_id:
-        pack = get_project_pack(connection, project_id=project_id)
-        if pack is None or pack.pack_id != pack_id:
-            return f"needs the {pack_id} ontology pack"
+    if pack_id and not _has_pack(connection, project_id, pack_id):
+        return f"needs the {pack_id} ontology pack"
     missing = [name for name in requires.get("mcp") or ()
                if find_mcp_server(connection, project_id, name) is None]
     if missing:

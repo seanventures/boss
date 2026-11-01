@@ -10720,6 +10720,27 @@ CREATE TABLE IF NOT EXISTS external_agent_kg_tokens (
 CREATE INDEX IF NOT EXISTS idx_external_agent_kg_tokens_hash ON external_agent_kg_tokens(token_hash);
 CREATE INDEX IF NOT EXISTS idx_external_agent_kg_tokens_expiry ON external_agent_kg_tokens(expires_at);
 
+-- A project's ontology packs (services/knowledge/ontology_packs.py): SEVERAL per project, keyed
+-- (project_id, pack_id). It was one per project (key project_id), so adding the DQ pack to a
+-- project running the AML and regulatory case studies took their kinds away. An install made
+-- with the old key is migrated in place: its one row stays as the project's first pack.
+CREATE TABLE IF NOT EXISTS kg_ontology_packs (
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  pack_id TEXT NOT NULL,
+  version TEXT NOT NULL,
+  set_by TEXT NOT NULL,
+  set_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (project_id, pack_id)
+);
+DO $$
+BEGIN
+  IF (SELECT count(*) FROM pg_index i JOIN pg_attribute a
+        ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+      WHERE i.indrelid = 'kg_ontology_packs'::regclass AND i.indisprimary) = 1 THEN
+    ALTER TABLE kg_ontology_packs DROP CONSTRAINT kg_ontology_packs_pkey;
+    ALTER TABLE kg_ontology_packs ADD PRIMARY KEY (project_id, pack_id);
+  END IF;
+END $$;
 -- ============================================================================================
 -- THE CONTEXT LAYER OF PACK KINDS (design §4.2, consultant conformance P1 #8).
 -- ============================================================================================

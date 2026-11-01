@@ -83,10 +83,14 @@ def pack_kinds() -> dict[str, dict[str, Any]]:
         return _PACK_KINDS
     out: dict[str, dict[str, Any]] = {}
     try:
-        from .ontology_packs import _ontology_root
+        from .ontology_packs import SHIPPED_PACK_IDS, _ontology_root
         from ..yaml_files import load_mapping
 
-        paths = sorted(_ontology_root().glob("*.yaml"))
+        # In shipping order, so the older pack keeps its words for a kind a newer one shares
+        # (banking-dq also declares banking-regulatory's `system`, `owner`, ...).
+        order = {pid: n for n, pid in enumerate(SHIPPED_PACK_IDS)}
+        paths = sorted(_ontology_root().glob("*.yaml"),
+                       key=lambda p: (order.get(p.stem, len(order)), p.stem))
     except Exception:  # noqa: BLE001 - no specpack: core kinds only
         log.warning("ontology packs could not be listed", exc_info=True)
         paths = []
@@ -99,7 +103,8 @@ def pack_kinds() -> dict[str, dict[str, Any]]:
                 if not kid or kid in out:
                     continue
                 label = str(kind.get("label") or kid.replace("_", " ").capitalize())
-                out[kid] = {"layer": kind.get("layer"), "label": label, "plural": _plural(label),
+                out[kid] = {"layer": kind.get("layer"), "label": label,
+                            "plural": str(kind.get("plural") or _plural(label)),
                             "color": kind.get("color"), "pack": pack_id}
         except Exception:  # noqa: BLE001 - one bad pack never hides the others
             log.warning("ontology pack %s could not be read", path.name, exc_info=True)
@@ -147,7 +152,8 @@ def legend(connection: Connection, project_id: str) -> dict[str, dict[str, Any]]
         if pack is not None:
             for kid, meta in pack.kind_meta.items():
                 label = str(meta.get("label") or kid.replace("_", " ").capitalize())
-                own[kid] = {"layer": meta.get("layer"), "label": label, "plural": _plural(label),
+                own[kid] = {"layer": meta.get("layer"), "label": label,
+                            "plural": str(meta.get("plural") or _plural(label)),
                             "color": meta.get("color"), "pack": pack.pack_id}
     except Exception:  # noqa: BLE001 - the shipped packs still name the kinds
         log.warning("project %s ontology pack could not be read", project_id, exc_info=True)

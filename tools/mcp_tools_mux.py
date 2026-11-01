@@ -12,6 +12,7 @@ rendering is already there):
     doc-render        :8771/mcp   (tools/mcp_doc_render_server.py)
     itsm              :8772/mcp   (tools/mcp_itsm_mock.py)
     aml-sample        :8773/{case-management,kyc,transactions}/mcp   (tools/mcp_aml_mock.py)
+    dq-sample         :8774/{eagle,olympus}/mcp                      (tools/mcp_dq_mock.py)
 
 Run it locally the same way:
 
@@ -38,6 +39,16 @@ def _ports() -> tuple[int, int, int, int]:
     return ports if len(ports) == 4 else (8765, 8770, 8771, 8772)  # type: ignore[return-value]
 
 
+def dq_sample_port() -> int:
+    """The DQ sample's connectors (tools/mcp_dq_mock.py: eagle, olympus, one path each).
+    BOSS_MCP_DQ_PORT moves it; the API reads the same variable for the addresses the DQ sample
+    registers (knowledge/dq_sample.dq_mcp_servers)."""
+    try:
+        return int(os.environ.get("BOSS_MCP_DQ_PORT", "").strip() or 8774)
+    except ValueError:
+        return 8774
+
+
 def aml_sample_port() -> int:
     """The AML sample's connectors (tools/mcp_aml_mock.py: case-management, kyc, transactions,
     one path each). BOSS_MCP_AML_PORT moves it; the API reads the same variable for the
@@ -51,7 +62,8 @@ def aml_sample_port() -> int:
 SERVERS = tuple(zip(("boss-devops-reference", "web-intel", "doc-render", "itsm"),
                     ("tools.mcp_demo_server", "tools.mcp_web_intel_server",
                      "tools.mcp_doc_render_server", "tools.mcp_itsm_mock"),
-                    _ports())) + (("aml-sample", "tools.mcp_aml_mock", aml_sample_port()),)
+                    _ports())) + (("aml-sample", "tools.mcp_aml_mock", aml_sample_port()),
+                                  ("dq-sample", "tools.mcp_dq_mock", dq_sample_port()))
 
 
 async def serve() -> None:

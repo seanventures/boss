@@ -4,7 +4,7 @@
 // misspelt permission anywhere in apps/web is a type error.
 
 export const CATALOGUE_VERSION = 1 as const;
-export const CATALOGUE_FINGERPRINT = "0d2820a9c1a3217a";
+export const CATALOGUE_FINGERPRINT = "f55e4c6f84929b4d";
 
 export const PERMISSIONS = [
   "directory:read",

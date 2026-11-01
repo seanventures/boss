@@ -177,7 +177,49 @@ def _aml_sample_status(ctx, *, project_id, actor, args):
             "href": f"/?project_id={project_id}&area=knowledge&kg_tab=documents"}
 
 
+def _load_dq_platform(ctx, *, project_id, actor, args):
+    from ..services.knowledge import dq_platform
+
+    with ctx.begin() as c:
+        return dq_platform.load_platform(c, project_id=project_id, actor=actor)
+
+
+def _dq_platform_status(ctx, *, project_id, actor, args):
+    from ..services.knowledge import dq_platform
+
+    with ctx.begin() as c:
+        found = dq_platform.status(c, project_id=project_id,
+                                   cob=str(args.get("cob") or "") or None)
+    return {"ok": True, **found,
+            "href": f"/?project_id={project_id}&area=knowledge&kg_tab=documents"}
+
+
 KNOWLEDGE_PROJECT_TOOLS: dict[str, dict] = {
+    "load_dq_platform": {
+        "description": (
+            "LOAD NorthPeak Bank's data platform into this project (the DQ case study): adds the "
+            "banking-dq ontology pack beside the project's other packs, registers the Eagle and "
+            "Olympus mock connectors, writes the platform (systems, tables, columns, feeds, "
+            "lineage, CDEs, reports, MDRM, calendar, issues, findings, Eagle's exception groups, "
+            "past incidents and precedents) into the Knowledge Graph, installs dq_incident_rca "
+            "and its side workflows, and schedules the daily escalation sweep. The DQ rules come "
+            "from the rulebook, never from here. Synthetic data; loading twice changes nothing. "
+            "Proposed by the model, but only an operator presses it. Then start dq_incident_rca "
+            "with exception_group_id EXG-20261005-0003."),
+        "parameters": {"type": "object", "properties": {}, "required": [],
+                       "additionalProperties": False},
+        "handler": _load_dq_platform, "kind": "write", "permission": "knowledge:manage",
+        "operator_only": True,
+    },
+    "dq_platform_status": {
+        "description": (
+            "Whether this project has NorthPeak Bank's data platform loaded, how many DQ rules "
+            "are in the graph, and Eagle's exception groups (optionally one COB) with each one's "
+            "incident and latest investigation."),
+        "parameters": {"type": "object", "properties": {"cob": {"type": "string"}},
+                       "required": [], "additionalProperties": False},
+        "handler": _dq_platform_status, "kind": "read", "permission": "knowledge:read",
+    },
     "knowledge_project_setup": {
         "description": (
             "Where a project's KNOWLEDGE GRAPH setup is, step by step — the same view as the "
@@ -251,10 +293,11 @@ KNOWLEDGE_PROJECT_TOOLS: dict[str, dict] = {
     },
     "set_ontology_pack": {
         "description": (
-            "SET this project's ontology pack (e.g. banking-regulatory, banking-dq): what kinds "
-            "of node and edge, beyond BOSS's core, the project's Knowledge Graph accepts — a "
-            "document and its clauses need one set first. Proposed by the model, but only an "
-            "operator presses it."),
+            "ADD an ontology pack to this project (e.g. banking-regulatory, banking-dq, "
+            "banking-aml): what kinds of node and edge, beyond BOSS's core, the project's "
+            "Knowledge Graph accepts — a document and its clauses need one first. A project "
+            "holds several packs; adding one never removes another's kinds. Proposed by the "
+            "model, but only an operator presses it."),
         "parameters": {"type": "object", "properties": {
             "pack_id": {"type": "string"}}, "required": ["pack_id"],
             "additionalProperties": False},
