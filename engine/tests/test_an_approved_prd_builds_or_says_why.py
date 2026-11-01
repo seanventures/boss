@@ -167,3 +167,24 @@ class TestRepositoryHasCode:
 def test_a_scaffold_is_never_seeded_through_the_install_default():
     with pytest.raises(ValueError):
         pd.seed_web_scaffold(SimpleNamespace(), work_branch="boss/code/x", name="app")
+
+
+class TestTheBuildActsForTheApprover:
+    """The launch thread enqueues a code.task job, which under enforce needs a principal. A bare
+    Thread starts with an empty context: PrincipalRequired, swallowed (dec_8b573b40)."""
+
+    def test_the_thread_sees_the_approvers_identity(self):
+        from boss_engine.identity import lineage
+
+        seen = []
+        token = lineage._ACTING.set("usr_approver")
+        try:
+            decisions._spawn_as_this_request(lambda: seen.append(lineage._ACTING.get())).join(5)
+        finally:
+            lineage._ACTING.reset(token)
+        assert seen == ["usr_approver"]
+
+    def test_the_prd_launch_uses_it(self):
+        body = inspect.getsource(decisions.DecisionService._start_code_task_after_prd)
+        assert "_spawn_as_this_request(_launch_build)" in body
+        assert "threading.Thread(" not in body
