@@ -7168,7 +7168,10 @@ def tick(
             )
             if claimed is None:
                 continue
-            if claimed.get("step_kind") not in ("capability", "deterministic"):
+            # `external_agent` (KG P6a) too: a bank's agent's step is an outbound call this
+            # runner makes. Left out, it was leased, skipped "for another claimant" that does not
+            # exist, and timed out on every run (2026-10-31).
+            if claimed.get("step_kind") not in ("capability", "deterministic", "external_agent"):
                 # Somebody else's step kind. Release it by letting the lease lapse rather than
                 # failing it — this runner is not the only possible claimant. `deterministic`
                 # (KG P5a) runs a fixed $0 graph query and is claimed here like `capability`:

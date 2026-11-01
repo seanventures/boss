@@ -72,9 +72,19 @@ def run_step(connection: Connection, ctx: Any, *, project_id: str, step: dict[st
 
     _phase = _phase_logger(project_id, run_id, step_id, agent_id)
     _phase("minting a scoped knowledge-graph key")
-    issued = external_agent_tokens.mint(
-        connection, project_id=project_id, run_id=run_id, step_id=step_id,
-        external_agent_id=agent_id, policy=policy, ttl_seconds=timeout_seconds)
+    # COMMITTED BEFORE THE CALL. The step runs inside the runner's open transaction, and the
+    # agent spends this token at the knowledge-graph MCP server, another process: minted in the
+    # step's transaction it is invisible there, so every read and write-back was refused.
+    engine = getattr(ctx, "engine", None)
+    if engine is not None:
+        with engine.begin() as own:
+            issued = external_agent_tokens.mint(
+                own, project_id=project_id, run_id=run_id, step_id=step_id,
+                external_agent_id=agent_id, policy=policy, ttl_seconds=timeout_seconds)
+    else:
+        issued = external_agent_tokens.mint(
+            connection, project_id=project_id, run_id=run_id, step_id=step_id,
+            external_agent_id=agent_id, policy=policy, ttl_seconds=timeout_seconds)
 
     auth_header = f"Bearer {secret_value}"
     payload = {
@@ -117,7 +127,11 @@ def run_step(connection: Connection, ctx: Any, *, project_id: str, step: dict[st
                  "latency_ms": latency_ms},
             ],
             project_id=project_id, code_task_run_id=run_id, stage=step_id)
-        external_agent_tokens.revoke(connection, issued.token_id)
+        if engine is not None:
+            with engine.begin() as own:
+                external_agent_tokens.revoke(own, issued.token_id)
+        else:
+            external_agent_tokens.revoke(connection, issued.token_id)
 
     # The trace-honesty property: what the step produced is read back from the Context Graph,
     # never trusted from the agent's self-reported HTTP body.

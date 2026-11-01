@@ -239,3 +239,38 @@ def test_p1_historical_pattern_declares_its_itsm_mcp_call_in_the_catalogue():
     assert itsm_tools & {"get_incident", "list_incidents"}, (
         "historical_pattern must declare the ITSM tool(s) it is allowed to call via "
         f"contract.calls, got {calls!r}")
+
+
+# ── An outside agent's step is run by the real runner (2026-10-31) ───────────────────────────
+# The runner leased an `external_agent` step, skipped it as "somebody else's step kind" and let
+# it time out: P6a's dispatch was reachable only from tests that called it directly.
+
+def test_p0_the_runner_runs_an_outside_agents_step(connection, monkeypatch):
+    from types import SimpleNamespace
+
+    from boss_engine.services import external_agent_runner
+    from boss_engine.services import workflow_capability_runner as runner
+
+    c, project = connection, connection.project_id
+    calls = []
+
+    def fake_run_step(conn, ctx, *, project_id, step, context):
+        calls.append(step["id"])
+        return {"kind": "external_agent", "status": "succeeded", "produced": {}}
+
+    monkeypatch.setattr(external_agent_runner, "run_step", fake_run_step)
+    c.execute(text("INSERT INTO external_agents (id, project_id, display_name, endpoint_url, "
+                   "secret_ref, sponsor_principal_id, status, created_by) VALUES "
+                   "('ext_test', :p, 'Bank agent', 'https://bank.example/agent', 'sref_test', "
+                   "'ceo', 'active', 'test')"), {"p": project})
+    run_id = _publish_and_start(c, project, [
+        {"id": "bank_review", "kind": "external_agent",
+         "captain": {"external_agent": "ext_test"}, "timeout_seconds": 60,
+         "contract": {"writes": [{"kind": "agent_decision", "required": True,
+                                  "decision_type": "bank_review"}]},
+         "next": []}], "bank_review")
+    runner.tick(c, SimpleNamespace(settings=None, engine=None), project_id=project)
+    assert calls == ["bank_review"]
+    status = c.execute(text("SELECT status FROM workflow_step_runs WHERE workflow_run_id = :r "
+                            "AND step_id = 'bank_review'"), {"r": run_id}).scalar()
+    assert status != "leased", status
