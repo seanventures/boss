@@ -73,10 +73,25 @@ def _role_agent(connection: Connection, settings: Any, project_id: str) -> tuple
 def _ask_role(agent: Any, prompt: str) -> Optional[dict[str, Any]]:
     """Run one role turn and parse its JSON judgement from between the marker lines. Returns
     None when the agent answered nothing readable — the caller treats that exactly like
-    ``regulatory_trace``'s unreadable judgement: a gap/ruled-out, never an invented verdict."""
+    ``regulatory_trace``'s unreadable judgement: a gap/ruled-out, never an invented verdict.
+
+    ONE MORE ASK, FOR THE ANSWER ONLY. An agent that spends its turns reading the code (the
+    Remediation Advisor did, and found the right classes) can end without its judgement; it is
+    asked once more, briefly, to answer from what it has, before the step falls back."""
     with tempfile.TemporaryDirectory(prefix="boss-banking-regulatory-") as cwd:
         result = agent.run_role(prompt, Path(cwd), read_only=True, max_turns=MAX_TURNS) or {}
-    body = str(result.get("summary") or "")
+        parsed = _parse_judgement(str(result.get("summary") or ""))
+        if parsed is None and str(result.get("summary") or "").strip():
+            followup = (f"{prompt}\n\nWHAT YOU FOUND SO FAR:\n{str(result.get('summary'))[:6000]}\n\n"
+                        "Answer NOW from what you already know: only the JSON judgement between "
+                        f"the two marker lines ({_MARK_OPEN} / {_MARK_CLOSE}), nothing else.")
+            result = agent.run_role(followup, Path(cwd), read_only=True, max_turns=2) or {}
+            parsed = _parse_judgement(str(result.get("summary") or ""))
+    return parsed
+
+
+def _parse_judgement(body: str) -> Optional[dict[str, Any]]:
+    """The JSON object between the marker lines (or the last object in the text), or None."""
     if _MARK_OPEN in body:
         body = body.split(_MARK_OPEN, 1)[1].split(_MARK_CLOSE, 1)[0]
     body = re.sub(r"^\s*```(?:json)?\s*|\s*```\s*$", "", body.strip())

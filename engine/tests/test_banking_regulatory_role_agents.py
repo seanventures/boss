@@ -441,3 +441,36 @@ class BankingRegulatoryRoleAgentTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_p0_an_agent_that_ends_without_its_judgement_is_asked_once_more_for_it():
+    """The Remediation Advisor read the code and ended with a narrative report, no JSON: the
+    step fell back to "no readable answer". It is asked once more for the answer only."""
+    from boss_engine.services.knowledge import banking_regulatory_pipeline as brp
+
+    class _Agent:
+        def __init__(self):
+            self.prompts = []
+
+        def run_role(self, prompt, cwd, read_only=True, max_turns=0):
+            self.prompts.append(prompt)
+            if len(self.prompts) == 1:
+                return {"summary": "I have all the information needed.\n\n## Report\nAdd suspense handling."}
+            return {"summary": f'{brp._MARK_OPEN}\n{{"title": "Add suspense handling"}}\n{brp._MARK_CLOSE}'}
+
+    agent = _Agent()
+    assert brp._ask_role(agent, "situation") == {"title": "Add suspense handling"}
+    assert len(agent.prompts) == 2 and "Add suspense handling" in agent.prompts[1]
+
+
+def test_p0_a_silent_agent_is_not_asked_again():
+    from boss_engine.services.knowledge import banking_regulatory_pipeline as brp
+
+    class _Silent:
+        calls = 0
+
+        def run_role(self, prompt, cwd, read_only=True, max_turns=0):
+            _Silent.calls += 1
+            return {"summary": ""}
+
+    assert brp._ask_role(_Silent(), "situation") is None and _Silent.calls == 1
