@@ -233,6 +233,12 @@ COPY scripts/install/ensure_local_place.py ./scripts/install/ensure_local_place.
 # same file the host self-installer runs.
 COPY scripts/install/self_fix_installer.py ./scripts/install/self_fix_installer.py
 COPY tools ./tools
+# EVERY SOURCE FILE PARSES ON THIS IMAGE'S PYTHON. Tests run on a developer's newer Python, so
+# syntax only 3.12+ accepts (an f-string spanning lines inside its braces) passed every test and
+# then failed to import here, at the first step of a live run (2026-11-01). The build stops instead,
+# and the installer's rollback keeps the running release.
+RUN python -m compileall -q -j 0 apps engine/boss_engine tools scripts > /tmp/compileall.log 2>&1 \
+    || (grep -E "Error|\*\*\*" /tmp/compileall.log | head -20; exit 1)
 COPY docs/product/V1_FEATURE_LOCK.md ./docs/product/V1_FEATURE_LOCK.md
 COPY docs/product/TRACEABILITY.md ./docs/product/TRACEABILITY.md
 
