@@ -4,7 +4,8 @@ import { HERO_BRIEF_PARAM } from "./url-intent";
 import { useCallback, useEffect, useState, useTransition, useRef} from "react";
 
 import { landingAnswerArrived } from "../lib/chat-landing";
-import { Markdown } from "./markdown";
+import { CitedAnswer } from "./agents/cited-answer";
+import { CitedAnswer } from "./agents/cited-answer";
 import { RateIt } from "./improve/rate-it";
 import { notifyChanged } from "./changed";
 
@@ -1330,8 +1331,10 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
                   their underscores into italics rewrites what they said. */}
               {m.role === "assistant" ? (
                 <>
-                  <Markdown className="agent-md"
-                            text={stripAppFacts(withoutBrief(m.content))} />
+                  {/* Its citations ([R:…] / [D:…] / [L:…]) as links named by the cited rule,
+                      clause or learning — never a raw id (rulebook source G6). */}
+                  <CitedAnswer className="agent-md" projectId={projectId} actor={actor}
+                               text={stripAppFacts(withoutBrief(m.content))} />
                   {m.technical ? (
                     <details className="agent-technical" data-testid="agent-message-technical">
                       <summary>Details</summary>

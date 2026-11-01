@@ -683,3 +683,68 @@
 .kg-doc-clause-section { font-weight: 600; }
 .kg-doc-clause-text { flex: 1 1 240px; font-size: 0.82rem; line-height: 1.45; color: var(--ink-soft); }
 .kg-doc-check { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.kg-doc-clause[data-kind] { border-left-color: var(--kg-clause); }
+.kg-doc-more { align-self: flex-start; margin-top: 8px; }
+
+/* ── Upload a document: the proposed sections a person checks (rulebook source G3) ──────────── */
+.kg-up { display: flex; flex-direction: column; gap: 12px; padding: 14px 16px; border: 1px solid var(--border-strong);
+  border-radius: var(--r-lg); background: var(--surface); box-shadow: inset 3px 0 0 var(--kg-clause); }
+.kg-up-head { display: flex; flex-direction: column; gap: 6px; }
+.kg-up-head .kg-eyebrow { margin: 0; }
+.kg-up-name { max-width: 560px; }
+.kg-up-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px;
+  max-height: 440px; overflow-y: auto; overscroll-behavior: contain; }
+.kg-up-row { display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface-2); }
+.kg-up-row[data-kind="rule_card"] { border-left: 3px solid var(--kg-rule); }
+.kg-up-row[data-kind="heading"], .kg-up-row[data-kind="custom"] { border-left: 3px solid var(--kg-clause); }
+.kg-up-row-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 10px; min-width: 0; }
+.kg-up-kind { flex: none; }
+.kg-up-kind[data-kind="rule_card"] { border-color: var(--kg-rule); color: var(--ink); }
+.kg-up-title { flex: 1 1 220px; min-width: 0; font-size: 0.84rem; font-weight: 600; color: var(--ink); overflow-wrap: anywhere; }
+.kg-up-page { flex: none; white-space: nowrap; }
+.kg-up-actions { display: inline-flex; flex-wrap: wrap; gap: 4px 12px; font-size: 0.78rem; }
+.kg-up-actions [data-tone="reject"] { color: var(--red); }
+.kg-up-first { margin: 0; font-size: 0.78rem; line-height: 1.45; color: var(--muted); overflow: hidden; display: -webkit-box;
+  -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; }
+.kg-up-lines { margin: 4px 0 0; padding: 6px 8px; list-style: none; display: flex; flex-direction: column; gap: 4px;
+  max-height: 260px; overflow-y: auto; border: 1px dashed var(--border-strong); border-radius: var(--r-sm); }
+.kg-up-lines li { display: grid; grid-template-columns: 6.5rem 1fr; align-items: baseline; gap: 8px; font-size: 0.78rem; }
+.kg-up-line { color: var(--ink-soft); overflow-wrap: anywhere; }
+
+/* ── A data-quality rule's card (Rules review, rulebook source G4/G5) ────────────────────────── */
+.kg-dq-id { font-family: var(--mono, ui-monospace, monospace); color: var(--ink); border-color: var(--kg-layer-domain); }
+.kg-dq { display: flex; flex-direction: column; gap: 8px; }
+.kg-dq-check { margin: 0; font-size: 0.84rem; line-height: 1.5; color: var(--ink-soft); }
+.kg-dq-thresholds { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.kg-dq-threshold { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; padding: 6px 10px; border-radius: var(--r-sm);
+  font-size: 0.82rem; color: var(--ink-soft); background: var(--amber-soft); }
+.kg-dq-threshold[data-level="error"] { background: var(--red-soft); }
+.kg-dq-level { flex: none; font-weight: 650; color: var(--amber); }
+.kg-dq-threshold[data-level="error"] .kg-dq-level { color: var(--red); }
+.kg-dq-facts { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0; font-size: 0.8rem; }
+.kg-dq-facts dt { color: var(--muted); }
+.kg-dq-facts dd { margin: 0; display: flex; flex-wrap: wrap; gap: 4px; color: var(--ink-soft); overflow-wrap: anywhere; }
+.kg-chip[data-severity="high"] { border-color: var(--red); color: var(--red); }
+.kg-chip[data-severity="medium"] { border-color: var(--amber); color: var(--amber); }
+.kg-ev-quote { margin: 0; padding: 4px 10px; border-left: 2px solid var(--kg-clause); font-size: 0.8rem; line-height: 1.45; color: var(--ink-soft); flex-basis: 100%; }
+
+/* ── By words and by meaning, side by side (rulebook source G9) ──────────────────────────────── */
+.kg-cmp { position: absolute; top: calc(100% + 4px); left: 0; z-index: 31; width: min(760px, calc(100vw - 32px));
+  max-height: 70vh; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding: 12px;
+  border: 1px solid var(--border-strong); border-radius: var(--r); background: var(--surface); box-shadow: var(--shadow-lg); }
+.kg-cmp-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.kg-cmp-head .kg-eyebrow { margin: 0; text-transform: none; letter-spacing: 0; font-size: 0.8rem; color: var(--muted); }
+.kg-cmp-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.kg-cmp-col { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.kg-cmp-title { margin: 0; font-size: 0.82rem; font-weight: 650; color: var(--ink); }
+.kg-cmp-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.kg-cmp-hit { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 8px; border: 1px solid transparent; border-radius: var(--r-sm);
+  background: transparent; color: var(--ink); font: inherit; font-size: 0.82rem; text-align: left; cursor: pointer; }
+.kg-cmp-hit:hover { background: var(--surface-3); }
+.kg-cmp-hit[data-only] { border-color: var(--accent-text); }
+.kg-cmp-label { flex: 1; min-width: 0; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; }
+.kg-cmp-only { flex: none; border-color: var(--accent-text); color: var(--accent-text); }
+@media (max-width: 640px) {
+  .kg-cmp-cols { grid-template-columns: 1fr; }
+  .kg-up-lines li { grid-template-columns: 1fr; }
+}

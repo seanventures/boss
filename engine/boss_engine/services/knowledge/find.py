@@ -97,12 +97,13 @@ def _kind_rank(incident: bool) -> dict[str, int]:
                  "review_finding", "decision", "fact"]
         rank = {k: i for i, k in enumerate(order)}
         rank["rule"] = len(order)
-        rank["data_quality_rule"] = len(order)
+        rank.update({"data_quality_rule": len(order), "clause": len(order) + 1,
+                     "dq_threshold": len(order) + 2, "cde": len(order) + 2})
     else:
         rank = {k: 0 for k in LEARNED_KINDS}
         rank["rule"] = 1
-        rank["data_quality_rule"] = 1
-        rank["clause"] = 2
+        # A rulebook's rule before the clause it was read from, before its thresholds.
+        rank.update({"data_quality_rule": 1, "clause": 2, "dq_threshold": 3, "cde": 3})
     for k in ANCHOR_KINDS:
         rank[k] = 20
     return rank

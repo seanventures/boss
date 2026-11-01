@@ -7959,6 +7959,15 @@ a.agent-chip-name:hover { text-decoration: underline; }
   font-size: .76rem; color: var(--ink-soft, #D4E0F4); max-width: 260px;
 }
 .agent-attached-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* An answer's citations by name (rulebook source G6): [R:…]/[D:…]/[L:…] become links to the
+   cited rule, clause or learning in the Knowledge Graph — never a raw id on screen. */
+.agent-cites { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; font-size: 0.78rem; }
+.agent-cites-label { color: var(--muted); }
+.agent-cite { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 2px 9px; border: 1px solid var(--border-strong);
+  border-radius: 999px; background: var(--surface-2); color: var(--ink-soft); text-decoration: none; }
+.agent-cite:hover, .agent-cite:focus-visible { border-color: var(--accent-text); color: var(--ink); }
+.agent-cite-kind { color: var(--muted); }
+.agent-cite-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agent-attached-drop {
   border: 0; background: transparent; color: var(--faint, #8092B3);
   cursor: pointer; font-size: .9rem; line-height: 1; padding: 0 2px;

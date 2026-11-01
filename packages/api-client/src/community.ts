@@ -5574,6 +5574,9 @@ export type KgVectorInfo =
       embedded: false;
       /** "Not embedded: code symbols are matched by structure, not meaning". */
       reason: string;
+      /** True when its kind IS embedded and the next pass will reach it; false when the kind is
+       * never embedded (found by name, words and links). */
+      waiting?: boolean;
     };
 
 export type KgLineageUse = {
@@ -5671,6 +5674,24 @@ export type KgSearchHit = {
   score: number;
 };
 
+/** GET /v1/knowledge/view/search/compare?project_id&actor&q=&layers=&limit=10 — the same query
+ * by words and by meaning (embeddings alone), side by side. */
+export type KgSearchCompareResponse = {
+  q: string;
+  words: KgSearchHit[];
+  meaning: KgSearchHit[];
+  meaning_available: boolean;
+  /** Why the meaning column is empty, in words. */
+  reason: string | null;
+  /** Meaning hits the words column did not find. */
+  only_by_meaning: string[];
+};
+
+/** GET /v1/knowledge/view/names?project_id&actor&ids=a,b — what an answer's citations are. */
+export type KgNodeNames = {
+  names: Record<string, { title: string; kind: string; kind_label: string; layer: string | null }>;
+};
+
 /** GET /v1/knowledge/view/search?project_id&actor&q=&layers=&limit=20&meaning=0|1 */
 export type KgSearchResponse = {
   q: string;
@@ -5690,6 +5711,53 @@ export type KgRuleEvidence = {
   /** The cited lines, e.g. [1569, 1576]. */
   lines: [number, number] | null;
   excerpt: string | null;
+};
+
+/** A document clause a rule cites (a rule read from a rulebook or regulation). */
+export type KgClauseEvidence = {
+  clause_id: string;
+  section: string;
+  document: string | null;
+  citation: string | null;
+  page: number | null;
+  page_end: number | null;
+  /** The passage quoted, word for word. */
+  quote: string | null;
+};
+
+export type KgDqThreshold = {
+  level: "warning" | "error";
+  text: string | null;
+  metric: string | null;
+  value: number | null;
+  node_id: string | null;
+};
+
+/** A bank's data-quality rule, as its rulebook prints it (kind data_quality_rule). */
+export type KgDqRule = {
+  rule_id: string;
+  version: number | null;
+  title: string;
+  dimension: string | null;
+  severity: string | null;
+  check: string | null;
+  owner: string | null;
+  system: string | null;
+  feed: string | null;
+  cdes: string[];
+  columns: string[];
+  tables: string[];
+  report_lines: string[];
+  mdrm: string[];
+  related: string[];
+  legal_reference: string | null;
+  page: number | null;
+  thresholds: KgDqThreshold[];
+  links: {
+    linked?: Record<string, string[]>;
+    unmatched?: Record<string, string[]>;
+    missing_relationships?: string[];
+  };
 };
 
 export type KgRuleReview = { by: string; at: string; decision_id: string | null; note: string | null;
@@ -5712,6 +5780,12 @@ export type KgRule = {
   evidence: KgRuleEvidence[];
   /** The scan that proposed it, for Rules review filtered by scan_id. */
   scan_id: string | null;
+  /** "rule" (a business rule) or "data_quality_rule" (read from a rulebook). */
+  kind?: "rule" | "data_quality_rule";
+  /** A data-quality rule's rulebook fields, thresholds and links; null for a business rule. */
+  dq?: KgDqRule | null;
+  /** The document clauses it cites (with the passage quoted). */
+  clause_evidence?: KgClauseEvidence[];
 };
 
 /** GET /v1/knowledge/view/rules?project_id&actor&status=proposed&scan_id=&area= */

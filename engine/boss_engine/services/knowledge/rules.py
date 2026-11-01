@@ -1027,7 +1027,8 @@ def edit_rule(
     attrs = dict(old["attrs"] or {})
     new_statement = _clean(statement, field="statement", limit=MAX_STATEMENT) if statement is not None \
         else attrs.get("statement") or old["body"]
-    new_title = _clean(title, field="title", limit=MAX_TITLE) if title is not None else old["name"]
+    old_title = attrs.get("title") or old["name"]          # a DQ rule's name carries its id
+    new_title = _clean(title, field="title", limit=MAX_TITLE) if title is not None else old_title
     new_category = str(category).strip().lower() if category is not None else attrs.get("category")
     if new_category not in CATEGORIES:
         raise RuleRefused(f"category is one of {', '.join(sorted(CATEGORIES))}.")
@@ -1039,14 +1040,14 @@ def edit_rule(
                   for k in ("areas", "packages", "symbols")}
         evidence_nodes = [dict(r) for r in connection.execute(text(
             "SELECT n.id, n.node_key, n.repo FROM kg_edges e JOIN kg_nodes n ON n.id = e.dst_id "
-            "WHERE e.src_id = :id AND e.kind = 'evidenced_by'"), {"id": rule_id}).mappings()]
+            "WHERE e.src_id = :id AND e.kind = 'evidenced_by' AND n.kind <> 'clause'"), {"id": rule_id}).mappings()]
         new_scope, _, _ = _scope(connection, project_id, merged, evidence_nodes)
         if scope.get("repo"):
             new_scope["repo"] = str(scope["repo"])
     else:
         new_scope = old_scope
     if (new_statement, new_title, new_category, json.dumps(new_scope, sort_keys=True)) == (
-            attrs.get("statement") or old["body"], old["name"], attrs.get("category"),
+            attrs.get("statement") or old["body"], old_title, attrs.get("category"),
             json.dumps(old_scope, sort_keys=True)):
         raise RuleRefused("Nothing changed. Approve the rule as it is, or change its statement, title, "
                           "category or scope.")

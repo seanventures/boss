@@ -117,6 +117,11 @@ export const WRITE_HELPERS: Readonly<Record<string, WriteGate | readonly Permiss
   "lib/kg-view.ts#addDocument": "knowledge:manage",   // POST /v1/knowledge/documents
   "lib/kg-view.ts#setPack": "knowledge:manage",       // POST /v1/knowledge/packs
   "lib/kg-view.ts#loadAmlSample": "knowledge:manage", // POST /v1/knowledge/samples/aml
+  "lib/kg-view.ts#stageUpload": "knowledge:manage",   // POST /v1/knowledge/documents/uploads
+  "lib/kg-view.ts#editUpload": "knowledge:manage",    // POST /v1/knowledge/documents/uploads/{id}/edit
+  "lib/kg-view.ts#confirmUpload": "knowledge:manage", // POST /v1/knowledge/documents/uploads/{id}/confirm
+  "lib/kg-view.ts#discardUpload": "knowledge:manage", // POST /v1/knowledge/documents/uploads/{id}/discard
+  "lib/kg-view.ts#stageDqRulebook": "knowledge:manage", // POST /v1/knowledge/samples/dq-rulebook
   "lib/kg-view.ts#promoteFact": "knowledge:manage",   // POST /v1/knowledge/facts/{id}/promote
   "lib/kg-view.ts#rejectFact": "knowledge:manage",    // POST /v1/knowledge/facts/{id}/reject
   "lib/kg-view.ts#forgetFact": "knowledge:manage",    // POST /v1/knowledge/facts/{id}/forget
