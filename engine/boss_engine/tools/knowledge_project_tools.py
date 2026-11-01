@@ -90,6 +90,22 @@ def _set_ontology_pack(ctx, *, project_id, actor, args):
     return {"ok": True, "pack_id": pack.pack_id, "version": pack.version}
 
 
+def _load_aml_sample(ctx, *, project_id, actor, args):
+    from ..services.knowledge import aml_sample
+
+    with ctx.begin() as c:
+        return aml_sample.load_sample(c, project_id=project_id, actor=actor)
+
+
+def _aml_sample_status(ctx, *, project_id, actor, args):
+    from ..services.knowledge import aml_sample
+
+    with ctx.begin() as c:
+        found = aml_sample.status(c, project_id=project_id)
+    return {"ok": True, **found,
+            "href": f"/?project_id={project_id}&area=knowledge&kg_tab=documents"}
+
+
 KNOWLEDGE_PROJECT_TOOLS: dict[str, dict] = {
     "knowledge_project_setup": {
         "description": (
@@ -148,6 +164,30 @@ KNOWLEDGE_PROJECT_TOOLS: dict[str, dict] = {
             "additionalProperties": False},
         "handler": _set_ontology_pack, "kind": "write", "permission": "knowledge:manage",
         "operator_only": True,
+    },
+    "load_aml_sample": {
+        "description": (
+            "LOAD the AML case study's sample bank into this project (case study 4): sets the "
+            "banking-aml ontology pack (it keeps banking-regulatory's kinds), registers the "
+            "sample's mock connectors (case-management, kyc, transactions), writes NorthPeak "
+            "Lending's synthetic customers, accounts, counterparties, KYC profiles, typologies "
+            "and three open alerts into the Knowledge Graph, and installs the "
+            "aml_alert_investigation workflow. Synthetic data only; loading twice changes "
+            "nothing. Proposed by the model, but only an operator presses it. Then start "
+            "aml_alert_investigation with alert_id ALERT-1."),
+        "parameters": {"type": "object", "properties": {}, "required": [],
+                       "additionalProperties": False},
+        "handler": _load_aml_sample, "kind": "write", "permission": "knowledge:manage",
+        "operator_only": True,
+    },
+    "aml_sample_status": {
+        "description": (
+            "Whether this project has the AML sample loaded, its ontology pack, and each sample "
+            "alert (ALERT-1..3) with its account, customer, rule and the latest investigation's "
+            "case status and the person's determination."),
+        "parameters": {"type": "object", "properties": {}, "required": [],
+                       "additionalProperties": False},
+        "handler": _aml_sample_status, "kind": "read", "permission": "knowledge:read",
     },
 }
 

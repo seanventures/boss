@@ -11,6 +11,7 @@ rendering is already there):
     web-intel         :8770/mcp   (tools/mcp_web_intel_server.py)
     doc-render        :8771/mcp   (tools/mcp_doc_render_server.py)
     itsm              :8772/mcp   (tools/mcp_itsm_mock.py)
+    aml-sample        :8773/{case-management,kyc,transactions}/mcp   (tools/mcp_aml_mock.py)
 
 Run it locally the same way:
 
@@ -37,10 +38,20 @@ def _ports() -> tuple[int, int, int, int]:
     return ports if len(ports) == 4 else (8765, 8770, 8771, 8772)  # type: ignore[return-value]
 
 
+def aml_sample_port() -> int:
+    """The AML sample's connectors (tools/mcp_aml_mock.py: case-management, kyc, transactions,
+    one path each). BOSS_MCP_AML_PORT moves it; the API reads the same variable for the
+    addresses the AML sample registers (knowledge/aml_sample.AML_MCP_SERVERS)."""
+    try:
+        return int(os.environ.get("BOSS_MCP_AML_PORT", "").strip() or 8773)
+    except ValueError:
+        return 8773
+
+
 SERVERS = tuple(zip(("boss-devops-reference", "web-intel", "doc-render", "itsm"),
                     ("tools.mcp_demo_server", "tools.mcp_web_intel_server",
                      "tools.mcp_doc_render_server", "tools.mcp_itsm_mock"),
-                    _ports()))
+                    _ports())) + (("aml-sample", "tools.mcp_aml_mock", aml_sample_port()),)
 
 
 async def serve() -> None:

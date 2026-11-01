@@ -33,6 +33,15 @@
   /* KG P5b: the banking-regulatory instance's two additive ontology kinds. */
   --kg-compliance-case: #fb7185;
   --kg-remediation-package: #22c55e;
+  /* Case study 4: the banking-aml pack's kinds (packages/specpack/ontology/banking-aml.yaml). */
+  --kg-customer: #0ea5e9;
+  --kg-account: #38bdf8;
+  --kg-counterparty: #f59e0b;
+  --kg-transaction: #94a3b8;
+  --kg-typology: #a855f7;
+  --kg-kyc-profile: #14b8a6;
+  --kg-alert: #ef4444;
+  --kg-aml-case: #f97316;
   /* Whole-repo bubbles and layer badges. */
   --kg-layer-code: #5b9dff;
   --kg-layer-rules: #f0a43a;

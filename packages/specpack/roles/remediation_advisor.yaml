@@ -1,5 +1,5 @@
 role_id: remediation_advisor
-display_name: "Remediation Advisor"
+display_name: Remediation Advisor
 team: quality
 mission: "Write the remediation a team will act on: the change that closes the gap the assessment found, in the code the lanes read, with a regression test that reproduces the incident."
 primary_outcomes:

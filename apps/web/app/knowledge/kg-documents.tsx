@@ -20,6 +20,7 @@ import {
 } from "../../lib/kg-view";
 import { SCAN_START } from "../../lib/kg-view";
 import { post } from "../workflows/delivery-api";
+import { AmlSample } from "./kg-aml-sample";
 
 type Who = { projectId: string; actor: string };
 
@@ -321,6 +322,7 @@ export function DocumentsTab({ projectId, actor, archived = false }: {
       ) : null}
       {packs ? <PackRow w={w} current={packs.current} available={packs.available} onChanged={() => void load()} archived={archived} /> : null}
       <AddRegulation w={w} disabled={addDisabled} disabledWhy={addWhy} onAdded={() => void load()} />
+      <AmlSample projectId={projectId} actor={actor} archived={archived} onLoaded={() => void load()} />
       {docs && docs.length === 0 ? <p className="kg-quiet" data-testid="kg-documents-empty">No regulation documents yet.</p> : null}
       {docs && docs.length > 0 ? (
         <ul className="kg-doc-list" data-testid="kg-doc-list">

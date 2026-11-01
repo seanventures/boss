@@ -180,3 +180,45 @@ def add_document_route(body: AddDocumentBody) -> dict[str, Any]:
             )
     except Exception as error:  # noqa: BLE001
         raise _http(error) from error
+
+
+# ── Case study 4: the AML sample (services/knowledge/aml_sample.py) ──────────────────────────
+# One product action loads it: the banking-aml pack, the sample's three mock connectors, the
+# synthetic bank into the Knowledge Graph, and the aml_alert_investigation workflow installed.
+# The same action the agent's `load_aml_sample` tool takes; never a SQL script.
+
+class LoadSampleBody(BaseModel):
+    project_id: str
+    actor: str
+    step_up: Optional[str] = None
+
+
+@router.get("/samples/aml")
+@permit(P.KNOWLEDGE_READ, scope=Scope.project(query="project_id"))
+def aml_sample_status(project_id: str = Query(...), actor: str = Query(...)) -> dict[str, Any]:
+    from boss_engine.services.knowledge import aml_sample
+
+    try:
+        with begin(_engine) as connection:
+            _actor(connection, project_id, actor, READ)
+            return aml_sample.status(connection, project_id=project_id)
+    except Exception as error:  # noqa: BLE001
+        raise _http(error) from error
+
+
+@router.post("/samples/aml")
+@permit(P.KNOWLEDGE_MANAGE, scope=Scope.project(body="project_id"))
+def load_aml_sample(body: LoadSampleBody) -> dict[str, Any]:
+    from boss_engine.services.knowledge import aml_sample
+
+    try:
+        require_confirmation(body.step_up)
+    except PermissionError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    try:
+        with begin(_engine) as connection:
+            _actor(connection, body.project_id, body.actor, MANAGE)
+            return aml_sample.load_sample(connection, project_id=body.project_id,
+                                          actor=body.actor)
+    except Exception as error:  # noqa: BLE001
+        raise _http(error) from error

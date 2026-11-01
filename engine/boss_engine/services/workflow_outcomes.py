@@ -309,6 +309,10 @@ VERDICTS: dict[str, Callable[[Mapping[str, Any], Mapping[str, Any]], Verdict]] =
     "lane_confirmation": role_agent,
     "remediation_package": role_agent,
     "compliance_closure": role_agent,
+    # aml_alert_investigation's role-agent steps (knowledge/aml_alert_pipeline.py).
+    "aml_network_mapping": role_agent,
+    "aml_analysis": role_agent,
+    "sar_narrative": role_agent,
 }
 
 

@@ -51,10 +51,32 @@ log = logging.getLogger(__name__)
 #: deterministic steps rather than a one-off call of its own.
 from .knowledge import graph_steps as _graph_steps
 
+
+def _aml_step(name: str):
+    """One of the AML instance's deterministic steps, imported when it runs (the pipeline module
+    reaches the regulatory one, which this module must not import at load time)."""
+    def run(connection: Connection, **kwargs: Any) -> dict[str, Any]:
+        from .knowledge import aml_alert_pipeline
+
+        try:
+            return getattr(aml_alert_pipeline, name)(connection, **kwargs)
+        except aml_alert_pipeline.DeterminationMissing as missing:
+            # Settled: retrying cannot make a person decide. The run stops here and says so.
+            raise SettledCapabilityError(str(missing)) from missing
+    run.__name__ = name
+    return run
+
+
 GRAPH_STEP_EXECUTORS = {
     "context_enrichment": _graph_steps.run_context_enrichment,
     "historical_pattern": _graph_steps.run_historical_pattern,
     "closure": _graph_steps.run_closure,
+    # Case study 4 (aml_alert_investigation): the AML instance's deterministic steps. Its
+    # `historical_pattern` step names `aml_historical_pattern` as its `capability` input.
+    "alert_intake": _aml_step("run_alert_intake"),
+    "evidence_collection": _aml_step("run_evidence_collection"),
+    "aml_historical_pattern": _aml_step("run_aml_historical_pattern"),
+    "aml_closure": _aml_step("run_aml_closure"),
 }
 
 
@@ -64,7 +86,12 @@ def execute_graph_step(
     """Run the fixed knowledge-graph query named by `step_id` (or `inputs["capability"]`),
     and return its $0 outputs. Every write it makes went through `context_graph`/the knowledge
     store's own primitives inside the function itself — nothing here writes a node directly."""
-    key = step_id if step_id in GRAPH_STEP_EXECUTORS else str(inputs.pop("capability", "") or "")
+    # A step may NAME its query (`capability`), so an instance keeps the template's step id —
+    # the AML instance's `historical_pattern` runs `aml_historical_pattern`. Without one, the
+    # step id is the query, as before.
+    named = str(inputs.pop("capability", "") or "")
+    key = named if named in GRAPH_STEP_EXECUTORS else (
+        step_id if step_id in GRAPH_STEP_EXECUTORS else named)
     func = GRAPH_STEP_EXECUTORS.get(key)
     if func is None:
         raise CapabilityExecutionError(f"no deterministic graph step registered for '{step_id}'.")
@@ -3050,6 +3077,39 @@ def _compliance_closure(connection: Connection, ctx: Any, project_id: str, step:
                                         context, inputs)
 
 
+def _run_aml_role_capability(key: str, connection: Connection, ctx: Any, project_id: str,
+                             step: dict[str, Any], context: dict[str, Any],
+                             inputs: dict[str, Any]) -> dict[str, Any]:
+    from .knowledge import aml_alert_pipeline
+
+    func = getattr(aml_alert_pipeline, f"run_{key}")
+    try:
+        return func(connection, getattr(ctx, "settings", None) or _settings(), project_id, step,
+                    context, inputs)
+    except aml_alert_pipeline.DeterminationMissing as missing:
+        # Settled: retrying cannot make a person decide. The run stops here and says so.
+        raise SettledCapabilityError(str(missing)) from missing
+
+
+def _aml_network_mapping(connection: Connection, ctx: Any, project_id: str,
+                         step: dict[str, Any], context: dict[str, Any],
+                         inputs: dict[str, Any]) -> dict[str, Any]:
+    return _run_aml_role_capability("aml_network_mapping", connection, ctx, project_id, step,
+                                    context, inputs)
+
+
+def _aml_analysis(connection: Connection, ctx: Any, project_id: str, step: dict[str, Any],
+                  context: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+    return _run_aml_role_capability("aml_analysis", connection, ctx, project_id, step,
+                                    context, inputs)
+
+
+def _sar_narrative(connection: Connection, ctx: Any, project_id: str, step: dict[str, Any],
+                   context: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+    return _run_aml_role_capability("sar_narrative", connection, ctx, project_id, step,
+                                    context, inputs)
+
+
 _BANKING_ROLE_CAPABILITIES: dict[str, str] = {
     "clause_intake": "_clause_intake",
     "compliance_assessment": "_compliance_assessment",
@@ -3057,6 +3117,10 @@ _BANKING_ROLE_CAPABILITIES: dict[str, str] = {
     "lane_confirmation": "_lane_confirmation",
     "remediation_package": "_remediation_package",
     "compliance_closure": "_compliance_closure",
+    # Case study 4 (aml_alert_investigation, knowledge/aml_alert_pipeline.py): the role agents.
+    "aml_network_mapping": "_aml_network_mapping",
+    "aml_analysis": "_aml_analysis",
+    "sar_narrative": "_sar_narrative",
 }
 
 

@@ -809,6 +809,10 @@ export function kindToken(kind: string, symbolKind?: string | null, id?: string)
     run: "--kg-anchor", pull_request: "--kg-anchor", release: "--kg-anchor", spec: "--kg-anchor",
     runbook: "--kg-anchor", alert_rule: "--kg-anchor", topic: "--kg-anchor",
     compliance_case: "--kg-compliance-case", remediation_package: "--kg-remediation-package",
+    // Case study 4: the banking-aml pack's kinds.
+    customer: "--kg-customer", account: "--kg-account", counterparty: "--kg-counterparty",
+    transaction: "--kg-transaction", typology: "--kg-typology", kyc_profile: "--kg-kyc-profile",
+    alert: "--kg-alert", aml_case: "--kg-aml-case",
   };
   return map[kind] ?? "--kg-function";
 }
@@ -823,6 +827,8 @@ const KIND_NAMES: Record<string, string> = {
   config_key: "Config key", queue: "Queue", service: "Service", resource: "Resource", deployment: "Deployment",
   datastore: "Datastore", external: "External", repo: "Repository", group: "Group",
   compliance_case: "Compliance case", remediation_package: "Remediation package",
+  customer: "Customer", account: "Account", counterparty: "Counterparty", transaction: "Transaction",
+  typology: "Typology", kyc_profile: "KYC profile", alert: "Alert", aml_case: "AML case",
 };
 
 /** The kind in words (tooltip, legend, panel: colour is never the only signal, §5.10). */

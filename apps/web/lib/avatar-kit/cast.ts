@@ -73,6 +73,15 @@ export const CAST: readonly CastMember[] = [
   picked("resource_janitor", "Resource Janitor", ["propeller", "cycle", "green", "band"]),
   picked("secrets_steward", "Secrets Steward", ["dome", "key", "amber", "shield"]),
   picked("archivist", "Archivist", ["dome", "page", "slate", "glasses"]),
+  // The knowledge-graph case studies' roles (incident response, banking-regulatory, banking-aml).
+  picked("incident_commander", "Incident Commander", ["siren", "flag", "coral", "slit"]),
+  picked("compliance_officer", "Compliance Officer", ["crest", "check", "slate", "glasses"]),
+  picked("compliance_analyst", "Compliance Analyst", ["magnifier", "page", "blue", "lens"]),
+  picked("lane_agent", "Lane Agent", ["hardhat", "braces", "amber", "band"]),
+  picked("remediation_advisor", "Remediation Advisor", ["headlamp", "wrench", "green", "band"]),
+  picked("aml_network_mapper", "Network Mapper", ["antenna", "people", "teal", "scope"]),
+  picked("aml_analyst", "AML Analyst", ["magnifier", "target", "purple", "lens"]),
+  picked("sar_narrator", "SAR Narrator", ["quill", "page", "coral", "glasses"]),
 ];
 
 export const CAST_BY_KEY: Readonly<Record<string, CastMember>> = dict(CAST.map((c) => [c.roleKey, c]));

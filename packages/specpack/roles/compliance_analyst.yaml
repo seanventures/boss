@@ -1,5 +1,5 @@
 role_id: compliance_analyst
-display_name: "Compliance Analyst"
+display_name: Compliance Analyst
 team: quality
 mission: "Judge whether a regulation's clause is implemented in the code, partly or not at all, from the evidence the graph and the incident history give, and say so with a confidence."
 primary_outcomes:

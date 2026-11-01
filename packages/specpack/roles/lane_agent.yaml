@@ -1,5 +1,5 @@
 role_id: lane_agent
-display_name: "Lane Agent"
+display_name: Lane Agent
 team: quality
 mission: "Check one finding against the real source code it cites, and confirm it, rule it out on code evidence, or say what is missing to judge it."
 primary_outcomes:
