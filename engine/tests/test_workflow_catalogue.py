@@ -76,8 +76,8 @@ def test_every_shipped_workflow_validates():
 
 def test_there_are_twelve_and_each_has_a_stable_key():
     keys = [e["key"] for e in catalogue.CATALOGUE]
-    assert len(keys) == 20
-    assert len(set(keys)) == 20, "duplicate workflow key"
+    assert len(keys) == 23
+    assert len(set(keys)) == 23, "duplicate workflow key"
     for key in keys:
         assert key.replace("_", "").isalnum(), key
 
@@ -152,8 +152,13 @@ def test_seeding_installs_every_workflow_as_read_only_product(eng, project):
     with eng.begin() as c:
         result = catalogue.seed(c, project)
         rows = workflows.list_definitions(c, project, namespace="product")
+        # An entry that needs a pack or a sample's connectors installs where they are, and is
+        # skipped (with why) here.
+        installable = [e for e in catalogue.CATALOGUE if not catalogue._unmet(c, project, e)]
     assert result["count"] == len(catalogue.CATALOGUE)
-    assert len(rows) == len(catalogue.CATALOGUE)
+    assert len(rows) == len(installable)
+    assert all(i.get("skipped") for i in result["installed"]
+               if i["key"] not in {e["key"] for e in installable})
     for row in rows:
         assert row["namespace"] == "product"
         assert row["is_catalogue"] is True, f"{row['workflow_key']} is editable in place"
@@ -169,8 +174,8 @@ def test_seeding_twice_does_not_create_a_second_copy(eng, project):
         versions = c.execute(
             text("SELECT count(*) FROM workflow_versions WHERE project_id=:p"), {"p": project}
         ).scalar()
-    assert len(definitions) == len(catalogue.CATALOGUE)
-    n = len(catalogue.CATALOGUE)
+        n = sum(1 for e in catalogue.CATALOGUE if not catalogue._unmet(c, project, e))
+    assert len(definitions) == n
     assert versions == n, f"re-seeding published {versions - n} redundant versions"
 
 

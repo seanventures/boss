@@ -19,6 +19,7 @@ _EXPECTED_TOOLS: set[str] = {
     "kg_rules", "kg_propose_rule",
     # A regulation or the AML sample into a project's Knowledge Graph (KG P7a, case study 4).
     "add_regulation_document", "set_ontology_pack", "load_aml_sample", "aml_sample_status",
+    "load_dq_platform", "dq_platform_status",
     # LEARNING WHILE EXECUTING (BOSSAPP-768 S2b): what an agent learned, recorded the moment it
     # learns it — one `inferred` item with evidence, the run's provenance, forgettable.
     "record_learning",
@@ -258,15 +259,15 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 169, (
+    assert len(reg.names()) == 171, (
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
-    assert len(read) == 96  # + aml_sample_status + knowledge_project_setup (BOSSAPP-768 project flow)
+    assert len(read) == 97  # + aml_sample_status + knowledge_project_setup (BOSSAPP-768 project flow)
     # + list_platform_gaps (BOSSAPP-571's doorway) + kg_rules (the approved business rules, BOSSAPP-768)
     #                         + wait_for (waiting for BOSS's own work) + kg_schema (what the knowledge graph holds) + code_graph_status, index_repository_code (a repository's code graph) + list_org_repositories (the org's repository registry) + list_projects, describe_project (a project's real state, any project)
     #                        + captain_goals, + 7 kg reads, + 3 self-fix reads, + read_app_logs, + my_recent_work, + system_health, + 7 template/security reads, + precheck_workflow
     #                        + query_project_data (the agent baseline's fenced row read)
-    assert len(write) == 73  # + add_regulation_document, set_ontology_pack, load_aml_sample + set_project_team (BOSSAPP-768 project flow)
+    assert len(write) == 74  # + add_regulation_document, set_ontology_pack, load_aml_sample + set_project_team (BOSSAPP-768 project flow)
     # + file_platform_gap, request_self_fix (BOSSAPP-571's doorway) + record_learning (BOSSAPP-768 S2b), + kg_propose_rule (BOSSAPP-768 S2a), + archive_project, restore_project (BOSSAPP-768 S5), + allow_repository, remove_project_repository + 5 captain writes (BOSSAPP-759), + create_project, + kg_propose_fact, + remove_app, + system_doctor_act, + run_security_scan (F4), + apply_template (F2),
     #                         + review_pull_request_again
     # the capabilities the user explicitly asked the agent to cover
@@ -525,7 +526,7 @@ _SAFE_WRITES = [
     # A REGULATION'S OWN WORDS, OR THE SYNTHETIC AML BANK, INTO THE GRAPH (KG P7a, case study 4):
     # upserts keyed by the document's or the sample's own ids, so adding again changes nothing;
     # the pack is set again to undo. Both pack-changing ones are a person's press.
-    "add_regulation_document", "set_ontology_pack", "load_aml_sample",
+    "add_regulation_document", "set_ontology_pack", "load_aml_sample", "load_dq_platform",
     # What an agent learned while working: one `inferred` item, with evidence (BOSSAPP-768 S2b).
     "record_learning",
     # Re-queues only steps whose recorded blocker has actually cleared — each one something the
@@ -572,7 +573,7 @@ def test_the_tools_that_are_never_pressed_by_the_model():
         "decide",             # approves a gate; an agent that approves its own gates is ungated
         "delete_workflow",    # removes a path a person authored
         # sets the project's ontology pack and loads the synthetic AML bank (case study 4)
-        "load_aml_sample",
+        "load_aml_sample", "load_dq_platform",
         "remove_app",         # stops an app and removes it from its host
         # starts BOSS changing its own code from a filed gap: a person's press (BOSSAPP-571)
         "request_self_fix",

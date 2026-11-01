@@ -105,6 +105,11 @@ INTERNAL = {
     "aml_network_mapping": "_aml_network_mapping",
     "aml_analysis": "_aml_analysis",
     "sar_narrative": "_sar_narrative",
+    # the DQ RCA and remediation pipeline (knowledge/dq_incident_pipeline.py)
+    **{key: f"_{key}" for key in (
+        "dq_monitoring", "dq_context_enrichment", "dq_historical_pattern", "dq_rca",
+        "dq_orchestration", "dq_lane", "dq_rule_drafting", "dq_remediation_package",
+        "dq_remediation_fix", "dq_incident_closure", "dq_escalation", "dq_eagle_intake")},
 }
 
 #: Tool-less capabilities that commission NOTHING. They are honest no-ops that say so

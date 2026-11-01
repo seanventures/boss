@@ -186,7 +186,7 @@ kinds:
     plural: Rule proposals
     color: "#4b4fb8"
     attrs: [rule_id, proposal, thresholds, status, rule_node_id]
-# Every relationship tools/dq_sample emits, lower-cased (IN/OF/FROM/TO/VIA renamed so they are
+# Every relationship tools/dq_sample emits, lower-cased (IN/FROM/TO/VIA renamed so they are
 # never a Cypher keyword), then the Context Graph relations the pipeline writes. owns, reads,
 # caused_by and references are core edge kinds and are used, not declared.
 edges:
@@ -278,7 +278,7 @@ edges:
     label: related to
     relationship: RELATED_TO
     between: [data_quality_rule->data_quality_rule]
-  - id: threshold_of
+  - id: of
     label: of
     relationship: OF
     between: [dq_threshold->data_quality_rule]

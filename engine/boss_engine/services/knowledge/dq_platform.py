@@ -48,7 +48,7 @@ WORKFLOW_KEYS = (RCA_WORKFLOW, ESCALATION_WORKFLOW, INTAKE_WORKFLOW)
 #: Kinds the rulebook brings, never this loader.
 RULEBOOK_KINDS = frozenset({"data_quality_rule", "dq_threshold"})
 #: D.RELATIONSHIPS names that are Cypher keywords, renamed as the pack declares them.
-_RESERVED = {"IN": "in_calendar", "OF": "threshold_of", "FROM": "lineage_from",
+_RESERVED = {"IN": "in_calendar", "FROM": "lineage_from",
              "TO": "lineage_to", "VIA": "lineage_via"}
 #: When the Escalation Agent sweeps every open incident (bank-local time).
 ESCALATION_SCHEDULE = {"cadence": "daily", "hour": 7, "minute": 0, "tz_name": "America/New_York"}

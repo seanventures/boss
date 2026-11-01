@@ -122,3 +122,27 @@ def test_the_aml_sample_loads_through_the_api_and_reports_its_alerts(client, eng
     after = client.get(url, params={"project_id": project_id, "actor": ACTOR}).json()
     assert after["loaded"] is True and after["pack_id"] == "banking-aml"
     assert [a["alert_id"] for a in after["alerts"]] == ["ALERT-1", "ALERT-2", "ALERT-3"]
+
+
+def test_the_dq_platform_loads_through_the_api_beside_the_other_packs(client, engine):
+    """The DQ case study: the platform is a product action (knowledge:manage, confirmed); it adds
+    banking-dq without taking a pack the project already holds, and lists Eagle's groups by COB."""
+    project_id = _new_project(engine, "dq-sample")
+    client.post("/v1/knowledge/packs", json={"project_id": project_id, "actor": ACTOR,
+                                             "step_up": "confirmed", "pack_id": "banking-aml"})
+    url = "/v1/knowledge/samples/dq"
+    before = client.get(url, params={"project_id": project_id, "actor": ACTOR})
+    assert before.status_code == 200, before.text
+    assert before.json()["loaded"] is False
+    assert client.post(url, json={"project_id": project_id, "actor": ACTOR}).status_code == 422
+    loaded = client.post(url, json={"project_id": project_id, "actor": ACTOR,
+                                    "step_up": "confirmed"})
+    assert loaded.status_code == 200, loaded.text
+    assert loaded.json()["pack_id"] == "banking-dq"
+    packs = client.get("/v1/knowledge/packs", params={"project_id": project_id,
+                                                       "actor": ACTOR}).json()
+    assert {p["pack_id"] for p in packs["packs"]} == {"banking-aml", "banking-dq"}
+    after = client.get(url, params={"project_id": project_id, "actor": ACTOR,
+                                    "cob": "2026-10-05"}).json()
+    assert after["loaded"] is True and after["running_example"] == "EXG-20261005-0003"
+    assert [g["group_id"] for g in after["groups"]] == ["EXG-20261005-0003", "EXG-20261005-0005"]
