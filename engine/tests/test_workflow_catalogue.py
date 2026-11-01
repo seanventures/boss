@@ -54,12 +54,23 @@ def project(eng):
         )
     yield pid
     with eng.begin() as c:
+        # Seeding installs the role agents a catalogue entry needs (rulebook_extraction's
+        # analyst everywhere; a pack's roles where the pack is): every row a project owns goes,
+        # in as many passes as the foreign keys between them need.
+        owned = [str(t) for t in c.execute(text(
+            "SELECT DISTINCT tc.table_name FROM information_schema.table_constraints tc "
+            "JOIN information_schema.constraint_column_usage cu ON cu.constraint_name = "
+            "tc.constraint_name WHERE tc.constraint_type = 'FOREIGN KEY' AND cu.table_name = "
+            "'projects' AND tc.table_name <> 'projects'")).scalars().all()]
         for table in ("workflow_mappings", "workflow_versions", "workflow_definitions",
-                      "events", "receipts"):
-            try:
-                c.execute(text(f"DELETE FROM {table} WHERE project_id=:p"), {"p": pid})
-            except Exception:
-                pass
+                      "events", "receipts", *owned):
+            for _pass in range(3):
+                try:
+                    with c.begin_nested():
+                        c.execute(text(f"DELETE FROM {table} WHERE project_id=:p"), {"p": pid})
+                    break
+                except Exception:
+                    continue
         c.execute(text("DELETE FROM projects WHERE id=:p"), {"p": pid})
 
 
