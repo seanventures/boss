@@ -53,6 +53,8 @@ export type Palette = { capabilities: Capability[]; customSteps: CustomStepDef[]
   /** Absent from palettes built before branch blocks could be placed: none are offered then. */
   controls?: ControlDef[];
   agents: RosterAgent[]; humanRole: string; riskFloor: number;
+  /** The project's connected outside agents (Agents › Outside agents), to name their steps. */
+  outsideAgents?: { id: string; name: string }[];
   bindable: { skills: { id: string; name: string }[];
               mcp_servers: { id: string; name: string; tools: { name: string }[] }[] } };
 

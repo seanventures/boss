@@ -43,7 +43,8 @@ export function SummaryChips({ state, views, typicalMinutes, onSettings, onIssue
       if (v.agent.kind === "named" && v.agent.role_key && !seen.has(v.agent.role_key)) seen.set(v.agent.role_key, v.agent);
     }
     for (const key of state.summary?.agents ?? []) {
-      if (!seen.has(key)) seen.set(key, { kind: "named", role_key: key, label: key.replace(/_/g, " "), tip: "" });
+      if (!seen.has(key)) seen.set(key, { kind: "named", role_key: key,
+        label: key.startsWith("outside:") ? "Outside agent" : key.replace(/_/g, " "), tip: "" });
     }
     return [...seen.values()];
   }, [views, state.summary]);

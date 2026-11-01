@@ -220,7 +220,12 @@ def explain_version(
         if (effective == "manual" or spec_of.get("is_gate")) and not by_panel and not by_policy:
             gates += 1
 
-        captain = str(step.get("captain") or spec_of.get("captain") or "")
+        raw_captain = step.get("captain") or spec_of.get("captain") or ""
+        # An outside agent's captain is {"external_agent": "ext_…"}: named by its id, never as
+        # the dict's Python text (the editor showed "{'external_agent': 'ext_…'}", 2026-10-31).
+        captain = (f"outside:{raw_captain.get('external_agent')}"
+                   if isinstance(raw_captain, dict) and raw_captain.get("external_agent")
+                   else "" if isinstance(raw_captain, dict) else str(raw_captain))
         if captain and captain not in agents:
             agents.append(captain)
         minutes += int(spec_of.get("typical_minutes") or 0)

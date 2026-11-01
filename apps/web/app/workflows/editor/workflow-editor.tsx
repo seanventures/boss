@@ -112,7 +112,7 @@ export function WorkflowEditor({ projectId, workflowKey, onBack, onStart, actor,
   const [key, setKey] = useState(workflowKey);
   useEffect(() => { setKey(workflowKey); }, [workflowKey]);
 
-  const { state, dispatch, palette, dirty, loading, error, restore, refreshPalette } = useWorkflowEditor(key, projectId);
+  const { state, dispatch, palette: basePalette, dirty, loading, error, restore, refreshPalette } = useWorkflowEditor(key, projectId);
   const { spec, meta } = state;
   const readOnly = meta.readOnlyVersion != null;
 
@@ -182,12 +182,6 @@ export function WorkflowEditor({ projectId, workflowKey, onBack, onStart, actor,
   }, []);
 
   /* ── Derived ── */
-  const views = useMemo(() => new Map(spec.steps.map((s) => [s.id, viewOf(s, palette)] as [string, StepView])),
-    [spec.steps, palette]);
-
-  /* ── Pipeline tab (KG P6b): the stage diagram, who runs each stage, and a contract stage's
-   *  captain switched to a connected outside agent. Outside agents are the project's own
-   *  (Agents › Outside agents), loaded once the tab is reachable. ── */
   const [outsideAgents, setOutsideAgents] = useState<OutsideAgentOption[]>([]);
   useEffect(() => {
     if (!projectId) return;
@@ -198,6 +192,16 @@ export function WorkflowEditor({ projectId, workflowKey, onBack, onStart, actor,
     });
     return () => { live = false; };
   }, [projectId]);
+  // The connected outside agents name their steps on the canvas and in the summary.
+  const palette = useMemo(() => (basePalette ? {
+    ...basePalette, outsideAgents: outsideAgents.map((a) => ({ id: a.id, name: a.display_name })),
+  } : basePalette), [basePalette, outsideAgents]);
+  const views = useMemo(() => new Map(spec.steps.map((s) => [s.id, viewOf(s, palette)] as [string, StepView])),
+    [spec.steps, palette]);
+
+  /* ── Pipeline tab (KG P6b): the stage diagram, who runs each stage, and a contract stage's
+   *  captain switched to a connected outside agent. Outside agents are the project's own
+   *  (Agents › Outside agents), loaded once the tab is reachable. ── */
   const pipelineSpec = useMemo(() => ({
     key: meta.workflow_key ?? meta.name ?? "workflow",
     version: meta.version ?? 1,

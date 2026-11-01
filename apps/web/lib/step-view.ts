@@ -135,6 +135,15 @@ export function isGateStep(step: SpecStep, palette: Palette | null): boolean {
 
 function agentOf(step: SpecStep, type: StepView["type"], palette: Palette): StepView["agent"] {
   const human = palette.humanRole || "human";
+  // A BANK'S OWN AGENT: {external_agent: "ext_…"}, an outbound call under a contract. It read
+  // "Auto" on the canvas and as raw code in the summary (2026-10-31).
+  const outside = step.captain && typeof step.captain === "object"
+    ? String((step.captain as { external_agent?: unknown }).external_agent ?? "") : "";
+  if (outside) {
+    const named = palette.outsideAgents?.find((a) => a.id === outside)?.name;
+    return { kind: "named", role_key: `outside:${outside}`, label: named || "Outside agent",
+             tip: "The organisation's own agent, called under this step's contract." };
+  }
   const captain = typeof step.captain === "string" ? step.captain.trim() : "";
   if (captain === human) return { kind: "person", label: "A person", tip: "Waits for a person to answer." };
   if (captain) {
