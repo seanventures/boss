@@ -46,7 +46,7 @@ describe("resolveDeepLinkOwnerOnServer", () => {
 
   it("API_URL configured and a target present: fetches the resolver with no-store and switches on success", async () => {
     clientMock.API_URL = "https://api.internal";
-    const fetchSpy = vi.fn(async (path: string) => ({
+    const fetchSpy = vi.fn(async (_path: string, _init?: RequestInit) => ({
       ok: true,
       status: 200,
       json: async () => ({ project_id: "proj_owner", can_view: true }),
