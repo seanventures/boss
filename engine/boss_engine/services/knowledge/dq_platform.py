@@ -195,6 +195,28 @@ def load_platform(connection: Connection, *, project_id: str, actor: str) -> dic
                           kind=edge_kind(rel), actor_kind="system", actor_ref=ACTOR_REF,
                           attrs={"relationship": rel})
         edges += 1
+    # The systems agents reach through MCP (Eagle, ITSM, Olympus): the Monitoring and
+    # Enrichment agents' designs read them as MCPServer nodes.
+    tools_of = {"eagle": ["list_exception_groups", "get_exception_group", "get_rule_run",
+                          "rerun_check"],
+                "itsm": ["get_incident", "list_incidents", "list_teams", "create_incident",
+                         "attach_to_incident", "update_incident"],
+                "olympus": ["get_exception_profile", "list_recent_changes"]}
+    for system in ds.systems:
+        if not system.mcp_server:
+            continue
+        server = STORE.upsert_node(
+            connection, project_id=project_id, kind="mcp_server",
+            node_key=node_key("mcp_server", system.mcp_server), name=system.mcp_server,
+            body=f"{system.name} reached by agents through MCP.", trust_tier="observed",
+            actor_kind="system", actor_ref=ACTOR_REF, source="dq_platform",
+            attrs={"key": system.mcp_server, "name": system.mcp_server,
+                   "system_id": system.system_id, "tools": tools_of.get(system.mcp_server, []),
+                   "sample": "dq"})
+        counts["mcp_server"] = counts.get("mcp_server", 0) + 1
+        STORE.upsert_edge(connection, project_id=project_id, src_id=ids[("system", system.system_id)],
+                          dst_id=server, kind="exposes", actor_kind="system", actor_ref=ACTOR_REF,
+                          attrs={"relationship": "EXPOSES"})
     # A table the code graph indexes is the same table: say so, rather than two islands.
     for table in ds.tables:
         if not table.in_code_graph:

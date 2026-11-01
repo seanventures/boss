@@ -23,6 +23,13 @@ knowledge_graph_reference: "KG v17"
 # incident, precedent, agent_decision and coverage_gap are BOSS core kinds: written, not declared.
 kinds:
   # ── Knowledge Graph (reference world; agents read it) ──
+  - id: mcp_server
+    layer: domain
+    label: MCP server
+    plural: MCP servers
+    color: "#1f8a9e"
+    group: Agent infrastructure
+    attrs: [name, system_id, tools]
   - id: system
     layer: domain
     label: System

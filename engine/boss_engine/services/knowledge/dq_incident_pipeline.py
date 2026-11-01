@@ -431,7 +431,32 @@ def run_dq_monitoring(connection: Connection, settings: Any, project_id: str,
     owner = _owner(connection, project_id, rule.get("owner_id"))
     tags = {"cde_ids": rule.get("cde_ids") or [], "column": group.get("column"),
             "platform": group.get("platform"), "dimension": rule.get("dimension")}
-    # 6 Match: an open incident on the same rule (the graph first, then ITSM).
+    # 6 Match. The incident THIS group already opened (a re-run, or one opened before BOSS was
+    # watching: INC-2301 from EXG-20261002-0002) is the same incident, opened — not an attach.
+    own = connection.execute(text(
+        "SELECT id, attrs FROM kg_nodes WHERE project_id = :p AND kind = 'incident' "
+        "AND valid_to IS NULL AND attrs->>'raised_from' = :g ORDER BY recorded_at DESC LIMIT 1"),
+        {"p": project_id, "g": group_id}).mappings().first()
+    if own is not None:
+        incident_id = str(_attrs(own).get("incident_id"))
+        node_id = str(own["id"])
+        statement = (f"{label} already opened {incident_id}; the investigation continues on it "
+                     f"(severity {_attrs(own).get('severity') or severity}).")
+        decision = _decide(connection, project_id, run_id=run_id, step_id=step_id,
+                           decision_type="IncidentOpened", statement=statement, actor_ref=actor,
+                           extra={"graded_severity": severity, "incident_id": incident_id,
+                                  "exception_group_id": group_id, "reopened_run": True})
+        gap_ids = _gaps(connection, project_id, run_id=run_id, step_id=step_id,
+                        statements=gaps, actor_ref=actor)
+        return {**base, "action": "open", "continue_pipeline": True, "incident_id": incident_id,
+                "subject_id": node_id, "incident_node_id": node_id,
+                "severity": _attrs(own).get("severity") or severity,
+                "rulebook_grade": rulebook_grade, "failure_reason": failure_reason,
+                "discrepancy": discrepancy or None, "owner": owner, "tags": tags,
+                "rule_node_id": rule.get("node_id"), "gaps": gaps, "note": statement,
+                "summary": statement, "produced": _produced("IncidentOpened", decision,
+                                                            statement, gap_ids, gaps)}
+    # Otherwise: an open incident on the same rule (the graph first, then ITSM).
     open_incident = connection.execute(text(
         "SELECT id, attrs FROM kg_nodes WHERE project_id = :p AND kind = 'incident' "
         "AND valid_to IS NULL AND attrs->>'rule_id' = :r "
@@ -1116,7 +1141,7 @@ def run_dq_rca(connection: Connection, settings: Any, project_id: str, step: Map
                                              "curator": curated.report()})
     return {"capability": "dq_rca", "tool": None, "status": "succeeded", "round": round_no,
             "incident_id": mon.get("incident_id"), "subject_id": incident_node,
-            "verdict": verdict, "candidates": candidates, "missing": missing,
+            "rca_verdict": verdict, "candidates": candidates, "missing": missing,
             "rationale": rationale, "families": [c["family"] for c in candidates],
             "cited_fact_ids": [precedent_ids[p]["node_id"] for c in candidates
                                for p in c["precedents"]],
@@ -1140,7 +1165,7 @@ def run_dq_orchestration(connection: Connection, settings: Any, project_id: str,
     mon, rca = steps.get("monitoring") or {}, steps.get("rca") or {}
     lanes: list[dict[str, Any]] = []
     held: list[str] = []
-    if rca.get("verdict") == INSUFFICIENT:
+    if rca.get("rca_verdict") == INSUFFICIENT:
         statement = (f"No lane for {mon.get('incident_id')}: RCA still found insufficient "
                      f"evidence after {rca.get('round') or 1} round(s) "
                      f"({'; '.join(rca.get('missing') or [])}). The incident stays open for a "
@@ -1166,7 +1191,7 @@ def run_dq_orchestration(connection: Connection, settings: Any, project_id: str,
                        extra={"lanes": [l["lane"] for l in lanes]})
     return {"capability": "dq_orchestration", "tool": None, "status": "succeeded",
             "incident_id": mon.get("incident_id"), "lanes": lanes,
-            "insufficient_evidence": rca.get("verdict") == INSUFFICIENT,
+            "insufficient_evidence": rca.get("rca_verdict") == INSUFFICIENT,
             "subject_id": mon.get("incident_node_id"), "note": statement[:600],
             "summary": statement, "ran_as": _ran_as(ORCHESTRATOR),
             "produced": _produced("Routed", decision, statement)}
@@ -1244,7 +1269,7 @@ def run_dq_lane(connection: Connection, settings: Any, project_id: str, step: Ma
                        extra={"lane": item.get("lane"), "family": family, "evidence": evidence})
     cited = [m["node_id"] for m in history.get("matches") or [] if m["incident_id"] in evidence]
     return {"capability": "dq_lane", "tool": None, "status": "succeeded",
-            "lane": item.get("lane"), "family": family, "verdict": verdict, "cause": cause,
+            "lane": item.get("lane"), "family": family, "lane_verdict": verdict, "cause": cause,
             "evidence": evidence, "rationale": rationale,
             "confidence": item.get("confidence"),
             "false_positive": family == "rule_config" and verdict == "Confirmed",
@@ -1382,7 +1407,7 @@ def run_dq_remediation_package(connection: Connection, settings: Any, project_id
     steps = _steps(connection, run_id, context)
     mon = steps.get("monitoring") or {}
     enrich, history = steps.get("context_enrichment") or {}, steps.get("historical_pattern") or {}
-    confirmed = sorted([r for r in _lane_results(steps) if r.get("verdict") == "Confirmed"],
+    confirmed = sorted([r for r in _lane_results(steps) if r.get("lane_verdict") == "Confirmed"],
                        key=lambda r: -float(r.get("confidence") or 0))
     base = {"capability": "dq_remediation_package", "tool": None, "status": "succeeded",
             "incident_id": mon.get("incident_id"), "subject_id": mon.get("incident_node_id"),
@@ -1578,7 +1603,7 @@ def run_dq_incident_closure(connection: Connection, settings: Any, project_id: s
             "incident_id": incident_id, "subject_id": incident_node, "calls": calls,
             "ran_as": _ran_as(CLOSURE)}
     if not fix.get("executed_by") or not advisor.get("package_ready"):
-        why = ("RCA found insufficient evidence" if rca.get("verdict") == INSUFFICIENT
+        why = ("RCA found insufficient evidence" if rca.get("rca_verdict") == INSUFFICIENT
                else "no cause was confirmed" if not advisor.get("package_ready")
                else "no fix was carried out")
         statement = (f"{incident_id} stays open: {why}. The Escalation Agent ladders it daily "

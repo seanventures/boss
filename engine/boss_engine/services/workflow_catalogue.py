@@ -17,7 +17,7 @@ from typing import Any, Optional
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
-from . import two_pass, workflows
+from . import dq_catalogue, two_pass, workflows
 from .workflow_capabilities import CAPABILITIES, estimate_minutes, project_requirements
 
 #: Which class of work a catalogue workflow is FOR. A customer applying "Fast Fix" to every
@@ -1606,6 +1606,11 @@ CATALOGUE: list[dict[str, Any]] = [
     },
 ]
 
+# THE CONSULTANT'S DQ RCA AND REMEDIATION PIPELINE (Instance A of kg_investigation_pipeline,
+# design §5.2) and its two side workflows — dq_catalogue.py holds their stages, contracts and
+# agent designs. Each installs only where the NorthPeak Bank data platform is loaded
+# (`requires`: the banking-dq pack and the DQ sample's connectors).
+CATALOGUE.extend(dq_catalogue.entries(_step, _in))
 
 
 def _staff_builds_by_app_kind() -> None:
@@ -1968,7 +1973,9 @@ BRIEFS: dict[str, dict[str, Any]] = {
                     "subject_id": "kgn_regz102636demo01"},
         "required": ("subject_id",),
     },
+    **dq_catalogue.BRIEFS,
 }
+_FIELD_TEXT.update(dq_catalogue.FIELD_TEXT)
 
 
 def _fields_read(steps: list[dict[str, Any]]) -> tuple[list[str], set[str]]:
@@ -2034,6 +2041,10 @@ def entry_spec(entry: dict[str, Any]) -> dict[str, Any]:
     # `monitoring_gate`: block (the default) or warn (monitoring_pack.gate_mode).
     if entry.get("monitoring_gate"):
         spec["monitoring_gate"] = entry["monitoring_gate"]
+    # THE PIPELINE'S SHAPE BEYOND ITS STEPS (the DQ pipeline): the loop back, the side
+    # workflows and paths, and the shared services, so the Pipeline view can draw them.
+    if entry.get("pipeline"):
+        spec["pipeline"] = entry["pipeline"]
     return spec
 
 
