@@ -8288,6 +8288,30 @@
                 },
                 {
                   "kind": "examination_finding"
+                },
+                {
+                  "kind": "transformation"
+                },
+                {
+                  "kind": "derivation_rule"
+                },
+                {
+                  "kind": "join_path"
+                },
+                {
+                  "kind": "domain"
+                },
+                {
+                  "kind": "contract"
+                },
+                {
+                  "kind": "data_concern"
+                },
+                {
+                  "kind": "adjustment"
+                },
+                {
+                  "kind": "regulatory_communication"
                 }
               ],
               "writes": [
@@ -8362,13 +8386,14 @@
                 {
                   "n": 2,
                   "name": "Rule footprint",
-                  "explain": "The rule's CDEs, columns, tables and feed.",
+                  "explain": "The rule's CDEs, columns, tables and feed, and the data domain they belong to.",
                   "reads": [
                     "data_quality_rule",
                     "cde",
                     "database_column",
                     "database_table",
-                    "database_structure"
+                    "database_structure",
+                    "domain"
                   ]
                 },
                 {
@@ -8383,41 +8408,48 @@
                 {
                   "n": 4,
                   "name": "Subscriptions",
-                  "explain": "The feeds that load the failing table and the ones that read it.",
+                  "explain": "The feeds that load the failing table and the ones that read it, their data contracts and the join paths between the tables.",
                   "reads": [
                     "feed",
                     "database_table",
-                    "system"
+                    "system",
+                    "contract",
+                    "join_path"
                   ]
                 },
                 {
                   "n": 5,
                   "name": "Upstream lineage",
-                  "explain": "Column lineage upstream within the hop cap; a feed hop nobody registered is a coverage gap.",
+                  "explain": "Column lineage upstream within the hop cap, with the transformation and derivation rule on each hop; a feed hop nobody registered is a coverage gap.",
                   "reads": [
                     "lineage",
                     "database_column",
-                    "feed"
+                    "feed",
+                    "transformation",
+                    "derivation_rule"
                   ]
                 },
                 {
                   "n": 6,
                   "name": "Regulatory reach",
-                  "explain": "CDE —REPORTED_IN→ report lines, their reports and MDRM codes (KG-G11).",
+                  "explain": "CDE —REPORTED_IN→ report lines, their reports and MDRM codes (KG-G11), adjustments on those lines and communications with the regulator.",
                   "reads": [
                     "cde",
                     "report_line",
                     "regulatory_report",
-                    "mdrm"
+                    "mdrm",
+                    "adjustment",
+                    "regulatory_communication"
                   ]
                 },
                 {
                   "n": 7,
                   "name": "Known issues",
-                  "explain": "Issues and examination findings at every level (A-D40).",
+                  "explain": "Issues, examination findings and open data concerns at every level (A-D40).",
                   "reads": [
                     "issue",
-                    "examination_finding"
+                    "examination_finding",
+                    "data_concern"
                   ]
                 },
                 {
@@ -8598,6 +8630,12 @@
                 },
                 {
                   "kind": "precedent"
+                },
+                {
+                  "kind": "remediation_template"
+                },
+                {
+                  "kind": "root_cause_category"
                 }
               ],
               "writes": [
@@ -8684,13 +8722,15 @@
                 {
                   "n": 3,
                   "name": "Reference data",
-                  "explain": "The business calendar (business day of the quarter) and the resolved patterns with their durable fixes.",
+                  "explain": "The business calendar (business day of the quarter), the resolved patterns with their root-cause categories, and the remediation templates that fixed them.",
                   "reads": [
                     "system",
                     "cde",
                     "business_calendar",
                     "calendar_day",
-                    "resolved_pattern"
+                    "resolved_pattern",
+                    "remediation_template",
+                    "root_cause_category"
                   ]
                 },
                 {

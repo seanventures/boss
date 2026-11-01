@@ -1,5 +1,5 @@
 id: banking-dq
-version: "2"
+version: "3"
 description: >
   Data quality for a bank's loan book and regulatory reporting (the banking DQ case study,
   NorthPeak Bank on Apache Fineract): the Knowledge Graph the RCA and remediation pipeline reads
@@ -149,6 +149,79 @@ kinds:
     color: "#566273"
     group: Known issues
     attrs: [finding_id, title, severity, regulator, issued, due, status]
+  # ── Added in v3: the kinds the consultant's Context Enrichment and Historical Pattern
+  # designs read. The sample world holds Transformations, Root cause categories and
+  # Remediation templates; the rest are declared for a bank's own graph (none invented). ──
+  - id: transformation
+    layer: domain
+    label: Transformation
+    plural: Transformations
+    color: "#c27c0e"
+    group: Lineage
+    attrs: [lineage_id, description]
+  - id: derivation_rule
+    layer: domain
+    label: Derivation rule
+    plural: Derivation rules
+    color: "#7b4fc4"
+    group: Lineage
+    attrs: [name, formula, cde_id]
+  - id: join_path
+    layer: domain
+    label: Join path
+    plural: Join paths
+    color: "#c27c0e"
+    group: Systems and data
+    attrs: [name, from_table, to_table, keys]
+  - id: contract
+    layer: domain
+    label: Data contract
+    plural: Data contracts
+    color: "#c27c0e"
+    group: Systems and data
+    attrs: [name, feed_id, terms]
+  - id: domain
+    layer: domain
+    label: Domain
+    plural: Domains
+    color: "#2e8b57"
+    group: Data governance
+    attrs: [name, owner_id]
+  - id: data_concern
+    layer: domain
+    label: Data concern
+    plural: Data concerns
+    color: "#b8433a"
+    group: Rules
+    attrs: [title, status, raised_by]
+  - id: adjustment
+    layer: domain
+    label: Adjustment
+    plural: Adjustments
+    color: "#b8433a"
+    group: Rules
+    attrs: [title, report_line, amount, reason]
+  - id: regulatory_communication
+    layer: domain
+    label: Regulatory communication
+    plural: Regulatory communications
+    color: "#566273"
+    group: Known issues
+    attrs: [title, regulator, sent, report_id]
+  - id: root_cause_category
+    layer: domain
+    label: Root cause category
+    plural: Root cause categories
+    color: "#a3266e"
+    group: Remediation
+    attrs: [family, description]
+  - id: remediation_template
+    layer: domain
+    label: Remediation template
+    plural: Remediation templates
+    color: "#a3266e"
+    group: Remediation
+    attrs: [pattern_id, family, fix]
   # ── Context Graph (what the pipeline's agents did and decided) ──
   - id: exception_group
     layer: context
@@ -190,6 +263,34 @@ kinds:
 # never a Cypher keyword), then the Context Graph relations the pipeline writes. owns, reads,
 # caused_by and references are core edge kinds and are used, not declared.
 edges:
+  - id: applies
+    label: applies
+    relationship: APPLIES
+    between: [lineage->transformation]
+  - id: in_category
+    label: in category
+    relationship: IN_CATEGORY
+    between: [resolved_pattern->root_cause_category]
+  - id: for_category
+    label: for category
+    relationship: FOR_CATEGORY
+    between: [remediation_template->root_cause_category]
+  - id: derives
+    label: derives
+    relationship: DERIVES
+    between: [derivation_rule->cde]
+  - id: joins
+    label: joins
+    relationship: JOINS
+    between: [join_path->database_table]
+  - id: in_domain
+    label: in domain
+    relationship: IN_DOMAIN
+    between: [cde->domain, data_quality_rule->domain]
+  - id: adjusts
+    label: adjusts
+    relationship: ADJUSTS
+    between: [adjustment->report_line]
   - id: stewards
     label: stewards
     relationship: STEWARDS
@@ -301,7 +402,7 @@ edges:
   - id: concerns
     label: concerns
     relationship: CONCERNS
-    between: [examination_finding->business_calendar, examination_finding->cde, examination_finding->data_quality_rule, examination_finding->feed, examination_finding->report_line, incident->cde, incident->data_quality_rule, issue->data_quality_rule, issue->database_table, issue->feed, issue->system]
+    between: [data_concern->cde, data_concern->data_quality_rule, regulatory_communication->regulatory_report, examination_finding->business_calendar, examination_finding->cde, examination_finding->data_quality_rule, examination_finding->feed, examination_finding->report_line, incident->cde, incident->data_quality_rule, issue->data_quality_rule, issue->database_table, issue->feed, issue->system]
   - id: tracks
     label: tracks
     relationship: TRACKS

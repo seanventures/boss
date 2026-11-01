@@ -88,7 +88,10 @@ DQ_CONTRACTS: dict[str, dict[str, Any]] = {
         "reads": _reads("agent", "mcp_server", "system", "incident", "agent_decision",
                         "data_quality_rule", "cde", "database_structure", "database_table",
                         "database_column", "feed", "lineage", "owner", "regulatory_report",
-                        "report_line", "mdrm", "issue", "examination_finding"),
+                        "report_line", "mdrm", "issue", "examination_finding",
+                        # banking-dq v3: the rest of the consultant's Enrichment reads.
+                        "transformation", "derivation_rule", "join_path", "domain", "contract",
+                        "data_concern", "adjustment", "regulatory_communication"),
         "writes": [_w("agent_decision", True, "ContextAssembled"), _w("coverage_gap"),
                    _w("agent_run"), _w("agent_tool_call")],
         "calls": [_c("olympus", "get_exception_profile"), _c("olympus", "list_recent_changes"),
@@ -112,7 +115,8 @@ DQ_CONTRACTS: dict[str, dict[str, Any]] = {
                    "demand. RCA never searches history itself.",
         "reads": _reads("agent", "mcp_server", "system", "data_quality_rule",
                         "database_structure", "cde", "business_calendar", "calendar_day",
-                        "resolved_pattern", "incident", "agent_decision", "precedent"),
+                        "resolved_pattern", "incident", "agent_decision", "precedent",
+                        "remediation_template", "root_cause_category"),
         "writes": [_w("agent_decision", True, "HistoricalPatternMatched"), _w("precedent"),
                    _w("agent_run"), _w("agent_tool_call")],
         "links": [{"from": "precedent", "to": "incident", "rel": "MATCHED_INCIDENT"},
@@ -332,19 +336,25 @@ DQ_STAGE_DESIGNS: dict[str, dict[str, Any]] = {
         "steps": [
             _s(1, "Load the incident", "Loads the incident Monitoring opened and its decision.",
                ("agent", "incident", "agent_decision")),
-            _s(2, "Rule footprint", "The rule's CDEs, columns, tables and feed.",
+            _s(2, "Rule footprint", "The rule's CDEs, columns, tables and feed, and the data "
+               "domain they belong to.",
                ("data_quality_rule", "cde", "database_column", "database_table",
-                "database_structure")),
+                "database_structure", "domain")),
             _s(3, "Owners", "The rule owner, CDE stewards and system owner, with their ITSM "
                "groups.", ("owner", "system")),
             _s(4, "Subscriptions", "The feeds that load the failing table and the ones that read "
-               "it.", ("feed", "database_table", "system")),
-            _s(5, "Upstream lineage", "Column lineage upstream within the hop cap; a feed hop "
-               "nobody registered is a coverage gap.", ("lineage", "database_column", "feed")),
+               "it, their data contracts and the join paths between the tables.",
+               ("feed", "database_table", "system", "contract", "join_path")),
+            _s(5, "Upstream lineage", "Column lineage upstream within the hop cap, with the "
+               "transformation and derivation rule on each hop; a feed hop nobody registered is "
+               "a coverage gap.", ("lineage", "database_column", "feed", "transformation",
+                                   "derivation_rule")),
             _s(6, "Regulatory reach", "CDE —REPORTED_IN→ report lines, their reports and MDRM "
-               "codes (KG-G11).", ("cde", "report_line", "regulatory_report", "mdrm")),
-            _s(7, "Known issues", "Issues and examination findings at every level (A-D40).",
-               ("issue", "examination_finding")),
+               "codes (KG-G11), adjustments on those lines and communications with the "
+               "regulator.", ("cde", "report_line", "regulatory_report", "mdrm", "adjustment",
+                              "regulatory_communication")),
+            _s(7, "Known issues", "Issues, examination findings and open data concerns at every "
+               "level (A-D40).", ("issue", "examination_finding", "data_concern")),
             _s(8, "Exception profile", "The rule's baseline on its platform from the Profile "
                "Service (A-D41).", ("system",), calls=((_OLY, "get_exception_profile"),)),
             _s(9, "Recent changes", "Changes on the platform, rule and feed in the look-back.",
@@ -379,9 +389,11 @@ DQ_STAGE_DESIGNS: dict[str, dict[str, Any]] = {
                ("agent", "incident", "agent_decision")),
             _s(2, "Sibling rules", "Related rules and rules on the same CDE or column.",
                ("data_quality_rule", "database_structure", "cde")),
-            _s(3, "Reference data", "The business calendar (business day of the quarter) and "
-               "the resolved patterns with their durable fixes.",
-               ("system", "cde", "business_calendar", "calendar_day", "resolved_pattern")),
+            _s(3, "Reference data", "The business calendar (business day of the quarter), the "
+               "resolved patterns with their root-cause categories, and the remediation "
+               "templates that fixed them.",
+               ("system", "cde", "business_calendar", "calendar_day", "resolved_pattern",
+                "remediation_template", "root_cause_category")),
             _s(4, "find_past_incidents", "Closed incidents in two tiers: the same rule, then "
                "sibling rules or the same CDE, two years back.",
                ("incident", "resolved_pattern", "agent_decision")),
