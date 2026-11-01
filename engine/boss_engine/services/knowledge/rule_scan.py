@@ -1261,7 +1261,9 @@ def open_proposals(connection: Connection, project_id: str, scan_id: str) -> int
     if not scan_id:
         return 0
     return int(connection.execute(
-        text("SELECT count(*) FROM kg_nodes WHERE project_id = :p AND kind = 'rule' "
+        # A rulebook extraction's data-quality rules wait in the same queue (rulebook source G5).
+        text("SELECT count(*) FROM kg_nodes WHERE project_id = :p "
+             "AND kind IN ('rule', 'data_quality_rule') "
              "AND valid_to IS NULL AND COALESCE(attrs->>'status', 'proposed') = 'proposed' "
              "AND COALESCE(attrs->>'scan_id', attrs->'provenance'->>'scan_id') = :s"),
         {"p": project_id, "s": scan_id},

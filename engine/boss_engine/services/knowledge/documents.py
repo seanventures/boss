@@ -1,8 +1,15 @@
-"""Add a document to a KG project (KG Domain layer v1, A2): paste-only in v1 (SPEC resolution
-#7 — fetch-from-URL is a follow-up), caller-segmented into clauses (SPEC resolution #1 — BOSS
-does not run text-segmentation over a pasted blob). Clauses are facts from the source: no
-approval is required to create them (PRD FR15); the document record stores who added it and
+"""Add a document to a KG project (KG Domain layer v1, A2). Clauses are facts from the source:
+no approval is required to create them (PRD FR15); the document record stores who added it and
 when.
+
+Two ways in, one writer (``add_document``):
+
+* PASTED: the caller segments the text into clauses (SPEC resolution #1 — BOSS does not run
+  text-segmentation over a pasted blob). Fetch-from-URL remains a follow-up (SPEC resolution #7).
+* UPLOADED (operator decision 2026-11-01, amending resolution #1): an uploaded PDF or text file
+  MAY be split into sections automatically — by its own headings and rule cards — but only after a
+  person confirms the split in a preview (``document_upload``: stage → edit → confirm). Nothing is
+  written before that confirmation, and the clause text is the exact extracted text.
 """
 from __future__ import annotations
 
@@ -14,10 +21,14 @@ from sqlalchemy.engine import Connection
 
 from ..core import now_utc
 from . import domain
-from .ontology_packs import get_project_pack
+from .ontology_packs import effective_node_kinds
 from .store import PostgresKnowledgeStore
 
 STORE = PostgresKnowledgeStore()
+
+
+#: What a clause may carry beyond its section, text, citation and url (an upload's sections).
+_CLAUSE_EXTRAS = ("page", "page_end", "order", "section_kind", "heading", "rule_id")
 
 
 class DocumentRefused(ValueError):
@@ -39,9 +50,13 @@ def add_document(
     sensitivity: str = "public",
     actor_kind: str = "person",
     actor_ref: Optional[str] = None,
+    extra_attrs: Optional[Mapping[str, Any]] = None,
 ) -> dict[str, Any]:
-    pack = get_project_pack(connection, project_id=project_id)
-    if pack is None or "document" not in pack.kinds:
+    """``extra_attrs`` go on the document node (an upload's file name, hash and page count). A
+    clause may carry ``page``, ``page_end``, ``order``, ``section_kind``, ``heading`` and
+    ``rule_id`` beside its section, text and citation; they are kept on the clause node."""
+    if "document" not in effective_node_kinds(connection, project_id=project_id) or \
+            "clause" not in effective_node_kinds(connection, project_id=project_id):
         raise DocumentRefused(
             f"project {project_id!r} has no active ontology pack granting 'document'; "
             "assign a pack (e.g. banking-regulatory) before adding a document."
@@ -53,7 +68,7 @@ def add_document(
         raise DocumentRefused("a document needs at least one clause.")
     # Validate every clause before writing anything: a bad clause is refused up front, so a
     # refusal never leaves a half-written document node, clause or document→clause edge behind.
-    checked: list[tuple[str, str, str, str]] = []
+    checked: list[tuple[str, str, str, str, dict[str, Any]]] = []
     for clause in clauses:
         section = str(clause.get("section") or "").strip()
         # Store the pasted clause text exactly as given; only check emptiness on a stripped copy.
@@ -63,10 +78,12 @@ def add_document(
                 "every clause needs a section and its exact text; "
                 f"got {dict(clause)!r}."
             )
+        extra = {k: clause[k] for k in _CLAUSE_EXTRAS if clause.get(k) not in (None, "")}
         checked.append((
             section, text_body,
             str(clause.get("citation") or citation or ""),
             str(clause.get("url") or source_url or ""),
+            extra,
         ))
     now = now_utc().isoformat()
     document_key = "document:" + _key(title, str(source_url or ""))
@@ -75,17 +92,18 @@ def add_document(
         name=title, body=str(citation or ""), trust_tier="governed", actor_kind=actor_kind,
         actor_ref=actor_ref,
         attrs={"title": title, "source_url": source_url, "citation": citation,
-              "sensitivity": sensitivity, "added_by": actor_ref or actor_kind, "added_at": now},
+              "sensitivity": sensitivity, "added_by": actor_ref or actor_kind, "added_at": now,
+              **dict(extra_attrs or {})},
     )
     clause_ids: list[str] = []
-    for section, text_body, clause_citation, clause_url in checked:
+    for section, text_body, clause_citation, clause_url, extra in checked:
         clause_key = "clause:" + _key(document_id, section)
         clause_id = STORE.upsert_node(
             connection, project_id=project_id, kind="clause", node_key=clause_key,
             name=section, body=text_body, trust_tier="governed", actor_kind=actor_kind,
             actor_ref=actor_ref,
             attrs={"document_id": document_id, "section": section, "text": text_body,
-                  "citation": clause_citation, "url": clause_url},
+                  "citation": clause_citation, "url": clause_url, **extra},
         )
         # The document→clause link the graph reads (criterion 2): the clause belongs to its
         # document, so a clause opened in Graph shows its document and vice versa.
@@ -120,7 +138,8 @@ def list_documents(connection: Connection, *, project_id: str) -> list[dict[str,
                 SELECT id, attrs
                 FROM kg_nodes
                 WHERE project_id = :project_id AND kind = 'clause'
-                  AND attrs->>'document_id' = :document_id
+                  AND attrs->>'document_id' = :document_id AND valid_to IS NULL
+                ORDER BY (attrs->>'order')::int NULLS LAST, name
                 """
             ),
             {"project_id": project_id, "document_id": document_id},
@@ -134,6 +153,10 @@ def list_documents(connection: Connection, *, project_id: str) -> list[dict[str,
                 "text": clause_attrs.get("text", ""),
                 "citation": clause_attrs.get("citation", ""),
                 "url": clause_attrs.get("url", ""),
+                "page": clause_attrs.get("page"),
+                "page_end": clause_attrs.get("page_end"),
+                "kind": clause_attrs.get("section_kind"),
+                "heading": clause_attrs.get("heading"),
             })
         documents.append({
             "id": document_id,
@@ -143,6 +166,8 @@ def list_documents(connection: Connection, *, project_id: str) -> list[dict[str,
             "sensitivity": attrs.get("sensitivity", "public"),
             "added_by": attrs.get("added_by", ""),
             "added_at": attrs.get("added_at", ""),
+            "filename": attrs.get("filename"),
+            "pages": attrs.get("pages"),
             "clauses": clauses,
         })
     return documents

@@ -954,6 +954,10 @@ class PostgresKnowledgeStore:
         # A proposed (unapproved) rule is never trusted input: a stage reads approved rules only.
         # The review queue and kg_rules(status='proposed') read them explicitly, labelled.
         rules = f" AND ({col}knowledge_layer <> 'rules' OR {col}trust_tier = 'approved')"
+        # A data-quality rule read from a rulebook, and its thresholds, are rules too: a stage
+        # reads them once a person approved them, never as proposals.
+        rules += (f" AND ({col}kind NOT IN ('data_quality_rule', 'dq_threshold')"
+                  f" OR {col}trust_tier IN ('approved', 'governed'))")
         # A step contract's declared `reads` narrow to exactly those kinds, beneath the layer
         # filter — a layer is never a blanket grant for every kind inside it.
         kinds = ""

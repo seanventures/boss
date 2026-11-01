@@ -97,8 +97,13 @@ MAX_ABOUT = 30
 MAX_LIST = 20
 
 #: Citations in any output an agent writes: [L:<id>] for a learning, [R:<id>] for a rule (the
-#: pack quotes them that way), or a bare kg node id.
-CITATION = re.compile(r"\[(?P<tag>[LR]):(?P<id>kgn_[A-Za-z0-9_]+)\]")
+#: pack quotes them that way), [D:<id>] for a document's clause, a data-quality rule or another
+#: node a rulebook put in the graph, or a bare kg node id.
+CITATION = re.compile(r"\[(?P<tag>[LRD]):(?P<id>kgn_[A-Za-z0-9_]+)\]")
+#: What a rulebook or regulation put into the graph and an answer may cite (rulebook source G6):
+#: clauses, documents, data-quality rules, their thresholds and the CDEs they protect. A cited one
+#: is logged like a rule or a learning — before, it was dropped without a word.
+CITABLE_DOCUMENT_KINDS = frozenset({"clause", "document", "data_quality_rule", "dq_threshold", "cde"})
 _NODE_ID = re.compile(r"\bkgn_[A-Za-z0-9]{6,}\b")
 
 _STORE = PostgresKnowledgeStore()
@@ -811,7 +816,8 @@ def log_use(
     message_id: Optional[str] = None,
 ) -> list[str]:
     """Record that a run used these items (``kg_usage``, spec §2.5) and draw the run's edges to
-    them now. Ids that are not rules, learnings or facts of this project are ignored (a cited id
+    them now. Ids that are not rules, learnings, facts or document nodes (clauses, data-quality
+    rules, thresholds, CDEs) of this project are ignored (a cited id
     is the model's word). A cited precedent or fix is also ``reused``. Returns the ids logged.
 
     With no run, the use is the conversation's (a chat turn, or a press in its thread): the
@@ -833,7 +839,8 @@ def log_use(
     rows = connection.execute(text(
         "SELECT id, kind FROM kg_nodes WHERE project_id = :p AND id = ANY(:ids) "
         "AND (kind = 'rule' OR kind = ANY(:kinds))"),
-        {"p": project_id, "ids": wanted, "kinds": sorted(LEARNING_KINDS)}).mappings().all()
+        {"p": project_id, "ids": wanted,
+         "kinds": sorted(LEARNING_KINDS | CITABLE_DOCUMENT_KINDS)}).mappings().all()
     kinds = {r["id"]: r["kind"] for r in rows}
     found = [i for i in dict.fromkeys(wanted) if i in kinds]
     if not found:

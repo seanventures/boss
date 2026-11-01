@@ -847,6 +847,30 @@ CAPABILITIES: dict[str, Capability] = {
             produces=("decision_id",),
             is_gate=True,
         ),
+        # ── RULEBOOK EXTRACTION (services/knowledge/rulebook_extract.py, rulebook source G5) ──
+        # The Rulebook Analyst reads a confirmed document's sections and proposes each
+        # data-quality rule it states, with its thresholds and the clause as evidence. Every
+        # proposal waits in Rules review for a person (rules.propose_dq_rule writes `inferred`).
+        _cap(
+            key="extract_rulebook_rules",
+            role_agent="rulebook_analyst",
+            family="research",
+            captain="chief_architect",
+            label="Extract rules from a rulebook",
+            summary="The Rulebook Analyst reads a document's sections and proposes each rule it "
+                    "states, with its Warning and Error thresholds and the clause quoted as "
+                    "evidence. A person approves each rule.",
+            tool=None,
+            calls=(),
+            risk_tier=1,
+            required_inputs=(),
+            optional_inputs=("document_id", "budget_usd", "batch_size"),
+            produces=("extraction_id", "scan_id", "rules_proposed", "thresholds_proposed",
+                      "sections_read", "spend_usd", "stopped_by", "review_link"),
+            skills=("knowledge.propose",),
+            typical_minutes=15,
+            needs_model=True,
+        ),
         # ── KG P5b: banking_regulatory_compliance (services/knowledge/banking_regulatory_pipeline.py)
         # The six thin role-agent capabilities this instance adds; context_enrichment,
         # historical_pattern and the closure's Precedent write stay P5a's deterministic steps,

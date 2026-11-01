@@ -211,6 +211,8 @@ CAPABILITY_PRECHECKS: dict[str, CapabilityPrecheck] = {
                                     "execution-state marker; deterministic underneath"),
     # Case study 4 (aml_alert_investigation): role-agent judgements over the graph and what the
     # deterministic steps collected; no sandbox, no repository, no connector call of their own.
+    "extract_rulebook_rules": NO_CHECKS("reads a confirmed document's clauses and proposes the "
+                                        "rules they state for review; runs no sandbox"),
     "aml_network_mapping": NO_CHECKS("names related parties from the graph edges around the "
                                      "alert; writes the Context Graph, runs no sandbox"),
     "aml_analysis": NO_CHECKS("recommends close or escalate from the assembled evidence; "

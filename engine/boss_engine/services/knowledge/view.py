@@ -1112,6 +1112,13 @@ def _class_connections(connection: Connection, project_id: str, tree: Mapping[st
                      and (g["kind"], g["direction"]) != ("defines", "out")]
 
 
+def _kind_plural(kind: str) -> str:
+    """A kind's plural as a sentence says it: the pack's plural, else the kind's words + "s"."""
+    meta = view_context.kind_meta(kind) or {}
+    one = _mid_sentence(str(meta.get("label") or kind.replace("_", " ")))
+    return _mid_sentence(str(meta.get("plural") or one + "s"))
+
+
 def _vector(connection: Connection, project_id: str, row: Mapping[str, Any], layer: str,
             withheld: frozenset[str], settings: Any) -> dict[str, Any]:
     found = connection.execute(text(
@@ -1121,9 +1128,18 @@ def _vector(connection: Connection, project_id: str, row: Mapping[str, Any], lay
         if layer == "code":
             return {"embedded": False, "reason": "Not embedded: code symbols are matched by structure, not meaning"}
         from .embedding_slot import read, search_state
+        from .embeddings import EMBEDDED_KINDS
 
+        # SAY THE TRUTH PER KIND (rulebook source G1). "Not reached it yet" was shown for every
+        # node without a vector, clauses and pack kinds included, which are never embedded.
+        if row["kind"] not in EMBEDDED_KINDS:
+            return {"embedded": False, "waiting": False,
+                    "reason": f"Not embedded: {_kind_plural(row['kind'])} are found by name, words and "
+                              "links, not by meaning"}
         on, reason = search_state(read(connection, project_id))
-        return {"embedded": False, "reason": "Not embedded yet: the project's embedding model has not reached it"
+        return {"embedded": False, "waiting": bool(on),
+                "reason": "Waiting to be embedded: the project's embedding model embeds it on its "
+                          "next pass (about a minute)"
                 if on else f"Not embedded: {reason}" if reason else "Not embedded"}
     from .store import PostgresKnowledgeStore
 
@@ -1652,3 +1668,76 @@ def _meaning_hits(connection: Connection, project_id: str, q: str, limit: int,
         if len(hits) == limit:
             break
     return hits
+
+
+def names(connection: Connection, project_id: str, ids: Iterable[str], *,
+          withheld: Iterable[str] = ()) -> dict[str, dict[str, Any]]:
+    """What an answer's citations (``[R:kgn_…]``, ``[D:kgn_…]``, ``[L:kgn_…]``) are, by name: the
+    console draws each as a link to the node, never as its id. A node of a kind the reader may not
+    see, or of another project, is left out."""
+    hidden = frozenset(withheld)
+    wanted = [str(i).strip() for i in ids if str(i or "").strip()][:100]
+    out: dict[str, dict[str, Any]] = {}
+    for node_id, row in _nodes_by_id(connection, project_id, wanted).items():
+        if row["kind"] in hidden:
+            continue
+        meta = view_context.kind_meta(row["kind"]) or {}
+        out[node_id] = {"title": str(row.get("name") or row.get("node_key") or "a graph item"),
+                        "kind": row["kind"],
+                        "kind_label": str(meta.get("label") or row["kind"].replace("_", " ").capitalize()),
+                        "layer": product_layer(row["kind"])}
+    return out
+
+
+def compare_search(connection: Connection, project_id: str, q: str, *,
+                   layers: Iterable[str] = DEFAULT_LAYERS, limit: int = 10,
+                   withheld: Iterable[str] = (), embedder: Any = None) -> dict[str, Any]:
+    """The same query two ways, side by side (rulebook source G9): ``words`` is the type-ahead
+    search (names and the words of names and bodies), ``meaning`` is the embedding model's nearest
+    nodes alone — no words at all — so a person sees what meaning finds that words miss
+    (``only_by_meaning``). Meaning needs the project's embedding model to have passed its check;
+    without it ``meaning`` is empty and ``reason`` says why. The query's embedding is one governed
+    call."""
+    from .embedding_slot import read, search_state
+    from .embeddings import configured_embedder
+    from .store import PostgresKnowledgeStore
+
+    q = (q or "").strip()
+    if not q:
+        raise ValueError("q is required")
+    limit = max(1, min(int(limit), 25))
+    withheld = frozenset(withheld)
+    words = search(connection, project_id, q, layers=layers, limit=limit, withheld=withheld)["hits"]
+    allowed = set(kinds_of(frozenset(layers), withheld))
+    meaning: list[dict[str, Any]] = []
+    available, reason = search_state(read(connection, project_id))
+    if embedder is None and available:
+        from ...config import get_settings
+
+        embedder, why = configured_embedder(connection, get_settings(), project_id)
+        reason = reason or why
+    if embedder is not None:
+        try:
+            with connection.begin_nested():
+                vector = embedder.embed([q])[0]
+                found = PostgresKnowledgeStore().vector_search(
+                    connection, project_id=project_id, model_id=embedder.model_id,
+                    embedding=[float(x) for x in vector], limit=max(limit * 3, 20))
+        except Exception as error:  # noqa: BLE001 — the words column still answers
+            found = []
+            reason = ("meaning-based search did not answer this time: the embedding model "
+                      f"refused or failed ({type(error).__name__})")
+        nodes = _nodes_by_id(connection, project_id, [h["node_id"] for h in found])
+        for hit in found:
+            row = nodes.get(hit["node_id"])
+            if not row or row["kind"] not in allowed or row["valid_to"] is not None:
+                continue
+            meaning.append({"node": node_payload(row), "path": row.get("path"), "match": "meaning",
+                            "score": round(float(hit.get("cosine") or 0), 4)})
+            if len(meaning) == limit:
+                break
+        available = True
+    worded = {h["node"]["id"] for h in words}
+    return {"q": q, "words": words, "meaning": meaning, "meaning_available": bool(available),
+            "reason": None if meaning or not reason else reason,
+            "only_by_meaning": [h["node"]["id"] for h in meaning if h["node"]["id"] not in worded]}

@@ -21,6 +21,14 @@ The life of a rule:
 * ``reject_rule``: closes the rule with the reviewer's note.
 
 Every write checks ``EntitlementPort.check(project_id, "knowledge.rules")`` (Community allows).
+
+RULES FROM A DOCUMENT (rulebook source G4/G5). A rule may cite a CLAUSE as its evidence instead of
+code: ``{clause, quote}``, where the quote must be a verbatim passage of the clause's text (or the
+proposal is refused). A bank's data-quality rule is a ``data_quality_rule`` node (the banking-dq
+pack's kind), proposed by ``propose_dq_rule`` with its ``dq_threshold`` nodes (Warning/Error), the
+clause it was read from as evidence, and links to the project's CDE, column, table and report-line
+nodes by name. It goes through the same review: listed in Rules review, approved, edited or
+rejected by a person (approving it approves its thresholds too).
 """
 from __future__ import annotations
 
@@ -38,6 +46,12 @@ from .store import PostgresKnowledgeStore
 
 CATEGORIES = frozenset({"validation", "calculation", "limit", "state_transition", "authorization", "other"})
 STATUSES = frozenset({"proposed", "approved", "rejected", "superseded"})
+#: A bank's data-quality rule and its grading thresholds (the banking-dq ontology pack's kinds).
+DQ_RULE_KIND = "data_quality_rule"
+DQ_THRESHOLD_KIND = "dq_threshold"
+#: Every kind Rules review lists and a person reviews.
+RULE_KINDS = ("rule", DQ_RULE_KIND)
+DQ_LEVELS = ("warning", "error")
 ENTITLEMENT = "knowledge.rules"
 
 MAX_TITLE = 200
@@ -265,8 +279,8 @@ def _area_of(path: Optional[str]) -> Optional[str]:
 def _rule_row(connection: Connection, project_id: str, rule_id: str) -> dict[str, Any]:
     row = connection.execute(text(
         "SELECT id, project_id, node_key, name, body, attrs, trust_tier, created_by, valid_to, "
-        "recorded_at, first_seen FROM kg_nodes WHERE id = :id AND kind = 'rule'"),
-        {"id": rule_id}).mappings().first()
+        "recorded_at, first_seen, kind FROM kg_nodes WHERE id = :id AND kind = ANY(:kinds)"),
+        {"id": rule_id, "kinds": list(RULE_KINDS)}).mappings().first()
     if row is None:
         raise LookupError(f"rule not found: {rule_id}")
     if row["project_id"] != project_id:
@@ -279,10 +293,12 @@ def _sub(status: str, category: str) -> str:
 
 
 def _evidence(connection: Connection, rule_id: str) -> list[dict[str, Any]]:
+    """The CODE a rule cites (a clause it cites is ``_clause_evidence``)."""
     rows = connection.execute(text(
         "SELECT e.attrs AS edge_attrs, n.id, n.node_key, n.name, n.path FROM kg_edges e "
         "JOIN kg_nodes n ON n.id = e.dst_id "
-        "WHERE e.src_id = :id AND e.kind = 'evidenced_by' ORDER BY e.first_seen, n.node_key"),
+        "WHERE e.src_id = :id AND e.kind = 'evidenced_by' AND n.kind <> 'clause' "
+        "ORDER BY e.first_seen, n.node_key"),
         {"id": rule_id}).mappings().all()
     out = []
     for row in rows:
@@ -316,8 +332,47 @@ def _events(connection: Connection, project_id: str, rule: Mapping[str, Any]) ->
     return events
 
 
+def _clause_evidence(connection: Connection, rule_id: str) -> list[dict[str, Any]]:
+    """The document clauses a rule cites: the passage quoted, the clause's section and page, and
+    its document's title — what Rules review draws as a clause chip."""
+    rows = connection.execute(text(
+        "SELECT e.attrs AS edge_attrs, n.id, n.name, n.attrs AS clause_attrs, d.name AS document "
+        "FROM kg_edges e JOIN kg_nodes n ON n.id = e.dst_id AND n.kind = 'clause' "
+        "LEFT JOIN kg_nodes d ON d.id = n.attrs->>'document_id' "
+        "WHERE e.src_id = :id AND e.kind = 'evidenced_by' AND e.valid_to IS NULL "
+        "ORDER BY e.first_seen, n.name"), {"id": rule_id}).mappings().all()
+    out = []
+    for row in rows:
+        edge = row["edge_attrs"] or {}
+        clause = row["clause_attrs"] or {}
+        out.append({
+            "clause_id": row["id"], "section": clause.get("section") or row["name"],
+            "document": row["document"], "citation": clause.get("citation"),
+            "page": clause.get("page"), "page_end": clause.get("page_end"),
+            "quote": edge.get("quote"),
+        })
+    return out
+
+
+def _thresholds(connection: Connection, rule: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """A data-quality rule's Warning and Error thresholds, as proposed with it."""
+    attrs = rule["attrs"] or {}
+    rows = {r["level"]: r for r in connection.execute(text(
+        "SELECT id, attrs->>'level' AS level, trust_tier FROM kg_nodes WHERE project_id = :p "
+        "AND kind = :k AND attrs->>'rule_id' = :rid AND (valid_to IS NULL OR valid_to > now())"),
+        {"p": rule["project_id"], "k": DQ_THRESHOLD_KIND,
+         "rid": (attrs.get("dq") or {}).get("rule_id") or ""}).mappings()}
+    out = []
+    for t in attrs.get("thresholds") or []:
+        found = rows.get(t.get("level"))
+        out.append({"level": t.get("level"), "text": t.get("text"), "metric": t.get("metric"),
+                    "value": t.get("value"), "node_id": found["id"] if found else None})
+    return out
+
+
 def rule_payload(connection: Connection, project_id: str, rule_id: str) -> dict[str, Any]:
-    """A rule as the view payload (``KgRule``)."""
+    """A rule as the view payload (``KgRule``). A data-quality rule also carries ``dq`` (its
+    rulebook fields, thresholds and what it links to); every rule carries ``clause_evidence``."""
     rule = _rule_row(connection, project_id, rule_id)
     attrs = rule["attrs"] or {}
     status = str(attrs.get("status") or "proposed")
@@ -325,11 +380,20 @@ def rule_payload(connection: Connection, project_id: str, rule_id: str) -> dict[
     provenance = dict(attrs.get("provenance") or {})
     review = attrs.get("review")
     scope = attrs.get("scope") or {}
+    kind = str(rule.get("kind") or "rule")
+    dq = None
+    if kind == DQ_RULE_KIND:
+        dq = {**dict(attrs.get("dq") or {}), "thresholds": _thresholds(connection, rule),
+              "links": dict(attrs.get("links") or {})}
     return {
-        "node": {"id": rule["id"], "key": rule["node_key"], "kind": "rule", "layer": "rules",
+        "node": {"id": rule["id"], "key": rule["node_key"], "kind": kind,
+                 "layer": "rules" if kind == "rule" else "domain",
                  "label": rule["name"], "sub": _sub(status, category),
                  "trust_tier": rule["trust_tier"], "status": status},
-        "title": rule["name"],
+        "kind": kind,
+        "dq": dq,
+        "clause_evidence": _clause_evidence(connection, rule["id"]),
+        "title": attrs.get("title") or rule["name"],
         "statement": attrs.get("statement") or rule["body"],
         "rationale": attrs.get("rationale") or None,
         "category": category,
@@ -382,14 +446,18 @@ def list_rules(
     scan_id: Optional[str] = None,
     area: Optional[str] = None,
     limit: int = 200,
+    kind: Optional[str] = None,
 ) -> dict[str, Any]:
     """The Rules review queue (``KgRulesResponse``): the rules of one status (all when None),
-    newest first, with counts per status under the same scan/area filter."""
+    newest first, with counts per status under the same scan/area filter. Business rules and
+    data-quality rules alike; ``kind`` narrows to one."""
     if status is not None and status not in STATUSES:
         raise RuleRefused(f"status is one of {', '.join(sorted(STATUSES))}.")
+    if kind is not None and kind not in RULE_KINDS:
+        raise RuleRefused(f"kind is one of {', '.join(RULE_KINDS)}.")
     _STORE._org_id(connection, project_id, None)
-    where = "project_id = :p AND kind = 'rule'"
-    params: dict[str, Any] = {"p": project_id}
+    where = "project_id = :p AND kind = ANY(:kinds)"
+    params: dict[str, Any] = {"p": project_id, "kinds": [kind] if kind else list(RULE_KINDS)}
     if scan_id:
         where += " AND attrs->>'scan_id' = :scan"
         params["scan"] = scan_id
@@ -417,9 +485,9 @@ def scan_labels(connection: Connection, project_id: str) -> list[dict[str, Any]]
 
     rows = connection.execute(text(
         "SELECT attrs->>'scan_id' AS scan, max(attrs->'provenance'->>'workflow_run_id') AS run, "
-        "min(first_seen) AS at, count(*) AS n FROM kg_nodes WHERE project_id = :p AND kind = 'rule' "
+        "min(first_seen) AS at, count(*) AS n FROM kg_nodes WHERE project_id = :p AND kind = ANY(:kinds) "
         "AND attrs->>'scan_id' IS NOT NULL GROUP BY 1 ORDER BY min(first_seen) DESC LIMIT 50"),
-        {"p": project_id}).mappings().all()
+        {"p": project_id, "kinds": list(RULE_KINDS)}).mappings().all()
     out = []
     for r in rows:
         label = run_title(connection, r["run"]) if r["run"] else (
@@ -470,7 +538,7 @@ def rules_for(
             {"p": project_id, "k": sorted(package_keys)}).scalars().all())
     def base(n: str = "") -> str:
         a = f"{n}." if n else ""
-        return (f"{a}project_id = :p AND {a}kind = 'rule' AND {a}trust_tier = :tier "
+        return (f"{a}project_id = :p AND {a}kind IN ('rule', '{DQ_RULE_KIND}') AND {a}trust_tier = :tier "
                 f"AND ({a}valid_to IS NULL OR {a}valid_to > now()) "
                 f"AND coalesce({a}attrs->>'status', 'proposed') = :status")
 
@@ -499,7 +567,7 @@ def rules_for(
         # any of the words in a rule's text and attributes.
         from .find import find_written
 
-        written = find_written(connection, project_id, query, kinds=["rule"], limit=200)
+        written = find_written(connection, project_id, query, kinds=list(RULE_KINDS), limit=200)
         allowed = set(connection.execute(text(f"SELECT id FROM kg_nodes WHERE {base()} AND id = ANY(:ids)"),
                                          {**params, "ids": [w["id"] for w in written]}).scalars().all())
         written = [w for w in written if w["id"] in allowed]
@@ -615,16 +683,49 @@ def _package_scope_key(node: Mapping[str, Any]) -> str:
     return node["name"]
 
 
+_QUOTE_SPACES = re.compile(r"\s+")
+
+
+def _squeeze(value: str) -> str:
+    """Text compared for a verbatim quote: line breaks, runs of spaces and non-breaking spaces
+    are one space (a PDF line break inside a sentence is not a different sentence)."""
+    return _QUOTE_SPACES.sub(" ", str(value or "").replace("\u00a0", " ")).strip()
+
+
+def clause_evidence(connection: Connection, project_id: str, item: Mapping[str, Any]) -> tuple[dict, dict]:
+    """``{clause, quote}`` → (the clause node, the evidence edge's attrs). The clause must be a
+    live clause of this project, and the quote a verbatim passage of its text — else refused."""
+    ref = str(item.get("clause") or "").strip()
+    row = connection.execute(text(
+        "SELECT id, kind, node_key, name, body, attrs, NULL AS path, NULL AS repo FROM kg_nodes "
+        "WHERE project_id = :p AND kind = 'clause' AND (id = :r OR node_key = :r) "
+        "AND (valid_to IS NULL OR valid_to > now()) LIMIT 1"), {"p": project_id, "r": ref}).mappings().first()
+    if row is None:
+        raise RuleRefused(f"'{ref}' is not a clause of a document in this project. Cite the clause "
+                          "the rule was read from (its id).")
+    quote = _clean(item.get("quote"), field="evidence quote", limit=MAX_EXCERPT)
+    if _squeeze(quote) not in _squeeze(row["body"]):
+        raise RuleRefused(f"The quote is not in clause {row['name']}: evidence from a document must "
+                          "be a passage copied from the clause, word for word.")
+    attrs = row["attrs"] or {}
+    return dict(row), {"quote": quote, "citation": attrs.get("citation"), "page": attrs.get("page"),
+                       "section": attrs.get("section") or row["name"]}
+
+
 def _evidence_nodes(connection: Connection, project_id: str,
                     evidence: Sequence[Mapping[str, Any]]) -> list[tuple[dict, dict]]:
     if not isinstance(evidence, (list, tuple)) or not evidence:
-        raise RuleRefused("A rule needs evidence: at least one {symbol, lines, excerpt} from the code.")
+        raise RuleRefused("A rule needs evidence: at least one {symbol, lines, excerpt} from the code, "
+                          "or {clause, quote} from a document's clause.")
     if len(evidence) > MAX_EVIDENCE:
         raise RuleRefused(f"{len(evidence)} pieces of evidence; at most {MAX_EVIDENCE}.")
     out = []
     for item in evidence:
         if not isinstance(item, Mapping):
-            raise RuleRefused("Each piece of evidence is {symbol, lines, excerpt}.")
+            raise RuleRefused("Each piece of evidence is {symbol, lines, excerpt} or {clause, quote}.")
+        if item.get("clause") and not item.get("symbol"):
+            out.append(clause_evidence(connection, project_id, item))
+            continue
         node = resolve_code(connection, project_id, str(item.get("symbol") or ""))
         lines = _lines(item.get("lines"), node)
         excerpt = _clean(item.get("excerpt"), field="evidence excerpt", limit=MAX_EXCERPT, required=False)
@@ -700,7 +801,9 @@ def propose_rule(
     if not 0.0 <= confidence <= 1.0:
         raise RuleRefused("confidence is a number from 0 to 1.")
     cited = _evidence_nodes(connection, project_id, evidence)
-    resolved, symbol_nodes, package_nodes = _scope(connection, project_id, scope, [n for n, _ in cited])
+    # A clause is evidence, never scope: only code a rule cites is what it governs by default.
+    resolved, symbol_nodes, package_nodes = _scope(connection, project_id, scope,
+                                                   [n for n, _ in cited if n.get("kind") != "clause"])
 
     version, previous_id = 1, None
     corrected = None
@@ -861,6 +964,8 @@ def _approve_in_place(connection: Connection, project_id: str, rule: Mapping[str
           _person(connection, project_id, actor_ref, review.get("by_name")), "approved_by",
           "person", actor_ref, {"at": review["at"], "note": review["note"]})
     _governs(connection, project_id, rule["id"], attrs.get("scope") or {}, actor_ref)
+    if rule.get("kind") == DQ_RULE_KIND:
+        _thresholds_follow(connection, project_id, rule, "approved", review)
     corrected = attrs.get("corrects")
     if corrected:
         old = _rule_row(connection, project_id, corrected)
@@ -946,11 +1051,17 @@ def edit_rule(
         raise RuleRefused("Nothing changed. Approve the rule as it is, or change its statement, title, "
                           "category or scope.")
     version = int(attrs.get("version") or 1) + 1
+    kind = str(old.get("kind") or "rule")
     content_key = _content_key(new_scope, new_statement)
-    key = _node_key(content_key, version)
+    if kind == DQ_RULE_KIND:
+        # A rulebook rule keeps its id: version n+1 of NPB-DQ-LN-003 is NPB-DQ-LN-003.v<n+1>.
+        base = str((attrs.get("dq") or {}).get("rule_id") or old["node_key"]).split(".v")[0]
+        key = f"{base}.v{version}"
+    else:
+        key = _node_key(content_key, version)
     clash = connection.execute(text(
-        "SELECT id FROM kg_nodes WHERE project_id = :p AND kind = 'rule' AND node_key = :k"),
-        {"p": project_id, "k": key}).scalar()
+        "SELECT id FROM kg_nodes WHERE project_id = :p AND kind = :kind AND node_key = :k"),
+        {"p": project_id, "k": key, "kind": kind}).scalar()
     if clash:
         raise RuleRefused(f"That version already exists as rule {clash}.")
     review = _review(actor_ref, note, decision_id, actor_name)
@@ -960,13 +1071,29 @@ def edit_rule(
         "content_key": content_key,
         "edited": {"by": actor_ref, "by_name": review["by_name"], "at": review["at"]},
     }
-    new_id = _STORE.upsert_node(connection, project_id=project_id, kind="rule", node_key=key,
-                                name=new_title, body=new_statement, trust_tier="approved",
+    name = new_title
+    if kind == DQ_RULE_KIND:
+        rid = str((attrs.get("dq") or {}).get("rule_id") or "")
+        new_attrs["title"] = new_title
+        name = f"{rid} — {new_title}" if rid and not new_title.startswith(rid) else new_title
+    new_id = _STORE.upsert_node(connection, project_id=project_id, kind=kind, node_key=key,
+                                name=name, body=new_statement, trust_tier="approved",
                                 actor_kind="person", actor_ref=actor_ref, attrs=new_attrs, source="rules")
+    # Its evidence and lineage carry over; a data-quality rule's links (the CDEs it checks, the
+    # columns and report lines it reaches) and its thresholds too.
+    carried = ("evidenced_by", "proposed_by", "corrects", *_DQ_LINK_EDGES) if kind == DQ_RULE_KIND else \
+        ("evidenced_by", "proposed_by", "corrects")
     for row in connection.execute(text(
-            "SELECT dst_id, kind, attrs FROM kg_edges WHERE src_id = :id AND kind IN ('evidenced_by', 'proposed_by', 'corrects')"),
-            {"id": rule_id}).mappings().all():
+            "SELECT dst_id, kind, attrs FROM kg_edges WHERE src_id = :id AND kind = ANY(:kinds) "
+            "AND valid_to IS NULL"), {"id": rule_id, "kinds": list(carried)}).mappings().all():
         _edge(connection, project_id, new_id, row["dst_id"], row["kind"], "person", actor_ref, row["attrs"] or {})
+    if kind == DQ_RULE_KIND:
+        for row in connection.execute(text(
+                "SELECT src_id, kind, attrs FROM kg_edges WHERE dst_id = :id AND kind = ANY(:kinds) "
+                "AND valid_to IS NULL"), {"id": rule_id, "kinds": ["of", "OF"]}).mappings().all():
+            _edge(connection, project_id, row["src_id"], new_id, row["kind"], "person", actor_ref,
+                  row["attrs"] or {})
+        _thresholds_follow(connection, project_id, {**old, "id": new_id, "attrs": new_attrs}, "approved", review)
     _edge(connection, project_id, new_id,
           _person(connection, project_id, actor_ref, review.get("by_name")), "approved_by",
           "person", actor_ref, {"at": review["at"], "note": review["note"]})
@@ -1006,6 +1133,9 @@ def reject_rule(
     _open_rule(connection, project_id, rule_id, ("proposed", "approved"))
     review = _review(actor_ref, note, decision_id, actor_name)
     _merge_attrs(connection, rule_id, {"status": "rejected", "review": review})
+    rule = _rule_row(connection, project_id, rule_id)
+    if rule.get("kind") == DQ_RULE_KIND:
+        _thresholds_follow(connection, project_id, rule, "rejected", review)
     _STORE.close_validity(connection, project_id=project_id, valid_to=datetime.now(timezone.utc),
                           actor_kind="person", node_id=rule_id)
     _STORE.audit(connection, project_id=project_id, action="knowledge.rule.reject", entity_id=rule_id,
@@ -1015,3 +1145,280 @@ def reject_rule(
 
     after_write(connection, project_id)
     return {"rule": rule_payload(connection, project_id, rule_id), "previous": None}
+
+
+# --- data-quality rules read from a document (rulebook source G4/G5) ----------------------------
+#: The links a data-quality rule draws to the project's catalogue, by the relationship names of
+#: tools/dq_sample/README.md (an ontology pack may spell them in capitals or lower case).
+_DQ_LINK_EDGES = ("checks", "CHECKS", "applies_to", "APPLIES_TO", "reaches", "REACHES")
+MAX_DQ_LIST = 40
+
+
+def dq_kinds_missing(connection: Connection, project_id: str) -> list[str]:
+    """The data-quality kinds this project's ontology does not grant (empty: it can hold DQ rules)."""
+    from .ontology_packs import effective_node_kinds
+
+    kinds = effective_node_kinds(connection, project_id=project_id)
+    return [k for k in (DQ_RULE_KIND, DQ_THRESHOLD_KIND) if k not in kinds]
+
+
+def require_dq_kinds(connection: Connection, project_id: str) -> None:
+    missing = dq_kinds_missing(connection, project_id)
+    if missing:
+        raise RuleRefused(
+            "This project's ontology cannot hold data-quality rules: it lacks "
+            + " and ".join(f"'{k}'" for k in missing)
+            + ". Assign the banking-dq ontology pack (or a pack that includes it) in Knowledge Graph › "
+            "Documents, then extract the rules again.")
+
+
+def _edge_kind(connection: Connection, project_id: str, name: str) -> Optional[str]:
+    """The project's spelling of a relationship (``CHECKS`` or ``checks``), or None when its
+    ontology grants neither."""
+    from .ontology_packs import effective_edge_kinds
+    from .store import EDGE_KINDS
+
+    granted = set(EDGE_KINDS) | set(effective_edge_kinds(connection, project_id=project_id))
+    for spelling in (name.lower(), name.upper()):
+        if spelling in granted:
+            return spelling
+    return None
+
+
+def _catalogue_node(connection: Connection, project_id: str, kinds: Sequence[str], ref: str,
+                    *, attr: Optional[str] = None) -> Optional[str]:
+    """An existing node of one of ``kinds`` named ``ref`` (its key, its name, or ``attrs[attr]``)."""
+    ref = str(ref or "").strip()
+    if not ref:
+        return None
+    params = {"p": project_id, "kinds": list(kinds), "r": ref}
+    extra = ""
+    if attr:
+        extra = " OR attrs->>:attr = :r"
+        params["attr"] = attr
+    return connection.execute(text(
+        "SELECT id FROM kg_nodes WHERE project_id = :p AND kind = ANY(:kinds) "
+        "AND (valid_to IS NULL OR valid_to > now()) "
+        f"AND (node_key = :r OR name = :r{extra}) ORDER BY (node_key = :r) DESC, id LIMIT 1"),
+        params).scalar()
+
+
+def _dq_list(value: Any, field: str) -> list[str]:
+    items = _as_list(value, field)
+    return [_clean(v, field=field, limit=300) for v in items][:MAX_DQ_LIST]
+
+
+def _number(value: Any) -> Optional[float]:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number == number else None          # NaN is not a threshold
+
+
+def propose_dq_rule(
+    connection: Connection,
+    *,
+    project_id: str,
+    rule_id: str,
+    title: str,
+    statement: str,
+    clause: str,
+    quote: str,
+    version: Optional[int] = None,
+    dimension: str = "",
+    severity: str = "",
+    check: str = "",
+    owner: str = "",
+    system: str = "",
+    feed: str = "",
+    cdes: Sequence[str] = (),
+    columns: Sequence[str] = (),
+    tables: Sequence[str] = (),
+    report_lines: Sequence[str] = (),
+    mdrm: Sequence[str] = (),
+    related: Sequence[str] = (),
+    legal_reference: str = "",
+    thresholds: Sequence[Mapping[str, Any]] = (),
+    confidence: float = 0.8,
+    scan_id: Optional[str] = None,
+    actor_kind: str = "agent",
+    actor_ref: Optional[str] = None,
+) -> dict[str, Any]:
+    """Propose one data-quality rule read from a rulebook clause, with its Warning/Error
+    ``dq_threshold`` nodes. Everything is ``inferred`` until a person approves it in Rules review.
+
+    Refused, in words, when the project's ontology lacks the banking-dq kinds, when the clause is
+    not a clause of this project, when the quote is not verbatim in it, or when the rule id is not
+    printed in the clause (a rule is never invented). Proposing the same rule id again returns the
+    existing proposal (a rejected one is refused). Links to the project's CDE, column, table and
+    report-line nodes are drawn by name when they exist; what did not match is recorded on the rule
+    (``attrs.links.unmatched``), never created.
+    """
+    _entitled(project_id)
+    require_dq_kinds(connection, project_id)
+    if actor_kind not in ("agent", "person", "system"):
+        raise RuleRefused(f"unknown actor kind {actor_kind!r}")
+    rule_id = _clean(rule_id, field="rule id", limit=80)
+    title = _clean(title, field="title", limit=MAX_TITLE)
+    statement = _clean(statement, field="statement", limit=MAX_STATEMENT)
+    clause_node, cite = clause_evidence(connection, project_id, {"clause": clause, "quote": quote})
+    if rule_id not in _squeeze(clause_node["body"]):
+        raise RuleRefused(f"Rule {rule_id} is not printed in clause {clause_node['name']}: a rule is "
+                          "proposed only from the clause that states it.")
+    try:
+        confidence = min(1.0, max(0.0, float(confidence)))
+    except (TypeError, ValueError) as error:
+        raise RuleRefused("confidence is a number from 0 to 1.") from error
+    levels = []
+    for item in thresholds or []:
+        if not isinstance(item, Mapping):
+            continue
+        level = str(item.get("level") or "").strip().lower()
+        if level not in DQ_LEVELS or any(t["level"] == level for t in levels):
+            continue
+        words = _clean(item.get("text"), field=f"{level} threshold", limit=600, required=False)
+        levels.append({"level": level, "text": words or None,
+                       "metric": _clean(item.get("metric"), field="metric", limit=40, required=False) or None,
+                       "value": _number(item.get("value"))})
+    dq = {
+        "rule_id": rule_id, "version": int(version) if isinstance(version, int) or str(version or "").isdigit() else None,
+        "title": title,
+        "dimension": _clean(dimension, field="dimension", limit=40, required=False).lower() or None,
+        "severity": _clean(severity, field="severity", limit=40, required=False) or None,
+        "check": _clean(check, field="check", limit=MAX_STATEMENT, required=False) or None,
+        "owner": _clean(owner, field="owner", limit=200, required=False) or None,
+        "system": _clean(system, field="system", limit=80, required=False) or None,
+        "feed": _clean(feed, field="feed", limit=80, required=False) or None,
+        "cdes": _dq_list(cdes, "cdes"), "columns": _dq_list(columns, "columns"),
+        "tables": _dq_list(tables, "tables"), "report_lines": _dq_list(report_lines, "report_lines"),
+        "mdrm": _dq_list(mdrm, "mdrm"), "related": _dq_list(related, "related"),
+        "legal_reference": _clean(legal_reference, field="legal reference", limit=300, required=False) or None,
+        "source": "document", "document_id": (clause_node.get("attrs") or {}).get("document_id"),
+        "clause_section": cite.get("section"), "page": cite.get("page"),
+    }
+    existing = connection.execute(text(
+        "SELECT id, attrs FROM kg_nodes WHERE project_id = :p AND kind = :k AND node_key = :key"),
+        {"p": project_id, "k": DQ_RULE_KIND, "key": rule_id}).mappings().first()
+    if existing is not None:
+        status = (existing["attrs"] or {}).get("status")
+        if status == "rejected":
+            review = (existing["attrs"] or {}).get("review") or {}
+            note = f": {review['note']}" if review.get("note") else ""
+            raise RuleRefused(f"Rule {rule_id} was rejected by {review.get('by') or 'a reviewer'}{note}.")
+        return rule_payload(connection, project_id, existing["id"])
+
+    ctx = _context()
+    provenance = _provenance(connection, project_id, actor_kind, actor_ref)
+    who = provenance["agent_role"] if actor_kind == "agent" else (actor_ref or actor_kind)
+    edge_actor = "agent" if actor_kind == "agent" else ("person" if actor_kind == "person" else "system")
+    attrs = {
+        "title": title, "statement": statement, "rationale": None, "category": "validation",
+        "scope": {"repo": None, "areas": [], "packages": [], "symbols": []},
+        "status": "proposed", "confidence": confidence, "provenance": provenance, "review": None,
+        "version": 1, "previous_id": None, "content_key": rule_id,
+        "scan_id": scan_id or ctx.get("knowledge_scan_id"), "corrects": None,
+        "dq": dq, "thresholds": levels,
+    }
+    body = statement + (f" Check: {dq['check']}" if dq["check"] else "")
+    node_id = _STORE.upsert_node(
+        connection, project_id=project_id, kind=DQ_RULE_KIND, node_key=rule_id,
+        name=f"{rule_id} — {title}", body=body, trust_tier="inferred", actor_kind=edge_actor,
+        actor_ref=who, attrs=attrs, source="rules")
+    _edge(connection, project_id, node_id, clause_node["id"], "evidenced_by", edge_actor, who, cite)
+    of = _edge_kind(connection, project_id, "of")
+    for level in levels:
+        words = level["text"] or level["level"]
+        threshold_id = _STORE.upsert_node(
+            connection, project_id=project_id, kind=DQ_THRESHOLD_KIND, node_key=f"{rule_id}:{level['level']}",
+            name=f"{rule_id} {level['level'].capitalize()} when {words}", body=words,
+            trust_tier="inferred", actor_kind=edge_actor, actor_ref=who, source="rules",
+            attrs={"rule_id": rule_id, "level": level["level"], "metric": level["metric"],
+                   "value": level["value"], "text": level["text"], "status": "proposed"})
+        if of:
+            _edge(connection, project_id, threshold_id, node_id, of, edge_actor, who)
+        _edge(connection, project_id, threshold_id, clause_node["id"], "evidenced_by", edge_actor, who, cite)
+    links = _link_dq_rule(connection, project_id, node_id, dq, edge_actor, who)
+    _merge_attrs(connection, node_id, {"links": links})
+    if actor_kind == "agent" and provenance["agent_role"]:
+        agent_id = _anchor(connection, project_id, "agent", f"agent:{provenance['agent_role']}",
+                           provenance["agent_name"] or provenance["agent_role"],
+                           {"role_key": provenance["agent_role"]})
+        _edge(connection, project_id, node_id, agent_id, "proposed_by", edge_actor, who,
+              {"run_id": provenance["run_id"], "step": provenance["step"]})
+    run_ref = provenance["run_id"] or provenance["workflow_run_id"]
+    if run_ref:
+        from .learning_writeback import run_anchor
+
+        run_node = run_anchor(connection, project_id, run_ref)
+        _edge(connection, project_id, run_node, node_id, "produced", edge_actor, who,
+              {"step": provenance["step"], "at": provenance["proposed_at"]})
+    _STORE.audit(connection, project_id=project_id, action="knowledge.rule.propose", entity_id=node_id,
+                 actor_kind=edge_actor, actor_ref=who,
+                 detail={"category": "validation", "scan_id": attrs["scan_id"], "rule_id": rule_id,
+                         "source": "document"})
+    from .age import after_write
+
+    after_write(connection, project_id)
+    return rule_payload(connection, project_id, node_id)
+
+
+def _link_dq_rule(connection: Connection, project_id: str, node_id: str, dq: Mapping[str, Any],
+                  actor_kind: str, actor_ref: Optional[str]) -> dict[str, Any]:
+    """CHECKS the CDEs, APPLIES_TO the columns and tables, REACHES the report lines — each only
+    when the project already holds that node, by name. Returns what was linked and what was not."""
+    plan = (
+        ("checks", "cde", ("cde",), list(dq.get("cdes") or []), None),
+        ("applies_to", "column", ("database_column",), list(dq.get("columns") or []), None),
+        ("applies_to", "table", ("database_table", "table"), list(dq.get("tables") or []), None),
+        # A report line by its id or caption, or by the MDRM code it carries.
+        ("reaches", "report_line", ("report_line",), list(dq.get("report_lines") or []) + list(dq.get("mdrm") or []), "mdrm"),
+    )
+    linked: dict[str, list[str]] = {}
+    unmatched: dict[str, list[str]] = {}
+    missing_edges: list[str] = []
+    for relation, what, kinds, refs, attr in plan:
+        if not refs:
+            continue
+        edge = _edge_kind(connection, project_id, relation)
+        for ref in refs:
+            target = _catalogue_node(connection, project_id, kinds, ref, attr=attr)
+            if target is None:
+                # A report line is matched by its MDRM code; a printed caption that names no
+                # node is not a miss when its code matched.
+                if what != "report_line" or ref in (dq.get("mdrm") or []):
+                    unmatched.setdefault(what, []).append(ref)
+                continue
+            if edge is None:
+                if relation.upper() not in missing_edges:
+                    missing_edges.append(relation.upper())
+                unmatched.setdefault(what, []).append(ref)
+                continue
+            _edge(connection, project_id, node_id, target, edge, actor_kind, actor_ref)
+            if ref not in linked.setdefault(what, []):
+                linked[what].append(ref)
+    return {"linked": linked, "unmatched": unmatched, "missing_relationships": missing_edges}
+
+
+def _thresholds_follow(connection: Connection, project_id: str, rule: Mapping[str, Any], status: str,
+                       review: Mapping[str, Any]) -> None:
+    """A data-quality rule's thresholds share its review: approved with it, closed with it."""
+    rid = str(((rule.get("attrs") or {}).get("dq") or {}).get("rule_id") or "")
+    if not rid:
+        return
+    ids = connection.execute(text(
+        "SELECT id FROM kg_nodes WHERE project_id = :p AND kind = :k AND attrs->>'rule_id' = :r "
+        "AND (valid_to IS NULL OR valid_to > now())"),
+        {"p": project_id, "k": DQ_THRESHOLD_KIND, "r": rid}).scalars().all()
+    for threshold_id in ids:
+        if status == "approved":
+            _STORE.set_trust(connection, project_id=project_id, node_id=threshold_id,
+                             trust_tier="approved", actor_kind="person")
+            _merge_attrs(connection, threshold_id, {"status": "approved", "review": dict(review)})
+        else:
+            _merge_attrs(connection, threshold_id, {"status": status, "review": dict(review)})
+            _STORE.close_validity(connection, project_id=project_id,
+                                  valid_to=datetime.now(timezone.utc), actor_kind="person",
+                                  node_id=threshold_id)

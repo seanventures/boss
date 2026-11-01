@@ -37,8 +37,13 @@ from sqlalchemy.engine import Connection
 
 from .view import ANCHOR_KINDS, LEARNED_KINDS
 
-#: Kinds people and agents write (learned items, rules) and the anchors they hang on.
-WRITTEN_KINDS = frozenset({"rule", *LEARNED_KINDS, *ANCHOR_KINDS})
+#: What a rulebook or regulation put into the graph and agents cite (rulebook source G6): its
+#: clauses and documents, a bank's data-quality rules, their thresholds and the CDEs they protect.
+DOCUMENT_KINDS = frozenset({"clause", "document", "data_quality_rule", "dq_threshold", "cde"})
+#: Kinds people and agents write (learned items, rules, document text) and the anchors they hang on.
+WRITTEN_KINDS = frozenset({"rule", *LEARNED_KINDS, *ANCHOR_KINDS, *DOCUMENT_KINDS})
+#: Rules a stage reads only once a person approved them.
+_REVIEWED_KINDS = ("rule", "data_quality_rule", "dq_threshold")
 
 #: An incident or ticket key (INC-2041, BOSSAPP-571) or a BOSS id (kgn_…, athr_…, crun_…).
 ID_TERM = re.compile(r"(?<![A-Za-z0-9_])(?:[A-Za-z][A-Za-z0-9]{1,15}-\d{2,}|[a-z]{2,8}_[0-9a-f]{8,})(?![A-Za-z0-9_])")
@@ -92,9 +97,12 @@ def _kind_rank(incident: bool) -> dict[str, int]:
                  "review_finding", "decision", "fact"]
         rank = {k: i for i, k in enumerate(order)}
         rank["rule"] = len(order)
+        rank["data_quality_rule"] = len(order)
     else:
         rank = {k: 0 for k in LEARNED_KINDS}
         rank["rule"] = 1
+        rank["data_quality_rule"] = 1
+        rank["clause"] = 2
     for k in ANCHOR_KINDS:
         rank[k] = 20
     return rank
@@ -123,7 +131,7 @@ def find_written(connection: Connection, project_id: str, query: str, *, kinds: 
         "allp": [_like(t) for t in [*ids, *phrases]], "words": words,
         "items": items, "anchors": list(ANCHOR_KINDS), "anchors_back": anchors_back,
         "layers": sorted(set(layers)) if layers is not None else None,
-        "approved": bool(approved_rules_only), "rank": json.dumps(_kind_rank(incident_like(q))),
+        "approved": bool(approved_rules_only), "reviewed": list(_REVIEWED_KINDS), "rank": json.dumps(_kind_rank(incident_like(q))),
         "limit": max(1, min(int(limit), 200)),
     }
     rows = connection.execute(text(
@@ -149,7 +157,7 @@ def find_written(connection: Connection, project_id: str, query: str, *, kinds: 
           FROM kg_nodes n
           WHERE n.project_id = :p AND n.valid_to IS NULL AND n.kind = ANY(CAST(:items AS text[]))
             AND (CAST(:layers AS text[]) IS NULL OR n.knowledge_layer = ANY(CAST(:layers AS text[])))
-            AND (NOT :approved OR n.kind <> 'rule' OR n.trust_tier = 'approved')
+            AND (NOT :approved OR n.kind <> ALL(CAST(:reviewed AS text[])) OR n.trust_tier IN ('approved', 'governed'))
         ), direct AS (
           SELECT c.id, c.kind, c.last_seen,
                  CASE WHEN c.id = ANY(CAST(:ids AS text[])) OR c.name ILIKE ANY(CAST(:idp AS text[])) OR c.body ILIKE ANY(CAST(:idp AS text[]))
