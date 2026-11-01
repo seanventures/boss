@@ -45,8 +45,51 @@ def _looks_like_web_app(text_v: str) -> bool:
     return bool(_WEB_APP_RE.search(text_v or ""))
 
 
+def project_github(engine, settings: Settings, project_id: str, owner: Optional[str],
+                   repo: Optional[str]):
+    """The GitHub adapter for THE BUILD'S repository, under the project's own binding.
+
+    `SoftwareFactoryService(settings).github` is the install's BOSS_TARGET_GITHUB_* default: on
+    a host that sets none (boss-1) it names no repository at all, and on one that does it names
+    a DIFFERENT repository than the build. A scaffold seeded through it either raised or landed
+    somewhere the build never looks."""
+    from .software_factory import SoftwareFactoryService
+
+    factory = SoftwareFactoryService(settings, owner=owner, repo=repo)
+    with begin(engine) as connection:
+        factory.bind_project_github(connection, project_id, owner=owner, repo=repo)
+    return factory.github
+
+
+def repository_has_code(github) -> bool:
+    """True when the repository's default branch already holds an application.
+
+    A NEW web app gets a deterministic scaffold; an EXISTING codebase never does. The web-app
+    heuristic alone cannot tell them apart: BOSS's own platform PRD says "UI" and "dashboard"
+    and was routed to "seed a fresh Vite app onto the branch" (dec_8b573b40, boss-1). An empty
+    repository answers 409 ("Git Repository is empty"); anything beyond the usual new-repo files
+    is a codebase. Any other failure is raised: the build cannot proceed without GitHub, and the
+    caller records why."""
+    import httpx
+
+    try:
+        branch, _sha = github.default_branch_sha()
+    except httpx.HTTPStatusError as error:
+        if error.response is not None and error.response.status_code in (404, 409):
+            return False
+        raise
+    payload = github._request("GET", f"/repos/{github.repository_full_name}/git/trees/{branch}")
+    entries = [str(t.get("path") or "").lower() for t in (payload or {}).get("tree") or []
+               if isinstance(t, dict)]
+    return any(e not in _NEW_REPO_FILES for e in entries)
+
+
+_NEW_REPO_FILES = frozenset({"readme", "readme.md", "license", "license.md", ".gitignore",
+                             ".gitattributes", ".github"})
+
+
 def seed_web_scaffold(settings: Settings, *, work_branch: str, name: str = "app",
-                      kind: str = "fullstack") -> int:
+                      kind: str = "fullstack", github=None) -> int:
     """Commit a DETERMINISTIC full-stack scaffold to work_branch — no agent, no turns, can't hit
     error_max_turns. Feature tasks then build on it. Returns the file count.
 
@@ -56,9 +99,11 @@ def seed_web_scaffold(settings: Settings, *, work_branch: str, name: str = "app"
     predictable result, and it was read as the agent building badly. Pass kind="vite"
     explicitly for something that genuinely has no backend."""
     from .scaffold_service import scaffold_project
-    from .software_factory import SoftwareFactoryService
+    if github is None:
+        raise ValueError("seed_web_scaffold needs the build's GitHub adapter (project_github); "
+                         "the install default names no repository or the wrong one")
     files = scaffold_project(name=name, kind=kind)["files"]
-    gh = SoftwareFactoryService(settings).github
+    gh = github
     gh.ensure_branch(work_branch)
     for path, content in files.items():
         gh.upsert_file(work_branch, path, content,
@@ -145,7 +190,8 @@ def start_decomposed_build(engine, settings: Settings, jobs, *, project_id: str,
                            task_id: Optional[str], prd_or_directive: str, owner: str, repo: str,
                            base_branch: Optional[str] = None, profile: Optional[str] = None,
                            risk_tier: Optional[int] = None, max_tasks: int = 6,
-                           seed_scaffold: bool = True, origin: Optional[dict] = None) -> dict:
+                           seed_scaffold: bool = True, origin: Optional[dict] = None,
+                           github=None) -> dict:
     """Decompose the PRD and START the build as one lineage. For a WEB APP, first SEED a
     deterministic Vite+React+TS+Tailwind scaffold onto a fresh lineage branch (no agent, no
     micro-VM turn limit — the exact thing that kept failing an agent-authored scaffold), then
@@ -157,8 +203,9 @@ def start_decomposed_build(engine, settings: Settings, jobs, *, project_id: str,
     if seed_scaffold and _looks_like_web_app(prd_or_directive):
         root = make_id("crun")
         try:
-            seeded = seed_web_scaffold(settings, work_branch=f"boss/code/{root}",
-                                       name=(repo or "app"))
+            seeded = seed_web_scaffold(
+                settings, work_branch=f"boss/code/{root}", name=(repo or "app"),
+                github=github or project_github(engine, settings, project_id, owner, repo))
             decomp_input = (
                 "IMPORTANT: a buildable Vite + React + TypeScript + Tailwind + shadcn-style scaffold "
                 "ALREADY EXISTS on the branch (package.json with dev/build/typecheck/lint/test:e2e "
@@ -178,7 +225,9 @@ def start_decomposed_build(engine, settings: Settings, jobs, *, project_id: str,
         model = model_routing.project_chat_adapter(connection, settings, project_id)
     tasks = decompose_prd_into_tasks(settings, decomp_input, max_tasks=max_tasks, adapter=model)
     if not tasks:
-        return {"tasks": [], "started": False, "reason": "decomposition produced no tasks"}
+        return {"tasks": [], "started": False, "reason": "decomposition_produced_no_tasks",
+                "detail": "The model returned no usable coding tasks for this PRD (see the "
+                          "API log for the model error, if any)."}
     first, rest = tasks[0], tasks[1:]
     # `origin` carries the panel and the approval this build came from. The outer workflow reads
     # it to adopt them rather than convening a second panel and asking for the same sign-off
@@ -211,14 +260,17 @@ def start_decomposed_build(engine, settings: Settings, jobs, *, project_id: str,
 
 def start_web_app_build(engine, settings: Settings, jobs, *, project_id: str,
                         task_id: Optional[str], directive: str, owner: str, repo: str,
-                        review: bool = False, origin: Optional[dict] = None) -> dict:
+                        review: bool = False, origin: Optional[dict] = None,
+                        github=None) -> dict:
     """SINGLE-TASK web-app build (the robust default for a website). Seed a deterministic
     Vite+React+TS+Tailwind scaffold (zero agent turns), then ONE governed task builds the whole app
     feature on top — a handful of files that fit comfortably under the guest's ~40-turn cap. No
     decomposition chain, no coordination. review=False runs it light (tier 1: no adversarial gate)
     so the FIRST pass just works; re-run with review=True to harden."""
     root = make_id("crun")
-    seeded = seed_web_scaffold(settings, work_branch=f"boss/code/{root}", name=(repo or "app"))
+    seeded = seed_web_scaffold(
+        settings, work_branch=f"boss/code/{root}", name=(repo or "app"),
+        github=github or project_github(engine, settings, project_id, owner, repo))
     instructions = (
         "A buildable FULL-STACK scaffold ALREADY EXISTS on this branch. Do NOT re-init the "
         "project, change the stack, or edit the config/build files.\n\n"

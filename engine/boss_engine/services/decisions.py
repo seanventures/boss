@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-
+import logging
 import re
 import threading
 from typing import Any, Optional
@@ -10,6 +10,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from ..config import Settings
+from ..db import begin
 from .budget import BudgetGovernor
 from . import decision_actions
 from .core import create_artifact, emit_event, now_utc
@@ -21,6 +22,8 @@ from .role_governance import RoleGovernanceService
 from .self_improvement import SelfImprovementService
 from .specpack import AgentModuleNotFoundError, SpecPackService
 from .jobs import JOB_PRIORITY_INTERACTIVE
+
+_log = logging.getLogger(__name__)
 
 
 class DecisionNotFoundError(Exception):
@@ -1425,39 +1428,21 @@ class DecisionService:
         if governing_run_id:
             origin_ctx = {**(origin_ctx or {}), "workflow_run_id": str(governing_run_id)}
 
-        def _launch_build() -> None:
-            try:
-                from ..db import get_engine
-                from .prd_decomposition import (
-                    _looks_like_web_app, start_decomposed_build, start_web_app_build,
-                )
+        # "STARTED" ONLY WITH SOMETHING BEHIND IT. This emitted code_task.started_from_prd on
+        # the request thread BEFORE the build thread ran, and the thread swallowed every failure
+        # and ignored `started: False`. dec_8b573b40 (boss-1, 2026-11-01): the event said the
+        # build had started; the scaffold seed raised, no run and no job existed, and nothing
+        # anywhere said so. The outcome is now recorded by the thread, after the run exists.
+        launch_args = dict(project_id=project_id, decision_id=str(row["id"]), task_id=task_id,
+                           actor=actor, title=title, directive=directive, owner=owner, repo=repo,
+                           origin=origin_ctx)
 
-                engine = get_engine()
-                if _looks_like_web_app(directive):
-                    start_web_app_build(
-                        engine, settings, jobs,
-                        project_id=project_id, task_id=task_id, directive=directive,
-                        owner=owner, repo=repo, review=False, origin=origin_ctx)
-                else:
-                    start_decomposed_build(
-                        engine, settings, jobs,
-                        project_id=project_id, task_id=task_id,
-                        prd_or_directive=directive, owner=owner, repo=repo, base_branch=None,
-                        origin=origin_ctx)
-            except Exception:  # noqa: BLE001 — best-effort; failure is visible via run status
-                return
+        def _launch_build() -> None:
+            from ..db import get_engine
+
+            launch_prd_build(get_engine(), settings, jobs, **launch_args)
 
         threading.Thread(target=_launch_build, daemon=True).start()
-        emit_event(
-            connection,
-            row["project_id"],
-            "code_task.started_from_prd",
-            actor,
-            "task",
-            task_id,
-            {"decision_id": row["id"], "task_id": task_id, "title": title,
-             "mode": "decomposed_build"},
-        )
 
     def _build_prd_onto_app(
         self,
@@ -2419,3 +2404,62 @@ def _identity_decides(connection: Connection, row: dict) -> Any:
         return None
     return ctx
 
+
+
+def launch_prd_build(engine, settings: Settings, jobs, *, project_id: str, decision_id: str,
+                     task_id: Optional[str], actor: str, title: str, directive: str, owner: str,
+                     repo: str, origin: Optional[dict] = None) -> dict[str, Any]:
+    """Turn an approved PRD into build work, and record what actually happened.
+
+    Exactly one of two events, each written only once the outcome is known:
+      - ``code_task.started_from_prd`` with the ``run_id`` that now exists (its job enqueued by
+        start_code_task in the same transaction), or
+      - ``code_task.not_started`` with the reason, plus the reason on the decision itself
+        (``resolution_note``), so the approval card says the build never began.
+
+    Routing: a scaffolded single-task web build only for a NEW app (an empty repository). A PRD
+    for an existing codebase — BOSS's own platform PRD mentions "UI" — is decomposed into
+    ordered slices on that codebase, the first started now and the rest chained, never seeded
+    with a fresh Vite app.
+    """
+    from . import prd_decomposition as pd
+
+    mode = "decomposed_build"
+    try:
+        github = pd.project_github(engine, settings, project_id, owner, repo)
+        has_code = pd.repository_has_code(github)
+        if pd._looks_like_web_app(directive) and not has_code:
+            mode = "web_app_build"
+            result = pd.start_web_app_build(
+                engine, settings, jobs, project_id=project_id, task_id=task_id,
+                directive=directive, owner=owner, repo=repo, review=False, origin=origin,
+                github=github)
+        else:
+            result = pd.start_decomposed_build(
+                engine, settings, jobs, project_id=project_id, task_id=task_id,
+                prd_or_directive=directive, owner=owner, repo=repo, base_branch=None,
+                seed_scaffold=not has_code, origin=origin, github=github)
+    except Exception as error:  # noqa: BLE001 — recorded below, never silent
+        _log.exception("PRD build for %s did not start", decision_id)
+        result = {"started": False, "reason": "build_launch_failed",
+                  "detail": f"{type(error).__name__}: {error}"[:600]}
+    run_id = (result or {}).get("run_id") or (result or {}).get("first_run_id")
+    with begin(engine) as connection:
+        if (result or {}).get("started") and run_id:
+            emit_event(connection, project_id, "code_task.started_from_prd", actor, "task",
+                       task_id, {"decision_id": decision_id, "task_id": task_id, "title": title,
+                                 "mode": mode, "run_id": run_id,
+                                 **({"total_tasks": result["total"]}
+                                    if result.get("total") else {})})
+            return result
+        reason = str((result or {}).get("reason") or "build_not_started")
+        detail = str((result or {}).get("detail") or "")
+        emit_event(connection, project_id, "code_task.not_started", actor, "task", task_id,
+                   {"decision_id": decision_id, "reason": reason, "mode": mode,
+                    **({"detail": detail} if detail else {})})
+        connection.execute(text(
+            "UPDATE decisions SET resolution_note = CONCAT_WS(E'\\n\\n', "
+            "NULLIF(resolution_note, ''), CAST(:why AS TEXT)), updated_at = now() WHERE id = :d"),
+            {"d": decision_id,
+             "why": f"The build did not start ({reason}){': ' + detail if detail else ''}."})
+    return {**(result or {}), "started": False}
