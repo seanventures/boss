@@ -84,13 +84,31 @@ def _recommendation(decision: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def step_gate_question(connection, project_id: str, task_id: Optional[str], question: str,
-                       run_id: str, step_id: str) -> str:
+                       run_id: str, step_id: str, subject: Optional[str] = None) -> str:
     """The question in words, kept distinct from another run's (or step's) open decision.
 
     Two runs of one workflow ask the same words at the same step. A second open card with the
     same words gets "(2)" — readable on the Approvals page, where a raw run id was not. The ids
     stay in the recommendation, which is the evidence.
+
+    A CARD THAT NAMES ITS CASE NEEDS NO COUNTER. When this gate names its subject (the
+    recommendation's `gate.subject`: "ALERT-3 · STRUCT-02 on ACC-0047") and every open card with
+    the same words names a different one, the cards already read apart; "(2)" on the second of
+    two different alerts said they were the same thing twice.
     """
+    subject = (subject or "").strip() or None
+    if subject:
+        same_words = connection.execute(
+            text("SELECT recommendation->>'workflow_run_id' AS run_id, "
+                 "recommendation->>'step_id' AS step_id, "
+                 "recommendation->'gate'->>'subject' AS subject FROM decisions "
+                 "WHERE project_id=:p AND question=:q AND status='pending' "
+                 "AND task_id IS NOT DISTINCT FROM :t"),
+            {"p": project_id, "q": question, "t": task_id},
+        ).mappings().all()
+        if all((r["run_id"] == run_id and r["step_id"] == step_id)
+               or (r["subject"] and r["subject"].strip() != subject) for r in same_words):
+            return question
     for n in range(1, 50):
         candidate = question if n == 1 else f"{question} ({n})"
         row = connection.execute(
@@ -119,9 +137,11 @@ def open_step_decision(
     if not run_id or not step_id:
         raise ValueError("a step's decision needs the run and the step it gates")
     rec = {**dict(recommendation), "workflow_run_id": run_id, "step_id": step_id}
+    gate = rec.get("gate") if isinstance(rec.get("gate"), dict) else {}
     return create_blocking_decision(
         connection, project_id, task_id,
-        step_gate_question(connection, project_id, task_id, question, run_id, step_id),
+        step_gate_question(connection, project_id, task_id, question, run_id, step_id,
+                           subject=str(gate.get("subject") or "")),
         rec, dict(cost_summary), reason, risk_tier=risk_tier, default_action=default_action,
     )
 
