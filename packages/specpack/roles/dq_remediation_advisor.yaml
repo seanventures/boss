@@ -1,5 +1,5 @@
 role_id: dq_remediation_advisor
-display_name: Remediation Advisor
+display_name: DQ Remediation Advisor
 team: quality
 mission: "Prepare the remediation package for a confirmed data-quality cause: the fix, its target, who executes it, who approves it, and the change content — prepared only."
 primary_outcomes:

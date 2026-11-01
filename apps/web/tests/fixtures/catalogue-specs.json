@@ -7873,6 +7873,2169 @@
         "output_schema": {},
         "step_agent_rules": 2
       }
+    },
+    {
+      "workflow_key": "dq_incident_rca",
+      "name": "DQ RCA and Remediation",
+      "description": "Investigate an Eagle exception group end to end: open or attach the incident, assemble its context and history, find the root cause, confirm it per family, prepare the fix — a person approves, a different person executes — and close it with a precedent.",
+      "spec": {
+        "entry_step": "monitoring",
+        "steps": [
+          {
+            "id": "monitoring",
+            "kind": "capability",
+            "binding": {
+              "capability": "dq_monitoring",
+              "inputs": {
+                "exception_group_id": {
+                  "from_input": "exception_group_id"
+                }
+              }
+            },
+            "next": [
+              "incident_route"
+            ],
+            "captain": "dq_monitoring_agent",
+            "default_captain": "dq_monitoring_agent",
+            "title": "Monitoring",
+            "contract": {
+              "trigger": "Eagle publishes an exception group (one rule version, one COB). The Pipeline Orchestrator receives it, starts the DQ pipeline and invokes Monitoring with the group ID and the function.",
+              "reads": [
+                {
+                  "kind": "agent"
+                },
+                {
+                  "kind": "mcp_server"
+                },
+                {
+                  "kind": "system"
+                },
+                {
+                  "kind": "exception_group"
+                },
+                {
+                  "kind": "data_quality_rule"
+                },
+                {
+                  "kind": "dq_threshold"
+                },
+                {
+                  "kind": "cde"
+                },
+                {
+                  "kind": "database_structure"
+                },
+                {
+                  "kind": "database_table"
+                },
+                {
+                  "kind": "incident"
+                }
+              ],
+              "writes": [
+                {
+                  "kind": "incident",
+                  "required": false
+                },
+                {
+                  "kind": "agent_decision",
+                  "required": false,
+                  "decision_type": "IncidentOpened|IncidentAttached"
+                },
+                {
+                  "kind": "coverage_gap",
+                  "required": false
+                }
+              ],
+              "calls": [
+                {
+                  "mcp": "eagle",
+                  "tool": "get_exception_group"
+                },
+                {
+                  "mcp": "itsm",
+                  "tool": "list_incidents"
+                },
+                {
+                  "mcp": "itsm",
+                  "tool": "create_incident"
+                },
+                {
+                  "mcp": "itsm",
+                  "tool": "attach_to_incident"
+                }
+              ],
+              "handoff": {
+                "to": "context_enrichment",
+                "carries": [
+                  "incident_id",
+                  "severity"
+                ]
+              },
+              "human_review": "None in the normal path. A policy parameter missing from both the function policy and the defaults stops the run and goes to human review.",
+              "policy": {
+                "opens_on": "Error",
+                "severity": "only rises"
+              },
+              "llm": "none",
+              "decisions": [
+                "severity only moves up",
+                "link facts only",
+                "one failure reason per DQ rule",
+                "ticket to the rule owner",
+                "a Warning writes nothing"
+              ],
+              "steps": [
+                {
+                  "n": 1,
+                  "name": "Read the group",
+                  "explain": "Reads the exception group Eagle published: one rule version, one COB, its grade and measure.",
+                  "reads": [
+                    "agent",
+                    "mcp_server",
+                    "system",
+                    "exception_group"
+                  ],
+                  "calls": [
+                    {
+                      "mcp": "eagle",
+                      "tool": "get_exception_group"
+                    }
+                  ]
+                },
+                {
+                  "n": 2,
+                  "name": "Resolve the rule",
+                  "explain": "Finds the rule in the graph by its rule id, with its table and schema; a rule not there yet is a coverage gap.",
+                  "reads": [
+                    "data_quality_rule",
+                    "database_structure",
+                    "database_table"
+                  ]
+                },
+                {
+                  "n": 3,
+                  "name": "Grade severity",
+                  "explain": "Grades the measure against the rule's own Warning and Error thresholds; only Error opens or attaches.",
+                  "reads": [
+                    "dq_threshold",
+                    "cde"
+                  ]
+                },
+                {
+                  "n": 4,
+                  "name": "Set failure reason",
+                  "explain": "One failure reason per DQ rule (A-D10).",
+                  "reads": [
+                    "data_quality_rule"
+                  ]
+                },
+                {
+                  "n": 5,
+                  "name": "Tag the exception",
+                  "explain": "Tags the CDEs, column and platform.",
+                  "reads": [
+                    "data_quality_rule"
+                  ]
+                },
+                {
+                  "n": 6,
+                  "name": "Match",
+                  "explain": "Looks for an open incident on the same rule.",
+                  "reads": [
+                    "incident"
+                  ],
+                  "calls": [
+                    {
+                      "mcp": "itsm",
+                      "tool": "list_incidents"
+                    }
+                  ]
+                },
+                {
+                  "n": 7,
+                  "name": "Open or attach",
+                  "explain": "Opens a ticket to the rule owner's group, or attaches the group to the open one.",
+                  "reads": [
+                    "data_quality_rule",
+                    "cde"
+                  ],
+                  "writes": [
+                    "incident",
+                    "agent_decision"
+                  ],
+                  "calls": [
+                    {
+                      "mcp": "itsm",
+                      "tool": "create_incident"
+                    },
+                    {
+                      "mcp": "itsm",
+                      "tool": "attach_to_incident"
+                    }
+                  ]
+                },
+                {
+                  "n": 8,
+                  "name": "Link facts",
+                  "explain": "Links the incident to its group, rule, CDEs and owner, and CORRELATED_WITH earlier incidents on the rule (linkType); facts only.",
+                  "writes": [
+                    "incident"
+                  ]
+                },
+                {
+                  "n": 9,
+                  "name": "Write trace, hand off",
+                  "explain": "Writes the decision with gradedSeverity and policyVersion, and hands off.",
+                  "reads": [
+                    "agent"
+                  ],
+                  "writes": [
+                    "agent_decision",
+                    "coverage_gap"
+                  ]
+                }
+              ],
+              "design": {
+                "status": "locked",
+                "reference": "Agent Reference v0.1",
+                "under_revision": "Rule authoring changed DQ grading (A-D87 to A-D89, KG v17): each rule has its own Warning and Error conditions; Eagle grades every run; Warning goes to the OMNIS dashboard and Monitoring writes nothing; only Error opens or attaches to an incident; OP-SEV-01 retired. Open: how incident severity is set, and what happens when the next COB is Warning or clean. The steps below show the locked v0.1 design.",
+                "decisions": [
+                  {
+                    "id": "A-D8",
+                    "text": "severity only moves up"
+                  },
+                  {
+                    "id": "A-D9",
+                    "text": "link facts only"
+                  },
+                  {
+                    "id": "A-D10",
+                    "text": "one failure reason per DQ rule"
+                  },
+                  {
+                    "id": "A-D11",
+                    "text": "ticket to the rule owner"
+                  },
+                  {
+                    "id": "A-D12",
+                    "text": "Pipeline Orchestrator supervises"
+                  },
+                  {
+                    "id": "A-D13",
+                    "text": "policyVersion on every run"
+                  }
+                ],
+                "applied_in": {
+                  "kg": "v17",
+                  "cg": "v4",
+                  "items": [
+                    "gradedSeverity on the decision and severity that can only rise (CG-G1)",
+                    "linkType on CORRELATED_WITH (CG-G2)",
+                    "policyVersion on the run (CG-G4)"
+                  ]
+                },
+                "open_questions": [
+                  {
+                    "id": "CG-G3",
+                    "text": "what Eagle's exception-group payload carries, and push or poll"
+                  },
+                  {
+                    "id": "KG-G1",
+                    "text": "rule owner to ITSM assignment group"
+                  }
+                ]
+              }
+            },
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "incident_route",
+            "kind": "condition",
+            "title": "A new incident?",
+            "expression": {
+              "path": "steps.monitoring.output.continue_pipeline",
+              "op": "truthy"
+            },
+            "on_true": "evidence_loop",
+            "on_false": "attached_stop",
+            "next": [],
+            "max_attempts": 3,
+            "binding": {}
+          },
+          {
+            "id": "attached_stop",
+            "kind": "timer",
+            "wait_seconds": 0,
+            "binding": {},
+            "title": "Attached to an open incident, or not an Error — stop",
+            "next": [],
+            "max_attempts": 3
+          },
+          {
+            "id": "evidence_loop",
+            "kind": "bounded_loop",
+            "title": "Evidence loop",
+            "body": [
+              "context_enrichment",
+              "historical_pattern",
+              "rca"
+            ],
+            "max_iterations": 3,
+            "expression": {
+              "path": "steps.rca.output.rca_verdict",
+              "op": "eq",
+              "value": "InsufficientEvidence"
+            },
+            "on_exhausted": "continue",
+            "next": [
+              "pipeline_orchestrator"
+            ],
+            "max_attempts": 3,
+            "binding": {}
+          },
+          {
+            "id": "context_enrichment",
+            "kind": "capability",
+            "binding": {
+              "capability": "dq_context_enrichment",
+              "inputs": {}
+            },
+            "next": [],
+            "captain": "dq_context_enrichment_agent",
+            "default_captain": "dq_context_enrichment_agent",
+            "title": "Context Enrichment",
+            "contract": {
+              "trigger": "Invoked by the Pipeline Orchestrator after Monitoring opens a new incident — never on an attach. Re-runs on demand, or when the Pipeline Orchestrator re-invokes it after RCA records InsufficientEvidence; a re-run writes a new decision and keeps the old one.",
+              "reads": [
+                {
+                  "kind": "agent"
+                },
+                {
+                  "kind": "mcp_server"
+                },
+                {
+                  "kind": "system"
+                },
+                {
+                  "kind": "incident"
+                },
+                {
+                  "kind": "agent_decision"
+                },
+                {
+                  "kind": "data_quality_rule"
+                },
+                {
+                  "kind": "cde"
+                },
+                {
+                  "kind": "database_structure"
+                },
+                {
+                  "kind": "database_table"
+                },
+                {
+                  "kind": "database_column"
+                },
+                {
+                  "kind": "feed"
+                },
+                {
+                  "kind": "lineage"
+                },
+                {
+                  "kind": "owner"
+                },
+                {
+                  "kind": "regulatory_report"
+                },
+                {
+                  "kind": "report_line"
+                },
+                {
+                  "kind": "mdrm"
+                },
+                {
+                  "kind": "issue"
+                },
+                {
+                  "kind": "examination_finding"
+                }
+              ],
+              "writes": [
+                {
+                  "kind": "agent_decision",
+                  "required": true,
+                  "decision_type": "ContextAssembled"
+                },
+                {
+                  "kind": "coverage_gap",
+                  "required": false
+                }
+              ],
+              "calls": [
+                {
+                  "mcp": "olympus",
+                  "tool": "get_exception_profile"
+                },
+                {
+                  "mcp": "olympus",
+                  "tool": "list_recent_changes"
+                }
+              ],
+              "handoff": {
+                "to": "historical_pattern",
+                "carries": [
+                  "decision_id",
+                  "context_pack"
+                ]
+              },
+              "human_review": "None. Missing metadata — lineage, CDE mapping, owner, MDRM route, profile — is recorded as a coverage gap and the run continues.",
+              "policy": {
+                "max_hops": 3,
+                "change_lookback_days": 14,
+                "list_cap": 25,
+                "data_access": "standard_profile"
+              },
+              "llm": "none",
+              "decisions": [
+                "new incidents only",
+                "facts only",
+                "no LLM for retrieval",
+                "references and counts",
+                "reach never changes severity"
+              ],
+              "steps": [
+                {
+                  "n": 1,
+                  "name": "Load the incident",
+                  "explain": "Loads the incident Monitoring opened and its decision.",
+                  "reads": [
+                    "agent",
+                    "incident",
+                    "agent_decision"
+                  ]
+                },
+                {
+                  "n": 2,
+                  "name": "Rule footprint",
+                  "explain": "The rule's CDEs, columns, tables and feed.",
+                  "reads": [
+                    "data_quality_rule",
+                    "cde",
+                    "database_column",
+                    "database_table",
+                    "database_structure"
+                  ]
+                },
+                {
+                  "n": 3,
+                  "name": "Owners",
+                  "explain": "The rule owner, CDE stewards and system owner, with their ITSM groups.",
+                  "reads": [
+                    "owner",
+                    "system"
+                  ]
+                },
+                {
+                  "n": 4,
+                  "name": "Subscriptions",
+                  "explain": "The feeds that load the failing table and the ones that read it.",
+                  "reads": [
+                    "feed",
+                    "database_table",
+                    "system"
+                  ]
+                },
+                {
+                  "n": 5,
+                  "name": "Upstream lineage",
+                  "explain": "Column lineage upstream within the hop cap; a feed hop nobody registered is a coverage gap.",
+                  "reads": [
+                    "lineage",
+                    "database_column",
+                    "feed"
+                  ]
+                },
+                {
+                  "n": 6,
+                  "name": "Regulatory reach",
+                  "explain": "CDE —REPORTED_IN→ report lines, their reports and MDRM codes (KG-G11).",
+                  "reads": [
+                    "cde",
+                    "report_line",
+                    "regulatory_report",
+                    "mdrm"
+                  ]
+                },
+                {
+                  "n": 7,
+                  "name": "Known issues",
+                  "explain": "Issues and examination findings at every level (A-D40).",
+                  "reads": [
+                    "issue",
+                    "examination_finding"
+                  ]
+                },
+                {
+                  "n": 8,
+                  "name": "Exception profile",
+                  "explain": "The rule's baseline on its platform from the Profile Service (A-D41).",
+                  "reads": [
+                    "system"
+                  ],
+                  "calls": [
+                    {
+                      "mcp": "olympus",
+                      "tool": "get_exception_profile"
+                    }
+                  ]
+                },
+                {
+                  "n": 9,
+                  "name": "Recent changes",
+                  "explain": "Changes on the platform, rule and feed in the look-back.",
+                  "reads": [
+                    "system",
+                    "feed"
+                  ],
+                  "calls": [
+                    {
+                      "mcp": "olympus",
+                      "tool": "list_recent_changes"
+                    }
+                  ]
+                },
+                {
+                  "n": 10,
+                  "name": "Assemble, hand off",
+                  "explain": "Writes ContextAssembled with contextPack and asOf, and the coverage gaps.",
+                  "reads": [
+                    "agent"
+                  ],
+                  "writes": [
+                    "agent_decision",
+                    "coverage_gap"
+                  ]
+                }
+              ],
+              "design": {
+                "status": "locked",
+                "reference": "Agent Reference v0.2",
+                "decisions": [
+                  {
+                    "id": "A-D30",
+                    "text": "new incidents only"
+                  },
+                  {
+                    "id": "A-D31",
+                    "text": "facts only"
+                  },
+                  {
+                    "id": "A-D32",
+                    "text": "no LLM for retrieval"
+                  },
+                  {
+                    "id": "A-D33",
+                    "text": "references and counts"
+                  },
+                  {
+                    "id": "A-D34",
+                    "text": "reach never changes severity"
+                  },
+                  {
+                    "id": "A-D36",
+                    "text": "coverage gaps"
+                  },
+                  {
+                    "id": "A-D38",
+                    "text": "regulatory reach"
+                  },
+                  {
+                    "id": "A-D40",
+                    "text": "known issues at every level"
+                  },
+                  {
+                    "id": "A-D41",
+                    "text": "profile service"
+                  }
+                ],
+                "policy": [
+                  {
+                    "id": "OP-ENR-01",
+                    "text": "hop cap 3"
+                  },
+                  {
+                    "id": "OP-ENR-02",
+                    "text": "change lookback 14 days"
+                  },
+                  {
+                    "id": "OP-ENR-03",
+                    "text": "list cap 25"
+                  },
+                  {
+                    "id": "dataAccess",
+                    "text": "Standard profile only (Orchestration Policy v0.2.0)"
+                  }
+                ],
+                "applied_in": {
+                  "kg": "v16",
+                  "cg": "v4",
+                  "items": [
+                    "CDE —REPORTED_IN→ RegulatoryReport (KG-G11)",
+                    "isProfileDimension on HAS_COLUMN (KG-G12)",
+                    "ContextAssembled with contextPack and asOf (CG-G9)"
+                  ]
+                }
+              }
+            },
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 0,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "historical_pattern",
+            "kind": "capability",
+            "binding": {
+              "capability": "dq_historical_pattern",
+              "inputs": {}
+            },
+            "next": [],
+            "captain": "dq_historical_pattern_agent",
+            "default_captain": "dq_historical_pattern_agent",
+            "title": "Historical Pattern",
+            "contract": {
+              "trigger": "Invoked by the Pipeline Orchestrator after Context Enrichment for a new incident; never on an attach. Re-runs whenever Enrichment re-runs, and on demand. RCA never searches history itself.",
+              "reads": [
+                {
+                  "kind": "agent"
+                },
+                {
+                  "kind": "mcp_server"
+                },
+                {
+                  "kind": "system"
+                },
+                {
+                  "kind": "data_quality_rule"
+                },
+                {
+                  "kind": "database_structure"
+                },
+                {
+                  "kind": "cde"
+                },
+                {
+                  "kind": "business_calendar"
+                },
+                {
+                  "kind": "calendar_day"
+                },
+                {
+                  "kind": "resolved_pattern"
+                },
+                {
+                  "kind": "incident"
+                },
+                {
+                  "kind": "agent_decision"
+                },
+                {
+                  "kind": "precedent"
+                }
+              ],
+              "writes": [
+                {
+                  "kind": "agent_decision",
+                  "required": true,
+                  "decision_type": "HistoricalPatternMatched"
+                },
+                {
+                  "kind": "precedent",
+                  "required": false
+                }
+              ],
+              "calls": [
+                {
+                  "mcp": "itsm",
+                  "tool": "update_incident"
+                }
+              ],
+              "handoff": {
+                "to": "rca",
+                "carries": [
+                  "decision_id",
+                  "matched"
+                ]
+              },
+              "human_review": "None. Zero matches is a fact, not InsufficientEvidence. Severity is never changed.",
+              "policy": {
+                "lookback_days": 730,
+                "tiers": 2,
+                "list_cap": 25
+              },
+              "llm": "none",
+              "decisions": [
+                "facts only",
+                "two search tiers",
+                "deterministic matching",
+                "only Historical Pattern creates Precedents"
+              ],
+              "steps": [
+                {
+                  "n": 1,
+                  "name": "Load the pack",
+                  "explain": "Loads the incident and Enrichment's decision.",
+                  "reads": [
+                    "agent",
+                    "incident",
+                    "agent_decision"
+                  ]
+                },
+                {
+                  "n": 2,
+                  "name": "Sibling rules",
+                  "explain": "Related rules and rules on the same CDE or column.",
+                  "reads": [
+                    "data_quality_rule",
+                    "database_structure",
+                    "cde"
+                  ]
+                },
+                {
+                  "n": 3,
+                  "name": "Reference data",
+                  "explain": "The business calendar (business day of the quarter) and the resolved patterns with their durable fixes.",
+                  "reads": [
+                    "system",
+                    "cde",
+                    "business_calendar",
+                    "calendar_day",
+                    "resolved_pattern"
+                  ]
+                },
+                {
+                  "n": 4,
+                  "name": "find_past_incidents",
+                  "explain": "Closed incidents in two tiers: the same rule, then sibling rules or the same CDE, two years back.",
+                  "reads": [
+                    "incident",
+                    "resolved_pattern",
+                    "agent_decision"
+                  ]
+                },
+                {
+                  "n": 5,
+                  "name": "Write precedents",
+                  "explain": "Precedents, MATCHED_INCIDENT and REFERENCES.",
+                  "writes": [
+                    "precedent",
+                    "agent_decision"
+                  ]
+                },
+                {
+                  "n": 6,
+                  "name": "Post briefing",
+                  "explain": "A work note on the ticket.",
+                  "reads": [
+                    "mcp_server"
+                  ],
+                  "calls": [
+                    {
+                      "mcp": "itsm",
+                      "tool": "update_incident"
+                    }
+                  ]
+                },
+                {
+                  "n": 7,
+                  "name": "Hand off",
+                  "explain": "Writes HistoricalPatternMatched.",
+                  "writes": [
+                    "agent_decision"
+                  ]
+                }
+              ],
+              "design": {
+                "status": "locked",
+                "reference": "Agent Reference v0.3",
+                "decisions": [
+                  {
+                    "id": "A-D48",
+                    "text": "facts only"
+                  },
+                  {
+                    "id": "A-D49",
+                    "text": "two search tiers"
+                  },
+                  {
+                    "id": "A-D50",
+                    "text": "deterministic matching"
+                  },
+                  {
+                    "id": "A-D51",
+                    "text": "KG data passed as parameters"
+                  },
+                  {
+                    "id": "A-D52",
+                    "text": "grouping by pattern"
+                  },
+                  {
+                    "id": "A-D53",
+                    "text": "negative precedents"
+                  },
+                  {
+                    "id": "A-D55",
+                    "text": "only Historical Pattern creates Precedents"
+                  },
+                  {
+                    "id": "A-D57",
+                    "text": "recurrence facts"
+                  }
+                ],
+                "applied_in": {
+                  "kg": "v16",
+                  "cg": "v4",
+                  "items": [
+                    "BusinessCalendar and CalendarDay (KG-G17)",
+                    "fixDurability (KG-G16)",
+                    "MATCHED_INCIDENT, Precedent recurrence facts, SameColumn and timingAlignment (CG-G12 to CG-G16)"
+                  ]
+                },
+                "open_questions": [
+                  {
+                    "id": "HP-Q1",
+                    "text": "promotionCandidate versus GovernanceFlag and RulePromotion. Per-cause confidenceLift — being settled in the RCA review."
+                  }
+                ]
+              }
+            },
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 0,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "rca",
+            "kind": "capability",
+            "binding": {
+              "capability": "dq_rca",
+              "inputs": {}
+            },
+            "next": [],
+            "captain": "dq_rca_agent",
+            "default_captain": "dq_rca_agent",
+            "title": "RCA",
+            "contract": {
+              "trigger": "After Historical Pattern, in each round of the evidence loop.",
+              "reads": [
+                {
+                  "kind": "incident"
+                },
+                {
+                  "kind": "agent_decision"
+                },
+                {
+                  "kind": "coverage_gap"
+                },
+                {
+                  "kind": "precedent"
+                },
+                {
+                  "kind": "resolved_pattern"
+                },
+                {
+                  "kind": "data_quality_rule"
+                },
+                {
+                  "kind": "cde"
+                }
+              ],
+              "writes": [
+                {
+                  "kind": "agent_decision",
+                  "required": true,
+                  "decision_type": "RootCauseCandidates|InsufficientEvidence"
+                }
+              ],
+              "handoff": {
+                "to": "pipeline_orchestrator",
+                "carries": [
+                  "candidates",
+                  "rca_verdict"
+                ]
+              },
+              "human_review": "None: lanes confirm or rule out; a person approves any fix.",
+              "policy": {
+                "token_budget": 6000,
+                "max_rounds": 3
+              },
+              "llm": "agent",
+              "decisions": [
+                "cites only offered evidence",
+                "InsufficientEvidence re-runs Enrichment and Historical Pattern, at most twice"
+              ],
+              "steps": [
+                {
+                  "n": 1,
+                  "name": "Read the curated pack",
+                  "explain": "The Context Curator's pack, within the token budget.",
+                  "reads": [
+                    "incident",
+                    "agent_decision",
+                    "coverage_gap"
+                  ]
+                },
+                {
+                  "n": 2,
+                  "name": "Weigh the precedents",
+                  "explain": "Tier-1 and tier-2 precedents and their patterns.",
+                  "reads": [
+                    "precedent",
+                    "resolved_pattern"
+                  ]
+                },
+                {
+                  "n": 3,
+                  "name": "Tier-1 explanations",
+                  "explain": "Causes a precedent explains, checked against this exception.",
+                  "reads": [
+                    "precedent"
+                  ]
+                },
+                {
+                  "n": 4,
+                  "name": "Tier-2 explanations",
+                  "explain": "Causes the evidence explains without a precedent.",
+                  "reads": [
+                    "data_quality_rule",
+                    "cde"
+                  ]
+                },
+                {
+                  "n": 5,
+                  "name": "Candidates or InsufficientEvidence",
+                  "explain": "Writes the candidates with confidence and USED_PRECEDENT {confidenceLift}, or what is missing.",
+                  "writes": [
+                    "agent_decision"
+                  ]
+                }
+              ],
+              "design": {
+                "status": "in_review",
+                "reference": "",
+                "decisions": [
+                  {
+                    "id": "RCA-1",
+                    "text": "cites only evidence it was offered"
+                  },
+                  {
+                    "id": "RCA-2",
+                    "text": "InsufficientEvidence re-runs Enrichment and Historical Pattern, at most twice"
+                  }
+                ],
+                "open_questions": [
+                  {
+                    "id": "HP-Q1",
+                    "text": "per-cause confidenceLift"
+                  }
+                ]
+              }
+            },
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 0,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "pipeline_orchestrator",
+            "kind": "capability",
+            "binding": {
+              "capability": "dq_orchestration",
+              "inputs": {}
+            },
+            "next": [
+              "lanes"
+            ],
+            "captain": "dq_pipeline_orchestrator",
+            "default_captain": "dq_pipeline_orchestrator",
+            "title": "Pipeline Orchestrator",
+            "contract": {
+              "trigger": "After the evidence loop ends (conclusive, or its rounds used up).",
+              "reads": [
+                {
+                  "kind": "agent_decision"
+                },
+                {
+                  "kind": "incident"
+                }
+              ],
+              "writes": [
+                {
+                  "kind": "agent_decision",
+                  "required": true,
+                  "decision_type": "Routed"
+                }
+              ],
+              "handoff": {
+                "to": "lanes",
+                "carries": [
+                  "lanes"
+                ]
+              },
+              "human_review": "None. No candidate above the routing floor starts no lane.",
+              "policy": {
+                "min_route_confidence": 0.3
+              },
+              "llm": "none",
+              "decisions": [
+                "one lane per candidate family"
+              ],
+              "steps": [
+                {
+                  "n": 1,
+                  "name": "Read the candidates",
+                  "explain": "RCA's latest round.",
+                  "reads": [
+                    "agent_decision"
+                  ]
+                },
+                {
+                  "n": 2,
+                  "name": "Route each family",
+                  "explain": "One lane per family above the routing floor.",
+                  "reads": [
+                    "incident"
+                  ],
+                  "writes": [
+                    "agent_decision"
+                  ]
+                }
+              ],
+              "design": {
+                "status": "not_reviewed",
+                "reference": ""
+              }
+            },
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 0,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "lanes",
+            "kind": "for_each",
+            "title": "Lanes",
+            "items": "steps.pipeline_orchestrator.output.lanes",
+            "body": "lane",
+            "max_items": 5,
+            "concurrency": 3,
+            "next": [
+              "rule_drafting"
+            ],
+            "max_attempts": 3,
+            "binding": {}
+          },
+          {
+            "id": "lane",
+            "kind": "capability",
+            "binding": {
+              "capability": "dq_lane",
+              "inputs": {
+                "item": {
+                  "from_item": ""
+                }
+              }
+            },
+            "next": [],
+            "captain": "dq_lane_agent",
+            "default_captain": "dq_lane_agent",
+            "title": "Lane",
+            "contract": {
+              "trigger": "One per routed family (lanes).",
+              "reads": [
+                {
+                  "kind": "incident"
+                },
+                {
+                  "kind": "agent_decision"
+                },
+                {
+                  "kind": "precedent"
+                },
+                {
+                  "kind": "data_quality_rule"
+                },
+                {
+                  "kind": "dq_threshold"
+                },
+                {
+                  "kind": "system"
+                },
+                {
+                  "kind": "feed"
+                }
+              ],
+              "writes": [
+                {
+                  "kind": "agent_decision",
+                  "required": true,
+                  "decision_type": "Confirmed|RuledOut|CannotVerify"
+                }
+              ],
+              "handoff": {
+                "to": "rule_drafting",
+                "carries": [
+                  "lane_verdict",
+                  "cause"
+                ]
+              },
+              "human_review": "None. CannotVerify leaves the incident for a person.",
+              "policy": {
+                "token_budget": 4000
+              },
+              "llm": "agent",
+              "decisions": [
+                "a verdict cites evidence it was offered"
+              ],
+              "steps": [
+                {
+                  "n": 1,
+                  "name": "Read the family's evidence",
+                  "explain": "Candidates, precedents, thresholds.",
+                  "reads": [
+                    "incident",
+                    "agent_decision",
+                    "precedent",
+                    "data_quality_rule",
+                    "dq_threshold"
+                  ]
+                },
+                {
+                  "n": 2,
+                  "name": "Confirm or rule out",
+                  "explain": "A verdict citing evidence.",
+                  "reads": [
+                    "system",
+                    "feed"
+                  ],
+                  "writes": [
+                    "agent_decision"
+                  ]
+                }
+              ],
+              "design": {
+                "status": "not_reviewed",
+                "reference": ""
+              }
+            },
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 0,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "rule_drafting",
+            "kind": "capability",
+            "binding": {
+              "capability": "dq_rule_drafting",
+              "inputs": {}
+            },
+            "next": [
+              "remediation_advisor"
+            ],
+            "captain": "dq_rule_drafting_agent",
+            "default_captain": "dq_rule_drafting_agent",
+            "title": "Rule Drafting",
+            "contract": {
+              "trigger": "After the lanes: a lane that confirmed a false positive (rule_config) opens a rule authoring case.",
+              "reads": [
+                {
+                  "kind": "agent_decision"
+                },
+                {
+                  "kind": "data_quality_rule"
+                },
+                {
+                  "kind": "dq_threshold"
+                },
+                {
+                  "kind": "incident"
+                }
+              ],
+              "writes": [
+                {
+                  "kind": "agent_decision",
+                  "required": true,
+                  "decision_type": "RuleProposed|NothingToDraft"
+                },
+                {
+                  "kind": "rule_proposal",
+                  "required": false
+                },
+                {
+                  "kind": "rule",
+                  "required": false
+                }
+              ],
+              "handoff": {
+                "to": "remediation_advisor",
+                "carries": [
+                  "proposal"
+                ]
+              },
+              "human_review": "Every rule change is a proposal a person approves in Rules review.",
+              "policy": {
+                "token_budget": 3000
+              },
+              "llm": "agent",
+              "decisions": [
+                "proposes; never changes a rule"
+              ],
+              "steps": [
+                {
+                  "n": 1,
+                  "name": "Read the false positive",
+                  "explain": "The confirmed rule_config lane and the rule's thresholds.",
+                  "reads": [
+                    "agent_decision",
+                    "data_quality_rule",
+                    "dq_threshold"
+                  ]
+                },
+                {
+                  "n": 2,
+                  "name": "Draft the rule change",
+                  "explain": "A rule proposal into Rules review.",
+                  "reads": [
+                    "incident"
+                  ],
+                  "writes": [
+                    "rule_proposal",
+                    "rule",
+                    "agent_decision"
+                  ]
+                }
+              ],
+              "design": {
+                "status": "not_reviewed",
+                "reference": ""
+              }
+            },
+            "side_path": "Rule authoring",
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "remediation_advisor",
+            "kind": "capability",
+            "binding": {
+              "capability": "dq_remediation_package",
+              "inputs": {}
+            },
+            "next": [
+              "package_route"
+            ],
+            "captain": "dq_remediation_advisor",
+            "default_captain": "dq_remediation_advisor",
+            "title": "Remediation Advisor",
+            "contract": {
+              "trigger": "After the lanes and rule drafting.",
+              "reads": [
+                {
+                  "kind": "agent_decision"
+                },
+                {
+                  "kind": "incident"
+                },
+                {
+                  "kind": "precedent"
+                },
+                {
+                  "kind": "resolved_pattern"
+                },
+                {
+                  "kind": "owner"
+                }
+              ],
+              "writes": [
+                {
+                  "kind": "agent_decision",
+                  "required": true,
+                  "decision_type": "RemediationPrepared|NoPackage"
+                },
+                {
+                  "kind": "remediation_package",
+                  "required": false
+                }
+              ],
+              "handoff": {
+                "to": "human_approval",
+                "carries": [
+                  "remediation_package_id"
+                ]
+              },
+              "human_review": "A person approves at Human approval; a different person carries it out.",
+              "policy": {
+                "token_budget": 4000,
+                "prepare_only": true
+              },
+              "llm": "agent",
+              "decisions": [
+                "prepared only",
+                "executor and approver are different people"
+              ],
+              "steps": [
+                {
+                  "n": 1,
+                  "name": "Read the confirmed cause",
+                  "explain": "The lane verdict and the templates.",
+                  "reads": [
+                    "agent_decision",
+                    "resolved_pattern",
+                    "precedent"
+                  ]
+                },
+                {
+                  "n": 2,
+                  "name": "Prepare the package",
+                  "explain": "Fix, target, executor, approver, change content.",
+                  "reads": [
+                    "owner",
+                    "incident"
+                  ],
+                  "writes": [
+                    "remediation_package",
+                    "agent_decision"
+                  ]
+                }
+              ],
+              "design": {
+                "status": "not_reviewed",
+                "reference": ""
+              }
+            },
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "package_route",
+            "kind": "condition",
+            "title": "A fix prepared?",
+            "expression": {
+              "path": "steps.remediation_advisor.output.package_ready",
+              "op": "truthy"
+            },
+            "on_true": "human_approval",
+            "on_false": "left_open",
+            "next": [],
+            "max_attempts": 3,
+            "binding": {}
+          },
+          {
+            "id": "left_open",
+            "kind": "timer",
+            "wait_seconds": 0,
+            "binding": {},
+            "title": "No confirmed cause — the incident stays open",
+            "next": [
+              "incident_closure"
+            ],
+            "max_attempts": 3
+          },
+          {
+            "id": "human_approval",
+            "kind": "decision",
+            "title": "Human approval",
+            "subject": [
+              "{steps.monitoring.output.incident_id} · {steps.monitoring.output.group_label}",
+              "{steps.monitoring.output.group_label}",
+              "{input.exception_group_id}"
+            ],
+            "summary": [
+              "{steps.remediation_advisor.output.note}"
+            ],
+            "question": "Approve the prepared fix?",
+            "guidance": "The Remediation Advisor prepared it from the confirmed cause; nothing has been done. Approving lets a DIFFERENT person carry it out — you cannot also do the execution.",
+            "approval": {
+              "mode": "manual",
+              "approver_role": "human"
+            },
+            "contract": {
+              "trigger": "A remediation package is prepared.",
+              "reads": [
+                {
+                  "kind": "remediation_package"
+                }
+              ],
+              "human_review": "A person approves the prepared fix; a rejection stops the run.",
+              "llm": "none",
+              "design": {
+                "status": "human_step",
+                "reference": ""
+              }
+            },
+            "next": [
+              "human_execution"
+            ],
+            "max_attempts": 3,
+            "binding": {}
+          },
+          {
+            "id": "human_execution",
+            "kind": "decision",
+            "title": "Human execution",
+            "subject": [
+              "{steps.monitoring.output.incident_id} · {steps.monitoring.output.group_label}",
+              "{steps.monitoring.output.group_label}",
+              "{input.exception_group_id}"
+            ],
+            "summary": [
+              "{steps.remediation_advisor.output.note}"
+            ],
+            "question": "Carry out the approved fix, then confirm it here with the change reference.",
+            "guidance": "Separation of duties: the person who approved the fix cannot carry it out. BOSS executes nothing (prepare-only); write the change ticket (e.g. CHG-7760) in your note.",
+            "approval": {
+              "mode": "manual",
+              "approver_role": "human",
+              "distinct_from": [
+                "human_approval"
+              ]
+            },
+            "recommendation": {
+              "reason_label": "Carried out",
+              "reason_prompt": "The change reference and what you did."
+            },
+            "contract": {
+              "trigger": "After a person approved the fix.",
+              "reads": [
+                {
+                  "kind": "remediation_package"
+                }
+              ],
+              "human_review": "A DIFFERENT person than the approver carries the fix out and records the change reference; the engine refuses the approver.",
+              "llm": "none",
+              "design": {
+                "status": "human_step",
+                "reference": ""
+              }
+            },
+            "next": [
+              "remediation_fix"
+            ],
+            "max_attempts": 3,
+            "binding": {}
+          },
+          {
+            "id": "remediation_fix",
+            "kind": "capability",
+            "binding": {
+              "capability": "dq_remediation_fix",
+              "inputs": {}
+            },
+            "next": [
+              "incident_closure"
+            ],
+            "title": "Remediation Fix (design target)",
+            "contract": {
+              "trigger": "After Human execution.",
+              "reads": [
+                {
+                  "kind": "remediation_package"
+                },
+                {
+                  "kind": "agent_decision"
+                }
+              ],
+              "writes": [
+                {
+                  "kind": "agent_decision",
+                  "required": true,
+                  "decision_type": "FixRecorded"
+                }
+              ],
+              "calls": [
+                {
+                  "mcp": "itsm",
+                  "tool": "update_incident"
+                }
+              ],
+              "handoff": {
+                "to": "incident_closure",
+                "carries": [
+                  "change_ref"
+                ]
+              },
+              "human_review": "Records what the people did; refuses to run without both answers.",
+              "llm": "none",
+              "decisions": [
+                "prepare-only cap: no agent executes fixes"
+              ],
+              "steps": [
+                {
+                  "n": 1,
+                  "name": "Record the execution",
+                  "explain": "Who approved, who carried it out, the change.",
+                  "reads": [
+                    "remediation_package",
+                    "agent_decision"
+                  ],
+                  "writes": [
+                    "agent_decision"
+                  ],
+                  "calls": [
+                    {
+                      "mcp": "itsm",
+                      "tool": "update_incident"
+                    }
+                  ]
+                }
+              ],
+              "design": {
+                "status": "not_reviewed",
+                "reference": "",
+                "decisions": [
+                  {
+                    "id": "PREP-1",
+                    "text": "prepare-only cap: no agent executes fixes"
+                  }
+                ]
+              }
+            },
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 0,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "incident_closure",
+            "kind": "capability",
+            "binding": {
+              "capability": "dq_incident_closure",
+              "inputs": {}
+            },
+            "next": [],
+            "captain": "dq_incident_closure_agent",
+            "default_captain": "dq_incident_closure_agent",
+            "title": "Incident Closure",
+            "contract": {
+              "trigger": "After the fix is recorded, or when no cause was confirmed.",
+              "reads": [
+                {
+                  "kind": "incident"
+                },
+                {
+                  "kind": "agent_decision"
+                },
+                {
+                  "kind": "remediation_package"
+                },
+                {
+                  "kind": "precedent"
+                },
+                {
+                  "kind": "resolved_pattern"
+                },
+                {
+                  "kind": "data_quality_rule"
+                }
+              ],
+              "writes": [
+                {
+                  "kind": "agent_decision",
+                  "required": true,
+                  "decision_type": "IncidentClosed|FixNotConfirmed|LeftOpen"
+                },
+                {
+                  "kind": "precedent",
+                  "required": false
+                },
+                {
+                  "kind": "resolved_pattern",
+                  "required": false
+                }
+              ],
+              "calls": [
+                {
+                  "mcp": "eagle",
+                  "tool": "rerun_check"
+                },
+                {
+                  "mcp": "itsm",
+                  "tool": "update_incident"
+                }
+              ],
+              "handoff": {
+                "to": "the next run's historical_pattern",
+                "carries": [
+                  "precedent_id"
+                ]
+              },
+              "human_review": "Never closes on a failing re-run; an unconfirmed incident stays open.",
+              "llm": "none",
+              "decisions": [
+                "re-run before closing",
+                "maintains resolved patterns",
+                "writes the precedent"
+              ],
+              "steps": [
+                {
+                  "n": 1,
+                  "name": "Re-run the check",
+                  "explain": "Eagle re-runs the rule after the fix.",
+                  "reads": [
+                    "data_quality_rule"
+                  ],
+                  "calls": [
+                    {
+                      "mcp": "eagle",
+                      "tool": "rerun_check"
+                    }
+                  ]
+                },
+                {
+                  "n": 2,
+                  "name": "Finalise the cause",
+                  "explain": "From the confirmed lane and the package.",
+                  "reads": [
+                    "agent_decision",
+                    "remediation_package"
+                  ]
+                },
+                {
+                  "n": 3,
+                  "name": "Close the incident",
+                  "explain": "Graph and ticket.",
+                  "reads": [
+                    "incident"
+                  ],
+                  "writes": [
+                    "agent_decision"
+                  ],
+                  "calls": [
+                    {
+                      "mcp": "itsm",
+                      "tool": "update_incident"
+                    }
+                  ]
+                },
+                {
+                  "n": 4,
+                  "name": "Maintain resolved patterns",
+                  "explain": "An existing pattern seen again, or a new one.",
+                  "reads": [
+                    "resolved_pattern"
+                  ],
+                  "writes": [
+                    "resolved_pattern"
+                  ]
+                },
+                {
+                  "n": 5,
+                  "name": "Write the precedent",
+                  "explain": "For the next investigation.",
+                  "reads": [
+                    "precedent"
+                  ],
+                  "writes": [
+                    "precedent"
+                  ]
+                }
+              ],
+              "design": {
+                "status": "not_reviewed",
+                "reference": ""
+              }
+            },
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "escalation",
+            "kind": "capability",
+            "binding": {
+              "capability": "dq_escalation",
+              "inputs": {}
+            },
+            "next": [],
+            "captain": "dq_escalation_agent",
+            "default_captain": "dq_escalation_agent",
+            "title": "Escalation Agent",
+            "contract": {
+              "trigger": "Daily, over every open incident (its own scheduled workflow).",
+              "reads": [
+                {
+                  "kind": "incident"
+                },
+                {
+                  "kind": "owner"
+                },
+                {
+                  "kind": "cde"
+                },
+                {
+                  "kind": "calendar_day"
+                },
+                {
+                  "kind": "report_line"
+                }
+              ],
+              "writes": [
+                {
+                  "kind": "agent_decision",
+                  "required": true,
+                  "decision_type": "EscalationSweep|Escalated"
+                }
+              ],
+              "calls": [
+                {
+                  "mcp": "itsm",
+                  "tool": "update_incident"
+                }
+              ],
+              "human_review": "The top rung is the Chief Data Officer.",
+              "policy": {
+                "ladder_business_days": [
+                  1,
+                  3,
+                  5
+                ],
+                "regulatory_reach": "one rung sooner"
+              },
+              "llm": "none",
+              "decisions": [
+                "escalation only rises"
+              ],
+              "steps": [
+                {
+                  "n": 1,
+                  "name": "Sweep open incidents",
+                  "explain": "Every open DQ incident.",
+                  "reads": [
+                    "incident"
+                  ]
+                },
+                {
+                  "n": 2,
+                  "name": "Apply the ladder",
+                  "explain": "Business days open on the calendar; regulatory reach one rung sooner.",
+                  "reads": [
+                    "calendar_day",
+                    "cde",
+                    "report_line",
+                    "owner"
+                  ]
+                },
+                {
+                  "n": 3,
+                  "name": "Escalate",
+                  "explain": "Note it on the ticket and record it.",
+                  "writes": [
+                    "agent_decision"
+                  ],
+                  "calls": [
+                    {
+                      "mcp": "itsm",
+                      "tool": "update_incident"
+                    }
+                  ]
+                }
+              ],
+              "design": {
+                "status": "not_reviewed",
+                "reference": ""
+              }
+            },
+            "side_path": "Daily over every open incident",
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "context_curator",
+            "kind": "deterministic",
+            "title": "Context Curator",
+            "description": "Ranks and trims context to each agent's token budget; routes nothing.",
+            "binding": {
+              "inputs": {
+                "capability": "dq_context_curator"
+              }
+            },
+            "contract": {
+              "trigger": "Called by every LLM step before it is asked.",
+              "reads": [
+                {
+                  "kind": "agent_decision"
+                }
+              ],
+              "human_review": "None: it ranks and trims, and reports what it dropped.",
+              "llm": "none",
+              "design": {
+                "status": "shared_service",
+                "reference": "Chapter to write",
+                "decisions": [
+                  {
+                    "id": "CC-1",
+                    "text": "ranks and trims context to each agent's token budget; routes nothing; reports what it dropped"
+                  }
+                ]
+              }
+            },
+            "next": [],
+            "max_attempts": 3
+          },
+          {
+            "id": "profile_service",
+            "kind": "deterministic",
+            "title": "Profile Service",
+            "description": "Deterministic exception profiles on each data platform (A-D41).",
+            "binding": {
+              "inputs": {
+                "capability": "dq_profile_service"
+              }
+            },
+            "contract": {
+              "trigger": "Called by Context Enrichment (and on demand) for a rule on its platform.",
+              "reads": [
+                {
+                  "kind": "system"
+                }
+              ],
+              "calls": [
+                {
+                  "mcp": "olympus",
+                  "tool": "get_exception_profile"
+                }
+              ],
+              "human_review": "None: a platform or rule it does not profile is said so.",
+              "llm": "none",
+              "design": {
+                "status": "shared_service",
+                "reference": "Built at the investigation checkpoint",
+                "decisions": [
+                  {
+                    "id": "A-D41",
+                    "text": "deterministic exception profiles on each data platform"
+                  }
+                ]
+              }
+            },
+            "next": [],
+            "max_attempts": 3
+          }
+        ],
+        "objective": "Investigate one Eagle exception group on NorthPeak Bank's data platform. Monitoring opens or attaches one incident for an Error group and never diagnoses. Context Enrichment and Historical Pattern are fixed graph reads, never a model. The RCA Agent proposes candidate causes citing the evidence, or says the evidence is insufficient, which runs Enrichment and Historical Pattern again (at most twice). Each candidate family goes to its lane; a confirmed false positive becomes a rule proposal. The Remediation Advisor prepares the fix; a person approves it and a different person carries it out — no agent executes. Closure re-runs the check, closes the incident and writes the precedent the next investigation finds.",
+        "workflow_name": "DQ RCA and Remediation",
+        "input_schema": {
+          "type": "object",
+          "required": [
+            "exception_group_id"
+          ],
+          "properties": {
+            "exception_group_id": {
+              "type": "string",
+              "title": "Exception group",
+              "description": "The Eagle exception group to investigate (Knowledge Graph › Documents › DQ sample lists them by COB), e.g. EXG-20261005-0003 (EGL-0588 v2 on COB 2026-10-05).",
+              "examples": [
+                "EXG-20261005-0003"
+              ]
+            }
+          }
+        },
+        "pipeline": {
+          "loops": [
+            {
+              "from": "rca",
+              "to": [
+                "context_enrichment",
+                "historical_pattern"
+              ],
+              "label": "InsufficientEvidence → re-run Enrichment and Historical Pattern",
+              "max_rounds": 2
+            }
+          ],
+          "side_workflows": [
+            {
+              "key": "dq_incident_escalation",
+              "stage": "escalation",
+              "label": "9 · Escalation Agent — runs daily over every open incident and applies the escalation ladder",
+              "schedule": "daily"
+            }
+          ],
+          "side_paths": [
+            {
+              "from": "lanes",
+              "to": "rule_drafting",
+              "label": "False Positive lane: rule proposal"
+            }
+          ],
+          "shared_services": [
+            "context_curator",
+            "profile_service"
+          ],
+          "design_target": {
+            "stage": "remediation_fix",
+            "label": "8 · Remediation Fix: design target"
+          }
+        },
+        "output_schema": {},
+        "step_agent_rules": 2
+      }
+    },
+    {
+      "workflow_key": "dq_incident_escalation",
+      "name": "DQ Incident Escalation",
+      "description": "Every day, apply the escalation ladder to each open data-quality incident: the longer it stays open, the higher it goes.",
+      "spec": {
+        "entry_step": "escalation",
+        "steps": [
+          {
+            "id": "escalation",
+            "kind": "capability",
+            "binding": {
+              "capability": "dq_escalation",
+              "inputs": {
+                "as_of": {
+                  "from_input": "as_of"
+                }
+              }
+            },
+            "next": [],
+            "captain": "dq_escalation_agent",
+            "default_captain": "dq_escalation_agent",
+            "title": "Escalation Agent",
+            "contract": {
+              "trigger": "Daily, over every open incident (its own scheduled workflow).",
+              "reads": [
+                {
+                  "kind": "incident"
+                },
+                {
+                  "kind": "owner"
+                },
+                {
+                  "kind": "cde"
+                },
+                {
+                  "kind": "calendar_day"
+                },
+                {
+                  "kind": "report_line"
+                }
+              ],
+              "writes": [
+                {
+                  "kind": "agent_decision",
+                  "required": true,
+                  "decision_type": "EscalationSweep|Escalated"
+                }
+              ],
+              "calls": [
+                {
+                  "mcp": "itsm",
+                  "tool": "update_incident"
+                }
+              ],
+              "human_review": "The top rung is the Chief Data Officer.",
+              "policy": {
+                "ladder_business_days": [
+                  1,
+                  3,
+                  5
+                ],
+                "regulatory_reach": "one rung sooner"
+              },
+              "llm": "none",
+              "decisions": [
+                "escalation only rises"
+              ],
+              "steps": [
+                {
+                  "n": 1,
+                  "name": "Sweep open incidents",
+                  "explain": "Every open DQ incident.",
+                  "reads": [
+                    "incident"
+                  ]
+                },
+                {
+                  "n": 2,
+                  "name": "Apply the ladder",
+                  "explain": "Business days open on the calendar; regulatory reach one rung sooner.",
+                  "reads": [
+                    "calendar_day",
+                    "cde",
+                    "report_line",
+                    "owner"
+                  ]
+                },
+                {
+                  "n": 3,
+                  "name": "Escalate",
+                  "explain": "Note it on the ticket and record it.",
+                  "writes": [
+                    "agent_decision"
+                  ],
+                  "calls": [
+                    {
+                      "mcp": "itsm",
+                      "tool": "update_incident"
+                    }
+                  ]
+                }
+              ],
+              "design": {
+                "status": "not_reviewed",
+                "reference": ""
+              }
+            },
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          }
+        ],
+        "objective": "Sweep every open DQ incident, count the business days it has been open on the bank's calendar, and raise its escalation to the next rung when due (regulatory reach one rung sooner). Escalation only rises.",
+        "workflow_name": "DQ Incident Escalation",
+        "input_schema": {
+          "type": "object",
+          "required": [],
+          "properties": {
+            "as_of": {
+              "type": "string",
+              "title": "As of (optional)",
+              "description": "The day the ladder is applied for (YYYY-MM-DD). Default: today.",
+              "examples": [
+                "2026-10-09"
+              ]
+            }
+          }
+        },
+        "output_schema": {},
+        "step_agent_rules": 2
+      }
+    },
+    {
+      "workflow_key": "dq_eagle_intake",
+      "name": "DQ Eagle Intake",
+      "description": "Read Eagle's latest close of business and start an RCA for each exception group graded Error.",
+      "spec": {
+        "entry_step": "eagle_intake",
+        "steps": [
+          {
+            "id": "eagle_intake",
+            "kind": "capability",
+            "binding": {
+              "capability": "dq_eagle_intake",
+              "inputs": {
+                "cob": {
+                  "from_input": "cob"
+                }
+              }
+            },
+            "next": [],
+            "captain": "dq_pipeline_orchestrator",
+            "default_captain": "dq_pipeline_orchestrator",
+            "title": "Eagle intake",
+            "contract": {
+              "trigger": "Each morning (scheduled) or on demand: Eagle's latest close of business.",
+              "reads": [
+                {
+                  "kind": "exception_group"
+                }
+              ],
+              "writes": [
+                {
+                  "kind": "agent_decision",
+                  "required": true,
+                  "decision_type": "IntakeRouted"
+                }
+              ],
+              "calls": [
+                {
+                  "mcp": "eagle",
+                  "tool": "list_exception_groups"
+                }
+              ],
+              "human_review": "Starts investigations; every fix still needs two people.",
+              "llm": "none"
+            },
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          }
+        ],
+        "objective": "The Pipeline Orchestrator reads Eagle's exception groups for the COB and starts one dq_incident_rca run per Error group not already under investigation.",
+        "workflow_name": "DQ Eagle Intake",
+        "input_schema": {
+          "type": "object",
+          "required": [],
+          "properties": {
+            "cob": {
+              "type": "string",
+              "title": "Close of business (optional)",
+              "description": "Eagle's COB to read (YYYY-MM-DD). Default: the latest.",
+              "examples": [
+                "2026-10-07"
+              ]
+            }
+          }
+        },
+        "output_schema": {},
+        "step_agent_rules": 2
+      }
     }
   ],
   "branched": {

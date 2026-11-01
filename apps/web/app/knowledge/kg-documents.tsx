@@ -24,6 +24,7 @@ import {
 import { SCAN_START } from "../../lib/kg-view";
 import { post } from "../workflows/delivery-api";
 import { AmlSample } from "./kg-aml-sample";
+import { DqPlatformSample } from "./kg-dq-platform";
 import { DqRulebookSample } from "./kg-dq-sample";
 import { ExtractRules, UploadDocument, UploadPreview, pagesWords } from "./kg-upload";
 import { getDqRulebookSample, getPendingUploads, type KgUploadPreview } from "../../lib/kg-view";
@@ -382,6 +383,7 @@ export function DocumentsTab({ projectId, actor, archived = false }: {
       {added ? <p className="kg-ok" role="status" data-testid="kg-upload-done">{added}</p> : null}
       <AddRegulation w={w} disabled={addDisabled} disabledWhy={addWhy} onAdded={() => void load()} />
       <DqRulebookSample projectId={projectId} actor={actor} archived={archived} onAdded={() => void load()} />
+      <DqPlatformSample projectId={projectId} actor={actor} archived={archived} onLoaded={() => void load()} />
       <AmlSample projectId={projectId} actor={actor} archived={archived} onLoaded={() => void load()} />
       {docs && docs.length === 0 ? <p className="kg-quiet" data-testid="kg-documents-empty">No regulation documents yet.</p> : null}
       {docs && docs.length > 0 ? (

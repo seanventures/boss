@@ -1,5 +1,5 @@
 role_id: dq_lane_agent
-display_name: Lane Agent
+display_name: DQ Lane Agent
 team: quality
 mission: "Work one root-cause family's lane: confirm the candidate cause on the evidence, rule it out on evidence that contradicts it, or say what is missing."
 primary_outcomes:
