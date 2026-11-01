@@ -509,7 +509,10 @@ def run_aml_historical_pattern(connection: Connection, *, project_id: str, run_i
             "precedent_id": str(row["id"]), "name": row["name"],
             "alert_id": attrs.get("alert_id"), "determination": attrs.get("determination"),
             "decided_by": attrs.get("decided_by"), "reason": attrs.get("reason"),
-            "shared": [(_node(connection, project_id, n) or {}).get("name") or n for n in shared],
+            # IN NAMES ONLY: a node no longer in the graph (a retired case) has no name to show,
+            # and its id is not one (it printed "kgn_8525…" in the analyst's history, 2026-11-01).
+            "shared": [name for name in ((_node(connection, project_id, n) or {}).get("name")
+                                         for n in shared) if name],
             "same_typology": bool(same_typology),
             "score": 2 * len(shared) + len(same_typology)})
     matches.sort(key=lambda m: (-m["score"], m["name"]))
