@@ -9318,7 +9318,7 @@ def put_secret_endpoint(payload: SecretPutBody):
     payload = payload.payload()
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
-    from .services.secret_backends import SecretUnavailable
+    from .services.secret_backends import SecretUnavailable, durable_secret_backend
     from .services.secrets_service import put_secret
 
     for field in ("project_id", "name", "value"):
@@ -9334,7 +9334,11 @@ def put_secret_endpoint(payload: SecretPutBody):
                 project_id=payload["project_id"], name=payload["name"],
                 value=payload["value"],
                 secret_kind=payload.get("secret_kind") or "api_token",
-                backend=payload.get("backend") or "platform_secret_store",
+                # THE INSTALL'S OWN DURABLE STORE WHEN THE CALLER NAMES NONE. It defaulted to
+                # the platform secret store, which a default install does not run, so adding a
+                # bank's outside agent failed "platform secret store is not configured" on the
+                # database-backed laptop install (2026-10-31).
+                backend=payload.get("backend") or durable_secret_backend(settings),
                 scope_type=scope_type, scope_id=scope_id, actor=actor)
     except SecretUnavailable as exc:
         # A backend that cannot accept the write is a configuration problem, not a server bug.

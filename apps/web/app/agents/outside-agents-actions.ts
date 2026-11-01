@@ -82,10 +82,11 @@ export const removeOutsideAgent = (projectId: string, actor: string, agentId: st
     { project_id: projectId, actor }, P(`outside-agent-${agentId}`, "Remove"));
 
 /** Write a secret through infra's own store and hand back only its reference — never the
- *  value itself, which is what `registerOutsideAgent` is allowed to carry. */
+ *  value itself, which is what `registerOutsideAgent` is allowed to carry. No backend is named:
+ *  the API picks this install's durable store (a default install has no platform store). */
 export const putOutsideAgentSecret = (projectId: string, actor: string, f: { name: string; value: string }) =>
   send<{ secret_ref_id?: string }>("POST", "/v1/secrets",
-    { project_id: projectId, actor, name: f.name, value: f.value, secret_kind: "api_token", backend: "platform_secret_store" },
+    { project_id: projectId, actor, name: f.name, value: f.value, secret_kind: "api_token" },
     P("outside-agents", "Add outside agent"));
 
 export function afterOutsideAgentWrite(reload?: () => void): void {
