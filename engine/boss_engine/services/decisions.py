@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextvars
 import json
 import logging
 import re
@@ -1442,7 +1443,11 @@ class DecisionService:
 
             launch_prd_build(get_engine(), settings, jobs, **launch_args)
 
-        threading.Thread(target=_launch_build, daemon=True).start()
+        # ON BEHALF OF THE APPROVER. A plain Thread starts with an EMPTY contextvars context, so
+        # the approver's acting identity (identity.lineage) was gone inside it, and under
+        # BOSS_AUTHZ_MODE=enforce enqueueing the code.task job raised PrincipalRequired — the
+        # failure behind dec_8b573b40, swallowed with everything else.
+        _spawn_as_this_request(_launch_build)
 
     def _build_prd_onto_app(
         self,
@@ -2404,6 +2409,14 @@ def _identity_decides(connection: Connection, row: dict) -> Any:
         return None
     return ctx
 
+
+
+def _spawn_as_this_request(fn) -> threading.Thread:
+    """Run `fn` on a daemon thread INSIDE a copy of the caller's contextvars context, so the
+    acting principal (and authz mode) of the request that asked for the work travels with it."""
+    thread = threading.Thread(target=contextvars.copy_context().run, args=(fn,), daemon=True)
+    thread.start()
+    return thread
 
 
 def launch_prd_build(engine, settings: Settings, jobs, *, project_id: str, decision_id: str,
