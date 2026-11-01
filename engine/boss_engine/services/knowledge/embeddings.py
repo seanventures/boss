@@ -31,6 +31,8 @@ EMBEDDED_KINDS = ("fact", "decision", "incident", "runbook", "spec", "review_fin
                   "document", "clause", "data_quality_rule", "dq_threshold", "cde")
 #: Summaries embedded per project per tick: a few governed calls, never a burst.
 BATCH = 64
+#: Vectors written per transaction: each commit releases what the writes held.
+WRITE_BATCH = 16
 
 
 class Embedder(Protocol):
@@ -80,26 +82,39 @@ def embed_due(engine: Any, *, project_id: str | None = None, limit: int = BATCH)
         projects = projects_archive.live_ids(
             connection, [project_id] if project_id else projects_with_a_slot(connection))
     settings = get_settings()
+    store = PostgresKnowledgeStore()
     for pid in projects:
         try:
+            # SHORT TRANSACTIONS, AND NONE OPEN WHILE THE MODEL IS CALLED. One transaction per
+            # project held its locks across the embedder's network call and every write; search
+            # ("Compare by words and by meaning") queued behind it for ~60 s.
             with engine.begin() as connection:
                 embedder, _reason = active_embedder(connection, settings, pid)
                 if embedder is None:
                     continue
                 out["projects"] += 1
                 out["dropped"] += drop_other_spaces(connection, project_id=pid, model_id=embedder.model_id)
-                out["embedded"] += embed_pending(connection, PostgresKnowledgeStore(), project_id=pid,
-                                                 embedder=embedder, limit=limit)
+                rows = pending_rows(connection, project_id=pid, model_id=embedder.model_id, limit=limit)
+            if not rows:
+                continue
+            vectors = embedder.embed([_embed_text(r) for r in rows])
+            for start in range(0, len(rows), WRITE_BATCH):
+                with engine.begin() as connection:
+                    out["embedded"] += write_vectors(
+                        connection, store, project_id=pid, model_id=embedder.model_id,
+                        rows=rows[start:start + WRITE_BATCH], vectors=vectors[start:start + WRITE_BATCH])
         except Exception:  # noqa: BLE001 — retried on the next tick
             out["failed"] += 1
     return out
 
 
-def embed_pending(
-    connection: Connection, store: Any, *, project_id: str, embedder: Embedder, limit: int = 200
-) -> int:
-    """Embed the open facts and summaries that have no embedding for this model and content."""
-    rows = connection.execute(
+def _embed_text(row: Any) -> str:
+    return f"{row['name']}\n{row['body']}"[:4000]
+
+
+def pending_rows(connection: Connection, *, project_id: str, model_id: str, limit: int) -> list[dict]:
+    """The open facts and summaries with no embedding for this model and content."""
+    return [dict(r) for r in connection.execute(
         text(
             """
             SELECT n.id, n.name, n.body, n.content_hash FROM kg_nodes n
@@ -110,11 +125,35 @@ def embed_pending(
             ORDER BY n.id LIMIT :n
             """
         ),
-        {"project_id": project_id, "kinds": list(EMBEDDED_KINDS), "model": embedder.model_id, "n": limit},
-    ).mappings().all()
+        {"project_id": project_id, "kinds": list(EMBEDDED_KINDS), "model": model_id, "n": limit},
+    ).mappings().all()]
+
+
+def write_vectors(connection: Connection, store: Any, *, project_id: str, model_id: str,
+                  rows: list[dict], vectors: list[list[float]]) -> int:
+    """Store the vectors; a node whose content changed since it was read is skipped (the next
+    tick embeds its new content)."""
+    written = 0
+    for row, vector in zip(rows, vectors):
+        try:
+            with connection.begin_nested():
+                store.upsert_embedding(connection, project_id=project_id, node_id=row["id"],
+                                       model_id=model_id, embedding=list(vector),
+                                       content_hash=row["content_hash"])
+            written += 1
+        except (ValueError, LookupError):
+            continue
+    return written
+
+
+def embed_pending(
+    connection: Connection, store: Any, *, project_id: str, embedder: Embedder, limit: int = 200
+) -> int:
+    """Embed the open facts and summaries that have no embedding for this model and content."""
+    rows = pending_rows(connection, project_id=project_id, model_id=embedder.model_id, limit=limit)
     if not rows:
         return 0
-    vectors = embedder.embed([f"{r['name']}\n{r['body']}"[:4000] for r in rows])
+    vectors = embedder.embed([_embed_text(r) for r in rows])
     for row, vector in zip(rows, vectors):
         store.upsert_embedding(connection, project_id=project_id, node_id=row["id"],
                                model_id=embedder.model_id, embedding=list(vector),

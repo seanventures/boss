@@ -418,14 +418,14 @@ def overview(connection: Connection, project_id: str, *, layers: Iterable[str] =
     target_sql = "'area:' || t.repo || ':' || t.area" if level == "area" else \
         "'pkg:' || t.repo || ':' || t.area || ':' || t.package"
     if "rules" in layers:
-        counts = dict.fromkeys(RULE_STATUSES, 0)
-        for row in connection.execute(text(
-                "SELECT n.attrs, n.valid_to, n.trust_tier FROM kg_nodes n "
-                "WHERE n.project_id = :p AND n.kind = 'rule'"), p).mappings().all():
-            counts[rule_status(row)] += 1
-        parts = [f"{counts[s]:,} {s}" for s in ("approved", "proposed") if counts[s]]
+        # The one count (rules.rule_counts): business and data-quality rules, as Rules review.
+        from .rules import rule_count_words, rule_counts
+
+        found = rule_counts(connection, project_id)
+        counts = {s: int(found.get(s) or 0) for s in RULE_STATUSES}
         bubbles.append({"id": "layer:rules", "key": "layer:rules", "kind": "layer", "layer": "rules",
-                        "label": "Rules", "sub": " · ".join(parts) or "No rules yet",
+                        "label": "Rules",
+                        "sub": rule_count_words(counts) if sum(counts.values()) else "No rules yet",
                         "trust_tier": "observed", "counts": counts})
         edges += _layer_edges(connection, project_id, "layer:rules", ["rule"], ("governs", "evidenced_by"),
                               target_sql, keys)
@@ -467,6 +467,36 @@ def overview(connection: Connection, project_id: str, *, layers: Iterable[str] =
 
 
 _BUBBLE_LABEL = {"domain": "Domain", "context": "Context"}
+#: What a project holding a pack sees first in the Domain and Context bubbles: the pack's own
+#: story, not whichever kind has the most rows (a DQ project opened on "190 DQ thresholds ·
+#: 173 database columns" and on AML cases from another pack). Core kinds a pack's story hangs
+#: on (a DQ incident) are counted in its layer here.
+PACK_HEADLINES: dict[str, dict[str, tuple[str, ...]]] = {
+    "banking-dq": {
+        "domain": ("data_quality_rule", "cde", "database_table", "database_column", "system", "feed"),
+        "context": ("incident", "exception_group", "remediation_package", "agent_decision"),
+    },
+}
+#: How many kinds a bubble names: a pack's headline in full, else the three largest.
+HEADLINE_PARTS = 6
+
+
+def _headline(connection: Connection, project_id: str, layer: str) -> tuple[str, ...]:
+    """The headline kinds of every pack the project holds, for ``layer`` (in pack order)."""
+    from .ontology_packs import get_project_pack
+
+    try:
+        with connection.begin_nested():
+            pack = get_project_pack(connection, project_id=project_id)
+    except Exception:  # noqa: BLE001 - no pack read: the bubble orders by size
+        return ()
+    held = (pack.pack_ids or (pack.pack_id,)) if pack is not None else ()
+    out: list[str] = []
+    for pack_id in held:
+        for kind in PACK_HEADLINES.get(pack_id, {}).get(layer, ()):
+            if kind not in out:
+                out.append(kind)
+    return tuple(out)
 _BUBBLE_EMPTY = {"domain": "No regulations or documents yet", "context": "No agent decisions yet"}
 
 
@@ -484,7 +514,8 @@ def _pack_bubble(connection: Connection, project_id: str, layer: str, withheld: 
     """The Domain or the Context bubble: how many of each of its kinds the project holds, said
     by the pack's plural ("2 clauses · 1 document"). Drawn when it holds something, or when it is
     the one chip on (so the empty state can say so)."""
-    members = sorted(layer_kinds(layer) - withheld)
+    headline = tuple(k for k in _headline(connection, project_id, layer) if k not in withheld)
+    members = sorted((layer_kinds(layer) | set(headline)) - withheld)
     found = dict(connection.execute(text(
         "SELECT kind, count(*) FROM kg_nodes WHERE project_id = :p AND kind = ANY(:k) "
         "AND valid_to IS NULL GROUP BY kind"), {"p": project_id, "k": members}).all()) if members else {}
@@ -503,8 +534,15 @@ def _pack_bubble(connection: Connection, project_id: str, layer: str, withheld: 
     def first(k: str) -> int:
         return 0 if k.endswith("_case") or k in ("document", "regulation") else 1 if k == "agent_decision" else 2
 
-    order = sorted(counts, key=lambda k: (first(k), -counts[k], k))
-    sub = " · ".join(said(k, counts[k]) for k in order[:3]) or _BUBBLE_EMPTY[layer]
+    if any(k in counts for k in headline):
+        # The pack's story first, in its order; the rest by size after it.
+        lead = [k for k in headline if k in counts]
+        order = lead + sorted((k for k in counts if k not in lead), key=lambda k: (first(k), -counts[k], k))
+        shown = order[:max(HEADLINE_PARTS, len(lead))]
+    else:
+        order = sorted(counts, key=lambda k: (first(k), -counts[k], k))
+        shown = order[:3]
+    sub = " · ".join(said(k, counts[k]) for k in shown) or _BUBBLE_EMPTY[layer]
     return {"id": f"layer:{layer}", "key": f"layer:{layer}", "kind": "layer", "layer": layer,
             "label": _BUBBLE_LABEL[layer], "sub": sub, "trust_tier": "observed", "counts": counts}
 

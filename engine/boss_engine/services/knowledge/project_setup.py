@@ -143,14 +143,11 @@ def _scans(connection: Connection, project_id: str) -> dict[str, Any]:
 
 
 def _rules(connection: Connection, project_id: str) -> dict[str, int]:
-    counts = {"proposed": 0, "approved": 0, "rejected": 0}
-    for status, n in connection.execute(text(
-            "SELECT coalesce(attrs->>'status', 'proposed'), count(*) FROM kg_nodes "
-            "WHERE project_id = :p AND kind = 'rule' AND valid_to IS NULL GROUP BY 1"),
-            {"p": project_id}).all():
-        if status in counts:
-            counts[status] = int(n)
-    return counts
+    """Business and data-quality rules, counted the one way every surface counts them."""
+    from .rules import rule_counts
+
+    counts = rule_counts(connection, project_id)
+    return {k: counts[k] for k in ("proposed", "approved", "rejected")}
 
 
 def _learnings(connection: Connection, project_id: str) -> int:

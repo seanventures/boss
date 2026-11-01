@@ -119,10 +119,10 @@ class KnowledgeGraphService:
         """Idempotent column/table extras for provenance + eval (BOSS-355/357)."""
         if self._schema_ready:
             return
-        for stmt in _SCHEMA_EXTRAS_SQL.split(";"):
-            sql = stmt.strip()
-            if sql:
-                connection.execute(text(sql))
+        # Boot applies these (db.SERVICE_SCHEMAS); a request only reads the catalog.
+        from ..db import ensure_declared_schema
+
+        ensure_declared_schema(connection, _SCHEMA_EXTRAS_SQL, key="knowledge_graph.extras")
         self._schema_ready = True
 
     def _require_project(self, connection: Connection, project_id: str) -> None:

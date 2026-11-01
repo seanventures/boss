@@ -296,7 +296,8 @@ def test_the_overview_draws_areas_their_calls_and_the_layer_bubbles(connection, 
     assert calls and all(e["label"] == f"{e['weight']:,} call{'' if e['weight'] == 1 else 's'}" for e in calls)
     rules, learning = out["layers"]
     assert rules["counts"] == {"proposed": 1, "approved": 1, "rejected": 1, "superseded": 0}
-    assert rules["sub"] == "1 approved · 1 proposed"
+    # The one count's words (rules.rule_count_words), as Rules review and the checklist say it.
+    assert rules["sub"] == "1 approved · 1 waiting for review · 1 rejected"
     assert learning["counts"] == {"test_failure": 1, "decision": 1} and learning["sub"] == "2 learned"
     governs = {e["dst"]: e for e in out["edges"] if e["src"] == "layer:rules"}
     assert governs[f"area:{REPO}:loan"]["label"] == "1 rule" and governs[f"area:{REPO}:core"]["weight"] == 1
