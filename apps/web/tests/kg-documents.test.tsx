@@ -64,7 +64,7 @@ describe("Documents tab: Add regulation", () => {
       clauses: [{ section: "1026.36(c)(1)(i)", text: "A loan originator shall not." }],
     });
     expect($('[data-testid="kg-doc-submit-msg"]')?.textContent).toBe("Regulation added.");
-    expect(calls.filter((c) => c.startsWith("GET /v1/knowledge/documents")).length).toBe(2);
+    expect(calls.filter((c) => c.startsWith("GET /v1/knowledge/documents?")).length).toBe(2);
   });
 
   it("will not submit until every clause has a section and exact text", async () => {

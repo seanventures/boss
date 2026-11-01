@@ -5,7 +5,6 @@ import { useCallback, useEffect, useState, useTransition, useRef} from "react";
 
 import { landingAnswerArrived } from "../lib/chat-landing";
 import { CitedAnswer } from "./agents/cited-answer";
-import { CitedAnswer } from "./agents/cited-answer";
 import { RateIt } from "./improve/rate-it";
 import { notifyChanged } from "./changed";
 

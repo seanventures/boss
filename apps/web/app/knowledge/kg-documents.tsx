@@ -350,7 +350,7 @@ export function DocumentsTab({ projectId, actor, archived = false }: {
     if (d.ok) { setDocs(d.data.documents); setError(null); } else setError(d.error);
     if (p.ok) setPacks({ current: p.data.current, available: p.data.available });
     // The DQ sample's own pending preview is shown in its row, not twice.
-    if (u.ok) setPending(u.data.uploads.filter((x) => !(dq.ok && x.upload_id === dq.data.pending_upload_id)));
+    if (u.ok) setPending((u.data.uploads ?? []).filter((x) => !(dq.ok && x.upload_id === dq.data.pending_upload_id)));
     if (dq.ok) setExtractWhy(dq.data.can_extract ? null : dq.data.extract_blocked_reason);
   }, [w]);
   useEffect(() => { void load(); }, [load]);
@@ -359,7 +359,7 @@ export function DocumentsTab({ projectId, actor, archived = false }: {
   const addDisabled = archived || !hasPack;
   const addWhy = archived
     ? "This project is archived: its documents are read-only."
-    : "Assign the banking-regulatory pack (or one that includes it) first, then add a document.";
+    : "Assign the banking-regulatory pack first (or a pack that includes it), then add a document.";
 
   return (
     <section className="kg-documents" data-testid="kg-documents" aria-label="Regulation documents">

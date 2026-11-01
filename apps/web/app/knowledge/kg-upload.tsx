@@ -79,7 +79,7 @@ export function ExtractRules({ w, documentId, title, disabledWhy, archived, orgI
       {msg ? (
         <span className={msg.ok ? "kg-ok" : "kg-inline-err"} role={msg.ok ? "status" : "alert"} data-testid="kg-extract-msg">
           {msg.text}
-          {msg.ok && msg.run ? <> <a className="inf-link" href={kgRunHref({ workflow_run_id: msg.run }, orgId)}>Open the run</a></> : null}
+          {msg.ok && msg.run ? <> <a className="inf-link" href={kgRunHref({ workflow_run_id: msg.run }, orgId) ?? undefined}>Open the run</a></> : null}
           {msg.ok ? <> · <a className="inf-link" href={kgRulesHref({}, orgId)}>Rules review</a></> : null}
         </span>
       ) : null}
