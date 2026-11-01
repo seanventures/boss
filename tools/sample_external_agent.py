@@ -26,13 +26,18 @@ def _post_json(url: str, payload: dict, *, headers: dict) -> dict:
         return json.loads(response.read().decode("utf-8") or "{}")
 
 
-def _ask_model(base_url: str, api_key: str, input_data: dict, contract: dict) -> str:
+def _ask_model(base_url: str, api_key: str, input_data: dict, contract: dict,
+               evidence: list | None = None) -> str:
     body = {
         "model": os.environ.get("MODEL_NAME", "gpt-4o-mini"),
         "messages": [
-            {"role": "system", "content": "You are a banking regulatory compliance analyst. "
-                                           "Answer with your assessment statement only."},
-            {"role": "user", "content": json.dumps({"input": input_data, "contract": contract})},
+            {"role": "system", "content": "You are the bank's own regulatory compliance reviewer. "
+                                           "Judge the case from the evidence you were given and "
+                                           "answer with your review statement only: agree or "
+                                           "disagree with BOSS's finding, and why, in two "
+                                           "sentences."},
+            {"role": "user", "content": json.dumps({"input": input_data, "contract": contract,
+                                                    "evidence": evidence or []})},
         ],
     }
     result = _post_json(f"{base_url.rstrip('/')}/chat/completions", body,
@@ -57,6 +62,26 @@ def _mcp_call(mcp_url: str, token: str, name: str, arguments: dict) -> dict:
     if content and content[0].get("isError"):
         raise RuntimeError(f"{name} refused: {content[0].get('text')}")
     return result.get("result") or {}
+
+
+def _read_evidence(mcp_url: str, token: str, contract: dict | None) -> list:
+    """Read what the contract lets this agent read (`reads` kinds) through its own token,
+    so the review stands on BOSS's evidence and the run shows what the agent read."""
+    evidence: list = []
+    for read in (contract or {}).get("reads") or []:
+        kind = str((read or {}).get("kind") or "").strip() if isinstance(read, dict) else ""
+        if not kind:
+            continue
+        result = _mcp_call(mcp_url, token, "kg_find", {"kind": kind})
+        for item in result.get("content") or []:
+            try:
+                payload = json.loads(item.get("text") or "{}")
+            except (TypeError, ValueError):
+                continue
+            for node in payload.get("nodes") or []:
+                evidence.append({"kind": kind, "name": node.get("name"),
+                                 "body": str(node.get("body") or "")[:800]})
+    return evidence
 
 
 def _apply_contract_writes(mcp_url: str, token: str, contract: dict | None, statement: str) -> None:
@@ -85,13 +110,14 @@ def _handle_step(body: dict) -> tuple[int, dict]:
     if not isinstance(kg, dict) or not kg.get("mcp_url") or not kg.get("token"):
         return 400, {"error": "kg.mcp_url and kg.token are required"}
     try:
+        evidence = _read_evidence(str(kg["mcp_url"]), str(kg["token"]), body.get("contract"))
         statement = _ask_model(
             base_url, os.environ.get("MODEL_API_KEY", ""),
-            body.get("input") or {}, body.get("contract") or {})
+            body.get("input") or {}, body.get("contract") or {}, evidence)
         _apply_contract_writes(str(kg["mcp_url"]), str(kg["token"]), body.get("contract"), statement)
     except Exception as exc:  # noqa: BLE001 — refused plainly, never a fabricated verdict
         return 502, {"error": str(exc)}
-    return 200, {"ok": True, "decision": statement}
+    return 200, {"ok": True, "decision": statement, "read": len(evidence)}
 
 
 class _Handler(BaseHTTPRequestHandler):

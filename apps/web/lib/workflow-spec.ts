@@ -345,7 +345,19 @@ export function applyStepPatch(step: SpecStep, patch: StepPatch): SpecStep {
   if (patch.externalAgent !== undefined) {
     const externalAgentId = (patch.externalAgent ?? "").trim();
     if (externalAgentId) {
-      out = { ...out, captain: { external_agent: externalAgentId } };
+      // AN OUTSIDE AGENT'S STEP IS ITS OWN KIND, WITH A CONTRACT. Setting only the captain left
+      // kind "capability" and no contract, and publishing failed ("not an agent key"), so a
+      // bank's agent could not be assigned from the console (2026-10-31). The default contract
+      // records one decision named after the step; what it may read is set in the JSON view.
+      const contract = asObj(out.contract);
+      out = {
+        ...out, kind: "external_agent", captain: { external_agent: externalAgentId },
+        contract: Object.keys(contract).length ? contract : {
+          reads: [],
+          writes: [{ kind: "agent_decision", required: true, decision_type: String(out.id ?? "review") }],
+        },
+      };
+      delete out.binding;
     } else if (typeof out.captain === "object") {
       out = setOrDrop(out, "captain", undefined);
     }
