@@ -61,6 +61,8 @@ export type RunReport = {
   status?: string;
   elapsed_minutes?: number;
   working_minutes?: number;
+  waiting_minutes?: number;
+  list_usd?: number;
   total_usd?: number;
   steps?: Step[];
   contributors?: Contributor[];
@@ -282,7 +284,14 @@ export function RunReportPanel(
   const lost = Math.max(0, (report.elapsed_minutes ?? 0) - (report.working_minutes ?? 0));
   const ran = (build.commands_run ?? []).map((c) => c.command);
 
-  const money = `${done}/${steps.length} · ${report.working_minutes}min · ${usd(report.total_usd ?? 0)}`;
+  // WORKING, WAITING AND WHAT IT COST, SAID APART. A run that waited three hours at its approval
+  // read "192.2min · $0.00" for three minutes of work and four model calls on a subscription.
+  const waited = report.waiting_minutes ?? 0;
+  const listed = report.list_usd ?? 0;
+  const billed = report.total_usd ?? 0;
+  const money = `${done}/${steps.length} · ${report.working_minutes}min working`
+    + (waited >= 1 ? ` · waited ${humanDuration(waited * 60)} for a person` : "")
+    + ` · ${usd(billed)}${listed > billed ? ` (${usd(listed)} at list price, on the subscription)` : ""}`;
 
   return (
     /* THE WHOLE REPORT IS COLLAPSED, and the summary line has to earn the click on its own:

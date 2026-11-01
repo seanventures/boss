@@ -478,7 +478,7 @@ def assemble_workflow(
     # sets completed_at and never sets started_at, so ordering on started_at put the approved
     # spec AFTER the build it had unblocked.
     step_rows = connection.execute(
-        text("SELECT id, step_id, status, attempt, output, last_error, decision_id, "
+        text("SELECT id, step_id, step_kind, status, attempt, output, last_error, decision_id, "
              "       evidence, started_at, completed_at, created_at "
              "  FROM workflow_step_runs WHERE workflow_run_id = :r "
              " ORDER BY COALESCE(started_at, completed_at) ASC NULLS LAST, created_at"),
@@ -488,6 +488,25 @@ def assemble_workflow(
     steps: list[dict[str, Any]] = []
     contributors: dict[str, dict[str, Any]] = {}
     total_usd = 0.0
+    list_usd = 0.0
+    # THE MODEL CALLS A STEP MADE ITSELF (a role agent judging a case, not a build it started):
+    # attributed to the workflow run and its step (llm_telemetry run_id / stage). They used to
+    # be invisible here, so a run of four model calls read "$0.00" (2026-10-31).
+    own_calls: dict[str, dict[str, Any]] = {}
+    try:
+        for c in connection.execute(
+                text("SELECT stage, role, model, COALESCE(cost_usd_micros, 0) AS micros, "
+                     "       COALESCE(included_in_subscription, false) AS included "
+                     "  FROM llm_calls WHERE code_task_run_id = :r"),
+                {"r": workflow_run_id}).mappings().all():
+            slot = own_calls.setdefault(str(c["stage"] or ""), {"calls": [], "list": 0.0,
+                                                                "billed": 0.0})
+            usd_ = int(c["micros"] or 0) / 1_000_000
+            slot["list"] += usd_
+            slot["billed"] += 0.0 if c["included"] else usd_
+            slot["calls"].append({"role": c["role"], "model": c["model"], "usd": usd_})
+    except Exception:  # noqa: BLE001 — a report without this line is still a report
+        own_calls = {}
 
     for row in step_rows:
         kind, work_id = _awaited(row["output"])
@@ -564,12 +583,33 @@ def assemble_workflow(
                     slot["usd"] = round(slot["usd"] + step["usd"], 4)
                     if model:
                         slot["models"].add(str(model))
+        mine = own_calls.get(str(row["step_id"])) if not (source and work_id) else None
+        if mine:
+            step["usd"] = round(mine["billed"], 4)
+            step["list_usd"] = round(mine["list"], 4)
+            for call in mine["calls"]:
+                role = str(call["role"] or "unattributed")
+                slot = contributors.setdefault(
+                    role, {"role": role, "calls": 0, "turns": 0, "usd": 0.0, "models": set()})
+                slot["calls"] += 1
+                slot["usd"] = round(slot["usd"] + call["usd"], 4)
+                if call["model"]:
+                    slot["models"].add(str(call["model"]))
+        list_usd = round(list_usd + float(step.get("list_usd", step["usd"]) or 0), 4)
         total_usd = round(total_usd + float(step["usd"] or 0), 4)
         steps.append(step)
 
+    work_ends = [r["completed_at"] for r in step_rows
+                 if r["completed_at"] and str(r.get("step_kind") or "") != "decision"
+                 and str(r["status"]) in ("succeeded", "skipped", "failed")]
+    last_work = max(work_ends) if work_ends else ended
+    if last_work and ended and last_work > ended:
+        last_work = ended
     host = host_is_degraded(_stalls_between(connection, started, ended),
                             elapsed_seconds=elapsed_s)
     stalled_s = float(host.get("stalled_seconds") or 0)
+    working_s = max(0.0, ((last_work - started).total_seconds() if (last_work and started)
+                          else elapsed_s) - stalled_s)
 
     run_findings = workflow_findings(steps, host)
     product = _product_and_build(connection, project_id, steps)
@@ -587,8 +627,12 @@ def assemble_workflow(
         "error": run["error"],
         "started_at": started.isoformat() if started else None,
         "elapsed_minutes": round(elapsed_s / 60, 1),
-        "working_minutes": round(max(0.0, elapsed_s - stalled_s) / 60, 1),
+        # WORKING TIME ENDS WHERE THE WORK DID. A run waiting at an approval gate kept counting
+        # "working" until it was cancelled three hours later (192 min for 3 min of work).
+        "working_minutes": round(working_s / 60, 1),
+        "waiting_minutes": round(max(0.0, elapsed_s - stalled_s - working_s) / 60, 1),
         "total_usd": total_usd,
+        "list_usd": list_usd,
         "steps": steps,
         "contributors": sorted(
             ({**c, "models": sorted(c["models"])} for c in contributors.values()),
