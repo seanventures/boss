@@ -74,6 +74,11 @@ CALLERS = {
         "seed path below (install_or_fill is its nested helper)",
     "services/shipped_cast.py::install_or_fill -> _upsert_role_spec":
         "seed path below; and a role the operator deleted is never reinstalled",
+    # The role agents a catalogue workflow's steps are (workflow_catalogue.roles_needed),
+    # installed with the workflow: only a MISSING role; _upsert_role_spec asks seed_exclusions,
+    # so one the operator deleted is never reinstalled.
+    "services/shipped_cast.py::install_roles -> _upsert_role_spec":
+        "seed path; a role the operator deleted is never reinstalled",
     # Register on the roster, for a key BOSS ships: the operator asked for the shipped agent.
     "services/agents.py::_install_shipped -> _upsert_role_spec":
         "operator: Register lifts the key's exclusions, then installs the shipped role",

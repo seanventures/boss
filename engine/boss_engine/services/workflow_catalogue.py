@@ -18,7 +18,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from . import two_pass, workflows
-from .workflow_capabilities import estimate_minutes, project_requirements
+from .workflow_capabilities import CAPABILITIES, estimate_minutes, project_requirements
 
 #: Which class of work a catalogue workflow is FOR. A customer applying "Fast Fix" to every
 #: new project would be a mistake worth preventing at the point of choosing.
@@ -135,8 +135,9 @@ def _step(
         "binding": {"capability": capability, "inputs": inputs or {}},
         "next": nxt or [],
     }
-    if capability in DEFAULT_STEP_AGENTS:
-        _set_default_captain(step, DEFAULT_STEP_AGENTS[capability])
+    default = default_agent_for(capability)
+    if default:
+        _set_default_captain(step, default)
     if approval or approver_role or follows_policy:
         step["approval"] = {}
         if approval:
@@ -148,6 +149,33 @@ def _step(
                 raise ValueError("only a Deploy step can follow the environment's policy")
             step["approval"]["follows_policy"] = True
     return step
+
+
+def default_agent_for(capability: str) -> str:
+    """The agent a catalogue step of this capability names by default: DEFAULT_STEP_AGENTS, or
+    else THE ROLE AGENT WHOSE JUDGEMENT THE STEP IS (Capability.role_agent — the Compliance
+    Analyst, the AML Analyst, ...).
+
+    A role-agent step that named nobody ran as the person (step_agents.resolve: run_actor), so
+    the consent fell back to the capability's captain and asked for "Security Reviewer and
+    Documentation Writer" to start an AML investigation that Mesh, Sift and Scribe do. Naming the
+    role agent makes the step, the run view and the consent say the same agent."""
+    if capability in DEFAULT_STEP_AGENTS:
+        return DEFAULT_STEP_AGENTS[capability]
+    cap = CAPABILITIES.get(capability)
+    return str(getattr(cap, "role_agent", "") or "")
+
+
+def roles_needed(entry: dict[str, Any]) -> list[str]:
+    """The role agents an entry's steps are the judgement of (Capability.role_agent), in step
+    order. These are pack roles no core cast installs, so seeding the entry installs them."""
+    out: list[str] = []
+    for step in entry.get("steps") or []:
+        cap = CAPABILITIES.get(str((step.get("binding") or {}).get("capability") or ""))
+        role = str(getattr(cap, "role_agent", "") or "")
+        if role and role not in out:
+            out.append(role)
+    return out
 
 
 def _set_default_captain(step: dict[str, Any], role_key: Optional[str]) -> dict[str, Any]:
@@ -2089,6 +2117,18 @@ def seed(connection: Connection, project_id: str, actor: str = "boss",
     than accumulating identical ones on every boot.
     """
     installed: list[dict[str, Any]] = []
+    # THE ROLE AGENTS AN ENTRY'S STEPS ARE THE JUDGEMENT OF ARE INSTALLED WITH IT (Compliance
+    # Analyst, Lane Agent, AML Analyst, ...): no core cast ships them, so without this
+    # `_staffed_for` dropped every one and the run (and its consent) fell back to other agents.
+    # Through the shipped-cast install path: additive, an operator's delete holds.
+    wanted = [role for entry in CATALOGUE
+              if (only is None or entry["key"] in only)
+              and not _unmet(connection, project_id, entry)
+              for role in roles_needed(entry)]
+    if wanted:
+        from .shipped_cast import install_roles
+
+        install_roles(connection, project_id, wanted, actor=actor)
     # THE AGENTS THIS PROJECT ACTUALLY HAS, not the bundled roster: a step naming an agent
     # with no roles row is refused at start ("there is no agent 'sre' on this project"), so a
     # default agent is named only where it exists.
@@ -2098,10 +2138,7 @@ def seed(connection: Connection, project_id: str, actor: str = "boss",
     for entry in CATALOGUE:
         if only is not None and entry["key"] not in only:
             continue
-        unmet = unmet_requirements(connection, project_id, entry)
-        needs_pack = ONTOLOGY_PACK_BY_ENTRY.get(entry["key"])
-        if not unmet and needs_pack and not _has_pack(connection, project_id, needs_pack):
-            unmet = f"needs the '{needs_pack}' ontology pack"
+        unmet = _unmet(connection, project_id, entry)
         if unmet:
             # NOT HERE YET, AND SAID SO. An entry whose contracts name a pack's kinds or a
             # sample's connectors cannot publish into a project without them; it installs when
@@ -2146,6 +2183,30 @@ def seed(connection: Connection, project_id: str, actor: str = "boss",
     mapped = _seed_default_mappings(connection, project_id, actor=actor) if only is None else []
     return {"project_id": project_id, "installed": installed, "count": len(installed),
             "mapped": mapped}
+
+
+def _unmet(connection: Connection, project_id: str, entry: dict[str, Any]) -> Optional[str]:
+    """Why this project cannot have the entry yet (its `requires`, or its contracts' pack)."""
+    unmet = unmet_requirements(connection, project_id, entry)
+    needs_pack = ONTOLOGY_PACK_BY_ENTRY.get(entry["key"])
+    if not unmet and needs_pack and not _has_pack(connection, project_id, needs_pack):
+        unmet = f"needs the '{needs_pack}' ontology pack"
+    return unmet
+
+
+def restaff_role_agent_entries(connection: Connection, project_id: str,
+                               actor: str = "boss") -> Optional[dict[str, Any]]:
+    """Re-seed the catalogue entries THIS PROJECT ALREADY HAS whose steps are role agents'
+    judgement, so a project that installed them before their steps named the role agents (or
+    before the roles were installed) is backfilled on the next boot (shipped_cast.sync_project).
+    Idempotent: an unchanged spec publishes nothing. None when the project has none of them."""
+    keys = frozenset(e["key"] for e in CATALOGUE if roles_needed(e))
+    have = frozenset(str(k) for k in connection.execute(
+        text("SELECT workflow_key FROM workflow_definitions WHERE project_id = :p "
+             "AND workflow_key = ANY(:k)"), {"p": project_id, "k": sorted(keys)}).scalars())
+    if not have:
+        return None
+    return seed(connection, project_id, actor=actor, only=have)
 
 
 def _has_pack(connection: Connection, project_id: str, pack_id: str) -> bool:

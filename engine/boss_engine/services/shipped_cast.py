@@ -250,10 +250,63 @@ def sync_project(connection: Connection, settings: Any, project_id: str, *,
         from .agent_acts import copy_declared_lines
 
         agent_identity.quietly(connection, copy_declared_lines, project_id)
+    # THE CATALOGUE WORKFLOWS WHOSE STEPS ARE ROLE AGENTS' WORK (the KG case studies) are
+    # re-seeded here, so a project that installed them before they named those agents gets the
+    # agents and the named steps on the next boot, not only the default project.
+    try:
+        with connection.begin_nested():
+            from .workflow_catalogue import restaff_role_agent_entries
+
+            restaff_role_agent_entries(connection, project_id, actor=actor)
+    except Exception:  # noqa: BLE001 — a boot must still come up; the next seed retries
+        _log.warning("shipped cast: role-agent workflows not re-seeded for %s", project_id,
+                     exc_info=True)
     if installed or filled:
         _log.info("shipped cast for %s: installed %s, filled %s", project_id, installed, filled)
     return {"project_id": project_id, "installed": installed, "filled": filled,
             "identities": int(identities)}
+
+
+def install_roles(connection: Connection, project_id: str, role_keys: list[str], *,
+                  settings: Any = None, actor: str = "boss") -> list[str]:
+    """Install the shipped roles a workflow's steps need and the project lacks — the same path
+    the cast takes (`_upsert_role_spec`, born from its home pack, skills/MCP by the additive
+    syncs, an identity for each). Additive: a present role is left as it is, and one an operator
+    deleted stays deleted (seed_exclusions). Returns the role keys installed."""
+    from . import agent_identity
+    from .specpack import RoleNotFoundError, SpecPackService
+
+    have = {str(k) for k in connection.execute(
+        text("SELECT role_key FROM roles WHERE project_id = :p"), {"p": project_id}).scalars()}
+    missing = [k for k in dict.fromkeys(str(r).strip().lower() for r in role_keys)
+               if k and k not in have]
+    if not missing:
+        return []
+    if settings is None:
+        from ..config import get_settings
+
+        settings = get_settings()
+    specpack = SpecPackService(settings)
+    installed: list[str] = []
+    with agent_identity.sealing_once():
+        for role_key in missing:
+            try:
+                shipped = specpack.load_role_spec(role_key)
+            except (RoleNotFoundError, ValueError):
+                _log.warning("install_roles: %s ships no role %s", project_id, role_key)
+                continue
+            pack_id, version = home_pack(specpack, role_key, settings)
+            result = specpack._upsert_role_spec(  # noqa: SLF001 — the cast's own install path
+                connection, project_id, role_key, shipped, actor,
+                born_from={"kind": "pack", "pack_id": pack_id, "module_version": version})
+            if result.get("status") == "installed":
+                installed.append(role_key)
+        if installed:
+            _grant(connection, project_id, actor)
+            agent_identity.quietly(connection, agent_identity.backfill, project_id)
+    if installed:
+        _log.info("roles for %s's workflows: installed %s", project_id, installed)
+    return installed
 
 
 #: Keys in a workflow YAML whose string value names the role a step is handed to.

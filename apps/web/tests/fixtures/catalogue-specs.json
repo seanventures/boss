@@ -6749,6 +6749,8 @@
             "next": [
               "compliance_orchestration"
             ],
+            "captain": "compliance_analyst",
+            "default_captain": "compliance_analyst",
             "contract": {
               "trigger": "after historical_pattern",
               "reads": [
@@ -6809,6 +6811,8 @@
             "next": [
               "lanes"
             ],
+            "captain": "pipeline_orchestrator",
+            "default_captain": "pipeline_orchestrator",
             "contract": {
               "trigger": "after compliance_assessment",
               "reads": [
@@ -6884,6 +6888,8 @@
               "inputs": {}
             },
             "next": [],
+            "captain": "lane_agent",
+            "default_captain": "lane_agent",
             "contract": {
               "trigger": "one per finding family (lanes)",
               "reads": [
@@ -6946,6 +6952,8 @@
             "next": [
               "human_approval"
             ],
+            "captain": "remediation_advisor",
+            "default_captain": "remediation_advisor",
             "contract": {
               "trigger": "after the lanes",
               "reads": [
@@ -7384,6 +7392,8 @@
             "next": [
               "historical_pattern"
             ],
+            "captain": "aml_network_mapper",
+            "default_captain": "aml_network_mapper",
             "title": "Network mapping",
             "contract": {
               "trigger": "after the evidence is assembled",
@@ -7509,6 +7519,8 @@
             "next": [
               "analyst_decision"
             ],
+            "captain": "aml_analyst",
+            "default_captain": "aml_analyst",
             "title": "AML analysis",
             "contract": {
               "trigger": "after historical_pattern",
@@ -7590,6 +7602,8 @@
             "next": [
               "filing_route"
             ],
+            "captain": "sar_narrator",
+            "default_captain": "sar_narrator",
             "title": "SAR narrative",
             "contract": {
               "trigger": "after a person's determination; drafts only when they escalated",

@@ -152,7 +152,7 @@ passport_presets:
     external_ceiling: {}
   - key: analyst
     name: Analyst
-    agents: [ledger, meter, conduit, sweep, writ, tally, mesh, sift]
+    agents: [ledger, meter, conduit, sweep, writ, tally, switch, mesh, sift]
     permissions: [knowledge:read, budget:read, model_provider:read, infra:read, observability:read, activity:read,
                   spend:reserve, workflow_run:read,
                   agent:read, code_task:read, decision:read, deployment:read, github:read, host:read, meeting:read, memory:read, preview:read, project:read, repository:read, sandbox:read, skill:read, system:read, workflow:read]

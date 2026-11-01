@@ -450,15 +450,20 @@ def workflow_needs(db: Any, project_id: str, spec: Any, input_data: Any) -> tupl
             if isinstance(seats, list):
                 candidates.extend(s.get("role_key") if isinstance(s, dict) else s for s in seats)
         cap_key = str(binding.get("capability") or "")
-        tool_perms, cap_captain = _capability_needs(cap_key)
+        tool_perms, cap_agent = _capability_needs(cap_key)
         # What the step's own tool call AND every tool it calls in-process will be checked against.
         perms.update(tool_perms)
-        if cap_captain and not any(candidates) and db is not None:
-            # The step runs as its capability's captain (workflow runner "ran_as"), so that agent
-            # must be in the grant — when this project has it.
+        if cap_agent and not _capability_is_code(cap_key) and not any(candidates) and db is not None:
+            # A step that names nobody but calls a tool brings its capability's agent (its role
+            # agent, else its captain) — when this project has it — so the grant can carry what
+            # that tool is checked against. A step that is BOSS's own code brings NO agent:
+            # asking for its captain named an agent that never acts — "Let Security Reviewer and
+            # Documentation Writer act for you?" to start an AML investigation that is Mesh's,
+            # Sift's and Scribe's work (2026-10-31). The catalogue names those role agents on
+            # their steps (workflow_catalogue.default_agent_for), so they are what is asked for.
             from . import runs
-            if runs.agent_for_role(db, project_id, cap_captain):
-                candidates.append(cap_captain)
+            if runs.agent_for_role(db, project_id, cap_agent):
+                candidates.append(cap_agent)
         is_build = cap_key in BUILD_CAPABILITIES or step.get("kind") == "code_task" or _capability_builds(cap_key)
         if is_build:
             builds = True
@@ -542,7 +547,8 @@ def _capability_builds(cap_key: str) -> bool:
 
 
 def _capability_needs(cap_key: str) -> tuple[tuple[str, ...], Optional[str]]:
-    """(the delegable permissions of every tool the capability calls, its default captain): its
+    """(the delegable permissions of every tool the capability calls, the agent whose work it is —
+    its role agent, else its default captain): its
     `tool` and the tools it calls in-process (`Capability.calls`: More tests' and PLRR's
     extend_code_task). The consent must ask for exactly what those calls are checked against
     (identity_gate), or the run starts and then fails at that step under enforce — More tests
@@ -562,9 +568,22 @@ def _capability_needs(cap_key: str) -> tuple[tuple[str, ...], Optional[str]]:
             key = str(getattr(specs.get(tool), "permission", "") or "")
             if key and catalogue.is_known(key) and catalogue.meta(key).delegable and key not in perms:
                 perms.append(key)
-        return tuple(perms), (getattr(cap, "captain", None) or None)
+        return tuple(perms), (getattr(cap, "role_agent", None) or getattr(cap, "captain", None)
+                              or None)
     except Exception:  # noqa: BLE001 — unknown here; the step's own check still decides
         return (), None
+
+
+def _capability_is_code(cap_key: str) -> bool:
+    """Is this capability BOSS's own deterministic code, run in-process with no agent
+    (Capability.is_code: KG clause intake, compliance closure)? Its step acts as nobody's agent."""
+    try:
+        from ..services import workflow_capabilities
+
+        cap = workflow_capabilities.CAPABILITIES.get(cap_key)
+    except Exception:  # noqa: BLE001 — unknown here: keep asking as before
+        return False
+    return bool(getattr(cap, "is_code", False))
 
 
 def capability_tools(cap: Any) -> tuple[str, ...]:
