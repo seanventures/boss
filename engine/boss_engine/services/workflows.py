@@ -3481,6 +3481,20 @@ def _insert_step_run(
     return step_run_id
 
 
+def _approver_name(connection: Connection, principal_id: Any) -> str:
+    """The approver's display name for the audit trail a person reads — never their raw id."""
+    if not principal_id:
+        return "a person"
+    got = connection.execute(text(
+        "SELECT display_name FROM identity_principals WHERE id = :p AND display_name <> '' "
+        "UNION ALL SELECT display_name FROM org_members WHERE member_id = :p AND display_name <> '' "
+        "LIMIT 1"), {"p": str(principal_id)}).scalar()
+    if got:
+        return str(got)
+    # An approver recorded by e-mail is already readable; an unresolvable internal id is not.
+    return str(principal_id) if "@" in str(principal_id) else "a person"
+
+
 def _run_row(connection: Connection, run_id: str, *, lock: bool = False) -> Any:
     lock_sql = " FOR UPDATE" if lock else ""
     row = connection.execute(
@@ -6188,7 +6202,7 @@ def _record_gate_answer(connection: Connection, run_id: str, step_id: str, *,
     if allowed and wanted not in allowed:
         return
     decision_type = wanted
-    who = str(decision.get("approved_by") or "a person")
+    who = _approver_name(connection, decision.get("approved_by"))
     note = str(decision.get("resolution_note") or "").strip()
     statement = (f"{'Approved' if approved else 'Rejected'} by {who}"
                  f"{': ' + note if note else ''} — {decision.get('question') or step_id}")[:1500]

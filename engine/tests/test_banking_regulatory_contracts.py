@@ -291,3 +291,14 @@ def test_a_required_write_the_step_only_claims_fails_after_one_repair_round(conn
     with pytest.raises(workflows.WorkflowValidationError):
         workflows.complete_step(c, project_id=project, step_run_id=again["id"],
                                 worker_id=WORKER, output=lie, evidence=[])
+
+
+def test_the_approval_names_the_person_never_their_internal_id(connection):
+    from boss_engine.services.workflows import _approver_name
+    connection.execute(text(
+        "INSERT INTO identity_principals (id, org_id, kind, status, display_name) "
+        "SELECT 'usr_test_approver_name', id, 'user', 'active', 'Dana Officer' FROM orgs LIMIT 1 "
+        "ON CONFLICT (id) DO NOTHING"))
+    assert _approver_name(connection, "usr_test_approver_name") == "Dana Officer"
+    assert _approver_name(connection, "usr_nobody_by_that_id") == "a person"
+    assert _approver_name(connection, "officer@example.com") == "officer@example.com"
