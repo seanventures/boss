@@ -51,6 +51,8 @@ function CheckCompliance({ w, documentId, clauseId, archived }: {
     if (subjectId) input.subject_id = subjectId;
     const r = await post("start", {
       project_id: w.projectId, workflow_key: "banking_regulatory_compliance", actor: w.actor, input,
+      // The project's own copy (e.g. with its bank's agent added) when it has one.
+      prefer_project_copy: true,
     });
     setBusy(false);
     if (r.ok) {

@@ -27148,6 +27148,21 @@ def start_delivery_workflow(payload: WorkflowStartBody, connection_in: Any = Non
             raise HTTPException(409, "The supplied brief changed. Review the current agreement before starting.")
     with _tx() as connection:
         require_project_actor(connection, project_id, actor, "workflow_execute")
+        # THE PROJECT'S OWN COPY, WHEN IT ASKED FOR ONE. A button that starts a standard
+        # workflow by key (the Documents tab's "Check compliance") ran BOSS's version even after
+        # the bank had made its own copy with its own agent's step in it. Opt-in: a caller naming
+        # a workflow explicitly still gets exactly that workflow.
+        if workflow_key and payload.get("prefer_project_copy"):
+            copy_key = connection.execute(
+                text("SELECT c.workflow_key FROM workflow_definitions c "
+                     "JOIN workflow_versions fv ON fv.id = c.forked_from_version_id "
+                     "JOIN workflow_definitions src ON src.id = fv.workflow_definition_id "
+                     "WHERE c.project_id = :p AND src.workflow_key = :k "
+                     "AND c.status = 'active' AND c.active_version_id IS NOT NULL "
+                     "ORDER BY c.updated_at DESC LIMIT 1"),
+                {"p": project_id, "k": workflow_key}).scalar()
+            if copy_key:
+                workflow_key = str(copy_key)
     run_input = payload.get("input") if isinstance(payload.get("input"), dict) else {}
     # ADOPTION IS NOT SOMETHING A CALLER GETS TO ASSERT.
     #
