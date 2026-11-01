@@ -21,7 +21,7 @@ from sqlalchemy.engine import Connection
 
 from ..core import now_utc
 from . import domain
-from .ontology_packs import effective_node_kinds
+from . import ontology_packs
 from .store import PostgresKnowledgeStore
 
 STORE = PostgresKnowledgeStore()
@@ -55,8 +55,8 @@ def add_document(
     """``extra_attrs`` go on the document node (an upload's file name, hash and page count). A
     clause may carry ``page``, ``page_end``, ``order``, ``section_kind``, ``heading`` and
     ``rule_id`` beside its section, text and citation; they are kept on the clause node."""
-    if "document" not in effective_node_kinds(connection, project_id=project_id) or \
-            "clause" not in effective_node_kinds(connection, project_id=project_id):
+    kinds = ontology_packs.effective_node_kinds(connection, project_id=project_id)
+    if "document" not in kinds or "clause" not in kinds:
         raise DocumentRefused(
             f"project {project_id!r} has no active ontology pack granting 'document'; "
             "assign a pack (e.g. banking-regulatory) before adding a document."

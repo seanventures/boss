@@ -246,6 +246,19 @@ def test_the_shipped_rulebook_splits_into_one_section_per_rule_card_plus_its_fro
             assert section.text in pages[section.page - 1]
 
 
+def test_the_measuring_script_reports_the_scripted_analyst_at_the_bar(capsys):
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("measure_rulebook_extraction",
+                                                  ROOT / "scripts" / "kg" / "measure_rulebook_extraction.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.main(["--scripted"]) == 0
+    out = capsys.readouterr().out
+    assert "Rules: 96 of 96 found; 96 proposed (precision 100.0%, recall 100.0%)." in out
+    assert "Retired rules proposed: 0." in out
+
+
 def test_an_image_only_pdf_is_refused_in_words():
     from pypdf import PdfWriter
 
