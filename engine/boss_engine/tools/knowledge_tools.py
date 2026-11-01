@@ -148,6 +148,28 @@ def _log_consulted(connection, project_id, ids) -> None:
         logging.getLogger(__name__).info("consulted not logged in %s", project_id, exc_info=True)
 
 
+def _neighbors(ctx, *, project_id, actor, args, policy=None, mode="on"):
+    from ..services.knowledge.neighbors import typed_neighbors
+
+    node = str(args.get("node") or args.get("node_id") or "").strip()
+    if not node:
+        return {"error": "node is required: a node id kg_search returned, or a node's key or exact name"}
+    kinds = args.get("edge_kinds")
+    if isinstance(kinds, str):
+        kinds = [k for k in kinds.split(",") if k.strip()]
+    with ctx.begin() as connection:
+        try:
+            found = typed_neighbors(connection, project_id=project_id, node=node,
+                                    hops=int(args.get("hops") or 1),
+                                    edge_kinds=kinds if isinstance(kinds, list) else None,
+                                    policy=policy, limit=int(args.get("limit") or 40))
+        except (LookupError, ValueError) as error:
+            return {"error": str(error)}
+        # The rules, clauses and learnings it returned are "consulted" (spec §2.5).
+        _log_consulted(connection, project_id, [n["id"] for n in found["neighbors"]])
+        return found
+
+
 def _precedent(ctx, *, project_id, actor, args, policy=None, mode="on"):
     query = str(args.get("query") or "").strip()
     if not query:
@@ -245,7 +267,8 @@ _RULES_PARAMS = {
     },
     "additionalProperties": False,
 }
-_APPROVED = "Approved by a person: trusted input. Cite a rule as [R:<id>]."
+_APPROVED = ("Approved by a person: trusted input. Cite a rule as [R:<id>] (a data-quality rule "
+             "read from a rulebook too).")
 _PROPOSED = ("PROPOSED, NOT APPROVED: untrusted. A person has not reviewed these; never rely on "
              "one, and never present it as a rule of the business.")
 
@@ -334,11 +357,26 @@ def _propose_rule(ctx, *, project_id, actor, args, policy=None, mode="on"):
 
 def register_knowledge_tools(reg) -> None:
     specs = [
-        ("kg_search", "Search this project's knowledge graph: code, rules and what agents learned (root "
-         "causes, precedents, investigations, fixes) by exact id (an incident or ticket key like INC-2041, a "
-         "kgn_ node id), words and meaning — in titles, bodies and attributes (evidence), and the learnings "
-         "a run or conversation whose brief names it produced. The same search as the console's Graph.",
+        ("kg_search", "Search this project's knowledge graph: code, rules, the documents it holds (a "
+         "regulation's or a rulebook's clauses, a bank's data-quality rules and their thresholds, critical "
+         "data elements) and what agents learned (root causes, precedents, investigations, fixes) by exact "
+         "id (an incident or ticket key like INC-2041, a rule id like NPB-DQ-LN-003, a kgn_ node id), words "
+         "and meaning — in titles, bodies and attributes (evidence), and the learnings a run or "
+         "conversation whose brief names it produced. The same search as the console's Graph. Cite a rule "
+         "as [R:<id>], a learning as [L:<id>], a clause or other document node as [D:<id>].",
          _props("query"), _search, "read"),
+        ("kg_neighbors", "A node's typed neighbours, one or two hops out: for a data-quality rule the CDE "
+         "it CHECKS, the columns and tables it APPLIES_TO, the report lines it REACHES, its Warning and "
+         "Error thresholds (OF) and the clause it was read from (evidenced_by); for any node what its "
+         "edges join. Pass the id kg_search returned (or a key such as NPB-DQ-LN-003); hops is 1 or 2; "
+         "edge_kinds narrows the edges followed.",
+         {"type": "object", "properties": {
+             "node": {"type": "string", "description": "A node id, key or exact name."},
+             "hops": {"type": "integer", "minimum": 1, "maximum": 2},
+             "edge_kinds": {"type": "array", "items": {"type": "string"}},
+             "limit": {"type": "integer", "minimum": 1, "maximum": 60}},
+          "required": ["node"], "additionalProperties": False},
+         _neighbors, "read"),
         ("kg_symbol", "Look up a code symbol by name.", _props("name"), _symbol, "read"),
         ("kg_callers", "List symbols that call a node, directly or by dispatch through a supertype.", _props("node_id"), _callers, "read"),
         ("kg_blast_radius", "Walk call edges out from a symbol.", _props("node_id"), _blast, "read"),

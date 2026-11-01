@@ -222,6 +222,8 @@ TOOL_LAYERS: dict[str, frozenset[str]] = {
     "kg_blast_radius": frozenset({"code"}),
     "kg_search": frozenset(LAYERS),
     "kg_why": frozenset(LAYERS),
+    # A node's typed neighbours (rulebook source G6): every hop reads under the stage's scope.
+    "kg_neighbors": frozenset(LAYERS),
     "kg_precedent": frozenset({"lifecycle", "knowledge"}),
     "kg_propose_fact": frozenset({"knowledge"}),
     "kg_rules": frozenset({"rules"}),

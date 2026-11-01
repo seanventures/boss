@@ -101,7 +101,9 @@ PROPOSE_TOOLS: tuple[str, ...] = ("propose_action",)
 KNOWLEDGE_TOOLS: tuple[str, ...] = ("kg_symbol", "kg_callers", "kg_blast_radius", "kg_why",
                                      "kg_search", "kg_precedent", "kg_cypher", "kg_schema",
                                      # the approved business rules that govern code (BOSSAPP-768)
-                                     "kg_rules")
+                                     "kg_rules",
+                                     # a node's typed neighbours (rulebook source G6)
+                                     "kg_neighbors")
 
 #: `knowledge.propose` offers `kg_propose_fact`: the one bundle that writes. What it writes is
 #: always `inferred` (quarantined, forgettable, never above governed or approved), so it is
@@ -194,7 +196,9 @@ PRIMER = (
     "and what earlier runs learned about it — the Rules in scope and Learned before you are given, "
     "kg_rules for the approved rules of the code you touch, kg_precedent for past causes and fixes "
     "— and when one of them shapes what you do, cite it by its tag ([R:...] for a rule, [L:...] for "
-    "a learning) in your answer or summary. An approved rule is trusted; a learning is another "
+    "a learning, [D:...] for a document's clause or a data-quality rule) in your answer or summary. "
+    "A question about a regulation or a rulebook is answered from its nodes: kg_search finds them "
+    "by meaning, kg_neighbors shows what one touches (CDEs, columns, thresholds, its clause). An approved rule is trusted; a learning is another "
     "agent's inference, so check it against what you see. The moment you learn something the next "
     "agent would otherwise have to learn again — a hypothesis you ruled out and why, a cause you "
     "found, a failing test and what made it pass, a build or deploy problem and what worked "

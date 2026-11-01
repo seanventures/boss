@@ -176,3 +176,32 @@ def search(
     return _read(request, project_id, actor, lambda c, withheld: view.search(
         c, project_id, q, layers=view.parse_layers(layers), limit=limit, meaning=bool(meaning),
         withheld=withheld, settings=_settings))
+
+
+@router.get("/search/compare")
+@permit(P.KNOWLEDGE_READ, scope=Scope.project(query="project_id"))
+def search_compare(
+    request: Request,
+    project_id: str = Query(...),
+    actor: str = Query(...),
+    q: str = Query(...),
+    layers: Optional[str] = Query(None),
+    limit: int = Query(10),
+) -> dict[str, Any]:
+    """The same query by words and by meaning, side by side (rulebook source G9)."""
+    return _read(request, project_id, actor, lambda c, withheld: view.compare_search(
+        c, project_id, q, layers=view.parse_layers(layers), limit=limit, withheld=withheld))
+
+
+@router.get("/names")
+@permit(P.KNOWLEDGE_READ, scope=Scope.project(query="project_id"))
+def node_names(
+    request: Request,
+    project_id: str = Query(...),
+    actor: str = Query(...),
+    ids: str = Query(""),
+) -> dict[str, Any]:
+    """The names of the graph items an answer cites, for its citation links (never raw ids)."""
+    wanted = [i.strip() for i in ids.split(",") if i.strip()]
+    return _read(request, project_id, actor, lambda c, withheld: {
+        "names": view.names(c, project_id, wanted, withheld=withheld)})

@@ -5876,6 +5876,89 @@
       }
     },
     {
+      "workflow_key": "rulebook_extraction",
+      "name": "Extract Rules from a Rulebook",
+      "description": "Read a rulebook you uploaded and propose each data-quality rule it states, with its Warning and Error thresholds, the data it protects and the clause it came from. A person approves each rule.",
+      "spec": {
+        "entry_step": "extract",
+        "steps": [
+          {
+            "id": "extract",
+            "kind": "capability",
+            "binding": {
+              "capability": "extract_rulebook_rules",
+              "inputs": {
+                "document_id": {
+                  "from_input": "document_id"
+                },
+                "budget_usd": {
+                  "from_input": "budget_usd"
+                }
+              }
+            },
+            "next": [
+              "review"
+            ],
+            "captain": "rulebook_analyst",
+            "default_captain": "rulebook_analyst",
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "review",
+            "kind": "capability",
+            "binding": {
+              "capability": "rules_review",
+              "inputs": {
+                "scan_id": {
+                  "from_step": "extract",
+                  "field": "scan_id"
+                }
+              }
+            },
+            "next": [],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "manual",
+              "on_timeout": "block",
+              "risk_tier": 2,
+              "forced_manual": true
+            }
+          }
+        ],
+        "objective": "Read every section of the named document and propose each rule in force that it states — its id, statement, dimension, severity, check, owner, the critical data elements and table.column values it protects, its regulatory reach, and its Warning and Error thresholds — quoting the clause word for word. Propose nothing the document does not print, and no retired rule. Nothing is approved automatically.",
+        "workflow_name": "Extract Rules from a Rulebook",
+        "input_schema": {
+          "type": "object",
+          "required": [],
+          "properties": {
+            "document_id": {
+              "type": "string",
+              "title": "Document (optional)",
+              "description": "The document to trace (Graph › Knowledge Graph › Documents). Leave blank and the trace reports nothing to do — add a document first.",
+              "examples": [
+                "kgn_0123456789ab"
+              ]
+            },
+            "budget_usd": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "default": 2.0,
+              "title": "Budget in dollars (optional)",
+              "description": "The most the scan may spend on its model, at most the project's cap. Default $2.00."
+            }
+          }
+        },
+        "output_schema": {},
+        "step_agent_rules": 2
+      }
+    },
+    {
       "workflow_key": "regulatory_trace",
       "name": "Trace Regulation to Code",
       "description": "Read a document's clauses and propose the rule or code that implements each, or a gap when nothing does. A person reviews every proposal.",

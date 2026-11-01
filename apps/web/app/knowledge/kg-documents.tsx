@@ -2,11 +2,14 @@
 
 /**
  * KNOWLEDGE GRAPH › DOCUMENTS (KG P7a): the regulation documents and clauses in a project's
- * Knowledge Graph. The pack row (with Change over the shipped packs), an "Add regulation" form
- * (title, citation, URL, and one section + exact text per clause, paste-only — BOSS never fetches
- * a URL or segments a blob), and the list of documents and their clauses. Each clause links to its
- * node in Graph, and offers "Check compliance" — starting banking_regulatory_compliance with the
- * clause's implementing rule as subject when there is exactly one, asking when there are several.
+ * Knowledge Graph. The pack row (with Change over the shipped packs), "Upload a document (PDF)"
+ * (rulebook source G3: BOSS proposes the sections, a person checks and confirms them before
+ * anything is added — kg-upload.tsx), an "Add regulation" form for pasted text (one section +
+ * exact text per clause; BOSS never segments a pasted blob), the samples, and the list of
+ * documents and their clauses. Each clause links to its node in Graph; a pasted clause offers
+ * "Check compliance" — starting banking_regulatory_compliance with the clause's implementing rule
+ * as subject when there is exactly one, asking when there are several. An uploaded document with
+ * rule cards offers "Extract rules".
  *
  * One door for every read and write: lib/kg-view.ts. Writes are pre-greyed on knowledge:manage
  * (components/gated.tsx); the workflow start reuses app/workflows/delivery-api.ts `post("start")`.
@@ -21,6 +24,9 @@ import {
 import { SCAN_START } from "../../lib/kg-view";
 import { post } from "../workflows/delivery-api";
 import { AmlSample } from "./kg-aml-sample";
+import { DqRulebookSample } from "./kg-dq-sample";
+import { ExtractRules, UploadDocument, UploadPreview, pagesWords } from "./kg-upload";
+import { getDqRulebookSample, getPendingUploads, type KgUploadPreview } from "../../lib/kg-view";
 
 type Who = { projectId: string; actor: string };
 
@@ -174,12 +180,48 @@ function CheckCompliance({ w, documentId, clauseId, archived }: {
 function ClauseRow({ w, document, clause, archived }: {
   w: Who; document: KgDocument; clause: KgClause; archived?: boolean;
 }) {
+  // An uploaded section shows its heading and page; its full text is one press away in Graph.
+  const uploaded = !!clause.kind;
+  const text = uploaded ? clause.text.split("\n").slice(1, 3).join(" ") : clause.text;
   return (
-    <li className="kg-doc-clause" data-testid="kg-doc-clause">
-      <a className="inf-link kg-doc-clause-section" href={kgNodeHref(clause.id)} data-testid="kg-doc-clause-link">{clause.section}</a>
-      <span className="kg-doc-clause-text" data-user-text>{clause.text}</span>
-      {clause.citation ? <span className="kg-quiet">{clause.citation}</span> : null}
-      <CheckCompliance w={w} documentId={document.id} clauseId={clause.id} archived={archived} />
+    <li className="kg-doc-clause" data-testid="kg-doc-clause" data-kind={clause.kind ?? undefined}>
+      <a className="inf-link kg-doc-clause-section" href={kgNodeHref(clause.id)} data-testid="kg-doc-clause-link"
+         title={uploaded ? clause.heading ?? clause.section : undefined}>{uploaded ? (clause.heading ?? clause.section) : clause.section}</a>
+      <span className="kg-doc-clause-text" data-user-text>{text}</span>
+      {uploaded ? <span className="kg-quiet" data-testid="kg-doc-clause-page">{pagesWords(clause.page, clause.page_end)}</span>
+        : clause.citation ? <span className="kg-quiet">{clause.citation}</span> : null}
+      {uploaded ? null : <CheckCompliance w={w} documentId={document.id} clauseId={clause.id} archived={archived} />}
+    </li>
+  );
+}
+
+/** How many sections a long document lists before "Show all". */
+const SECTIONS_SHOWN = 8;
+
+function DocumentCard({ w, doc, archived, extractWhy }: {
+  w: Who; doc: KgDocument; archived?: boolean; extractWhy: string | null;
+}) {
+  const [all, setAll] = useState(false);
+  const cards = doc.clauses.filter((c) => c.kind === "rule_card").length;
+  const shown = all ? doc.clauses : doc.clauses.slice(0, SECTIONS_SHOWN);
+  return (
+    <li className="kg-doc" data-testid="kg-doc">
+      <div className="kg-doc-head">
+        <span className="kg-doc-title" data-user-text>{doc.title}</span>
+        {doc.filename ? <span className="kg-quiet" data-testid="kg-doc-file"><span data-user-text>{doc.filename}</span>{doc.pages ? ` · ${doc.pages} pages` : ""} · {doc.clauses.length} sections{cards ? `, ${cards} rule cards` : ""}</span>
+          : doc.citation ? <span className="kg-quiet">{doc.citation}</span> : null}
+        {doc.added_at ? <span className="kg-quiet">{kgWhen(doc.added_at)}</span> : null}
+        {cards ? <ExtractRules w={w} documentId={doc.id} title={doc.title} archived={archived} disabledWhy={extractWhy} /> : null}
+      </div>
+      <ul className="kg-doc-clause-list">
+        {shown.map((clause) => <ClauseRow key={clause.id} w={w} document={doc} clause={clause} archived={archived} />)}
+      </ul>
+      {doc.clauses.length > SECTIONS_SHOWN ? (
+        <button type="button" className="inf-link kg-doc-more" data-testid="kg-doc-more" aria-expanded={all}
+                onClick={() => setAll((v) => !v)}>
+          {all ? "Show fewer" : `Show all ${doc.clauses.length} sections`}
+        </button>
+      ) : null}
     </li>
   );
 }
@@ -299,11 +341,17 @@ export function DocumentsTab({ projectId, actor, archived = false }: {
   const [docs, setDocs] = useState<KgDocument[] | null>(null);
   const [packs, setPacks] = useState<{ current: KgPack | null; available: KgPack[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState<KgUploadPreview[]>([]);
+  const [added, setAdded] = useState<string | null>(null);
+  const [extractWhy, setExtractWhy] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    const [d, p] = await Promise.all([getDocuments(w), getPacks(w)]);
+    const [d, p, u, dq] = await Promise.all([getDocuments(w), getPacks(w), getPendingUploads(w), getDqRulebookSample(w)]);
     if (d.ok) { setDocs(d.data.documents); setError(null); } else setError(d.error);
     if (p.ok) setPacks({ current: p.data.current, available: p.data.available });
+    // The DQ sample's own pending preview is shown in its row, not twice.
+    if (u.ok) setPending((u.data.uploads ?? []).filter((x) => !(dq.ok && x.upload_id === dq.data.pending_upload_id)));
+    if (dq.ok) setExtractWhy(dq.data.can_extract ? null : dq.data.extract_blocked_reason);
   }, [w]);
   useEffect(() => { void load(); }, [load]);
 
@@ -311,7 +359,7 @@ export function DocumentsTab({ projectId, actor, archived = false }: {
   const addDisabled = archived || !hasPack;
   const addWhy = archived
     ? "This project is archived: its documents are read-only."
-    : "Assign the banking-regulatory pack first, then add a regulation.";
+    : "Assign the banking-regulatory pack first (or a pack that includes it), then add a document.";
 
   return (
     <section className="kg-documents" data-testid="kg-documents" aria-label="Regulation documents">
@@ -321,23 +369,24 @@ export function DocumentsTab({ projectId, actor, archived = false }: {
         </div>
       ) : null}
       {packs ? <PackRow w={w} current={packs.current} available={packs.available} onChanged={() => void load()} archived={archived} /> : null}
+      <UploadDocument w={w} disabled={addDisabled} disabledWhy={addWhy}
+                      onStaged={(preview) => { setAdded(null); setPending((cur) => [preview, ...cur.filter((x) => x.upload_id !== preview.upload_id)]); }} />
+      {pending.map((preview) => (
+        <UploadPreview key={preview.upload_id} w={w} preview={preview} archived={archived} onDone={(done) => {
+          setPending((cur) => cur.filter((x) => x.upload_id !== preview.upload_id));
+          setAdded(done ? `Added “${done.title}”: ${done.sections} sections${done.rule_cards ? `, ${done.rule_cards} of them rule cards — Extract rules reads them next` : ""}.`
+                        : "Discarded: nothing was added.");
+          void load();
+        }} />
+      ))}
+      {added ? <p className="kg-ok" role="status" data-testid="kg-upload-done">{added}</p> : null}
       <AddRegulation w={w} disabled={addDisabled} disabledWhy={addWhy} onAdded={() => void load()} />
+      <DqRulebookSample projectId={projectId} actor={actor} archived={archived} onAdded={() => void load()} />
       <AmlSample projectId={projectId} actor={actor} archived={archived} onLoaded={() => void load()} />
       {docs && docs.length === 0 ? <p className="kg-quiet" data-testid="kg-documents-empty">No regulation documents yet.</p> : null}
       {docs && docs.length > 0 ? (
         <ul className="kg-doc-list" data-testid="kg-doc-list">
-          {docs.map((doc) => (
-            <li className="kg-doc" key={doc.id} data-testid="kg-doc">
-              <div className="kg-doc-head">
-                <span className="kg-doc-title" data-user-text>{doc.title}</span>
-                {doc.citation ? <span className="kg-quiet">{doc.citation}</span> : null}
-                {doc.added_at ? <span className="kg-quiet">{kgWhen(doc.added_at)}</span> : null}
-              </div>
-              <ul className="kg-doc-clause-list">
-                {doc.clauses.map((clause) => <ClauseRow key={clause.id} w={w} document={doc} clause={clause} archived={archived} />)}
-              </ul>
-            </li>
-          ))}
+          {docs.map((doc) => <DocumentCard key={doc.id} w={w} doc={doc} archived={archived} extractWhy={extractWhy} />)}
         </ul>
       ) : null}
     </section>

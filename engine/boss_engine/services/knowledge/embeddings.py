@@ -24,7 +24,11 @@ from .embedding_slot import NO_MODEL, UNCHECKED  # noqa: F401 — the reasons, i
 #: so review can find its near-duplicates by meaning, an approved one so a task finds it.
 EMBEDDED_KINDS = ("fact", "decision", "incident", "runbook", "spec", "review_finding", "rule",
                   # what agents learn while they work (BOSSAPP-768 §4.3), under the same governed pass
-                  "investigation", "test_failure", "fix", "workaround", "root_cause", "precedent")
+                  "investigation", "test_failure", "fix", "workaround", "root_cause", "precedent",
+                  # what a rulebook or regulation put in the graph (rulebook source G1): its
+                  # documents and clauses, a bank's data-quality rules, their thresholds and the
+                  # critical data elements they protect — so a question in other words finds them.
+                  "document", "clause", "data_quality_rule", "dq_threshold", "cde")
 #: Summaries embedded per project per tick: a few governed calls, never a burst.
 BATCH = 64
 

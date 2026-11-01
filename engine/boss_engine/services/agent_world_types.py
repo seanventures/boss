@@ -68,6 +68,8 @@ CANONICAL_ROLE_KEYS: frozenset[str] = frozenset({
     "compliance_analyst", "pipeline_orchestrator", "lane_agent", "remediation_advisor",
     # the banking-aml pack's judging roles (case study 4: AML alert investigation)
     "aml_network_mapper", "aml_analyst", "sar_narrator",
+    # a rulebook's rules read into the Knowledge Graph (rulebook source G5)
+    "rulebook_analyst",
     # archetypes, "thinks like" agents (§0.1.3, §8)
     "first_principles_researcher", "visionary_founder", "relentless_operator",
     "teacher_who_simplifies",

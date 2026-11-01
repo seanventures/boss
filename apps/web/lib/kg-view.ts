@@ -19,7 +19,7 @@ import type { Permission } from "./identity/permissions.gen";
 import type {
   KgLiveResponse, KgNeighbourhoodResponse, KgNodeDetailResponse, KgOverviewResponse, KgRuleActionRequest,
   KgRuleActionResponse, KgRuleCategory, KgRuleScope, KgRulesResponse, KgRuleStatus, KgSearchResponse,
-  KgTreeChildrenResponse, KgTreeTab, KgRunProofResponse,
+  KgTreeChildrenResponse, KgTreeTab, KgRunProofResponse, KgSearchCompareResponse, KgNodeNames,
 } from "./kg-view-types";
 import { KG_VIEW_BASE, registerKinds } from "./kg-view-types";
 
@@ -160,6 +160,16 @@ export function getSearch(w: Who, q: string, o: { layers?: string; limit?: numbe
   return kgRead<KgSearchResponse>(`${KG_VIEW_BASE}/search`, { project_id: w.projectId, actor: w.actor, q, layers: o.layers, limit: o.limit ?? 20, meaning: o.meaning ? 1 : undefined }, signal);
 }
 
+/** The same query by words and by meaning, side by side (rulebook source G9). */
+export function getSearchCompare(w: Who, q: string, o: { layers?: string; limit?: number } = {}, signal?: AbortSignal) {
+  return kgRead<KgSearchCompareResponse>(`${KG_VIEW_BASE}/search/compare`, { project_id: w.projectId, actor: w.actor, q, layers: o.layers, limit: o.limit ?? 10 }, signal);
+}
+
+/** What an answer's citations are, by name (never a raw id on screen). */
+export function getNodeNames(w: Who, ids: string[], signal?: AbortSignal) {
+  return kgRead<KgNodeNames>(`${KG_VIEW_BASE}/names`, { project_id: w.projectId, actor: w.actor, ids: ids.join(",") }, signal);
+}
+
 /** The reuse scorecard (§4.6): one run (or conversation), or it against a baseline — what it
  *  carried from the baseline, each metric's change and BOSS's verdict. */
 export function getProof(w: Who, run: string, baseline?: string | null, signal?: AbortSignal) {
@@ -256,10 +266,38 @@ export function getBlastRadius(w: Who, nodeId: string, signal?: AbortSignal) {
 /** Add a regulation document or change the project's ontology pack: both knowledge:manage. */
 export const DOCUMENT_MANAGE: Permission = "knowledge:manage";
 
-export type KgClause = { id: string; section: string; text: string; citation: string; url: string };
+export type KgClause = {
+  id: string; section: string; text: string; citation: string; url: string;
+  /** An uploaded document's section: its page(s) and what it is. */
+  page?: number | null; page_end?: number | null;
+  kind?: "title_page" | "contents" | "heading" | "rule_card" | "custom" | null; heading?: string | null;
+};
 export type KgDocument = {
   id: string; title: string; source_url: string; citation: string;
   added_by: string; added_at: string; clauses: KgClause[];
+  /** An uploaded file's name and page count. */
+  filename?: string | null; pages?: number | null;
+};
+
+/** One proposed section of an upload (nothing is in the graph until a person confirms). */
+export type KgUploadSection = {
+  key: string; title: string; label: string;
+  kind: "title_page" | "contents" | "heading" | "rule_card" | "custom";
+  page: number; page_end: number; first_lines: string[]; line_count: number; chars: number;
+};
+export type KgUploadPreview = {
+  upload_id: string; title: string; filename: string; pages: number;
+  status: "pending" | "confirmed" | "discarded"; pattern: string | null;
+  proposed_by_kind: "person" | "agent"; document_id: string | null;
+  counts: { sections: number; rule_cards: number; headings: number; other: number };
+  sections: KgUploadSection[];
+};
+export type KgUploadEdit = { op: "drop" | "merge" | "split"; key: string; line?: number };
+export type KgDqRulebookSample = {
+  available: boolean; title: string; filename: string;
+  pending_upload_id: string | null; document_id: string | null; sections: number;
+  rules: { proposed: number; approved: number };
+  workflow_key: string; can_extract: boolean; extract_blocked_reason: string | null;
 };
 export type KgPack = { pack_id: string; version: string };
 export type KgPacksResponse = { current: KgPack | null; available: KgPack[] };
@@ -297,6 +335,66 @@ export async function setPack(w: Who, packId: string) {
   return send<KgPack>("/v1/knowledge/packs",
     { project_id: w.projectId, actor: w.actor, step_up: "confirmed", pack_id: packId },
     { scope: `kg-pack:${w.projectId}`, label: "Change pack" });
+}
+
+// ── uploads (rulebook source G3) and the DQ sample (G7) ─────────────────────────────────────
+
+/** A file's bytes as base64, in chunks (a 20 MB PDF must not blow the argument stack). */
+export async function fileBase64(file: Blob): Promise<string> {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(binary);
+}
+
+export async function stageUpload(w: Who, body: { filename: string; content_base64: string; title?: string; pattern?: string }) {
+  return send<KgUploadPreview>("/v1/knowledge/documents/uploads",
+    { project_id: w.projectId, actor: w.actor, step_up: "confirmed", ...body },
+    { scope: `kg-upload:${w.projectId}`, label: "Upload a document" });
+}
+
+export function getPendingUploads(w: Who, signal?: AbortSignal) {
+  return kgRead<{ uploads: KgUploadPreview[] }>("/v1/knowledge/documents/uploads", { project_id: w.projectId, actor: w.actor }, signal);
+}
+
+export function getUpload(w: Who, uploadId: string, signal?: AbortSignal) {
+  return kgRead<KgUploadPreview>(`/v1/knowledge/documents/uploads/${encodeURIComponent(uploadId)}`,
+    { project_id: w.projectId, actor: w.actor }, signal);
+}
+
+export function getUploadSection(w: Who, uploadId: string, key: string, signal?: AbortSignal) {
+  return kgRead<{ key: string; lines: string[] }>(`/v1/knowledge/documents/uploads/${encodeURIComponent(uploadId)}/sections/${encodeURIComponent(key)}`,
+    { project_id: w.projectId, actor: w.actor }, signal);
+}
+
+export async function editUpload(w: Who, uploadId: string, edits: KgUploadEdit[], title?: string) {
+  return send<KgUploadPreview>(`/v1/knowledge/documents/uploads/${encodeURIComponent(uploadId)}/edit`,
+    { project_id: w.projectId, actor: w.actor, step_up: "confirmed", edits, ...(title ? { title } : {}) },
+    { scope: `kg-upload:${uploadId}`, label: "Change the sections" });
+}
+
+export async function confirmUpload(w: Who, uploadId: string, title?: string) {
+  return send<{ document_id: string; clause_ids: string[]; title: string; sections: number; rule_cards: number }>(
+    `/v1/knowledge/documents/uploads/${encodeURIComponent(uploadId)}/confirm`,
+    { project_id: w.projectId, actor: w.actor, step_up: "confirmed", ...(title ? { title } : {}) },
+    { scope: `kg-upload:${uploadId}`, label: "Add the document" });
+}
+
+export async function discardUpload(w: Who, uploadId: string) {
+  return send<KgUploadPreview>(`/v1/knowledge/documents/uploads/${encodeURIComponent(uploadId)}/discard`,
+    { project_id: w.projectId, actor: w.actor, step_up: "confirmed" },
+    { scope: `kg-upload:${uploadId}`, label: "Discard" });
+}
+
+export function getDqRulebookSample(w: Who, signal?: AbortSignal) {
+  return kgRead<KgDqRulebookSample>("/v1/knowledge/samples/dq-rulebook", { project_id: w.projectId, actor: w.actor }, signal);
+}
+
+/** Stage the NorthPeak DQ rulebook through the same upload path: a preview a person confirms. */
+export async function stageDqRulebook(w: Who) {
+  return send<KgUploadPreview>("/v1/knowledge/samples/dq-rulebook",
+    { project_id: w.projectId, actor: w.actor, step_up: "confirmed" },
+    { scope: `kg-dq-sample:${w.projectId}`, label: "Load the NorthPeak Bank rulebook" });
 }
 
 // ── the AML sample (case study 4) ──────────────────────────────────────────────────────────

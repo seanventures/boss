@@ -3,7 +3,10 @@
 /**
  * RULES REVIEW (KNOWLEDGE_GRAPH_PRODUCT_SPEC.md §5.7): the business rules agents proposed, each
  * with the code that shows it, for a person to Approve, Edit (a new version, approved in the same
- * act) or Reject. Filters by status, scan and area; bulk approve with a count and a confirm; the
+ * act) or Reject. A data-quality rule read from a rulebook (rulebook source G4/G5) is reviewed
+ * here too: its card shows the rule id, what it checks, its Warning and Error thresholds, the data
+ * it protects and the clause it was read from (quoted, with its page); approving it approves its
+ * thresholds. Filters by status, scan and area; bulk approve with a count and a confirm; the
  * actions are pre-greyed for a viewer without rule review (GatedButton) and disabled, with the
  * reason, on an archived project. The Facts sub-tab holds today's fact promotion queue (moved
  * here from Approvals, §5.1).
@@ -20,7 +23,7 @@ import {
   rejectFact, rejectRule,
   kgWhen,
 } from "../../lib/kg-view";
-import { KG_RULE_CATEGORIES, type KgRule, type KgRuleCategory, type KgRulesResponse, type KgRuleStatus } from "../../lib/kg-view-types";
+import { KG_RULE_CATEGORIES, type KgClauseEvidence, type KgDqRule, type KgDqThreshold, type KgRule, type KgRuleCategory, type KgRulesResponse, type KgRuleStatus } from "../../lib/kg-view-types";
 
 type StatusFilter = KgRuleStatus | "all";
 const STATUS: Array<{ key: StatusFilter; label: string }> = [
@@ -189,6 +192,7 @@ export function RulesReview({ projectId, actor, orgId, archived, locked, initial
                 <p className="kg-empty-body">
                   Agents propose business rules when they scan an area: pick an area or package in the graph and press
                   <strong> Scan for rules here</strong>. Each proposal arrives here with the lines of code that show it.
+                  A rulebook uploaded in <strong>Documents</strong> brings its rules here too, after <strong>Extract rules</strong>.
                 </p>
               </div>
             </div>
@@ -208,6 +212,88 @@ export function RulesReview({ projectId, actor, orgId, archived, locked, initial
           ) : null}
         </>
       )}
+    </div>
+  );
+}
+
+/** "0.05%" for a rate, "USD 1,000" for money, "30 min" for lateness, "5" for a count. */
+export function thresholdValue(t: Pick<KgDqThreshold, "metric" | "value">): string | null {
+  if (t.value === null || t.value === undefined) return null;
+  const v = Number(t.value);
+  if (t.metric === "rate" || t.metric === "relative_diff") return `${+(v * 100).toPrecision(6)}%`;
+  if (t.metric === "amount_usd") return `USD ${v.toLocaleString("en-US")}`;
+  if (t.metric === "minutes") return `${v} min`;
+  return String(v);
+}
+
+const METRIC_WORDS: Record<string, string> = {
+  rate: "failure rate", relative_diff: "relative difference", amount_usd: "amount difference",
+  minutes: "lateness", count: "failure count",
+};
+
+/** Where a rule was read from: the document, the clause, its page, and the passage quoted. */
+function ClauseChips({ items, onFocusNode }: { items: KgClauseEvidence[]; onFocusNode: (id: string) => void }) {
+  if (!items.length) return null;
+  return (
+    <ul className="kg-evidence" aria-label="Read from">
+      {items.map((e) => (
+        <li key={e.clause_id} className="kg-ev" data-testid="kg-rule-clause">
+          <button type="button" className="kg-ev-chip" onClick={() => onFocusNode(e.clause_id)} data-testid="kg-clause-focus"
+                  title={e.citation ?? e.section}>
+            <span className="kg-dot" data-layer="domain" aria-hidden />
+            <span>{e.document ? <span data-user-text>{e.document}</span> : "Document"} · {e.section}{e.page ? ` · p. ${e.page}` : ""}</span>
+          </button>
+          {e.quote ? <blockquote className="kg-ev-quote" data-user-text>{e.quote}</blockquote> : null}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function linkWords(dq: KgDqRule): { linked: string; unmatched: string } {
+  const words: Record<string, [string, string]> = {
+    cde: ["CDE", "CDEs"], column: ["column", "columns"], table: ["table", "tables"], report_line: ["report line", "report lines"],
+  };
+  const say = (m?: Record<string, string[]>) => Object.entries(m ?? {})
+    .filter(([, v]) => v.length)
+    .map(([k, v]) => `${v.length} ${(words[k] ?? [k, `${k}s`])[v.length === 1 ? 0 : 1]}`).join(", ");
+  return { linked: say(dq.links?.linked), unmatched: say(dq.links?.unmatched) };
+}
+
+/** A data-quality rule's rulebook fields: what it checks, when it warns or errors, what it protects. */
+function DqDetails({ dq }: { dq: KgDqRule }) {
+  const links = linkWords(dq);
+  return (
+    <div className="kg-dq" data-testid="kg-dq-details">
+      {dq.check ? <p className="kg-dq-check"><span className="kg-quiet">Check</span> <span data-user-text>{dq.check}</span></p> : null}
+      {dq.thresholds.length ? (
+        <ul className="kg-dq-thresholds" aria-label="Thresholds">
+          {dq.thresholds.map((t) => {
+            const value = thresholdValue(t);
+            return (
+              <li key={t.level} className="kg-dq-threshold" data-level={t.level} data-testid="kg-dq-threshold">
+                <span className="kg-dq-level">{t.level === "error" ? "Error when" : "Warning when"}</span>
+                <span data-user-text>{t.text}</span>
+                {value ? <span className="kg-chip" title={t.metric ? METRIC_WORDS[t.metric] ?? t.metric : undefined}>{t.metric ? `${METRIC_WORDS[t.metric] ?? t.metric} > ${value}` : value}</span> : null}
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
+      <dl className="kg-dq-facts">
+        {dq.cdes.length ? <><dt>Protects</dt><dd>{dq.cdes.map((c) => <span key={c} className="kg-chip">{c}</span>)}</dd></> : null}
+        {dq.columns.length ? <><dt>Applies to</dt><dd className="inf-mono" data-user-text>{dq.columns.join(", ")}</dd></> : null}
+        {dq.report_lines.length ? <><dt>Reaches</dt><dd data-user-text>{dq.report_lines.join("; ")}</dd></> : null}
+        {dq.legal_reference ? <><dt>Law</dt><dd data-user-text>{dq.legal_reference}</dd></> : null}
+        {dq.owner ? <><dt>Owner</dt><dd data-user-text>{dq.owner}</dd></> : null}
+        {dq.related.length ? <><dt>Related</dt><dd>{dq.related.join(", ")}</dd></> : null}
+      </dl>
+      {links.linked || links.unmatched ? (
+        <p className="kg-quiet" data-testid="kg-dq-links">
+          {links.linked ? <>Linked in the graph: {links.linked}.</> : null}
+          {links.unmatched ? <> Not in the graph yet: {links.unmatched}.</> : null}
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -236,14 +322,16 @@ function RuleCard({ r, w, orgId, archived, archivedWhy, picked, editing, onPick,
     if (res.ok) { setMode("view"); onDone(ok); } else onFail(res.error ?? "It did not go through.");
   };
   const list = (s: string) => s.split(",").map((x) => x.trim()).filter(Boolean);
+  const dq = r.kind === "data_quality_rule" ? r.dq ?? null : null;
   return (
-    <li className="kg-card" data-testid="kg-rule-card" data-status={r.status} data-rule={r.node.id}>
+    <li className="kg-card" data-testid="kg-rule-card" data-status={r.status} data-rule={r.node.id} data-kind={r.kind ?? "rule"}>
       <div className="kg-card-head">
         {proposed ? (
           <input type="checkbox" className="kg-check" checked={picked} onChange={(e) => onPick(e.target.checked)}
                  aria-label={`Select “${r.title}”`} data-testid="kg-rule-pick" disabled={archived} />
         ) : null}
-        <span className="kg-dot" style={{ background: "var(--kg-rule)" }} aria-hidden />
+        <span className="kg-dot" style={{ background: dq ? "var(--kg-layer-domain)" : "var(--kg-rule)" }} aria-hidden />
+        {dq ? <span className="kg-chip kg-dq-id" data-testid="kg-dq-id">{dq.rule_id}{dq.version ? ` v${dq.version}` : ""}</span> : null}
         <h4 className="kg-card-title" data-user-text>{r.title}</h4>
         <span className="kg-status" data-status={r.status}>{r.status}</span>
       </div>
@@ -251,14 +339,14 @@ function RuleCard({ r, w, orgId, archived, archivedWhy, picked, editing, onPick,
         <form className="kg-edit" data-testid="kg-rule-edit" noValidate onSubmit={(e) => {
           e.preventDefault();
           if (!statement.trim() || !title.trim()) return;
-          void go("edit", () => editRule(w, r.node.id, {
-            title: title.trim(), statement: statement.trim(), category,
-            scope: { areas: list(areas), packages: list(packages) },
-          }), `Saved as version ${r.version + 1} and approved.`);
+          void go("edit", () => editRule(w, r.node.id, dq
+            ? { title: title.trim(), statement: statement.trim() }
+            : { title: title.trim(), statement: statement.trim(), category, scope: { areas: list(areas), packages: list(packages) } }),
+          `Saved as version ${r.version + 1} and approved.`);
         }}>
           <label className="kg-field"><span>Title</span><input className="input" value={title} onChange={(e) => setTitle(e.target.value)} aria-label="Title" data-testid="kg-edit-title" /></label>
           <label className="kg-field"><span>Statement</span><textarea className="input" rows={3} value={statement} onChange={(e) => setStatement(e.target.value)} aria-label="Statement" data-testid="kg-edit-statement" /></label>
-          <div className="kg-edit-row">
+          {dq ? null : <><div className="kg-edit-row">
             <label className="kg-field"><span>Category</span>
               <select value={category} onChange={(e) => setCategory(e.target.value as KgRuleCategory)} aria-label="Category" data-testid="kg-edit-category">
                 {KG_RULE_CATEGORIES.map((c) => <option key={c} value={c}>{c.replace(/_/g, " ")}</option>)}
@@ -266,7 +354,7 @@ function RuleCard({ r, w, orgId, archived, archivedWhy, picked, editing, onPick,
             </label>
             <label className="kg-field"><span>Areas</span><input className="input" value={areas} onChange={(e) => setAreas(e.target.value)} aria-label="Areas, comma separated" /></label>
           </div>
-          <label className="kg-field"><span>Packages</span><input className="input" value={packages} onChange={(e) => setPackages(e.target.value)} aria-label="Packages, comma separated" /></label>
+          <label className="kg-field"><span>Packages</span><input className="input" value={packages} onChange={(e) => setPackages(e.target.value)} aria-label="Packages, comma separated" /></label></>}
           {!statement.trim() || !title.trim() ? <p className="kg-inline-err" role="alert">A rule needs a title and a statement.</p> : null}
           <p className="kg-quiet">Saving makes version {r.version + 1}, which supersedes this one and is approved in the same act.</p>
           <div className="kg-panel-actions">
@@ -281,10 +369,15 @@ function RuleCard({ r, w, orgId, archived, archivedWhy, picked, editing, onPick,
         <>
           <p className="kg-card-statement" data-user-text>{r.statement}</p>
           {r.rationale ? <p className="kg-card-rationale"><span className="kg-quiet">Why:</span> <span data-user-text>{r.rationale}</span></p> : null}
+          {dq ? <DqDetails dq={dq} /> : null}
         </>
       )}
       <div className="kg-card-meta">
-        <span className="kg-chip">{r.category.replace(/_/g, " ")}</span>
+        {dq ? <>
+          {dq.dimension ? <span className="kg-chip" data-testid="kg-dq-dimension">{dq.dimension}</span> : null}
+          {dq.severity ? <span className="kg-chip" data-severity={dq.severity.toLowerCase()}>{dq.severity} severity</span> : null}
+          {dq.system ? <span>{dq.system}{dq.feed ? ` · ${dq.feed}` : ""}</span> : null}
+        </> : <span className="kg-chip">{r.category.replace(/_/g, " ")}</span>}
         <span title="How sure the proposing agent was, capped by its evidence">{Math.round(r.confidence * 100)}% confident</span>
         <span>Proposed by <strong>{by}</strong>{r.provenance.at ? ` · ${when(r.provenance.at)}` : ""}</span>
         {run ? <a className="inf-link" href={run} data-testid="kg-rule-run">its run ↗</a> : null}
@@ -292,7 +385,8 @@ function RuleCard({ r, w, orgId, archived, archivedWhy, picked, editing, onPick,
         {r.review ? <span data-testid="kg-rule-approver">{r.status === "rejected" ? "Rejected" : r.status === "approved" ? "Approved" : "Reviewed"} by <strong>{personName(r.review.by, r.review.by_name)}</strong> · {when(r.review.at)}{r.review.note ? ` — “${r.review.note}”` : ""}</span> : null}
         {r.version > 1 ? <span>version {r.version}</span> : null}
       </div>
-      <ul className="kg-evidence" aria-label="Evidence">
+      <ClauseChips items={r.clause_evidence ?? []} onFocusNode={onFocusNode} />
+      {r.evidence.length ? <ul className="kg-evidence" aria-label="Evidence">
         {r.evidence.map((e) => {
           const href = codeHref(r.scope.repo, e.path, e.lines);
           return (
@@ -307,7 +401,7 @@ function RuleCard({ r, w, orgId, archived, archivedWhy, picked, editing, onPick,
             </li>
           );
         })}
-      </ul>
+      </ul> : null}
       {proposed && mode !== "edit" ? (
         mode === "reject" ? (
           <form className="kg-reject" data-testid="kg-rule-reject-form" onSubmit={(e) => { e.preventDefault(); void go("reject", () => rejectRule(w, r.node.id, note.trim() || undefined), "Rejected. Agents will not be given it."); }}>

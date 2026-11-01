@@ -11,6 +11,11 @@
  */
 export type {
   KgAnchorKind,
+  KgClauseEvidence,
+  KgDqRule,
+  KgDqThreshold,
+  KgNodeNames,
+  KgSearchCompareResponse,
   KgConnectionGroup,
   KgContextCard,
   KgKindMeta,

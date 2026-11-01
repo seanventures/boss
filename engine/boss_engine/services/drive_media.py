@@ -24,7 +24,6 @@ whether the step succeeds or throws.
 """
 from __future__ import annotations
 
-import io
 import json
 import os
 import re
@@ -443,30 +442,16 @@ def _text_out_of_a_pdf(payload: bytes, name: str) -> str:
     Nothing is stored and nothing is guessed. The pages are joined in order, so a title on page
     one stays before a description on page two.
     """
-    try:
-        from pypdf import PdfReader
-    except ModuleNotFoundError as exc:  # pragma: no cover - a deployment fault, not a user one
-        raise DriveMediaError(
-            f"'{name}' is a PDF and this install cannot read PDFs: pypdf is not present. "
-            "Export the brief as a Google Doc, or type the details into the form.") from exc
+    # ONE READER (document_text.pdf_pages): Knowledge Graph › Documents uploads read a PDF
+    # through the same function, so the two cannot disagree about what a page says.
+    from .document_text import DocumentTextError, pdf_text
 
     try:
-        reader = PdfReader(io.BytesIO(payload))
-        pages = [(page.extract_text() or "") for page in reader.pages]
-    except Exception as exc:  # pypdf raises a family of its own errors for a damaged file
-        raise DriveMediaError(
-            f"Could not read '{name}' as a PDF: {exc}. If it is encrypted or damaged, open it "
-            "and save it again, or put the text in a Google Doc.") from exc
-
-    text_value = _tidied("\n\n".join(page for page in pages if page.strip()))
-    text_value = in_the_order_a_reader_wrote_it(text_value)
-    if not text_value:
-        raise DriveMediaError(
-            f"'{name}' is a PDF with {len(pages)} page(s) and no text in any of them — the "
-            "pages are images, so the words are part of the picture and there is nothing to "
-            "lift out. Put the text in a Google Doc and link that instead, or type the title "
-            "and description into the start form.")
-    return text_value
+        return pdf_text(payload, name, advice=(
+            "Put the text in a Google Doc and link that instead, or type the title and "
+            "description into the start form."))
+    except DocumentTextError as exc:
+        raise DriveMediaError(str(exc)) from exc
 
 
 def _text_by_asking_drive_to_convert(
