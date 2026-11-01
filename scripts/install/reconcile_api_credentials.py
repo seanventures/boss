@@ -93,6 +93,10 @@ def reconcile(path: Path, *, ensure_worker: bool = False) -> None:
         ("BOSS_WORKER_PRINCIPAL", "system"),
     ):
         lines = _set(lines, key, value)
+    # THE KNOWLEDGE-GRAPH MCP SERVER'S TOKEN, for installs that predate it. An archive update
+    # does not run install.sh, and compose refuses every service when it is missing.
+    if ensure_worker and not values.get("BOSS_KG_MCP_HTTP_TOKEN", "").strip():
+        lines = _set(lines, "BOSS_KG_MCP_HTTP_TOKEN", secrets.token_hex(24))
     # Remote archive updates apply this to the live .env; replace it atomically
     # so a failed write cannot leave the previous install without credentials.
     temporary: Path | None = None

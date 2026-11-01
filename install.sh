@@ -802,6 +802,9 @@ fi
 # by restore_preserved_env.sh on reruns.
 BOSS_CONSOLE_PASSWORD="$(openssl rand -hex 24)"
 BOSS_CONSOLE_SESSION_SECRET="$(openssl rand -hex 32)"
+# The knowledge-graph MCP server listens on the compose network, not loopback, so it refuses to
+# start without a token (boss_engine serve-mcp). Outside agents use their own scoped keys.
+BOSS_KG_MCP_HTTP_TOKEN="$(openssl rand -hex 24)"
 
 # The directory that contains this installer, when it is already a BOSS checkout.
 # A downloaded one-liner lives in a temp file and returns nothing here.
@@ -1158,6 +1161,8 @@ if [ -f "$ENV_FILE" ]; then
   _existing() { grep -E "^$1=" "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2-; }
   _keep_db="$(_existing BOSS_DB_PASSWORD)"
   _keep_api="$(_existing BOSS_API_KEY)"
+  _keep_kg="$(_existing BOSS_KG_MCP_HTTP_TOKEN || true)"
+  if [ -n "$_keep_kg" ]; then BOSS_KG_MCP_HTTP_TOKEN="$_keep_kg"; fi
   if [ -n "$_keep_db" ]; then
     BOSS_DB_PASSWORD="$_keep_db"
     ui_info "Reusing the existing database password — the data volume already expects it"
@@ -1198,6 +1203,7 @@ BOSS_WORKER_PRINCIPAL=system
 BOSS_DB_PASSWORD=${BOSS_DB_PASSWORD}
 BOSS_CONSOLE_PASSWORD=${BOSS_CONSOLE_PASSWORD}
 BOSS_CONSOLE_SESSION_SECRET=${BOSS_CONSOLE_SESSION_SECRET}
+BOSS_KG_MCP_HTTP_TOKEN=${BOSS_KG_MCP_HTTP_TOKEN}
 BOSS_DEFAULT_ORG_ID=org_boss
 BOSS_DEFAULT_WORKSPACE_ID=ws_boss
 BOSS_DEFAULT_PROJECT_ID=boss-dogfood

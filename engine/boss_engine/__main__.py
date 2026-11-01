@@ -315,7 +315,8 @@ def _cmd_serve_mcp(args) -> int:
     if args.http and args.host not in ("127.0.0.1", "localhost", "::1") and not http_token:
         print(
             "boss-engine: non-loopback HTTP MCP requires BOSS_MCP_HTTP_TOKEN; "
-            "read tools can expose project data.",
+            "read tools can expose project data. On a Community install it is "
+            "BOSS_KG_MCP_HTTP_TOKEN in .env (install.sh and archive updates generate it).",
             file=sys.stderr,
         )
         return 2
