@@ -67,6 +67,15 @@ def _aml_step(name: str):
     return run
 
 
+def _dq_service(name: str):
+    def run(connection: Connection, **kwargs: Any) -> dict[str, Any]:
+        from .knowledge import dq_incident_pipeline
+
+        return getattr(dq_incident_pipeline, name)(connection, **kwargs)
+    run.__name__ = name
+    return run
+
+
 GRAPH_STEP_EXECUTORS = {
     "context_enrichment": _graph_steps.run_context_enrichment,
     "historical_pattern": _graph_steps.run_historical_pattern,
@@ -77,6 +86,10 @@ GRAPH_STEP_EXECUTORS = {
     "evidence_collection": _aml_step("run_evidence_collection"),
     "aml_historical_pattern": _aml_step("run_aml_historical_pattern"),
     "aml_closure": _aml_step("run_aml_closure"),
+    # The DQ pipeline's two shared services, runnable on their own (they are drawn in the
+    # pipeline's Shared services row; every LLM stage calls the Context Curator in-process).
+    "dq_context_curator": _dq_service("run_context_curator"),
+    "dq_profile_service": _dq_service("run_profile_service"),
 }
 
 
@@ -3110,7 +3123,41 @@ def _sar_narrative(connection: Connection, ctx: Any, project_id: str, step: dict
                                     context, inputs)
 
 
+def _run_dq_stage(key: str, connection: Connection, ctx: Any, project_id: str,
+                  step: dict[str, Any], context: dict[str, Any],
+                  inputs: dict[str, Any]) -> dict[str, Any]:
+    """One stage of the DQ RCA and remediation pipeline (knowledge/dq_incident_pipeline.py)."""
+    from .knowledge import dq_incident_pipeline
+
+    func = getattr(dq_incident_pipeline, f"run_{key}")
+    try:
+        return func(connection, getattr(ctx, "settings", None) or _settings(), project_id, step,
+                    context, inputs)
+    except dq_incident_pipeline.PersonMissing as missing:
+        # Settled: retrying cannot make a person approve or carry out a fix.
+        raise SettledCapabilityError(str(missing)) from missing
+
+
+def _dq_stage(key: str):
+    def run(connection: Connection, ctx: Any, project_id: str, step: dict[str, Any],
+            context: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+        return _run_dq_stage(key, connection, ctx, project_id, step, context, inputs)
+    run.__name__ = f"_{key}"
+    return run
+
+
+#: The DQ pipeline's stages, each a function here (`_dq_monitoring`, ...) so a test can patch it
+#: by name like every other INTERNAL capability.
+_DQ_STAGES = ("dq_monitoring", "dq_context_enrichment", "dq_historical_pattern", "dq_rca",
+              "dq_orchestration", "dq_lane", "dq_rule_drafting", "dq_remediation_package",
+              "dq_remediation_fix", "dq_incident_closure", "dq_escalation", "dq_eagle_intake")
+for _key in _DQ_STAGES:
+    globals()[f"_{_key}"] = _dq_stage(_key)
+
+
 _BANKING_ROLE_CAPABILITIES: dict[str, str] = {
+    # The DQ RCA and remediation pipeline (dq_incident_rca and its side workflows).
+    **{key: f"_{key}" for key in _DQ_STAGES},
     "clause_intake": "_clause_intake",
     "compliance_assessment": "_compliance_assessment",
     "compliance_orchestration": "_compliance_orchestration",

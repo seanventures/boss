@@ -216,6 +216,25 @@ CAPABILITY_PRECHECKS: dict[str, CapabilityPrecheck] = {
     "aml_analysis": NO_CHECKS("recommends close or escalate from the assembled evidence; "
                               "writes the Context Graph, runs no sandbox"),
     "sar_narrative": NO_CHECKS("drafts a narrative after a person escalated; files nothing"),
+    # The DQ RCA and remediation pipeline (dq_incident_rca): graph reads, the DQ sample's
+    # connectors (Eagle, Olympus, ITSM) and role-agent judgements; no sandbox, no repository.
+    **{key: NO_CHECKS(why) for key, why in (
+        ("dq_monitoring", "opens or attaches an incident from Eagle's exception group; writes "
+                          "the Context Graph and the ticket, runs no sandbox"),
+        ("dq_context_enrichment", "reads the graph and the profile service; writes the Context "
+                                  "Graph"),
+        ("dq_historical_pattern", "matches closed incidents in the graph; writes the Context "
+                                  "Graph"),
+        ("dq_rca", "proposes causes from the assembled evidence; writes the Context Graph"),
+        ("dq_orchestration", "routes candidate families to lanes by policy"),
+        ("dq_lane", "confirms or rules out one family on the evidence"),
+        ("dq_rule_drafting", "drafts a rule proposal into Rules review; changes no rule"),
+        ("dq_remediation_package", "prepares a package; executes nothing"),
+        ("dq_remediation_fix", "records what a person carried out; executes nothing"),
+        ("dq_incident_closure", "re-runs the check and records the closure"),
+        ("dq_escalation", "raises open incidents' escalation on the ticket"),
+        ("dq_eagle_intake", "starts an investigation per Error exception group"),
+    )},
 }
 
 #: Which route a capability's agent takes (engine_startup): the build pipeline's stages, the

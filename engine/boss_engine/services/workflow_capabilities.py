@@ -981,6 +981,65 @@ CAPABILITIES: dict[str, Capability] = {
             produces=("precedent_id", "execution_state"),
             typical_minutes=3,
         ),
+        # ── The consultant's DQ RCA and remediation pipeline (dq_incident_rca; services/
+        # knowledge/dq_incident_pipeline.py). Each stage runs AS its role agent; the retrieval
+        # stages are BOSS's deterministic code ($0), only RCA, the lanes, rule drafting and the
+        # remediation advisor ask a model. No agent executes a fix: people approve and execute.
+        *(_cap(key=key, role_agent=role, family="research", captain=role, label=label,
+               summary=summary, tool=None, risk_tier=risk, optional_inputs=optional,
+               produces=produces, typical_minutes=minutes, needs_model=model)
+          for key, role, label, summary, risk, optional, produces, minutes, model in (
+              ("dq_monitoring", "dq_monitoring_agent", "Monitoring",
+               "Open or attach one incident for an exception group Eagle graded Error, and set "
+               "its severity; never diagnose.", 1, ("exception_group_id",),
+               ("incident_id", "action", "severity", "continue_pipeline"), 1, False),
+              ("dq_context_enrichment", "dq_context_enrichment_agent", "Context enrichment",
+               "Assemble the incident's footprint, owners, feeds, lineage, regulatory reach, known "
+               "issues, exception profile and recent changes; every missing fact a coverage gap. "
+               "No model.", 0, (), ("context_pack", "gaps"), 1, False),
+              ("dq_historical_pattern", "dq_historical_pattern_agent", "Historical pattern",
+               "Match closed incidents in two tiers, grouped by resolved pattern, with how each fix "
+               "held. No model.", 0, (), ("matches", "patterns"), 1, False),
+              ("dq_rca", "dq_rca_agent", "Root-cause analysis",
+               "Candidate root causes with a confidence, citing the evidence and precedents — or "
+               "InsufficientEvidence, which runs enrichment and history again.", 0, (),
+               ("verdict", "candidates", "missing"), 3, True),
+              ("dq_orchestration", "dq_pipeline_orchestrator", "Pipeline orchestrator",
+               "Route each candidate root-cause family to the lane that confirms or rules it out.",
+               0, (), ("lanes",), 1, False),
+              ("dq_lane", "dq_lane_agent", "Lane",
+               "Confirm or rule out one root-cause family on the evidence.", 0, ("item",),
+               ("verdict", "cause", "false_positive"), 3, True),
+              ("dq_rule_drafting", "dq_rule_drafting_agent", "Rule drafting",
+               "Turn a confirmed false positive into a rule proposal in Rules review.", 1, (),
+               ("drafted", "proposal"), 3, True),
+              ("dq_remediation_package", "dq_remediation_advisor", "Remediation advisor",
+               "Prepare the remediation package: fix, target, executor, approver, change content. "
+               "Prepared only.", 1, (), ("package_ready", "package", "remediation_package_id"),
+               3, True),
+              ("dq_incident_closure", "dq_incident_closure_agent", "Incident closure",
+               "Re-run the check, finalise the cause, close the incident, maintain the resolved "
+               "pattern and write the precedent.", 1, (), ("closed", "precedent_id"), 1, False),
+              ("dq_escalation", "dq_escalation_agent", "Escalation",
+               "Apply the escalation ladder to every open DQ incident.", 1, ("as_of",),
+               ("escalated",), 1, False),
+              ("dq_eagle_intake", "dq_pipeline_orchestrator", "Eagle intake",
+               "Start an RCA for each exception group Eagle graded Error on the COB.", 1,
+               ("cob",), ("started",), 1, False),
+          )),
+        _cap(
+            key="dq_remediation_fix",
+            is_code=True,
+            family="research",
+            captain="dq_pipeline_orchestrator",
+            label="Remediation fix (design target)",
+            summary="Record the fix a person carried out after another approved it; under the "
+                    "prepare-only cap no agent executes.",
+            tool=None,
+            risk_tier=0,
+            produces=("approved_by", "executed_by", "change_ref"),
+            typical_minutes=1,
+        ),
     )
 }
 
