@@ -112,6 +112,10 @@ class Capability:
     #: recorded on the step's output as `ran_as`. The Pipeline view names this agent on the
     #: stage before any run has happened, so it must travel with the capability.
     role_agent: str = ""
+    #: BOSS'S OWN DETERMINISTIC CODE, run in-process: no model, no tool, no agent's judgement
+    #: (KG clause intake, compliance closure). A step of it acts as nobody's agent, so the consent
+    #: at start does not ask for its captain (identity.consent.workflow_needs).
+    is_code: bool = False
 
 
 def _cap(**kwargs: Any) -> Capability:
@@ -849,6 +853,7 @@ CAPABILITIES: dict[str, Capability] = {
         # reused unmodified.
         _cap(
             key="clause_intake",
+            is_code=True,
             family="research",
             captain="security_reviewer",
             label="Clause intake",
@@ -921,6 +926,7 @@ CAPABILITIES: dict[str, Capability] = {
         # the role agents' judgement calls. None closes, escalates or files: a person does.
         _cap(
             key="aml_network_mapping",
+            role_agent="aml_network_mapper",
             family="research",
             captain="security_reviewer",
             label="Map the network",
@@ -935,6 +941,7 @@ CAPABILITIES: dict[str, Capability] = {
         ),
         _cap(
             key="aml_analysis",
+            role_agent="aml_analyst",
             family="research",
             captain="security_reviewer",
             label="AML analysis",
@@ -948,6 +955,7 @@ CAPABILITIES: dict[str, Capability] = {
         ),
         _cap(
             key="sar_narrative",
+            role_agent="sar_narrator",
             family="research",
             captain="docs_writer",
             label="Draft the SAR narrative",
@@ -961,6 +969,7 @@ CAPABILITIES: dict[str, Capability] = {
         ),
         _cap(
             key="compliance_closure",
+            is_code=True,
             family="research",
             captain="chief_architect",
             label="Compliance closure",
@@ -1134,7 +1143,10 @@ REGISTERED_ROLES = frozenset({
     # dispatches work to it: a step whose captain is `human` waits for a person, which is what
     # a gate already does.
     "human",
-})
+}) | frozenset(
+    # THE PACK ROLE AGENTS whose judgement a capability's work is (Capability.role_agent): the
+    # catalogue names them on those steps and installs them with the workflow.
+    c.role_agent for c in CAPABILITIES.values() if c.role_agent)
 
 #: The roles that are people rather than agents. Small on purpose — this is not a category to
 #: grow, it is the boundary between what BOSS runs and what it asks somebody to do.

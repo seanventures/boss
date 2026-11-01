@@ -77,6 +77,7 @@ export const CAST: readonly CastMember[] = [
   picked("incident_commander", "Incident Commander", ["siren", "flag", "coral", "slit"]),
   picked("compliance_officer", "Compliance Officer", ["crest", "check", "slate", "glasses"]),
   picked("compliance_analyst", "Compliance Analyst", ["magnifier", "page", "blue", "lens"]),
+  picked("pipeline_orchestrator", "Pipeline Orchestrator", ["antenna", "flag", "blue", "band"]),
   picked("lane_agent", "Lane Agent", ["hardhat", "braces", "amber", "band"]),
   picked("remediation_advisor", "Remediation Advisor", ["headlamp", "wrench", "green", "band"]),
   picked("aml_network_mapper", "Network Mapper", ["antenna", "people", "teal", "scope"]),
