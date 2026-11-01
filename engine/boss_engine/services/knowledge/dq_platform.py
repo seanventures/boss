@@ -254,9 +254,43 @@ def load_platform(connection: Connection, *, project_id: str, actor: str) -> dic
             "workflows": installed, "escalation_schedule": schedule, "note": note}
 
 
-def _install_workflows(connection: Connection, project_id: str, actor: str) -> list[dict]:
-    from ..workflow_catalogue import seed
+#: The sample's own connectors each stage's contract calls, granted to its role agent when the
+#: platform is loaded (they exist only then, so the role specs cannot name them; ITSM is shipped
+#: and granted by the role specs).
+SAMPLE_GRANTS = (("dq_monitoring_agent", "eagle", ["get_exception_group"]),
+                 ("dq_context_enrichment_agent", "olympus",
+                  ["get_exception_profile", "list_recent_changes"]),
+                 ("dq_incident_closure_agent", "eagle", ["rerun_check"]),
+                 ("dq_pipeline_orchestrator", "eagle", ["list_exception_groups"]))
 
+
+def _install_workflows(connection: Connection, project_id: str, actor: str) -> list[dict]:
+    from ..agents import grant_mcp
+    from ..shipped_cast import install_roles
+    from ..workflow_catalogue import CATALOGUE, roles_needed, seed
+
+    # The roles first, holding the sample's connectors, so each stage's contract (its `calls`)
+    # is satisfied when the workflow is published. A grant a person removed stays removed.
+    install_roles(connection, project_id, [r for e in CATALOGUE if e["key"] in WORKFLOW_KEYS
+                                           for r in roles_needed(e)], actor=actor)
+    for role, server, tools in SAMPLE_GRANTS:
+        held = connection.execute(text(
+            "SELECT 1 FROM role_mcp_servers g JOIN mcp_servers s ON s.id = g.mcp_server_id "
+            "WHERE g.project_id = :p AND g.role_key = :r AND s.name = :s"),
+            {"p": project_id, "r": role, "s": server}).scalar()
+        removed = connection.execute(text(
+            "SELECT 1 FROM roles WHERE project_id = :p AND role_key = :r"),
+            {"p": project_id, "r": role}).scalar() is None
+        from .. import seed_exclusions
+        from ..agents import role_mcp_subject
+
+        revoked = seed_exclusions.is_excluded(connection, project_id, "role_skill",
+                                              role_mcp_subject(role, server))
+        if held or removed or revoked:
+            continue
+        with connection.begin_nested():
+            grant_mcp(connection, project_id, actor=actor, role_key=role, mcp_server_id=server,
+                      tools=tools)
     result = seed(connection, project_id, actor=actor, only=frozenset(WORKFLOW_KEYS))
     return [i for i in result.get("installed") or [] if i.get("key") in WORKFLOW_KEYS]
 

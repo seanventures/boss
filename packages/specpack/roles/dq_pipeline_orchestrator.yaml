@@ -20,9 +20,6 @@ permissions:
   abilities: []
   recommended_abilities: [team_chat]
   forbidden_skills: [ssh_host.workload.teardown, provider.write.direct, provider.secret.read_raw]
-  # The DQ sample's connectors this stage's contract calls (Knowledge Graph › Documents › DQ sample).
-  mcp_servers:
-    - {server: eagle, tools: [list_exception_groups]}
 output_contracts: [Routed]
 autonomy:
   level: 1

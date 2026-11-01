@@ -22,7 +22,6 @@ permissions:
   forbidden_skills: [ssh_host.workload.teardown, provider.write.direct, provider.secret.read_raw]
   # The DQ sample's connectors this stage's contract calls (Knowledge Graph › Documents › DQ sample).
   mcp_servers:
-    - {server: eagle, tools: [get_exception_group]}
     - {server: itsm, tools: [list_incidents, create_incident, attach_to_incident]}
 output_contracts: [IncidentOpenedOrAttached]
 autonomy:
