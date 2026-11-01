@@ -378,6 +378,13 @@ class DecisionService:
                 refuse_policy_approval(row, system_policy=system_policy, actor=actor)
             except InstallRefused as refused:
                 raise InvalidDecisionTransitionError(str(refused)) from refused
+            # SEPARATION OF DUTIES (a workflow gate with `approval.distinct_from`): the person
+            # who approved a change never also answers the gate that carries it out.
+            from .workflows import separation_of_duties_refusal
+
+            separated = separation_of_duties_refusal(connection, decision_id, actor)
+            if separated:
+                raise InvalidDecisionTransitionError(separated)
         identity_ctx = None if system_policy else _identity_decides(connection, row)
         if system_policy and action == "approve" and actor == SYSTEM_ACTOR:
             pass
