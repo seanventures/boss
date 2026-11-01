@@ -965,6 +965,21 @@ def normalise_workflow_spec(
             # What the reviewer should look at. Carried as written; the gate joins it to
             # whatever the earlier steps produced when it opens.
             step["guidance"] = str(step.get("guidance") or "").strip()[:1000]
+            # WHICH CASE THE CARD IS ABOUT, and what the reviewer reads first: optional
+            # `{path}` templates over the run's context (_gate_text). A string or a list of
+            # fallbacks; anything else is refused rather than silently dropped.
+            for field in ("subject", "summary"):
+                value = step.get(field)
+                if value is None:
+                    continue
+                if isinstance(value, str):
+                    value = [value]
+                if not (isinstance(value, list) and value
+                        and all(isinstance(v, str) and v.strip() for v in value)):
+                    bad(field, f"step '{step_id}' {field} must be a template string or a "
+                               "list of them.")
+                else:
+                    step[field] = [v.strip()[:400] for v in value][:5]
         if "compensation" in step and not isinstance(step["compensation"], dict):
             bad("compensation", f"step '{step_id}' compensation must be an object.")
         normalized_steps.append(step)
@@ -3568,6 +3583,192 @@ def _published_spec(raw: Any, roster: Optional[Iterable[str]] = None, *,
     return validate_workflow_spec(spec, roster, check_agents=under_current_agent_rules(spec))
 
 
+#: Steps that route, wait or gate rather than make anything: a reviewer is never asked about
+#: their output, so the work a gate is about is the newest step BEFORE them.
+_CONTROL_STEP_KINDS = ("condition", "timer", "bounded_loop", "for_each", "decision")
+
+
+def _producing_step(connection: Connection, run_id: str) -> Optional[dict[str, Any]]:
+    """The newest succeeded step that made something: a SAR gate after an "Escalated?" condition
+    is about the narrative, not about the condition's yes."""
+    row = connection.execute(
+        text(
+            """
+            SELECT step_id, step_kind, output FROM workflow_step_runs
+            WHERE workflow_run_id = :run_id AND status = 'succeeded'
+              AND COALESCE(step_kind, '') NOT IN :control
+            ORDER BY completed_at DESC NULLS LAST
+            LIMIT 1
+            """
+        ).bindparams(bindparam("control", expanding=True)),
+        {"run_id": run_id, "control": list(_CONTROL_STEP_KINDS)},
+    ).mappings().first()
+    if row is None:
+        return None
+    return {"step_id": row["step_id"], "output": _json(row["output"], {})}
+
+
+_GATE_PLACEHOLDER = re.compile(r"\{([^{}|]+)(?:\|([a-z_]+)(?::([A-Za-z0-9_]+))?)?\}")
+
+
+def _graph_node_words(connection: Connection, project_id: str, node_id: str,
+                      attr: Optional[str]) -> Optional[str]:
+    """A Knowledge Graph node said in words: its `attr`, else its own name, else its name."""
+    try:
+        with connection.begin_nested():
+            node = connection.execute(
+                text("SELECT name, attrs FROM kg_nodes WHERE project_id = :p AND id = :id"),
+                {"p": project_id, "id": node_id},
+            ).mappings().first()
+    except Exception:  # noqa: BLE001 - a project with no graph names nothing
+        return None
+    if node is None:
+        return None
+    attrs = _json(node["attrs"], {})
+    for value in ((attrs.get(attr) if attr else None), attrs.get("name"), node["name"]):
+        if isinstance(value, (str, int, float)) and str(value).strip():
+            return str(value).strip()
+    return None
+
+
+def _gate_text(connection: Connection, project_id: str, templates: Any,
+               context: dict[str, Any]) -> Optional[str]:
+    """The first of a gate's `subject`/`summary` templates whose every `{path}` resolves.
+
+    `{input.alert_id}`, `{steps.alert_intake.output.rule}` read the run's context as an
+    expression does; `{…|name}` says a graph node id as the node's name, `{…|attr:citation}` as
+    one of its attributes. A template with a hole is skipped, never shown half-filled.
+    """
+    if isinstance(templates, str):
+        templates = [templates]
+    for template in templates if isinstance(templates, list) else []:
+        missing = False
+
+        def fill(match: "re.Match[str]") -> str:
+            nonlocal missing
+            found, value = _lookup_path(context, match.group(1))
+            if not found or value in (None, "", [], {}) or isinstance(value, (dict, list)):
+                missing = True
+                return ""
+            words: Optional[str] = str(value)
+            if match.group(2) in ("name", "attr"):
+                words = _graph_node_words(connection, project_id, str(value),
+                                          match.group(3) if match.group(2) == "attr" else None)
+            if not words:
+                missing = True
+                return ""
+            return words
+
+        rendered = _GATE_PLACEHOLDER.sub(fill, str(template))
+        if not missing and rendered.strip():
+            return " ".join(rendered.split())
+    return None
+
+
+def _clip(words: str, limit: int) -> str:
+    """At most `limit` characters, cut at a word, with an ellipsis when cut."""
+    words = " ".join(str(words).split())
+    if len(words) <= limit:
+        return words
+    return words[:limit].rsplit(" ", 1)[0].rstrip(",;:—-") + "…"
+
+
+def _agent_words(connection: Connection, project_id: str, role_key: str) -> Optional[str]:
+    """An agent as a person reads it: "AML Analyst (Sift)", never its role key."""
+    if not role_key:
+        return None
+    try:
+        with connection.begin_nested():
+            row = connection.execute(
+                text("SELECT role_key, display_name, spec FROM roles "
+                     "WHERE project_id = :p AND role_key = :r"),
+                {"p": project_id, "r": role_key},
+            ).mappings().first()
+    except Exception:  # noqa: BLE001 - an unnamed agent is said by its step instead
+        return None
+    if row is None:
+        return None
+    from .agent_persona import persona_of
+
+    name = str(row["display_name"] or "").strip()
+    callsign = str(persona_of(dict(row)).get("callsign") or "").strip()
+    if name and callsign and callsign.lower() not in name.lower():
+        return f"{name} ({callsign})"
+    return name or callsign or None
+
+
+def _gate_card(connection: Connection, run: Any, spec: dict[str, Any],
+               template: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    """WHAT A GATE'S CARD SAYS, IN WORDS: which case, what was produced, by whom.
+
+    Two alerts waiting at the same gate used to read identically, said "the recommendation is
+    above" with nothing above it, and named the run and step by their ids. The subject comes from
+    the step's own `subject` template, else the run's display title; the summary from its
+    `summary` template, else the producing step's own summary or note. No ids.
+    """
+    project_id = run["project_id"]
+    run_input = _json(run["input"], {})
+    subject = _gate_text(connection, project_id, template.get("subject"), context)
+    if not subject:
+        for key in ("title", "subject", "name"):
+            value = run_input.get(key)
+            if isinstance(value, str) and value.strip() and not value.strip().startswith(
+                    ("kgn_", "wfr_")):
+                subject = " ".join(value.split())
+                break
+    producing = _producing_step(connection, run["id"]) or {}
+    output = producing.get("output") if isinstance(producing.get("output"), dict) else {}
+    summary = _gate_text(connection, project_id, template.get("summary"), context)
+    if not summary:
+        for key in ("summary", "note"):
+            value = output.get(key)
+            if isinstance(value, str) and value.strip():
+                summary = value
+                break
+    produced_step = producing.get("step_id")
+    produced_template = _step_map(spec).get(produced_step or "") or {}
+    step_title = str(produced_template.get("title") or "").strip() or (
+        str(produced_step or "").replace("_", " ").strip().capitalize())
+    ran_as = output.get("ran_as") if isinstance(output.get("ran_as"), dict) else {}
+    agent = _agent_words(connection, project_id, str(ran_as.get("agent") or ""))
+    workflow_name = None
+    if run.get("workflow_definition_id"):
+        workflow_name = connection.execute(
+            text("SELECT name FROM workflow_definitions WHERE id = :id"),
+            {"id": run["workflow_definition_id"]},
+        ).scalar()
+    workflow_name = str(workflow_name or spec.get("name") or "").strip() or None
+    card: dict[str, Any] = {}
+    if subject:
+        card["subject"] = _clip(subject, 160)
+    if workflow_name:
+        card["workflow_name"] = workflow_name
+    if summary:
+        card["summary"] = _clip(summary, 600)
+    if produced_step:
+        card["produced_by_title"] = step_title
+    if agent:
+        card["produced_by_agent"] = agent
+    return card
+
+
+def _gate_reason(guidance: str, card: dict[str, Any], view_url: Optional[str]) -> str:
+    """The card's "why", in words: the step author's guidance, then where the run is."""
+    where = (f"The {card['workflow_name']} run" if card.get("workflow_name")
+             else "This workflow run")
+    where += f" for {card['subject']}" if card.get("subject") else ""
+    where += " is waiting here for your answer."
+    if card.get("produced_by_agent") and card.get("produced_by_title"):
+        where += (f" The {card['produced_by_agent']} produced what you are reviewing, at the "
+                  f"“{card['produced_by_title']}” step.")
+    elif card.get("produced_by_title"):
+        where += (" What you are reviewing was produced at the "
+                  f"“{card['produced_by_title']}” step.")
+    if view_url:
+        where += f" Review it at {view_url}."
+    return (f"{guidance} " if guidance else "") + where
+
+
 def _what_there_is_to_review(connection: Connection, run_id: str) -> dict[str, Any]:
     """The thing the previous steps made, so an approval can point at it.
 
@@ -3578,17 +3779,7 @@ def _what_there_is_to_review(connection: Connection, run_id: str) -> dict[str, A
     Only fields a reviewer can act on: a link to open, an id to trace, and what the agent said
     it did. Not the whole output blob — a wall of JSON is not review material.
     """
-    row = connection.execute(
-        text(
-            """
-            SELECT step_id, output FROM workflow_step_runs
-            WHERE workflow_run_id = :run_id AND status = 'succeeded'
-            ORDER BY completed_at DESC NULLS LAST
-            LIMIT 1
-            """
-        ),
-        {"run_id": run_id},
-    ).mappings().first()
+    row = _producing_step(connection, run_id)
     output = (row or {}).get("output")
     if not isinstance(output, dict):
         return {}
@@ -4588,20 +4779,19 @@ def _process_control_step(connection: Connection, run: Any, row: Any) -> None:
         question = str(template.get("question") or "").strip() or (
             f"Approve {row['step_id']} in {run.get('workflow_key') or 'this workflow'}")
         guidance = str(template.get("guidance") or "").strip()
+        # WHICH CASE, WHAT WAS PRODUCED, BY WHOM — in words (_gate_card). Two alerts at one gate
+        # read identically, and the card named its run and step by their ids.
+        card = _gate_card(connection, run, spec, template, context)
         recommendation = {
             **(template.get("recommendation") or {}),
             **({"what_to_check": guidance} if guidance else {}),
             **({"review": review} if review else {}),
+            **({"gate": card} if card else {}),
             # LAST, so a spec's own recommendation cannot replace it. This card is the step's
             # gate: approving it must release the step, and the buttons the inbox draws are
             # decided by this action (decision_actions). It came first, before the spread.
             "action": "resume_workflow",
         }
-        where = ""
-        if review.get("view_url"):
-            where = f" Review it at {review['view_url']}."
-        elif review.get("produced_by"):
-            where = f" It was produced by step '{review['produced_by']}'."
         # ONE GATE, ONE RUN. The card belongs to this run's step: open_step_decision records
         # whose question it is (run_decisions withdraws it when the run ends) and keeps a second
         # run at the same gate from being merged onto this card — one Approve used to release
@@ -4615,8 +4805,7 @@ def _process_control_step(connection: Connection, run: Any, row: Any) -> None:
             question,
             recommendation,
             template.get("cost_summary") or {},
-            (f"{guidance} " if guidance else "")
-            + f"Workflow {run['id']} is waiting at decision step {row['step_id']}.{where}",
+            _gate_reason(guidance, card, review.get("view_url")),
             run_id=run["id"],
             step_id=row["step_id"],
             risk_tier=int(template.get("risk_tier", 2)),

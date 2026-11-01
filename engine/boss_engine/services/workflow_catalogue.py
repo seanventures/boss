@@ -191,6 +191,18 @@ def _set_default_captain(step: dict[str, Any], role_key: Optional[str]) -> dict[
 #: `{"from_input": "directive"}` — read what the run was started with. A catalogue workflow
 #: cannot hard-code the thing being built; "Standard Product Delivery" has to work for any
 #: directive anyone gives it.
+#: An AML gate's subject: the alert, its rule, the account and the customer by name — falling
+#: back to less when intake could not say it all (workflows._gate_text skips a template with a
+#: hole).
+_AML_ALERT_SUBJECT = [
+    "{steps.alert_intake.output.alert_id} · {steps.alert_intake.output.rule} on "
+    "{steps.alert_intake.output.account_id} ({steps.alert_intake.output.customer_node_id|name})",
+    "{steps.alert_intake.output.alert_id} · {steps.alert_intake.output.rule} on "
+    "{steps.alert_intake.output.account_id}",
+    "{input.alert_id}",
+]
+
+
 def _in(field: str) -> dict[str, str]:
     return {"from_input": field}
 
@@ -1345,6 +1357,10 @@ CATALOGUE: list[dict[str, Any]] = [
             {
                 "id": "human_approval", "kind": "decision",
                 "question": "Approve the proposed remediation package for execution?",
+                # WHICH RULE, AGAINST WHICH CLAUSE — said by the graph nodes' names.
+                "subject": ["{input.subject_id|name} against {input.document_id|attr:citation}",
+                            "{input.subject_id|name}", "{input.document_id|name}"],
+                "summary": ["{steps.remediation_package.output.note}"],
                 "guidance": "The remediation cites the evidence Compliance Assessment and the "
                            "lane confirmation assembled; nothing has been executed yet. "
                            "Approving triggers a scoped code-change task; it does not merge it.",
@@ -1501,6 +1517,9 @@ CATALOGUE: list[dict[str, Any]] = [
             {
                 "id": "analyst_decision", "kind": "decision",
                 "title": "Analyst decision",
+                # WHICH ALERT: two waiting at this gate read identically without it.
+                "subject": _AML_ALERT_SUBJECT,
+                "summary": ["{steps.aml_analysis.output.note}"],
                 "question": "Decide this alert: close it as a false positive, or escalate it?",
                 "guidance": "The AML Analyst's recommendation, its confidence and the evidence "
                             "and precedent it cites are above. Approve to accept the "
@@ -1542,6 +1561,10 @@ CATALOGUE: list[dict[str, Any]] = [
             {
                 "id": "sar_filing", "kind": "decision",
                 "title": "File the SAR",
+                "subject": _AML_ALERT_SUBJECT,
+                # The draft's opening lines on the card; the whole draft is on the run.
+                "summary": ["{steps.narrative.output.narrative}",
+                            "{steps.narrative.output.note}"],
                 "question": "File the suspicious activity report for this alert?",
                 "guidance": "The narrative above is an agent's DRAFT. BOSS does not file: review "
                             "it, file the report yourself, then approve here with the filing "

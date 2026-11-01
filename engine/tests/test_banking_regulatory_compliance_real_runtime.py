@@ -204,6 +204,59 @@ def test_p1_the_real_lanes_for_each_body_is_claimable(connection):
     assert lane_claim["step_id"] == "lane_confirmation"
 
 
+def test_the_approval_card_names_the_rule_and_clause_and_shows_the_package(connection):
+    """The Compliance Officer's card says WHICH rule against WHICH clause (the graph nodes'
+    names, never their kgn_ ids) and the remediation package's title and owner — not
+    "Workflow wfr_… is waiting at decision step human_approval"."""
+    c, project = connection, connection.project_id
+    from boss_engine.services.knowledge import ontology_packs
+    ontology_packs.set_project_pack(c, project_id=project, pack_id="banking-regulatory")
+    store = PostgresKnowledgeStore()
+    rule = store.upsert_node(
+        c, project_id=project, kind="rule", node_key="rule:card:repayment",
+        name="Repayment-like transaction classification", body="", trust_tier="governed",
+        actor_kind="person")
+    document = store.upsert_node(
+        c, project_id=project, kind="document", node_key="document:card:regz",
+        name="Regulation Z, 12 CFR 1026.36(c)(1) — Payment processing", body="",
+        trust_tier="governed", actor_kind="person",
+        attrs={"citation": "12 CFR 1026.36(c)(1)"})
+
+    def decided(decision_type, **more):
+        return {"produced": {"agent_decision": {"decision_type": decision_type,
+                                                "statement": decision_type}, **more}}
+
+    entry = _entry()
+    run_id = _publish_and_start(c, project, entry["steps"], "clause_intake",
+                                {"document_id": document, "subject_id": rule})
+    _finish(c, project, run_id, "clause_intake",
+            decided("ClauseIntake", compliance_case={"statement": "case opened"}))
+    _finish(c, project, run_id, "context_enrichment",
+            {"missing_kinds": [], **decided("ContextAssembled")})
+    _finish(c, project, run_id, "historical_pattern",
+            {"matched": [], **decided("HistoricalPatternMatched")})
+    _finish(c, project, run_id, "compliance_assessment", decided("Assessment"))
+    _finish(c, project, run_id, "compliance_orchestration",
+            {"finding_families": ["payment_allocation"], **decided("Routed")})
+    _finish(c, project, run_id, "lane_confirmation", decided("Confirmed"))
+    workflows.advance_run(c, project, run_id)
+    note = "Credit periodic payments as of receipt — ready for Loan Servicing Team's approver."
+    _finish(c, project, run_id, "remediation_package",
+            {"note": note, "produced": {"remediation_package": {
+                "statement": "change brief"}}})
+    workflows.advance_run(c, project, run_id)
+    card = c.execute(text(
+        "SELECT d.question, d.recommendation FROM decisions d JOIN workflow_step_runs s ON "
+        "s.decision_id = d.id WHERE s.workflow_run_id = :r AND s.step_id = 'human_approval'"),
+        {"r": run_id}).mappings().one()
+    gate = card["recommendation"]["gate"]
+    assert gate["subject"] == ("Repayment-like transaction classification against "
+                               "12 CFR 1026.36(c)(1)")
+    assert gate["summary"] == note
+    said = card["question"] + card["recommendation"]["reason"] + str(gate)
+    assert "wfr_" not in said and "kgn_" not in said and "human_approval" not in said
+
+
 # ── P1: historical_pattern's graph write is an upsert, never a duplicate (criterion 3) ────────
 
 def test_p1_historical_pattern_correlates_without_duplicating_on_a_rerun(connection):

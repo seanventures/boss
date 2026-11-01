@@ -483,3 +483,66 @@ def test_starting_it_needs_only_a_model_and_its_gates_are_a_persons():
 
     entry = next(e for e in catalogue.CATALOGUE if e["key"] == KEY)
     assert needs_of(catalogue.entry_spec(entry)) == ["model"]
+
+
+def _card(c, run_id, step_id):
+    return c.execute(text("SELECT d.* FROM decisions d JOIN workflow_step_runs s ON "
+                          "s.decision_id = d.id WHERE s.workflow_run_id = :r AND "
+                          "s.step_id = :s"), {"r": run_id, "s": step_id}).mappings().one()
+
+
+def test_each_gate_card_names_its_alert_and_shows_what_it_is_deciding(loaded, monkeypatch):
+    """Two alerts waiting at one gate used to read identically ("… escalate it? (2)"), said the
+    recommendation was "above" with nothing above it, and named the run and step by their ids.
+    Each card now names its alert (rule, account, customer by name), carries the producing step's
+    summary, and says where it is in words: no wfr_ id, no step key, no counter."""
+    c, project, _ = loaded
+    agents = ScriptedAgents()
+    monkeypatch.setattr(pipeline, "_role_agent", lambda *a, **k: (agents, "scripted"))
+    run1, spec = _start(c, project, "ALERT-1")
+    run3, _ = _start(c, project, "ALERT-3")
+    assert _drive(c, project, run1, spec) == "analyst_decision"
+    assert _drive(c, project, run3, spec) == "analyst_decision"
+    one, three = _card(c, run1, "analyst_decision"), _card(c, run3, "analyst_decision")
+    # Different alerts read apart by their subject, so neither carries a "(2)".
+    assert one["question"] == three["question"] == (
+        "Decide this alert: close it as a false positive, or escalate it?")
+    intake = _output(c, run3, "alert_intake")
+    gate3 = three["recommendation"]["gate"]
+    assert gate3["subject"].startswith(
+        f"ALERT-3 · {intake['rule']} on {intake['account_id']} (")
+    assert "kgn_" not in gate3["subject"]
+    assert one["recommendation"]["gate"]["subject"].startswith("ALERT-1 · ")
+    assert gate3["workflow_name"] == "AML Alert Investigation"
+    assert gate3["summary"].startswith("Recommends ESCALATE for ALERT-3")
+    assert gate3["produced_by_title"] == "AML analysis"
+    for card in (one, three):
+        said = " ".join([card["question"], card["recommendation"].get("reason") or "",
+                         json.dumps(card["recommendation"]["gate"])])
+        assert "wfr_" not in said and "aml_analysis" not in said, said
+        assert "decision step" not in said
+    where = (f"The AML Alert Investigation run for {gate3['subject']} is waiting here for your "
+             "answer.")
+    assert where in three["recommendation"]["reason"]
+    assert "“AML analysis” step" in three["recommendation"]["reason"]
+
+    # The SAR gate (behind an "Escalated?" condition) shows the narrative draft's opening lines.
+    _answer(c, run3, "analyst_decision", by="dana.analyst", note="Escalate: structuring.")
+    assert _drive(c, project, run3, spec) == "sar_filing"
+    sar = _card(c, run3, "sar_filing")
+    assert sar["recommendation"]["gate"]["subject"] == gate3["subject"]
+    assert sar["recommendation"]["gate"]["summary"].startswith("WHO: Q. Marlow.")
+    assert sar["recommendation"]["gate"]["produced_by_title"] == "SAR narrative"
+    assert "wfr_" not in (sar["recommendation"].get("reason") or "")
+
+
+def test_the_same_case_twice_still_gets_a_counter(loaded, monkeypatch):
+    """The counter is kept for what it was for: two open cards that WOULD read the same."""
+    c, project, _ = loaded
+    agents = ScriptedAgents()
+    monkeypatch.setattr(pipeline, "_role_agent", lambda *a, **k: (agents, "scripted"))
+    run_a, spec = _start(c, project, "ALERT-1")
+    run_b, _ = _start(c, project, "ALERT-1")
+    assert _drive(c, project, run_a, spec) == "analyst_decision"
+    assert _drive(c, project, run_b, spec) == "analyst_decision"
+    assert _card(c, run_b, "analyst_decision")["question"].endswith("escalate it? (2)")
