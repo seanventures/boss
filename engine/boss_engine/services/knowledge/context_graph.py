@@ -8,6 +8,7 @@ truth for the same run is the risk the brief calls out).
 """
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from typing import Any, Optional
 
@@ -66,6 +67,51 @@ def _statement_of(entry: Any, fallback: str) -> str:
     return str(entry)
 
 
+_PROVENANCE_KEYS = ("policy_version", "workflow_version", "agent_fingerprint")
+
+
+def stamp_provenance(connection: Connection, project_id: str, node_id: str, *, run_id: str,
+                     step_id: str, provenance: Mapping[str, Any]) -> None:
+    """Record on a node WHICH run and step wrote it, under which policy/workflow version and by
+    which agent — the "what this step wrote" a console view reads back. A step's own write is
+    made before the engine knows the run's versions (and the store's upsert keeps attrs when the
+    content is unchanged), so the engine stamps them afterwards. An empty value never overwrites
+    one already recorded."""
+    patch: dict[str, Any] = {"run_id": run_id, "step_id": step_id}
+    for key in _PROVENANCE_KEYS:
+        value = str(provenance.get(key) or "")
+        if value:
+            patch[key] = value
+    connection.execute(
+        text("UPDATE kg_nodes SET attrs = COALESCE(attrs, '{}'::jsonb) || CAST(:patch AS JSONB) "
+             "WHERE project_id = :p AND id = :i"),
+        {"patch": json.dumps(patch), "p": project_id, "i": node_id})
+
+
+def _named_nodes(entry: Any) -> list[str]:
+    """The node ids a produced entry says the step ALREADY wrote itself (`node_id`/`node_ids`)."""
+    if not isinstance(entry, Mapping):
+        return []
+    ids = [str(i) for i in (entry.get("node_ids") or []) if i]
+    if entry.get("node_id"):
+        ids.insert(0, str(entry["node_id"]))
+    return list(dict.fromkeys(ids))
+
+
+def _verified(connection: Connection, project_id: str, node_ids: list[str], kind: str
+              ) -> list[dict[str, Any]]:
+    """The named nodes that really exist in this project with this kind — a step's say-so that
+    it wrote something is checked against the rows, never trusted."""
+    if not node_ids:
+        return []
+    rows = connection.execute(
+        text("SELECT id, attrs FROM kg_nodes WHERE project_id = :p AND kind = :k "
+             "AND id = ANY(:ids)"),
+        {"p": project_id, "k": kind, "ids": node_ids},
+    ).mappings().all()
+    return [dict(r) for r in rows]
+
+
 def persist_contract_writes(connection: Connection, project_id: str, *, run_id: str, step_id: str,
                             contract: Any, produced: Mapping[str, Any],
                             provenance: Mapping[str, Any]) -> set[str]:
@@ -73,10 +119,16 @@ def persist_contract_writes(connection: Connection, project_id: str, *, run_id: 
     postcondition (§4.1 step 3): a required write becomes a real `kg_nodes` row rather than
     something the model may or may not have remembered to call a tool for.
 
+    A produced entry that names `node_id`/`node_ids` is a node the step's own code already wrote
+    (a ComplianceCase, a RemediationPackage, a Precedent): the engine checks those rows exist
+    with the declared kind (and, for a decision, an accepted decision_type) and stamps the run's
+    provenance on them instead of writing a copy. Any other entry is written here. Every node
+    that lands carries run, step, policy/workflow version and agent fingerprint.
+
     Returns the set of contract write kinds that actually landed as nodes, so the runtime can
     tell whether every required write was satisfied.
     """
-    from .step_contracts import WriteSpec, _satisfied
+    from .step_contracts import _satisfied, decision_types
 
     produced = produced or {}
     actor_ref = str(provenance.get("actor_ref") or f"agent:{step_id}")
@@ -85,11 +137,26 @@ def persist_contract_writes(connection: Connection, project_id: str, *, run_id: 
         entry = produced.get(spec.kind)
         if entry is None:
             continue
+        allowed = decision_types(spec)
+        named = _named_nodes(entry)
+        if named:
+            rows = _verified(connection, project_id, named, spec.kind)
+            if spec.kind == "agent_decision" and allowed:
+                rows = [r for r in rows if (r.get("attrs") or {}).get("decision_type") in allowed]
+            for row in rows:
+                stamp_provenance(connection, project_id, str(row["id"]), run_id=run_id,
+                                 step_id=step_id, provenance=provenance)
+            if rows and _satisfied(spec, produced):
+                landed.add(spec.kind)
+            continue
         statement = _statement_of(entry, f"{spec.kind} produced by {step_id}")
         if spec.kind == "agent_decision":
-            decision_type = spec.decision_type or (
-                entry.get("decision_type") if isinstance(entry, Mapping) else None) or "Decision"
-            write_agent_decision(
+            produced_type = entry.get("decision_type") if isinstance(entry, Mapping) else None
+            if allowed:
+                decision_type = produced_type if produced_type in allowed else allowed[0]
+            else:
+                decision_type = produced_type or "Decision"
+            written = write_agent_decision(
                 connection, project_id, step_id=step_id, run_id=run_id,
                 decision_type=decision_type, statement=statement,
                 policy_version=str(provenance.get("policy_version") or ""),
@@ -97,15 +164,17 @@ def persist_contract_writes(connection: Connection, project_id: str, *, run_id: 
                 agent_fingerprint=str(provenance.get("agent_fingerprint") or ""),
                 actor_ref=actor_ref)
         elif spec.kind == "coverage_gap":
-            write_coverage_gap(connection, project_id, step_id=step_id, run_id=run_id,
-                               statement=statement, actor_ref=actor_ref)
+            written = write_coverage_gap(connection, project_id, step_id=step_id, run_id=run_id,
+                                         statement=statement, actor_ref=actor_ref)
         else:
             node_key = f"context:{spec.kind}:{run_id}:{step_id}"
-            _STORE.upsert_node(
+            written = {"id": _STORE.upsert_node(
                 connection, project_id=project_id, kind=spec.kind, node_key=node_key,
                 name=f"{spec.kind} ({step_id})", body=statement, trust_tier="inferred",
                 actor_kind="agent", actor_ref=actor_ref, source="context_graph",
-                attrs={"statement": statement, "step_id": step_id, "run_id": run_id})
+                attrs={"statement": statement, "step_id": step_id, "run_id": run_id})}
+        stamp_provenance(connection, project_id, str(written["id"]), run_id=run_id,
+                         step_id=step_id, provenance=provenance)
         # Only count it against the contract if it satisfies the spec (kind AND, when named,
         # decision_type): a wrong-typed decision is written for the record but does not satisfy
         # a different required decision.
@@ -114,16 +183,45 @@ def persist_contract_writes(connection: Connection, project_id: str, *, run_id: 
     return landed
 
 
+def step_writes(connection: Connection, project_id: str, *, run_id: str,
+                step_id: Optional[str] = None) -> list[dict[str, Any]]:
+    """What a run's steps wrote, with provenance — the rows a console "what this step wrote"
+    view lists. Read from the stamped `kg_nodes` rows, never from a step's self-reported output."""
+    clauses = ["project_id = :p", "attrs->>'run_id' = :r", "valid_to IS NULL"]
+    params: dict[str, Any] = {"p": project_id, "r": run_id}
+    if step_id:
+        clauses.append("attrs->>'step_id' = :s")
+        params["s"] = step_id
+    rows = connection.execute(text(
+        f"SELECT id, kind, name, body, attrs FROM kg_nodes WHERE {' AND '.join(clauses)} "
+        "ORDER BY recorded_at ASC"
+    ), params).mappings().all()
+    out = []
+    for row in rows:
+        attrs = row["attrs"] or {}
+        out.append({
+            "id": row["id"], "kind": row["kind"], "name": row["name"],
+            "statement": attrs.get("statement") or row["body"],
+            "decision_type": attrs.get("decision_type"),
+            "step_id": attrs.get("step_id"), "run_id": attrs.get("run_id"),
+            **{key: attrs.get(key) for key in _PROVENANCE_KEYS},
+        })
+    return out
+
+
 def read_contract_writes(connection: Connection, project_id: str, *, run_id: str, step_id: str,
                           contract: Any) -> dict[str, Any]:
     """What a step's contract declares as writes, read back from the real ``kg_nodes`` rows —
     never from an agent's self-reported HTTP body. A write that was never actually made through
     the Context Graph tools is simply absent from the result, never synthesized."""
+    from .step_contracts import decision_types
+
     produced: dict[str, Any] = {}
     for spec in getattr(contract, "writes", ()):  # WriteSpec
         if spec.kind == "agent_decision":
-            if spec.decision_type:
-                node_key = f"context:agent_decision:{run_id}:{step_id}:{spec.decision_type}"
+            types = decision_types(spec)
+            if len(types) == 1:
+                node_key = f"context:agent_decision:{run_id}:{step_id}:{types[0]}"
             else:
                 row = connection.execute(text(
                     "SELECT attrs FROM kg_nodes WHERE project_id = :p AND kind = 'agent_decision' "

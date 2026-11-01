@@ -161,35 +161,53 @@ def run_clause_intake(
     connection: Connection, settings: Any, project_id: str, step: Mapping[str, Any],
     context: Mapping[str, Any], inputs: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Open one ComplianceCase per clause of `document_id`, with AgentDecision(ClauseIntake)."""
+    """Open one ComplianceCase per clause of `document_id` — or, with no document (or none of
+    its clauses found), one for the run's subject clause — and record ONE
+    AgentDecision(ClauseIntake) saying what was opened. Returns both as `produced`, so the
+    step's contract can hold the engine to them."""
     run_id = _run_id(step, context)
     step_id = str(step.get("id") or "clause_intake")
     document_id = str(inputs.get("document_id") or "").strip()
+    subject_id = str(inputs.get("subject_id") or "").strip()
     actor_ref = "banking_regulatory_pipeline:clause_intake"
-    case_ids: list[str] = []
+    clause_ids: list[str] = []
     if document_id:
-        clauses = connection.execute(
+        clause_ids = [str(r["id"]) for r in connection.execute(
             text("SELECT id FROM kg_nodes WHERE project_id = :p AND kind = 'clause' "
                  "AND valid_to IS NULL AND attrs->>'document_id' = :d ORDER BY name"),
             {"p": project_id, "d": document_id},
-        ).mappings().all()
-        for clause in clauses:
-            clause_id = str(clause["id"])
-            case_id = STORE.upsert_node(
-                connection, project_id=project_id, kind="compliance_case",
-                node_key=f"case:{clause_id}", name=f"Compliance case: {clause_id}", body="",
-                trust_tier="inferred", actor_kind="agent", actor_ref=actor_ref,
-                attrs={"clause_id": clause_id, "status": "open"})
-            case_ids.append(case_id)
-            context_graph.write_agent_decision(
-                connection, project_id, step_id=step_id, run_id=run_id or f"adhoc:{clause_id}",
-                decision_type="ClauseIntake",
-                statement=f"Opened a compliance case for clause {clause_id}.",
-                policy_version="", workflow_version="", agent_fingerprint="deterministic",
-                actor_ref=actor_ref)
+        ).mappings().all()]
+    case_ids: list[str] = []
+    if not clause_ids and subject_id:
+        # THE CASE IS ABOUT THE SUBJECT when no document says which clauses changed: a run
+        # started on one clause opened nothing, and every later step judged a case nobody opened.
+        # A subject that already IS a case is that case.
+        subject = STORE.get_node(connection, project_id=project_id, node_id=subject_id)
+        if subject and subject["kind"] == "compliance_case":
+            case_ids.append(subject_id)
+        elif subject:
+            clause_ids = [subject_id]
+    for clause_id in clause_ids:
+        case_ids.append(STORE.upsert_node(
+            connection, project_id=project_id, kind="compliance_case",
+            node_key=f"case:{clause_id}", name=f"Compliance case: {clause_id}", body="",
+            trust_tier="inferred", actor_kind="agent", actor_ref=actor_ref,
+            attrs={"clause_id": clause_id, "status": "open"}))
+    source = f"document {document_id}" if document_id else f"subject {subject_id or '(none)'}"
+    statement = (f"Opened {len(case_ids)} compliance case(s) for {source}: "
+                 f"{', '.join(clause_ids or case_ids)}." if case_ids
+                 else f"No clause found to open a compliance case for ({source}).")
+    decision = context_graph.write_agent_decision(
+        connection, project_id, step_id=step_id, run_id=run_id or f"adhoc:{document_id or subject_id}",
+        decision_type="ClauseIntake", statement=statement,
+        policy_version="", workflow_version="", agent_fingerprint="deterministic",
+        actor_ref=actor_ref)
+    produced: dict[str, Any] = {"agent_decision": {
+        "decision_type": "ClauseIntake", "statement": statement, "node_id": decision["id"]}}
+    if case_ids:
+        produced["compliance_case"] = {"statement": statement, "node_ids": case_ids}
     return {"capability": "clause_intake", "tool": None, "status": "succeeded",
-            "compliance_case_ids": case_ids,
-            "note": f"Opened {len(case_ids)} compliance case(s) for document {document_id or '(none)'}."}
+            "compliance_case_ids": case_ids, "produced": produced, "note": statement}
 
 
 def _prior_decisions(connection: Connection, project_id: str, matched: list) -> str:
@@ -296,7 +314,7 @@ def run_compliance_assessment(
         else:
             rationale = "the Compliance Analyst answered nothing readable for this subject"
     statement = f"Assessed as {status} (confidence {confidence:.2f}): {rationale}"
-    context_graph.write_agent_decision(
+    decision = context_graph.write_agent_decision(
         connection, project_id, step_id=step_id, run_id=run_id, decision_type="Assessment",
         statement=statement, policy_version="", workflow_version="",
         agent_fingerprint="deterministic", actor_ref=actor_ref)
@@ -313,6 +331,8 @@ def run_compliance_assessment(
     return {"capability": "compliance_assessment", "tool": None, "status": "succeeded",
             "assessment": status, "confidence": confidence, "citation": citation,
             "cited_incident": cited_incident, "note": statement, "subject_id": subject_id,
+            "produced": {"agent_decision": {"decision_type": "Assessment", "statement": statement,
+                                            "node_id": decision["id"]}},
             "ran_as": _ran_as("compliance_analyst"),
             "learned": _learned(run_id, step_id, kind="decision",
                                 title=f"Clause assessed as {status}", statement=statement,
@@ -344,12 +364,29 @@ def run_compliance_orchestration(
     situation = (
         f"CITED EVIDENCE: {node_text or '(no rule/code citation)'}\n{incident_text}\n\n"
         f"Valid families: {', '.join(FAMILIES)}.")
+    run_id = _run_id(step, context)
+    step_id = str(step.get("id") or "compliance_orchestration")
     agent, _engine = _role_agent(connection, settings, project_id)
-    judged = _ask_role(agent, _role_prompt("pipeline_orchestrator.md", situation))
+    with _attributed(connection, project_id, run_id, step_id, "pipeline_orchestrator"):
+        judged = _ask_role(agent, _role_prompt("pipeline_orchestrator.md", situation))
     family = judged.get("family") if judged else None
     family = family if family in FAMILIES else None
+    # THE ROUTING IS A DECISION ON THE RECORD (design §5.3 stage 5): which lane the finding went
+    # to and why — or that none fitted — not only a list the for_each reads and forgets.
+    why = " ".join(str((judged or {}).get("rationale") or "").split())[:600]
+    statement = (f"Routed the finding to the {family.replace('_', ' ')} lane"
+                 f"{': ' + why if why else '.'}" if family else
+                 "No finding family fitted the evidence; no lane was started"
+                 f"{': ' + why if why else '.'}")
+    decision = context_graph.write_agent_decision(
+        connection, project_id, step_id=step_id, run_id=run_id, decision_type="Routed",
+        statement=statement, policy_version="", workflow_version="",
+        agent_fingerprint="deterministic",
+        actor_ref="banking_regulatory_pipeline:compliance_orchestration")
     return {"capability": "compliance_orchestration", "tool": None, "status": "succeeded",
-            "finding_families": [family] if family else []}
+            "finding_families": [family] if family else [], "note": statement,
+            "produced": {"agent_decision": {"decision_type": "Routed", "statement": statement,
+                                            "node_id": decision["id"]}}}
 
 
 def _repo_reader(connection: Connection, settings: Any, project_id: str, actor: str) -> rule_scan.Reader:
@@ -599,13 +636,15 @@ def run_lane_confirmation(
         "ruled_out": f"Ruled out: {cited} — {reason}",
         "cannot_verify": f"Cannot verify: {cited} — {reason}",
     }[verdict]
-    context_graph.write_agent_decision(
+    decision = context_graph.write_agent_decision(
         connection, project_id, step_id=step_id, run_id=run_id, decision_type=decision_type,
         statement=statement, policy_version="", workflow_version="",
         agent_fingerprint="deterministic", actor_ref=actor_ref)
     return {"capability": "lane_confirmation", "tool": None, "status": "succeeded",
             "verdict": verdict, "confirmed": confirmed, "cited_node_id": citation or None,
             "reason": reason, "note": statement, "ran_as": _ran_as("lane_agent"),
+            "produced": {"agent_decision": {"decision_type": decision_type,
+                                            "statement": statement, "node_id": decision["id"]}},
             "learned": _learned(run_id, step_id, kind="fact",
                                 title=f"Lane verdict: {verdict.replace('_', ' ')}",
                                 statement=statement,
@@ -695,6 +734,8 @@ def run_remediation_package(
     return {"capability": "remediation_package", "tool": None, "status": "succeeded",
             "remediation_package_id": package_id, "owner_team": owner_team,
             "note": f"{title} — ready for {owner_team}'s approver.",
+            "produced": {"remediation_package": {"statement": change_brief,
+                                                 "node_id": package_id}},
             "ran_as": _ran_as("remediation_advisor"),
             "learned": _learned(run_id, step_id, kind="decision", title=title,
                                 statement=change_brief, confidence=0.6),

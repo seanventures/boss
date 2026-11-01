@@ -170,6 +170,16 @@ def test_p1_the_real_lanes_for_each_body_is_claimable(connection):
     lanes = next(s for s in steps if s["id"] == "lanes")
     assert lanes["kind"] == "for_each" and lanes["body"] == "lane_confirmation"
 
+    # The steps' contracts name the banking-regulatory pack's kinds (compliance_case, clause…),
+    # which a project grants only once it has set that pack.
+    from boss_engine.services.knowledge import ontology_packs
+    ontology_packs.set_project_pack(c, project_id=project, pack_id="banking-regulatory")
+
+    def decided(decision_type, **more):
+        # Each step's contract requires its writes; the engine persists these itself.
+        return {"produced": {"agent_decision": {"decision_type": decision_type,
+                                                "statement": decision_type}, **more}}
+
     run_id = _publish_and_start(
         c, project, steps, entry["steps"][0]["id"] if entry["steps"] else "clause_intake",
         {"document_id": "doc_1", "subject_id": "kgn_subject_1", "directive": "check"})
@@ -178,12 +188,15 @@ def test_p1_the_real_lanes_for_each_body_is_claimable(connection):
     # capability logic does — we only assert that once `lanes` has an item to fan out,
     # `lane_confirmation` becomes claimable, which is exactly what the dry run showed broken
     # (it sat `ready` for 30+ minutes, never leased).
-    _finish(c, project, run_id, "clause_intake")
-    _finish(c, project, run_id, "context_enrichment", {"missing_kinds": []})
-    _finish(c, project, run_id, "historical_pattern", {"matched": []})
-    _finish(c, project, run_id, "compliance_assessment")
+    _finish(c, project, run_id, "clause_intake",
+            decided("ClauseIntake", compliance_case={"statement": "case opened"}))
+    _finish(c, project, run_id, "context_enrichment",
+            {"missing_kinds": [], **decided("ContextAssembled")})
+    _finish(c, project, run_id, "historical_pattern",
+            {"matched": [], **decided("HistoricalPatternMatched")})
+    _finish(c, project, run_id, "compliance_assessment", decided("Assessment"))
     _finish(c, project, run_id, "compliance_orchestration",
-           {"finding_families": ["payment_allocation"]})
+           {"finding_families": ["payment_allocation"], **decided("Routed")})
 
     lane_claim = _claim(c, project, run_id)
     assert lane_claim is not None, (

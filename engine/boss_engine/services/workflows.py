@@ -4769,6 +4769,8 @@ def advance_run(connection: Connection, project_id: str, run_id: str) -> dict[st
                 output: dict[str, Any] = {"woke_at": now_utc().isoformat()}
             elif step["step_kind"] == "decision":
                 output = {"decision_id": step["decision_id"], "outcome": "approved"}
+                _record_gate_answer(connection, run_id, step_id,
+                                    decision_id=str(step["decision_id"]), outcome="approved")
             else:
                 output = {
                     "child_workflow_run_id": step["child_workflow_run_id"],
@@ -5325,6 +5327,7 @@ def reject_gate(
     a refused approval: skipping would turn the person's no into a yes
     (workflow_run_actions.require, skip_failed_step).
     """
+    _record_gate_answer(connection, run_id, step_id, decision_id=decision_id, outcome=outcome)
     _refuse_step(connection, run_id, step_id, iteration, decision_id=decision_id,
                  outcome=outcome)
     row = connection.execute(
@@ -6136,6 +6139,71 @@ def park_step_awaiting(
     return _serialize_step(updated)
 
 
+def _step_fingerprint(connection: Connection, project_id: str, run_id: str, step_id: str,
+                      contract: Any) -> str:
+    """Which agent wrote a step's Context Graph nodes: `deterministic` for a step whose contract
+    says `llm: none`; otherwise the fingerprint of the act signed for THIS step, falling back to
+    the run's first act (an act may be signed after the step completes)."""
+    if str(getattr(contract, "llm", "") or "").strip().lower() == "none":
+        return "deterministic"
+    found = connection.execute(
+        text("SELECT fingerprint FROM agent_acts WHERE project_id = :p "
+             "AND workflow_run_id = :r AND step_id = :s AND fingerprint IS NOT NULL "
+             "ORDER BY started_at DESC LIMIT 1"),
+        {"p": project_id, "r": run_id, "s": step_id}).scalar()
+    if found:
+        return str(found)
+    from .knowledge import context_graph
+
+    return str((context_graph.project_agent_run(connection, project_id, run_id) or {})
+               .get("fingerprint") or "")
+
+
+def _record_gate_answer(connection: Connection, run_id: str, step_id: str, *,
+                        decision_id: str, outcome: str) -> None:
+    """A gate step whose contract declares an `agent_decision` write records the person's answer
+    in the Context Graph — AgentDecision(Approved|Rejected), who answered and their note — with
+    the same provenance as every other step's write. A gate without a contract is untouched."""
+    spec = _run_spec(connection, run_id)
+    template = _step_map(spec).get(step_id) or {}
+    contract_raw = template.get("contract")
+    # Only a decision step's contract is about the person's answer; a capability step held at
+    # its approval declares what its WORK writes, which a refusal never produced.
+    if not contract_raw or template.get("kind") != "decision":
+        return
+    from .knowledge import context_graph
+    from .knowledge.step_contracts import decision_types, parse_contract
+
+    contract = parse_contract(step_id, contract_raw)
+    spec_write = next((w for w in contract.writes if w.kind == "agent_decision"), None)
+    if spec_write is None:
+        return
+    run = _run_row(connection, run_id)
+    decision = connection.execute(
+        text("SELECT approved_by, resolution_note, question FROM decisions WHERE id = :d"),
+        {"d": decision_id}).mappings().first() or {}
+    approved = outcome == "approved"
+    wanted = "Approved" if approved else "Rejected"
+    allowed = decision_types(spec_write)
+    if allowed and wanted not in allowed:
+        return
+    decision_type = wanted
+    who = str(decision.get("approved_by") or "a person")
+    note = str(decision.get("resolution_note") or "").strip()
+    statement = (f"{'Approved' if approved else 'Rejected'} by {who}"
+                 f"{': ' + note if note else ''} — {decision.get('question') or step_id}")[:1500]
+    context_graph.persist_contract_writes(
+        connection, run["project_id"], run_id=run_id, step_id=step_id, contract=contract,
+        produced={"agent_decision": {"decision_type": decision_type, "statement": statement}},
+        provenance={
+            "policy_version": str((run.get("context") or {}).get("policy_version")
+                                  or spec.get("version") or ""),
+            "workflow_version": str(run.get("workflow_version_id") or spec.get("version") or ""),
+            "agent_fingerprint": f"person:{who}",
+            "actor_ref": f"person:{who}",
+        })
+
+
 def complete_step(
     connection: Connection,
     *,
@@ -6217,8 +6285,8 @@ def complete_step(
         # Context Graph itself, rather than trusting the model to have called a tool. A required
         # write that never landed is the AG-1 "chat text only, nothing written" miss
         # [L:kgn_a7426dae68a24130a1b2]; it does not complete the step.
-        fingerprint = (context_graph.project_agent_run(
-            connection, project_id, row["workflow_run_id"]) or {}).get("fingerprint")
+        fingerprint = _step_fingerprint(connection, project_id, row["workflow_run_id"],
+                                        row["step_id"], contract)
         provenance = {
             "policy_version": str((run.get("context") or {}).get("policy_version")
                                   or spec.get("version") or ""),
@@ -6226,10 +6294,14 @@ def complete_step(
             "agent_fingerprint": str(fingerprint or ""),
             "actor_ref": f"agent:{template.get('captain') or row['step_id']}",
         }
-        context_graph.persist_contract_writes(
+        landed = context_graph.persist_contract_writes(
             connection, project_id, run_id=row["workflow_run_id"], step_id=row["step_id"],
             contract=contract, produced=produced, provenance=provenance)
-        missing = unsatisfied_required(contract, produced)
+        # Said is not done: a required kind the step claimed (a node id) but that never landed
+        # as a real row of that kind is as missing as one it never mentioned.
+        missing = list(dict.fromkeys([
+            *unsatisfied_required(contract, produced),
+            *(w.kind for w in contract.writes if w.required and w.kind not in landed)]))
         if missing:
             if row["attempt"] + 1 < row["max_attempts"]:
                 # ONE REPAIR ROUND: back to the queue once, with the missing kind named.

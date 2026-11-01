@@ -293,6 +293,230 @@ def _increments(count: int) -> list[dict[str, Any]]:
     return steps
 
 
+def _reads(*kinds: str) -> list[dict[str, str]]:
+    return [{"kind": k} for k in kinds]
+
+
+def _writes(*specs: tuple) -> list[dict[str, Any]]:
+    """`("agent_decision", True, "Assessment")` → a contract write: kind, required, decision_type."""
+    out = []
+    for kind, required, *rest in specs:
+        entry: dict[str, Any] = {"kind": kind, "required": bool(required)}
+        if rest and rest[0]:
+            entry["decision_type"] = rest[0]
+        out.append(entry)
+    return out
+
+
+_ITSM_CALLS = [{"mcp": "itsm", "tool": "get_incident"}, {"mcp": "itsm", "tool": "list_incidents"}]
+
+# STEP CONTRACTS (design §4.1, §5.1): what each stage of the KG investigation template reads
+# from the Knowledge Graph, must write to the Context Graph, and calls. Core kinds only, so the
+# template publishes into any project. A `required` write is one the step ALWAYS produces — the
+# engine fails a step that does not (one repair round first); placeholders (`task` stages a
+# bank fills with its own agent) declare their slot's writes as optional.
+KG_TEMPLATE_CONTRACTS: dict[str, dict[str, Any]] = {
+    "intake": {
+        "trigger": "a person or monitoring opens a case on a subject node",
+        "reads": _reads("incident", "rule"),
+        "writes": _writes(("agent_decision", False, "CaseOpened")),
+        "handoff": {"to": "evidence_loop", "carries": ["subject_id"]},
+        "human_review": "none",
+        "decisions": ["placeholder: an instance names the agent that opens or attaches the case"],
+    },
+    "context_enrichment": {
+        "trigger": "inside evidence_loop, after intake; at most 2 rounds",
+        "reads": _reads("rule", "symbol", "file", "service", "datastore", "team", "incident"),
+        "writes": _writes(("agent_decision", True, "ContextAssembled"), ("coverage_gap", False)),
+        "handoff": {"to": "historical_pattern", "carries": ["collected", "missing_kinds"]},
+        "human_review": "none; what the hop cap could not reach is a CoverageGap and the run "
+                        "continues",
+        "policy": {"max_hops": 2},
+        "llm": "none",
+        "decisions": ["facts only: a fixed graph traversal, $0 and repeatable",
+                      "missing expected kinds re-run the loop, at most twice"],
+    },
+    "evidence_loop": {
+        "trigger": "after intake; re-runs context_enrichment while kinds are missing",
+        "handoff": {"to": "historical_pattern", "carries": ["collected"]},
+        "policy": {"max_iterations": 2},
+        "llm": "none",
+        "decisions": ["bounded: never more than 2 enrichment rounds"],
+    },
+    "historical_pattern": {
+        "trigger": "after the evidence loop",
+        "reads": _reads("incident", "precedent", "rule", "symbol"),
+        "writes": _writes(("agent_decision", True, "HistoricalPatternMatched"),
+                          ("incident", False)),
+        "calls": _ITSM_CALLS,
+        "handoff": {"to": "analysis", "carries": ["matched"]},
+        "human_review": "none",
+        "policy": {"max_hops": 2},
+        "llm": "none",
+        "decisions": ["a match shares a link with the subject; correlates_with is upserted, "
+                      "never duplicated",
+                      "an ITSM ticket naming the subject's code becomes an incident node"],
+    },
+    "analysis": {
+        "trigger": "after historical_pattern",
+        "reads": _reads("rule", "symbol", "incident", "precedent", "agent_decision"),
+        "writes": _writes(("agent_decision", False, "Assessment")),
+        "handoff": {"to": "orchestrator", "carries": ["findings", "finding_families"]},
+        "human_review": "graph changes are proposals that go to review",
+        "decisions": ["cites the evidence for each finding, with a confidence"],
+    },
+    "orchestrator": {
+        "trigger": "after analysis",
+        "reads": _reads("agent_decision"),
+        "writes": _writes(("agent_decision", False, "Routed")),
+        "handoff": {"to": "lanes", "carries": ["finding_families"]},
+        "human_review": "none",
+        "decisions": ["routes each finding family to its own lane"],
+    },
+    "lanes": {
+        "trigger": "one remediation_advisor per finding family",
+        "handoff": {"to": "human_approval", "carries": ["results"]},
+        "policy": {"max_items": 25, "concurrency": 3},
+        "llm": "none",
+    },
+    "remediation_advisor": {
+        "trigger": "one per finding family (lanes)",
+        "reads": _reads("rule", "symbol", "team", "agent_decision"),
+        "writes": _writes(("agent_decision", False, "RemediationProposed")),
+        "handoff": {"to": "human_approval", "carries": ["remediation"]},
+        "human_review": "a person approves at human_approval",
+    },
+    "human_approval": {
+        "trigger": "remediations are ready",
+        "writes": _writes(("agent_decision", True, "Approved|Rejected")),
+        "handoff": {"to": "execution", "carries": ["decision_id"]},
+        "human_review": "the approver approves or rejects; a rejection stops the run",
+        "llm": "none",
+        "decisions": ["nothing executes before a person approves"],
+    },
+    "execution": {
+        "trigger": "after approval",
+        "handoff": {"to": "closure", "carries": ["execution_state"]},
+        "human_review": "runs under the approver's grant; a different person merges",
+    },
+    "closure": {
+        "trigger": "after execution",
+        "reads": _reads("incident", "precedent"),
+        "writes": _writes(("precedent", False), ("agent_decision", False, "PrecedentRecorded")),
+        "handoff": {"to": "the next run's historical_pattern", "carries": ["precedent_id"]},
+        "human_review": "none",
+        "decisions": ["records the resolution as a precedent the next run finds"],
+    },
+}
+
+# The regulatory instance (design §5.3, NorthPeak Lending on Apache Fineract). Every required
+# write here is one the step's code really persists and names in its `produced` output — the
+# engine verifies the row and stamps run/step/version/fingerprint on it.
+REGULATORY_CONTRACTS: dict[str, dict[str, Any]] = {
+    "clause_intake": {
+        "trigger": "a run starts on a regulation document (document_id) or a clause (subject_id)",
+        "reads": _reads("document", "clause", "regulation"),
+        "writes": _writes(("compliance_case", True), ("agent_decision", True, "ClauseIntake")),
+        "handoff": {"to": "evidence_loop", "carries": ["compliance_case_ids", "subject_id"]},
+        "human_review": "none; the Compliance Officer reviews the outcome at human_approval",
+        "llm": "none",
+        "decisions": ["one ComplianceCase per clause of the document; with none, one for the "
+                      "subject",
+                      "re-opening an open case is idempotent (keyed by clause)"],
+    },
+    "evidence_loop": KG_TEMPLATE_CONTRACTS["evidence_loop"],
+    "context_enrichment": {
+        **KG_TEMPLATE_CONTRACTS["context_enrichment"],
+        "trigger": "inside evidence_loop, after clause_intake; at most 2 rounds",
+        "reads": _reads("clause", "rule", "symbol", "file", "system", "owner",
+                        "regulatory_report"),
+    },
+    "historical_pattern": {
+        **KG_TEMPLATE_CONTRACTS["historical_pattern"],
+        "handoff": {"to": "compliance_assessment", "carries": ["matched"]},
+    },
+    "compliance_assessment": {
+        "trigger": "after historical_pattern",
+        "reads": _reads("clause", "rule", "symbol", "incident", "precedent"),
+        "writes": _writes(("agent_decision", True, "Assessment")),
+        "handoff": {"to": "compliance_orchestration",
+                    "carries": ["assessment", "confidence", "citation", "cited_incident"]},
+        "human_review": "implemented_by / gap edges are proposals that go to review",
+        "decisions": ["implemented, partly implemented or gap, with a confidence",
+                      "cites only a candidate node it was offered; anything else is a gap",
+                      "a correlated incident's detail (INC-2088) comes from ITSM, never invented"],
+    },
+    "compliance_orchestration": {
+        "trigger": "after compliance_assessment",
+        "reads": _reads("agent_decision", "rule", "symbol"),
+        "writes": _writes(("agent_decision", True, "Routed")),
+        "handoff": {"to": "lanes", "carries": ["finding_families"]},
+        "human_review": "none",
+        "decisions": ["families: payment_crediting, payment_allocation, prepayment — the "
+                      "Pipeline Orchestrator's judgement, never a keyword match",
+                      "no fitting family starts no lane"],
+    },
+    "lanes": {
+        **KG_TEMPLATE_CONTRACTS["lanes"],
+        "trigger": "one lane_confirmation per finding family",
+        "handoff": {"to": "remediation_package", "carries": ["results"]},
+    },
+    "lane_confirmation": {
+        "trigger": "one per finding family (lanes)",
+        "reads": _reads("clause", "rule", "symbol", "file", "incident"),
+        "writes": _writes(("agent_decision", True, "Confirmed|RuledOut|CannotVerify")),
+        "handoff": {"to": "remediation_package", "carries": ["verdict", "reason",
+                                                             "cited_node_id"]},
+        "human_review": "none",
+        "policy": {"max_cited_symbols": 5},
+        "decisions": ["judged against the current source lines, read-only",
+                      "CannotVerify is forced by the code: no citation, no connected symbol, "
+                      "or unreadable source",
+                      "only a successful code read may rule a finding out"],
+    },
+    "remediation_package": {
+        "trigger": "after the lanes",
+        "reads": _reads("clause", "rule", "symbol", "owner", "incident", "agent_decision"),
+        "writes": _writes(("remediation_package", True)),
+        "handoff": {"to": "human_approval",
+                    "carries": ["remediation_package_id", "owner_team"]},
+        "human_review": "the Compliance Officer approves it at human_approval",
+        "decisions": ["a change brief, a test, an owner team and an approver role",
+                      "closes the gap the assessment states, in the code the lane read"],
+    },
+    "human_approval": {
+        **KG_TEMPLATE_CONTRACTS["human_approval"],
+        "trigger": "a remediation package is ready",
+        "reads": _reads("remediation_package", "compliance_case"),
+        "human_review": "the Compliance Officer approves or rejects; a rejection stops the run",
+    },
+    "execution": {
+        **KG_TEMPLATE_CONTRACTS["execution"],
+        "reads": _reads("remediation_package"),
+        "handoff": {"to": "compliance_closure", "carries": ["execution_state"]},
+    },
+    "compliance_closure": {
+        "trigger": "after execution (or approval, where execution is out of the workflow)",
+        "reads": _reads("compliance_case", "incident", "precedent"),
+        "writes": _writes(("precedent", True), ("agent_decision", True, "PrecedentRecorded")),
+        "handoff": {"to": "the next run's historical_pattern", "carries": ["precedent_id"]},
+        "human_review": "none",
+        "llm": "none",
+        "decisions": ["the precedent links to what the subject was connected to, so the next "
+                      "run's Historical Pattern finds it",
+                      "a reused edge back to every incident/precedent this run correlated"],
+    },
+}
+
+
+def with_contracts(steps: list[dict[str, Any]], contracts: dict[str, dict[str, Any]]
+                   ) -> list[dict[str, Any]]:
+    """Each step with its declared contract — a step that already carries one keeps it (an
+    outside agent's own contract, an operator's edit)."""
+    return [({**s, "contract": contracts[s["id"]]}
+             if s.get("id") in contracts and not s.get("contract") else s) for s in steps]
+
+
 #: The catalogue. `key` is stable and is what a mapping points at.
 # WHY THERE IS NO `review` OR `test` STEP IN ANY OF THESE.
 #
@@ -1074,8 +1298,7 @@ CATALOGUE: list[dict[str, Any]] = [
             {
                 "id": "historical_pattern", "kind": "deterministic",
                 "binding": {"inputs": {"subject_id": _in("subject_id")}},
-                "contract": {"calls": [{"mcp": "itsm", "tool": "get_incident"},
-                                       {"mcp": "itsm", "tool": "list_incidents"}]},
+                # Its contract (ITSM calls included) is REGULATORY_CONTRACTS', applied below.
                 "next": ["compliance_assessment"],
             },
             _step("compliance_assessment", "compliance_assessment",
@@ -1126,6 +1349,31 @@ def _staff_builds_by_app_kind() -> None:
 
 
 _staff_builds_by_app_kind()
+
+
+#: Which catalogue entries carry which step contracts (design §4.1): every step of the KG
+#: investigation template and of its regulatory instance declares its footprint.
+CONTRACTS_BY_ENTRY: dict[str, dict[str, dict[str, Any]]] = {
+    "kg_investigation_pipeline": KG_TEMPLATE_CONTRACTS,
+    "banking_regulatory_compliance": REGULATORY_CONTRACTS,
+}
+
+#: The ontology pack an entry's contracts name kinds from. Seeding skips such an entry in a
+#: project that has not set the pack (its kinds would be refused at publish) instead of failing
+#: the whole catalogue; setting the pack seeds it (knowledge_project_tools._set_ontology_pack).
+ONTOLOGY_PACK_BY_ENTRY: dict[str, str] = {
+    "banking_regulatory_compliance": "banking-regulatory",
+}
+
+
+def _declare_contracts() -> None:
+    for entry in CATALOGUE:
+        contracts = CONTRACTS_BY_ENTRY.get(entry["key"])
+        if contracts:
+            entry["steps"] = with_contracts(entry["steps"], contracts)
+
+
+_declare_contracts()
 
 
 def _two_pass_builds() -> None:
@@ -1594,8 +1842,19 @@ def catalogue_summary(prd_auto_approve: Optional[bool] = None) -> list[dict[str,
     return out
 
 
-def seed(connection: Connection, project_id: str, actor: str = "boss") -> dict[str, Any]:
-    """Install the catalogue into a project. Idempotent.
+def seed_unlocked_by_pack(connection: Connection, project_id: str, pack_id: str,
+                          actor: str = "boss") -> dict[str, Any]:
+    """Install the catalogue entries a just-set ontology pack unlocks (their step contracts name
+    its kinds), and nothing else. Idempotent."""
+    keys = frozenset(k for k, p in ONTOLOGY_PACK_BY_ENTRY.items() if p == pack_id)
+    if not keys:
+        return {"project_id": project_id, "installed": [], "count": 0, "mapped": []}
+    return seed(connection, project_id, actor=actor, only=keys)
+
+
+def seed(connection: Connection, project_id: str, actor: str = "boss",
+         only: Optional[frozenset[str]] = None) -> dict[str, Any]:
+    """Install the catalogue into a project (or only the `only` entries). Idempotent.
 
     Re-running publishes a new version ONLY when the spec actually changed — the runtime keys
     versions by content hash, so an unchanged catalogue re-seeds to the same version rather
@@ -1609,6 +1868,13 @@ def seed(connection: Connection, project_id: str, actor: str = "boss") -> dict[s
         text("SELECT role_key FROM roles WHERE project_id = :p"), {"p": project_id},
     ).scalars().all())
     for entry in CATALOGUE:
+        if only is not None and entry["key"] not in only:
+            continue
+        needs_pack = ONTOLOGY_PACK_BY_ENTRY.get(entry["key"])
+        if needs_pack and not _has_pack(connection, project_id, needs_pack):
+            installed.append({"key": entry["key"], "version_id": None, "version": None,
+                              "skipped": f"needs the '{needs_pack}' ontology pack"})
+            continue
         existing = connection.execute(
             text(
                 "SELECT id FROM workflow_definitions "
@@ -1643,9 +1909,16 @@ def seed(connection: Connection, project_id: str, actor: str = "boss") -> dict[s
         except workflows.WorkflowConflictError:
             # Same content hash: already published. Nothing to do, and not an error.
             installed.append({"key": entry["key"], "version_id": None, "version": None})
-    mapped = _seed_default_mappings(connection, project_id, actor=actor)
+    mapped = _seed_default_mappings(connection, project_id, actor=actor) if only is None else []
     return {"project_id": project_id, "installed": installed, "count": len(installed),
             "mapped": mapped}
+
+
+def _has_pack(connection: Connection, project_id: str, pack_id: str) -> bool:
+    from .knowledge.ontology_packs import get_project_pack
+
+    pack = get_project_pack(connection, project_id=project_id)
+    return pack is not None and pack.pack_id == pack_id
 
 
 def _staffed_for(entry: dict[str, Any], present: frozenset[str]) -> dict[str, Any]:
