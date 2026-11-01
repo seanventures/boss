@@ -25442,6 +25442,12 @@ def tick_workflow_schedules(payload: open_bodies.WorkflowSchedulesTickBody) -> d
     return {"started": started, "count": len(started)}
 
 
+def graph_step_descriptions() -> dict:
+    from boss_engine.services.knowledge.graph_steps import DESCRIPTIONS
+
+    return {key: dict(value) for key, value in DESCRIPTIONS.items()}
+
+
 @app.get("/v1/delivery-workflows/capabilities")
 @permit(P.WORKFLOW_READ, scope=Scope.project_or_org(query="project_id"))
 def list_delivery_capabilities(project_id: str | None = None) -> dict:
@@ -25463,7 +25469,10 @@ def list_delivery_capabilities(project_id: str | None = None) -> dict:
     # Agents page was never offered. `human` is offered for gates only.
     roster: frozenset[str] = frozenset()
     agents: list[dict] = []
+    role_names: dict[str, dict[str, str]] = {}
     if project_id and database_is_reachable(engine):
+        from boss_engine.services.knowledge import pipeline_trace
+
         from boss_engine.services.workflows import project_roster
 
         with begin(engine) as connection:
@@ -25471,6 +25480,7 @@ def list_delivery_capabilities(project_id: str | None = None) -> dict:
                       if s["enabled"]]
             roster = project_roster(connection, project_id)
             agents = step_agents.project_agents(connection, project_id)
+            role_names = pipeline_trace.role_names(connection, project_id, agents)
 
     return {
         "capabilities": palette(),
@@ -25488,6 +25498,13 @@ def list_delivery_capabilities(project_id: str | None = None) -> dict:
         "agents": [{"role_key": a["role_key"], "name": a["name"], "holds": a["holds"],
                     "mcp": a.get("mcp") or []}
                    for a in agents],
+        # EVERY ROLE A STAGE CAN NAME, by key: display name and callsign. Not a list of who a
+        # step can be given to (that is `agents`): the Pipeline view names the role agent a
+        # capability's work runs as (`role_agent`) and a gate's approver role, even when the
+        # project has not installed that role.
+        "role_names": role_names,
+        # What each deterministic graph step is (it binds no capability, so it had no name).
+        "graph_steps": graph_step_descriptions(),
         "human_role": step_agents.HUMAN,
         "manual_approval_risk_floor": MANUAL_APPROVAL_RISK_FLOOR,
         "note": (
@@ -28009,6 +28026,29 @@ def get_workflow_run(run_id: str, project_id: str) -> WorkflowRunDetail:
             )
         except workflow_runtime.WorkflowError as error:
             raise_workflow_error(error)
+
+
+@app.get("/v1/workflow-runs/{run_id}/context-trace")
+@permit(P.WORKFLOW_RUN_READ, scope=Scope.project(query="project_id"))
+def get_workflow_run_context_trace(run_id: str, project_id: str) -> dict:
+    """What each step of this run actually read and wrote in the Knowledge and Context Graphs
+    (§4.7 "Show the last run"): per step, its latest status and the node kinds it read and
+    wrote, from the graph's own record — never from the step's input and output keys.
+    Read-only, and only for a run of this project."""
+    from boss_engine.services.knowledge import pipeline_trace
+
+    with begin(engine) as connection:
+        stored_project = connection.execute(
+            text("SELECT project_id FROM workflow_runs WHERE id = :run_id"),
+            {"run_id": run_id},
+        ).scalar()
+        if stored_project is None or project_id != stored_project:
+            raise HTTPException(status_code=404, detail="workflow run not found")
+        require_project_reader(connection, stored_project)
+        trace = pipeline_trace.run_trace(connection, project_id, run_id)
+    if trace is None:
+        raise HTTPException(status_code=404, detail="workflow run not found")
+    return trace
 
 
 @app.post("/v1/workflow-runs/{run_id}/advance", response_model=WorkflowRunDetail)

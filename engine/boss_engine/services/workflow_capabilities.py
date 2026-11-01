@@ -106,6 +106,12 @@ class Capability:
     #: Undeclared, the consent never asked for code_task:retry and every More tests pass was
     #: refused under enforce (wfr_9575c86ab4a74defa0d2).
     calls: tuple[str, ...] = ()
+    #: THE ROLE AGENT WHOSE JUDGEMENT THE STEP'S WORK IS, when that is not the captain. The
+    #: banking regulatory steps answer to a captain (who is asked about the step) but the work
+    #: itself is a role agent's prompt — Compliance Analyst, Lane Agent, Remediation Advisor —
+    #: recorded on the step's output as `ran_as`. The Pipeline view names this agent on the
+    #: stage before any run has happened, so it must travel with the capability.
+    role_agent: str = ""
 
 
 def _cap(**kwargs: Any) -> Capability:
@@ -855,6 +861,7 @@ CAPABILITIES: dict[str, Capability] = {
         ),
         _cap(
             key="compliance_assessment",
+            role_agent="compliance_analyst",
             family="research",
             captain="security_reviewer",
             label="Compliance assessment",
@@ -871,6 +878,7 @@ CAPABILITIES: dict[str, Capability] = {
         ),
         _cap(
             key="compliance_orchestration",
+            role_agent="pipeline_orchestrator",
             family="research",
             captain="program_manager",
             label="Compliance orchestration",
@@ -883,6 +891,7 @@ CAPABILITIES: dict[str, Capability] = {
         ),
         _cap(
             key="lane_confirmation",
+            role_agent="lane_agent",
             family="research",
             captain="chief_architect",
             label="Lane confirmation",
@@ -897,6 +906,7 @@ CAPABILITIES: dict[str, Capability] = {
         ),
         _cap(
             key="remediation_package",
+            role_agent="remediation_advisor",
             family="research",
             captain="software_engineer",
             label="Remediation package",
@@ -953,6 +963,8 @@ def palette() -> list[dict[str, Any]]:
             # Who answers for this step. Travels with the capability so the console does not
             # keep a second copy of the mapping to drift from this one.
             "captain": c.captain,
+            # The role agent whose judgement the work is, when not the captain (Pipeline view).
+            "role_agent": c.role_agent,
             # What the builder must show as fixed rather than as a choice.
             "approval_forced_manual": c.risk_tier >= MANUAL_APPROVAL_RISK_FLOOR,
             # Whether the run actually waits for a PERSON here — false for the PRD approval,

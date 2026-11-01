@@ -26,6 +26,27 @@ _STORE = PostgresKnowledgeStore()
 #: earlier investigation's Closure wrote.
 _PATTERN_KINDS = frozenset({"incident", "precedent"})
 
+#: WHAT EACH DETERMINISTIC STEP DOES, in the words a reader of the Pipeline view needs: a
+#: `deterministic` step binds no capability, so without this it had no name and no summary
+#: anywhere in the console. Keyed like `workflow_capability_runner.GRAPH_STEP_EXECUTORS`.
+DESCRIPTIONS: dict[str, dict[str, str]] = {
+    "context_enrichment": {
+        "label": "Context enrichment",
+        "summary": "Collects the rules, code, systems, owners and reports connected to the case "
+                   "within a hop cap; what it cannot reach is recorded as a coverage gap.",
+    },
+    "historical_pattern": {
+        "label": "Historical pattern",
+        "summary": "Finds prior incidents and precedents that share the case's links, and asks "
+                   "the ITSM system for matching tickets.",
+    },
+    "closure": {
+        "label": "Closure",
+        "summary": "Records the investigation's resolution as a precedent, so the next run's "
+                   "Historical pattern finds it.",
+    },
+}
+
 #: Depth `traverse` is extended to when a hop cap misses an expected kind, so the gap can say
 #: whether it was never there or just beyond the cap.
 _EXTENDED_HOPS = 5
