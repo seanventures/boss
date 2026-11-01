@@ -10,6 +10,13 @@ description: >
   remediation packages and rule proposals). Mirrors tools/dq_sample/data.py exactly; a test
   keeps the two equal.
 status: active
+# The Context Graph schema these kinds form (graph_versions.cg_version): the bands read
+# "Context Graph v4", the version the consultant's agent designs were reviewed against.
+context_version: 4
+# The Knowledge Graph's version is not declared here: it is 1 + the approved change sets in
+# the project (graph_versions.kg_version), so it moves as people approve rules and links. The
+# consultant's designs cite KG v16/v17 (Applied in KG v16 / CG v4) as their reference.
+knowledge_graph_reference: "KG v17"
 # Domain colours follow the consultant's screens: teal agent infrastructure and people, amber
 # systems and data, red rules and thresholds, green governance (CDEs), purple lineage, blue
 # regulatory reporting, slate known issues, olive the calendar, indigo the Context Graph.

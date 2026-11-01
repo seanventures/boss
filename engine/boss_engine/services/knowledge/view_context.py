@@ -352,6 +352,19 @@ def load_trace(connection: Connection, project_id: str, withheld: Iterable[str] 
             for ref in ids & live:
                 if ref != nid and not (nid in cases and ref == _subject_of(cases[nid])):
                     add(nid, ref, "cites", 1)
+    # The STORED Context Graph edges (context_graph.link_step_decisions): what a decision
+    # consulted ("consulted"), cited ("cites") and is about ("about") — real kg_edges rows.
+    decision_ids = sorted(nid for nid, r in trace.nodes.items() if r["kind"] == "agent_decision")
+    if decision_ids:
+        for src, dst, kind, how in connection.execute(text(
+                "SELECT e.src_id, e.dst_id, e.kind, e.attrs->>'how' FROM kg_edges e "
+                "JOIN kg_nodes d ON d.id = e.dst_id AND d.valid_to IS NULL "
+                "WHERE e.project_id = :p AND e.valid_to IS NULL AND e.src_id = ANY(:s) "
+                "AND e.kind IN ('consulted', 'about') AND e.attrs->>'source' = 'context_graph'"),
+                {"p": project_id, "s": decision_ids}).all():
+            if dst in cases and kind == "about":
+                continue  # the case file already draws its decisions ("decided")
+            add(src, dst, "cites" if how == "cited" else kind, 1)
     # A precedent a run produced (keyed by the run) hangs on it, like its decisions.
     if run_ids:
         for pid, pkey, pattrs in connection.execute(text(

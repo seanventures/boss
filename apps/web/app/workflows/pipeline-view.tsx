@@ -12,11 +12,12 @@
 import React from "react";
 
 import {
-  contractSummary, kindLabel, STATUS_LABEL, type PipelineStage, type StageStatus,
+  contractSummary, DESIGN_LABEL, kindKey, kindLabel, STATUS_LABEL, type DesignsInfo, type PipelineStage,
+  type StageStatus,
 } from "../../lib/pipeline-model";
 import { localWith } from "../../lib/local-time";
-import type { RunContext } from "../../lib/workflow-api";
-import { AgentContractView } from "./editor/agent-contract-view";
+import type { DesignAction, RunContext } from "../../lib/workflow-api";
+import { AgentContractView, DesignPill } from "./editor/agent-contract-view";
 
 /** A connected outside agent the captain switcher can offer (KG P6b console). */
 export type OutsideAgentOption = { id: string; display_name: string; endpoint_host: string };
@@ -94,16 +95,18 @@ function StageCard({ stage, selected, onSelect, outsideAgents, onAssignCaptain }
       data-testid={`stage-${stage.id}`}
       data-selected={selected ? "true" : undefined}
       data-tone={stage.runsAs.tone}
+      data-design={stage.design.status}
+      data-placement={stage.placement}
       aria-pressed={selected}
-      aria-label={`Stage ${stage.number ?? ""} ${stage.title}, ${stage.runsAs.label}, ${STATUS_LABEL[stage.status]}`}
+      aria-label={`${stage.number ? `Stage ${stage.number} ` : ""}${stage.title}, ${stage.runsAs.label}, design ${DESIGN_LABEL[stage.design.status]}, last run ${STATUS_LABEL[stage.status]}`}
       onClick={() => onSelect(stage.id)}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(stage.id); }
       }}
     >
       <div className="pl-card-top">
-        <span className="pl-num" aria-hidden>{stage.number}</span>
-        <StatusPill status={stage.status} />
+        {stage.number ? <span className="pl-num" aria-hidden>{stage.number}</span> : <span className="pl-num pl-num-none" aria-hidden>{stage.placement === "shared" ? "S" : "·"}</span>}
+        <DesignPill status={stage.design.status} testid={`stage-design-${stage.id}`} />
       </div>
       <div className="pl-card-title">{stage.title}</div>
       <RunsAsChip stage={stage} />
@@ -112,6 +115,10 @@ function StageCard({ stage, selected, onSelect, outsideAgents, onAssignCaptain }
            data-empty={summary ? undefined : "true"}
            title={stage.contract ? contractTip(stage.contract) : undefined}>
         {summary ?? "No contract declared"}
+        {stage.contract?.steps?.length ? ` · ${stage.contract.steps.length} steps` : ""}
+      </div>
+      <div className="pl-card-run" title="How this stage went on the last run">
+        <span className="pl-faint">Last run</span> <StatusPill status={stage.status} />
       </div>
       {switchable ? <CaptainSwitcher stage={stage} outsideAgents={outsideAgents} onAssign={onAssignCaptain!} /> : null}
     </div>
@@ -160,6 +167,14 @@ function Frame({ frame, members, children }: {
   );
 }
 
+/** "Agent Reference v0.1 · under revision", "—" when the design names none. */
+function referenceWords(stage: PipelineStage): string {
+  const ref = stage.design.reference;
+  if (!ref) return "—";
+  return stage.design.underRevision || (stage.design.status === "in_review" && stage.design.locked?.reference)
+    ? `${ref} · under revision` : ref;
+}
+
 function formatWhen(iso: string | null): string {
   return localWith(iso, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 }
@@ -169,8 +184,23 @@ const RUN_WORD: Record<string, string> = {
   queued: "Queued", failed: "Failed", cancelled: "Cancelled", paused: "Paused", blocked: "Blocked",
 };
 
+/** The design legend under the diagram, in the consultant's words. */
+function DesignLegend() {
+  return (
+    <div className="pl-legend pl-design-legend" data-testid="design-legend">
+      <span><i className="pl-swatch" data-design="locked" />Locked: select to view its steps</span>
+      <span><i className="pl-swatch" data-design="in_review" />In review</span>
+      <span><i className="pl-swatch" data-design="not_reviewed" />Not yet reviewed</span>
+      <span><i className="pl-swatch" data-design="human_step" />Human step</span>
+      <span><i className="pl-swatch" data-design="shared_service" />Shared service</span>
+      <span><i className="pl-key pl-key-side" />Loop or side path</span>
+    </div>
+  );
+}
+
 export function PipelineView({
-  name, stages, run, outsideAgents = [], onAssignCaptain, selectedId, onSelectStage,
+  name, stages, run, outsideAgents = [], onAssignCaptain, selectedId, onSelectStage, designs = null,
+  onDesignAction,
 }: {
   /** The workflow's own name. */
   name: string;
@@ -182,8 +212,14 @@ export function PipelineView({
   onAssignCaptain?: Assign;
   selectedId?: string | null;
   onSelectStage?: (id: string | null) => void;
+  /** Design statuses, graph versions and kind colours (`view=designs`); null before they load. */
+  designs?: DesignsInfo | null;
+  /** Send for review / Lock design / Revise on one stage; absent when the viewer cannot. */
+  onDesignAction?: (stageId: string, action: DesignAction) => Promise<void>;
 }) {
   const [ownSelection, setOwnSelection] = React.useState<string | null>(null);
+  const [designBusy, setDesignBusy] = React.useState(false);
+  const [designError, setDesignError] = React.useState<string | null>(null);
   const selected = selectedId !== undefined ? selectedId : ownSelection;
   const select = (id: string | null) => {
     if (onSelectStage) onSelectStage(id);
@@ -207,12 +243,33 @@ export function PipelineView({
   }
 
   const byId = new Map(stages.map((s) => [s.id, s]));
-  const top = stages.filter((s) => !s.group);
+  const top = stages.filter((s) => !s.group && s.placement === "main");
+  const shared = stages.filter((s) => s.placement === "shared");
+  const sideAreas = new Map<string, PipelineStage[]>();
+  for (const s of stages.filter((x) => x.placement === "side")) {
+    const label = s.sideLabel ?? "Side paths";
+    sideAreas.set(label, [...(sideAreas.get(label) ?? []), s]);
+  }
   const selectedStage = selected ? byId.get(selected) : undefined;
   const hasRun = !!run;
+  // What this pipeline treats as Context Graph: any kind one of its stages writes.
+  const contextKinds = React.useMemo(() => new Set(stages.flatMap(
+    (s) => (s.contract?.writes ?? []).map((w) => kindKey(w.kind)))), [stages]);
+  const graph = { kgVersion: designs?.kgVersion ?? null, cgVersion: designs?.cgVersion ?? null,
+                  kinds: designs?.kinds ?? {}, contextKinds };
+  const act = onDesignAction && selectedStage ? (action: DesignAction) => {
+    setDesignBusy(true);
+    setDesignError(null);
+    onDesignAction(selectedStage.id, action)
+      .catch((e: unknown) => {
+        const code = (e as { code?: string })?.code;
+        if (code !== "step_up_cancelled") setDesignError(String((e as Error)?.message ?? e));
+      })
+      .finally(() => setDesignBusy(false));
+  } : undefined;
 
   const card = (s: PipelineStage) => (
-    <StageCard key={s.id} stage={s} selected={selected === s.id} onSelect={toggle}
+    <StageCard key={s.id} stage={s} selected={selected === s.id} onSelect={(id) => { setDesignError(null); toggle(id); }}
                outsideAgents={outsideAgents} onAssignCaptain={onAssignCaptain} />
   );
 
@@ -247,12 +304,30 @@ export function PipelineView({
             </React.Fragment>
           );
         })}
+        {shared.length || sideAreas.size ? (
+          <div className="pl-aside" data-testid="pipeline-aside">
+            {shared.length ? (
+              <div className="pl-aside-group" data-testid="shared-services">
+                <div className="pl-aside-title">Shared services</div>
+                <div className="pl-aside-cards">{shared.map(card)}</div>
+              </div>
+            ) : null}
+            {[...sideAreas.entries()].map(([label, members]) => (
+              <div key={label} className="pl-aside-group pl-side" data-testid="side-paths">
+                <div className="pl-aside-title">{label}</div>
+                <div className="pl-aside-cards">{members.map(card)}</div>
+              </div>
+            ))}
+          </div>
+        ) : null}
       </section>
-      <p className="pl-hint">Click a stage to see what it reads from the Knowledge Graph, what it writes to the Context Graph, and which outside systems it calls.</p>
+      <DesignLegend />
+      <p className="pl-hint">Select a stage, in the diagram or the table, to see its agent design: the steps it takes, what each reads from the Knowledge Graph and writes to the Context Graph, and which outside systems it calls.</p>
 
       {selectedStage ? (
         <div ref={detailRef} className="pl-detail" data-testid="pipeline-stage-detail">
-          <AgentContractView key={selectedStage.id} stage={selectedStage} hasRun={hasRun} onClose={() => select(null)} />
+          <AgentContractView key={selectedStage.id} stage={selectedStage} hasRun={hasRun} onClose={() => select(null)}
+                             graph={graph} onDesignAction={act} designBusy={designBusy} designError={designError} />
         </div>
       ) : null}
 
@@ -261,18 +336,27 @@ export function PipelineView({
         <div className="pl-table-wrap">
           <table className="pl-table" data-testid="pipeline-stage-table">
             <thead>
-              <tr><th>#</th><th>Stage</th><th>What it does</th><th>Runs as</th><th>Status</th></tr>
+              <tr>
+                <th>#</th><th>Stage</th><th>What it does</th><th>Runs as</th>
+                <th title="The agent design's review state">Design</th><th>Reference</th>
+                <th title="How the stage went on the last run">Last run</th>
+              </tr>
             </thead>
             <tbody>
               {stages.map((s) => (
                 <tr key={s.id} data-testid={`stage-row-${s.id}`} data-member={s.group ? "true" : undefined}
                     data-selected={selected === s.id ? "true" : undefined}
-                    onClick={() => { if (!s.members) toggle(s.id); }}
+                    onClick={() => { if (!s.members) { setDesignError(null); toggle(s.id); } }}
                     className={s.members ? "pl-row-frame" : "pl-row"}>
-                  <td className="pl-cell-num">{s.number ?? (s.kind === "bounded_loop" ? "↻" : s.kind === "for_each" ? "⇉" : "")}</td>
+                  <td className="pl-cell-num">{s.number ?? (s.kind === "bounded_loop" ? "↻" : s.kind === "for_each" ? "⇉"
+                    : s.placement === "shared" ? "S" : "—")}</td>
                   <td className="pl-cell-stage">{s.members ? s.runsAs.label : s.title}</td>
                   <td className="pl-cell-what">{s.description}</td>
                   <td><RunsAsChip stage={s} /></td>
+                  <td>{s.members ? null : <DesignPill status={s.design.status} testid={`row-design-${s.id}`} />}</td>
+                  <td className="pl-cell-ref" data-testid={`row-reference-${s.id}`}>
+                    {s.members ? null : referenceWords(s)}
+                  </td>
                   <td><StatusPill status={s.status} /></td>
                 </tr>
               ))}

@@ -15,9 +15,11 @@
 import React, { useMemo, useState } from "react";
 
 import {
-  kindKey, kindLabel, STATUS_LABEL, type ContractKind, type PipelineStage, type StageContract,
+  DESIGN_LABEL, kindKey, kindLabel, STATUS_LABEL, type ContractKind, type DesignNote, type DesignStatus,
+  type KindMeta, type PipelineStage, type StageContract, type StageDesignState,
 } from "../../../lib/pipeline-model";
-import type { TracedKind } from "../../../lib/workflow-api";
+import type { DesignAction, TracedKind } from "../../../lib/workflow-api";
+import { AgentStepsMap, bandTitle } from "./agent-steps-map";
 
 type Side = "read" | "write";
 type Overlay = "declared" | "done" | "missing" | "undeclared";
@@ -94,45 +96,145 @@ function bandHeight(count: number): number {
   return Math.max(1, Math.ceil(count / PER_ROW)) * (NODE_H + GAP) - GAP;
 }
 
-function Cards({ contract }: { contract: StageContract | null }) {
+/** IDs read in a row, each hoverable for its words: "A-D8 severity only moves up · A-D9 …". */
+function Notes({ notes, testid }: { notes: DesignNote[]; testid: string }) {
+  return (
+    <p className="pl-notes" data-testid={testid}>
+      {notes.map((n, i) => (
+        <React.Fragment key={`${n.id}-${i}`}>
+          {i > 0 ? <span className="pl-notes-sep" aria-hidden> · </span> : null}
+          <span className="pl-note-item" title={n.id ? `${n.id}: ${n.text}` : n.text}>
+            {n.id ? <b className="pl-note-id">{n.id}</b> : null}{n.id && n.text ? " " : ""}{n.text}
+          </span>
+        </React.Fragment>
+      ))}
+    </p>
+  );
+}
+
+type Card = { title: string; tone: "ink" | "graph" | "muted"; body: React.ReactNode; testid?: string };
+
+/** The design cards under the read/write view, in the consultant's order: what changed, how
+ *  it starts and ends, who reviews it, which graph versions it relies on, its policy, decisions
+ *  and open questions. A card shows only when the contract says something for it. */
+export function DesignCards({ contract, design }: { contract: StageContract | null; design?: StageDesignState }) {
   if (!contract) return null;
-  const cards: [string, React.ReactNode][] = [];
-  if (contract.trigger) cards.push(["Trigger", contract.trigger]);
-  if (contract.handoff) cards.push(["Handoff", contract.handoff]);
-  if (contract.human_review) cards.push(["Human review", contract.human_review]);
-  if (contract.llm) cards.push(["Model", contract.llm === "none" ? "None: no model is used" : contract.llm]);
-  if (contract.policy?.length) {
-    cards.push(["Policy", <ul key="p">{contract.policy.map(([k, v]) => <li key={k}><b>{k}</b> {v}</li>)}</ul>]);
+  const cards = contract.design;
+  const out: Card[] = [];
+  const revision = design?.underRevision ?? cards?.underRevision;
+  if (revision) out.push({ title: "Under revision", tone: "muted", testid: "card-under-revision", body: <p>{revision}</p> });
+  if (contract.trigger) out.push({ title: "Trigger", tone: "ink", body: <p>{contract.trigger}</p> });
+  if (contract.handoff) out.push({ title: "Handoff", tone: "ink", body: <p>{contract.handoff}</p> });
+  if (contract.human_review) out.push({ title: "Human review", tone: "ink", body: <p>{contract.human_review}</p> });
+  const applied = cards?.appliedIn;
+  if (applied && (applied.items.length || applied.kg || applied.cg)) {
+    const versions = [applied.kg ? `KG ${applied.kg}` : "", applied.cg ? `CG ${applied.cg}` : ""].filter(Boolean);
+    const title = versions.length === 2 ? `Applied in ${versions.join(" / ")}`
+      : applied.cg ? `Applied in Context Graph ${applied.cg}` : applied.kg ? `Applied in Knowledge Graph ${applied.kg}` : "Applied in";
+    out.push({ title, tone: "graph", testid: "card-applied-in",
+               body: applied.items.length ? <p>{applied.items.join("; ")}</p> : <p className="pl-faint">No schema changes named.</p> });
   }
-  if (contract.decisions?.length) {
-    cards.push(["Decisions", <ul key="d">{contract.decisions.map((d) => <li key={d}>{d}</li>)}</ul>]);
+  if (cards?.policy.length || contract.policy?.length) {
+    out.push({ title: "Policy", tone: "muted", testid: "card-policy", body: (
+      <>
+        {cards?.policy.length ? <Notes notes={cards.policy} testid="policy-notes" /> : null}
+        {contract.policy?.length ? (
+          <ul className="pl-kv">{contract.policy.map(([k, v]) => <li key={k}><b>{k}</b> {v}</li>)}</ul>
+        ) : null}
+      </>
+    ) });
   }
-  if (contract.open_questions?.length) {
-    cards.push(["Open questions", <ul key="q">{contract.open_questions.map((d) => <li key={d}>{d}</li>)}</ul>]);
+  if (cards?.openQuestions.length || contract.open_questions?.length) {
+    out.push({ title: "Open questions", tone: "muted", testid: "card-open-questions", body: (
+      <>
+        {cards?.openQuestions.length ? <Notes notes={cards.openQuestions} testid="open-question-notes" /> : null}
+        {contract.open_questions?.length ? <ul>{contract.open_questions.map((d) => <li key={d}>{d}</li>)}</ul> : null}
+      </>
+    ) });
   }
-  if (!cards.length) return null;
+  if (cards?.decisions.length || contract.decisions?.length) {
+    out.push({ title: "Decisions", tone: "ink", testid: "card-decisions", body: (
+      <>
+        {cards?.decisions.length ? <Notes notes={cards.decisions} testid="decision-notes" /> : null}
+        {contract.decisions?.length ? <ul>{contract.decisions.map((d) => <li key={d}>{d}</li>)}</ul> : null}
+      </>
+    ) });
+  }
+  if (contract.llm) {
+    out.push({ title: "Model", tone: "muted", body: <p>{contract.llm === "none" ? "None: no model is used" : contract.llm}</p> });
+  }
+  if (!out.length) return null;
   return (
     <div className="pl-cards" data-testid="contract-cards">
-      {cards.map(([title, body]) => (
-        <div key={title} className="pl-design-card">
-          <div className="pl-design-card-title">{title}</div>
-          <div className="pl-design-card-body">{body}</div>
+      {out.map((c) => (
+        <div key={c.title} className="pl-design-card" data-tone={c.tone} data-testid={c.testid}>
+          <div className="pl-design-card-title">{c.title}</div>
+          <div className="pl-design-card-body">{c.body}</div>
         </div>
       ))}
     </div>
   );
 }
 
-export function AgentContractView({ stage, hasRun, onClose }: {
+export function DesignPill({ status, testid = "design-status" }: { status: DesignStatus; testid?: string }) {
+  return <span className="pl-design" data-design={status} data-testid={testid}>{DESIGN_LABEL[status]}</span>;
+}
+
+/** The design's status, its reference, and the review buttons a person may press now. */
+function DesignBar({ design, onAction, busy, error }: {
+  design: StageDesignState; onAction?: (action: DesignAction) => void; busy?: boolean; error?: string | null;
+}) {
+  const locked = design.locked && design.status !== "locked" ? design.locked : null;
+  return (
+    <div className="pl-design-bar" data-testid="design-bar">
+      <DesignPill status={design.status} />
+      {design.reference ? <span className="pl-design-ref" data-testid="design-reference">{design.reference}</span> : null}
+      {locked?.reference ? (
+        <span className="pl-faint" data-testid="design-locked-version">{`${locked.reference} stays locked while this is reviewed`}</span>
+      ) : design.status === "locked" && design.locked?.by ? (
+        <span className="pl-faint">{`Locked by ${design.locked.by}`}</span>
+      ) : null}
+      {onAction ? (
+        <span className="pl-design-actions">
+          {design.can.send_for_review ? (
+            <button type="button" className="pl-btn" data-testid="design-send-for-review" disabled={busy}
+                    title="Ask a reviewer to check this agent's design" onClick={() => onAction("review")}>Send for review</button>
+          ) : null}
+          {design.can.lock ? (
+            <button type="button" className="pl-btn pl-btn-primary" data-testid="design-lock" disabled={busy}
+                    title="Lock this design: its contract cannot change until it is revised. Asks you to confirm it is you."
+                    onClick={() => onAction("lock")}>Lock design</button>
+          ) : null}
+          {design.can.revise ? (
+            <button type="button" className="pl-btn" data-testid="design-revise" disabled={busy}
+                    title="Open the next version of this design for review; the locked one stays on record"
+                    onClick={() => onAction("revise")}>Revise</button>
+          ) : null}
+        </span>
+      ) : null}
+      {error ? <span className="pl-design-error" role="alert" data-testid="design-error">{error}</span> : null}
+    </div>
+  );
+}
+
+export function AgentContractView({ stage, hasRun, onClose, graph, onDesignAction, designBusy, designError }: {
   stage: PipelineStage;
   /** Whether the workflow has a last run at all. */
   hasRun: boolean;
   onClose?: () => void;
+  /** The project's graph versions and kinds, for the band titles and domain colours. */
+  graph?: { kgVersion: number | null; cgVersion: number | null; kinds: Record<string, KindMeta>;
+            contextKinds: Set<string> };
+  /** Send for review / Lock design / Revise; absent when the viewer cannot change the design. */
+  onDesignAction?: (action: DesignAction) => void;
+  designBusy?: boolean;
+  designError?: string | null;
 }) {
   const [showRun, setShowRun] = useState(false);
   const [highlighted, setHighlighted] = useState<string | null>(null);
   const contract = stage.contract;
-  const reached = !!stage.trace && !["pending", "not_run"].includes(stage.status);
+  const steps = contract?.steps?.length ? contract.steps : null;
+  const reached =!!stage.trace && !["pending", "not_run"].includes(stage.status);
   const overlay = showRun && reached && stage.trace ? stage.trace : null;
   const runTip = !hasRun ? "This workflow has not run yet"
     : !reached ? "This stage was not reached on the last run" : "Overlay what the last run read and wrote";
@@ -192,9 +294,13 @@ export function AgentContractView({ stage, hasRun, onClose }: {
     <div data-area="agent-contract-view" className="pl-acv">
       <div className="pl-acv-head">
         <div>
-          <div className="pl-acv-kicker">Stage {stage.number ?? ""} · read/write view</div>
-          <div className="pl-acv-title">{stage.title}</div>
+          <div className="pl-acv-kicker">
+            {stage.number ? `Stage ${stage.number}` : stage.placement === "shared" ? "Shared service" : stage.placement === "side" ? (stage.sideLabel ?? "Side path") : "Stage"}
+            {steps ? " · agent design" : " · read/write view"}
+          </div>
+          <h3 className="pl-acv-title">{stage.number ? `${stage.number}. ${stage.title}` : stage.title}</h3>
           <div className="pl-acv-desc">{stage.description}</div>
+          <DesignBar design={stage.design} onAction={onDesignAction} busy={designBusy} error={designError} />
         </div>
         <div className="pl-acv-actions">
           <button type="button" className="pl-toggle" data-testid="show-last-run"
@@ -216,6 +322,13 @@ export function AgentContractView({ stage, hasRun, onClose }: {
         </p>
       ) : null}
 
+      {steps && contract ? (
+        <AgentStepsMap stage={stage} steps={steps} kinds={graph?.kinds ?? {}}
+                       contextKinds={graph?.contextKinds ?? new Set()} kgVersion={graph?.kgVersion ?? null}
+                       cgVersion={graph?.cgVersion ?? null}
+                       overlay={overlay ? { reads: overlay.reads, writes: overlay.writes, calls: overlay.calls,
+                                            callsRecorded: overlay.callsRecorded } : null} />
+      ) : (<>
       <div className="pl-legend" aria-hidden>
         <span><i className="pl-key pl-key-read" />Reads</span>
         <span><i className="pl-key pl-key-write" />Writes</span>
@@ -234,9 +347,9 @@ export function AgentContractView({ stage, hasRun, onClose }: {
            aria-label={`What ${stage.title} reads and writes`} data-overlay-on={overlay ? "true" : "false"}>
         {/* Bands */}
         <rect className="pl-band pl-band-kg" x={0} y={0} width={W} height={kgTop + kgH + 16} rx={10} />
-        <text className="pl-band-label" x={14} y={22}>Knowledge Graph (read only)</text>
+        <text className="pl-band-label" x={14} y={22}>{bandTitle("Knowledge Graph", graph?.kgVersion ?? null, "read only")}</text>
         <rect className="pl-band pl-band-cg" x={0} y={cgLabelY - 26} width={W} height={H - (cgLabelY - 26)} rx={10} />
-        <text className="pl-band-label" x={14} y={cgLabelY - 4}>Context Graph (read &amp; write)</text>
+        <text className="pl-band-label" x={14} y={cgLabelY - 4}>{bandTitle("Context Graph", graph?.cgVersion ?? null, "read and write")}</text>
 
         {/* Lines first, so nodes sit on top. */}
         {reads.map((n, i) => {
@@ -362,8 +475,9 @@ export function AgentContractView({ stage, hasRun, onClose }: {
           ) : selectedNode.overlay === "missing" ? " · the last run did not do this" : null}
         </div>
       ) : null}
+      </>)}
 
-      <Cards contract={contract} />
+      <DesignCards contract={contract} design={stage.design} />
     </div>
   );
 }

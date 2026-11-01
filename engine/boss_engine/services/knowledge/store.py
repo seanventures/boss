@@ -267,6 +267,16 @@ class PostgresKnowledgeStore:
             sql = stmt.strip()
             if sql:
                 connection.execute(text(sql))
+        # The context kinds the ontology packs declare are stored in the context layer (the
+        # kg_kind_layers trigger, db/schema.sql): synced and backfilled once per process.
+        try:
+            from .ontology_packs import sync_kind_layers
+
+            sync_kind_layers(connection)
+        except Exception:  # noqa: BLE001 - an older schema keeps the core layers
+            import logging
+
+            logging.getLogger(__name__).warning("kg_kind_layers sync skipped", exc_info=True)
         self._schema_ready = True
 
     def _org_id(self, connection: Connection, project_id: str, claimed: Optional[str]) -> str:

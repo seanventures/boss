@@ -26604,6 +26604,19 @@ def check_delivery_workflow(payload: WorkflowCheckBody) -> dict:
         require_project_actor(connection, project_id, actor, "workflow_manage")
         namespace = _editor_namespace(connection, project_id, payload.get("definition_id"))
         result = workflow_runtime.check_spec(connection, project_id, spec, namespace=namespace)
+        # A locked agent design is refused at Save (stage_designs.publish_refusals): said here
+        # first, on the stage, so Check and Save agree.
+        if payload.get("definition_id"):
+            from boss_engine.services.knowledge.stage_designs import publish_refusals
+
+            definition = connection.execute(
+                text("SELECT * FROM workflow_definitions WHERE id = :id AND project_id = :p"),
+                {"id": str(payload["definition_id"]), "p": project_id}).mappings().first()
+            if definition is not None:
+                locked = publish_refusals(connection, project_id, dict(definition), spec)
+                if locked:
+                    result = {**result, "ok": False,
+                              "problems": [*result["problems"], *locked]}
     return {**result, "problems": _editor_problems(result["problems"])}
 
 

@@ -574,6 +574,28 @@ def ensure_schema(engine: Engine, settings: Optional[Settings] = None) -> None:
             print(f"[ensure_schema] FAILED: {failure}")
     finally:
         raw_connection.close()
+    # The context kinds the ontology packs declare, stored in the context layer (kg_kind_layers)
+    # and the existing nodes backfilled — committed with the deploy, idempotent.
+    try:
+        from .services.knowledge.ontology_packs import sync_kind_layers
+
+        with engine.begin() as connection:
+            done = sync_kind_layers(connection, force=True)
+        if done.get("nodes"):
+            print(f"[ensure_schema] context layer: {done['nodes']} node(s) moved to 'context'")
+    except Exception as exc:  # noqa: BLE001 - never fails the deploy; the store retries lazily
+        print(f"[ensure_schema] context layer sync skipped: {str(exc).strip()[:160]}")
+    # Stored Context Graph edges for decisions written before they existed (context_graph
+    # .backfill_decision_edges): only decisions not linked yet, so a second boot does nothing.
+    try:
+        from .services.knowledge.context_graph import backfill_decision_edges
+
+        with engine.begin() as connection:
+            linked = backfill_decision_edges(connection)
+        if linked.get("edges_added"):
+            print(f"[ensure_schema] context graph: {linked['edges_added']} decision edge(s) backfilled")
+    except Exception as exc:  # noqa: BLE001 - never fails the deploy
+        print(f"[ensure_schema] context graph backfill skipped: {str(exc).strip()[:160]}")
 
 
 @contextmanager

@@ -10571,7 +10571,9 @@ BEGIN
   DROP TABLE kgr_layer_probe;
   SELECT generation_expression INTO have FROM information_schema.columns
   WHERE table_schema = current_schema() AND table_name = 'kg_nodes' AND column_name = 'knowledge_layer';
-  IF have IS DISTINCT FROM want THEN
+  -- Only while the column is still GENERATED: the context-layer block at the end of this file
+  -- makes it a plain column kept by a trigger (have IS NULL), which must never be rebuilt here.
+  IF have IS NOT NULL AND have IS DISTINCT FROM want THEN
     DROP INDEX IF EXISTS idx_kg_nodes_layer;
     DROP INDEX IF EXISTS idx_kg_nodes_search_noncode;
     ALTER TABLE kg_nodes DROP COLUMN IF EXISTS knowledge_layer;
@@ -10739,3 +10741,71 @@ BEGIN
     ALTER TABLE kg_ontology_packs ADD PRIMARY KEY (project_id, pack_id);
   END IF;
 END $$;
+-- ============================================================================================
+-- THE CONTEXT LAYER OF PACK KINDS (design §4.2, consultant conformance P1 #8).
+-- ============================================================================================
+-- kg_nodes.knowledge_layer was a column GENERATED from a hard-coded CASE, so the context kinds
+-- an ontology pack declares (compliance_case, remediation_package, aml_case, resolved_pattern…)
+-- were stored as 'knowledge' and every SQL, MCP or kg_search filter by layer missed them. The
+-- column becomes a plain one kept by a trigger: a kind named in kg_kind_layers (synced from the
+-- packs by ontology_packs.sync_kind_layers, which also backfills existing rows, idempotently)
+-- takes that layer; every other kind keeps the core CASE (scopes.layer_sql_case, pinned by
+-- test_knowledge_stage_scopes_db). The KGR block above rebuilds the column only while it is
+-- still generated, so after this block it never rewrites kg_nodes again.
+CREATE TABLE IF NOT EXISTS kg_kind_layers (
+  kind TEXT PRIMARY KEY,
+  layer TEXT NOT NULL CHECK (layer IN ('code', 'lifecycle', 'ops', 'knowledge', 'rules', 'context')),
+  source TEXT NOT NULL DEFAULT 'pack',
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE OR REPLACE FUNCTION kg_nodes_set_layer() RETURNS trigger LANGUAGE plpgsql AS $kg_layer$
+BEGIN
+  NEW.knowledge_layer := COALESCE(
+    (SELECT l.layer FROM kg_kind_layers l WHERE l.kind = NEW.kind),
+    CASE WHEN NEW.kind IN ('config_key', 'endpoint', 'file', 'module', 'queue', 'symbol', 'table') THEN 'code' WHEN NEW.kind IN ('agent', 'decision', 'person', 'pull_request', 'release', 'review_finding', 'run', 'spec', 'team') THEN 'lifecycle' WHEN NEW.kind IN ('alert_rule', 'datastore', 'deployment', 'external', 'incident', 'repo', 'resource', 'root_cause', 'runbook', 'service') THEN 'ops' WHEN NEW.kind IN ('rule') THEN 'rules' WHEN NEW.kind IN ('agent_decision', 'coverage_gap') THEN 'context' ELSE 'knowledge' END);
+  RETURN NEW;
+END $kg_layer$;
+DO $kg_layer_plain$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns
+             WHERE table_schema = current_schema() AND table_name = 'kg_nodes'
+               AND column_name = 'knowledge_layer' AND is_generated = 'ALWAYS') THEN
+    ALTER TABLE kg_nodes ALTER COLUMN knowledge_layer DROP EXPRESSION;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'kg_nodes_layer'
+                 AND tgrelid = 'kg_nodes'::regclass) THEN
+    CREATE TRIGGER kg_nodes_layer BEFORE INSERT OR UPDATE OF kind ON kg_nodes
+      FOR EACH ROW EXECUTE FUNCTION kg_nodes_set_layer();
+  END IF;
+END $kg_layer_plain$;
+
+-- ============================================================================================
+-- AGENT DESIGN REVIEW AND LOCK (design §4.6): one row per (workflow, stage) design version.
+-- ============================================================================================
+-- not_reviewed → in_review → locked. Locking needs a person who manages the workflow (and a
+-- fresh second factor, as every workflow:publish act); a locked stage's contract cannot be
+-- published changed until "Revise" opens the next version in review (stage_designs.py). Every
+-- transition is a workflow.design_* event.
+CREATE TABLE IF NOT EXISTS workflow_stage_designs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  workflow_definition_id TEXT NOT NULL REFERENCES workflow_definitions(id) ON DELETE CASCADE,
+  stage_id TEXT NOT NULL,
+  design_version INTEGER NOT NULL CHECK (design_version >= 1),
+  reference TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('not_reviewed', 'in_review', 'locked')),
+  contract_hash TEXT NOT NULL,
+  contract JSONB NOT NULL DEFAULT '{}'::jsonb,
+  under_revision TEXT,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  sent_for_review_by TEXT,
+  sent_for_review_at TIMESTAMPTZ,
+  locked_by TEXT,
+  locked_by_name TEXT,
+  locked_at TIMESTAMPTZ,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (workflow_definition_id, stage_id, design_version)
+);
+CREATE INDEX IF NOT EXISTS idx_workflow_stage_designs_stage
+  ON workflow_stage_designs(project_id, workflow_definition_id, stage_id, design_version DESC);
