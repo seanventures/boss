@@ -12,7 +12,7 @@ through the Context Graph's existing primitives (`context_graph.write_agent_deci
 """
 from __future__ import annotations
 
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping, Optional, Sequence
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
@@ -122,8 +122,12 @@ def run_historical_pattern(
 
     # Always asked, even when the graph already has a match: a new ticket touching the
     # subject's code/systems since the last run would otherwise go unseen.
+    # THE MCP CALLS IT REALLY MADE, as the AML steps record theirs: `pipeline_trace` reads them
+    # so the read/write view says "called" or "declared, not done" truthfully — a deterministic
+    # step leaves no agent turn to read them from.
+    calls: list[dict[str, Any]] = []
     from_itsm = _itsm_matches(connection, project_id=project_id, subject_id=subject_id,
-                              actor_ref=actor_ref)
+                              actor_ref=actor_ref, calls=calls)
     matches.update(from_itsm)
 
     for match_id in matches:
@@ -146,11 +150,12 @@ def run_historical_pattern(
         produced["incident"] = {"statement": f"{len(from_itsm)} incident(s) from ITSM.",
                                 "node_ids": list(from_itsm)}
 
-    return {"cost_usd_micros": 0, "matched": list(matches.keys()), "produced": produced}
+    return {"cost_usd_micros": 0, "matched": list(matches.keys()), "calls": calls,
+            "produced": produced}
 
 
-def _itsm_matches(connection: Connection, *, project_id: str, subject_id: str, actor_ref: str
-                  ) -> dict[str, Mapping[str, Any]]:
+def _itsm_matches(connection: Connection, *, project_id: str, subject_id: str, actor_ref: str,
+                  calls: Optional[list[dict[str, Any]]] = None) -> dict[str, Mapping[str, Any]]:
     """Ask the project's REGISTERED `itsm` MCP server (bootstrap.BUILTIN_MCP_SERVERS seeds one
     on every project, pointed at `tools/mcp_itsm_mock.py` — the step's `contract.calls` source)
     for a past ticket that names one of the subject's connected code symbols/systems, and write
@@ -159,7 +164,10 @@ def _itsm_matches(connection: Connection, *, project_id: str, subject_id: str, a
     sibling. Goes through `mcp_registry.call_tool_unattended` like any other registry server's
     tool (no person is present during a workflow step to ask), never a direct import of the
     mock — a re-pointed or disabled `itsm` server must be able to refuse this call exactly as
-    it would refuse any other road to a registered MCP tool."""
+    it would refuse any other road to a registered MCP tool.
+
+    Each call it really makes is appended to `calls` as `{mcp, tool, ok}`; a call it never made
+    (no server, nothing to match) is not."""
     from .. import mcp_registry
     from ...config import get_settings
 
@@ -176,11 +184,15 @@ def _itsm_matches(connection: Connection, *, project_id: str, subject_id: str, a
     if not neighbor_names:
         return {}
 
+    call = {"mcp": "itsm", "tool": "list_incidents", "ok": False}
+    if calls is not None:
+        calls.append(call)
     try:
         result = mcp_registry.call_tool_unattended(get_settings(), server, "list_incidents", {})
         incidents = (result or {}).get("incidents") or []
     except Exception:
         return {}
+    call["ok"] = isinstance(result, dict) and not result.get("error")
 
     found: dict[str, Mapping[str, Any]] = {}
     for incident in incidents:

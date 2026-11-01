@@ -309,3 +309,44 @@ def test_p1_a_second_runs_historical_pattern_finds_the_first_runs_closure_preced
         assert precedent_from_run_1 is not None
         assert precedent_from_run_1 in matched, (
             "run 2's historical_pattern step did not find the Precedent run 1's Closure wrote")
+
+
+# ── The MCP calls a deterministic step made are recorded in its output (2026-10-31) ──────────
+# The Pipeline view's read/write overlay said "not recorded" for Historical pattern's ITSM call:
+# a deterministic step leaves no agent turn, so nothing said it had called anything.
+
+def test_p1_historical_pattern_records_the_itsm_call_it_made(pg_engine, project, monkeypatch):
+    from boss_engine.services import mcp_registry
+    from boss_engine.services.knowledge import graph_steps
+
+    asked: list[str] = []
+    monkeypatch.setattr(mcp_registry, "find_mcp_server",
+                        lambda c, p, ref: {"id": "mcp_itsm", "enabled": True} if ref == "itsm" else None)
+
+    def call(settings, server, tool, args):
+        asked.append(tool)
+        return {"incidents": []}
+
+    monkeypatch.setattr(mcp_registry, "call_tool_unattended", call)
+    with pg_engine.begin() as c:
+        subject = _rule(c, project, "calls-subject-rule")
+        _link(c, project, subject, _symbol(c, project, "calls-shared-symbol"))
+        out = graph_steps.run_historical_pattern(
+            c, project_id=project, run_id="wfr_calls_1", step_id="historical_pattern",
+            subject_id=subject)
+    assert asked == ["list_incidents"]
+    assert out["calls"] == [{"mcp": "itsm", "tool": "list_incidents", "ok": True}]
+
+
+def test_p1_historical_pattern_records_no_call_it_never_made(pg_engine, project, monkeypatch):
+    from boss_engine.services import mcp_registry
+    from boss_engine.services.knowledge import graph_steps
+
+    monkeypatch.setattr(mcp_registry, "find_mcp_server", lambda c, p, ref: None)
+    with pg_engine.begin() as c:
+        subject = _rule(c, project, "nocalls-subject-rule")
+        _link(c, project, subject, _symbol(c, project, "nocalls-shared-symbol"))
+        out = graph_steps.run_historical_pattern(
+            c, project_id=project, run_id="wfr_calls_2", step_id="historical_pattern",
+            subject_id=subject)
+    assert out["calls"] == []

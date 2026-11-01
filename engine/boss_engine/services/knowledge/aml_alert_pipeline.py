@@ -794,8 +794,9 @@ def run_aml_closure(connection: Connection, *, project_id: str, run_id: str, ste
     produced: dict[str, Any] = {"agent_decision": _decision("PrecedentRecorded", statement)}
     if gap:
         produced["coverage_gap"] = {"statement": f"The case note was not posted: {gap}"}
+    calls = [{"mcp": "case-management", "tool": "add_case_note", "ok": posted is not None}]
     return {"cost_usd_micros": 0, "status": "succeeded", "alert_id": alert_id,
-            "case_id": case_id, "case_status": status, "precedent_id": precedent_id,
+            "calls": calls, "case_id": case_id, "case_status": status, "precedent_id": precedent_id,
             "determination": person["determination"], "decided_by": decided_by,
             "reason": person["reason"], "filed_by": filed_by or None,
             "reused_precedents": reused,

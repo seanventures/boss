@@ -11,8 +11,10 @@ reads the real record instead:
 * READS — the nodes a step's output names as what it consulted (`collected`, `matched`,
   `cited_node_id`), the run's `kg_usage` rows for the step (consulted / cited / shown / reused),
   and an outside agent's own `kg_find` calls under the run's token (agent_turns).
-* CALLS — tool calls recorded for the step (agent_turns); a deterministic MCP call that leaves
-  no turn is not reported, and the console says so rather than calling it "not done".
+* CALLS — tool calls recorded for the step: an agent's own (agent_turns), and the MCP calls a
+  deterministic step records in its output (`calls: [{mcp, tool, ok}]`). A step with either
+  record is marked `calls_recorded`, so a declared call it never made reads "declared, not
+  done"; a step with no record at all still reads "not recorded", never "not done".
 
 Read-only, one project. Nothing here is synthesised: a kind absent from the result was not
 found in the record.
@@ -132,6 +134,7 @@ def run_trace(connection: Connection, project_id: str, run_id: str) -> Optional[
     kinds: dict[str, str] = {}
     out_reads: dict[str, list[str]] = {}
     out_writes: dict[str, list[str]] = {}
+    out_calls: dict[str, list[dict[str, Any]]] = {}
     for row in step_rows:
         step = str(row["step_id"])
         status[step] = str(row["status"] or "")  # the latest iteration wins
@@ -142,6 +145,10 @@ def run_trace(connection: Connection, project_id: str, run_id: str) -> Optional[
                 output = json.loads(output)
             except ValueError:
                 output = {}
+        if isinstance(output, dict) and isinstance(output.get("calls"), list):
+            # The latest iteration's record wins, like its status.
+            out_calls[step] = [c for c in output["calls"]
+                               if isinstance(c, dict) and str(c.get("tool") or "")]
         r, w = _ids_in_output(output)
         out_reads.setdefault(step, []).extend(r)
         out_writes.setdefault(step, []).extend(w)
@@ -149,7 +156,14 @@ def run_trace(connection: Connection, project_id: str, run_id: str) -> Optional[
 
     reads = {s: _Bucket() for s in step_ids}
     writes = {s: _Bucket() for s in step_ids}
-    calls: dict[str, dict[str, int]] = {s: {} for s in step_ids}
+    calls: dict[str, dict[tuple[str, str], int]] = {s: {} for s in step_ids}
+    recorded: set[str] = set(out_calls)
+    for step, made in out_calls.items():
+        for call in made:
+            if call.get("ok") is False:
+                continue  # asked for, but the server was absent or did not answer
+            key = (str(call.get("mcp") or call.get("server") or ""), str(call["tool"]))
+            calls[step][key] = calls[step].get(key, 0) + int(call.get("count") or 1)
 
     # WRITES the engine keyed to this run and step.
     written = connection.execute(text(
@@ -210,7 +224,8 @@ def run_trace(connection: Connection, project_id: str, run_id: str) -> Optional[
             continue
         if tool.startswith("kg_"):
             continue  # a graph write: already read back from kg_nodes above
-        calls[step][tool] = calls[step].get(tool, 0) + 1
+        recorded.add(step)
+        calls[step][("", tool)] = calls[step].get(("", tool), 0) + 1
 
     return {
         "run_id": str(run["id"]),
@@ -223,7 +238,9 @@ def run_trace(connection: Connection, project_id: str, run_id: str) -> Optional[
                 "kind": kinds[step],
                 "reads": reads[step].out(),
                 "writes": writes[step].out(),
-                "calls": [{"tool": t, "count": n} for t, n in calls[step].items()],
+                "calls": [{"tool": t, "server": srv, "count": n}
+                          for (srv, t), n in calls[step].items()],
+                "calls_recorded": step in recorded,
             }
             for step in status
         },
