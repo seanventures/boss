@@ -256,17 +256,18 @@ def _vec_table(dimensions: int) -> str:
     return f"kg_vec_{dimensions}"
 
 
-class PostgresKnowledgeStore:
-    def __init__(self) -> None:
-        self._schema_ready = False
+#: How long DDL the store runs outside boot (a vector table's first build) waits for its lock.
+FALLBACK_DDL_LOCK_TIMEOUT = "3s"
 
+
+class PostgresKnowledgeStore:
     def ensure_schema(self, connection: Connection) -> None:
-        if self._schema_ready:
-            return
-        for stmt in _SCHEMA_SQL.split(";"):
-            sql = stmt.strip()
-            if sql:
-                connection.execute(text(sql))
+        """A REQUEST NEVER RUNS DDL. After boot (or the first check in this process) this is a
+        no-op; the first call reads the catalog, and only a database missing the store's objects
+        — one the boot never migrated — gets the DDL, with a lock timeout."""
+        from ...db import ensure_declared_schema
+
+        ensure_declared_schema(connection, _SCHEMA_SQL, key="knowledge.store")
         # The context kinds the ontology packs declare are stored in the context layer (the
         # kg_kind_layers trigger, db/schema.sql): synced and backfilled once per process.
         try:
@@ -277,7 +278,6 @@ class PostgresKnowledgeStore:
             import logging
 
             logging.getLogger(__name__).warning("kg_kind_layers sync skipped", exc_info=True)
-        self._schema_ready = True
 
     def _org_id(self, connection: Connection, project_id: str, claimed: Optional[str]) -> str:
         if not project_id or not str(project_id).strip():
@@ -1113,12 +1113,54 @@ class PostgresKnowledgeStore:
             nested.rollback()
             return False
 
+    def ensure_vector_table(self, connection: Connection, *, dimensions: int) -> bool:
+        """kg_vec_<dim> and its HNSW index exist (True), created only when the catalog says they
+        are missing, under a lock timeout. Two catalog reads (no lock) per write: an embedding
+        write never re-runs CREATE INDEX (SHARE lock) on a table search is reading. Not cached:
+        a build inside a transaction that rolls back would leave a cache that lies."""
+        if not self._vector_extension_available(connection):
+            return False
+        table = _vec_table(dimensions)
+        ready = bool(connection.execute(text("SELECT to_regclass(:t) IS NOT NULL"), {"t": table}).scalar()
+                     and self._hnsw_ready(connection, dimensions))
+        if not ready:
+            self.sync_vector_index(connection, dimensions=dimensions)
+        return True
+
+    def _copy_embedding_to_index(self, connection: Connection, *, embedding_id: str, dimensions: int) -> None:
+        """ONE ROW into kg_vec_<dim>: the row just written, never the whole kg_embeddings table
+        (that copy, once per embedding, rewrote every vector of every project inside the sync's
+        transaction and held 14-16 searches waiting on it)."""
+        table = _vec_table(dimensions)
+        connection.execute(
+            text(
+                f"""
+                INSERT INTO {table} (
+                  embedding_id, project_id, node_id, model_id, content_hash, embedding
+                )
+                SELECT e.id, e.project_id, e.node_id, e.model_id, e.content_hash,
+                       CAST(translate(e.embedding::text, '{{}}', '[]') AS vector)
+                FROM kg_embeddings e
+                WHERE e.id = :id
+                ON CONFLICT (embedding_id) DO UPDATE SET
+                  project_id = EXCLUDED.project_id,
+                  node_id = EXCLUDED.node_id,
+                  model_id = EXCLUDED.model_id,
+                  content_hash = EXCLUDED.content_hash,
+                  embedding = EXCLUDED.embedding
+                """
+            ),
+            {"id": embedding_id},
+        )
+
     def sync_vector_index(self, connection: Connection, *, dimensions: int) -> str:
-        """Build kg_vec_<dim> and its HNSW index when pgvector is installed."""
+        """Build kg_vec_<dim> and its HNSW index when pgvector is installed, and copy every
+        stored vector of that dimension into it (a rebuild; a write copies its own row)."""
         self.ensure_schema(connection)
         if not self._vector_extension_available(connection):
             return "not_created"
         table = _vec_table(dimensions)
+        connection.execute(text(f"SET LOCAL lock_timeout = '{FALLBACK_DDL_LOCK_TIMEOUT}'"))
         connection.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         connection.execute(
             text(
@@ -1203,8 +1245,8 @@ class PostgresKnowledgeStore:
                 "content_hash": content_hash,
             },
         ).scalar_one()
-        if self._vector_extension_available(connection) and 1 <= len(embedding) <= 2000:
-            self.sync_vector_index(connection, dimensions=len(embedding))
+        if 1 <= len(embedding) <= 2000 and self.ensure_vector_table(connection, dimensions=len(embedding)):
+            self._copy_embedding_to_index(connection, embedding_id=embedding_id, dimensions=len(embedding))
         return embedding_id
 
     def vector_search(

@@ -475,7 +475,121 @@ def _record_schema_apply(raw_connection, total: int, failures: list[str],
 SERVICE_SCHEMAS: tuple[str, ...] = (
     "boss_engine.services.factory_flow:SCHEMA_SQL",
     "boss_engine.services.work_plane:_SCHEMA_SQL",
+    # The knowledge store's columns, tables and indexes (BOSSAPP KG freeze, 2026-11-01): its
+    # lazy ensure ran ALTER TABLE kg_nodes on the request path, took ACCESS EXCLUSIVE, and one
+    # long transaction behind it froze every graph read for 14 minutes. Applied here, at boot.
+    "boss_engine.services.knowledge.store:_SCHEMA_SQL",
+    "boss_engine.services.knowledge.document_upload:_SCHEMA_SQL",
+    "boss_engine.services.knowledge_graph:_SCHEMA_EXTRAS_SQL",
 )
+
+#: How long a boot DDL statement waits for its table lock. A boot statement that queues for an
+#: ACCESS EXCLUSIVE lock makes every read of that table queue behind IT; past this it gives up,
+#: is recorded as a failure in schema_apply_runs, and the next boot tries again.
+BOOT_DDL_LOCK_TIMEOUT = "5s"
+
+_ADD_COLUMN = re.compile(
+    r"^ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:ONLY\s+)?\"?(\w+)\"?\s+ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS\s+\"?(\w+)\"?",
+    re.I)
+_CREATE_INDEX_IF = re.compile(
+    r"^CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:CONCURRENTLY\s+)?IF\s+NOT\s+EXISTS\s+\"?(\w+)\"?", re.I)
+
+
+def ddl_already_applied(cursor, stmt: str, columns: set[tuple[str, str]]) -> bool:
+    """True when ``stmt`` is an `ADD COLUMN IF NOT EXISTS` whose column exists, or a
+    `CREATE INDEX IF NOT EXISTS` whose index exists. Both take a table lock even when they do
+    nothing (ACCESS EXCLUSIVE and SHARE), so a booted install skips them instead of locking
+    every table it declares on every start. Read from the catalog only: no lock taken."""
+    head = stmt.lstrip()
+    m = _ADD_COLUMN.match(head)
+    if m:
+        return (m.group(1).lower(), m.group(2).lower()) in columns
+    m = _CREATE_INDEX_IF.match(head)
+    if m:
+        cursor.execute("SELECT to_regclass(%s) IS NOT NULL", (m.group(1),))
+        row = cursor.fetchone()
+        return bool(row and row[0])
+    return False
+
+
+#: How long DDL that reaches a request (a database the boot never migrated) waits for its lock.
+REQUEST_DDL_LOCK_TIMEOUT = "3s"
+#: Which declared schemas this PROCESS has already found in place (keyed by the caller's name).
+_DECLARED_READY: set[str] = set()
+_DECL_TABLE = re.compile(r"CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+\"?(\w+)\"?", re.I)
+_DECL_COLUMN = re.compile(
+    r"ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:ONLY\s+)?\"?(\w+)\"?\s+ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS\s+\"?(\w+)\"?",
+    re.I)
+_DECL_INDEX = re.compile(
+    r"CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:CONCURRENTLY\s+)?IF\s+NOT\s+EXISTS\s+\"?(\w+)\"?", re.I)
+
+
+def declared_missing(connection, schema_sql: str) -> list[str]:
+    """The tables, columns and indexes ``schema_sql`` declares that the database lacks, read
+    from the catalog only: no DDL runs and no table lock is taken."""
+    tables = list(dict.fromkeys(t.lower() for t in _DECL_TABLE.findall(schema_sql)))
+    columns = list(dict.fromkeys((t.lower(), c.lower()) for t, c in _DECL_COLUMN.findall(schema_sql)))
+    indexes = list(dict.fromkeys(i.lower() for i in _DECL_INDEX.findall(schema_sql)))
+    missing = [t for t in tables
+               if not connection.execute(text("SELECT to_regclass(:t) IS NOT NULL"), {"t": t}).scalar()]
+    if columns:
+        live = {(str(t), str(c)) for t, c in connection.execute(text(
+            "SELECT lower(table_name), lower(column_name) FROM information_schema.columns "
+            "WHERE table_schema = current_schema() AND lower(table_name) = ANY(:t)"),
+            {"t": sorted({t for t, _c in columns})}).all()}
+        missing += [f"{t}.{c}" for t, c in columns if (t, c) not in live]
+    missing += [i for i in indexes
+                if not connection.execute(text("SELECT to_regclass(:i) IS NOT NULL"), {"i": i}).scalar()]
+    return missing
+
+
+def ensure_declared_schema(connection, schema_sql: str, *, key: str) -> bool:
+    """A SERVICE'S LAZY ENSURE, SAFE ON A REQUEST PATH. Boot applies the service's DDL
+    (SERVICE_SCHEMAS); here the catalog is read once per process, and the DDL runs only when
+    something it declares is missing — under a lock timeout, so it can never sit in the lock
+    queue holding every reader of the table behind it. True when DDL ran.
+
+    `ALTER TABLE … ADD COLUMN IF NOT EXISTS` takes ACCESS EXCLUSIVE even when the column exists:
+    re-running it per request froze the knowledge graph for 14 minutes (2026-11-01)."""
+    if key in _DECLARED_READY:
+        return False
+    ran = False
+    missing = declared_missing(connection, schema_sql)
+    if missing:
+        print(f"[schema] {key}: not applied at boot (missing {missing[:6]}); applying it now")
+        connection.execute(text(f"SET LOCAL lock_timeout = '{REQUEST_DDL_LOCK_TIMEOUT}'"))
+        for statement in (chunk.strip() for chunk in schema_sql.split(";")):
+            if statement:
+                connection.execute(text(statement))
+        # Not remembered: this transaction may still roll back. The next call reads the
+        # catalog again (no lock) and remembers it once it is committed.
+        return True
+    _DECLARED_READY.add(key)
+    return ran
+
+
+def reset_declared_schemas() -> None:
+    """Forget what this process found in place (tests that rebuild the schema)."""
+    _DECLARED_READY.clear()
+
+
+def wait_for_database(engine: Engine, *, timeout_s: float = 120.0, interval_s: float = 2.0,
+                      sleep=None) -> bool:
+    """Block until the database answers ``SELECT 1`` or ``timeout_s`` passes (False then).
+
+    The API container starts with the database ("the database system is starting up"): every
+    boot step — the schema apply, the vault, the warm-up — was skipped on that first refusal and
+    never retried, so the knowledge store fell back to running its DDL on the request path."""
+    import time as _time
+
+    sleep = sleep or _time.sleep
+    deadline = _time.monotonic() + max(0.0, timeout_s)
+    while True:
+        if database_is_reachable(engine):
+            return True
+        if _time.monotonic() >= deadline:
+            return False
+        sleep(interval_s)
 
 _CREATE_TABLE = re.compile(r"CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+([A-Za-z_][A-Za-z0-9_]*)", re.I)
 
@@ -538,8 +652,19 @@ def ensure_schema(engine: Engine, settings: Optional[Settings] = None) -> None:
         statements = split_statements(sql) + split_statements(seed_sql)
         for service_sql in _service_schema_sql():
             statements += [chunk.strip() for chunk in service_sql.split(";") if chunk.strip()]
+        skipped_noop = 0
         with raw_connection.cursor() as cursor:
+            cursor.execute(f"SET lock_timeout = '{BOOT_DDL_LOCK_TIMEOUT}'")
+            live = _live_columns(cursor)
+            raw_connection.commit()
             for stmt in statements:
+                try:
+                    if ddl_already_applied(cursor, stmt, live):
+                        skipped_noop += 1
+                        raw_connection.commit()
+                        continue
+                except Exception:  # noqa: BLE001 — cannot tell: run it, IF NOT EXISTS keeps it right
+                    raw_connection.rollback()
                 try:
                     cursor.execute("SAVEPOINT _stmt")
                     cursor.execute(stmt)
@@ -554,15 +679,20 @@ def ensure_schema(engine: Engine, settings: Optional[Settings] = None) -> None:
                 # last statement — and deadlocked any writer that reached two of them.
                 raw_connection.commit()
         raw_connection.commit()
+        with raw_connection.cursor() as cursor:
+            cursor.execute("RESET lock_timeout")
+        raw_connection.commit()
 
         # AFTER the script: the tables and columns an index names exist by now.
         repairs, index_failures = _converge_indexes(raw_connection, sql)
 
-        _record_schema_apply(raw_connection, len(statements), failures + index_failures,
+        # Index repairs first: the row keeps 50 failures, and a partial test schema can fail
+        # dozens of service statements ahead of the one repair a person needs to see.
+        _record_schema_apply(raw_connection, len(statements), index_failures + failures,
                              repairs)
 
         print(f"[ensure_schema] applied {len(statements) - len(failures)}/{len(statements)} "
-              f"statements")
+              f"statements ({skipped_noop} already in place, skipped without a lock)")
         if skipped:
             print(f"[ensure_schema] column reconcile: {attempted} checked, "
                   f"{len(skipped)} skipped (non-fatal): {skipped[:8]}")

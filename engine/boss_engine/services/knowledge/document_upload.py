@@ -72,10 +72,10 @@ class UploadRefused(ValueError):
 
 
 def ensure_schema(connection: Connection) -> None:
-    for stmt in _SCHEMA_SQL.split(";"):
-        sql = stmt.strip()
-        if sql:
-            connection.execute(text(sql))
+    """Boot applies the table (db.SERVICE_SCHEMAS); a request only reads the catalog."""
+    from ...db import ensure_declared_schema
+
+    ensure_declared_schema(connection, _SCHEMA_SQL, key="knowledge.document_upload")
 
 
 # ── reading ────────────────────────────────────────────────────────────────────────────────────

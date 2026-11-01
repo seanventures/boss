@@ -65,6 +65,44 @@ _STORE = PostgresKnowledgeStore()
 _SPACES = re.compile(r"\s+")
 
 
+def rule_status_sql(alias: str = "") -> str:
+    """A rule's status in SQL — the same reading as view.rule_status: its recorded status, else
+    rejected when closed, approved when a person approved it, proposed otherwise."""
+    a = f"{alias}." if alias else ""
+    known = ", ".join(f"'{s}'" for s in sorted(STATUSES))
+    return (f"CASE WHEN {a}attrs->>'status' IN ({known}) THEN {a}attrs->>'status' "
+            f"WHEN {a}valid_to IS NOT NULL THEN 'rejected' "
+            f"WHEN {a}trust_tier = 'approved' THEN 'approved' ELSE 'proposed' END")
+
+
+def rule_counts(connection: Connection, project_id: str, *, kinds: Optional[Sequence[str]] = None,
+                where: str = "", params: Optional[Mapping[str, Any]] = None) -> dict[str, int]:
+    """THE RULE COUNT every surface shows — Rules review, the setup checklist, the graph
+    canvas's Rules bubble, the rulebook sample, the DQ platform. Business rules and data-quality
+    rules alike (``RULE_KINDS``) unless ``kinds`` narrows it; ``where`` (" AND …", on kg_nodes
+    columns) narrows by scan, area or document. {status: n} for every status, zeros included.
+
+    Four surfaces each counted their own way (only `rule`; only open rows; a missing status as
+    proposed or as approved), and the console said 0, 50, 96 and 146 about the same rules."""
+    counts = {s: 0 for s in sorted(STATUSES)}
+    for value, n in connection.execute(text(
+            f"SELECT {rule_status_sql()} AS status, count(*) FROM kg_nodes "
+            f"WHERE project_id = :p AND kind = ANY(:kinds){where} GROUP BY 1"),
+            {**dict(params or {}), "p": project_id, "kinds": list(kinds or RULE_KINDS)}).all():
+        if value in counts:
+            counts[value] = int(n)
+    return counts
+
+
+def rule_count_words(counts: Mapping[str, int]) -> str:
+    """The count in words, the same everywhere: "93 approved · 53 waiting for review"."""
+    parts = [f"{int(counts.get('approved') or 0):,} approved",
+             f"{int(counts.get('proposed') or 0):,} waiting for review"]
+    if counts.get("rejected"):
+        parts.append(f"{int(counts['rejected']):,} rejected")
+    return " · ".join(parts)
+
+
 class RuleRefused(ValueError):
     """A proposal or review refused in words (a 422 on the API, an ``error`` from a tool)."""
 
@@ -458,19 +496,16 @@ def list_rules(
     _STORE._org_id(connection, project_id, None)
     where = "project_id = :p AND kind = ANY(:kinds)"
     params: dict[str, Any] = {"p": project_id, "kinds": [kind] if kind else list(RULE_KINDS)}
+    narrow = ""
     if scan_id:
-        where += " AND attrs->>'scan_id' = :scan"
+        narrow += " AND attrs->>'scan_id' = :scan"
         params["scan"] = scan_id
     area_sql, area_params = _area_filter_sql(area)
-    where += area_sql
+    narrow += area_sql
     params.update(area_params)
-    counts = {s: 0 for s in sorted(STATUSES)}
-    for value, n in connection.execute(text(
-            f"SELECT coalesce(attrs->>'status', 'proposed'), count(*) FROM kg_nodes WHERE {where} GROUP BY 1"),
-            params).all():
-        if value in counts:
-            counts[value] = int(n)
-    listed = where + (" AND coalesce(attrs->>'status', 'proposed') = :status" if status else "")
+    where += narrow
+    counts = rule_counts(connection, project_id, kinds=params["kinds"], where=narrow, params=params)
+    listed = where + (f" AND {rule_status_sql()} = :status" if status else "")
     ids = connection.execute(text(
         f"SELECT id FROM kg_nodes WHERE {listed} ORDER BY first_seen DESC, id LIMIT :n"),
         {**params, "status": status, "n": max(1, min(int(limit), 500))}).scalars().all()

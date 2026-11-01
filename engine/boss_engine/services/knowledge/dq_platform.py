@@ -107,15 +107,37 @@ def resolve_rule(connection: Connection, project_id: str, rule_id: str) -> Optio
     rule_id = str(rule_id or "").strip()
     if not rule_id:
         return None
+    # A rulebook-extracted rule carries its id as its node_key and under attrs.dq.rule_id
+    # (rules.propose_dq_rule); the sample's own rules use the dq: key. All of them count.
     row = connection.execute(text(
         "SELECT id, kind, node_key, name, body, attrs FROM kg_nodes WHERE project_id = :p "
         "AND kind IN ('data_quality_rule', 'rule') AND valid_to IS NULL "
-        "AND (attrs->>'rule_id' = :r OR attrs->>'rule_code' = :r OR node_key = :k) "
+        "AND (attrs->>'rule_id' = :r OR attrs->>'rule_code' = :r OR attrs->'dq'->>'rule_id' = :r "
+        "OR node_key = :k OR node_key = :r) "
         "AND COALESCE(attrs->>'status', 'active') NOT IN ('rejected', 'retired', 'superseded') "
         "ORDER BY (kind = 'data_quality_rule') DESC, recorded_at DESC LIMIT 1"),
         {"p": project_id, "r": rule_id, "k": node_key("data_quality_rule", rule_id)}
     ).mappings().first()
     return dict(row) if row else None
+
+
+def approved_rule_ids(connection: Connection, project_id: str) -> set[str]:
+    """The rule ids of every APPROVED DQ rule in the graph, read by the one rule count's own
+    status reading (rules.rule_status_sql). "N of M DQ rules in the graph" counts these: a rule
+    waiting for review is not yet in the graph the agents work from."""
+    from .rules import rule_status_sql
+
+    return {str(v) for v in connection.execute(text(
+        "SELECT coalesce(attrs->'dq'->>'rule_id', attrs->>'rule_id', attrs->>'rule_code', node_key) "
+        "FROM kg_nodes WHERE project_id = :p AND kind IN ('data_quality_rule', 'rule') "
+        f"AND valid_to IS NULL AND {rule_status_sql()} = 'approved'"),
+        {"p": project_id}).scalars().all() if v}
+
+
+def rules_in_graph(connection: Connection, project_id: str, rule_ids) -> int:
+    """How many of ``rule_ids`` are approved DQ rules in the graph (a dq:-keyed one too)."""
+    approved = approved_rule_ids(connection, project_id)
+    return sum(1 for r in rule_ids if r in approved or node_key("data_quality_rule", r) in approved)
 
 
 def resolve_threshold(connection: Connection, project_id: str, threshold_id: str
@@ -231,7 +253,7 @@ def load_platform(connection: Connection, *, project_id: str, actor: str) -> dic
                               kind="references", actor_kind="system", actor_ref=ACTOR_REF,
                               attrs={"relationship": "SAME_TABLE_AS_CODE"})
 
-    rules_present = sum(1 for r in ds.rules if resolve_rule(connection, project_id, r.rule_id))
+    rules_present = rules_in_graph(connection, project_id, [r.rule_id for r in ds.rules])
     installed = _install_workflows(connection, project_id, actor)
     schedule = _ensure_schedule(connection, project_id, actor, ESCALATION_WORKFLOW,
                                 "Escalation Agent — daily sweep of open incidents",
@@ -243,7 +265,7 @@ def load_platform(connection: Connection, *, project_id: str, actor: str) -> dic
             f"{counts.get('report_line', 0)} report lines, {groups} Eagle exception groups and "
             f"{counts.get('incident', 0)} incidents. ")
     if rules_present < len(ds.rules):
-        note += (f"{rules_present} of {len(ds.rules)} DQ rules are in the graph: load the "
+        note += (f"{rules_present} of {len(ds.rules)} DQ rules are approved in the graph: load the "
                  "rulebook (NorthPeak Loan DQ Rulebook v3.2) to bring the rest, then load the "
                  "platform again to link them.")
     else:
@@ -344,7 +366,7 @@ def status(connection: Connection, *, project_id: str, cob: Optional[str] = None
 
     ds = D.generate()
     loaded = bool(node_id_of(connection, project_id, "system", "S-EGL"))
-    rules_present = sum(1 for r in ds.rules if resolve_rule(connection, project_id, r.rule_id)) \
+    rules_present = rules_in_graph(connection, project_id, [r.rule_id for r in ds.rules]) \
         if loaded else 0
     groups = []
     for g in ds.exception_groups:

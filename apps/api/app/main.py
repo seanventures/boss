@@ -1205,6 +1205,13 @@ def _warm_read_paths() -> None:
     optimisation must never be able to fail a boot or delay readiness.
     """
     def _warm() -> None:
+        # A warm-up against a database that is not up yet warms nothing: wait for it (this is
+        # a background thread), so a boot that raced the database still warms once it is up.
+        from boss_engine.db import wait_for_database
+
+        if not wait_for_database(engine, timeout_s=600.0, interval_s=5.0):
+            print("[lifespan] warm-up skipped: the database did not come up within 10 minutes")
+            return
         # The model router's OpenRouter catalogue (prices, tier suggestions), Fixed mode too.
         from boss_engine.services.model_router.store import load_catalogue_at_boot
 
@@ -1432,6 +1439,24 @@ async def lifespan(_: FastAPI):
     except Exception as exc:  # noqa: BLE001
         print(f"[lifespan] unread-variable check not scheduled: {exc}")
 
+    # WAIT FOR THE DATABASE BEFORE THE BOOT STEPS. Started beside the database, the API met
+    # "the database system is starting up" and skipped every step below — the schema apply,
+    # the vault, the warm-up — and never tried them again: the knowledge store then ran its
+    # DDL on the request path and froze the graph (2026-11-01). Bounded; past it, the steps
+    # are skipped as before and say so.
+    try:
+        import asyncio as _asyncio
+
+        from boss_engine.db import wait_for_database
+
+        if not database_is_reachable(engine):
+            print("[lifespan] database not ready: waiting up to 120s before the boot steps", flush=True)
+            _db_ready = await _asyncio.to_thread(wait_for_database, engine, timeout_s=120.0)
+            print("[lifespan] database ready" if _db_ready else
+                  "[lifespan] DATABASE STILL NOT READY after 120s: boot steps run and may be skipped",
+                  flush=True)
+    except Exception as exc:  # noqa: BLE001 — never stops the API booting
+        print(f"[lifespan] database wait failed: {exc}")
     try:
         ensure_schema(engine, settings)
         print("[lifespan] ensure_schema applied (idempotent schema sync)")

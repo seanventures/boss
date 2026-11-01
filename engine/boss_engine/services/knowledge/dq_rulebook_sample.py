@@ -60,12 +60,11 @@ def status(connection: Connection, *, project_id: str) -> dict[str, Any]:
         sections = int(connection.execute(text(
             "SELECT count(*) FROM kg_nodes WHERE project_id = :p AND kind = 'clause' AND valid_to IS NULL "
             "AND attrs->>'document_id' = :d"), {"p": project_id, "d": document["id"]}).scalar() or 0)
-        for value, n in connection.execute(text(
-                "SELECT coalesce(attrs->>'status', 'proposed'), count(*) FROM kg_nodes WHERE project_id = :p "
-                "AND kind = :k AND valid_to IS NULL AND attrs->'dq'->>'document_id' = :d GROUP BY 1"),
-                {"p": project_id, "k": DQ_RULE_KIND, "d": document["id"]}).all():
-            if value in counts:
-                counts[value] = int(n)
+        from .rules import rule_counts
+
+        found = rule_counts(connection, project_id, kinds=[DQ_RULE_KIND],
+                            where=" AND attrs->'dq'->>'document_id' = :d", params={"d": document["id"]})
+        counts = {k: found[k] for k in counts}
     missing = dq_kinds_missing(connection, project_id)
     return {
         "available": available(), "title": TITLE, "filename": FILENAME,

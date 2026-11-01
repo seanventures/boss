@@ -245,8 +245,9 @@ def _load_rulebook(c, project):
             node_key=dq_platform.node_key("data_quality_rule", rule_id),
             name=f"{rule_id} v{r['version']}: {r['title']}", body=r["statement"],
             trust_tier="observed", actor_kind="system", actor_ref="rulebook_extraction",
-            attrs={"rule_id": rule_id, **{k: v for k, v in r.items()
-                                          if k not in ("warning", "error")},
+            # Reviewed: "in the graph" counts approved DQ rules (rules.rule_counts' reading).
+            attrs={"rule_id": rule_id, "status": "approved", **{k: v for k, v in r.items()
+                                                                if k not in ("warning", "error")},
                    "warning_text": r["warning"], "error_text": r["error"]})
         rule = ds.rule(rule_id)
         for t in (rule.warning, rule.error):
