@@ -40,6 +40,9 @@ class OntologyPack:
     kinds: frozenset[str]
     edges: frozenset[str]
     kind_meta: dict[str, dict[str, Any]]
+    #: The schema version of the context kinds this pack declares (graph_versions.cg_version);
+    #: None means the pack's own version stands for it.
+    context_version: Optional[str] = None
 
     def get(self, name: str, default: Any = None) -> Any:
         """Dict-like read of a field by name, for a caller that treats a pack as data."""
@@ -91,6 +94,7 @@ def _parse_pack(pack_id: str, document: dict[str, Any]) -> OntologyPack:
     return OntologyPack(
         pack_id=pack_id, version=str(document.get("version") or "1"),
         kinds=kinds, edges=edges, kind_meta=kind_meta,
+        context_version=(str(document["context_version"]) if document.get("context_version") else None),
     )
 
 
@@ -167,6 +171,58 @@ def get_project_pack(connection: Connection, *, project_id: str) -> Optional[Ont
     pack = shipped_packs().get(str(row["pack_id"])) if row else None
     _PROJECT_PACK_CACHE[project_id] = pack
     return pack
+
+
+_LAYERS_SYNCED = False
+
+
+def pack_context_kinds() -> frozenset[str]:
+    """Every kind a shipped pack (or the core trace) puts in the Context Graph whose storage
+    layer the core CASE does not already say: the kinds kg_kind_layers maps to 'context'."""
+    from . import scopes
+    from .view_context import kinds_in
+
+    return frozenset(k for k in kinds_in("context") if scopes.core_layer_of(k) != "context")
+
+
+def sync_kind_layers(connection: Connection, *, force: bool = False) -> dict[str, int]:
+    """Keep ``kg_kind_layers`` equal to the packs' context kinds and backfill the stored
+    ``knowledge_layer`` of existing nodes to match (the migration). Idempotent: a second call
+    changes nothing. Once per process unless ``force``; a database without the table (an old
+    schema) is left alone."""
+    global _LAYERS_SYNCED
+    if _LAYERS_SYNCED and not force:
+        return {"kinds": 0, "nodes": 0}
+    from . import scopes
+
+    with connection.begin_nested():
+        exists = connection.execute(text("SELECT to_regclass('kg_kind_layers') IS NOT NULL")).scalar()
+        if not exists:
+            return {"kinds": 0, "nodes": 0}
+        wanted = {kind: "context" for kind in pack_context_kinds()}
+        have = {str(k): str(v) for k, v in connection.execute(
+            text("SELECT kind, layer FROM kg_kind_layers WHERE source = 'pack'")).all()}
+        gone = sorted(set(have) - set(wanted))
+        changed = sorted(k for k, layer in wanted.items() if have.get(k) != layer)
+        if gone:
+            connection.execute(text("DELETE FROM kg_kind_layers WHERE source = 'pack' AND kind = ANY(:k)"),
+                               {"k": gone})
+        for kind in changed:
+            connection.execute(text(
+                "INSERT INTO kg_kind_layers (kind, layer, source) VALUES (:k, :l, 'pack') "
+                "ON CONFLICT (kind) DO UPDATE SET layer = EXCLUDED.layer, updated_at = now()"),
+                {"k": kind, "l": wanted[kind]})
+        nodes = 0
+        touched = sorted(set(wanted) | set(gone))
+        if touched:
+            nodes = connection.execute(text(
+                "UPDATE kg_nodes n SET knowledge_layer = COALESCE(l.layer, "
+                + scopes.layer_sql_case("n.kind") + ") FROM (SELECT unnest(CAST(:k AS text[])) AS kind) t "
+                "LEFT JOIN kg_kind_layers l ON l.kind = t.kind WHERE n.kind = t.kind "
+                "AND n.knowledge_layer IS DISTINCT FROM COALESCE(l.layer, "
+                + scopes.layer_sql_case("n.kind") + ")"), {"k": touched}).rowcount
+    _LAYERS_SYNCED = True
+    return {"kinds": len(changed) + len(gone), "nodes": int(nodes or 0)}
 
 
 def effective_node_kinds(connection: Connection, *, project_id: str) -> frozenset[str]:

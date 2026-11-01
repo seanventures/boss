@@ -10,7 +10,10 @@ reads the real record instead:
   plus the nodes a step's output names as what it opened (`compliance_case_ids`, `precedent_id`).
 * READS — the nodes a step's output names as what it consulted (`collected`, `matched`,
   `cited_node_id`), the run's `kg_usage` rows for the step (consulted / cited / shown / reused),
-  and an outside agent's own `kg_find` calls under the run's token (agent_turns).
+  an outside agent's own `kg_find` calls under the run's token (agent_turns), the step's INPUT
+  (the subject, document or case the run bound it to — its whole job is to read them), what a
+  node it opened is about (a case's `clause_id`), and the stored Context Graph edges of its
+  decision (`consulted` / `about`, context_graph.link_step_decisions).
 * CALLS — tool calls recorded for the step: an agent's own (agent_turns), and the MCP calls a
   deterministic step records in its output (`calls: [{mcp, tool, ok}]`). A step with either
   record is marked `calls_recorded`, so a declared call it never made reads "declared, not
@@ -36,6 +39,9 @@ _NODE_ID = re.compile(r"^kgn_[0-9a-f]{8,}$")
 #: Text that would put a raw id on screen: never used as an example name.
 _RAW_ID = re.compile(r"\b(kgn|wfr|wfd|wfv|act|dec|ext)_[0-9A-Za-z]{6,}")
 _EXAMPLES = 3
+#: A written node's attrs that name what it is about: read by the step that wrote it.
+_SUBJECT_ATTRS = ("clause_id", "document_id", "regulation_id", "subject_id", "alert_id",
+                  "incident_id")
 
 
 def _node_ids(value: Any) -> list[str]:
@@ -119,14 +125,20 @@ def run_trace(connection: Connection, project_id: str, run_id: str) -> Optional[
     """Per step of `run_id`: its last status and the graph kinds it read and wrote. None when
     the run is not this project's."""
     run = connection.execute(text(
-        "SELECT id, status, created_at, completed_at FROM workflow_runs "
-        "WHERE id = :r AND project_id = :p"
+        "SELECT r.id, r.status, r.created_at, r.completed_at, r.input, v.spec FROM workflow_runs r "
+        "LEFT JOIN workflow_versions v ON v.id = r.workflow_version_id "
+        "WHERE r.id = :r AND r.project_id = :p"
     ), {"r": run_id, "p": project_id}).mappings().first()
     if run is None:
         return None
+    from .context_graph import bound_run_input
+
+    run_input = run["input"] if isinstance(run["input"], dict) else {}
+    templates = {str(s.get("id")): s for s in ((run["spec"] or {}).get("steps") or [])
+                 if isinstance(s, dict)} if isinstance(run["spec"], dict) else {}
 
     step_rows = connection.execute(text(
-        "SELECT step_id, step_kind, iteration, status, output FROM workflow_step_runs "
+        "SELECT step_id, step_kind, iteration, status, input, output FROM workflow_step_runs "
         "WHERE workflow_run_id = :r AND project_id = :p ORDER BY created_at ASC, iteration ASC"
     ), {"r": run_id, "p": project_id}).mappings().all()
 
@@ -152,6 +164,14 @@ def run_trace(connection: Connection, project_id: str, run_id: str) -> Optional[
         r, w = _ids_in_output(output)
         out_reads.setdefault(step, []).extend(r)
         out_writes.setdefault(step, []).extend(w)
+        # THE STEP'S INPUT IS A READ (§4.7 overlay fix): the subject, document or case the run
+        # handed this step (its `from_input` bindings, and its own stored input) was read by it —
+        # a clause intake's clause is not "declared, not done".
+        for value in bound_run_input(templates.get(step) or {}, run_input).values():
+            out_reads[step].extend(_node_ids(value))
+        step_input = row.get("input") if isinstance(row.get("input"), dict) else {}
+        for value in step_input.values():
+            out_reads[step].extend(_node_ids(value))
     step_ids = set(status)
 
     reads = {s: _Bucket() for s in step_ids}
@@ -170,6 +190,7 @@ def run_trace(connection: Connection, project_id: str, run_id: str) -> Optional[
         "SELECT id, kind, name, node_key, attrs FROM kg_nodes WHERE project_id = :p "
         "AND (node_key LIKE :like OR attrs->>'run_id' = :r)"
     ), {"p": project_id, "r": run_id, "like": f"%:{run_id}:%"}).mappings().all()
+    written_by: dict[str, set[str]] = {s: set() for s in step_ids}
     for row in written:
         attrs = row["attrs"] if isinstance(row["attrs"], dict) else {}
         step = str(attrs.get("step_id") or "") or _step_of_key(str(row["node_key"]), run_id,
@@ -177,6 +198,24 @@ def run_trace(connection: Connection, project_id: str, run_id: str) -> Optional[
         if step in writes:
             writes[step].add(str(row["kind"]), ref=str(row["id"]), name=str(row["name"] or ""),
                              decision_type=_decision_type(dict(row)))
+            written_by[step].add(str(row["id"]))
+            # What a node it opened is ABOUT (a case's clause, an alert's subject) the step read.
+            for key in _SUBJECT_ATTRS:
+                out_reads.setdefault(step, []).extend(_node_ids(attrs.get(key)))
+    # The nodes a step's output names as what it opened are its writes too.
+    for step, ids in out_writes.items():
+        written_by.setdefault(step, set()).update(ids)
+    # The stored Context Graph edges of the run's decisions (context_graph.link_step_decisions):
+    # what each step's decision consulted, cited and is about.
+    for src_step, dst, kind in connection.execute(text(
+        "SELECT d.attrs->>'step_id', e.dst_id, e.kind FROM kg_edges e "
+        "JOIN kg_nodes d ON d.id = e.src_id AND d.project_id = e.project_id "
+        "WHERE e.project_id = :p AND d.kind = 'agent_decision' AND d.attrs->>'run_id' = :r "
+        "AND e.kind IN ('consulted', 'about') AND e.valid_to IS NULL"
+    ), {"p": project_id, "r": run_id}).all():
+        step = str(src_step or "")
+        if step in step_ids and str(dst) not in written_by.get(step, set()):
+            out_reads.setdefault(step, []).append(str(dst))
 
     # What the outputs name, resolved to kinds in one read.
     named = _nodes(connection, project_id,
