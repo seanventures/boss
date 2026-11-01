@@ -243,7 +243,8 @@ def _agent_step_skills(step: Mapping[str, Any], connection: Optional[Connection]
     if scoped:
         return scoped
     binding = step.get("binding") or {}
-    agent = str(step.get("captain") or binding.get("agent") or "").strip()
+    captain = step.get("captain")
+    agent = "" if isinstance(captain, dict) else str(captain or binding.get("agent") or "").strip()
     if not agent or connection is None or not project_id:
         return []
     try:
@@ -428,8 +429,13 @@ def requirements(
         from .step_agents import is_default_captain
 
         # A catalogue default captain is not a need: without it the step runs on Auto.
-        captain = ("" if is_default_captain(dict(step))
-                   else str(step.get("captain") or binding.get("agent") or "").strip())
+        # AN OUTSIDE AGENT IS NOT A ROLE THIS PROJECT MUST HAVE. Its captain is
+        # {"external_agent": "ext_…"}; read as a role key it refused every workflow with a bank's
+        # agent step ("no agent '{'external_agent': …}' on this project", 2026-10-31). Whether it
+        # is connected and active is checked when the step runs (external_agent_runner).
+        raw_captain = step.get("captain")
+        captain = ("" if is_default_captain(dict(step)) or isinstance(raw_captain, dict)
+                   else str(raw_captain or binding.get("agent") or "").strip())
         for named in (captain, approver):
             if named and named not in caps.HUMAN_ROLES:
                 needed.add(f"role:{named}")
