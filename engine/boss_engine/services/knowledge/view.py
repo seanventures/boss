@@ -470,6 +470,15 @@ _BUBBLE_LABEL = {"domain": "Domain", "context": "Context"}
 _BUBBLE_EMPTY = {"domain": "No regulations or documents yet", "context": "No agent decisions yet"}
 
 
+def _mid_sentence(label: str) -> str:
+    """A pack's label as it reads inside a sentence: "Compliance case" → "compliance case", but
+    an acronym keeps its capitals ("AML case" stays "AML case")."""
+    head, _, rest = label.partition(" ")
+    if len(head) > 1 and head.isupper():
+        return label
+    return label[:1].lower() + label[1:]
+
+
 def _pack_bubble(connection: Connection, project_id: str, layer: str, withheld: frozenset[str],
                  kinds: Mapping[str, Mapping[str, Any]], *, alone: bool) -> Optional[dict[str, Any]]:
     """The Domain or the Context bubble: how many of each of its kinds the project holds, said
@@ -485,13 +494,17 @@ def _pack_bubble(connection: Connection, project_id: str, layer: str, withheld: 
 
     def said(kind: str, n: int) -> str:
         meta = kinds.get(kind) or view_context.kind_meta(kind) or {}
-        one = str(meta.get("label") or kind.replace("_", " ")).lower()
-        many = str(meta.get("plural") or one + "s").lower()
+        one = _mid_sentence(str(meta.get("label") or kind.replace("_", " ")))
+        many = _mid_sentence(str(meta.get("plural") or one + "s"))
         return f"{n:,} {one if n == 1 else many}"
 
-    # The kinds a person looks for first: cases and documents, then the rest by size.
-    order = sorted(counts, key=lambda k: (not (k.endswith("_case") or k in ("document", "regulation")), -counts[k], k))
-    sub = " · ".join(said(k, counts[k]) for k in order[:2]) or _BUBBLE_EMPTY[layer]
+    # The kinds a person looks for first: cases and documents, then the agent decisions that
+    # worked them, then the rest by size ("2 AML cases · 2 compliance cases · 94 agent decisions").
+    def first(k: str) -> int:
+        return 0 if k.endswith("_case") or k in ("document", "regulation") else 1 if k == "agent_decision" else 2
+
+    order = sorted(counts, key=lambda k: (first(k), -counts[k], k))
+    sub = " · ".join(said(k, counts[k]) for k in order[:3]) or _BUBBLE_EMPTY[layer]
     return {"id": f"layer:{layer}", "key": f"layer:{layer}", "kind": "layer", "layer": layer,
             "label": _BUBBLE_LABEL[layer], "sub": sub, "trust_tier": "observed", "counts": counts}
 

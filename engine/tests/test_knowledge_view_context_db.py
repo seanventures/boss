@@ -107,6 +107,9 @@ def test_the_context_bubble_counts_the_trace_in_the_packs_words(connection, case
     assert ctx["layer"] == "context" and ctx["label"] == "Context"
     assert ctx["counts"]["compliance_case"] == 1 and ctx["counts"]["agent_decision"] == 3
     assert ctx["sub"].startswith("1 compliance case")            # cases first, in the pack's word
+    assert "3 agent decisions" in ctx["sub"]                    # the decisions that worked it, too
+    assert view._mid_sentence("AML case") == "AML case"          # an acronym keeps its capitals
+    assert view._mid_sentence("Compliance case") == "compliance case"
     dom = bubbles["layer:domain"]
     assert dom["counts"] == {"clause": 1, "document": 1} and dom["sub"] == "1 document · 1 clause"
     assert o["kinds"]["compliance_case"]["color"] == "#ff9f4a"   # the pack's colour

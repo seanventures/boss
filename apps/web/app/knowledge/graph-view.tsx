@@ -854,7 +854,7 @@ export function GraphView({ projectId, actor, orgId, repos, onReposChanged, rule
         <div className="kg-search" data-testid="kg-search">
           <label className="inf-find kg-find">
             <MagnifyingGlass size={14} aria-hidden />
-            <input ref={searchBox} type="text" value={query} placeholder="Search the graph…" title="Search symbols, rules and learnings (⌘K)"
+            <input ref={searchBox} type="text" value={query} placeholder="Search…" title="Search symbols, rules and learnings (⌘K)"
                    aria-label="Search the graph" aria-expanded={dropOpen && !!query.trim()} aria-controls="kg-search-results"
                    aria-activedescendant={dropOpen && hits[active] ? `kg-hit-${active}` : undefined} role="combobox" aria-autocomplete="list"
                    data-testid="kg-search-input"

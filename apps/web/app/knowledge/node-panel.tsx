@@ -144,7 +144,7 @@ export function NodePanel({ projectId, actor, orgId, nodeId, preview, bubble, ar
           {close}
         </div>
         <h3 className="kg-panel-title" data-testid="kg-panel-title" data-user-text>{soft(node?.label ?? "…")}</h3>
-        {node?.sub && !isBubble ? <p className="kg-panel-sub inf-mono" title={node.sub}>{node.sub}</p> : null}
+        {node?.sub && !isBubble ? <p className={layer === "code" ? "kg-panel-sub inf-mono" : "kg-panel-sub"} data-testid="kg-panel-sub" title={node.sub}>{node.sub}</p> : null}
         <div className="kg-panel-actions">
           {onShowConnected ? (
             <button type="button" className="ag-btn" data-testid="kg-panel-focus" onClick={onShowConnected}
