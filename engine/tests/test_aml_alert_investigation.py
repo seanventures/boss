@@ -363,6 +363,16 @@ def test_alert_1_then_alert_2_reuses_the_first_determination(loaded, monkeypatch
     assert _drive(c, project, run1, spec) == "analyst_decision"
     assert _output(c, run1, "aml_analysis")["recommendation"] == "close_false_positive"
     assert "PRIOR DECISIONS: none" in agents.prompts["analyst"][0]
+    # The gate asks a PERSON for the determination and its reason: the inbox draws a reason box,
+    # and the card carries the AML Analyst's recommendation to judge.
+    from boss_engine.services.decision_actions import allowed_actions
+
+    card = c.execute(text("SELECT d.* FROM decisions d JOIN workflow_step_runs s ON "
+                          "s.decision_id = d.id WHERE s.workflow_run_id = :r AND "
+                          "s.step_id = 'analyst_decision'"), {"r": run1}).mappings().one()
+    offered = {a["action"]: a for a in allowed_actions(dict(card))}
+    assert offered["approve"]["needs"] == "note" and offered["approve"]["label"] == "Decide"
+    assert "CLOSE AS A FALSE POSITIVE" in card["recommendation"]["review"]["summary"]
     # No person, no closure: the closure step refuses to run on its own.
     with pytest.raises(pipeline.DeterminationMissing):
         pipeline.run_aml_closure(c, project_id=project, run_id=run1, step_id="aml_closure",

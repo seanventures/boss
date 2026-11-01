@@ -462,6 +462,19 @@ def allowed_actions(decision: Mapping[str, Any]) -> list[dict[str, Any]]:
                     "regulatory trace review."),
             _delegate(),
         ]
+    if kind == "workflow_gate" and str(_rec(decision).get("reason_prompt") or "").strip():
+        # A GATE WHOSE ANSWER IS A PERSON'S STATED DETERMINATION (the AML analyst decision, the
+        # SAR filing): the reason is the record a later case is judged against, so the approval
+        # is drawn open with its reason box and sent with it (forced + note, which
+        # decisions.transition requires a note for). The step's own prompt says what to write.
+        return [
+            _action("approve", str(_rec(decision).get("reason_label") or "Decide"), "approve",
+                    "Releases the step with your note as the determination and its reason; it "
+                    "is recorded for later cases.", needs="note"),
+            _action("reject", "Stop the run", "reject",
+                    "Fails the step. Nothing is decided and the case stays open."),
+            _delegate(),
+        ]
     if kind == "workflow_gate":
         # No "Request changes": the workflow runner reads approved, rejected and expired, and
         # a gate parked in revision_requested left its run waiting for ever.

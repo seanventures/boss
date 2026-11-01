@@ -6847,6 +6847,10 @@
               "mode": "manual",
               "approver_role": "human"
             },
+            "recommendation": {
+              "reason_label": "Decide",
+              "reason_prompt": "Your determination and why — e.g. 'Close: documented payroll, register on file' or 'Escalate: cash just under the threshold, wired offshore'. A note that names neither accepts the AML Analyst's recommendation."
+            },
             "next": [
               "narrative"
             ],
@@ -6931,6 +6935,10 @@
             "approval": {
               "mode": "manual",
               "approver_role": "human"
+            },
+            "recommendation": {
+              "reason_label": "Filed",
+              "reason_prompt": "The filing reference, once you have filed it yourself (BOSS never files)."
             },
             "next": [
               "aml_closure"

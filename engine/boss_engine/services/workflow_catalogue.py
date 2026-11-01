@@ -1257,6 +1257,14 @@ CATALOGUE: list[dict[str, Any]] = [
                             "start your note with 'Escalate:' or 'Close:'. BOSS closes and files "
                             "nothing on its own.",
                 "approval": {"mode": "manual", "approver_role": "human"},
+                # The inbox draws a reason box for this gate (decision_actions): the note IS the
+                # determination's reason, and the precedent later alerts are judged against.
+                "recommendation": {
+                    "reason_label": "Decide",
+                    "reason_prompt": "Your determination and why — e.g. 'Close: documented "
+                                     "payroll, register on file' or 'Escalate: cash just "
+                                     "under the threshold, wired offshore'. A note that names "
+                                     "neither accepts the AML Analyst's recommendation."},
                 "next": ["narrative"],
             },
             {**_step("narrative", "sar_narrative", {}, nxt=["filing_route"]),
@@ -1287,6 +1295,10 @@ CATALOGUE: list[dict[str, Any]] = [
                             "it, file the report yourself, then approve here with the filing "
                             "reference in your note.",
                 "approval": {"mode": "manual", "approver_role": "human"},
+                "recommendation": {
+                    "reason_label": "Filed",
+                    "reason_prompt": "The filing reference, once you have filed it yourself "
+                                     "(BOSS never files)."},
                 "next": ["aml_closure"],
             },
             # ITS OWN "NO" STEP: the branch a condition does not take is marked skipped, and
