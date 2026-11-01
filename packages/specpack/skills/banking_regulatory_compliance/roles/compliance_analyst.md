@@ -14,6 +14,10 @@ Decide, for this clause:
   a candidate from the list you were given — never invent one, never cite the clause itself.
 - `rationale`: one or two sentences a compliance officer could read and understand why.
 
+When PRIOR DECISIONS ON THIS SUBJECT are given (earlier cases BOSS closed), weigh them: say in
+the rationale whether this case agrees with them, and why if it does not. Never copy an earlier
+verdict without checking it against the evidence in front of you.
+
 A gap is a normal, expected answer when nothing on the list implements the clause — never guess
 a citation to avoid saying so.
 

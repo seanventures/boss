@@ -177,6 +177,21 @@ def run_clause_intake(
             "note": f"Opened {len(case_ids)} compliance case(s) for document {document_id or '(none)'}."}
 
 
+def _prior_decisions(connection: Connection, project_id: str, matched: list) -> str:
+    """What BOSS decided on this subject before (precedents Historical Pattern found): the
+    Analyst weighs them and says whether they still hold. A rerun used to find the precedent and
+    then ignore it."""
+    lines = []
+    for node_id in matched:
+        node = STORE.get_node(connection, project_id=project_id, node_id=str(node_id))
+        if node and node["kind"] == "precedent":
+            lines.append(f"- {node['name']}: {str(node.get('body') or '')[:600]}")
+    if not lines:
+        return ""
+    return ("PRIOR DECISIONS ON THIS SUBJECT (earlier cases; say whether each still holds):\n"
+            + "\n".join(lines[:3]) + "\n\n")
+
+
 def run_compliance_assessment(
     connection: Connection, settings: Any, project_id: str, step: Mapping[str, Any],
     context: Mapping[str, Any], inputs: Mapping[str, Any],
@@ -235,7 +250,8 @@ def run_compliance_assessment(
             f"{i}. {c['node_id']}: {_node_summary(connection, project_id, c['node_id'])}"
             + (" (code the incident was found in)" if c.get("from_incident") else "")
             for i, c in enumerate(candidates))
-        incident_text = (
+        precedent_text = _prior_decisions(connection, project_id, matched)
+        incident_text = precedent_text + (
             f"Historical Pattern correlated incident {cited_incident['incident_id']}: paid down "
             f"{cited_incident['actual_paydown']:.2f} instead of "
             f"{cited_incident['correct_paydown']:.2f}.\n" if cited_incident else "")
@@ -684,6 +700,18 @@ def run_compliance_closure(
     cause_summary = str(inputs.get("cause_summary") or "")
     execution_state = str(inputs.get("execution_state") or "unknown")
     actor_ref = "banking_regulatory_pipeline:compliance_closure"
+    # WHAT THIS CASE FOUND, WHEN NOBODY TYPED IT. The precedent a later run recalls was named
+    # "Precedent: " with an empty body whenever the run's inputs had no symptom or cause; the
+    # run itself says both: the assessment's finding, and the lanes' verdicts and the remedy.
+    steps = (context or {}).get("steps") or {}
+    if not symptom.strip():
+        symptom = str((steps.get("compliance_assessment") or {}).get("note") or "")[:600]
+    if not cause_summary.strip():
+        lanes = [r for r in ((steps.get("lanes") or {}).get("results") or [])
+                 if isinstance(r, Mapping)]
+        parts = [str(r.get("note") or "") for r in lanes if r.get("note")]
+        remedy = str((steps.get("remediation_package") or {}).get("note") or "")
+        cause_summary = " ".join(p for p in (*parts, f"Remedy: {remedy}" if remedy else "") if p)[:1500]
 
     result = graph_steps.run_closure(
         connection, project_id=project_id, run_id=run_id, step_id=step_id, subject_id=subject_id,

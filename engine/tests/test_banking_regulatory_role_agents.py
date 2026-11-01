@@ -332,6 +332,44 @@ class BankingRegulatoryRoleAgentTests(unittest.TestCase):
         finally:
             mp.undo()
 
+    def test_a_rerun_weighs_the_earlier_decision_and_closure_names_what_it_found(self):
+        """'BOSS remembers' (2026-10-31): a precedent Historical Pattern finds reaches the
+        Analyst, and a closure with no typed symptom records what the run found."""
+        import pytest
+        mp = pytest.MonkeyPatch()
+        try:
+            precedent = STORE.upsert_node(
+                self.connection, project_id=self.project_id, kind="precedent",
+                node_key="precedent:run_old:compliance_closure",
+                name="Precedent: gap in repayment amount checks", body="No amount check found.",
+                trust_tier="inferred", actor_kind="agent", actor_ref="test")
+            rule_id = self._add_rule(name="classification", body="types")
+            candidate_id = self._add_rule(name="allocation", body="applies payments")
+            agent = FakeAgent({"status": "gap", "confidence": 0.7, "citation": None,
+                               "rationale": "agrees with the earlier case"})
+            _install_fake(mp, agent)
+            mp.setattr(pipeline.STORE, "neighbors", lambda *a, **k: [])
+            pipeline.run_compliance_assessment(
+                self.connection, settings=None, project_id=self.project_id,
+                step={"id": "compliance_assessment", "run_id": "run_new"},
+                context={"steps": {"context_enrichment": {"collected": [candidate_id]},
+                                   "historical_pattern": {"matched": [precedent]}}},
+                inputs={"subject_id": rule_id})
+            self.assertIn("PRIOR DECISIONS ON THIS SUBJECT", agent.prompts[0])
+            self.assertIn("No amount check found.", agent.prompts[0])
+        finally:
+            mp.undo()
+        result = pipeline.run_compliance_closure(
+            self.connection, settings=None, project_id=self.project_id,
+            step={"id": "compliance_closure", "run_id": "run_new"},
+            context={"steps": {"compliance_assessment": {"note": "Assessed as gap: no amount check"},
+                               "lanes": {"results": [{"note": "Confirmed: classification"}]}}},
+            inputs={"subject_id": rule_id})
+        node = STORE.get_node(self.connection, project_id=self.project_id,
+                              node_id=result["precedent_id"])
+        self.assertIn("no amount check", node["name"])
+        self.assertIn("Confirmed: classification", node["body"])
+
     def test_remediation_package_falls_back_when_the_advisor_answers_nothing_readable(self):
         class UnreadableAgent:
             def run_role(self, *a, **k):
