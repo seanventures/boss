@@ -535,6 +535,8 @@
 .wf-stepout dt { font-size: 0.75rem; color: var(--faint); }
 .wf-stepout dd { margin: 2px 0 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
              font-size: 0.8125rem; color: var(--ink); }
+.wf-stepout > .wf-stepout-prose { grid-column: 1 / -1; }
+.wf-stepout > .wf-stepout-prose dd { white-space: normal; overflow: visible; line-height: 1.45; }
 .wf-stepout-mono dd { font-family: var(--mono, monospace); font-size: 0.75rem; color: var(--muted); }
 .wf-stepout-details { margin-top: 10px; }
 .wf-stepout-details > summary { cursor: pointer; font-size: 0.75rem; color: var(--faint); }

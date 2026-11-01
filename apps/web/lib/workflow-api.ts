@@ -130,6 +130,7 @@ function toCapability(raw: unknown): Capability {
     ...(str(c.captain) ? { captain: str(c.captain) } : {}),
     ...(str(c.role_agent) ? { role_agent: str(c.role_agent) } : {}),
     ...(c.needs_model === true ? { needs_model: true } : {}),
+    ...(c.is_code === true ? { is_code: true } : {}),
   };
 }
 

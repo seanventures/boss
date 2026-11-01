@@ -40,7 +40,9 @@ export type Capability = { key: string; label: string; summary: string; risk_tie
   /** The role agent whose judgement the work is, when not the captain (Pipeline view). */
   role_agent?: string;
   /** True when the step's work is done by a model. */
-  needs_model?: boolean };
+  needs_model?: boolean;
+  /** BOSS's own deterministic code (clause intake, closure): no model, no agent. */
+  is_code?: boolean };
 export type CustomStepDef = { step_key: string; label: string; summary?: string;
   binding_kind: "skill" | "mcp_tool"; skill_id?: string; mcp_server_id?: string; mcp_tool_name?: string;
   inputs: { name: string; required: boolean }[]; produces: string[]; risk_tier: number;

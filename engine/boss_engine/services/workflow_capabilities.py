@@ -1024,6 +1024,8 @@ def palette() -> list[dict[str, Any]]:
             "stops_for_a_person": stops_for_a_person(c.key),
             "answered_by": c.answered_by,
             "needs_model": c.needs_model,
+            # BOSS's own deterministic code: the run page says "BOSS · no model", not an agent.
+            "is_code": c.is_code,
             "cost_note": c.cost_note,
             "reviewed_by_a_person": c.reviewed_by_a_person,
         }

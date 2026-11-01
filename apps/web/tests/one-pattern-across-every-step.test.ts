@@ -187,3 +187,12 @@ describe("the workflow agent is reachable from the workflow page", () => {
     expect(block).toContain("retire one");
   });
 });
+
+import { stepView as _sv } from "../lib/step-view";
+describe("a deterministic step says who did it", () => {
+  it("reads BOSS · no model, never Auto or You", () => {
+    const palette = { agents: [], capabilities: [{ key: "compliance_closure", is_code: true }], humanRole: "human" } as never;
+    expect(_sv({ id: "context_enrichment", kind: "deterministic", binding: {} } as never, palette).agent.label).toBe("BOSS · no model");
+    expect(_sv({ id: "compliance_closure", kind: "capability", binding: { capability: "compliance_closure" } } as never, palette).agent.label).toBe("BOSS · no model");
+  });
+});

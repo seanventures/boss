@@ -193,9 +193,14 @@ def run_clause_intake(
             node_key=f"case:{clause_id}", name=f"Compliance case: {clause_id}", body="",
             trust_tier="inferred", actor_kind="agent", actor_ref=actor_ref,
             attrs={"clause_id": clause_id, "status": "open"}))
-    source = f"document {document_id}" if document_id else f"subject {subject_id or '(none)'}"
+    # IN NAMES, NEVER IDS: a person reads this on the step and in the audit trail.
+    def _named(node_id: str) -> str:
+        node = STORE.get_node(connection, project_id=project_id, node_id=node_id) if node_id else None
+        return str(node["name"]) if node and node.get("name") else "an unnamed node"
+    source = (f"the regulation \u201c{_named(document_id)}\u201d" if document_id
+              else f"\u201c{_named(subject_id)}\u201d" if subject_id else "no subject")
     statement = (f"Opened {len(case_ids)} compliance case(s) for {source}: "
-                 f"{', '.join(clause_ids or case_ids)}." if case_ids
+                 f"{'; '.join(_named(c) for c in (clause_ids or case_ids))}." if case_ids
                  else f"No clause found to open a compliance case for ({source}).")
     decision = context_graph.write_agent_decision(
         connection, project_id, step_id=step_id, run_id=run_id or f"adhoc:{document_id or subject_id}",

@@ -144,6 +144,13 @@ function agentOf(step: SpecStep, type: StepView["type"], palette: Palette): Step
     return { kind: "named", role_key: `outside:${outside}`, label: named || "Outside agent",
              tip: "The organisation's own agent, called under this step's contract." };
   }
+  // A DETERMINISTIC STEP is BOSS's own code — a graph query or a record, no model, no agent.
+  // It read "Auto" (and BOSS's own clause intake read "You") on the run page (2026-11-01).
+  const capKey = String(asObj(step.binding).capability ?? "");
+  const cap = palette.capabilities.find((c) => c.key === capKey);
+  if (String((step as { kind?: unknown }).kind ?? "") === "deterministic" || cap?.is_code) {
+    return { kind: "auto", label: "BOSS · no model", tip: "A deterministic step: BOSS's own code, no AI model." };
+  }
   const captain = typeof step.captain === "string" ? step.captain.trim() : "";
   if (captain === human) return { kind: "person", label: "A person", tip: "Waits for a person to answer." };
   if (captain) {

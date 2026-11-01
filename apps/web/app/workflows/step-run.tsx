@@ -460,7 +460,8 @@ export function StepOutputFacts({ facts, details }: { facts: OutputFact[]; detai
       {facts.length ? (
         <dl className="wf-stepout" data-testid="dw-step-out">
           {facts.map((f) => (
-            <div key={`${f.label}:${f.value}`}>
+            // A finding is prose: it reads in full across the row, never cut to one line.
+            <div key={`${f.label}:${f.value}`} className={f.value.length > 70 ? "wf-stepout-prose" : undefined}>
               <dt>{f.label}</dt>
               <dd data-tip={f.tip ?? f.value} data-user-text>{f.value}</dd>
             </div>
