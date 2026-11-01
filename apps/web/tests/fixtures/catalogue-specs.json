@@ -6167,10 +6167,6 @@
               "calls": [
                 {
                   "mcp": "itsm",
-                  "tool": "get_incident"
-                },
-                {
-                  "mcp": "itsm",
                   "tool": "list_incidents"
                 }
               ],
@@ -6708,10 +6704,6 @@
                 }
               ],
               "calls": [
-                {
-                  "mcp": "itsm",
-                  "tool": "get_incident"
-                },
                 {
                   "mcp": "itsm",
                   "tool": "list_incidents"

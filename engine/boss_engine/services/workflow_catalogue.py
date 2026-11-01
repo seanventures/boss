@@ -336,7 +336,8 @@ def _writes(*specs: tuple) -> list[dict[str, Any]]:
     return out
 
 
-_ITSM_CALLS = [{"mcp": "itsm", "tool": "get_incident"}, {"mcp": "itsm", "tool": "list_incidents"}]
+# What Historical pattern actually calls (it lists matching tickets; it never fetches one by id).
+_ITSM_CALLS = [{"mcp": "itsm", "tool": "list_incidents"}]
 
 # STEP CONTRACTS (design §4.1, §5.1): what each stage of the KG investigation template reads
 # from the Knowledge Graph, must write to the Context Graph, and calls. Core kinds only, so the
