@@ -450,10 +450,14 @@ def gate_wait_seconds(step_rows: Any, work_ends: list, started: Any, last_work: 
     total = 0.0
     for r in step_rows:
         answered = r["completed_at"]
-        if str(r.get("step_kind") or "") != "decision" or not answered or answered > last_work:
+        # Only a gate the run WORKED AFTER: a run's own end stamp can land a few milliseconds
+        # before the approval that released its last step, so it is not the yardstick.
+        if (str(r.get("step_kind") or "") != "decision" or not answered
+                or not any(w > answered for w in work_ends)):
             continue
         before = [w for w in work_ends if w <= answered]
-        total += max(0.0, (answered - (max(before) if before else started)).total_seconds())
+        end = min(answered, last_work) if answered > last_work else answered
+        total += max(0.0, (end - (max(before) if before else started)).total_seconds())
     return total
 
 

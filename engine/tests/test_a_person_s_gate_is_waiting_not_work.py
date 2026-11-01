@@ -23,3 +23,11 @@ def test_a_gate_still_waiting_after_the_last_work_is_left_to_the_waiting_tail():
     rows = [{"step_kind": "capability", "completed_at": at(3)},
             {"step_kind": "decision", "completed_at": None}]
     assert gate_wait_seconds(rows, [at(3)], T0, at(3)) == 0.0
+
+
+def test_a_run_end_stamped_just_before_the_answer_still_counts_the_wait():
+    rows = [{"step_kind": "capability", "completed_at": at(3)},
+            {"step_kind": "decision", "completed_at": at(10.001)},
+            {"step_kind": "capability", "completed_at": at(10.002)}]
+    # the run's end (and so last_work) was stamped at 10.000, before the answer
+    assert round(gate_wait_seconds(rows, [at(3), at(10.002)], T0, at(10))) == 7 * 60
