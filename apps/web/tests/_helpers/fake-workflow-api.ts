@@ -19,8 +19,10 @@ export type FakeWorkflow = {
   last_run?: { id: string; status: string; at: string } | null;
 };
 
-/** `view=run_detail`'s steps, by run id — what `fetchRunTrace` turns into `{reads, writes}`. */
-export type FakeRunDetail = Record<string, { steps: { step_id: string; status: string; input?: Obj; output?: Obj }[] }>;
+/** `view=context_trace`, by run id — what each step of the run read and wrote in the graph
+ *  (`fetchRunContext`, the Pipeline tab's last run). */
+export type FakeRunContext = Record<string, { status: string; started_at?: string;
+  steps: Record<string, { status: string; reads?: Obj[]; writes?: Obj[]; calls?: Obj[] }> }>;
 
 export type FakeApi = {
   workflows: FakeWorkflow[];
@@ -53,7 +55,7 @@ function paletteWire(p: Palette) {
 }
 
 export function fakeWorkflowApi(palette: Palette, workflows: FakeWorkflow[],
-                                runDetail: FakeRunDetail = {}): FakeApi {
+                                runContext: FakeRunContext = {}): FakeApi {
   const api: FakeApi = {
     workflows, palette, writes: [], problems: [], draft: null,
     fetch: async (input, init) => {
@@ -73,11 +75,11 @@ export function fakeWorkflowApi(palette: Palette, workflows: FakeWorkflow[],
                                               capability: (s.binding as Obj | undefined)?.capability })),
           })) });
         }
-        if (view === "run_detail") {
+        if (view === "context_trace") {
           const runId = url.searchParams.get("run_id") ?? "";
-          const run = runDetail[runId];
+          const run = runContext[runId];
           if (!run) return Response.json({ error: "no such run" }, { status: 404 });
-          return Response.json({ id: runId, steps: run.steps });
+          return Response.json({ run_id: runId, completed_at: null, started_at: null, ...run });
         }
         if (view === "spec") {
           const w = api.workflows.find((x) => x.workflow_key === url.searchParams.get("key"));

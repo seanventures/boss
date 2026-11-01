@@ -19,8 +19,10 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import type { CustomStepDef, FlowLink, PaletteItem, Spec, StepView } from "../../../lib/workflow-editor-types";
 import { TOAST_EVENT } from "../../../lib/api-write";
 import {
-  checkSpec, deleteWorkflow, draftFromDescription, fetchLibrary, fetchRunTrace, fetchSpec,
+  checkSpec, deleteWorkflow, draftFromDescription, fetchLibrary, fetchRunContext, fetchSpec,
+  type RunContext,
 } from "../../../lib/workflow-api";
+import { buildPipeline } from "../../../lib/pipeline-model";
 import { checkRewire } from "../../../lib/workflow-rewire";
 import { newMeta, useWorkflowEditor } from "../../../lib/workflow-editor-store";
 import { canRemove, insertStep, layoutFlow, linearOrder } from "../../../lib/workflow-graph";
@@ -47,7 +49,7 @@ import { TestRunPanel } from "./test-run-panel";
 import { useCan } from "../../../components/identity/identity-provider";
 import { useAreaKeydown } from "../../../lib/area-keys";
 import { hostOf, listOutsideAgents } from "../../agents/outside-agents-actions";
-import { PipelineView, type OutsideAgentOption, type StageTrace } from "../pipeline-view";
+import { PipelineView, type OutsideAgentOption } from "../pipeline-view";
 
 const BLOCK_REMOVED: Record<ControlBlock, string> = {
   condition: "Branch removed", parallel: "Parallel steps removed", bounded_loop: "Repeat removed",
@@ -153,6 +155,7 @@ export function WorkflowEditor({ projectId, workflowKey, onBack, onStart, actor,
     try {
       const q = new URLSearchParams(window.location.search);
       if (q.get("view") === "json") setView("json");
+      else if (q.get("view") === "pipeline") setView("pipeline");
       urlStep.current = q.get("step");
       const v = Number(q.get("v"));
       pendingVersion.current = Number.isInteger(v) && v > 0 ? v : null;
@@ -168,7 +171,7 @@ export function WorkflowEditor({ projectId, workflowKey, onBack, onStart, actor,
   useEffect(() => {
     if (!urlRead.current || loading) return;
     writeUrl({
-      wf: key, step: state.selection, view: view === "json" ? "json" : null,
+      wf: key, step: state.selection, view: view === "visual" ? null : view,
       v: meta.readOnlyVersion != null ? String(meta.readOnlyVersion) : null,
     });
   }, [key, state.selection, view, meta.readOnlyVersion, loading]);
@@ -199,41 +202,26 @@ export function WorkflowEditor({ projectId, workflowKey, onBack, onStart, actor,
   const views = useMemo(() => new Map(spec.steps.map((s) => [s.id, viewOf(s, palette)] as [string, StepView])),
     [spec.steps, palette]);
 
-  /* ── Pipeline tab (KG P6b): the stage diagram, who runs each stage, and a contract stage's
-   *  captain switched to a connected outside agent. Outside agents are the project's own
-   *  (Agents › Outside agents), loaded once the tab is reachable. ── */
-  const pipelineSpec = useMemo(() => ({
-    key: meta.workflow_key ?? meta.name ?? "workflow",
-    version: meta.version ?? 1,
-    steps: spec.steps.map((s) => {
-      const captain = s.captain;
-      const outsideId = captain && typeof captain === "object" ? captain.external_agent : undefined;
-      const outsideAgent = outsideId ? outsideAgents.find((a) => a.id === outsideId) : undefined;
-      return {
-        id: s.id,
-        kind: ["for_each", "bounded_loop", "gate"].includes(s.kind) ? s.kind : "custom_step",
-        agent: outsideId ? (outsideAgent?.display_name ?? outsideId) : (typeof captain === "string" ? captain : undefined),
-        captain_kind: outsideId ? ("outside_agent" as const) : undefined,
-        endpoint_host: outsideAgent?.endpoint_host,
-        contract: s.contract as { reads?: { kind: string }[]; writes?: { kind: string; required?: boolean }[] } | undefined,
-      };
-    }),
-  }), [meta.workflow_key, meta.name, meta.version, spec.steps, outsideAgents]);
-  /* ── The last run's trace: what each stage actually read and wrote, once it has run. The
-   *  library's row for this workflow carries its last run's id; its full trace lives on the
-   *  run itself. ── */
-  const [trace, setTrace] = useState<StageTrace | undefined>(undefined);
+  /* ── Pipeline tab (design §4.7): the numbered stage diagram — who runs each stage, what it
+   *  reads and writes, how it went on the last run — and a stage's captain switched to a
+   *  connected outside agent (KG P6b). Built from the spec on screen, so an edit shows at once. ── */
+  const [lastRun, setLastRun] = useState<RunContext | null>(null);
   useEffect(() => {
-    if (!projectId || !meta.workflow_key) { setTrace(undefined); return; }
+    if (!projectId || !meta.workflow_key || view !== "pipeline") return;
     let live = true;
+    // The library's row for this workflow carries its last run's id; what each step read and
+    // wrote on it is the run's own graph record (view=context_trace).
     void fetchLibrary(projectId).then((items) => {
       if (!live) return;
       const runId = items.find((w) => w.workflow_key === meta.workflow_key)?.last_run?.id;
-      if (!runId) { setTrace(undefined); return; }
-      void fetchRunTrace(projectId, runId).then((t) => { if (live) setTrace(t); }, () => { if (live) setTrace(undefined); });
-    }, () => { if (live) setTrace(undefined); });
+      if (!runId) { setLastRun(null); return; }
+      void fetchRunContext(projectId, runId).then((r) => { if (live) setLastRun(r); },
+        () => { if (live) setLastRun(null); });
+    }, () => { if (live) setLastRun(null); });
     return () => { live = false; };
-  }, [projectId, meta.workflow_key]);
+  }, [projectId, meta.workflow_key, view]);
+  const pipelineStages = useMemo(() => buildPipeline(spec, palette, outsideAgents, lastRun),
+    [spec, palette, outsideAgents, lastRun]);
   const assignCaptain = useCallback((stepId: string, choice: { kind: "agent" | "outside_agent"; value: string }) => {
     if (readOnly) return;
     dispatch({ type: "PATCH_STEP", id: stepId, patch: { externalAgent: choice.kind === "outside_agent" ? choice.value : null } });
@@ -626,8 +614,8 @@ export function WorkflowEditor({ projectId, workflowKey, onBack, onStart, actor,
           </main>
         ) : (
           <main className="wf-stage wf-stage-pipeline" aria-label="Pipeline" data-testid="wf-pipeline-tab">
-            <PipelineView spec={pipelineSpec} outsideAgents={outsideAgents} onAssignCaptain={assignCaptain}
-                          trace={trace} />
+            <PipelineView name={meta.name || "Workflow"} stages={pipelineStages} run={lastRun}
+                          outsideAgents={outsideAgents} onAssignCaptain={readOnly ? undefined : assignCaptain} />
           </main>
         )}
         {inspectorOpen && palette ? (

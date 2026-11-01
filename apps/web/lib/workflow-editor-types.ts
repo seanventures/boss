@@ -36,7 +36,11 @@ export type SpecStep = Record<string, unknown> & {
 
 export type Capability = { key: string; label: string; summary: string; risk_tier: number;
   required_inputs: string[]; optional_inputs: string[]; produces: string[]; skills: string[];
-  typical_minutes?: number; is_gate?: boolean; approval_forced_manual?: boolean; captain?: string };
+  typical_minutes?: number; is_gate?: boolean; approval_forced_manual?: boolean; captain?: string;
+  /** The role agent whose judgement the work is, when not the captain (Pipeline view). */
+  role_agent?: string;
+  /** True when the step's work is done by a model. */
+  needs_model?: boolean };
 export type CustomStepDef = { step_key: string; label: string; summary?: string;
   binding_kind: "skill" | "mcp_tool"; skill_id?: string; mcp_server_id?: string; mcp_tool_name?: string;
   inputs: { name: string; required: boolean }[]; produces: string[]; risk_tier: number;
@@ -53,6 +57,11 @@ export type Palette = { capabilities: Capability[]; customSteps: CustomStepDef[]
   /** Absent from palettes built before branch blocks could be placed: none are offered then. */
   controls?: ControlDef[];
   agents: RosterAgent[]; humanRole: string; riskFloor: number;
+  /** Every role a stage can name, by key — display name and callsign — including roles this
+   *  project has not installed (the Pipeline view names a capability's role agent with it). */
+  roleNames?: Record<string, { name: string; callsign: string }>;
+  /** What each deterministic graph step is, by step id (it binds no capability). */
+  graphSteps?: Record<string, { label: string; summary: string }>;
   /** The project's connected outside agents (Agents › Outside agents), to name their steps. */
   outsideAgents?: { id: string; name: string }[];
   bindable: { skills: { id: string; name: string }[];
