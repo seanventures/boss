@@ -192,14 +192,14 @@ CAPABILITY_PRECHECKS: dict[str, CapabilityPrecheck] = {
         "a person's review of the proposed implemented_by and gap findings"),
     # KG P5b banking_regulatory_compliance: thin role-agent steps that read and write the
     # Context Graph through the deterministic knowledge path (not a build sandbox). Two call a
-    # tool during their turn — the ITSM mock, and the repo read — declared so the consent check
+    # tool during their turn — the Service Desk mock, and the repo read — declared so the consent check
     # grants it.
     "clause_intake": NO_CHECKS("opens a ComplianceCase per clause from the pasted document; "
                                "writes the Context Graph, runs no sandbox"),
     "compliance_assessment": CapabilityPrecheck(
         none_because="classifies the assembled evidence and cites a graph node; writes the "
                      "Context Graph, runs no sandbox",
-        invokes_tools=("itsm_mock",)),
+        invokes_tools=("service_desk_mock",)),
     "compliance_orchestration": NO_CHECKS("groups the run's findings into remediation families "
                                           "from what the assessment recorded"),
     "lane_confirmation": CapabilityPrecheck(
@@ -219,23 +219,24 @@ CAPABILITY_PRECHECKS: dict[str, CapabilityPrecheck] = {
                               "writes the Context Graph, runs no sandbox"),
     "sar_narrative": NO_CHECKS("drafts a narrative after a person escalated; files nothing"),
     # The DQ RCA and remediation pipeline (dq_incident_rca): graph reads, the DQ sample's
-    # connectors (Eagle, Olympus, ITSM) and role-agent judgements; no sandbox, no repository.
+    # connectors (the DQ Monitor, the Profile Service, the Service Desk) and role-agent
+    # judgements; no sandbox, no repository.
     **{key: NO_CHECKS(why) for key, why in (
-        ("dq_monitoring", "opens or attaches an incident from Eagle's exception group; writes "
+        ("dq_monitoring", "opens or attaches an incident from the DQ Monitor's exception group; writes "
                           "the Context Graph and the ticket, runs no sandbox"),
         ("dq_context_enrichment", "reads the graph and the profile service; writes the Context "
                                   "Graph"),
         ("dq_historical_pattern", "matches closed incidents in the graph; writes the Context "
                                   "Graph"),
         ("dq_rca", "proposes causes from the assembled evidence; writes the Context Graph"),
-        ("dq_orchestration", "routes candidate families to lanes by policy"),
+        ("dq_orchestration", "routes candidate families to cause checks by policy"),
         ("dq_lane", "confirms or rules out one family on the evidence"),
         ("dq_rule_drafting", "drafts a rule proposal into Rules review; changes no rule"),
         ("dq_remediation_package", "prepares a package; executes nothing"),
         ("dq_remediation_fix", "records what a person carried out; executes nothing"),
         ("dq_incident_closure", "re-runs the check and records the closure"),
         ("dq_escalation", "raises open incidents' escalation on the ticket"),
-        ("dq_eagle_intake", "starts an investigation per Error exception group"),
+        ("dq_monitor_intake", "starts an investigation per Error exception group"),
     )},
 }
 

@@ -98,7 +98,7 @@ function bandHeight(count: number): number {
   return Math.max(1, Math.ceil(count / PER_ROW)) * (NODE_H + GAP) - GAP;
 }
 
-/** IDs read in a row, each hoverable for its words: "A-D8 severity only moves up · A-D9 …". */
+/** IDs read in a row, each hoverable for its words: "MON-1 severity never goes down · MON-2 …". */
 function Notes({ notes, testid }: { notes: DesignNote[]; testid: string }) {
   return (
     <p className="pl-notes" data-testid={testid}>
@@ -116,7 +116,7 @@ function Notes({ notes, testid }: { notes: DesignNote[]; testid: string }) {
 
 type Card = { title: string; tone: "ink" | "graph" | "muted"; body: React.ReactNode; testid?: string };
 
-/** The design cards under the read/write view, in the consultant's order: what changed, how
+/** The design cards under the read/write view, in this order: what changed, how
  *  it starts and ends, who reviews it, which graph versions it relies on, its policy, decisions
  *  and open questions. A card shows only when the contract says something for it. */
 export function DesignCards({ contract, design }: { contract: StageContract | null; design?: StageDesignState }) {
@@ -255,7 +255,7 @@ export function AgentContractView({ stage, hasRun, onClose, graph, onDesignActio
     // A step that records its calls and has none for this one did not make it; a step with no
     // record at all (an agent that took no turns we can read) cannot be said to have skipped it.
     const missing = !!overlay && !made && !!overlay.callsRecorded;
-    const system = c.mcp ? kindLabel(c.mcp) : "Outside system";
+    const system = c.mcp ? kindLabel(c.mcp).replace(/^Dq\b/, "DQ") : "Outside system";
     return {
       key: `${c.mcp}-${c.tool}`, label: system.length <= 4 ? system.toUpperCase() : system,
       sub: !overlay ? humanTool(tool)

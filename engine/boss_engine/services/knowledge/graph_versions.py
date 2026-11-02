@@ -1,4 +1,4 @@
-"""Knowledge Graph and Context Graph version numbers (design §4.2: "KG v17", "CG v4").
+"""Knowledge Graph and Context Graph version numbers (design §4.2: "KG v3", "CG v3").
 
 KNOWLEDGE GRAPH VERSION — the reference graph's version is ``1 + the number of approved change
 sets`` in the project, counted at a point in time. A change set is ONE act by which a person
@@ -22,7 +22,7 @@ project's ontology pack's ``context_version`` when the pack declares one, else t
 :data:`CORE_CONTEXT_VERSION`.
 
 Both are written on every AgentDecision (``attrs.kg_version`` / ``attrs.cg_version``) and shown on
-the agent read/write view's band titles ("Knowledge Graph v17 · read only").
+the agent read/write view's band titles ("Knowledge Graph v3 · read only").
 """
 from __future__ import annotations
 
@@ -72,7 +72,7 @@ def cg_version(connection: Connection, project_id: str) -> int:
 
 
 def kg_reference(connection: Connection, project_id: str) -> Optional[int]:
-    """The Knowledge Graph version the project's agent designs are written against ("KG v17"):
+    """The Knowledge Graph version the project's agent designs are written against ("KG v3"):
     its ontology pack's ``knowledge_graph_reference``, or None when no pack declares one. The
     agent design views title their Knowledge Graph band with it, so the band and the design
     cards ("Applied in KG v16") speak of one versioning; the live ``kg_version`` stays what every
@@ -98,7 +98,7 @@ def versions(connection: Connection, project_id: str) -> dict[str, int]:
 
 
 def label(version: int | str | None) -> str:
-    """``17`` → ``"v17"``; a value already spelt ``v17`` is kept."""
+    """``3`` → ``"v3"``; a value already spelt ``v3`` is kept."""
     if version in (None, ""):
         return ""
     value = str(version)

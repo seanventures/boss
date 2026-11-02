@@ -1,5 +1,5 @@
 """The AML case study's three mock MCP connectors — case management, KYC and transactions — over
-the synthetic bank in tools/aml_sample_data.py. Sample tools, like the ITSM mock: zero config,
+the synthetic bank in tools/aml_sample_data.py. Sample tools, like the Service Desk mock: zero config,
 in-process, no network, served by the `mcp-tools` service (tools/mcp_tools_mux.py) on one port,
 one path per connector:
 

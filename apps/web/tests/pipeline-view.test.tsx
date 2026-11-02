@@ -10,7 +10,7 @@ import { OUTSIDE, REG_PALETTE, REG_RUN, REG_SPEC } from "./_helpers/regulatory-p
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 /**
- * The Pipeline tab as the consultant's screen (design §4.7): numbered stages, who runs each,
+ * The Pipeline tab as the reference screen (design §4.7): numbered stages, who runs each,
  * the loop and the lanes drawn as frames, a status from the last run (never "unknown"), and
  * the stage table — on the real NorthPeak regulatory pipeline's shape.
  */

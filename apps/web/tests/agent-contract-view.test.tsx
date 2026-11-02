@@ -53,10 +53,10 @@ describe("AgentContractView", () => {
 
   it("P0 draws reads, writes and MCP calls as their own kind of line", () => {
     mount("historical_pattern");
-    const call = by("edge-call-itsm-get_incident")!;
+    const call = by("edge-call-service-desk-get_incident")!;
     expect(call.getAttribute("class")).toContain("pl-edge-call");
-    expect(by("node-call-itsm-get_incident")!.textContent).toContain("ITSM");
-    expect(by("node-call-itsm-get_incident")!.textContent).toContain("get incident");
+    expect(by("node-call-service-desk-get_incident")!.textContent).toContain("Service desk");
+    expect(by("node-call-service-desk-get_incident")!.textContent).toContain("get incident");
     mount("context_enrichment");
     expect(by("edge-read-rule")!.getAttribute("class")).toContain("pl-edge-read");
     expect(by("edge-write-agentdecision")!.getAttribute("class")).toContain("pl-edge-write");
@@ -104,19 +104,19 @@ describe("AgentContractView", () => {
   it("P1 an outside agent's calls the run does not record say 'not recorded', never 'not done'", () => {
     mount("historical_pattern");
     click(by("show-last-run"));
-    expect(by("node-call-itsm-get_incident")!.textContent).toContain("not recorded");
+    expect(by("node-call-service-desk-get_incident")!.textContent).toContain("not recorded");
   });
 
   it("P1 a deterministic step that records its calls says 'called' and 'declared, not done' truthfully", () => {
     const trace: RunContext = { ...REG_RUN, steps: { ...REG_RUN.steps, historical_pattern: {
       ...REG_RUN.steps.historical_pattern,
-      calls: [{ tool: "list_incidents", server: "itsm", count: 1 }], callsRecorded: true } } };
+      calls: [{ tool: "list_incidents", server: "service-desk", count: 1 }], callsRecorded: true } } };
     mount("historical_pattern", { trace });
     click(by("show-last-run"));
-    const listed = by("node-call-itsm-list_incidents")!;
+    const listed = by("node-call-service-desk-list_incidents")!;
     expect(listed.textContent).toContain("list incidents · called 1");
     expect(listed.getAttribute("data-made")).toBe("true");
-    const got = by("node-call-itsm-get_incident")!;
+    const got = by("node-call-service-desk-get_incident")!;
     expect(got.textContent).toContain("get incident · declared, not done");
     expect(got.getAttribute("data-overlay")).toBe("missing");
     expect(got.textContent).not.toContain("not recorded");
@@ -136,7 +136,7 @@ describe("AgentContractView", () => {
     expect(cards.textContent).toContain("Trigger");
     expect(cards.textContent).toContain("after intake opens a new case");
     expect(cards.textContent).toContain("Max hops");
-    expect(cards.textContent).toContain("A-D32 no LLM for retrieval");
+    expect(cards.textContent).toContain("CTX-3 no LLM for retrieval");
     expect(cards.textContent).toContain("None: no model is used");
   });
 });

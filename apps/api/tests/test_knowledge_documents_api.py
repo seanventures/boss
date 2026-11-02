@@ -126,7 +126,7 @@ def test_the_aml_sample_loads_through_the_api_and_reports_its_alerts(client, eng
 
 def test_the_dq_platform_loads_through_the_api_beside_the_other_packs(client, engine):
     """The DQ case study: the platform is a product action (knowledge:manage, confirmed); it adds
-    banking-dq without taking a pack the project already holds, and lists Eagle's groups by COB."""
+    banking-dq without taking a pack the project already holds, and lists the DQ Monitor's groups by COB."""
     project_id = _new_project(engine, "dq-sample")
     client.post("/v1/knowledge/packs", json={"project_id": project_id, "actor": ACTOR,
                                              "step_up": "confirmed", "pack_id": "banking-aml"})

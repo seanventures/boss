@@ -3,7 +3,7 @@
 Pins the "Done means" from the brief: a catalogue entry that publishes through the real
 runtime, the two new additive ontology kinds (ComplianceCase, RemediationPackage), the
 clause-intake capability writing a ComplianceCase + AgentDecision, closure stamping an
-execution-state marker and a `reused` edge, the ITSM mock's INC-2088 fixture, and the
+execution-state marker and a `reused` edge, the Service Desk mock's INC-2088 fixture, and the
 second-run-is-faster definition the PR commits to (fewer succeeded workflow_step_runs rows).
 
 Runs against a real, disposable postgres (DATABASE_URL), like test_regulatory_trace.py and
@@ -28,7 +28,7 @@ from boss_engine.services.knowledge.store import PostgresKnowledgeStore
 # Intended module names (not yet implemented) — importing them pins the build to these paths.
 from boss_engine.services.knowledge import banking_regulatory_pipeline as pipeline
 from boss_engine.services.knowledge import graph_steps
-from tools import mcp_itsm_mock
+from tools import mcp_service_desk_mock
 
 CATALOGUE_KEY = "banking_regulatory_compliance"
 STORE = PostgresKnowledgeStore()
@@ -125,11 +125,11 @@ class BankingRegulatoryComplianceTests(unittest.TestCase):
         ).mappings().first()
         self.assertIsNotNone(version, "seeding must publish a version with no contract problems")
 
-    # ── P0: the ITSM mock ships the INC-2088 fixture with zero config ──────────────────────────
+    # ── P0: the Service Desk mock ships the INC-2088 fixture with zero config ──────────────────────────
 
-    def test_p0_itsm_mock_serves_inc_2088_with_zero_config(self):
-        self.assertIn("get_incident", mcp_itsm_mock.TOOL_FNS)
-        incident = mcp_itsm_mock.TOOL_FNS["get_incident"]({"incident_id": "INC-2088"})
+    def test_p0_service_desk_mock_serves_inc_2088_with_zero_config(self):
+        self.assertIn("get_incident", mcp_service_desk_mock.TOOL_FNS)
+        incident = mcp_service_desk_mock.TOOL_FNS["get_incident"]({"incident_id": "INC-2088"})
         self.assertEqual(incident["incident_id"], "INC-2088")
         self.assertAlmostEqual(incident["payment_amount"], 250.00)
         self.assertAlmostEqual(incident["interest_due"], 31.40)

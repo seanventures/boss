@@ -67,7 +67,7 @@ def _seed(engine, project_id: str) -> dict[str, str]:
             ("wsr_ctx1", "enrich", "deterministic", "succeeded", {
                 "collected": [rule, incident],
                 # The MCP calls a deterministic step records: one made, one refused.
-                "calls": [{"mcp": "itsm", "tool": "list_incidents", "ok": True},
+                "calls": [{"mcp": "service-desk", "tool": "list_incidents", "ok": True},
                           {"mcp": "kyc", "tool": "get_kyc_profile", "ok": False}]}),
             ("wsr_ctx2", "assess", "capability", "succeeded",
              {"citation": rule, "assessment": "gap", "subject_id": "not-a-node"}),
@@ -108,7 +108,7 @@ def test_each_step_reports_what_it_read_and_wrote_in_the_graph(client, engine):
 
     # The calls it recorded: made ones counted, a refused one not; the step is marked as
     # recording its calls, so a declared call it never made reads "declared, not done".
-    assert enrich["calls"] == [{"tool": "list_incidents", "server": "itsm", "count": 1}]
+    assert enrich["calls"] == [{"tool": "list_incidents", "server": "service-desk", "count": 1}]
     assert enrich["calls_recorded"] is True
 
     assess = steps["assess"]

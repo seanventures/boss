@@ -20,7 +20,7 @@ CONTRACT = {
     "writes": [{"kind": "agent_decision", "required": True, "decision_type": "Prepared"}],
     "steps": [{"n": 1, "name": "Read the rule", "reads": ["rule"]},
               {"n": 2, "name": "Write the decision", "writes": ["agent_decision"]}],
-    "design": {"decisions": [{"id": "A-D1", "text": "prepare only"}]},
+    "design": {"decisions": [{"id": "PREP-1", "text": "prepare only"}]},
 }
 
 
@@ -70,7 +70,7 @@ def test_review_lock_publish_refusal_and_revise(client, engine):
 
     sent = client.post(f"{base}/prepare/review", json={"project_id": PROJECT_ID, "actor": ACTOR})
     assert sent.status_code == 200, sent.text
-    assert sent.json()["status"] == "in_review" and sent.json()["reference"] == "Agent Reference v0.1"
+    assert sent.json()["status"] == "in_review" and sent.json()["reference"] == "Design v0.1"
 
     no_step_up = client.post(f"{base}/prepare/lock", json={"project_id": PROJECT_ID, "actor": ACTOR})
     assert no_step_up.status_code == 403 and "step_up" in no_step_up.json()["detail"]
@@ -87,12 +87,12 @@ def test_review_lock_publish_refusal_and_revise(client, engine):
                                       spec=_spec(changed), actor=ACTOR)
             raise AssertionError("a locked contract was published changed")
         except workflows.WorkflowValidationError as refused:
-            assert "locked at Agent Reference v0.1" in str(refused) and "Revise" in str(refused)
+            assert "locked at Design v0.1" in str(refused) and "Revise" in str(refused)
 
     revised = client.post(f"{base}/prepare/revise", json={"project_id": PROJECT_ID, "actor": ACTOR,
                                                           "note": "On demand too"})
     assert revised.status_code == 200, revised.text
-    assert revised.json()["reference"] == "Agent Reference v0.2" and revised.json()["status"] == "in_review"
+    assert revised.json()["reference"] == "Design v0.2" and revised.json()["status"] == "in_review"
     with begin(engine) as connection:
         workflows.publish_version(connection, project_id=PROJECT_ID, definition_id=definition_id,
                                   spec=_spec(changed), actor=ACTOR)

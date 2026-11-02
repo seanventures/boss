@@ -183,7 +183,7 @@
 .pl-design-card-body { font-size: 0.8125rem; color: var(--ink-soft); }
 .pl-design-card-body ul { margin: 0; padding-left: 16px; }
 
-/* ── Design status (design §4.6): the consultant's legend — Locked filled, In review outlined in
+/* ── Design status (design §4.6): the design legend — Locked filled, In review outlined in
    blue, Not yet reviewed faint, Human step a pill, Shared service grey. ── */
 .pl-design {
   display: inline-flex; align-items: center; padding: 1px 9px; border-radius: 6px; white-space: nowrap;
@@ -204,7 +204,7 @@
 .pl-swatch[data-design="shared_service"] { background: color-mix(in srgb, var(--faint) 25%, transparent); border-color: transparent; }
 .pl-key-side { border-top-style: dashed; border-color: var(--muted); }
 
-/* A locked stage reads as the consultant's dark card; one in review is outlined in blue. */
+/* A locked stage reads as a dark card; one in review is outlined in blue. */
 .pl-card[data-design="locked"] { background: var(--ink); border-color: var(--ink); }
 .pl-card[data-design="locked"] .pl-card-title { color: var(--surface); }
 .pl-card[data-design="locked"] .pl-card-contract, .pl-card[data-design="locked"] .pl-faint { color: color-mix(in srgb, var(--surface) 75%, transparent); }
@@ -219,7 +219,7 @@
 .pl-card-run { display: flex; align-items: center; gap: 6px; }
 .pl-num-none { background: transparent; color: var(--muted); }
 
-/* Shared services and side paths: under the main flow, the consultant's two areas. */
+/* Shared services and side paths: under the main flow, in two areas of their own. */
 .pl-aside { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 12px 28px; justify-content: space-between;
   padding-top: 12px; margin-top: 4px; border-top: 1px dashed var(--border-strong); }
 .pl-aside-group { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
@@ -242,7 +242,7 @@
 .pl-design-error { flex-basis: 100%; font-size: 0.8125rem; color: var(--red); }
 h3.pl-acv-title { margin: 2px 0 0; font-size: 1.35rem; line-height: 1.25; }
 
-/* Design cards: a top rule in ink, graph indigo, or muted grey, as the consultant's. */
+/* Design cards: a top rule in ink, graph indigo, or muted grey. */
 .pl-cards { grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: 12px; }
 .pl-design-card { background: var(--surface); border-top: 3px solid var(--ink); border-radius: var(--r); box-shadow: 0 1px 2px rgb(0 0 0 / 0.04); }
 .pl-design-card[data-tone="graph"] { border-top-color: #5b5fc7; }

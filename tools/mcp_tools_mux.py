@@ -10,9 +10,9 @@ rendering is already there):
     devops-reference  :8765/mcp   (tools/mcp_demo_server.py)
     web-intel         :8770/mcp   (tools/mcp_web_intel_server.py)
     doc-render        :8771/mcp   (tools/mcp_doc_render_server.py)
-    itsm              :8772/mcp   (tools/mcp_itsm_mock.py)
+    service-desk      :8772/mcp   (tools/mcp_service_desk_mock.py)
     aml-sample        :8773/{case-management,kyc,transactions}/mcp   (tools/mcp_aml_mock.py)
-    dq-sample         :8774/{eagle,olympus}/mcp                      (tools/mcp_dq_mock.py)
+    dq-sample         :8774/{dq-monitor,profile-service}/mcp                      (tools/mcp_dq_mock.py)
 
 Run it locally the same way:
 
@@ -40,7 +40,7 @@ def _ports() -> tuple[int, int, int, int]:
 
 
 def dq_sample_port() -> int:
-    """The DQ sample's connectors (tools/mcp_dq_mock.py: eagle, olympus, one path each).
+    """The DQ sample's connectors (tools/mcp_dq_mock.py: dq-monitor, profile-service, one path each).
     BOSS_MCP_DQ_PORT moves it; the API reads the same variable for the addresses the DQ sample
     registers (knowledge/dq_sample.dq_mcp_servers)."""
     try:
@@ -59,9 +59,9 @@ def aml_sample_port() -> int:
         return 8773
 
 
-SERVERS = tuple(zip(("boss-devops-reference", "web-intel", "doc-render", "itsm"),
+SERVERS = tuple(zip(("boss-devops-reference", "web-intel", "doc-render", "service-desk"),
                     ("tools.mcp_demo_server", "tools.mcp_web_intel_server",
-                     "tools.mcp_doc_render_server", "tools.mcp_itsm_mock"),
+                     "tools.mcp_doc_render_server", "tools.mcp_service_desk_mock"),
                     _ports())) + (("aml-sample", "tools.mcp_aml_mock", aml_sample_port()),
                                   ("dq-sample", "tools.mcp_dq_mock", dq_sample_port()))
 

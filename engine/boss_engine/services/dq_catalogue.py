@@ -1,13 +1,13 @@
-"""The consultant's DQ RCA and remediation pipeline as catalogue entries (Instance A of
+"""The DQ RCA and remediation pipeline as catalogue entries (Instance A of
 `kg_investigation_pipeline`, design §5.2), with every stage's step contract (§4.1) and its agent
-DESIGN — numbered internal steps and the design cards — in the consultant's own words where the
-screens show them (Monitoring, Context Enrichment, Historical Pattern are locked at Agent
-Reference v0.1/v0.2/v0.3; RCA is in review; the rest not yet reviewed; the people are human
-steps; the Context Curator and Profile Service are shared services).
+DESIGN — numbered internal steps and the design cards (Incident Intake, Context Gathering and Past
+Incidents are locked at Design v0.1/v0.2/v0.3; Root Cause Analysis is in review; the rest are not
+yet reviewed; the people are human steps; the Context Budgeter and Profile Service are shared
+services).
 
-`dq_incident_rca`        one Eagle exception group, Monitoring → Closure
-`dq_incident_escalation` the Escalation Agent's daily sweep over every open incident
-`dq_eagle_intake`        the scheduled trigger: each COB, an RCA per Error exception group
+`dq_incident_rca`        one DQ Monitor exception group, Incident Intake → Close and Learn
+`dq_incident_escalation` the Escalation Watch's daily sweep over every open incident
+`dq_monitor_intake`      the scheduled trigger: each COB, an RCA per Error exception group
 
 `DQ_CONTRACTS` holds each stage's contract; `DQ_STAGE_DESIGNS` its `steps` and `design`, merged in
 when the contract schema carries them (`step_contracts.SUPPORTS_STEPS_AND_DESIGN`).
@@ -56,9 +56,9 @@ def _s(n: int, name: str, explain: str, reads: tuple = (), writes: tuple = (),
 
 DQ_CONTRACTS: dict[str, dict[str, Any]] = {
     "monitoring": {
-        "trigger": "Eagle publishes an exception group (one rule version, one COB). The Pipeline "
-                   "Orchestrator receives it, starts the DQ pipeline and invokes Monitoring with "
-                   "the group ID and the function.",
+        "trigger": "The DQ Monitor publishes an exception group (one rule version, one COB). The "
+                   "pipeline starts for it and Incident Intake is called with the group ID and the "
+                   "business function.",
         "reads": _reads("agent", "mcp_server", "system", "exception_group", "data_quality_rule",
                         "dq_threshold", "cde", "database_structure", "database_table",
                         "incident"),
@@ -66,52 +66,54 @@ DQ_CONTRACTS: dict[str, dict[str, Any]] = {
                    _w("coverage_gap"), _w("agent_run"), _w("agent_tool_call")],
         "links": [{"from": "incident", "to": "incident", "rel": "CORRELATED_WITH"}],
         "invoked_by": "pipeline_orchestrator",
-        "calls": [_c("eagle", "get_exception_group"), _c("itsm", "list_incidents"),
-                  _c("itsm", "create_incident"), _c("itsm", "attach_to_incident")],
+        "calls": [_c("dq-monitor", "get_exception_group"), _c("service-desk", "list_incidents"),
+                  _c("service-desk", "create_incident"), _c("service-desk", "attach_to_incident")],
         "handoff": {"to": "pipeline_orchestrator", "next": "context_enrichment",
                     "carries": ["incident_id", "severity"],
                     "text": "Returns the incident ID, opened or attached, and the severity to the "
-                            "Pipeline Orchestrator. A new incident goes to Context Enrichment; an "
+                            "Cause Router. A new incident goes to Context Gathering; an "
                             "attach does not restart the pipeline."},
         "human_review": "None in the normal path. A policy parameter missing from both the "
                         "function policy and the defaults stops the run and goes to human review.",
         "policy": {"opens_on": "Error", "severity": "only rises"},
         "llm": "none",
-        "decisions": ["severity only moves up", "link facts only", "one failure reason per DQ "
-                      "rule", "ticket to the rule owner", "a Warning writes nothing"],
+        "decisions": ["severity never goes down", "links are facts, not conclusions",
+                      "each rule has a single failure reason", "the ticket goes to whoever owns "
+                      "the rule", "a Warning records nothing"],
     },
     "context_enrichment": {
-        "trigger": "Invoked by the Pipeline Orchestrator after Monitoring opens a new incident — "
-                   "never on an attach. Re-runs on demand, or when the Pipeline Orchestrator "
+        "trigger": "Invoked by the Cause Router after Incident Intake opens a new incident — "
+                   "never on an attach. Re-runs on demand, or when the Cause Router "
                    "re-invokes it after RCA records InsufficientEvidence; a re-run writes a new "
                    "decision and keeps the old one.",
         "reads": _reads("agent", "mcp_server", "system", "incident", "agent_decision",
                         "data_quality_rule", "cde", "database_structure", "database_table",
                         "database_column", "feed", "lineage", "owner", "regulatory_report",
                         "report_line", "mdrm", "issue", "examination_finding",
-                        # banking-dq v3: the rest of the consultant's Enrichment reads.
+                        # banking-dq v3: the transformation, contract and regulatory kinds it also reads.
                         "transformation", "derivation_rule", "join_path", "domain", "contract",
                         "data_concern", "adjustment", "regulatory_communication"),
         "writes": [_w("agent_decision", True, "ContextAssembled"), _w("coverage_gap"),
                    _w("agent_run"), _w("agent_tool_call")],
-        "calls": [_c("olympus", "get_exception_profile"), _c("olympus", "list_recent_changes"),
-                  _c("itsm", "get_incident")],
+        "calls": [_c("profile-service", "get_exception_profile"), _c("profile-service", "list_recent_changes"),
+                  _c("service-desk", "get_incident")],
         "invoked_by": "pipeline_orchestrator",
         "handoff": {"to": "pipeline_orchestrator", "next": "historical_pattern",
                     "carries": ["decision_id", "context_pack"],
-                    "text": "Returns the decision ID to the Pipeline Orchestrator, which invokes "
-                            "Historical Pattern. RCA reads the pack through the Context Curator."},
+                    "text": "Returns the decision ID to the Cause Router, which invokes "
+                            "Past Incidents. RCA reads the pack through the Context Budgeter."},
         "human_review": "None. Missing metadata — lineage, CDE mapping, owner, MDRM route, "
                         "profile — is recorded as a coverage gap and the run continues.",
         "policy": {"max_hops": 3, "change_lookback_days": 14, "list_cap": 25,
                    "data_access": "standard_profile"},
         "llm": "none",
-        "decisions": ["new incidents only", "facts only", "no LLM for retrieval",
-                      "references and counts", "reach never changes severity"],
+        "decisions": ["runs for new incidents, not attaches", "gathers facts, draws no "
+                      "conclusions", "retrieval is code, not a model", "ids and counts, not "
+                      "copies", "regulatory reach leaves severity alone"],
     },
     "historical_pattern": {
-        "trigger": "Invoked by the Pipeline Orchestrator after Context Enrichment for a new "
-                   "incident; never on an attach. Re-runs whenever Enrichment re-runs, and on "
+        "trigger": "Invoked by the Cause Router after Context Gathering for a new "
+                   "incident; never on an attach. Re-runs whenever Context Gathering re-runs, and on "
                    "demand. RCA never searches history itself.",
         "reads": _reads("agent", "mcp_server", "system", "data_quality_rule",
                         "database_structure", "cde", "business_calendar", "calendar_day",
@@ -121,78 +123,79 @@ DQ_CONTRACTS: dict[str, dict[str, Any]] = {
                    _w("agent_run"), _w("agent_tool_call")],
         "links": [{"from": "precedent", "to": "incident", "rel": "MATCHED_INCIDENT"},
                   {"from": "precedent", "to": "resolved_pattern", "rel": "REFERENCES"}],
-        "calls": [_c("itsm", "update_incident")],
+        "calls": [_c("service-desk", "update_incident")],
         "invoked_by": "pipeline_orchestrator",
         "handoff": {"to": "pipeline_orchestrator", "next": "rca",
                     "carries": ["decision_id", "matched"],
-                    "text": "Returns the decision ID to the Pipeline Orchestrator, which invokes "
+                    "text": "Returns the decision ID to the Cause Router, which invokes "
                             "RCA. RCA links its own USED_PRECEDENT {confidenceLift} to the "
                             "precedents it relies on."},
         "human_review": "None. Zero matches is a fact, not InsufficientEvidence. Severity is "
                         "never changed.",
         "policy": {"lookback_days": 730, "tiers": 2, "list_cap": 25},
         "llm": "none",
-        "decisions": ["facts only", "two search tiers", "deterministic matching",
-                      "only Historical Pattern creates Precedents"],
+        "decisions": ["gathers facts, draws no conclusions", "searches the same rule first, "
+                      "then its neighbours", "the same inputs always match the same incidents",
+                      "the one stage that writes precedents"],
     },
     "rca": {
-        "trigger": "After Historical Pattern, in each round of the evidence loop.",
+        "trigger": "After Past Incidents, in each round of the evidence loop.",
         "reads": _reads("incident", "agent_decision", "coverage_gap", "precedent",
                         "resolved_pattern", "data_quality_rule", "cde"),
         "writes": [_w("agent_decision", True, "RootCauseCandidates|InsufficientEvidence")],
         "handoff": {"to": "pipeline_orchestrator", "carries": ["candidates", "rca_verdict"],
                     "text": "Returns the candidate root causes, or InsufficientEvidence, to the "
-                            "Pipeline Orchestrator, which re-runs Enrichment and Historical "
-                            "Pattern or routes the candidates to the lanes."},
-        "human_review": "None: lanes confirm or rule out; a person approves any fix.",
+                            "Cause Router, which either re-runs Context Gathering and Past "
+                            "Incidents or routes the candidates to the cause checks."},
+        "human_review": "None: cause checks confirm or rule out; a person approves any fix.",
         "policy": {"token_budget": 6000, "max_rounds": 3},
         "llm": "agent",
-        "decisions": ["cites only offered evidence", "InsufficientEvidence re-runs Enrichment "
-                      "and Historical Pattern, at most twice"],
+        "decisions": ["cites only offered evidence", "InsufficientEvidence re-runs Context Gathering "
+                      "and Past Incidents, at most twice"],
     },
     "pipeline_orchestrator": {
         "trigger": "After the evidence loop ends (conclusive, or its rounds used up).",
         "reads": _reads("agent_decision", "incident"),
         "writes": [_w("agent_decision", True, "Routed")],
         "handoff": {"to": "lanes", "carries": ["lanes"],
-                    "text": "Starts one lane per candidate root-cause family above the routing "
+                    "text": "Starts one cause check per candidate root-cause family above the routing "
                             "floor, in parallel."},
-        "human_review": "None. No candidate above the routing floor starts no lane.",
+        "human_review": "None. No candidate above the routing floor starts no cause check.",
         "policy": {"min_route_confidence": 0.3},
         "llm": "none",
-        "decisions": ["one lane per candidate family"],
+        "decisions": ["one cause check per candidate family"],
     },
     "lane": {
-        "trigger": "One per routed family (lanes).",
+        "trigger": "One per routed family (cause checks).",
         "reads": _reads("incident", "agent_decision", "precedent", "data_quality_rule",
                         "dq_threshold", "system", "feed"),
         "writes": [_w("agent_decision", True, "Confirmed|RuledOut|CannotVerify")],
         "handoff": {"to": "pipeline_orchestrator", "next": "remediation_advisor",
                     "carries": ["lane_verdict", "cause"],
-                    "text": "Returns its verdict to the Pipeline Orchestrator. A confirmed cause "
-                            "goes to the Remediation Advisor; a confirmed false positive also "
-                            "opens a rule authoring case with Rule Drafting."},
+                    "text": "Returns its verdict to the Cause Router. A confirmed cause "
+                            "goes to the Fix Planner; a confirmed false positive also "
+                            "opens a rule authoring case with Rule Proposal."},
         "human_review": "None. CannotVerify leaves the incident for a person.",
         "policy": {"token_budget": 4000},
         "llm": "agent",
         "decisions": ["a verdict cites evidence it was offered"],
     },
     "rule_drafting": {
-        "trigger": "After the lanes: a lane that confirmed a false positive (rule_config) opens "
+        "trigger": "After the cause checks: a cause check that confirmed a false positive (rule_config) opens "
                    "a rule authoring case.",
         "reads": _reads("agent_decision", "data_quality_rule", "dq_threshold", "incident"),
         "writes": [_w("agent_decision", True, "RuleProposed|NothingToDraft"),
                    _w("rule_proposal"), _w("rule")],
         "handoff": {"to": "remediation_advisor", "carries": ["proposal"],
                     "text": "Leaves the rule proposal in Rules review for a person, and hands on "
-                            "to the Remediation Advisor."},
+                            "to the Fix Planner."},
         "human_review": "Every rule change is a proposal a person approves in Rules review.",
         "policy": {"token_budget": 3000},
         "llm": "agent",
         "decisions": ["proposes; never changes a rule"],
     },
     "remediation_advisor": {
-        "trigger": "After the lanes and rule drafting.",
+        "trigger": "After the cause checks and rule drafting.",
         "reads": _reads("agent_decision", "incident", "precedent", "resolved_pattern", "owner"),
         "writes": [_w("agent_decision", True, "RemediationPrepared|NoPackage"),
                    _w("remediation_package")],
@@ -221,9 +224,9 @@ DQ_CONTRACTS: dict[str, dict[str, Any]] = {
         "trigger": "After Human execution.",
         "reads": _reads("remediation_package", "agent_decision"),
         "writes": [_w("agent_decision", True, "FixRecorded")],
-        "calls": [_c("itsm", "update_incident")],
+        "calls": [_c("service-desk", "update_incident")],
         "handoff": {"to": "incident_closure", "carries": ["change_ref"],
-                    "text": "Hands the change reference to Incident Closure, which re-runs the "
+                    "text": "Hands the change reference to Close and Learn, which re-runs the "
                             "check before closing."},
         "human_review": "Records what the people did; refuses to run without both answers.",
         "llm": "none",
@@ -235,10 +238,10 @@ DQ_CONTRACTS: dict[str, dict[str, Any]] = {
                         "resolved_pattern", "data_quality_rule"),
         "writes": [_w("agent_decision", True, "IncidentClosed|FixNotConfirmed|LeftOpen"),
                    _w("precedent"), _w("resolved_pattern")],
-        "calls": [_c("eagle", "rerun_check"), _c("itsm", "update_incident")],
+        "calls": [_c("dq-monitor", "rerun_check"), _c("service-desk", "update_incident")],
         "handoff": {"carries": ["precedent_id"],
-                    "text": "Leaves the precedent for the next investigation's Historical "
-                            "Pattern to find."},
+                    "text": "Leaves the precedent for the next investigation's Past "
+                            "Incidents to find."},
         "human_review": "Never closes on a failing re-run; an unconfirmed incident stays open.",
         "llm": "none",
         "decisions": ["re-run before closing", "maintains resolved patterns",
@@ -248,17 +251,17 @@ DQ_CONTRACTS: dict[str, dict[str, Any]] = {
         "trigger": "Daily, over every open incident (its own scheduled workflow).",
         "reads": _reads("incident", "owner", "cde", "calendar_day", "report_line"),
         "writes": [_w("agent_decision", True, "EscalationSweep|Escalated")],
-        "calls": [_c("itsm", "update_incident")],
+        "calls": [_c("service-desk", "update_incident")],
         "human_review": "The top rung is the Chief Data Officer.",
         "policy": {"ladder_business_days": [1, 3, 5], "regulatory_reach": "one rung sooner"},
         "llm": "none",
         "decisions": ["escalation only rises"],
     },
-    "eagle_intake": {
-        "trigger": "Each morning (scheduled) or on demand: Eagle's latest close of business.",
+    "monitor_intake": {
+        "trigger": "Each morning (scheduled) or on demand: the DQ Monitor's latest close of business.",
         "reads": _reads("exception_group"),
         "writes": [_w("agent_decision", True, "IntakeRouted")],
-        "calls": [_c("eagle", "list_exception_groups")],
+        "calls": [_c("dq-monitor", "list_exception_groups")],
         "human_review": "Starts investigations; every fix still needs two people.",
         "llm": "none",
     },
@@ -269,9 +272,9 @@ DQ_CONTRACTS: dict[str, dict[str, Any]] = {
         "llm": "none",
     },
     "profile_service": {
-        "trigger": "Called by Context Enrichment (and on demand) for a rule on its platform.",
+        "trigger": "Called by Context Gathering (and on demand) for a rule on its platform.",
         "reads": _reads("system"),
-        "calls": [_c("olympus", "get_exception_profile")],
+        "calls": [_c("profile-service", "get_exception_profile")],
         "human_review": "None: a platform or rule it does not profile is said so.",
         "llm": "none",
     },
@@ -279,29 +282,29 @@ DQ_CONTRACTS: dict[str, dict[str, Any]] = {
 
 # ── Agent designs: numbered internal steps and the design cards ─────────────────────────────
 
-_EAGLE, _ITSM, _OLY = "eagle", "itsm", "olympus"
+_MONITOR, _DESK, _PROFILER = "dq-monitor", "service-desk", "profile-service"
 DQ_STAGE_DESIGNS: dict[str, dict[str, Any]] = {
     "monitoring": {
         "steps": [
-            _s(1, "Read the group", "Reads the exception group Eagle published: one rule "
+            _s(1, "Read the group", "Reads the exception group the DQ Monitor published: one rule "
                "version, one COB, its grade and measure.", ("agent", "mcp_server", "system",
                                                              "exception_group"),
-               calls=((_EAGLE, "get_exception_group"),)),
+               calls=((_MONITOR, "get_exception_group"),)),
             _s(2, "Resolve the rule", "Finds the rule in the graph by its rule id, with its "
                "table and schema; a rule not there yet is a coverage gap.",
                ("data_quality_rule", "database_structure", "database_table")),
             _s(3, "Grade severity", "Grades the measure against the rule's own Warning and "
                "Error thresholds; only Error opens or attaches.", ("dq_threshold", "cde")),
-            _s(4, "Set failure reason", "One failure reason per DQ rule (A-D10).",
+            _s(4, "Set failure reason", "The rule's single failure reason.",
                ("data_quality_rule",)),
             _s(5, "Tag the exception", "Tags the CDEs, column and platform.",
                ("data_quality_rule",)),
             _s(6, "Match", "Looks for an open incident on the same rule.", ("incident",),
-               calls=((_ITSM, "list_incidents"),)),
+               calls=((_DESK, "list_incidents"),)),
             _s(7, "Open or attach", "Opens a ticket to the rule owner's group, or attaches the "
                "group to the open one.", ("data_quality_rule", "cde"),
                ("incident", "agent_decision"),
-               ((_ITSM, "create_incident"), (_ITSM, "attach_to_incident"))),
+               ((_DESK, "create_incident"), (_DESK, "attach_to_incident"))),
             _s(8, "Link facts", "Links the incident to its group, rule, CDEs and owner, and "
                "CORRELATED_WITH earlier incidents on the rule (linkType); facts only.",
                writes=("incident",)),
@@ -310,37 +313,40 @@ DQ_STAGE_DESIGNS: dict[str, dict[str, Any]] = {
                ("agent_decision", "coverage_gap", "agent_run", "agent_tool_call")),
         ],
         "design": {
-            "status": "locked", "reference": "Agent Reference v0.1",
-            "example": "EGL-0588 v2 on COB 2026-10-05 (locked running example).",
-            "under_revision": "Rule authoring changed DQ grading (A-D87 to A-D89, KG v17): each "
-                              "rule has its own Warning and Error conditions; Eagle grades "
-                              "every run; Warning goes to the OMNIS dashboard and Monitoring "
-                              "writes nothing; only Error opens or attaches to an incident; "
-                              "OP-SEV-01 retired. Open: how incident severity is set, and what "
-                              "happens when the next COB is Warning or clean. The steps below "
-                              "show the locked v0.1 design.",
-            "decisions": [_n("A-D8", "severity only moves up"), _n("A-D9", "link facts only"),
-                          _n("A-D10", "one failure reason per DQ rule"),
-                          _n("A-D11", "ticket to the rule owner"),
-                          _n("A-D12", "Pipeline Orchestrator supervises"),
-                          _n("A-D13", "policyVersion on every run")],
-            "applied_in": {"kg": "v17", "cg": "v4", "items": [
-                "gradedSeverity on the decision and severity that can only rise (CG-G1)",
-                "linkType on CORRELATED_WITH (CG-G2)", "policyVersion on the run (CG-G4)"]},
+            "status": "locked", "reference": "Design v0.1",
+            "example": "DQX-0588 v2 on COB 2026-10-05 (locked running example).",
+            "under_revision": "Grading now lives with each rule: every rule carries its own "
+                              "Warning and Error thresholds and the DQ Monitor grades each run "
+                              "against them. A Warning only shows on the DQ dashboard and "
+                              "Incident Intake records nothing for it; an Error opens an incident "
+                              "or joins the open one. The old fixed severity table is gone. Still "
+                              "to settle: how an incident's severity is chosen, and what a later "
+                              "Warning or clean close of business does to an open incident. The "
+                              "steps below are the locked v0.1 design.",
+            "decisions": [_n("MON-1", "severity never goes down"),
+                          _n("MON-2", "links are facts, not conclusions"),
+                          _n("MON-3", "each rule has a single failure reason"),
+                          _n("MON-4", "the ticket goes to whoever owns the rule"),
+                          _n("MON-5", "the pipeline, not the agent, decides what runs next"),
+                          _n("MON-6", "every run records the policy version it used")],
+            "applied_in": {"kg": "v3", "cg": "v3", "items": [
+                "the graded severity on the decision, and a severity that can only rise",
+                "a link type on CORRELATED_WITH", "the policy version on the run"]},
             "open_questions": [
-                _n("CG-G3", "what Eagle's exception-group payload carries, and push or poll"),
-                _n("KG-G1", "rule owner to ITSM assignment group")],
+                _n("MON-Q1", "which fields the DQ Monitor sends with an exception group, and "
+                             "whether BOSS is told or asks"),
+                _n("MON-Q2", "how a rule owner maps to a Service Desk assignment group")],
         },
     },
     "context_enrichment": {
         "steps": [
-            _s(1, "Load the incident", "Loads the incident Monitoring opened and its decision.",
+            _s(1, "Load the incident", "Loads the incident Incident Intake opened and its decision.",
                ("agent", "incident", "agent_decision")),
             _s(2, "Rule footprint", "The rule's CDEs, columns, tables and feed, and the data "
                "domain they belong to.",
                ("data_quality_rule", "cde", "database_column", "database_table",
                 "database_structure", "domain")),
-            _s(3, "Owners", "The rule owner, CDE stewards and system owner, with their ITSM "
+            _s(3, "Owners", "The rule owner, CDE stewards and system owner, with their Service Desk "
                "groups.", ("owner", "system")),
             _s(4, "Subscriptions", "The feeds that load the failing table and the ones that read "
                "it, their data contracts and the join paths between the tables.",
@@ -350,42 +356,45 @@ DQ_STAGE_DESIGNS: dict[str, dict[str, Any]] = {
                "a coverage gap.", ("lineage", "database_column", "feed", "transformation",
                                    "derivation_rule")),
             _s(6, "Regulatory reach", "CDE —REPORTED_IN→ report lines, their reports and MDRM "
-               "codes (KG-G11), adjustments on those lines and communications with the "
+               "codes, adjustments on those lines and communications with the "
                "regulator.", ("cde", "report_line", "regulatory_report", "mdrm", "adjustment",
                               "regulatory_communication")),
             _s(7, "Known issues", "Issues, examination findings and open data concerns at every "
-               "level (A-D40).", ("issue", "examination_finding", "data_concern")),
+               "level: the rule, its CDEs, feed, system and table.", ("issue", "examination_finding", "data_concern")),
             _s(8, "Exception profile", "The rule's baseline on its platform from the Profile "
-               "Service (A-D41).", ("system",), calls=((_OLY, "get_exception_profile"),)),
+               "Service.", ("system",), calls=((_PROFILER, "get_exception_profile"),)),
             _s(9, "Recent changes", "Changes on the platform, rule and feed in the look-back.",
-               ("system", "feed"), calls=((_OLY, "list_recent_changes"),)),
+               ("system", "feed"), calls=((_PROFILER, "list_recent_changes"),)),
             _s(10, "Assemble, hand off", "Writes ContextAssembled with contextPack and asOf, "
                "the coverage gaps, the run and its tool calls.", ("agent",),
                ("agent_decision", "coverage_gap", "agent_run", "agent_tool_call"),
-               ((_ITSM, "get_incident"),)),
+               ((_DESK, "get_incident"),)),
         ],
         "design": {
-            "status": "locked", "reference": "Agent Reference v0.2",
-            "example": "INC-501 · EGL-0588 v2 on COB 2026-10-05 (locked running example).",
-            "decisions": [_n("A-D30", "new incidents only"), _n("A-D31", "facts only"),
-                          _n("A-D32", "no LLM for retrieval"),
-                          _n("A-D33", "references and counts"),
-                          _n("A-D34", "reach never changes severity"),
-                          _n("A-D36", "coverage gaps"), _n("A-D38", "regulatory reach"),
-                          _n("A-D40", "known issues at every level"),
-                          _n("A-D41", "profile service")],
-            "policy": [_n("OP-ENR-01", "hop cap 3"), _n("OP-ENR-02", "change lookback 14 days"),
-                       _n("OP-ENR-03", "list cap 25"),
-                       _n("dataAccess", "Standard profile only (Orchestration Policy v0.2.0)")],
-            "applied_in": {"kg": "v16", "cg": "v4", "items": [
-                "CDE —REPORTED_IN→ RegulatoryReport (KG-G11)",
-                "isProfileDimension on HAS_COLUMN (KG-G12)",
-                "ContextAssembled with contextPack and asOf (CG-G9)"]},
+            "status": "locked", "reference": "Design v0.2",
+            "example": "INC-501 · DQX-0588 v2 on COB 2026-10-05 (locked running example).",
+            "decisions": [_n("CTX-1", "runs for new incidents, not attaches"),
+                          _n("CTX-2", "gathers facts, draws no conclusions"),
+                          _n("CTX-3", "retrieval is code, not a model"),
+                          _n("CTX-4", "ids and counts, not copies"),
+                          _n("CTX-5", "regulatory reach leaves severity alone"),
+                          _n("CTX-6", "a missing fact is a coverage gap, never a stop"),
+                          _n("CTX-7", "follows each CDE to the reports it feeds"),
+                          _n("CTX-8", "known issues on the rule and everything under it"),
+                          _n("CTX-9", "baselines come from the Profile Service")],
+            "policy": [_n("CTX-P1", "at most 3 lineage hops"),
+                       _n("CTX-P2", "looks 14 days back for changes"),
+                       _n("CTX-P3", "at most 25 items per list"),
+                       _n("dataAccess", "standard profile data only")],
+            "applied_in": {"kg": "v3", "cg": "v3", "items": [
+                "CDE —REPORTED_IN→ RegulatoryReport",
+                "isProfileDimension on HAS_COLUMN",
+                "ContextAssembled with contextPack and asOf"]},
         },
     },
     "historical_pattern": {
         "steps": [
-            _s(1, "Load the pack", "Loads the incident and Enrichment's decision.",
+            _s(1, "Load the pack", "Loads the incident and Context Gathering's decision.",
                ("agent", "incident", "agent_decision")),
             _s(2, "Sibling rules", "Related rules and rules on the same CDE or column.",
                ("data_quality_rule", "database_structure", "cde")),
@@ -401,31 +410,34 @@ DQ_STAGE_DESIGNS: dict[str, dict[str, Any]] = {
                "and its tool calls.",
                writes=("precedent", "agent_decision", "agent_run", "agent_tool_call")),
             _s(6, "Post briefing", "A work note on the ticket.", ("mcp_server",),
-               calls=((_ITSM, "update_incident"),)),
+               calls=((_DESK, "update_incident"),)),
             _s(7, "Hand off", "Writes HistoricalPatternMatched.", writes=("agent_decision",)),
         ],
         "design": {
-            "status": "locked", "reference": "Agent Reference v0.3",
-            "example": "INC-501 · EGL-0588 v2 on COB 2026-10-05 (business day 3 of Q4); "
+            "status": "locked", "reference": "Design v0.3",
+            "example": "INC-501 · DQX-0588 v2 on COB 2026-10-05 (business day 3 of Q4); "
                        "lookback from 2024-10-05.",
-            "decisions": [_n("A-D48", "facts only"), _n("A-D49", "two search tiers"),
-                          _n("A-D50", "deterministic matching"),
-                          _n("A-D51", "KG data passed as parameters"),
-                          _n("A-D52", "grouping by pattern"), _n("A-D53", "negative precedents"),
-                          _n("A-D55", "only Historical Pattern creates Precedents"),
-                          _n("A-D57", "recurrence facts")],
-            "applied_in": {"kg": "v16", "cg": "v4", "items": [
-                "BusinessCalendar and CalendarDay (KG-G17)", "fixDurability (KG-G16)",
-                "MATCHED_INCIDENT, Precedent recurrence facts, SameColumn and timingAlignment "
-                "(CG-G12 to CG-G16)"]},
+            "decisions": [_n("HIS-1", "gathers facts, draws no conclusions"),
+                          _n("HIS-2", "searches the same rule first, then its neighbours"),
+                          _n("HIS-3", "the same inputs always match the same incidents"),
+                          _n("HIS-4", "graph values go in as query parameters"),
+                          _n("HIS-5", "matches are grouped by resolved pattern"),
+                          _n("HIS-6", "a fix that did not hold is kept as a warning"),
+                          _n("HIS-7", "the one stage that writes precedents"),
+                          _n("HIS-8", "how often it recurred is stated as a fact")],
+            "applied_in": {"kg": "v3", "cg": "v3", "items": [
+                "BusinessCalendar and CalendarDay", "how long each fix held",
+                "MATCHED_INCIDENT, recurrence facts on the precedent, same-column and timing "
+                "matches"]},
             "open_questions": [
-                _n("HP-Q1", "promotionCandidate versus GovernanceFlag and RulePromotion. "
-                            "Per-cause confidenceLift — being settled in the RCA review.")],
+                _n("HIS-Q1", "whether a recurring pattern should suggest a new rule, and how "
+                             "much each precedent should raise a cause's confidence (part of "
+                             "the Root Cause Analysis review)")],
         },
     },
     "rca": {
         "steps": [
-            _s(1, "Read the curated pack", "The Context Curator's pack, within the token budget.",
+            _s(1, "Read the curated pack", "The Context Budgeter's pack, within the token budget.",
                ("incident", "agent_decision", "coverage_gap")),
             _s(2, "Weigh the precedents", "Tier-1 and tier-2 precedents and their patterns.",
                ("precedent", "resolved_pattern")),
@@ -440,14 +452,15 @@ DQ_STAGE_DESIGNS: dict[str, dict[str, Any]] = {
         "design": {
             "status": "in_review", "reference": "",
             "decisions": [_n("RCA-1", "cites only evidence it was offered"),
-                          _n("RCA-2", "InsufficientEvidence re-runs Enrichment and Historical "
-                                      "Pattern, at most twice")],
-            "open_questions": [_n("HP-Q1", "per-cause confidenceLift")],
+                          _n("RCA-2", "InsufficientEvidence re-runs Context Gathering and Past "
+                                      "Incidents, at most twice")],
+            "open_questions": [_n("RCA-Q1", "how much each precedent raises a cause's "
+                                            "confidence")],
         },
     },
     "pipeline_orchestrator": {
         "steps": [_s(1, "Read the candidates", "RCA's latest round.", ("agent_decision",)),
-                  _s(2, "Route each family", "One lane per family above the routing floor.",
+                  _s(2, "Route each family", "One cause check per family above the routing floor.",
                      ("incident",), ("agent_decision",))],
         "design": {"status": "not_reviewed", "reference": ""},
     },
@@ -460,7 +473,7 @@ DQ_STAGE_DESIGNS: dict[str, dict[str, Any]] = {
         "design": {"status": "not_reviewed", "reference": ""},
     },
     "rule_drafting": {
-        "steps": [_s(1, "Read the false positive", "The confirmed rule_config lane and the "
+        "steps": [_s(1, "Read the false positive", "The confirmed rule_config cause check and the "
                      "rule's thresholds.", ("agent_decision", "data_quality_rule",
                                             "dq_threshold")),
                   _s(2, "Draft the rule change", "A rule proposal into Rules review.",
@@ -468,7 +481,7 @@ DQ_STAGE_DESIGNS: dict[str, dict[str, Any]] = {
         "design": {"status": "not_reviewed", "reference": ""},
     },
     "remediation_advisor": {
-        "steps": [_s(1, "Read the confirmed cause", "The lane verdict and the templates.",
+        "steps": [_s(1, "Read the confirmed cause", "The cause check verdict and the templates.",
                      ("agent_decision", "resolved_pattern", "precedent")),
                   _s(2, "Prepare the package", "Fix, target, executor, approver, change content.",
                      ("owner", "incident"), ("remediation_package", "agent_decision"))],
@@ -479,17 +492,17 @@ DQ_STAGE_DESIGNS: dict[str, dict[str, Any]] = {
     "remediation_fix": {
         "steps": [_s(1, "Record the execution", "Who approved, who carried it out, the change.",
                      ("remediation_package", "agent_decision"), ("agent_decision",),
-                     ((_ITSM, "update_incident"),))],
+                     ((_DESK, "update_incident"),))],
         "design": {"status": "not_reviewed", "reference": "",
                    "decisions": [_n("PREP-1", "prepare-only cap: no agent executes fixes")]},
     },
     "incident_closure": {
-        "steps": [_s(1, "Re-run the check", "Eagle re-runs the rule after the fix.",
-                     ("data_quality_rule",), calls=((_EAGLE, "rerun_check"),)),
-                  _s(2, "Finalise the cause", "From the confirmed lane and the package.",
+        "steps": [_s(1, "Re-run the check", "The DQ Monitor re-runs the rule after the fix.",
+                     ("data_quality_rule",), calls=((_MONITOR, "rerun_check"),)),
+                  _s(2, "Finalise the cause", "From the confirmed cause check and the package.",
                      ("agent_decision", "remediation_package")),
                   _s(3, "Close the incident", "Graph and ticket.", ("incident",),
-                     ("agent_decision",), ((_ITSM, "update_incident"),)),
+                     ("agent_decision",), ((_DESK, "update_incident"),)),
                   _s(4, "Maintain resolved patterns", "An existing pattern seen again, or a new "
                      "one.", ("resolved_pattern",), ("resolved_pattern",)),
                   _s(5, "Write the precedent", "For the next investigation.", ("precedent",),
@@ -501,7 +514,7 @@ DQ_STAGE_DESIGNS: dict[str, dict[str, Any]] = {
                   _s(2, "Apply the ladder", "Business days open on the calendar; regulatory "
                      "reach one rung sooner.", ("calendar_day", "cde", "report_line", "owner")),
                   _s(3, "Escalate", "Note it on the ticket and record it.",
-                     writes=("agent_decision",), calls=((_ITSM, "update_incident"),))],
+                     writes=("agent_decision",), calls=((_DESK, "update_incident"),))],
         "design": {"status": "not_reviewed", "reference": ""},
     },
     "context_curator": {
@@ -512,8 +525,8 @@ DQ_STAGE_DESIGNS: dict[str, dict[str, Any]] = {
     "profile_service": {
         "design": {"status": "shared_service",
                    "reference": "Built at the investigation checkpoint",
-                   "decisions": [_n("A-D41", "deterministic exception profiles on each data "
-                                             "platform")]},
+                   "decisions": [_n("PRF-1", "the same inputs always give the same exception "
+                                             "profile, per data platform")]},
     },
 }
 
@@ -542,38 +555,38 @@ def entries(step: Callable[..., dict[str, Any]], from_input: Callable[[str], dic
     rca = {
         "key": "dq_incident_rca",
         "name": "DQ RCA and Remediation",
-        "description": "Investigate an Eagle exception group end to end: open or attach the "
+        "description": "Investigate a DQ Monitor exception group end to end: open or attach the "
                        "incident, assemble its context and history, find the root cause, confirm "
                        "it per family, prepare the fix — a person approves, a different person "
                        "executes — and close it with a precedent.",
         "objective": (
-            "Investigate one Eagle exception group on NorthPeak Bank's data platform. Monitoring "
+            "Investigate one DQ Monitor exception group on NorthPeak Bank's data platform. Incident Intake "
             "opens or attaches one incident for an Error group and never diagnoses. Context "
-            "Enrichment and Historical Pattern are fixed graph reads, never a model. The RCA "
+            "Context Gathering and Past Incidents are fixed graph reads, never a model. The RCA "
             "Agent proposes candidate causes citing the evidence, or says the evidence is "
-            "insufficient, which runs Enrichment and Historical Pattern again (at most twice). "
-            "Each candidate family goes to its lane; a confirmed false positive becomes a rule "
-            "proposal. The Remediation Advisor prepares the fix; a person approves it and a "
-            "different person carries it out — no agent executes. Closure re-runs the check, "
+            "insufficient, which runs Context Gathering and Past Incidents again (at most twice). "
+            "Each candidate family goes to its cause check; a confirmed false positive becomes a rule "
+            "proposal. The Fix Planner prepares the fix; a person approves it and a "
+            "different person carries it out — no agent executes. Close and Learn re-runs the check, "
             "closes the incident and writes the precedent the next investigation finds."),
         "work_class": "any",
-        "requires": {"ontology_pack": PACK, "mcp": ("eagle", "olympus", "itsm")},
+        "requires": {"ontology_pack": PACK, "mcp": ("dq-monitor", "profile-service", "service-desk")},
         "pipeline": {
             "loops": [{"from": "rca", "to": ["context_enrichment", "historical_pattern"],
-                       "label": "InsufficientEvidence → re-run Enrichment and Historical "
-                                "Pattern", "max_rounds": 2}],
+                       "label": "InsufficientEvidence → re-run Context Gathering and Past "
+                                "Incidents", "max_rounds": 2}],
             "side_workflows": [{"key": "dq_incident_escalation", "stage": "escalation",
-                                "label": "9 · Escalation Agent — runs daily over every open "
+                                "label": "9 · Escalation Watch — runs daily over every open "
                                          "incident and applies the escalation ladder",
                                 "schedule": "daily"}],
             "side_paths": [{"from": "lanes", "to": "rule_drafting",
-                            "label": "False Positive lane: rule proposal"}],
+                            "label": "Confirmed false positive: rule proposal"}],
             "shared_services": ["context_curator", "profile_service"],
             "design_target": {"stage": "remediation_fix",
-                              "label": "8 · Remediation Fix: design target"},
+                              "label": "8 · Fix: design target"},
         },
         "steps": [
-            cap("monitoring", "dq_monitoring", "Monitoring",
+            cap("monitoring", "dq_monitoring", "Incident Intake",
                 {"exception_group_id": from_input("exception_group_id")}, ["incident_route"]),
             {"id": "incident_route", "kind": "condition", "title": "A new incident?",
              "expression": {"path": "steps.monitoring.output.continue_pipeline", "op": "truthy"},
@@ -585,18 +598,18 @@ def entries(step: Callable[..., dict[str, Any]], from_input: Callable[[str], dic
              "expression": {"path": "steps.rca.output.rca_verdict", "op": "eq",
                             "value": "InsufficientEvidence"},
              "on_exhausted": "continue", "next": ["pipeline_orchestrator"]},
-            cap("context_enrichment", "dq_context_enrichment", "Context Enrichment"),
-            cap("historical_pattern", "dq_historical_pattern", "Historical Pattern"),
-            cap("rca", "dq_rca", "RCA"),
-            cap("pipeline_orchestrator", "dq_orchestration", "Pipeline Orchestrator", nxt=["lanes"]),
-            {"id": "lanes", "kind": "for_each", "title": "Lanes",
+            cap("context_enrichment", "dq_context_enrichment", "Context Gathering"),
+            cap("historical_pattern", "dq_historical_pattern", "Past Incidents"),
+            cap("rca", "dq_rca", "Root Cause Analysis"),
+            cap("pipeline_orchestrator", "dq_orchestration", "Cause Router", nxt=["lanes"]),
+            {"id": "lanes", "kind": "for_each", "title": "Cause Checks",
              "items": "steps.pipeline_orchestrator.output.lanes", "body": "lane",
              "max_items": 5, "concurrency": 3, "item_label": "root-cause family",
              "next": ["rule_drafting"]},
-            cap("lane", "dq_lane", "Lane", {"item": {"from_item": ""}}),
-            cap("rule_drafting", "dq_rule_drafting", "Rule Drafting", nxt=["remediation_advisor"],
+            cap("lane", "dq_lane", "Cause Check", {"item": {"from_item": ""}}),
+            cap("rule_drafting", "dq_rule_drafting", "Rule Proposal", nxt=["remediation_advisor"],
                 side_path="Rule authoring"),
-            cap("remediation_advisor", "dq_remediation_package", "Remediation Advisor",
+            cap("remediation_advisor", "dq_remediation_package", "Fix Planner",
                 nxt=["package_route"]),
             {"id": "package_route", "kind": "condition", "title": "A fix prepared?",
              "expression": {"path": "steps.remediation_advisor.output.package_ready",
@@ -608,7 +621,7 @@ def entries(step: Callable[..., dict[str, Any]], from_input: Callable[[str], dic
             {"id": "human_approval", "kind": "decision", "title": "Human approval",
              "subject": _SUBJECT, "summary": ["{steps.remediation_advisor.output.note}"],
              "question": "Approve the prepared fix?",
-             "guidance": "The Remediation Advisor prepared it from the confirmed cause; nothing "
+             "guidance": "The Fix Planner prepared it from the confirmed cause; nothing "
                          "has been done. Approving lets a DIFFERENT person carry it out — you "
                          "cannot also do the execution.",
              "approval": {"mode": "manual", "approver_role": "human"},
@@ -625,20 +638,20 @@ def entries(step: Callable[..., dict[str, Any]], from_input: Callable[[str], dic
              "recommendation": {"reason_label": "Carried out",
                                 "reason_prompt": "The change reference and what you did."},
              "contract": contract("human_execution"), "next": ["remediation_fix"]},
-            cap("remediation_fix", "dq_remediation_fix", "Remediation Fix (design target)",
+            cap("remediation_fix", "dq_remediation_fix", "Fix (design target)",
                 nxt=["incident_closure"]),
-            cap("incident_closure", "dq_incident_closure", "Incident Closure"),
-            # Drawn in the pipeline, run elsewhere: the daily Escalation Agent (its own
+            cap("incident_closure", "dq_incident_closure", "Close and Learn"),
+            # Drawn in the pipeline, run elsewhere: the daily Escalation Watch (its own
             # scheduled workflow) and the two shared services.
-            cap("escalation", "dq_escalation", "Escalation Agent",
+            cap("escalation", "dq_escalation", "Escalation Watch",
                 side_path="Daily over every open incident", stage_number=9),
-            {"id": "context_curator", "kind": "deterministic", "title": "Context Curator",
+            {"id": "context_curator", "kind": "deterministic", "title": "Context Budgeter",
              "description": "Ranks and trims context to each agent's token budget; routes "
                             "nothing.",
              "binding": {"inputs": {"capability": "dq_context_curator"}},
              "contract": contract("context_curator"), "next": []},
             {"id": "profile_service", "kind": "deterministic", "title": "Profile Service",
-             "description": "Deterministic exception profiles on each data platform (A-D41).",
+             "description": "Deterministic exception profiles on each data platform.",
              "binding": {"inputs": {"capability": "dq_profile_service"}},
              "contract": contract("profile_service"), "next": []},
         ],
@@ -652,21 +665,21 @@ def entries(step: Callable[..., dict[str, Any]], from_input: Callable[[str], dic
                      "the bank's calendar, and raise its escalation to the next rung when due "
                      "(regulatory reach one rung sooner). Escalation only rises.",
         "work_class": "any",
-        "requires": {"ontology_pack": PACK, "mcp": ("itsm",)},
-        "steps": [cap("escalation", "dq_escalation", "Escalation Agent",
+        "requires": {"ontology_pack": PACK, "mcp": ("service-desk",)},
+        "steps": [cap("escalation", "dq_escalation", "Escalation Watch",
                       {"as_of": from_input("as_of")})],
     }
     intake = {
-        "key": "dq_eagle_intake",
-        "name": "DQ Eagle Intake",
-        "description": "Read Eagle's latest close of business and start an RCA for each "
+        "key": "dq_monitor_intake",
+        "name": "DQ Monitor Intake",
+        "description": "Read the DQ Monitor's latest close of business and start an RCA for each "
                        "exception group graded Error.",
-        "objective": "The Pipeline Orchestrator reads Eagle's exception groups for the COB and "
+        "objective": "The Cause Router reads the DQ Monitor's exception groups for the COB and "
                      "starts one dq_incident_rca run per Error group not already under "
                      "investigation.",
         "work_class": "any",
-        "requires": {"ontology_pack": PACK, "mcp": ("eagle",)},
-        "steps": [cap("eagle_intake", "dq_eagle_intake", "Eagle intake",
+        "requires": {"ontology_pack": PACK, "mcp": ("dq-monitor",)},
+        "steps": [cap("monitor_intake", "dq_monitor_intake", "DQ Monitor intake",
                       {"cob": from_input("cob")})],
     }
     return [rca, escalation, intake]
@@ -677,7 +690,7 @@ BRIEFS: dict[str, dict[str, Any]] = {
     "dq_incident_rca": {
         "directive": ("What should this investigation focus on? (optional)",
                       "The exception group's own evidence is always assembled."),
-        "example": {"title": "Investigate EGL-0588 v2 on COB 2026-10-05",
+        "example": {"title": "Investigate DQX-0588 v2 on COB 2026-10-05",
                     "exception_group_id": "EXG-20261005-0003",
                     "directive": "Principal outstanding no longer reconciles to its components."},
         "required": ("exception_group_id",),
@@ -687,23 +700,23 @@ BRIEFS: dict[str, dict[str, Any]] = {
         "example": {"title": "Escalation sweep", "as_of": "2026-10-09",
                     "directive": "Daily sweep."},
     },
-    "dq_eagle_intake": {
-        "directive": ("Anything to note? (optional)", "Eagle's latest COB is read."),
-        "example": {"title": "Eagle intake for COB 2026-10-07", "cob": "2026-10-07",
+    "dq_monitor_intake": {
+        "directive": ("Anything to note? (optional)", "The DQ Monitor's latest COB is read."),
+        "example": {"title": "DQ Monitor intake for COB 2026-10-07", "cob": "2026-10-07",
                     "directive": "Investigate the COB's Error groups."},
     },
 }
 
 FIELD_TEXT: dict[str, dict[str, Any]] = {
     "exception_group_id": {"type": "string", "title": "Exception group",
-                           "description": "The Eagle exception group to investigate (Knowledge "
+                           "description": "The DQ Monitor's exception group to investigate (Knowledge "
                                           "Graph › Documents › DQ sample lists them by COB), e.g. "
-                                          "EXG-20261005-0003 (EGL-0588 v2 on COB 2026-10-05).",
+                                          "EXG-20261005-0003 (DQX-0588 v2 on COB 2026-10-05).",
                            "examples": ["EXG-20261005-0003"]},
     "as_of": {"type": "string", "title": "As of (optional)",
               "description": "The day the ladder is applied for (YYYY-MM-DD). Default: today.",
               "examples": ["2026-10-09"]},
     "cob": {"type": "string", "title": "Close of business (optional)",
-            "description": "Eagle's COB to read (YYYY-MM-DD). Default: the latest.",
+            "description": "The DQ Monitor's COB to read (YYYY-MM-DD). Default: the latest.",
             "examples": ["2026-10-07"]},
 }

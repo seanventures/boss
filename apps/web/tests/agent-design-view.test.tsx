@@ -11,7 +11,7 @@ import { DQ_DESIGNS, DQ_PALETTE, DQ_RUN, DQ_SPEC } from "./_helpers/dq-design-fi
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 /**
- * The consultant's agent design in the Pipeline tab (design §4.6, §4.7): design status and
+ * The agent design in the Pipeline tab (design §4.6, §4.7): design status and
  * reference beside the last run, shared services and side paths off the flow, the agent's own
  * numbered steps with what each reads and writes, the design cards, and the review buttons.
  */
@@ -42,7 +42,7 @@ function view(stageId: string, opts: { run?: boolean; onDesignAction?: (a: strin
   const list = stages(DQ_DESIGNS, opts.run === false ? (null as never) : DQ_RUN);
   const contextKinds = new Set(list.flatMap((s) => (s.contract?.writes ?? []).map((w) => w.kind.replace(/[^a-z0-9]/gi, "").toLowerCase())));
   mount(<AgentContractView stage={at(stageId, list)} hasRun={opts.run !== false}
-                           graph={{ kgVersion: 17, cgVersion: 4, kinds: DQ_DESIGNS.kinds, contextKinds }}
+                           graph={{ kgVersion: 3, cgVersion: 3, kinds: DQ_DESIGNS.kinds, contextKinds }}
                            onDesignAction={opts.onDesignAction} designError={opts.error} />);
 }
 
@@ -50,32 +50,32 @@ describe("the design model", () => {
   it("P0 takes each stage's design from its review record, else its contract, else its kind", () => {
     const list = stages(designsFrom({ stages: {} }));
     expect(at("monitoring", list).design.status).toBe("locked");
-    expect(at("monitoring", list).design.reference).toBe("Agent Reference v0.1");
+    expect(at("monitoring", list).design.reference).toBe("Design v0.1");
     expect(at("monitoring", list).design.can.revise).toBe(true);
     expect(at("context_enrichment", list).design.status).toBe("in_review");
     expect(at("rca", list).design.status).toBe("not_reviewed");
     expect(at("human_approval", list).design.status).toBe("human_step");
     expect(at("human_approval", list).design.can).toEqual({ send_for_review: false, lock: false, revise: false });
     // The review record wins over what the contract declares.
-    const reviewed = stages(designsFrom({ stages: { monitoring: { status: "in_review", reference: "Agent Reference v0.2",
-      source: "review", locked: { reference: "Agent Reference v0.1" }, can: { lock: true } } } }));
+    const reviewed = stages(designsFrom({ stages: { monitoring: { status: "in_review", reference: "Design v0.2",
+      source: "review", locked: { reference: "Design v0.1" }, can: { lock: true } } } }));
     expect(at("monitoring", reviewed).design.status).toBe("in_review");
-    expect(at("monitoring", reviewed).design.locked?.reference).toBe("Agent Reference v0.1");
+    expect(at("monitoring", reviewed).design.locked?.reference).toBe("Design v0.1");
   });
 
   it("P0 puts a shared service and a side path off the flow, unnumbered, and anchors each agent between its neighbours", () => {
     const list = stages();
     expect(list.filter((s) => s.number !== null).map((s) => [s.number, s.title])).toEqual([
-      [1, "Monitoring Agent"], [2, "Context Enrichment Agent"], [3, "RCA Agent"]]);
-    // A person's step is a human step ("—"), as the consultant's table shows it.
+      [1, "Incident Intake Agent"], [2, "Context Gathering Agent"], [3, "Root Cause Analysis Agent"]]);
+    // A person's step is a human step ("—"), as the reference table shows it.
     expect(at("human_approval", list).number).toBeNull();
     expect(at("context_curator", list).placement).toBe("shared");
     expect(at("rule_drafting", list).placement).toBe("side");
     expect(at("rule_drafting", list).sideLabel).toBe("Rule authoring");
-    expect(at("monitoring", list).to).toBe("Context Enrichment Agent");
-    expect(at("context_enrichment", list).from).toBe("Monitoring Agent");
+    expect(at("monitoring", list).to).toBe("Context Gathering Agent");
+    expect(at("context_enrichment", list).from).toBe("Incident Intake Agent");
     expect(at("monitoring", list).contract!.steps!.map((s) => s.n)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
-    expect(at("monitoring", list).contract!.design!.decisions[0]).toEqual({ id: "A-D8", text: "severity only moves up" });
+    expect(at("monitoring", list).contract!.design!.decisions[0]).toEqual({ id: "MON-1", text: "severity only moves up" });
   });
 });
 
@@ -88,7 +88,7 @@ describe("the pipeline's design status column", () => {
     expect(head).toContain("Last run");
     expect(by("row-design-monitoring")!.textContent).toBe("Locked");
     expect(by("row-design-monitoring")!.getAttribute("data-design")).toBe("locked");
-    expect(by("row-reference-monitoring")!.textContent).toBe("Agent Reference v0.1 · under revision");
+    expect(by("row-reference-monitoring")!.textContent).toBe("Design v0.1 · under revision");
     expect(by("row-design-context_enrichment")!.textContent).toBe("In review");
     expect(by("row-design-rca")!.textContent).toBe("Not yet reviewed");
     expect(by("row-reference-rca")!.textContent).toBe("—");
@@ -130,10 +130,10 @@ describe("the agent's steps", () => {
     expect(by("step-1")!.textContent).toContain("Read the group");
     expect(by("step-9")!.textContent).toContain("Write trace,");
     expect(by("steps-to")!.textContent).toContain("To Context");
-    expect(by("band-kg")!.textContent).toBe("Knowledge Graph v17 · read only");
-    expect(by("band-cg")!.textContent).toBe("Context Graph v4 · read and write");
+    expect(by("band-kg")!.textContent).toBe("Knowledge Graph v3 · read only");
+    expect(by("band-cg")!.textContent).toBe("Context Graph v3 · read and write");
     expect(by("band-mcp")!.textContent).toBe("External systems · via MCP");
-    expect(by("band-steps")!.textContent).toBe("Monitoring Agent · steps");
+    expect(by("band-steps")!.textContent).toBe("Incident Intake Agent · steps");
   });
 
   it("P0 colours Knowledge Graph kinds by their domain and draws Context Graph kinds as hexagons", () => {
@@ -144,22 +144,22 @@ describe("the agent's steps", () => {
     expect(by("map-node-cde")!.querySelector("rect")!.getAttribute("style")).toContain("#17866b");
     expect(by("steps-cg")!.querySelector('[data-testid="map-node-incident"] polygon')).not.toBeNull();
     expect(by("steps-cg")!.querySelector('[data-testid="map-node-agentdecision"] polygon')).not.toBeNull();
-    expect(by("map-system-eagle")!.textContent).toBe("Eagle");
-    expect(by("map-system-itsm")!.textContent).toBe("ITSM");
+    expect(by("map-system-dqmonitor")!.textContent).toBe("DQ monitor");
+    expect(by("map-system-servicedesk")!.textContent).toBe("Service desk");
   });
 
-  it("P0 selecting step 7 lights only its lines: DataQualityRule, CDE, Incident, AgentDecision and ITSM", () => {
+  it("P0 selecting step 7 lights only its lines: DataQualityRule, CDE, Incident, AgentDecision and Service Desk", () => {
     view("monitoring");
     click(by("step-7"));
     const on = [...host!.querySelectorAll('[data-testid^="line-"][data-on="true"]')].map((l) => l.getAttribute("data-testid"));
     expect(on.sort()).toEqual([
-      "line-call-7-itsm-createticket", "line-read-7-cde", "line-read-7-dataqualityrule",
+      "line-call-7-servicedesk-createticket", "line-read-7-cde", "line-read-7-dataqualityrule",
       "line-write-7-agentdecision", "line-write-7-incident"]);
     expect(by("line-read-1-agent")!.getAttribute("data-on")).toBe("false");
     expect(by("map-node-dataqualityrule")!.getAttribute("data-on")).toBe("true");
     expect(by("map-node-system")!.getAttribute("data-on")).toBe("false");
     expect(by("step-detail")!.textContent).toContain("Step 7 · Open or attach");
-    expect(by("step-detail")!.textContent).toContain("ITSM (create ticket)");
+    expect(by("step-detail")!.textContent).toContain("Service desk (create ticket)");
     click(by("step-7"));
     expect(by("step-detail")).toBeNull();
   });
@@ -184,8 +184,8 @@ describe("the agent's steps", () => {
     expect(by("step-7")!.getAttribute("data-run")).toBe("done");
     expect(by("step-1")!.getAttribute("data-run")).toBe("missing");
     expect(by("step-3")!.getAttribute("data-run")).toBe("partly");
-    expect(by("map-system-itsm")!.getAttribute("data-overlay")).toBe("done");
-    expect(by("map-system-eagle")!.getAttribute("data-overlay")).toBe("missing");
+    expect(by("map-system-servicedesk")!.getAttribute("data-overlay")).toBe("done");
+    expect(by("map-system-dqmonitor")!.getAttribute("data-overlay")).toBe("missing");
     click(by("step-3"));
     expect(by("step-detail")!.textContent).toContain("1 of 2 done; not done: DQThreshold");
   });
@@ -194,21 +194,21 @@ describe("the agent's steps", () => {
     view("rca");
     expect(by("agent-steps-map")).toBeNull();
     expect(by("contract-map")).not.toBeNull();
-    expect(host!.textContent).toContain("Knowledge Graph v17 · read only");
+    expect(host!.textContent).toContain("Knowledge Graph v3 · read only");
   });
 });
 
 describe("the design cards", () => {
-  it("P0 lays out the consultant's cards with their IDs", () => {
+  it("P0 lays out the design cards with their IDs", () => {
     view("monitoring");
     const cards = by("contract-cards")!;
     const titles = [...cards.querySelectorAll(".pl-design-card-title")].map((t) => t.textContent);
-    expect(titles).toEqual(["Under revision", "Trigger", "Handoff", "Human review", "Applied in KG v16 / CG v4",
+    expect(titles).toEqual(["Under revision", "Trigger", "Handoff", "Human review", "Applied in KG v3 / CG v3",
                             "Policy", "Open questions", "Decisions"]);
-    expect(by("decision-notes")!.textContent).toBe("A-D8 severity only moves up · A-D9 link facts only");
-    expect(by("decision-notes")!.querySelector('[title="A-D8: severity only moves up"]')).not.toBeNull();
-    expect(by("policy-notes")!.textContent).toContain("OP-SEV-02 severity ladder");
-    expect(by("card-applied-in")!.textContent).toContain("linkType on CORRELATED_WITH (CG-G2)");
+    expect(by("decision-notes")!.textContent).toBe("MON-1 severity only moves up · MON-2 link facts only");
+    expect(by("decision-notes")!.querySelector('[title="MON-1: severity only moves up"]')).not.toBeNull();
+    expect(by("policy-notes")!.textContent).toContain("MON-P1 severity ladder");
+    expect(by("card-applied-in")!.textContent).toContain("linkType on CORRELATED_WITH");
     expect(by("card-under-revision")!.textContent).toContain("Rule authoring changed DQ grading");
     expect(by("card-applied-in")!.getAttribute("data-tone")).toBe("graph");
   });
@@ -219,7 +219,7 @@ describe("design review and lock", () => {
     const onDesignAction = vi.fn();
     view("context_enrichment", { onDesignAction });
     expect(by("design-status")!.textContent).toBe("In review");
-    expect(by("design-reference")!.textContent).toBe("Agent Reference v0.2");
+    expect(by("design-reference")!.textContent).toBe("Design v0.2");
     expect(by("design-send-for-review")).toBeNull();
     expect(by("design-revise")).toBeNull();
     click(by("design-lock"));

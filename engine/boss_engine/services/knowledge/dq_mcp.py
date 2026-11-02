@@ -1,4 +1,4 @@
-"""One road to the DQ pipeline's connectors (Eagle, Olympus, ITSM): the project's REGISTERED
+"""One road to the DQ pipeline's connectors (the DQ Monitor, the Profile Service, the Service Desk): the project's REGISTERED
 servers, through the registry's unattended call (an unreviewed or re-pointed server refuses like
 any other). A connector that cannot answer is a coverage gap the step records — never a silent
 omission and never a failed investigation. Every call made is appended to `calls` as

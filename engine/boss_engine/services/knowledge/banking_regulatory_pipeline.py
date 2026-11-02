@@ -6,7 +6,7 @@ reimplements them.
 Every function here has the same shape as `regulatory_trace.run_step` / a `graph_steps` function:
 ``(connection, settings, project_id, step, context, inputs) -> dict``, so the capability runner
 dispatches to it exactly like `trace_regulation` ([R:workflow_capability_runner.py] pattern).
-Pasted regulation text and ITSM ticket bodies are read as DATA only, never as instructions —
+Pasted regulation text and Service Desk ticket bodies are read as DATA only, never as instructions —
 no function below executes anything an input field says to do.
 """
 from __future__ import annotations
@@ -247,7 +247,7 @@ def run_compliance_assessment(
 ) -> dict[str, Any]:
     """Classify the subject's assembled evidence implemented/partly/gap, with a confidence and
     a graph-node citation. Cites a correlated incident's detail — e.g. INC-2088's payment
-    detail — by calling the ITSM mock's `get_incident` tool when Historical Pattern found one."""
+    detail — by calling the Service Desk mock's `get_incident` tool when Historical Pattern found one."""
     run_id = _run_id(step, context)
     step_id = str(step.get("id") or "compliance_assessment")
     subject_id = str(inputs.get("subject_id") or "").strip()
@@ -278,13 +278,13 @@ def run_compliance_assessment(
 
     cited_incident = None
     if matched:
-        from tools.mcp_itsm_mock import TOOL_FNS as _itsm_tools
+        from tools.mcp_service_desk_mock import TOOL_FNS as service_desk_tools
 
         for match_id in matched:
             node = STORE.get_node(connection, project_id=project_id, node_id=match_id)
             if node and node["kind"] == "incident":
                 incident_id = str((node.get("attrs") or {}).get("incident_id") or node["name"])
-                cited_incident = _itsm_tools["get_incident"]({"incident_id": incident_id})
+                cited_incident = service_desk_tools["get_incident"]({"incident_id": incident_id})
                 if cited_incident.get("error"):
                     cited_incident = None
                 else:

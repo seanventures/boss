@@ -215,7 +215,7 @@ def test_an_unknown_zone_falls_back_to_utc_without_asking_twice():
     ccv._ZONES = None
     try:
         assert ccv.resolve_zone(Conn(), "Asia/Kolkata") == "Asia/Kolkata"
-        assert ccv.resolve_zone(Conn(), "Mars/Olympus") == "UTC"
+        assert ccv.resolve_zone(Conn(), "Mars/the Profile Service") == "UTC"
         assert ccv.resolve_zone(Conn(), "") == "UTC"
         assert Conn.calls == 1
     finally:

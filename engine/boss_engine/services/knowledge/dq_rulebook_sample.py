@@ -41,6 +41,47 @@ def stage(connection: Connection, *, project_id: str, actor_kind: str = "person"
         title=TITLE, actor_kind=actor_kind, actor_ref=actor_ref)
 
 
+def replace_previous(connection: Connection, *, project_id: str, document_id: str) -> dict[str, int]:
+    """LOADING THE RULEBOOK AGAIN REPLACES IT. A person confirmed a new copy of the sample
+    rulebook (``document_id``): every earlier copy in the project goes, with its sections and
+    the DQ rules and thresholds read from it, so the graph holds one rulebook and "Extract rules"
+    reads the new one (a rule already in the graph would otherwise be returned as it was).
+    Counts what went."""
+    from .rules import DQ_RULE_KIND, DQ_THRESHOLD_KIND
+    from .store import PostgresKnowledgeStore
+
+    store = PostgresKnowledgeStore()
+    removed = {"documents": 0, "sections": 0, "rules": 0}
+    older = connection.execute(text(
+        "SELECT id FROM kg_nodes WHERE project_id = :p AND kind = 'document' "
+        "AND attrs->>'filename' = :f AND id <> :d"),
+        {"p": project_id, "f": FILENAME, "d": document_id}).scalars().all()
+    for old_id in older:
+        rules = connection.execute(text(
+            "SELECT id, node_key FROM kg_nodes WHERE project_id = :p AND kind = :k "
+            "AND attrs->'dq'->>'document_id' = :d"),
+            {"p": project_id, "k": DQ_RULE_KIND, "d": old_id}).mappings().all()
+        thresholds = connection.execute(text(
+            "SELECT id FROM kg_nodes WHERE project_id = :p AND kind = :k "
+            "AND attrs->>'rule_id' = ANY(:r)"),
+            {"p": project_id, "k": DQ_THRESHOLD_KIND,
+             "r": [str(r["node_key"]) for r in rules]}).scalars().all()
+        sections = connection.execute(text(
+            "SELECT id FROM kg_nodes WHERE project_id = :p AND kind = 'clause' "
+            "AND attrs->>'document_id' = :d"), {"p": project_id, "d": old_id}).scalars().all()
+        for node_id in [*thresholds, *[r["id"] for r in rules], *sections, old_id]:
+            store.delete_node(connection, project_id=project_id, node_id=node_id,
+                              actor_kind="person")
+        # And the upload that wrote it: its staged sections are the old copy's text.
+        connection.execute(text(
+            "DELETE FROM kg_document_uploads WHERE project_id = :p AND document_id = :d"),
+            {"p": project_id, "d": old_id})
+        removed["documents"] += 1
+        removed["sections"] += len(sections)
+        removed["rules"] += len(rules)
+    return removed
+
+
 def status(connection: Connection, *, project_id: str) -> dict[str, Any]:
     """Whether the sample can be loaded, its pending preview, the confirmed document, and how
     many rules have been proposed from it and approved."""

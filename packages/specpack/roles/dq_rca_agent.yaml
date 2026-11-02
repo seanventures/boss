@@ -1,5 +1,5 @@
 role_id: dq_rca_agent
-display_name: RCA Agent
+display_name: Root Cause Analysis Agent
 team: quality
 mission: "Propose the candidate root causes of a data-quality incident with a confidence each — tier 1 from a precedent, tier 2 from the evidence — or say the evidence is insufficient and what is missing."
 primary_outcomes:

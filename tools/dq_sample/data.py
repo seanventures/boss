@@ -3,7 +3,7 @@
 DETERMINISTIC AND SYNTHETIC. Every value is a fixed table below or comes from `random.Random(seed)`
 (sample keys and profile baselines only). No network, no model, no clock. `generate()` returns the
 same world on every machine, so the rulebook PDF (tools/dq_sample/rulebook.py), the mock MCP
-servers (Eagle DQ monitor, ITSM, Olympus profile service), the graph loader and the tests all read
+servers (DQ Monitor, Service Desk, Profile Service), the graph loader and the tests all read
 one bank.
 
 What is here (see README.md for the full API and the relationship names):
@@ -13,8 +13,8 @@ What is here (see README.md for the full API and the relationship names):
     reports, report lines and MDRM codes, the business calendar, issues and examination findings;
   * the Context Graph seed (what agents did before): 10 closed incidents with confirmed causes,
     fixes and fix durability, their precedents and resolved patterns, and one open incident;
-  * Eagle's exception groups over COB 2026-10-01 .. 2026-10-07 (incl. the running example
-    EGL-0588 v2 on COB 2026-10-05) and Olympus' exception profiles per data platform;
+  * the DQ Monitor's exception groups over COB 2026-10-01 .. 2026-10-07 (incl. the running example
+    DQX-0588 v2 on COB 2026-10-05) and the Profile Service's exception profiles per data platform;
   * `answer_key()`: the expected pipeline outcome per exception group, and every rulebook rule's
     fields (for measuring rulebook extraction). Never shown to an agent.
 
@@ -37,7 +37,7 @@ BANK = "NorthPeak Bank"
 RULEBOOK_TITLE = "NorthPeak Bank: Loan Data Quality Rulebook"
 RULEBOOK_VERSION = "3.2"
 RULEBOOK_EFFECTIVE = "2026-07-01"
-RUNNING_EXAMPLE = "EXG-20261005-0003"   # EGL-0588 v2 on COB 2026-10-05
+RUNNING_EXAMPLE = "EXG-20261005-0003"   # DQX-0588 v2 on COB 2026-10-05
 MDRM_DISCLAIMER = ("Report line numbers and MDRM codes in this rulebook are illustrative. They "
                    "follow the public FFIEC 031/041 Call Report and FR Y-9C schedules; verify "
                    "every code against the FFIEC MDRM dictionary before relying on it.")
@@ -50,7 +50,7 @@ KG_KINDS = ("system", "owner", "feed", "lineage", "database_structure", "databas
             "report_line", "mdrm", "business_calendar", "calendar_day", "issue",
             "examination_finding", "transformation", "root_cause_category",
             "remediation_template")
-#: Kinds the consultant's agent designs read that this sample world holds no instance of: the
+#: Kinds the pipeline's agent designs read that this sample world holds no instance of: the
 #: pack declares them (so a bank's own graph can carry them and the contracts read them), but
 #: the sample never invents one.
 DECLARED_ONLY_KINDS = ("derivation_rule", "data_concern", "adjustment",
@@ -61,7 +61,7 @@ CONTEXT_KINDS = ("exception_group", "incident", "precedent", "resolved_pattern")
 RELATIONSHIPS: tuple[tuple[str, str, str, str], ...] = (
     ("owner", "OWNS", "system", "the team/person accountable for a system"),
     ("owner", "OWNS", "feed", "the team that runs a feed"),
-    ("owner", "OWNS", "data_quality_rule", "the rule owner (ITSM tickets go to its group)"),
+    ("owner", "OWNS", "data_quality_rule", "the rule owner (Service Desk tickets go to its group)"),
     ("owner", "STEWARDS", "cde", "the data steward of a critical data element"),
     ("owner", "MEMBER_OF", "owner", "a person belongs to a team"),
     ("system", "HOSTS", "database_structure", "a system hosts a database/schema"),
@@ -86,7 +86,7 @@ RELATIONSHIPS: tuple[tuple[str, str, str, str], ...] = (
     ("data_quality_rule", "APPLIES_TO", "database_column", "a column the check reads"),
     ("data_quality_rule", "APPLIES_TO", "database_table", "the table the check runs on"),
     ("data_quality_rule", "COVERS", "feed", "the feed whose output the rule checks"),
-    ("data_quality_rule", "MONITORED_BY", "system", "the DQ monitor that runs it (Eagle)"),
+    ("data_quality_rule", "MONITORED_BY", "system", "the DQ monitor that runs it (the DQ Monitor)"),
     ("data_quality_rule", "REACHES", "report_line", "regulatory reach of the rule"),
     ("data_quality_rule", "RELATED_TO", "data_quality_rule", "a related rule"),
     ("dq_threshold", "OF", "data_quality_rule", "a rule's Warning or Error threshold"),
@@ -111,7 +111,7 @@ RELATIONSHIPS: tuple[tuple[str, str, str, str], ...] = (
     ("exception_group", "RAISED_BY", "data_quality_rule", "the rule whose check failed"),
     ("exception_group", "ON_COB", "calendar_day", "the close of business graded"),
     ("exception_group", "AFFECTS", "database_column", "the failing column"),
-    ("exception_group", "EMITTED_BY", "system", "the DQ monitor that emitted it (Eagle)"),
+    ("exception_group", "EMITTED_BY", "system", "the DQ monitor that emitted it (the DQ Monitor)"),
     ("incident", "RAISED_FROM", "exception_group", "the exception group that opened it"),
     ("incident", "CONCERNS", "data_quality_rule", "the rule an incident is about"),
     ("incident", "CONCERNS", "cde", "the CDE an incident is about"),
@@ -151,8 +151,8 @@ def remediation_template_id(pattern_id: str) -> str:
 LANES = {
     "lane_source_processing": "source_processing", "lane_feed_etl": "feed_etl",
     "lane_reference_data": "reference_data", "lane_manual_entry": "manual_entry",
-    "rule_drafting": "rule_config",          # false positive -> Rule Drafting Agent case
-    "insufficient_evidence": None,           # RCA loops back to Enrichment + Historical Pattern
+    "rule_drafting": "rule_config",          # false positive -> Rule Proposal Agent case
+    "insufficient_evidence": None,           # RCA loops back to Context Gathering + Past Incidents
 }
 
 
@@ -166,7 +166,7 @@ class Owner:
     owner_type: str                 # "team" | "person"
     title: str
     team_id: str | None = None      # a person's team
-    itsm_group: str | None = None   # ITSM assignment group (teams)
+    service_desk_group: str | None = None   # Service Desk assignment group (teams)
 
 
 @dataclass(frozen=True)
@@ -289,7 +289,7 @@ class DqThreshold:
 class DqRule:
     rule_id: str
     version: int
-    eagle_id: str
+    monitor_id: str
     family: str
     title: str
     statement: str
@@ -391,7 +391,7 @@ class ExaminationFinding:
 @dataclass(frozen=True)
 class ExceptionGroup:
     group_id: str
-    eagle_rule_id: str
+    monitor_rule_id: str
     rule_id: str
     rule_version: int
     cob: str
@@ -402,8 +402,8 @@ class ExceptionGroup:
     failed: int
     metric: str
     measured: float                 # the value graded (rate, count, minutes, diff ...)
-    eagle_grade: str                # the grade Eagle emitted
-    eagle_thresholds: dict[str, float]
+    monitor_grade: str                # the grade the DQ Monitor emitted
+    monitor_thresholds: dict[str, float]
     emitted_at: str
     sample_keys: tuple[str, ...]
     note: str = ""
@@ -431,24 +431,24 @@ class PlatformProfile:
 # Owners and systems
 # ---------------------------------------------------------------------------------------------
 OWNERS: tuple[Owner, ...] = (
-    Owner("OWN-CDO", "Chief Data Office", "team", "Data governance", itsm_group="NPB-CDO"),
+    Owner("OWN-CDO", "Chief Data Office", "team", "Data governance", service_desk_group="NPB-CDO"),
     Owner("OWN-LOANOPS", "Loan Operations", "team", "Loan servicing operations",
-          itsm_group="NPB-LOAN-OPS"),
+          service_desk_group="NPB-LOAN-OPS"),
     Owner("OWN-PAYOPS", "Payments Operations", "team", "Payments and posting",
-          itsm_group="NPB-PAY-OPS"),
-    Owner("OWN-COLL", "Collections", "team", "Arrears and collections", itsm_group="NPB-COLL"),
+          service_desk_group="NPB-PAY-OPS"),
+    Owner("OWN-COLL", "Collections", "team", "Arrears and collections", service_desk_group="NPB-COLL"),
     Owner("OWN-CUSTDATA", "Customer Data Management", "team", "Customer master data",
-          itsm_group="NPB-CUST-DATA"),
+          service_desk_group="NPB-CUST-DATA"),
     Owner("OWN-FIN", "Finance Controllership", "team", "General ledger and provisioning",
-          itsm_group="NPB-FIN-CTRL"),
+          service_desk_group="NPB-FIN-CTRL"),
     Owner("OWN-REGREP", "Regulatory Reporting", "team", "Call Report and FR Y-9C",
-          itsm_group="NPB-REG-REP"),
+          service_desk_group="NPB-REG-REP"),
     Owner("OWN-DATAPLAT", "Data Platform Engineering", "team", "Warehouse and feeds",
-          itsm_group="NPB-DATA-PLAT"),
+          service_desk_group="NPB-DATA-PLAT"),
     Owner("OWN-LSPENG", "Loan Platform Engineering", "team", "Fineract platform engineering",
-          itsm_group="NPB-LSP-ENG"),
-    Owner("OWN-DQOPS", "Data Quality Operations", "team", "Eagle administration",
-          itsm_group="NPB-DQ-OPS"),
+          service_desk_group="NPB-LSP-ENG"),
+    Owner("OWN-DQOPS", "Data Quality Operations", "team", "DQ Monitor administration",
+          service_desk_group="NPB-DQ-OPS"),
     Owner("P-DWHITFIELD", "Dana Whitfield", "person", "Chief Data Officer", "OWN-CDO"),
     Owner("P-MFELD", "Marcus Feld", "person", "Loan Operations data steward", "OWN-LOANOPS"),
     Owner("P-ARAHMAN", "Aisha Rahman", "person", "Payments data steward", "OWN-PAYOPS"),
@@ -479,13 +479,13 @@ SYSTEMS: tuple[System, ...] = (
            "for reporting and finance.", 1, "OWN-DATAPLAT", "Warehouse", "warehouse"),
     System("S-RRH", "Regulatory Reporting Hub", "Builds the Call Report (FFIEC 031) and FR Y-9C "
            "extracts.", 1, "OWN-REGREP", "Reporting hub", "reporting"),
-    System("S-EGL", "Eagle DQ Monitor", "Runs every DQ rule at each COB, grades it Warning or Error "
-           "and emits exception groups.", 1, "OWN-DQOPS", "Eagle", "dq_monitor", "eagle"),
-    System("S-ITSM", "ServiceDesk ITSM", "Incident and change tickets; assignment groups per "
-           "owner.", 2, "OWN-DQOPS", "ITSM", "itsm", "itsm"),
-    System("S-OLY", "Olympus Profile Service", "Deterministic exception profiles per data platform "
-           "(baseline failure rates, recent changes).", 2, "OWN-DATAPLAT", "Olympus",
-           "profile_service", "olympus"),
+    System("S-DQM", "DQ Monitor", "Runs every DQ rule at each COB, grades it Warning or Error "
+           "and emits exception groups.", 1, "OWN-DQOPS", "DQ Monitor", "dq_monitor", "dq-monitor"),
+    System("S-DESK", "Service Desk", "Incident and change tickets; assignment groups per "
+           "owner.", 2, "OWN-DQOPS", "Service Desk", "service_desk", "service-desk"),
+    System("S-PRF", "Profile Service", "Deterministic exception profiles per data platform "
+           "(baseline failure rates, recent changes).", 2, "OWN-DATAPLAT", "Profile Service",
+           "profile_service", "profile-service"),
 )
 
 STRUCTURES: tuple[DatabaseStructure, ...] = (
@@ -975,7 +975,7 @@ CDES: tuple[Cde, ...] = tuple(
 # ---------------------------------------------------------------------------------------------
 # DQ rules (96 active + 4 retired)
 # ---------------------------------------------------------------------------------------------
-#: family -> (name, primary table, owner, feed, (plural population, singular), eagle id base)
+#: family -> (name, primary table, owner, feed, (plural population, singular), monitor id base)
 FAMILIES: dict[str, tuple[str, str, str, str | None, tuple[str, str], int]] = {
     "LN": ("Loan master", "m_loan", "OWN-LOANOPS", "F-01", ("active loans", "active loan"), 585),
     "TX": ("Loan transactions", "m_loan_transaction", "OWN-PAYOPS", "F-02",
@@ -1646,9 +1646,9 @@ def _build_rules() -> tuple[DqRule, ...]:
             _SEVERITY_DEFAULT[dim] if regs else ("Low" if dim == "completeness" else "Medium")
         owner_team = owner
         handling = (f"Warning: DQ dashboard only. Error: opens an incident for "
-                    f"{_owner_name(owner_team)} (ITSM {_owner_group(owner_team)}) or attaches to "
+                    f"{_owner_name(owner_team)} (Service Desk {_owner_group(owner_team)}) or attaches to "
                     f"the open one for this rule, with the failing keys.")
-        out.append(DqRule(rid, ver, f"EGL-{base + n:04d}", fam, title, statement, dim, cdes, cols,
+        out.append(DqRule(rid, ver, f"DQX-{base + n:04d}", fam, title, statement, dim, cdes, cols,
                           tables, check, pop[0], warn, err, sev, owner_team, system, feed_id, regs,
                           handling, related, extra.get("legal")))
     return tuple(out)
@@ -1659,7 +1659,7 @@ def _owner_name(owner_id: str) -> str:
 
 
 def _owner_group(owner_id: str) -> str:
-    return next(o.itsm_group for o in OWNERS if o.owner_id == owner_id)
+    return next(o.service_desk_group for o in OWNERS if o.owner_id == owner_id)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -1734,11 +1734,11 @@ PATTERNS: tuple[ResolvedPattern, ...] = (
                     "CL-001 duplicates where names and dates of birth match.",
                     ("NPB-DQ-CL-001", "NPB-DQ-CL-009"),
                     "Duplicate check at onboarding plus a weekly merge."),
-    ResolvedPattern("RPAT-THRESHOLD-UNIT", "Eagle threshold entered in the wrong unit",
-                    "rule_config", "A threshold was entered as a percent where Eagle expects a "
-                    "fraction (or the reverse), so Eagle grades Error on a failure rate the "
+    ResolvedPattern("RPAT-THRESHOLD-UNIT", "DQ Monitor threshold entered in the wrong unit",
+                    "rule_config", "A threshold was entered as a percent where the DQ Monitor expects a "
+                    "fraction (or the reverse), so the DQ Monitor grades Error on a failure rate the "
                     "rulebook treats as a Warning or clean.",
-                    "Eagle's configured thresholds differ from the rulebook's by a factor of 100.",
+                    "The DQ Monitor's configured thresholds differ from the rulebook's by a factor of 100.",
                     ("NPB-DQ-CL-004",),
                     "Validate threshold units on rule-pack import against the rulebook."),
     ResolvedPattern("RPAT-PARTIAL-LOAD", "Report extract built on a partial feed load",
@@ -1805,9 +1805,9 @@ INCIDENTS: tuple[Incident, ...] = (
     Incident("INC-2203", "Age-range rule flagged Error on a normal week (false positive)",
              "2026-07-20", "2026-07-22", "closed", "NPB-DQ-CL-004", ("CDE-CL-002",), "Medium",
              "OWN-DQOPS", "rule_config", "RPAT-THRESHOLD-UNIT",
-             "Eagle had the CL-004 thresholds entered as percentages where it expects fractions; "
+             "The DQ Monitor had the CL-004 thresholds entered as percentages where it expects fractions; "
              "the data matched its baseline.", ("onboarding defect", "CIF sync"),
-             "Corrected Eagle's thresholds; Rule Drafting case RD-014 asked for unit validation.",
+             "Corrected the DQ Monitor's thresholds; Rule Proposal case RD-014 asked for unit validation.",
              "config_change", "held_until_regressed",
              "Held until the rule-pack re-import of 2026-10-05 (CHG-7745)."),
     Incident("INC-2219", "Q2 Call Report RCON2122 off by USD 3.1M", "2026-07-08", "2026-07-11",
@@ -1821,7 +1821,7 @@ INCIDENTS: tuple[Incident, ...] = (
              "The Collections batch overran and F-07 landed after the EDW arrears snapshot.",
              ("arrears aging job defect",), "Re-ran F-07 and the snapshot; added a landing gate.",
              "process_change", "partial", "The gate was not applied on Mondays (ISS-052)."),
-    # The one open incident (opened by Monitoring from EXG-20261002-0002).
+    # The one open incident (opened by Incident Intake from EXG-20261002-0002).
     Incident("INC-2301", "Overdue-since set late on COB 2026-10-02", "2026-10-02", None,
              "investigating", "NPB-DQ-AR-001", ("CDE-AR-001",), "High", "OWN-COLL", None, None,
              None, (), None, None, None, None, raised_from="EXG-20261002-0002"),
@@ -1844,10 +1844,10 @@ ISSUES: tuple[Issue, ...] = (
           (("feed", "F-06"), ("database_table", "rrh.fry9c_extract"),
            ("data_quality_rule", "NPB-DQ-RP-006")), ("EF-2025-02",),
           "The EDW to RRH hop for FR Y-9C (F-06) is undocumented column by column."),
-    Issue("ISS-047", "Eagle rule-pack import does not validate threshold units", "open",
+    Issue("ISS-047", "DQ Monitor rule-pack import does not validate threshold units", "open",
           "2026-07-22", "OWN-DQOPS",
-          (("system", "S-EGL"), ("data_quality_rule", "NPB-DQ-CL-004")),
-          description="Rule Drafting case RD-014 from INC-2203."),
+          (("system", "S-DQM"), ("data_quality_rule", "NPB-DQ-CL-004")),
+          description="Rule Proposal case RD-014 from INC-2203."),
     Issue("ISS-052", "F-07 arrears feed lands after the EDW snapshot on Mondays", "open",
           "2026-08-20", "OWN-COLL",
           (("feed", "F-07"), ("data_quality_rule", "NPB-DQ-AR-001")),
@@ -1888,7 +1888,7 @@ FINDINGS: tuple[ExaminationFinding, ...] = (
 )
 
 # ---------------------------------------------------------------------------------------------
-# Olympus profile service: recent changes per platform
+# Profile Service: recent changes per platform
 # ---------------------------------------------------------------------------------------------
 CHANGES: tuple[Change, ...] = (
     Change("CHG-7690", "2026-09-15", "S-LSP", "Repayment allocation strategy changed for product "
@@ -1904,17 +1904,17 @@ CHANGES: tuple[Change, ...] = (
     Change("CHG-7731", "2026-10-02", "S-LSP", "LSP release 1.11.3: COB job chain rebuilt; the F-01 "
            "trigger no longer waits for 'Update Loan Summary'.",
            ("NPB-DQ-LN-003", "NPB-DQ-LN-014"), ("F-01",)),
-    Change("CHG-7745", "2026-10-05", "S-EGL", "Eagle rule pack re-imported (CL family v3).",
+    Change("CHG-7745", "2026-10-05", "S-DQM", "DQ Monitor rule pack re-imported (CL family v3).",
            ("NPB-DQ-CL-004",)),
     Change("CHG-7750", "2026-10-05", "S-EDW", "EDW cluster patch window (22:00-05:30 ET).",
            ("NPB-DQ-FD-001",), ("F-01",)),
 )
 
 # ---------------------------------------------------------------------------------------------
-# Eagle exception groups and the answer key's planted outcomes
+# The DQ Monitor exception groups and the answer key's planted outcomes
 # ---------------------------------------------------------------------------------------------
 # (group id, rule id, cob, column, population, failed, measured or None (=failed/population),
-#  eagle thresholds override or None, emitted_at, note)
+#  monitor thresholds override or None, emitted_at, note)
 _GROUP_ROWS = (
     ("EXG-20261001-0001", "NPB-DQ-TX-006", "2026-10-01", "m_loan_transaction.amount", 18450, 4,
      None, None, "2026-10-02T05:12:00-04:00", ""),
@@ -1928,7 +1928,7 @@ _GROUP_ROWS = (
      22310, 5, None, None, "2026-10-05T06:02:00-04:00", ""),
     ("EXG-20261005-0003", "NPB-DQ-LN-003", "2026-10-05", "m_loan.principal_outstanding_derived",
      61220, 412, None, None, "2026-10-06T06:17:00-04:00",
-     "Running example: EGL-0588 v2 on COB 2026-10-05."),
+     "Running example: DQX-0588 v2 on COB 2026-10-05."),
     ("EXG-20261005-0005", "NPB-DQ-AR-001", "2026-10-05",
      "m_loan_arrears_aging.overdue_since_date_derived", 3950, 48, None, None,
      "2026-10-06T06:20:00-04:00", ""),
@@ -2012,7 +2012,7 @@ def grade(rule: DqRule, measured: float, thresholds: dict[str, float] | None = N
     """Grade a measured value against a rule's thresholds: "Error", "Warning" or "Clean".
 
     `measured` is in the rule's metric (rate = failed/population, count, minutes late,
-    relative difference, USD difference). `thresholds` overrides {"warning", "error"} (Eagle's
+    relative difference, USD difference). `thresholds` overrides {"warning", "error"} (the DQ Monitor's
     configured values, which may differ from the rulebook's)."""
     w = thresholds["warning"] if thresholds else rule.warning.value
     e = thresholds["error"] if thresholds else rule.error.value
@@ -2056,8 +2056,8 @@ class Dataset:
     def rule(self, rule_id: str) -> DqRule:
         return self._idx("rule", self.rules, "rule_id")[rule_id]
 
-    def rule_by_eagle_id(self, eagle_id: str) -> DqRule:
-        return self._idx("eagle", self.rules, "eagle_id")[eagle_id]
+    def rule_by_monitor_id(self, monitor_id: str) -> DqRule:
+        return self._idx("dq-monitor", self.rules, "monitor_id")[monitor_id]
 
     def cde(self, cde_id: str) -> Cde:
         return self._idx("cde", self.cdes, "cde_id")[cde_id]
@@ -2180,7 +2180,7 @@ class Dataset:
         for f in self.findings:
             add("examination_finding", f.finding_id, f.title, f)
         for g in self.exception_groups:
-            add("exception_group", g.group_id, f"{g.eagle_rule_id} v{g.rule_version} on COB "
+            add("exception_group", g.group_id, f"{g.monitor_rule_id} v{g.rule_version} on COB "
                 f"{g.cob}", g)
         for i in self.incidents:
             add("incident", i.incident_id, i.title, i)
@@ -2233,7 +2233,7 @@ class Dataset:
                 add(("cde", c.cde_id, "REPORTED_IN", "report_line", line))
         for r in self.rules:
             add(("owner", r.owner_id, "OWNS", "data_quality_rule", r.rule_id))
-            add(("data_quality_rule", r.rule_id, "MONITORED_BY", "system", "S-EGL"))
+            add(("data_quality_rule", r.rule_id, "MONITORED_BY", "system", "S-DQM"))
             for c in r.cde_ids:
                 add(("data_quality_rule", r.rule_id, "CHECKS", "cde", c))
             for col in r.columns:
@@ -2268,7 +2268,7 @@ class Dataset:
             add(("exception_group", g.group_id, "RAISED_BY", "data_quality_rule", g.rule_id))
             add(("exception_group", g.group_id, "ON_COB", "calendar_day", g.cob))
             add(("exception_group", g.group_id, "AFFECTS", "database_column", g.column))
-            add(("exception_group", g.group_id, "EMITTED_BY", "system", "S-EGL"))
+            add(("exception_group", g.group_id, "EMITTED_BY", "system", "S-DQM"))
         for i in self.incidents:
             add(("incident", i.incident_id, "CONCERNS", "data_quality_rule", i.rule_id))
             add(("incident", i.incident_id, "ASSIGNED_TO", "owner", i.owner_id))
@@ -2292,14 +2292,14 @@ class Dataset:
             add(("remediation_template", template, "FOR_CATEGORY", "root_cause_category", p.family))
         return e
 
-    def eagle_payload(self, group_id: str) -> dict[str, Any]:
-        """The exception group as Eagle publishes it (what the Monitoring step receives)."""
+    def monitor_payload(self, group_id: str) -> dict[str, Any]:
+        """The exception group as the DQ Monitor publishes it (what the Incident Intake step receives)."""
         g = self.exception_group(group_id)
-        return {"group_id": g.group_id, "eagle_rule_id": g.eagle_rule_id, "rule_id": g.rule_id,
+        return {"group_id": g.group_id, "monitor_rule_id": g.monitor_rule_id, "rule_id": g.rule_id,
                 "rule_version": g.rule_version, "cob": g.cob, "platform": g.platform,
-                "table": g.table, "column": g.column, "grade": g.eagle_grade,
+                "table": g.table, "column": g.column, "grade": g.monitor_grade,
                 "metric": g.metric, "measured": g.measured, "failed": g.failed,
-                "population": g.population, "thresholds": dict(g.eagle_thresholds),
+                "population": g.population, "thresholds": dict(g.monitor_thresholds),
                 "sample_keys": list(g.sample_keys), "emitted_at": g.emitted_at}
 
 
@@ -2321,16 +2321,16 @@ def _exception_groups(rules: dict[str, DqRule], rng: random.Random) -> tuple[Exc
             table, "ROW")
         keys = tuple(sorted(f"{prefix}-{rng.randrange(1, 999999):06d}"
                             for _ in range(min(failed, 5))))
-        out.append(ExceptionGroup(gid, r.eagle_id, rid, r.version, cob, platform, table, col, pop,
+        out.append(ExceptionGroup(gid, r.monitor_id, rid, r.version, cob, platform, table, col, pop,
                                   failed, r.warning.metric, value, grade(r, value, thr), thr,
                                   emitted, keys, note))
     return tuple(out)
 
 
 def _profiles(rules: tuple[DqRule, ...], rng: random.Random) -> tuple[PlatformProfile, ...]:
-    platforms = ("S-LSP", "S-GL", "S-CIF", "S-EDW", "S-RRH", "S-COL", "S-EGL")
+    platforms = ("S-LSP", "S-GL", "S-CIF", "S-EDW", "S-RRH", "S-COL", "S-DQM")
     volume = {"S-LSP": 1_240_000, "S-GL": 310_000, "S-CIF": 52_000, "S-EDW": 2_900_000,
-              "S-RRH": 1_800, "S-COL": 4_100, "S-EGL": 96}
+              "S-RRH": 1_800, "S-COL": 4_100, "S-DQM": 96}
     out = []
     for p in platforms:
         prules = {}
@@ -2367,7 +2367,7 @@ def generate(seed: int = SEED) -> Dataset:
 def answer_key(seed: int = SEED) -> dict[str, Any]:
     """Ground truth for tests and evaluation. Never shown to an agent.
 
-    {"exception_groups": {group id: {rulebook_grade, eagle_grade, incident_action
+    {"exception_groups": {group id: {rulebook_grade, monitor_grade, incident_action
        ("open"|"attach"|"ignore"), attach_to, root_cause_family, precedent, pattern, lane,
        loop_back, ...}},
      "rules": {rule id: every rulebook field an extractor should recover},
@@ -2377,11 +2377,11 @@ def answer_key(seed: int = SEED) -> dict[str, Any]:
     groups = {}
     for g in ds.exception_groups:
         r = ds.rule(g.rule_id)
-        groups[g.group_id] = {"rule_id": g.rule_id, "eagle_rule_id": g.eagle_rule_id,
+        groups[g.group_id] = {"rule_id": g.rule_id, "monitor_rule_id": g.monitor_rule_id,
                               "cob": g.cob, "rulebook_grade": grade(r, g.measured),
-                              "eagle_grade": g.eagle_grade, **_EXPECTED[g.group_id]}
+                              "monitor_grade": g.monitor_grade, **_EXPECTED[g.group_id]}
     rules = {r.rule_id: {
-        "version": r.version, "eagle_id": r.eagle_id, "family": r.family, "title": r.title,
+        "version": r.version, "monitor_id": r.monitor_id, "family": r.family, "title": r.title,
         "statement": r.statement, "dimension": r.dimension, "cde_ids": list(r.cde_ids),
         "columns": list(r.columns), "tables": list(r.tables), "check": r.check,
         "warning": r.warning.text, "error": r.error.text, "metric": r.warning.metric,

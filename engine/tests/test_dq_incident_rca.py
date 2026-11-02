@@ -1,17 +1,17 @@
-"""The consultant's DQ RCA and remediation pipeline (`dq_incident_rca`), built into BOSS and run
+"""The DQ RCA and remediation pipeline (`dq_incident_rca`), built into BOSS and run
 end to end through the real workflow runtime on NorthPeak Bank's synthetic data platform
 (tools/dq_sample), graded against `answer_key()`.
 
 Proven here, against a disposable postgres (DATABASE_URL, never the live DB):
 
 * the banking-dq pack mirrors tools/dq_sample, and a project holds it beside banking-aml;
-* the Eagle / Olympus / ITSM mocks answer from the sample world; ITSM opens, attaches and only
+* the DQ Monitor / the Profile Service / Service Desk mocks answer from the sample world; Service Desk opens, attaches and only
   raises severity;
 * loading the platform is a product action (pack, connectors, graph, workflows, the daily
   escalation schedule), idempotent, never writing the rulebook's rules — and a rule not in the
   graph is a coverage gap that says "load the rulebook";
 * Monitoring's open / attach / ignore for every exception group matches the answer key;
-* EGL-0588 v2 (EXG-20261005-0003) end to end: open → enrichment (CHG-7731, ISS-031, EF-2026-01)
+* DQX-0588 v2 (EXG-20261005-0003) end to end: open → enrichment (CHG-7731, ISS-031, EF-2026-01)
   → history (INC-2187, INC-2041, RPAT-COB-ORDER) → RCA source_processing citing INC-2187 →
   lane confirms → package → approval by A → execution REFUSED for A, done by B → closure writes
   the precedent; the next COB's group attaches to the incident it opened;
@@ -43,7 +43,7 @@ from boss_engine.services.knowledge import dq_incident_pipeline as pipeline
 from boss_engine.services.knowledge import dq_platform, ontology_packs
 from boss_engine.services.knowledge.dq_services import Section, curate
 from boss_engine.services.knowledge.store import NODE_KINDS, PostgresKnowledgeStore
-from tools import mcp_dq_mock, mcp_itsm_mock
+from tools import mcp_dq_mock, mcp_service_desk_mock
 from tools.dq_sample import data as D
 
 KEY = "dq_incident_rca"
@@ -67,8 +67,8 @@ def test_the_pack_mirrors_the_sample_world():
     assert {"matched_incident", "used_precedent"} <= pack.edges
     meta = pack.kind_meta["data_quality_rule"]
     assert meta["color"] and meta["label"] == "Data quality rule" and meta["plural"]
-    assert pack.context_version == "4"
-    # v3: the kinds the consultant's designs read; the sample holds instances of some, the rest
+    assert pack.context_version == "3"
+    # v3: the kinds the agent designs read; the sample holds instances of some, the rest
     # are declared and never invented.
     assert pack.version == "3"
     assert set(D.DECLARED_ONLY_KINDS) <= pack.kinds
@@ -130,33 +130,33 @@ def test_a_project_already_on_v2_gets_the_new_kinds_and_its_contracts_publish(lo
 
 
 def test_the_mocks_answer_from_the_sample_world():
-    mcp_itsm_mock.reset()
-    eagle, olympus = mcp_dq_mock.TOOL_FNS["eagle"], mcp_dq_mock.TOOL_FNS["olympus"]
-    listed = eagle["list_exception_groups"]({"cob": "2026-10-05"})
+    mcp_service_desk_mock.reset()
+    monitor, profiler = mcp_dq_mock.TOOL_FNS["dq-monitor"], mcp_dq_mock.TOOL_FNS["profile-service"]
+    listed = monitor["list_exception_groups"]({"cob": "2026-10-05"})
     assert [g["group_id"] for g in listed["groups"]] == ["EXG-20261005-0003", "EXG-20261005-0005"]
-    group = eagle["get_exception_group"]({"group_id": D.RUNNING_EXAMPLE})
-    assert group["eagle_rule_id"] == "EGL-0588" and group["grade"] == "Error"
-    assert eagle["get_exception_group"]({"group_id": "NOPE"}).get("error")
-    rerun = eagle["rerun_check"]({"rule_id": "NPB-DQ-LN-003", "cob": "2026-10-05",
+    group = monitor["get_exception_group"]({"group_id": D.RUNNING_EXAMPLE})
+    assert group["monitor_rule_id"] == "DQX-0588" and group["grade"] == "Error"
+    assert monitor["get_exception_group"]({"group_id": "NOPE"}).get("error")
+    rerun = monitor["rerun_check"]({"rule_id": "NPB-DQ-LN-003", "cob": "2026-10-05",
                                   "change_ref": "CHG-7760"})
     assert rerun["grade"] != "Error" and rerun["before_grade"] == "Error"
-    profile = olympus["get_exception_profile"]({"platform": "S-LSP", "rule_id": "NPB-DQ-LN-003",
+    profile = profiler["get_exception_profile"]({"platform": "S-LSP", "rule_id": "NPB-DQ-LN-003",
                                                 "measured": 0.00673})
     assert profile["profiled"] and profile["z_score"] > 3
-    changes = olympus["list_recent_changes"]({"platform": "S-LSP", "until": "2026-10-05"})
+    changes = profiler["list_recent_changes"]({"platform": "S-LSP", "until": "2026-10-05"})
     assert "CHG-7731" in {c["change_id"] for c in changes["changes"]}
-    itsm = mcp_itsm_mock.TOOL_FNS
-    assert itsm["get_incident"]({"incident_id": "INC-2088"})["correct_paydown"] == 218.60
-    assert [t["incident_id"] for t in itsm["list_incidents"](
+    desk = mcp_service_desk_mock.TOOL_FNS
+    assert desk["get_incident"]({"incident_id": "INC-2088"})["correct_paydown"] == 218.60
+    assert [t["incident_id"] for t in desk["list_incidents"](
         {"rule_id": "NPB-DQ-AR-001", "status": "open"})["incidents"]] == ["INC-2301"]
-    made = itsm["create_incident"]({"title": "t", "assignment_group": "NPB-LOAN-OPS",
+    made = desk["create_incident"]({"title": "t", "assignment_group": "NPB-LOAN-OPS",
                                     "source_ref": D.RUNNING_EXAMPLE, "severity": "High"})
-    again = itsm["create_incident"]({"title": "t", "assignment_group": "NPB-LOAN-OPS",
+    again = desk["create_incident"]({"title": "t", "assignment_group": "NPB-LOAN-OPS",
                                      "source_ref": D.RUNNING_EXAMPLE, "severity": "High"})
     assert made["created"] and not again["created"] and made["incident_id"] == again["incident_id"]
-    assert itsm["update_incident"]({"incident_id": made["incident_id"], "severity": "Low"})[
-        "error"].endswith("(A-D8)")
-    mcp_itsm_mock.reset()
+    assert desk["update_incident"]({"incident_id": made["incident_id"], "severity": "Low"})[
+        "error"].endswith("only moves up")
+    mcp_service_desk_mock.reset()
 
 
 def test_the_mux_serves_the_dq_connectors():
@@ -179,14 +179,14 @@ def test_the_context_curator_trims_to_budget_and_says_what_it_dropped():
     assert "dropped" in curated.note()
 
 
-def test_every_stage_has_a_contract_and_the_consultants_design():
+def test_every_stage_has_a_contract_and_its_design():
     entry = next(e for e in catalogue.CATALOGUE if e["key"] == KEY)
     steps = {s["id"]: s for s in entry["steps"]}
     designs = {sid: (s.get("contract") or {}).get("design") or {} for sid, s in steps.items()}
     assert designs["monitoring"]["status"] == "locked"
-    assert designs["monitoring"]["reference"] == "Agent Reference v0.1"
-    assert designs["context_enrichment"]["reference"] == "Agent Reference v0.2"
-    assert designs["historical_pattern"]["reference"] == "Agent Reference v0.3"
+    assert designs["monitoring"]["reference"] == "Design v0.1"
+    assert designs["context_enrichment"]["reference"] == "Design v0.2"
+    assert designs["historical_pattern"]["reference"] == "Design v0.3"
     assert designs["rca"]["status"] == "in_review"
     assert designs["human_approval"]["status"] == designs["human_execution"]["status"] == "human_step"
     assert designs["context_curator"]["status"] == designs["profile_service"]["status"] == \
@@ -196,8 +196,8 @@ def test_every_stage_has_a_contract_and_the_consultants_design():
         "Tag the exception", "Match", "Open or attach", "Link facts", "Write trace, hand off"]
     assert len(steps["context_enrichment"]["contract"]["steps"]) == 10
     assert len(steps["historical_pattern"]["contract"]["steps"]) == 7
-    assert {"A-D30", "A-D32", "A-D41"} <= {d["id"] for d in designs["context_enrichment"]["decisions"]}
-    assert designs["context_enrichment"]["policy"][0]["id"] == "OP-ENR-01"
+    assert {"CTX-1", "CTX-3", "CTX-9"} <= {d["id"] for d in designs["context_enrichment"]["decisions"]}
+    assert designs["context_enrichment"]["policy"][0]["id"] == "CTX-P1"
     # The shape: RCA loops back to stages 2-3, two people at the end, the side paths.
     assert steps["evidence_loop"]["body"] == ["context_enrichment", "historical_pattern", "rca"]
     assert steps["evidence_loop"]["on_exhausted"] == "continue"
@@ -213,7 +213,7 @@ def test_every_stage_has_a_contract_and_the_consultants_design():
     assert problems == []
 
 
-def test_the_designs_draw_as_the_consultants_reference():
+def test_the_designs_draw_as_the_reference_design():
     """The run trace, the Context Graph links, the orchestrator as the entry, handoffs in full
     sentences, the escalation band numbered 9 and the lanes named by what they fan out over."""
     from boss_engine.services.knowledge.step_contracts import contract_shape_problems
@@ -225,14 +225,14 @@ def test_the_designs_draw_as_the_consultants_reference():
         written = {w["kind"] for w in contract["writes"]}
         assert {"agent_run", "agent_tool_call"} <= written, sid
         assert contract["invoked_by"] == "pipeline_orchestrator"
-        assert contract["design"]["example"].startswith(("EGL-0588", "INC-501"))
+        assert contract["design"]["example"].startswith(("DQX-0588", "INC-501"))
         last = contract["steps"][-1 if sid != "historical_pattern" else 4]
         assert {"agent_run", "agent_tool_call"} <= set(last["writes"]), sid
     assert {(l["from"], l["to"], l["rel"]) for l in steps["monitoring"]["contract"]["links"]} == {
         ("incident", "incident", "CORRELATED_WITH")}
     assert {l["rel"] for l in steps["historical_pattern"]["contract"]["links"]} == {
         "MATCHED_INCIDENT", "REFERENCES"}
-    assert {c["mcp"] for c in steps["context_enrichment"]["contract"]["calls"]} == {"olympus", "itsm"}
+    assert {c["mcp"] for c in steps["context_enrichment"]["contract"]["calls"]} == {"profile-service", "service-desk"}
     assert steps["context_enrichment"]["contract"]["handoff"]["next"] == "historical_pattern"
     for sid, step in steps.items():
         handoff = (step.get("contract") or {}).get("handoff")
@@ -270,11 +270,11 @@ def pg_engine():
 def connection(pg_engine, monkeypatch):
     def call(settings, server, tool, args):
         name = server["name"]
-        fns = mcp_itsm_mock.TOOL_FNS if name == "itsm" else mcp_dq_mock.TOOL_FNS[name]
+        fns = mcp_service_desk_mock.TOOL_FNS if name == "service-desk" else mcp_dq_mock.TOOL_FNS[name]
         return fns[tool](args)
 
     monkeypatch.setattr(mcp_registry, "call_tool_unattended", call)
-    mcp_itsm_mock.reset()
+    mcp_service_desk_mock.reset()
     with pg_engine.connect() as conn:
         transaction = conn.begin()
         suffix = uuid.uuid4().hex[:8]
@@ -290,7 +290,7 @@ def connection(pg_engine, monkeypatch):
         finally:
             transaction.rollback()
             ontology_packs._PROJECT_PACK_CACHE.pop(project, None)
-            mcp_itsm_mock.reset()
+            mcp_service_desk_mock.reset()
 
 
 def _load_rulebook(c, project):
@@ -413,6 +413,117 @@ def test_loading_is_a_product_action_and_idempotent(loaded):
                                                   if e["key"] == KEY)) or "banking-dq")
 
 
+#: What an earlier release's sample was called, in this test: a name the current sample never
+#: uses. Loading again must leave no trace of it anywhere in the project's graph or library.
+OLD = "Zephyr"
+
+
+def _project_text(c, project: str) -> str:
+    """Everything the project's graph, connectors, library and schedules say, as one string."""
+    parts = [str(v) for v in c.execute(text(
+        "SELECT concat_ws(' ', node_key, name, body, attrs::text) FROM kg_nodes "
+        "WHERE project_id = :p AND (valid_to IS NULL OR valid_to > now())"),
+        {"p": project}).scalars().all()]
+    parts += [str(v) for v in c.execute(text(
+        "SELECT concat_ws(' ', name, url, description) FROM mcp_servers WHERE project_id = :p"),
+        {"p": project}).scalars().all()]
+    parts += [str(v) for v in c.execute(text(
+        "SELECT concat_ws(' ', workflow_key, name, description) FROM workflow_definitions "
+        "WHERE project_id = :p AND status <> 'retired'"), {"p": project}).scalars().all()]
+    parts += [str(v) for v in c.execute(text(
+        "SELECT concat_ws(' ', workflow_key, name) FROM workflow_schedules WHERE project_id = :p"),
+        {"p": project}).scalars().all()]
+    return "\n".join(parts)
+
+
+def test_loading_again_replaces_the_previous_sample(loaded):
+    """An install that loaded an earlier sample (other system, connector, exception-group and
+    workflow names) loads this one: one reload leaves none of the old names in the project's
+    graph, its connectors, its library or its schedules, and nothing of the new sample is lost."""
+    from boss_engine.bootstrap import builtin_provenance
+
+    c, project, first = loaded
+    old_key = f"dq_{OLD.lower()}_intake"
+    # The earlier sample's own pieces, as an earlier load and its runs left them.
+    STORE.upsert_node(c, project_id=project, kind="system", node_key="dq:system:S-ZPH",
+                      name=f"{OLD} DQ Monitor", body=f"{OLD} grades every rule.",
+                      trust_tier="observed", actor_kind="system", actor_ref="dq_platform",
+                      attrs={"sample": "dq", "key": "S-ZPH"})
+    STORE.upsert_node(c, project_id=project, kind="mcp_server",
+                      node_key=f"dq:mcp_server:{OLD.lower()}", name=OLD.lower(),
+                      body=f"{OLD} reached by agents through MCP.", trust_tier="observed",
+                      actor_kind="system", actor_ref="dq_platform", attrs={"sample": "dq"})
+    c.execute(text("UPDATE kg_nodes SET attrs = attrs || CAST(:a AS JSONB) WHERE project_id = :p "
+                   "AND node_key = 'dq:owner:OWN-CDO'"),
+              {"p": project, "a": json.dumps({f"{OLD.lower()}_group": "NPB-CDO"})})
+    c.execute(text("UPDATE kg_nodes SET name = :n, content_hash = 'earlier' WHERE project_id = :p "
+                   "AND node_key = :k"),
+              {"p": project, "n": f"ZPH-0588 v2 on COB 2026-10-05 ({OLD})",
+               "k": dq_platform.node_key("exception_group", D.RUNNING_EXAMPLE)})
+    mcp_registry.ensure_mcp_server(c, project, OLD.lower(), f"http://mcp-tools:8774/{OLD.lower()}/mcp",
+                                   risk_tier=0, description=f"DQ sample {OLD} DQ monitor",
+                                   provenance={**builtin_provenance(), "sample": "dq"})
+    old_def = workflows.create_definition(c, project_id=project, workflow_key=old_key,
+                                          name=f"DQ {OLD} Intake", description=f"Read {OLD}.",
+                                          actor="ceo", namespace=workflows.PRODUCT_NAMESPACE,
+                                          is_catalogue=True)
+    c.execute(text("INSERT INTO workflow_schedules (id, project_id, workflow_key, name, cadence, "
+                   "minute, hour, timezone, actor, next_run_at) VALUES (:i, :p, :k, :n, 'daily', "
+                   "30, 6, 'UTC', 'ceo', now())"),
+              {"i": f"wsc_{uuid.uuid4().hex[:10]}", "p": project, "k": old_key,
+               "n": f"Investigate {OLD}'s Error groups each COB"})
+    run = workflows.start_run(c, project_id=project, actor="ceo", input_data={},
+                              dedupe_key=f"dq_{uuid.uuid4().hex[:10]}",
+                              workflow_version_id=_version(c, project, "dq_incident_escalation"))
+    pipeline._decide(c, project, run_id=run["id"], step_id="escalation",
+                     decision_type="EscalationSweep", statement=f"{OLD} graded it Error.")
+    assert OLD in _project_text(c, project)
+    before = {k: v for k, v in first["counts"].items()}
+
+    again = dq_platform.load_platform(c, project_id=project, actor="ceo")
+
+    assert OLD not in _project_text(c, project), [
+        line for line in _project_text(c, project).splitlines() if OLD in line][:5]
+    assert OLD.lower() not in _project_text(c, project).lower()
+    assert again["counts"] == before and again["rules_in_graph"] == 96
+    assert again["replaced"]["nodes"] >= 2 and again["replaced"]["connectors"] == 1
+    assert again["replaced"]["run_nodes"] >= 1 and again["replaced"]["schedules"] == 1
+    assert c.execute(text("SELECT status FROM workflow_definitions WHERE id = :i"),
+                     {"i": old_def["id"]}).scalar() in (None, "retired")
+    status = dq_platform.status(c, project_id=project, cob="2026-10-05")
+    assert status["loaded"] and status["groups"][0]["monitor_rule_id"] == "DQX-0588"
+
+
+def test_loading_the_rulebook_again_replaces_the_earlier_copy(connection):
+    """The Documents tab's "Load it again": a newer copy of the sample rulebook, confirmed,
+    replaces the earlier one — its sections and the rules read from it go with it."""
+    from boss_engine.services.knowledge import document_upload, dq_rulebook_sample
+
+    c, project = connection, connection.project_id
+    for pack in ("banking-regulatory", "banking-dq"):
+        ontology_packs.set_project_pack(c, project_id=project, pack_id=pack, set_by="ceo")
+    older = STORE.upsert_node(c, project_id=project, kind="document", node_key="document:earlier",
+                              name=f"{OLD} rulebook", body=f"{OLD} rule cards", trust_tier="governed",
+                              actor_kind="person", actor_ref="ceo",
+                              attrs={"filename": dq_rulebook_sample.FILENAME})
+    clause = STORE.upsert_node(c, project_id=project, kind="clause", node_key="clause:earlier",
+                               name="LN-003", body=f"{OLD} rule: ZPH-0588", trust_tier="governed",
+                               actor_kind="person", actor_ref="ceo",
+                               attrs={"document_id": older})
+    rule = STORE.upsert_node(c, project_id=project, kind="data_quality_rule",
+                             node_key="NPB-DQ-LN-003", name=f"NPB-DQ-LN-003 ({OLD})", body="b",
+                             trust_tier="inferred", actor_kind="person", actor_ref="ceo",
+                             attrs={"dq": {"rule_id": "NPB-DQ-LN-003", "document_id": older}})
+    preview = dq_rulebook_sample.stage(c, project_id=project, actor_kind="person", actor_ref="ceo")
+    added = document_upload.confirm_upload(c, project_id=project, upload_id=preview["upload_id"],
+                                           actor_kind="person", actor_ref="ceo")
+    assert added["replaced"] == {"documents": 1, "sections": 1, "rules": 1}
+    gone = c.execute(text("SELECT count(*) FROM kg_nodes WHERE id = ANY(:ids)"),
+                     {"ids": [older, clause, rule]}).scalar()
+    assert gone == 0 and OLD not in _project_text(c, project)
+    assert dq_rulebook_sample.status(c, project_id=project)["document_id"] == added["document_id"]
+
+
 def test_monitoring_opens_attaches_or_ignores_as_the_answer_key_says(loaded):
     c, project, _ = loaded
     for group in sorted(D.generate().exception_groups, key=lambda g: (g.cob, g.group_id)):
@@ -459,7 +570,7 @@ class ScriptedAgents:
         return [x.strip() for x in prompt.rsplit("EVIDENCE YOU MAY CITE", 1)[1]
                 .split(":", 1)[1].split(",")]
 
-    def _rca_agent(self, prompt):
+    def _root_cause_analysis_agent(self, prompt):
         tier1 = self._section(prompt, "CLOSED INCIDENTS ON THIS RULE (TIER 1 PRECEDENTS):")
         precedents = re.findall(r"^\[(INC-\d+)\] tier 1 .*?Cause \((\w+),", tier1, re.M)
         gaps = self._section(prompt, "COVERAGE GAPS")
@@ -479,26 +590,26 @@ class ScriptedAgents:
                                 "confidence": 0.82, "evidence": ids + changes,
                                 "precedents": ids, "confidence_lift": {ids[0]: 0.3}}]}
 
-    def _lane_agent(self, prompt):
-        cand = self._section(prompt, "CANDIDATES FOR THIS LANE:")
+    def _cause_check_agent(self, prompt):
+        cand = self._section(prompt, "CANDIDATES FOR THIS CAUSE CHECK:")
         cited = re.findall(r"— cites (.*)$", cand, re.M)
         evidence = [x.strip() for x in cited[0].split(",")] if cited else []
         return {"verdict": "Confirmed" if evidence else "CannotVerify",
                 "cause": cand.strip().split(": ", 1)[-1].split(" — ")[0],
                 "evidence": evidence, "rationale": "scripted"}
 
-    def _rule_drafting_agent(self, prompt):
+    def _rule_proposal_agent(self, prompt):
         found = re.search(r"Warning above ([0-9.e-]+), Error above ([0-9.e-]+) \((\w+)\)", prompt)
         evidence = [x for x in self._offered(prompt) if x.startswith("INC-")][:1] or ["EXCEPTION"]
         return {"title": "use the rulebook's thresholds", "confidence": 0.8,
-                "proposal": f"Eagle runs the rule with the rulebook's thresholds (Warning above "
+                "proposal": f"The DQ Monitor runs the rule with the rulebook's thresholds (Warning above "
                             f"{found.group(1)}, Error above {found.group(2)}); the rule-pack "
                             "import validates threshold units against the rulebook.",
                 "thresholds": {"warning": float(found.group(1)), "error": float(found.group(2)),
                                "unit": found.group(3)},
                 "rationale": "scripted", "evidence": evidence}
 
-    def _remediation_advisor(self, prompt):
+    def _fix_planner(self, prompt):
         owner = re.search(r"rule owner: .*? — (OWN-[A-Z]+) \((NPB-[A-Z-]+)\)", prompt)
         steward = re.search(r"CDE steward: .*? — (P-[A-Z]+)", prompt)
         fix = re.search(r"durable fix — (.*?);", prompt)
@@ -592,7 +703,7 @@ def _scripted(monkeypatch):
     return agents
 
 
-def test_egl_0588_runs_end_to_end_and_two_people_finish_it(loaded, monkeypatch):
+def test_dqx_0588_runs_end_to_end_and_two_people_finish_it(loaded, monkeypatch):
     c, project, _ = loaded
     agents = _scripted(monkeypatch)
     expected = KEY_ANSWERS[D.RUNNING_EXAMPLE]
@@ -615,7 +726,7 @@ def test_egl_0588_runs_end_to_end_and_two_people_finish_it(loaded, monkeypatch):
     top = rca["candidates"][0]
     assert top["family"] == expected["root_cause_family"] and top["tier"] == 1
     assert expected["precedent"] in top["precedents"] and expected["recent_change"] in top["evidence"]
-    assert "Context Curator" in rca["curator_note"]
+    assert "Context Budgeter" in rca["curator_note"]
     used = c.execute(text("SELECT count(*) FROM kg_edges e JOIN kg_nodes n ON n.id = e.src_id "
                           "WHERE n.project_id = :p AND e.kind = 'used_precedent' AND "
                           "n.attrs->>'incident_id' = :i"), {"p": project, "i": incident}).scalar()
@@ -655,13 +766,13 @@ def test_egl_0588_runs_end_to_end_and_two_people_finish_it(loaded, monkeypatch):
     precedent = c.execute(text("SELECT attrs FROM kg_nodes WHERE id = :i"),
                           {"i": closure["precedent_node_id"]}).scalar()
     assert precedent["incident_id"] == incident and precedent["pattern_id"] == expected["pattern"]
-    assert mcp_itsm_mock.TOOL_FNS["get_incident"]({"incident_id": incident})["status"] == "resolved"
+    assert mcp_service_desk_mock.TOOL_FNS["get_incident"]({"incident_id": incident})["status"] == "resolved"
     assert {"IncidentOpened", "ContextAssembled", "HistoricalPatternMatched",
             "RootCauseCandidates", "Routed", "Confirmed", "RemediationPrepared", "FixRecorded",
             "IncidentClosed"} <= _decision_types(c, project, run)
     assert c.execute(text("SELECT status FROM workflow_runs WHERE id = :r"),
                      {"r": run}).scalar() == "completed"
-    assert agents.prompts["RCA Agent"] and agents.prompts["Lane Agent"]
+    assert agents.prompts["Root Cause Analysis Agent"] and agents.prompts["Cause Check Agent"]
 
 
 def test_an_attach_stops_after_monitoring(loaded, monkeypatch):
@@ -732,8 +843,8 @@ def test_insufficient_evidence_loops_back_and_leaves_the_incident_open(loaded, m
     assert c.execute(text("SELECT count(*) FROM kg_nodes WHERE project_id = :p AND kind = "
                           "'agent_decision' AND attrs->>'run_id' = :r AND attrs->>'decision_type' "
                           "= 'ContextAssembled'"), {"p": project, "r": run}).scalar() == 3
-    assert "round 3" in agents.prompts["RCA Agent"][-1]
-    # And the Escalation Agent ladders it.
+    assert "round 3" in agents.prompts["Root Cause Analysis Agent"][-1]
+    # And the Escalation Watch ladders it.
     out = pipeline.run_dq_escalation(c, None, project, {"id": "escalation"}, {"run_id": "esc"},
                                      {"as_of": "2026-10-14"})
     escalated = {e["incident_id"]: e for e in out["escalated"]}
@@ -744,16 +855,16 @@ def test_insufficient_evidence_loops_back_and_leaves_the_incident_open(loaded, m
     assert mine not in {e["incident_id"] for e in again["escalated"]}, "never told twice"
 
 
-def test_the_eagle_intake_starts_one_investigation_per_error_group(loaded):
+def test_the_monitor_intake_starts_one_investigation_per_error_group(loaded):
     c, project, _ = loaded
     run = workflows.start_run(c, project_id=project, actor="ceo", input_data={},
                               dedupe_key=f"dq_{uuid.uuid4().hex[:10]}",
-                              workflow_version_id=_version(c, project, "dq_eagle_intake"))
-    out = pipeline.run_dq_eagle_intake(c, None, project, {"id": "eagle_intake"},
+                              workflow_version_id=_version(c, project, "dq_monitor_intake"))
+    out = pipeline.run_dq_monitor_intake(c, None, project, {"id": "monitor_intake"},
                                        {"run_id": run["id"]}, {"cob": "2026-10-07"})
     errors = [g for g, a in KEY_ANSWERS.items() if a["cob"] == "2026-10-07"
-              and a["eagle_grade"] == "Error"]
+              and a["monitor_grade"] == "Error"]
     assert sorted(s["group_id"] for s in out["started"]) == sorted(errors)
-    again = pipeline.run_dq_eagle_intake(c, None, project, {"id": "eagle_intake"},
+    again = pipeline.run_dq_monitor_intake(c, None, project, {"id": "monitor_intake"},
                                          {"run_id": run["id"]}, {"cob": "2026-10-07"})
     assert again["started"] == [] and len(again["skipped"]) == len(errors)

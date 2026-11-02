@@ -1,7 +1,7 @@
 # NorthPeak Bank loan data-quality sample (`tools/dq_sample`)
 
-The synthetic world behind the **banking DQ case study**: the consultant's DQ incident pipeline
-(Monitoring → Context Enrichment → Historical Pattern → RCA → lanes → Remediation → Closure)
+The synthetic world behind the **banking DQ case study**: the DQ incident pipeline
+(Incident Intake → Context Gathering → Past Incidents → Root Cause Analysis → Cause Checks → Fix Planner → Close and Learn)
 running on BOSS against a bank's loan book whose core is Apache Fineract.
 
 Pure Python standard library, **deterministic**: no network, no model, no clock. The rulebook PDF
@@ -9,7 +9,7 @@ renderer needs Playwright Chromium; nothing else does.
 
 | File | What it is |
 |---|---|
-| `data.py` | The single source of truth: Knowledge Graph and Context Graph seed, Eagle exception groups, Olympus profiles, and the answer key. |
+| `data.py` | The single source of truth: Knowledge Graph and Context Graph seed, DQ Monitor exception groups, Profile Service profiles, and the answer key. |
 | `rulebook.py` | Renders *NorthPeak Bank: Loan Data Quality Rulebook v3.2* from `data.py` (HTML → PDF with Playwright Chromium). |
 | `NorthPeak_Loan_DQ_Rulebook_v3.2.pdf` | The rendered rulebook (45 Letter pages, about 400 KB, real text). Committed. |
 | `engine/tests/test_dq_sample_data.py` | Determinism, counts, referential integrity, answer key and PDF round-trip. |
@@ -28,8 +28,8 @@ D.grade(rule, measured)      # "Error" | "Warning" | "Clean" against the rule's 
 
 | Field | Type | Count |
 |---|---|---|
-| `owners` | `Owner` (teams with ITSM assignment groups, and people with `team_id`) | 20 |
-| `systems` | `System` (S-LSP Fineract, S-GL, S-PAY, S-CIF, S-COL, S-CLT, S-EDW, S-RRH, S-EGL Eagle, S-ITSM, S-OLY Olympus) | 11 |
+| `owners` | `Owner` (teams with Service Desk assignment groups, and people with `team_id`) | 20 |
+| `systems` | `System` (S-LSP Fineract, S-GL, S-PAY, S-CIF, S-COL, S-CLT, S-EDW, S-RRH, S-DQM DQ Monitor, S-DESK Service Desk, S-PRF Profile Service) | 11 |
 | `structures` | `DatabaseStructure` (schemas) | 8 |
 | `tables` | `DatabaseTable` (with `columns: tuple[DatabaseColumn]`, `fineract`, `in_code_graph`) | 28 tables, 173 columns |
 | `feeds` | `Feed` F-01..F-12 (`reads`, `feeds` table keys) | 12 |
@@ -41,10 +41,10 @@ D.grade(rule, measured)      # "Error" | "Warning" | "Clean" against the rule's 
 | `incidents` | `Incident`: 10 closed (confirmed cause, ruled out, fix, fix durability) + 1 open (INC-2301) | 11 |
 | `patterns`, `precedents` | `ResolvedPattern` (one per root-cause pattern), `Precedent` (one per closed incident) | 8, 10 |
 | `issues`, `findings` | `Issue`, `ExaminationFinding` | 5, 5 |
-| `exception_groups` | `ExceptionGroup` as Eagle emits them, COB 2026-10-01..2026-10-07 | 13 |
-| `profiles`, `changes` | Olympus `PlatformProfile` per platform (baseline failure rate per rule, recent `Change`s) | 7, 8 |
+| `exception_groups` | `ExceptionGroup` as the DQ Monitor emits them, COB 2026-10-01..2026-10-07 | 13 |
+| `profiles`, `changes` | Profile Service `PlatformProfile` per platform (baseline failure rate per rule, recent `Change`s) | 7, 8 |
 
-Lookups: `ds.rule(id)`, `ds.rule_by_eagle_id("EGL-0588")`, `ds.cde(id)`, `ds.table(key)`,
+Lookups: `ds.rule(id)`, `ds.rule_by_monitor_id("DQX-0588")`, `ds.cde(id)`, `ds.table(key)`,
 `ds.column("m_loan.principal_outstanding_derived")`, `ds.system(id)`, `ds.feed(id)`, `ds.owner(id)`,
 `ds.report_line(id)`, `ds.incident(id)`, `ds.exception_group(id)`, `ds.profile("S-LSP")`,
 `ds.calendar_day("2026-10-05")`, `ds.rules_in_family("LN")`, `ds.open_incidents()`,
@@ -53,7 +53,7 @@ Lookups: `ds.rule(id)`, `ds.rule_by_eagle_id("EGL-0588")`, `ds.cde(id)`, `ds.tab
 Graph projection (what a loader writes):
 - `ds.nodes()` → `[{"kind", "key", "name", "attrs"}]` (attrs are JSON-safe)
 - `ds.edges()` → `[(source_kind, source_key, RELATIONSHIP, target_kind, target_key)]`
-- `ds.eagle_payload(group_id)` → the exception group exactly as the Eagle mock should serve it.
+- `ds.monitor_payload(group_id)` → the exception group exactly as the DQ Monitor mock should serve it.
 
 Constants: `KG_KINDS`, `CONTEXT_KINDS`, `RELATIONSHIPS`, `DIMENSIONS`, `ROOT_CAUSE_FAMILIES`,
 `LANES`, `FAMILIES`, `KNOWN_LINEAGE_GAPS`, `CODE_GRAPH_TABLES`, `RUNNING_EXAMPLE`
@@ -79,7 +79,7 @@ Every edge `edges()` emits uses one of these (the test enforces it); the ontolog
 |---|---|---|---|
 | owner | OWNS | system | the team/person accountable for a system |
 | owner | OWNS | feed | the team that runs a feed |
-| owner | OWNS | data_quality_rule | the rule owner (ITSM tickets go to its group) |
+| owner | OWNS | data_quality_rule | the rule owner (Service Desk tickets go to its group) |
 | owner | STEWARDS | cde | the data steward of a critical data element |
 | owner | MEMBER_OF | owner | a person belongs to a team |
 | system | HOSTS | database_structure | a system hosts a database/schema |
@@ -103,7 +103,7 @@ Every edge `edges()` emits uses one of these (the test enforces it); the ontolog
 | data_quality_rule | APPLIES_TO | database_column | a column the check reads |
 | data_quality_rule | APPLIES_TO | database_table | the table the check runs on |
 | data_quality_rule | COVERS | feed | the feed whose output the rule checks |
-| data_quality_rule | MONITORED_BY | system | the DQ monitor that runs it (Eagle) |
+| data_quality_rule | MONITORED_BY | system | the DQ monitor that runs it (the DQ Monitor) |
 | data_quality_rule | REACHES | report_line | regulatory reach of the rule |
 | data_quality_rule | RELATED_TO | data_quality_rule | a related rule |
 | dq_threshold | OF | data_quality_rule | a rule's Warning or Error threshold |
@@ -118,7 +118,7 @@ Every edge `edges()` emits uses one of these (the test enforces it); the ontolog
 | exception_group | RAISED_BY | data_quality_rule | the rule whose check failed |
 | exception_group | ON_COB | calendar_day | the close of business graded |
 | exception_group | AFFECTS | database_column | the failing column |
-| exception_group | EMITTED_BY | system | the DQ monitor that emitted it (Eagle) |
+| exception_group | EMITTED_BY | system | the DQ monitor that emitted it (the DQ Monitor) |
 | incident | RAISED_FROM | exception_group | the exception group that opened it |
 | incident | CONCERNS | data_quality_rule / cde | what the incident is about |
 | incident | CAUSED_BY | resolved_pattern | the confirmed root-cause pattern |
@@ -128,26 +128,26 @@ Every edge `edges()` emits uses one of these (the test enforces it); the ontolog
 | precedent | MATCHES | resolved_pattern | the pattern a precedent confirms |
 | resolved_pattern | SEEN_ON | data_quality_rule | a rule the pattern has broken |
 
-The Olympus profiles (`profiles`, `changes`) are served by the profile-service mock, not written
+The Profile Service profiles (`profiles`, `changes`) are served by the profile-service mock, not written
 as graph nodes.
 
 ## The planted exception groups (answer key)
 
-| Group | Rule (Eagle id) | COB | Grade | Expected |
+| Group | Rule (DQ Monitor id) | COB | Grade | Expected |
 |---|---|---|---|---|
-| EXG-20261001-0001 | TX-006 (EGL-0611) | 10-01 | Warning | ignore (dashboard only) |
-| EXG-20261001-0003 | GL-002 v2 (EGL-0707) | 10-01 | Error | open; reference_data; precedent INC-2112; change CHG-7702 |
-| EXG-20261002-0002 | AR-001 v2 (EGL-0646) | 10-02 | Error | open (became INC-2301, still open); feed_etl; precedent INC-2240 |
-| EXG-20261002-0004 | CH-001 (EGL-0666) | 10-02 | Warning | ignore |
-| **EXG-20261005-0003** | **LN-003 v2 (EGL-0588)** | **10-05** | **Error** | **open; source_processing; precedent INC-2187 (and INC-2041), pattern RPAT-COB-ORDER; recent change CHG-7731 regressed the INC-2187 fix** |
+| EXG-20261001-0001 | TX-006 (DQX-0611) | 10-01 | Warning | ignore (dashboard only) |
+| EXG-20261001-0003 | GL-002 v2 (DQX-0707) | 10-01 | Error | open; reference_data; precedent INC-2112; change CHG-7702 |
+| EXG-20261002-0002 | AR-001 v2 (DQX-0646) | 10-02 | Error | open (became INC-2301, still open); feed_etl; precedent INC-2240 |
+| EXG-20261002-0004 | CH-001 (DQX-0666) | 10-02 | Warning | ignore |
+| **EXG-20261005-0003** | **LN-003 v2 (DQX-0588)** | **10-05** | **Error** | **open; source_processing; precedent INC-2187 (and INC-2041), pattern RPAT-COB-ORDER; recent change CHG-7731 regressed the INC-2187 fix** |
 | EXG-20261005-0005 | AR-001 v2 | 10-05 | Error | **attach** to open INC-2301 |
-| EXG-20261006-0001 | FD-001 (EGL-0746) | 10-06 | Error | open; feed_etl; precedent INC-1988 |
-| EXG-20261006-0002 | CL-004 v3 (EGL-0689) | 10-06 | Eagle Error / rulebook Warning | **false positive**: Eagle thresholds 100x too tight after CHG-7745; precedent INC-2203; lane `rule_drafting` |
-| EXG-20261006-0005 | SC-004 (EGL-0629) | 10-06 | Error | open; source_processing; precedent INC-2059 (short payment, Reg Z) |
-| EXG-20261006-0007 | LN-003 v2 (EGL-0588) | 10-06 | Error | attach to the incident opened for EXG-20261005-0003 |
-| EXG-20261007-0001 | CL-001 (EGL-0686) | 10-07 | Error | open; manual_entry; precedent INC-2150 |
-| EXG-20261007-0004 | RP-006 (EGL-0731) | 10-07 | Error | open; **insufficient evidence**: the EDW → rrh.fry9c_extract hop (F-06) is not registered (EF-2025-02, ISS-044); RCA loops back |
-| EXG-20261007-0006 | TX-009 v2 (EGL-0614) | 10-07 | Warning | ignore |
+| EXG-20261006-0001 | FD-001 (DQX-0746) | 10-06 | Error | open; feed_etl; precedent INC-1988 |
+| EXG-20261006-0002 | CL-004 v3 (DQX-0689) | 10-06 | DQ Monitor Error / rulebook Warning | **false positive**: the DQ Monitor's thresholds 100x too tight after CHG-7745; precedent INC-2203; cause check `rule_drafting` |
+| EXG-20261006-0005 | SC-004 (DQX-0629) | 10-06 | Error | open; source_processing; precedent INC-2059 (short payment, Reg Z) |
+| EXG-20261006-0007 | LN-003 v2 (DQX-0588) | 10-06 | Error | attach to the incident opened for EXG-20261005-0003 |
+| EXG-20261007-0001 | CL-001 (DQX-0686) | 10-07 | Error | open; manual_entry; precedent INC-2150 |
+| EXG-20261007-0004 | RP-006 (DQX-0731) | 10-07 | Error | open; **insufficient evidence**: the EDW → rrh.fry9c_extract hop (F-06) is not registered (EF-2025-02, ISS-044); RCA loops back |
+| EXG-20261007-0006 | TX-009 v2 (DQX-0614) | 10-07 | Warning | ignore |
 
 `answer_key()["rules"]` holds every rulebook field per rule id (title, statement, dimension, CDEs,
 columns, check, warning/error text and values, owner, feed, report lines, MDRM codes, legal

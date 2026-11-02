@@ -486,6 +486,13 @@ def confirm_upload(
         "UPDATE kg_document_uploads SET status = 'confirmed', confirmed_by = :by, confirmed_at = :now, "
         "document_id = :d, title = :t WHERE id = :id"),
         {"by": actor_ref, "now": now_utc(), "d": written["document_id"], "t": name, "id": upload_id})
+    # The shipped DQ sample rulebook, loaded again, replaces the copy loaded before.
+    from . import dq_rulebook_sample
+
+    replaced = None
+    if row["filename"] == dq_rulebook_sample.FILENAME:
+        replaced = dq_rulebook_sample.replace_previous(
+            connection, project_id=project_id, document_id=written["document_id"])
     # A confirmed document is what "Extract rules" reads: install whatever the project's packs
     # now unlock (rulebook_extraction), so the press right after this one finds its workflow.
     # The document stands either way; a failed install is the next press's own refusal.
@@ -497,4 +504,5 @@ def confirm_upload(
     except Exception:  # noqa: BLE001
         pass
     return {**written, "title": name, "sections": len(clauses),
-            "rule_cards": sum(1 for s in sections if s["kind"] == "rule_card")}
+            "rule_cards": sum(1 for s in sections if s["kind"] == "rule_card"),
+            **({"replaced": replaced} if replaced else {})}

@@ -34,7 +34,7 @@ MCP_TOOLS_HOST = os.environ.get("BOSS_MCP_TOOLS_HOST", "mcp-tools").strip() or "
 
 
 def mcp_tools_ports() -> tuple[int, int, int, int]:
-    """(devops-reference, web-intel, doc-render, itsm) ports; BOSS_MCP_TOOLS_PORTS overrides
+    """(devops-reference, web-intel, doc-render, service-desk) ports; BOSS_MCP_TOOLS_PORTS overrides
     them for a machine where the defaults are taken. tools/mcp_tools_mux.py reads the same
     variable."""
     raw = os.environ.get("BOSS_MCP_TOOLS_PORTS", "").strip()
@@ -45,14 +45,14 @@ def mcp_tools_ports() -> tuple[int, int, int, int]:
     return ports if len(ports) == 4 else (8765, 8770, 8771, 8772)  # type: ignore[return-value]
 
 
-_DEVOPS_PORT, _WEB_INTEL_PORT, _DOC_RENDER_PORT, _ITSM_PORT = mcp_tools_ports()
+_DEVOPS_PORT, _WEB_INTEL_PORT, _DOC_RENDER_PORT, _SERVICE_DESK_PORT = mcp_tools_ports()
 
 #: The release's own review of the servers it ships, recorded as such (not as a person's).
 FIRST_PARTY_REVIEW = "boss (first-party)"
 
 #: Bumped when the seeded rows change; a row on an older version, untouched by any person, is
 #: brought up to date on the next boot (`migrate_builtin_mcp_servers`).
-BUILTIN_MCP_VERSION = "4"
+BUILTIN_MCP_VERSION = "5"
 
 BUILTIN_MCP_SERVERS = [
     {
@@ -80,12 +80,12 @@ BUILTIN_MCP_SERVERS = [
         "description": "Render Markdown to PDF: render_markdown_pdf",
     },
     {
-        # KG P7b: the ITSM mock (tools/mcp_itsm_mock.py) Historical Pattern consults for prior
+        # KG P7b: the Service Desk mock (tools/mcp_service_desk_mock.py) Historical Pattern consults for prior
         # incidents correlated with a subject's connected code — a project's REAL connected
-        # source once a real ITSM integration ships; every project is seeded with this one so
+        # source once a real Service Desk integration ships; every project is seeded with this one so
         # the step's `contract.calls` can be enforced like any other MCP, not exempted from it.
-        "name": "itsm",
-        "url": f"http://{MCP_TOOLS_HOST}:{_ITSM_PORT}/mcp",
+        "name": "service-desk",
+        "url": f"http://{MCP_TOOLS_HOST}:{_SERVICE_DESK_PORT}/mcp",
         "risk_tier": 0,
         "data_boundary": "internal",
         "description": ("Past and open incidents and tickets (Historical Pattern; the DQ "
@@ -94,6 +94,34 @@ BUILTIN_MCP_SERVERS = [
                         "attach_to_incident, update_incident"),
     },
 ]
+
+
+#: Built-in servers a release renamed: old name → new name. The row keeps its id (and so every
+#: role's grant of it); only the name moves. A person's removal of the old name carries over.
+RENAMED_BUILTIN_MCP_SERVERS = {"itsm": "service-desk"}
+
+
+def rename_builtin_mcp_servers(connection, project_id) -> list[str]:
+    """Rename the built-in servers a release renamed (RENAMED_BUILTIN_MCP_SERVERS), in place.
+    Returns the new names given. A project that already has the new name keeps both rows as
+    they are; an operator who removed the old one has the new one excluded too."""
+    from .services import seed_exclusions
+
+    renamed: list[str] = []
+    for old, new in RENAMED_BUILTIN_MCP_SERVERS.items():
+        if seed_exclusions.is_excluded(connection, project_id, "mcp_server", old):
+            seed_exclusions.exclude(connection, project_id, "mcp_server", new,
+                                    actor="bootstrap", reason=f"{old} was removed; renamed {new}")
+        row = connection.execute(
+            text("UPDATE mcp_servers SET name = :new, updated_at = now() "
+                 "WHERE project_id = :p AND lower(name) = :old AND NOT EXISTS ("
+                 "SELECT 1 FROM mcp_servers m WHERE m.project_id = :p AND lower(m.name) = :new) "
+                 "RETURNING id"), {"p": project_id, "old": old, "new": new}).first()
+        if row is not None:
+            emit_event(connection, project_id, "mcp.builtin_server_renamed", "bootstrap",
+                       "mcp_server", str(row[0]), {"from": old, "to": new})
+            renamed.append(new)
+    return renamed
 
 
 def builtin_provenance() -> dict:
@@ -112,6 +140,7 @@ def migrate_builtin_mcp_servers(connection, project_id) -> list[str]:
     import json as _json
 
     moved: list[str] = []
+    rename_builtin_mcp_servers(connection, project_id)
     wanted = {s["name"].lower(): s for s in BUILTIN_MCP_SERVERS}
     rows = connection.execute(
         text("SELECT id, name, url, risk_tier, provenance FROM mcp_servers "

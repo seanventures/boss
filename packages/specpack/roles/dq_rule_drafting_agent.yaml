@@ -1,5 +1,5 @@
 role_id: dq_rule_drafting_agent
-display_name: Rule Drafting Agent
+display_name: Rule Proposal Agent
 team: quality
 mission: "When a lane confirms a false positive, open a rule authoring case: draft the rule change that stops it recurring, for a person to review in Rules review."
 primary_outcomes:
