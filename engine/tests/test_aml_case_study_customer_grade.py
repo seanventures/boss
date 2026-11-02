@@ -254,6 +254,20 @@ def test_p1_problem_screen_names_customers_shows_the_rule_and_no_raw_ids(loaded)
     assert screen["open_count"] == len([a for a in screen["alerts"] if a.get("is_open", True)])
 
 
+def test_p1_problem_screen_account_label_is_the_product_not_the_raw_account_number(loaded):
+    """A8: the account a row points at reads as its product ('Business Payroll'), never the raw
+    account number (ACC-0012) — the account id lives in attrs, never on a screen a person reads."""
+    c, project, _ = loaded
+    screen = aml_sample.build_problem_screen(c, project_id=project)
+    assert screen["alerts"], "the problem screen must list the open alerts"
+    for row in screen["alerts"]:
+        label = str(row.get("account_label") or "")
+        assert label, "each row must carry a readable account label"
+        assert not re.search(r"\bACC-\d+\b", label), label
+        rendered = " ".join(str(v) for v in row.values())
+        assert not re.search(r"\bACC-\d+\b", rendered), rendered
+
+
 def test_p1_reloading_the_sample_clears_prior_runs_cases_and_inferred_edges(loaded):
     """A6: reloading the sample, like the DQ platform reload, removes the leftovers of earlier
     runs — the case nodes and the agent-inferred related_to edges — not just the sample data."""
