@@ -42,7 +42,7 @@ import type {
   FlowLayout, FlowLink, GraphEdge, Palette, PaletteItem, Problem, Spec, SpecStep, StepView,
 } from "../../../lib/workflow-editor-types";
 import {
-  afterGaps, canMove as modelCanMove, insertStep, layoutFlow, linearOrder, REPEATS, rewireLink, START_TARGET,
+  afterGaps, bodiesOf, canMove as modelCanMove, insertStep, layoutFlow, linearOrder, REPEATS, rewireLink, START_TARGET,
 } from "../../../lib/workflow-graph";
 import { pinTip, unpinTip, useTips } from "./tip-layer";
 import { layoutOffsets, type NodeOffset } from "../../../lib/workflow-layout";
@@ -50,7 +50,7 @@ import {
   afterGapPoints, caretX, END_ID, gapPoints, planDrag, shiftsFor, type GapArrows, type LanePlan,
 } from "./drag-plan";
 import {
-  BASE_REM, chooseDensity, clampBox, cubicAt, fitScale, forwardRoute, offsetFromCanvas, overflows, placedGeometry,
+  BASE_REM, chooseDensity, clampBox, cubicAt, fitScale, wrapFitScale, forwardRoute, offsetFromCanvas, overflows, placedGeometry,
   ROW_GAP, roomyGeometry, routeGrip, routePath, routeSamples, stepsCrossed,
   type LaneGeometry, type Point, type Route,
 } from "./geometry";
@@ -123,6 +123,8 @@ export function drawEdges(layout: FlowLayout, g: LaneGeometry, spec: Spec): Draw
     if (s.kind === "bounded_loop") return Number(s.max_iterations) ? [[s.id, `↻ ×${Number(s.max_iterations)}`]] : [];
     return s.kind === "for_each" ? [[s.id, "↻ each item"]] : [];
   }));
+  const tails = new Map(spec.steps.map((s) => [s.id, bodiesOf(s).slice(-1)[0]] as const)
+    .filter((x): x is readonly [string, string] => !!x[1]));
   const labelled = new Set<string>();
   // A For each's arrow into the step it runs can be pointed at another step; a Repeat's cannot.
   const forEach = new Set(spec.steps.filter((s) => s.kind === "for_each").map((s) => s.id));
@@ -173,7 +175,11 @@ export function drawEdges(layout: FlowLayout, g: LaneGeometry, spec: Spec): Draw
     out.push({ key: `${e.kind}:${e.from}>${e.to}`, kind: e.kind, ends: [e.from, e.to], ...drawn(route), label,
                ...(relinkable(e) ? { link: { from: e.from, to: e.to, kind: e.kind }, from: a, grip: routeGrip(route, GRIP_T) } : {}) });
     // A loop's body returns to its controller; the spec only names the way in.
-    if (e.kind === "loop" && !backs.has(`${e.to}>${e.from}`)) back(e.to, e.from, loopBadge.get(e.from) ?? "");
+    // A loop over several steps returns from the last of them.
+    if (e.kind === "loop" && !backs.has(`${e.to}>${e.from}`)) {
+      const tail = tails.get(e.from) ?? e.to;
+      if (g.boxes.has(tail)) back(tail, e.from, loopBadge.get(e.from) ?? "");
+    }
   }
   for (const id of layout.terminal) {
     if (!g.boxes.has(id)) continue;
@@ -272,6 +278,9 @@ export function FlowLane(p: {
   zoom?: LaneZoom; onZoomChange?(zoom: LaneZoom): void;
   /** Read-only: no drag, no keyboard moves, no gap actions. */
   readOnly?: boolean;
+  /** A full page: every title and name in full (wrapped, never cut), nodes sized to their words,
+   *  and Fit never below a readable scale — wider than that, the lane scrolls (geometry.ts). */
+  wrap?: boolean;
   /** The lane's accessible name. */
   label?: string;
   /** How much of the lane's right edge something floats over (the inspector drawer), in px. */
@@ -294,6 +303,13 @@ export function FlowLane(p: {
   const order = useMemo(() => linearOrder(spec), [spec]);
   const views = useMemo(() => new Map(steps.map((s) => [s.id, viewOf(s, palette)])), [steps, palette]);
   const details = useMemo(() => new Map(steps.map((s) => [s.id, nodeDetail(s, palette)])), [steps, palette]);
+  // WHAT A FOR EACH RUNS, ON ITS CARD: "Lane × each root-cause family", so the stack of cards is
+  // never an empty box. Named by the step it runs, as that step is titled on the lane.
+  const repeats = useMemo(() => new Map(steps.filter((s) => s.kind === "for_each").map((s) => {
+    const body = bodiesOf(s).map((b) => views.get(b)?.title ?? b).join(" → ");
+    const item = typeof s.item_label === "string" && s.item_label.trim() ? s.item_label.trim() : "item";
+    return [s.id, body ? `${body} × each ${item}` : `× each ${item}`] as [string, string];
+  })), [steps, views]);
   const types = useMemo(() => new Map([...views].map(([id, v]) => [id, v.type] as [string, StepView["type"]])), [views]);
   const problemOf = useMemo(() => {
     const m = new Map<string, string>();
@@ -333,7 +349,9 @@ export function FlowLane(p: {
   // scrolling sideways inside itself (never the page), with the step in flight kept in view.
   // Shrinking eleven steps into one screen made them unreadable. The editor keeps Fit as its
   // default, for seeing and dragging the whole flow, and 100% is the same roomy lane.
-  const roomy = p.density !== "compact" && (mode === "run" || zoom === "full");
+  // A run whose host controls the zoom (the run's full page) gets Fit and 100% like the editor.
+  const runZoom = mode === "run" && p.zoom !== undefined;
+  const roomy = p.density !== "compact" && ((mode === "run" && !runZoom) || zoom === "full");
   // The root font the node's words are set in (it grows with the screen): nodes are as tall as
   // their rows at that size, so a title never runs into the row under it (geometry nodeHeight).
   const [rem, setRem] = useState(BASE_REM);
@@ -346,9 +364,11 @@ export function FlowLane(p: {
     window.addEventListener("resize", read);
     return () => window.removeEventListener("resize", read);
   }, []);
-  const grid = useMemo(() => (roomy ? roomyGeometry(layout, types, available, rem)
+  const wrap = !!p.wrap;
+  const grid = useMemo(() => (wrap ? roomyGeometry(layout, types, available, rem, true)
+    : roomy ? roomyGeometry(layout, types, available, rem)
     : chooseDensity(layout, types, available, p.density === "compact" ? "compact" : undefined, rem)),
-  [roomy, layout, types, available, p.density, rem]);
+  [wrap, roomy, layout, types, available, p.density, rem]);
   // Where the operator has put steps, and (while one is being dragged off the grid) where it is.
   const offsets = useMemo(() => layoutOffsets(spec), [spec]);
   const settled = useMemo(() => placedGeometry(grid, offsets), [grid, offsets]);
@@ -364,7 +384,8 @@ export function FlowLane(p: {
   }, [grid, settled, offsets, live]);
   // The scale is the settled drawing's: a step dragged past the edge must not rescale the lane
   // under the pointer.
-  const scale = roomy ? 1 : fitScale(settled.width, available, settled.density);
+  const scale = wrap ? (zoom === "full" ? 1 : wrapFitScale(settled.width, available))
+    : roomy ? 1 : fitScale(settled.width, available, settled.density);
   const scrolls = overflows(geometry.width, scale, available);
   // Under a drawer: when the drawing reaches under it, give the lane that much more to scroll,
   // so the last steps can be brought clear of it. Density and scale are untouched.
@@ -719,6 +740,7 @@ export function FlowLane(p: {
 
   return (
     <div className="wf-lane" ref={rootRef} data-mode={mode} data-density={geometry.density}
+         data-wrap={wrap ? "true" : undefined}
          data-linear={linear ? "true" : "false"} data-scrolls={scrolls ? "true" : undefined}
          data-empty={steps.length ? undefined : "true"} data-testid="wf-lane">
       {/* THE ARROWS SIT IN GUTTERS BESIDE THE STEPS, never over them, and only while the lane
@@ -811,6 +833,7 @@ export function FlowLane(p: {
                   <StepNode view={view} mode={mode === "run" ? "run" : "design"}
                             selected={selection === id} problem={problemOf.get(id)}
                             detail={details.get(id)} errorPath={tookError.has(id)}
+                            repeats={repeats.get(id)}
                             run={mode === "run" ? { phase, meta: runState?.[id]?.meta ?? "",
                                                     tip: runState?.[id]?.tip,
                                                     agent: runState?.[id]?.agent } : undefined}
@@ -901,15 +924,15 @@ export function FlowLane(p: {
                  })} />
       ) : null}
 
-      {mode === "design" && steps.length ? (
-        <div className="wf-zoom" role="group" aria-label="Zoom">
+      {(mode === "design" || runZoom) && steps.length ? (
+        <div className="wf-zoom" role="group" aria-label="Zoom" data-testid="wf-zoom">
           {design && onResetLayout && offsets.size ? (
             <button type="button" className="wf-zoom-btn" data-testid="wf-tidy" onClick={onResetLayout}
                     data-tip="Put every step back in its place">Tidy</button>
           ) : null}
-          <button type="button" className="wf-zoom-btn" aria-pressed={zoom === "fit"} onClick={() => setZoom("fit")}
+          <button type="button" className="wf-zoom-btn" aria-pressed={zoom === "fit"} onClick={() => setZoom("fit")} data-testid="wf-zoom-fit"
                   data-tip="Fit the whole flow (F)">Fit</button>
-          <button type="button" className="wf-zoom-btn" aria-pressed={zoom === "full"} onClick={() => setZoom("full")}>
+          <button type="button" className="wf-zoom-btn" aria-pressed={zoom === "full"} onClick={() => setZoom("full")} data-testid="wf-zoom-full">
             100%
           </button>
         </div>

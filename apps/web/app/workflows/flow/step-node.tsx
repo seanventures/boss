@@ -161,8 +161,10 @@ export function StepNode(p: {
   detail?: NodeDetail;
   /** On a run: it failed, and the run went on at its error path (`on_error`). */
   errorPath?: boolean;
+  /** A For each: what it runs, and over what ("Lane × each root-cause family"). */
+  repeats?: string;
 }): React.JSX.Element {
-  const { view, mode, selected, problem, run, onSelect, detail, errorPath } = p;
+  const { view, mode, selected, problem, run, onSelect, detail, errorPath, repeats } = p;
   // A run names a named agent by callsign (below), resolved at render: repaint when identities load.
   useIdentityVersion();
 
@@ -211,6 +213,9 @@ export function StepNode(p: {
         <span className="wf-node-title" data-tip={view.title} data-tip-when="cut">{view.title}</span>
         {mode === "run" ? <span className="wf-sr">{PHASE_WORDS[phase]}{errorPath ? ", went to its error path" : ""}</span> : null}
       </span>
+      {repeats ? (
+        <span className="wf-node-repeats" data-testid="wf-node-repeats">{repeats}</span>
+      ) : null}
       {BLOCK_TYPES.has(view.type) ? null : view.type === "wait" ? (
         <span className="wf-node-agent wf-node-wait" data-testid="wf-node-wait">{detail?.duration ?? ""}</span>
       ) : mode === "run" && run?.agent ? (
