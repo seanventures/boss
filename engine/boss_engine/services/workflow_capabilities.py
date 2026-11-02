@@ -1017,7 +1017,7 @@ CAPABILITIES: dict[str, Capability] = {
                "Open or attach one incident for an exception group the DQ Monitor graded Error, and set "
                "its severity; never diagnose.", 1, ("exception_group_id",),
                ("incident_id", "action", "severity", "continue_pipeline"), 1, False),
-              ("dq_context_enrichment", "dq_context_enrichment_agent", "Context gathering",
+              ("dq_context_enrichment", "dq_context_enrichment_agent", "Context hydration",
                "Assemble the incident's footprint, owners, feeds, lineage, regulatory reach, known "
                "issues, exception profile and recent changes; every missing fact a coverage gap. "
                "No model.", 0, (), ("context_pack", "gaps"), 1, False),
