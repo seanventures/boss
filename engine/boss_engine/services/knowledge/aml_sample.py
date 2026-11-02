@@ -83,6 +83,11 @@ def load_sample(connection: Connection, *, project_id: str, actor: str) -> dict[
     ontology_packs.set_project_pack(connection, project_id=project_id, pack_id=PACK_ID,
                                     set_by=actor)
 
+    # LOADING THE SAMPLE REPLACES IT (A6, the DQ platform's own load behaviour): clear the
+    # leftovers of an earlier run — the `aml_case` nodes it opened and the `related_to` edges the
+    # Network Mapper inferred — before writing the bank's data, so a fresh load is a clean state.
+    _clear_run_leftovers(connection, project_id)
+
     registered = []
     for server in aml_mcp_servers():
         row = mcp_registry.ensure_mcp_server(
@@ -110,7 +115,9 @@ def load_sample(connection: Connection, *, project_id: str, actor: str) -> dict[
     for typ in ds.typologies.values():
         node("typology", typ["typology_id"], typ["name"], typ["red_flags"], typ)
     for cid, cust in ds.customers.items():
-        node("customer", cid, f"{cust['name']} ({cid})",
+        # Display name carries no raw id (A4): the id lives in node_key and attrs, never on the
+        # name a decision-card subject or a screen shows a person.
+        node("customer", cid, cust['name'],
              f"{cust['segment'].replace('_', ' ')} customer of {BANK} since "
              f"{cust['onboarded']}; {cust['occupation']}; risk {cust['risk_rating']}.", cust)
         kyc = ds.kyc_profiles[cid]
@@ -121,12 +128,14 @@ def load_sample(connection: Connection, *, project_id: str, actor: str) -> dict[
         edge(ids[("customer", cid)], kyc_id, "has_kyc")
     for aid, acc in ds.accounts.items():
         owner = ds.customers[acc["customer_id"]]["name"]
-        node("account", aid, f"{aid} {acc['product'].replace('_', ' ')}",
+        # Display name carries no raw id (A4/A8): the account number lives in attrs, never on the
+        # name a graph screen shows a person.
+        node("account", aid, f"{acc['product'].replace('_', ' ').title()} — {owner}",
              f"{acc['product'].replace('_', ' ')} of {owner}, opened {acc['opened']}.", acc)
         edge(ids[("customer", acc["customer_id"])], ids[("account", aid)], "owns")
     for cp_id, cp in ds.counterparties.items():
         where = f", registered at {cp['registered_address']}" if cp.get("registered_address") else ""
-        node("counterparty", cp_id, f"{cp['name']} ({cp_id})",
+        node("counterparty", cp_id, cp['name'],
              f"{cp['kind']} counterparty in {cp['country']}{where}.", cp)
 
     def party_node(party: str) -> str:
@@ -178,8 +187,9 @@ def load_sample(connection: Connection, *, project_id: str, actor: str) -> dict[
 
     by_txn = {t["transaction_id"]: t for t in ds.transactions}
     for alert in ds.alerts.values():
+        owner_name = ds.customers.get(alert["customer_id"], {}).get("name") or "a customer"
         alert_id = node("alert", alert["alert_id"],
-                        f"{alert['alert_id']}: {alert['rule']} on {alert['account_id']}",
+                        f"{alert['rule']} alert on {owner_name}",
                         f"{alert['rule_text']} (score {alert['score']}, raised "
                         f"{alert['raised_at']}).",
                         {k: v for k, v in alert.items() if k != "flagged_transactions"}
@@ -192,7 +202,7 @@ def load_sample(connection: Connection, *, project_id: str, actor: str) -> dict[
         for txn_id in alert["flagged_transactions"]:
             t = by_txn[txn_id]
             txn = node("transaction", txn_id,
-                       f"{txn_id} {t['direction']} {t['amount']:,.2f} {t['channel']}",
+                       f"{t['direction'].title()} {t['amount']:,.2f} via {t['channel']}",
                        f"{t['booked_at']}: {t['direction']} {t['amount']:,.2f} via "
                        f"{t['channel']} {'to' if t['direction'] == 'out' else 'from'} "
                        f"{t['party']} ({t['memo']}).", t)
@@ -201,13 +211,30 @@ def load_sample(connection: Connection, *, project_id: str, actor: str) -> dict[
             if party:
                 edge(txn, party, "transfers_to")
 
+    # The named people who finish the two human gates with separation of duties (A5): an AML
+    # Analyst who can escalate, and a BSA Officer who alone can file the SAR. Their owner_id is
+    # the actor ref each approves with; they are `owner` nodes (owner_type person), the way the
+    # DQ platform records the bank's people.
+    people = [
+        ("dana.analyst", "Dana Whitfield", "AML Analyst"),
+        ("lee.analyst", "Lee Brennan", "AML Analyst"),
+        ("bsa.officer", "Morgan Avery", "BSA Officer"),
+    ]
+    for owner_id, display, title in people:
+        node("owner", owner_id, display,
+             f"{display}, {title} at {BANK}.",
+             {"owner_id": owner_id, "owner_type": "person", "title": title,
+              "display_name": display})
+
+    policy = _ingest_policy(connection, project_id, ids)
+
     installed = _install_workflow(connection, project_id, actor)
     counts = {kind: sum(1 for (k, _s) in ids if k == kind)
               for kind in ("customer", "account", "counterparty", "kyc_profile", "typology",
                            "alert", "transaction")}
     return {"ok": True, "pack_id": PACK_ID, "connectors": registered, "counts": counts,
             "flows": len(flows), "alerts": status(connection, project_id=project_id)["alerts"],
-            "workflow": installed,
+            "workflow": installed, "people": [p[0] for p in people], "policy": policy,
             "note": (f"Loaded {BANK}'s AML sample: {counts['customer']} customers, "
                      f"{counts['account']} accounts, {len(ds.transactions)} transactions "
                      f"(in the transactions connector), 3 open alerts. Start "
@@ -222,6 +249,102 @@ def _install_workflow(connection: Connection, project_id: str, actor: str) -> di
         if item.get("key") == WORKFLOW_KEY:
             return item
     return {"key": WORKFLOW_KEY, "skipped": "not in the catalogue"}
+
+
+def build_problem_screen(connection: Connection, *, project_id: str) -> dict[str, Any]:
+    """The readable problem screen (A4): each alert's customer by name and the rule it tripped,
+    never a raw customer id or node id, with an open count that reflects alerts a person has not
+    yet closed or filed — not a count fixed at load time."""
+    from tools.aml_sample_data import generate
+
+    ds = generate()
+    rows: list[dict[str, Any]] = []
+    for alert_id, alert in ds.alerts.items():
+        customer = ds.customers.get(alert["customer_id"]) or {}
+        case = connection.execute(
+            text("SELECT attrs FROM kg_nodes WHERE project_id = :p AND kind = 'aml_case' "
+                 "AND node_key = :k AND valid_to IS NULL ORDER BY recorded_at DESC LIMIT 1"),
+            {"p": project_id, "k": f"aml_case:{alert_id}"}).mappings().first()
+        case_attrs = dict((case or {}).get("attrs") or {})
+        case_status = str(case_attrs.get("status") or "open")
+        is_open = case_status == "open"
+        rows.append({
+            "alert_id": alert_id,
+            "customer_name": customer.get("name") or "Unnamed customer",
+            "account_label": f"{alert['account_id']} {alert.get('product', '')}".strip(),
+            "rule": alert["rule"],
+            "rule_text": alert["rule_text"],
+            "score": alert["score"],
+            "flagged_count": len(alert["flagged_transactions"]),
+            "raised_at": alert["raised_at"],
+            "status": case_status,
+            "is_open": is_open,
+        })
+    open_count = len([r for r in rows if r["is_open"]])
+    return {"alerts": rows, "open_count": open_count}
+
+
+def _clear_run_leftovers(connection: Connection, project_id: str) -> None:
+    """Remove every leftover of an earlier run of the AML workflow — the `aml_case` nodes it
+    opened, and the `related_to` edges the Network Mapper inferred (tagged with a run_id) — so a
+    fresh load never mistakes BOSS's own prior output for the bank's network (A3/A6)."""
+    removed_cases = connection.execute(text(
+        "SELECT id FROM kg_nodes WHERE project_id = :p AND kind = 'aml_case'"),
+        {"p": project_id}).scalars().all()
+    for node_id in removed_cases:
+        try:
+            with connection.begin_nested():
+                STORE.delete_node(connection, project_id=project_id, node_id=node_id,
+                                  actor_kind="person")
+        except Exception:  # noqa: BLE001 — already gone, or edges removed it already
+            pass
+    connection.execute(text(
+        "DELETE FROM kg_edges WHERE project_id = :p AND kind = 'related_to' "
+        "AND attrs->>'run_id' IS NOT NULL"), {"p": project_id})
+
+
+def _ingest_policy(connection: Connection, project_id: str,
+                   ids: dict[tuple[str, str], str]) -> dict[str, Any]:
+    """Chapter 2 (A1): the AML monitoring policy becomes knowledge through the document path the
+    DQ rulebook uses — a document with cited clauses, ingested by a named person — and each alert
+    rule's typology and alerts are linked to the policy page that defines them, so the Analyst can
+    cite 'policy §FANOUT-01 p.4'."""
+    from . import documents
+
+    clauses = [
+        {"section": "FANOUT-01",
+         "text": "Ten or more outbound payments to distinct payees from one account in a single "
+                 "day, above the fan-out threshold, are flagged as a rapid fan-out (funnel "
+                 "account) typology.",
+         "citation": "NorthPeak AML Standard v1 p.4", "page": 4},
+        {"section": "STRUCT-02",
+         "text": "Three or more cash deposits between $9,000 and the $10,000 CTR threshold (31 CFR "
+                 "1010.311), followed by outbound wires, are flagged as structuring.",
+         "citation": "NorthPeak AML Standard v1 p.7", "page": 7},
+    ]
+    result = documents.add_document(
+        connection, project_id=project_id,
+        title="NorthPeak AML Transaction Monitoring Standard",
+        source_url="internal://aml-policy", citation="NorthPeak AML Standard v1",
+        clauses=clauses, actor_kind="person", actor_ref="dana.analyst")
+    # Link the rule's typology (and the alerts that tripped it) to the clause that defines it.
+    links = {"FANOUT-01": ("TYP-FANOUT", ["ALERT-1", "ALERT-2"]),
+             "STRUCT-02": ("TYP-STRUCTURING", ["ALERT-3"])}
+    for clause_id, clause in zip(result.get("clause_ids") or [], clauses):
+        typ_key, alert_keys = links.get(clause["section"], ("", []))
+        for src in [ids.get(("typology", typ_key))] + [ids.get(("alert", a)) for a in alert_keys]:
+            if src:
+                STORE.upsert_edge(connection, project_id=project_id, src_id=src, dst_id=clause_id,
+                                  kind="implemented_by", actor_kind="system", actor_ref=ACTOR_REF,
+                                  attrs={"page": clause["page"], "citation": clause["citation"]})
+    return {"document_id": result.get("document_id"), "clauses": len(result.get("clause_ids") or [])}
+
+
+def reload_sample(connection: Connection, *, project_id: str, actor: str) -> dict[str, Any]:
+    """Load the sample again (A6, the DQ platform's own reload behaviour): the bank's data stays
+    exactly as loaded, idempotently, while `load_sample` clears every leftover of an earlier run
+    first, so a fresh run never mistakes BOSS's own prior output for the bank's network."""
+    return load_sample(connection, project_id=project_id, actor=actor)
 
 
 def status(connection: Connection, *, project_id: str) -> dict[str, Any]:
