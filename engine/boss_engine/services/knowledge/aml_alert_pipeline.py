@@ -336,10 +336,19 @@ def _network_edges(connection: Connection, project_id: str, seeds: list[str]
     for _hop in range(2):
         if not frontier:
             break
+        # Exclude edges that touch BOSS's own case/alert nodes, and edges an agent inferred on a
+        # prior run (tagged with a run_id): the network is the bank's data, never BOSS's own
+        # investigation artifacts (A3 — a case node must never come back as a network party).
         rows = connection.execute(
-            text("SELECT e.id, e.kind, e.src_id, e.dst_id, e.attrs FROM kg_edges e "
-                 "WHERE e.project_id = :p AND e.kind = ANY(:kinds) AND e.valid_to IS NULL "
-                 "AND (e.src_id = ANY(:ids) OR e.dst_id = ANY(:ids))"),
+            text(
+                "SELECT e.id, e.kind, e.src_id, e.dst_id, e.attrs FROM kg_edges e "
+                "JOIN kg_nodes src ON src.id = e.src_id "
+                "JOIN kg_nodes dst ON dst.id = e.dst_id "
+                "WHERE e.project_id = :p AND e.kind = ANY(:kinds) AND e.valid_to IS NULL "
+                "AND e.attrs->>'run_id' IS NULL "
+                "AND src.kind NOT IN ('aml_case', 'alert') "
+                "AND dst.kind NOT IN ('aml_case', 'alert') "
+                "AND (e.src_id = ANY(:ids) OR e.dst_id = ANY(:ids))"),
             {"p": project_id, "kinds": list(_NETWORK_EDGE_KINDS), "ids": frontier}
         ).mappings().all()
         nxt = []
@@ -374,15 +383,28 @@ def _edge_line(connection: Connection, project_id: str, edge: Mapping[str, Any])
             f" [{edge['dst_id']}]{detail}")
 
 
-def run_aml_network_mapping(connection: Connection, settings: Any, project_id: str,
-                            step: Mapping[str, Any], context: Mapping[str, Any],
-                            inputs: Mapping[str, Any]) -> dict[str, Any]:
-    run_id = _run_id(step, context)
-    step_id = str(step.get("id") or "network_mapping")
+def run_aml_network_mapping(connection: Connection, settings: Any = None, project_id: str = "",
+                            step: Optional[Mapping[str, Any]] = None,
+                            context: Optional[Mapping[str, Any]] = None,
+                            inputs: Optional[Mapping[str, Any]] = None, *,
+                            run_id: str = "", step_id: str = "", alert_id: str = "",
+                            case_id: str = "", **_ignored: Any) -> dict[str, Any]:
+    """Also callable directly (project_id, run_id, step_id, alert_id, case_id) — a test driving
+    the pipeline step by step, outside a workflow run, the way `run_alert_intake` and
+    `run_evidence_collection` already are."""
+    step, context, inputs = dict(step or {}), dict(context or {}), dict(inputs or {})
+    run_id = _run_id(step, context) or run_id
+    step_id = str(step.get("id") or step_id or "network_mapping")
     intake = _steps(connection, run_id, context).get("alert_intake") or {}
-    alert_id = str(intake.get("alert_id") or inputs.get("alert_id") or "")
-    case_id = str(intake.get("case_id") or "")
-    seeds = [str(intake.get("customer_node_id") or ""), str(intake.get("account_node_id") or "")]
+    alert_id = str(intake.get("alert_id") or inputs.get("alert_id") or alert_id or "").strip().upper()
+    case_id = str(intake.get("case_id") or case_id or "")
+    customer_node_id, account_node_id = intake.get("customer_node_id"), intake.get("account_node_id")
+    if not customer_node_id and not account_node_id and alert_id:
+        facts = _alert_facts(connection, project_id, alert_id)
+        customer_node_id = customer_node_id or facts.get("customer_node_id")
+        account_node_id = account_node_id or facts.get("account_node_id")
+        intake = {**facts["attrs"], **intake}
+    seeds = [str(customer_node_id or ""), str(account_node_id or "")]
     edges = _network_edges(connection, project_id, seeds)
     actor_ref = "aml_alert_pipeline:network_mapping"
     parties: list[dict[str, Any]] = []
@@ -412,11 +434,13 @@ def run_aml_network_mapping(connection: Connection, settings: Any, project_id: s
                 # A party is named only with an edge that touches it: never one the graph does
                 # not connect, and never the alerted customer or account themselves.
                 cited = [e for e in cited if node_id in (e["src_id"], e["dst_id"])]
+                party_name = (_node(connection, project_id, node_id) or {}).get("name")
                 if node_id not in nodes or node_id in seeds or not cited or \
+                        not party_name or \
                         any(p["node_id"] == node_id for p in parties):
                     continue
                 parties.append({"node_id": node_id,
-                                "name": (_node(connection, project_id, node_id) or {}).get("name"),
+                                "name": party_name,
                                 "relationship": " ".join(str(raw.get("relationship") or "").split())[:300],
                                 "edges": [e["ref"] for e in cited],
                                 "edge_ids": [str(e["id"]) for e in cited]})
