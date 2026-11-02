@@ -13,7 +13,7 @@ gap:
   `banking_regulatory_compliance` catalogue entry (not a synthetic spec) up to that point.
 * [P1] `historical_pattern`'s graph write must be an upsert, not a one-off insert: re-running it
   must not duplicate the `correlates_with` edge it already wrote.
-* [P1] The catalogue must declare which ITSM MCP tool `historical_pattern` is allowed to call
+* [P1] The catalogue must declare which Service Desk MCP tool `historical_pattern` is allowed to call
   (contract.calls), so the step can query it without tripping contract enforcement.
 
 These run against a real, disposable postgres (DATABASE_URL), like test_kg_investigation_pipeline_template.py.
@@ -295,15 +295,15 @@ def test_p1_historical_pattern_correlates_without_duplicating_on_a_rerun(connect
     assert edges == 1, "a rerun of historical_pattern must upsert, not duplicate, the edge"
 
 
-# ── P1: the catalogue declares the ITSM MCP tool historical_pattern is allowed to call ────────
+# ── P1: the catalogue declares the Service Desk MCP tool historical_pattern is allowed to call ────────
 
-def test_p1_historical_pattern_declares_its_itsm_mcp_call_in_the_catalogue():
+def test_p1_historical_pattern_declares_its_service_desk_mcp_call_in_the_catalogue():
     entry = _entry()
     step = next(s for s in entry["steps"] if s["id"] == "historical_pattern")
     calls = ((step.get("contract") or {}).get("calls")) or []
-    itsm_tools = {c.get("tool") for c in calls if c.get("mcp") == "itsm"}
-    assert itsm_tools & {"get_incident", "list_incidents"}, (
-        "historical_pattern must declare the ITSM tool(s) it is allowed to call via "
+    service_desk_tools = {c.get("tool") for c in calls if c.get("mcp") == "service-desk"}
+    assert service_desk_tools & {"get_incident", "list_incidents"}, (
+        "historical_pattern must declare the Service Desk tool(s) it is allowed to call via "
         f"contract.calls, got {calls!r}")
 
 

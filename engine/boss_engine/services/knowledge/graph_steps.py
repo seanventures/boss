@@ -38,7 +38,7 @@ DESCRIPTIONS: dict[str, dict[str, str]] = {
     "historical_pattern": {
         "label": "Historical pattern",
         "summary": "Finds prior incidents and precedents that share the case's links, and asks "
-                   "the ITSM system for matching tickets.",
+                   "the Service Desk system for matching tickets.",
     },
     "closure": {
         "label": "Closure",
@@ -151,9 +151,9 @@ def run_historical_pattern(
     # so the read/write view says "called" or "declared, not done" truthfully — a deterministic
     # step leaves no agent turn to read them from.
     calls: list[dict[str, Any]] = []
-    from_itsm = _itsm_matches(connection, project_id=project_id, subject_id=subject_id,
+    from_service_desk = _service_desk_matches(connection, project_id=project_id, subject_id=subject_id,
                               actor_ref=actor_ref, calls=calls)
-    matches.update(from_itsm)
+    matches.update(from_service_desk)
 
     for match_id in matches:
         _STORE.upsert_edge(
@@ -170,10 +170,10 @@ def run_historical_pattern(
     produced: dict[str, Any] = {"agent_decision": {
         "decision_type": "HistoricalPatternMatched", "statement": statement,
         "node_id": decision["id"]}}
-    if from_itsm:
-        # The tickets the ITSM server returned, written in as incident nodes this run.
-        produced["incident"] = {"statement": f"{len(from_itsm)} incident(s) from ITSM.",
-                                "node_ids": list(from_itsm)}
+    if from_service_desk:
+        # The tickets the Service Desk server returned, written in as incident nodes this run.
+        produced["incident"] = {"statement": f"{len(from_service_desk)} incident(s) from Service Desk.",
+                                "node_ids": list(from_service_desk)}
 
     note = (f"Found {_named_summary(connection, project_id, list(matches), name_kinds=('incident', 'precedent'))}"
             f" in the ticket system and the graph, with no model."
@@ -182,16 +182,16 @@ def run_historical_pattern(
             "produced": produced, "note": note}
 
 
-def _itsm_matches(connection: Connection, *, project_id: str, subject_id: str, actor_ref: str,
+def _service_desk_matches(connection: Connection, *, project_id: str, subject_id: str, actor_ref: str,
                   calls: Optional[list[dict[str, Any]]] = None) -> dict[str, Mapping[str, Any]]:
-    """Ask the project's REGISTERED `itsm` MCP server (bootstrap.BUILTIN_MCP_SERVERS seeds one
-    on every project, pointed at `tools/mcp_itsm_mock.py` — the step's `contract.calls` source)
+    """Ask the project's REGISTERED `service-desk` MCP server (bootstrap.BUILTIN_MCP_SERVERS seeds one
+    on every project, pointed at `tools/mcp_service_desk_mock.py` — the step's `contract.calls` source)
     for a past ticket that names one of the subject's connected code symbols/systems, and write
     it in as an `incident` node — never a bespoke insert, through the same `_STORE.upsert_node`
     every other write here uses — so the NEXT run's graph-only pass above finds it like a
     sibling. Goes through `mcp_registry.call_tool_unattended` like any other registry server's
     tool (no person is present during a workflow step to ask), never a direct import of the
-    mock — a re-pointed or disabled `itsm` server must be able to refuse this call exactly as
+    mock — a re-pointed or disabled `service-desk` server must be able to refuse this call exactly as
     it would refuse any other road to a registered MCP tool.
 
     Each call it really makes is appended to `calls` as `{mcp, tool, ok}`; a call it never made
@@ -199,7 +199,7 @@ def _itsm_matches(connection: Connection, *, project_id: str, subject_id: str, a
     from .. import mcp_registry
     from ...config import get_settings
 
-    server = mcp_registry.find_mcp_server(connection, project_id, "itsm")
+    server = mcp_registry.find_mcp_server(connection, project_id, "service-desk")
     if server is None or not server.get("enabled", True):
         return {}
 
@@ -212,7 +212,7 @@ def _itsm_matches(connection: Connection, *, project_id: str, subject_id: str, a
     if not neighbor_names:
         return {}
 
-    call = {"mcp": "itsm", "tool": "list_incidents", "ok": False}
+    call = {"mcp": "service-desk", "tool": "list_incidents", "ok": False}
     if calls is not None:
         calls.append(call)
     try:
@@ -227,7 +227,7 @@ def _itsm_matches(connection: Connection, *, project_id: str, subject_id: str, a
         incident_id = str(incident.get("incident_id") or "").strip()
         if not incident_id:
             continue
-        # The ticket's text and its affected components (what a real ITSM ticket records as
+        # The ticket's text and its affected components (what a real Service Desk ticket records as
         # the code or service the incident touched).
         components = " ".join(str(c) for c in (incident.get("affected_components") or []))
         haystack = f"{incident.get('title', '')} {incident.get('summary', '')} {components}".lower()

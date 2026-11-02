@@ -1,6 +1,6 @@
 /**
  * THE PIPELINE VIEW'S MODEL (design §4.7): a workflow spec, read as the numbered stage diagram a
- * consultant draws — who runs each stage, what it reads and writes, whether it ran — in words.
+ * reference design draws — who runs each stage, what it reads and writes, whether it ran — in words.
  *
  * Pure: the spec, the palette (capabilities, role names, graph-step descriptions), the
  * connected outside agents and the last run's trace in; stages out. Nothing here fetches, and
@@ -22,7 +22,7 @@ export type ContractKind = { kind: string; required?: boolean; via?: string; dec
 export type ContractCall = { mcp: string; tool: string };
 /** A Context Graph edge between two kinds a contract names; `from === to` links a kind to itself. */
 export type ContractLink = { from: string; to: string; rel: string };
-/** A decision, policy or open question with its ID ("A-D30", "OP-ENR-01", "HP-Q1"). */
+/** A decision, policy or open question with its ID ("CTX-1", "CTX-P1", "HIS-Q1"). */
 export type DesignNote = { id: string; text: string };
 /** One of the agent's numbered internal steps (`contract.steps`). */
 export type AgentStepDef = {
@@ -31,7 +31,7 @@ export type AgentStepDef = {
 /** The design cards a contract carries (`contract.design`). */
 export type StageDesignCards = {
   status?: DesignStatus; reference?: string; underRevision?: string;
-  /** The running example the design is read against ("EGL-0588 v2 on COB 2026-10-05"). */
+  /** The running example the design is read against ("DQX-0588 v2 on COB 2026-10-05"). */
   example?: string;
   decisions: DesignNote[]; policy: DesignNote[]; openQuestions: DesignNote[];
   appliedIn?: { kg?: string; cg?: string; items: string[] };
@@ -51,7 +51,7 @@ export type StageContract = {
   design?: StageDesignCards;
 };
 
-/** A stage design's review state (design §4.6), as the consultant's legend names it. */
+/** A stage design's review state (design §4.6), as the design legend names it. */
 export type DesignStatus = "locked" | "in_review" | "not_reviewed" | "human_step" | "shared_service";
 export const DESIGN_STATUSES: DesignStatus[] = ["locked", "in_review", "not_reviewed", "human_step", "shared_service"];
 export const DESIGN_LABEL: Record<DesignStatus, string> = {
@@ -165,7 +165,7 @@ export function kindKey(kind: string): string {
 function fieldWords(field: string): string {
   return String(field ?? "").split(/[_\s]+/).filter(Boolean).map((w) => {
     const lower = w.toLowerCase();
-    return ["id", "rca", "cde", "kg", "cg", "mcp", "itsm", "cob", "dq"].includes(lower) ? lower.toUpperCase() : lower;
+    return ["id", "rca", "cde", "kg", "cg", "mcp", "service-desk", "cob", "dq"].includes(lower) ? lower.toUpperCase() : lower;
   }).join(" ");
 }
 

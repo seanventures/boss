@@ -1,8 +1,8 @@
-"""The ITSM mock MCP server: past and open tickets for Historical Pattern, the Compliance
+"""The Service Desk mock MCP server: past and open tickets for the history steps, the Compliance
 Analyst's citation and the DQ pipeline's incidents. Zero config: in-process, no network, every
 fixture deterministic. Run standalone:
 
-    .venv/bin/python -m uvicorn tools.mcp_itsm_mock:app --port 8766
+    .venv/bin/python -m uvicorn tools.mcp_service_desk_mock:app --port 8766
 
 TWO BOOKS OF TICKETS, ONE SERVICE DESK:
 
@@ -12,12 +12,12 @@ TWO BOOKS OF TICKETS, ONE SERVICE DESK:
   confirmed cause, fix and how long the fix held, and INC-2301, still being investigated; plus
   the bank's assignment groups (teams, their people).
 
-THE DQ PIPELINE WRITES HERE, as a real service desk is written to: Monitoring opens a ticket
-(`create_incident`, assigned to the rule owner's group — A-D11) or attaches an exception group to
-an open one (`attach_to_incident`); stages add work notes, and the Escalation and Incident
-Closure agents update it (`update_incident`: severity only rises — A-D8; status resolved/closed).
+THE DQ PIPELINE WRITES HERE, as a real service desk is written to: Incident Intake opens a ticket
+(`create_incident`, assigned to the rule owner's group) or attaches an exception group to
+an open one (`attach_to_incident`); stages add work notes, and the Escalation and Close and
+Learn agents update it (`update_incident`: severity only rises; status resolved/closed).
 A new ticket's number is derived from the exception group that opened it (INC-5nn, nn = the
-group's place in Eagle's list), so opening twice is the same ticket and a restart renumbers
+group's place in the DQ Monitor's list), so opening twice is the same ticket and a restart renumbers
 nothing. What was written is kept in memory (a restart forgets it); the investigation's own
 record is the Knowledge Graph's Context Graph.
 
@@ -33,7 +33,7 @@ from typing import Any
 
 from fastapi import FastAPI, Request, Response
 
-app = FastAPI(title="boss-itsm-mock")
+app = FastAPI(title="boss-service-desk-mock")
 
 INCIDENTS: dict[str, dict[str, Any]] = {
     "INC-2088": {
@@ -67,11 +67,11 @@ def _dq() -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
 
     ds = D.generate()
     team_of = {o.owner_id: (o.team_id or o.owner_id) for o in ds.owners}
-    groups = {o.owner_id: o.itsm_group for o in ds.owners if o.itsm_group}
+    groups = {o.owner_id: o.service_desk_group for o in ds.owners if o.service_desk_group}
     teams = {}
     for o in ds.owners:
         if o.owner_type == "team":
-            teams[o.itsm_group] = {"assignment_group": o.itsm_group, "team_id": o.owner_id,
+            teams[o.service_desk_group] = {"assignment_group": o.service_desk_group, "team_id": o.owner_id,
                                    "name": o.name, "remit": o.title,
                                    "members": [{"owner_id": p.owner_id, "name": p.name,
                                                 "title": p.title}
@@ -84,7 +84,7 @@ def _dq() -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
             "summary": i.confirmed_cause or i.title,
             "status": "closed" if i.status == "closed" else "investigating",
             "opened": i.opened, "closed": i.closed, "severity": i.severity,
-            "rule_id": i.rule_id, "eagle_rule_id": rule.eagle_id, "cde_ids": list(i.cde_ids),
+            "rule_id": i.rule_id, "monitor_rule_id": rule.monitor_id, "cde_ids": list(i.cde_ids),
             "assignment_group": groups.get(team_of.get(i.owner_id, ""), ""),
             "owner_id": i.owner_id, "root_cause_family": i.root_cause_family,
             "confirmed_cause": i.confirmed_cause, "ruled_out": list(i.ruled_out),
@@ -197,7 +197,7 @@ def _create_incident(args: dict) -> dict:
             "summary": str(args.get("summary") or title), "status": "open",
             "opened": str(args.get("opened") or ""), "closed": None, "severity": severity,
             "rule_id": str(args.get("rule_id") or ""),
-            "eagle_rule_id": str(args.get("eagle_rule_id") or ""),
+            "monitor_rule_id": str(args.get("monitor_rule_id") or ""),
             "cde_ids": [str(c) for c in args.get("cde_ids") or []],
             "assignment_group": group, "owner_id": str(args.get("owner_id") or ""),
             "root_cause_family": None, "confirmed_cause": None, "ruled_out": [], "fix": None,
@@ -239,7 +239,7 @@ def _update_incident(args: dict) -> dict:
             if SEVERITY_ORDER.index(severity) < SEVERITY_ORDER.index(ticket.get("severity")
                                                                      or "Low"):
                 return {"error": f"{incident_id} is {ticket['severity']}: severity only moves "
-                                 "up (A-D8)"}
+                                 "up"}
             ticket["severity"] = severity
         status = str(args.get("status") or "").strip().lower()
         if status:
@@ -264,7 +264,7 @@ _STR = {"type": "string"}
 TOOLS = [
     {
         "name": "get_incident",
-        "description": "Get an ITSM incident/ticket by id: its detail, status, assignment group, "
+        "description": "Get a Service Desk incident/ticket by id: its detail, status, assignment group, "
                        "and for a DQ ticket the confirmed cause, fix and how long it held.",
         "inputSchema": {"type": "object",
                         "properties": {"incident_id": {"type": "string"}},
@@ -288,7 +288,7 @@ TOOLS = [
                        "Opening the same group twice returns the same ticket.",
         "inputSchema": {"type": "object", "properties": {
             "title": _STR, "summary": _STR, "assignment_group": _STR, "severity": _STR,
-            "source_ref": _STR, "rule_id": _STR, "eagle_rule_id": _STR, "owner_id": _STR,
+            "source_ref": _STR, "rule_id": _STR, "monitor_rule_id": _STR, "owner_id": _STR,
             "opened": _STR, "cde_ids": {"type": "array", "items": _STR}},
             "required": ["title", "assignment_group", "source_ref"]},
     },
@@ -325,7 +325,7 @@ async def mcp(request: Request):
     if method == "initialize":
         return {"jsonrpc": "2.0", "id": rid,
                 "result": {"protocolVersion": "2024-11-05", "capabilities": {"tools": {}},
-                           "serverInfo": {"name": "boss-itsm-mock", "version": "0.2.0"}}}
+                           "serverInfo": {"name": "boss-service-desk-mock", "version": "0.2.0"}}}
     if method == "notifications/initialized":
         return Response(status_code=202)
     if method == "tools/list":
@@ -347,4 +347,4 @@ async def mcp(request: Request):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "server": "boss-itsm-mock", "tools": [t["name"] for t in TOOLS]}
+    return {"status": "ok", "server": "boss-service-desk-mock", "tools": [t["name"] for t in TOOLS]}

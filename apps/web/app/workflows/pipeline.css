@@ -239,7 +239,7 @@
 .pl-card-run { display: flex; align-items: center; gap: 6px; }
 .pl-num-none { background: transparent; color: var(--muted); }
 
-/* Shared services and side paths: under the main flow, the consultant's two areas. */
+/* Shared services and side paths: under the main flow, in two areas of their own. */
 .pl-aside { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 12px 28px; justify-content: space-between;
   padding-top: 12px; margin-top: 4px; border-top: 1px dashed var(--border-strong); }
 .pl-aside-group { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
@@ -262,7 +262,7 @@
 .pl-design-error { flex-basis: 100%; font-size: 0.8125rem; color: var(--red); }
 h3.pl-acv-title { margin: 2px 0 0; font-size: 1.35rem; line-height: 1.25; }
 
-/* Design cards: a top rule in ink, graph indigo, or muted grey, as the consultant's. */
+/* Design cards: a top rule in ink, graph indigo, or muted grey. */
 .pl-cards { grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: 12px; }
 .pl-design-card { background: var(--surface); border-top: 3px solid var(--ink); border-radius: var(--r); box-shadow: 0 1px 2px rgb(0 0 0 / 0.04); }
 .pl-design-card[data-tone="graph"] { border-top-color: #5b5fc7; }

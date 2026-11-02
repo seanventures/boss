@@ -1,4 +1,4 @@
-"""Three engine shapes the DQ RCA pipeline needs (consultant conformance P0 #4):
+"""Three engine shapes the DQ RCA pipeline needs (reference-design conformance P0 #4):
 
 * A BOUNDED LOOP WITH A MULTI-STEP BODY. ``"body": ["enrich", "history", "rca"]`` runs the three
   in order each round and decides after the last: RCA says InsufficientEvidence and Context

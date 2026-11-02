@@ -7,17 +7,17 @@ tool, which only a person presses), both calling `load_platform` here:
 
   1. ADDS the `banking-dq` ontology pack to the project (a project holds several packs, so one
      running the regulatory and AML case studies keeps their kinds);
-  2. registers the sample's mock connectors — Eagle (the DQ monitor) and Olympus (the profile
-     service), served by the `mcp-tools` service (tools/mcp_dq_mock.py); ITSM is the shipped
-     `itsm` connector every project already has, which carries the bank's DQ incidents;
+  2. registers the sample's mock connectors — the DQ Monitor and the Profile Service, served by
+     the `mcp-tools` service (tools/mcp_dq_mock.py); the Service Desk is the shipped
+     `service-desk` connector every project already has, which carries the bank's DQ incidents;
   3. writes the platform from tools/dq_sample (`D.nodes()`/`D.edges()`) through the store's own
      primitives (`upsert_node`/`upsert_edge`, trust `observed`, as a system of record's data):
      systems, owners, schemas, tables, columns, feeds, column lineage, CDEs, reports, report
      lines, MDRM codes, the business calendar, known issues and examination findings — and the
-     Context Graph's history: Eagle's exception groups, the closed incidents with their
+     Context Graph's history: the DQ Monitor's exception groups, the closed incidents with their
      precedents and resolved patterns, and the one open incident;
-  4. installs the DQ workflows (`dq_incident_rca`, `dq_incident_escalation`, `dq_eagle_intake`)
-     and schedules the Escalation Agent's daily sweep.
+  4. installs the DQ workflows (`dq_incident_rca`, `dq_incident_escalation`, `dq_monitor_intake`)
+     and schedules the Escalation Watch's daily sweep.
 
 THE RULES ARE NOT HERE. DQ rules and their Warning/Error thresholds come from the bank's rulebook
 (NorthPeak Loan DQ Rulebook v3.2, a PDF) through rulebook extraction — never copied in from the
@@ -27,6 +27,14 @@ needs a rule not yet in the graph records a coverage gap that says so.
 
 Idempotent: every write is an upsert keyed by the sample's own ids. The data is synthetic and
 deterministic.
+
+LOADING AGAIN REPLACES THE SAMPLE, never adds beside it (`replace_previous`): the sample's graph
+nodes a newer sample no longer has (a renamed system, connector or exception group), the
+incidents, precedents and decisions earlier runs of the DQ workflows wrote, the sample's
+connectors it no longer registers, and the schedules of a DQ workflow the catalogue no longer
+ships all go; a node it still has is rewritten with the newer sample's attributes. The DQ
+workflows the catalogue dropped leave the library on the same load (workflow_catalogue
+.retire_dropped).
 """
 from __future__ import annotations
 
@@ -43,17 +51,19 @@ PACK_ID = "banking-dq"
 ACTOR_REF = "dq_platform"
 RCA_WORKFLOW = "dq_incident_rca"
 ESCALATION_WORKFLOW = "dq_incident_escalation"
-INTAKE_WORKFLOW = "dq_eagle_intake"
+INTAKE_WORKFLOW = "dq_monitor_intake"
 WORKFLOW_KEYS = (RCA_WORKFLOW, ESCALATION_WORKFLOW, INTAKE_WORKFLOW)
 #: Kinds the rulebook brings, never this loader.
 RULEBOOK_KINDS = frozenset({"data_quality_rule", "dq_threshold"})
 #: D.RELATIONSHIPS names that are Cypher keywords, renamed as the pack declares them.
 _RESERVED = {"IN": "in_calendar", "FROM": "lineage_from",
              "TO": "lineage_to", "VIA": "lineage_via"}
-#: When the Escalation Agent sweeps every open incident (bank-local time).
+#: When the Escalation Watch sweeps every open incident (bank-local time).
 ESCALATION_SCHEDULE = {"cadence": "daily", "hour": 7, "minute": 0, "tz_name": "America/New_York"}
-#: When the Pipeline Orchestrator reads Eagle's latest COB and starts an RCA per Error group.
+#: When the Cause Router reads the DQ Monitor's latest COB and starts an RCA per Error group.
 INTAKE_SCHEDULE = {"cadence": "daily", "hour": 6, "minute": 30, "tz_name": "America/New_York"}
+ESCALATION_SCHEDULE_NAME = "Escalation Watch — daily sweep of open incidents"
+INTAKE_SCHEDULE_NAME = "Cause Router — investigate the DQ Monitor's Error groups each COB"
 
 
 def edge_kind(relationship: str) -> str:
@@ -74,11 +84,11 @@ def dq_mcp_servers() -> list[dict[str, Any]]:
 
     base = f"http://{MCP_TOOLS_HOST}:{_dq_port()}"
     return [
-        {"name": "eagle", "url": f"{base}/eagle/mcp", "risk_tier": 0,
-         "description": "DQ sample Eagle DQ monitor: list_exception_groups, get_exception_group, "
+        {"name": "dq-monitor", "url": f"{base}/dq-monitor/mcp", "risk_tier": 0,
+         "description": "DQ sample DQ Monitor: list_exception_groups, get_exception_group, "
                         "get_rule_run, rerun_check (read-only)"},
-        {"name": "olympus", "url": f"{base}/olympus/mcp", "risk_tier": 0,
-         "description": "DQ sample Olympus profile service: get_exception_profile, "
+        {"name": "profile-service", "url": f"{base}/profile-service/mcp", "risk_tier": 0,
+         "description": "DQ sample Profile Service: get_exception_profile, "
                         "list_recent_changes (read-only, deterministic)"},
     ]
 
@@ -172,6 +182,8 @@ def load_platform(connection: Connection, *, project_id: str, actor: str) -> dic
 
     ontology_packs.set_project_pack(connection, project_id=project_id, pack_id=PACK_ID,
                                     set_by=actor)
+    ds = D.generate()
+    replaced = replace_previous(connection, project_id, sample_keys(ds))
     registered = []
     for server in dq_mcp_servers():
         row = mcp_registry.ensure_mcp_server(
@@ -182,7 +194,6 @@ def load_platform(connection: Connection, *, project_id: str, actor: str) -> dic
             provenance={**builtin_provenance(), "sample": "dq"}, respect_operator=True)
         registered.append({"name": server["name"], "registered": row is not None})
 
-    ds = D.generate()
     ids: dict[tuple[str, str], str] = {}
     counts: dict[str, int] = {}
     for node in ds.nodes():
@@ -194,6 +205,7 @@ def load_platform(connection: Connection, *, project_id: str, actor: str) -> dic
             name=str(node["name"])[:300], body=_body(node), trust_tier="observed",
             actor_kind="system", actor_ref=ACTOR_REF, source="dq_platform",
             attrs={**node["attrs"], "key": key, "sample": "dq"})
+        _set_attrs(connection, ids[(kind, key)], {**node["attrs"], "key": key, "sample": "dq"})
         counts[kind] = counts.get(kind, 0) + 1
 
     def endpoint(kind: str, key: str) -> str:
@@ -217,24 +229,21 @@ def load_platform(connection: Connection, *, project_id: str, actor: str) -> dic
                           kind=edge_kind(rel), actor_kind="system", actor_ref=ACTOR_REF,
                           attrs={"relationship": rel})
         edges += 1
-    # The systems agents reach through MCP (Eagle, ITSM, Olympus): the Monitoring and
-    # Enrichment agents' designs read them as MCPServer nodes.
-    tools_of = {"eagle": ["list_exception_groups", "get_exception_group", "get_rule_run",
-                          "rerun_check"],
-                "itsm": ["get_incident", "list_incidents", "list_teams", "create_incident",
-                         "attach_to_incident", "update_incident"],
-                "olympus": ["get_exception_profile", "list_recent_changes"]}
+    # The systems agents reach through MCP (the DQ Monitor, the Service Desk, the Profile
+    # Service): the Incident Intake and Context Gathering agents' designs read them as MCPServer
+    # nodes.
     for system in ds.systems:
         if not system.mcp_server:
             continue
+        server_attrs = {"key": system.mcp_server, "name": system.mcp_server,
+                        "system_id": system.system_id,
+                        "tools": MCP_TOOLS.get(system.mcp_server, []), "sample": "dq"}
         server = STORE.upsert_node(
             connection, project_id=project_id, kind="mcp_server",
             node_key=node_key("mcp_server", system.mcp_server), name=system.mcp_server,
             body=f"{system.name} reached by agents through MCP.", trust_tier="observed",
-            actor_kind="system", actor_ref=ACTOR_REF, source="dq_platform",
-            attrs={"key": system.mcp_server, "name": system.mcp_server,
-                   "system_id": system.system_id, "tools": tools_of.get(system.mcp_server, []),
-                   "sample": "dq"})
+            actor_kind="system", actor_ref=ACTOR_REF, source="dq_platform", attrs=server_attrs)
+        _set_attrs(connection, server, server_attrs)
         counts["mcp_server"] = counts.get("mcp_server", 0) + 1
         STORE.upsert_edge(connection, project_id=project_id, src_id=ids[("system", system.system_id)],
                           dst_id=server, kind="exposes", actor_kind="system", actor_ref=ACTOR_REF,
@@ -256,13 +265,12 @@ def load_platform(connection: Connection, *, project_id: str, actor: str) -> dic
     rules_present = rules_in_graph(connection, project_id, [r.rule_id for r in ds.rules])
     installed = _install_workflows(connection, project_id, actor)
     schedule = _ensure_schedule(connection, project_id, actor, ESCALATION_WORKFLOW,
-                                "Escalation Agent — daily sweep of open incidents",
-                                ESCALATION_SCHEDULE)
+                                ESCALATION_SCHEDULE_NAME, ESCALATION_SCHEDULE)
     groups = len(ds.exception_groups)
     note = (f"Loaded {D.BANK}'s data platform: {counts.get('system', 0)} systems, "
             f"{counts.get('database_table', 0)} tables, {counts.get('database_column', 0)} "
             f"columns, {counts.get('feed', 0)} feeds, {counts.get('cde', 0)} CDEs, "
-            f"{counts.get('report_line', 0)} report lines, {groups} Eagle exception groups and "
+            f"{counts.get('report_line', 0)} report lines, {groups} DQ Monitor exception groups and "
             f"{counts.get('incident', 0)} incidents. ")
     if rules_present < len(ds.rules):
         note += (f"{rules_present} of {len(ds.rules)} DQ rules are approved in the graph: load the "
@@ -273,17 +281,102 @@ def load_platform(connection: Connection, *, project_id: str, actor: str) -> dic
     return {"ok": True, "pack_id": PACK_ID, "connectors": registered, "counts": counts,
             "edges": edges, "edges_waiting_for_rules": waiting,
             "rules_in_graph": rules_present, "rules_in_rulebook": len(ds.rules),
-            "workflows": installed, "escalation_schedule": schedule, "note": note}
+            "workflows": installed, "escalation_schedule": schedule, "replaced": replaced,
+            "note": note}
+
+
+#: The tools each MCP connector the sample's systems are reached through serves.
+MCP_TOOLS = {"dq-monitor": ["list_exception_groups", "get_exception_group", "get_rule_run",
+                            "rerun_check"],
+             "service-desk": ["get_incident", "list_incidents", "list_teams", "create_incident",
+                              "attach_to_incident", "update_incident"],
+             "profile-service": ["get_exception_profile", "list_recent_changes"]}
+
+
+def sample_keys(ds: Any) -> set[str]:
+    """The graph node keys this sample writes (its MCP server nodes included)."""
+    keys = {node_key(n["kind"], n["key"]) for n in ds.nodes() if n["kind"] not in RULEBOOK_KINDS}
+    keys |= {node_key("mcp_server", s.mcp_server) for s in ds.systems if s.mcp_server}
+    return keys
+
+
+def _set_attrs(connection: Connection, node_id: str, attrs: dict[str, Any]) -> None:
+    """A node the sample still has carries the newer sample's attributes. The store keeps a node
+    whose name and body did not change as it was (its content hash covers those), so an
+    attribute the sample renamed would otherwise stay under its old name."""
+    import json
+
+    connection.execute(text(
+        "UPDATE kg_nodes SET attrs = CAST(:a AS JSONB) WHERE id = :id "
+        "AND attrs IS DISTINCT FROM CAST(:a AS JSONB)"), {"id": node_id, "a": json.dumps(attrs)})
+
+
+def replace_previous(connection: Connection, project_id: str, keep: set[str]) -> dict[str, int]:
+    """LOADING AGAIN REPLACES THE SAMPLE. Removes what an earlier load of it, or an earlier run of
+    its workflows, left in the project that this sample does not have: its graph nodes by their
+    `dq:` keys (incidents and precedents runs opened included), the Context Graph the DQ
+    workflows' runs wrote, the sample's connectors it no longer registers, and the schedules of
+    a DQ workflow the catalogue no longer ships. Counts what went."""
+    from .. import workflow_catalogue
+
+    removed = {"nodes": 0, "run_nodes": 0, "connectors": 0, "schedules": 0}
+    stale = connection.execute(text(
+        "SELECT id, node_key FROM kg_nodes WHERE project_id = :p AND node_key LIKE 'dq:%' "
+        "AND NOT (kind = ANY(:rulebook))"),
+        {"p": project_id, "rulebook": list(RULEBOOK_KINDS)}).mappings().all()
+    for row in stale:
+        if row["node_key"] in keep:
+            continue
+        _forget(connection, project_id, row["id"])
+        removed["nodes"] += 1
+    # The Context Graph the DQ workflows' runs wrote (decisions, coverage gaps, packages,
+    # proposals): every node carrying the run id of a run of a `dq_` workflow.
+    run_nodes = connection.execute(text(
+        "SELECT n.id FROM kg_nodes n WHERE n.project_id = :p AND n.node_key LIKE 'context:%' "
+        "AND n.attrs->>'run_id' IN (SELECT r.id FROM workflow_runs r JOIN workflow_versions v "
+        "ON v.id = r.workflow_version_id JOIN workflow_definitions d "
+        "ON d.id = v.workflow_definition_id WHERE r.project_id = :p "
+        "AND d.workflow_key LIKE 'dq\\_%')"), {"p": project_id}).scalars().all()
+    for node_id in run_nodes:
+        _forget(connection, project_id, node_id)
+        removed["run_nodes"] += 1
+    wanted = [s["name"].lower() for s in dq_mcp_servers()]
+    removed["connectors"] = connection.execute(text(
+        "DELETE FROM mcp_servers WHERE project_id = :p AND provenance->>'sample' = 'dq' "
+        "AND NOT (lower(name) = ANY(:names))"), {"p": project_id, "names": wanted}).rowcount or 0
+    shipped = [e["key"] for e in workflow_catalogue.CATALOGUE]
+    removed["schedules"] = connection.execute(text(
+        "DELETE FROM workflow_schedules WHERE project_id = :p AND workflow_key LIKE 'dq\\_%' "
+        "AND NOT (workflow_key = ANY(:keys))"), {"p": project_id, "keys": shipped}).rowcount or 0
+    # A schedule the sample made under an earlier name for a workflow it still ships.
+    for key, name in ((ESCALATION_WORKFLOW, ESCALATION_SCHEDULE_NAME),
+                      (INTAKE_WORKFLOW, INTAKE_SCHEDULE_NAME)):
+        connection.execute(text(
+            "UPDATE workflow_schedules SET name = :n, updated_at = now() WHERE project_id = :p "
+            "AND workflow_key = :k AND name <> :n AND NOT EXISTS (SELECT 1 FROM "
+            "workflow_schedules o WHERE o.project_id = :p AND o.workflow_key = :k AND o.name = :n)"),
+            {"p": project_id, "k": key, "n": name})
+    return removed
+
+
+def _forget(connection: Connection, project_id: str, node_id: str) -> None:
+    """Remove one node the sample replaced (its edges go with it)."""
+    try:
+        with connection.begin_nested():
+            STORE.delete_node(connection, project_id=project_id, node_id=node_id,
+                              actor_kind="person")
+    except Exception:  # noqa: BLE001 — already gone, or held by something else: left as is
+        pass
 
 
 #: The sample's own connectors each stage's contract calls, granted to its role agent when the
-#: platform is loaded (they exist only then, so the role specs cannot name them; ITSM is shipped
+#: platform is loaded (they exist only then, so the role specs cannot name them; Service Desk is shipped
 #: and granted by the role specs).
-SAMPLE_GRANTS = (("dq_monitoring_agent", "eagle", ["get_exception_group"]),
-                 ("dq_context_enrichment_agent", "olympus",
+SAMPLE_GRANTS = (("dq_monitoring_agent", "dq-monitor", ["get_exception_group"]),
+                 ("dq_context_enrichment_agent", "profile-service",
                   ["get_exception_profile", "list_recent_changes"]),
-                 ("dq_incident_closure_agent", "eagle", ["rerun_check"]),
-                 ("dq_pipeline_orchestrator", "eagle", ["list_exception_groups"]))
+                 ("dq_incident_closure_agent", "dq-monitor", ["rerun_check"]),
+                 ("dq_pipeline_orchestrator", "dq-monitor", ["list_exception_groups"]))
 
 
 def _install_workflows(connection: Connection, project_id: str, actor: str) -> list[dict]:
@@ -348,24 +441,23 @@ def _ensure_schedule(connection: Connection, project_id: str, actor: str, workfl
 
 
 def schedule_intake(connection: Connection, *, project_id: str, actor: str) -> dict[str, Any]:
-    """THE SCHEDULED TRIGGER: every morning the Pipeline Orchestrator reads Eagle's latest close
-    of business and starts an RCA for each exception group Eagle graded Error. A person turns it
-    on (it starts model-backed runs); turning it off is the schedule's own switch."""
+    """THE SCHEDULED TRIGGER: every morning the Cause Router reads the DQ Monitor's latest close
+    of business and starts an RCA for each exception group the DQ Monitor graded Error. A person
+    turns it on (it starts model-backed runs); turning it off is the schedule's own switch."""
     return _ensure_schedule(connection, project_id, actor, INTAKE_WORKFLOW,
-                            "Pipeline Orchestrator — investigate Eagle's Error groups each COB",
-                            INTAKE_SCHEDULE)
+                            INTAKE_SCHEDULE_NAME, INTAKE_SCHEDULE)
 
 
 def status(connection: Connection, *, project_id: str, cob: Optional[str] = None
            ) -> dict[str, Any]:
-    """Whether the platform is loaded, how many rules are in the graph, and Eagle's exception
-    groups by COB, each with what the pipeline made of it (incident, latest run)."""
+    """Whether the platform is loaded, how many rules are in the graph, and the DQ Monitor's
+    exception groups by COB, each with what the pipeline made of it (incident, latest run)."""
     from tools.dq_sample import data as D
 
     from . import ontology_packs
 
     ds = D.generate()
-    loaded = bool(node_id_of(connection, project_id, "system", "S-EGL"))
+    loaded = bool(node_id_of(connection, project_id, "system", "S-DQM"))
     rules_present = rules_in_graph(connection, project_id, [r.rule_id for r in ds.rules]) \
         if loaded else 0
     groups = []
@@ -387,9 +479,9 @@ def status(connection: Connection, *, project_id: str, cob: Optional[str] = None
             {"p": project_id, "k": RCA_WORKFLOW, "g": g.group_id}).mappings().first() \
             if loaded else None
         attrs = incident or {}
-        groups.append({"group_id": g.group_id, "eagle_rule_id": g.eagle_rule_id,
+        groups.append({"group_id": g.group_id, "monitor_rule_id": g.monitor_rule_id,
                        "rule_id": g.rule_id, "rule_version": g.rule_version, "cob": g.cob,
-                       "grade": g.eagle_grade, "column": g.column, "failed": g.failed,
+                       "grade": g.monitor_grade, "column": g.column, "failed": g.failed,
                        "population": g.population,
                        "incident_id": attrs.get("incident_id"),
                        "incident_status": attrs.get("status"),

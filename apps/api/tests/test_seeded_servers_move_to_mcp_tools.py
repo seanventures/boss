@@ -52,3 +52,24 @@ def test_a_removed_seed_is_not_brought_back(engine):
         c.execute(text("DELETE FROM seed_exclusions WHERE project_id=:p AND kind='mcp_server' "
                        "AND subject='boss-devops-reference'"), {"p": PROJECT})
         shipped_cast._ensure_builtin_mcp_servers(c, PROJECT)
+
+
+def test_a_renamed_builtin_keeps_its_row_and_its_grants(engine):
+    """A release that renames a built-in server renames the project's row in place: same id, so
+    every role's grant of it holds, and no second server is seeded beside it."""
+    from boss_engine.bootstrap import RENAMED_BUILTIN_MCP_SERVERS, migrate_builtin_mcp_servers
+    from boss_engine.services.mcp_registry import find_mcp_server
+
+    old, new = next(iter(RENAMED_BUILTIN_MCP_SERVERS.items()))
+    with engine.begin() as c:
+        server = find_mcp_server(c, PROJECT, new)
+        assert server is not None
+        c.execute(text("UPDATE mcp_servers SET name = :old WHERE id = :id"),
+                  {"old": old, "id": server["id"]})
+        migrate_builtin_mcp_servers(c, PROJECT)
+        renamed = find_mcp_server(c, PROJECT, new)
+        assert renamed is not None and renamed["id"] == server["id"]
+        assert find_mcp_server(c, PROJECT, old) is None
+        assert c.execute(text("SELECT count(*) FROM mcp_servers WHERE project_id = :p "
+                              "AND lower(name) IN (:o, :n)"),
+                         {"p": PROJECT, "o": old, "n": new}).scalar() == 1

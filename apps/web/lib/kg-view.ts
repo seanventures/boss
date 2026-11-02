@@ -420,7 +420,7 @@ export async function loadAmlSample(w: Who) {
 // ── the DQ case study: NorthPeak Bank's data platform ─────────────────────────────────────────
 
 export type KgDqGroup = {
-  group_id: string; eagle_rule_id: string; rule_id: string; rule_version: number; cob: string;
+  group_id: string; monitor_rule_id: string; rule_id: string; rule_version: number; cob: string;
   grade: string; column: string; failed: number; population: number;
   incident_id: string | null; incident_status: string | null;
   run_id: string | null; run_status: string | null;
@@ -434,7 +434,7 @@ export function getDqPlatform(w: Who, signal?: AbortSignal) {
   return kgRead<KgDqPlatform>("/v1/knowledge/samples/dq", { project_id: w.projectId, actor: w.actor }, signal);
 }
 
-/** Load the platform: the banking-dq pack (beside the others), Eagle and Olympus, the graph,
+/** Load the platform: the banking-dq pack (beside the others), the DQ Monitor and the Profile Service, the graph,
  *  the DQ workflows and the daily escalation schedule. Never the rulebook's rules. */
 export async function loadDqPlatform(w: Who) {
   return send<{ ok: boolean; note: string }>("/v1/knowledge/samples/dq",
@@ -442,11 +442,11 @@ export async function loadDqPlatform(w: Who) {
     { scope: `kg-dq:${w.projectId}`, label: "Load the NorthPeak Bank data platform" });
 }
 
-/** The scheduled trigger: each morning, an RCA per exception group Eagle graded Error. */
+/** The scheduled trigger: each morning, an RCA per exception group the DQ Monitor graded Error. */
 export async function scheduleDqIntake(w: Who) {
   return send<{ created?: boolean; enabled?: boolean; error?: string }>("/v1/knowledge/samples/dq/schedule",
     { project_id: w.projectId, actor: w.actor, step_up: "confirmed" },
-    { scope: `kg-dq-schedule:${w.projectId}`, label: "Investigate Eagle's Error groups every morning" });
+    { scope: `kg-dq-schedule:${w.projectId}`, label: "Investigate the DQ Monitor's Error groups every morning" });
 }
 
 // ── writes ──────────────────────────────────────────────────────────────────────────────────

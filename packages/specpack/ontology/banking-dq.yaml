@@ -11,13 +11,13 @@ description: >
   keeps the two equal.
 status: active
 # The Context Graph schema these kinds form (graph_versions.cg_version): the bands read
-# "Context Graph v4", the version the consultant's agent designs were reviewed against.
-context_version: 4
+# "Context Graph v3", the pack's own version, which the agent designs were reviewed against.
+context_version: 3
 # The Knowledge Graph's version is not declared here: it is 1 + the approved change sets in
 # the project (graph_versions.kg_version), so it moves as people approve rules and links. The
-# consultant's designs cite KG v16/v17 (Applied in KG v16 / CG v4) as their reference.
-knowledge_graph_reference: "KG v17"
-# Domain colours follow the consultant's screens: teal agent infrastructure and people, amber
+# agent designs cite the pack's version (Applied in KG v3 / CG v3) as their reference.
+knowledge_graph_reference: "KG v3"
+# Domain colours: teal agent infrastructure and people, amber
 # systems and data, red rules and thresholds, green governance (CDEs), purple lineage, blue
 # regulatory reporting, slate known issues, olive the calendar, indigo the Context Graph.
 # incident, precedent, agent_decision and coverage_gap are BOSS core kinds: written, not declared.
@@ -43,7 +43,7 @@ kinds:
     plural: Owners
     color: "#1f8a9e"
     group: People and teams
-    attrs: [owner_id, name, owner_type, title, team_id, itsm_group]
+    attrs: [owner_id, name, owner_type, title, team_id, service_desk_group]
   - id: feed
     layer: domain
     label: Feed
@@ -92,7 +92,7 @@ kinds:
     plural: Data quality rules
     color: "#b8433a"
     group: Rules
-    attrs: [rule_id, version, eagle_id, family, title, dimension, severity, owner_id, status]
+    attrs: [rule_id, version, monitor_id, family, title, dimension, severity, owner_id, status]
   - id: dq_threshold
     layer: domain
     label: DQ threshold
@@ -149,7 +149,7 @@ kinds:
     color: "#566273"
     group: Known issues
     attrs: [finding_id, title, severity, regulator, issued, due, status]
-  # ── Added in v3: the kinds the consultant's Context Enrichment and Historical Pattern
+  # ── Added in v3: the kinds the Context Gathering and Past Incidents
   # designs read. The sample world holds Transformations, Root cause categories and
   # Remediation templates; the rest are declared for a bank's own graph (none invented). ──
   - id: transformation
@@ -228,7 +228,7 @@ kinds:
     label: Exception group
     plural: Exception groups
     color: "#4b4fb8"
-    attrs: [group_id, eagle_rule_id, rule_id, rule_version, cob, platform, column, failed, population, measured, eagle_grade]
+    attrs: [group_id, monitor_rule_id, rule_id, rule_version, cob, platform, column, failed, population, measured, monitor_grade]
   - id: resolved_pattern
     layer: context
     label: Resolved pattern

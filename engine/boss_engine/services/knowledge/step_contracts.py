@@ -5,7 +5,7 @@ an absent contract, so an already-published workflow is untouched by this module
 
 THE AGENT DESIGN (design §4.1, §4.6) rides on the same block, in two optional keys:
 
-* ``steps`` — the agent's own numbered internal steps, as a consultant draws them:
+* ``steps`` — the agent's own numbered internal steps, as a design review draws them:
   ``[{n: int, name: str, reads: [kind], writes: [kind], calls: [{mcp, tool}], explain: str}]``.
   ``n`` and ``name`` are required; each step's ``reads``/``writes``/``calls`` must be a SUBSET
   of the contract's own (a step cannot read what the agent as a whole may not). A step's call
@@ -13,11 +13,11 @@ THE AGENT DESIGN (design §4.1, §4.6) rides on the same block, in two optional 
 * ``design`` — the design record's cards: ``{status, reference, under_revision, example,
   decisions: [{id, text}], policy: [{id, text}], applied_in: {kg, cg, items: [str]},
   open_questions: [{id, text}]}``. ``example`` is the running example the design is read
-  against ("EGL-0588 v2 on COB 2026-10-05"), shown under the agent's title. ``status`` is one of :data:`DESIGN_STATUSES`. The status a contract declares
+  against ("DQX-0588 v2 on COB 2026-10-05"), shown under the agent's title. ``status`` is one of :data:`DESIGN_STATUSES`. The status a contract declares
   is the stage's design status until a person reviews it in BOSS (stage_designs.py), which then
   owns it.
 
-Two more optional keys draw the design the way the consultant does:
+Two more optional keys draw the design the way a design review does:
 
 * ``invoked_by`` — the stage that starts this one (a step id: the Pipeline Orchestrator invokes
   Monitoring, Enrichment and Historical Pattern), the design view's entry pill.
@@ -41,7 +41,7 @@ from sqlalchemy.engine import Connection
 from . import scopes
 
 #: A contract may carry an agent's numbered internal `steps` and its `design` record (the
-#: consultant's per-agent view). Workflows that ship designs check this before adding them.
+#: per-agent design view). Workflows that ship designs check this before adding them.
 SUPPORTS_STEPS_AND_DESIGN = True
 
 _CONTRACT_KEYS = {
@@ -58,7 +58,7 @@ _LINK_KEYS = {"from", "to", "rel"}
 _HANDOFF_KEYS = {"to", "next", "carries", "text"}
 _ID_TEXT_KEYS = {"id", "text"}
 _APPLIED_KEYS = {"kg", "cg", "items"}
-#: A stage design's review state (design §4.6), in the consultant's legend's order.
+#: A stage design's review state (design §4.6), in the design legend's order.
 DESIGN_STATUSES = ("locked", "in_review", "not_reviewed", "human_step", "shared_service")
 
 
@@ -94,7 +94,7 @@ class AgentStep:
 
 @dataclass(frozen=True)
 class DesignNote:
-    """A decision, policy or open question with its ID ("A-D30", "OP-ENR-01", "HP-Q1")."""
+    """A decision, policy or open question with its ID ("CTX-1", "CTX-P1", "HIS-Q1")."""
     id: str
     text: str
 

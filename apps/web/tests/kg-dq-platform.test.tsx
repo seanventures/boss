@@ -2,7 +2,7 @@
 /**
  * The DQ case study, console side: Knowledge Graph › Documents › DQ platform (app/knowledge/
  * kg-dq-platform.tsx). "Load the NorthPeak Bank data platform" is the product action (POST
- * /v1/knowledge/samples/dq, confirmed); once loaded, Eagle's exception groups are listed by COB
+ * /v1/knowledge/samples/dq, confirmed); once loaded, the DQ Monitor's exception groups are listed by COB
  * and each one's "Investigate" starts dq_incident_rca with that group; the morning intake is a
  * confirmed schedule; a rulebook not loaded yet is said.
  */
@@ -21,7 +21,7 @@ const press = async (el: Element | null) => { await act(async () => (el as HTMLE
 
 const PACKS = { current: null, packs: [], available: [{ pack_id: "banking-dq", version: "2" }] };
 const group = (id: string, cob: string, extra: Record<string, unknown> = {}) => ({
-  group_id: id, eagle_rule_id: "EGL-0588", rule_id: "NPB-DQ-LN-003", rule_version: 2, cob,
+  group_id: id, monitor_rule_id: "DQX-0588", rule_id: "NPB-DQ-LN-003", rule_version: 2, cob,
   grade: "Error", column: "m_loan.principal_outstanding_derived", failed: 412, population: 61220,
   incident_id: null, incident_status: null, run_id: null, run_status: null, ...extra,
 });
@@ -30,7 +30,7 @@ const BASE = { has_pack: true, rules_in_rulebook: 96, workflow_key: "dq_incident
 const NOT_LOADED = { ...BASE, loaded: false, has_pack: false, rules_in_graph: 0, groups: [] };
 const LOADED = { ...BASE, loaded: true, rules_in_graph: 0, groups: [
   group("EXG-20261005-0003", "2026-10-05", { incident_id: "INC-505", incident_status: "open" }),
-  group("EXG-20261005-0005", "2026-10-05", { eagle_rule_id: "EGL-0646", rule_id: "NPB-DQ-AR-001" }),
+  group("EXG-20261005-0005", "2026-10-05", { monitor_rule_id: "DQX-0646", rule_id: "NPB-DQ-AR-001" }),
   group("EXG-20261006-0007", "2026-10-06"),
 ] };
 
@@ -46,7 +46,7 @@ const routes = (sample: () => unknown, extra: Record<string, unknown> = {}) => m
 } as never);
 
 describe("Documents tab: DQ platform", () => {
-  it("loads the platform through the confirmed product action and lists Eagle's groups by COB", async () => {
+  it("loads the platform through the confirmed product action and lists the DQ Monitor's groups by COB", async () => {
     let loaded = false;
     const fn = routes(() => (loaded ? LOADED : NOT_LOADED));
     await mount(<Docs />);
@@ -78,7 +78,7 @@ describe("Documents tab: DQ platform", () => {
       action: "start", project_id: "northpeak-bank", workflow_key: "dq_incident_rca",
       input: { exception_group_id: "EXG-20261006-0007" } });
     const msg = $('[data-testid="kg-dq-investigate-msg"]');
-    expect(msg?.textContent).toMatch(/Investigating EGL-0588 v2 on COB 2026-10-06/);
+    expect(msg?.textContent).toMatch(/Investigating DQX-0588 v2 on COB 2026-10-06/);
     expect(msg?.querySelector("a")?.getAttribute("href")).toContain("wfr=wfr_dq_1");
   });
 

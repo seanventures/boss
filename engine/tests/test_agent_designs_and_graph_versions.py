@@ -1,4 +1,4 @@
-"""The consultant's agent design in BOSS (design §4.1, §4.2, §4.6; conformance P0 2/3/5/6, P1 7/8).
+"""The agent design in BOSS (design §4.1, §4.2, §4.6; conformance P0 2/3/5/6, P1 7/8).
 
 * A contract's numbered `steps` and `design` cards validate exactly as documented: a step reads,
   writes and calls only a subset of the contract's own, and unknown keys are still refused.
@@ -36,24 +36,24 @@ WORKER = "worker-designs"
 
 def _contract(**extra):
     base = {
-        "trigger": "Eagle publishes an exception group",
+        "trigger": "The DQ Monitor publishes an exception group",
         "reads": [{"kind": "rule"}, {"kind": "clause"}],
         "writes": [{"kind": "agent_decision", "required": True, "decision_type": "Opened"},
                    {"kind": "coverage_gap"}],
-        "calls": [{"mcp": "eagle", "tool": "get_exception_group"}, {"mcp": "itsm"}],
+        "calls": [{"mcp": "dq-monitor", "tool": "get_exception_group"}, {"mcp": "service-desk"}],
         "steps": [
             {"n": 1, "name": "Read the group", "reads": ["rule"],
-             "calls": [{"mcp": "eagle", "tool": "get_exception_group"}],
-             "explain": "Reads the exception group Eagle graded Error."},
+             "calls": [{"mcp": "dq-monitor", "tool": "get_exception_group"}],
+             "explain": "Reads the exception group the DQ Monitor graded Error."},
             {"n": 2, "name": "Open or attach", "reads": ["clause"], "writes": ["agent_decision"],
-             "calls": [{"mcp": "itsm", "tool": "create_ticket"}]},
+             "calls": [{"mcp": "service-desk", "tool": "create_ticket"}]},
         ],
         "design": {
-            "status": "locked", "reference": "Agent Reference v0.2", "under_revision": None,
-            "decisions": [{"id": "A-D8", "text": "severity only moves up"}],
-            "policy": [{"id": "OP-ENR-01", "text": "hop cap 3"}],
-            "applied_in": {"kg": "v16", "cg": "v4", "items": ["CG-G1 gradedSeverity"]},
-            "open_questions": [{"id": "HP-Q1", "text": "promotionCandidate versus GovernanceFlag"}],
+            "status": "locked", "reference": "Design v0.2", "under_revision": None,
+            "decisions": [{"id": "MON-1", "text": "severity only moves up"}],
+            "policy": [{"id": "CTX-P1", "text": "at most 3 lineage hops"}],
+            "applied_in": {"kg": "v3", "cg": "v3", "items": ["gradedSeverity"]},
+            "open_questions": [{"id": "HIS-Q1", "text": "whether a recurring pattern suggests a new rule"}],
         },
     }
     base.update(extra)
@@ -70,24 +70,24 @@ def test_steps_and_design_as_documented_are_accepted_and_parsed():
     assert contract_shape_problems(_step(_contract())) == []
     parsed = parse_contract("monitoring", _contract(steps=list(reversed(_contract()["steps"]))))
     assert [s.n for s in parsed.steps] == [1, 2], "steps are ordered by n"
-    assert parsed.steps[0].calls[0].mcp == "eagle" and parsed.steps[0].explain
-    assert parsed.design.status == "locked" and parsed.design.reference == "Agent Reference v0.2"
-    assert parsed.design.decisions[0].id == "A-D8"
-    assert parsed.design.applied_in == {"kg": "v16", "cg": "v4", "items": ["CG-G1 gradedSeverity"]}
+    assert parsed.steps[0].calls[0].mcp == "dq-monitor" and parsed.steps[0].explain
+    assert parsed.design.status == "locked" and parsed.design.reference == "Design v0.2"
+    assert parsed.design.decisions[0].id == "MON-1"
+    assert parsed.design.applied_in == {"kg": "v3", "cg": "v3", "items": ["gradedSeverity"]}
 
 
 @pytest.mark.parametrize("mutate, says", [
     (lambda c: c["steps"][0].update(reads=["cde"]), "reads ['cde'], which the contract's own reads"),
     (lambda c: c["steps"][1].update(writes=["incident"]), "writes ['incident']"),
-    (lambda c: c["steps"][0].update(calls=[{"mcp": "olympus"}]), "calls olympus"),
-    (lambda c: c["steps"][0].update(calls=[{"mcp": "eagle", "tool": "rerun_check"}]), "calls eagle.rerun_check"),
+    (lambda c: c["steps"][0].update(calls=[{"mcp": "profile-service"}]), "calls profile-service"),
+    (lambda c: c["steps"][0].update(calls=[{"mcp": "dq-monitor", "tool": "rerun_check"}]), "calls dq-monitor.rerun_check"),
     (lambda c: c["steps"][0].update(colour="red"), "unknown keys ['colour']"),
     (lambda c: c["steps"][1].update(n=1), "numbers step 1 twice"),
     (lambda c: c["steps"][0].update(n=True), "need a number n"),
     (lambda c: c["steps"][0].pop("name"), "needs a name"),
     (lambda c: c["design"].update(status="approved"), "status must be one of"),
     (lambda c: c["design"].update(owner="x"), "contract.design has unknown keys ['owner']"),
-    (lambda c: c["design"]["decisions"].append({"id": "A-D9"}), "need an id and a text"),
+    (lambda c: c["design"]["decisions"].append({"id": "MON-2"}), "need an id and a text"),
     (lambda c: c["design"]["policy"].append({"id": "P", "text": "t", "why": "w"}), "unknown keys ['why']"),
     (lambda c: c["design"]["applied_in"].update(dq="v1"), "applied_in has unknown keys ['dq']"),
     (lambda c: c.update(diagram={}), "contract has unknown keys ['diagram']"),
@@ -112,34 +112,34 @@ def test_links_invoked_by_handoff_and_example_as_documented_are_accepted():
                     invoked_by="pipeline_orchestrator",
                     handoff={"to": "pipeline_orchestrator", "next": "context_enrichment",
                              "carries": ["incident_id"], "text": "Returns the incident ID."})
-    contract["design"]["example"] = "EGL-0588 v2 on COB 2026-10-05"
+    contract["design"]["example"] = "DQX-0588 v2 on COB 2026-10-05"
     assert contract_shape_problems(_step(contract)) == []
 
 
 def test_the_design_kg_version_is_the_packs_reference():
     from boss_engine.services.knowledge import ontology_packs
 
-    assert ontology_packs.load_pack("banking-dq").kg_reference == "KG v17"
+    assert ontology_packs.load_pack("banking-dq").kg_reference == "KG v3"
 
 
 def test_a_step_call_matches_a_contract_call_that_names_no_tool():
     contract = _contract()
-    contract["steps"][1]["calls"] = [{"mcp": "itsm", "tool": "anything"}]
+    contract["steps"][1]["calls"] = [{"mcp": "service-desk", "tool": "anything"}]
     assert contract_shape_problems(_step(contract)) == []
 
 
-def test_reference_bumps_keep_the_consultants_numbering():
-    assert stage_designs.next_reference("Agent Reference v0.2") == "Agent Reference v0.3"
+def test_reference_bumps_keep_the_design_numbering():
+    assert stage_designs.next_reference("Design v0.2") == "Design v0.3"
     assert stage_designs.next_reference("Spec v2") == "Spec v3"
-    assert stage_designs.next_reference("") == "Agent Reference v0.1"
+    assert stage_designs.next_reference("") == "Design v0.1"
 
 
 def test_the_design_hash_ignores_only_the_review_managed_fields():
     a = _contract()
     b = copy.deepcopy(a)
-    b["design"].update(status="in_review", reference="Agent Reference v0.3", under_revision="why")
+    b["design"].update(status="in_review", reference="Design v0.3", under_revision="why")
     assert stage_designs.contract_hash(a) == stage_designs.contract_hash(b)
-    b["design"]["decisions"].append({"id": "A-D9", "text": "link facts only"})
+    b["design"]["decisions"].append({"id": "MON-2", "text": "link facts only"})
     assert stage_designs.contract_hash(a) != stage_designs.contract_hash(b)
     c = copy.deepcopy(a)
     c["steps"][0]["name"] = "Read the exception group"
@@ -230,7 +230,7 @@ def test_a_design_goes_from_not_reviewed_to_locked_and_only_a_person_locks_it(co
                            actor="u1", actor_kind="person")
     sent = stage_designs.send_for_review(c, c.project_id, workflow_key=key,
                                          stage_id="remediation_package", actor="u1")
-    assert sent["status"] == "in_review" and sent["reference"] == "Agent Reference v0.1"
+    assert sent["status"] == "in_review" and sent["reference"] == "Design v0.1"
     with pytest.raises(PermissionError, match="Only a person"):
         stage_designs.lock(c, c.project_id, workflow_key=key, stage_id="remediation_package",
                            actor="agent:x", actor_kind="agent")
@@ -255,36 +255,36 @@ def test_a_locked_contract_is_refused_at_publish_until_revise_opens_the_next_ver
     with pytest.raises(workflows.WorkflowValidationError) as refused:
         _publish(c, definition, changed)
     message = str(refused.value)
-    assert "locked at Agent Reference v0.1" in message and "Revise" in message and "v0.2" in message
+    assert "locked at Design v0.1" in message and "Revise" in message and "v0.2" in message
     assert refused.value.problems[0]["step_id"] == "remediation_package"
     # A managed field alone is not a change of design.
     same = copy.deepcopy(catalogue.REGULATORY_CONTRACTS["remediation_package"])
-    same["design"] = {"status": "locked", "reference": "Agent Reference v0.1"}
+    same["design"] = {"status": "locked", "reference": "Design v0.1"}
     _publish(c, definition, same)
     revised = stage_designs.revise(c, c.project_id, workflow_key=key, stage_id="remediation_package",
                                    actor="u1", note="Two approvers now")
-    assert revised["status"] == "in_review" and revised["reference"] == "Agent Reference v0.2"
-    assert revised["locked"]["reference"] == "Agent Reference v0.1", "the locked one stays on record"
+    assert revised["status"] == "in_review" and revised["reference"] == "Design v0.2"
+    assert revised["locked"]["reference"] == "Design v0.1", "the locked one stays on record"
     assert revised["under_revision"] == "Two approvers now"
     _publish(c, definition, changed)
     relocked = stage_designs.lock(c, c.project_id, workflow_key=key, stage_id="remediation_package",
                                   actor="u1", actor_kind="person")
-    assert relocked["status"] == "locked" and relocked["reference"] == "Agent Reference v0.2"
+    assert relocked["status"] == "locked" and relocked["reference"] == "Design v0.2"
 
 
 def test_a_contract_that_declares_locked_is_enforced_like_a_locked_version(connection):
     c = connection
     declared = copy.deepcopy(catalogue.REGULATORY_CONTRACTS["remediation_package"])
-    declared["design"] = {"status": "locked", "reference": "Agent Reference v0.3"}
+    declared["design"] = {"status": "locked", "reference": "Design v0.3"}
     key, definition = _workflow(c, declared)
     stage = stage_designs.designs(c, c.project_id, key)["stages"]["remediation_package"]
-    assert (stage["status"], stage["reference"], stage["source"]) == ("locked", "Agent Reference v0.3", "contract")
+    assert (stage["status"], stage["reference"], stage["source"]) == ("locked", "Design v0.3", "contract")
     changed = copy.deepcopy(declared)
     changed["trigger"] = "after the lanes, and on demand"
-    with pytest.raises(workflows.WorkflowValidationError, match="locked at Agent Reference v0.3"):
+    with pytest.raises(workflows.WorkflowValidationError, match="locked at Design v0.3"):
         _publish(c, definition, changed)
     revised = stage_designs.revise(c, c.project_id, workflow_key=key, stage_id="remediation_package", actor="u1")
-    assert revised["reference"] == "Agent Reference v0.4"
+    assert revised["reference"] == "Design v0.4"
     _publish(c, definition, changed)
 
 

@@ -8,7 +8,7 @@ One action, offered by the console (Knowledge Graph › Documents › AML sample
      project already running the regulatory case keeps its regulation kinds);
   2. registers the sample's three mock MCP connectors — case-management, kyc, transactions —
      served by the `mcp-tools` service (tools/mcp_aml_mock.py), first-party reviewed like the
-     ITSM mock;
+     Service Desk mock;
   3. writes the bank's entities into the Knowledge Graph through the store's own primitives
      (`upsert_node`/`upsert_edge`, trust `observed`, as a system of record's data): customers,
      accounts, counterparties, KYC profiles, typologies, aggregated `transfers_to` flows,

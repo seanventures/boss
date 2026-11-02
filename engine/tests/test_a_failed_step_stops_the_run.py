@@ -110,7 +110,7 @@ INTERNAL = {
     **{key: f"_{key}" for key in (
         "dq_monitoring", "dq_context_enrichment", "dq_historical_pattern", "dq_rca",
         "dq_orchestration", "dq_lane", "dq_rule_drafting", "dq_remediation_package",
-        "dq_remediation_fix", "dq_incident_closure", "dq_escalation", "dq_eagle_intake")},
+        "dq_remediation_fix", "dq_incident_closure", "dq_escalation", "dq_monitor_intake")},
 }
 
 #: Tool-less capabilities that commission NOTHING. They are honest no-ops that say so

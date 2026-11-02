@@ -98,7 +98,7 @@ def _cover(ds: D.Dataset) -> str:
       consumer and residential loan book</dd>
     <dt>Rules in force</dt><dd>{len(ds.rules)} rules in {len(D.FAMILY_ORDER)} families;
       {len(ds.cdes)} critical data elements</dd>
-    <dt>Monitored by</dt><dd>Eagle DQ Monitor (S-EGL), graded at each close of business</dd>
+    <dt>Monitored by</dt><dd>DQ Monitor (S-DQM), graded at each close of business</dd>
     <dt>Classification</dt><dd>Internal. SYNTHETIC DOCUMENT prepared for a demonstration; the bank,
       people and figures are fictitious.</dd>
   </dl>
@@ -128,7 +128,7 @@ def _about(ds: D.Dataset) -> str:
 the figures the bank files on the Call Report (FFIEC 031) and the FR Y-9C. Each rule states what
 good data looks like, how it is checked, when a failure is a Warning and when it is an Error, who
 owns it, and which regulatory lines depend on it.</p>
-<p>It is the reference the Eagle DQ Monitor is configured from, and the reference incident
+<p>It is the reference the DQ Monitor is configured from, and the reference incident
 investigators use to judge whether an exception is a real data problem, a known recurring pattern,
 or a fault in the rule itself.</p>
 <h2>0.2 Scope</h2>
@@ -152,9 +152,9 @@ process in chapter 2 and are approved by the Data Governance Council.</p>
 <li><b>Rule id, version and title.</b> Rule ids take the form NPB-DQ-&lt;family&gt;-&lt;nnn&gt; and
 never change; the version rises when the check or a threshold changes.</li>
 <li><b>Statement:</b> the rule in plain language.</li>
-<li><b>Dimension, Severity, System, Feed, Eagle rule:</b> the data quality dimension, the business
+<li><b>Dimension, Severity, System, Feed, DQ Monitor rule:</b> the data quality dimension, the business
 impact of an Error, the system of record checked, the feed whose output is checked, and the id the
-rule carries in Eagle.</li>
+rule carries in the DQ Monitor.</li>
 <li><b>CDE</b> and <b>Applies to:</b> the critical data elements protected and the table.column
 values the check reads.</li>
 <li><b>Check:</b> the check, in words.</li>
@@ -169,12 +169,12 @@ values the check reads.</li>
 def _grading(ds: D.Dataset) -> str:
     return """
 <h1 class="chapter">1. Severity and grading</h1>
-<p>Eagle runs every rule at each close of business (COB) and grades the result against the rule's
-own thresholds. The grading unit is one rule version on one COB: Eagle publishes one exception
+<p>The DQ Monitor runs every rule at each close of business (COB) and grades the result against the rule's
+own thresholds. The grading unit is one rule version on one COB: the DQ Monitor publishes one exception
 group per failing rule per COB.</p>
 <h2>1.1 Warning and Error</h2>
 <ul>
-<li><b>Warning</b> goes to the DQ dashboard only. No incident is opened and the Monitoring step
+<li><b>Warning</b> goes to the DQ dashboard only. No incident is opened and the Incident Intake step
 writes nothing.</li>
 <li><b>Error</b> opens an incident for the rule owner, or attaches to the open incident for the same
 rule and cause. An attach does not restart the investigation.</li>
@@ -203,15 +203,15 @@ holidays. A rule that runs on a non-business day is not graded. Quarterly rules 
 graded on the extract built for the quarter-end COB.</p>
 <h2>1.5 False positives</h2>
 <p>When an investigation concludes that the data is correct and the rule or its configuration is
-wrong, the incident is closed as a false positive and a Rule Drafting case is opened against this
-rulebook. Thresholds are never changed in Eagle alone.</p>
+wrong, the incident is closed as a false positive and a Rule Proposal case is opened against this
+rulebook. Thresholds are never changed in the DQ Monitor alone.</p>
 """
 
 
 def _governance(ds: D.Dataset) -> str:
     teams = [o for o in ds.owners if o.owner_type == "team"]
     rows = "".join(
-        f"<tr><td>{_e(o.name)}</td><td>{_e(o.title)}</td><td>{_e(o.itsm_group)}</td>"
+        f"<tr><td>{_e(o.name)}</td><td>{_e(o.title)}</td><td>{_e(o.service_desk_group)}</td>"
         f"<td>{_e(', '.join(p.name for p in ds.owners if p.team_id == o.owner_id))}</td></tr>"
         for o in teams)
     findings = "".join(
@@ -224,22 +224,22 @@ def _governance(ds: D.Dataset) -> str:
 <li><b>Chief Data Office</b> owns the rulebook and chairs the Data Governance Council.</li>
 <li><b>Data stewards</b> approve the definition of each CDE and the thresholds of every rule that
 checks it (remediation of EF-2024-11).</li>
-<li><b>Rule owners</b> receive incidents for their rules through their ITSM assignment group and
+<li><b>Rule owners</b> receive incidents for their rules through their Service Desk assignment group and
 own the fix.</li>
-<li><b>Data Quality Operations</b> configures Eagle from this rulebook and may not change a
+<li><b>Data Quality Operations</b> configures the DQ Monitor from this rulebook and may not change a
 threshold without an approved rulebook change.</li>
 <li><b>Investigators</b> (people or approved agents) may prepare a remediation; a person approves
 it and a different person carries it out.</li>
 </ul>
 <h2>2.2 Owners and assignment groups</h2>
-<table><tr><th>Team</th><th>Responsibility</th><th>ITSM group</th><th>Steward / lead</th></tr>
+<table><tr><th>Team</th><th>Responsibility</th><th>Service Desk group</th><th>Steward / lead</th></tr>
 {rows}</table>
 <h2>2.3 Changing a rule</h2>
 <ul>
-<li>A change is proposed as a Rule Drafting case with evidence (exception history, profile,
+<li>A change is proposed as a Rule Proposal case with evidence (exception history, profile,
 incident).</li>
 <li>The CDE steward approves thresholds; the rule owner approves the check.</li>
-<li>The version rises; Eagle is reconfigured from the new version; retired rules are listed in
+<li>The version rises; the DQ Monitor is reconfigured from the new version; retired rules are listed in
 Appendix C and never reused.</li>
 </ul>
 <h2>2.4 Open supervisory matters</h2>
@@ -319,7 +319,7 @@ def rule_card(ds: D.Dataset, r: D.DqRule) -> str:
         f"<p><b>Statement:</b> {_e(r.statement)}</p>",
         f"<p><b>Dimension:</b> {r.dimension.capitalize()} &nbsp; <b>Severity:</b> {r.severity} "
         f"&nbsp; <b>System:</b> {r.system_id} &nbsp; <b>Feed:</b> {r.feed_id or '-'} &nbsp; "
-        f"<b>Eagle rule:</b> {r.eagle_id}</p>",
+        f"<b>DQ Monitor rule:</b> {r.monitor_id}</p>",
         f"<p><b>CDE:</b> {_e(cdes)}</p>",
         f"<p><b>Applies to:</b> {_e(', '.join(r.columns))}</p>",
         f"<p><b>Check:</b> {_e(r.check)}</p>",
@@ -390,16 +390,16 @@ def _appendices(ds: D.Dataset) -> str:
          "regulatory filing, financial statement or customer outcome."),
         ("Data quality dimension", "Completeness, validity, accuracy, consistency, timeliness or "
          "uniqueness."),
-        ("Eagle", "The bank's DQ monitor; it runs each rule at COB and emits exception groups."),
-        ("Exception group", "All failures of one rule version on one COB, as Eagle publishes them."),
+        ("DQ Monitor", "The bank's data-quality monitoring system; it runs each rule at COB and emits exception groups."),
+        ("Exception group", "All failures of one rule version on one COB, as the DQ Monitor publishes them."),
         ("Feed", "A scheduled transfer of data between two systems."),
-        ("ITSM", "The bank's service-management system for incidents, problems and changes."),
+        ("Service Desk", "The bank's service-management system for incidents, problems and changes."),
         ("Lineage", "The documented path of a value from its system of record to a report line."),
         ("MDRM", "Micro Data Reference Manual: the Federal Reserve's catalogue of reporting codes."),
-        ("Olympus", "The profile service that keeps baseline failure rates and recent changes per "
+        ("Profile Service", "The service that keeps baseline failure rates and recent changes per "
          "data platform."),
         ("Precedent", "A closed incident whose confirmed cause and fix inform a new investigation."),
-        ("Rule Drafting case", "A proposal to change this rulebook, opened when an exception is a "
+        ("Rule Proposal case", "A proposal to change this rulebook, opened when an exception is a "
          "false positive."),
         ("Warning / Error", "The two grades a rule can give; only Error opens or attaches an "
          "incident."),
@@ -416,7 +416,7 @@ holidays. Quarter-end COBs in the second half of 2026: {qe}.</p>
 <h1 class="chapter">Appendix C. Change log and retired rules</h1>
 <h2>C.1 Re-graded in v3.2</h2><ul>{regraded}</ul>
 <h2>C.2 Retired rules</h2>
-<p>These rules are no longer in force. Their ids are not reused; Eagle no longer runs them.</p>
+<p>These rules are no longer in force. Their ids are not reused; the DQ Monitor no longer runs them.</p>
 <table><tr><th>Rule id</th><th>Title</th><th>Reason</th></tr>{retired}</table>
 <h2>Appendix D. Glossary</h2>
 <table><tr><th>Term</th><th>Meaning</th></tr>{gl}</table>

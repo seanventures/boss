@@ -198,12 +198,12 @@ KNOWLEDGE_PROJECT_TOOLS: dict[str, dict] = {
     "load_dq_platform": {
         "description": (
             "LOAD NorthPeak Bank's data platform into this project (the DQ case study): adds the "
-            "banking-dq ontology pack beside the project's other packs, registers the Eagle and "
-            "Olympus mock connectors, writes the platform (systems, tables, columns, feeds, "
-            "lineage, CDEs, reports, MDRM, calendar, issues, findings, Eagle's exception groups, "
+            "banking-dq ontology pack beside the project's other packs, registers the DQ Monitor and "
+            "Profile Service mock connectors, writes the platform (systems, tables, columns, feeds, "
+            "lineage, CDEs, reports, MDRM, calendar, issues, findings, the DQ Monitor's exception groups, "
             "past incidents and precedents) into the Knowledge Graph, installs dq_incident_rca "
             "and its side workflows, and schedules the daily escalation sweep. The DQ rules come "
-            "from the rulebook, never from here. Synthetic data; loading twice changes nothing. "
+            "from the rulebook, never from here. Synthetic data; loading again replaces the earlier sample. "
             "Proposed by the model, but only an operator presses it. Then start dq_incident_rca "
             "with exception_group_id EXG-20261005-0003."),
         "parameters": {"type": "object", "properties": {}, "required": [],
@@ -214,7 +214,7 @@ KNOWLEDGE_PROJECT_TOOLS: dict[str, dict] = {
     "dq_platform_status": {
         "description": (
             "Whether this project has NorthPeak Bank's data platform loaded, how many DQ rules "
-            "are in the graph, and Eagle's exception groups (optionally one COB) with each one's "
+            "are in the graph, and the DQ Monitor's exception groups (optionally one COB) with each one's "
             "incident and latest investigation."),
         "parameters": {"type": "object", "properties": {"cob": {"type": "string"}},
                        "required": [], "additionalProperties": False},

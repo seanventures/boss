@@ -1,4 +1,4 @@
-"""The DQ pipeline's two shared services (design §4.4; the consultant's "Shared services" row).
+"""The DQ pipeline's two shared services (design §4.4; the pipeline's "Shared services" row).
 
 CONTEXT CURATOR — ranks and trims the context every LLM step is given to that step's token
 budget, and REPORTS WHAT IT DROPPED: a step never silently reasons over less than it was told it
@@ -7,9 +7,9 @@ the must-haves alone overrun the budget, they are kept and the overrun is said),
 section in the order the caller ranked them, and whatever does not fit is listed by section with
 how many items and roughly how many tokens went. Routes nothing.
 
-PROFILE SERVICE — the deterministic exception profile of a data platform (A-D41): through the
-project's registered Olympus connector, the rule's 30-day baseline failure rate, its spread and
-the last 7 COBs, and how far today's measure sits from it. A platform or rule Olympus does not
+PROFILE SERVICE — the deterministic exception profile of a data platform: through the
+project's registered the Profile Service connector, the rule's 30-day baseline failure rate, its spread and
+the last 7 COBs, and how far today's measure sits from it. A platform or rule the Profile Service does not
 profile is said so, never estimated.
 """
 from __future__ import annotations
@@ -54,10 +54,10 @@ class Curated:
 
     def note(self) -> str:
         if not self.dropped:
-            return f"Context Curator kept everything ({self.used} of {self.budget} tokens)."
+            return f"Context Budgeter kept everything ({self.used} of {self.budget} tokens)."
         parts = "; ".join(f"{d['section']}: {d['items']} item(s), ~{d['tokens']} tokens"
                           for d in self.dropped)
-        return (f"Context Curator trimmed to {self.used} of {self.budget} tokens and dropped "
+        return (f"Context Budgeter trimmed to {self.used} of {self.budget} tokens and dropped "
                 f"{parts}.")
 
 
@@ -109,17 +109,17 @@ def exception_profile(connection: Connection, project_id: str, *, platform: str,
                       measured: Optional[float] = None,
                       calls: Optional[list[dict[str, Any]]] = None
                       ) -> tuple[Optional[dict[str, Any]], str]:
-    """(profile, "") or (None, why) — the rule's baseline on its platform, via Olympus."""
+    """(profile, "") or (None, why) — the rule's baseline on its platform, via the Profile Service."""
     from .dq_mcp import call
 
     args: dict[str, Any] = {"platform": platform, "rule_id": rule_id}
     if measured is not None:
         args["measured"] = measured
-    result, gap = call(connection, project_id, "olympus", "get_exception_profile", args, calls)
+    result, gap = call(connection, project_id, "profile-service", "get_exception_profile", args, calls)
     if result is None:
         return None, gap
     if not result.get("profiled"):
-        return None, (f"Olympus does not profile {rule_id} on {platform}: "
+        return None, (f"The Profile Service does not profile {rule_id} on {platform}: "
                       f"{result.get('note') or 'no baseline'}")
     return result, ""
 

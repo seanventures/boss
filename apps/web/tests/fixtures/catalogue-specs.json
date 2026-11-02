@@ -6249,7 +6249,7 @@
               ],
               "calls": [
                 {
-                  "mcp": "itsm",
+                  "mcp": "service-desk",
                   "tool": "list_incidents"
                 }
               ],
@@ -6266,7 +6266,7 @@
               "llm": "none",
               "decisions": [
                 "a match shares a link with the subject; correlates_with is upserted, never duplicated",
-                "an ITSM ticket naming the subject's code becomes an incident node"
+                "a Service Desk ticket naming the subject's code becomes an incident node"
               ]
             },
             "max_attempts": 3
@@ -6788,7 +6788,7 @@
               ],
               "calls": [
                 {
-                  "mcp": "itsm",
+                  "mcp": "service-desk",
                   "tool": "list_incidents"
                 }
               ],
@@ -6805,7 +6805,7 @@
               "llm": "none",
               "decisions": [
                 "a match shares a link with the subject; correlates_with is upserted, never duplicated",
-                "an ITSM ticket naming the subject's code becomes an incident node"
+                "a Service Desk ticket naming the subject's code becomes an incident node"
               ]
             },
             "max_attempts": 3
@@ -6865,7 +6865,7 @@
               "decisions": [
                 "implemented, partly implemented or gap, with a confidence",
                 "cites only a candidate node it was offered; anything else is a gap",
-                "a correlated incident's detail (INC-2088) comes from ITSM, never invented"
+                "a correlated incident's detail (INC-2088) comes from Service Desk, never invented"
               ]
             },
             "max_attempts": 3,
@@ -7877,7 +7877,7 @@
     {
       "workflow_key": "dq_incident_rca",
       "name": "DQ RCA and Remediation",
-      "description": "Investigate an Eagle exception group end to end: open or attach the incident, assemble its context and history, find the root cause, confirm it per family, prepare the fix — a person approves, a different person executes — and close it with a precedent.",
+      "description": "Investigate a DQ Monitor exception group end to end: open or attach the incident, assemble its context and history, find the root cause, confirm it per family, prepare the fix — a person approves, a different person executes — and close it with a precedent.",
       "spec": {
         "entry_step": "monitoring",
         "steps": [
@@ -7897,9 +7897,9 @@
             ],
             "captain": "dq_monitoring_agent",
             "default_captain": "dq_monitoring_agent",
-            "title": "Monitoring",
+            "title": "Incident Intake",
             "contract": {
-              "trigger": "Eagle publishes an exception group (one rule version, one COB). The Pipeline Orchestrator receives it, starts the DQ pipeline and invokes Monitoring with the group ID and the function.",
+              "trigger": "The DQ Monitor publishes an exception group (one rule version, one COB). The pipeline starts for it and Incident Intake is called with the group ID and the business function.",
               "reads": [
                 {
                   "kind": "agent"
@@ -7965,19 +7965,19 @@
               "invoked_by": "pipeline_orchestrator",
               "calls": [
                 {
-                  "mcp": "eagle",
+                  "mcp": "dq-monitor",
                   "tool": "get_exception_group"
                 },
                 {
-                  "mcp": "itsm",
+                  "mcp": "service-desk",
                   "tool": "list_incidents"
                 },
                 {
-                  "mcp": "itsm",
+                  "mcp": "service-desk",
                   "tool": "create_incident"
                 },
                 {
-                  "mcp": "itsm",
+                  "mcp": "service-desk",
                   "tool": "attach_to_incident"
                 }
               ],
@@ -7988,7 +7988,7 @@
                   "incident_id",
                   "severity"
                 ],
-                "text": "Returns the incident ID, opened or attached, and the severity to the Pipeline Orchestrator. A new incident goes to Context Enrichment; an attach does not restart the pipeline."
+                "text": "Returns the incident ID, opened or attached, and the severity to the Cause Router. A new incident goes to Context Gathering; an attach does not restart the pipeline."
               },
               "human_review": "None in the normal path. A policy parameter missing from both the function policy and the defaults stops the run and goes to human review.",
               "policy": {
@@ -7997,17 +7997,17 @@
               },
               "llm": "none",
               "decisions": [
-                "severity only moves up",
-                "link facts only",
-                "one failure reason per DQ rule",
-                "ticket to the rule owner",
-                "a Warning writes nothing"
+                "severity never goes down",
+                "links are facts, not conclusions",
+                "each rule has a single failure reason",
+                "the ticket goes to whoever owns the rule",
+                "a Warning records nothing"
               ],
               "steps": [
                 {
                   "n": 1,
                   "name": "Read the group",
-                  "explain": "Reads the exception group Eagle published: one rule version, one COB, its grade and measure.",
+                  "explain": "Reads the exception group the DQ Monitor published: one rule version, one COB, its grade and measure.",
                   "reads": [
                     "agent",
                     "mcp_server",
@@ -8016,7 +8016,7 @@
                   ],
                   "calls": [
                     {
-                      "mcp": "eagle",
+                      "mcp": "dq-monitor",
                       "tool": "get_exception_group"
                     }
                   ]
@@ -8043,7 +8043,7 @@
                 {
                   "n": 4,
                   "name": "Set failure reason",
-                  "explain": "One failure reason per DQ rule (A-D10).",
+                  "explain": "The rule's single failure reason.",
                   "reads": [
                     "data_quality_rule"
                   ]
@@ -8065,7 +8065,7 @@
                   ],
                   "calls": [
                     {
-                      "mcp": "itsm",
+                      "mcp": "service-desk",
                       "tool": "list_incidents"
                     }
                   ]
@@ -8084,11 +8084,11 @@
                   ],
                   "calls": [
                     {
-                      "mcp": "itsm",
+                      "mcp": "service-desk",
                       "tool": "create_incident"
                     },
                     {
-                      "mcp": "itsm",
+                      "mcp": "service-desk",
                       "tool": "attach_to_incident"
                     }
                   ]
@@ -8118,52 +8118,52 @@
               ],
               "design": {
                 "status": "locked",
-                "reference": "Agent Reference v0.1",
-                "example": "EGL-0588 v2 on COB 2026-10-05 (locked running example).",
-                "under_revision": "Rule authoring changed DQ grading (A-D87 to A-D89, KG v17): each rule has its own Warning and Error conditions; Eagle grades every run; Warning goes to the OMNIS dashboard and Monitoring writes nothing; only Error opens or attaches to an incident; OP-SEV-01 retired. Open: how incident severity is set, and what happens when the next COB is Warning or clean. The steps below show the locked v0.1 design.",
+                "reference": "Design v0.1",
+                "example": "DQX-0588 v2 on COB 2026-10-05 (locked running example).",
+                "under_revision": "Grading now lives with each rule: every rule carries its own Warning and Error thresholds and the DQ Monitor grades each run against them. A Warning only shows on the DQ dashboard and Incident Intake records nothing for it; an Error opens an incident or joins the open one. The old fixed severity table is gone. Still to settle: how an incident's severity is chosen, and what a later Warning or clean close of business does to an open incident. The steps below are the locked v0.1 design.",
                 "decisions": [
                   {
-                    "id": "A-D8",
-                    "text": "severity only moves up"
+                    "id": "MON-1",
+                    "text": "severity never goes down"
                   },
                   {
-                    "id": "A-D9",
-                    "text": "link facts only"
+                    "id": "MON-2",
+                    "text": "links are facts, not conclusions"
                   },
                   {
-                    "id": "A-D10",
-                    "text": "one failure reason per DQ rule"
+                    "id": "MON-3",
+                    "text": "each rule has a single failure reason"
                   },
                   {
-                    "id": "A-D11",
-                    "text": "ticket to the rule owner"
+                    "id": "MON-4",
+                    "text": "the ticket goes to whoever owns the rule"
                   },
                   {
-                    "id": "A-D12",
-                    "text": "Pipeline Orchestrator supervises"
+                    "id": "MON-5",
+                    "text": "the pipeline, not the agent, decides what runs next"
                   },
                   {
-                    "id": "A-D13",
-                    "text": "policyVersion on every run"
+                    "id": "MON-6",
+                    "text": "every run records the policy version it used"
                   }
                 ],
                 "applied_in": {
-                  "kg": "v17",
-                  "cg": "v4",
+                  "kg": "v3",
+                  "cg": "v3",
                   "items": [
-                    "gradedSeverity on the decision and severity that can only rise (CG-G1)",
-                    "linkType on CORRELATED_WITH (CG-G2)",
-                    "policyVersion on the run (CG-G4)"
+                    "the graded severity on the decision, and a severity that can only rise",
+                    "a link type on CORRELATED_WITH",
+                    "the policy version on the run"
                   ]
                 },
                 "open_questions": [
                   {
-                    "id": "CG-G3",
-                    "text": "what Eagle's exception-group payload carries, and push or poll"
+                    "id": "MON-Q1",
+                    "text": "which fields the DQ Monitor sends with an exception group, and whether BOSS is told or asks"
                   },
                   {
-                    "id": "KG-G1",
-                    "text": "rule owner to ITSM assignment group"
+                    "id": "MON-Q2",
+                    "text": "how a rule owner maps to a Service Desk assignment group"
                   }
                 ]
               }
@@ -8231,9 +8231,9 @@
             "next": [],
             "captain": "dq_context_enrichment_agent",
             "default_captain": "dq_context_enrichment_agent",
-            "title": "Context Enrichment",
+            "title": "Context Gathering",
             "contract": {
-              "trigger": "Invoked by the Pipeline Orchestrator after Monitoring opens a new incident — never on an attach. Re-runs on demand, or when the Pipeline Orchestrator re-invokes it after RCA records InsufficientEvidence; a re-run writes a new decision and keeps the old one.",
+              "trigger": "Invoked by the Cause Router after Incident Intake opens a new incident — never on an attach. Re-runs on demand, or when the Cause Router re-invokes it after RCA records InsufficientEvidence; a re-run writes a new decision and keeps the old one.",
               "reads": [
                 {
                   "kind": "agent"
@@ -8335,15 +8335,15 @@
               ],
               "calls": [
                 {
-                  "mcp": "olympus",
+                  "mcp": "profile-service",
                   "tool": "get_exception_profile"
                 },
                 {
-                  "mcp": "olympus",
+                  "mcp": "profile-service",
                   "tool": "list_recent_changes"
                 },
                 {
-                  "mcp": "itsm",
+                  "mcp": "service-desk",
                   "tool": "get_incident"
                 }
               ],
@@ -8355,7 +8355,7 @@
                   "decision_id",
                   "context_pack"
                 ],
-                "text": "Returns the decision ID to the Pipeline Orchestrator, which invokes Historical Pattern. RCA reads the pack through the Context Curator."
+                "text": "Returns the decision ID to the Cause Router, which invokes Past Incidents. RCA reads the pack through the Context Budgeter."
               },
               "human_review": "None. Missing metadata — lineage, CDE mapping, owner, MDRM route, profile — is recorded as a coverage gap and the run continues.",
               "policy": {
@@ -8366,17 +8366,17 @@
               },
               "llm": "none",
               "decisions": [
-                "new incidents only",
-                "facts only",
-                "no LLM for retrieval",
-                "references and counts",
-                "reach never changes severity"
+                "runs for new incidents, not attaches",
+                "gathers facts, draws no conclusions",
+                "retrieval is code, not a model",
+                "ids and counts, not copies",
+                "regulatory reach leaves severity alone"
               ],
               "steps": [
                 {
                   "n": 1,
                   "name": "Load the incident",
-                  "explain": "Loads the incident Monitoring opened and its decision.",
+                  "explain": "Loads the incident Incident Intake opened and its decision.",
                   "reads": [
                     "agent",
                     "incident",
@@ -8399,7 +8399,7 @@
                 {
                   "n": 3,
                   "name": "Owners",
-                  "explain": "The rule owner, CDE stewards and system owner, with their ITSM groups.",
+                  "explain": "The rule owner, CDE stewards and system owner, with their Service Desk groups.",
                   "reads": [
                     "owner",
                     "system"
@@ -8432,7 +8432,7 @@
                 {
                   "n": 6,
                   "name": "Regulatory reach",
-                  "explain": "CDE —REPORTED_IN→ report lines, their reports and MDRM codes (KG-G11), adjustments on those lines and communications with the regulator.",
+                  "explain": "CDE —REPORTED_IN→ report lines, their reports and MDRM codes, adjustments on those lines and communications with the regulator.",
                   "reads": [
                     "cde",
                     "report_line",
@@ -8445,7 +8445,7 @@
                 {
                   "n": 7,
                   "name": "Known issues",
-                  "explain": "Issues, examination findings and open data concerns at every level (A-D40).",
+                  "explain": "Issues, examination findings and open data concerns at every level: the rule, its CDEs, feed, system and table.",
                   "reads": [
                     "issue",
                     "examination_finding",
@@ -8455,13 +8455,13 @@
                 {
                   "n": 8,
                   "name": "Exception profile",
-                  "explain": "The rule's baseline on its platform from the Profile Service (A-D41).",
+                  "explain": "The rule's baseline on its platform from the Profile Service.",
                   "reads": [
                     "system"
                   ],
                   "calls": [
                     {
-                      "mcp": "olympus",
+                      "mcp": "profile-service",
                       "tool": "get_exception_profile"
                     }
                   ]
@@ -8476,7 +8476,7 @@
                   ],
                   "calls": [
                     {
-                      "mcp": "olympus",
+                      "mcp": "profile-service",
                       "tool": "list_recent_changes"
                     }
                   ]
@@ -8496,7 +8496,7 @@
                   ],
                   "calls": [
                     {
-                      "mcp": "itsm",
+                      "mcp": "service-desk",
                       "tool": "get_incident"
                     }
                   ]
@@ -8504,71 +8504,71 @@
               ],
               "design": {
                 "status": "locked",
-                "reference": "Agent Reference v0.2",
-                "example": "INC-501 · EGL-0588 v2 on COB 2026-10-05 (locked running example).",
+                "reference": "Design v0.2",
+                "example": "INC-501 · DQX-0588 v2 on COB 2026-10-05 (locked running example).",
                 "decisions": [
                   {
-                    "id": "A-D30",
-                    "text": "new incidents only"
+                    "id": "CTX-1",
+                    "text": "runs for new incidents, not attaches"
                   },
                   {
-                    "id": "A-D31",
-                    "text": "facts only"
+                    "id": "CTX-2",
+                    "text": "gathers facts, draws no conclusions"
                   },
                   {
-                    "id": "A-D32",
-                    "text": "no LLM for retrieval"
+                    "id": "CTX-3",
+                    "text": "retrieval is code, not a model"
                   },
                   {
-                    "id": "A-D33",
-                    "text": "references and counts"
+                    "id": "CTX-4",
+                    "text": "ids and counts, not copies"
                   },
                   {
-                    "id": "A-D34",
-                    "text": "reach never changes severity"
+                    "id": "CTX-5",
+                    "text": "regulatory reach leaves severity alone"
                   },
                   {
-                    "id": "A-D36",
-                    "text": "coverage gaps"
+                    "id": "CTX-6",
+                    "text": "a missing fact is a coverage gap, never a stop"
                   },
                   {
-                    "id": "A-D38",
-                    "text": "regulatory reach"
+                    "id": "CTX-7",
+                    "text": "follows each CDE to the reports it feeds"
                   },
                   {
-                    "id": "A-D40",
-                    "text": "known issues at every level"
+                    "id": "CTX-8",
+                    "text": "known issues on the rule and everything under it"
                   },
                   {
-                    "id": "A-D41",
-                    "text": "profile service"
+                    "id": "CTX-9",
+                    "text": "baselines come from the Profile Service"
                   }
                 ],
                 "policy": [
                   {
-                    "id": "OP-ENR-01",
-                    "text": "hop cap 3"
+                    "id": "CTX-P1",
+                    "text": "at most 3 lineage hops"
                   },
                   {
-                    "id": "OP-ENR-02",
-                    "text": "change lookback 14 days"
+                    "id": "CTX-P2",
+                    "text": "looks 14 days back for changes"
                   },
                   {
-                    "id": "OP-ENR-03",
-                    "text": "list cap 25"
+                    "id": "CTX-P3",
+                    "text": "at most 25 items per list"
                   },
                   {
                     "id": "dataAccess",
-                    "text": "Standard profile only (Orchestration Policy v0.2.0)"
+                    "text": "standard profile data only"
                   }
                 ],
                 "applied_in": {
-                  "kg": "v16",
-                  "cg": "v4",
+                  "kg": "v3",
+                  "cg": "v3",
                   "items": [
-                    "CDE —REPORTED_IN→ RegulatoryReport (KG-G11)",
-                    "isProfileDimension on HAS_COLUMN (KG-G12)",
-                    "ContextAssembled with contextPack and asOf (CG-G9)"
+                    "CDE —REPORTED_IN→ RegulatoryReport",
+                    "isProfileDimension on HAS_COLUMN",
+                    "ContextAssembled with contextPack and asOf"
                   ]
                 }
               }
@@ -8591,9 +8591,9 @@
             "next": [],
             "captain": "dq_historical_pattern_agent",
             "default_captain": "dq_historical_pattern_agent",
-            "title": "Historical Pattern",
+            "title": "Past Incidents",
             "contract": {
-              "trigger": "Invoked by the Pipeline Orchestrator after Context Enrichment for a new incident; never on an attach. Re-runs whenever Enrichment re-runs, and on demand. RCA never searches history itself.",
+              "trigger": "Invoked by the Cause Router after Context Gathering for a new incident; never on an attach. Re-runs whenever Context Gathering re-runs, and on demand. RCA never searches history itself.",
               "reads": [
                 {
                   "kind": "agent"
@@ -8671,7 +8671,7 @@
               ],
               "calls": [
                 {
-                  "mcp": "itsm",
+                  "mcp": "service-desk",
                   "tool": "update_incident"
                 }
               ],
@@ -8683,7 +8683,7 @@
                   "decision_id",
                   "matched"
                 ],
-                "text": "Returns the decision ID to the Pipeline Orchestrator, which invokes RCA. RCA links its own USED_PRECEDENT {confidenceLift} to the precedents it relies on."
+                "text": "Returns the decision ID to the Cause Router, which invokes RCA. RCA links its own USED_PRECEDENT {confidenceLift} to the precedents it relies on."
               },
               "human_review": "None. Zero matches is a fact, not InsufficientEvidence. Severity is never changed.",
               "policy": {
@@ -8693,16 +8693,16 @@
               },
               "llm": "none",
               "decisions": [
-                "facts only",
-                "two search tiers",
-                "deterministic matching",
-                "only Historical Pattern creates Precedents"
+                "gathers facts, draws no conclusions",
+                "searches the same rule first, then its neighbours",
+                "the same inputs always match the same incidents",
+                "the one stage that writes precedents"
               ],
               "steps": [
                 {
                   "n": 1,
                   "name": "Load the pack",
-                  "explain": "Loads the incident and Enrichment's decision.",
+                  "explain": "Loads the incident and Context Gathering's decision.",
                   "reads": [
                     "agent",
                     "incident",
@@ -8763,7 +8763,7 @@
                   ],
                   "calls": [
                     {
-                      "mcp": "itsm",
+                      "mcp": "service-desk",
                       "tool": "update_incident"
                     }
                   ]
@@ -8779,55 +8779,55 @@
               ],
               "design": {
                 "status": "locked",
-                "reference": "Agent Reference v0.3",
-                "example": "INC-501 · EGL-0588 v2 on COB 2026-10-05 (business day 3 of Q4); lookback from 2024-10-05.",
+                "reference": "Design v0.3",
+                "example": "INC-501 · DQX-0588 v2 on COB 2026-10-05 (business day 3 of Q4); lookback from 2024-10-05.",
                 "decisions": [
                   {
-                    "id": "A-D48",
-                    "text": "facts only"
+                    "id": "HIS-1",
+                    "text": "gathers facts, draws no conclusions"
                   },
                   {
-                    "id": "A-D49",
-                    "text": "two search tiers"
+                    "id": "HIS-2",
+                    "text": "searches the same rule first, then its neighbours"
                   },
                   {
-                    "id": "A-D50",
-                    "text": "deterministic matching"
+                    "id": "HIS-3",
+                    "text": "the same inputs always match the same incidents"
                   },
                   {
-                    "id": "A-D51",
-                    "text": "KG data passed as parameters"
+                    "id": "HIS-4",
+                    "text": "graph values go in as query parameters"
                   },
                   {
-                    "id": "A-D52",
-                    "text": "grouping by pattern"
+                    "id": "HIS-5",
+                    "text": "matches are grouped by resolved pattern"
                   },
                   {
-                    "id": "A-D53",
-                    "text": "negative precedents"
+                    "id": "HIS-6",
+                    "text": "a fix that did not hold is kept as a warning"
                   },
                   {
-                    "id": "A-D55",
-                    "text": "only Historical Pattern creates Precedents"
+                    "id": "HIS-7",
+                    "text": "the one stage that writes precedents"
                   },
                   {
-                    "id": "A-D57",
-                    "text": "recurrence facts"
+                    "id": "HIS-8",
+                    "text": "how often it recurred is stated as a fact"
                   }
                 ],
                 "applied_in": {
-                  "kg": "v16",
-                  "cg": "v4",
+                  "kg": "v3",
+                  "cg": "v3",
                   "items": [
-                    "BusinessCalendar and CalendarDay (KG-G17)",
-                    "fixDurability (KG-G16)",
-                    "MATCHED_INCIDENT, Precedent recurrence facts, SameColumn and timingAlignment (CG-G12 to CG-G16)"
+                    "BusinessCalendar and CalendarDay",
+                    "how long each fix held",
+                    "MATCHED_INCIDENT, recurrence facts on the precedent, same-column and timing matches"
                   ]
                 },
                 "open_questions": [
                   {
-                    "id": "HP-Q1",
-                    "text": "promotionCandidate versus GovernanceFlag and RulePromotion. Per-cause confidenceLift — being settled in the RCA review."
+                    "id": "HIS-Q1",
+                    "text": "whether a recurring pattern should suggest a new rule, and how much each precedent should raise a cause's confidence (part of the Root Cause Analysis review)"
                   }
                 ]
               }
@@ -8850,9 +8850,9 @@
             "next": [],
             "captain": "dq_rca_agent",
             "default_captain": "dq_rca_agent",
-            "title": "RCA",
+            "title": "Root Cause Analysis",
             "contract": {
-              "trigger": "After Historical Pattern, in each round of the evidence loop.",
+              "trigger": "After Past Incidents, in each round of the evidence loop.",
               "reads": [
                 {
                   "kind": "incident"
@@ -8889,9 +8889,9 @@
                   "candidates",
                   "rca_verdict"
                 ],
-                "text": "Returns the candidate root causes, or InsufficientEvidence, to the Pipeline Orchestrator, which re-runs Enrichment and Historical Pattern or routes the candidates to the lanes."
+                "text": "Returns the candidate root causes, or InsufficientEvidence, to the Cause Router, which either re-runs Context Gathering and Past Incidents or routes the candidates to the cause checks."
               },
-              "human_review": "None: lanes confirm or rule out; a person approves any fix.",
+              "human_review": "None: cause checks confirm or rule out; a person approves any fix.",
               "policy": {
                 "token_budget": 6000,
                 "max_rounds": 3
@@ -8899,13 +8899,13 @@
               "llm": "agent",
               "decisions": [
                 "cites only offered evidence",
-                "InsufficientEvidence re-runs Enrichment and Historical Pattern, at most twice"
+                "InsufficientEvidence re-runs Context Gathering and Past Incidents, at most twice"
               ],
               "steps": [
                 {
                   "n": 1,
                   "name": "Read the curated pack",
-                  "explain": "The Context Curator's pack, within the token budget.",
+                  "explain": "The Context Budgeter's pack, within the token budget.",
                   "reads": [
                     "incident",
                     "agent_decision",
@@ -8957,13 +8957,13 @@
                   },
                   {
                     "id": "RCA-2",
-                    "text": "InsufficientEvidence re-runs Enrichment and Historical Pattern, at most twice"
+                    "text": "InsufficientEvidence re-runs Context Gathering and Past Incidents, at most twice"
                   }
                 ],
                 "open_questions": [
                   {
-                    "id": "HP-Q1",
-                    "text": "per-cause confidenceLift"
+                    "id": "RCA-Q1",
+                    "text": "how much each precedent raises a cause's confidence"
                   }
                 ]
               }
@@ -8988,7 +8988,7 @@
             ],
             "captain": "dq_pipeline_orchestrator",
             "default_captain": "dq_pipeline_orchestrator",
-            "title": "Pipeline Orchestrator",
+            "title": "Cause Router",
             "contract": {
               "trigger": "After the evidence loop ends (conclusive, or its rounds used up).",
               "reads": [
@@ -9011,15 +9011,15 @@
                 "carries": [
                   "lanes"
                 ],
-                "text": "Starts one lane per candidate root-cause family above the routing floor, in parallel."
+                "text": "Starts one cause check per candidate root-cause family above the routing floor, in parallel."
               },
-              "human_review": "None. No candidate above the routing floor starts no lane.",
+              "human_review": "None. No candidate above the routing floor starts no cause check.",
               "policy": {
                 "min_route_confidence": 0.3
               },
               "llm": "none",
               "decisions": [
-                "one lane per candidate family"
+                "one cause check per candidate family"
               ],
               "steps": [
                 {
@@ -9033,7 +9033,7 @@
                 {
                   "n": 2,
                   "name": "Route each family",
-                  "explain": "One lane per family above the routing floor.",
+                  "explain": "One cause check per family above the routing floor.",
                   "reads": [
                     "incident"
                   ],
@@ -9058,7 +9058,7 @@
           {
             "id": "lanes",
             "kind": "for_each",
-            "title": "Lanes",
+            "title": "Cause Checks",
             "items": "steps.pipeline_orchestrator.output.lanes",
             "body": "lane",
             "max_items": 5,
@@ -9084,9 +9084,9 @@
             "next": [],
             "captain": "dq_lane_agent",
             "default_captain": "dq_lane_agent",
-            "title": "Lane",
+            "title": "Cause Check",
             "contract": {
-              "trigger": "One per routed family (lanes).",
+              "trigger": "One per routed family (cause checks).",
               "reads": [
                 {
                   "kind": "incident"
@@ -9124,7 +9124,7 @@
                   "lane_verdict",
                   "cause"
                 ],
-                "text": "Returns its verdict to the Pipeline Orchestrator. A confirmed cause goes to the Remediation Advisor; a confirmed false positive also opens a rule authoring case with Rule Drafting."
+                "text": "Returns its verdict to the Cause Router. A confirmed cause goes to the Fix Planner; a confirmed false positive also opens a rule authoring case with Rule Proposal."
               },
               "human_review": "None. CannotVerify leaves the incident for a person.",
               "policy": {
@@ -9185,9 +9185,9 @@
             ],
             "captain": "dq_rule_drafting_agent",
             "default_captain": "dq_rule_drafting_agent",
-            "title": "Rule Drafting",
+            "title": "Rule Proposal",
             "contract": {
-              "trigger": "After the lanes: a lane that confirmed a false positive (rule_config) opens a rule authoring case.",
+              "trigger": "After the cause checks: a cause check that confirmed a false positive (rule_config) opens a rule authoring case.",
               "reads": [
                 {
                   "kind": "agent_decision"
@@ -9222,7 +9222,7 @@
                 "carries": [
                   "proposal"
                 ],
-                "text": "Leaves the rule proposal in Rules review for a person, and hands on to the Remediation Advisor."
+                "text": "Leaves the rule proposal in Rules review for a person, and hands on to the Fix Planner."
               },
               "human_review": "Every rule change is a proposal a person approves in Rules review.",
               "policy": {
@@ -9236,7 +9236,7 @@
                 {
                   "n": 1,
                   "name": "Read the false positive",
-                  "explain": "The confirmed rule_config lane and the rule's thresholds.",
+                  "explain": "The confirmed rule_config cause check and the rule's thresholds.",
                   "reads": [
                     "agent_decision",
                     "data_quality_rule",
@@ -9283,9 +9283,9 @@
             ],
             "captain": "dq_remediation_advisor",
             "default_captain": "dq_remediation_advisor",
-            "title": "Remediation Advisor",
+            "title": "Fix Planner",
             "contract": {
-              "trigger": "After the lanes and rule drafting.",
+              "trigger": "After the cause checks and rule drafting.",
               "reads": [
                 {
                   "kind": "agent_decision"
@@ -9335,7 +9335,7 @@
                 {
                   "n": 1,
                   "name": "Read the confirmed cause",
-                  "explain": "The lane verdict and the templates.",
+                  "explain": "The cause check verdict and the templates.",
                   "reads": [
                     "agent_decision",
                     "resolved_pattern",
@@ -9407,7 +9407,7 @@
               "{steps.remediation_advisor.output.note}"
             ],
             "question": "Approve the prepared fix?",
-            "guidance": "The Remediation Advisor prepared it from the confirmed cause; nothing has been done. Approving lets a DIFFERENT person carry it out — you cannot also do the execution.",
+            "guidance": "The Fix Planner prepared it from the confirmed cause; nothing has been done. Approving lets a DIFFERENT person carry it out — you cannot also do the execution.",
             "approval": {
               "mode": "manual",
               "approver_role": "human"
@@ -9487,7 +9487,7 @@
             "next": [
               "incident_closure"
             ],
-            "title": "Remediation Fix (design target)",
+            "title": "Fix (design target)",
             "contract": {
               "trigger": "After Human execution.",
               "reads": [
@@ -9507,7 +9507,7 @@
               ],
               "calls": [
                 {
-                  "mcp": "itsm",
+                  "mcp": "service-desk",
                   "tool": "update_incident"
                 }
               ],
@@ -9516,7 +9516,7 @@
                 "carries": [
                   "change_ref"
                 ],
-                "text": "Hands the change reference to Incident Closure, which re-runs the check before closing."
+                "text": "Hands the change reference to Close and Learn, which re-runs the check before closing."
               },
               "human_review": "Records what the people did; refuses to run without both answers.",
               "llm": "none",
@@ -9537,7 +9537,7 @@
                   ],
                   "calls": [
                     {
-                      "mcp": "itsm",
+                      "mcp": "service-desk",
                       "tool": "update_incident"
                     }
                   ]
@@ -9572,7 +9572,7 @@
             "next": [],
             "captain": "dq_incident_closure_agent",
             "default_captain": "dq_incident_closure_agent",
-            "title": "Incident Closure",
+            "title": "Close and Learn",
             "contract": {
               "trigger": "After the fix is recorded, or when no cause was confirmed.",
               "reads": [
@@ -9612,11 +9612,11 @@
               ],
               "calls": [
                 {
-                  "mcp": "eagle",
+                  "mcp": "dq-monitor",
                   "tool": "rerun_check"
                 },
                 {
-                  "mcp": "itsm",
+                  "mcp": "service-desk",
                   "tool": "update_incident"
                 }
               ],
@@ -9624,7 +9624,7 @@
                 "carries": [
                   "precedent_id"
                 ],
-                "text": "Leaves the precedent for the next investigation's Historical Pattern to find."
+                "text": "Leaves the precedent for the next investigation's Past Incidents to find."
               },
               "human_review": "Never closes on a failing re-run; an unconfirmed incident stays open.",
               "llm": "none",
@@ -9637,13 +9637,13 @@
                 {
                   "n": 1,
                   "name": "Re-run the check",
-                  "explain": "Eagle re-runs the rule after the fix.",
+                  "explain": "The DQ Monitor re-runs the rule after the fix.",
                   "reads": [
                     "data_quality_rule"
                   ],
                   "calls": [
                     {
-                      "mcp": "eagle",
+                      "mcp": "dq-monitor",
                       "tool": "rerun_check"
                     }
                   ]
@@ -9651,7 +9651,7 @@
                 {
                   "n": 2,
                   "name": "Finalise the cause",
-                  "explain": "From the confirmed lane and the package.",
+                  "explain": "From the confirmed cause check and the package.",
                   "reads": [
                     "agent_decision",
                     "remediation_package"
@@ -9669,7 +9669,7 @@
                   ],
                   "calls": [
                     {
-                      "mcp": "itsm",
+                      "mcp": "service-desk",
                       "tool": "update_incident"
                     }
                   ]
@@ -9720,7 +9720,7 @@
             "next": [],
             "captain": "dq_escalation_agent",
             "default_captain": "dq_escalation_agent",
-            "title": "Escalation Agent",
+            "title": "Escalation Watch",
             "contract": {
               "trigger": "Daily, over every open incident (its own scheduled workflow).",
               "reads": [
@@ -9749,7 +9749,7 @@
               ],
               "calls": [
                 {
-                  "mcp": "itsm",
+                  "mcp": "service-desk",
                   "tool": "update_incident"
                 }
               ],
@@ -9795,7 +9795,7 @@
                   ],
                   "calls": [
                     {
-                      "mcp": "itsm",
+                      "mcp": "service-desk",
                       "tool": "update_incident"
                     }
                   ]
@@ -9819,7 +9819,7 @@
           {
             "id": "context_curator",
             "kind": "deterministic",
-            "title": "Context Curator",
+            "title": "Context Budgeter",
             "description": "Ranks and trims context to each agent's token budget; routes nothing.",
             "binding": {
               "inputs": {
@@ -9853,14 +9853,14 @@
             "id": "profile_service",
             "kind": "deterministic",
             "title": "Profile Service",
-            "description": "Deterministic exception profiles on each data platform (A-D41).",
+            "description": "Deterministic exception profiles on each data platform.",
             "binding": {
               "inputs": {
                 "capability": "dq_profile_service"
               }
             },
             "contract": {
-              "trigger": "Called by Context Enrichment (and on demand) for a rule on its platform.",
+              "trigger": "Called by Context Gathering (and on demand) for a rule on its platform.",
               "reads": [
                 {
                   "kind": "system"
@@ -9868,7 +9868,7 @@
               ],
               "calls": [
                 {
-                  "mcp": "olympus",
+                  "mcp": "profile-service",
                   "tool": "get_exception_profile"
                 }
               ],
@@ -9879,8 +9879,8 @@
                 "reference": "Built at the investigation checkpoint",
                 "decisions": [
                   {
-                    "id": "A-D41",
-                    "text": "deterministic exception profiles on each data platform"
+                    "id": "PRF-1",
+                    "text": "the same inputs always give the same exception profile, per data platform"
                   }
                 ]
               }
@@ -9889,7 +9889,7 @@
             "max_attempts": 3
           }
         ],
-        "objective": "Investigate one Eagle exception group on NorthPeak Bank's data platform. Monitoring opens or attaches one incident for an Error group and never diagnoses. Context Enrichment and Historical Pattern are fixed graph reads, never a model. The RCA Agent proposes candidate causes citing the evidence, or says the evidence is insufficient, which runs Enrichment and Historical Pattern again (at most twice). Each candidate family goes to its lane; a confirmed false positive becomes a rule proposal. The Remediation Advisor prepares the fix; a person approves it and a different person carries it out — no agent executes. Closure re-runs the check, closes the incident and writes the precedent the next investigation finds.",
+        "objective": "Investigate one DQ Monitor exception group on NorthPeak Bank's data platform. Incident Intake opens or attaches one incident for an Error group and never diagnoses. Context Context Gathering and Past Incidents are fixed graph reads, never a model. The RCA Agent proposes candidate causes citing the evidence, or says the evidence is insufficient, which runs Context Gathering and Past Incidents again (at most twice). Each candidate family goes to its cause check; a confirmed false positive becomes a rule proposal. The Fix Planner prepares the fix; a person approves it and a different person carries it out — no agent executes. Close and Learn re-runs the check, closes the incident and writes the precedent the next investigation finds.",
         "workflow_name": "DQ RCA and Remediation",
         "input_schema": {
           "type": "object",
@@ -9900,7 +9900,7 @@
             "exception_group_id": {
               "type": "string",
               "title": "Exception group",
-              "description": "The Eagle exception group to investigate (Knowledge Graph › Documents › DQ sample lists them by COB), e.g. EXG-20261005-0003 (EGL-0588 v2 on COB 2026-10-05).",
+              "description": "The DQ Monitor's exception group to investigate (Knowledge Graph › Documents › DQ sample lists them by COB), e.g. EXG-20261005-0003 (DQX-0588 v2 on COB 2026-10-05).",
               "examples": [
                 "EXG-20261005-0003"
               ]
@@ -9915,7 +9915,7 @@
                 "context_enrichment",
                 "historical_pattern"
               ],
-              "label": "InsufficientEvidence → re-run Enrichment and Historical Pattern",
+              "label": "InsufficientEvidence → re-run Context Gathering and Past Incidents",
               "max_rounds": 2
             }
           ],
@@ -9923,7 +9923,7 @@
             {
               "key": "dq_incident_escalation",
               "stage": "escalation",
-              "label": "9 · Escalation Agent — runs daily over every open incident and applies the escalation ladder",
+              "label": "9 · Escalation Watch — runs daily over every open incident and applies the escalation ladder",
               "schedule": "daily"
             }
           ],
@@ -9931,7 +9931,7 @@
             {
               "from": "lanes",
               "to": "rule_drafting",
-              "label": "False Positive lane: rule proposal"
+              "label": "Confirmed false positive: rule proposal"
             }
           ],
           "shared_services": [
@@ -9940,7 +9940,7 @@
           ],
           "design_target": {
             "stage": "remediation_fix",
-            "label": "8 · Remediation Fix: design target"
+            "label": "8 · Fix: design target"
           }
         },
         "output_schema": {},
@@ -9968,7 +9968,7 @@
             "next": [],
             "captain": "dq_escalation_agent",
             "default_captain": "dq_escalation_agent",
-            "title": "Escalation Agent",
+            "title": "Escalation Watch",
             "contract": {
               "trigger": "Daily, over every open incident (its own scheduled workflow).",
               "reads": [
@@ -9997,7 +9997,7 @@
               ],
               "calls": [
                 {
-                  "mcp": "itsm",
+                  "mcp": "service-desk",
                   "tool": "update_incident"
                 }
               ],
@@ -10043,7 +10043,7 @@
                   ],
                   "calls": [
                     {
-                      "mcp": "itsm",
+                      "mcp": "service-desk",
                       "tool": "update_incident"
                     }
                   ]
@@ -10084,17 +10084,17 @@
       }
     },
     {
-      "workflow_key": "dq_eagle_intake",
-      "name": "DQ Eagle Intake",
-      "description": "Read Eagle's latest close of business and start an RCA for each exception group graded Error.",
+      "workflow_key": "dq_monitor_intake",
+      "name": "DQ Monitor Intake",
+      "description": "Read the DQ Monitor's latest close of business and start an RCA for each exception group graded Error.",
       "spec": {
-        "entry_step": "eagle_intake",
+        "entry_step": "monitor_intake",
         "steps": [
           {
-            "id": "eagle_intake",
+            "id": "monitor_intake",
             "kind": "capability",
             "binding": {
-              "capability": "dq_eagle_intake",
+              "capability": "dq_monitor_intake",
               "inputs": {
                 "cob": {
                   "from_input": "cob"
@@ -10104,9 +10104,9 @@
             "next": [],
             "captain": "dq_pipeline_orchestrator",
             "default_captain": "dq_pipeline_orchestrator",
-            "title": "Eagle intake",
+            "title": "DQ Monitor intake",
             "contract": {
-              "trigger": "Each morning (scheduled) or on demand: Eagle's latest close of business.",
+              "trigger": "Each morning (scheduled) or on demand: the DQ Monitor's latest close of business.",
               "reads": [
                 {
                   "kind": "exception_group"
@@ -10121,7 +10121,7 @@
               ],
               "calls": [
                 {
-                  "mcp": "eagle",
+                  "mcp": "dq-monitor",
                   "tool": "list_exception_groups"
                 }
               ],
@@ -10137,8 +10137,8 @@
             }
           }
         ],
-        "objective": "The Pipeline Orchestrator reads Eagle's exception groups for the COB and starts one dq_incident_rca run per Error group not already under investigation.",
-        "workflow_name": "DQ Eagle Intake",
+        "objective": "The Cause Router reads the DQ Monitor's exception groups for the COB and starts one dq_incident_rca run per Error group not already under investigation.",
+        "workflow_name": "DQ Monitor Intake",
         "input_schema": {
           "type": "object",
           "required": [],
@@ -10146,7 +10146,7 @@
             "cob": {
               "type": "string",
               "title": "Close of business (optional)",
-              "description": "Eagle's COB to read (YYYY-MM-DD). Default: the latest.",
+              "description": "The DQ Monitor's COB to read (YYYY-MM-DD). Default: the latest.",
               "examples": [
                 "2026-10-07"
               ]

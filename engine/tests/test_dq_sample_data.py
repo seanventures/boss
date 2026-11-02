@@ -48,7 +48,7 @@ def test_generation_is_deterministic():
 def test_counts(ds):
     assert len(ds.rules) == 96
     assert len({r.rule_id for r in ds.rules}) == 96
-    assert len({r.eagle_id for r in ds.rules}) == 96
+    assert len({r.monitor_id for r in ds.rules}) == 96
     assert len(ds.cdes) == 24
     assert len(ds.exception_groups) >= 12
     assert len([i for i in ds.incidents if i.status == "closed"]) >= 10
@@ -80,7 +80,7 @@ def test_every_reference_resolves(ds):
         assert set(c.upstream) <= {x.cde_id for x in ds.cdes}
     for g in ds.exception_groups:
         r = ds.rule(g.rule_id)
-        assert g.eagle_rule_id == r.eagle_id and g.rule_version == r.version
+        assert g.monitor_rule_id == r.monitor_id and g.rule_version == r.version
         assert g.column in columns and g.table in tables
         assert ds.calendar_day(g.cob).business_day, g.group_id
     # every edge joins two nodes that exist, through a declared relationship
@@ -104,10 +104,10 @@ def test_cdes_map_to_real_fineract_tables(ds):
 
 def test_running_example_egl_0588(ds):
     g = ds.exception_group(D.RUNNING_EXAMPLE)
-    assert (g.eagle_rule_id, g.rule_version, g.cob) == ("EGL-0588", 2, "2026-10-05")
-    r = ds.rule_by_eagle_id("EGL-0588")
+    assert (g.monitor_rule_id, g.rule_version, g.cob) == ("DQX-0588", 2, "2026-10-05")
+    r = ds.rule_by_monitor_id("DQX-0588")
     assert r.rule_id == "NPB-DQ-LN-003" and "CDE-LN-001" in r.cde_ids
-    assert g.column == "m_loan.principal_outstanding_derived" and g.eagle_grade == "Error"
+    assert g.column == "m_loan.principal_outstanding_derived" and g.monitor_grade == "Error"
     key = D.answer_key()["exception_groups"][D.RUNNING_EXAMPLE]
     assert key["rulebook_grade"] == "Error"
     assert key["incident_action"] == "open"
@@ -129,7 +129,7 @@ def test_answer_key_covers_every_path(ds):
     open_ids = {i.incident_id for i in ds.open_incidents()}
     for gid, v in key.items():
         if v["incident_action"] == "ignore":
-            assert v["rulebook_grade"] == "Warning" and v["eagle_grade"] == "Warning"
+            assert v["rulebook_grade"] == "Warning" and v["monitor_grade"] == "Warning"
         if v["incident_action"] == "attach" and v["attach_to"].startswith("INC-"):
             assert v["attach_to"] in open_ids
         if v["precedent"]:
@@ -137,10 +137,10 @@ def test_answer_key_covers_every_path(ds):
             assert p.status == "closed" and p.root_cause_family == v["root_cause_family"]
         if v["lane"]:
             assert v["lane"] in D.LANES
-    # the false positive: Eagle says Error, the rulebook threshold says Warning
+    # the false positive: the DQ Monitor says Error, the rulebook threshold says Warning
     fp = [g for g, v in key.items() if v.get("false_positive")]
     assert len(fp) == 1 and key[fp[0]]["lane"] == "rule_drafting"
-    assert key[fp[0]]["eagle_grade"] == "Error" and key[fp[0]]["rulebook_grade"] == "Warning"
+    assert key[fp[0]]["monitor_grade"] == "Error" and key[fp[0]]["rulebook_grade"] == "Warning"
     # insufficient evidence: the lineage hop it needs is a known gap
     ie = [g for g, v in key.items() if v["loop_back"]]
     assert len(ie) == 1 and key[ie[0]]["lane"] == "insufficient_evidence"

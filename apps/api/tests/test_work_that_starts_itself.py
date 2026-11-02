@@ -167,7 +167,7 @@ class TestSchedules:
 
     def test_an_unknown_timezone_is_refused(self):
         with pytest.raises(wake.WakeupError):
-            wake.next_scheduled_wake("09:00", [], "Mars/Olympus")
+            wake.next_scheduled_wake("09:00", [], "Mars/the Profile Service")
 
     def test_a_nonsense_time_is_refused(self):
         with pytest.raises(wake.WakeupError):
@@ -261,7 +261,7 @@ class TestTheToolsThemselves:
 
     def test_a_bad_timezone_comes_back_as_an_error_not_a_crash(self, engine):
         out = self._invoke(engine, "schedule_work", {
-            "prompt": "x", "at_time": "09:00", "timezone": "Mars/Olympus"})
+            "prompt": "x", "at_time": "09:00", "timezone": "Mars/the Profile Service"})
         assert out["ok"] is False
         assert "timezone" in out["error"]
 

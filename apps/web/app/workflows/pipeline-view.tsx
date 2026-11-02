@@ -2,7 +2,7 @@
 
 /**
  * THE PIPELINE VIEW (Workflow editor › Pipeline, design §4.7): the workflow as the numbered
- * stage diagram a consultant draws. Each stage says who runs it, what it reads and writes, and
+ * stage diagram of the reference design. Each stage says who runs it, what it reads and writes, and
  * how it went on the last run; a loop is drawn as the frame of the stages it repeats, a lane as
  * the stage it runs once per item. Click a stage for its read/write view.
  *
@@ -180,7 +180,7 @@ function Route({ stage }: { stage: PipelineStage }) {
   );
 }
 
-/** "Agent Reference v0.1 · under revision", "—" when the design names none. */
+/** "Design v0.1 · under revision", "—" when the design names none. */
 function referenceWords(stage: PipelineStage): string {
   const ref = stage.design.reference;
   if (!ref) return "—";
@@ -197,7 +197,7 @@ const RUN_WORD: Record<string, string> = {
   queued: "Queued", failed: "Failed", cancelled: "Cancelled", paused: "Paused", blocked: "Blocked",
 };
 
-/** The design legend under the diagram, in the consultant's words. */
+/** The design legend under the diagram. */
 function DesignLegend() {
   return (
     <div className="pl-legend pl-design-legend" data-testid="design-legend">

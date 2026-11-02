@@ -7,7 +7,7 @@ steps and its cards. Each (workflow, stage) has design versions in ``workflow_st
                                           ▲                        │
                                           └──────── Revise ────────┘   (next version, reference bumped)
 
-* SEND FOR REVIEW opens a version in review, its reference ("Agent Reference v0.1") taken from
+* SEND FOR REVIEW opens a version in review, its reference ("Design v0.1") taken from
   the contract's ``design.reference`` or the first version's.
 * LOCK DESIGN needs a PERSON who manages the workflow — never an agent or a run token — and,
   at the API, a fresh second factor (workflow:publish is a step-up permission). It snapshots
@@ -20,7 +20,7 @@ steps and its cards. Each (workflow, stage) has design versions in ``workflow_st
   without it. BOSS's own standards (catalogue definitions) ship from code and are not refused.
 
 THE STATUS A STAGE SHOWS, in order: its latest design version here; else what its contract
-declares (``design.status``, as a consultant's imported design says "locked"); else "human
+declares (``design.status``, as an imported design says "locked"); else "human
 step" for a person's decision; else "not reviewed". A contract that DECLARES locked is enforced
 like a locked version, its declared contract being the locked one.
 
@@ -42,7 +42,7 @@ from ..core import emit_event, json_hash, make_id
 #: Fields of `contract.design` that the review record manages: changing them is not a change
 #: of the locked design.
 MANAGED_DESIGN_FIELDS = ("status", "reference", "under_revision")
-DEFAULT_REFERENCE = "Agent Reference v0.1"
+DEFAULT_REFERENCE = "Design v0.1"
 _VERSIONED = re.compile(r"^(.*?v)(\d+)\.(\d+)\s*$")
 _PLAIN = re.compile(r"^(.*?v)(\d+)\s*$")
 
@@ -65,7 +65,7 @@ def contract_hash(contract: Any) -> str:
 
 
 def next_reference(reference: str) -> str:
-    """"Agent Reference v0.2" → "Agent Reference v0.3"; "Spec v2" → "Spec v3"."""
+    """"Design v0.2" → "Design v0.3"; "Spec v2" → "Spec v3"."""
     ref = str(reference or "").strip()
     if not ref:
         return DEFAULT_REFERENCE

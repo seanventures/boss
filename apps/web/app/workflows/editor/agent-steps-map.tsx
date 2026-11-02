@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * THE AGENT'S OWN STEPS, as a banking consultant draws an agent design (design §4.7.2; the
- * consultant's "1. Monitoring Agent" screen). Four bands:
+ * THE AGENT'S OWN STEPS, as an agent design is drawn (design §4.7.2; the
+ * reference "1. Incident Intake Agent" screen). Four bands:
  *
  *   Knowledge Graph vN · read only        the kinds the agent reads, in their domain colours
  *   <Agent> · steps                       its numbered steps, from the stage before to the next
@@ -130,7 +130,7 @@ function humanTool(tool: string): string {
 }
 
 function systemLabel(mcp: string): string {
-  const words = kindLabel(mcp.replace(/_mock$/i, ""));
+  const words = kindLabel(mcp.replace(/_mock$/i, "")).replace(/^Dq\b/, "DQ");
   return words.length <= 4 ? words.toUpperCase() : words;
 }
 
@@ -545,7 +545,7 @@ export function AgentStepsMap({ stage, steps, kinds, contextKinds, kgVersion, cg
   );
 }
 
-/** "Knowledge Graph v17 · read only"; without a version, "Knowledge Graph · read only". */
+/** "Knowledge Graph v3 · read only"; without a version, "Knowledge Graph · read only". */
 export function bandTitle(graph: string, version: number | null, access: string): string {
   return `${graph}${version ? ` v${version}` : ""} · ${access}`;
 }

@@ -1,38 +1,38 @@
-"""The consultant's DQ root-cause analysis and remediation pipeline (`dq_incident_rca`, Instance
+"""The DQ root-cause analysis and remediation pipeline (`dq_incident_rca`, Instance
 A of `kg_investigation_pipeline`; design §5.2), on NorthPeak Bank's data platform.
 
-One Eagle exception group, investigated end to end:
+One DQ Monitor exception group, investigated end to end:
 
-  1 monitoring           Monitoring Agent       open or attach ONE incident per Error group, grade
+  1 monitoring           Incident Intake Agent       open or attach ONE incident per Error group, grade
                                                 its severity; never diagnoses; Warning writes nothing
-  2 context_enrichment   Context Enrichment     ten fixed graph reads + Olympus + ITSM: footprint,
+  2 context_enrichment   Context Gathering     ten fixed graph reads + the Profile Service + Service Desk: footprint,
                                                 owners, subscriptions, lineage, regulatory reach,
                                                 known issues, exception profile, recent changes;
                                                 every missing fact a CoverageGap; no LLM
-  3 historical_pattern   Historical Pattern     two-tier deterministic match of closed incidents,
+  3 historical_pattern   Past Incidents     two-tier deterministic match of closed incidents,
                                                 grouped by resolved pattern, with how each fix held;
                                                 MATCHED_INCIDENT edges; a briefing on the ticket
-  4 rca                  RCA Agent (LLM)        candidate root causes with confidence (tier 1 from a
+  4 rca                  Root Cause Analysis Agent (LLM)        candidate root causes with confidence (tier 1 from a
                                                 precedent, tier 2 from the evidence), or
                                                 InsufficientEvidence — and 2-3-4 run again (at most
                                                 two more rounds)
-  5 pipeline_orchestrator  Pipeline Orchestrator route each candidate family to its lane
+  5 pipeline_orchestrator  Cause Router route each candidate family to its lane
   6 lane (for each)      Lane Agent (LLM)       confirm or rule out the family's candidate on evidence
-  - rule_drafting        Rule Drafting (LLM)    a confirmed false positive becomes a rule proposal in
+  - rule_drafting        Rule Proposal (LLM)    a confirmed false positive becomes a rule proposal in
                                                 Rules review (side path "Rule authoring")
-  7 remediation_advisor  Remediation Advisor    the package: fix, target, executor, approver, change
+  7 remediation_advisor  Fix Planner    the package: fix, target, executor, approver, change
                                                 content — PREPARED only
   - human_approval / human_execution            a person approves; a DIFFERENT person carries it out
   8 remediation_fix      (design target)        records what the person did; no agent executes
-  10 incident_closure    Incident Closure       re-run Eagle's check, finalise the cause, close the
+  10 incident_closure    Close and Learn       re-run the DQ Monitor's check, finalise the cause, close the
                                                 ticket, maintain the resolved pattern, write the
                                                 Precedent the next investigation finds
-  9 escalation           Escalation Agent       (its own daily workflow) ladders every open incident
+  9 escalation           Escalation Watch       (its own daily workflow) ladders every open incident
 
 Deterministic stages are BOSS's own code run as the named role agent ($0, repeatable). The LLM
 stages reuse the regulatory instance's governed agent path verbatim (`_role_agent`/`_ask_role`:
 the configured model, JSON between markers, one more ask, an unreadable answer is no answer) and
-are fed through the Context Curator, which trims to the step's token budget and says what it
+are fed through the Context Budgeter, which trims to the step's token budget and says what it
 dropped. Anything an agent cites must be in the list it was offered.
 
 Each stage returns `produced` (the Context Graph writes its contract declares) naming the nodes it
@@ -84,9 +84,9 @@ LANE_OF = {"source_processing": "lane_source_processing", "feed_etl": "lane_feed
            "rule_config": "rule_drafting"}
 INSUFFICIENT = "InsufficientEvidence"
 SEVERITIES = ("Low", "Medium", "High", "Critical")
-#: Policy (the stages' contracts say the same; Orchestration Policy v0.2.0).
-POLICY_VERSION = "Orchestration Policy v0.2.0"
-HOP_CAP, CHANGE_LOOKBACK_DAYS, LIST_CAP = 3, 14, 25          # OP-ENR-01/02/03
+#: Policy (the stages' contracts say the same; DQ pipeline policy v0.2.0).
+POLICY_VERSION = "DQ pipeline policy v0.2.0"
+HOP_CAP, CHANGE_LOOKBACK_DAYS, LIST_CAP = 3, 14, 25          # CTX-P1/P2/P3
 HISTORY_LOOKBACK_DAYS = 730                                   # HP: two years back from the COB
 MIN_ROUTE_CONFIDENCE = 0.3                                    # OP-ORC-01
 TOKEN_BUDGETS = {"rca": 6000, "lane": 4000, "rule_drafting": 3000, "remediation_advisor": 4000}
@@ -206,7 +206,7 @@ def _decide(connection: Connection, project_id: str, *, run_id: str, step_id: st
             decision_type: str, statement: str, round_no: int = 1, scope: str = "",
             actor_ref: str = "", extra: Optional[Mapping[str, Any]] = None) -> str:
     """One AgentDecision, keyed by run, step, type, round (and `scope`, e.g. an incident): a
-    re-run writes a new decision and keeps the old one (A-D30's trigger card)."""
+    re-run writes a new decision and keeps the old one (see the stage's trigger)."""
     suffix = (f":r{round_no}" if round_no > 1 else "") + (f":{scope}" if scope else "")
     attrs = {"decision_type": decision_type, "statement": statement[:4000], "step_id": step_id,
              "run_id": run_id, "round": round_no, "policy_version": POLICY_VERSION,
@@ -325,16 +325,16 @@ def _grade(measured: float, warning: Optional[float], error: Optional[float]) ->
 
 
 def _owner(connection: Connection, project_id: str, owner_id: Optional[str]) -> dict[str, Any]:
-    """An owner by id, with the team and ITSM assignment group that work its tickets."""
+    """An owner by id, with the team and Service Desk assignment group that work its tickets."""
     node = _by_key(connection, project_id, "owner", str(owner_id or "")) if owner_id else None
     if node is None:
         return {}
     attrs = _attrs(node)
-    group = attrs.get("itsm_group")
+    group = attrs.get("service_desk_group")
     team = attrs.get("team_id")
     if not group and team:
         team_node = _by_key(connection, project_id, "owner", team)
-        group = _attrs(team_node).get("itsm_group") if team_node else None
+        group = _attrs(team_node).get("service_desk_group") if team_node else None
     return {"owner_id": owner_id, "name": node["name"], "title": attrs.get("title"),
             "type": attrs.get("owner_type"), "team_id": team or owner_id,
             "assignment_group": group, "node_id": node["id"]}
@@ -345,30 +345,30 @@ def _incident_node(connection: Connection, project_id: str, incident_id: str
     return _by_key(connection, project_id, "incident", incident_id)
 
 
-# ── 1. Monitoring ─────────────────────────────────────────────────────────────────────────────
+# ── 1. Incident Intake ─────────────────────────────────────────────────────────────────────────────
 
 def _group(connection: Connection, project_id: str, group_id: str,
            calls: list[dict[str, Any]], gaps: list[str]) -> dict[str, Any]:
-    payload, gap = _call(connection, project_id, "eagle", "get_exception_group",
+    payload, gap = _call(connection, project_id, "dq-monitor", "get_exception_group",
                          {"group_id": group_id}, calls)
     if payload is not None:
         return payload
     node = _by_key(connection, project_id, "exception_group", group_id)
     if node is None:
         raise LookupError(
-            f"{group_id or 'that exception group'} is neither in Eagle nor in this project's "
+            f"{group_id or 'that exception group'} is neither in the DQ Monitor nor in this project's "
             "graph: load the NorthPeak Bank data platform (Knowledge Graph › Documents › DQ "
-            "sample) and start the investigation from one of Eagle's exception groups.")
-    gaps.append(f"Eagle was not read ({gap}); the exception group as loaded into the graph is used")
+            "sample) and start the investigation from one of the DQ Monitor's exception groups.")
+    gaps.append(f"The DQ Monitor was not read ({gap}); the exception group as loaded into the graph is used")
     attrs = _attrs(node)
-    return {"group_id": group_id, "eagle_rule_id": attrs.get("eagle_rule_id"),
+    return {"group_id": group_id, "monitor_rule_id": attrs.get("monitor_rule_id"),
             "rule_id": attrs.get("rule_id"), "rule_version": attrs.get("rule_version"),
             "cob": attrs.get("cob"), "platform": attrs.get("platform"),
             "table": attrs.get("table"), "column": attrs.get("column"),
-            "grade": attrs.get("eagle_grade"), "metric": attrs.get("metric"),
+            "grade": attrs.get("monitor_grade"), "metric": attrs.get("metric"),
             "measured": attrs.get("measured"), "failed": attrs.get("failed"),
             "population": attrs.get("population"),
-            "thresholds": attrs.get("eagle_thresholds") or {}, "sample_keys":
+            "thresholds": attrs.get("monitor_thresholds") or {}, "sample_keys":
             attrs.get("sample_keys") or [], "emitted_at": attrs.get("emitted_at")}
 
 
@@ -382,50 +382,50 @@ def run_dq_monitoring(connection: Connection, settings: Any, project_id: str,
                    ((context or {}).get("input") or {}).get("exception_group_id") or "").strip()
     if not group_id:
         raise ValueError("start the investigation with an exception_group_id, e.g. "
-                         "EXG-20261005-0003 (EGL-0588 v2 on COB 2026-10-05)")
+                         "EXG-20261005-0003 (DQX-0588 v2 on COB 2026-10-05)")
     calls: list[dict[str, Any]] = []
     gaps: list[str] = []
     # 1 Read the group
     group = _group(connection, project_id, group_id, calls, gaps)
     rule_id = str(group.get("rule_id") or "")
     measured = float(group.get("measured") or 0)
-    eagle_grade = str(group.get("grade") or "")
+    monitor_grade = str(group.get("grade") or "")
     group_node = dq_platform.node_id_of(connection, project_id, "exception_group", group_id)
-    label = f"{group.get('eagle_rule_id')} v{group.get('rule_version')} on COB {group.get('cob')}"
+    label = f"{group.get('monitor_rule_id')} v{group.get('rule_version')} on COB {group.get('cob')}"
     base = {"capability": "dq_monitoring", "tool": None, "status": "succeeded",
             "exception_group_id": group_id, "exception_group_node_id": group_node or None,
-            "rule_id": rule_id, "eagle_rule_id": group.get("eagle_rule_id"),
+            "rule_id": rule_id, "monitor_rule_id": group.get("monitor_rule_id"),
             "rule_version": group.get("rule_version"), "cob": group.get("cob"),
             "platform": group.get("platform"), "column": group.get("column"),
             "table": group.get("table"), "metric": group.get("metric"), "measured": measured,
             "failed": group.get("failed"), "population": group.get("population"),
-            "eagle_grade": eagle_grade, "group_label": label, "calls": calls,
+            "monitor_grade": monitor_grade, "group_label": label, "calls": calls,
             "ran_as": _ran_as(MONITORING)}
     # 2 Resolve the rule (by its rule id: the rulebook brings it)
     rule = _rule_facts(connection, project_id, rule_id)
     if not rule:
         gaps.append(f"rule {rule_id} is not in the graph yet — load the rulebook (NorthPeak Loan "
                     "DQ Rulebook v3.2) so the rule, its thresholds, owner and CDEs can be read")
-    # 3 Grade severity: Eagle grades every run; only Error opens or attaches (A-D87..A-D89).
+    # 3 Grade severity: the DQ Monitor grades every run; only Error opens or attaches.
     rulebook_grade = _grade(measured, rule.get("warning_value"), rule.get("error_value")) \
         if rule else None
-    if eagle_grade != "Error":
-        note = (f"{label}: Eagle graded it {eagle_grade or 'not at all'}. A Warning goes to the "
-                "OMNIS dashboard; Monitoring writes nothing and opens no incident.")
+    if monitor_grade != "Error":
+        note = (f"{label}: the DQ Monitor graded it {monitor_grade or 'not at all'}. A Warning goes to the "
+                "DQ dashboard; Incident Intake writes nothing and opens no incident.")
         return {**base, "action": "ignore", "continue_pipeline": False,
                 "rulebook_grade": rulebook_grade, "note": note, "summary": note, "produced": {}}
     severity = str(rule.get("severity") or "Medium").capitalize()
     if severity not in SEVERITIES:
         severity = "Medium"
-    # 4 Set failure reason: one per rule (A-D10), facts only.
+    # 4 Set failure reason: one per rule, facts only.
     failure_reason = (f"{rule.get('title') or rule_id} failed for {group.get('failed')} of "
                       f"{group.get('population')} ({group.get('metric')} {measured}"
                       + (f" vs Error above {rule.get('error_value')}" if rule.get('error_value')
                          is not None else "") + ")")
     discrepancy = ""
-    if rulebook_grade and rulebook_grade != eagle_grade:
-        discrepancy = (f"Eagle graded Error; against the rulebook's thresholds the measure is "
-                       f"{rulebook_grade} (Eagle's configured thresholds "
+    if rulebook_grade and rulebook_grade != monitor_grade:
+        discrepancy = (f"The DQ Monitor graded Error; against the rulebook's thresholds the measure is "
+                       f"{rulebook_grade} (the DQ Monitor's configured thresholds "
                        f"{group.get('thresholds')}).")
     # 5 Tag the exception
     owner = _owner(connection, project_id, rule.get("owner_id"))
@@ -456,7 +456,7 @@ def run_dq_monitoring(connection: Connection, settings: Any, project_id: str,
                 "rule_node_id": rule.get("node_id"), "gaps": gaps, "note": statement,
                 "summary": statement, "produced": _produced("IncidentOpened", decision,
                                                             statement, gap_ids, gaps)}
-    # Otherwise: an open incident on the same rule (the graph first, then ITSM).
+    # Otherwise: an open incident on the same rule (the graph first, then Service Desk).
     open_incident = connection.execute(text(
         "SELECT id, attrs FROM kg_nodes WHERE project_id = :p AND kind = 'incident' "
         "AND valid_to IS NULL AND attrs->>'rule_id' = :r "
@@ -464,10 +464,10 @@ def run_dq_monitoring(connection: Connection, settings: Any, project_id: str,
         "ORDER BY recorded_at DESC LIMIT 1"), {"p": project_id, "r": rule_id}).mappings().first()
     open_id = str(_attrs(open_incident).get("incident_id") or "") if open_incident else ""
     if not open_id:
-        listed, gap = _call(connection, project_id, "itsm", "list_incidents",
+        listed, gap = _call(connection, project_id, "service-desk", "list_incidents",
                             {"rule_id": rule_id, "status": "open"}, calls)
         if listed is None:
-            gaps.append(f"ITSM was not asked for an open incident on {rule_id}: {gap}")
+            gaps.append(f"Service Desk was not asked for an open incident on {rule_id}: {gap}")
         else:
             tickets = [t for t in listed.get("incidents") or [] if t.get("domain") == "data_quality"]
             open_id = str(tickets[0]["incident_id"]) if tickets else ""
@@ -475,12 +475,12 @@ def run_dq_monitoring(connection: Connection, settings: Any, project_id: str,
     if open_id:
         action = "attach"
         incident_id = open_id
-        ticket, gap = _call(connection, project_id, "itsm", "attach_to_incident",
+        ticket, gap = _call(connection, project_id, "service-desk", "attach_to_incident",
                             {"incident_id": incident_id, "source_ref": group_id,
-                             "note": f"Attached {label}: {failure_reason}.", "by": "Monitoring Agent"},
+                             "note": f"Attached {label}: {failure_reason}.", "by": "Incident Intake Agent"},
                             calls)
         if ticket is None:
-            gaps.append(f"the ITSM ticket {incident_id} was not updated: {gap}")
+            gaps.append(f"the Service Desk ticket {incident_id} was not updated: {gap}")
         node = _incident_node(connection, project_id, incident_id)
         if node is None:
             node_id = _write_incident(connection, project_id, incident_id, ticket or {}, group,
@@ -490,7 +490,7 @@ def run_dq_monitoring(connection: Connection, settings: Any, project_id: str,
             node_id = node["id"]
             current = str(_attrs(node).get("severity") or "Low")
             groups = list(dict.fromkeys([*(_attrs(node).get("exception_groups") or []), group_id]))
-            # Severity only moves up (A-D8).
+            # Severity only moves up.
             raised = severity if SEVERITIES.index(severity) > SEVERITIES.index(
                 current if current in SEVERITIES else "Low") else current
             _patch(connection, project_id, node_id, {"exception_groups": groups,
@@ -498,21 +498,21 @@ def run_dq_monitoring(connection: Connection, settings: Any, project_id: str,
             severity = raised
     else:
         action = "open"
-        ticket, gap = _call(connection, project_id, "itsm", "create_incident", {
+        ticket, gap = _call(connection, project_id, "service-desk", "create_incident", {
             "title": f"{label}: {rule.get('title') or rule_id}",
             "summary": failure_reason, "assignment_group": owner.get("assignment_group") or "",
             "severity": severity, "source_ref": group_id, "rule_id": rule_id,
-            "eagle_rule_id": group.get("eagle_rule_id"), "owner_id": owner.get("owner_id") or "",
+            "monitor_rule_id": group.get("monitor_rule_id"), "owner_id": owner.get("owner_id") or "",
             "opened": group.get("cob"), "cde_ids": tags["cde_ids"]}, calls)
         if ticket is None:
-            gaps.append(f"no ITSM ticket was opened ({gap}); the incident is recorded in the "
+            gaps.append(f"no Service Desk ticket was opened ({gap}); the incident is recorded in the "
                         "graph only")
             incident_id = f"DQ-{group_id}"
         else:
             incident_id = str(ticket["incident_id"])
         node_id = _write_incident(connection, project_id, incident_id, ticket or {}, group, rule,
                                   owner, severity, actor, status="open")
-    # 8 Link facts (A-D9: links only, no interpretation)
+    # 8 Link facts (links only, no interpretation)
     if group_node:
         _edge(connection, project_id, node_id, group_node, "raised_from", actor,
               {"link_type": action, "run_id": run_id})
@@ -533,7 +533,7 @@ def run_dq_monitoring(connection: Connection, settings: Any, project_id: str,
     decision = _decide(connection, project_id, run_id=run_id, step_id=step_id,
                        decision_type=decision_type, statement=statement, actor_ref=actor,
                        extra={"graded_severity": severity, "incident_id": incident_id,
-                              "exception_group_id": group_id, "eagle_grade": eagle_grade,
+                              "exception_group_id": group_id, "monitor_grade": monitor_grade,
                               "rulebook_grade": rulebook_grade})
     gap_ids = _gaps(connection, project_id, run_id=run_id, step_id=step_id, statements=gaps,
                     actor_ref=actor)
@@ -558,7 +558,7 @@ def _write_incident(connection: Connection, project_id: str, incident_id: str,
         body=str(ticket.get("summary") or "")[:2000], trust_tier="inferred", actor_kind="agent",
         actor_ref=actor, source="dq_pipeline",
         attrs={"incident_id": incident_id, "key": incident_id, "status": status,
-               "rule_id": rule_id, "eagle_rule_id": group.get("eagle_rule_id"),
+               "rule_id": rule_id, "monitor_rule_id": group.get("monitor_rule_id"),
                "severity": severity, "opened": group.get("cob"),
                "exception_groups": [group.get("group_id")], "cde_ids": list(rule.get("cde_ids") or []),
                "owner_id": owner.get("owner_id"), "assignment_group": owner.get("assignment_group"),
@@ -573,7 +573,7 @@ def _write_incident(connection: Connection, project_id: str, incident_id: str,
     return node_id
 
 
-# ── 2. Context Enrichment (deterministic) ────────────────────────────────────────────────────
+# ── 2. Context Gathering (deterministic) ────────────────────────────────────────────────────
 
 def run_dq_context_enrichment(connection: Connection, settings: Any, project_id: str,
                               step: Mapping[str, Any], context: Mapping[str, Any],
@@ -584,7 +584,7 @@ def run_dq_context_enrichment(connection: Connection, settings: Any, project_id:
     steps = _steps(connection, run_id, context)
     mon = steps.get("monitoring") or {}
     rca = steps.get("rca") or {}
-    # A re-run after InsufficientEvidence widens its reach (OP-ENR-01/02): one more hop, twice
+    # A re-run after InsufficientEvidence widens its reach (CTX-P1/P2): one more hop, twice
     # the change look-back — and is told what RCA said was missing.
     hop_cap = HOP_CAP + (round_no - 1)
     lookback = CHANGE_LOOKBACK_DAYS * (2 ** (round_no - 1))
@@ -594,7 +594,7 @@ def run_dq_context_enrichment(connection: Connection, settings: Any, project_id:
     # 1 Load the incident
     incident_node = str(mon.get("incident_node_id") or "")
     if not incident_node:
-        raise ValueError("Context Enrichment runs after Monitoring opens an incident (never on "
+        raise ValueError("Context Gathering runs after Incident Intake opens an incident (never on "
                          "an attach); this run has none.")
     rule_id = str(mon.get("rule_id") or "")
     column = str(mon.get("column") or "")
@@ -709,7 +709,7 @@ def run_dq_context_enrichment(connection: Connection, settings: Any, project_id:
                 if ha.get("to_kind") == "database_column" and ha.get("to"):
                     nxt.append(str(ha["to"]))
         frontier, hops = nxt, hops + 1
-    # 6 Regulatory reach (KG-G11: CDE -REPORTED_IN-> line; the rule's own REACHES)
+    # 6 Regulatory reach (CDE -REPORTED_IN-> line; the rule's own REACHES)
     lines: dict[str, dict[str, Any]] = {}
     for cde in footprint["cdes"]:
         node = _by_key(connection, project_id, "cde", cde["cde_id"])
@@ -730,7 +730,7 @@ def run_dq_context_enrichment(connection: Connection, settings: Any, project_id:
                       "report_id": la.get("report_id"), "mdrm": la.get("mdrm")})
     if footprint["cdes"] and not reach:
         gaps.append(f"no regulatory route recorded for {', '.join(c['cde_id'] for c in footprint['cdes'])}")
-    # 7 Known issues at every level (A-D40): the rule, its CDEs, feed, system and table.
+    # 7 Known issues at every level: the rule, its CDEs, feed, system and table.
     anchors = [n for n in [rule.get("node_id"), system["id"] if system else None,
                            table_node["id"] if table_node else None,
                            *[f["node_id"] for f in feeds_in],
@@ -752,17 +752,17 @@ def run_dq_context_enrichment(connection: Connection, settings: Any, project_id:
                                            "node_id": e["id"]})
     known = list(issues.values())[:LIST_CAP]
     consulted += [i["node_id"] for i in known]
-    # 8 Exception profile (Profile Service, Olympus)
+    # 8 Exception profile (Profile Service, the Profile Service)
     profile, gap = exception_profile(connection, project_id, platform=platform, rule_id=rule_id,
                                      measured=mon.get("measured"), calls=calls)
     if profile is None:
         gaps.append(f"no exception profile: {gap}")
-    # 9 Recent changes (Olympus), the platform's and the rule's and the feed's, in the look-back.
+    # 9 Recent changes (the Profile Service), the platform's and the rule's and the feed's, in the look-back.
     changes: dict[str, dict[str, Any]] = {}
     for args in ({"platform": platform}, {"rule_id": rule_id},
                  *({"feed_id": f} for f in {rule.get("feed_id"), *[x["feed_id"] for x in feeds_in]}
                    if f)):
-        found, gap = _call(connection, project_id, "olympus", "list_recent_changes",
+        found, gap = _call(connection, project_id, "profile-service", "list_recent_changes",
                            {**args, "until": cob, "lookback_days": lookback}, calls)
         if found is None:
             gaps.append(f"recent changes not read: {gap}")
@@ -770,11 +770,11 @@ def run_dq_context_enrichment(connection: Connection, settings: Any, project_id:
         for c in found.get("changes") or []:
             changes.setdefault(c["change_id"], c)
     recent = sorted(changes.values(), key=lambda c: (c["day"], c["change_id"]))[:LIST_CAP]
-    # 10 Assemble, hand off (ContextAssembled: contextPack and asOf, CG-G9)
+    # 10 Assemble, hand off (ContextAssembled: contextPack and asOf)
     pack = {"exception": {k: mon.get(k) for k in ("exception_group_id", "group_label", "rule_id",
                                                   "column", "platform", "cob", "metric",
                                                   "measured", "failed", "population",
-                                                  "eagle_grade", "rulebook_grade",
+                                                  "monitor_grade", "rulebook_grade",
                                                   "discrepancy", "severity", "incident_id")},
             "footprint": footprint, "owners": owners, "feeds_in": feeds_in,
             "feeds_out": feeds_out, "upstream_lineage": lineage, "downstream": downstream,
@@ -805,7 +805,7 @@ def run_dq_context_enrichment(connection: Connection, settings: Any, project_id:
             "produced": _produced("ContextAssembled", decision, statement, gap_ids, gaps)}
 
 
-# ── 3. Historical Pattern (deterministic) ────────────────────────────────────────────────────
+# ── 3. Past Incidents (deterministic) ────────────────────────────────────────────────────
 
 def _calendar_note(connection: Connection, project_id: str, cob: str) -> dict[str, Any]:
     if not cob:
@@ -868,7 +868,7 @@ def run_dq_historical_pattern(connection: Connection, settings: Any, project_id:
             "family": pa.get("family"), "signature": pa.get("signature"),
             "durable_fix": pa.get("durable_fix"), "node_id": row["id"],
             "rule_ids": list(pa.get("rule_ids") or [])}
-    # 4 find_past_incidents: two tiers (A-D49), deterministic (A-D50), closed only, two years.
+    # 4 find_past_incidents: two tiers, deterministic, closed only, two years.
     since = (date.fromisoformat(cob) - timedelta(days=HISTORY_LOOKBACK_DAYS)).isoformat() \
         if cob else "0000"
     changes = {c["change_id"]: c for c in pack.get("recent_changes") or []}
@@ -888,7 +888,7 @@ def run_dq_historical_pattern(connection: Connection, settings: Any, project_id:
         tier = 1 if same_rule else 2
         pattern = patterns.get(str(ia.get("pattern_id") or ""))
         # timingAlignment: a fix that held until a change regressed it, and a recent change on
-        # the same rule now — the facts a person would line up (CG-G16), never a verdict.
+        # the same rule now — the facts a person would line up, never a verdict.
         regressions = [c for c in changes.values() if rule_id in (c.get("rule_ids") or [])]
         matches.append({
             "incident_id": ia.get("incident_id"), "node_id": row["id"], "title": row["name"],
@@ -907,7 +907,7 @@ def run_dq_historical_pattern(connection: Connection, settings: Any, project_id:
                                                                  "did_not_hold") else [])})
     matches.sort(key=lambda m: (m["tier"], -(int(str(m["opened"] or "0").replace("-", "") or 0))))
     matches = matches[:LIST_CAP]
-    # 5 Write precedents: each match's precedent (only Historical Pattern creates them, A-D55),
+    # 5 Write precedents: each match's precedent (only Past Incidents creates them),
     #   MATCHED_INCIDENT from the new incident, and REFERENCES from precedent to pattern.
     precedents, written = [], []
     for m in matches:
@@ -952,16 +952,16 @@ def run_dq_historical_pattern(connection: Connection, settings: Any, project_id:
         group["fix_durability"] = held
     # 6 Post briefing on the ticket
     tier1 = [m for m in matches if m["tier"] == 1]
-    briefing = (f"Historical Pattern: {len(tier1)} closed incident(s) on {rule_id} "
+    briefing = (f"Past Incidents: {len(tier1)} closed incident(s) on {rule_id} "
                 f"({', '.join(m['incident_id'] for m in tier1) or 'none'}); "
                 f"{len(matches) - len(tier1)} on sibling rules or the same CDE. "
                 + " ".join(f"{g['pattern_id']}: {g['recurrences']} incident(s), fixes "
                            f"{', '.join(str(x) for x in g['fix_durability'])}."
                            for g in by_pattern.values() if g["pattern_id"]))
     if mon.get("incident_id"):
-        posted, gap = _call(connection, project_id, "itsm", "update_incident",
+        posted, gap = _call(connection, project_id, "service-desk", "update_incident",
                             {"incident_id": mon["incident_id"], "note": briefing[:1900],
-                             "by": "Historical Pattern Agent"}, calls)
+                             "by": "Past Incidents Agent"}, calls)
     # 7 Hand off
     statement = (f"Matched {len(matches)} closed incident(s) for {mon.get('incident_id')} "
                  f"(round {round_no}): "
@@ -1012,7 +1012,7 @@ def _evidence_catalogue(mon: Mapping[str, Any], enrich: Mapping[str, Any],
         out[str(i["id"])] = f"{i['kind'].replace('_', ' ')} ({i['status']}): {i['title']}. " \
                             f"{i.get('description') or ''}"
     if pack.get("profile"):
-        out["PROFILE"] = f"Olympus profile of {mon.get('rule_id')} on {mon.get('platform')}: " \
+        out["PROFILE"] = f"The Profile Service's profile of {mon.get('rule_id')} on {mon.get('platform')}: " \
                          f"{describe_profile(pack['profile'])}"
     for n, gap in enumerate(enrich.get("gaps") or [], start=1):
         out[f"GAP-{n}"] = f"coverage gap: {gap}"
@@ -1037,7 +1037,7 @@ def _sections(mon: Mapping[str, Any], enrich: Mapping[str, Any], history: Mappin
             f"Rule: {json.dumps(fp.get('rule'))}",
             f"CDEs: {', '.join(c['cde_id'] + ' ' + c['name'] for c in fp.get('cdes') or []) or '-'}"],
             must=True, priority=100),
-        Section("Coverage gaps (what Context Enrichment could not establish)",
+        Section("Coverage gaps (what Context Gathering could not establish)",
                 cite([k for k in catalogue if k.startswith("GAP-")]), must=True, priority=95),
         Section("Closed incidents on this rule (tier 1 precedents)", cite(tier1), priority=90),
         Section("Recent changes", cite([k for k in catalogue if k.startswith("CHG-")]),
@@ -1094,7 +1094,7 @@ def run_dq_rca(connection: Connection, settings: Any, project_id: str, step: Map
     rationale = ""
     why = ""
     if judged is None:
-        why = "the RCA Agent answered nothing readable"
+        why = "the Root Cause Analysis Agent answered nothing readable"
     else:
         rationale = " ".join(str(judged.get("rationale") or "").split())[:1200]
         missing = [" ".join(str(x).split())[:300] for x in judged.get("missing") or [] if str(x).strip()]
@@ -1155,7 +1155,7 @@ def run_dq_rca(connection: Connection, settings: Any, project_id: str, step: Map
             "produced": _produced(decision_type, decision, statement)}
 
 
-# ── 5. Pipeline Orchestrator (routing by policy) ─────────────────────────────────────────────
+# ── 5. Cause Router (routing by policy) ─────────────────────────────────────────────
 
 def run_dq_orchestration(connection: Connection, settings: Any, project_id: str,
                          step: Mapping[str, Any], context: Mapping[str, Any],
@@ -1167,10 +1167,10 @@ def run_dq_orchestration(connection: Connection, settings: Any, project_id: str,
     lanes: list[dict[str, Any]] = []
     held: list[str] = []
     if rca.get("rca_verdict") == INSUFFICIENT:
-        statement = (f"No lane for {mon.get('incident_id')}: RCA still found insufficient "
+        statement = (f"No cause check for {mon.get('incident_id')}: RCA still found insufficient "
                      f"evidence after {rca.get('round') or 1} round(s) "
                      f"({'; '.join(rca.get('missing') or [])}). The incident stays open for a "
-                     "person and the Escalation Agent's daily ladder.")
+                     "person and the Escalation Watch's daily ladder.")
     else:
         by_family: dict[str, list[dict[str, Any]]] = {}
         for cand in rca.get("candidates") or []:
@@ -1184,7 +1184,7 @@ def run_dq_orchestration(connection: Connection, settings: Any, project_id: str,
                           "incident_id": mon.get("incident_id")})
         statement = (f"Routed {mon.get('incident_id')} to "
                      + (", ".join(f"{l['lane']} ({l['confidence']:.2f})" for l in lanes)
-                        or "no lane")
+                        or "no cause check")
                      + (f"; below the routing floor ({MIN_ROUTE_CONFIDENCE}): {', '.join(held)}"
                         if held else "") + ".")
     decision = _decide(connection, project_id, run_id=run_id, step_id=step_id,
@@ -1210,7 +1210,7 @@ _LANE_FOCUS = {
                       "break equals one product's balance",
     "manual_entry": "people and channels: onboarding channel changes, duplicates by name and "
                     "birth date",
-    "rule_config": "the rule itself: Eagle's configured thresholds against the rulebook's, "
+    "rule_config": "the rule itself: the DQ Monitor's configured thresholds against the rulebook's, "
                    "whether the data sits at its usual baseline, recent rule-pack imports",
 }
 
@@ -1222,13 +1222,13 @@ def run_dq_lane(connection: Connection, settings: Any, project_id: str, step: Ma
     item = dict((context or {}).get("item") or inputs.get("item") or {})
     family = str(item.get("family") or "")
     if family not in FAMILIES:
-        raise ValueError(f"a lane runs one root-cause family; got {family or 'none'}")
+        raise ValueError(f"a cause check runs one root-cause family; got {family or 'none'}")
     steps = _steps(connection, run_id, context)
     mon, enrich = steps.get("monitoring") or {}, steps.get("context_enrichment") or {}
     history = steps.get("historical_pattern") or {}
     catalogue = _evidence_catalogue(mon, enrich, history)
     sections = _sections(mon, enrich, history, catalogue)
-    sections.insert(1, Section("Candidates for this lane", [
+    sections.insert(1, Section("Candidates for this cause check", [
         f"{c['family']} {c['confidence']:.2f} (tier {c['tier']}): {c['cause']} — cites "
         f"{', '.join(c['evidence'])}" for c in item.get("candidates") or []], must=True,
         priority=99))
@@ -1238,11 +1238,11 @@ def run_dq_lane(connection: Connection, settings: Any, project_id: str, step: Ma
             f"Rulebook thresholds: Warning above {rule.get('warning_value')}, Error above "
             f"{rule.get('error_value')} ({rule.get('metric')})" if rule else
             "The rulebook's thresholds are not in the graph.",
-            f"Eagle measured {mon.get('measured')} and graded {mon.get('eagle_grade')}; "
+            f"The DQ Monitor measured {mon.get('measured')} and graded {mon.get('monitor_grade')}; "
             f"against the rulebook that is {mon.get('rulebook_grade') or 'unknown'}. "
             f"{mon.get('discrepancy') or ''}"], must=True, priority=98))
     curated = curate(sections, TOKEN_BUDGETS["lane"])
-    situation = (f"LANE: {item.get('lane')} — family {family}: {FAMILIES[family]}\n"
+    situation = (f"CAUSE CHECK: {item.get('lane')} — family {family}: {FAMILIES[family]}\n"
                  f"LOOK AT: {_LANE_FOCUS[family]}\nINCIDENT {mon.get('incident_id')}\n\n"
                  + curated.text + "\n\nEVIDENCE YOU MAY CITE: " + ", ".join(catalogue))
     agent, _engine = _role_agent(connection, settings, project_id)
@@ -1291,7 +1291,7 @@ def _lane_results(steps: Mapping[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
-# ── Rule Drafting (side path: Rule authoring) ────────────────────────────────────────────────
+# ── Rule Proposal (side path: Rule authoring) ────────────────────────────────────────────────
 
 def run_dq_rule_drafting(connection: Connection, settings: Any, project_id: str,
                          step: Mapping[str, Any], context: Mapping[str, Any],
@@ -1302,7 +1302,7 @@ def run_dq_rule_drafting(connection: Connection, settings: Any, project_id: str,
     mon = steps.get("monitoring") or {}
     confirmed = [r for r in _lane_results(steps) if r.get("false_positive")]
     if not confirmed:
-        statement = (f"No lane confirmed a false positive on {mon.get('incident_id')}: nothing "
+        statement = (f"No cause check confirmed a false positive on {mon.get('incident_id')}: nothing "
                      "to draft.")
         decision = _decide(connection, project_id, run_id=run_id, step_id=step_id,
                            decision_type="NothingToDraft", statement=statement,
@@ -1323,8 +1323,8 @@ def run_dq_rule_drafting(connection: Connection, settings: Any, project_id: str,
             f"Rulebook thresholds: Warning above {rule.get('warning_value')}, Error above "
             f"{rule.get('error_value')} ({rule.get('metric')})"] if rule else
             [f"{rule_id} is not in the graph yet."], must=True, priority=95),
-        Section("What Eagle did", [f"Eagle measured {mon.get('measured')} against its configured "
-                                   f"thresholds and graded {mon.get('eagle_grade')}. "
+        Section("What the DQ Monitor did", [f"The DQ Monitor measured {mon.get('measured')} against its configured "
+                                   f"thresholds and graded {mon.get('monitor_grade')}. "
                                    f"{mon.get('discrepancy') or ''}"], priority=90),
         Section("Evidence", [f"[{k}] {v}" for k, v in catalogue.items()], priority=50),
     ], TOKEN_BUDGETS["rule_drafting"])
@@ -1338,7 +1338,7 @@ def run_dq_rule_drafting(connection: Connection, settings: Any, project_id: str,
     thresholds = (judged or {}).get("thresholds") if isinstance((judged or {}).get("thresholds"),
                                                                  Mapping) else {}
     if not proposal or not evidence:
-        statement = (f"The Rule Drafting Agent drafted nothing it could stand behind for "
+        statement = (f"The Rule Proposal Agent drafted nothing it could stand behind for "
                      f"{rule_id} ({'no proposal' if not proposal else 'no evidence cited'}); a "
                      "person opens the rule authoring case.")
         decision = _decide(connection, project_id, run_id=run_id, step_id=step_id,
@@ -1363,7 +1363,7 @@ def run_dq_rule_drafting(connection: Connection, settings: Any, project_id: str,
                "category": "limit", "scope": scope, "status": "proposed",
                "confidence": _confidence((judged or {}).get("confidence"), 0.6),
                "provenance": {"actor_kind": "agent", "agent_role": RULE_DRAFTING,
-                              "agent_name": "Rule Drafting Agent", "run_id": run_id,
+                              "agent_name": "Rule Proposal Agent", "run_id": run_id,
                               "workflow_run_id": run_id, "step": step_id},
                "review": None, "version": 1, "previous_id": None, "content_key": content_key,
                "rule_code": rule_id, "corrects_dq_rule": rule_id, "thresholds": dict(thresholds),
@@ -1398,7 +1398,7 @@ def run_dq_rule_drafting(connection: Connection, settings: Any, project_id: str,
                                   rule_proposal={"node_id": proposal_node})}
 
 
-# ── 7. Remediation Advisor (role agent, LLM): the package, prepared only ─────────────────────
+# ── 7. Fix Planner (role agent, LLM): the package, prepared only ─────────────────────
 
 def run_dq_remediation_package(connection: Connection, settings: Any, project_id: str,
                                step: Mapping[str, Any], context: Mapping[str, Any],
@@ -1427,7 +1427,7 @@ def run_dq_remediation_package(connection: Connection, settings: Any, project_id
         "SELECT name, attrs FROM kg_nodes WHERE project_id = :p AND kind = 'owner' "
         "AND valid_to IS NULL AND attrs->>'owner_type' = 'team' ORDER BY node_key"),
         {"p": project_id}).mappings().all()
-    groups = {str(_attrs(t).get("itsm_group")): t["name"] for t in teams if _attrs(t).get("itsm_group")}
+    groups = {str(_attrs(t).get("service_desk_group")): t["name"] for t in teams if _attrs(t).get("service_desk_group")}
     people = {str(_attrs(r).get("owner_id")): f"{r['name']} ({_attrs(r).get('title')})"
               for r in connection.execute(text(
                   "SELECT name, attrs FROM kg_nodes WHERE project_id = :p AND kind = 'owner' "
@@ -1479,7 +1479,7 @@ def run_dq_remediation_package(connection: Connection, settings: Any, project_id
     if not evidence:
         problems.append("no evidence cited")
     if problems:
-        statement = (f"The Remediation Advisor's package for {mon.get('incident_id')} was not "
+        statement = (f"The Fix Planner's package for {mon.get('incident_id')} was not "
                      f"usable ({'; '.join(problems)}); nothing is prepared and a person "
                      "writes the fix.")
         decision = _decide(connection, project_id, run_id=run_id, step_id=step_id,
@@ -1519,7 +1519,7 @@ def run_dq_remediation_package(connection: Connection, settings: Any, project_id
                                   remediation_package={"node_id": package_id})}
 
 
-# ── 8. Remediation Fix (design target: records what the person did) ──────────────────────────
+# ── 8. Fix (design target: records what the person did) ──────────────────────────
 
 def _gate(connection: Connection, run_id: str, step_id: str) -> Optional[dict[str, Any]]:
     if not run_id:
@@ -1561,11 +1561,11 @@ def run_dq_remediation_fix(connection: Connection, settings: Any, project_id: st
             "change_ref": change_ref, "execution_note": note[:600]})
     calls: list[dict[str, Any]] = []
     if mon.get("incident_id"):
-        _call(connection, project_id, "itsm", "update_incident",
+        _call(connection, project_id, "service-desk", "update_incident",
               {"incident_id": mon["incident_id"], "status": "in_progress",
                "note": f"Fix approved by {approved_by}, carried out by {executed_by}"
                        + (f" under {change_ref}" if change_ref else "") + f". {note}"[:1800],
-               "by": "Remediation Fix"}, calls)
+               "by": "Fix"}, calls)
     statement = (f"The approved fix for {mon.get('incident_id')} was carried out by "
                  f"{executed_by}" + (f" under {change_ref}" if change_ref else "")
                  + f", after {approved_by} approved it. No agent executed anything "
@@ -1582,7 +1582,7 @@ def run_dq_remediation_fix(connection: Connection, settings: Any, project_id: st
             "produced": _produced("FixRecorded", decision, statement)}
 
 
-# ── 10. Incident Closure ─────────────────────────────────────────────────────────────────────
+# ── 10. Close and Learn ─────────────────────────────────────────────────────────────────────
 
 def run_dq_incident_closure(connection: Connection, settings: Any, project_id: str,
                             step: Mapping[str, Any], context: Mapping[str, Any],
@@ -1607,23 +1607,23 @@ def run_dq_incident_closure(connection: Connection, settings: Any, project_id: s
         why = ("RCA found insufficient evidence" if rca.get("rca_verdict") == INSUFFICIENT
                else "no cause was confirmed" if not advisor.get("package_ready")
                else "no fix was carried out")
-        statement = (f"{incident_id} stays open: {why}. The Escalation Agent ladders it daily "
+        statement = (f"{incident_id} stays open: {why}. The Escalation Watch ladders it daily "
                      "until a person resolves it.")
-        _call(connection, project_id, "itsm", "update_incident",
-              {"incident_id": incident_id, "note": statement, "by": "Incident Closure Agent"},
+        _call(connection, project_id, "service-desk", "update_incident",
+              {"incident_id": incident_id, "note": statement, "by": "Close and Learn Agent"},
               calls)
         decision = _decide(connection, project_id, run_id=run_id, step_id=step_id,
                            decision_type="LeftOpen", statement=statement, actor_ref=actor)
         return {**base, "closed": False, "note": statement, "summary": statement,
                 "produced": _produced("LeftOpen", decision, statement)}
     # 1 Re-run the check
-    rerun, gap = _call(connection, project_id, "eagle", "rerun_check",
+    rerun, gap = _call(connection, project_id, "dq-monitor", "rerun_check",
                        {"rule_id": rule_id, "cob": mon.get("cob"),
                         "change_ref": fix.get("change_ref") or "recorded fix"}, calls)
     grade = (rerun or {}).get("grade")
     if rerun is None or grade == "Error":
         statement = (f"{incident_id} is not closed: "
-                     + (f"Eagle's re-run of {rule_id} still grades Error ({rerun.get('measured')})"
+                     + (f"The DQ Monitor's re-run of {rule_id} still grades Error ({rerun.get('measured')})"
                         if rerun else f"the check could not be re-run ({gap})")
                      + ". The fix is not confirmed.")
         decision = _decide(connection, project_id, run_id=run_id, step_id=step_id,
@@ -1672,12 +1672,12 @@ def run_dq_incident_closure(connection: Connection, settings: Any, project_id: s
         "fix_type": "change", "change_ref": fix.get("change_ref"),
         "approved_by": fix.get("approved_by"), "executed_by": fix.get("executed_by"),
         "fix_durability": "pending", "closed": closed_on})
-    _call(connection, project_id, "itsm", "update_incident",
+    _call(connection, project_id, "service-desk", "update_incident",
           {"incident_id": incident_id, "status": "resolved", "confirmed_cause": cause,
            "root_cause_family": family, "fix": package.get("fix"),
            "note": f"Re-run graded {grade}; closed with cause {family}.",
-           "by": "Incident Closure Agent"}, calls)
-    # 5 Write the Precedent the next investigation's Historical Pattern finds
+           "by": "Close and Learn Agent"}, calls)
+    # 5 Write the Precedent the next investigation's Past Incidents finds
     precedent_key = f"PRE-{incident_id[4:] if incident_id.startswith('INC-') else incident_id}"
     recurrence = len([m for m in matched.values() if m.get("pattern_id") == pattern_id]) + 1
     precedent_id = STORE.upsert_node(
@@ -1696,7 +1696,7 @@ def run_dq_incident_closure(connection: Connection, settings: Any, project_id: s
           actor_kind="system")
     _edge(connection, project_id, precedent_id, pattern_node, "matches", actor,
           actor_kind="system")
-    statement = (f"Closed {incident_id}: Eagle's re-run of {rule_id} grades {grade}; confirmed "
+    statement = (f"Closed {incident_id}: the DQ Monitor's re-run of {rule_id} grades {grade}; confirmed "
                  f"cause {family} ({pattern_id}); fix by {fix.get('executed_by')} under "
                  f"{fix.get('change_ref')}. Wrote precedent {precedent_key} (occurrence "
                  f"{recurrence} of the pattern) for the next investigation.")
@@ -1788,11 +1788,11 @@ def run_dq_escalation(connection: Connection, settings: Any, project_id: str,
                   {"level": rung, "as_of": as_of})
         _patch(connection, project_id, row["id"], {"escalation_level": rung,
                                                    "escalated_on": as_of})
-        _call(connection, project_id, "itsm", "update_incident",
+        _call(connection, project_id, "service-desk", "update_incident",
               {"incident_id": incident_id, "escalation_level": rung,
                "note": f"Escalated to level {rung} ({who}): open {age} business day(s) as of "
                        f"{as_of}" + (", with regulatory reach" if reach else "") + ".",
-               "by": "Escalation Agent"}, calls)
+               "by": "Escalation Watch"}, calls)
         statement = (f"Escalated {incident_id} to level {rung} ({who}): open {age} business "
                      f"day(s) as of {as_of}" + (", regulatory reach" if reach else "") + ".")
         decisions.append(_decide(connection, project_id, run_id=run_id, step_id=step_id,
@@ -1816,9 +1816,9 @@ def run_dq_escalation(connection: Connection, settings: Any, project_id: str,
                                             "node_ids": [sweep, *decisions]}}}
 
 
-# ── The scheduled trigger: Eagle's Error groups → one RCA run each ───────────────────────────
+# ── The scheduled trigger: the DQ Monitor's Error groups → one RCA run each ───────────────────────────
 
-def run_dq_eagle_intake(connection: Connection, settings: Any, project_id: str,
+def run_dq_monitor_intake(connection: Connection, settings: Any, project_id: str,
                         step: Mapping[str, Any], context: Mapping[str, Any],
                         inputs: Mapping[str, Any]) -> dict[str, Any]:
     import uuid
@@ -1826,16 +1826,16 @@ def run_dq_eagle_intake(connection: Connection, settings: Any, project_id: str,
     from .. import workflows
 
     run_id = _run_id(step, context)
-    step_id = str(step.get("id") or "eagle_intake")
+    step_id = str(step.get("id") or "monitor_intake")
     calls: list[dict[str, Any]] = []
     cob = str(inputs.get("cob") or ((context or {}).get("input") or {}).get("cob") or "").strip()
-    listed, gap = _call(connection, project_id, "eagle", "list_exception_groups",
+    listed, gap = _call(connection, project_id, "dq-monitor", "list_exception_groups",
                         {"cob": cob} if cob else {}, calls)
     if listed is None:
-        raise RuntimeError(f"Eagle could not be read: {gap}")
+        raise RuntimeError(f"The DQ Monitor could not be read: {gap}")
     if not cob:
         cob = (listed.get("cobs") or [""])[-1]
-        listed, gap = _call(connection, project_id, "eagle", "list_exception_groups",
+        listed, gap = _call(connection, project_id, "dq-monitor", "list_exception_groups",
                             {"cob": cob}, calls)
     errors = [g for g in (listed or {}).get("groups") or [] if g.get("grade") == "Error"]
     version = connection.execute(text(
@@ -1864,12 +1864,12 @@ def run_dq_eagle_intake(connection: Connection, settings: Any, project_id: str,
                                   dedupe_key=f"dq_intake_{g['group_id']}_{uuid.uuid4().hex[:6]}",
                                   workflow_version_id=version)
         started.append({"group_id": g["group_id"], "run_id": run["id"]})
-    statement = (f"Eagle's COB {cob}: {len(errors)} exception group(s) graded Error; started "
+    statement = (f"DQ Monitor, COB {cob}: {len(errors)} exception group(s) graded Error; started "
                  f"{len(started)} investigation(s)"
                  + (f", {len(skipped)} already under investigation" if skipped else "") + ".")
     decision = _decide(connection, project_id, run_id=run_id, step_id=step_id,
                        decision_type="IntakeRouted", statement=statement, actor_ref=ORCHESTRATOR)
-    return {"capability": "dq_eagle_intake", "tool": None, "status": "succeeded", "cob": cob,
+    return {"capability": "dq_monitor_intake", "tool": None, "status": "succeeded", "cob": cob,
             "started": started, "skipped": skipped, "calls": calls, "note": statement,
             "summary": statement, "ran_as": _ran_as(ORCHESTRATOR),
             "produced": _produced("IntakeRouted", decision, statement)}
@@ -1879,20 +1879,20 @@ def run_dq_eagle_intake(connection: Connection, settings: Any, project_id: str,
 
 def run_context_curator(connection: Connection, *, project_id: str, run_id: str, step_id: str,
                         **_ignored: Any) -> dict[str, Any]:
-    """What the Context Curator kept and dropped for each LLM step of this run."""
+    """What the Context Budgeter kept and dropped for each LLM step of this run."""
     steps = _outputs(connection, run_id)
     report = {sid: out.get("curator") for sid, out in steps.items() if out.get("curator")}
     note = "; ".join(f"{sid}: used {r['used_tokens']}/{r['budget_tokens']} tokens, dropped "
                      f"{sum(d['items'] for d in r['dropped'])} item(s)"
                      for sid, r in report.items()) or "no LLM step has run yet"
     return {"cost_usd_micros": 0, "status": "succeeded", "report": report,
-            "note": f"Context Curator: {note}.", "produced": {}}
+            "note": f"Context Budgeter: {note}.", "produced": {}}
 
 
 def run_profile_service(connection: Connection, *, project_id: str, run_id: str, step_id: str,
                         platform: str = "", rule_id: str = "", measured: Any = None,
                         **_ignored: Any) -> dict[str, Any]:
-    """The exception profile of one rule on its platform (Olympus), deterministic."""
+    """The exception profile of one rule on its platform (the Profile Service), deterministic."""
     calls: list[dict[str, Any]] = []
     profile, gap = exception_profile(connection, project_id, platform=str(platform),
                                      rule_id=str(rule_id),

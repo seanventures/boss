@@ -1,7 +1,7 @@
 """KG P5b: the Profile Service mock MCP server (tools/mcp_profile_service_mock.py) had no test
 exercising it at all — `get_customer_profile` and the mock's MCP handshake (initialize,
 tools/list, tools/call, unknown method/tool) were pinned by nothing, unlike its sibling mocks
-(mcp_itsm_mock is read by test_banking_regulatory_compliance.py). This file closes that gap
+(mcp_service_desk_mock is read by test_banking_regulatory_compliance.py). This file closes that gap
 directly against the mock's FastAPI app, no network and no database required.
 """
 from __future__ import annotations

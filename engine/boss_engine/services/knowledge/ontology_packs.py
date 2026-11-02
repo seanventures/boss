@@ -75,7 +75,7 @@ class OntologyPack:
     #: The schema version of the context kinds this pack declares (graph_versions.cg_version);
     #: None means the pack's own version stands for it.
     context_version: Optional[str] = None
-    #: The Knowledge Graph version the pack's agent designs are written against ("KG v17"), when
+    #: The Knowledge Graph version the pack's agent designs are written against ("KG v3"), when
     #: it declares one: the version the agent design views name, so a band and a design card
     #: never disagree (graph_versions.kg_reference).
     kg_reference: Optional[str] = None

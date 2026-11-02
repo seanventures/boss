@@ -9343,7 +9343,7 @@ CREATE TABLE IF NOT EXISTS oidc_user_pools (
 );
 
 -- id IS the client_id. The secret lives in the vault; the API returns presence only (§6.5).
--- id_token_alg: RS256 by default, EdDSA opt-in per client (D10; IDENTITY.md amendment A-D10).
+-- id_token_alg: RS256 by default, EdDSA opt-in per client (D10; the IDENTITY.md amendment).
 CREATE TABLE IF NOT EXISTS oidc_clients (
   id                          TEXT PRIMARY KEY,
   org_id                      TEXT NOT NULL REFERENCES orgs(id),
@@ -10742,7 +10742,7 @@ BEGIN
   END IF;
 END $$;
 -- ============================================================================================
--- THE CONTEXT LAYER OF PACK KINDS (design §4.2, consultant conformance P1 #8).
+-- THE CONTEXT LAYER OF PACK KINDS (design §4.2, reference-design conformance P1 #8).
 -- ============================================================================================
 -- kg_nodes.knowledge_layer was a column GENERATED from a hard-coded CASE, so the context kinds
 -- an ontology pack declares (compliance_case, remediation_package, aml_case, resolved_pattern…)

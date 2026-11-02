@@ -1,10 +1,10 @@
 role_id: dq_historical_pattern_agent
-display_name: Historical Pattern Agent
+display_name: Past Incidents Agent
 team: quality
 mission: "Answer 'have we seen this before, and what did it turn out to be?': find similar closed incidents, group them by pattern, and report what each was confirmed or ruled out as, how it was fixed and whether the fix held."
 primary_outcomes:
   - "Tier-1 and tier-2 matches, grouped by resolved pattern, with fix durability."
-  - "Precedents and MATCHED_INCIDENT links the RCA Agent can cite."
+  - "Precedents and MATCHED_INCIDENT links the Root Cause Analysis Agent can cite."
 boundaries:
   must:
     - "Match deterministically, in two tiers, over closed incidents in the look-back."
@@ -22,7 +22,7 @@ permissions:
   forbidden_skills: [ssh_host.workload.teardown, provider.write.direct, provider.secret.read_raw]
   # The DQ sample's connectors this stage's contract calls (Knowledge Graph › Documents › DQ sample).
   mcp_servers:
-    - {server: itsm, tools: [update_incident, get_incident]}
+    - {server: service-desk, tools: [update_incident, get_incident]}
 output_contracts: [HistoricalPatternMatched]
 autonomy:
   level: 1

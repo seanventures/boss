@@ -146,7 +146,7 @@ def test_today_buckets_follow_the_viewers_zone(engine):
 
 
 def test_an_unknown_zone_falls_back_to_utc_and_says_so(engine, client):
-    assert _build(engine, tz="Mars/Olympus_Mons", now=NOW)["tz"] == "UTC"
+    assert _build(engine, tz="Mars/Tharsis", now=NOW)["tz"] == "UTC"
     assert _view(client, tz="Not/A_Zone").json()["tz"] == "UTC"
 
 

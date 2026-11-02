@@ -1,14 +1,14 @@
 "use client";
 
 /**
- * KNOWLEDGE GRAPH › DOCUMENTS › DQ PLATFORM (the consultant's DQ case study). "Load the NorthPeak
+ * KNOWLEDGE GRAPH › DOCUMENTS › DQ PLATFORM (the banking DQ case study). "Load the NorthPeak
  * Bank data platform" is the product action (POST /v1/knowledge/samples/dq, confirmed; the
  * agent's `load_dq_platform` tool takes the same one): the banking-dq pack beside the project's
- * other packs, the Eagle and Olympus connectors, the platform into the graph, the DQ workflows
+ * other packs, the DQ Monitor and the Profile Service connectors, the platform into the graph, the DQ workflows
  * and the daily escalation sweep. The rules come from the rulebook, never from here — the row
- * says how many are in the graph. Then Eagle's exception groups are listed by close of business,
+ * says how many are in the graph. Then the DQ Monitor's exception groups are listed by close of business,
  * each with "Investigate" (starts dq_incident_rca with that group), and the scheduled trigger can
- * be turned on: every morning, an investigation per group Eagle graded Error.
+ * be turned on: every morning, an investigation per group the DQ Monitor graded Error.
  */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -34,7 +34,7 @@ function GroupRow({ w, group, workflowKey, archived, onStarted }: {
 }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string; href?: string | null } | null>(null);
-  const label = `${group.eagle_rule_id} v${group.rule_version} on COB ${group.cob}`;
+  const label = `${group.monitor_rule_id} v${group.rule_version} on COB ${group.cob}`;
   const [refusal, setRefusal] = useState<PendingRefusal | null>(null);
 
   const start = async (startAnyway: string[] = []) => {
@@ -63,7 +63,7 @@ function GroupRow({ w, group, workflowKey, archived, onStarted }: {
     <li className="kg-doc-clause" data-testid="kg-dq-group">
       <span className="kg-doc-clause-section">{label}</span>
       <span className="kg-doc-clause-text">
-        {group.rule_id}: {group.failed} of {group.population} failed on {group.column} — Eagle graded {group.grade}
+        {group.rule_id}: {group.failed} of {group.population} failed on {group.column} — the DQ Monitor graded {group.grade}
       </span>
       <span className="kg-quiet" data-testid="kg-dq-group-status">{groupStatus(group)}</span>
       <span className="kg-doc-check">
@@ -113,7 +113,7 @@ export function DqPlatformSample({ projectId, actor, archived = false, onLoaded 
     setBusy(false);
     if (!r.ok) { setMsg({ ok: false, text: r.error }); return; }
     setMsg(r.data.error ? { ok: false, text: r.data.error }
-      : { ok: true, text: r.data.created ? "Every morning the Pipeline Orchestrator investigates Eagle's Error groups."
+      : { ok: true, text: r.data.created ? "Every morning the Cause Router investigates the DQ Monitor's Error groups."
                                          : "The morning intake is already scheduled." });
   };
 
@@ -131,13 +131,13 @@ export function DqPlatformSample({ projectId, actor, archived = false, onLoaded 
             : "Not loaded"}
         </span>
         <GatedButton permission={DOCUMENT_MANAGE} className="ag-btn" data-testid="kg-dq-load" disabled={archived || busy}
-                     title="Load NorthPeak Bank's systems, tables, feeds, lineage, CDEs, reports, calendar, issues, Eagle's exception groups and past incidents, the banking-dq pack and its connectors"
+                     title="Load NorthPeak Bank's systems, tables, feeds, lineage, CDEs, reports, calendar, issues, the DQ Monitor's exception groups and past incidents, the banking-dq pack and its connectors"
                      onClick={() => void load()}>
           {busy ? "Working…" : platform.loaded ? "Reload" : "Load the NorthPeak Bank data platform"}
         </GatedButton>
         {platform.loaded ? (
           <GatedButton permission={DOCUMENT_MANAGE} className="ag-btn" data-testid="kg-dq-schedule" disabled={archived || busy}
-                       title="Every morning, start an investigation for each exception group Eagle graded Error"
+                       title="Every morning, start an investigation for each exception group the DQ Monitor graded Error"
                        onClick={() => void schedule()}>Investigate every morning</GatedButton>
         ) : null}
         {msg ? <span className={msg.ok ? "kg-ok" : "kg-inline-err"} role={msg.ok ? "status" : "alert"} data-testid="kg-dq-msg">{msg.text}</span> : null}

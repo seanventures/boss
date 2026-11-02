@@ -83,17 +83,17 @@ export const CAST: readonly CastMember[] = [
   picked("aml_network_mapper", "Network Mapper", ["antenna", "people", "teal", "scope"]),
   picked("aml_analyst", "AML Analyst", ["magnifier", "target", "purple", "lens"]),
   picked("sar_narrator", "SAR Narrator", ["quill", "page", "coral", "glasses"]),
-  // The banking-dq pack's DQ RCA and remediation pipeline (the consultant's Instance A).
-  picked("dq_monitoring_agent", "Monitoring Agent", ["siren", "eye", "amber", "band"]),
-  picked("dq_context_enrichment_agent", "Context Enrichment Agent", ["antenna", "layers", "teal", "lens"]),
-  picked("dq_historical_pattern_agent", "Historical Pattern Agent", ["mortarboard", "cycle", "slate", "glasses"]),
-  picked("dq_rca_agent", "RCA Agent", ["magnifier", "atom", "blue", "scope"]),
-  picked("dq_pipeline_orchestrator", "DQ Pipeline Orchestrator", ["headset", "compass", "purple", "band"]),
-  picked("dq_lane_agent", "DQ Lane Agent", ["goggles", "check", "mint", "lens"]),
-  picked("dq_rule_drafting_agent", "Rule Drafting Agent", ["beret", "nib", "pink", "glasses"]),
-  picked("dq_remediation_advisor", "DQ Remediation Advisor", ["hardhat", "wrench", "green", "slit"]),
-  picked("dq_incident_closure_agent", "Incident Closure Agent", ["crest", "check", "teal", "monocle"]),
-  picked("dq_escalation_agent", "Escalation Agent", ["flag", "stopwatch", "coral", "slit"]),
+  // The banking-dq pack's DQ RCA and remediation pipeline (Instance A of the investigation pipeline).
+  picked("dq_monitoring_agent", "Incident Intake Agent", ["siren", "eye", "amber", "band"]),
+  picked("dq_context_enrichment_agent", "Context Gathering Agent", ["antenna", "layers", "teal", "lens"]),
+  picked("dq_historical_pattern_agent", "Past Incidents Agent", ["mortarboard", "cycle", "slate", "glasses"]),
+  picked("dq_rca_agent", "Root Cause Analysis Agent", ["magnifier", "atom", "blue", "scope"]),
+  picked("dq_pipeline_orchestrator", "Cause Router", ["headset", "compass", "purple", "band"]),
+  picked("dq_lane_agent", "Cause Check Agent", ["goggles", "check", "mint", "lens"]),
+  picked("dq_rule_drafting_agent", "Rule Proposal Agent", ["beret", "nib", "pink", "glasses"]),
+  picked("dq_remediation_advisor", "Fix Planner", ["hardhat", "wrench", "green", "slit"]),
+  picked("dq_incident_closure_agent", "Close and Learn Agent", ["crest", "check", "teal", "monocle"]),
+  picked("dq_escalation_agent", "Escalation Watch", ["flag", "stopwatch", "coral", "slit"]),
   picked("rulebook_analyst", "Rulebook Analyst", ["dome", "page", "teal", "lens"]),
 ];
 

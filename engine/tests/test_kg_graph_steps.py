@@ -320,16 +320,16 @@ def test_p1_a_second_runs_historical_pattern_finds_the_first_runs_closure_preced
 
 
 # ── The MCP calls a deterministic step made are recorded in its output (2026-10-31) ──────────
-# The Pipeline view's read/write overlay said "not recorded" for Historical pattern's ITSM call:
+# The Pipeline view's read/write overlay said "not recorded" for Historical pattern's Service Desk call:
 # a deterministic step leaves no agent turn, so nothing said it had called anything.
 
-def test_p1_historical_pattern_records_the_itsm_call_it_made(pg_engine, project, monkeypatch):
+def test_p1_historical_pattern_records_the_service_desk_call_it_made(pg_engine, project, monkeypatch):
     from boss_engine.services import mcp_registry
     from boss_engine.services.knowledge import graph_steps
 
     asked: list[str] = []
     monkeypatch.setattr(mcp_registry, "find_mcp_server",
-                        lambda c, p, ref: {"id": "mcp_itsm", "enabled": True} if ref == "itsm" else None)
+                        lambda c, p, ref: {"id": "mcp_service_desk", "enabled": True} if ref == "service-desk" else None)
 
     def call(settings, server, tool, args):
         asked.append(tool)
@@ -343,7 +343,7 @@ def test_p1_historical_pattern_records_the_itsm_call_it_made(pg_engine, project,
             c, project_id=project, run_id="wfr_calls_1", step_id="historical_pattern",
             subject_id=subject)
     assert asked == ["list_incidents"]
-    assert out["calls"] == [{"mcp": "itsm", "tool": "list_incidents", "ok": True}]
+    assert out["calls"] == [{"mcp": "service-desk", "tool": "list_incidents", "ok": True}]
 
 
 def test_p1_historical_pattern_records_no_call_it_never_made(pg_engine, project, monkeypatch):

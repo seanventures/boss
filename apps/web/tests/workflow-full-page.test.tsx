@@ -149,7 +149,7 @@ const RUN = {
   id: "wfr_big", status: "completed", standing: standingOf("completed"), workflow_key: "my_flow",
   workflow_name: "My flow", version: 2, step_count: 6, steps_done: 6, current_step: null,
   waiting_on: null, blocked_reason: null, error: null, updated_at: null, actions: [], finished: true,
-  input: { title: "Investigate EGL-0588" }, created_at: "2026-11-01T23:57:00Z",
+  input: { title: "Investigate DQX-0588" }, created_at: "2026-11-01T23:57:00Z",
   steps: DEF.steps.map((s) => step(s.id, "capability", "research")),
 };
 
@@ -216,7 +216,7 @@ describe("a run's full page", () => {
     await mountRuns({ onFullPage, fullPageRun: RUN.id });
     const page = $('[data-testid="run-full-page"]')!;
     expect(page.dataset.runId).toBe("wfr_big");
-    expect($('[data-testid="run-full-title"]')?.textContent).toContain("Investigate EGL-0588");
+    expect($('[data-testid="run-full-title"]')?.textContent).toContain("Investigate DQX-0588");
     expect(page.querySelectorAll('[data-testid="dw-run"]').length).toBe(0);
     expect(page.querySelector('[data-testid="dw-path"]')?.getAttribute("data-full-page")).toBe("true");
     // Every step of the run is on the lane.

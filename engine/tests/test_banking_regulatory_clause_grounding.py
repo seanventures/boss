@@ -34,7 +34,7 @@ from boss_engine.services.knowledge import documents
 from boss_engine.services.knowledge import ontology_packs
 from boss_engine.services.knowledge.code_index import symbol_key
 from boss_engine.services.knowledge.store import PostgresKnowledgeStore
-from tools.mcp_itsm_mock import INCIDENTS
+from tools.mcp_service_desk_mock import INCIDENTS
 
 STORE = PostgresKnowledgeStore()
 

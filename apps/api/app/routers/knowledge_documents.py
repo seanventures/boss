@@ -428,9 +428,9 @@ def stage_dq_rulebook(body: LoadSampleBody) -> dict[str, Any]:
 
 # ── The DQ case study: NorthPeak Bank's data platform (services/knowledge/dq_platform.py) ─────
 # One product action loads it: the banking-dq pack (added beside the project's other packs), the
-# Eagle and Olympus connectors, the platform into the Knowledge Graph (never the rulebook's
-# rules), the DQ workflows and the Escalation Agent's daily schedule. Same action as the agent's
-# `load_dq_platform` tool.
+# DQ Monitor and Profile Service connectors, the platform into the Knowledge Graph (never the
+# rulebook's rules), the DQ workflows and the Escalation Watch's daily schedule. Loading again
+# replaces the earlier sample. Same action as the agent's `load_dq_platform` tool.
 
 @router.get("/samples/dq")
 @permit(P.KNOWLEDGE_READ, scope=Scope.project(query="project_id"))
@@ -467,7 +467,7 @@ def load_dq_platform(body: LoadSampleBody) -> dict[str, Any]:
 @router.post("/samples/dq/schedule")
 @permit(P.KNOWLEDGE_MANAGE, scope=Scope.project(body="project_id"))
 def schedule_dq_intake(body: LoadSampleBody) -> dict[str, Any]:
-    """The scheduled trigger: each morning, an RCA per exception group Eagle graded Error."""
+    """The scheduled trigger: each morning, an RCA per Error exception group of the DQ Monitor."""
     from boss_engine.services.knowledge import dq_platform
 
     try:

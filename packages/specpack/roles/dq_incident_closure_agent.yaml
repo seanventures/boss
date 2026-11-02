@@ -1,5 +1,5 @@
 role_id: dq_incident_closure_agent
-display_name: Incident Closure Agent
+display_name: Close and Learn Agent
 team: quality
 mission: "Close an incident only on evidence: re-run the check, finalise the confirmed cause, close the ticket, maintain the resolved pattern and write the precedent the next investigation finds."
 primary_outcomes:
@@ -22,7 +22,7 @@ permissions:
   forbidden_skills: [ssh_host.workload.teardown, provider.write.direct, provider.secret.read_raw]
   # The DQ sample's connectors this stage's contract calls (Knowledge Graph › Documents › DQ sample).
   mcp_servers:
-    - {server: itsm, tools: [update_incident]}
+    - {server: service-desk, tools: [update_incident]}
 output_contracts: [IncidentClosed]
 autonomy:
   level: 1

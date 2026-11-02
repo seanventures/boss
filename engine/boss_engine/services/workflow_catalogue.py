@@ -351,7 +351,7 @@ def _writes(*specs: tuple) -> list[dict[str, Any]]:
 
 
 # What Historical pattern actually calls (it lists matching tickets; it never fetches one by id).
-_ITSM_CALLS = [{"mcp": "itsm", "tool": "list_incidents"}]
+_SERVICE_DESK_CALLS = [{"mcp": "service-desk", "tool": "list_incidents"}]
 
 # STEP CONTRACTS (design §4.1, §5.1): what each stage of the KG investigation template reads
 # from the Knowledge Graph, must write to the Context Graph, and calls. Core kinds only, so the
@@ -391,14 +391,14 @@ KG_TEMPLATE_CONTRACTS: dict[str, dict[str, Any]] = {
         "reads": _reads("incident", "precedent", "rule", "symbol"),
         "writes": _writes(("agent_decision", True, "HistoricalPatternMatched"),
                           ("incident", False)),
-        "calls": _ITSM_CALLS,
+        "calls": _SERVICE_DESK_CALLS,
         "handoff": {"to": "analysis", "carries": ["matched"]},
         "human_review": "none",
         "policy": {"max_hops": 2},
         "llm": "none",
         "decisions": ["a match shares a link with the subject; correlates_with is upserted, "
                       "never duplicated",
-                      "an ITSM ticket naming the subject's code becomes an incident node"],
+                      "a Service Desk ticket naming the subject's code becomes an incident node"],
     },
     "analysis": {
         "trigger": "after historical_pattern",
@@ -487,7 +487,7 @@ REGULATORY_CONTRACTS: dict[str, dict[str, Any]] = {
         "human_review": "implemented_by / gap edges are proposals that go to review",
         "decisions": ["implemented, partly implemented or gap, with a confidence",
                       "cites only a candidate node it was offered; anything else is a gap",
-                      "a correlated incident's detail (INC-2088) comes from ITSM, never invented"],
+                      "a correlated incident's detail (INC-2088) comes from Service Desk, never invented"],
     },
     "compliance_orchestration": {
         "trigger": "after compliance_assessment",
@@ -1370,7 +1370,7 @@ CATALOGUE: list[dict[str, Any]] = [
             {
                 "id": "historical_pattern", "kind": "deterministic",
                 "binding": {"inputs": {"subject_id": _in("subject_id")}},
-                # Its contract (ITSM calls included) is REGULATORY_CONTRACTS', applied below.
+                # Its contract (Service Desk calls included) is REGULATORY_CONTRACTS', applied below.
                 "next": ["compliance_assessment"],
             },
             _step("compliance_assessment", "compliance_assessment",
@@ -2250,6 +2250,13 @@ def seed(connection: Connection, project_id: str, actor: str = "boss",
 
         if existing:
             definition_id = existing["id"]
+            # A catalogue workflow is read-only (a customer forks it to change it), so its name
+            # and description follow the catalogue: a reworded standard reads the new words.
+            connection.execute(
+                text("UPDATE workflow_definitions SET name = :n, description = :d, "
+                     "updated_at = now() WHERE id = :id AND is_catalogue "
+                     "AND (name IS DISTINCT FROM :n OR description IS DISTINCT FROM :d)"),
+                {"id": definition_id, "n": entry["name"], "d": entry["description"]})
         else:
             definition = workflows.create_definition(
                 connection,
@@ -2275,8 +2282,49 @@ def seed(connection: Connection, project_id: str, actor: str = "boss",
             # Same content hash: already published. Nothing to do, and not an error.
             installed.append({"key": entry["key"], "version_id": None, "version": None})
     mapped = _seed_default_mappings(connection, project_id, actor=actor) if only is None else []
+    retired = retire_dropped(connection, project_id)
     return {"project_id": project_id, "installed": installed, "count": len(installed),
-            "mapped": mapped}
+            "mapped": mapped, "retired": retired}
+
+
+def retire_dropped(connection: Connection, project_id: str) -> list[str]:
+    """Take the standards the catalogue no longer ships out of the project's library: a
+    catalogue workflow whose key is not in CATALOGUE (dropped, or renamed to a new key) loses its
+    mappings and is removed if it never ran, or retired if it did, so its runs stay readable.
+    One with a run still going is left for the next sync. Returns the keys taken out."""
+    keys = [entry["key"] for entry in CATALOGUE]
+    rows = connection.execute(
+        text("SELECT id, workflow_key FROM workflow_definitions WHERE project_id = :p "
+             "AND is_catalogue AND status <> 'retired' AND NOT (workflow_key = ANY(:keys))"),
+        {"p": project_id, "keys": keys}).mappings().all()
+    gone: list[str] = []
+    for row in rows:
+        runs = connection.execute(
+            text("SELECT count(*) AS ever, count(*) FILTER (WHERE status IN "
+                 "('running', 'waiting', 'queued', 'validating')) AS live "
+                 "FROM workflow_runs WHERE workflow_definition_id = :id"),
+            {"id": row["id"]}).mappings().first() or {"ever": 0, "live": 0}
+        if int(runs["live"] or 0):
+            continue
+        connection.execute(
+            text("DELETE FROM workflow_mappings WHERE workflow_version_id IN "
+                 "(SELECT id FROM workflow_versions WHERE workflow_definition_id = :id)"),
+            {"id": row["id"]})
+        removed = False
+        if not int(runs["ever"] or 0):
+            try:
+                with connection.begin_nested():
+                    connection.execute(text("DELETE FROM workflow_definitions WHERE id = :id"),
+                                       {"id": row["id"]})
+                removed = True
+            except Exception:  # noqa: BLE001 — something still points at it: retire instead
+                removed = False
+        if not removed:
+            connection.execute(
+                text("UPDATE workflow_definitions SET status = 'retired', updated_at = now() "
+                     "WHERE id = :id"), {"id": row["id"]})
+        gone.append(str(row["workflow_key"]))
+    return gone
 
 
 def _unmet(connection: Connection, project_id: str, entry: dict[str, Any]) -> Optional[str]:
