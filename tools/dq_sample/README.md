@@ -1,7 +1,7 @@
 # NorthPeak Bank loan data-quality sample (`tools/dq_sample`)
 
 The synthetic world behind the **banking DQ case study**: the DQ incident pipeline
-(Incident Intake → Context Gathering → Past Incidents → Root Cause Analysis → Cause Checks → Fix Planner → Close and Learn)
+(Incident Intake → Context Gathering → Past Incidents → Root Cause Analysis → Swimlanes → Fix Planner → Close and Learn)
 running on BOSS against a bank's loan book whose core is Apache Fineract.
 
 Pure Python standard library, **deterministic**: no network, no model, no clock. The rulebook PDF
@@ -142,7 +142,7 @@ as graph nodes.
 | **EXG-20261005-0003** | **LN-003 v2 (DQX-0588)** | **10-05** | **Error** | **open; source_processing; precedent INC-2187 (and INC-2041), pattern RPAT-COB-ORDER; recent change CHG-7731 regressed the INC-2187 fix** |
 | EXG-20261005-0005 | AR-001 v2 | 10-05 | Error | **attach** to open INC-2301 |
 | EXG-20261006-0001 | FD-001 (DQX-0746) | 10-06 | Error | open; feed_etl; precedent INC-1988 |
-| EXG-20261006-0002 | CL-004 v3 (DQX-0689) | 10-06 | DQ Monitor Error / rulebook Warning | **false positive**: the DQ Monitor's thresholds 100x too tight after CHG-7745; precedent INC-2203; cause check `rule_drafting` |
+| EXG-20261006-0002 | CL-004 v3 (DQX-0689) | 10-06 | DQ Monitor Error / rulebook Warning | **false positive**: the DQ Monitor's thresholds 100x too tight after CHG-7745; precedent INC-2203; swimlane `rule_drafting` |
 | EXG-20261006-0005 | SC-004 (DQX-0629) | 10-06 | Error | open; source_processing; precedent INC-2059 (short payment, Reg Z) |
 | EXG-20261006-0007 | LN-003 v2 (DQX-0588) | 10-06 | Error | attach to the incident opened for EXG-20261005-0003 |
 | EXG-20261007-0001 | CL-001 (DQX-0686) | 10-07 | Error | open; manual_entry; precedent INC-2150 |

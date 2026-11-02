@@ -50,11 +50,11 @@ describe("the DQ pipeline overview", () => {
       [5, "pipeline_orchestrator"], [6, "lane"], [7, "remediation_advisor"], [8, "remediation_fix"],
       [9, "escalation"], [10, "incident_closure"],
     ]);
-    // People are human steps; Rule Proposal sits in Rule authoring, reached from the cause checks.
+    // People are human steps; Rule Proposal sits in Rule authoring, reached from the swimlanes.
     expect(at("human_approval").number).toBeNull();
     expect(at("human_execution").number).toBeNull();
     expect(at("rule_drafting").placement).toBe("side");
-    expect(at("rule_drafting").sideLink).toBe("From Cause Checks: Confirmed false positive: rule proposal");
+    expect(at("rule_drafting").sideLink).toBe("From Swimlanes: Confirmed false positive: rule proposal");
     expect(at("escalation").placement).toBe("side");
     // Nothing the flow runs is left as an unnumbered side path.
     for (const id of ["pipeline_orchestrator", "remediation_advisor", "remediation_fix", "incident_closure"]) {
@@ -68,7 +68,7 @@ describe("the DQ pipeline overview", () => {
       "Yes: Evidence loop · No: Attached to an open incident, or not an Error — stop");
     expect(at("attached_stop").outcome).toBe(true);
     expect(at("lanes").frameNote).toBe(
-      "In parallel, one per root-cause family, from Cause Router · up to 3 at once");
+      "In parallel, one per root-cause family, from Flow Orchestrator · up to 3 at once");
     expect(at("evidence_loop").frameNote).toContain("while it reports InsufficientEvidence");
     const el = mount(<PipelineView name="DQ RCA and Remediation" stages={stages} />);
     expect(el.textContent).not.toContain("No stage inside yet");
@@ -79,7 +79,7 @@ describe("the DQ pipeline overview", () => {
   });
 
   it("P0 hands off in full sentences that name stages by their display names", () => {
-    expect(at("context_enrichment").contract!.handoff).toMatch(/^Returns the decision ID to the Cause Router, which invokes Past Incidents\./);
+    expect(at("context_enrichment").contract!.handoff).toMatch(/^Returns the decision ID to the Flow Orchestrator, which invokes Past Incidents\./);
     expect(at("monitoring").contract!.handoff).toMatch(/^Returns the incident ID/);
     for (const s of stages) {
       const handoff = s.contract?.handoff ?? "";
@@ -88,7 +88,7 @@ describe("the DQ pipeline overview", () => {
       expect(handoff, s.id).not.toMatch(RAW_ID);
     }
     for (const id of ["monitoring", "context_enrichment", "historical_pattern"]) {
-      expect(at(id).from, id).toBe("Cause Router");
+      expect(at(id).from, id).toBe("Flow Orchestrator");
     }
     expect(at("monitoring").to).toBe("Context Gathering");
     expect(at("context_enrichment").to).toBe("Past Incidents");
@@ -123,7 +123,7 @@ describe("the DQ agent designs", () => {
     const decisions = el.querySelector('[data-testid="card-decisions"]')!;
     expect(decisions.querySelectorAll("ul").length).toBe(0);
     expect(decisions.textContent!.match(/severity never goes down/g)).toHaveLength(1);
-    expect(el.querySelector('[data-testid="steps-from"]')?.textContent).toContain("Cause Router");
+    expect(el.querySelector('[data-testid="steps-from"]')?.textContent).toContain("Flow Orchestrator");
     expect(el.querySelector('[data-testid="band-kg"]')?.textContent).toBe("Knowledge Graph v3 · read only");
   });
 

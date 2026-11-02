@@ -313,12 +313,12 @@ describe("on a full page every step is named in full", () => {
         { id: "plan", kind: "capability", binding: { capability: "research" }, next: ["lanes"] },
         { id: "lanes", kind: "for_each", title: "Lanes", items: "steps.plan.output.items", body: "check",
           item_label: "root-cause family", next: [] },
-        { id: "check", kind: "capability", title: "Cause Check", binding: { capability: "research" } },
+        { id: "check", kind: "capability", title: "Swimlane", binding: { capability: "research" } },
       ],
     } as unknown as Spec;
     act(() => root!.render(<FlowLane spec={spec} palette={PALETTE} mode="design" wrap />));
     await settle();
     expect($('.wf-node[data-step-id="lanes"] [data-testid="wf-node-repeats"]')?.textContent)
-      .toBe("Cause Check × each root-cause family");
+      .toBe("Swimlane × each root-cause family");
   });
 });

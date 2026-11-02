@@ -113,7 +113,7 @@ export function DqPlatformSample({ projectId, actor, archived = false, onLoaded 
     setBusy(false);
     if (!r.ok) { setMsg({ ok: false, text: r.error }); return; }
     setMsg(r.data.error ? { ok: false, text: r.data.error }
-      : { ok: true, text: r.data.created ? "Every morning the Cause Router investigates the DQ Monitor's Error groups."
+      : { ok: true, text: r.data.created ? "Every morning the Flow Orchestrator investigates the DQ Monitor's Error groups."
                                          : "The morning intake is already scheduled." });
   };
 

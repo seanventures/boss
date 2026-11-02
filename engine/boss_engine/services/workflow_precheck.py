@@ -229,7 +229,7 @@ CAPABILITY_PRECHECKS: dict[str, CapabilityPrecheck] = {
         ("dq_historical_pattern", "matches closed incidents in the graph; writes the Context "
                                   "Graph"),
         ("dq_rca", "proposes causes from the assembled evidence; writes the Context Graph"),
-        ("dq_orchestration", "routes candidate families to cause checks by policy"),
+        ("dq_orchestration", "routes candidate families to swimlanes by policy"),
         ("dq_lane", "confirms or rules out one family on the evidence"),
         ("dq_rule_drafting", "drafts a rule proposal into Rules review; changes no rule"),
         ("dq_remediation_package", "prepares a package; executes nothing"),

@@ -1007,7 +1007,7 @@ CAPABILITIES: dict[str, Capability] = {
         ),
         # ── The DQ RCA and remediation pipeline (dq_incident_rca; services/
         # knowledge/dq_incident_pipeline.py). Each stage runs AS its role agent; the retrieval
-        # stages are BOSS's deterministic code ($0), only RCA, the cause checks, rule proposal and the
+        # stages are BOSS's deterministic code ($0), only RCA, the swimlanes, rule proposal and the
         # fix planner ask a model. No agent executes a fix: people approve and execute.
         *(_cap(key=key, role_agent=role, family="research", captain=role, label=label,
                summary=summary, tool=None, risk_tier=risk, optional_inputs=optional,
@@ -1029,7 +1029,7 @@ CAPABILITIES: dict[str, Capability] = {
                "InsufficientEvidence, which runs context gathering and past incidents again.", 0, (),
                ("rca_verdict", "candidates", "missing"), 3, True),
               ("dq_orchestration", "dq_pipeline_orchestrator", "Cause router",
-               "Route each candidate root-cause family to the cause check that confirms or rules it out.",
+               "Route each candidate root-cause family to the swimlane that confirms or rules it out.",
                0, (), ("lanes",), 1, False),
               ("dq_lane", "dq_lane_agent", "Cause check",
                "Confirm or rule out one root-cause family on the evidence.", 0, ("item",),

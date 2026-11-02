@@ -60,10 +60,10 @@ _RESERVED = {"IN": "in_calendar", "FROM": "lineage_from",
              "TO": "lineage_to", "VIA": "lineage_via"}
 #: When the Escalation Watch sweeps every open incident (bank-local time).
 ESCALATION_SCHEDULE = {"cadence": "daily", "hour": 7, "minute": 0, "tz_name": "America/New_York"}
-#: When the Cause Router reads the DQ Monitor's latest COB and starts an RCA per Error group.
+#: When the Flow Orchestrator reads the DQ Monitor's latest COB and starts an RCA per Error group.
 INTAKE_SCHEDULE = {"cadence": "daily", "hour": 6, "minute": 30, "tz_name": "America/New_York"}
 ESCALATION_SCHEDULE_NAME = "Escalation Watch — daily sweep of open incidents"
-INTAKE_SCHEDULE_NAME = "Cause Router — investigate the DQ Monitor's Error groups each COB"
+INTAKE_SCHEDULE_NAME = "Flow Orchestrator — investigate the DQ Monitor's Error groups each COB"
 
 
 def edge_kind(relationship: str) -> str:
@@ -441,7 +441,7 @@ def _ensure_schedule(connection: Connection, project_id: str, actor: str, workfl
 
 
 def schedule_intake(connection: Connection, *, project_id: str, actor: str) -> dict[str, Any]:
-    """THE SCHEDULED TRIGGER: every morning the Cause Router reads the DQ Monitor's latest close
+    """THE SCHEDULED TRIGGER: every morning the Flow Orchestrator reads the DQ Monitor's latest close
     of business and starts an RCA for each exception group the DQ Monitor graded Error. A person
     turns it on (it starts model-backed runs); turning it off is the schedule's own switch."""
     return _ensure_schedule(connection, project_id, actor, INTAKE_WORKFLOW,

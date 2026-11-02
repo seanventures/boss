@@ -772,7 +772,7 @@ def test_dqx_0588_runs_end_to_end_and_two_people_finish_it(loaded, monkeypatch):
             "IncidentClosed"} <= _decision_types(c, project, run)
     assert c.execute(text("SELECT status FROM workflow_runs WHERE id = :r"),
                      {"r": run}).scalar() == "completed"
-    assert agents.prompts["Root Cause Analysis Agent"] and agents.prompts["Cause Check Agent"]
+    assert agents.prompts["Root Cause Analysis Agent"] and agents.prompts["Swimlane Agent"]
 
 
 def test_an_attach_stops_after_monitoring(loaded, monkeypatch):

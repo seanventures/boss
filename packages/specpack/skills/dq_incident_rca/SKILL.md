@@ -1,6 +1,6 @@
 ---
 name: dq-incident-rca
-description: The DQ root-cause analysis and remediation pipeline (dq_incident_rca, Instance A of kg_investigation_pipeline) on NorthPeak Bank's data platform — the role agents, what each reads, writes and calls, and the role prompts of the four that reason (Root Cause Analysis, Cause Checks, Rule Proposal, Fix Planner). Agents prepare; people approve and a different person executes.
+description: The DQ root-cause analysis and remediation pipeline (dq_incident_rca, Instance A of kg_investigation_pipeline) on NorthPeak Bank's data platform — the role agents, what each reads, writes and calls, and the role prompts of the four that reason (Root Cause Analysis, Swimlanes, Rule Proposal, Fix Planner). Agents prepare; people approve and a different person executes.
 ---
 
 # DQ incident RCA and remediation: the agents
@@ -16,8 +16,8 @@ lanes, Rule Proposal and the Fix Planner reason, through the governed
 | 2 | Context Gathering Agent | Gather | code, no LLM | — | AgentDecision ContextAssembled (contextPack, asOf), CoverageGap |
 | 3 | Past Incidents Agent | Echo | code, no LLM | — | Precedent, MATCHED_INCIDENT, REFERENCES, AgentDecision HistoricalPatternMatched |
 | 4 | Root Cause Analysis Agent | Probe | LLM | `roles/rca_agent.md` | AgentDecision RootCauseCandidates or InsufficientEvidence, USED_PRECEDENT {confidenceLift} |
-| 5 | Cause Router | Conductor | code (routing policy) | — | AgentDecision Routed |
-| 6 | Cause Check Agent | Trace | LLM, one per family | `roles/lane_agent.md` | AgentDecision Confirmed/RuledOut/CannotVerify |
+| 5 | Flow Orchestrator | Conductor | code (routing policy) | — | AgentDecision Routed |
+| 6 | Swimlane Agent | Trace | LLM, one per family | `roles/lane_agent.md` | AgentDecision Confirmed/RuledOut/CannotVerify |
 | – | Rule Proposal Agent | Draft | LLM, false positives | `roles/rule_drafting_agent.md` | RuleProposal, a proposed rule in Rules review |
 | 7 | Fix Planner | Remedy | LLM | `roles/remediation_advisor.md` | RemediationPackage (prepared only) |
 | – | Human approval, Human execution | people | — | — | a person approves; a DIFFERENT person carries it out |

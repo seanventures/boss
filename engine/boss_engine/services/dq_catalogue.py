@@ -71,7 +71,7 @@ DQ_CONTRACTS: dict[str, dict[str, Any]] = {
         "handoff": {"to": "pipeline_orchestrator", "next": "context_enrichment",
                     "carries": ["incident_id", "severity"],
                     "text": "Returns the incident ID, opened or attached, and the severity to the "
-                            "Cause Router. A new incident goes to Context Gathering; an "
+                            "Flow Orchestrator. A new incident goes to Context Gathering; an "
                             "attach does not restart the pipeline."},
         "human_review": "None in the normal path. A policy parameter missing from both the "
                         "function policy and the defaults stops the run and goes to human review.",
@@ -82,8 +82,8 @@ DQ_CONTRACTS: dict[str, dict[str, Any]] = {
                       "the rule", "a Warning records nothing"],
     },
     "context_enrichment": {
-        "trigger": "Invoked by the Cause Router after Incident Intake opens a new incident — "
-                   "never on an attach. Re-runs on demand, or when the Cause Router "
+        "trigger": "Invoked by the Flow Orchestrator after Incident Intake opens a new incident — "
+                   "never on an attach. Re-runs on demand, or when the Flow Orchestrator "
                    "re-invokes it after RCA records InsufficientEvidence; a re-run writes a new "
                    "decision and keeps the old one.",
         "reads": _reads("agent", "mcp_server", "system", "incident", "agent_decision",
@@ -100,7 +100,7 @@ DQ_CONTRACTS: dict[str, dict[str, Any]] = {
         "invoked_by": "pipeline_orchestrator",
         "handoff": {"to": "pipeline_orchestrator", "next": "historical_pattern",
                     "carries": ["decision_id", "context_pack"],
-                    "text": "Returns the decision ID to the Cause Router, which invokes "
+                    "text": "Returns the decision ID to the Flow Orchestrator, which invokes "
                             "Past Incidents. RCA reads the pack through the Context Budgeter."},
         "human_review": "None. Missing metadata — lineage, CDE mapping, owner, MDRM route, "
                         "profile — is recorded as a coverage gap and the run continues.",
@@ -112,7 +112,7 @@ DQ_CONTRACTS: dict[str, dict[str, Any]] = {
                       "copies", "regulatory reach leaves severity alone"],
     },
     "historical_pattern": {
-        "trigger": "Invoked by the Cause Router after Context Gathering for a new "
+        "trigger": "Invoked by the Flow Orchestrator after Context Gathering for a new "
                    "incident; never on an attach. Re-runs whenever Context Gathering re-runs, and on "
                    "demand. RCA never searches history itself.",
         "reads": _reads("agent", "mcp_server", "system", "data_quality_rule",
@@ -127,7 +127,7 @@ DQ_CONTRACTS: dict[str, dict[str, Any]] = {
         "invoked_by": "pipeline_orchestrator",
         "handoff": {"to": "pipeline_orchestrator", "next": "rca",
                     "carries": ["decision_id", "matched"],
-                    "text": "Returns the decision ID to the Cause Router, which invokes "
+                    "text": "Returns the decision ID to the Flow Orchestrator, which invokes "
                             "RCA. RCA links its own USED_PRECEDENT {confidenceLift} to the "
                             "precedents it relies on."},
         "human_review": "None. Zero matches is a fact, not InsufficientEvidence. Severity is "
@@ -145,9 +145,9 @@ DQ_CONTRACTS: dict[str, dict[str, Any]] = {
         "writes": [_w("agent_decision", True, "RootCauseCandidates|InsufficientEvidence")],
         "handoff": {"to": "pipeline_orchestrator", "carries": ["candidates", "rca_verdict"],
                     "text": "Returns the candidate root causes, or InsufficientEvidence, to the "
-                            "Cause Router, which either re-runs Context Gathering and Past "
-                            "Incidents or routes the candidates to the cause checks."},
-        "human_review": "None: cause checks confirm or rule out; a person approves any fix.",
+                            "Flow Orchestrator, which either re-runs Context Gathering and Past "
+                            "Incidents or routes the candidates to the swimlanes."},
+        "human_review": "None: swimlanes confirm or rule out; a person approves any fix.",
         "policy": {"token_budget": 6000, "max_rounds": 3},
         "llm": "agent",
         "decisions": ["cites only offered evidence", "InsufficientEvidence re-runs Context Gathering "
@@ -158,21 +158,21 @@ DQ_CONTRACTS: dict[str, dict[str, Any]] = {
         "reads": _reads("agent_decision", "incident"),
         "writes": [_w("agent_decision", True, "Routed")],
         "handoff": {"to": "lanes", "carries": ["lanes"],
-                    "text": "Starts one cause check per candidate root-cause family above the routing "
+                    "text": "Starts one swimlane per candidate root-cause family above the routing "
                             "floor, in parallel."},
-        "human_review": "None. No candidate above the routing floor starts no cause check.",
+        "human_review": "None. No candidate above the routing floor starts no swimlane.",
         "policy": {"min_route_confidence": 0.3},
         "llm": "none",
-        "decisions": ["one cause check per candidate family"],
+        "decisions": ["one swimlane per candidate family"],
     },
     "lane": {
-        "trigger": "One per routed family (cause checks).",
+        "trigger": "One per routed family (swimlanes).",
         "reads": _reads("incident", "agent_decision", "precedent", "data_quality_rule",
                         "dq_threshold", "system", "feed"),
         "writes": [_w("agent_decision", True, "Confirmed|RuledOut|CannotVerify")],
         "handoff": {"to": "pipeline_orchestrator", "next": "remediation_advisor",
                     "carries": ["lane_verdict", "cause"],
-                    "text": "Returns its verdict to the Cause Router. A confirmed cause "
+                    "text": "Returns its verdict to the Flow Orchestrator. A confirmed cause "
                             "goes to the Fix Planner; a confirmed false positive also "
                             "opens a rule authoring case with Rule Proposal."},
         "human_review": "None. CannotVerify leaves the incident for a person.",
@@ -181,7 +181,7 @@ DQ_CONTRACTS: dict[str, dict[str, Any]] = {
         "decisions": ["a verdict cites evidence it was offered"],
     },
     "rule_drafting": {
-        "trigger": "After the cause checks: a cause check that confirmed a false positive (rule_config) opens "
+        "trigger": "After the swimlanes: a swimlane that confirmed a false positive (rule_config) opens "
                    "a rule authoring case.",
         "reads": _reads("agent_decision", "data_quality_rule", "dq_threshold", "incident"),
         "writes": [_w("agent_decision", True, "RuleProposed|NothingToDraft"),
@@ -195,7 +195,7 @@ DQ_CONTRACTS: dict[str, dict[str, Any]] = {
         "decisions": ["proposes; never changes a rule"],
     },
     "remediation_advisor": {
-        "trigger": "After the cause checks and rule drafting.",
+        "trigger": "After the swimlanes and rule drafting.",
         "reads": _reads("agent_decision", "incident", "precedent", "resolved_pattern", "owner"),
         "writes": [_w("agent_decision", True, "RemediationPrepared|NoPackage"),
                    _w("remediation_package")],
@@ -460,7 +460,7 @@ DQ_STAGE_DESIGNS: dict[str, dict[str, Any]] = {
     },
     "pipeline_orchestrator": {
         "steps": [_s(1, "Read the candidates", "RCA's latest round.", ("agent_decision",)),
-                  _s(2, "Route each family", "One cause check per family above the routing floor.",
+                  _s(2, "Route each family", "One swimlane per family above the routing floor.",
                      ("incident",), ("agent_decision",))],
         "design": {"status": "not_reviewed", "reference": ""},
     },
@@ -473,7 +473,7 @@ DQ_STAGE_DESIGNS: dict[str, dict[str, Any]] = {
         "design": {"status": "not_reviewed", "reference": ""},
     },
     "rule_drafting": {
-        "steps": [_s(1, "Read the false positive", "The confirmed rule_config cause check and the "
+        "steps": [_s(1, "Read the false positive", "The confirmed rule_config swimlane and the "
                      "rule's thresholds.", ("agent_decision", "data_quality_rule",
                                             "dq_threshold")),
                   _s(2, "Draft the rule change", "A rule proposal into Rules review.",
@@ -481,7 +481,7 @@ DQ_STAGE_DESIGNS: dict[str, dict[str, Any]] = {
         "design": {"status": "not_reviewed", "reference": ""},
     },
     "remediation_advisor": {
-        "steps": [_s(1, "Read the confirmed cause", "The cause check verdict and the templates.",
+        "steps": [_s(1, "Read the confirmed cause", "The swimlane verdict and the templates.",
                      ("agent_decision", "resolved_pattern", "precedent")),
                   _s(2, "Prepare the package", "Fix, target, executor, approver, change content.",
                      ("owner", "incident"), ("remediation_package", "agent_decision"))],
@@ -499,7 +499,7 @@ DQ_STAGE_DESIGNS: dict[str, dict[str, Any]] = {
     "incident_closure": {
         "steps": [_s(1, "Re-run the check", "The DQ Monitor re-runs the rule after the fix.",
                      ("data_quality_rule",), calls=((_MONITOR, "rerun_check"),)),
-                  _s(2, "Finalise the cause", "From the confirmed cause check and the package.",
+                  _s(2, "Finalise the cause", "From the confirmed swimlane and the package.",
                      ("agent_decision", "remediation_package")),
                   _s(3, "Close the incident", "Graph and ticket.", ("incident",),
                      ("agent_decision",), ((_DESK, "update_incident"),)),
@@ -565,7 +565,7 @@ def entries(step: Callable[..., dict[str, Any]], from_input: Callable[[str], dic
             "Context Gathering and Past Incidents are fixed graph reads, never a model. The RCA "
             "Agent proposes candidate causes citing the evidence, or says the evidence is "
             "insufficient, which runs Context Gathering and Past Incidents again (at most twice). "
-            "Each candidate family goes to its cause check; a confirmed false positive becomes a rule "
+            "Each candidate family goes to its swimlane; a confirmed false positive becomes a rule "
             "proposal. The Fix Planner prepares the fix; a person approves it and a "
             "different person carries it out — no agent executes. Close and Learn re-runs the check, "
             "closes the incident and writes the precedent the next investigation finds."),
@@ -601,12 +601,12 @@ def entries(step: Callable[..., dict[str, Any]], from_input: Callable[[str], dic
             cap("context_enrichment", "dq_context_enrichment", "Context Gathering"),
             cap("historical_pattern", "dq_historical_pattern", "Past Incidents"),
             cap("rca", "dq_rca", "Root Cause Analysis"),
-            cap("pipeline_orchestrator", "dq_orchestration", "Cause Router", nxt=["lanes"]),
-            {"id": "lanes", "kind": "for_each", "title": "Cause Checks",
+            cap("pipeline_orchestrator", "dq_orchestration", "Flow Orchestrator", nxt=["lanes"]),
+            {"id": "lanes", "kind": "for_each", "title": "Swimlanes",
              "items": "steps.pipeline_orchestrator.output.lanes", "body": "lane",
              "max_items": 5, "concurrency": 3, "item_label": "root-cause family",
              "next": ["rule_drafting"]},
-            cap("lane", "dq_lane", "Cause Check", {"item": {"from_item": ""}}),
+            cap("lane", "dq_lane", "Swimlane", {"item": {"from_item": ""}}),
             cap("rule_drafting", "dq_rule_drafting", "Rule Proposal", nxt=["remediation_advisor"],
                 side_path="Rule authoring"),
             cap("remediation_advisor", "dq_remediation_package", "Fix Planner",
@@ -674,7 +674,7 @@ def entries(step: Callable[..., dict[str, Any]], from_input: Callable[[str], dic
         "name": "DQ Monitor Intake",
         "description": "Read the DQ Monitor's latest close of business and start an RCA for each "
                        "exception group graded Error.",
-        "objective": "The Cause Router reads the DQ Monitor's exception groups for the COB and "
+        "objective": "The Flow Orchestrator reads the DQ Monitor's exception groups for the COB and "
                      "starts one dq_incident_rca run per Error group not already under "
                      "investigation.",
         "work_class": "any",

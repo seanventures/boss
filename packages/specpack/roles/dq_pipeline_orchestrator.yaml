@@ -1,5 +1,5 @@
 role_id: dq_pipeline_orchestrator
-display_name: Cause Router
+display_name: Flow Orchestrator
 team: quality
 mission: "Supervise the DQ pipeline: start an investigation for each Error exception group, and route each candidate root-cause family to the lane that confirms or rules it out."
 primary_outcomes:

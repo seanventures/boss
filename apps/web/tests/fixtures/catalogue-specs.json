@@ -7988,7 +7988,7 @@
                   "incident_id",
                   "severity"
                 ],
-                "text": "Returns the incident ID, opened or attached, and the severity to the Cause Router. A new incident goes to Context Gathering; an attach does not restart the pipeline."
+                "text": "Returns the incident ID, opened or attached, and the severity to the Flow Orchestrator. A new incident goes to Context Gathering; an attach does not restart the pipeline."
               },
               "human_review": "None in the normal path. A policy parameter missing from both the function policy and the defaults stops the run and goes to human review.",
               "policy": {
@@ -8233,7 +8233,7 @@
             "default_captain": "dq_context_enrichment_agent",
             "title": "Context Gathering",
             "contract": {
-              "trigger": "Invoked by the Cause Router after Incident Intake opens a new incident — never on an attach. Re-runs on demand, or when the Cause Router re-invokes it after RCA records InsufficientEvidence; a re-run writes a new decision and keeps the old one.",
+              "trigger": "Invoked by the Flow Orchestrator after Incident Intake opens a new incident — never on an attach. Re-runs on demand, or when the Flow Orchestrator re-invokes it after RCA records InsufficientEvidence; a re-run writes a new decision and keeps the old one.",
               "reads": [
                 {
                   "kind": "agent"
@@ -8355,7 +8355,7 @@
                   "decision_id",
                   "context_pack"
                 ],
-                "text": "Returns the decision ID to the Cause Router, which invokes Past Incidents. RCA reads the pack through the Context Budgeter."
+                "text": "Returns the decision ID to the Flow Orchestrator, which invokes Past Incidents. RCA reads the pack through the Context Budgeter."
               },
               "human_review": "None. Missing metadata — lineage, CDE mapping, owner, MDRM route, profile — is recorded as a coverage gap and the run continues.",
               "policy": {
@@ -8593,7 +8593,7 @@
             "default_captain": "dq_historical_pattern_agent",
             "title": "Past Incidents",
             "contract": {
-              "trigger": "Invoked by the Cause Router after Context Gathering for a new incident; never on an attach. Re-runs whenever Context Gathering re-runs, and on demand. RCA never searches history itself.",
+              "trigger": "Invoked by the Flow Orchestrator after Context Gathering for a new incident; never on an attach. Re-runs whenever Context Gathering re-runs, and on demand. RCA never searches history itself.",
               "reads": [
                 {
                   "kind": "agent"
@@ -8683,7 +8683,7 @@
                   "decision_id",
                   "matched"
                 ],
-                "text": "Returns the decision ID to the Cause Router, which invokes RCA. RCA links its own USED_PRECEDENT {confidenceLift} to the precedents it relies on."
+                "text": "Returns the decision ID to the Flow Orchestrator, which invokes RCA. RCA links its own USED_PRECEDENT {confidenceLift} to the precedents it relies on."
               },
               "human_review": "None. Zero matches is a fact, not InsufficientEvidence. Severity is never changed.",
               "policy": {
@@ -8889,9 +8889,9 @@
                   "candidates",
                   "rca_verdict"
                 ],
-                "text": "Returns the candidate root causes, or InsufficientEvidence, to the Cause Router, which either re-runs Context Gathering and Past Incidents or routes the candidates to the cause checks."
+                "text": "Returns the candidate root causes, or InsufficientEvidence, to the Flow Orchestrator, which either re-runs Context Gathering and Past Incidents or routes the candidates to the swimlanes."
               },
-              "human_review": "None: cause checks confirm or rule out; a person approves any fix.",
+              "human_review": "None: swimlanes confirm or rule out; a person approves any fix.",
               "policy": {
                 "token_budget": 6000,
                 "max_rounds": 3
@@ -8988,7 +8988,7 @@
             ],
             "captain": "dq_pipeline_orchestrator",
             "default_captain": "dq_pipeline_orchestrator",
-            "title": "Cause Router",
+            "title": "Flow Orchestrator",
             "contract": {
               "trigger": "After the evidence loop ends (conclusive, or its rounds used up).",
               "reads": [
@@ -9011,15 +9011,15 @@
                 "carries": [
                   "lanes"
                 ],
-                "text": "Starts one cause check per candidate root-cause family above the routing floor, in parallel."
+                "text": "Starts one swimlane per candidate root-cause family above the routing floor, in parallel."
               },
-              "human_review": "None. No candidate above the routing floor starts no cause check.",
+              "human_review": "None. No candidate above the routing floor starts no swimlane.",
               "policy": {
                 "min_route_confidence": 0.3
               },
               "llm": "none",
               "decisions": [
-                "one cause check per candidate family"
+                "one swimlane per candidate family"
               ],
               "steps": [
                 {
@@ -9033,7 +9033,7 @@
                 {
                   "n": 2,
                   "name": "Route each family",
-                  "explain": "One cause check per family above the routing floor.",
+                  "explain": "One swimlane per family above the routing floor.",
                   "reads": [
                     "incident"
                   ],
@@ -9058,7 +9058,7 @@
           {
             "id": "lanes",
             "kind": "for_each",
-            "title": "Cause Checks",
+            "title": "Swimlanes",
             "items": "steps.pipeline_orchestrator.output.lanes",
             "body": "lane",
             "max_items": 5,
@@ -9084,9 +9084,9 @@
             "next": [],
             "captain": "dq_lane_agent",
             "default_captain": "dq_lane_agent",
-            "title": "Cause Check",
+            "title": "Swimlane",
             "contract": {
-              "trigger": "One per routed family (cause checks).",
+              "trigger": "One per routed family (swimlanes).",
               "reads": [
                 {
                   "kind": "incident"
@@ -9124,7 +9124,7 @@
                   "lane_verdict",
                   "cause"
                 ],
-                "text": "Returns its verdict to the Cause Router. A confirmed cause goes to the Fix Planner; a confirmed false positive also opens a rule authoring case with Rule Proposal."
+                "text": "Returns its verdict to the Flow Orchestrator. A confirmed cause goes to the Fix Planner; a confirmed false positive also opens a rule authoring case with Rule Proposal."
               },
               "human_review": "None. CannotVerify leaves the incident for a person.",
               "policy": {
@@ -9187,7 +9187,7 @@
             "default_captain": "dq_rule_drafting_agent",
             "title": "Rule Proposal",
             "contract": {
-              "trigger": "After the cause checks: a cause check that confirmed a false positive (rule_config) opens a rule authoring case.",
+              "trigger": "After the swimlanes: a swimlane that confirmed a false positive (rule_config) opens a rule authoring case.",
               "reads": [
                 {
                   "kind": "agent_decision"
@@ -9236,7 +9236,7 @@
                 {
                   "n": 1,
                   "name": "Read the false positive",
-                  "explain": "The confirmed rule_config cause check and the rule's thresholds.",
+                  "explain": "The confirmed rule_config swimlane and the rule's thresholds.",
                   "reads": [
                     "agent_decision",
                     "data_quality_rule",
@@ -9285,7 +9285,7 @@
             "default_captain": "dq_remediation_advisor",
             "title": "Fix Planner",
             "contract": {
-              "trigger": "After the cause checks and rule drafting.",
+              "trigger": "After the swimlanes and rule drafting.",
               "reads": [
                 {
                   "kind": "agent_decision"
@@ -9335,7 +9335,7 @@
                 {
                   "n": 1,
                   "name": "Read the confirmed cause",
-                  "explain": "The cause check verdict and the templates.",
+                  "explain": "The swimlane verdict and the templates.",
                   "reads": [
                     "agent_decision",
                     "resolved_pattern",
@@ -9651,7 +9651,7 @@
                 {
                   "n": 2,
                   "name": "Finalise the cause",
-                  "explain": "From the confirmed cause check and the package.",
+                  "explain": "From the confirmed swimlane and the package.",
                   "reads": [
                     "agent_decision",
                     "remediation_package"
@@ -9889,7 +9889,7 @@
             "max_attempts": 3
           }
         ],
-        "objective": "Investigate one DQ Monitor exception group on NorthPeak Bank's data platform. Incident Intake opens or attaches one incident for an Error group and never diagnoses. Context Context Gathering and Past Incidents are fixed graph reads, never a model. The RCA Agent proposes candidate causes citing the evidence, or says the evidence is insufficient, which runs Context Gathering and Past Incidents again (at most twice). Each candidate family goes to its cause check; a confirmed false positive becomes a rule proposal. The Fix Planner prepares the fix; a person approves it and a different person carries it out — no agent executes. Close and Learn re-runs the check, closes the incident and writes the precedent the next investigation finds.",
+        "objective": "Investigate one DQ Monitor exception group on NorthPeak Bank's data platform. Incident Intake opens or attaches one incident for an Error group and never diagnoses. Context Context Gathering and Past Incidents are fixed graph reads, never a model. The RCA Agent proposes candidate causes citing the evidence, or says the evidence is insufficient, which runs Context Gathering and Past Incidents again (at most twice). Each candidate family goes to its swimlane; a confirmed false positive becomes a rule proposal. The Fix Planner prepares the fix; a person approves it and a different person carries it out — no agent executes. Close and Learn re-runs the check, closes the incident and writes the precedent the next investigation finds.",
         "workflow_name": "DQ RCA and Remediation",
         "input_schema": {
           "type": "object",
@@ -10137,7 +10137,7 @@
             }
           }
         ],
-        "objective": "The Cause Router reads the DQ Monitor's exception groups for the COB and starts one dq_incident_rca run per Error group not already under investigation.",
+        "objective": "The Flow Orchestrator reads the DQ Monitor's exception groups for the COB and starts one dq_incident_rca run per Error group not already under investigation.",
         "workflow_name": "DQ Monitor Intake",
         "input_schema": {
           "type": "object",

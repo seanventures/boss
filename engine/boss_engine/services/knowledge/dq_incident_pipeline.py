@@ -16,7 +16,7 @@ One DQ Monitor exception group, investigated end to end:
                                                 precedent, tier 2 from the evidence), or
                                                 InsufficientEvidence — and 2-3-4 run again (at most
                                                 two more rounds)
-  5 pipeline_orchestrator  Cause Router route each candidate family to its lane
+  5 pipeline_orchestrator  Flow Orchestrator route each candidate family to its lane
   6 lane (for each)      Lane Agent (LLM)       confirm or rule out the family's candidate on evidence
   - rule_drafting        Rule Proposal (LLM)    a confirmed false positive becomes a rule proposal in
                                                 Rules review (side path "Rule authoring")
@@ -1155,7 +1155,7 @@ def run_dq_rca(connection: Connection, settings: Any, project_id: str, step: Map
             "produced": _produced(decision_type, decision, statement)}
 
 
-# ── 5. Cause Router (routing by policy) ─────────────────────────────────────────────
+# ── 5. Flow Orchestrator (routing by policy) ─────────────────────────────────────────────
 
 def run_dq_orchestration(connection: Connection, settings: Any, project_id: str,
                          step: Mapping[str, Any], context: Mapping[str, Any],
@@ -1167,7 +1167,7 @@ def run_dq_orchestration(connection: Connection, settings: Any, project_id: str,
     lanes: list[dict[str, Any]] = []
     held: list[str] = []
     if rca.get("rca_verdict") == INSUFFICIENT:
-        statement = (f"No cause check for {mon.get('incident_id')}: RCA still found insufficient "
+        statement = (f"No swimlane for {mon.get('incident_id')}: RCA still found insufficient "
                      f"evidence after {rca.get('round') or 1} round(s) "
                      f"({'; '.join(rca.get('missing') or [])}). The incident stays open for a "
                      "person and the Escalation Watch's daily ladder.")
@@ -1184,7 +1184,7 @@ def run_dq_orchestration(connection: Connection, settings: Any, project_id: str,
                           "incident_id": mon.get("incident_id")})
         statement = (f"Routed {mon.get('incident_id')} to "
                      + (", ".join(f"{l['lane']} ({l['confidence']:.2f})" for l in lanes)
-                        or "no cause check")
+                        or "no swimlane")
                      + (f"; below the routing floor ({MIN_ROUTE_CONFIDENCE}): {', '.join(held)}"
                         if held else "") + ".")
     decision = _decide(connection, project_id, run_id=run_id, step_id=step_id,
@@ -1222,13 +1222,13 @@ def run_dq_lane(connection: Connection, settings: Any, project_id: str, step: Ma
     item = dict((context or {}).get("item") or inputs.get("item") or {})
     family = str(item.get("family") or "")
     if family not in FAMILIES:
-        raise ValueError(f"a cause check runs one root-cause family; got {family or 'none'}")
+        raise ValueError(f"a swimlane runs one root-cause family; got {family or 'none'}")
     steps = _steps(connection, run_id, context)
     mon, enrich = steps.get("monitoring") or {}, steps.get("context_enrichment") or {}
     history = steps.get("historical_pattern") or {}
     catalogue = _evidence_catalogue(mon, enrich, history)
     sections = _sections(mon, enrich, history, catalogue)
-    sections.insert(1, Section("Candidates for this cause check", [
+    sections.insert(1, Section("Candidates for this swimlane", [
         f"{c['family']} {c['confidence']:.2f} (tier {c['tier']}): {c['cause']} — cites "
         f"{', '.join(c['evidence'])}" for c in item.get("candidates") or []], must=True,
         priority=99))
@@ -1302,7 +1302,7 @@ def run_dq_rule_drafting(connection: Connection, settings: Any, project_id: str,
     mon = steps.get("monitoring") or {}
     confirmed = [r for r in _lane_results(steps) if r.get("false_positive")]
     if not confirmed:
-        statement = (f"No cause check confirmed a false positive on {mon.get('incident_id')}: nothing "
+        statement = (f"No swimlane confirmed a false positive on {mon.get('incident_id')}: nothing "
                      "to draft.")
         decision = _decide(connection, project_id, run_id=run_id, step_id=step_id,
                            decision_type="NothingToDraft", statement=statement,
