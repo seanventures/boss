@@ -20,6 +20,13 @@ from .core import (
 )
 
 
+def _open_statuses() -> list[str]:
+    """A decision still awaiting an answer — the one shared definition (decision_actions)."""
+    from .decision_actions import OPEN_STATUSES
+
+    return sorted(OPEN_STATUSES)
+
+
 # ── EVERY CAP MEASURES ITS OWN PERIOD ─────────────────────────────────────────────────────────
 #
 # `daily_cap_usd_micros` is a cap on a DAY's money and `monthly_cap_usd_micros` on a MONTH's
@@ -488,30 +495,13 @@ class BudgetGovernor:
         # Expiry revokes authority; it is not evidence that a provider never accepted work.
         # Keep positive exposure until explicit settlement or a known no-call release. The
         # generic/proof path has no reliable receipt link, so missing job/lease is not proof.
-        pending = connection.execute(text(
-            "SELECT r.id, r.project_id, r.amount_usd_micros FROM budget_reservations r "
-            "WHERE r.status='active' AND r.amount_usd_micros > 0 AND r.expires_at <= :now_utc "
-            "AND (CAST(:project_id AS text) IS NULL OR r.project_id=:project_id) "
-            "AND NOT EXISTS (SELECT 1 FROM events e WHERE e.entity_id=r.id "
-            "AND e.event_type='budget.reservation_reconciliation_required') "
-            "FOR UPDATE OF r SKIP LOCKED"),
-            {"now_utc": query_params['now_utc'], "project_id": project_id}).mappings().all()
-        for row in pending:
-            if connection.execute(text(
-                    "SELECT 1 FROM events WHERE entity_id=:id "
-                    "AND event_type='budget.reservation_reconciliation_required' LIMIT 1"),
-                    {"id": row['id']}).first():
-                continue
-            decision_id = create_blocking_decision(
-                connection, row['project_id'], None,
-                f"Reconcile expired budget reservation {row['id']}",
-                {"action": "verify_provider_outcome_then_settle_or_release", "reservation_id": row['id']},
-                {"reserved_usd_micros": int(row['amount_usd_micros'])},
-                "budget_outcome_unknown",
-            )
-            emit_event(connection, row['project_id'], 'budget.reservation_reconciliation_required',
-                       'budget_governor', 'budget_reservation', row['id'],
-                       {"decision_id": decision_id, "held_usd_micros": int(row['amount_usd_micros'])})
+        #
+        # BOSS VERIFIES THE OUTCOME ITSELF FIRST (reconcile_expired_reservations): a governed
+        # call links its receipt to its reservation, so a receipt that says the call failed (or
+        # never left BOSS) releases the hold, one that carries the provider's usage settles it,
+        # and only an attempt with no recorded result reaches a person — grouped, one card per
+        # cause, never one per reservation (68 identical cards on northpeak-lending, 2026-11-01).
+        self.reconcile_expired_reservations(connection, project_id, now=query_params['now_utc'])
 
         expired_ids: list[str] = []
         for row in rows:
@@ -526,6 +516,193 @@ class BudgetGovernor:
                 {},
             )
         return expired_ids
+
+    def _recorded_outcome(self, connection: Connection, reservation_id: str) -> Optional[dict]:
+        """What BOSS's own ledger says happened to the call a reservation paid for, or None when
+        no result was recorded. Evidence is only a receipt LINKED to the reservation
+        (effect_scope.budget_reservation_id, written by the governed adapter in the same
+        transaction as the reservation) or a cost receipt already naming it — never a guess
+        from timing or names."""
+        cost = connection.execute(text(
+            "SELECT receipt_id, actual_usd_micros FROM cost_receipts WHERE reservation_id=:r "
+            "ORDER BY created_at LIMIT 1"), {"r": reservation_id}).mappings().first()
+        receipt = connection.execute(text(
+            "SELECT id, status, result, error FROM receipts "
+            "WHERE effect_scope->>'budget_reservation_id'=:r ORDER BY created_at DESC LIMIT 1"),
+            {"r": reservation_id}).mappings().first()
+        if cost is not None:
+            return {"kind": "consumed", "receipt_id": cost["receipt_id"],
+                    "actual_usd_micros": cost["actual_usd_micros"]}
+        if receipt is None:
+            return None
+        if receipt["status"] == "failed":
+            error = receipt["error"] if isinstance(receipt["error"], dict) else {}
+            before = error.get("code") == "provider_not_dispatched"
+            return {"kind": "release", "receipt_id": receipt["id"],
+                    "reason": ("The call failed before it reached the provider "
+                               if before else "The provider call failed and was receipted as failed ")
+                    + f"(receipt {receipt['id']}); nothing was spent, so the expired hold is released."}
+        if receipt["status"] == "succeeded":
+            result = receipt["result"] if isinstance(receipt["result"], dict) else {}
+            actual = result.get("actual_usd_micros")
+            if actual is None:
+                return None
+            return {"kind": "settle", "receipt_id": receipt["id"], "actual_usd_micros": int(actual),
+                    "included": bool(result.get("included_in_subscription")),
+                    "equivalent_usd_micros": result.get("equivalent_usd_micros")}
+        return None
+
+    def reconcile_expired_reservations(self, connection: Connection, project_id: Optional[str] = None,
+                                       *, now: Optional[datetime] = None) -> dict[str, int]:
+        """Settle what BOSS can prove about each expired positive hold; group the rest.
+
+        1. A hold whose linked receipt failed (or never left BOSS) is RELEASED; one whose receipt
+           carries the provider's usage is SETTLED at that actual. Each records an event and, via
+           release/settle, resolves any card already open for it (resolution_note says why,
+           executed_by is the budget governor).
+        2. A hold still unknown — a call started and no result was recorded — needs a person, but
+           as ONE card per cause (project + category + reason): an open group card gains the new
+           reservation, an older one-per-reservation card is folded into the group card.
+        """
+        out = {"released": 0, "settled": 0, "grouped": 0}
+        # release/settle read the budget status, which runs this pass again: one pass at a time.
+        if getattr(self, "_reconciling", False):
+            return out
+        self._reconciling = True
+        try:
+            return self._reconcile_expired(connection, project_id, now or now_utc(), out)
+        finally:
+            self._reconciling = False
+
+    def _reconcile_expired(self, connection: Connection, project_id: Optional[str],
+                           now: datetime, out: dict[str, int]) -> dict[str, int]:
+        rows = connection.execute(text(
+            "SELECT r.id, r.project_id, r.category, r.reason, r.amount_usd_micros FROM budget_reservations r "
+            "WHERE r.status='active' AND r.amount_usd_micros > 0 AND r.expires_at <= :now_utc "
+            "AND (CAST(:project_id AS text) IS NULL OR r.project_id=:project_id) "
+            # New holds, and holds still on an open one-per-reservation card (the flood before
+            # this pass existed). A hold a person already answered, or one already on a group
+            # card, is not raised again.
+            "AND (NOT EXISTS (SELECT 1 FROM events e WHERE e.entity_id=r.id "
+            "     AND e.event_type='budget.reservation_reconciliation_required') "
+            "  OR EXISTS (SELECT 1 FROM decisions d WHERE d.project_id=r.project_id "
+            "     AND d.status = ANY(:open_statuses) "
+            "     AND d.recommendation->>'action'='verify_provider_outcome_then_settle_or_release' "
+            "     AND d.recommendation->>'reservation_id'=r.id "
+            "     AND COALESCE(d.recommendation->>'grouped','false')<>'true')) "
+            "ORDER BY r.created_at FOR UPDATE OF r SKIP LOCKED"),
+            {"now_utc": now, "project_id": project_id, "open_statuses": _open_statuses()}).mappings().all()
+        unknown: dict[tuple[str, str, str], list[dict]] = {}
+        for row in rows:
+            outcome = self._recorded_outcome(connection, row["id"])
+            if outcome and outcome["kind"] == "release":
+                self.release(connection, row["project_id"], row["id"], outcome["reason"])
+                emit_event(connection, row["project_id"], "budget.reservation_auto_reconciled",
+                           "budget_governor", "budget_reservation", row["id"],
+                           {"outcome": "released", "receipt_id": outcome["receipt_id"]})
+                self._mark_system_resolved(connection, row["project_id"], row["id"])
+                out["released"] += 1
+                continue
+            if outcome and outcome["kind"] == "consumed":
+                connection.execute(text("UPDATE budget_reservations SET status='consumed' WHERE id=:r"),
+                                   {"r": row["id"]})
+                self._resolve_reconciliation(connection, row["project_id"], row["id"],
+                                             "A cost receipt already records this call.")
+            elif outcome and outcome["kind"] == "settle":
+                included = bool(outcome.get("included"))
+                worth = outcome.get("equivalent_usd_micros") if included else None
+                self.settle(connection, row["project_id"], row["id"], outcome["receipt_id"],
+                            row["category"], str(row["reason"] or "").split(":", 1)[0][:200],
+                            int(row["amount_usd_micros"]),
+                            int(worth if worth is not None else outcome["actual_usd_micros"]),
+                            included_in_subscription=included)
+            if outcome and outcome["kind"] in ("settle", "consumed"):
+                emit_event(connection, row["project_id"], "budget.reservation_auto_reconciled",
+                           "budget_governor", "budget_reservation", row["id"],
+                           {"outcome": "settled", "receipt_id": outcome["receipt_id"]})
+                self._mark_system_resolved(connection, row["project_id"], row["id"])
+                out["settled"] += 1
+                continue
+            key = (row["project_id"], str(row["category"] or ""), str(row["reason"] or ""))
+            unknown.setdefault(key, []).append(dict(row))
+        for (pid, category, reason), group in unknown.items():
+            out["grouped"] += self._group_unknown(connection, pid, category, reason, group)
+        return out
+
+    def _mark_system_resolved(self, connection: Connection, project_id: str, reservation_id: str) -> None:
+        connection.execute(text(
+            "UPDATE decisions SET executed_by='budget_governor', executed_at=clock_timestamp() "
+            "WHERE project_id=:p AND status='resolved' AND executed_by IS NULL "
+            "AND recommendation->>'action'='verify_provider_outcome_then_settle_or_release' "
+            "AND (recommendation->>'reservation_id'=:r "
+            "OR recommendation->'reservation_ids' @> jsonb_build_array(CAST(:r AS text)))"),
+            {"p": project_id, "r": reservation_id})
+
+    def _group_unknown(self, connection: Connection, project_id: str, category: str, reason: str,
+                       group: list[dict]) -> int:
+        """Put every still-unknown hold of one cause on one open card. Returns the holds newly
+        placed on it."""
+        ids = [g["id"] for g in group]
+        card = connection.execute(text(
+            "SELECT id, recommendation FROM decisions WHERE project_id=:p AND status = ANY(:open_statuses) "
+            "AND recommendation->>'action'='verify_provider_outcome_then_settle_or_release' "
+            "AND recommendation->>'grouped'='true' AND recommendation->>'category'=:c "
+            "AND recommendation->>'reservation_reason'=:reason ORDER BY created_at LIMIT 1 FOR UPDATE"),
+            {"p": project_id, "c": category, "reason": reason,
+             "open_statuses": _open_statuses()}).mappings().first()
+        held = set()
+        if card is not None:
+            rec = card["recommendation"] if isinstance(card["recommendation"], dict) else {}
+            held = set(rec.get("reservation_ids") or [])
+        new = [i for i in ids if i not in held]
+        all_ids = sorted(held | set(ids))
+        total = int(connection.execute(text(
+            "SELECT COALESCE(SUM(amount_usd_micros),0) FROM budget_reservations "
+            "WHERE id = ANY(:ids) AND status='active'"), {"ids": all_ids}).scalar_one())
+        skill = reason.split(":", 1)[0].strip() or category
+        question = (f"Reconcile {len(all_ids)} expired budget reservation"
+                    f"{'s' if len(all_ids) != 1 else ''} from {skill} ({category}): "
+                    "a call started and no result was recorded")
+        recommendation = {"action": "verify_provider_outcome_then_settle_or_release",
+                          "reason_code": "budget_outcome_unknown", "grouped": True,
+                          "category": category, "reservation_reason": reason,
+                          "reservation_ids": all_ids,
+                          **({"reservation_id": all_ids[0]} if len(all_ids) == 1 else {})}
+        if not new:
+            decision_id = card["id"]
+        elif card is None:
+            decision_id = create_blocking_decision(
+                connection, project_id, None, question, recommendation,
+                {"reserved_usd_micros": total, "reservations": len(all_ids)}, "budget_outcome_unknown")
+        else:
+            decision_id = card["id"]
+            connection.execute(text(
+                "UPDATE decisions SET question=:q, recommendation=CAST(:rec AS jsonb), "
+                "cost_summary=CAST(:cost AS jsonb), updated_at=clock_timestamp() WHERE id=:id"),
+                {"q": question, "rec": json.dumps(recommendation), "id": decision_id,
+                 "cost": json.dumps({"reserved_usd_micros": total, "reservations": len(all_ids)})})
+        # Fold each older one-card-per-reservation decision into the group card.
+        folded = connection.execute(text(
+            "UPDATE decisions SET status='resolved', executed_by='budget_governor', "
+            "executed_at=clock_timestamp(), updated_at=clock_timestamp(), resolution_note=:note "
+            "WHERE project_id=:p AND status = ANY(:open_statuses) AND id<>:d "
+            "AND recommendation->>'action'='verify_provider_outcome_then_settle_or_release' "
+            "AND recommendation->>'reservation_id' = ANY(:ids) "
+            "AND COALESCE(recommendation->>'grouped','false')<>'true' RETURNING id"),
+            {"p": project_id, "d": decision_id, "ids": ids, "open_statuses": _open_statuses(),
+             "note": f"Grouped into decision {decision_id}: one card for every expired reservation "
+                     f"of the same cause ({skill}, {category})."}).scalars().all()
+        for reservation_id in new:
+            emit_event(connection, project_id, 'budget.reservation_reconciliation_required',
+                       'budget_governor', 'budget_reservation', reservation_id,
+                       {"decision_id": decision_id, "grouped": True,
+                        "held_usd_micros": int(next(g["amount_usd_micros"] for g in group
+                                                    if g["id"] == reservation_id))})
+        if folded:
+            emit_event(connection, project_id, 'budget.reconciliation_grouped', 'budget_governor',
+                       'decision', decision_id, {"folded_decision_ids": list(folded),
+                                                 "reservation_ids": all_ids})
+        return len(new)
 
     def status_for_project(self, connection: Connection, project_id: str,
                            *, now: Optional[datetime] = None) -> dict:
@@ -1213,7 +1390,8 @@ class BudgetGovernor:
             if refusal["kind"] == "headroom":
                 reconciliation = connection.execute(text(
                     "SELECT d.id FROM decisions d JOIN budget_reservations r ON "
-                    "(d.recommendation->>'reservation_id'=r.id OR d.cost_summary->>'budget_reservation_id'=r.id) "
+                    "(d.recommendation->>'reservation_id'=r.id OR d.cost_summary->>'budget_reservation_id'=r.id "
+                    "OR d.recommendation->'reservation_ids' @> jsonb_build_array(r.id)) "
                     "WHERE d.project_id=:p AND r.project_id=:p AND d.status='pending' AND r.status='active' "
                     "AND d.recommendation->>'action' IN ('verify_provider_outcome_then_settle_or_release', "
                     "'verify_provider_outcome_before_retry') ORDER BY d.created_at LIMIT 1"),
@@ -1587,6 +1765,15 @@ class BudgetGovernor:
             "(SELECT 1 FROM model_gateway_invocations i WHERE i.model_gateway_lease_id=decisions.recommendation->>'lease_id' "
             "AND i.status='in_progress')) "
             "RETURNING id"), {"p": project_id, "r": reservation_id, "reason": reason}).scalars().all()
+        # A group card (reconcile_expired_reservations) closes when its LAST hold is settled.
+        rows = list(rows) + list(connection.execute(text(
+            "UPDATE decisions SET status='resolved', resolution_note=:reason, updated_at=clock_timestamp() "
+            "WHERE project_id=:p AND status='pending' "
+            "AND recommendation->>'action'='verify_provider_outcome_then_settle_or_release' "
+            "AND recommendation->'reservation_ids' @> jsonb_build_array(CAST(:r AS text)) "
+            "AND NOT EXISTS (SELECT 1 FROM budget_reservations held WHERE held.status='active' "
+            "AND held.id IN (SELECT jsonb_array_elements_text(decisions.recommendation->'reservation_ids'))) "
+            "RETURNING id"), {"p": project_id, "r": reservation_id, "reason": reason}).scalars().all())
         if rows:
             emit_event(connection, project_id, 'budget.reservation_reconciled', 'budget_governor',
                        'budget_reservation', reservation_id, {"decision_ids": list(rows), "reason": reason})

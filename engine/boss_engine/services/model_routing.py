@@ -599,6 +599,15 @@ def turn_estimate_usd_micros(choice: ModelChoice, settings: Any) -> int:
     return int(getattr(settings, "agent_turn_budget_usd_micros", 0) or 20_000)
 
 
+def not_dispatched(error: BaseException) -> bool:
+    """True when `error` was raised before any request left BOSS: a configuration the adapter
+    refused (IntegrationConfigurationError — no key, no endpoint, an outbound check), or an
+    error that says so itself (`provider_not_dispatched = True`). Such a call spent nothing."""
+    if getattr(error, "provider_not_dispatched", False) is True:
+        return True
+    return isinstance(error, IntegrationConfigurationError)
+
+
 class GovernedChatAdapter:
     """Reserve, call, settle — around every turn of an adapter `project_chat_adapter` built.
 
@@ -761,23 +770,49 @@ class GovernedChatAdapter:
         receipt, _ = ReceiptService().create_or_reuse(
             connection, str(scope["org_id"]), str(scope["workspace_id"]), project_id,
             f"{self._skill_id}:{self._ref}:{self._turn}:{uuid.uuid4().hex[:12]}",
-            self._skill_id, {"data_boundary": "internal", "ref": self._ref},
+            # LINKED TO ITS RESERVATION, so an expired hold can be reconciled from this receipt
+            # alone (budget.reconcile_expired_reservations) instead of becoming a person's card.
+            self._skill_id, {"data_boundary": "internal", "ref": self._ref,
+                             "budget_reservation_id": reservation["reservation_id"]},
             {"turn": self._turn}, data_boundary="internal",
         )
         return reservation["reservation_id"], receipt["id"]
+
+    def _ledger(self):
+        """The connection the turn's outcome is written on: the caller's, or — when the caller's
+        connection is already closed or invalid — a fresh transaction on its engine. An outcome
+        written on a closed connection is lost, and its reservation expires into a person's
+        decision (51cd3c2ba: every knowledge.embed hold on northpeak-lending)."""
+        import contextlib
+
+        connection = self._connection
+        engine = getattr(connection, "engine", None)
+        unusable = (getattr(connection, "closed", False) is True
+                    or getattr(connection, "invalidated", False) is True)
+        if unusable and engine is not None:
+            from ..db import begin
+
+            return begin(engine)
+        return contextlib.nullcontext(connection)
 
     def _fail(self, held: tuple[str, str], error: BaseException) -> None:
         from .budget import BudgetGovernor
         from .receipts import ReceiptService
 
         reservation_id, receipt_id = held
-        ReceiptService().mark_failed(self._connection, receipt_id,
-                                     {"message": str(error)[:500] or type(error).__name__,
-                                      "skill_id": self._skill_id})
-        BudgetGovernor(self._settings).release(self._connection, self._project_id,
-                                               reservation_id, f"{self._skill_id} turn failed")
+        failure = {"message": str(error)[:500] or type(error).__name__, "skill_id": self._skill_id}
+        if not_dispatched(error):
+            failure["code"] = "provider_not_dispatched"
+        with self._ledger() as connection:
+            ReceiptService().mark_failed(connection, receipt_id, failure)
+            BudgetGovernor(self._settings).release(connection, self._project_id,
+                                                   reservation_id, f"{self._skill_id} turn failed")
 
     def _settle(self, held: tuple[str, str], usage: Any) -> None:
+        with self._ledger() as connection:
+            self._settle_on(connection, held, usage)
+
+    def _settle_on(self, connection: Any, held: tuple[str, str], usage: Any) -> None:
         from .budget import BudgetGovernor
         from .openai_adapter import estimate_cost_usd_micros
         from .receipts import ReceiptService
@@ -789,11 +824,11 @@ class GovernedChatAdapter:
         worth = estimate_cost_usd_micros(usage)
         included = turn_is_included(self._choice, usage)
         ReceiptService().mark_succeeded(
-            self._connection, receipt_id, str(usage.get("model") or ""),
+            connection, receipt_id, str(usage.get("model") or ""),
             {"usage": usage, "actual_usd_micros": 0 if included else worth,
              **({"included_in_subscription": True,
                  "equivalent_usd_micros": worth} if included else {})})
-        BudgetGovernor(self._settings).settle(self._connection, self._project_id,
+        BudgetGovernor(self._settings).settle(connection, self._project_id,
                                               reservation_id, receipt_id, self._category,
                                               self._skill_id, self._estimate, worth,
                                               included_in_subscription=included)
