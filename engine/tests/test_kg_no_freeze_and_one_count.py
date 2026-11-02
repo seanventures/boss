@@ -165,7 +165,11 @@ class _Engine:
         return _Tx()
 
 
-def test_no_transaction_is_open_while_the_model_embeds(monkeypatch):
+def test_the_model_embeds_on_its_own_live_connection_and_no_graph_write_shares_it(monkeypatch):
+    """The governed embedder reserves and settles budget on the connection it was built with.
+    Called after that transaction closed, every call failed silently and left its reservation to
+    expire into a "Reconcile expired budget reservation" card (2026-11-02). The model call gets
+    its own short transaction, open while it embeds, holding no graph write."""
     from boss_engine.services import projects_archive
     from boss_engine.services.knowledge import embedding_slot
 
@@ -176,12 +180,16 @@ def test_no_transaction_is_open_while_the_model_embeds(monkeypatch):
     class _Embedder:
         model_id = "m"
 
+        def __init__(self, depth):
+            self.depth = depth
+
         def embed(self, texts):
-            assert engine.open == 0, "the embedder was called inside a database transaction"
+            assert engine.open == self.depth == 1, "the embedder's own transaction must be open while it embeds"
+            assert not batches, "a graph write ran before or alongside the model call"
             return [[0.1, 0.2]] * len(texts)
 
     monkeypatch.setattr(projects_archive, "live_ids", lambda _c, ids: ids)
-    monkeypatch.setattr(embedding_slot, "active_embedder", lambda *_a: (_Embedder(), ""))
+    monkeypatch.setattr(embedding_slot, "active_embedder", lambda *_a: (_Embedder(engine.open), ""))
     monkeypatch.setattr(embeddings, "drop_other_spaces", lambda *_a, **_k: 0)
     monkeypatch.setattr(embeddings, "pending_rows", lambda *_a, **_k: rows)
 

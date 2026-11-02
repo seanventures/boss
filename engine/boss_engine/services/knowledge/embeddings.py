@@ -97,7 +97,15 @@ def embed_due(engine: Any, *, project_id: str | None = None, limit: int = BATCH)
                 rows = pending_rows(connection, project_id=pid, model_id=embedder.model_id, limit=limit)
             if not rows:
                 continue
-            vectors = embedder.embed([_embed_text(r) for r in rows])
+            # The governed embedder reserves and settles its budget on the connection it was built
+            # with, so the model call gets its own short transaction: it holds only the budget row,
+            # never a lock on the graph's tables. Built on the closed connection above, every call
+            # failed silently and left its reservation to expire into an approval card.
+            with engine.begin() as connection:
+                embedder, _reason = active_embedder(connection, settings, pid)
+                if embedder is None:
+                    continue
+                vectors = embedder.embed([_embed_text(r) for r in rows])
             for start in range(0, len(rows), WRITE_BATCH):
                 with engine.begin() as connection:
                     out["embedded"] += write_vectors(
