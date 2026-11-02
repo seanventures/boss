@@ -19,6 +19,7 @@ import { AgentChat } from "./agent-ui";
 import { dockChatKey, dockSpeaker } from "../lib/dock-subject";
 import { dockWidthFor, railForDock } from "../lib/shell-rail";
 import { ProjectStrip } from "./project-strip";
+import { useFullPage } from "./workflows/full-page";
 import { ProjectMenu, type ProjectMenuItem } from "./project-menu";
 import { useDetailsDismiss } from "../lib/details-dismiss";
 import { PresencePill } from "./agents/presence-pill";
@@ -1324,9 +1325,14 @@ function ConsoleShellInner({
     });
   };
 
+  // ONE WORKFLOW, OR ONE RUN, WITH THE WHOLE WINDOW (`page=full`, app/workflows/full-page.ts):
+  // the sidebar, the top bar and the project strip step aside; the area draws its own way back.
+  const fullPage = useFullPage() && active === "delivery_workflows" && !routeMode;
+
   return (
     <div className={`bx-shell${navOpen ? " nav-open" : ""}${railed ? " nav-docked" : ""}`}
          data-route-mode={routeMode || undefined}
+         data-page={fullPage ? "full" : undefined}
          data-rail-for-dock={railed && !docked ? "true" : undefined}>
       <a className="skip-link" href="#decision-inbox">Skip to decision inbox</a>
 
@@ -1648,7 +1654,7 @@ function ConsoleShellInner({
         ) : null}
 
         {/* The Factory's Floor IS the list of builds (walk D19): no second strip of them. */}
-        {active !== "code_tasks" && !routeMode ? <ProjectStrip projectId={scope.projectId ?? scope.project} area={active} /> : null}
+        {active !== "code_tasks" && !routeMode && !fullPage ? <ProjectStrip projectId={scope.projectId ?? scope.project} area={active} /> : null}
 
         {/* The console gets out of the panel's way rather than hiding behind it. The dock is
             fixed-position, so without this inset the right-hand column of cards sat underneath

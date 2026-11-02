@@ -20,7 +20,7 @@
 import { GatedButton } from "../../components/gated";
 import React, { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
-  CalendarBlank, Check, Clock, DotsThree, ListNumbers, LockSimple, MagnifyingGlass, PencilSimple,
+  CalendarBlank, Check, Clock, CornersOut, DotsThree, ListNumbers, LockSimple, MagnifyingGlass, PencilSimple,
   Play, Plus, PuzzlePiece, Sparkle, Trash, Warning,
 } from "@phosphor-icons/react";
 
@@ -230,6 +230,8 @@ export type LibraryProps = {
   onInstallStandards?: () => void;
   onStart: (key: string, example?: { title?: string; directive?: string } | null) => void;
   onOpen: (key: string) => void;
+  /** Open the workflow with the whole window (app/workflows/full-page.ts). */
+  onOpenFull?: (key: string) => void;
   onNew: () => void;
   /** Open the editor on an unsaved copy of this workflow; nothing is written until Save. */
   onDuplicate: (key: string) => void;
@@ -650,6 +652,14 @@ function LibraryCard(p: CardProps) {
         </button>
         <button type="button" className="wf-btn wf-btn-sm" data-testid={`wf-card-open-${w.workflow_key}`}
                 onClick={() => p.onOpen(w.workflow_key)}>Open</button>
+        {p.onOpenFull ? (
+          <button type="button" className="wf-btn wf-btn-sm wf-btn-icon" aria-label={`Open ${w.name} full page`}
+                  title="Open full page: the whole window for this workflow"
+                  data-testid={`open-full-page-${w.workflow_key}`}
+                  onClick={() => p.onOpenFull?.(w.workflow_key)}>
+            <CornersOut size={14} aria-hidden />
+          </button>
+        ) : null}
         <button type="button" className="wf-btn wf-btn-sm wf-btn-icon" aria-label="More"
                 aria-expanded={pop.open === "menu"} data-testid={`wf-card-more-${w.workflow_key}`}
                 onClick={() => pop.setOpen(pop.open ? null : "menu")}>
@@ -680,6 +690,11 @@ function LibraryCard(p: CardProps) {
             ) : (
               <>
                 <button type="button" role="menuitem" onClick={() => { pop.setOpen(null); p.onOpen(w.workflow_key); }}>Open</button>
+                {p.onOpenFull ? (
+                  <button type="button" role="menuitem" onClick={() => { pop.setOpen(null); p.onOpenFull?.(w.workflow_key); }}>
+                    Open full page
+                  </button>
+                ) : null}
                 <button type="button" role="menuitem" onClick={() => { pop.setOpen(null); p.onStart(w.workflow_key); }}>Start</button>
                 {example ? (
                   <button type="button" role="menuitem" data-testid={`wf-card-example-${w.workflow_key}`}

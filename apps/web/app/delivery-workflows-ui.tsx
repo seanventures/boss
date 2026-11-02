@@ -4,6 +4,7 @@ import { GatedButton, useGate } from "../components/gated";
 import type { Permission } from "../lib/identity/permissions.gen";
 import { routeForStep, useRunRoutes } from "./why-this-model";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ArrowLeft, CornersIn, CornersOut } from "@phosphor-icons/react";
 import { ShareRunButton } from "./improve/share-run";
 import { humanDuration } from "../lib/datetime";
 
@@ -61,9 +62,11 @@ export {
 import {
   FlowLane, WorkflowEditor, runLaneSpec, runPalette, useRunDefinition,
 } from "./workflows/studio-parts";
+import type { LaneZoom } from "./workflows/flow/flow-lane";
 import { useOnScreen } from "../lib/area-shown";
 import { forEachProgress } from "../lib/workflow-for-each";
 import { LearnedStrip } from "./knowledge/learned-strip";
+import { FULL_PAGE, PAGE_PARAM, readFullPage } from "./workflows/full-page";
 
 // Moved to app/workflows/ (Workflow Studio, phase 0); re-exported so existing imports hold.
 export { CaptainCanRunIt, DefineStepForm };
@@ -653,17 +656,21 @@ function setAreaUrl(patch: Record<string, string | null>, mode: "push" | "replac
   } catch { /* non-browser */ }
 }
 
-/** The editor's own parameters; cleared together when it closes. */
-const EDITOR_PARAMS = { wf: null, step: null, view: null, v: null, from: null } as const;
+/** The editor's own parameters; cleared together when it closes. `page=full` goes with them:
+ *  leaving the editor, or switching tab, leaves the full page too. */
+const EDITOR_PARAMS = { wf: null, step: null, view: null, v: null, from: null, [PAGE_PARAM]: null } as const;
 
 export function DeliveryWorkflows({ projectId, actor }: { projectId: string; actor: string }) {
   const [tab, setTabState] = useState<AreaTab>("runs");
   /** Whether the URL named the tab; when it did not, an empty project opens on New project. */
   const [tabNamed, setTabNamed] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
+  /** `page=full`: the workflow, or the run, the URL names, with the whole window. */
+  const [fullPage, setFullPage] = useState(false);
   useEffect(() => {
     const read = () => {
       const now = readAreaUrl(window.location.search);
+      setFullPage(readFullPage(window.location.search) !== null);
       // THE URL SAYS WHERE YOU ARE (rc10.5 walk m4): a run link opened Runs over a stale
       // `tab=new`, and the URL went on saying New project, so a reload or a copied link lied.
       const fixed = urlWithTab(window.location.search, now.tab);
@@ -1062,22 +1069,37 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
   }, [runs]);
 
   const [scheduleFor, setScheduleFor] = useState<string | null>(null);
-  const openWorkflow = useCallback((key: string, extra: Record<string, string | null> = {}) => {
+  const openWorkflow = useCallback((key: string, extra: Record<string, string | null> = {},
+                                    full = false) => {
     setEditing(key);
-    setAreaUrl({ ...EDITOR_PARAMS, ...extra, wf: key });
+    setAreaUrl({ ...EDITOR_PARAMS, ...extra, wf: key, ...(full ? { [PAGE_PARAM]: FULL_PAGE } : {}) });
+  }, []);
+  /** One run with the whole window, or (null) back to it in the list, still open. */
+  const openRunFullPage = useCallback((runId: string | null) => {
+    if (runId) {
+      setOpenRun(runId);
+      setAreaUrl({ ...EDITOR_PARAMS, tab: "runs", wfr: runId, [PAGE_PARAM]: FULL_PAGE });
+    } else {
+      setAreaUrl({ [PAGE_PARAM]: null, step: null });
+    }
   }, []);
 
   // THE EDITOR REPLACES THE TABS, full width. It loads its own data, so it does not wait on
   // this area's run list.
   if (editing) {
     return (
-      <div className="dw" data-testid="delivery-workflows">
+      <div className="dw" data-testid="delivery-workflows" data-full-page={fullPage ? "true" : undefined}>
+        <div className={fullPage ? "dw-full" : undefined}
+             data-testid={fullPage ? "workflow-full-page" : undefined}>
         <WorkflowEditor projectId={projectId} workflowKey={editing} actor={actor}
+                        fullPage={fullPage}
+                        onFullPage={() => setAreaUrl({ [PAGE_PARAM]: fullPage ? null : FULL_PAGE })}
                         usedFor={installed.find((w) => w.workflow_key === editing)?.used_for}
                         onBack={() => { setEditing(null); setTab("library"); }}
                         onStart={(key) => { setEditing(null); openComposerOn(key); }}
                         // The schedule popover lives on the workflow's Library card.
                         onSchedule={(key) => { setEditing(null); setScheduleFor(key); setTab("library"); }} />
+        </div>
       </div>
     );
   }
@@ -1160,6 +1182,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
           customSteps={customSteps} riskFloor={riskFloor}
           onStart={(key, example) => openComposerOn(key, example)}
           onOpen={(key) => openWorkflow(key)}
+          onOpenFull={(key) => openWorkflow(key, {}, true)}
           onNew={() => openWorkflow("new")}
           onDuplicate={(key) => openWorkflow("new", { from: key })}
           scheduleFor={scheduleFor} onScheduleShown={() => setScheduleFor(null)}
@@ -1257,10 +1280,13 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
         </div>
       ) : (
         <div className="wf-runs-area" role="tabpanel" id="dw-panel-runs" aria-labelledby="dw-tab-runs"
-             data-testid="dw-panel-runs">
-          <header className="wf-lib-head">
-            {tabs}
-          </header>
+             data-testid="dw-panel-runs" data-full-page={fullPage && openRun ? "true" : undefined}>
+          {/* A run's full page draws its own way back; the tabs are the list's. */}
+          {fullPage && openRun ? null : (
+            <header className="wf-lib-head">
+              {tabs}
+            </header>
+          )}
           {awaited ? (
             <p className="dw-awaiting detail" data-testid="dw-awaiting">
               Starting <code>{awaited}</code>…
@@ -1272,7 +1298,10 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
             highlightRun={justStarted} onNewProject={() => setTab("new")}
             capabilities={capabilities} targets={targets} hosts={hosts}
             actor={actor} roles={roles}
-            onOpenWorkflow={(key) => openWorkflow(key)}
+            // FROM A RUN, THE WORKFLOW OPENS FULL PAGE: a run is read at the whole flow's scale.
+            onOpenWorkflow={(key) => openWorkflow(key, {}, true)}
+            fullPageRun={fullPage ? openRun : null}
+            onFullPage={openRunFullPage}
             // NOT THE WORKER'S PUMP. What an operator means by "Advance" is "is anything stuck
             // that could move now?", which is a re-check of each unfinished run: the console key
             // may do that, and it says what it put back.
@@ -1582,8 +1611,12 @@ export function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilit
                    onBound, projectId, actor, roles,
                    previewStarting, onOpenWorkflow,
                    targets, hosts, highlightRun, onNewProject,
-                   onRerunFrom, showTests, onShowTests }: {
+                   onRerunFrom, showTests, onShowTests, fullPageRun, onFullPage }: {
   projectId: string;
+  /** The run shown with the whole window (`wfr=<id>&page=full`), or null for the list. */
+  fullPageRun?: string | null;
+  /** Open one run full page, or (null) leave it for the list. Absent: no full page offered. */
+  onFullPage?: (runId: string | null) => void;
   /** Start a NEW run from one step of a finished run, earlier steps pinned to this run's. */
   onRerunFrom?: (run: Run, stepId: string) => void;
   /** Whether test runs are listed; absent = the toggle is not offered. */
@@ -1661,6 +1694,131 @@ export function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilit
       </div>
     );
   }
+  /** Why this run stopped, or was refused, said on its card (and on its full page). */
+  const noticeFor = (run: Run) => {
+    // The step this run stopped at for the operator, if any — see `stoppedStep`.
+    const stopped = stoppedStep(run);
+    const stoppedCapability = stopped
+      ? capabilities.find((c) => c.key === stopped.capability) : undefined;
+    return (
+            stopped ? (
+              // STOPPED, AND WAITING ON YOU — SAID ON THE CARD, WITH BOTH ANSWERS.
+              //
+              // A run that stopped at a failed step showed no reason here (the runtime wrote
+              // `error`, this rendered only `blocked_reason`), sat under "Stopped" beside runs
+              // somebody cancelled, and offered "Run this workflow again" and "Remove this run"
+              // — both of which throw the run away. The two answers that keep it were inside the
+              // run, on the step, two clicks deep. The runtime now writes the sentence
+              // ("Stopped at Research: … Try it again, or skip it and carry on.") and the card
+              // carries it with the buttons, so the decision is visible without opening anything.
+              <div className="dw-blocked dw-stopped" data-testid="dw-run-stopped">
+                <p>
+                  {run.blocked_reason
+                    || `Stopped at ${stoppedCapability?.label ?? stopped.step_id}: `
+                       + `${stopped.error || run.error || "its work failed"}.`
+                       + stoppedAnswers(stepActions(run, stopped.step_id))}
+                </p>
+                <FailedStepActions key={stopped.step_id} step={stopped}
+                                   capability={stoppedCapability} busy={busy}
+                                   actions={stepActions(run, stopped.step_id)}
+                                   idPrefix="dw-run-stopped"
+                                   onRetry={(note) => onRetryStep(run.id, stopped.step_id, note)}
+                                   onSkip={(reason) => onSkipStep(run.id, stopped.step_id, reason)} />
+              </div>
+            ) : run.blocked_reason ? (
+              // A DENIED RELEASE IS A DECISION, NOT A FAULT. "step 'deploy' was rejected"
+              // rendered in the same red as a crash, with no hint of what happens next — so a
+              // deliberate no looked like a failure the operator had to debug.
+              <p className="dw-blocked" data-denied={DENIED.test(run.blocked_reason)}
+                 data-testid="dw-blocked">
+                {DENIED.test(run.blocked_reason)
+                  ? `You denied ${run.blocked_reason.replace(DENIED, "$1")}. Nothing shipped — `
+                    + "reopen it with “Try … again”, or leave the run as it is."
+                  : run.blocked_reason}
+              </p>
+            ) : null
+    );
+  };
+  /** The run's path — its chain, lane, the picked step and its actions — in the row, or with the
+   *  whole window (`full`). One element, so the two can never offer different things. */
+  const pathFor = (run: Run, full = false) => (
+            <StepPath run={run} onOpenWorkflow={onOpenWorkflow} fullPage={full}
+                        onOpenFullPage={onFullPage && !full ? () => onFullPage(run.id) : undefined} actor={actor} roles={roles} capabilities={capabilities} targets={targets} hosts={hosts}
+                        onRetryStep={(stepId, note) => onRetryStep(run.id, stepId, note)}
+                        onSkipStep={(stepId, reason) => onSkipStep(run.id, stepId, reason)}
+                        onRerun={() => onRerun(run)} onRecheck={() => onRecheck(run)}
+                        onStop={() => onStop(run)}
+                        onDelete={() => onDelete(run)}
+                        onStopAndRerun={() => onStopAndRerun(run)}
+                        onBuildOnThis={() => onBuildOnThis(run)}
+                        onRerunFrom={onRerunFrom ? (stepId) => onRerunFrom(run, stepId) : undefined}
+                        busy={busy}
+                        onSetTarget={(targetId) => onSetTarget(run.id, targetId)}
+                        onPrepareTarget={(hostId) => onPrepareTarget(run.id, hostId)}
+                        onRunPreview={onRunPreview}
+                        onBound={onBound}
+                        projectId={projectId}
+                        previewStarting={previewStarting} />
+  );
+
+  // ONE RUN WITH THE WHOLE WINDOW (`wfr=<id>&page=full`): its own head with the way back, the
+  // same notice and path the row has, the lane left to right at the page's width.
+  const fullRun = fullPageRun ? runs.find((r) => r.id === fullPageRun) : undefined;
+  if (fullPageRun) {
+    const back = (
+      <button type="button" className="wf-btn wf-btn-ghost wf-back" data-testid="run-full-back"
+              onClick={() => onFullPage?.(null)}>
+        <ArrowLeft size={14} weight="bold" aria-hidden />Back to runs
+      </button>
+    );
+    if (!fullRun) {
+      return (
+        <div className="dw-run-full" data-testid="run-full-page" data-missing="true">
+          <header className="dw-full-head">{back}</header>
+          <p className="detail" data-testid="run-full-missing">
+            <code>{fullPageRun}</code> is not in this project&rsquo;s runs{showTests ? "" : " (test runs are hidden)"}.
+          </p>
+        </div>
+      );
+    }
+    return (
+      <div className="dw-run-full" data-testid="run-full-page" data-run-id={fullRun.id}
+           data-status={fullRun.status}>
+        <header className="dw-full-head">
+          {back}
+          <span className="dw-badge" data-tone={tone(fullRun.status)}>{fullRun.status}</span>
+          <h2 className="dw-full-title" data-testid="run-full-title">
+            {runSubject(fullRun) ?? fullRun.workflow_name}
+            <em className="dw-run-wf">{fullRun.workflow_name} v{fullRun.version}</em>
+          </h2>
+          <span className="dw-run-progress">
+            {fullRun.steps_done} of {fullRun.step_count}
+            <i className="dw-bar" aria-hidden>
+              <i style={{ width: `${Math.round((fullRun.steps_done / Math.max(1, fullRun.step_count)) * 100)}%` }} />
+            </i>
+          </span>
+          {fullRun.created_at ? (
+            <span className="detail dw-run-started">started {startedLabel(fullRun.created_at)}</span>
+          ) : null}
+          {fullRun.waiting_on ? (
+            <span className="dw-waiting">
+              waiting on {/^[a-z0-9_]+$/.test(fullRun.waiting_on) ? roleLabel(fullRun.waiting_on) : fullRun.waiting_on}
+            </span>
+          ) : null}
+          <button type="button" className="wf-btn wf-btn-ghost dw-full-exit" data-testid="exit-full-page"
+                  title="Back to the list, with this run open"
+                  onClick={() => onFullPage?.(null)}>
+            <CornersIn size={14} weight="bold" aria-hidden /> Exit full page
+          </button>
+        </header>
+        {noticeFor(fullRun)}
+        <LearnedStrip projectId={projectId} actor={actor} runId={fullRun.id}
+                      live={!/^(succeeded|completed|failed|cancelled|canceled|deadlettered)$/.test(fullRun.status)} />
+        {pathFor(fullRun, true)}
+      </div>
+    );
+  }
+
   // WAITING, BLOCKED AND DEAD-LETTERED ARE NOT "RUNNING".
   //
   // Every run sat under one heading called Running, so a run stopped dead and a run waiting on
@@ -1713,10 +1871,6 @@ export function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilit
       ) : null}
       {shown.map((run) => {
         const open = openRun === run.id;
-        // The step this run stopped at for the operator, if any — see `stoppedStep`.
-        const stopped = stoppedStep(run);
-        const stoppedCapability = stopped
-          ? capabilities.find((c) => c.key === stopped.capability) : undefined;
         return (
           // OPEN IS A STATE THE CARD SHOULD LOOK LIKE.
           //
@@ -1775,61 +1929,9 @@ export function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilit
                 </span>
               ) : null}
             </button>
-            {stopped ? (
-              // STOPPED, AND WAITING ON YOU — SAID ON THE CARD, WITH BOTH ANSWERS.
-              //
-              // A run that stopped at a failed step showed no reason here (the runtime wrote
-              // `error`, this rendered only `blocked_reason`), sat under "Stopped" beside runs
-              // somebody cancelled, and offered "Run this workflow again" and "Remove this run"
-              // — both of which throw the run away. The two answers that keep it were inside the
-              // run, on the step, two clicks deep. The runtime now writes the sentence
-              // ("Stopped at Research: … Try it again, or skip it and carry on.") and the card
-              // carries it with the buttons, so the decision is visible without opening anything.
-              <div className="dw-blocked dw-stopped" data-testid="dw-run-stopped">
-                <p>
-                  {run.blocked_reason
-                    || `Stopped at ${stoppedCapability?.label ?? stopped.step_id}: `
-                       + `${stopped.error || run.error || "its work failed"}.`
-                       + stoppedAnswers(stepActions(run, stopped.step_id))}
-                </p>
-                <FailedStepActions key={stopped.step_id} step={stopped}
-                                   capability={stoppedCapability} busy={busy}
-                                   actions={stepActions(run, stopped.step_id)}
-                                   idPrefix="dw-run-stopped"
-                                   onRetry={(note) => onRetryStep(run.id, stopped.step_id, note)}
-                                   onSkip={(reason) => onSkipStep(run.id, stopped.step_id, reason)} />
-              </div>
-            ) : run.blocked_reason ? (
-              // A DENIED RELEASE IS A DECISION, NOT A FAULT. "step 'deploy' was rejected"
-              // rendered in the same red as a crash, with no hint of what happens next — so a
-              // deliberate no looked like a failure the operator had to debug.
-              <p className="dw-blocked" data-denied={DENIED.test(run.blocked_reason)}
-                 data-testid="dw-blocked">
-                {DENIED.test(run.blocked_reason)
-                  ? `You denied ${run.blocked_reason.replace(DENIED, "$1")}. Nothing shipped — `
-                    + "reopen it with “Try … again”, or leave the run as it is."
-                  : run.blocked_reason}
-              </p>
-            ) : null}
+            {noticeFor(run)}
             {open ? <LearnedStrip projectId={projectId} actor={actor} runId={run.id} live={!/^(succeeded|completed|failed|cancelled|canceled|deadlettered)$/.test(run.status)} /> : null}
-            {open ? (
-              <StepPath run={run} onOpenWorkflow={onOpenWorkflow} actor={actor} roles={roles} capabilities={capabilities} targets={targets} hosts={hosts}
-                        onRetryStep={(stepId, note) => onRetryStep(run.id, stepId, note)}
-                        onSkipStep={(stepId, reason) => onSkipStep(run.id, stepId, reason)}
-                        onRerun={() => onRerun(run)} onRecheck={() => onRecheck(run)}
-                        onStop={() => onStop(run)}
-                        onDelete={() => onDelete(run)}
-                        onStopAndRerun={() => onStopAndRerun(run)}
-                        onBuildOnThis={() => onBuildOnThis(run)}
-                        onRerunFrom={onRerunFrom ? (stepId) => onRerunFrom(run, stepId) : undefined}
-                        busy={busy}
-                        onSetTarget={(targetId) => onSetTarget(run.id, targetId)}
-                        onPrepareTarget={(hostId) => onPrepareTarget(run.id, hostId)}
-                        onRunPreview={onRunPreview}
-                        onBound={onBound}
-                        projectId={projectId}
-                        previewStarting={previewStarting} />
-            ) : null}
+            {open ? pathFor(run) : null}
           </article>
         );
       })}
@@ -1993,9 +2095,13 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
                    onStopAndRerun, onBuildOnThis, onRecheck,
                    onSetTarget,
                    onPrepareTarget, onRunPreview, onBound, projectId,
-                   previewStarting, busy, actor, roles, onOpenWorkflow }: {
+                   previewStarting, busy, actor, roles, onOpenWorkflow, fullPage, onOpenFullPage }: {
   projectId: string;
   actor: string;
+  /** Drawn with the whole window: the lane fits the page's width (Fit or 100%). */
+  fullPage?: boolean;
+  /** Open this run full page; absent on the full page itself. */
+  onOpenFullPage?: () => void;
   roles: Array<{ role_key: string; display_name?: string | null }>;
   run: Run; capabilities: Capability[]; targets: DeployTarget[]; hosts: DeployHost[];
   /** Open the workflow this run follows in the editor. */
@@ -2109,6 +2215,9 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
   // WHO WORKS THIS RUN is a property of the app, not a stage of its delivery — so it is a chip
   // on the run's bar, not a node in the lane the runtime never runs.
   const [showAgents, setShowAgents] = useState(false);
+  // ON THE FULL PAGE THE WHOLE FLOW FITS FIRST: a 21-step run with loops and lanes is read as a
+  // whole, then at 100% to read one part. In the row it stays roomy (FlowLane's run default).
+  const [zoom, setZoom] = useState<LaneZoom>("fit");
 
   useEffect(() => {
     const place = () => {
@@ -2164,7 +2273,7 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
   }, [picked, steps.length, laneSpec, showAgents]);
 
   return (
-    <div className="dw-path" data-testid="dw-path">
+    <div className="dw-path" data-testid="dw-path" data-full-page={fullPage ? "true" : undefined}>
       <div className="wf-run-bar">
         <button type="button" className="wf-tag" aria-pressed={showAgents}
                 data-testid="dw-run-agents" title={terminal ? "Agents, as run" : "Agents on this run"}
@@ -2178,6 +2287,13 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
                   title={`${run.workflow_name} v${run.version}`}
                   onClick={() => onOpenWorkflow(run.workflow_key)}>
             Open workflow
+          </button>
+        ) : null}
+        {onOpenFullPage ? (
+          <button type="button" className="wf-link dw-open-full" data-testid="open-full-page"
+                  title="This run with the whole window: the flow left to right, the step below"
+                  onClick={onOpenFullPage}>
+            <CornersOut size={13} weight="bold" aria-hidden /> Open full page
           </button>
         ) : null}
         {isTestRun(run) ? (
@@ -2194,6 +2310,7 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
       <RunChain chain={chain} viewer={actor} />
       <div className="wf-run-lane" ref={laneRef} data-testid="dw-run-lane">
         <FlowLane spec={laneSpec} palette={lanePalette} mode="run" label="Workflow steps"
+                  {...(fullPage ? { zoom, onZoomChange: setZoom } : {})}
                   selection={showAgents ? null : picked} runState={laneState}
                   onSelect={(id) => {
                     // Only a step this run has: a branch it never took has nothing to show.

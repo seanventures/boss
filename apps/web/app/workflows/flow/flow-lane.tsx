@@ -42,7 +42,7 @@ import type {
   FlowLayout, FlowLink, GraphEdge, Palette, PaletteItem, Problem, Spec, SpecStep, StepView,
 } from "../../../lib/workflow-editor-types";
 import {
-  afterGaps, canMove as modelCanMove, insertStep, layoutFlow, linearOrder, REPEATS, rewireLink, START_TARGET,
+  afterGaps, bodiesOf, canMove as modelCanMove, insertStep, layoutFlow, linearOrder, REPEATS, rewireLink, START_TARGET,
 } from "../../../lib/workflow-graph";
 import { pinTip, unpinTip, useTips } from "./tip-layer";
 import { layoutOffsets, type NodeOffset } from "../../../lib/workflow-layout";
@@ -123,6 +123,8 @@ export function drawEdges(layout: FlowLayout, g: LaneGeometry, spec: Spec): Draw
     if (s.kind === "bounded_loop") return Number(s.max_iterations) ? [[s.id, `↻ ×${Number(s.max_iterations)}`]] : [];
     return s.kind === "for_each" ? [[s.id, "↻ each item"]] : [];
   }));
+  const tails = new Map(spec.steps.map((s) => [s.id, bodiesOf(s).slice(-1)[0]] as const)
+    .filter((x): x is readonly [string, string] => !!x[1]));
   const labelled = new Set<string>();
   // A For each's arrow into the step it runs can be pointed at another step; a Repeat's cannot.
   const forEach = new Set(spec.steps.filter((s) => s.kind === "for_each").map((s) => s.id));
@@ -173,7 +175,11 @@ export function drawEdges(layout: FlowLayout, g: LaneGeometry, spec: Spec): Draw
     out.push({ key: `${e.kind}:${e.from}>${e.to}`, kind: e.kind, ends: [e.from, e.to], ...drawn(route), label,
                ...(relinkable(e) ? { link: { from: e.from, to: e.to, kind: e.kind }, from: a, grip: routeGrip(route, GRIP_T) } : {}) });
     // A loop's body returns to its controller; the spec only names the way in.
-    if (e.kind === "loop" && !backs.has(`${e.to}>${e.from}`)) back(e.to, e.from, loopBadge.get(e.from) ?? "");
+    // A loop over several steps returns from the last of them.
+    if (e.kind === "loop" && !backs.has(`${e.to}>${e.from}`)) {
+      const tail = tails.get(e.from) ?? e.to;
+      if (g.boxes.has(tail)) back(tail, e.from, loopBadge.get(e.from) ?? "");
+    }
   }
   for (const id of layout.terminal) {
     if (!g.boxes.has(id)) continue;
@@ -333,7 +339,9 @@ export function FlowLane(p: {
   // scrolling sideways inside itself (never the page), with the step in flight kept in view.
   // Shrinking eleven steps into one screen made them unreadable. The editor keeps Fit as its
   // default, for seeing and dragging the whole flow, and 100% is the same roomy lane.
-  const roomy = p.density !== "compact" && (mode === "run" || zoom === "full");
+  // A run whose host controls the zoom (the run's full page) gets Fit and 100% like the editor.
+  const runZoom = mode === "run" && p.zoom !== undefined;
+  const roomy = p.density !== "compact" && ((mode === "run" && !runZoom) || zoom === "full");
   // The root font the node's words are set in (it grows with the screen): nodes are as tall as
   // their rows at that size, so a title never runs into the row under it (geometry nodeHeight).
   const [rem, setRem] = useState(BASE_REM);
@@ -901,15 +909,15 @@ export function FlowLane(p: {
                  })} />
       ) : null}
 
-      {mode === "design" && steps.length ? (
-        <div className="wf-zoom" role="group" aria-label="Zoom">
+      {(mode === "design" || runZoom) && steps.length ? (
+        <div className="wf-zoom" role="group" aria-label="Zoom" data-testid="wf-zoom">
           {design && onResetLayout && offsets.size ? (
             <button type="button" className="wf-zoom-btn" data-testid="wf-tidy" onClick={onResetLayout}
                     data-tip="Put every step back in its place">Tidy</button>
           ) : null}
-          <button type="button" className="wf-zoom-btn" aria-pressed={zoom === "fit"} onClick={() => setZoom("fit")}
+          <button type="button" className="wf-zoom-btn" aria-pressed={zoom === "fit"} onClick={() => setZoom("fit")} data-testid="wf-zoom-fit"
                   data-tip="Fit the whole flow (F)">Fit</button>
-          <button type="button" className="wf-zoom-btn" aria-pressed={zoom === "full"} onClick={() => setZoom("full")}>
+          <button type="button" className="wf-zoom-btn" aria-pressed={zoom === "full"} onClick={() => setZoom("full")} data-testid="wf-zoom-full">
             100%
           </button>
         </div>

@@ -183,39 +183,59 @@
 .pl-design-card-body { font-size: 0.8125rem; color: var(--ink-soft); }
 .pl-design-card-body ul { margin: 0; padding-left: 16px; }
 
-/* ── Design status (design §4.6): the consultant's legend — Locked filled, In review outlined in
-   blue, Not yet reviewed faint, Human step a pill, Shared service grey. ── */
+/* ── Design status (design §4.6), as COLOUR ON THE CONSOLE'S CARD (operator, 2026-11-01: "why
+   we have white boxes?"). Locked used to be an inverted card, var(--ink) behind var(--surface)
+   words: a bright white box on the dark console. Every stage now sits on the same dark surface
+   and its design state is the accent: a bar down its left edge and a matching badge. One token
+   per state, so the card, the badge and the legend swatch can never disagree, and both themes
+   follow the tokens:
+     Locked            solid green bar, green badge
+     In review         blue bar and border, blue outlined badge
+     Not yet reviewed  dashed grey border, muted badge
+     Human step        amber bar, amber pill (the card is pill-shaped too)
+     Shared service    grey, flat ── */
+.pl-card, .pl-swatch, .pl-design { --pl-state: var(--border-strong); }
+:is(.pl-card, .pl-swatch, .pl-design)[data-design="locked"] { --pl-state: var(--green); --pl-state-soft: var(--green-soft); }
+:is(.pl-card, .pl-swatch, .pl-design)[data-design="in_review"] { --pl-state: var(--tier-balanced); --pl-state-soft: var(--tier-balanced-soft); }
+:is(.pl-card, .pl-swatch, .pl-design)[data-design="not_reviewed"] { --pl-state: var(--faint); --pl-state-soft: transparent; }
+:is(.pl-card, .pl-swatch, .pl-design)[data-design="human_step"] { --pl-state: var(--amber); --pl-state-soft: var(--amber-soft); }
+:is(.pl-card, .pl-swatch, .pl-design)[data-design="shared_service"] { --pl-state: var(--faint); --pl-state-soft: color-mix(in srgb, var(--faint) 16%, transparent); }
+
 .pl-design {
   display: inline-flex; align-items: center; padding: 1px 9px; border-radius: 6px; white-space: nowrap;
   font: 700 0.6875rem/1.55 var(--sans); border: 1px solid var(--border-strong); color: var(--muted);
   background: var(--surface-2);
 }
-.pl-design[data-design="locked"] { background: var(--ink); color: var(--surface); border-color: var(--ink); }
-.pl-design[data-design="in_review"] { color: var(--accent-text); border-color: var(--accent); background: transparent; border-width: 1.5px; }
-.pl-design[data-design="not_reviewed"] { color: var(--muted); font-weight: 600; }
-.pl-design[data-design="human_step"] { border-radius: 999px; color: var(--ink-soft); border-color: var(--ink-soft); background: transparent; }
-.pl-design[data-design="shared_service"] { color: var(--ink-soft); background: color-mix(in srgb, var(--faint) 18%, transparent); border-color: transparent; }
+.pl-design[data-design] { color: var(--pl-state); background: var(--pl-state-soft);
+  border-color: color-mix(in srgb, var(--pl-state) 55%, transparent); }
+.pl-design[data-design="not_reviewed"] { color: var(--muted); font-weight: 600; border-style: dashed; }
+.pl-design[data-design="human_step"] { border-radius: 999px; }
+.pl-design[data-design="shared_service"] { color: var(--ink-soft); border-color: transparent; }
 
 .pl-design-legend { margin-top: -4px; }
-.pl-swatch { display: inline-block; width: 30px; height: 14px; border-radius: 4px; border: 1px solid var(--border-strong); background: var(--surface-2); }
-.pl-swatch[data-design="locked"] { background: var(--ink); border-color: var(--ink); }
-.pl-swatch[data-design="in_review"] { border: 2px solid var(--accent); background: transparent; }
-.pl-swatch[data-design="human_step"] { border-radius: 999px; border-color: var(--ink-soft); background: transparent; }
-.pl-swatch[data-design="shared_service"] { background: color-mix(in srgb, var(--faint) 25%, transparent); border-color: transparent; }
+.pl-swatch {
+  display: inline-block; width: 30px; height: 14px; border-radius: 4px; box-sizing: border-box;
+  border: 1px solid color-mix(in srgb, var(--pl-state) 55%, transparent); border-left: 4px solid var(--pl-state);
+  background: var(--surface-3);
+}
+.pl-swatch[data-design="in_review"] { border: 1.5px solid var(--pl-state); border-left-width: 4px; }
+.pl-swatch[data-design="not_reviewed"] { border-style: dashed; border-left-style: solid; border-color: var(--border-strong); border-left-color: var(--faint); }
+.pl-swatch[data-design="human_step"] { border-radius: 999px; }
+.pl-swatch[data-design="shared_service"] { background: var(--surface-2); }
 .pl-key-side { border-top-style: dashed; border-color: var(--muted); }
 
-/* A locked stage reads as the consultant's dark card; one in review is outlined in blue. */
-.pl-card[data-design="locked"] { background: var(--ink); border-color: var(--ink); }
-.pl-card[data-design="locked"] .pl-card-title { color: var(--surface); }
-.pl-card[data-design="locked"] .pl-card-contract, .pl-card[data-design="locked"] .pl-faint { color: color-mix(in srgb, var(--surface) 75%, transparent); }
-.pl-card[data-design="locked"] .pl-num { background: color-mix(in srgb, var(--surface) 18%, transparent); color: var(--surface); border-color: transparent; }
-.pl-card[data-design="locked"] .pl-design { background: var(--surface); color: var(--ink); }
-.pl-card[data-design="locked"] .pl-runs-as { background: transparent; color: var(--surface);
-  border-color: color-mix(in srgb, var(--surface) 45%, transparent); }
-.pl-card[data-design="in_review"] { border: 2px solid var(--accent); }
-.pl-card[data-design="human_step"] { border-radius: 999px / 48px; padding-inline: 18px; }
+/* Every stage is the console's dark card; the state is the left bar and the border's tint. */
+.pl-card[data-design] { background: var(--surface-3); border-left: 4px solid var(--pl-state); padding-left: 10px; }
+.pl-card[data-design="locked"] { border-color: color-mix(in srgb, var(--green) 40%, var(--border-strong)); border-left-color: var(--green); }
+.pl-card[data-design="in_review"] { border-color: color-mix(in srgb, var(--tier-balanced) 70%, transparent); border-width: 1.5px; border-left-width: 4px; border-left-color: var(--tier-balanced); }
+.pl-card[data-design="not_reviewed"] { border-style: dashed; border-left-style: solid; border-left-color: var(--faint); }
+.pl-card[data-design="human_step"] { border-radius: 999px / 48px; padding-inline: 18px; border-color: color-mix(in srgb, var(--amber) 45%, var(--border-strong)); border-left-color: var(--amber); }
 .pl-card[data-design="shared_service"], .pl-card[data-placement="side"] { min-height: 0; width: 240px; background: var(--surface-2); }
-.pl-card[data-placement="side"] { border-style: dashed; }
+.pl-card[data-placement="side"] { border-style: dashed; border-left-style: solid; }
+.pl-card[data-design="locked"] .pl-num { background: var(--green-soft); border-color: color-mix(in srgb, var(--green) 45%, transparent); }
+/* Selected stays the selection colour whatever the state, and keeps its state bar. */
+.pl-card[data-selected="true"] { border-color: var(--accent); }
+.pl-card[data-selected="true"][data-design] { border-left-color: var(--pl-state); }
 .pl-card-run { display: flex; align-items: center; gap: 6px; }
 .pl-num-none { background: transparent; color: var(--muted); }
 

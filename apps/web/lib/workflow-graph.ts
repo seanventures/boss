@@ -80,11 +80,19 @@ function retarget(step: SpecStep, from: string, to: string | null): SpecStep {
  *  (`bounded_loop`) and a For each (`for_each`, once per item). Drawn, laid out and edited alike. */
 export const REPEATS = new Set(["bounded_loop", "for_each"]);
 
+/** The steps a Repeat or For each runs, in order. One step (`body: "x"`) as the canvas makes
+ *  it, or a list (`body: ["a", "b", "c"]`, a loop over three stages, as the DQ RCA workflow's
+ *  Evidence loop): the runtime runs a list in order and returns to the loop after the last. */
+export function bodiesOf(step: SpecStep): string[] {
+  if (!REPEATS.has(step.kind)) return [];
+  const body = step.body;
+  return (Array.isArray(body) ? body : body ? [body] : []).map(String).filter(Boolean);
+}
+
 /** Every step some Repeat or For each repeats. Its `next` is never followed: it returns to the
  *  step that repeats it. */
 export function loopBodies(spec: Spec): Set<string> {
-  return new Set(stepsOf(spec).filter((s) => REPEATS.has(s.kind) && s.body)
-    .map((s) => String(s.body)));
+  return new Set(stepsOf(spec).flatMap(bodiesOf));
 }
 
 const BRANCH_KINDS = new Set(["parallel", "condition", "join", "bounded_loop", "for_each"]);
@@ -129,7 +137,12 @@ export function edgesOf(spec: Spec): GraphEdge[] {
     if (step.kind === "parallel" && Array.isArray(step.branches)) {
       for (const branch of step.branches) add(id, String(branch), "branch");
     }
-    if (REPEATS.has(step.kind) && step.body) add(id, String(step.body), "loop");
+    // A loop over several steps goes into the first and through them in order: drawn as the
+    // chain the runtime runs, not as steps nothing leads to (which all stacked in the first
+    // column — the "narrow vertical strip" of a 21-step run, 2026-11-01).
+    const members = bodiesOf(step);
+    if (members.length) add(id, members[0], "loop");
+    for (let i = 1; i < members.length; i += 1) add(members[i - 1], members[i], "next");
     for (const target of nextOf(step)) {
       add(id, target, waitedBy.get(id)?.has(target) ? "join" : "next");
     }
@@ -281,11 +294,23 @@ export function layoutFlow(spec: Spec): FlowLayout {
   let last = Math.max(-1, ...column.values());
   for (const id of order) if (!column.has(id) || (pending.get(id) ?? 0) > 0) column.set(id, ++last);
 
+  // A STEP NOTHING LEADS TO AND THAT LEADS NOWHERE (a shared service, a side workflow's stage)
+  // is not the start of the flow. Kahn put every one of them in the first column, under the
+  // entry, so a workflow with three of them began with a tower. They go along the bottom
+  // instead, one per column from the second, after the flow's own steps there.
+  const entry = String(spec.entry_step ?? order[0] ?? "");
+  const linked = new Set(edges.flatMap((e) => [e.from, e.to]));
+  const isolated = linked.size ? order.filter((id) => id !== entry && !linked.has(id)) : [];
+  isolated.forEach((id, i) => column.set(id, 1 + i));
+
   // A loop's body goes to the BOTTOM of its column: its way back to the loop runs along the
   // bottom of the lane, and from any higher row it would cross the step under it.
-  const bodies = new Set(edges.filter((e) => e.kind === "loop").map((e) => e.to));
+  const bodies = loopBodies(spec);
+  for (const e of edges) if (e.kind === "loop") bodies.add(e.to);
+  const alone = new Set(isolated);
   const byColumn = new Map<number, string[]>();
-  for (const id of [...order.filter((x) => !bodies.has(x)), ...order.filter((x) => bodies.has(x))]) {
+  for (const id of [...order.filter((x) => !bodies.has(x) && !alone.has(x)),
+                    ...order.filter((x) => bodies.has(x)), ...isolated]) {
     const c = column.get(id)!;
     if (!byColumn.has(c)) byColumn.set(c, []);
     byColumn.get(c)!.push(id);
@@ -306,7 +331,8 @@ export function layoutFlow(spec: Spec): FlowLayout {
     linear: isLinear(spec),
     // A loop body has no edge out, but it returns to its loop: it is not where the flow ends.
     // A step whose only way out is its error path still ends the flow when it succeeds.
-    terminal: order.filter((id) => !(ends.get(id) ?? []).length && !bodies.has(id)),
+    // Nor is a step off the flow altogether (a shared service): no arrow to End from it.
+    terminal: order.filter((id) => !(ends.get(id) ?? []).length && !bodies.has(id) && !alone.has(id)),
   };
 }
 
@@ -319,7 +345,8 @@ function forwardErrorEdges(spec: Spec, structural: GraphEdge[], errors: GraphEdg
   structural.forEach(link);
   // A loop body returns to its loop: a way back the edges do not name.
   for (const step of stepsOf(spec)) {
-    if (REPEATS.has(step.kind) && step.body) link({ from: String(step.body), to: step.id, kind: "next" });
+    const members = bodiesOf(step);
+    if (members.length) link({ from: members[members.length - 1], to: step.id, kind: "next" });
   }
   const reaches = (from: string, to: string) => {
     const seen = new Set([from]);

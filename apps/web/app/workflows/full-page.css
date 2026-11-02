@@ -1,0 +1,42 @@
+/* FULL PAGE (app/workflows/full-page.ts): one workflow, or one run, with the whole window.
+   The console's sidebar, top bar and project strip step aside; the area's panel loses its
+   frame so the flow, the stage table and the editor reach the window's edges. Tokens only. */
+
+.bx-shell[data-page="full"] { grid-template-columns: minmax(0, 1fr); }
+.bx-shell[data-page="full"] > .bx-sidebar,
+.bx-shell[data-page="full"] .bx-topbar,
+.bx-shell[data-page="full"] .bx-scrim { display: none; }
+.bx-shell[data-page="full"] .bx-content { max-width: none; padding: 12px 20px 32px; }
+.bx-shell[data-page="full"] .panel-stack[data-area="delivery_workflows"] {
+  padding: 0; border: 0; background: transparent; box-shadow: none;
+}
+
+/* ── The workflow ── */
+.dw-full { display: flex; flex-direction: column; min-height: calc(100vh - 60px); }
+.dw-full > .wf-editor { flex: 1; }
+.wf-editor[data-full-page="true"] .wf-topbar { position: sticky; top: 0; z-index: 6; background: var(--surface); }
+.wf-editor[data-full-page="true"] .wf-body { min-height: calc(100vh - 220px); }
+
+/* ── The run ── */
+.dw-run-full { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.dw-full-head {
+  position: sticky; top: 0; z-index: 6;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px;
+  padding: 10px 14px; border: 1px solid var(--border); border-radius: var(--r-xl);
+  background: var(--surface); box-shadow: var(--shadow-sm);
+}
+.dw-full-title {
+  margin: 0; display: flex; flex-direction: column; gap: 1px; min-width: 0;
+  font: 700 1rem/1.3 var(--display); color: var(--ink);
+}
+.dw-full-head .dw-run-progress { margin-left: auto; }
+.dw-full-exit { flex: none; }
+.dw-run-full[data-missing="true"] .detail { margin: 0; }
+
+/* The run's path at the page's width: the lane takes it all, and the step reads below it. */
+.dw-path[data-full-page="true"] { margin: 0; display: flex; flex-direction: column; gap: 12px; }
+.dw-path[data-full-page="true"] .wf-run-bar { margin-bottom: 0; }
+.dw-path[data-full-page="true"] .wf-run-lane {
+  padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--surface);
+}
+.dw-open-full { display: inline-flex; align-items: center; gap: 4px; }

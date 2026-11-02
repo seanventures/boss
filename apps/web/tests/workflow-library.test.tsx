@@ -349,3 +349,22 @@ describe("the keyboard", () => {
     expect(p.onNew).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("a workflow opens full page from its card", () => {
+  it("the card's full-page button and its menu item open that workflow with the whole window", async () => {
+    const onOpenFull = vi.fn();
+    p = { ...props(), onOpenFull } as typeof p;
+    await mount();
+    await click($('[data-testid="open-full-page-spd"]'));
+    expect(onOpenFull).toHaveBeenCalledWith("spd");
+    expect(p.onOpen).not.toHaveBeenCalled();
+    await click($('[data-testid="wf-card-more-spd"]'));
+    await click(menuItem("Open full page"));
+    expect(onOpenFull).toHaveBeenLastCalledWith("spd");
+  });
+
+  it("offers no full-page button where the host has no full page", async () => {
+    await mount();
+    expect($('[data-testid="open-full-page-spd"]')).toBeNull();
+  });
+});
