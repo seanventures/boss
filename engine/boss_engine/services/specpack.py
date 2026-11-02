@@ -527,13 +527,6 @@ class SpecPackService:
                         "source_module_version": source_module_version,
                     },
                 )
-                if existing_role["display_name"] != display_name:
-                    # The agent's identity carries the name people see (consent sheet, lineage,
-                    # approvals): a renamed role renames its agent, or the old name lives on there.
-                    connection.execute(text(
-                        "UPDATE identity_principals SET display_name = :n, updated_at = now() "
-                        "WHERE kind = 'agent' AND id = (SELECT agent_id FROM roles WHERE id = :id)"),
-                        {"n": display_name, "id": role_id})
                 emit_event(
                     connection,
                     project_id,
@@ -553,6 +546,13 @@ class SpecPackService:
                 agent_identity.quietly(connection, agent_identity.seal_identity, project_id,
                                        role_key, "remit", actor)
                 status = "updated"
+        if existing_role and not operator_edited:
+            # The agent's identity carries the name people see (consent sheet, lineage,
+            # approvals): it follows the role's name, or a renamed agent keeps its old one there.
+            connection.execute(text(
+                "UPDATE identity_principals SET display_name = :n, updated_at = now() "
+                "WHERE kind = 'agent' AND id = (SELECT agent_id FROM roles WHERE id = :id) "
+                "AND display_name IS DISTINCT FROM :n"), {"n": display_name, "id": role_id})
         return {
             "role_key": role_key,
             "display_name": display_name,
