@@ -90,7 +90,7 @@ describe("the DQ pipeline overview", () => {
     for (const id of ["monitoring", "context_enrichment", "historical_pattern"]) {
       expect(at(id).from, id).toBe("Flow Orchestrator");
     }
-    expect(at("monitoring").to).toBe("Context Gathering");
+    expect(at("monitoring").to).toBe("Context Hydration");
     expect(at("context_enrichment").to).toBe("Past Incidents");
     expect(at("historical_pattern").to).toBe("Root Cause Analysis");
     // A policy value reads as words, never as its raw key.
@@ -127,7 +127,7 @@ describe("the DQ agent designs", () => {
     expect(el.querySelector('[data-testid="band-kg"]')?.textContent).toBe("Knowledge Graph v3 · read only");
   });
 
-  it("P0 Context Gathering: the Service Desk is drawn, the policy has no raw value, labels never collide", () => {
+  it("P0 Context Hydration: the Service Desk is drawn, the policy has no raw value, labels never collide", () => {
     const el = mount(<AgentContractView stage={at("context_enrichment")} hasRun={false} graph={graph} />);
     expect(el.querySelector('[data-testid="map-system-servicedesk"]')).not.toBeNull();
     expect(el.textContent).not.toContain("standard_profile");

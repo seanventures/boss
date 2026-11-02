@@ -5,7 +5,7 @@ One DQ Monitor exception group, investigated end to end:
 
   1 monitoring           Incident Intake Agent       open or attach ONE incident per Error group, grade
                                                 its severity; never diagnoses; Warning writes nothing
-  2 context_enrichment   Context Gathering     ten fixed graph reads + the Profile Service + Service Desk: footprint,
+  2 context_enrichment   Context Hydration     ten fixed graph reads + the Profile Service + Service Desk: footprint,
                                                 owners, subscriptions, lineage, regulatory reach,
                                                 known issues, exception profile, recent changes;
                                                 every missing fact a CoverageGap; no LLM
@@ -573,7 +573,7 @@ def _write_incident(connection: Connection, project_id: str, incident_id: str,
     return node_id
 
 
-# ── 2. Context Gathering (deterministic) ────────────────────────────────────────────────────
+# ── 2. Context Hydration (deterministic) ────────────────────────────────────────────────────
 
 def run_dq_context_enrichment(connection: Connection, settings: Any, project_id: str,
                               step: Mapping[str, Any], context: Mapping[str, Any],
@@ -594,7 +594,7 @@ def run_dq_context_enrichment(connection: Connection, settings: Any, project_id:
     # 1 Load the incident
     incident_node = str(mon.get("incident_node_id") or "")
     if not incident_node:
-        raise ValueError("Context Gathering runs after Incident Intake opens an incident (never on "
+        raise ValueError("Context Hydration runs after Incident Intake opens an incident (never on "
                          "an attach); this run has none.")
     rule_id = str(mon.get("rule_id") or "")
     column = str(mon.get("column") or "")
@@ -1037,7 +1037,7 @@ def _sections(mon: Mapping[str, Any], enrich: Mapping[str, Any], history: Mappin
             f"Rule: {json.dumps(fp.get('rule'))}",
             f"CDEs: {', '.join(c['cde_id'] + ' ' + c['name'] for c in fp.get('cdes') or []) or '-'}"],
             must=True, priority=100),
-        Section("Coverage gaps (what Context Gathering could not establish)",
+        Section("Coverage gaps (what Context Hydration could not establish)",
                 cite([k for k in catalogue if k.startswith("GAP-")]), must=True, priority=95),
         Section("Closed incidents on this rule (tier 1 precedents)", cite(tier1), priority=90),
         Section("Recent changes", cite([k for k in catalogue if k.startswith("CHG-")]),

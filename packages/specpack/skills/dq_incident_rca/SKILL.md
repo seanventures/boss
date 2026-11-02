@@ -13,7 +13,7 @@ lanes, Rule Proposal and the Fix Planner reason, through the governed
 | # | Agent | Callsign | Runs as | Prompt | Writes |
 | --- | --- | --- | --- | --- | --- |
 | 1 | Incident Intake Agent | Watch | code | — | Incident (open or attach), AgentDecision IncidentOpened/IncidentAttached, CORRELATED_WITH |
-| 2 | Context Gathering Agent | Gather | code, no LLM | — | AgentDecision ContextAssembled (contextPack, asOf), CoverageGap |
+| 2 | Context Hydration Agent | Gather | code, no LLM | — | AgentDecision ContextAssembled (contextPack, asOf), CoverageGap |
 | 3 | Past Incidents Agent | Echo | code, no LLM | — | Precedent, MATCHED_INCIDENT, REFERENCES, AgentDecision HistoricalPatternMatched |
 | 4 | Root Cause Analysis Agent | Probe | LLM | `roles/rca_agent.md` | AgentDecision RootCauseCandidates or InsufficientEvidence, USED_PRECEDENT {confidenceLift} |
 | 5 | Flow Orchestrator | Conductor | code (routing policy) | — | AgentDecision Routed |
@@ -29,5 +29,5 @@ lanes, Rule Proposal and the Fix Planner reason, through the governed
 
 Every reasoning call answers with one JSON object between `=== JUDGEMENT ===` / `=== END
 JUDGEMENT ===`. An unreadable answer is no answer; anything cited must be in the list the agent
-was offered. RCA's InsufficientEvidence sends Context Gathering, Past Incidents and RCA
+was offered. RCA's InsufficientEvidence sends Context Hydration, Past Incidents and RCA
 round again (at most two more rounds), each re-run widening its reach and writing a new decision.

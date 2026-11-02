@@ -51,7 +51,7 @@ export const DQ_SPEC: Spec = {
           open_questions: [{ id: "MON-Q1", text: "what the DQ Monitor's exception-group payload carries" }],
         },
       } },
-    { id: "context_enrichment", kind: "external_agent", title: "Context Gathering Agent", next: ["rca"],
+    { id: "context_enrichment", kind: "external_agent", title: "Context Hydration Agent", next: ["rca"],
       contract: {
         reads: [{ kind: "cde" }, { kind: "regulatory_report" }],
         writes: [{ kind: "agent_decision", required: true, decision_type: "ContextAssembled" }],

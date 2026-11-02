@@ -1026,7 +1026,7 @@ CAPABILITIES: dict[str, Capability] = {
                "held. No model.", 0, (), ("matches", "patterns"), 1, False),
               ("dq_rca", "dq_rca_agent", "Root cause analysis",
                "Candidate root causes with a confidence, citing the evidence and precedents — or "
-               "InsufficientEvidence, which runs context gathering and past incidents again.", 0, (),
+               "InsufficientEvidence, which runs context hydration and past incidents again.", 0, (),
                ("rca_verdict", "candidates", "missing"), 3, True),
               ("dq_orchestration", "dq_pipeline_orchestrator", "Cause router",
                "Route each candidate root-cause family to the swimlane that confirms or rules it out.",

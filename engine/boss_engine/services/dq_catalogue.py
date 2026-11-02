@@ -1,6 +1,6 @@
 """The DQ RCA and remediation pipeline as catalogue entries (Instance A of
 `kg_investigation_pipeline`, design §5.2), with every stage's step contract (§4.1) and its agent
-DESIGN — numbered internal steps and the design cards (Incident Intake, Context Gathering and Past
+DESIGN — numbered internal steps and the design cards (Incident Intake, Context Hydration and Past
 Incidents are locked at Design v0.1/v0.2/v0.3; Root Cause Analysis is in review; the rest are not
 yet reviewed; the people are human steps; the Context Budgeter and Profile Service are shared
 services).
@@ -71,7 +71,7 @@ DQ_CONTRACTS: dict[str, dict[str, Any]] = {
         "handoff": {"to": "pipeline_orchestrator", "next": "context_enrichment",
                     "carries": ["incident_id", "severity"],
                     "text": "Returns the incident ID, opened or attached, and the severity to the "
-                            "Flow Orchestrator. A new incident goes to Context Gathering; an "
+                            "Flow Orchestrator. A new incident goes to Context Hydration; an "
                             "attach does not restart the pipeline."},
         "human_review": "None in the normal path. A policy parameter missing from both the "
                         "function policy and the defaults stops the run and goes to human review.",
@@ -112,8 +112,8 @@ DQ_CONTRACTS: dict[str, dict[str, Any]] = {
                       "copies", "regulatory reach leaves severity alone"],
     },
     "historical_pattern": {
-        "trigger": "Invoked by the Flow Orchestrator after Context Gathering for a new "
-                   "incident; never on an attach. Re-runs whenever Context Gathering re-runs, and on "
+        "trigger": "Invoked by the Flow Orchestrator after Context Hydration for a new "
+                   "incident; never on an attach. Re-runs whenever Context Hydration re-runs, and on "
                    "demand. RCA never searches history itself.",
         "reads": _reads("agent", "mcp_server", "system", "data_quality_rule",
                         "database_structure", "cde", "business_calendar", "calendar_day",
@@ -145,12 +145,12 @@ DQ_CONTRACTS: dict[str, dict[str, Any]] = {
         "writes": [_w("agent_decision", True, "RootCauseCandidates|InsufficientEvidence")],
         "handoff": {"to": "pipeline_orchestrator", "carries": ["candidates", "rca_verdict"],
                     "text": "Returns the candidate root causes, or InsufficientEvidence, to the "
-                            "Flow Orchestrator, which either re-runs Context Gathering and Past "
+                            "Flow Orchestrator, which either re-runs Context Hydration and Past "
                             "Incidents or routes the candidates to the swimlanes."},
         "human_review": "None: swimlanes confirm or rule out; a person approves any fix.",
         "policy": {"token_budget": 6000, "max_rounds": 3},
         "llm": "agent",
-        "decisions": ["cites only offered evidence", "InsufficientEvidence re-runs Context Gathering "
+        "decisions": ["cites only offered evidence", "InsufficientEvidence re-runs Context Hydration "
                       "and Past Incidents, at most twice"],
     },
     "pipeline_orchestrator": {
@@ -272,7 +272,7 @@ DQ_CONTRACTS: dict[str, dict[str, Any]] = {
         "llm": "none",
     },
     "profile_service": {
-        "trigger": "Called by Context Gathering (and on demand) for a rule on its platform.",
+        "trigger": "Called by Context Hydration (and on demand) for a rule on its platform.",
         "reads": _reads("system"),
         "calls": [_c("profile-service", "get_exception_profile")],
         "human_review": "None: a platform or rule it does not profile is said so.",
@@ -394,7 +394,7 @@ DQ_STAGE_DESIGNS: dict[str, dict[str, Any]] = {
     },
     "historical_pattern": {
         "steps": [
-            _s(1, "Load the pack", "Loads the incident and Context Gathering's decision.",
+            _s(1, "Load the pack", "Loads the incident and Context Hydration's decision.",
                ("agent", "incident", "agent_decision")),
             _s(2, "Sibling rules", "Related rules and rules on the same CDE or column.",
                ("data_quality_rule", "database_structure", "cde")),
@@ -452,7 +452,7 @@ DQ_STAGE_DESIGNS: dict[str, dict[str, Any]] = {
         "design": {
             "status": "in_review", "reference": "",
             "decisions": [_n("RCA-1", "cites only evidence it was offered"),
-                          _n("RCA-2", "InsufficientEvidence re-runs Context Gathering and Past "
+                          _n("RCA-2", "InsufficientEvidence re-runs Context Hydration and Past "
                                       "Incidents, at most twice")],
             "open_questions": [_n("RCA-Q1", "how much each precedent raises a cause's "
                                             "confidence")],
@@ -562,9 +562,9 @@ def entries(step: Callable[..., dict[str, Any]], from_input: Callable[[str], dic
         "objective": (
             "Investigate one DQ Monitor exception group on NorthPeak Bank's data platform. Incident Intake "
             "opens or attaches one incident for an Error group and never diagnoses. Context "
-            "Context Gathering and Past Incidents are fixed graph reads, never a model. The RCA "
+            "Context Hydration and Past Incidents are fixed graph reads, never a model. The RCA "
             "Agent proposes candidate causes citing the evidence, or says the evidence is "
-            "insufficient, which runs Context Gathering and Past Incidents again (at most twice). "
+            "insufficient, which runs Context Hydration and Past Incidents again (at most twice). "
             "Each candidate family goes to its swimlane; a confirmed false positive becomes a rule "
             "proposal. The Fix Planner prepares the fix; a person approves it and a "
             "different person carries it out — no agent executes. Close and Learn re-runs the check, "
@@ -573,7 +573,7 @@ def entries(step: Callable[..., dict[str, Any]], from_input: Callable[[str], dic
         "requires": {"ontology_pack": PACK, "mcp": ("dq-monitor", "profile-service", "service-desk")},
         "pipeline": {
             "loops": [{"from": "rca", "to": ["context_enrichment", "historical_pattern"],
-                       "label": "InsufficientEvidence → re-run Context Gathering and Past "
+                       "label": "InsufficientEvidence → re-run Context Hydration and Past "
                                 "Incidents", "max_rounds": 2}],
             "side_workflows": [{"key": "dq_incident_escalation", "stage": "escalation",
                                 "label": "9 · Escalation Watch — runs daily over every open "
@@ -598,7 +598,7 @@ def entries(step: Callable[..., dict[str, Any]], from_input: Callable[[str], dic
              "expression": {"path": "steps.rca.output.rca_verdict", "op": "eq",
                             "value": "InsufficientEvidence"},
              "on_exhausted": "continue", "next": ["pipeline_orchestrator"]},
-            cap("context_enrichment", "dq_context_enrichment", "Context Gathering"),
+            cap("context_enrichment", "dq_context_enrichment", "Context Hydration"),
             cap("historical_pattern", "dq_historical_pattern", "Past Incidents"),
             cap("rca", "dq_rca", "Root Cause Analysis"),
             cap("pipeline_orchestrator", "dq_orchestration", "Flow Orchestrator", nxt=["lanes"]),

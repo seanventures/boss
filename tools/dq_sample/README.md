@@ -1,7 +1,7 @@
 # NorthPeak Bank loan data-quality sample (`tools/dq_sample`)
 
 The synthetic world behind the **banking DQ case study**: the DQ incident pipeline
-(Incident Intake → Context Gathering → Past Incidents → Root Cause Analysis → Swimlanes → Fix Planner → Close and Learn)
+(Incident Intake → Context Hydration → Past Incidents → Root Cause Analysis → Swimlanes → Fix Planner → Close and Learn)
 running on BOSS against a bank's loan book whose core is Apache Fineract.
 
 Pure Python standard library, **deterministic**: no network, no model, no clock. The rulebook PDF

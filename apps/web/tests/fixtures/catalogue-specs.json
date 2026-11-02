@@ -7988,7 +7988,7 @@
                   "incident_id",
                   "severity"
                 ],
-                "text": "Returns the incident ID, opened or attached, and the severity to the Flow Orchestrator. A new incident goes to Context Gathering; an attach does not restart the pipeline."
+                "text": "Returns the incident ID, opened or attached, and the severity to the Flow Orchestrator. A new incident goes to Context Hydration; an attach does not restart the pipeline."
               },
               "human_review": "None in the normal path. A policy parameter missing from both the function policy and the defaults stops the run and goes to human review.",
               "policy": {
@@ -8231,7 +8231,7 @@
             "next": [],
             "captain": "dq_context_enrichment_agent",
             "default_captain": "dq_context_enrichment_agent",
-            "title": "Context Gathering",
+            "title": "Context Hydration",
             "contract": {
               "trigger": "Invoked by the Flow Orchestrator after Incident Intake opens a new incident — never on an attach. Re-runs on demand, or when the Flow Orchestrator re-invokes it after RCA records InsufficientEvidence; a re-run writes a new decision and keeps the old one.",
               "reads": [
@@ -8593,7 +8593,7 @@
             "default_captain": "dq_historical_pattern_agent",
             "title": "Past Incidents",
             "contract": {
-              "trigger": "Invoked by the Flow Orchestrator after Context Gathering for a new incident; never on an attach. Re-runs whenever Context Gathering re-runs, and on demand. RCA never searches history itself.",
+              "trigger": "Invoked by the Flow Orchestrator after Context Hydration for a new incident; never on an attach. Re-runs whenever Context Hydration re-runs, and on demand. RCA never searches history itself.",
               "reads": [
                 {
                   "kind": "agent"
@@ -8702,7 +8702,7 @@
                 {
                   "n": 1,
                   "name": "Load the pack",
-                  "explain": "Loads the incident and Context Gathering's decision.",
+                  "explain": "Loads the incident and Context Hydration's decision.",
                   "reads": [
                     "agent",
                     "incident",
@@ -8889,7 +8889,7 @@
                   "candidates",
                   "rca_verdict"
                 ],
-                "text": "Returns the candidate root causes, or InsufficientEvidence, to the Flow Orchestrator, which either re-runs Context Gathering and Past Incidents or routes the candidates to the swimlanes."
+                "text": "Returns the candidate root causes, or InsufficientEvidence, to the Flow Orchestrator, which either re-runs Context Hydration and Past Incidents or routes the candidates to the swimlanes."
               },
               "human_review": "None: swimlanes confirm or rule out; a person approves any fix.",
               "policy": {
@@ -8899,7 +8899,7 @@
               "llm": "agent",
               "decisions": [
                 "cites only offered evidence",
-                "InsufficientEvidence re-runs Context Gathering and Past Incidents, at most twice"
+                "InsufficientEvidence re-runs Context Hydration and Past Incidents, at most twice"
               ],
               "steps": [
                 {
@@ -8957,7 +8957,7 @@
                   },
                   {
                     "id": "RCA-2",
-                    "text": "InsufficientEvidence re-runs Context Gathering and Past Incidents, at most twice"
+                    "text": "InsufficientEvidence re-runs Context Hydration and Past Incidents, at most twice"
                   }
                 ],
                 "open_questions": [
@@ -9860,7 +9860,7 @@
               }
             },
             "contract": {
-              "trigger": "Called by Context Gathering (and on demand) for a rule on its platform.",
+              "trigger": "Called by Context Hydration (and on demand) for a rule on its platform.",
               "reads": [
                 {
                   "kind": "system"
@@ -9889,7 +9889,7 @@
             "max_attempts": 3
           }
         ],
-        "objective": "Investigate one DQ Monitor exception group on NorthPeak Bank's data platform. Incident Intake opens or attaches one incident for an Error group and never diagnoses. Context Context Gathering and Past Incidents are fixed graph reads, never a model. The RCA Agent proposes candidate causes citing the evidence, or says the evidence is insufficient, which runs Context Gathering and Past Incidents again (at most twice). Each candidate family goes to its swimlane; a confirmed false positive becomes a rule proposal. The Fix Planner prepares the fix; a person approves it and a different person carries it out — no agent executes. Close and Learn re-runs the check, closes the incident and writes the precedent the next investigation finds.",
+        "objective": "Investigate one DQ Monitor exception group on NorthPeak Bank's data platform. Incident Intake opens or attaches one incident for an Error group and never diagnoses. Context Context Hydration and Past Incidents are fixed graph reads, never a model. The RCA Agent proposes candidate causes citing the evidence, or says the evidence is insufficient, which runs Context Hydration and Past Incidents again (at most twice). Each candidate family goes to its swimlane; a confirmed false positive becomes a rule proposal. The Fix Planner prepares the fix; a person approves it and a different person carries it out — no agent executes. Close and Learn re-runs the check, closes the incident and writes the precedent the next investigation finds.",
         "workflow_name": "DQ RCA and Remediation",
         "input_schema": {
           "type": "object",
@@ -9915,7 +9915,7 @@
                 "context_enrichment",
                 "historical_pattern"
               ],
-              "label": "InsufficientEvidence → re-run Context Gathering and Past Incidents",
+              "label": "InsufficientEvidence → re-run Context Hydration and Past Incidents",
               "max_rounds": 2
             }
           ],

@@ -85,7 +85,7 @@ export const CAST: readonly CastMember[] = [
   picked("sar_narrator", "SAR Narrator", ["quill", "page", "coral", "glasses"]),
   // The banking-dq pack's DQ RCA and remediation pipeline (Instance A of the investigation pipeline).
   picked("dq_monitoring_agent", "Incident Intake Agent", ["siren", "eye", "amber", "band"]),
-  picked("dq_context_enrichment_agent", "Context Gathering Agent", ["antenna", "layers", "teal", "lens"]),
+  picked("dq_context_enrichment_agent", "Context Hydration Agent", ["antenna", "layers", "teal", "lens"]),
   picked("dq_historical_pattern_agent", "Past Incidents Agent", ["mortarboard", "cycle", "slate", "glasses"]),
   picked("dq_rca_agent", "Root Cause Analysis Agent", ["magnifier", "atom", "blue", "scope"]),
   picked("dq_pipeline_orchestrator", "Flow Orchestrator", ["headset", "compass", "purple", "band"]),

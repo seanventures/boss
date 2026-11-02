@@ -149,7 +149,7 @@ kinds:
     color: "#566273"
     group: Known issues
     attrs: [finding_id, title, severity, regulator, issued, due, status]
-  # ── Added in v3: the kinds the Context Gathering and Past Incidents
+  # ── Added in v3: the kinds the Context Hydration and Past Incidents
   # designs read. The sample world holds Transformations, Root cause categories and
   # Remediation templates; the rest are declared for a bank's own graph (none invented). ──
   - id: transformation

@@ -152,7 +152,7 @@ LANES = {
     "lane_source_processing": "source_processing", "lane_feed_etl": "feed_etl",
     "lane_reference_data": "reference_data", "lane_manual_entry": "manual_entry",
     "rule_drafting": "rule_config",          # false positive -> Rule Proposal Agent case
-    "insufficient_evidence": None,           # RCA loops back to Context Gathering + Past Incidents
+    "insufficient_evidence": None,           # RCA loops back to Context Hydration + Past Incidents
 }
 
 

@@ -1,5 +1,5 @@
 role_id: dq_context_enrichment_agent
-display_name: Context Gathering Agent
+display_name: Context Hydration Agent
 team: quality
 mission: "Assemble the facts an investigation needs — footprint, owners, sources, lineage, regulatory reach, known issues, exception profile, recent changes — and report them without interpreting them."
 primary_outcomes:
