@@ -12,7 +12,7 @@ TWO BOOKS OF TICKETS, ONE SERVICE DESK:
   confirmed cause, fix and how long the fix held, and INC-2301, still being investigated; plus
   the bank's assignment groups (teams, their people).
 
-THE DQ PIPELINE WRITES HERE, as a real service desk is written to: Incident Intake opens a ticket
+THE DQ PIPELINE WRITES HERE, as a real service desk is written to: Sentinel opens a ticket
 (`create_incident`, assigned to the rule owner's group) or attaches an exception group to
 an open one (`attach_to_incident`); stages add work notes, and the Escalation and Close and
 Learn agents update it (`update_incident`: severity only rises; status resolved/closed).

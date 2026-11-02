@@ -1,5 +1,5 @@
 role_id: dq_incident_closure_agent
-display_name: Close and Learn Agent
+display_name: Retrospective Agent
 team: quality
 mission: "Close an incident only on evidence: re-run the check, finalise the confirmed cause, close the ticket, maintain the resolved pattern and write the precedent the next investigation finds."
 primary_outcomes:

@@ -1,6 +1,6 @@
 /**
  * A DQ root-cause pipeline in the reference design (screens "RCA and remediation pipeline",
- * "1. Incident Intake Agent"): its spec with numbered agent steps and design cards on the contracts,
+ * "1. Sentinel Agent"): its spec with numbered agent steps and design cards on the contracts,
  * a shared service and a rule-authoring side path, the designs view's answer (statuses, graph
  * versions, kind colours), and a last run for Monitoring.
  */
@@ -10,7 +10,7 @@ import { designsFrom } from "../../lib/pipeline-model";
 
 export const DQ_PALETTE: Palette = {
   capabilities: [], customSteps: [], blocks: [], agents: [], humanRole: "human", riskFloor: 2,
-  roleNames: { monitoring_agent: { name: "Incident Intake Agent", callsign: "" } },
+  roleNames: { monitoring_agent: { name: "Sentinel Agent", callsign: "" } },
   graphSteps: {}, bindable: { skills: [], mcp_servers: [] },
 };
 
@@ -31,7 +31,7 @@ const MONITORING_STEPS = [
 export const DQ_SPEC: Spec = {
   entry_step: "monitoring",
   steps: [
-    { id: "monitoring", kind: "external_agent", title: "Incident Intake Agent", next: ["context_enrichment"],
+    { id: "monitoring", kind: "external_agent", title: "Sentinel Agent", next: ["context_enrichment"],
       description: "Opens or attaches an incident for each exception group the DQ Monitor grades Error, and sets its severity",
       contract: {
         trigger: "The DQ Monitor publishes an exception group (one rule version, one COB).",

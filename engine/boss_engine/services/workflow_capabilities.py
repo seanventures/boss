@@ -1008,7 +1008,7 @@ CAPABILITIES: dict[str, Capability] = {
         # ── The DQ RCA and remediation pipeline (dq_incident_rca; services/
         # knowledge/dq_incident_pipeline.py). Each stage runs AS its role agent; the retrieval
         # stages are BOSS's deterministic code ($0), only RCA, the swimlanes, rule proposal and the
-        # fix planner ask a model. No agent executes a fix: people approve and execute.
+        # corrective action ask a model. No agent executes a fix: people approve and execute.
         *(_cap(key=key, role_agent=role, family="research", captain=role, label=label,
                summary=summary, tool=None, risk_tier=risk, optional_inputs=optional,
                produces=produces, typical_minutes=minutes, needs_model=model)

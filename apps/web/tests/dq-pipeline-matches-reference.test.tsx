@@ -113,7 +113,7 @@ describe("the DQ agent designs", () => {
   const contextKinds = new Set(stages.flatMap((s) => (s.contract?.writes ?? []).map((w) => kindKey(w.kind))));
   const graph = { kgVersion: 3, cgVersion: 3, kinds: {}, contextKinds };
 
-  it("P0 Incident Intake: the run trace, CORRELATED_WITH, the example, decisions once", () => {
+  it("P0 Sentinel: the run trace, CORRELATED_WITH, the example, decisions once", () => {
     const el = mount(<AgentContractView stage={at("monitoring")} hasRun={false} graph={graph} />);
     expect(el.querySelector('[data-testid="map-node-agentrun"]')).not.toBeNull();
     expect(el.querySelector('[data-testid="map-node-agenttoolcall"]')).not.toBeNull();

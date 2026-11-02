@@ -122,7 +122,7 @@ def _get_rule_run(args: dict) -> dict:
 
 
 def _rerun_check(args: dict) -> dict:
-    """Re-run a rule's check for a COB now (Close and Learn's confirmation)."""
+    """Re-run a rule's check for a COB now (Retrospective's confirmation)."""
     ds = _ds()
     rule = _rule(ds, args)
     cob = str(args.get("cob") or "").strip()

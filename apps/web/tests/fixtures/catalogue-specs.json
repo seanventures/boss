@@ -7897,9 +7897,9 @@
             ],
             "captain": "dq_monitoring_agent",
             "default_captain": "dq_monitoring_agent",
-            "title": "Incident Intake",
+            "title": "Sentinel",
             "contract": {
-              "trigger": "The DQ Monitor publishes an exception group (one rule version, one COB). The pipeline starts for it and Incident Intake is called with the group ID and the business function.",
+              "trigger": "The DQ Monitor publishes an exception group (one rule version, one COB). The pipeline starts for it and Sentinel is called with the group ID and the business function.",
               "reads": [
                 {
                   "kind": "agent"
@@ -8120,7 +8120,7 @@
                 "status": "locked",
                 "reference": "Design v0.1",
                 "example": "DQX-0588 v2 on COB 2026-10-05 (locked running example).",
-                "under_revision": "Grading now lives with each rule: every rule carries its own Warning and Error thresholds and the DQ Monitor grades each run against them. A Warning only shows on the DQ dashboard and Incident Intake records nothing for it; an Error opens an incident or joins the open one. The old fixed severity table is gone. Still to settle: how an incident's severity is chosen, and what a later Warning or clean close of business does to an open incident. The steps below are the locked v0.1 design.",
+                "under_revision": "Grading now lives with each rule: every rule carries its own Warning and Error thresholds and the DQ Monitor grades each run against them. A Warning only shows on the DQ dashboard and Sentinel records nothing for it; an Error opens an incident or joins the open one. The old fixed severity table is gone. Still to settle: how an incident's severity is chosen, and what a later Warning or clean close of business does to an open incident. The steps below are the locked v0.1 design.",
                 "decisions": [
                   {
                     "id": "MON-1",
@@ -8233,7 +8233,7 @@
             "default_captain": "dq_context_enrichment_agent",
             "title": "Context Hydration",
             "contract": {
-              "trigger": "Invoked by the Flow Orchestrator after Incident Intake opens a new incident — never on an attach. Re-runs on demand, or when the Flow Orchestrator re-invokes it after RCA records InsufficientEvidence; a re-run writes a new decision and keeps the old one.",
+              "trigger": "Invoked by the Flow Orchestrator after Sentinel opens a new incident — never on an attach. Re-runs on demand, or when the Flow Orchestrator re-invokes it after RCA records InsufficientEvidence; a re-run writes a new decision and keeps the old one.",
               "reads": [
                 {
                   "kind": "agent"
@@ -8376,7 +8376,7 @@
                 {
                   "n": 1,
                   "name": "Load the incident",
-                  "explain": "Loads the incident Incident Intake opened and its decision.",
+                  "explain": "Loads the incident Sentinel opened and its decision.",
                   "reads": [
                     "agent",
                     "incident",
@@ -9124,7 +9124,7 @@
                   "lane_verdict",
                   "cause"
                 ],
-                "text": "Returns its verdict to the Flow Orchestrator. A confirmed cause goes to the Fix Planner; a confirmed false positive also opens a rule authoring case with Rule Proposal."
+                "text": "Returns its verdict to the Flow Orchestrator. A confirmed cause goes to the Corrective Action agent; a confirmed false positive also opens a rule authoring case with Rule Proposal."
               },
               "human_review": "None. CannotVerify leaves the incident for a person.",
               "policy": {
@@ -9222,7 +9222,7 @@
                 "carries": [
                   "proposal"
                 ],
-                "text": "Leaves the rule proposal in Rules review for a person, and hands on to the Fix Planner."
+                "text": "Leaves the rule proposal in Rules review for a person, and hands on to the Corrective Action agent."
               },
               "human_review": "Every rule change is a proposal a person approves in Rules review.",
               "policy": {
@@ -9283,7 +9283,7 @@
             ],
             "captain": "dq_remediation_advisor",
             "default_captain": "dq_remediation_advisor",
-            "title": "Fix Planner",
+            "title": "Corrective Action",
             "contract": {
               "trigger": "After the swimlanes and rule drafting.",
               "reads": [
@@ -9407,7 +9407,7 @@
               "{steps.remediation_advisor.output.note}"
             ],
             "question": "Approve the prepared fix?",
-            "guidance": "The Fix Planner prepared it from the confirmed cause; nothing has been done. Approving lets a DIFFERENT person carry it out — you cannot also do the execution.",
+            "guidance": "The Corrective Action agent prepared it from the confirmed cause; nothing has been done. Approving lets a DIFFERENT person carry it out — you cannot also do the execution.",
             "approval": {
               "mode": "manual",
               "approver_role": "human"
@@ -9516,7 +9516,7 @@
                 "carries": [
                   "change_ref"
                 ],
-                "text": "Hands the change reference to Close and Learn, which re-runs the check before closing."
+                "text": "Hands the change reference to Retrospective, which re-runs the check before closing."
               },
               "human_review": "Records what the people did; refuses to run without both answers.",
               "llm": "none",
@@ -9572,7 +9572,7 @@
             "next": [],
             "captain": "dq_incident_closure_agent",
             "default_captain": "dq_incident_closure_agent",
-            "title": "Close and Learn",
+            "title": "Retrospective",
             "contract": {
               "trigger": "After the fix is recorded, or when no cause was confirmed.",
               "reads": [
@@ -9889,7 +9889,7 @@
             "max_attempts": 3
           }
         ],
-        "objective": "Investigate one DQ Monitor exception group on NorthPeak Bank's data platform. Incident Intake opens or attaches one incident for an Error group and never diagnoses. Context Context Hydration and Past Incidents are fixed graph reads, never a model. The RCA Agent proposes candidate causes citing the evidence, or says the evidence is insufficient, which runs Context Hydration and Past Incidents again (at most twice). Each candidate family goes to its swimlane; a confirmed false positive becomes a rule proposal. The Fix Planner prepares the fix; a person approves it and a different person carries it out — no agent executes. Close and Learn re-runs the check, closes the incident and writes the precedent the next investigation finds.",
+        "objective": "Investigate one DQ Monitor exception group on NorthPeak Bank's data platform. Sentinel opens or attaches one incident for an Error group and never diagnoses. Context Context Hydration and Past Incidents are fixed graph reads, never a model. The RCA Agent proposes candidate causes citing the evidence, or says the evidence is insufficient, which runs Context Hydration and Past Incidents again (at most twice). Each candidate family goes to its swimlane; a confirmed false positive becomes a rule proposal. The Corrective Action agent prepares the fix; a person approves it and a different person carries it out — no agent executes. Retrospective re-runs the check, closes the incident and writes the precedent the next investigation finds.",
         "workflow_name": "DQ RCA and Remediation",
         "input_schema": {
           "type": "object",

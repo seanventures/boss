@@ -174,7 +174,7 @@ own thresholds. The grading unit is one rule version on one COB: the DQ Monitor 
 group per failing rule per COB.</p>
 <h2>1.1 Warning and Error</h2>
 <ul>
-<li><b>Warning</b> goes to the DQ dashboard only. No incident is opened and the Incident Intake step
+<li><b>Warning</b> goes to the DQ dashboard only. No incident is opened and the Sentinel step
 writes nothing.</li>
 <li><b>Error</b> opens an incident for the rule owner, or attaches to the open incident for the same
 rule and cause. An attach does not restart the investigation.</li>

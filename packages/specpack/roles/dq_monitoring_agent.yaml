@@ -1,5 +1,5 @@
 role_id: dq_monitoring_agent
-display_name: Incident Intake Agent
+display_name: Sentinel Agent
 team: quality
 mission: "Turn each exception group the DQ Monitor grades Error into exactly one incident: open a new one or attach to the open one, and set its severity. Never diagnose a cause."
 primary_outcomes:

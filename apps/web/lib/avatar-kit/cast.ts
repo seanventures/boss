@@ -84,15 +84,15 @@ export const CAST: readonly CastMember[] = [
   picked("aml_analyst", "AML Analyst", ["magnifier", "target", "purple", "lens"]),
   picked("sar_narrator", "SAR Narrator", ["quill", "page", "coral", "glasses"]),
   // The banking-dq pack's DQ RCA and remediation pipeline (Instance A of the investigation pipeline).
-  picked("dq_monitoring_agent", "Incident Intake Agent", ["siren", "eye", "amber", "band"]),
+  picked("dq_monitoring_agent", "Sentinel Agent", ["siren", "eye", "amber", "band"]),
   picked("dq_context_enrichment_agent", "Context Hydration Agent", ["antenna", "layers", "teal", "lens"]),
   picked("dq_historical_pattern_agent", "Past Incidents Agent", ["mortarboard", "cycle", "slate", "glasses"]),
   picked("dq_rca_agent", "Root Cause Analysis Agent", ["magnifier", "atom", "blue", "scope"]),
   picked("dq_pipeline_orchestrator", "Flow Orchestrator", ["headset", "compass", "purple", "band"]),
   picked("dq_lane_agent", "Swimlane Agent", ["goggles", "check", "mint", "lens"]),
   picked("dq_rule_drafting_agent", "Rule Proposal Agent", ["beret", "nib", "pink", "glasses"]),
-  picked("dq_remediation_advisor", "Fix Planner", ["hardhat", "wrench", "green", "slit"]),
-  picked("dq_incident_closure_agent", "Close and Learn Agent", ["crest", "check", "teal", "monocle"]),
+  picked("dq_remediation_advisor", "Corrective Action", ["hardhat", "wrench", "green", "slit"]),
+  picked("dq_incident_closure_agent", "Retrospective Agent", ["crest", "check", "teal", "monocle"]),
   picked("dq_escalation_agent", "Escalation Watch", ["flag", "stopwatch", "coral", "slit"]),
   picked("rulebook_analyst", "Rulebook Analyst", ["dome", "page", "teal", "lens"]),
 ];

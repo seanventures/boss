@@ -2,7 +2,7 @@
 
 /**
  * THE AGENT'S OWN STEPS, as an agent design is drawn (design §4.7.2; the
- * reference "1. Incident Intake Agent" screen). Four bands:
+ * reference "1. Sentinel Agent" screen). Four bands:
  *
  *   Knowledge Graph vN · read only        the kinds the agent reads, in their domain colours
  *   <Agent> · steps                       its numbered steps, from the stage before to the next

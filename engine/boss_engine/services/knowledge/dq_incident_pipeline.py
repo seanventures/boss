@@ -3,7 +3,7 @@ A of `kg_investigation_pipeline`; design §5.2), on NorthPeak Bank's data platfo
 
 One DQ Monitor exception group, investigated end to end:
 
-  1 monitoring           Incident Intake Agent       open or attach ONE incident per Error group, grade
+  1 monitoring           Sentinel Agent       open or attach ONE incident per Error group, grade
                                                 its severity; never diagnoses; Warning writes nothing
   2 context_enrichment   Context Hydration     ten fixed graph reads + the Profile Service + Service Desk: footprint,
                                                 owners, subscriptions, lineage, regulatory reach,
@@ -20,11 +20,11 @@ One DQ Monitor exception group, investigated end to end:
   6 lane (for each)      Lane Agent (LLM)       confirm or rule out the family's candidate on evidence
   - rule_drafting        Rule Proposal (LLM)    a confirmed false positive becomes a rule proposal in
                                                 Rules review (side path "Rule authoring")
-  7 remediation_advisor  Fix Planner    the package: fix, target, executor, approver, change
+  7 remediation_advisor  Corrective Action    the package: fix, target, executor, approver, change
                                                 content — PREPARED only
   - human_approval / human_execution            a person approves; a DIFFERENT person carries it out
   8 remediation_fix      (design target)        records what the person did; no agent executes
-  10 incident_closure    Close and Learn       re-run the DQ Monitor's check, finalise the cause, close the
+  10 incident_closure    Retrospective       re-run the DQ Monitor's check, finalise the cause, close the
                                                 ticket, maintain the resolved pattern, write the
                                                 Precedent the next investigation finds
   9 escalation           Escalation Watch       (its own daily workflow) ladders every open incident
@@ -345,7 +345,7 @@ def _incident_node(connection: Connection, project_id: str, incident_id: str
     return _by_key(connection, project_id, "incident", incident_id)
 
 
-# ── 1. Incident Intake ─────────────────────────────────────────────────────────────────────────────
+# ── 1. Sentinel ─────────────────────────────────────────────────────────────────────────────
 
 def _group(connection: Connection, project_id: str, group_id: str,
            calls: list[dict[str, Any]], gaps: list[str]) -> dict[str, Any]:
@@ -411,7 +411,7 @@ def run_dq_monitoring(connection: Connection, settings: Any, project_id: str,
         if rule else None
     if monitor_grade != "Error":
         note = (f"{label}: the DQ Monitor graded it {monitor_grade or 'not at all'}. A Warning goes to the "
-                "DQ dashboard; Incident Intake writes nothing and opens no incident.")
+                "DQ dashboard; Sentinel writes nothing and opens no incident.")
         return {**base, "action": "ignore", "continue_pipeline": False,
                 "rulebook_grade": rulebook_grade, "note": note, "summary": note, "produced": {}}
     severity = str(rule.get("severity") or "Medium").capitalize()
@@ -477,7 +477,7 @@ def run_dq_monitoring(connection: Connection, settings: Any, project_id: str,
         incident_id = open_id
         ticket, gap = _call(connection, project_id, "service-desk", "attach_to_incident",
                             {"incident_id": incident_id, "source_ref": group_id,
-                             "note": f"Attached {label}: {failure_reason}.", "by": "Incident Intake Agent"},
+                             "note": f"Attached {label}: {failure_reason}.", "by": "Sentinel Agent"},
                             calls)
         if ticket is None:
             gaps.append(f"the Service Desk ticket {incident_id} was not updated: {gap}")
@@ -594,7 +594,7 @@ def run_dq_context_enrichment(connection: Connection, settings: Any, project_id:
     # 1 Load the incident
     incident_node = str(mon.get("incident_node_id") or "")
     if not incident_node:
-        raise ValueError("Context Hydration runs after Incident Intake opens an incident (never on "
+        raise ValueError("Context Hydration runs after Sentinel opens an incident (never on "
                          "an attach); this run has none.")
     rule_id = str(mon.get("rule_id") or "")
     column = str(mon.get("column") or "")
@@ -1398,7 +1398,7 @@ def run_dq_rule_drafting(connection: Connection, settings: Any, project_id: str,
                                   rule_proposal={"node_id": proposal_node})}
 
 
-# ── 7. Fix Planner (role agent, LLM): the package, prepared only ─────────────────────
+# ── 7. Corrective Action (role agent, LLM): the package, prepared only ─────────────────────
 
 def run_dq_remediation_package(connection: Connection, settings: Any, project_id: str,
                                step: Mapping[str, Any], context: Mapping[str, Any],
@@ -1479,7 +1479,7 @@ def run_dq_remediation_package(connection: Connection, settings: Any, project_id
     if not evidence:
         problems.append("no evidence cited")
     if problems:
-        statement = (f"The Fix Planner's package for {mon.get('incident_id')} was not "
+        statement = (f"The Corrective Action agent's package for {mon.get('incident_id')} was not "
                      f"usable ({'; '.join(problems)}); nothing is prepared and a person "
                      "writes the fix.")
         decision = _decide(connection, project_id, run_id=run_id, step_id=step_id,
@@ -1582,7 +1582,7 @@ def run_dq_remediation_fix(connection: Connection, settings: Any, project_id: st
             "produced": _produced("FixRecorded", decision, statement)}
 
 
-# ── 10. Close and Learn ─────────────────────────────────────────────────────────────────────
+# ── 10. Retrospective ─────────────────────────────────────────────────────────────────────
 
 def run_dq_incident_closure(connection: Connection, settings: Any, project_id: str,
                             step: Mapping[str, Any], context: Mapping[str, Any],
@@ -1610,7 +1610,7 @@ def run_dq_incident_closure(connection: Connection, settings: Any, project_id: s
         statement = (f"{incident_id} stays open: {why}. The Escalation Watch ladders it daily "
                      "until a person resolves it.")
         _call(connection, project_id, "service-desk", "update_incident",
-              {"incident_id": incident_id, "note": statement, "by": "Close and Learn Agent"},
+              {"incident_id": incident_id, "note": statement, "by": "Retrospective Agent"},
               calls)
         decision = _decide(connection, project_id, run_id=run_id, step_id=step_id,
                            decision_type="LeftOpen", statement=statement, actor_ref=actor)
@@ -1676,7 +1676,7 @@ def run_dq_incident_closure(connection: Connection, settings: Any, project_id: s
           {"incident_id": incident_id, "status": "resolved", "confirmed_cause": cause,
            "root_cause_family": family, "fix": package.get("fix"),
            "note": f"Re-run graded {grade}; closed with cause {family}.",
-           "by": "Close and Learn Agent"}, calls)
+           "by": "Retrospective Agent"}, calls)
     # 5 Write the Precedent the next investigation's Past Incidents finds
     precedent_key = f"PRE-{incident_id[4:] if incident_id.startswith('INC-') else incident_id}"
     recurrence = len([m for m in matched.values() if m.get("pattern_id") == pattern_id]) + 1

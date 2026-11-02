@@ -66,14 +66,14 @@ describe("the design model", () => {
   it("P0 puts a shared service and a side path off the flow, unnumbered, and anchors each agent between its neighbours", () => {
     const list = stages();
     expect(list.filter((s) => s.number !== null).map((s) => [s.number, s.title])).toEqual([
-      [1, "Incident Intake Agent"], [2, "Context Hydration Agent"], [3, "Root Cause Analysis Agent"]]);
+      [1, "Sentinel Agent"], [2, "Context Hydration Agent"], [3, "Root Cause Analysis Agent"]]);
     // A person's step is a human step ("—"), as the reference table shows it.
     expect(at("human_approval", list).number).toBeNull();
     expect(at("context_curator", list).placement).toBe("shared");
     expect(at("rule_drafting", list).placement).toBe("side");
     expect(at("rule_drafting", list).sideLabel).toBe("Rule authoring");
     expect(at("monitoring", list).to).toBe("Context Hydration Agent");
-    expect(at("context_enrichment", list).from).toBe("Incident Intake Agent");
+    expect(at("context_enrichment", list).from).toBe("Sentinel Agent");
     expect(at("monitoring", list).contract!.steps!.map((s) => s.n)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
     expect(at("monitoring", list).contract!.design!.decisions[0]).toEqual({ id: "MON-1", text: "severity only moves up" });
   });
@@ -133,7 +133,7 @@ describe("the agent's steps", () => {
     expect(by("band-kg")!.textContent).toBe("Knowledge Graph v3 · read only");
     expect(by("band-cg")!.textContent).toBe("Context Graph v3 · read and write");
     expect(by("band-mcp")!.textContent).toBe("External systems · via MCP");
-    expect(by("band-steps")!.textContent).toBe("Incident Intake Agent · steps");
+    expect(by("band-steps")!.textContent).toBe("Sentinel Agent · steps");
   });
 
   it("P0 colours Knowledge Graph kinds by their domain and draws Context Graph kinds as hexagons", () => {

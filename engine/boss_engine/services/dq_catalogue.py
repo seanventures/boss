@@ -1,11 +1,11 @@
 """The DQ RCA and remediation pipeline as catalogue entries (Instance A of
 `kg_investigation_pipeline`, design §5.2), with every stage's step contract (§4.1) and its agent
-DESIGN — numbered internal steps and the design cards (Incident Intake, Context Hydration and Past
+DESIGN — numbered internal steps and the design cards (Sentinel, Context Hydration and Past
 Incidents are locked at Design v0.1/v0.2/v0.3; Root Cause Analysis is in review; the rest are not
 yet reviewed; the people are human steps; the Context Budgeter and Profile Service are shared
 services).
 
-`dq_incident_rca`        one DQ Monitor exception group, Incident Intake → Close and Learn
+`dq_incident_rca`        one DQ Monitor exception group, Sentinel → Retrospective
 `dq_incident_escalation` the Escalation Watch's daily sweep over every open incident
 `dq_monitor_intake`      the scheduled trigger: each COB, an RCA per Error exception group
 
@@ -57,7 +57,7 @@ def _s(n: int, name: str, explain: str, reads: tuple = (), writes: tuple = (),
 DQ_CONTRACTS: dict[str, dict[str, Any]] = {
     "monitoring": {
         "trigger": "The DQ Monitor publishes an exception group (one rule version, one COB). The "
-                   "pipeline starts for it and Incident Intake is called with the group ID and the "
+                   "pipeline starts for it and Sentinel is called with the group ID and the "
                    "business function.",
         "reads": _reads("agent", "mcp_server", "system", "exception_group", "data_quality_rule",
                         "dq_threshold", "cde", "database_structure", "database_table",
@@ -82,7 +82,7 @@ DQ_CONTRACTS: dict[str, dict[str, Any]] = {
                       "the rule", "a Warning records nothing"],
     },
     "context_enrichment": {
-        "trigger": "Invoked by the Flow Orchestrator after Incident Intake opens a new incident — "
+        "trigger": "Invoked by the Flow Orchestrator after Sentinel opens a new incident — "
                    "never on an attach. Re-runs on demand, or when the Flow Orchestrator "
                    "re-invokes it after RCA records InsufficientEvidence; a re-run writes a new "
                    "decision and keeps the old one.",
@@ -173,7 +173,7 @@ DQ_CONTRACTS: dict[str, dict[str, Any]] = {
         "handoff": {"to": "pipeline_orchestrator", "next": "remediation_advisor",
                     "carries": ["lane_verdict", "cause"],
                     "text": "Returns its verdict to the Flow Orchestrator. A confirmed cause "
-                            "goes to the Fix Planner; a confirmed false positive also "
+                            "goes to the Corrective Action agent; a confirmed false positive also "
                             "opens a rule authoring case with Rule Proposal."},
         "human_review": "None. CannotVerify leaves the incident for a person.",
         "policy": {"token_budget": 4000},
@@ -188,7 +188,7 @@ DQ_CONTRACTS: dict[str, dict[str, Any]] = {
                    _w("rule_proposal"), _w("rule")],
         "handoff": {"to": "remediation_advisor", "carries": ["proposal"],
                     "text": "Leaves the rule proposal in Rules review for a person, and hands on "
-                            "to the Fix Planner."},
+                            "to the Corrective Action agent."},
         "human_review": "Every rule change is a proposal a person approves in Rules review.",
         "policy": {"token_budget": 3000},
         "llm": "agent",
@@ -226,7 +226,7 @@ DQ_CONTRACTS: dict[str, dict[str, Any]] = {
         "writes": [_w("agent_decision", True, "FixRecorded")],
         "calls": [_c("service-desk", "update_incident")],
         "handoff": {"to": "incident_closure", "carries": ["change_ref"],
-                    "text": "Hands the change reference to Close and Learn, which re-runs the "
+                    "text": "Hands the change reference to Retrospective, which re-runs the "
                             "check before closing."},
         "human_review": "Records what the people did; refuses to run without both answers.",
         "llm": "none",
@@ -318,7 +318,7 @@ DQ_STAGE_DESIGNS: dict[str, dict[str, Any]] = {
             "under_revision": "Grading now lives with each rule: every rule carries its own "
                               "Warning and Error thresholds and the DQ Monitor grades each run "
                               "against them. A Warning only shows on the DQ dashboard and "
-                              "Incident Intake records nothing for it; an Error opens an incident "
+                              "Sentinel records nothing for it; an Error opens an incident "
                               "or joins the open one. The old fixed severity table is gone. Still "
                               "to settle: how an incident's severity is chosen, and what a later "
                               "Warning or clean close of business does to an open incident. The "
@@ -340,7 +340,7 @@ DQ_STAGE_DESIGNS: dict[str, dict[str, Any]] = {
     },
     "context_enrichment": {
         "steps": [
-            _s(1, "Load the incident", "Loads the incident Incident Intake opened and its decision.",
+            _s(1, "Load the incident", "Loads the incident Sentinel opened and its decision.",
                ("agent", "incident", "agent_decision")),
             _s(2, "Rule footprint", "The rule's CDEs, columns, tables and feed, and the data "
                "domain they belong to.",
@@ -560,14 +560,14 @@ def entries(step: Callable[..., dict[str, Any]], from_input: Callable[[str], dic
                        "it per family, prepare the fix — a person approves, a different person "
                        "executes — and close it with a precedent.",
         "objective": (
-            "Investigate one DQ Monitor exception group on NorthPeak Bank's data platform. Incident Intake "
+            "Investigate one DQ Monitor exception group on NorthPeak Bank's data platform. Sentinel "
             "opens or attaches one incident for an Error group and never diagnoses. Context "
             "Context Hydration and Past Incidents are fixed graph reads, never a model. The RCA "
             "Agent proposes candidate causes citing the evidence, or says the evidence is "
             "insufficient, which runs Context Hydration and Past Incidents again (at most twice). "
             "Each candidate family goes to its swimlane; a confirmed false positive becomes a rule "
-            "proposal. The Fix Planner prepares the fix; a person approves it and a "
-            "different person carries it out — no agent executes. Close and Learn re-runs the check, "
+            "proposal. The Corrective Action agent prepares the fix; a person approves it and a "
+            "different person carries it out — no agent executes. Retrospective re-runs the check, "
             "closes the incident and writes the precedent the next investigation finds."),
         "work_class": "any",
         "requires": {"ontology_pack": PACK, "mcp": ("dq-monitor", "profile-service", "service-desk")},
@@ -586,7 +586,7 @@ def entries(step: Callable[..., dict[str, Any]], from_input: Callable[[str], dic
                               "label": "8 · Fix: design target"},
         },
         "steps": [
-            cap("monitoring", "dq_monitoring", "Incident Intake",
+            cap("monitoring", "dq_monitoring", "Sentinel",
                 {"exception_group_id": from_input("exception_group_id")}, ["incident_route"]),
             {"id": "incident_route", "kind": "condition", "title": "A new incident?",
              "expression": {"path": "steps.monitoring.output.continue_pipeline", "op": "truthy"},
@@ -609,7 +609,7 @@ def entries(step: Callable[..., dict[str, Any]], from_input: Callable[[str], dic
             cap("lane", "dq_lane", "Swimlane", {"item": {"from_item": ""}}),
             cap("rule_drafting", "dq_rule_drafting", "Rule Proposal", nxt=["remediation_advisor"],
                 side_path="Rule authoring"),
-            cap("remediation_advisor", "dq_remediation_package", "Fix Planner",
+            cap("remediation_advisor", "dq_remediation_package", "Corrective Action",
                 nxt=["package_route"]),
             {"id": "package_route", "kind": "condition", "title": "A fix prepared?",
              "expression": {"path": "steps.remediation_advisor.output.package_ready",
@@ -621,7 +621,7 @@ def entries(step: Callable[..., dict[str, Any]], from_input: Callable[[str], dic
             {"id": "human_approval", "kind": "decision", "title": "Human approval",
              "subject": _SUBJECT, "summary": ["{steps.remediation_advisor.output.note}"],
              "question": "Approve the prepared fix?",
-             "guidance": "The Fix Planner prepared it from the confirmed cause; nothing "
+             "guidance": "The Corrective Action agent prepared it from the confirmed cause; nothing "
                          "has been done. Approving lets a DIFFERENT person carry it out — you "
                          "cannot also do the execution.",
              "approval": {"mode": "manual", "approver_role": "human"},
@@ -640,7 +640,7 @@ def entries(step: Callable[..., dict[str, Any]], from_input: Callable[[str], dic
              "contract": contract("human_execution"), "next": ["remediation_fix"]},
             cap("remediation_fix", "dq_remediation_fix", "Fix (design target)",
                 nxt=["incident_closure"]),
-            cap("incident_closure", "dq_incident_closure", "Close and Learn"),
+            cap("incident_closure", "dq_incident_closure", "Retrospective"),
             # Drawn in the pipeline, run elsewhere: the daily Escalation Watch (its own
             # scheduled workflow) and the two shared services.
             cap("escalation", "dq_escalation", "Escalation Watch",

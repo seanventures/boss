@@ -1821,7 +1821,7 @@ INCIDENTS: tuple[Incident, ...] = (
              "The Collections batch overran and F-07 landed after the EDW arrears snapshot.",
              ("arrears aging job defect",), "Re-ran F-07 and the snapshot; added a landing gate.",
              "process_change", "partial", "The gate was not applied on Mondays (ISS-052)."),
-    # The one open incident (opened by Incident Intake from EXG-20261002-0002).
+    # The one open incident (opened by Sentinel from EXG-20261002-0002).
     Incident("INC-2301", "Overdue-since set late on COB 2026-10-02", "2026-10-02", None,
              "investigating", "NPB-DQ-AR-001", ("CDE-AR-001",), "High", "OWN-COLL", None, None,
              None, (), None, None, None, None, raised_from="EXG-20261002-0002"),
@@ -2293,7 +2293,7 @@ class Dataset:
         return e
 
     def monitor_payload(self, group_id: str) -> dict[str, Any]:
-        """The exception group as the DQ Monitor publishes it (what the Incident Intake step receives)."""
+        """The exception group as the DQ Monitor publishes it (what the Sentinel step receives)."""
         g = self.exception_group(group_id)
         return {"group_id": g.group_id, "monitor_rule_id": g.monitor_rule_id, "rule_id": g.rule_id,
                 "rule_version": g.rule_version, "cob": g.cob, "platform": g.platform,

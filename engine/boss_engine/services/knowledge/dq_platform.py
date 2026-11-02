@@ -230,7 +230,7 @@ def load_platform(connection: Connection, *, project_id: str, actor: str) -> dic
                           attrs={"relationship": rel})
         edges += 1
     # The systems agents reach through MCP (the DQ Monitor, the Service Desk, the Profile
-    # Service): the Incident Intake and Context Hydration agents' designs read them as MCPServer
+    # Service): the Sentinel and Context Hydration agents' designs read them as MCPServer
     # nodes.
     for system in ds.systems:
         if not system.mcp_server:
