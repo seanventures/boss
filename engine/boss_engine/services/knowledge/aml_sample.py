@@ -261,6 +261,11 @@ def build_problem_screen(connection: Connection, *, project_id: str) -> dict[str
     rows: list[dict[str, Any]] = []
     for alert_id, alert in ds.alerts.items():
         customer = ds.customers.get(alert["customer_id"]) or {}
+        # A readable account label carries the product, never the raw account number (A4/A8):
+        # the account id lives in attrs, never on a screen a person reads.
+        account = ds.accounts.get(alert["account_id"]) or {}
+        account_label = (account.get("product") or alert.get("product") or "account").replace(
+            "_", " ").title()
         case = connection.execute(
             text("SELECT attrs FROM kg_nodes WHERE project_id = :p AND kind = 'aml_case' "
                  "AND node_key = :k AND valid_to IS NULL ORDER BY recorded_at DESC LIMIT 1"),
@@ -271,7 +276,7 @@ def build_problem_screen(connection: Connection, *, project_id: str) -> dict[str
         rows.append({
             "alert_id": alert_id,
             "customer_name": customer.get("name") or "Unnamed customer",
-            "account_label": f"{alert['account_id']} {alert.get('product', '')}".strip(),
+            "account_label": account_label,
             "rule": alert["rule"],
             "rule_text": alert["rule_text"],
             "score": alert["score"],
