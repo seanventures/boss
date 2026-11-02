@@ -14,7 +14,7 @@
  * `startRef`.
  */
 import {
-  ArrowClockwise, ArrowCounterClockwise, ArrowLeft, DotsThree, PencilSimple, Play, Sparkle,
+  ArrowClockwise, ArrowCounterClockwise, ArrowLeft, CornersIn, CornersOut, DotsThree, PencilSimple, Play, Sparkle,
 } from "@phosphor-icons/react";
 import React, { useRef, useState, type RefObject } from "react";
 
@@ -71,6 +71,9 @@ export function TopBar(p: {
   onDuplicate(): void; duplicateBlocked?: string | null; onUseFor(): void; onChanges(): void; onDiscard(): void; onDelete(): void;
   deleteBlocked?: string | null;
   readOnly: boolean;
+  /** Whether the editor has the whole window (`page=full`), and the press that switches it.
+   *  Absent: the host offers no full page, and no button is drawn. */
+  fullPage?: boolean; onFullPage?(): void;
 }) {
   const { state, dirty, view } = p;
   const meta = state.meta;
@@ -98,7 +101,7 @@ export function TopBar(p: {
       <div className="wf-topbar-row" data-testid="wf-topbar-row">
         <div className="wf-bar-identity" data-testid="wf-bar-identity">
           <button type="button" className="wf-btn wf-btn-ghost wf-back" data-testid="wf-back" onClick={p.onBack}>
-            <ArrowLeft size={14} weight="bold" aria-hidden />Library
+            <ArrowLeft size={14} weight="bold" aria-hidden />{p.fullPage ? "Back to library" : "Library"}
           </button>
 
           {/* The name never cuts short: the field asks for the room its whole name needs, and the
@@ -172,6 +175,15 @@ export function TopBar(p: {
                 Pipeline
               </Btn>
             </div>
+
+            {p.onFullPage ? (
+              <Btn className="wf-icon-btn" label={p.fullPage ? "Exit full page" : "Open full page"}
+                   tip={p.fullPage ? "Back to the console around it" : "Full page: the whole window for this workflow"}
+                   pressed={!!p.fullPage} testId={p.fullPage ? "exit-full-page" : "open-full-page"}
+                   onClick={p.onFullPage}>
+                {p.fullPage ? <CornersIn size={16} weight="bold" aria-hidden /> : <CornersOut size={16} weight="bold" aria-hidden />}
+              </Btn>
+            ) : null}
 
             <Btn className="wf-icon-btn" buttonRef={describeRef} label="Describe" testId="wf-describe"
                  blocked={p.readOnly ? `Viewing v${viewing}` : p.describeBlocked}

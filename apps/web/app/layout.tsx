@@ -13,6 +13,7 @@ import "./workflows/editor.css";
 import "./workflows/inspector.css";
 import "./workflows/library.css";
 import "./workflows/pipeline.css";
+import "./workflows/full-page.css";
 // New project: a new app, or a feature added to an app that exists (np- classes).
 import "./workflows/compose.css";
 // Agent World (avatars, motion, Passport, Roster, Chain, conversations): ag- classes, agav- keyframes.

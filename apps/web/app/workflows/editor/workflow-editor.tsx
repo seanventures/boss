@@ -101,8 +101,10 @@ function writeUrl(patch: Record<string, string | null>, push = false) {
 
 type Note = { id: number; message: string; undo?: boolean };
 
-export function WorkflowEditor({ projectId, workflowKey, onBack, onStart, actor, usedFor, onSchedule }: {
+export function WorkflowEditor({ projectId, workflowKey, onBack, onStart, actor, usedFor, onSchedule, fullPage, onFullPage }: {
   projectId: string; workflowKey: string | "new"; onBack(): void; onStart(key: string): void;
+  /** Whether the editor has the whole window (app/workflows/full-page.ts), and its switch. */
+  fullPage?: boolean; onFullPage?(): void;
   /** The signed-in member: Grant, Used for and new steps are attributed to them. */
   actor?: string;
   /** The work classes this workflow is mapped to, when the host knows them. */
@@ -530,7 +532,7 @@ export function WorkflowEditor({ projectId, workflowKey, onBack, onStart, actor,
 
   return (
     <div className="wf-editor" data-view={view} data-inspector={inspectorOpen ? "open" : undefined}
-         data-testid="wf-editor">
+         data-full-page={fullPage ? "true" : undefined} data-testid="wf-editor">
       <TopBar state={state} dirty={dirty} view={view} readOnly={readOnly}
               onView={setView} onBack={() => saveFlow.guardLeave(onBack)}
               onName={(name) => dispatch({ type: "SET_META", patch: { name } })}
@@ -560,6 +562,7 @@ export function WorkflowEditor({ projectId, workflowKey, onBack, onStart, actor,
               onUseFor={openSettings} onChanges={showChanges}
               onDiscard={() => dispatch({ type: "LOAD", spec: state.loaded ?? { steps: [] }, meta: state.loadedMeta })}
               onDelete={() => void deleteThis()}
+              fullPage={fullPage} onFullPage={onFullPage}
               deleteBlocked={!deleteGate.allowed ? deleteGate.reason : meta.is_catalogue ? NO_DELETE_TIP : !meta.definition_id ? "Not saved yet" : null} />
       {saveFlow.popover}
       {testing && meta.workflow_key ? (
@@ -619,7 +622,8 @@ export function WorkflowEditor({ projectId, workflowKey, onBack, onStart, actor,
                         onPlace={(id, offset) => dispatch({ type: "PLACE", id, offset })}
                         onResetLayout={() => dispatch({ type: "RESET_LAYOUT" })}
                         onRewire={(link, target) => void rewire(link, target)}
-                        zoom={zoom} onZoomChange={setZoom} occludedRight={inspectorOpen ? occluded : 0} />
+                        zoom={zoom} onZoomChange={setZoom} occludedRight={inspectorOpen ? occluded : 0}
+                        wrap={fullPage} />
             </main>
           </>
         ) : view === "json" ? (
