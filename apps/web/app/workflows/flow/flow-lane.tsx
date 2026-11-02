@@ -50,7 +50,7 @@ import {
   afterGapPoints, caretX, END_ID, gapPoints, planDrag, shiftsFor, type GapArrows, type LanePlan,
 } from "./drag-plan";
 import {
-  BASE_REM, chooseDensity, clampBox, cubicAt, fitScale, forwardRoute, offsetFromCanvas, overflows, placedGeometry,
+  BASE_REM, chooseDensity, clampBox, cubicAt, fitScale, wrapFitScale, forwardRoute, offsetFromCanvas, overflows, placedGeometry,
   ROW_GAP, roomyGeometry, routeGrip, routePath, routeSamples, stepsCrossed,
   type LaneGeometry, type Point, type Route,
 } from "./geometry";
@@ -278,6 +278,9 @@ export function FlowLane(p: {
   zoom?: LaneZoom; onZoomChange?(zoom: LaneZoom): void;
   /** Read-only: no drag, no keyboard moves, no gap actions. */
   readOnly?: boolean;
+  /** A full page: every title and name in full (wrapped, never cut), nodes sized to their words,
+   *  and Fit never below a readable scale — wider than that, the lane scrolls (geometry.ts). */
+  wrap?: boolean;
   /** The lane's accessible name. */
   label?: string;
   /** How much of the lane's right edge something floats over (the inspector drawer), in px. */
@@ -300,6 +303,13 @@ export function FlowLane(p: {
   const order = useMemo(() => linearOrder(spec), [spec]);
   const views = useMemo(() => new Map(steps.map((s) => [s.id, viewOf(s, palette)])), [steps, palette]);
   const details = useMemo(() => new Map(steps.map((s) => [s.id, nodeDetail(s, palette)])), [steps, palette]);
+  // WHAT A FOR EACH RUNS, ON ITS CARD: "Lane × each root-cause family", so the stack of cards is
+  // never an empty box. Named by the step it runs, as that step is titled on the lane.
+  const repeats = useMemo(() => new Map(steps.filter((s) => s.kind === "for_each").map((s) => {
+    const body = bodiesOf(s).map((b) => views.get(b)?.title ?? b).join(" → ");
+    const item = typeof s.item_label === "string" && s.item_label.trim() ? s.item_label.trim() : "item";
+    return [s.id, body ? `${body} × each ${item}` : `× each ${item}`] as [string, string];
+  })), [steps, views]);
   const types = useMemo(() => new Map([...views].map(([id, v]) => [id, v.type] as [string, StepView["type"]])), [views]);
   const problemOf = useMemo(() => {
     const m = new Map<string, string>();
@@ -354,9 +364,11 @@ export function FlowLane(p: {
     window.addEventListener("resize", read);
     return () => window.removeEventListener("resize", read);
   }, []);
-  const grid = useMemo(() => (roomy ? roomyGeometry(layout, types, available, rem)
+  const wrap = !!p.wrap;
+  const grid = useMemo(() => (wrap ? roomyGeometry(layout, types, available, rem, true)
+    : roomy ? roomyGeometry(layout, types, available, rem)
     : chooseDensity(layout, types, available, p.density === "compact" ? "compact" : undefined, rem)),
-  [roomy, layout, types, available, p.density, rem]);
+  [wrap, roomy, layout, types, available, p.density, rem]);
   // Where the operator has put steps, and (while one is being dragged off the grid) where it is.
   const offsets = useMemo(() => layoutOffsets(spec), [spec]);
   const settled = useMemo(() => placedGeometry(grid, offsets), [grid, offsets]);
@@ -372,7 +384,8 @@ export function FlowLane(p: {
   }, [grid, settled, offsets, live]);
   // The scale is the settled drawing's: a step dragged past the edge must not rescale the lane
   // under the pointer.
-  const scale = roomy ? 1 : fitScale(settled.width, available, settled.density);
+  const scale = wrap ? (zoom === "full" ? 1 : wrapFitScale(settled.width, available))
+    : roomy ? 1 : fitScale(settled.width, available, settled.density);
   const scrolls = overflows(geometry.width, scale, available);
   // Under a drawer: when the drawing reaches under it, give the lane that much more to scroll,
   // so the last steps can be brought clear of it. Density and scale are untouched.
@@ -727,6 +740,7 @@ export function FlowLane(p: {
 
   return (
     <div className="wf-lane" ref={rootRef} data-mode={mode} data-density={geometry.density}
+         data-wrap={wrap ? "true" : undefined}
          data-linear={linear ? "true" : "false"} data-scrolls={scrolls ? "true" : undefined}
          data-empty={steps.length ? undefined : "true"} data-testid="wf-lane">
       {/* THE ARROWS SIT IN GUTTERS BESIDE THE STEPS, never over them, and only while the lane
@@ -819,6 +833,7 @@ export function FlowLane(p: {
                   <StepNode view={view} mode={mode === "run" ? "run" : "design"}
                             selected={selection === id} problem={problemOf.get(id)}
                             detail={details.get(id)} errorPath={tookError.has(id)}
+                            repeats={repeats.get(id)}
                             run={mode === "run" ? { phase, meta: runState?.[id]?.meta ?? "",
                                                     tip: runState?.[id]?.tip,
                                                     agent: runState?.[id]?.agent } : undefined}

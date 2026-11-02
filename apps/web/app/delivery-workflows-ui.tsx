@@ -2310,7 +2310,7 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
       <RunChain chain={chain} viewer={actor} />
       <div className="wf-run-lane" ref={laneRef} data-testid="dw-run-lane">
         <FlowLane spec={laneSpec} palette={lanePalette} mode="run" label="Workflow steps"
-                  {...(fullPage ? { zoom, onZoomChange: setZoom } : {})}
+                  {...(fullPage ? { zoom, onZoomChange: setZoom, wrap: true } : {})}
                   selection={showAgents ? null : picked} runState={laneState}
                   onSelect={(id) => {
                     // Only a step this run has: a branch it never took has nothing to show.

@@ -622,7 +622,8 @@ export function WorkflowEditor({ projectId, workflowKey, onBack, onStart, actor,
                         onPlace={(id, offset) => dispatch({ type: "PLACE", id, offset })}
                         onResetLayout={() => dispatch({ type: "RESET_LAYOUT" })}
                         onRewire={(link, target) => void rewire(link, target)}
-                        zoom={zoom} onZoomChange={setZoom} occludedRight={inspectorOpen ? occluded : 0} />
+                        zoom={zoom} onZoomChange={setZoom} occludedRight={inspectorOpen ? occluded : 0}
+                        wrap={fullPage} />
             </main>
           </>
         ) : view === "json" ? (

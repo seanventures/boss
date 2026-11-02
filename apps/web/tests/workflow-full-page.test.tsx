@@ -260,3 +260,65 @@ describe("the workflow's full page", () => {
     for (const v of ["visual", "json", "pipeline"]) expect($(`[data-testid="wf-view-${v}"]`)).not.toBeNull();
   });
 });
+
+describe("on a full page every step is named in full", () => {
+  it("nodes are sized for ~20-character titles on three lines at the root font in use, waits too", async () => {
+    const { laneGeometry, wrapNodeWidth, wrapNodeHeight, nodeHeight } = await import("../app/workflows/flow/geometry");
+    const layout = layoutFlow(linear(3));
+    const types = new Map([["s0", "wait"], ["s1", "agent"], ["s2", "builtin"]] as const);
+    for (const rem of [16, 19, 22.8]) {
+      const g = laneGeometry(layout, types as never, "comfortable", undefined, rem, true);
+      // The longest word of a ~20-character title ("Orchestrator", 12 characters of a 0.875rem
+      // title at ≈ 0.6em each) fits on a line beside the icon, so it wraps between words to
+      // three lines at most and is never cut.
+      expect(g.node.w).toBeGreaterThanOrEqual(Math.ceil(12 * 0.875 * rem * 0.6) + 2 * 12 + 32);
+      expect(g.node.w).toBe(wrapNodeWidth(rem));
+      expect(g.node.h).toBe(wrapNodeHeight(rem));
+      expect(g.node.h).toBeGreaterThan(nodeHeight("comfortable", rem));
+      for (const box of g.boxes.values()) expect(box.w).toBe(g.node.w);
+    }
+  });
+
+  it("Fit never goes below 0.8: wider than that, the lane scrolls", async () => {
+    const { wrapFitScale, WRAP_MIN_SCALE } = await import("../app/workflows/flow/geometry");
+    expect(WRAP_MIN_SCALE).toBe(0.8);
+    expect(wrapFitScale(1000, 1200)).toBe(1);
+    expect(wrapFitScale(1000, 900)).toBeCloseTo(0.9);
+    expect(wrapFitScale(5000, 1800)).toBe(0.8);
+  });
+
+  it("the wrapped lane's titles, names and statuses are never clamped or cut", () => {
+    const css = readFileSync("app/workflows/flow.css", "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+    const rule = (sel: string) => css.match(new RegExp(`${sel.replace(/[.[\]"=]/g, "\\$&")}[^{]*\\{([^}]*)\\}`))?.[1] ?? "";
+    const title = rule('.wf-lane[data-wrap="true"] .wf-node-title');
+    expect(title).toMatch(/-webkit-line-clamp: unset/);
+    expect(title).toMatch(/overflow: visible/);
+    expect(title).toMatch(/text-overflow: clip/);
+    expect(css).toMatch(/\.wf-lane\[data-wrap="true"\] \.wf-node-agent-name,\s*\.wf-lane\[data-wrap="true"\] \.wf-node-status \{[^}]*white-space: normal/);
+  });
+
+  it("the run's full page draws the wrapped lane; the row does not", async () => {
+    await mountRuns({ onFullPage: noop, fullPageRun: RUN.id });
+    expect($('.wf-lane')?.dataset.wrap).toBe("true");
+    act(() => root!.render(<div />));
+    await mountRuns({ onFullPage: noop });
+    expect($('.wf-lane')?.dataset.wrap).toBeUndefined();
+  });
+
+  it("a For each says what it runs inside its stack, never an empty box", async () => {
+    const { FlowLane } = await import("../app/workflows/flow/flow-lane");
+    const spec = {
+      entry_step: "plan",
+      steps: [
+        { id: "plan", kind: "capability", binding: { capability: "research" }, next: ["lanes"] },
+        { id: "lanes", kind: "for_each", title: "Lanes", items: "steps.plan.output.items", body: "check",
+          item_label: "root-cause family", next: [] },
+        { id: "check", kind: "capability", title: "Cause Check", binding: { capability: "research" } },
+      ],
+    } as unknown as Spec;
+    act(() => root!.render(<FlowLane spec={spec} palette={PALETTE} mode="design" wrap />));
+    await settle();
+    expect($('.wf-node[data-step-id="lanes"] [data-testid="wf-node-repeats"]')?.textContent)
+      .toBe("Cause Check × each root-cause family");
+  });
+});

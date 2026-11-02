@@ -543,3 +543,18 @@
 .wf-step-sec-loud { font-size: 0.75rem; font-weight: 600; color: var(--amber); }
 .wf-step-sec-loud[data-level="error"] { color: var(--red); }
 .wf-step-sec-loud[data-level="recovered"] { color: var(--muted); font-weight: 500; }
+
+/* What a For each runs, inside its stack of cards (step-node.tsx `repeats`). */
+.wf-node-repeats { min-width: 0; font-size: 0.75rem; line-height: 1.25; color: var(--muted);
+  overflow-wrap: break-word; }
+
+/* A FULL PAGE NAMES EVERY STEP IN FULL (FlowLane `wrap`, geometry.ts wrapNodeHeight): titles wrap
+   to three lines and names to two, never an ellipsis; the node is sized for them. */
+.wf-lane[data-wrap="true"] .wf-node-title {
+  display: block; -webkit-line-clamp: unset; line-clamp: none; overflow: visible; text-overflow: clip;
+  overflow-wrap: normal; /* between words only, never "Productio" / "n": the node is wide enough */
+}
+.wf-lane[data-wrap="true"] .wf-node-agent { align-items: flex-start; }
+.wf-lane[data-wrap="true"] .wf-node-agent-name,
+.wf-lane[data-wrap="true"] .wf-node-status { white-space: normal; overflow: visible; text-overflow: clip;
+  overflow-wrap: break-word; }

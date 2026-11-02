@@ -89,20 +89,51 @@ export function nodeHeight(density: Density, rem: number = BASE_REM): number {
   return Math.max(NODE[density].h, Math.ceil(rows));
 }
 
-export function nodeWidth(type: StepView["type"] | undefined, density: Density): number {
+export function nodeWidth(type: StepView["type"] | undefined, density: Density, wrapW?: number): number {
+  // Wrapped, a Wait is as wide as any step: its title ("Attached to an open incident, or not an
+  // Error — stop") is read in full like the others.
+  if (wrapW) return wrapW;
   return type === "wait" ? WAIT_W[density] : NODE[density].w;
+}
+
+/**
+ * A FULL PAGE NAMES EVERY STEP IN FULL (operator, 2026-11-01: "Monito…", "Pipeline Orches…").
+ * The wrapped lane (FlowLane `wrap`) is Comfortable with the node sized to its words: wide enough
+ * for about 20 characters a line at the root font in use (the root grows to 22.8px at 1920, so a
+ * fixed 188px held 12), titles wrapping to three lines, a name to two, and never an ellipsis.
+ */
+export const WRAP_CHARS_REM = 11;
+export const WRAP_TITLE_LINES = 3;
+export const WRAP_AGENT_LINES = 2;
+export function wrapNodeWidth(rem: number = BASE_REM): number {
+  return Math.max(NODE.comfortable.w, Math.round(WRAP_CHARS_REM * rem));
+}
+export function wrapNodeHeight(rem: number = BASE_REM): number {
+  const line = (size: number, height: number) => size * rem * height;
+  // Three title lines (0.875rem × 1.25), two name lines (0.75rem × 1.25) beside a 20px face, the
+  // badges or the run's status (16px), two 5px gaps, 10px padding top and bottom and the border.
+  return Math.ceil(WRAP_TITLE_LINES * line(0.875, 1.25) + Math.max(20, WRAP_AGENT_LINES * line(0.75, 1.25))
+    + 16 + 2 * 5 + 2 * 10 + 2);
+}
+/** The smallest scale Fit takes a wrapped lane to; wider than that, it scrolls instead. */
+export const WRAP_MIN_SCALE = 0.8;
+export function wrapFitScale(natural: number, available: number): number {
+  if (!(available > 0) || natural <= available) return 1;
+  return Math.max(WRAP_MIN_SCALE, available / natural);
 }
 
 /** Positions for every node, column and gap at one density. */
 export function laneGeometry(layout: FlowLayout, types: Map<string, StepView["type"]>,
-                             density: Density, connector?: number, rem: number = BASE_REM): LaneGeometry {
-  const node = { w: NODE[density].w, h: nodeHeight(density, rem) };
+                             density: Density, connector?: number, rem: number = BASE_REM,
+                             wrap = false): LaneGeometry {
+  const wrapW = wrap ? wrapNodeWidth(rem) : undefined;
+  const node = wrap ? { w: wrapW!, h: wrapNodeHeight(rem) } : { w: NODE[density].w, h: nodeHeight(density, rem) };
   const conn = connector ?? CONN[density];
   const flagW = FLAG_W[density];
   const columns = layout.columns;
   const colW: number[] = Array.from({ length: columns }, () => 0);
   for (const n of layout.nodes) {
-    colW[n.column] = Math.max(colW[n.column] ?? 0, nodeWidth(types.get(n.id), density));
+    colW[n.column] = Math.max(colW[n.column] ?? 0, nodeWidth(types.get(n.id), density, wrapW));
   }
   const rows = Math.max(1, layout.maxRows);
   const pitch = node.h + ROW_GAP;
@@ -132,7 +163,7 @@ export function laneGeometry(layout: FlowLayout, types: Map<string, StepView["ty
 
   const boxes = new Map<string, Box>();
   for (const n of layout.nodes) {
-    const w = nodeWidth(types.get(n.id), density);
+    const w = nodeWidth(types.get(n.id), density, wrapW);
     const cw = colW[n.column] || node.w;
     const offset = (rows - Math.max(1, n.rowsInColumn)) / 2;
     boxes.set(n.id, {
@@ -185,11 +216,11 @@ export const ROOMY_MIN_CONN = 24;
  * scrolls inside the lane.
  */
 export function roomyGeometry(layout: FlowLayout, types: Map<string, StepView["type"]>,
-                              available: number, rem: number = BASE_REM): LaneGeometry {
-  const full = laneGeometry(layout, types, "comfortable", undefined, rem);
+                              available: number, rem: number = BASE_REM, wrap = false): LaneGeometry {
+  const full = laneGeometry(layout, types, "comfortable", undefined, rem, wrap);
   if (!(available > 0) || full.width <= available) return full;
   for (let c = CONN.comfortable - 8; c >= ROOMY_MIN_CONN; c -= 8) {
-    const g = laneGeometry(layout, types, "comfortable", c, rem);
+    const g = laneGeometry(layout, types, "comfortable", c, rem, wrap);
     if (g.width <= available) return g;
   }
   return full;
