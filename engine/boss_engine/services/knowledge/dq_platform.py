@@ -387,7 +387,8 @@ def _install_workflows(connection: Connection, project_id: str, actor: str) -> l
     # The roles first, holding the sample's connectors, so each stage's contract (its `calls`)
     # is satisfied when the workflow is published. A grant a person removed stays removed.
     install_roles(connection, project_id, [r for e in CATALOGUE if e["key"] in WORKFLOW_KEYS
-                                           for r in roles_needed(e)], actor=actor)
+                                           for r in roles_needed(e)], actor=actor,
+                  refresh_present=True)
     for role, server, tools in SAMPLE_GRANTS:
         held = connection.execute(text(
             "SELECT 1 FROM role_mcp_servers g JOIN mcp_servers s ON s.id = g.mcp_server_id "

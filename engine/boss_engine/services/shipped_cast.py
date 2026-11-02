@@ -268,18 +268,22 @@ def sync_project(connection: Connection, settings: Any, project_id: str, *,
 
 
 def install_roles(connection: Connection, project_id: str, role_keys: list[str], *,
-                  settings: Any = None, actor: str = "boss") -> list[str]:
+                  settings: Any = None, actor: str = "boss", refresh_present: bool = False) -> list[str]:
     """Install the shipped roles a workflow's steps need and the project lacks — the same path
     the cast takes (`_upsert_role_spec`, born from its home pack, skills/MCP by the additive
     syncs, an identity for each). Additive: a present role is left as it is, and one an operator
-    deleted stays deleted (seed_exclusions). Returns the role keys installed."""
+    deleted stays deleted (seed_exclusions). Returns the role keys installed.
+
+    ``refresh_present``: a person loading a sample again asked for it as it ships now, so a
+    present role is brought up to its shipped spec as well (a renamed agent shows its new name);
+    _upsert_role_spec still keeps a role the operator edited exactly as they left it."""
     from . import agent_identity
     from .specpack import RoleNotFoundError, SpecPackService
 
     have = {str(k) for k in connection.execute(
         text("SELECT role_key FROM roles WHERE project_id = :p"), {"p": project_id}).scalars()}
     missing = [k for k in dict.fromkeys(str(r).strip().lower() for r in role_keys)
-               if k and k not in have]
+               if k and (refresh_present or k not in have)]
     if not missing:
         return []
     if settings is None:
