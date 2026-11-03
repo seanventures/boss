@@ -14,7 +14,7 @@ export type SeatsResponse = {
   tiers: Record<string, string[]>;
   two_person_tiers: number[];
   vacant_tiers: number[];
-  single_operator_waiver?: { effective?: boolean } | null;
+  single_operator_waiver?: { effective?: boolean; setting?: boolean | null; active_people?: number } | null;
 };
 
 export type SeatHolder = { id: string; name: string };

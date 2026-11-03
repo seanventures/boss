@@ -115,6 +115,7 @@ function CreateSheet({ kinds, maxDays, maxTier, projects, onClose, onIssued }: {
   const [where, setWhere] = useState<string[]>(projects.length === 1 ? [projects[0].id] : []);
   const [days, setDays] = useState(30);
   const [cap, setCap] = useState<string>("");
+  const [tier3, setTier3] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const toggle = (list: string[], v: string) => (list.includes(v) ? list.filter((x) => x !== v) : [...list, v]);
@@ -136,6 +137,11 @@ function CreateSheet({ kinds, maxDays, maxTier, projects, onClose, onIssued }: {
       <label className="idn-field"><span className="idn-label">Days (at most {maxDays})</span>
         <input className="idn-input" type="number" min={1} max={maxDays} value={days} data-testid="days"
           onChange={(e) => setDays(Math.max(1, Math.min(maxDays, Number(e.target.value) || 1)))} /></label>
+      {maxTier < 3 ? (
+        <label className="idn-field" title="Tier-3 decisions are the highest a delegate may take. Deploys, releases, budget and identity changes are never delegated.">
+          <span><input type="checkbox" checked={tier3} data-testid="tier-3"
+                       onChange={() => setTier3(!tier3)} /> Also tier-3 decisions (above tier {maxTier})</span></label>
+      ) : null}
       <label className="idn-field"><span className="idn-label">At most this many a day (optional)</span>
         <input className="idn-input" type="number" min={1} value={cap} placeholder="no cap" data-testid="daily-cap"
           onChange={(e) => setCap(e.target.value)} /></label>
@@ -150,6 +156,7 @@ function CreateSheet({ kinds, maxDays, maxTier, projects, onClose, onIssued }: {
               const got = await guarded("A delegate will approve for you without asking again.", () =>
                 idPost<IssuedSecret>("/v1/identity/me/approval-delegations", {
                   kinds: chosen, projects: where, days, ...(cap ? { daily_cap: Number(cap) } : {}),
+                  ...(tier3 ? { extra_risk_tiers: [3] } : {}),
                 }));
               onIssued({ ...got, replaces: null });
             } catch (e) {

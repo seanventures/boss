@@ -91,6 +91,40 @@ function SeatCardView({ card, twoPerson, people }: { card: SeatCard; twoPerson: 
   );
 }
 
+/** ONE PERSON APPROVES EVERY TIER (the single-operator waiver, D29). A tier-3 decision needs two
+ *  different people; an org run by one person (boss-1, 2026-11-03: the operator approved each
+ *  tier-3 card twice, as two accounts) turns that off here. The API always took it
+ *  (PUT /v1/identity/policy single_operator_waiver); the console had no control for it. */
+function OnePersonSwitch({ waiver }: { waiver: { effective?: boolean; setting?: boolean | null; active_people?: number } | null | undefined }) {
+  const guarded = useGuardedCall();
+  const refresh = useConsoleRefresh();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const on = Boolean(waiver?.effective);
+  const flip = async () => {
+    setBusy(true); setError(null);
+    try {
+      await guarded(on ? "Tier-3 decisions will need two different people again."
+                       : "One person will approve every tier, tier 3 included.",
+        () => idPut("/v1/identity/policy", { single_operator_waiver: !on }));
+      showToast("success", on ? "Two people for tier 3" : "One person approves every tier");
+      refresh("now");
+    } catch (e) { setError(words(e)); } finally { setBusy(false); }
+  };
+  return (
+    <div className="idn-line" data-testid="seats-one-person">
+      <span title="Tier-3 decisions normally need two different people. Turn this on when one person runs this org.">
+        {on ? "One person approves every tier" : "Tier 3 needs two different people"}
+      </span>
+      <CanButton permission="security_policy:manage" className="idn-btn sm" disabled={busy}
+                 data-testid="seats-one-person-toggle" onClick={() => void flip()}>
+        {on ? "Require two people" : "One person approves every tier"}
+      </CanButton>
+      <ErrorLine error={error} />
+    </div>
+  );
+}
+
 export function SeatsScreen({ data, people, failure = null }: { data: SeatsResponse | null; people: PersonOption[]; failure?: ReadFailure | null }) {
   const cards = data ? seatCards(data) : [];
   const vacant = data?.vacant_tiers ?? [];
@@ -103,6 +137,7 @@ export function SeatsScreen({ data, people, failure = null }: { data: SeatsRespo
         </span>
       </div>
       {failure ? <ErrorState what="approval seats" failure={failure} testId="seats-error" /> : null}
+      {data ? <OnePersonSwitch waiver={data.single_operator_waiver} /> : null}
       <div className="idn-glist" data-testid="seats-list">
         {cards.map((c) => <SeatCardView key={c.key} card={c} twoPerson={data?.two_person_tiers ?? []} people={people} />)}
       </div>
