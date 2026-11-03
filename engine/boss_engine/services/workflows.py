@@ -6637,8 +6637,8 @@ def complete_step(
         ),
         {
             "id": step_run_id,
-            "output": json.dumps(output or {}),
-            "evidence": json.dumps(evidence or []),
+            "output": json.dumps(output or {}, default=str),
+            "evidence": json.dumps(evidence or [], default=str),
         },
     ).mappings().one()
     if output:
@@ -6650,7 +6650,7 @@ def complete_step(
                 WHERE id=:run_id
                 """
             ),
-            {"run_id": row["workflow_run_id"], "output": json.dumps(output)},
+            {"run_id": row["workflow_run_id"], "output": json.dumps(output, default=str)},
         )
     run = _run_row(connection, row["workflow_run_id"])
     _emit_step_event(
