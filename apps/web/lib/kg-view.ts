@@ -404,7 +404,19 @@ export type KgAmlAlert = {
   rule: string; raised_at: string; case_id: string | null;
   case_status: string | null; determination: string | null;
 };
-export type KgAmlSample = { loaded: boolean; pack_id: string | null; workflow_key: string; alerts: KgAmlAlert[] };
+export type KgAmlProblemRow = {
+  alert_id: string; customer_name: string; account_label: string; rule: string;
+  rule_text: string; score: number; flagged_count: number; raised_at: string;
+  status: string; status_label: string; is_open: boolean;
+};
+export type KgAmlProblemScreen = {
+  title: string; state: "ok" | "empty" | "error"; summary: string;
+  alerts: KgAmlProblemRow[]; open_count: number; error?: string;
+};
+export type KgAmlSample = {
+  loaded: boolean; pack_id: string | null; workflow_key: string; alerts: KgAmlAlert[];
+  problem_screen: KgAmlProblemScreen;
+};
 
 export function getAmlSample(w: Who, signal?: AbortSignal) {
   return kgRead<KgAmlSample>("/v1/knowledge/samples/aml", { project_id: w.projectId, actor: w.actor }, signal);
