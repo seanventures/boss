@@ -81,6 +81,13 @@ def _add_case_note(args: dict) -> dict:
     return {"ok": True, **entry}
 
 
+def clear_notes() -> None:
+    """Forget every case note an AML run has posted (a fresh load's clean slate); the sample's own
+    alerts, accounts and transactions are generated fresh each call and are never touched here."""
+    with _NOTES_LOCK:
+        _NOTES.clear()
+
+
 def _get_kyc_profile(args: dict) -> dict:
     customer_id = str(args.get("customer_id") or "").strip()
     ds = generate()
