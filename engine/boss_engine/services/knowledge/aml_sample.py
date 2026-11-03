@@ -472,22 +472,41 @@ def build_alert_detail(connection: Connection, *, project_id: str,
 
 
 def _clear_run_leftovers(connection: Connection, project_id: str) -> None:
-    """Remove every leftover of an earlier run of the AML workflow — the `aml_case` nodes it
-    opened, and the `related_to` edges the Network Mapper inferred (tagged with a run_id) — so a
-    fresh load never mistakes BOSS's own prior output for the bank's network (A3/A6)."""
-    removed_cases = connection.execute(text(
+    """Remove every node and edge an earlier run of the AML workflow wrote — the `aml_case` nodes
+    it opened, the `precedent` nodes a person's determination produced, the `related_to` edges the
+    Network Mapper inferred, and the `consulted`/`reused`/`produced`/`about`/`correlates_with`
+    edges that linked cases to precedents — so a fresh load never mistakes BOSS's own prior output
+    (including an earlier run's precedent) for the bank's network or a prior determination (A3/A6).
+    The bank's own data (customers, accounts, counterparties, alerts, transactions) is untouched."""
+    case_ids = connection.execute(text(
         "SELECT id FROM kg_nodes WHERE project_id = :p AND kind = 'aml_case'"),
         {"p": project_id}).scalars().all()
-    for node_id in removed_cases:
+    precedent_ids = connection.execute(text(
+        "SELECT id FROM kg_nodes WHERE project_id = :p AND kind = 'precedent' "
+        "AND attrs->>'domain' = 'aml'"), {"p": project_id}).scalars().all()
+
+    written_edge_kinds = ("related_to", "consulted", "reused", "produced", "about",
+                          "correlates_with")
+    written_ids = set(case_ids) | set(precedent_ids)
+    if written_ids:
+        connection.execute(text(
+            "DELETE FROM kg_edges WHERE project_id = :p AND kind = ANY(:kinds) "
+            "AND (src_id = ANY(:ids) OR dst_id = ANY(:ids))"),
+            {"p": project_id, "kinds": list(written_edge_kinds), "ids": list(written_ids)})
+    connection.execute(text(
+        "DELETE FROM kg_edges WHERE project_id = :p AND kind = 'related_to' "
+        "AND attrs->>'run_id' IS NOT NULL"), {"p": project_id})
+
+    for node_id in [*case_ids, *precedent_ids]:
         try:
             with connection.begin_nested():
                 STORE.delete_node(connection, project_id=project_id, node_id=node_id,
                                   actor_kind="person")
         except Exception:  # noqa: BLE001 — already gone, or edges removed it already
             pass
-    connection.execute(text(
-        "DELETE FROM kg_edges WHERE project_id = :p AND kind = 'related_to' "
-        "AND attrs->>'run_id' IS NOT NULL"), {"p": project_id})
+
+    from tools import mcp_aml_mock
+    mcp_aml_mock.clear_notes()
 
 
 def _ingest_policy(connection: Connection, project_id: str,
