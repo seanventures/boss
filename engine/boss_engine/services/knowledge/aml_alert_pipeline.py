@@ -647,8 +647,9 @@ def run_aml_analysis(connection: Connection, settings: Any, project_id: str,
             confidence = 0.5
         if answer not in RECOMMENDATIONS:
             why = f"the AML Analyst's answer named no recommendation it may make ({answer or 'none'})"
-        elif not cited and not applied:
-            why = "the AML Analyst cited no evidence it was given, so its answer is not a recommendation"
+        elif not rationale and not cited and not applied:
+            why = ("the AML Analyst gave no rationale and cited no evidence it was given, so its "
+                   "answer is not a recommendation")
         else:
             recommendation, why = answer, ""
     if recommendation:
@@ -675,6 +676,30 @@ def run_aml_analysis(connection: Connection, settings: Any, project_id: str,
 
 # ── 6. narrative (role agent: the SAR Narrator) — only after a person escalated ───────────────
 
+def _named_wire_total(connection: Connection, project_id: str, account_node_id: str,
+                      named_ids: set[str]) -> dict[str, Any]:
+    """The real outbound wire total/count from `account_node_id` to exactly `named_ids`, and the
+    outbound total/count to every other counterparty — summed in code off the `transfers_to`
+    edges, never left for a model to add up (A7)."""
+    if not account_node_id:
+        return {"named_total": 0.0, "named_count": 0, "other_total": 0.0, "other_count": 0}
+    rows = connection.execute(
+        text("SELECT dst_id, attrs FROM kg_edges WHERE project_id = :p AND kind = 'transfers_to' "
+             "AND src_id = :a AND valid_to IS NULL"),
+        {"p": project_id, "a": account_node_id}).mappings().all()
+    named_total = named_count = other_total = other_count = 0
+    for row in rows:
+        attrs = row["attrs"] if isinstance(row["attrs"], dict) else json.loads(row["attrs"] or "{}")
+        if row["dst_id"] in named_ids:
+            named_total += float(attrs.get("total") or 0)
+            named_count += int(attrs.get("count") or 0)
+        else:
+            other_total += float(attrs.get("total") or 0)
+            other_count += int(attrs.get("count") or 0)
+    return {"named_total": round(named_total, 2), "named_count": named_count,
+            "other_total": round(other_total, 2), "other_count": other_count}
+
+
 def run_sar_narrative(connection: Connection, settings: Any, project_id: str,
                       step: Mapping[str, Any], context: Mapping[str, Any],
                       inputs: Mapping[str, Any]) -> dict[str, Any]:
@@ -695,6 +720,22 @@ def run_sar_narrative(connection: Connection, settings: Any, project_id: str,
     network = steps.get("network_mapping") or {}
     analysis = steps.get("aml_analysis") or {}
     citable = _evidence_list(connection, project_id, intake, network)
+    named_ids = {str(p.get("node_id") or "") for p in network.get("related_parties") or []}
+    wires = _named_wire_total(connection, project_id, str(intake.get("account_node_id") or ""),
+                              named_ids)
+    named_party_names = ", ".join(sorted({str(p.get("name") or "") for p in
+                                          network.get("related_parties") or [] if p.get("name")}))
+    if wires["named_count"]:
+        wire_line = (
+            f"NAMED WIRE TOTAL (computed, cite exactly, never add up amounts yourself): "
+            f"${wires['named_total']:,.2f} across {wires['named_count']} wire(s) to the named "
+            f"related part(ies) ({named_party_names or 'named above'})."
+            + (f" A further ${wires['other_total']:,.2f} across {wires['other_count']} other "
+               "payment(s) went to counterparties not named above — report that separately if "
+               "at all, never folded into the named total."
+               if wires["other_count"] else ""))
+    else:
+        wire_line = "NAMED WIRE TOTAL: no outbound wires to named related parties were found."
     situation = (
         f"ALERT {alert_id}: {intake.get('rule')} — {intake.get('rule_text') or ''}; raised "
         f"{intake.get('raised_at')}.\nESCALATED BY: {person['decided_by']} — reason: "
@@ -702,7 +743,8 @@ def run_sar_narrative(connection: Connection, settings: Any, project_id: str,
         f"KYC (data): {json.dumps(evidence.get('kyc') or {})}\n"
         f"TRANSACTIONS, 90 DAYS: {json.dumps(evidence.get('transactions') or {})}\n"
         f"MOST RECENT: {json.dumps(evidence.get('recent_transactions') or [])[:3000]}\n"
-        f"NETWORK: {network.get('note') or '(not mapped)'}\n\n"
+        f"NETWORK: {network.get('note') or '(not mapped)'}\n"
+        f"{wire_line}\n\n"
         "EVIDENCE:\n" + "\n".join(f"- {i}: {label}" for i, label in citable.items()))
     agent, _engine = _role_agent(connection, settings, project_id)
     with _attributed(connection, project_id, run_id, step_id, SAR_NARRATOR):
@@ -797,13 +839,17 @@ def run_aml_closure(connection: Connection, *, project_id: str, run_id: str, ste
                           actor_ref=decided_by)
     actor_ref = "aml_alert_pipeline:aml_closure"
     applied = set(analysis.get("precedents_applied") or [])
+    match_determinations = {m["precedent_id"]: m.get("determination")
+                            for m in history.get("matches") or []}
     reused = []
     for match_id in history.get("matched") or []:
         if not case_id:
             break
         STORE.upsert_edge(connection, project_id=project_id, src_id=case_id, dst_id=match_id,
                           kind="consulted", actor_kind="agent", actor_ref=actor_ref)
-        if match_id in applied:
+        # A precedent is reused when the agent explicitly cited it, or the person's own
+        # determination matches it — upholding it rather than overriding it (case study 4).
+        if match_id in applied or match_determinations.get(match_id) == person["determination"]:
             STORE.upsert_edge(connection, project_id=project_id, src_id=case_id,
                               dst_id=match_id, kind="reused", actor_kind="agent",
                               actor_ref=actor_ref)
