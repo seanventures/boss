@@ -42,6 +42,22 @@ describe("what counts as the person asking", () => {
     expect(isInteractive()).toBe(true);
   });
 
+  it("choosing in a menu is a press: Pin a job saves on a select change (boss-1, 2026-11-03)", () => {
+    noteGesture({ type: "change", target: el("<select id=s><option>a</option></select>", "#s") });
+    expect(isInteractive()).toBe(true);
+  });
+
+  it("a script's change event is never the person", () => {
+    noteGesture({ type: "change", isTrusted: false,
+                  target: el("<select id=s><option>a</option></select>", "#s") });
+    expect(isInteractive()).toBe(false);
+  });
+
+  it("a change on something that is not a form control is not a press", () => {
+    noteGesture({ type: "change", target: el("<div id=d></div>", "#d") });
+    expect(isInteractive()).toBe(false);
+  });
+
   it("opening an area is a view, not a request to act", () => {
     for (const [html, pick] of [
       ['<nav><button id=x data-area-nav="setup">Repo and models</button></nav>', "#x"],

@@ -1449,6 +1449,29 @@ def set_job(connection: Connection, settings: Any, project_id: str, job: str,
     return {"job": job, "engine": engine, "model": model}
 
 
+def set_claude_credential_order(connection: Connection, settings: Any, project_id: str,
+                                order: str, *, actor: str = "ceo",
+                                scope: Optional[str] = None) -> dict[str, Any]:
+    """Subscription first or API key first for every claude BOSS starts (claude_credential).
+    The org's choice unless scope='project'. Recorded as an event: it decides who pays."""
+    from . import claude_credential, project_settings
+    from .core import emit_event
+
+    if order not in claude_credential.ORDERS:
+        raise SetupActionError(422, "failed", "Order",
+                               "Subscription first or API key first.")
+    if scope not in (None, "", "org", "project"):
+        raise SetupActionError(422, "failed", "Scope", "All projects (org) or this project.")
+    try:
+        project_settings.set_one(connection, project_id, claude_credential.ORDER_KNOB, order,
+                                 actor, scope=scope)
+    except PermissionError as exc:
+        raise SetupActionError(403, "failed", "Org admin", str(exc)) from None
+    emit_event(connection, project_id, "setup.claude_credential_order", actor, "setting",
+               claude_credential.ORDER_KNOB, {"order": order, "scope": scope or "org"})
+    return {"order": order}
+
+
 # ── Budget ────────────────────────────────────────────────────────────────────────────────────
 
 def set_budget(connection: Connection, settings: Any, project_id: str, monthly_cap_usd: Any, *,

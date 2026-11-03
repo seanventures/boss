@@ -16,7 +16,7 @@ from fastapi import APIRouter, HTTPException, Request
 from boss_engine.db import begin
 
 from ..schemas_setup import (
-    BudgetBody, ChecksBody, JobBody, ModelConnectBody, ReleaseHoldBody, RepositoryAppBody, RepositorySelectBody, RepositorySigninBody,
+    BudgetBody, ChecksBody, ClaudeCredentialBody, JobBody, ModelConnectBody, ReleaseHoldBody, RepositoryAppBody, RepositorySelectBody, RepositorySigninBody,
     RepositoryTokenBody, RoutingBody, SetupView, SignInBody, SignInCodeBody, SignInSession,
     SourceModelBody, TryBody, dump,
 )
@@ -449,6 +449,23 @@ def build_setup_router(
                 setup_actions.set_job(connection, get_settings(), body.project_id, job,
                                       body.choice.model_dump() if body.choice else None,
                                       actor=actor, scope=body.scope)
+            except setup_actions.SetupActionError as error:
+                fail(error)
+        return fresh_view(body.project_id)
+
+    @router.put("/v1/setup/claude-credential", response_model=SetupView,
+                response_model_by_alias=True)
+    @permit(P.SETUP_MANAGE, scope=Scope.project(body="project_id"))
+    def put_claude_credential(body: ClaudeCredentialBody) -> dict[str, Any]:
+        """Subscription first or API key first for Claude Code — the setting that decides who
+        pays for every claude BOSS starts, which had no control in the console."""
+        actor = actor_for(body.actor)
+        with begin(engine) as connection:
+            require_actor(connection, body.project_id, actor, "providerops_manage")
+            try:
+                setup_actions.set_claude_credential_order(
+                    connection, get_settings(), body.project_id, body.order, actor=actor,
+                    scope=body.scope)
             except setup_actions.SetupActionError as error:
                 fail(error)
         return fresh_view(body.project_id)

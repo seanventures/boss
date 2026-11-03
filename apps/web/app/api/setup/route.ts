@@ -50,6 +50,8 @@ const OPS: Record<string, Op> = {
   try: { method: "POST", path: () => "/v1/setup/try" },
   decision_key: { method: "POST", path: () => "/v1/setup/decisions/key" },
   routing: { method: "PUT", path: () => "/v1/setup/routing" },
+  // Claude Code pays with: subscription first or API key first (setup:manage).
+  claude_credential: { method: "PUT", path: () => "/v1/setup/claude-credential" },
   routing_catalogue: { method: "POST", path: () => "/v1/setup/routing/catalogue" },
   // "Give builds a database (Postgres)": the project setting build_services (Owner/Admin).
   build_database: { method: "PUT", path: () => "/v1/settings/build_services" },

@@ -936,6 +936,7 @@ def _jobs(connection: Connection, settings: Any, project_id: str,
         if model_working(entry):
             by_engine.setdefault(engine_for_provider(entry["provider"]), entry)
     _offer_agent_sdk(settings, models, by_engine)
+    _say_which_claude_credential(connection, settings, project_id, by_engine)
     try:
         from .typed_decisions import _typesafe_key
         from .project_settings import applied
@@ -1005,6 +1006,43 @@ def _offer_agent_sdk(settings: Any, models: list[dict[str, Any]],
         return
     by_engine[ENGINE] = {**key, "label": ENGINE_LABELS[ENGINE],
                          "model": getattr(settings, "agent_sdk_model", "") or DEFAULT_MODEL}
+
+
+#: What each Claude choice bills, said in its label (claude_credential's kinds).
+CLAUDE_ON_SUBSCRIPTION = "Claude Code · subscription"
+CLAUDE_CODE_ON_KEY = "Claude Code · API key"
+CLAUDE_SDK_ON_KEY = "Claude · API key"
+
+
+def _say_which_claude_credential(connection: Connection, settings: Any, project_id: str,
+                                 by_engine: dict[str, dict[str, Any]]) -> None:
+    """TWO CLAUDE CHOICES, EACH SAYING WHAT IT BILLS (boss-1, 2026-11-03). The Claude
+    subscription and the Anthropic API key both map to the claude_code engine, and the list
+    keeps ONE entry per engine — so the job menus showed a single "Claude Code" that silently
+    ran on whichever credential claude_credential's order picked ("API key first" had been set,
+    and $112 of builds billed the key while the subscription sat idle). The operator could not
+    tell, nor pick the other one for a job.
+
+    Now: the claude_code entry is labelled by the credential it will really use (subscription
+    or API key, from claude_credential.describe — the same order every launch follows) and
+    priced accordingly; the Claude Agent SDK engine, which always runs on the key, is offered
+    beside it as "Claude · API key". Each job picks either."""
+    from . import claude_credential
+
+    try:
+        cred = claude_credential.describe(connection, settings, project_id)
+    except Exception:  # noqa: BLE001 — the menus still list what works
+        cred = {}
+    active = str(cred.get("active") or "")
+    claude = by_engine.get("claude_code")
+    if claude is not None and active:
+        on_sub = active in (claude_credential.KIND_SUBSCRIPTION, claude_credential.KIND_CLI_LOGIN)
+        by_engine["claude_code"] = {
+            **claude, "label": CLAUDE_ON_SUBSCRIPTION if on_sub else CLAUDE_CODE_ON_KEY,
+            "kind": "subscription" if on_sub else "metered"}
+    sdk = by_engine.get("claude_agent_sdk")
+    if sdk is not None:
+        by_engine["claude_agent_sdk"] = {**sdk, "label": CLAUDE_SDK_ON_KEY, "kind": "metered"}
 
 
 def _source_label(engine: str, source_id: Optional[str], models: list[dict[str, Any]]) -> str:
@@ -1243,8 +1281,24 @@ def _build(connection: Connection, settings: Any, project_id: str, *,
         # Whose models these are: the org's (set once, every project uses them), the org's model
         # home, and this project's pins (org_models.view).
         "models_scope": _models_scope(connection, project_id),
+        # Which credential Claude Code runs on, and the operator's order (subscription first or
+        # API key first) — never a secret, only which kind is active (claude_credential.describe).
+        "claude_credential": _claude_credential(connection, settings, project_id),
         "generated_at": now.isoformat(),
     }
+
+
+def _claude_credential(connection: Connection, settings: Any, project_id: str
+                       ) -> Optional[dict[str, Any]]:
+    from . import claude_credential
+
+    try:
+        found = claude_credential.describe(connection, settings, project_id)
+    except Exception:  # noqa: BLE001
+        return None
+    return {"order": found.get("order"), "active": found.get("active"),
+            "billing": found.get("billing"),
+            "subscription_disconnected": bool(found.get("subscription_disconnected"))}
 
 
 def _models_scope(connection: Connection, project_id: str) -> Optional[dict[str, Any]]:

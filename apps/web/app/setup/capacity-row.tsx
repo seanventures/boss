@@ -160,6 +160,54 @@ export function claudeCopy(src: CapSource): { line: string; tip: string; billing
 }
 const isLogin = (src: CapSource) => src.auth.includes("oauth");
 
+const PAYS_WITH: { order: "subscription_first" | "api_key_first"; label: string; tip: string }[] = [
+  { order: "subscription_first", label: "Subscription first",
+    tip: "Claude Code runs on the Claude subscription; the API key only when the subscription is disconnected." },
+  { order: "api_key_first", label: "API key first",
+    tip: "Claude Code runs on the Anthropic API key, billed per call; the subscription only when there is no key." },
+];
+
+/** WHO PAYS FOR CLAUDE CODE, as a control (boss-1, 2026-11-03). "API key first" had been set
+ *  with no way to see or undo it here: a day of builds billed the key while the subscription
+ *  sat idle. The two buttons are presses, so a stale second factor opens "Confirm it's you". */
+function ClaudePaysWith() {
+  const { projectId, view, apply } = useBoard();
+  const [busy, setBusy] = useState(false);
+  const cred = view.claude_credential;
+  if (!cred) return null;
+  const onKey = cred.active === "stored_key" || cred.active === "env_key";
+  const save = async (order: "subscription_first" | "api_key_first", label: string) => {
+    if (busy || order === cred.order) return;
+    setBusy(true);
+    try {
+      apply(await setupWrite<SetupView>(projectId, "claude_credential", { order }, { label }));
+      toast(`Saved · Claude Code: ${label}`);
+    } catch (error) {
+      const refusal = (error as SetupFailure).refusal as { headline?: string; message?: string } | undefined;
+      toast(refusal?.message ?? refusal?.headline ?? "Not saved", "error");
+    } finally { setBusy(false); }
+  };
+  return (
+    <div className="su-line su-claude-pays" role="group" aria-label="Claude Code pays with"
+         data-testid="setup-claude-pays">
+      <span className="su-faint">Claude Code pays with</span>
+      {PAYS_WITH.map((o) => (
+        <GatedButton key={o.order} permission="setup:manage" type="button"
+                     className={`su-btn su-btn-sm${o.order === cred.order ? " su-btn-primary" : ""}`}
+                     aria-pressed={o.order === cred.order} aria-busy={busy || undefined}
+                     title={o.tip} data-tip={o.tip} data-testid={`setup-claude-pays-${o.order}`}
+                     onClick={() => void save(o.order, o.label)}>
+          {o.label}
+        </GatedButton>
+      ))}
+      <span className="su-faint" data-testid="setup-claude-pays-now">
+        Now: {onKey ? "the API key (billed per call)" : cred.active === "none" ? "nothing connected"
+              : "the subscription"}
+      </span>
+    </div>
+  );
+}
+
 async function post(path: string, body: Obj, label: string, scope: string): Promise<string | null> {
   try {
     const r = await apiWrite(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) },
@@ -498,6 +546,7 @@ function SourceRow({ item, sessions, onBoard, formOpen, onForm, actions }: {
                    open={section.menuSource === id} />
         ) : <span className="su-menu-gap" aria-hidden="true" />}
       </div>
+      {id === "anthropic_claude_code" ? <ClaudePaysWith /> : null}
       {details ? (
         <dl className="su-src-details" data-testid="setup-cap-details-panel" title={ids}>
           <dt>Kind</dt><dd><Tip tip={entry ? KIND[entry.kind].tip : ids}>{kindWord}</Tip></dd>

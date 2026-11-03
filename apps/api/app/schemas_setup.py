@@ -182,6 +182,7 @@ class SetupView(_Open):
     build_database: Optional[dict[str, Any]] = None
     #: Whose models these are (org_models.view): the org's, its model home, this project's pins.
     models_scope: Optional[dict[str, Any]] = None
+    claude_credential: Optional[dict[str, Any]] = None
 
     model_config = ConfigDict(extra="allow", populate_by_name=True)
 
@@ -281,6 +282,13 @@ class JobBody(_Body):
     choice: Optional[JobChoice] = None
     #: 'org' (the default: every project of the org) or 'project' (pin this project only;
     #: with no choice, removes only the pin).
+    scope: Optional[Literal["org", "project"]] = None
+
+
+class ClaudeCredentialBody(_Body):
+    """Which credential Claude Code runs on first: the Claude subscription or the Anthropic
+    API key (claude_credential). 'org' (default: every project) or 'project'."""
+    order: Literal["subscription_first", "api_key_first"]
     scope: Optional[Literal["org", "project"]] = None
 
 

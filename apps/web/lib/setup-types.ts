@@ -203,6 +203,13 @@ export type HeldProof = {
   release: { cost_usd_micros: number; basis: "refused" | "priced" | "unpriced"; succeeded: boolean };
 };
 
+export type ClaudeCredential = {
+  order: "subscription_first" | "api_key_first";
+  active: "subscription" | "cli_login" | "stored_key" | "env_key" | "none";
+  billing?: string | null;
+  subscription_disconnected?: boolean;
+};
+
 export type SetupView = {
   project_id: string;
   ready: boolean;
@@ -233,6 +240,8 @@ export type SetupView = {
   embedding_model?: EmbeddingModel | null;
   /** Whose models these are (org_models.view): the org's, its model home, this project's pins. */
   models_scope?: ModelsScope | null;
+  /** Which credential Claude Code runs on, and the order (claude_credential.describe). */
+  claude_credential?: ClaudeCredential | null;
   /** A background probe (signed-in CLIs, the secret store) is on its way: ask again soon. */
   detecting?: boolean;
 };

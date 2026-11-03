@@ -33,8 +33,13 @@ def test_no_config_resolves_to_lane_engine_and_class_model():
         eng, model = _materialize(route, strong_model="opus", low_cost_model="haiku")
         expected_lane = "native" if step in REVIEW_LANE_STEPS else "claude_code"
         assert eng == expected_lane, step
-        # model equals today's model_for_step class mapping
+        # model equals today's model_for_step class mapping — on an engine that can run it. The
+        # review lane here is OpenAI (`native`), which cannot run a Claude model: it runs its own
+        # default instead of `opus` (model_router.compat; boss-1 2026-11-03 launched
+        # `claude --model gpt-6-sol` from exactly this kind of pairing).
         expected_model = "opus" if model_for_step(profile, step) == "strong" else "haiku"
+        if eng == "native":
+            expected_model = None
         assert model == expected_model, step
 
 
