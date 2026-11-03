@@ -1599,8 +1599,10 @@ CATALOGUE: list[dict[str, Any]] = [
                 "question": "File the suspicious activity report for this alert?",
                 "guidance": "The narrative above is an agent's DRAFT. BOSS does not file: review "
                             "it, file the report yourself, then approve here with the filing "
-                            "reference in your note.",
-                "approval": {"mode": "manual", "approver_role": "human"},
+                            "reference in your note. A different person must file than the one "
+                            "who made the analyst decision (separation of duties).",
+                "approval": {"mode": "manual", "approver_role": "human",
+                            "distinct_from": ["analyst_decision"]},
                 "recommendation": {
                     "reason_label": "Filed",
                     "reason_prompt": "The filing reference, once you have filed it yourself "
