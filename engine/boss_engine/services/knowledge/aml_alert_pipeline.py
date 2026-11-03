@@ -251,10 +251,18 @@ def run_alert_intake(connection: Connection, *, project_id: str, run_id: str, st
                       dst_id=facts["alert_node_id"], kind="about", actor_kind="agent",
                       actor_ref=actor_ref)
     flagged = len((fetched or {}).get("flagged") or []) or int(attrs.get("flagged_count") or 0)
+    # A4/A8: name the customer and the account's product, never a raw CUST-/ACC- id, on a screen
+    # or note a person reads; the ids stay available as a detail field for a tooltip.
+    from tools.aml_sample_data import generate as _generate_sample
+
+    ds = _generate_sample()
+    customer_name = (ds.customers.get(str(attrs.get("customer_id")) or "") or {}).get(
+        "name") or "an unnamed customer"
+    account_label = ((ds.accounts.get(str(attrs.get("account_id")) or "") or {}).get("product")
+                     or "account").replace("_", " ").title()
     statement = (f"Opened the AML case for {alert_id}: rule {attrs.get('rule')} (score "
-                 f"{attrs.get('score')}) on account {attrs.get('account_id')} of customer "
-                 f"{attrs.get('customer_id')}, raised {attrs.get('raised_at')}, {flagged} "
-                 "flagged transaction(s).")
+                 f"{attrs.get('score')}) on {customer_name}'s {account_label}, raised "
+                 f"{attrs.get('raised_at')}, {flagged} flagged transaction(s).")
     produced: dict[str, Any] = {"agent_decision": _decision("AlertIntake", statement)}
     if gap:
         produced["coverage_gap"] = {"statement": f"Case management was not read: {gap}"}
