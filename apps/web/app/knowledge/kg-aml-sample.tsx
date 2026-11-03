@@ -14,20 +14,15 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { GatedButton } from "../../components/gated";
 import {
   DOCUMENT_MANAGE, SCAN_START, getAmlSample, kgNodeHref, kgRunHref, loadAmlSample,
-  type KgAmlAlert, type KgAmlSample,
+  type KgAmlAlert, type KgAmlProblemRow, type KgAmlSample,
 } from "../../lib/kg-view";
 import { post } from "../workflows/delivery-api";
 
 type Who = { projectId: string; actor: string };
 
-const STATUS_WORDS: Record<string, string> = {
-  open: "Investigating",
-  closed_false_positive: "Closed as a false positive",
-  escalated_filed: "Escalated, SAR filed",
-};
-
-function AlertRow({ w, alert, workflowKey, archived, onStarted }: {
-  w: Who; alert: KgAmlAlert; workflowKey: string; archived?: boolean; onStarted: () => void;
+function AlertRow({ w, row, alert, workflowKey, archived, onStarted }: {
+  w: Who; row: KgAmlProblemRow; alert: KgAmlAlert | undefined; workflowKey: string;
+  archived?: boolean; onStarted: () => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string; href?: string | null } | null>(null);
@@ -36,29 +31,29 @@ function AlertRow({ w, alert, workflowKey, archived, onStarted }: {
     setBusy(true); setMsg(null);
     const r = await post("start", {
       project_id: w.projectId, workflow_key: workflowKey, actor: w.actor,
-      input: { alert_id: alert.alert_id, title: `Investigate ${alert.alert_id}` },
+      input: { alert_id: row.alert_id, title: `Investigate ${row.alert_id}` },
       prefer_project_copy: true,
     });
     setBusy(false);
     if (!r.ok) { setMsg({ ok: false, text: r.error ? String(r.error) : "The investigation did not start." }); return; }
     const data = (r.data ?? {}) as { run?: { id?: string }; id?: string; run_id?: string };
     const runId = data.run?.id ?? data.run_id ?? data.id ?? null;
-    setMsg({ ok: true, text: `Investigating ${alert.alert_id}.`, href: runId ? kgRunHref({ workflow_run_id: runId }) : null });
+    setMsg({ ok: true, text: `Investigating ${row.alert_id}.`, href: runId ? kgRunHref({ workflow_run_id: runId }) : null });
     onStarted();
   };
 
-  const status = alert.case_status ? (STATUS_WORDS[alert.case_status] ?? alert.case_status) : "Not investigated";
+  const nodeId = alert?.node_id ?? null;
   return (
     <li className="kg-doc-clause" data-testid="kg-aml-alert">
-      {alert.node_id
-        ? <a className="inf-link kg-doc-clause-section" href={kgNodeHref(alert.node_id)} data-testid="kg-aml-alert-link">{alert.alert_id}</a>
-        : <span className="kg-doc-clause-section">{alert.alert_id}</span>}
-      <span className="kg-doc-clause-text">{alert.rule} on {alert.account_id} ({alert.customer_id}), raised {alert.raised_at}</span>
-      <span className="kg-quiet" data-testid="kg-aml-alert-status">{status}</span>
+      {nodeId
+        ? <a className="inf-link kg-doc-clause-section" href={kgNodeHref(nodeId)} data-testid="kg-aml-alert-link" title={row.alert_id}>{row.customer_name}</a>
+        : <span className="kg-doc-clause-section" title={row.alert_id}>{row.customer_name}</span>}
+      <span className="kg-doc-clause-text">{row.account_label} — {row.rule_text || row.rule}, risk score {row.score}, {row.flagged_count} flagged transaction{row.flagged_count === 1 ? "" : "s"}, raised {row.raised_at}</span>
+      <span className="kg-quiet" data-testid="kg-aml-alert-status">{row.status_label}</span>
       <span className="kg-doc-check">
         <GatedButton permission={SCAN_START} className="ag-btn" data-testid="kg-aml-investigate"
-                     disabled={archived || busy || !alert.node_id}
-                     title={`Start the AML alert investigation for ${alert.alert_id}`}
+                     disabled={archived || busy || !nodeId}
+                     title={`Start the AML alert investigation for ${row.customer_name}`}
                      onClick={() => void start()}>Investigate</GatedButton>
         {msg ? (
           <span className={msg.ok ? "kg-ok" : "kg-inline-err"} role={msg.ok ? "status" : "alert"} data-testid="kg-aml-investigate-msg">
@@ -94,13 +89,16 @@ export function AmlSample({ projectId, actor, archived = false, onLoaded }: {
     onLoaded?.();
   };
 
+  const byAlertId = useMemo(() => new Map((sample?.alerts ?? []).map((a) => [a.alert_id, a])),
+                            [sample]);
   if (!sample) return null;
+  const screen = sample.problem_screen;
   return (
     <section className="kg-doc" data-testid="kg-aml-sample" aria-label="AML sample">
       <div className="kg-doc-row">
         <span className="kg-doc-pack-label">AML sample</span>
         <span className="kg-doc-pack-value" data-testid="kg-aml-sample-state">
-          {sample.loaded ? "NorthPeak Lending's synthetic bank is loaded: 3 open alerts" : "Not loaded"}
+          {sample.loaded ? `NorthPeak Lending's synthetic bank is loaded: ${screen.summary}` : "Not loaded"}
         </span>
         <GatedButton permission={DOCUMENT_MANAGE} className="ag-btn" data-testid="kg-aml-load" disabled={archived || busy}
                      title="Load NorthPeak Lending's synthetic customers, accounts, transactions and alerts, the banking-aml pack and its connectors"
@@ -109,13 +107,16 @@ export function AmlSample({ projectId, actor, archived = false, onLoaded }: {
         </GatedButton>
         {msg ? <span className={msg.ok ? "kg-ok" : "kg-inline-err"} role={msg.ok ? "status" : "alert"} data-testid="kg-aml-load-msg">{msg.text}</span> : null}
       </div>
-      {sample.loaded ? (
+      {sample.loaded && screen.state === "ok" ? (
         <ul className="kg-doc-clause-list" data-testid="kg-aml-alerts">
-          {sample.alerts.map((alert) => (
-            <AlertRow key={alert.alert_id} w={w} alert={alert} workflowKey={sample.workflow_key}
-                      archived={archived} onStarted={() => void read()} />
+          {screen.alerts.map((row) => (
+            <AlertRow key={row.alert_id} w={w} row={row} alert={byAlertId.get(row.alert_id)}
+                      workflowKey={sample.workflow_key} archived={archived} onStarted={() => void read()} />
           ))}
         </ul>
+      ) : null}
+      {sample.loaded && screen.state === "error" ? (
+        <span className="kg-inline-err" role="alert" data-testid="kg-aml-sample-error">{screen.error}</span>
       ) : null}
     </section>
   );

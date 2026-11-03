@@ -373,7 +373,10 @@ def aml_sample_status(project_id: str = Query(...), actor: str = Query(...)) -> 
     try:
         with begin(_engine) as connection:
             _actor(connection, project_id, actor, READ)
-            return aml_sample.status(connection, project_id=project_id)
+            found = aml_sample.status(connection, project_id=project_id)
+            found["problem_screen"] = aml_sample.build_problem_screen(
+                connection, project_id=project_id)
+            return found
     except Exception as error:  # noqa: BLE001
         raise _http(error) from error
 

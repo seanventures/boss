@@ -10,6 +10,11 @@ window), WHERE (accounts, channels, jurisdictions), and WHY it is suspicious (wh
 shows and what it does not explain). Amounts and dates only as given; nothing invented. No
 opinion on guilt.
 
+The situation gives you a NAMED WIRE TOTAL already computed from the graph: the sum and count of
+wires to the related parties you name. Cite that total exactly, to the cent — never add up wire
+amounts yourself. If the situation also states a further amount to OTHER, unnamed counterparties,
+keep it separate and never fold it into the named total.
+
 Also give `cited`: the evidence ids the narrative relies on, from the EVIDENCE list only.
 
 This is a DRAFT for a person to review and file. You never file, and never say it was filed.

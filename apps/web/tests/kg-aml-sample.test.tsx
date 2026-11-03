@@ -24,10 +24,27 @@ const alert = (id: string, extra: Record<string, unknown> = {}) => ({
   customer_id: "CUST-0007", rule: "FANOUT-01", raised_at: "2026-10-23", case_id: null,
   case_status: null, determination: null, ...extra,
 });
+const row = (id: string, name: string, extra: Record<string, unknown> = {}) => ({
+  alert_id: id, customer_name: name, account_label: "Business Checking",
+  rule: "FANOUT-01", rule_text: "Rapid fan-out of outbound payments.", score: 0.81,
+  flagged_count: 11, raised_at: "2026-10-23", status: "open", status_label: "Open",
+  is_open: true, ...extra,
+});
 const NOT_LOADED = { loaded: false, pack_id: null, workflow_key: "aml_alert_investigation",
-                     alerts: [{ ...alert("ALERT-1"), node_id: null }] };
+                     alerts: [{ ...alert("ALERT-1"), node_id: null }],
+                     problem_screen: { title: "AML alerts to review", state: "empty",
+                                       summary: "No AML alerts are loaded.", alerts: [],
+                                       open_count: 0 } };
 const LOADED = { loaded: true, pack_id: "banking-aml", workflow_key: "aml_alert_investigation",
-                 alerts: [alert("ALERT-1", { case_status: "closed_false_positive" }), alert("ALERT-2")] };
+                 alerts: [alert("ALERT-1", { case_status: "closed_false_positive" }), alert("ALERT-2")],
+                 problem_screen: { title: "AML alerts to review", state: "ok",
+                                   summary: "1 of 2 alerts still open.",
+                                   alerts: [
+                                     row("ALERT-1", "Harbor Point Cafe LLC",
+                                         { status: "closed_false_positive",
+                                           status_label: "Closed False Positive", is_open: false }),
+                                     row("ALERT-2", "NorthPeak Catering Co"),
+                                   ], open_count: 1 } };
 
 function Docs() {
   return <DocumentsTab projectId="northpeak-lending" actor="ceo" />;
@@ -53,7 +70,25 @@ describe("Documents tab: AML sample", () => {
       project_id: "northpeak-lending", actor: "ceo", step_up: "confirmed" });
     expect($$('[data-testid="kg-aml-alert"]').length).toBe(2);
     expect($$('[data-testid="kg-aml-alert-status"]').map((e) => e.textContent)).toEqual([
-      "Closed as a false positive", "Not investigated"]);
+      "Closed False Positive", "Open"]);
+    const stateText = $('[data-testid="kg-aml-sample-state"]')?.textContent ?? "";
+    expect(stateText).toContain("1 of 2 alerts still open.");
+  });
+
+  it("renders from the problem screen: no raw ids, and the header count matches open rows", async () => {
+    mockKgFetch({
+      "/v1/knowledge/packs$": { body: PACKS },
+      "/v1/knowledge/documents$": { body: { documents: [] } },
+      "/v1/knowledge/samples/aml$": { body: LOADED },
+    });
+    await mount(<Docs />);
+    const rowText = $$('[data-testid="kg-aml-alert"]').map((e) => e.textContent ?? "").join(" ");
+    expect(rowText).not.toMatch(/\bCUST-\d+\b/);
+    expect(rowText).not.toMatch(/\bACC-\d+\b/);
+    expect(rowText).toContain("Harbor Point Cafe LLC");
+    expect(rowText).toContain("Business Checking");
+    const openRows = LOADED.problem_screen.alerts.filter((a) => a.is_open).length;
+    expect($('[data-testid="kg-aml-sample-state"]')?.textContent).toContain(`${openRows} of`);
   });
 
   it("Investigate starts aml_alert_investigation with that alert and links the run", async () => {
