@@ -54,13 +54,20 @@ from sqlalchemy import text
 from .principal import AuthContext, PrincipalKind
 
 #: The decision kinds a person may delegate. Anything else is out of scope (403).
-DELEGABLE_KINDS = ("prd", "architecture", "workflow_gate", "merge_to_release_branch")
+DELEGABLE_KINDS = ("prd", "architecture", "workflow_gate", "merge_to_release_branch", "build_plan")
 KIND_LABELS = {
     "prd": "PRD approvals",
     "architecture": "Architecture approvals",
     "workflow_gate": "Other workflow gates (not deploys)",
     "merge_to_release_branch": "Merges into the project's release branch",
+    # A BUILD'S PLAN, before it writes code (operator, 2026-11-03: "I'd have approved at least
+    # 20-25 tasks, please do it yourself"). Plan approvals were kind `general` and never
+    # delegable, so every sensitive-area build waited on the one person who could press Approve.
+    "build_plan": "Build plans, before a build writes code (never identity, security or permissions)",
 }
+#: A build plan whose sensitive areas include one of these stays the person's (hard_limit).
+_PLAN_AREAS_NEVER_DELEGATED = frozenset({"identity", "security", "secret", "secrets", "credential",
+                                         "credentials", "permission", "permissions", "auth"})
 MAX_DAYS = 90
 DEFAULT_DAYS = 30
 MAX_DAILY_CAP = 1000
@@ -293,6 +300,13 @@ def hard_limit(db: Any, row: Mapping[str, Any]) -> Optional[tuple[str, str]]:
                 and _word((rec.get("args") or {}).get("kind")) == "security_review")):
         return ("governance_never_delegated",
                 "A delegate never approves an identity, security or settings change. The person decides it.")
+    if raw_action == "resume_code_task":
+        areas = {str(a).strip().lower() for a in (rec.get("sensitive") or ())}
+        touched = sorted(areas & _PLAN_AREAS_NEVER_DELEGATED)
+        if touched:
+            return ("governance_never_delegated",
+                    f"This build's plan touches {', '.join(touched)}. A delegate never approves "
+                    "an identity, security or permissions change. The person decides it.")
     if raw_action in _MAIN_MERGE_ACTIONS:
         return ("main_merge_never_delegated",
                 "A delegate never merges to main or the default branch. The person decides it.")
@@ -324,6 +338,8 @@ def kind_for(row: Mapping[str, Any]) -> Optional[str]:
     if kind == "workflow_gate":
         step = _word(rec.get("step_id")) + " " + _word(rec.get("capability"))
         return "prd" if "prd" in step else "workflow_gate"
+    if action == "resume_code_task" and rec.get("plan") is not None:
+        return "build_plan"
     return None
 
 
