@@ -254,8 +254,8 @@ def load_sample(connection: Connection, *, project_id: str, actor: str) -> dict[
             "workflow": installed, "people": [p[0] for p in people], "policy": policy,
             "note": (f"Loaded {BANK}'s AML sample: {counts['customer']} customers, "
                      f"{counts['account']} accounts, {len(ds.transactions)} transactions "
-                     f"(in the transactions connector), 3 open alerts. Start "
-                     f"{WORKFLOW_KEY} with an alert to investigate it.")}
+                     f"(in the transactions connector), 3 open alerts. Press Investigate on an "
+                     "alert to start an investigation.")}
 
 
 def _install_workflow(connection: Connection, project_id: str, actor: str) -> dict[str, Any]:
