@@ -19,6 +19,7 @@ import { isAreaId } from "../lib/area-ids";
 import { displayTitle } from "../lib/directive-subject";
 import { SubmitButton } from "./submit-button";
 import { formatDateTime as formatDateTimeShared } from "../lib/datetime";
+import { sentenceCut } from "../lib/decision-excerpt";
 import {
   DEFAULT_DECISION_INBOX_FILTER,
   DECISION_INBOX_EMPTY_HOWTO,
@@ -37,6 +38,29 @@ import type { TaskFeedItem } from "../lib/tasks";
 import { ChangeSetApproval, isChangeSetDecision } from "./multirepo/change-set-approval";
 import { SelfFixCard, cardOf, isSelfFixDecision } from "./self-fix/approval-card";
 import { MonitoringPackCard, monitoringPackOf } from "./workflows/monitoring-pack";
+
+/**
+ * A decision-card excerpt (output/evidence/why) that never cuts mid-word or mid-sentence
+ * (AML video polish [7]): short text renders whole, long text cuts at a sentence boundary with
+ * an in-place "Show all" control that toggles the full text and its own aria-expanded state.
+ */
+export function DecisionCardExcerpt({ text, testid, as: As = "p" }: {
+  text: string; testid: string; as?: "p" | "span";
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const { text: excerpt, cut } = sentenceCut(text, 600);
+  return (
+    <>
+      <As data-testid={testid}>{expanded || !cut ? text : excerpt}</As>
+      {cut ? (
+        <button type="button" className="dq-excerpt-toggle" data-testid={`${testid}-toggle`}
+                aria-expanded={expanded} onClick={() => setExpanded((prev) => !prev)}>
+          {expanded ? "Show less" : "Show all"}
+        </button>
+      ) : null}
+    </>
+  );
+}
 
 function formatMicros(amount: unknown): string {
   if (typeof amount !== "number") {
@@ -854,6 +878,8 @@ function DecisionInboxRow({
   // recommendation.gate): two alerts at one gate read identically, and its guidance said the
   // recommendation was "above" with nothing above it.
   const gateCard = workflowGateCard(rec);
+  // AML VIDEO POLISH [7]: scoped to the AML gate card — other workflows' excerpts are unchanged.
+  const isAmlGateCard = gateCard?.workflowName === "AML Alert Investigation";
 
   // ONE APPROVAL FOR A MULTI-REPO CHANGE: its own card (every PR, review, cross-repo check, cost,
   // rollback) and the three answers the engine offers for a set; no per-PR approval.
@@ -933,7 +959,11 @@ function DecisionInboxRow({
               the work it was about may have moved on.
             </p>
           ) : null}
-          {refusal ? null : (
+          {refusal ? null : isAmlGateCard && why ? (
+            <div className="dq-rationale" data-testid="decision-subtitle">
+              <DecisionCardExcerpt text={why} testid="dq-evidence-excerpt" />
+            </div>
+          ) : (
             <p className="dq-rationale" data-testid="decision-subtitle">
               {why || (preview ? previewLead(preview) : formatRecommendation(decision))}
             </p>
@@ -949,7 +979,11 @@ function DecisionInboxRow({
                         ? `From “${gateCard.producedByTitle}”`
                         : "What the run produced"}
                   </span>
-                  <p>{gateCard.summary}</p>
+                  {isAmlGateCard ? (
+                    <DecisionCardExcerpt text={gateCard.summary} testid="dq-output-excerpt" />
+                  ) : (
+                    <p>{gateCard.summary}</p>
+                  )}
                 </>
               ) : null}
               {gateCard.runId ? (
@@ -1035,7 +1069,12 @@ function DecisionInboxRow({
           {/* Prose in the body font: a paragraph of guidance set as a mono chip read as a log. */}
           {reasonInWords(decision.reason) ? (
             <p className="dq-why" data-testid="decision-reason">
-              <span className="dq-why-label">Why</span> {reasonInWords(decision.reason)}
+              <span className="dq-why-label">Why</span>{" "}
+              {isAmlGateCard ? (
+                <DecisionCardExcerpt text={reasonInWords(decision.reason)} testid="dq-why-excerpt" as="span" />
+              ) : (
+                reasonInWords(decision.reason)
+              )}
             </p>
           ) : null}
           {isPending && refusal && guidance ? (
