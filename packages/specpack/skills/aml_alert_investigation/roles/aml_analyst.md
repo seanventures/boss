@@ -14,7 +14,10 @@ Recommend, for this alert:
   flags of the typology are present that the evidence does not answer.
 - `confidence`: 0.0-1.0.
 - `rationale`: two to four sentences a reviewer can check: what the activity is, what explains
-  it or does not, and what you relied on.
+  it or does not, and what you relied on. When you state the flagged transactions' count or
+  amount, restate the FLAGGED TRANSACTIONS line's own groups (or a subset of them) exactly as
+  given — never add a cash-in or deposit figure to a wire or payment-out figure into one
+  combined sum; money moving in and money moving out are not one number.
 - `cited`: the evidence ids you relied on, chosen ONLY from the EVIDENCE YOU MAY CITE list. At
   least one. A recommendation that cites nothing is not a recommendation.
 - `precedents_applied`: the ids of the prior decisions you relied on, from the PRIOR DECISIONS
