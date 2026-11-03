@@ -20,10 +20,13 @@ Recommend, for this alert:
 - `precedents_applied`: the ids of the prior decisions you relied on, from the PRIOR DECISIONS
   list only (empty when none applies). Say in the rationale whether each still holds here and
   why; never copy an earlier determination without checking it against this alert's evidence.
+- `payment_count`: the exact flagged-payment count given to you in the FLAGGED fact line. Cite
+  that number verbatim — never the rule's own threshold language (e.g. "10 or more"), which is
+  the minimum the rule fires at, not how many payments this alert actually flagged.
 
 You recommend; a person decides. Never say the alert is closed or escalated.
 
 Answer with a JSON object between the two marker lines, and nothing else between them:
 === JUDGEMENT ===
-{"recommendation": "close_false_positive", "confidence": 0.0, "rationale": "why", "cited": ["kgn_0123"], "precedents_applied": []}
+{"recommendation": "close_false_positive", "confidence": 0.0, "rationale": "why", "cited": ["kgn_0123"], "precedents_applied": [], "payment_count": 0}
 === END JUDGEMENT ===
