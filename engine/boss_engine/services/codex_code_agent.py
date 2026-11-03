@@ -182,8 +182,13 @@ class CodexCodeAgent(GenericCliCodeAgent):
 
         binary = self._resolve_binary()
         common = ["--skip-git-repo-check", "--json", "--output-last-message", final_path]
-        if model:
+        from .model_router.compat import fits
+
+        if model and fits("codex", model):
             common += ["--model", model]
+        elif model:
+            # THE LAST LINE (model_router.compat): a Claude/Gemini name never reaches codex.
+            _log.warning("codex cannot run model %s; using its own default", model)
         effort = EFFORT_TO_CODEX.get(str(_current_effort() or "").lower())
         if effort:
             common += ["-c", f'model_reasoning_effort="{effort}"']

@@ -1293,7 +1293,16 @@ class GenericCliCodeAgent:
         # order decide whether a reviewer can edit the code it is reviewing.
         argv += list(self.spec.read_only_args if read_only else self.spec.write_args)
         if model and self.spec.model_flag:
-            argv += [self.spec.model_flag, model]
+            from .model_router.compat import fits
+
+            # THE LAST LINE (model_router.compat): another engine's model never reaches this
+            # CLI's command line — it would fail every step ("There's an issue with the selected
+            # model (gpt-6-sol)", boss-1 2026-11-03). The engine's own default runs instead.
+            if fits(self.spec.name, model):
+                argv += [self.spec.model_flag, model]
+            else:
+                _log.warning("%s cannot run model %s; using its own default", self.spec.name,
+                             model)
         if self.spec.prompt_via == "argv":
             argv.append(f"{self.spec.prompt_prefix}{prompt}" if self.spec.prompt_prefix
                         else prompt)

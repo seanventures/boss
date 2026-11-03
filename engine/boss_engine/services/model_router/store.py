@@ -557,10 +557,28 @@ def route(connection: Any, settings: Any, request: RouteRequest, *,
             from .policy import Target
 
             request = replace(request, session_pin=Target(prior["engine"], prior.get("model")))
-    decision = ROUTER.route(request, snap, ledger=ledger)
+    decision = _fit_model(ROUTER.route(request, snap, ledger=ledger))
     if record_it and connection is not None:
         record(connection, decision)
     return decision
+
+
+def _fit_model(decision: RouteDecision) -> RouteDecision:
+    """EVERY ROUTE NAMES A MODEL ITS ENGINE CAN RUN (model_router.compat). Smart and Fixed both
+    come through here, so a pin, a session, a profile or a lane that pairs an engine with
+    another engine's model is corrected once, said in the route's why, and recorded as such."""
+    from dataclasses import replace
+
+    from .compat import fitted
+
+    if not decision.engine:
+        return decision
+    model, why = fitted(decision.engine, decision.model, decision.tier)
+    if why is None:
+        return decision
+    return replace(decision, model=model, why=(*decision.why, why),
+                   reason=f"{decision.reason} · {why}" if decision.reason else why,
+                   rules=(*decision.rules, "model_fit"))
 
 
 #: The kinds of call an agent makes as itself (its role is an agent's role_key).

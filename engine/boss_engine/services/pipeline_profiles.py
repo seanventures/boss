@@ -483,6 +483,21 @@ def materialize_route(
     # for. An explicit per-step pin in model_config still wins over both.
     #
     # Empty lane model changes nothing: the expression falls through to exactly what it was.
+    #
+    # BUT ONLY A MODEL OF THE ENGINE THAT WAS CHOSEN (boss-1, 2026-11-03): with Build on
+    # Codex · gpt-6-sol and Routine work on Claude Code · sonnet, the engine came from the
+    # low-cost class and the model from Build, and every implement step launched
+    # `claude --model gpt-6-sol`. A knob's model goes with that knob's engine: the lane model
+    # applies when the lane's engine runs the step, the class model when the class's engine
+    # does (or when the class names a model and no engine — the pre-B2 behaviour).
+    from .model_router.compat import fits
+
     lane_model = (review_model if route.get("lane") == "review" else build_model) or None
-    model = route.get("model") or lane_model or class_model
-    return engine_name, model
+    chosen = str(engine_name or "").lower()
+    lane_engine = str(lane_default or "").lower()
+    picked = (route.get("model")
+              or (lane_model if chosen == lane_engine else None)
+              or (class_model if class_engine is None or chosen == class_engine else None))
+    # The last word: whatever was picked, a model of another engine's family runs as the chosen
+    # engine's own default instead of failing at launch.
+    return engine_name, (picked if fits(engine_name, picked) else None)

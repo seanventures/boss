@@ -530,8 +530,13 @@ class ClaudeCliAdapter(CliChatBrain):
         if system_prompt is not None:
             cmd += ["--system-prompt", system_prompt]
         model = self.model_override or getattr(self.settings, "claude_cli_model", None)
-        if model:
+        from .model_router.compat import fits
+
+        if model and fits("claude_code", model):
             cmd += ["--model", model]
+        elif model:
+            # THE LAST LINE (model_router.compat): an OpenAI/Gemini name never reaches claude.
+            _log.warning("claude cannot run model %s; using its own default", model)
         return cmd, via_stdin
 
     def _timeouts(self) -> tuple[float, int]:
