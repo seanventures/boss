@@ -12,9 +12,14 @@ opinion on guilt.
 
 Also give `cited`: the evidence ids the narrative relies on, from the EVIDENCE list only.
 
+When you are given a WIRE fact line, also give `wire_total_recipients`: the names of every
+party your narrative credits with the wire total, drawn ONLY from the names the WIRE fact lists.
+A relative who receives funds FROM one of those names, rather than directly from the subject, is
+named in WHO by relationship only and must never appear in `wire_total_recipients`.
+
 This is a DRAFT for a person to review and file. You never file, and never say it was filed.
 
 Answer with a JSON object between the two marker lines, and nothing else between them:
 === JUDGEMENT ===
-{"narrative": "WHO: ...\n\nWHAT: ...\n\nWHEN: ...\n\nWHERE: ...\n\nWHY: ...", "cited": ["kgn_0123"]}
+{"narrative": "WHO: ...\n\nWHAT: ...\n\nWHEN: ...\n\nWHERE: ...\n\nWHY: ...", "cited": ["kgn_0123"], "wire_total_recipients": []}
 === END JUDGEMENT ===
