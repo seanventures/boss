@@ -260,6 +260,36 @@ def test_p1_named_wire_total_excludes_payments_to_parties_the_draft_does_not_nam
         "outbound payment on the account")
 
 
+def test_p1_wire_total_reports_no_other_payments_when_every_wire_is_named(loaded):
+    """A7 inverse of the exclusion test: when the named parties cover every outbound wire on the
+    account, `other_count` must be 0 and the narrator's wire line must omit the "further ...
+    not named above" sentence instead of reporting a spurious zero-dollar other bucket."""
+    c, project, _ = loaded
+    account = aml_sample.node_id_of(c, project, "account", data.MARLOW_ACCOUNT)
+    named_ids = {aml_sample.node_id_of(c, project, "counterparty", s)
+                 for s in ("CP-0101", "CP-0102", "CP-0103", "CP-0010")}
+    wires = pipeline._named_wire_total(c, project, account, named_ids)
+    assert wires["named_count"] > 0
+    assert wires["other_total"] == 0.0 and wires["other_count"] == 0, (
+        "naming every counterparty the account wired to must leave nothing in the other bucket")
+
+
+def test_p1_wire_total_reports_none_found_when_account_has_no_outbound_wires(loaded):
+    """A7 boundary: an account with no outbound `transfers_to` edges at all (or no account node
+    id) must report a zero/zero total, never raise or silently fold in unrelated edges."""
+    c, project, _ = loaded
+    named_ids = {aml_sample.node_id_of(c, project, "counterparty", "CP-0101")}
+
+    wires = pipeline._named_wire_total(c, project, "", named_ids)
+    assert wires == {"named_total": 0.0, "named_count": 0, "other_total": 0.0, "other_count": 0}
+
+    other_account = aml_sample.node_id_of(c, project, "account", data.MARLOW_ACCOUNT)
+    c.execute(text("UPDATE kg_edges SET valid_to = now() WHERE project_id = :p "
+                   "AND kind = 'transfers_to' AND src_id = :a"), {"p": project, "a": other_account})
+    wires = pipeline._named_wire_total(c, project, other_account, named_ids)
+    assert wires == {"named_total": 0.0, "named_count": 0, "other_total": 0.0, "other_count": 0}
+
+
 def test_p0_three_alert_walk_completes_through_its_gates_with_two_different_people(loaded,
                                                                                     monkeypatch):
     """The end-to-end acceptance walk: ALERT-1 closed as a false positive, ALERT-2 closed by
