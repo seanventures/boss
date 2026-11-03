@@ -137,7 +137,7 @@ def test_no_pick_is_the_operators_order(monkeypatch):
 
 def test_both_claude_codes_are_offered_for_every_model(monkeypatch):
     monkeypatch.setattr(setup_view, "_offered_models", lambda engine, model: ["sonnet", "opus"])
-    opts = setup_view._claude_options({"claude_picks": ["sub", "key"], "model": None})
+    opts = setup_view._picked_options("claude_code", {"picks": ["sub", "key"], "model": None})
     assert [(o["model"], o["label"], o["metered"]) for o in opts] == [
         ("sub:sonnet", "Claude Code · subscription · sonnet", False),
         ("sub:opus", "Claude Code · subscription · opus", False),
@@ -153,7 +153,7 @@ def test_only_the_connected_credential_is_offered(monkeypatch):
                                          "has_key": False})
     by_engine = _entries()
     setup_view._say_which_claude_credential(None, object(), "p", by_engine)
-    assert by_engine["claude_code"]["claude_picks"] == ["sub"]
+    assert by_engine["claude_code"]["picks"] == ["sub"]
 
 
 def test_the_cli_harness_gets_the_bare_model_and_keeps_the_pick():
@@ -172,3 +172,58 @@ def test_resolve_for_pick_is_the_one_resolution_and_nothing_else():
 
     src = inspect.getsource(claude_credential.resolve_for_pick)
     assert "resolve_claude_credential(" in src and "_stored_key(" not in src
+
+
+# ── Codex: the same toggle (subscription = the ChatGPT login file; API key = OPENAI_API_KEY) ──
+
+def test_codex_on_the_subscription_never_sees_an_api_key(tmp_path):
+    from boss_engine.services.cli_harness import apply_codex_pick
+
+    env = {"OPENAI_API_KEY": "k", "CODEX_API_KEY": "k2", "CODEX_HOME": str(tmp_path)}
+    apply_codex_pick(env, "sub", home=str(tmp_path), resolve_secret=lambda n: None)
+    assert "OPENAI_API_KEY" not in env and "CODEX_API_KEY" not in env
+    assert env["CODEX_HOME"] == str(tmp_path), "the login file's home is kept"
+
+
+def test_codex_on_the_key_runs_in_a_home_with_no_login_file(tmp_path):
+    from boss_engine.services.cli_harness import apply_codex_pick
+
+    home = tmp_path / "codex"
+    home.mkdir()
+    (home / "auth.json").write_text("{}")
+    (home / "config.toml").write_text("model = 'x'\n")
+    env = {}
+    apply_codex_pick(env, "key", home=str(home), resolve_secret=lambda n: "stored-key")
+    key_home = tmp_path / "codex-apikey"
+    assert env["CODEX_HOME"] == str(key_home) and env["OPENAI_API_KEY"] == "stored-key"
+    assert not (key_home / "auth.json").exists(), "the subscription cannot be used by accident"
+    assert (key_home / "config.toml").read_text() == "model = 'x'\n"
+
+
+def test_codex_on_the_key_with_no_key_is_a_clear_refusal(tmp_path):
+    from boss_engine.services.cli_harness import CliHarnessUnavailable, apply_codex_pick
+
+    with pytest.raises(CliHarnessUnavailable, match="no OpenAI API key is connected"):
+        apply_codex_pick({}, "key", home=str(tmp_path), resolve_secret=lambda n: None)
+
+
+def test_codex_offers_both_only_when_an_openai_key_is_held(monkeypatch):
+    monkeypatch.setattr(claude_credential, "describe", lambda c, s, p: {"active": "subscription"})
+
+    class S:
+        openai_api_key = ""
+
+    by_engine = _entries()
+    setup_view._say_which_claude_credential(None, S(), "p", by_engine)
+    assert "picks" not in by_engine["codex"]
+    by_engine = {**_entries(), "native": {"label": "OpenAI", "kind": "metered"}}
+    setup_view._say_which_claude_credential(None, S(), "p", by_engine)
+    assert by_engine["codex"]["picks"] == ["sub", "key"]
+    monkeypatch.setattr(setup_view, "_offered_models", lambda e, m: ["gpt-6-sol"])
+    labels = [o["label"] for o in setup_view._picked_options("codex", by_engine["codex"])]
+    assert labels == ["Codex · subscription · gpt-6-sol", "Codex · API key · gpt-6-sol"]
+
+
+def test_a_pick_fits_claude_and_codex_but_no_other_engine():
+    assert fits("codex", "key:gpt-6-sol") and fits("codex", "sub:gpt-6-sol")
+    assert not fits("native", "key:gpt-6-sol") and not fits("gemini", "sub:gemini-3-pro")

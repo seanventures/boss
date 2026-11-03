@@ -212,6 +212,11 @@ class CodexCodeAgent(GenericCliCodeAgent):
         # The same checks as every CLI session (a tripped harness, read-only, the login).
         self._preflight(read_only=read_only,
                         read_only_by_copy=bool(_ignored.get("_contract_read_only_copy")))
+        from .claude_credential import split_pick
+
+        # The job's credential choice ("sub:"/"key:" on its model): _env applies it, the CLI
+        # gets the bare model name.
+        self._pick, model = split_pick(model)
         # ONE environment per session: each `_env()` issues a model-proxy run token, and the
         # billing stamp reads the same env the child ran with. An API key reaches the child
         # only as a run token (model_proxy), so its presence is what says "metered".

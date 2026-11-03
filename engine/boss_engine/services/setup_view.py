@@ -960,10 +960,11 @@ def _jobs(connection: Connection, settings: Any, project_id: str,
             for engine, entry in by_engine.items():
                 if job == "chat" and engine not in CHAT_ROUTABLE:
                     continue
-                if engine == "claude_code" and entry.get("claude_picks"):
-                    # BOTH CLAUDE CODES, side by side: each model on the subscription and on the
-                    # API key, so one job can take one and another job the other.
-                    options.extend(_claude_options(entry))
+                if entry.get("picks"):
+                    # BOTH WAYS TO PAY, side by side (Claude Code, Codex): each model on the
+                    # subscription and on the API key; the console folds them into one entry
+                    # per model with a toggle (lib/job-picks), and each job takes either.
+                    options.extend(_picked_options(engine, entry))
                     continue
                 for name in _offered_models(engine, entry.get("model")):
                     options.append(_option(engine, name, entry))
@@ -982,13 +983,13 @@ def _jobs(connection: Connection, settings: Any, project_id: str,
             picked = None
         if picked is not None and picked.engine:
             name = _source_label(picked.engine, picked.source_id, models)
-            label = (claude_choice_label(picked.model) if picked.engine == "claude_code" else None) \
+            label = claude_choice_label(picked.model, picked.engine) \
                 or (f"{name} · {picked.model}" if picked.model else name)
             resolved = {"engine": picked.engine, "model": picked.model,
                         "label": label if choice else f"Auto · {name}", "why": picked.why,
                         "source_id": picked.source_id}
         metered = bool(picked and picked.metered)
-        if picked is not None and picked.engine == "claude_code":
+        if picked is not None and picked.engine in PICK_NAMES:
             from .claude_credential import PICK_KEY, PICK_SUBSCRIPTION, split_pick
 
             pick = split_pick(picked.model)[0]
@@ -1051,7 +1052,7 @@ def _say_which_claude_credential(connection: Connection, settings: Any, project_
         # Which credentials a job may pick for itself (both, when both are connected).
         picks = [p for p, ok in ((claude_credential.PICK_SUBSCRIPTION, cred.get("has_subscription")),
                                  (claude_credential.PICK_KEY, cred.get("has_key"))) if ok]
-        by_engine["claude_code"] = claude = {**claude, "claude_picks": picks}
+        by_engine["claude_code"] = claude = {**claude, "picks": picks}
     if claude is not None and active:
         on_sub = active in (claude_credential.KIND_SUBSCRIPTION, claude_credential.KIND_CLI_LOGIN)
         by_engine["claude_code"] = {
@@ -1060,6 +1061,14 @@ def _say_which_claude_credential(connection: Connection, settings: Any, project_
     sdk = by_engine.get("claude_agent_sdk")
     if sdk is not None:
         by_engine["claude_agent_sdk"] = {**sdk, "label": CLAUDE_SDK_ON_KEY, "kind": "metered"}
+    # CODEX TOO: its subscription (the ChatGPT login) and an OpenAI API key, when both are held
+    # (cli_harness.apply_codex_pick runs each job on the one it picked).
+    codex = by_engine.get("codex")
+    has_openai_key = "native" in by_engine or bool(
+        str(getattr(settings, "openai_api_key", "") or "").strip())
+    if codex is not None and has_openai_key:
+        by_engine["codex"] = {**codex, "picks": [claude_credential.PICK_SUBSCRIPTION,
+                                                  claude_credential.PICK_KEY]}
 
 
 def _source_label(engine: str, source_id: Optional[str], models: list[dict[str, Any]]) -> str:
@@ -1079,27 +1088,32 @@ def _resolves_to(resolved: dict[str, Any], entry: dict[str, Any]) -> bool:
         not resolved.get("source_id") or entry["source"] == "install")
 
 
-def _claude_options(entry: dict[str, Any]) -> list[dict[str, Any]]:
+PICK_NAMES = {"claude_code": (CLAUDE_ON_SUBSCRIPTION, CLAUDE_CODE_ON_KEY),
+              "codex": ("Codex · subscription", "Codex · API key")}
+
+
+def _picked_options(engine: str, entry: dict[str, Any]) -> list[dict[str, Any]]:
     from .claude_credential import PICK_SUBSCRIPTION, with_pick
 
+    on_sub, on_key = PICK_NAMES[engine]
     out = []
-    for pick in entry["claude_picks"]:
-        name = CLAUDE_ON_SUBSCRIPTION if pick == PICK_SUBSCRIPTION else CLAUDE_CODE_ON_KEY
-        for model in _offered_models("claude_code", entry.get("model")):
-            out.append({"engine": "claude_code", "model": with_pick(pick, model),
+    for pick in entry["picks"]:
+        name = on_sub if pick == PICK_SUBSCRIPTION else on_key
+        for model in _offered_models(engine, entry.get("model")):
+            out.append({"engine": engine, "model": with_pick(pick, model),
                         "label": f"{name} · {model}" if model else name,
                         "metered": pick != PICK_SUBSCRIPTION})
     return out
 
 
-def claude_choice_label(model: Optional[str]) -> Optional[str]:
+def claude_choice_label(model: Optional[str], engine: str = "claude_code") -> Optional[str]:
     """"Claude Code · API key · opus" for a stored "key:opus"; None when it carries no pick."""
     from .claude_credential import PICK_SUBSCRIPTION, split_pick
 
     pick, bare = split_pick(model)
-    if pick is None:
+    if pick is None or engine not in PICK_NAMES:
         return None
-    name = CLAUDE_ON_SUBSCRIPTION if pick == PICK_SUBSCRIPTION else CLAUDE_CODE_ON_KEY
+    name = PICK_NAMES[engine][0 if pick == PICK_SUBSCRIPTION else 1]
     return f"{name} · {bare}" if bare else name
 
 

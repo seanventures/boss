@@ -37,7 +37,7 @@ import subprocess
 import threading
 import time
 import tomllib
-from typing import Optional
+from typing import Callable, Optional
 
 from . import model_proxy as _model_proxy
 from . import owned_process
@@ -1222,6 +1222,38 @@ class CliHarnessUnavailable(RuntimeError):
 _proxy_scoped = _model_proxy.scoped()
 
 
+def apply_codex_pick(env: dict, pick: Optional[str], *, home: str,
+                     resolve_secret: Callable[[str], Optional[str]]) -> dict:
+    """CODEX ON THE JOB'S OWN CREDENTIAL (operator, 2026-11-03: a subscription/API-key toggle
+    "both for codex and Anthropic"). The subscription is the ChatGPT login file in CODEX_HOME;
+    the API key is OPENAI_API_KEY. With both present the CLI may use either, so:
+
+      sub — no API key in the environment: the login file is the only way in.
+      key — the key, and a CODEX_HOME of its own beside the usual one with NO login file in it
+            (its config copied), so the subscription cannot be used by accident. No key held is
+            a clear refusal, never a silent run on the subscription.
+    """
+    import shutil
+
+    if pick == "sub":
+        env.pop("OPENAI_API_KEY", None)
+        env.pop("CODEX_API_KEY", None)
+    elif pick == "key":
+        key = (env.get("OPENAI_API_KEY") or resolve_secret("OPENAI_API_KEY") or "").strip()
+        if not key:
+            raise CliHarnessUnavailable(
+                "Codex · API key was chosen for this job, but no OpenAI API key is connected. "
+                "Add one in Repo and models, or switch the job to Subscription.")
+        key_home = home.rstrip("/") + "-apikey"
+        os.makedirs(key_home, mode=0o700, exist_ok=True)
+        config = os.path.join(home, "config.toml")
+        if os.path.isfile(config) and not os.path.exists(os.path.join(key_home, "config.toml")):
+            shutil.copyfile(config, os.path.join(key_home, "config.toml"))
+        env["CODEX_HOME"] = key_home
+        env["OPENAI_API_KEY"] = key
+    return env
+
+
 class GenericCliCodeAgent:
     """Drive any coding CLI that edits files in the working directory."""
 
@@ -1282,6 +1314,9 @@ class GenericCliCodeAgent:
             token = self._resolve_secret(self.spec.token_env)
             if token:
                 env[self.spec.token_env] = token
+        if self.spec.name == "codex" and getattr(self, "_pick", None):
+            apply_codex_pick(env, self._pick, home=self.cli_home(),
+                             resolve_secret=self._resolve_secret)
         # A PROVIDER API KEY NEVER REACHES THE CLI (model_proxy): an Anthropic, OpenAI or
         # OpenRouter key passed through above becomes a run token for the loopback proxy, with
         # the base URL the CLI reads. A CLI's own login (a token, an auth file) is untouched.

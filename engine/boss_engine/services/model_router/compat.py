@@ -40,6 +40,10 @@ _PREFIXES: tuple[tuple[str, tuple[str, ...]], ...] = (
 )
 
 
+#: Engines that run on a subscription OR an API key, chosen per job ("sub:"/"key:" on the model).
+PICK_ENGINES = frozenset({"claude_code", "claude_cli", "claude", "codex", "codex_cli"})
+
+
 def engine_family(engine: Optional[str]) -> Optional[str]:
     return ENGINE_FAMILY.get(str(engine or "").strip().lower())
 
@@ -66,8 +70,8 @@ def fits(engine: Optional[str], model: Optional[str]) -> bool:
 
     pick, _ = split_pick(model)
     want, have = engine_family(engine), model_family(model)
-    if pick is not None and want != ANTHROPIC:
-        return False  # a Claude credential choice belongs to a Claude engine only
+    if pick is not None and str(engine or "").strip().lower() not in PICK_ENGINES:
+        return False  # a subscription/API-key choice belongs to an engine that has both
     return want is None or have is None or want == have
 
 

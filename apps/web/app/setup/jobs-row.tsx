@@ -9,6 +9,8 @@ import { GatedButton, useGate } from "../../components/gated";
 import React, { forwardRef, useEffect, useState } from "react";
 import { CaretRight } from "@phosphor-icons/react";
 
+import { foldOptions, PICK_LABEL, PICK_TIP, pickFor, splitPick, withPick, type Pick }
+  from "../../lib/job-picks";
 import { SetupFailure, setupWrite } from "../../lib/setup-client";
 import type { Job, SetupView } from "../../lib/setup-types";
 import { toast, useBoard } from "./parts";
@@ -84,19 +86,25 @@ export function JobLine({ job }: { job: Job }) {
   const [busy, setBusy] = useState(false);
   const [adding, setAdding] = useState(false);
   const none = view.models.length === 0;
-  const value = job.choice ? encode(job.choice.engine, job.choice.model) : "auto";
+  // ONE ENTRY PER MODEL; who pays is the toggle beside the menu (lib/job-picks).
+  const menu = foldOptions(job.options);
+  const chosen = job.choice ? splitPick(job.choice.model) : { pick: null, bare: null };
+  const value = job.choice ? encode(job.choice.engine, chosen.bare) : "auto";
+  const current = job.choice ? menu.find((m) => m.engine === job.choice?.engine && m.bare === chosen.bare) : undefined;
   // What Auto resolves to now, when Auto is what runs; "Auto" alone while a choice stands.
   const autoLabel = job.resolved && !job.choice ? job.resolved.label : "Auto";
   const jobGate = useGate("setup:manage");
   const pinned = job.scope === "project";
-  const save = async (raw: string, scope?: "project") => {
+  const save = async (raw: string, scope?: "project", pick?: Pick) => {
     if (raw === "add-key") { setAdding(true); return; }
-    const option = job.options.find((o) => encode(o.engine, o.model) === raw);
+    const entry = menu.find((m) => encode(m.engine, m.bare) === raw);
+    // The menu keeps the job's credential when the new model can take it; the toggle sets one.
+    const model = entry ? withPick(pick ?? pickFor(entry, chosen.pick), entry.bare) : null;
     setBusy(true);
     try {
       const next = await setupWrite<SetupView>(projectId, "job", {
-        job: job.job, choice: raw === "auto" || !option ? null
-          : { engine: option.engine, model: option.model },
+        job: job.job, choice: raw === "auto" || !entry ? null
+          : { engine: entry.engine, model },
         ...(scope ? { scope } : {}),
       }, { label: job.label });
       apply(next);
@@ -115,20 +123,34 @@ export function JobLine({ job }: { job: Job }) {
         <select value={value} disabled={(busy) || !jobGate.allowed} aria-label={job.label} title={AUTO_TIP} {...jobGate.props}
                 data-testid={`su-job-select-${job.job}`} onChange={(e) => void save(e.target.value)}>
           <option value="auto">{autoLabel}</option>
-          {job.choice && !job.options.some((o) => encode(o.engine, o.model) === value) ? (
+          {job.choice && !menu.some((m) => encode(m.engine, m.bare) === value) ? (
             // THE STORED CHOICE IS ALWAYS SHOWN: a model no longer among the options (renamed,
             // its source re-listed) still reads as what is saved, never as "Auto".
             <option value={value}>{storedLabel(job)}</option>
           ) : null}
-          {job.options.map((o) => (
-            o.needs_key ? (
-              <option key="add-key" value="add-key">{o.label} · Add key</option>
+          {menu.map((m) => (
+            m.needs_key ? (
+              <option key="add-key" value="add-key">{m.label} · Add key</option>
             ) : (
-              <option key={encode(o.engine, o.model)} value={encode(o.engine, o.model)}>{o.label}</option>
+              <option key={encode(m.engine, m.bare)} value={encode(m.engine, m.bare)}>{m.label}</option>
             )
           ))}
         </select>
       )}
+      {current && current.picks.length > 1 ? (
+        <span className="su-pick" role="group" aria-label={`${job.label} pays with`}
+              data-testid={`su-job-pick-${job.job}`}>
+          {current.picks.map((p) => (
+            <GatedButton key={p} permission="setup:manage" type="button"
+                         className={`su-btn su-btn-sm${chosen.pick === p ? " su-btn-primary" : ""}`}
+                         aria-pressed={chosen.pick === p} title={PICK_TIP[p]} data-tip={PICK_TIP[p]}
+                         data-testid={`su-job-pick-${job.job}-${p}`} disabled={busy}
+                         onClick={() => { if (chosen.pick !== p) void save(value, undefined, p); }}>
+              {PICK_LABEL[p]}
+            </GatedButton>
+          ))}
+        </span>
+      ) : null}
       {job.choice && !pinned ? (
         <Tip tip="Set once: every project in this org uses it." className="su-chip"
              testid={`su-job-scope-${job.job}`}>All projects</Tip>
