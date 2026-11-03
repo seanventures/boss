@@ -138,9 +138,9 @@ class CliChatBrain:
         one interface a customer talks to was the one that could not reach the model.
         """
         from .agent_env import agent_environment
-        from .claude_credential import resolve_claude_credential
+        from .claude_credential import resolve_for_pick, split_pick
 
-        cred = resolve_claude_credential(self.settings)
+        cred = resolve_for_pick(self.settings, split_pick(self.model_override)[0])
         self._billing = cred.billing
         return cred.apply(agent_environment(os.environ))
 
@@ -529,8 +529,10 @@ class ClaudeCliAdapter(CliChatBrain):
         ]
         if system_prompt is not None:
             cmd += ["--system-prompt", system_prompt]
-        model = self.model_override or getattr(self.settings, "claude_cli_model", None)
+        from .claude_credential import split_pick
         from .model_router.compat import fits
+
+        model = split_pick(self.model_override or getattr(self.settings, "claude_cli_model", None))[1]
 
         if model and fits("claude_code", model):
             cmd += ["--model", model]
@@ -734,12 +736,12 @@ class ClaudeCliAdapter(CliChatBrain):
         one interface a customer talks to was the one that could not reach the model.
         """
         from .agent_env import agent_environment
-        from .claude_credential import resolve_claude_credential
+        from .claude_credential import resolve_for_pick, split_pick
 
         # WHICH CREDENTIAL, AND WHO PAYS (claude_credential, included_spend.py): the
         # subscription for its login, money for the console's Anthropic API key or an
         # ANTHROPIC_API_KEY in the environment. Exactly one of them reaches the child.
-        cred = resolve_claude_credential(self.settings)
+        cred = resolve_for_pick(self.settings, split_pick(self.model_override)[0])
         self._billing = cred.billing
         return cred.apply(agent_environment(os.environ))
 

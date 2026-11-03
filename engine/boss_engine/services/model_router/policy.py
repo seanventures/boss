@@ -75,7 +75,9 @@ _BALANCED_MARKERS = ("sonnet", "deepseek", "qwen", "coder", "kimi", "glm", "llam
 def model_tier(engine: str, model: Optional[str]) -> Optional[str]:
     """The tier a named model belongs to, or None when the name says nothing. An engine's own
     tier aliases (claude_code: haiku/sonnet/opus) are exact; other names go by markers."""
-    name = str(model or "").strip().lower()
+    from ..claude_credential import split_pick
+
+    name = str(split_pick(model)[1] or "").lower()
     if not name:
         return None
     for tier, alias in (ENGINE_TIER_MODELS.get(str(engine or "").lower()) or {}).items():

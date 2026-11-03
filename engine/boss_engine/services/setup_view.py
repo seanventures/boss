@@ -960,6 +960,11 @@ def _jobs(connection: Connection, settings: Any, project_id: str,
             for engine, entry in by_engine.items():
                 if job == "chat" and engine not in CHAT_ROUTABLE:
                     continue
+                if engine == "claude_code" and entry.get("claude_picks"):
+                    # BOTH CLAUDE CODES, side by side: each model on the subscription and on the
+                    # API key, so one job can take one and another job the other.
+                    options.extend(_claude_options(entry))
+                    continue
                 for name in _offered_models(engine, entry.get("model")):
                     options.append(_option(engine, name, entry))
         choice = None
@@ -977,11 +982,18 @@ def _jobs(connection: Connection, settings: Any, project_id: str,
             picked = None
         if picked is not None and picked.engine:
             name = _source_label(picked.engine, picked.source_id, models)
-            label = f"{name} · {picked.model}" if picked.model else name
+            label = (claude_choice_label(picked.model) if picked.engine == "claude_code" else None) \
+                or (f"{name} · {picked.model}" if picked.model else name)
             resolved = {"engine": picked.engine, "model": picked.model,
                         "label": label if choice else f"Auto · {name}", "why": picked.why,
                         "source_id": picked.source_id}
         metered = bool(picked and picked.metered)
+        if picked is not None and picked.engine == "claude_code":
+            from .claude_credential import PICK_KEY, PICK_SUBSCRIPTION, split_pick
+
+            pick = split_pick(picked.model)[0]
+            if pick in (PICK_KEY, PICK_SUBSCRIPTION):
+                metered = pick == PICK_KEY  # the job's own pick decides who pays
         # WHOSE CHOICE: the org's (every project) or this project's pin, which Setup shows with
         # a Remove that hands the job back to the org's choice.
         scope = ("project" if engine_knob in own or (model_knob and model_knob in own)
@@ -1035,6 +1047,11 @@ def _say_which_claude_credential(connection: Connection, settings: Any, project_
         cred = {}
     active = str(cred.get("active") or "")
     claude = by_engine.get("claude_code")
+    if claude is not None:
+        # Which credentials a job may pick for itself (both, when both are connected).
+        picks = [p for p, ok in ((claude_credential.PICK_SUBSCRIPTION, cred.get("has_subscription")),
+                                 (claude_credential.PICK_KEY, cred.get("has_key"))) if ok]
+        by_engine["claude_code"] = claude = {**claude, "claude_picks": picks}
     if claude is not None and active:
         on_sub = active in (claude_credential.KIND_SUBSCRIPTION, claude_credential.KIND_CLI_LOGIN)
         by_engine["claude_code"] = {
@@ -1060,6 +1077,30 @@ def _resolves_to(resolved: dict[str, Any], entry: dict[str, Any]) -> bool:
         return True
     return engine_for_provider(entry["provider"]) == resolved["engine"] and (
         not resolved.get("source_id") or entry["source"] == "install")
+
+
+def _claude_options(entry: dict[str, Any]) -> list[dict[str, Any]]:
+    from .claude_credential import PICK_SUBSCRIPTION, with_pick
+
+    out = []
+    for pick in entry["claude_picks"]:
+        name = CLAUDE_ON_SUBSCRIPTION if pick == PICK_SUBSCRIPTION else CLAUDE_CODE_ON_KEY
+        for model in _offered_models("claude_code", entry.get("model")):
+            out.append({"engine": "claude_code", "model": with_pick(pick, model),
+                        "label": f"{name} · {model}" if model else name,
+                        "metered": pick != PICK_SUBSCRIPTION})
+    return out
+
+
+def claude_choice_label(model: Optional[str]) -> Optional[str]:
+    """"Claude Code · API key · opus" for a stored "key:opus"; None when it carries no pick."""
+    from .claude_credential import PICK_SUBSCRIPTION, split_pick
+
+    pick, bare = split_pick(model)
+    if pick is None:
+        return None
+    name = CLAUDE_ON_SUBSCRIPTION if pick == PICK_SUBSCRIPTION else CLAUDE_CODE_ON_KEY
+    return f"{name} · {bare}" if bare else name
 
 
 def _option(engine: str, model: Optional[str], entry: dict[str, Any]) -> dict[str, Any]:

@@ -48,7 +48,9 @@ def model_family(model: Optional[str]) -> Optional[str]:
     """The family a model name belongs to, or None when the name does not say. A provider
     prefix ("anthropic/claude-…", "openai/gpt-…") is a gateway id and says nothing about the
     engine that must run it, so it is read from its last segment like any other name."""
-    name = str(model or "").strip().lower().rsplit("/", 1)[-1]
+    from ..claude_credential import split_pick
+
+    name = str(split_pick(model)[1] or "").lower().rsplit("/", 1)[-1]
     if not name:
         return None
     for family, prefixes in _PREFIXES:
@@ -60,7 +62,12 @@ def model_family(model: Optional[str]) -> Optional[str]:
 def fits(engine: Optional[str], model: Optional[str]) -> bool:
     """True when `engine` can run `model` — or when either side cannot tell (no model means the
     engine's own default; an unknown name or a multi-provider engine is allowed)."""
+    from ..claude_credential import split_pick
+
+    pick, _ = split_pick(model)
     want, have = engine_family(engine), model_family(model)
+    if pick is not None and want != ANTHROPIC:
+        return False  # a Claude credential choice belongs to a Claude engine only
     return want is None or have is None or want == have
 
 

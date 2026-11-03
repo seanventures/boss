@@ -1273,7 +1273,9 @@ class GenericCliCodeAgent:
             from .claude_credential import resolve_claude_credential
 
             try:
-                resolve_claude_credential(self.settings).apply(env)
+                from .claude_credential import resolve_for_pick
+
+                resolve_for_pick(self.settings, getattr(self, "_pick", None)).apply(env)
             except CredentialStoreUnavailable:
                 pass           # as before: what the environment holds, logged by the lookup
         elif _uses_env_route(self.spec) and not env.get(self.spec.token_env):
@@ -1292,6 +1294,11 @@ class GenericCliCodeAgent:
         # list that already carried the write value would leave two copies and let argument
         # order decide whether a reviewer can edit the code it is reviewing.
         argv += list(self.spec.read_only_args if read_only else self.spec.write_args)
+        if self.spec.name == "claude_code":
+            from .claude_credential import split_pick
+
+            # The job's credential choice rides on its model; _env (called after) uses it.
+            self._pick, model = split_pick(model)
         if model and self.spec.model_flag:
             from .model_router.compat import fits
 

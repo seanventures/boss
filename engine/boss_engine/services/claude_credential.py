@@ -304,6 +304,45 @@ def resolve_claude_credential(settings: Any, *, connection: Any = None,
 _CLI_LOGIN_MARK = "cli-login"
 
 
+#: A JOB'S OWN CLAUDE CREDENTIAL (boss-1, 2026-11-03). The operator wants "Claude Code ·
+#: subscription" and "Claude Code · API key" side by side, one job on each — but the order above
+#: is one answer for every claude BOSS starts. The choice rides on the job's MODEL value, the one
+#: thing every route already carries to the launch: "sub:sonnet" runs sonnet on the subscription,
+#: "key:opus" runs opus on the API key. `split_pick` strips it before `--model`; the launcher
+#: resolves with that order instead of the global one. No prefix = the operator's order, as before.
+PICK_SUBSCRIPTION, PICK_KEY = "sub", "key"
+PICKS = (PICK_SUBSCRIPTION, PICK_KEY)
+
+
+def split_pick(model: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    """("sub" | "key" | None, the model name to run)."""
+    raw = str(model or "").strip()
+    head, sep, rest = raw.partition(":")
+    if sep and head.lower() in PICKS:
+        return head.lower(), (rest.strip() or None)
+    return None, (raw or None)
+
+
+def with_pick(pick: Optional[str], model: Optional[str]) -> Optional[str]:
+    """The stored model value for a Claude choice: "sub:sonnet", "key:opus" (None model: the
+    CLI's default on that credential, "sub:" / "key:")."""
+    if pick not in PICKS:
+        return model
+    return f"{pick}:{model or ''}"
+
+
+def resolve_for_pick(settings: Any, pick: Optional[str], *, connection: Any = None,
+                     project_id: Optional[str] = None) -> ClaudeCredential:
+    """The credential for one launch: the job's pick when it made one (that credential first,
+    the other only when it is absent), else the operator's order (resolve_claude_credential).
+    A pre-bound answer (`bind`) is set aside for a pick — it was bound in the global order."""
+    if pick not in PICKS:
+        return resolve_claude_credential(settings, connection=connection, project_id=project_id)
+    order = SUBSCRIPTION_FIRST if pick == PICK_SUBSCRIPTION else API_KEY_FIRST
+    picked = settings.model_copy(update={"claude_credential_kind": "", ORDER_KNOB: order})
+    return resolve_claude_credential(picked)
+
+
 def cli_login_present() -> bool:
     """Is the Claude CLI signed in with its OWN login in this process's config dir — the
     private, service-user-owned `.credentials.json` that `claude auth login` writes? A file
@@ -423,6 +462,8 @@ def describe(connection: Any, settings: Any, project_id: str) -> dict[str, Any]:
     active = next((k for k, ok in present if ok), KIND_NONE)
     cred = ClaudeCredential(active)
     return {"active": active, "order": order,
+            # Both can be offered at once: a job may pick either (split_pick).
+            "has_subscription": bool(has_sub), "has_key": bool(has_stored or has_env),
             "billing": cred.billing if active != KIND_NONE else None,
             "source_id": (key_source_id(rows) if active == KIND_STORED_KEY
                           else source_for_kind(active)),

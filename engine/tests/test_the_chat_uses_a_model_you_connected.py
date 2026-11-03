@@ -202,7 +202,7 @@ def test_the_chat_cli_is_given_the_credential_this_install_holds():
     env = inspect.getsource(claude_cli_adapter.ClaudeCliAdapter._child_env)
     # The one resolution every `claude` child uses: the login, or the console's Anthropic API
     # key (claude_credential, BOSSAPP-530) — and it asks the install's store.
-    assert "resolve_claude_credential(self.settings)" in env
+    assert "resolve_for_pick(self.settings" in env
     from boss_engine.services import claude_credential
 
     assert "_store_lookup(settings, TOKEN_NAME)" in inspect.getsource(
@@ -267,7 +267,7 @@ def test_and_the_code_agent_gets_it_too():
     # The one resolution every `claude` child uses (claude_credential.resolve_claude_credential).
     # (through the one hook an engine may override: claude_agent_sdk asks for the key only).
     assert "self._resolve_credential()" in env
-    assert "resolve_claude_credential(self.settings)" in inspect.getsource(
+    assert "resolve_for_pick(self.settings" in inspect.getsource(
         ClaudeCodeAgent._resolve_credential)
     from boss_engine.services import claude_credential
 

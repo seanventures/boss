@@ -954,6 +954,11 @@ _model_proxy_scoped = _model_proxy.scoped(attach_usage=True)
 # --------------------------------------------------------------------------- #
 #  Claude Code headless implementation                                        #
 # --------------------------------------------------------------------------- #
+#: The credential pick of the launch this thread is starting (claude_credential.split_pick): set
+#: where `--model` is built, read by _resolve_credential when the child's env is made.
+_LAUNCH = threading.local()
+
+
 class ClaudeCodeAgent:
     """Drives `claude -p` inside the sandbox with its native editing tools.
 
@@ -1029,11 +1034,12 @@ class ClaudeCodeAgent:
         return env
 
     def _resolve_credential(self):
-        """Which Anthropic credential this engine's child runs on (claude_credential). The
-        claude_agent_sdk engine overrides this: the API key only, never the login."""
-        from .claude_credential import resolve_claude_credential
+        """Which Anthropic credential this engine's child runs on (claude_credential): the
+        job's own pick for this launch ("sub:"/"key:" on its model), else the operator's order.
+        The claude_agent_sdk engine overrides this: the API key only, never the login."""
+        from .claude_credential import resolve_for_pick
 
-        return resolve_claude_credential(self.settings)
+        return resolve_for_pick(self.settings, getattr(_LAUNCH, "pick", None))
 
     def _build_prompt(self, spec: CodeTaskSpec, repo: RepoContext,
                       cwd: Optional[Path] = None) -> str:
@@ -1157,6 +1163,11 @@ class ClaudeCodeAgent:
         # only the transcript is lost.
         capturing = capture_enabled()
         model = model or getattr(self.settings, "claude_cli_model", None)
+        from .claude_credential import split_pick
+
+        # The job's credential choice travels on its model ("key:opus"): the CLI gets the bare
+        # name, and _child_env (this thread, at launch) resolves that credential.
+        _LAUNCH.pick, model = split_pick(model)
         # EFFORT PER STAGE (stage_effort): writing stages at the project's writing effort,
         # design and review at high, anything else at the CLI's own default.
         effort = _current_effort()

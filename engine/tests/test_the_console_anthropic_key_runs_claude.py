@@ -177,6 +177,9 @@ def test_every_claude_launch_uses_the_one_resolution():
     services = Path(__file__).resolve().parents[1] / "boss_engine" / "services"
     for name in ("code_agent.py", "claude_cli_adapter.py", "governed_code_task_service.py"):
         text = (services / name).read_text(encoding="utf-8")
-        assert "resolve_claude_credential" in text or "bind_claude_credential" in text, name
+        # resolve_for_pick is the one resolution with a job's own credential pick (it calls
+        # resolve_claude_credential, never a second order of its own).
+        assert ("resolve_claude_credential" in text or "bind_claude_credential" in text
+                or "resolve_for_pick" in text), name
         assert 'env_fallback_attr="claude_code_oauth_token"' not in text, name
         assert 'key("claude_code_oauth_token")' not in text, name
