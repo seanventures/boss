@@ -296,7 +296,8 @@ def build(connection: Connection, settings: Any, project_id: str, *,
     ]
     return {
         "project_id": project_id,
-        "meter": meter(status, ledger_for(connection, project_id, status)),
+        "meter": meter(status, ledger_for(connection, project_id, status),
+                       period_spent(connection, project_id, status)),
         "controls": controls,
         "thresholds": thresholds,
         "token_guides": token_guides(connection, project_id),
@@ -324,7 +325,29 @@ def ledger_for(connection: Connection, project_id: str, status: dict[str, Any]) 
     return ledger_spend(connection, project_id, start, end)
 
 
-def meter(status: dict[str, Any], ledger: Optional[dict[str, int]] = None) -> dict[str, Any]:
+def period_spent(connection: Connection, project_id: str,
+                 status: dict[str, Any]) -> dict[str, int]:
+    """BOSSAPP-807, ONE "SPENT": each cap period's money by the ledger's definition
+    (included_spend.ledger_spend — what get_costs, the meter's `Spent`, Spend's hero, By project
+    and Limits' "used" all say). What a cap COUNTS is different on purpose — settled money plus
+    every active hold (`committed`) — and is said as "held" beside it, never as spent."""
+    from .included_spend import ledger_spend
+
+    def _at(value: Any) -> Any:
+        return datetime.fromisoformat(value) if isinstance(value, str) and value else value
+
+    out: dict[str, int] = {}
+    for name, p in (status.get("periods") or {}).items():
+        start = _at(p.get("period_start"))
+        if not start:
+            continue
+        out[str(p.get("period") or name)] = int(
+            ledger_spend(connection, project_id, start, _at(p.get("resets_at")))["money_usd_micros"])
+    return out
+
+
+def meter(status: dict[str, Any], ledger: Optional[dict[str, int]] = None,
+          spent: Optional[dict[str, int]] = None) -> dict[str, Any]:
     """The meter: the binding period's money and holds against its cap, the other period
     beneath it, and the subscription figure that is shown and never counted. `ledger` is the
     model-call ledger over the same period: `spent` (money), `estimate` (subscription calls at
@@ -367,17 +390,22 @@ def meter(status: dict[str, Any], ledger: Optional[dict[str, int]] = None) -> di
             | {"state_label": STATE_LABELS.get(str(p.get("budget_state")), "Unknown"),
                # BOSSAPP-807: where the period lands at today's burn — money and holds now,
                # plus the trailing-24h burn rate until it resets. A projection, not money.
-               "forecast_usd_micros": _forecast(p, status)}
+               "forecast_usd_micros": _forecast(p, status, (spent or {}).get(str(p.get("period")))),
+               # The money spent in the period (period_spent), and the holds the cap also counts.
+               "spent_usd_micros": int((spent or {}).get(str(p.get("period")),
+                                                         p.get("actual_usd_micros") or 0)),
+               "held_usd_micros": int(p.get("reserved_usd_micros") or 0)}
             for p in periods.values()
         ],
     }
 
 
-def _forecast(period: dict[str, Any], status: dict[str, Any]) -> int:
-    committed = int(period.get("committed_usd_micros") or 0)
+def _forecast(period: dict[str, Any], status: dict[str, Any], spent: Optional[int] = None) -> int:
+    """Money spent so far plus the trailing-24h burn until the period resets."""
+    base = int(spent if spent is not None else (period.get("actual_usd_micros") or 0))
     rate = int(status.get("burn_rate_usd_micros_per_hour") or 0)
     seconds = int(period.get("resets_in_seconds") or 0)
-    return committed + int(rate * seconds / 3600)
+    return base + int(rate * seconds / 3600)
 
 
 def token_guides(connection: Connection, project_id: str) -> dict[str, Any]:
@@ -404,7 +432,7 @@ def token_guides(connection: Connection, project_id: str) -> dict[str, Any]:
 WINDOWS = {"24h": 24, "7d": 24 * 7, "30d": 24 * 30}
 #: Windows that start at a period boundary rather than N hours back (BOSSAPP-807: Spend's
 #: "Month" is this calendar month, the monthly cap's own period).
-PERIOD_WINDOWS = {"month": "month"}
+PERIOD_WINDOWS = {"month": "month", "day": "day"}
 
 
 def daily_spend(connection: Connection, project_id: str, *, days: int = 30,
@@ -476,7 +504,7 @@ def spend(connection: Connection, settings: Any, project_id: str, *, window: str
     from .cost_insights import build_insights
 
     if window not in WINDOWS and window not in PERIOD_WINDOWS:
-        raise ValueError("window must be 24h, 7d, 30d or month.")
+        raise ValueError("window must be 24h, 7d, 30d, day or month.")
     now = now or datetime.now(timezone.utc)
     if window in PERIOD_WINDOWS:
         since = budget_period(PERIOD_WINDOWS[window], now)["start"]
@@ -522,6 +550,11 @@ def spend(connection: Connection, settings: Any, project_id: str, *, window: str
         # BOSSAPP-807: across every project the viewer may read (the route passes them; the
         # current project alone when none are passed), over the same window and definitions.
         "by_project": by_project(connection, projects or [{"id": project_id}], since),
+        # Screen A's By model: this project's money by model over the window, the calls with
+        # no model under their engine, and what no model call explains as `other` — so the
+        # rows add up to `money_usd_micros`, the hero's figure.
+        "by_model_spent": _models_reconciled(connection, project_id, since,
+                                             int(totals["money"] or 0)),
         "by_model_all": _model_spend_across(
             connection, [str(p["id"]) for p in (projects or [{"id": project_id}])], since),
         "not_under_cap_usd_micros": ledger["not_under_cap_usd_micros"],
@@ -531,7 +564,8 @@ def spend(connection: Connection, settings: Any, project_id: str, *, window: str
         "scorecard": scorecard,
         "savings": list(savings.values()),
         "top_drivers": drivers,
-        "spent_vs_cap": meter(status, ledger_for(connection, project_id, status)),
+        "spent_vs_cap": meter(status, ledger_for(connection, project_id, status),
+                              period_spent(connection, project_id, status)),
     }
 
 
@@ -552,6 +586,32 @@ def _model_spend(connection: Connection, project_id: str, since: datetime,
             GROUP BY 1 ORDER BY 3 DESC, 4 DESC, 1 LIMIT 12"""),
             {"p": project_id, "s": since}).mappings()
     ]
+
+
+def _models_reconciled(connection: Connection, project_id: str, since: datetime,
+                       money: int) -> list[dict[str, Any]]:
+    rows = [
+        {"id": str(r["id"]), "calls": int(r["calls"]), "money_usd_micros": int(r["money"] or 0),
+         "included_usd_micros": int(r["included"] or 0)}
+        for r in connection.execute(text("""
+            SELECT COALESCE(NULLIF(TRIM(model), ''), NULLIF(TRIM(engine), ''), 'other') AS id,
+                   COUNT(*) AS calls,
+                   COALESCE(SUM(CASE WHEN COALESCE(included_in_subscription, false) THEN 0
+                                     ELSE cost_usd_micros END), 0) AS money,
+                   COALESCE(SUM(CASE WHEN COALESCE(included_in_subscription, false)
+                                     THEN cost_usd_micros ELSE 0 END), 0) AS included
+            FROM llm_calls WHERE project_id = :p AND created_at >= :s
+            GROUP BY 1 ORDER BY 3 DESC, 4 DESC, 1"""), {"p": project_id, "s": since}).mappings()
+    ]
+    gap = money - sum(r["money_usd_micros"] for r in rows)
+    if gap > 0:
+        other = next((r for r in rows if r["id"] == "other"), None)
+        if other:
+            other["money_usd_micros"] += gap
+        else:
+            rows.append({"id": "other", "calls": 0, "money_usd_micros": gap, "included_usd_micros": 0})
+        rows.sort(key=lambda r: (-r["money_usd_micros"], -r["included_usd_micros"], r["id"]))
+    return rows
 
 
 def by_project(connection: Connection, projects: list[dict[str, Any]],

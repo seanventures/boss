@@ -142,7 +142,8 @@ export function GovernMeter({ meter, error, onRetry }: { meter: MeterData | null
     <section className="gv-meter" data-testid="gv-meter" data-state={meter.state} title={metaTip}>
       <div className="gv-meter-line">
         <span className="gv-meter-period" data-testid="gv-meter-period">{periodWord(meter.period)}</span>
-        <span className="gv-meter-amount" data-testid="gv-meter-amount">
+        <span className="gv-meter-amount" data-testid="gv-meter-amount"
+              title={`What the cap counts: spent plus ${money(meter.reserved_usd_micros)} held by running work`}>
           {money(meter.committed_usd_micros)} <span className="gv-of">of</span> {money(meter.cap_usd_micros)}
         </span>
         <span className="gv-state" data-state={paidWorkHeld ? "held" : meter.state} data-testid="gv-meter-state">

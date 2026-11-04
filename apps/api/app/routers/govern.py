@@ -91,7 +91,7 @@ def _budget_projects(request: Request, project_id: str) -> list[dict[str, Any]]:
 @router.get("/v1/govern/spend")
 @permit(P.BUDGET_READ, scope=Scope.project(query="project_id"))
 def get_govern_spend(request: Request, project_id: str = Query(...),
-                     window: str = Query("7d", pattern="^(24h|7d|30d|month)$")) -> Response:
+                     window: str = Query("7d", pattern="^(24h|7d|30d|day|month)$")) -> Response:
     from boss_engine.services import govern_view
 
     main = _main()

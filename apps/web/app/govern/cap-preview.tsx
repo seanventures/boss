@@ -17,12 +17,14 @@ import { plural } from "../../lib/factory-floor";
 const W = 300;
 const H = 64;
 
-export function DailyBars({ daily, cap, cumulative, testid = "gv-daily", highlight, capLabel }: {
+export function DailyBars({ daily, cap, cumulative, testid = "gv-daily", highlight, capLabel, capOnScaleAlways }: {
   daily: DailySpend[]; cap: number | null; cumulative?: boolean; testid?: string;
   /** A day (YYYY-MM-DD) drawn as the current one (Govern › Spend: today). */
   highlight?: string;
   /** Names the dashed cap line beside the chart (`daily cap $100`). */
   capLabel?: string;
+  /** Draw the cap line at its real height even far above the bars (Govern › Spend). */
+  capOnScaleAlways?: boolean;
 }) {
   const series = cumulative
     ? daily.reduce<number[]>((acc, d, i) => {
@@ -35,7 +37,7 @@ export function DailyBars({ daily, cap, cumulative, testid = "gv-daily", highlig
   const included = daily.map((d) => d.included_usd_micros);
   const dataPeak = Math.max(1, ...series, ...(cumulative ? [] : included.map((v, i) => v + series[i])));
   // A cap near the data joins the scale; one far above it stays a reference at the top edge.
-  const capOnScale = cap !== null && cap <= dataPeak * 1.5;
+  const capOnScale = cap !== null && (Boolean(capOnScaleAlways) || cap <= dataPeak * 1.5);
   const peak = capOnScale ? Math.max(dataPeak, cap ?? 0) : dataPeak * 1.1;
   const bw = W / Math.max(1, daily.length);
   const y = (v: number) => H - (Math.min(v, peak) / peak) * (H - 4);
@@ -53,7 +55,8 @@ export function DailyBars({ daily, cap, cumulative, testid = "gv-daily", highlig
             ) : null}
             <rect className="gv-chart-bar" data-over={cap !== null && v > cap ? true : undefined}
                   data-today={highlight && d.day === highlight ? true : undefined}
-                  x={i * bw + 1} width={Math.max(1, bw - 2)} y={y(v)} height={Math.max(0, H - y(v))} />
+                  x={i * bw + 1} width={Math.max(1, bw - 2)}
+                  y={v > 0 ? Math.min(y(v), H - 1) : y(v)} height={v > 0 ? Math.max(1, H - y(v)) : Math.max(0, H - y(v))} />
           </g>
         );
       })}

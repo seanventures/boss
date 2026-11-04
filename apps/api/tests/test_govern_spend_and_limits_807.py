@@ -206,3 +206,45 @@ def test_stop_refuses_even_free_work_and_asks_nobody(client, engine, clean):
     for refused in (paid, free):
         assert refused["refusal"] == "cap_exceeded" and refused["decision_id"] is None, refused
         assert refused["at_limit"] == "stop" and refused["message"].startswith("Stopped at the limit")
+
+
+def test_one_dataset_one_spent_figure_on_every_screen(client, engine, clean):
+    """The walk found five figures for one project: the hero (settled receipts), By project (the
+    ledger), Limits' "used" (receipts), By model (another project's calls) and the board (spent
+    plus holds). One definition now: SPENT is the ledger; what a cap counts is spent + HELD."""
+    with engine.begin() as c:
+        for model, cost in (("claude-opus-4-8[1m]", 7_000_000), ("gpt-4o", 2_000_000)):
+            _call(c, PROJECT, model, cost)
+            _receipt(c, PROJECT, cost)
+        c.execute(text("INSERT INTO llm_calls (id, project_id, stage, engine, model, cost_usd_micros, "
+                       "included_in_subscription) VALUES (:i, :p, 'chat', 'claude_code', NULL, 0, true)"),
+                  {"i": f"llm_{uuid4().hex[:12]}", "p": PROJECT})
+        _receipt(c, PROJECT, 1_000_000)          # money no model call explains (e.g. a provider)
+        _receipt(c, OTHER, 4_000_000)
+        c.execute(text("INSERT INTO budget_reservations (id, project_id, category, amount_usd_micros, "
+                       "status, reason, expires_at, created_at) VALUES (:i, :p, 'code_task', 5000000, "
+                       "'active', 'held', now() + interval '1 hour', now())"),
+                  {"i": f"res_{uuid4().hex[:10]}", "p": PROJECT})
+    view = client.get("/v1/govern", params={"project_id": PROJECT}).json()
+    periods = {p["period"]: p for p in view["meter"]["periods"]}
+    month = client.get("/v1/govern/spend", params={"project_id": PROJECT, "window": "month"}).json()
+    day = client.get("/v1/govern/spend", params={"project_id": PROJECT, "window": "day"}).json()
+    week = client.get("/v1/govern/spend", params={"project_id": PROJECT, "window": "7d"}).json()
+    limits = {r["project_id"]: r for r in client.get(
+        "/v1/govern/project-limits", params={"project_id": PROJECT}).json()["projects"]}
+    mine = lambda body: next(r for r in body["by_project"] if r["id"] == PROJECT)  # noqa: E731
+
+    spent = 10_000_000
+    assert periods["month"]["spent_usd_micros"] == month["money_usd_micros"] == spent
+    assert mine(month)["money_usd_micros"] == limits[PROJECT]["used_usd_micros"] == spent
+    assert sum(r["money_usd_micros"] for r in month["by_model_spent"]) == spent
+    assert periods["day"]["spent_usd_micros"] == day["money_usd_micros"] == mine(day)["money_usd_micros"] == spent
+    assert week["money_usd_micros"] == mine(week)["money_usd_micros"] == spent
+    # What the cap counts (the board's meter, Setup's row) is spent + held, said apart.
+    assert periods["month"]["held_usd_micros"] == 5_000_000
+    assert periods["month"]["committed_usd_micros"] == spent + periods["month"]["held_usd_micros"]
+    ids = [r["id"] for r in month["by_model_spent"]]
+    assert "unknown" not in ids and "claude_code" in ids and "other" in ids
+    assert next(r for r in month["by_model_spent"] if r["id"] == "other")["money_usd_micros"] == 1_000_000
+    assert limits[OTHER]["used_usd_micros"] == next(
+        r for r in month["by_project"] if r["id"] == OTHER)["money_usd_micros"] == 4_000_000

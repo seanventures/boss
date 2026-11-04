@@ -45,11 +45,11 @@ function view(over: Record<string, unknown> = {}, at: "pause" | "cheaper" | "sto
                { period: "day", cap_usd_micros: 100 * M, actual_usd_micros: 38 * M, reserved_usd_micros: 0,
                  committed_usd_micros: 38 * M, utilization_ratio: 0.38, budget_state: "green",
                  resets_at: "2026-11-05T00:00:00+00:00", resets_at_label: "00:00 UTC", state_label: "Under cap",
-                 forecast_usd_micros: 60 * M },
+                 forecast_usd_micros: 60 * M, spent_usd_micros: 38 * M, held_usd_micros: 0 },
                { period: "month", cap_usd_micros: 1000 * M, actual_usd_micros: 412 * M, reserved_usd_micros: 0,
                  committed_usd_micros: 412 * M, utilization_ratio: 0.412, budget_state: "green",
                  resets_at: "2026-12-01T00:00:00+00:00", resets_at_label: "00:00 UTC on 1 December",
-                 state_label: "Under cap", forecast_usd_micros: 860 * M },
+                 state_label: "Under cap", forecast_usd_micros: 860 * M, spent_usd_micros: 412 * M, held_usd_micros: 0 },
              ] },
     at_limit: { value: at, choices: ["pause", "cheaper", "stop"], default: "pause",
                 source: at === "pause" ? "default" : "set", version: "unset", changed_by: null },
@@ -68,17 +68,23 @@ function spend(meter: unknown) {
     daily_cap_usd_micros: 100 * M, scorecard: { calls: 1550 }, savings: [], top_drivers: [],
     by_agent: [{ id: "software_engineer", calls: 300, money_usd_micros: 300 * M, included_usd_micros: 0 }],
     by_model: [{ id: "claude-opus-4-1", calls: 200, money_usd_micros: 300 * M, included_usd_micros: 0 }],
+    by_model_spent: [{ id: "claude-opus-4-8[1m]", calls: 200, money_usd_micros: 390 * M, included_usd_micros: 0 },
+                     { id: "gpt-4o", calls: 50, money_usd_micros: 20 * M, included_usd_micros: 0 },
+                     { id: "other", calls: 0, money_usd_micros: 2 * M, included_usd_micros: 0 },
+                     { id: "claude-sonnet-4-5-20250929", calls: 1240, money_usd_micros: 0, included_usd_micros: 90 * M },
+                     { id: "codex", calls: 3, money_usd_micros: 0, included_usd_micros: 0 }],
     by_model_all: [{ id: "claude-opus-4-1", calls: 260, money_usd_micros: 390 * M, included_usd_micros: 0 },
                    { id: "gpt-4o", calls: 50, money_usd_micros: 22 * M, included_usd_micros: 0 },
                    { id: "claude-sonnet-4-5-20250929", calls: 1240, money_usd_micros: 0, included_usd_micros: 90 * M }],
-    by_project: [{ id: "p1", name: "HelpDesk AI", money_usd_micros: 240 * M, included_usd_micros: 0, calls: 900 },
-                 { id: "p2", name: "Billing", money_usd_micros: 172 * M, included_usd_micros: 90 * M, calls: 650 }],
+    by_project: [{ id: "p1", name: "HelpDesk AI", money_usd_micros: 412 * M, included_usd_micros: 90 * M, calls: 1550 },
+                 { id: "p2", name: "Billing", money_usd_micros: 172 * M, included_usd_micros: 0, calls: 650 },
+                 { id: "p3", name: "Sandbox", money_usd_micros: 0, included_usd_micros: 0, calls: 0 }],
     spent_vs_cap: meter,
   };
 }
 
 const LIMITS = { project_id: "p1", projects: [
-  { project_id: "p1", name: "HelpDesk AI", limit_usd_micros: 300 * M, envelope_id: "bua_1", used_usd_micros: 240 * M },
+  { project_id: "p1", name: "HelpDesk AI", limit_usd_micros: 300 * M, envelope_id: "bua_1", used_usd_micros: 412 * M },
   { project_id: "p2", name: "Billing", limit_usd_micros: null, envelope_id: null, used_usd_micros: 172 * M },
 ] };
 
@@ -127,17 +133,29 @@ describe("Screen A — Govern › Spend is the landing", () => {
   it("draws each day of the month with today marked and the daily cap named", async () => {
     await mount(<GovernHome projectId="p1" actor="ceo" />);
     const bars = $$("[data-testid=gv-days-chart] .gv-chart-bar");
-    expect(bars).toHaveLength(4); // 1-4 November, not the 30-day series
-    expect(bars.map((b) => b.hasAttribute("data-today"))).toEqual([false, false, false, true]);
+    expect(bars).toHaveLength(30); // every day of November at its date; days to come are empty
+    expect(bars.findIndex((b) => b.hasAttribute("data-today"))).toBe(3);
+    expect(bars.slice(4).every((b) => Number(b.getAttribute("height")) === 0)).toBe(true);
     expect(t("[data-testid=gv-days-chart-cap-label]")).toBe("daily cap $100");
+    // The cap is a dashed line at its height, drawn even when it is far above every day.
     expect($("[data-testid=gv-days-chart] .gv-chart-cap")).not.toBeNull();
+    expect($$("[data-testid=gv-days-axis] span").map((e) => e.textContent)).toEqual(["Nov 1", "Nov 15", "Nov 30"]);
+    expect($("[data-testid=gv-days-chart]")!.getAttribute("aria-label")).toBe("30 days of spend");
+    await click($("[data-testid=gv-period-week]"));
+    expect($$("[data-testid=gv-days-chart] .gv-chart-bar")).toHaveLength(7);
+    expect($$("[data-testid=gv-days-axis] span").map((e) => e.textContent)).toEqual(["Oct 29", "Nov 1", "Nov 4"]);
   });
 
   it("says spend by model and by project, across projects, and opens the detail one click away", async () => {
     await mount(<GovernHome projectId="p1" actor="ceo" />);
     const rows = (id: string) => $$(`[data-testid=${id}-row]`).map((li) => [li.children[0].textContent, li.children[2].textContent]);
-    expect(rows("gv-home-models")).toEqual([["Claude Opus 4.1", "$390"], ["GPT-4o", "$22.00"], ["Claude Sonnet 4.5", "Included"]]);
-    expect(rows("gv-home-projects")).toEqual([["HelpDesk AI", "$240"], ["Billing", "$172"]]);
+    // This project's models add up to the hero ($412); the context size reads (1M); no Unknown;
+    // a model with nothing spent or included is folded into a count.
+    expect(rows("gv-home-models")).toEqual([["Claude Opus 4.8 (1M)", "$390"], ["GPT-4o", "$20.00"],
+                                            ["Other spend", "$2.00"], ["Claude Sonnet 4.5", "Included"]]);
+    expect(t("[data-testid=gv-home-models-quiet]")).toBe("+1 with no spend");
+    expect(rows("gv-home-projects")).toEqual([["HelpDesk AI", "$412"], ["Billing", "$172"]]);
+    expect(t("[data-testid=gv-hero-scope]")).toBe("This project · HelpDesk AI");
     await click($("[data-testid=gv-where]"));
     expect($("[data-testid=gv-spend]")).not.toBeNull();
     expect($("[data-testid=gv-by-agent]")).not.toBeNull();
@@ -147,7 +165,8 @@ describe("Screen A — Govern › Spend is the landing", () => {
   it("the period switch reads that window; Today is today's cap", async () => {
     await mount(<GovernHome projectId="p1" actor="ceo" />);
     await click($("[data-testid=gv-period-today]"));
-    expect(g.calls.some((c) => c.url === "/api/govern?project_id=p1&view=spend&window=24h")).toBe(true);
+    expect(g.calls.some((c) => c.url === "/api/govern?project_id=p1&view=spend&window=day")).toBe(true);
+    expect($$("[data-testid=gv-days-chart] .gv-chart-bar")).toHaveLength(1);
     expect(t("[data-testid=gv-hero-amount]")).toBe("$38.00");
     expect(t("[data-testid=gv-hero-of]")).toBe("of $100 today");
     await click($("[data-testid=gv-period-week]"));
@@ -155,11 +174,29 @@ describe("Screen A — Govern › Spend is the landing", () => {
     expect(t("[data-testid=gv-hero-of]")).toBe("this week");
   });
 
+  it("one figure: hero, today, By project, By model and Limits' used agree; holds are said apart", async () => {
+    const v = view() as Record<string, any>;
+    // Holds are active reservations: the same $40 in today's and this month's cap.
+    v.meter.periods = v.meter.periods.map((p: any) => ({ ...p, held_usd_micros: 40 * M, reserved_usd_micros: 40 * M,
+                                                         committed_usd_micros: p.spent_usd_micros + 40 * M }));
+    g.view = v;
+    await mount(<GovernHome projectId="p1" actor="ceo" />);
+    const hero = t("[data-testid=gv-hero-amount]");
+    const mine = $$("[data-testid=gv-home-projects-row]").find((li) => li.hasAttribute("data-mine"))!;
+    expect(mine.children[2].textContent).toBe(hero);
+    const models = (g.spend as any).by_model_spent.reduce((n: number, r: any) => n + r.money_usd_micros, 0);
+    expect(`$${models / M}`).toBe(hero);
+    expect(t("[data-testid=gv-hero-held-line]")).toBe("$40.00 held");
+    await click($("[data-testid=gv-tab-limits]"));
+    expect(t("[data-testid=gv-hint-month]")).toBe(`Used ${hero} · resets Dec 1`);
+    expect($("[data-testid=gv-proj-p1]")!.textContent).toContain(`${hero} used`);
+  });
+
   it("the badge says near the cap, and at the cap what the at-limit choice does", () => {
     const v = view() as Record<string, any>;
     const month = v.meter.periods[1];
     expect(badgeOf(v.meter, { ...month, forecast_usd_micros: 1200 * M }, "pause")).toEqual({ tone: "yellow", text: "Near the cap" });
-    const at = { ...v.meter, periods: [v.meter.periods[0], { ...month, actual_usd_micros: 1000 * M }] };
+    const at = { ...v.meter, periods: [v.meter.periods[0], { ...month, actual_usd_micros: 1000 * M, spent_usd_micros: 1000 * M }] };
     expect(badgeOf(at, at.periods[1], "pause").text).toBe("At the cap — new work paused");
     expect(badgeOf(at, at.periods[1], "cheaper").text).toBe("At the cap — cheaper models");
     expect(badgeOf(at, at.periods[1], "stop")).toEqual({ tone: "red", text: "At the cap — stopped" });
@@ -207,7 +244,7 @@ describe("Screen B — Govern › Limits", () => {
     expect(value("gv-proj-input-p1")).toBe("300");
     expect(value("gv-proj-input-p2")).toBe("");
     expect(($("[data-testid=gv-proj-input-p2]") as HTMLInputElement).placeholder).toBe("No limit");
-    expect($("[data-testid=gv-proj-p1]")!.textContent).toContain("$240 used");
+    expect($("[data-testid=gv-proj-p1]")!.textContent).toContain("$412 used");
     await wait(350);
     expect(t("[data-testid=gv-paused-days]")).toBe("With these limits, last month would have paused work on 3 days");
     expect(($("[data-testid=gv-save-limits]") as HTMLButtonElement).disabled).toBe(true); // nothing changed yet
@@ -260,6 +297,25 @@ describe("Screen B — Govern › Limits", () => {
     await click($("[data-testid=gv-frozen] button"));
     expect($("[data-testid=gv-limits]")).not.toBeNull();
     expect(document.activeElement).toBe($("[data-testid=gv-input-month]"));
+  });
+});
+
+describe("the Advanced board still works from More", () => {
+  it("Pace's slider previews and applies; the monthly cap replays the last 30 days", async () => {
+    await mount(<GovernHome projectId="p1" actor="ceo" />);
+    await click($("[data-testid=gv-tab-board]"));
+    await click($("[data-testid=gv-more-pace]"));
+    await click($("[data-testid=gv-edit-pace]"));
+    await wait(200);
+    expect($("[data-testid=gv-pace-slider]")).not.toBeNull();
+    expect(t("[data-testid=gv-pace-preview]")).toContain("Daily $252");
+    await click($("[data-testid=gv-pace-apply]"));
+    expect(posts("pace")).toHaveLength(1);
+    await click($("[data-testid=gv-more-monthly_cap]"));
+    await click($("[data-testid=gv-edit-monthly_cap]"));
+    await wait(350);
+    expect(t("[data-testid=gv-would-stop]")).toBe("Would have stopped 3 days");
+    expect($("[data-testid=gv-preview-chart]")).not.toBeNull();
   });
 });
 

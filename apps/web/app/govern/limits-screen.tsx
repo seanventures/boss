@@ -172,9 +172,9 @@ export function LimitsScreen({ view, projectId, actor, unreachable, focus, onSav
         <h3 id="gv-howmuch-h" className="gv-card-title">How much BOSS may spend</h3>
         <MoneyField id="gv-month" label="Per month" testid="month" value={month} onChange={edit(setMonth)} inputRef={monthRef}
                     error={monthErr}
-                    hint={`Used ${money(monthPeriod?.actual_usd_micros)}${monthPeriod?.resets_at ? ` · resets ${resetDay(monthPeriod.resets_at)}` : ""}`} />
+                    hint={`Used ${money(monthPeriod?.spent_usd_micros ?? monthPeriod?.actual_usd_micros)}${monthPeriod?.resets_at ? ` · resets ${resetDay(monthPeriod.resets_at)}` : ""}`} />
         <MoneyField id="gv-day" label="Per day" testid="day" value={day} onChange={edit(setDay)}
-                    error={dayErr} hint={`Used ${money(dayPeriod?.actual_usd_micros)} today`} />
+                    error={dayErr} hint={`Used ${money(dayPeriod?.spent_usd_micros ?? dayPeriod?.actual_usd_micros)} today`} />
         <MoneyField id="gv-burst" label="Burst per minute" testid="burst" value={burst} onChange={edit(setBurst)} perMin
                     error={burstErr} hint="Stops a runaway loop fast" />
         <span className="gv-muted" data-testid="gv-included-note"

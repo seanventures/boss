@@ -39,6 +39,9 @@ export type Period = {
   resets_at_label: string; state_label: string;
   /** Where the period lands at today's burn (BOSSAPP-807). A projection, not money. */
   forecast_usd_micros?: number;
+  /** Money spent in the period — the one "spent" (the ledger); the cap also counts `held`. */
+  spent_usd_micros?: number;
+  held_usd_micros?: number;
 };
 /** One unresolved historical call. Its old estimate is not a settled charge or a total. */
 export type LegacyFinancialHold = {
@@ -123,6 +126,8 @@ export type SpendView = {
   /** BOSSAPP-807: across every project the viewer may read. */
   by_project?: ProjectSpendRow[];
   by_model_all?: ModelSpendRow[];
+  /** This project's money by model, adding up to `money_usd_micros` (`other`: no model call). */
+  by_model_spent?: ModelSpendRow[];
   metered_calls?: number;
   included_calls?: number;
 };
@@ -253,8 +258,15 @@ const PROVIDER: Record<string, string> = {
  *  `gpt-4o` → `GPT-4o`; a Setup source id (`setup-openai`, `setup-openai-2`) → `OpenAI`
  *  (`OpenAI 2`). Anything else reads as words (`repo_scan` → `Repo scan`). */
 export function modelName(id: string): string {
-  const raw = String(id ?? "").trim();
+  let raw = String(id ?? "").trim();
   if (!raw) return "Unknown";
+  if (raw === "other") return "Other spend";
+  // A context-size suffix (`claude-opus-4-8[1m]`) is said as `(1M)`, not mangled into the name.
+  const ctx = raw.match(/\[(\w+)\]$/);
+  if (ctx) {
+    raw = raw.slice(0, -ctx[0].length);
+    return `${modelName(raw)} (${ctx[1].toUpperCase()})`;
+  }
   const setup = raw.match(/^setup[-_:]([a-z][a-z0-9_]*?)(?:[-_](\d+))?$/i);
   if (setup) {
     const name = PROVIDER[setup[1].toLowerCase()] ?? humanWords(setup[1]);

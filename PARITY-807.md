@@ -40,3 +40,10 @@ lands on that row of the control board.
 These eight web tests opened the board as the Govern landing. They now open it at `?area=budget&tab=board`. That is a one-line URL change in each file, and no assertion changed:
 `activity-govern-copy-budget`, `every-govern-form-saves-what-was-typed`, `govern-board-shows-effective-values`, `govern-loads-on-a-rail-switch`, `govern-spend-says-who-and-which-model`, `govern-writes-what-it-wrote-before`, `log-and-govern-recheck-items`, `log-govern-layout-fixture`.
 The fake API helper `tests/_helpers/govern-fixtures.ts` gained a `project_limits` read. That is an addition only.
+
+## One figure (after the 2026-11-04 walk)
+
+- **Spent** is one definition everywhere, the ledger (`included_spend.ledger_spend`). It is what the Spend hero, Today, Week, By model (this project, adding up to the hero), By project, Limits "Used" and per-project "used", and the board meter's "Spent" line all show.
+- **Held** means active reservations. A cap counts spent + held, so the board's meter amount and Setup's budget row show spent + held. The Spend hero shows "$X held" beside the spent figure, and the meter amount's tooltip says so.
+- The Spend hero covers this project, because caps are per project. By project lists every project you can see. Both scopes are labelled on screen.
+- API additions: `meter.periods[].spent_usd_micros` and `held_usd_micros`, `GET /v1/govern/spend?window=day`, and `by_model_spent`.

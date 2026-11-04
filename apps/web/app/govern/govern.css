@@ -172,6 +172,10 @@
 .gv-hero-sub { display: flex; flex-wrap: wrap; gap: 4px 0; font-size: 0.82rem; color: var(--muted); font-variant-numeric: tabular-nums; }
 .gv-hero-sub > span + span::before { content: "·"; margin: 0 8px; color: var(--faint); }
 .gv-chart-bar[data-today] { fill: var(--accent-text); }
+.gv-hero-scope { font-size: 0.74rem; font-weight: 700; letter-spacing: 0.06em; color: var(--faint); text-transform: uppercase; }
+.gv-hero-break { flex-basis: 100%; height: 0; }
+.gv-axis { display: flex; justify-content: space-between; font-size: 0.72rem; color: var(--faint); font-variant-numeric: tabular-nums; }
+.gv-hbars li[data-mine] .gv-hbar-name { font-weight: 700; }
 .gv-chart-caplabel { align-self: flex-end; }
 .gv-hbars { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .gv-hbars li { display: grid; grid-template-columns: minmax(0, 9rem) minmax(0, 1fr) auto; align-items: center; gap: 10px; font-size: 0.84rem; }
