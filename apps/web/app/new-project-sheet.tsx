@@ -30,12 +30,14 @@ export const PROJECT_TYPES: { key: ProjectType; label: string; line: string }[] 
     line: "Import a repository, map its code, and have agents find its business rules and learn as they work." },
 ];
 
-export function NewProjectSheet({ draft, onDraft, onClose, onCreated }: {
+export function NewProjectSheet({ draft, onDraft, onClose, onCreated, onBack }: {
   /** Held by the caller, so closing the menu around it (a passkey prompt) never loses it. */
   draft: NewProjectDraft;
   onDraft: (next: NewProjectDraft) => void;
   onClose: () => void;
   onCreated: (projectId: string, type: ProjectType) => void;
+  /** Back to New project's three doors (BOSSAPP-810), when this form was opened from them. */
+  onBack?: () => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -106,6 +108,10 @@ export function NewProjectSheet({ draft, onDraft, onClose, onCreated }: {
         {kg ? <p className="bx-np-next" data-testid="new-project-next">Next: import the code, choose the agents who work on it, and run a first scan for business rules.</p> : null}
         {error ? <p className="bx-np-error" role="alert" data-testid="new-project-error">{error}</p> : null}
         <div className="bx-np-actions">
+          {onBack ? (
+            <button type="button" className="ag-btn sp-back-btn" data-testid="new-project-back" disabled={busy}
+                    onClick={onBack}>← Back</button>
+          ) : null}
           <button type="button" className="ag-btn" data-testid="new-project-cancel" disabled={busy} onClick={onClose}>Cancel</button>
           <GatedButton permission="project:create" type="submit" className="ag-btn ag-btn-primary" data-testid="new-project-create"
                        disabled={busy}

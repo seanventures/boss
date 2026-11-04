@@ -15,6 +15,8 @@ EXPECTED = {
     "login-oauth": "connector", "stripe-checkout": "connector", "paypal-checkout": "connector",
     "transactional-email": "connector",
     "banking-starter": "idea", "catalog-cart": "idea", "hello": "idea",
+    # BOSSAPP-810: the sample project (New project › Try a sample) builds from it.
+    "hello-world": "idea",
     "banking-starter-insecure": "training",
 }
 
@@ -69,6 +71,7 @@ def test_a_card_carries_its_kind_and_training_is_listed_only_when_asked(monkeypa
                                                              "stripe-checkout",
                                                              "transactional-email"]
     ideas = service.list_templates(_Conn(), "org", kind="idea")
-    assert sorted(c["template_key"] for c in ideas) == ["banking-starter", "catalog-cart", "hello"]
+    assert sorted(c["template_key"] for c in ideas) == ["banking-starter", "catalog-cart", "hello",
+                                                                 "hello-world"]
     training = service.list_templates(_Conn(), "org", kind="training")
     assert [c["template_key"] for c in training] == ["banking-starter-insecure"]

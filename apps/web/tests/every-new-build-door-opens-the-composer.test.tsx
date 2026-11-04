@@ -87,7 +87,9 @@ describe("no New build door opens the agent chat", () => {
     // sheet it opens (new-project-sheet.tsx, BOSSAPP-768 round 2: the form moved out of the
     // dropdown into a sheet) — it makes a BOSS project in the org (POST /v1/projects,
     // project:create), not a build (tests/new-project-in-the-org.test.tsx holds it).
-    const PROJECT_DOORS = ["app/project-menu.tsx", "app/new-project-sheet.tsx"];
+    // BOSSAPP-810: the menu's New project opens the start flow's sheet (three doors), whose
+    // "New app from an idea" is the project sheet.
+    const PROJECT_DOORS = ["app/project-menu.tsx", "app/new-project-sheet.tsx", "app/start-project/start-sheet.tsx"];
     const labels = newProjectLabels();
     expect(labels.map((l) => l.split(":")[0]).every((f) => PROJECT_DOORS.includes(f)), labels.join(", "))
       .toBe(true);

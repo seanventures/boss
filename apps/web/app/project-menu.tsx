@@ -6,6 +6,8 @@ import { GatedButton } from "../components/gated";
 import { consoleHref } from "./console-href";
 import { useDetailsDismiss } from "../lib/details-dismiss";
 import { EMPTY_DRAFT, NewProjectSheet, type NewProjectDraft } from "./new-project-sheet";
+import { StartProjectSheet } from "./start-project/start-sheet";
+import { NEW_PROJECT_PARAM, clearStepParam, projectPageHref, stepFromParam, type StartStep } from "../lib/start-project";
 import { ArchiveDialog, ArchivedNotice, ArchivedProjects, useArchived } from "./project-archive";
 import type { ProjectType } from "@boss/api-client";
 
@@ -57,7 +59,23 @@ export function ProjectMenu({ projects, activeId, homeId, orgId }: {
   homeId: string;
   orgId?: string;
 }) {
-  const [creating, setCreating] = useState(false);
+  // NEW PROJECT (BOSSAPP-810): which screen of the flow is open — the three doors and the presets,
+  // the sample, Import a repo, or the idea form (the name-and-description sheet, both types).
+  // `/?new_project=sample|import|idea|1` opens it at that choice (the Welcome screen's links).
+  const [step, setStep] = useState<StartStep | null>(null);
+  useEffect(() => {
+    // On load, and on an in-console link (pushState + popstate) to `?new_project=…`.
+    const read = () => {
+      try {
+        const asked = stepFromParam(new URL(window.location.href).searchParams.get(NEW_PROJECT_PARAM));
+        if (asked) setStep(asked);
+      } catch { /* non-browser */ }
+    };
+    read();
+    window.addEventListener("popstate", read);
+    return () => window.removeEventListener("popstate", read);
+  }, []);
+  const closeStart = () => { setStep(null); clearStepParam(); };
   // The draft is the menu's, not the sheet's form: a passkey prompt or a refused step-up keeps it.
   const [draft, setDraft] = useState<NewProjectDraft>(EMPTY_DRAFT);
   const [archiving, setArchiving] = useState(false);
@@ -103,7 +121,7 @@ export function ProjectMenu({ projects, activeId, homeId, orgId }: {
           ))}
         </ul>
         <GatedButton permission="project:create" className="bx-project-menu-new" title={NEW_PROJECT_TIP}
-                     data-testid="new-project" onClick={() => { close(); setCreating(true); }}>
+                     data-testid="new-project" onClick={() => { close(); setStep("choose"); }}>
           + New project
         </GatedButton>
         {active ? (isHome ? (
@@ -130,13 +148,17 @@ export function ProjectMenu({ projects, activeId, homeId, orgId }: {
         ) : null}
       </div>
     </details>
-    {creating ? (
-      <NewProjectSheet draft={draft} onDraft={setDraft} onClose={() => setCreating(false)}
+    {step === "idea" ? (
+      <NewProjectSheet draft={draft} onDraft={setDraft} onClose={closeStart} onBack={() => setStep("choose")}
                        onCreated={(id, type) => {
                          setDraft(EMPTY_DRAFT);
+                         clearStepParam();
                          // A knowledge-graph project opens on its setup: import, team, first scan.
-                         window.location.assign(type === "knowledge_graph" ? knowledgeSetupHref(id, homeId) : projectHref(id, homeId));
+                         // An app opens on its page: "What should we build?", the description ready.
+                         window.location.assign(type === "knowledge_graph" ? knowledgeSetupHref(id, homeId) : projectPageHref(id, homeId));
                        }} />
+    ) : step ? (
+      <StartProjectSheet step={step} onStep={setStep} onClose={closeStart} projectId={activeId} homeId={homeId} />
     ) : null}
     {archiving && active ? (
       <ArchiveDialog projectId={active.id} name={active.name} onClose={() => setArchiving(false)}

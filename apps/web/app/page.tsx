@@ -134,6 +134,7 @@ import { InfraHome } from "./infra/infra-home";
 import { ObsHome } from "./observability/obs-home";
 import { GraphArea } from "./knowledge/graph-area";
 import { KgLifecycleCard } from "./knowledge/kg-lifecycle";
+import { ProjectStartCard } from "./start-project/project-start";
 import { fetchReliabilityFeed } from "../lib/reliability";
 import { fetchAiSreCapabilities } from "../lib/ai-sre";
 import { AiSreHome } from "./ai-sre-ui";
@@ -1155,6 +1156,11 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         <section className="ov-cc" data-area="overview" aria-label="Command center">
           {/* The monthly check-in: renders nothing unless it is this person's month (≤ once in 30 days). */}
           <CheckinCard projectId={activeProjectId} actor={activeActorId} />
+          {/* THE PROJECT PAGE (BOSSAPP-810): "What should we add?" for a project of its own (not the
+              org's home project, not a knowledge graph's): its repo, Start, what happens, its work. */}
+          {activeProjectId !== selectedOrg.project_id && activeProject?.projectType !== "knowledge_graph" ? (
+            <ProjectStartCard projectId={activeProjectId} orgId={activeOrgId} actor={activeActorId} />
+          ) : null}
           {/* THE KNOWLEDGE GRAPH'S LIFECYCLE (indexed → rules → learnings) and its team. */}
           {/* Any project with a code graph (an app project too: NorthPeak Bank, boss-dogfood); the
               card decides from GET /v1/knowledge/setup and draws nothing for a project without one. */}

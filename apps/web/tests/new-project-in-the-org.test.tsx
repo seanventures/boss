@@ -88,6 +88,8 @@ describe("the project menu", () => {
     expect(button.getAttribute("data-can")).toBe("yes");
     expect(button.getAttribute("title")).toMatch(/new project in this organization/i);
     await act(async () => button.click());
+    // BOSSAPP-810: New project opens its three doors first; the form is "New app from an idea".
+    await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="start-idea"]')!.click());
     // A SHEET, outside the menu (round 2: the dropdown cut the type's text and scrolled sideways).
     const f = document.querySelector('[data-testid="new-project-form"]')!;
     expect(el.contains(f)).toBe(false);
@@ -155,6 +157,8 @@ describe("a project's type (BOSSAPP-768 project flow)", () => {
   it("New project asks what it is for — an app, or a knowledge graph of an existing codebase", async () => {
     const el = await mount("admin");
     await act(async () => el.querySelector<HTMLButtonElement>('[data-testid="new-project"]')!.click());
+    // BOSSAPP-810: New project opens its three doors first; the form is "New app from an idea".
+    await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="start-idea"]')!.click());
     const radios = [...document.querySelectorAll<HTMLInputElement>('[data-testid="new-project-type"] input[name="project_type"]')];
     expect(radios.map((r) => r.value)).toEqual(["app", "knowledge_graph"]);
     expect(radios[0].checked).toBe(true);
@@ -170,6 +174,8 @@ describe("a project's type (BOSSAPP-768 project flow)", () => {
       detail: { error: "project_exists", slug: "fineract-map", project_id: null } }));
     const el = await mount("admin");
     await act(async () => el.querySelector<HTMLButtonElement>('[data-testid="new-project"]')!.click());
+    // BOSSAPP-810: New project opens its three doors first; the form is "New app from an idea".
+    await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="start-idea"]')!.click());
     const name = document.querySelector<HTMLInputElement>('[data-testid="new-project-form"] input[name="name"]')!;
     await act(async () => {
       const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
