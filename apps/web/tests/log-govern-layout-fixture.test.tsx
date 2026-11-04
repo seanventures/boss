@@ -45,7 +45,7 @@ describe("the pages the browser hit-test taps", () => {
     const byRun = document.querySelector(".lx")!.outerHTML;
     unmount();
     vi.stubGlobal("fetch", fakeGovernApi(newGovern()));
-    window.history.replaceState({}, "", "/?area=budget");
+    window.history.replaceState({}, "", "/?area=budget&tab=board");
     await mount(<GovernHome projectId="p1" actor="ceo" />);
     expect($("[data-testid=gv-board]")).not.toBeNull();
     const govern = document.querySelector(".gv")!.outerHTML;

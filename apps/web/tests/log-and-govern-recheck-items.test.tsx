@@ -33,7 +33,7 @@ describe("Per step token guides", () => {
     g.view = view;
     vi.stubGlobal("fetch", fakeGovernApi(g));
     setConsoleLive(true);
-    window.history.replaceState({}, "", "/?area=budget");
+    window.history.replaceState({}, "", "/?area=budget&tab=board");
     await mount(<GovernHome projectId="p1" actor="ceo" />);
     const shown = () => $$("[data-testid=gv-control-token_per_step] [data-testid^=gv-step-]").map((s) => s.textContent);
     expect(shown()).toEqual(["review code 48,500", "standards 32k", "spec 48k"]);

@@ -81,16 +81,16 @@ export function noteText(c: Control): { text: string; tip: string } | null {
   return null;
 }
 
-type Failure = { text: string; tip?: string; reload?: boolean };
+export type Failure = { text: string; tip?: string; reload?: boolean };
 
-function failureOf(result: Extract<WriteResult, { ok: false }>, op: string): Failure {
+export function failureOf(result: Extract<WriteResult, { ok: false }>, op: string): Failure {
   if (result.status === 412) return { text: `Changed by ${result.changedBy || "someone"} just now`, reload: true };
   if (result.status === 403) return { text: "You can't change this", tip: rightsFor(op) };
   if (result.status === 422 || result.status === 400) return { text: result.error };
   return { text: "Can't reach BOSS", tip: result.error };
 }
 
-function FailureLine({ failure, onReload }: { failure: Failure; onReload: () => void }) {
+export function FailureLine({ failure, onReload }: { failure: Failure; onReload: () => void }) {
   return (
     <span className="gv-fail" role="alert" data-testid="gv-fail" title={failure.tip}>
       {failure.text}

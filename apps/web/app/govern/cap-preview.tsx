@@ -17,8 +17,12 @@ import { plural } from "../../lib/factory-floor";
 const W = 300;
 const H = 64;
 
-export function DailyBars({ daily, cap, cumulative, testid = "gv-daily" }: {
+export function DailyBars({ daily, cap, cumulative, testid = "gv-daily", highlight, capLabel }: {
   daily: DailySpend[]; cap: number | null; cumulative?: boolean; testid?: string;
+  /** A day (YYYY-MM-DD) drawn as the current one (Govern › Spend: today). */
+  highlight?: string;
+  /** Names the dashed cap line beside the chart (`daily cap $100`). */
+  capLabel?: string;
 }) {
   const series = cumulative
     ? daily.reduce<number[]>((acc, d, i) => {
@@ -48,6 +52,7 @@ export function DailyBars({ daily, cap, cumulative, testid = "gv-daily" }: {
                     y={y(v + included[i])} height={Math.max(0, y(v) - y(v + included[i]))} />
             ) : null}
             <rect className="gv-chart-bar" data-over={cap !== null && v > cap ? true : undefined}
+                  data-today={highlight && d.day === highlight ? true : undefined}
                   x={i * bw + 1} width={Math.max(1, bw - 2)} y={y(v)} height={Math.max(0, H - y(v))} />
           </g>
         );
@@ -55,12 +60,21 @@ export function DailyBars({ daily, cap, cumulative, testid = "gv-daily" }: {
       {cap !== null && capOnScale ? <line className="gv-chart-cap" x1={0} x2={W} y1={y(cap)} y2={y(cap)} /> : null}
     </svg>
   );
-  if (cap === null || capOnScale) return chart;
+  if (cap === null) return chart;
+  if (capOnScale) {
+    if (!capLabel) return chart;
+    return (
+      <span className="gv-chart-wrap">
+        <span className="gv-chart-note gv-chart-caplabel" data-testid={`${testid}-cap-label`}>{capLabel}</span>
+        {chart}
+      </span>
+    );
+  }
   return (
     <span className="gv-chart-wrap">
       {chart}
       <span className="gv-chart-note" data-testid={`${testid}-cap-above`} title="Bars are scaled to the spend, not the cap">
-        Cap {money(cap)} ↑
+        {capLabel ? `${capLabel} ↑` : `Cap ${money(cap)} ↑`}
       </span>
     </span>
   );

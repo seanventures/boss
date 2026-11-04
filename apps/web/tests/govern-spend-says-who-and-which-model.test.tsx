@@ -42,7 +42,7 @@ function spendView() {
 async function openSpend() {
   vi.stubGlobal("fetch", fakeGovernApi(spendView()));
   setConsoleLive(true);
-  window.history.replaceState({}, "", "/?area=budget");
+  window.history.replaceState({}, "", "/?area=budget&tab=board");
   await mount(<GovernHome projectId="p1" actor="ceo" />);
   await click($("[data-testid=gv-tab-spend]"));
 }
