@@ -42,12 +42,12 @@ export function createTokenUrl(host: string): string {
   });
 }
 
-function refusalOf(error: unknown): SetupRefusal {
+export function refusalOf(error: unknown): SetupRefusal {
   if (error instanceof SetupFailure && error.refusal) return error.refusal;
   return { state: "failed", headline: "Check failed", fix: String((error as Error)?.message ?? error) };
 }
 
-type SigninFound = TokenFound & { install_needed?: InstallNeeded[]; read_only?: number };
+export type SigninFound = TokenFound & { install_needed?: InstallNeeded[]; read_only?: number };
 
 /** "Install BOSS on <org>": each account of yours where the BOSS app is not installed yet. */
 export function InstallNeededLinks({ needed, onCheck, busy }: {
@@ -147,8 +147,11 @@ export function TokenForm({ connectionId, onDone, makeDefault = true }: {
   return <PasteTokenForm connectionId={connectionId} onDone={onDone} makeDefault={makeDefault} />;
 }
 
-function PasteTokenForm({ connectionId, onDone, makeDefault = true }: {
+export function PasteTokenForm({ connectionId, onDone, makeDefault = true, onFound }: {
   connectionId?: string | null; onDone?: () => void; makeDefault?: boolean;
+  /** Setup › Add a GitHub account: hand the token's account and repos to the caller's own
+   *  "Pick repos" step instead of this form's single picker. */
+  onFound?: (found: TokenFound) => void;
 }) {
   const { projectId, view, apply } = useBoard();
   const [token, setToken] = useState("");
@@ -175,7 +178,9 @@ function PasteTokenForm({ connectionId, onDone, makeDefault = true }: {
     setPhase("checking");
     setRefusal(null);
     try {
-      setFound(await setupWrite<TokenFound>(projectId, "repo_app", {}, { label: "Use the GitHub App" }));
+      const app = await setupWrite<TokenFound>(projectId, "repo_app", {}, { label: "Use the GitHub App" });
+      if (onFound) { onFound(app); setPhase("idle"); return; }
+      setFound(app);
       setPhase("found");
     } catch (error) {
       setRefusal(refusalOf(error));
@@ -206,6 +211,7 @@ function PasteTokenForm({ connectionId, onDone, makeDefault = true }: {
         onDone?.();
         return;
       }
+      if (onFound) { onFound(answer); setPhase("idle"); return; }
       setFound(answer);
       setPhase("found");
     } catch (error) {
@@ -421,7 +427,7 @@ function RepoLine({ repo, onReplace, single }: { repo: RepoEntry; onReplace: () 
   );
 }
 
-function AddRepo({ connectionId, onDone }: { connectionId: string; onDone: () => void }) {
+export function AddRepo({ connectionId, onDone }: { connectionId: string; onDone: () => void }) {
   const { projectId, view, apply } = useBoard();
   const [found, setFound] = useState<TokenFound | null>(null);
   const [busy, setBusy] = useState(false);
