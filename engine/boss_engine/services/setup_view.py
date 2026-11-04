@@ -429,8 +429,7 @@ def _builds_reach(connection: Connection, project_id: str, connection_id: str,
                  "WHERE p.id = :p"), {"p": project_id}).scalar()
         if not org_id or github_setup.app_ready(connection, str(org_id)):
             return {"ok": True}
-        current = github_setup.org_token(connection, str(org_id))
-        if current is not None and full_name.lower() in [r.lower() for r in current["repos"]]:
+        if github_setup.org_token_for(connection, full_name, str(org_id)) is not None:
             return {"ok": True}
         ref = str(connection.execute(text("SELECT credential_ref FROM github_connections WHERE id = :c"),
                                      {"c": connection_id}).scalar() or "")
@@ -1235,6 +1234,20 @@ def _try(connection: Connection, project_id: str) -> dict[str, Any]:
     return out
 
 
+def _accounts(connection: Connection, settings: Any, project_id: str, repository: dict[str, Any],
+              now: datetime) -> dict[str, Any]:
+    """Setup's accounts and repositories (setup_accounts.py). Never breaks the page."""
+    from . import setup_accounts
+
+    try:
+        return setup_accounts.build(connection, settings, project_id, repository, now)
+    except Exception:  # noqa: BLE001 — the rows above still render; the new blocks fall back
+        import logging
+
+        logging.getLogger(__name__).warning("setup: GitHub accounts were not read", exc_info=True)
+        return {"accounts": [], "repositories": []}
+
+
 # ── The view ──────────────────────────────────────────────────────────────────────────────────
 
 def build_basics(connection: Connection, settings: Any, project_id: str, *,
@@ -1268,6 +1281,7 @@ def _build(connection: Connection, settings: Any, project_id: str, *,
     jobs = _jobs(connection, settings, project_id, models)
     detected = _detected(settings)
     trying = _try(connection, project_id)
+    accounts = _accounts(connection, settings, project_id, repository, now)
 
     # READY MEANS PROVEN (PROVEN_REPOSITORY / PROVEN_MODEL): a row a check has not answered
     # still lets a workflow start (basics), but the header does not say Ready over it.
@@ -1315,6 +1329,11 @@ def _build(connection: Connection, settings: Any, project_id: str, *,
         "problems": problems,
         "secrets": secrets_state(connection, settings, project_id),
         "repository": repository,
+        # Setup's GitHub accounts and Repositories BOSS can work on (BOSSAPP-808): one row per
+        # account (this project's connections and the org's own App and tokens), one per repo
+        # with the account it goes through and the projects that use it.
+        "github_accounts": accounts["accounts"],
+        "repositories": accounts["repositories"],
         "models": models,
         "detected": detected,
         "catalogue": _catalogue(settings),
