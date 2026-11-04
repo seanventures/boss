@@ -37,6 +37,8 @@ export type Period = {
   period: string; cap_usd_micros: number; actual_usd_micros: number; reserved_usd_micros: number;
   committed_usd_micros: number; utilization_ratio: number; budget_state: string; resets_at: string;
   resets_at_label: string; state_label: string;
+  /** Where the period lands at today's burn (BOSSAPP-807). A projection, not money. */
+  forecast_usd_micros?: number;
 };
 /** One unresolved historical call. Its old estimate is not a settled charge or a total. */
 export type LegacyFinancialHold = {
@@ -86,7 +88,16 @@ export type GovernView = {
                   schema_ready: boolean };
   pace: { value: number | null; envelope: Envelope | null };
   versions: { budget: string };
+  /** BOSSAPP-807: what happens when a limit is reached, as the engine reads it. */
+  at_limit?: AtLimitView;
 };
+export type AtLimit = "pause" | "cheaper" | "stop";
+export type AtLimitView = { value: AtLimit; choices: AtLimit[]; default: AtLimit; source: "set" | "default";
+                            version: string; changed_by: string | null };
+export type ProjectSpendRow = { id: string; name: string; money_usd_micros: number; included_usd_micros: number; calls: number };
+export type ProjectLimitRow = { project_id: string; name: string; limit_usd_micros: number | null;
+                                envelope_id: string | null; used_usd_micros: number };
+export type ProjectLimitsView = { project_id: string; projects: ProjectLimitRow[] };
 export type Envelope = {
   operational_intensity: number; daily_cap_usd_micros: number; monthly_cap_usd_micros: number;
   burst_cap_usd_micros_per_min: number; max_concurrent_jobs: number; max_workers_total: number;
@@ -109,6 +120,11 @@ export type SpendView = {
   by_agent?: ModelSpendRow[];
   by_model?: ModelSpendRow[];
   spent_vs_cap: Meter;
+  /** BOSSAPP-807: across every project the viewer may read. */
+  by_project?: ProjectSpendRow[];
+  by_model_all?: ModelSpendRow[];
+  metered_calls?: number;
+  included_calls?: number;
 };
 export type ModelSpendRow = { id: string; calls: number; money_usd_micros: number; included_usd_micros: number };
 export type Allocation = {
@@ -131,7 +147,8 @@ export type GovernRead<T> =
   | { ok: true; notModified: true; etag: string | null; data?: undefined }
   | { ok: false; status: number; error: string };
 
-export async function readGovern<T>(projectId: string, view: "limits" | "spend" | "envelopes" | "daily",
+export async function readGovern<T>(projectId: string,
+                                    view: "limits" | "spend" | "envelopes" | "daily" | "project_limits",
                                     extra: Record<string, string> = {},
                                     opts: { etag?: string | null; signal?: AbortSignal } = {}): Promise<GovernRead<T>> {
   const q = new URLSearchParams({ project_id: projectId, view, ...extra });
