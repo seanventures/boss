@@ -58,13 +58,14 @@ export function ProjectStartCard({ projectId, orgId, actor }: {
     return () => ctl.abort();
   }, [load]);
 
-  // The words to start from: a preset's brief, else the description typed at New project.
+  // A preset's brief is a real task, so it is ready to Start. Nothing else is typed for the
+  // person (walk 806: the project's description pre-filled the box and one click started a build
+  // with no real task): the box is empty, its placeholder an example, Start off until they type.
   useEffect(() => {
     if (!view || seeded) return;
     setSeeded(true);
     const brief = presetBrief();
     if (brief) setText(brief);
-    else if (!view.work.length && view.description) setText(view.description);
   }, [view, seeded]);
 
   // Mapping and work move on their own: look again while something is under way.
@@ -101,28 +102,28 @@ export function ProjectStartCard({ projectId, orgId, actor }: {
   };
 
   return (
-    <section className="sp-page" data-testid="project-start" aria-labelledby="sp-page-name">
-      <header className="sp-page-head">
-        <h2 id="sp-page-name">{view.name}</h2>
+    <section className="spj-page" data-testid="project-start" aria-labelledby="spj-page-name">
+      <header className="spj-page-head">
+        <h2 id="spj-page-name">{view.name}</h2>
         {view.repo ? (
           <p data-testid="project-start-repo">
-            <span className="sp-mono">{view.repo.full_name}</span> · {view.repo.branch} ·{" "}
+            <span className="spj-mono">{view.repo.full_name}</span> · {view.repo.branch} ·{" "}
             <span data-done={view.repo.mapping.done || undefined} data-testid="project-start-mapped">
               {view.repo.mapping.done ? "code mapped ✓" : mappingWords(view.repo.mapping).toLowerCase()}
             </span>
           </p>
-        ) : <p className="sp-quiet" data-testid="project-start-repo">New app · BOSS makes its repo</p>}
+        ) : <p className="spj-quiet" data-testid="project-start-repo">New app · BOSS makes its repo</p>}
       </header>
 
-      <div className="sp-ask" data-testid="project-start-ask">
-        <label htmlFor="sp-ask-text" className="sp-ask-label">{adding ? "What should we add?" : "What should we build?"}</label>
-        <textarea id="sp-ask-text" className="input sp-ask-text" data-testid="project-start-text" rows={3}
-                  value={text} placeholder={adding ? "Add an endpoint that lists orders by customer" : "A shift-swap board for a small team"}
+      <div className="spj-ask" data-testid="project-start-ask">
+        <label htmlFor="spj-ask-text" className="spj-ask-label">{adding ? "What should we add?" : "What should we build?"}</label>
+        <textarea id="spj-ask-text" className="input spj-ask-text" data-testid="project-start-text" rows={3}
+                  value={text} placeholder={adding ? "e.g. Add an endpoint that lists orders by customer" : "e.g. A shift-swap board where staff offer shifts and a manager approves"}
                   onChange={(e) => setText(e.target.value)} />
         {adding ? (
-          <div className="sp-chips" data-testid="project-start-chips">
+          <div className="spj-chips" data-testid="project-start-chips">
             {view.examples.map((ex) => (
-              <button key={ex} type="button" className="sp-chip" onClick={() => setText(ex)}>{ex}</button>
+              <button key={ex} type="button" className="spj-chip" onClick={() => setText(ex)}>{ex}</button>
             ))}
           </div>
         ) : null}
@@ -131,8 +132,8 @@ export function ProjectStartCard({ projectId, orgId, actor }: {
             <ReadinessPanel readiness={refusal} accepted={startAnyway} onAccept={setStartAnyway} />
           </div>
         ) : null}
-        <div className="sp-ask-foot">
-          <span className="sp-quiet" data-testid="project-start-estimate"
+        <div className="spj-ask-foot">
+          <span className="spj-quiet" data-testid="project-start-estimate"
                 title={view.start.workflow_name ? `Runs ${view.start.workflow_name}` : undefined}>
             {estimateLine(view.start)}
           </span>
@@ -144,11 +145,11 @@ export function ProjectStartCard({ projectId, orgId, actor }: {
           </GatedButton>
         </div>
         {error ? <p className="bx-np-error" role="alert" data-testid="project-start-error">{error}</p> : null}
-        {started ? <p className="sp-ok" role="status" data-testid="project-start-started">Started. It shows below.</p> : null}
+        {started ? <p className="spj-ok" role="status" data-testid="project-start-started">Started. It shows below.</p> : null}
       </div>
 
-      <div className="sp-next" data-testid="project-start-next" aria-label="What happens next">
-        <h3 className="sp-sub">What happens next</h3>
+      <div className="spj-next" data-testid="project-start-next" aria-label="What happens next">
+        <h3 className="spj-sub">What happens next</h3>
         <ol>
           {view.next.map((s) => (
             <li key={s.key} data-you={s.you || undefined}><b>{s.label}</b><span>{s.who}</span></li>
@@ -157,15 +158,15 @@ export function ProjectStartCard({ projectId, orgId, actor }: {
       </div>
 
       {view.work.length ? (
-        <div className="sp-work" data-testid="project-start-work">
-          <h3 className="sp-sub">In this project</h3>
+        <div className="spj-work" data-testid="project-start-work">
+          <h3 className="spj-sub">In this project</h3>
           <ul>
             {view.work.map((w) => (
               <li key={w.run_id} data-tone={w.tone} data-testid={`project-start-work-${w.run_id}`}>
-                <span className="sp-dot" aria-hidden />
-                <span className="sp-work-title">{w.title}</span>
-                <span className="sp-work-state">{w.state}</span>
-                <a className="sp-link" href={workHref(w, orgId)}
+                <span className="spj-dot" aria-hidden />
+                <span className="spj-work-title">{w.title}</span>
+                <span className="spj-work-state">{w.state}</span>
+                <a className="spj-link" href={workHref(w, orgId)}
                    {...(w.action.kind === "pr" ? { target: "_blank", rel: "noreferrer" } : {})}>{w.action.label}</a>
               </li>
             ))}

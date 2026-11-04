@@ -16,7 +16,9 @@ import type { Registry, RegistryRepo } from "./multirepo";
 
 // ── The URL: /?new_project=sample|import|idea (or 1) opens the flow at that choice ─────────────
 
-export type StartStep = "choose" | "sample" | "import" | "idea";
+/** `form` is the name-and-description form (both project types; a knowledge graph or a blank
+ *  project), reached from the idea step. */
+export type StartStep = "choose" | "sample" | "import" | "idea" | "form";
 export const NEW_PROJECT_PARAM = "new_project";
 
 /** The step a `?new_project=` value opens on, or null when the URL does not ask for the flow. */
@@ -85,6 +87,18 @@ export function shownPresets(all: Preset[] = allPresets()): Preset[] {
   return [...apps, ...all.filter((p) => p.kind === "knowledge_graph")];
 }
 
+/** A project name from a one-sentence idea: its first few words, without a leading verb or
+ *  article ("Build a shift-swap board for…" → "Shift-swap board"). Editable before Create. */
+export function nameFromIdea(sentence: string): string {
+  const words = sentence.trim().replace(/[.!?].*$/s, "")
+    .replace(/^(please\s+)?(build|make|create|write|add)\s+/i, "")
+    .replace(/^(a|an|the|my|our)\s+/i, "")
+    .split(/\s+/).filter(Boolean);
+  const cut = words.findIndex((w, i) => i > 0 && /^(for|that|where|which|to|with|so|who|from|in|on|of)$/i.test(w));
+  const name = (cut > 0 ? words.slice(0, cut) : words).slice(0, 5).join(" ");
+  return name ? (name[0].toUpperCase() + name.slice(1)).slice(0, 60) : "";
+}
+
 // ── Import: accounts, repos, facts ───────────────────────────────────────────────────────────
 
 /** The GitHub accounts the org's registry reaches (each repo's owner), the connection's first. */
@@ -144,6 +158,8 @@ export type WorkRow = {
 export type StartPlan = {
   mode: "feature" | "new_app"; work_class: string | null; workflow_key: string | null;
   workflow_name?: string | null; resolved_key?: string | null; minutes?: number | null;
+  /** To the pull request and its preview (the steps after a person's merge are not counted). */
+  minutes_to_pr?: number | null; minutes_low?: number | null; minutes_high?: number | null;
   cost?: { runs: number; low_usd: number; high_usd: number; metered?: boolean } | null;
 };
 export type StartView = {
@@ -161,7 +177,8 @@ function dollars(n: number): string { return n < 1 ? `$${n.toFixed(2)}` : `$${Ma
 export function estimateLine(plan: StartPlan | null | undefined): string {
   if (!plan) return "";
   const parts: string[] = [];
-  if (plan.minutes) parts.push(`~${plan.minutes} min`);
+  if (plan.minutes_low && plan.minutes_high) parts.push(`${plan.minutes_low}–${plan.minutes_high} min to a pull request`);
+  else if (plan.minutes) parts.push(`~${plan.minutes} min`);
   const c = plan.cost;
   if (c && c.runs > 0) {
     const mid = (c.low_usd + c.high_usd) / 2;

@@ -129,8 +129,10 @@ describe("New project › Create and set up, with a step-up", () => {
         <ProjectMenu projects={[{ id: "boss-dogfood", name: "Default project" }]} activeId="boss-dogfood" homeId="boss-dogfood" />
       </IdentityProvider>));
     await act(async () => host!.querySelector<HTMLButtonElement>('[data-testid="new-project"]')!.click());
-    // BOSSAPP-810: New project opens its three doors first; the form is "New app from an idea".
+    // BOSSAPP-810: New project opens its three doors first; this form is New app from an idea ›
+    // "Knowledge graph or blank project".
     await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="start-idea"]')!.click());
+    await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="idea-form"]')!.click());
     const name = document.querySelector<HTMLInputElement>('[data-testid="new-project-form"] input[name="name"]')!;
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(name, "kg-tester-r4");

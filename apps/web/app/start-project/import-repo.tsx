@@ -106,9 +106,9 @@ export function ImportRepo({ projectId, onCreated }: {
 
   const addAccount = consoleHref({ area: "setup", focus: "repository", new_project: undefined });
   return (
-    <div className="sp-import" data-testid="import-repo">
-      <section className="sp-col" aria-labelledby="sp-col-pick">
-        <h3 id="sp-col-pick" className="sp-col-title"><span>1</span> Pick the repo</h3>
+    <div className="spj-import" data-testid="import-repo">
+      <section className="spj-col" aria-labelledby="spj-col-pick">
+        <h3 id="spj-col-pick" className="spj-col-title"><span>1</span> Pick the repo</h3>
         {loadError ? <p className="bx-np-error" role="alert" data-testid="import-load-error">{loadError}</p> : null}
         <label className="bx-np-field">
           <span>Account</span>
@@ -118,61 +118,61 @@ export function ImportRepo({ projectId, onCreated }: {
             {accounts.map((a) => <option key={a} value={a}>{a}</option>)}
           </select>
         </label>
-        <ul className="sp-repos" role="listbox" aria-label="Repositories" data-testid="import-repos">
+        <ul className="spj-repos" role="listbox" aria-label="Repositories" data-testid="import-repos">
           {repos.map((r) => (
             <li key={r.id}>
-              <button type="button" role="option" aria-selected={r.id === picked} className="sp-repo"
+              <button type="button" role="option" aria-selected={r.id === picked} className="spj-repo"
                       data-testid={`import-repo-${r.id}`} onClick={() => pick(r.id)}>
-                <span className="sp-mono">{r.full_name.split("/")[1]}</span>
+                <span className="spj-mono">{r.full_name.split("/")[1]}</span>
                 {r.language ? <small>{r.language}</small> : null}
               </button>
             </li>
           ))}
-          {registry && !repos.length ? <li className="sp-quiet" data-testid="import-none">No repositories here yet.</li> : null}
+          {registry && !repos.length ? <li className="spj-quiet" data-testid="import-none">No repositories here yet.</li> : null}
         </ul>
-        <a className="sp-link" href={addAccount} data-testid="import-add-account"
+        <a className="spj-link" href={addAccount} data-testid="import-add-account"
            title="Connect another GitHub account or allow more repositories in Setup">Repo not listed? Add a GitHub account</a>
       </section>
 
-      <section className="sp-col" aria-labelledby="sp-col-read" data-empty={!repo || undefined}>
-        <h3 id="sp-col-read" className="sp-col-title"><span>2</span> BOSS reads it</h3>
-        {!repo ? <p className="sp-quiet">Pick a repo.</p> : null}
-        {repo && !facts && !factsError ? <p className="sp-quiet" data-testid="import-reading">Reading {repo.full_name}…</p> : null}
-        {factsError ? <p className="sp-quiet" role="status" data-testid="import-facts-error">Couldn&apos;t read it now: {factsError}</p> : null}
+      <section className="spj-col" aria-labelledby="spj-col-read" data-empty={!repo || undefined}>
+        <h3 id="spj-col-read" className="spj-col-title"><span>2</span> BOSS reads it</h3>
+        {!repo ? <p className="spj-quiet">Pick a repo.</p> : null}
+        {repo && !facts && !factsError ? <p className="spj-quiet" data-testid="import-reading">Reading {repo.full_name}…</p> : null}
+        {factsError ? <p className="spj-quiet" role="status" data-testid="import-facts-error">Couldn&apos;t read it now: {factsError}</p> : null}
         {facts ? (
           <>
-            <dl className="sp-facts" data-testid="import-facts">
+            <dl className="spj-facts" data-testid="import-facts">
               {factRows(facts).map((row) => (
                 <div key={row.label} data-known={row.known || undefined}>
                   <dt>{row.label}</dt><dd>{row.value}</dd>
                 </div>
               ))}
             </dl>
-            <div className="sp-map" data-testid="import-mapping">
+            <div className="spj-map" data-testid="import-mapping">
               <span>{mappingWords(facts.mapping)}</span>
-              <span className="sp-bar" role="progressbar" aria-valuemin={0} aria-valuemax={100}
+              <span className="spj-bar" role="progressbar" aria-valuemin={0} aria-valuemax={100}
                     aria-valuenow={facts.mapping.percent} aria-label="Mapping the code">
                 <i style={{ width: `${facts.mapping.percent}%` }} />
               </span>
             </div>
-            <p className="sp-quiet">You can continue now; mapping finishes in the background.</p>
+            <p className="spj-quiet">You can continue now; mapping finishes in the background.</p>
           </>
         ) : null}
       </section>
 
-      <section className="sp-col" aria-labelledby="sp-col-name">
-        <h3 id="sp-col-name" className="sp-col-title"><span>3</span> Name it</h3>
+      <section className="spj-col" aria-labelledby="spj-col-name">
+        <h3 id="spj-col-name" className="spj-col-title"><span>3</span> Name it</h3>
         <label className="bx-np-field">
           <span>Project name</span>
           <input className="input" data-testid="import-name" maxLength={120} value={name} disabled={!repo}
                  onChange={(e) => { setName(e.target.value); named.current = true; }} />
         </label>
-        <label className="sp-check" title="Also find the business rules in its code (a knowledge-graph project)">
+        <label className="spj-check" title="Also find the business rules in its code (a knowledge-graph project)">
           <input type="checkbox" data-testid="import-rules" checked={rules} onChange={(e) => setRules(e.target.checked)} />
           {" "}Map business rules too
         </label>
-        <p className="sp-quiet">BOSS&apos;s agents, checks and budget are set up for you.</p>
-        <GatedButton permission="project:create" className="ag-btn ag-btn-primary sp-wide" data-testid="import-create"
+        <p className="spj-quiet">BOSS&apos;s agents, checks and budget are set up for you.</p>
+        <GatedButton permission="project:create" className="ag-btn ag-btn-primary spj-wide" data-testid="import-create"
                      disabled={!repo || !name.trim() || busy}
                      title="Create the project with this repo; mapping starts by itself"
                      onClick={() => void create()}>

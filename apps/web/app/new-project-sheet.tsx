@@ -109,7 +109,7 @@ export function NewProjectSheet({ draft, onDraft, onClose, onCreated, onBack }: 
         {error ? <p className="bx-np-error" role="alert" data-testid="new-project-error">{error}</p> : null}
         <div className="bx-np-actions">
           {onBack ? (
-            <button type="button" className="ag-btn sp-back-btn" data-testid="new-project-back" disabled={busy}
+            <button type="button" className="ag-btn spj-back-btn" data-testid="new-project-back" disabled={busy}
                     onClick={onBack}>← Back</button>
           ) : null}
           <button type="button" className="ag-btn" data-testid="new-project-cancel" disabled={busy} onClick={onClose}>Cancel</button>
