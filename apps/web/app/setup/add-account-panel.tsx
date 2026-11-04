@@ -18,15 +18,15 @@ import { setupWrite } from "../../lib/setup-client";
 import type { SetupRefusal, SetupView, TokenFound } from "../../lib/setup-types";
 import { Drawer } from "./drawer";
 import { DeviceSignin } from "./github-signin-row";
-import { toast, useBoard } from "./parts";
+import { Consent, CONSENT_REFUSAL, toast, useBoard } from "./parts";
 import { Out, Refusal, Tip } from "./pill";
-import { InstallNeededLinks, PasteTokenForm, refusalOf, type SigninFound } from "./repository-row";
+import { createTokenUrl, InstallNeededLinks, refusalOf, type SigninFound } from "./repository-row";
 
 export type How = "own" | "org" | "token";
 type Step = 1 | 2 | 3;
 
-const HOW: { key: How; title: string; badge?: string; line: string }[] = [
-  { key: "own", title: "My own account", badge: "Recommended", line: "Sign in with GitHub. One click, no tokens to copy." },
+const HOW: { key: How; title: string; line: string }[] = [
+  { key: "own", title: "My own account", line: "Sign in with GitHub. One click, no tokens to copy." },
   { key: "org", title: "An organisation", line: "Install the BOSS app on the org. An org admin may need to approve." },
   { key: "token", title: "Paste an access token", line: "For locked-down orgs. We show exactly which permissions to tick." },
 ];
@@ -120,7 +120,13 @@ export function AddAccountPanel({ onClose, onAdvanced, initial = null }: {
   const { projectId, view, apply, signin } = useBoard();
   const signinReady = Boolean(signin?.configured);
   const signedIn = signin?.me?.status === "active";
-  const [how, setHow] = useState<How>(initial ?? (signinReady ? "own" : "token"));
+  // THE APP THAT WORKS HERE: the org's GitHub App when it is installed (repo_app lists its repos).
+  const app = (view.github_accounts ?? []).find((a) => a.kind === "org_app") ?? null;
+  // RECOMMENDED IS A PATH THAT WORKS ON THIS INSTALL, never a greyed-out one.
+  const recommended: How = signinReady ? "own" : app ? "org" : "token";
+  const [how, setHow] = useState<How>(initial ?? recommended);
+  const [token, setToken] = useState("");
+  const [consent, setConsent] = useState(false);
   const [step, setStep] = useState<Step>(1);
   const [signing, setSigning] = useState(false);
   const [found, setFound] = useState<(TokenFound & Partial<SigninFound>) | null>(null);
@@ -144,11 +150,44 @@ export function AddAccountPanel({ onClose, onAdvanced, initial = null }: {
     if (signing && signedIn) { setSigning(false); void listSignin(); }
   }, [signing, signedIn]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const foundRepos = (f: TokenFound) => {
+    setFound(f);
+    setPicked(f.repos.length === 1 ? [f.repos[0].full_name] : []);
+    setStep(2);
+  };
+
+  const sendToken = async () => {
+    if (!token.trim()) { setRefusal({ state: "none", headline: "Paste a token first", fix: "" }); return; }
+    if (view.secrets.needs_consent && !consent) { setRefusal(CONSENT_REFUSAL); return; }
+    setBusy(true);
+    try {
+      foundRepos(await setupWrite<TokenFound>(projectId, "repo_token", {
+        token: token.trim(), accept_database_fallback: view.secrets.needs_consent ? consent : undefined,
+      }, { label: "Connect GitHub" }));
+    } catch (error) { setRefusal(refusalOf(error)); } finally {
+      setBusy(false);
+      setToken("");                        // never held after it was sent
+    }
+  };
+
+  const useApp = async () => {
+    setBusy(true);
+    try {
+      foundRepos(await setupWrite<TokenFound>(projectId, "repo_app", {}, { label: "Use the GitHub App" }));
+    } catch (error) { setRefusal(refusalOf(error)); } finally { setBusy(false); }
+  };
+
   const next = async () => {
     setRefusal(null);
     if (step === 1) {
-      if (how === "token") return;                     // the token form below moves on by itself
-      if (!signinReady) { onAdvanced(); return; }
+      if (how === "token") { await sendToken(); return; }
+      if (how === "org") {
+        if (app) { await useApp(); return; }
+        if (signinReady && signedIn) { await listSignin(); return; }
+        if (signinReady) { setSigning(true); return; }
+        onAdvanced();
+        return;
+      }
       if (!signedIn) { setSigning(true); return; }
       await listSignin();
       return;
@@ -182,25 +221,30 @@ export function AddAccountPanel({ onClose, onAdvanced, initial = null }: {
         <div className="su-radio-cards" role="radiogroup" aria-label="How to connect">
           {HOW.map((h) => {
             const off = h.key === "own" && !signinReady;
+            const why = "Sign in with GitHub is not set up on this install.";
+            const line = off ? why
+              : h.key === "org" && app ? `Use the BOSS GitHub App on @${app.login ?? app.name}.` : h.line;
             return (
               <label key={h.key} className="su-radio-card" data-checked={how === h.key || undefined}
-                     data-disabled={off || undefined} data-testid={`su-how-${h.key}`}>
+                     data-disabled={off || undefined} data-testid={`su-how-${h.key}`}
+                     title={off ? why : undefined} data-tip={off ? why : undefined}>
                 <input type="radio" name="su-how" value={h.key} checked={how === h.key} disabled={off}
-                       onChange={() => { setHow(h.key); setSigning(false); }} />
+                       onChange={() => { setHow(h.key); setSigning(false); setRefusal(null); }} />
                 <span className="su-stack su-tight">
-                  <span className="su-strong">{h.title}{h.badge ? <span className="su-chip su-chip-good">{h.badge}</span> : null}</span>
-                  <span className="su-faint">{off ? "Not set up on this install" : h.line}</span>
+                  <span className="su-strong">{h.title}{h.key === recommended
+                    ? <span className="su-chip su-chip-good">Recommended</span> : null}</span>
+                  <span className="su-faint">{line}</span>
                 </span>
               </label>
             );
           })}
         </div>
-        {how === "own" && signing && !signedIn ? <DeviceSignin onDone={() => undefined} /> : null}
+        {how !== "token" && signing && !signedIn ? <DeviceSignin onDone={() => undefined} /> : null}
         {how === "own" && signedIn ? (
           <Tip tip="One GitHub sign-in per person. For another personal account, paste its token."
                className="su-faint" testid="su-how-signed-in">Signed in as @{signin?.me?.login ?? "you"}</Tip>
         ) : null}
-        {how === "org" ? (
+        {how === "org" && !app ? (
           <div className="su-line">
             {signin?.install_url ? (
               <Out href={signin.install_url} testid="su-how-install"
@@ -213,8 +257,19 @@ export function AddAccountPanel({ onClose, onAdvanced, initial = null }: {
           </div>
         ) : null}
         {how === "token" ? (
-          <PasteTokenForm makeDefault={false}
-                          onFound={(f) => { setFound(f); setPicked(f.repos.length === 1 ? [f.repos[0].full_name] : []); setStep(2); }} />
+          <div className="su-stack" data-testid="su-how-token-form">
+            <input type="password" autoComplete="off" spellCheck={false} className="su-input" value={token}
+                   placeholder="Paste token" aria-label="Paste token" data-testid="su-account-token"
+                   title="Stored in BOSS's secret store. Never shown again."
+                   onChange={(e) => setToken(e.target.value)}
+                   onKeyDown={(e) => { if (e.key === "Enter") void next(); }} />
+            {view.secrets.needs_consent ? <Consent checked={consent} onChange={setConsent} /> : null}
+            <div className="su-line">
+              <Out href={createTokenUrl(typeof window !== "undefined" ? window.location.hostname : "this server")}
+                   tip="Opens GitHub with Contents and Pull requests: Read and write ticked."
+                   testid="su-account-create-token">Create token</Out>
+            </div>
+          </div>
         ) : null}
       </div>
     );
@@ -239,10 +294,10 @@ export function AddAccountPanel({ onClose, onAdvanced, initial = null }: {
         {refusal ? <Refusal headline={refusal.headline} fix={refusal.fix} /> : null}
         <div className="su-line su-panel-foot">
           <button type="button" className="su-btn" onClick={onClose} data-testid="su-account-cancel">Cancel</button>
-          {step === 1 && how === "token" ? null : (
+          {(
             <GatedButton permission={step === 2 ? "repository:register" : "github:connect"} type="button"
                          className="su-btn su-btn-primary" data-testid="su-account-continue"
-                         disabled={busy || (step === 1 && how === "own" && signing)} onClick={() => void next()}>
+                         disabled={busy || (step === 1 && how !== "token" && signing && !signedIn)} onClick={() => void next()}>
               {busy ? <CircleNotch className="su-spin" size={12} aria-hidden /> : null}{continueLabel}
             </GatedButton>
           )}

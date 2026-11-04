@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { GitHubAccount, SetupRepository, SetupView } from "../lib/setup-types";
 import { AreaShownContext } from "../lib/area-shown";
-import { click, fakeApi, flush, press, q, type, type Mounted } from "./_helpers/setup-board";
+import { click, fakeApi, flush, q, type, type Mounted } from "./_helpers/setup-board";
 import { board, firstRun, PILLS, tryStep } from "./_helpers/setup-fixtures";
 
 const now = "2026-11-04T12:00:00+00:00";
@@ -209,13 +209,18 @@ describe("Screen 3 — Add a GitHub account", () => {
     expect(panel.textContent).toContain("Pick repos");
     expect(panel.textContent).toContain("Check access");
     expect(q(panel, "su-how-own")!.textContent).toContain("My own account");
-    expect(q(panel, "su-how-own")!.textContent).toContain("Recommended");
+    // Sign-in is not set up here: own account says why (tooltip) and is not the recommended one.
+    expect(q(panel, "su-how-own")!.textContent).not.toContain("Recommended");
+    expect(q(panel, "su-how-own")!.getAttribute("title")).toContain("not set up on this install");
     expect(q(panel, "su-how-org")!.textContent).toContain("An organisation");
     expect(q(panel, "su-how-token")!.textContent).toContain("Paste an access token");
-    // No "Sign in with GitHub" on this API: a token is the way, preselected.
+    // No "Sign in with GitHub" and no App here: a token is the way, preselected and recommended.
     expect((q(panel, "su-how-token")!.querySelector("input") as HTMLInputElement).checked).toBe(true);
-    await type(q(panel, "su-token-input"), "github_pat_not_a_real_one_0000000000");
-    await press(q(panel, "su-token-input"), "Enter");
+    expect(q(panel, "su-how-token")!.textContent).toContain("Recommended");
+    expect(q(panel, "su-account-cancel")).not.toBeNull();
+    expect(q(panel, "su-account-continue")!.textContent).toBe("Continue");
+    await type(q(panel, "su-account-token"), "github_pat_not_a_real_one_0000000000");
+    await click(q(panel, "su-account-continue"));
     expect(q(panel, "su-add-account-body")!.getAttribute("data-step")).toBe("2");
     await click(q(panel, "su-account-repo-acme/web"));
     await click(q(panel, "su-account-repo-acme/api"));
@@ -230,6 +235,26 @@ describe("Screen 3 — Add a GitHub account", () => {
     expect(document.body.innerHTML).not.toContain("github_pat_not_a_real_one");
     await click(q(panel, "su-account-continue"));
     expect(q(document.body, "su-add-account")).toBeNull();
+  });
+
+  it("with the org's GitHub App installed, An organisation is recommended and Continue lists its repos", async () => {
+    const appRow: GitHubAccount = { ...ACCOUNTS[0], id: "org_app", connection_id: null, scope: "org", kind: "org_app",
+                                    name: "paramg", how: "Personal · BOSS GitHub App" };
+    const view = { ...withAccounts(board()), github_accounts: [ACCOUNTS[0], appRow] };
+    const api = fakeApi(view);
+    api.answer = (call) => (call.op === "repo_app" ? { status: 200, body: {
+      account_login: "paramg", expires_at: null, connection_id: "ghc-app", source: "github_app",
+      repos: [{ full_name: "paramg/boss", private: true, default_branch: "main", owner_type: "User" }] } } : null);
+    const { container } = await mount(view);
+    await click(q(container, "su-add-account-open"));
+    const panel = q(document.body, "su-add-account")!;
+    expect((q(panel, "su-how-org")!.querySelector("input") as HTMLInputElement).checked).toBe(true);
+    expect(q(panel, "su-how-org")!.textContent).toContain("Recommended");
+    expect(q(panel, "su-how-org")!.textContent).toContain("@paramg");
+    await click(q(panel, "su-account-continue"));
+    expect(api.calls.some((c) => c.op === "repo_app")).toBe(true);
+    expect(q(panel, "su-add-account-body")!.getAttribute("data-step")).toBe("2");
+    expect(q(panel, "su-account-continue")!.textContent).toBe("Add 1 repo");
   });
 
   it("Cancel closes the panel and nothing is written", async () => {
