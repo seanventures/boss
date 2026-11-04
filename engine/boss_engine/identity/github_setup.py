@@ -364,20 +364,53 @@ def _repos(values: Iterable[str]) -> list[str]:
     return sorted(set(out))
 
 
-def org_token(db: Any, org_id: Optional[str] = None) -> Optional[dict[str, Any]]:
-    q = ("SELECT id, connection_name, granted_scopes, provider_subject, created_at FROM identity_vault_items "
-         "WHERE kind = 'legacy_pat' AND owner_principal_id IS NULL AND provider = 'github' AND status = 'active'")
-    row = (db.execute(_sql(q + " AND org_id = :o ORDER BY created_at DESC LIMIT 1"), {"o": org_id}).mappings().first()
-           if org_id else db.execute(_sql(q + " ORDER BY created_at DESC LIMIT 1")).mappings().first())
-    if row is None:
-        return None
+_ORG_TOKENS_Q = ("SELECT id, connection_name, granted_scopes, provider_subject, created_at FROM identity_vault_items "
+                 "WHERE kind = 'legacy_pat' AND owner_principal_id IS NULL AND provider = 'github' "
+                 "AND status = 'active'")
+
+
+def _token_row(row: Any) -> dict[str, Any]:
     repos = [s[len(REPO_PREFIX):] for s in (row["granted_scopes"] or []) if s.startswith(REPO_PREFIX)]
     return {"id": row["id"], "repos": repos, "login": row["provider_subject"],
             "migrated": row["connection_name"] == MIGRATED_NAME, "created_at": row["created_at"]}
 
 
+def org_token(db: Any, org_id: Optional[str] = None) -> Optional[dict[str, Any]]:
+    """The org's NEWEST fine-grained token (the one Identity › GitHub shows). An org may hold
+    several since BOSSAPP-808 (one per GitHub account); `org_token_for` picks the one a repo uses."""
+    tokens = org_tokens(db, org_id, limit=1)
+    return tokens[0] if tokens else None
+
+
+def org_tokens(db: Any, org_id: Optional[str] = None, *, limit: int = 50) -> list[dict[str, Any]]:
+    """Every active org GitHub token, newest first: one per GitHub account the org connected
+    with a token (a personal account and one or more organisations)."""
+    q = _ORG_TOKENS_Q + (" AND org_id = :o" if org_id else "") + " ORDER BY created_at DESC, id DESC LIMIT :lim"
+    params: dict[str, Any] = {"lim": int(limit)}
+    if org_id:
+        params["o"] = org_id
+    return [_token_row(r) for r in db.execute(_sql(q), params).mappings().all()]
+
+
+def org_token_for(db: Any, repos: Iterable[str] | str, org_id: Optional[str] = None) -> Optional[dict[str, Any]]:
+    """The org token that covers EVERY one of `repos` (newest first), or None. Builds use the
+    account that owns the repository, never "whichever token was stored last"."""
+    wanted = {str(r).strip().lower() for r in ([repos] if isinstance(repos, str) else repos)}
+    for tok in org_tokens(db, org_id):
+        if wanted and wanted <= set(tok["repos"]):
+            return tok
+    return None
+
+
 def store_org_token(*, token: str, repos: Iterable[str], org_id: str, db: Any, by: str,
-                    migrated: bool = False, check: bool = True) -> dict[str, Any]:
+                    migrated: bool = False, check: bool = True, keep_others: bool = False,
+                    login: Optional[str] = None) -> dict[str, Any]:
+    """Keep `token` as an org GitHub connection for `repos`.
+
+    `keep_others=False` (Identity › GitHub's paste, the env migration): it REPLACES the org's
+    token, as it always did. `keep_others=True` (Setup › Add GitHub account): it is ANOTHER
+    account — only an older token of the same GitHub login is retired (its repos carry over), so
+    a second account never takes the first one's repositories away."""
     require_org_credentials_authority(org_id, db=db)
     token = (token or "").strip()
     if not token or len(token) > 400 or any(c.isspace() for c in token):
@@ -385,7 +418,6 @@ def store_org_token(*, token: str, repos: Iterable[str], org_id: str, db: Any, b
     wanted = _repos(repos)
     if not wanted:
         raise GitHubSetupError("repos_required", 422, message="Name the repositories this token is for.")
-    login = None
     if check:
         me = github_app._call("GET", "/user", token=token)  # noqa: SLF001
         if me.status != 200:
@@ -395,9 +427,17 @@ def store_org_token(*, token: str, repos: Iterable[str], org_id: str, db: Any, b
             r = github_app._call("GET", f"/repos/{repo}", token=token)  # noqa: SLF001
             if r.status != 200:
                 raise GitHubSetupError("token_cannot_see_repo", 422, repo=repo)
-    db.execute(_sql("UPDATE identity_vault_items SET status = 'revoked' WHERE kind = 'legacy_pat' AND "
-                    "owner_principal_id IS NULL AND provider = 'github' AND org_id = :o AND status = 'active'"),
-               {"o": org_id})
+    if keep_others:
+        same = [t for t in org_tokens(db, org_id)
+                if login and str(t["login"] or "").lower() == str(login).lower()]
+        wanted = _repos([*wanted, *(r for t in same for r in t["repos"])])
+        if same:
+            db.execute(_sql("UPDATE identity_vault_items SET status = 'revoked' WHERE id = ANY(:ids)"),
+                       {"ids": [t["id"] for t in same]})
+    else:
+        db.execute(_sql("UPDATE identity_vault_items SET status = 'revoked' WHERE kind = 'legacy_pat' AND "
+                        "owner_principal_id IS NULL AND provider = 'github' AND org_id = :o AND status = 'active'"),
+                   {"o": org_id})
     item = vault.store(org_id=org_id, owner_principal_id=None, kind=vault.VaultItemKind.LEGACY_PAT,
                        provider="github", secret=token, provider_subject=login,
                        connection_name=MIGRATED_NAME if migrated else ORG_TOKEN_NAME,
@@ -406,10 +446,12 @@ def store_org_token(*, token: str, repos: Iterable[str], org_id: str, db: Any, b
     return {"id": item, "repos": wanted, "login": login, "migrated": migrated}
 
 
-def add_repo_to_org_token(*, repo: str, org_id: str, db: Any) -> None:
-    """Setup › Repo picked another repository for the stored token: the org connection covers it too."""
+def add_repo_to_org_token(*, repo: str, org_id: str, db: Any, token_id: Optional[str] = None) -> None:
+    """Setup › Repo picked another repository for a stored token: that org connection covers it too.
+    `token_id` names which (an org may hold several); without it, the newest."""
     require_org_credentials_authority(org_id, db=db)
-    current = org_token(db, org_id)
+    current = (next((t for t in org_tokens(db, org_id) if t["id"] == token_id), None) if token_id
+               else org_token(db, org_id))
     wanted = _repos([repo])
     if current is None or not wanted or wanted[0] in current["repos"]:
         return
@@ -417,9 +459,10 @@ def add_repo_to_org_token(*, repo: str, org_id: str, db: Any) -> None:
                     "WHERE id = :i"), {"r": REPO_PREFIX + wanted[0], "i": current["id"]})
 
 
-def remove_org_token(*, org_id: str, db: Any, by: str) -> bool:
+def remove_org_token(*, org_id: str, db: Any, by: str, token_id: Optional[str] = None) -> bool:
     require_org_credentials_authority(org_id, db=db)
-    current = org_token(db, org_id)
+    current = (next((t for t in org_tokens(db, org_id) if t["id"] == token_id), None) if token_id
+               else org_token(db, org_id))
     if current is None:
         return False
     db.execute(_sql("UPDATE identity_vault_items SET status = 'revoked' WHERE id = :i"), {"i": current["id"]})
@@ -565,8 +608,8 @@ def control_plane_token(db: Any, owner: str, repo: str) -> Optional[str]:
             return tok.token
         except github_app.GitHubRefused:
             pass
-    token = org_token(db)
-    if token is not None and full in token["repos"]:
+    token = org_token_for(db, full)
+    if token is not None:
         return vault.org_github_token(token["id"], db=db)
     return None
 
@@ -740,6 +783,9 @@ def mode(db: Any, org_id: Optional[str] = None) -> dict[str, Any]:
                     "verified": _verified(cfg)},
             "token": ({"repos": token["repos"], "login": token["login"], "migrated": token["migrated"]}
                       if token else None),
+            # Every org token (one per GitHub account), newest first. Never a secret.
+            "tokens": [{"id": t["id"], "repos": t["repos"], "login": t["login"], "migrated": t["migrated"]}
+                       for t in org_tokens(db, org_id)],
             "people_connected": people,
             "env_token": {"present": env_token, "read_by_builds": read_by_builds}}
 

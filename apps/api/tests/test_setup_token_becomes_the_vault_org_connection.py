@@ -106,3 +106,29 @@ def test_with_the_app_connected_setup_binds_its_repos_without_a_token(client, mo
     finally:
         with begin() as db:
             db.execute(text("DELETE FROM identity_github_app"))
+
+
+def test_a_second_accounts_token_is_kept_beside_the_first(client, monkeypatch):
+    """BOSSAPP-808: a token for ANOTHER GitHub account pasted in Setup is a second org connection.
+    It used to replace the first one, so the first account's repositories stopped building."""
+    as_ceo(monkeypatch)
+    fakes(monkeypatch)
+    monkeypatch.setenv("BOSS_MASTER_KEY", base64.b64encode(b"k" * 32).decode())
+    monkeypatch.delenv("BOSS_MASTER_KEY_FILE", raising=False)
+    vault.reset_master_key_cache()
+    with begin() as db:
+        vault.check_master_key(db=db)
+        db.execute(text("UPDATE identity_vault_items SET status = 'revoked' WHERE kind = 'legacy_pat' "
+                        "AND owner_principal_id IS NULL"))
+    connect_repository(client, token="ghp_e2e_full", full_name="e2e/app")
+    with begin() as db:
+        first = github_setup.org_token(db)
+        # The first account is someone else (the stub answers one login for every token).
+        db.execute(text("UPDATE identity_vault_items SET provider_subject = 'first-account' WHERE id = :i"),
+                   {"i": first["id"]})
+    connect_repository(client, token="ghp_e2e_expiring", full_name="e2e/other")
+    with begin() as db:
+        tokens = github_setup.org_tokens(db)
+        assert first["id"] in {t["id"] for t in tokens} and len(tokens) == 2
+        assert github_setup.control_plane_token(db, "e2e", "app") == "ghp_e2e_full"
+        assert github_setup.control_plane_token(db, "e2e", "other") == "ghp_e2e_expiring"

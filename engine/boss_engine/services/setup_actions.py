@@ -477,15 +477,23 @@ def _mirror_token_into_vault(connection: Connection, service: Any, project_id: s
         repos = [str(r) for r in connection.execute(
             text("SELECT full_name FROM github_repository_bindings WHERE connection_id = :c "
                  "AND status = 'active'"), {"c": connection_id}).scalars()]
-        current = github_setup.org_token(connection, str(org_id))
-        if current is not None and vault.org_github_token(current["id"], db=connection) == token:
-            for repo in repos:
-                github_setup.add_repo_to_org_token(repo=repo, org_id=str(org_id), db=connection)
-            return
+        # SEVERAL ACCOUNTS (BOSSAPP-808): the org may already hold this very token (add the repos
+        # to it), or another account's token — which is KEPT: a second account never takes the
+        # first one's repositories away. Only an older token of the same login is retired.
+        for current in github_setup.org_tokens(connection, str(org_id)):
+            if vault.org_github_token(current["id"], db=connection) == token:
+                for repo in repos:
+                    github_setup.add_repo_to_org_token(repo=repo, org_id=str(org_id), db=connection,
+                                                       token_id=current["id"])
+                return
+        login = connection.execute(
+            text("SELECT account_login FROM github_connections WHERE id = :c"),
+            {"c": connection_id}).scalar()
         with connection.begin_nested():
             github_setup.store_org_token(token=token, repos=repos,
                                          org_id=str(org_id), db=connection,
-                                         by=actor if actor.startswith("usr_") else "", check=False)
+                                         by=actor if actor.startswith("usr_") else "", check=False,
+                                         keep_others=True, login=str(login) if login else None)
     except Exception as exc:  # noqa: BLE001 — Setup's own check already said whether the token works
         import logging
 

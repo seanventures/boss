@@ -48,19 +48,23 @@ def _list_from_app(db: Any) -> list[dict[str, Any]]:
 
 
 def _list_from_org_token(db: Any, org_id: str) -> list[dict[str, Any]]:
+    """Every repository the org's tokens were given for — all of them, one per GitHub account
+    (BOSSAPP-808), not only the newest token's."""
     from ..identity import github_app, github_setup, vault
 
-    tok = github_setup.org_token(db, org_id)
-    if tok is None:
-        return []
-    secret = vault.org_github_token(tok["id"], db=db)
     out: list[dict[str, Any]] = []
-    for full in tok["repos"][:200]:
-        resp = github_app._call("GET", f"/repos/{full}", token=secret)  # noqa: SLF001
-        if resp.status == 200 and isinstance(resp.json(), dict):
-            out.append(resp.json())
-        else:
-            out.append({"full_name": full})
+    seen: set[str] = set()
+    for tok in github_setup.org_tokens(db, org_id):
+        secret = vault.org_github_token(tok["id"], db=db)
+        for full in tok["repos"][:200]:
+            if full.lower() in seen:
+                continue
+            seen.add(full.lower())
+            resp = github_app._call("GET", f"/repos/{full}", token=secret)  # noqa: SLF001
+            if resp.status == 200 and isinstance(resp.json(), dict):
+                out.append(resp.json())
+            else:
+                out.append({"full_name": full})
     return out
 
 
@@ -253,8 +257,8 @@ def default_prober(db: Any, settings: Any, org_id: str, project_id: str, full_na
         except Exception:  # noqa: BLE001
             token = None
     if token is None:
-        org = github_setup.org_token(db, org_id)
-        if org is not None and norm_repo(full_name) in {norm_repo(r) for r in org["repos"]}:
+        org = github_setup.org_token_for(db, norm_repo(full_name), org_id)
+        if org is not None:
             token = vault.org_github_token(org["id"], db=db)
     if not token:
         at = setup_checks.iso(setup_checks.now_utc())

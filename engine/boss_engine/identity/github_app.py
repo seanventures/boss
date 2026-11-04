@@ -307,10 +307,13 @@ def _credential_for_run(claims: RunTokenClaims, repos: list[str], perms: Mapping
                                  permissions=dict(perms), kind="as_me")
     if github_setup.app_ready(db, claims.org_id):
         return mint_installation_token(repos, perms, db=db)
-    org = github_setup.org_token(db, claims.org_id)
+    # An org may hold several tokens (one per GitHub account, BOSSAPP-808): the one that covers
+    # this run's repos is used; none covering them is the same refusal as before.
+    org = (github_setup.org_token_for(db, repos, claims.org_id) if repos
+           else github_setup.org_token(db, claims.org_id))
+    if org is None and github_setup.org_token(db, claims.org_id) is not None:
+        raise GitHubRefused("repo_outside_org_token")
     if org is not None:
-        if not {r.lower() for r in repos} <= set(org["repos"]):
-            raise GitHubRefused("repo_outside_org_token")
         return InstallationToken(token=vault.org_github_token(org["id"], db=db),
                                  expires_at=datetime.now(timezone.utc) + timedelta(minutes=30),
                                  repositories=tuple(repos), permissions=dict(perms), kind="org_token")
