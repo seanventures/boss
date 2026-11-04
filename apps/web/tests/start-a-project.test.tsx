@@ -22,7 +22,7 @@ import { ProjectStartCard } from "../app/start-project/project-start";
 import { StartProjectSheet } from "../app/start-project/start-sheet";
 import { ProjectMenu } from "../app/project-menu";
 import {
-  accountsOf, estimateLine, newProjectHref, startBody, stepFromParam, type RepoFacts, type StartView,
+  accountsOf, estimateLine, nameFromIdea, newProjectHref, startBody, stepFromParam, type RepoFacts, type StartView,
 } from "../lib/start-project";
 import {
   $$, choose, click, mountAs, registryFixture, stubFetch, tid, type, unmount,
@@ -44,7 +44,7 @@ function view(extra: Partial<StartView> = {}): StartView {
     project_id: "order-service", name: "Order service", description: null, project_type: "app", archived: false,
     repo: { full_name: "acme/order-service", branch: "develop", mapping: { state: "done", percent: 100, done: true } },
     start: { mode: "feature", work_class: null, workflow_key: "minor_feature", workflow_name: "Minor Feature",
-             resolved_key: "minor_feature", minutes: 25, cost: { runs: 4, low_usd: 2, high_usd: 4, metered: true } },
+             resolved_key: "minor_feature", minutes: 106, minutes_to_pr: 86, minutes_low: 45, minutes_high: 110, cost: { runs: 4, low_usd: 2, high_usd: 4, metered: true } },
     examples: ["Add an API endpoint", "Fix a bug", "Add tests", "Upgrade a library"],
     next: [
       { key: "plan", label: "Plan", who: "You approve", you: true },
@@ -108,15 +108,70 @@ describe("the URL opens the flow at a choice", () => {
     expect(tid("start-project")!.getAttribute("data-step")).toBe("sample");
   });
 
-  it("/?new_project=idea opens the name-and-description form, with Back to the doors", async () => {
+  it("/?new_project=idea opens one sentence box; the full form is one press away, with Back", async () => {
     window.history.replaceState(null, "", "/?new_project=idea");
     stubFetch(() => undefined);
     await mountAs(<ProjectMenu projects={[{ id: "p1", name: "Acme Shop" }]} activeId="p1" homeId="p1" />);
-    expect(tid("new-project-form")).not.toBeNull();
+    expect(tid("start-idea-step")!.querySelector("label span")!.textContent).toBe("Describe it in a sentence");
+    expect(tid("new-project-form")).toBeNull();
+    await click(tid("idea-form"));
     // Both project types are still offered: an app, or a knowledge graph of an existing codebase.
     expect($$('[data-testid="new-project-type"] input').map((i) => (i as HTMLInputElement).value)).toEqual(["app", "knowledge_graph"]);
     await click(tid("new-project-back"));
-    expect(tid("start-choices")).not.toBeNull();
+    expect(tid("start-idea-step")).not.toBeNull();
+  });
+});
+
+describe("New app from an idea", () => {
+  it("names it from the sentence, makes the project and starts its new-app workflow with the sentence", async () => {
+    const calls = stubFetch((c) => {
+      if (c.method === "POST" && c.path === "/v1/projects") return { status: 201, body: { id: "shift-swap-board", name: "Shift-swap board" } };
+      if (c.method === "POST" && c.path === "/api/delivery-workflows") return { body: { run: { id: "wfr_1" } } };
+      return undefined;
+    });
+    const go = vi.fn();
+    await mountAs(<StartProjectSheet step="idea" onStep={() => {}} onClose={() => {}} projectId="p1" homeId="p1" go={go} />);
+    expect((tid("idea-go") as HTMLButtonElement).disabled).toBe(true);
+    const sentence = "Build a shift-swap board where staff offer shifts and a manager approves";
+    await type(tid("idea-text"), sentence);
+    expect((tid("idea-name") as HTMLInputElement).value).toBe("Shift-swap board");
+    await click(tid("idea-go"));
+    expect(calls.find((c) => c.path === "/v1/projects")!.body).toEqual({ name: "Shift-swap board", description: sentence });
+    expect(calls.find((c) => c.path === "/api/delivery-workflows")!.body).toEqual({
+      action: "start", project_id: "shift-swap-board", work_class: "project.new",
+      input: { directive: sentence, title: "Shift-swap board" } });
+    expect(new URLSearchParams(String(go.mock.calls[0][0]).split("?")[1]).get("project_id")).toBe("shift-swap-board");
+  });
+
+  it("a name typed by the person is kept; refused for what is missing, Start anyway reuses the project", async () => {
+    let starts = 0;
+    const calls = stubFetch((c) => {
+      if (c.method === "POST" && c.path === "/v1/projects") return { status: 201, body: { id: "rota", name: "Rota" } };
+      if (c.method === "POST" && c.path === "/api/delivery-workflows") {
+        starts += 1;
+        return starts === 1 ? { status: 409, body: { error: "Not ready here yet", readiness: READINESS } } : { body: { run: { id: "wfr_1" } } };
+      }
+      return undefined;
+    });
+    const go = vi.fn();
+    await mountAs(<StartProjectSheet step="idea" onStep={() => {}} onClose={() => {}} projectId="p1" homeId="p1" go={go} />);
+    await type(tid("idea-text"), "A fair on-call rota for a team of six");
+    await type(tid("idea-name"), "Rota");
+    await type(tid("idea-text"), "A fair on-call rota for a team of six people");
+    expect((tid("idea-name") as HTMLInputElement).value).toBe("Rota");
+    await click(tid("idea-go"));
+    expect(tid("start-idea-readiness")).not.toBeNull();
+    await click(tid("dw-readiness-start-anyway"));
+    await click(tid("idea-go"));
+    expect(calls.filter((c) => c.path === "/v1/projects").length).toBe(1);
+    expect((calls.filter((c) => c.path === "/api/delivery-workflows")[1].body as { start_anyway: string[] }).start_anyway).toEqual(["deployment_target"]);
+    expect(go).toHaveBeenCalledTimes(1);
+  });
+
+  it("derives a short name from a sentence", () => {
+    expect(nameFromIdea("Build an incident timeline from alert logs.")).toBe("Incident timeline");
+    expect(nameFromIdea("A tool that tracks expiring access")).toBe("Tool");
+    expect(nameFromIdea("")).toBe("");
   });
 });
 
@@ -125,18 +180,18 @@ describe("screen 1 — New project", () => {
     stubFetch(() => undefined);
     await mountAs(<StartProjectSheet step="choose" onStep={() => {}} onClose={() => {}} projectId="p1" homeId="p1" />);
     const doors = ["sample", "import", "idea"].map((k) => tid(`start-${k}`)!);
-    expect(doors.map((d) => d.querySelector(".sp-tag")!.textContent)).toEqual(["NEW HERE? · 8 MIN", "MOST COMMON · 2 MIN", "FROM SCRATCH · 1 MIN"]);
+    expect(doors.map((d) => d.querySelector(".spj-tag")!.textContent)).toEqual(["NEW HERE? · 8 MIN", "MOST COMMON · 2 MIN", "FROM SCRATCH · 1 MIN"]);
     expect(doors.map((d) => d.querySelector("b")!.textContent)).toEqual(["Try a sample", "Import a repo", "New app from an idea"]);
-    expect(doors.map((d) => d.querySelector(".sp-cta")!.textContent)).toEqual(["Start →", "Choose repo →", "Describe it →"]);
+    expect(doors.map((d) => d.querySelector(".spj-cta")!.textContent)).toEqual(["Start →", "Choose repo →", "Describe it →"]);
     expect(doors[0].getAttribute("data-highlight")).toBe("true");
-    const presets = $$('[data-testid="start-presets"] .sp-preset:not(.sp-preset-all)');
+    const presets = $$('[data-testid="start-presets"] .spj-preset:not(.spj-preset-all)');
     expect(presets.map((p) => p.textContent)).toContain("Bug triage boardWeb app");
     for (const kg of ["AML alert investigation", "Regulatory change", "Data quality RCA"]) {
       expect(presets.map((p) => p.textContent)).toContain(`${kg}Banking · Knowledge graph`);
     }
     expect(tid("start-presets-all")!.textContent).toBe("See all 19 →");
     await click(tid("start-presets-all"));
-    expect($$('[data-testid="start-presets"] .sp-preset').length).toBe(19);
+    expect($$('[data-testid="start-presets"] .spj-preset').length).toBe(19);
   });
 
   it("a door moves to its screen", async () => {
@@ -190,7 +245,7 @@ describe("the sample", () => {
     });
     const go = vi.fn();
     await mountAs(<StartProjectSheet step="sample" onStep={() => {}} onClose={() => {}} projectId="p1" homeId="p1" go={go} />);
-    expect($$(".sp-flow li b").map((b) => b.textContent)).toEqual(["Plan", "Build", "Review", "Pull request", "Preview"]);
+    expect($$(".spj-flow li b").map((b) => b.textContent)).toEqual(["Plan", "Build", "Review", "Pull request", "Preview"]);
     await click(tid("start-sample-go"));
     expect(calls.find((c) => c.path === "/v1/projects")!.body).toEqual({ name: "Hello World" });
     expect(calls.find((c) => c.path.endsWith("/apply"))!.body).toEqual({
@@ -246,7 +301,7 @@ describe("screen 2 — Import a repo", () => {
     await mountAs(<StartProjectSheet step="import" onStep={() => {}} onClose={() => {}} projectId="p1" homeId="p1" go={go} />);
     // Every account the registry reaches; allowed, live repos only (not mobile, not the archived one).
     expect($$('[data-testid="import-account"] option').map((o) => o.textContent)).toEqual(["acme", "globex"]);
-    expect($$('[data-testid="import-repos"] .sp-repo .sp-mono').map((r) => r.textContent)).toEqual(["api", "contracts", "infra", "web"]);
+    expect($$('[data-testid="import-repos"] .spj-repo .spj-mono').map((r) => r.textContent)).toEqual(["api", "contracts", "infra", "web"]);
     expect(tid("import-add-account")!.textContent).toBe("Repo not listed? Add a GitHub account");
     expect(new URLSearchParams(tid("import-add-account")!.getAttribute("href")!.split("?")[1]).get("area")).toBe("setup");
     expect((tid("import-create") as HTMLButtonElement).disabled).toBe(true);
@@ -270,7 +325,7 @@ describe("screen 2 — Import a repo", () => {
     const calls = api();
     await mountAs(<StartProjectSheet step="import" onStep={() => {}} onClose={() => {}} projectId="p1" homeId="p1" go={() => {}} />);
     await choose(tid("import-account"), "globex");
-    expect($$('[data-testid="import-repos"] .sp-repo .sp-mono').map((r) => r.textContent)).toEqual(["billing"]);
+    expect($$('[data-testid="import-repos"] .spj-repo .spj-mono').map((r) => r.textContent)).toEqual(["billing"]);
     await choose(tid("import-account"), "acme");
     await click(tid("import-repo-ghr_api"));
     await click(tid("import-rules"));
@@ -306,7 +361,7 @@ describe("screen 3 — What should we add?", () => {
     expect(tid("project-start-ask")!.querySelector("label")!.textContent).toBe("What should we add?");
     expect($$('[data-testid="project-start-chips"] button').map((b) => b.textContent))
       .toEqual(["Add an API endpoint", "Fix a bug", "Add tests", "Upgrade a library"]);
-    expect(tid("project-start-estimate")!.textContent).toBe("Estimate: ~25 min · ~$3 or included in subscription");
+    expect(tid("project-start-estimate")!.textContent).toBe("Estimate: 45–110 min to a pull request · ~$3 or included in subscription");
     expect((tid("project-start-go") as HTMLButtonElement).disabled).toBe(true);
     await click($$('[data-testid="project-start-chips"] button')[2]);
     expect((tid("project-start-text") as HTMLTextAreaElement).value).toBe("Add tests");
@@ -325,7 +380,7 @@ describe("screen 3 — What should we add?", () => {
     expect($$('[data-testid="project-start-next"] li[data-you]').length).toBe(2);
     const plan = tid("project-start-work-wfr_plan")!;
     expect(plan.getAttribute("data-tone")).toBe("amber");
-    expect(plan.querySelector(".sp-work-state")!.textContent).toBe("Waiting for your plan approval");
+    expect(plan.querySelector(".spj-work-state")!.textContent).toBe("Waiting for your plan approval");
     const review = plan.querySelector("a")!;
     expect(review.textContent).toBe("Review plan");
     expect(new URLSearchParams(review.getAttribute("href")!.split("?")[1]).get("wfr")).toBe("wfr_plan");
@@ -348,13 +403,16 @@ describe("screen 3 — What should we add?", () => {
     expect((starts[1].body as { start_anyway: string[] }).start_anyway).toEqual(["deployment_target"]);
   });
 
-  it("a project with no repo builds a new app from its description", async () => {
+  it("a project with no repo builds a new app; its box starts empty", async () => {
     stubFetch((c) => (c.path === "/v1/projects/idea/start" ? { body: view({
       project_id: "idea", name: "Shift swap", description: "A shift-swap board for a small team", repo: null, work: [],
       start: { mode: "new_app", work_class: "project.new", workflow_key: null, workflow_name: "Standard Product Delivery", minutes: 60, cost: null } }) } : undefined));
     await mountAs(<ProjectStartCard projectId="idea" />);
     expect(tid("project-start-ask")!.querySelector("label")!.textContent).toBe("What should we build?");
-    expect((tid("project-start-text") as HTMLTextAreaElement).value).toBe("A shift-swap board for a small team");
+    // The description is not typed for the person: the box is empty and Start waits for words.
+    expect((tid("project-start-text") as HTMLTextAreaElement).value).toBe("");
+    expect((tid("project-start-text") as HTMLTextAreaElement).placeholder).toMatch(/^e\.g\. /);
+    expect((tid("project-start-go") as HTMLButtonElement).disabled).toBe(true);
     expect(tid("project-start-chips")).toBeNull();
     expect(tid("project-start-estimate")!.textContent).toBe("Estimate: ~60 min · included in subscription or pay per use");
   });
@@ -367,5 +425,17 @@ describe("screen 3 — What should we add?", () => {
       .toEqual({ project_id: "order-service", work_class: "project.new", input: { directive: "A board", title: "A board" } });
     expect(estimateLine({ mode: "feature", work_class: null, workflow_key: "x", minutes: null, cost: { runs: 1, low_usd: 0.2, high_usd: 0.4 } }))
       .toBe("Estimate: ~$0.30 or included in subscription");
+  });
+});
+
+describe("one task box per project page (walk 806)", () => {
+  it("the Command Center drops its own task box where the project page's card is", async () => {
+    const { readFileSync } = await import("node:fs");
+    const page = readFileSync("app/page.tsx", "utf8");
+    const cc = readFileSync("app/command-center-ui.tsx", "utf8");
+    expect(page).toMatch(/\{showsStartCard \? \(\s*<ProjectStartCard/);
+    expect(page).toContain("startCard={showsStartCard}");
+    expect(cc).toContain('{startCard && action.kind === "empty" ? null : <div className="cc-next"');
+    expect(cc).toContain('open={!startCard && action.kind === "empty"}');
   });
 });

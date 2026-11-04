@@ -84,3 +84,18 @@ def test_the_project_page_names_five_tiles_and_four_examples():
                                                    "Preview"]
     assert [s["who"] for s in sp.NEXT_STEPS if s["you"]] == ["You approve", "You merge"]
     assert sp.EXAMPLES == ("Add an API endpoint", "Fix a bug", "Add tests", "Upgrade a library")
+
+
+def test_the_estimate_is_a_range_to_the_pull_request_not_through_the_release():
+    from boss_engine.services.workflow_catalogue import CATALOGUE
+    from boss_engine.services import workflow_capabilities as caps
+
+    entry = next(e for e in CATALOGUE if e["key"] == sp.FEATURE_WORKFLOW)
+    spec = {"steps": entry["steps"]}
+    to_pr = sp.minutes_to_pr(spec)
+    # Plan (the panel), build, preview, more tests and the report — not the deploy a person approves.
+    assert to_pr == sum(caps.get(k).typical_minutes for k in ("meeting", "build", "preview", "more_tests", "report"))
+    assert to_pr < caps.estimate_minutes(spec)
+    low, high = sp.minutes_range(to_pr)
+    assert low < to_pr < high and low % 5 == 0 and high % 5 == 0
+    assert sp.minutes_range(0) == (None, None)

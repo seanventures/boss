@@ -282,8 +282,43 @@ def how_to_start(connection: Connection, project_id: str, *, has_repo: bool) -> 
     out["workflow_name"] = chosen["name"]
     out["resolved_key"] = chosen["workflow_key"]
     out["minutes"] = workflow_capabilities.estimate_minutes(spec) if isinstance(spec, dict) else None
+    # THE ESTIMATE PEOPLE READ is to the pull request and its preview: the steps after a person
+    # merges (deploy, notify, monitor) wait on that person, so they are not "how long it takes".
+    # Said as a range around the steps' typical minutes, never one precise-looking number.
+    to_pr = minutes_to_pr(spec) if isinstance(spec, dict) else 0
+    out["minutes_to_pr"] = to_pr or None
+    out["minutes_low"], out["minutes_high"] = minutes_range(to_pr)
     out["cost"] = _cost(connection, project_id, str(chosen["workflow_key"]))
     return out
+
+
+#: Steps from which the work waits on a person's release decision: not counted in the estimate.
+_AFTER_THE_PR = ("deploy", "notify", "monitor")
+
+
+def minutes_to_pr(spec: dict[str, Any]) -> int:
+    """The steps' typical minutes up to the first step after the pull request (deploy)."""
+    from . import workflow_capabilities
+
+    total = 0
+    for step in spec.get("steps") or []:
+        if step.get("kind") != "capability":
+            continue
+        key = str((step.get("binding") or {}).get("capability") or "")
+        if key in _AFTER_THE_PR:
+            break
+        if key in workflow_capabilities.CAPABILITY_KEYS:
+            total += workflow_capabilities.get(key).typical_minutes
+    return total
+
+
+def minutes_range(typical: int) -> tuple[Optional[int], Optional[int]]:
+    """An honest range around a typical figure: half of it to a quarter more, in 5s."""
+    if not typical:
+        return None, None
+    low = max(5, int(round(typical * 0.5 / 5.0)) * 5)
+    high = max(low + 5, int(round(typical * 1.25 / 5.0)) * 5)
+    return low, high
 
 
 def _cost(connection: Connection, project_id: str, workflow_key: str) -> Optional[dict[str, Any]]:

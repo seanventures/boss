@@ -60,7 +60,7 @@ export function ProjectMenu({ projects, activeId, homeId, orgId }: {
   orgId?: string;
 }) {
   // NEW PROJECT (BOSSAPP-810): which screen of the flow is open — the three doors and the presets,
-  // the sample, Import a repo, or the idea form (the name-and-description sheet, both types).
+  // the sample, Import a repo, the idea (one sentence), or the name-and-description form (both types).
   // `/?new_project=sample|import|idea|1` opens it at that choice (the Welcome screen's links).
   const [step, setStep] = useState<StartStep | null>(null);
   useEffect(() => {
@@ -148,8 +148,8 @@ export function ProjectMenu({ projects, activeId, homeId, orgId }: {
         ) : null}
       </div>
     </details>
-    {step === "idea" ? (
-      <NewProjectSheet draft={draft} onDraft={setDraft} onClose={closeStart} onBack={() => setStep("choose")}
+    {step === "form" ? (
+      <NewProjectSheet draft={draft} onDraft={setDraft} onClose={closeStart} onBack={() => setStep("idea")}
                        onCreated={(id, type) => {
                          setDraft(EMPTY_DRAFT);
                          clearStepParam();

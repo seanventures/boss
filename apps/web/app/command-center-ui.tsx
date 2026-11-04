@@ -114,12 +114,15 @@ export type CommandCenterProps = {
   composer?: React.ReactNode;
   /** What you can do here (the full help card) for the `?` popover. */
   help?: React.ReactNode;
+  /** The project page's "What should we add?" card is above (BOSSAPP-810): it is where a task is
+   *  typed, so the hero drops its own "Describe your first task" box — Ask BOSS stays, closed. */
+  startCard?: boolean;
   /** The Factory's apps as the server read them (wire + ETag), or null. */
   initialApps?: { wire: unknown; etag: string | null } | null;
 };
 
 export function CommandCenter({ projectId, orgId, actor, initial: given, initialWire, initialError = null,
-                                tz = "UTC", viewer, composer, help, initialApps }: CommandCenterProps) {
+                                tz = "UTC", viewer, composer, help, initialApps, startCard = false }: CommandCenterProps) {
   const [initial] = useState<CommandCenterView | null>(
     () => given ?? (initialWire ? parseCommandCenterView(initialWire) : null));
   // THE VIEWER'S ZONE: the browser knows it; remembered for the next server paint.
@@ -263,7 +266,7 @@ export function CommandCenter({ projectId, orgId, actor, initial: given, initial
               </div>
             ) : null}
           </div>
-          <div className="cc-next" data-testid="cc-next-action" data-kind={action.kind}>
+          {startCard && action.kind === "empty" ? null : <div className="cc-next" data-testid="cc-next-action" data-kind={action.kind}>
             <span className="cc-next-label">{action.kind === "active" ? "Current work" : action.kind === "result" ? "Ready to review" : "Next action"}</span>
             <h1 className="cc-headline" data-user-text>{action.title}</h1>
             <p className="cc-next-detail" data-user-text>{action.detail}</p>
@@ -271,9 +274,9 @@ export function CommandCenter({ projectId, orgId, actor, initial: given, initial
               testId="cc-next-go">{action.label}</Go> : action.label ? (
               <button type="button" className="cc-btn primary" data-testid="cc-next-go" onClick={refresh}>{action.label}</button>
             ) : null}
-          </div>
-          <details className="cc-compose-disclosure" ref={composeRef} open={action.kind === "empty"} data-testid="cc-compose-disclosure">
-            <summary>{action.kind === "empty" ? "Your task" : "Describe another task"}</summary>
+          </div>}
+          <details className="cc-compose-disclosure" ref={composeRef} open={!startCard && action.kind === "empty"} data-testid="cc-compose-disclosure">
+            <summary>{startCard ? "Ask BOSS" : action.kind === "empty" ? "Your task" : "Describe another task"}</summary>
           <div className="cc-compose" id="cc-compose">
             {/* Keyed: it is an element the server page made, rendered here among siblings. */}
             <React.Fragment key="composer">{composer}</React.Fragment>

@@ -23,10 +23,11 @@ import { IdentityError } from "../../lib/identity/api";
 import { withConsent } from "../../lib/identity/consent";
 import { templatesApi } from "../../lib/templates";
 import {
-  CHOICES, allPresets, createFresh, projectPageHref, shownPresets, type Preset, type StartStep,
+  CHOICES, allPresets, createFresh, nameFromIdea, projectPageHref, shownPresets, type Preset, type StartStep,
 } from "../../lib/start-project";
 import { ReadinessPanel, asReadiness, unaccepted, type Readiness } from "../workflow-readiness-ui";
 import { ImportRepo } from "./import-repo";
+import { post } from "../workflows/delivery-api";
 import "./start-project.css";
 
 /** The sample, as the project page's view names it (services/start_project.py). */
@@ -51,7 +52,7 @@ function refusalText(e: unknown): string {
 }
 
 export function StartProjectSheet({ step, onStep, onClose, projectId, homeId, go = (href) => window.location.assign(href) }: {
-  step: Exclude<StartStep, "idea">;
+  step: Exclude<StartStep, "form">;
   onStep: (next: StartStep) => void;
   onClose: () => void;
   /** The project open now: the org registry is read through it. */
@@ -122,41 +123,76 @@ export function StartProjectSheet({ step, onStep, onClose, projectId, homeId, go
     }
   };
 
+  // THE IDEA: one sentence. The name comes from it and can be changed; Plan it makes the project
+  // and starts its new-app workflow (project.new) with the sentence as the brief.
+  const [idea, setIdea] = useState("");
+  const [ideaName, setIdeaName] = useState("");
+  const [ideaNamed, setIdeaNamed] = useState(false);
+  const [ideaProject, setIdeaProject] = useState<string | null>(null);
+  const shownName = ideaNamed ? ideaName : nameFromIdea(idea);
+  const runIdea = async () => {
+    if (!idea.trim() || !shownName.trim() || busy) return;
+    if (!canCreate.allowed) { setError(canCreate.reason); return; }
+    setBusy("idea"); setError(null);
+    try {
+      let pid = ideaProject;
+      if (!pid) {
+        const made = await guarded("Create the project.", () => createFresh(shownName.trim(), { description: idea.trim() }));
+        pid = made.id;
+        setIdeaProject(pid);
+      }
+      const r = await post("start", {
+        project_id: pid, work_class: "project.new", input: { directive: idea.trim(), title: shownName.trim() },
+        ...(startAnyway.length ? { start_anyway: startAnyway } : {}),
+      });
+      if (!r.ok) {
+        if ("readiness" in r && r.readiness) { setRefusal(r.readiness); setBusy(null); return; }
+        setError(typeof r.error === "string" ? r.error : "It did not start.");
+        setBusy(null);
+        return;
+      }
+      go(projectPageHref(pid, homeId));
+    } catch (e) {
+      setError(refusalText(e));
+      setBusy(null);
+    }
+  };
+
   const open = unaccepted(refusal, startAnyway);
   const sheet = (
     <div className="bx-np-backdrop" data-testid="start-project-backdrop"
          onPointerDown={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>
-      <div className="bx-np-sheet sp-sheet" role="dialog" aria-modal="true" aria-labelledby={titleId}
+      <div className="bx-np-sheet spj-sheet" role="dialog" aria-modal="true" aria-labelledby={titleId}
            data-testid="start-project" data-step={step}>
-        <div className="sp-head">
+        <div className="spj-head">
           {step !== "choose" ? (
-            <button type="button" className="sp-back" data-testid="start-back" disabled={!!busy}
+            <button type="button" className="spj-back" data-testid="start-back" disabled={!!busy}
                     onClick={() => { setRefusal(null); setError(null); onStep("choose"); }}>← Back</button>
           ) : null}
-          <h2 id={titleId} className="bx-np-title">{step === "import" ? "Import a repo" : step === "sample" ? "Try a sample" : "New project"}</h2>
-          <button type="button" className="sp-close" aria-label="Close" title="Close" data-testid="start-close"
+          <h2 id={titleId} className="bx-np-title">{step === "import" ? "Import a repo" : step === "sample" ? "Try a sample" : step === "idea" ? "New app from an idea" : "New project"}</h2>
+          <button type="button" className="spj-close" aria-label="Close" title="Close" data-testid="start-close"
                   disabled={!!busy} onClick={onClose}>×</button>
         </div>
 
         {step === "choose" ? (
           <>
-            <div className="sp-choices" data-testid="start-choices">
+            <div className="spj-choices" data-testid="start-choices">
               {CHOICES.map((c) => (
-                <button key={c.key} type="button" className="sp-choice" data-highlight={c.highlight || undefined}
+                <button key={c.key} type="button" className="spj-choice" data-highlight={c.highlight || undefined}
                         data-testid={`start-${c.key}`} disabled={!!busy}
                         onClick={() => onStep(c.key)}>
-                  <span className="sp-tag">{c.tag} · {c.time}</span>
+                  <span className="spj-tag">{c.tag} · {c.time}</span>
                   <b>{c.title}</b>
-                  <span className="sp-line">{c.line}</span>
-                  <span className="sp-cta">{c.cta}</span>
+                  <span className="spj-line">{c.line}</span>
+                  <span className="spj-cta">{c.cta}</span>
                 </button>
               ))}
             </div>
             <section aria-labelledby={`${titleId}-presets`}>
-              <h3 id={`${titleId}-presets`} className="sp-sub">Or start from a preset</h3>
-              <div className="sp-presets" data-testid="start-presets">
+              <h3 id={`${titleId}-presets`} className="spj-sub">Or start from a preset</h3>
+              <div className="spj-presets" data-testid="start-presets">
                 {grid.map((p) => (
-                  <GatedButton key={p.key} permission="project:create" className="sp-preset" data-testid={`preset-${p.key}`}
+                  <GatedButton key={p.key} permission="project:create" className="spj-preset" data-testid={`preset-${p.key}`}
                                data-kind={p.kind} disabled={!!busy}
                                title={p.kind === "knowledge_graph" ? "A knowledge-graph project, opened on its sample" : "A project with this brief, ready to Start"}
                                onClick={() => void pickPreset(p)}>
@@ -165,7 +201,7 @@ export function StartProjectSheet({ step, onStep, onClose, projectId, homeId, go
                   </GatedButton>
                 ))}
                 {!all ? (
-                  <button type="button" className="sp-preset sp-preset-all" data-testid="start-presets-all"
+                  <button type="button" className="spj-preset spj-preset-all" data-testid="start-presets-all"
                           onClick={() => setAll(true)}>
                     <b>See all {presets.length} →</b>
                   </button>
@@ -176,15 +212,15 @@ export function StartProjectSheet({ step, onStep, onClose, projectId, homeId, go
         ) : null}
 
         {step === "sample" ? (
-          <div className="sp-sample" data-testid="start-sample-step">
-            <ol className="sp-flow" aria-label="What happens">
+          <div className="spj-sample" data-testid="start-sample-step">
+            <ol className="spj-flow" aria-label="What happens">
               <li><b>Plan</b><span>You approve</span></li>
               <li><b>Build</b><span>BOSS</span></li>
               <li><b>Review</b><span>BOSS</span></li>
               <li><b>Pull request</b><span>You merge</span></li>
               <li><b>Preview</b><span>Live</span></li>
             </ol>
-            <p className="sp-quiet">Hello World · one page and one test · about 8 minutes.</p>
+            <p className="spj-quiet">Hello World · one page and one test · about 8 minutes.</p>
             {refusal ? (
               <div data-testid="start-sample-readiness">
                 <ReadinessPanel readiness={refusal} accepted={startAnyway} onAccept={setStartAnyway} />
@@ -196,6 +232,39 @@ export function StartProjectSheet({ step, onStep, onClose, projectId, homeId, go
                            title="Create the Hello World project and start building it"
                            onClick={() => void runSample()}>
                 {busy === "sample" ? "Starting…" : refusal ? "Start anyway" : "Start the sample"}
+              </GatedButton>
+            </div>
+          </div>
+        ) : null}
+
+        {step === "idea" ? (
+          <div className="spj-idea" data-testid="start-idea-step">
+            <label className="bx-np-field">
+              <span>Describe it in a sentence</span>
+              <textarea className="input spj-ask-text" data-testid="idea-text" rows={3} maxLength={2000} autoFocus
+                        value={idea} placeholder="e.g. A shift-swap board where staff offer shifts and a manager approves"
+                        onChange={(e) => setIdea(e.target.value)} />
+            </label>
+            <label className="bx-np-field spj-idea-name">
+              <span>Name</span>
+              <input className="input" data-testid="idea-name" maxLength={120} value={shownName}
+                     placeholder="From your sentence" onChange={(e) => { setIdeaName(e.target.value); setIdeaNamed(true); }} />
+            </label>
+            <p className="spj-quiet">BOSS plans it, you approve, it builds.</p>
+            {refusal ? (
+              <div data-testid="start-idea-readiness">
+                <ReadinessPanel readiness={refusal} accepted={startAnyway} onAccept={setStartAnyway} />
+              </div>
+            ) : null}
+            <div className="bx-np-actions spj-idea-actions">
+              <button type="button" className="spj-more" data-testid="idea-form"
+                      title="A knowledge graph for an existing codebase, or a project with no build yet"
+                      disabled={!!busy} onClick={() => onStep("form")}>Knowledge graph or blank project</button>
+              <GatedButton permission="project:create" className="ag-btn ag-btn-primary" data-testid="idea-go"
+                           disabled={!!busy || !idea.trim() || !shownName.trim() || (!!refusal && open.length > 0)}
+                           title="Create the project and start planning it"
+                           onClick={() => void runIdea()}>
+                {busy === "idea" ? "Starting…" : refusal ? "Start anyway" : "Plan it →"}
               </GatedButton>
             </div>
           </div>

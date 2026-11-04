@@ -767,9 +767,12 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     fetchQaScorecardFeed(activeProjectId, needs("reports")),
   ]);
   const projects = await projectsP;
+  // THE PROJECT PAGE'S CARD (BOSSAPP-810) shows on a project of its own: not the org's home
+  // project, not a knowledge graph's (its lifecycle card is its start).
   const activeProject = projects.items.find(
     (project) => project.id === activeProjectId,
   );
+  const showsStartCard = activeProjectId !== selectedOrg.project_id && activeProject?.projectType !== "knowledge_graph";
   const [
     status,
     decisions,
@@ -1159,7 +1162,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           <CheckinCard projectId={activeProjectId} actor={activeActorId} />
           {/* THE PROJECT PAGE (BOSSAPP-810): "What should we add?" for a project of its own (not the
               org's home project, not a knowledge graph's): its repo, Start, what happens, its work. */}
-          {activeProjectId !== selectedOrg.project_id && activeProject?.projectType !== "knowledge_graph" ? (
+          {showsStartCard ? (
             <ProjectStartCard projectId={activeProjectId} orgId={activeOrgId} actor={activeActorId} />
           ) : null}
           {/* THE KNOWLEDGE GRAPH'S LIFECYCLE (indexed → rules → learnings) and its team. */}
@@ -1175,7 +1178,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               <AskBossHero projectId={activeProjectId} actor={activeActorId}
                 orgId={activeOrgId} deploymentAvailable={false} layout="hero" />
             }
-            help={<OnboardingHelpCard />} />
+            help={<OnboardingHelpCard />} startCard={showsStartCard} />
         </section>
         ) : null}
 
