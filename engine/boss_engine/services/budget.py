@@ -1369,6 +1369,52 @@ class BudgetGovernor:
                            amount_usd_micros=amount_usd_micros, snapshot=snapshot)
             return refused
         refusal = self.cap_refusal(snapshot, amount_usd_micros)
+        # BOSSAPP-807: the project's monthly limit (a project envelope, spend_limits) refuses
+        # like a cap, and the operator's choice for a reached limit decides what a refusal on
+        # money means: pause (the decision below), cheaper (go on — the red budget routes build
+        # steps to low-cost models) or stop (refused, even $0 work, and nobody is asked).
+        from . import spend_limits
+
+        limit_period = spend_limits.limit_period(connection, project_id, snapshot)
+        if refusal is None and limit_period is not None:
+            refusal = self.cap_refusal({"periods": {"project": limit_period}}, amount_usd_micros)
+        choice = spend_limits.at_limit(connection, self.settings, project_id)
+        if refusal is None and choice == "stop":
+            refusal = spend_limits.reached_period(snapshot, limit_period)
+        if refusal is not None and refusal["kind"] == "cap" and choice == "cheaper":
+            emit_event(connection, project_id, "budget.cap_passed_cheaper", "budget_governor",
+                       "project", project_id,
+                       {"requested_usd_micros": amount_usd_micros, "period": refusal["period"],
+                        "cap_usd_micros": refusal["cap_usd_micros"],
+                        "limit": refusal.get("limit") or "cap", "reason": reason})
+            record_policy_eval(
+                connection, project_id, "budget.reserve", "allow", action=category,
+                reason="cap reached; at-limit choice is cheaper models",
+                detail={"requested_usd_micros": amount_usd_micros, "period": refusal["period"]})
+            refusal = None
+        if refusal is not None and refusal["kind"] == "cap" and choice == "stop":
+            emit_event(connection, project_id, "budget.reservation_denied", "budget_governor",
+                       "project", project_id,
+                       {"requested_usd_micros": amount_usd_micros, "reason": reason,
+                        "period": refusal["period"], "at_limit": "stop"})
+            record_policy_eval(
+                connection, project_id, "budget.reserve", "deny", action=category,
+                reason="cap reached; at-limit choice is stop",
+                detail={"requested_usd_micros": amount_usd_micros, "period": refusal["period"],
+                        "cap_usd_micros": refusal["cap_usd_micros"]})
+            refused = {
+                "status": "denied", "refusal": "cap_exceeded", "transient": False,
+                "decision_id": None, "budget_state": snapshot["budget_state"],
+                "period": refusal["period"], "resets_at": refusal.get("resets_at"),
+                "at_limit": "stop",
+                "message": (f"Stopped at the limit: {cap_used_sentence(refusal)}. "
+                            f"Nothing runs until it resets at "
+                            f"{refusal.get('resets_at_label') or '00:00 UTC'}, "
+                            f"or raise the {refusal.get('cap_name') or 'cap'} in Govern › Limits."),
+            }
+            record_refusal(connection, project_id, refused, category=category, reason=reason,
+                           amount_usd_micros=amount_usd_micros, period=refusal)
+            return refused
         if refusal is not None:
             # Every cap is checked against ITS period (period_spend): today's money against the
             # daily cap, this month's against the monthly one. Yesterday's spend never refuses

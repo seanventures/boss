@@ -87,6 +87,32 @@ function Spent({ ledger, fallbackIncluded }: { ledger?: MeterData["ledger"]; fal
   );
 }
 
+/** The holds no cap reset clears (an unreconciled model call or provider attempt), said with
+ *  their decision. Shown under the meter and on Govern › Spend (BOSSAPP-807). */
+export function LegacyHolds({ meter }: { meter: MeterData }) {
+  const historicalHold = meter.legacy_financial_hold;
+  const providerHold = meter.legacy_provider_hold;
+  return (
+    <>
+      {historicalHold ? <div className="gv-legacy-hold" role="status" data-testid="gv-legacy-hold">
+        <span>An earlier model call needs reconciliation. New paid work is held. Earlier estimate {money(historicalHold.original_estimate_usd_micros)};
+          actual charge unknown. A cap reset will not clear this hold.</span>
+        {historicalHold.decision_id ? <a className="ag-link" href={consoleHref({ area: "decisions", decision: historicalHold.decision_id })}>
+          Open decision ↗
+        </a> : null}
+      </div> : null}
+      {providerHold ? <div className="gv-legacy-hold" role="status" data-testid="gv-legacy-provider-hold">
+        <span>An earlier provider action may have been accepted. New paid work is held until that attempt is reconciled.
+          Earlier estimate {money(providerHold.original_estimate_usd_micros)}; actual charge unknown.
+          A cap reset will not clear this hold.</span>
+        {providerHold.decision_id ? <a className="ag-link" href={consoleHref({ area: "decisions", decision: providerHold.decision_id })}>
+          Review provider attempt ↗
+        </a> : null}
+      </div> : null}
+    </>
+  );
+}
+
 export function GovernMeter({ meter, error, onRetry }: { meter: MeterData | null; error: string; onRetry: () => void }) {
   if (!meter) {
     return (
@@ -130,21 +156,7 @@ export function GovernMeter({ meter, error, onRetry }: { meter: MeterData | null
           {meter.time_to_cap_seconds !== null ? <span>Cap in {capIn(meter.time_to_cap_seconds)}</span> : null}
         </span>
       </div>
-      {historicalHold ? <div className="gv-legacy-hold" role="status" data-testid="gv-legacy-hold">
-        <span>An earlier model call needs reconciliation. New paid work is held. Earlier estimate {money(historicalHold.original_estimate_usd_micros)};
-          actual charge unknown. A cap reset will not clear this hold.</span>
-        {historicalHold.decision_id ? <a className="ag-link" href={consoleHref({ area: "decisions", decision: historicalHold.decision_id })}>
-          Open decision ↗
-        </a> : null}
-      </div> : null}
-      {providerHold ? <div className="gv-legacy-hold" role="status" data-testid="gv-legacy-provider-hold">
-        <span>An earlier provider action may have been accepted. New paid work is held until that attempt is reconciled.
-          Earlier estimate {money(providerHold.original_estimate_usd_micros)}; actual charge unknown.
-          A cap reset will not clear this hold.</span>
-        {providerHold.decision_id ? <a className="ag-link" href={consoleHref({ area: "decisions", decision: providerHold.decision_id })}>
-          Review provider attempt ↗
-        </a> : null}
-      </div> : null}
+      <LegacyHolds meter={meter} />
       <Bar cap={meter.cap_usd_micros} actual={meter.actual_usd_micros} reserved={meter.reserved_usd_micros}
            ticks={ticks} forecast={forecast} testid="gv-bar"
            forecastTip={`Spend over ${meter.burn_window_hours}h plus reservations, projected`} />

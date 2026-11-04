@@ -27,7 +27,7 @@ beforeEach(() => {
   vi.stubGlobal("fetch", fakeGovernApi(g));
   setConsoleLive(true);
   // Arrived by the rail from another area: nothing for Govern was loaded by the render.
-  window.history.replaceState({}, "", "/?area=budget");
+  window.history.replaceState({}, "", "/?area=budget&tab=board");
 });
 afterEach(() => { unmount(); vi.unstubAllGlobals(); });
 

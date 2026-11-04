@@ -31,7 +31,7 @@ beforeEach(() => {
   window.addEventListener("boss:toast", onToast);
   vi.stubGlobal("fetch", fakeGovernApi(g));
   setConsoleLive(true);
-  window.history.replaceState({}, "", "/?area=budget");
+  window.history.replaceState({}, "", "/?area=budget&tab=board");
 });
 afterEach(() => { unmount(); vi.unstubAllGlobals(); window.removeEventListener("boss:toast", onToast); });
 

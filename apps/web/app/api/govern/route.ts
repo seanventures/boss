@@ -13,9 +13,9 @@ import { rawRequestUrl } from "../../../lib/raw-request-url";
  * components sent: the same method, path and body (tests/govern-writes-what-it-wrote-before),
  * plus the version the screen showed as `If-Match`.
  *
- * GET  ?project_id=&view=limits|spend|envelopes|daily[&window=]
+ * GET  ?project_id=&view=limits|spend|envelopes|daily|project_limits[&window=]
  * POST {op, ...}  setting · pace · pace_preview · cap_preview · monthly_cap · token_cap ·
- *                 reconcile · initiative
+ *                 reconcile · initiative · limits · project_limit
  */
 export const dynamic = "force-dynamic";
 
@@ -27,6 +27,7 @@ const READS: Record<string, (q: URLSearchParams) => string> = {
   spend: (q) => `/v1/govern/spend?project_id=${enc(q.get("project_id"))}&window=${enc(q.get("window") || "7d")}`,
   envelopes: (q) => `/v1/govern/envelopes?project_id=${enc(q.get("project_id"))}`,
   daily: (q) => `/v1/budget/daily?project_id=${enc(q.get("project_id"))}&days=30`,
+  project_limits: (q) => `/v1/govern/project-limits?project_id=${enc(q.get("project_id"))}`,
 };
 
 export async function GET(req: Request) {

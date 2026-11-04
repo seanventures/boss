@@ -103,6 +103,8 @@ export type FakeGovern = {
   view: Json;
   spend: Json | null;
   envelopes: Json | null;
+  /** GET view=project_limits (BOSSAPP-807). */
+  projectLimits?: Json | null;
   status: number;
   writeStatus: number;
   writeBody: Json;
@@ -131,6 +133,7 @@ export function fakeGovernApi(g: FakeGovern) {
       const view = url.searchParams.get("view");
       if (view === "spend") return Response.json(g.spend ?? {});
       if (view === "envelopes") return Response.json(g.envelopes ?? {});
+      if (view === "project_limits") return Response.json(g.projectLimits ?? { project_id: "p1", projects: [] });
       return Response.json(g.view, { headers: { ETag: "\"v1\"" } });
     }
     if (url.pathname === "/api/govern" && method === "POST") {

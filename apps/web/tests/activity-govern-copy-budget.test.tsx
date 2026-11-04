@@ -70,7 +70,7 @@ describe("Govern's copy", () => {
                     initiative_rule: { tier_min: 2, amount_usd_micros: 50_000_000 } };
     vi.stubGlobal("fetch", fakeImproveApi(newImprove(), fakeGovernApi(g) as never));
     setConsoleLive(true);
-    window.history.replaceState({}, "", "/?area=budget");
+    window.history.replaceState({}, "", "/?area=budget&tab=board");
     await mount(<GovernHome projectId="p1" actor="ceo" />);
     await click($("[data-testid=gv-more-pace]"));
     await click($("[data-testid=gv-edit-pace]"));

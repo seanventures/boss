@@ -149,6 +149,57 @@
 .gv-verdict[data-verdict="on_track"] { background: var(--green-soft); color: var(--green); }
 .gv-verdict[data-verdict="over_utilized"], .gv-verdict[data-verdict="under_utilized"] { background: var(--amber-soft); color: var(--amber); }
 
+/* BOSSAPP-807: Spend (the landing) and Limits in plain words. */
+.gv-moremenu { position: relative; }
+.gv-moremenu > summary { list-style: none; cursor: pointer; }
+.gv-moremenu > summary::-webkit-details-marker { display: none; }
+.gv-moremenu > summary[data-current] { box-shadow: 0 0 0 1px var(--accent-line); }
+.gv-moremenu .gv-menu { min-width: 200px; }
+.gv-moremenu:not([open]) .gv-menu { display: none; }
+.gv-menu a.ag-link { min-height: 34px; display: flex; align-items: center; padding: 0 12px; font-size: 0.84rem; }
+.gv-menu button[aria-selected="true"] { color: var(--accent-text); font-weight: 650; }
+.gv-home, .gv-limits { display: flex; flex-direction: column; gap: 14px; }
+.gv-hero { display: flex; flex-direction: column; gap: 10px; padding: 16px 18px; border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--surface); }
+.gv-hero-line { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 12px; min-width: 0; }
+.gv-hero-amount { font-family: var(--display); font-size: 2.1rem; font-weight: 700; line-height: 1.1; color: var(--ink); font-variant-numeric: tabular-nums; }
+.gv-hero-of { font-size: 0.95rem; color: var(--muted); }
+.gv-hero-badge { padding: 3px 10px; border-radius: 999px; background: var(--surface-2); }
+.gv-hero-badge[data-state="green"] { background: var(--green-soft); }
+.gv-hero-badge[data-state="yellow"] { background: var(--amber-soft); }
+.gv-hero-badge[data-state="red"] { background: var(--red-soft); }
+.gv-hero-bar[data-tone="yellow"] .gv-bar-fill { background: var(--amber); }
+.gv-hero-bar[data-tone="red"] .gv-bar-fill { background: var(--red); }
+.gv-hero-sub { display: flex; flex-wrap: wrap; gap: 4px 0; font-size: 0.82rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.gv-hero-sub > span + span::before { content: "·"; margin: 0 8px; color: var(--faint); }
+.gv-chart-bar[data-today] { fill: var(--accent-text); }
+.gv-chart-caplabel { align-self: flex-end; }
+.gv-hbars { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.gv-hbars li { display: grid; grid-template-columns: minmax(0, 9rem) minmax(0, 1fr) auto; align-items: center; gap: 10px; font-size: 0.84rem; }
+.gv-hbar-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
+.gv-hbar-track { height: 8px; border-radius: 999px; background: var(--surface-3); overflow: hidden; }
+.gv-hbar-fill { display: block; height: 100%; border-radius: 999px; background: var(--accent); }
+.gv-hbar-fill[data-included] { background: var(--border-strong); }
+.gv-hbar-value { min-width: 4.5rem; text-align: right; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.gv-detail-link { align-self: flex-start; margin-top: 4px; }
+.gv-back { align-self: flex-start; }
+.gv-card-title { margin: 0 0 2px; font-size: 0.95rem; font-weight: 700; color: var(--ink); }
+.gv-limit-row { display: grid; grid-template-columns: minmax(7rem, 11rem) auto minmax(0, 1fr); align-items: center; gap: 8px 14px; min-height: 44px; }
+.gv-proj-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.gv-limit-label { font-size: 0.88rem; font-weight: 600; color: var(--ink); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gv-limit-hint { font-size: 0.8rem; color: var(--muted); }
+.gv-limit-hint .gv-field-error { flex-basis: auto; }
+.gv-radios { display: flex; flex-direction: column; gap: 6px; }
+.gv-radio { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 10px; align-items: center; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--r); cursor: pointer; }
+.gv-radio[data-checked] { border-color: var(--accent-line); background: var(--accent-soft); }
+.gv-radio input { accent-color: var(--accent); margin: 0; }
+.gv-radio-label { font-size: 0.88rem; font-weight: 600; color: var(--ink); }
+.gv-radio-hint { grid-column: 2; font-size: 0.78rem; color: var(--muted); }
+.gv-save-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; }
+.gv-paused-line { font-size: 0.84rem; color: var(--muted); }
+.gv-paused-line[data-warn] { color: var(--amber); }
+.gv-advanced { align-self: flex-start; font-size: 0.84rem; }
+.gv-skel-short { height: 44px; }
+
 /* 1024-1279: the meter's meta moves into its tooltip. */
 @media (max-width: 1279px) { .gv-meta { display: none; } }
 /* 720-1023: Evidence stacks under Enforced (D10: it was dropped — what a limit stopped is the
@@ -175,6 +226,11 @@
     min-height: 44px; display: inline-flex; align-items: center;
   }
   .gv-edit-form > * { flex: 1 1 100%; }
+  /* Spend and Limits (BOSSAPP-807). */
+  .gv-limit-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .gv-limit-hint { grid-column: 1 / -1; }
+  .gv-hbars li { grid-template-columns: minmax(0, 7rem) minmax(0, 1fr) auto; }
+  .gv-hero-amount { font-size: 1.7rem; }
 }
 
 @media (prefers-reduced-motion: reduce) {

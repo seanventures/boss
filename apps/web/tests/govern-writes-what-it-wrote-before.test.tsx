@@ -61,7 +61,7 @@ beforeEach(() => {
   g = newGovern();
   vi.stubGlobal("fetch", fakeGovernApi(g));
   setConsoleLive(true);
-  window.history.replaceState({}, "", "/?area=budget");
+  window.history.replaceState({}, "", "/?area=budget&tab=board");
 });
 afterEach(() => { unmount(); vi.unstubAllGlobals(); });
 
