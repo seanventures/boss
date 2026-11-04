@@ -12,7 +12,7 @@
 import React from "react";
 
 import {
-  modelName, money, readGovern, type AtLimit, type GovernView, type Meter, type ModelSpendRow, type Period,
+  modelName, money, type DailySpend, readGovern, type AtLimit, type GovernView, type Meter, type ModelSpendRow, type Period,
   type ProjectSpendRow, type SpendView,
 } from "../../lib/govern";
 import { usePolledRead } from "../../lib/log-stream";
@@ -22,7 +22,30 @@ import { LegacyHolds } from "./meter";
 export type SpendPeriod = "today" | "week" | "month";
 export const SPEND_PERIODS: { key: SpendPeriod; label: string }[] = [
   { key: "today", label: "Today" }, { key: "week", label: "Week" }, { key: "month", label: "Month" }];
-const WINDOW: Record<SpendPeriod, string> = { today: "24h", week: "7d", month: "month" };
+const WINDOW: Record<SpendPeriod, string> = { today: "day", week: "7d", month: "month" };
+
+/** THE money spent in a period (the ledger, the same figure every Govern read says). */
+export const spentOf = (p: Period | null | undefined) => Number(p?.spent_usd_micros ?? p?.actual_usd_micros ?? 0);
+const heldOf = (p: Period | null | undefined) => Number(p?.held_usd_micros ?? p?.reserved_usd_micros ?? 0);
+
+const day = (iso: string) => new Date(`${iso}T00:00:00Z`);
+const isoDay = (d: Date) => d.toISOString().slice(0, 10);
+const shortDay = (iso: string) => day(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+
+/** One bar per day of the chosen period: the whole month (days to come are empty), the last
+ *  7 days, or today. Days without spend are $0 bars, so the bars sit at their dates. */
+export function daysFor(period: SpendPeriod, daily: DailySpend[], today: string): DailySpend[] {
+  if (!today) return [];
+  const known = new Map(daily.map((d) => [d.day, d]));
+  const want: string[] = [];
+  if (period === "month") {
+    const first = day(`${today.slice(0, 7)}-01`);
+    for (let d = new Date(first); d.getUTCMonth() === first.getUTCMonth(); d.setUTCDate(d.getUTCDate() + 1)) want.push(isoDay(d));
+  } else if (period === "week") {
+    for (let i = 6; i >= 0; i -= 1) { const d = day(today); d.setUTCDate(d.getUTCDate() - i); want.push(isoDay(d)); }
+  } else want.push(today);
+  return want.map((d) => known.get(d) ?? { day: d, money_usd_micros: 0, included_usd_micros: 0 });
+}
 
 const AT_CAP: Record<AtLimit, string> = {
   pause: "At the cap — new work paused",
@@ -55,40 +78,50 @@ export function resetDay(iso: string | null | undefined): string {
 export function badgeOf(meter: Meter | null | undefined, period: Period | null, atLimit: AtLimit): Badge {
   const capped = (meter?.periods ?? []).filter((p) => p.cap_usd_micros > 0);
   if (!period || !period.cap_usd_micros) return { tone: "unknown", text: "No cap set" };
-  if (capped.some((p) => p.actual_usd_micros >= p.cap_usd_micros)) return { tone: "red", text: AT_CAP[atLimit] };
-  const forecast = period.forecast_usd_micros ?? period.committed_usd_micros;
+  if (capped.some((p) => spentOf(p) >= p.cap_usd_micros)) return { tone: "red", text: AT_CAP[atLimit] };
+  const forecast = period.forecast_usd_micros ?? spentOf(period);
   const soft = Number(meter?.soft_cap_pct ?? 0.7);
-  if (period.utilization_ratio >= soft || forecast > period.cap_usd_micros) return { tone: "yellow", text: "Near the cap" };
+  const counted = (spentOf(period) + heldOf(period)) / period.cap_usd_micros;
+  if (counted >= soft || forecast > period.cap_usd_micros) return { tone: "yellow", text: "Near the cap" };
   return { tone: "green", text: `On track · forecast ${money(forecast)}` };
 }
 
 function HeroBar({ period, tone }: { period: Period; tone: Badge["tone"] }) {
   const cap = period.cap_usd_micros;
   const pct = (n: number) => `${Math.max(0, Math.min(100, (n / cap) * 100)).toFixed(2)}%`;
-  const spent = period.actual_usd_micros;
+  const spent = spentOf(period);
+  const held = heldOf(period);
   const forecast = Math.max(period.forecast_usd_micros ?? 0, spent);
   return (
     <div className="gv-bar gv-hero-bar" data-tone={tone} data-testid="gv-hero-bar" role="img"
-         aria-label={`${money(spent)} of ${money(cap)}, forecast ${money(forecast)}`}>
+         aria-label={`${money(spent)} spent, ${money(held)} held, of ${money(cap)}, forecast ${money(forecast)}`}>
       <span className="gv-bar-fill" data-testid="gv-hero-fill" style={{ width: pct(spent) }} />
+      {held > 0 ? (
+        <span className="gv-bar-held" data-testid="gv-hero-held" title={`Held ${money(held)} by running work`}
+              style={{ left: pct(spent), width: `calc(${pct(Math.min(spent + held, cap))} - ${pct(spent)})` }} />
+      ) : null}
       {forecast > spent ? (
-        <span className="gv-bar-held" data-testid="gv-hero-forecast" title={`Forecast ${money(forecast)}`}
-              style={{ left: pct(spent), width: `calc(${pct(Math.min(forecast, cap))} - ${pct(spent)})` }} />
+        <span className="gv-forecast" data-testid="gv-hero-forecast" title={`Forecast ${money(forecast)}`}
+              style={{ left: pct(Math.min(forecast, cap)) }} />
       ) : null}
     </div>
   );
 }
 
-function BarRows({ rows, testid, empty }: {
-  rows: { id: string; name: string; money: number; included: number }[]; testid: string; empty: string;
+function BarRows({ rows: all, testid, empty, mine }: {
+  rows: { id: string; name: string; money: number; included: number }[]; testid: string; empty: string; mine?: string;
 }) {
+  // Nothing spent and nothing included says nothing: folded into one quiet count.
+  const rows = all.filter((r) => r.money > 0 || r.included > 0 || r.id === mine);
+  const quiet = all.length - rows.length;
   const peak = Math.max(1, ...rows.map((r) => r.money || r.included));
   if (!rows.length) return <span className="gv-muted" data-testid={`${testid}-empty`}>{empty}</span>;
   return (
+    <>
     <ul className="gv-hbars" data-testid={testid}>
       {rows.map((r) => (
-        <li key={r.id} data-testid={`${testid}-row`}>
-          <span className="gv-hbar-name" data-user-text title={r.id}>{r.name}</span>
+        <li key={r.id} data-testid={`${testid}-row`} data-mine={r.id === mine || undefined}>
+          <span className="gv-hbar-name" data-user-text title={r.id === mine ? `${r.id} · this project` : r.id}>{r.name}</span>
           <span className="gv-hbar-track" aria-hidden="true">
             <span className="gv-hbar-fill" data-included={!r.money || undefined}
                   style={{ width: `${Math.max(2, ((r.money || r.included) / peak) * 100).toFixed(1)}%` }} />
@@ -99,6 +132,8 @@ function BarRows({ rows, testid, empty }: {
         </li>
       ))}
     </ul>
+    {quiet ? <span className="gv-muted" data-testid={`${testid}-quiet`}>+{quiet} with no spend</span> : null}
+    </>
   );
 }
 
@@ -120,23 +155,26 @@ export function SpendHome({ view, viewError, onRetry, projectId, paused, period,
     },
   });
   const s = read.data;
+  const projects: ProjectSpendRow[] = s?.by_project ?? [];
   const meter = view?.meter ?? null;
   const atLimit: AtLimit = view?.at_limit?.value ?? "pause";
   const day = periodOf(meter, "day");
   const month = periodOf(meter, "month");
   const shown = period === "today" ? day : period === "month" ? month : null;
   const badge = badgeOf(meter, shown ?? month, atLimit);
-  const big = shown ? shown.actual_usd_micros : (s?.money_usd_micros ?? 0);
+  const big = shown ? spentOf(shown) : (s?.money_usd_micros ?? 0);
+  const held = heldOf(shown ?? day);
   const word = period === "today" ? "today" : period === "week" ? "this week" : "this month";
   const other = period === "today" ? month : day;
   const included = Number(s?.included_calls ?? 0);
   const resets = period === "today" ? (day?.resets_at_label ?? "") : resetDay((month ?? day)?.resets_at);
   const daily = s?.daily ?? [];
   const today = daily.length ? daily[daily.length - 1].day : "";
-  const days = period === "month" ? daily.filter((d) => d.day.slice(0, 7) === today.slice(0, 7)) : daily.slice(-7);
+  const days = daysFor(period, daily, today);
   const dailyCap = day?.cap_usd_micros || s?.daily_cap_usd_micros || 0;
-  const models: ModelSpendRow[] = s?.by_model_all ?? s?.by_model ?? [];
-  const projects: ProjectSpendRow[] = s?.by_project ?? [];
+  // By model is THIS project's, adding up to the hero; By project is every project you can see.
+  const models: ModelSpendRow[] = s?.by_model_spent ?? s?.by_model ?? [];
+  const projectName = projects.find((p) => p.id === projectId)?.name ?? "";
 
   return (
     <div className="gv-home" data-testid="gv-home">
@@ -149,6 +187,11 @@ export function SpendHome({ view, viewError, onRetry, projectId, paused, period,
         ) : (
           <>
             <div className="gv-hero-line">
+              <span className="gv-hero-scope" data-testid="gv-hero-scope" data-user-text
+                    title="Caps are per project. By project shows every project you can see.">
+                {projectName ? `This project · ${projectName}` : "This project"}
+              </span>
+              <span className="gv-hero-break" />
               <span className="gv-hero-amount" data-testid="gv-hero-amount">{money(big)}</span>
               <span className="gv-hero-of" data-testid="gv-hero-of">
                 {shown && shown.cap_usd_micros ? `of ${money(shown.cap_usd_micros)} ${word}` : word}
@@ -160,7 +203,12 @@ export function SpendHome({ view, viewError, onRetry, projectId, paused, period,
             {shown && shown.cap_usd_micros ? <HeroBar period={shown} tone={badge.tone} /> : null}
             <div className="gv-hero-sub" data-testid="gv-hero-sub">
               {other && other.cap_usd_micros ? (
-                <span>{money(other.actual_usd_micros)} {other.period === "day" ? "today" : "this month"} of {money(other.cap_usd_micros)}</span>
+                <span>{money(spentOf(other))} {other.period === "day" ? "today" : "this month"} of {money(other.cap_usd_micros)}</span>
+              ) : null}
+              {held > 0 ? (
+                <span data-testid="gv-hero-held-line" title="Reserved by running work. The cap counts it; it is not spent.">
+                  {money(held)} held
+                </span>
               ) : null}
               {included > 0 ? (
                 <span title="Subscription calls are not money and count against no cap">
@@ -183,18 +231,25 @@ export function SpendHome({ view, viewError, onRetry, projectId, paused, period,
         <>
           <section className="gv-card" aria-labelledby="gv-days-h" data-testid="gv-days">
             <h3 id="gv-days-h" className="gv-sec-head">EACH DAY</h3>
-            <DailyBars daily={days} cap={dailyCap || null} testid="gv-days-chart" highlight={today}
+            <DailyBars daily={days} cap={dailyCap || null} testid="gv-days-chart" highlight={today} capOnScaleAlways
                        capLabel={dailyCap ? `daily cap ${money(dailyCap)}` : undefined} />
+            {days.length > 1 ? (
+              <span className="gv-axis" data-testid="gv-days-axis" aria-hidden="true">
+                <span>{shortDay(days[0].day)}</span>
+                <span>{shortDay(days[Math.floor((days.length - 1) / 2)].day)}</span>
+                <span>{shortDay(days[days.length - 1].day)}</span>
+              </span>
+            ) : days.length ? <span className="gv-axis" data-testid="gv-days-axis" aria-hidden="true"><span>{shortDay(days[0].day)}</span></span> : null}
           </section>
           <div className="gv-pair">
             <section className="gv-card" aria-labelledby="gv-bymodel-h">
-              <h3 id="gv-bymodel-h" className="gv-sec-head" title="Every project you can see">BY MODEL</h3>
+              <h3 id="gv-bymodel-h" className="gv-sec-head">BY MODEL <span className="gv-badge">this project</span></h3>
               <BarRows testid="gv-home-models" empty="No model calls"
                        rows={models.map((r) => ({ id: r.id, name: modelName(r.id), money: r.money_usd_micros, included: r.included_usd_micros }))} />
             </section>
             <section className="gv-card" aria-labelledby="gv-byproject-h">
-              <h3 id="gv-byproject-h" className="gv-sec-head" title="Every project you can see">BY PROJECT</h3>
-              <BarRows testid="gv-home-projects" empty="No spend yet"
+              <h3 id="gv-byproject-h" className="gv-sec-head">BY PROJECT <span className="gv-badge">all you can see</span></h3>
+              <BarRows testid="gv-home-projects" empty="No spend yet" mine={projectId}
                        rows={projects.map((r) => ({ id: r.id, name: r.name, money: r.money_usd_micros, included: r.included_usd_micros }))} />
               <button type="button" className="ag-link gv-detail-link" data-testid="gv-where" onClick={onDetail}
                       title="By agent, by step, savings and top drivers">Where the money went →</button>
