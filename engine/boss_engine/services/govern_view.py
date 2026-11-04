@@ -27,6 +27,7 @@ from .budget import (
     policy_version,
 )
 from .included_spend import INCLUDED_SQL, MONEY_SQL
+from .spend_limits import at_limit_view
 
 #: The budget state, as the meter says it. One map: the screen never shows `orange`.
 STATE_LABELS = {"green": "Under cap", "yellow": "Heads-up", "orange": "Cheaper builds",
@@ -300,6 +301,9 @@ def build(connection: Connection, settings: Any, project_id: str, *,
         "thresholds": thresholds,
         "token_guides": token_guides(connection, project_id),
         "pace": {"value": intensity, "envelope": pace},
+        # BOSSAPP-807: what happens when a limit is reached (spend_limits.at_limit), as the
+        # enforcement path reads it.
+        "at_limit": at_limit_view(connection, settings, project_id),
         "versions": {"budget": budget_version},
     }
 
@@ -360,10 +364,20 @@ def meter(status: dict[str, Any], ledger: Optional[dict[str, int]] = None) -> di
                                    "reserved_usd_micros", "committed_usd_micros",
                                    "utilization_ratio", "budget_state", "resets_at",
                                    "resets_at_label")}
-            | {"state_label": STATE_LABELS.get(str(p.get("budget_state")), "Unknown")}
+            | {"state_label": STATE_LABELS.get(str(p.get("budget_state")), "Unknown"),
+               # BOSSAPP-807: where the period lands at today's burn — money and holds now,
+               # plus the trailing-24h burn rate until it resets. A projection, not money.
+               "forecast_usd_micros": _forecast(p, status)}
             for p in periods.values()
         ],
     }
+
+
+def _forecast(period: dict[str, Any], status: dict[str, Any]) -> int:
+    committed = int(period.get("committed_usd_micros") or 0)
+    rate = int(status.get("burn_rate_usd_micros_per_hour") or 0)
+    seconds = int(period.get("resets_in_seconds") or 0)
+    return committed + int(rate * seconds / 3600)
 
 
 def token_guides(connection: Connection, project_id: str) -> dict[str, Any]:
@@ -388,6 +402,9 @@ def token_guides(connection: Connection, project_id: str) -> dict[str, Any]:
 # ── Spend: where the money went, one window for every figure ────────────────────────────────
 
 WINDOWS = {"24h": 24, "7d": 24 * 7, "30d": 24 * 30}
+#: Windows that start at a period boundary rather than N hours back (BOSSAPP-807: Spend's
+#: "Month" is this calendar month, the monthly cap's own period).
+PERIOD_WINDOWS = {"month": "month"}
 
 
 def daily_spend(connection: Connection, project_id: str, *, days: int = 30,
@@ -450,18 +467,23 @@ def cap_preview(connection: Connection, project_id: str, *, period: str, cap_usd
 
 
 def spend(connection: Connection, settings: Any, project_id: str, *, window: str = "7d",
-          now: Optional[datetime] = None) -> dict[str, Any]:
+          now: Optional[datetime] = None,
+          projects: Optional[list[dict[str, Any]]] = None) -> dict[str, Any]:
     """The Spend tab: daily money (30 days), cache, scorecard, savings and drivers over ONE
     window, so the figures stop disagreeing. Money excludes subscription calls; what those ran
     is reported beside it — the totals, by agent and by model."""
     from . import token_efficiency as te
     from .cost_insights import build_insights
 
-    if window not in WINDOWS:
-        raise ValueError("window must be 24h, 7d or 30d.")
-    hours = WINDOWS[window]
+    if window not in WINDOWS and window not in PERIOD_WINDOWS:
+        raise ValueError("window must be 24h, 7d, 30d or month.")
     now = now or datetime.now(timezone.utc)
-    since = now - timedelta(hours=hours)
+    if window in PERIOD_WINDOWS:
+        since = budget_period(PERIOD_WINDOWS[window], now)["start"]
+        hours = max(1, int((now - since).total_seconds() // 3600) + 1)
+    else:
+        hours = WINDOWS[window]
+        since = now - timedelta(hours=hours)
     # The window's money and estimate: the one definition get_costs and the meter read
     # (included_spend.ledger_spend), so a build's spend is never missing from Spend.
     from .included_spend import ledger_spend
@@ -495,6 +517,13 @@ def spend(connection: Connection, settings: Any, project_id: str, *, window: str
         "by_model": _model_spend(connection, project_id, since, "model"),
         "money_usd_micros": int(totals["money"] or 0),
         "included_usd_micros": int(totals["included"] or 0),
+        "metered_calls": int(ledger.get("metered_calls") or 0),
+        "included_calls": int(ledger.get("included_calls") or 0),
+        # BOSSAPP-807: across every project the viewer may read (the route passes them; the
+        # current project alone when none are passed), over the same window and definitions.
+        "by_project": by_project(connection, projects or [{"id": project_id}], since),
+        "by_model_all": _model_spend_across(
+            connection, [str(p["id"]) for p in (projects or [{"id": project_id}])], since),
         "not_under_cap_usd_micros": ledger["not_under_cap_usd_micros"],
         "daily": daily_spend(connection, project_id, now=now),
         "daily_cap_usd_micros": int(((status.get("periods") or {}).get("day") or {})
@@ -522,6 +551,44 @@ def _model_spend(connection: Connection, project_id: str, since: datetime,
             FROM llm_calls WHERE project_id = :p AND created_at >= :s
             GROUP BY 1 ORDER BY 3 DESC, 4 DESC, 1 LIMIT 12"""),
             {"p": project_id, "s": since}).mappings()
+    ]
+
+
+def by_project(connection: Connection, projects: list[dict[str, Any]],
+               since: datetime) -> list[dict[str, Any]]:
+    """Money and the subscription estimate per project since `since` — the one definition
+    (included_spend.ledger_spend) — biggest first."""
+    from .included_spend import ledger_spend
+
+    rows = []
+    for project in projects[:200]:
+        pid = str(project["id"])
+        got = ledger_spend(connection, pid, since)
+        rows.append({"id": pid, "name": str(project.get("name") or pid),
+                     "money_usd_micros": int(got["money_usd_micros"]),
+                     "included_usd_micros": int(got["included_usd_micros"]),
+                     "calls": int(got["metered_calls"]) + int(got["included_calls"])})
+    rows.sort(key=lambda r: (-r["money_usd_micros"], -r["included_usd_micros"], r["name"]))
+    return rows
+
+
+def _model_spend_across(connection: Connection, project_ids: list[str],
+                        since: datetime) -> list[dict[str, Any]]:
+    """`_model_spend` by model over several projects. Top 12."""
+    if not project_ids:
+        return []
+    return [
+        {"id": str(r["id"]), "calls": int(r["calls"]), "money_usd_micros": int(r["money"] or 0),
+         "included_usd_micros": int(r["included"] or 0)}
+        for r in connection.execute(text("""
+            SELECT COALESCE(NULLIF(TRIM(model), ''), 'unknown') AS id, COUNT(*) AS calls,
+                   COALESCE(SUM(CASE WHEN COALESCE(included_in_subscription, false) THEN 0
+                                     ELSE cost_usd_micros END), 0) AS money,
+                   COALESCE(SUM(CASE WHEN COALESCE(included_in_subscription, false)
+                                     THEN cost_usd_micros ELSE 0 END), 0) AS included
+            FROM llm_calls WHERE project_id = ANY(:ps) AND created_at >= :s
+            GROUP BY 1 ORDER BY 3 DESC, 4 DESC, 1 LIMIT 12"""),
+            {"ps": list(project_ids), "s": since}).mappings()
     ]
 
 
