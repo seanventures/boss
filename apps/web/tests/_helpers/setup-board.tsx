@@ -51,7 +51,7 @@ export function fakeApi(view: SetupView): FakeApi {
 export type Mounted = { root: Root; container: HTMLElement; unmount: () => void };
 
 export async function mountBoard(view: SetupView, search = "?area=setup", shown = true,
-                                 layout: "classic" | "setup" = "classic"): Promise<Mounted> {
+                                 layout: "classic" | "setup" | "welcome" = "classic"): Promise<Mounted> {
   window.history.replaceState(null, "", `/${search}`);
   const { SetupBoard } = await import("../../app/setup/setup-board");
   const container = document.createElement("div");

@@ -44,7 +44,8 @@ function withAccounts(view: SetupView): SetupView {
 let mounted: Mounted | null = null;
 afterEach(() => { mounted?.unmount(); mounted = null; vi.unstubAllGlobals(); });
 
-async function mount(view: SetupView, search = "?area=setup"): Promise<Mounted> {
+async function mount(view: SetupView, search = "?area=setup",
+                     layout: "setup" | "welcome" = "setup"): Promise<Mounted> {
   window.history.replaceState(null, "", `/${search}`);
   const { SetupBoard } = await import("../app/setup/setup-board");
   const container = document.createElement("div");
@@ -52,7 +53,7 @@ async function mount(view: SetupView, search = "?area=setup"): Promise<Mounted> 
   const root = createRoot(container);
   await act(async () => {
     root.render(<AreaShownContext.Provider value={true}>
-      <SetupBoard projectId="p" initialView={view} layout="setup" />
+      <SetupBoard projectId="p" initialView={view} layout={layout} />
     </AreaShownContext.Provider>);
   });
   await flush();
@@ -60,10 +61,17 @@ async function mount(view: SetupView, search = "?area=setup"): Promise<Mounted> 
   return mounted;
 }
 
-describe("Screen 1 — Welcome", () => {
-  it("a new install lands on the 3 steps, GitHub first, and the project buttons open New project", async () => {
+/** Area switches the board asks the shell for (`boss:navigate`). */
+function navigations(): string[] {
+  const seen: string[] = [];
+  window.addEventListener("boss:navigate", (e) => seen.push(String((e as CustomEvent).detail)));
+  return seen;
+}
+
+describe("Screen 1 — Get started is its own place", () => {
+  it("shows the 3 steps, GitHub first, and the project buttons open New project", async () => {
     fakeApi(firstRun());
-    const { container } = await mount(firstRun());
+    const { container } = await mount(firstRun(), "?area=welcome", "welcome");
     expect(q(container, "su-welcome")).not.toBeNull();
     expect(container.textContent).toContain("Get BOSS working in 3 steps");
     expect(container.textContent).toContain("About 10 minutes. You can change everything later in Setup.");
@@ -75,67 +83,105 @@ describe("Screen 1 — Welcome", () => {
     const flow = [...container.querySelectorAll(".su-wl-flow > li.su-chip")].map((li) => li.textContent);
     expect(flow).toEqual(["Idea", "Plan (you approve)", "Build", "Review", "Pull request", "Live preview"]);
     expect(container.textContent).toContain("~8 min · included in your subscription");
-    // Nothing of the board shows behind it.
     expect(q(container, "su-accounts")).toBeNull();
+    expect(q(container, "su-row-repository")).toBeNull();
+  });
+
+  it("Connect GitHub and Add a model deep-link into Repo and models, in place", async () => {
+    fakeApi(firstRun());
+    const seen = navigations();
+    const { container } = await mount(firstRun(), "?area=welcome", "welcome");
+    expect(q(container, "su-wl-github-go")!.getAttribute("href")).toBe("/?area=setup&focus=repository");
+    expect(q(container, "su-wl-model-go")!.getAttribute("href")).toBe("/?area=setup&focus=models");
+    await click(q(container, "su-wl-github-go"));
+    expect(seen).toContain("setup");
+    expect(new URLSearchParams(window.location.search).get("focus")).toBe("repository");
   });
 
   it("done steps say who is connected and which model builds; step 3 is current", async () => {
     const view = withAccounts(tryStep());
     fakeApi(view);
-    const { container } = await mount(view);
+    const { container } = await mount(view, "?area=welcome", "welcome");
     expect(q(container, "su-wl-github-done")!.textContent).toBe("Connected as paramg · 2 repos BOSS can use");
     expect(q(container, "su-wl-model-done")!.textContent).toBe("Claude Code signed in · builds and reviews will use it");
     expect(q(container, "su-wl-github-more")!.textContent).toBe("Add another account");
     expect(q(container, "su-wl-model-more")!.textContent).toBe("Add another model");
     expect(q(container, "su-wl-sample")!.getAttribute("data-current")).toBe("true");
   });
+});
 
-  it("a finished install opens on Setup; Get started brings the Welcome back and Setup returns", async () => {
+describe("Repo and models never shows the Welcome", () => {
+  it("a new install's Setup is the 1 GitHub · 2 Repos · 3 Model stepper, with a way back", async () => {
+    fakeApi(firstRun());
+    const seen = navigations();
+    const { container } = await mount(firstRun());
+    expect(q(container, "su-welcome")).toBeNull();
+    expect(container.querySelector("h1")!.textContent).toBe("Repo and models");
+    expect(q(container, "su-row-repository")).not.toBeNull();
+    expect(q(container, "su-row-models")).not.toBeNull();
+    expect(q(container, "su-row-try")).toBeNull();
+    await click(q(container, "su-open-welcome"));
+    expect(seen).toContain("welcome");
+  });
+
+  it("once a repo and a model work it is the board; Back to Get started until a first PR", async () => {
+    const ready = withAccounts(tryStep());
+    fakeApi(ready);
+    const { container } = await mount(ready);
+    expect(q(container, "su-accounts")).not.toBeNull();
+    expect(q(container, "su-open-welcome")!.textContent).toBe("Back to Get started");
+    mounted?.unmount(); mounted = null;
+    const done = withAccounts(board());
+    fakeApi(done);
+    const again = await mount(done);
+    expect(q(again.container, "su-open-welcome")).toBeNull();
+  });
+
+  it("Welcome's Add another account lands on the board's Add GitHub account", async () => {
     const view = withAccounts(board());
     fakeApi(view);
-    const { container } = await mount(view);
-    expect(q(container, "su-welcome")).toBeNull();
-    expect(q(container, "su-accounts")).not.toBeNull();
-    await click(q(container, "su-open-welcome"));
-    expect(q(container, "su-welcome")).not.toBeNull();
-    expect(window.location.search).toContain("view=welcome");
-    await click(q(container, "su-welcome-setup"));
-    expect(q(container, "su-accounts")).not.toBeNull();
+    await mount(view, "?area=setup&focus=repository");
+    expect(q(document.body, "su-add-account")).not.toBeNull();
+  });
+
+  it("old links (view=welcome, focus=try) open Get started", async () => {
+    const view = withAccounts(board());
+    fakeApi(view);
+    const seen = navigations();
+    await mount(view, "?area=setup&view=welcome");
+    expect(seen).toContain("welcome");
   });
 });
 
 describe("Try it is not part of Setup", () => {
-  it("Setup shows connections only; the sample, Quick PR and the last run live on the Welcome", async () => {
+  it("Setup shows connections only; the sample, Quick PR and the last run live on Get started", async () => {
     const view = withAccounts(board());
     fakeApi(view);
     const { container } = await mount(view);
     expect(q(container, "su-row-try")).toBeNull();
     expect(q(container, "su-try-input")).toBeNull();
-    await click(q(container, "su-open-welcome"));
-    expect(q(container, "su-wl-quick-pr")!.querySelector('[data-testid="su-try-input"]')).not.toBeNull();
-    expect(q(container, "su-wl-last-pr")!.getAttribute("href")).toBe("https://github.com/owner/app/pull/12");
+    mounted?.unmount(); mounted = null;
+    const welcome = await mount(view, "?area=welcome", "welcome");
+    expect(q(welcome.container, "su-wl-quick-pr")!.querySelector('[data-testid="su-try-input"]')).not.toBeNull();
+    expect(q(welcome.container, "su-wl-last-pr")!.getAttribute("href")).toBe("https://github.com/owner/app/pull/12");
   });
 
-  it("focus=try (older links) opens the Welcome with Quick PR open", async () => {
+  it("focus=try opens Get started with Quick PR open", async () => {
     const view = withAccounts(board());
     fakeApi(view);
-    const { container } = await mount(view, "?area=setup&focus=try");
-    expect(q(container, "su-welcome")).not.toBeNull();
+    const { container } = await mount(view, "?area=welcome&focus=try", "welcome");
     expect((q(container, "su-wl-quick-pr") as HTMLDetailsElement).open).toBe(true);
   });
 });
 
 describe("Welcome is honest", () => {
-  it("other PRs in the project do not tick the sample step; the install still lands on Setup", async () => {
+  it("other PRs in the project do not tick the sample step", async () => {
     const view = { ...withAccounts(board()), try: { workflow_key: "setup_first_pr", last_run: null, done: true } };
     fakeApi(view);
-    const { container } = await mount(view, "?area=setup&view=welcome");
+    const { container } = await mount(view, "?area=welcome", "welcome");
     const circle = q(container, "su-wl-sample")!.querySelector(".su-wl-circle")!;
     expect(circle.getAttribute("data-done")).toBeNull();
     expect(q(container, "su-wl-github")!.querySelector(".su-wl-circle")!.getAttribute("data-done")).toBe("true");
-    mounted?.unmount(); mounted = null;
-    const again = await mount(view, "?area=setup");
-    expect(q(again.container, "su-accounts")).not.toBeNull();
   });
 
   it("the rail's Get started shows until GitHub, a model and a first PR exist", async () => {
@@ -219,9 +265,9 @@ describe("Screen 2 — Setup on one page", () => {
     expect((advanced as HTMLDetailsElement).open).toBe(true);
   });
 
-  it("a deep link into a row opens Setup with Advanced settings open, never the Welcome", async () => {
-    fakeApi(firstRun());
-    const { container } = await mount(firstRun(), "?area=setup&focus=budget");
+  it("a deep link into a row opens Advanced settings on it", async () => {
+    fakeApi(board());
+    const { container } = await mount(board(), "?area=setup&focus=budget");
     expect(q(container, "su-welcome")).toBeNull();
     expect((q(container, "su-advanced-all") as HTMLDetailsElement).open).toBe(true);
   });

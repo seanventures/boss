@@ -38,7 +38,7 @@ describe("one press, one effect", () => {
   it("Open a PR", async () => {
     const api = fakeApi(tryStep());
     api.hold = true;
-    mounted = await mountBoard(tryStep(), "?area=setup&focus=try", true, "setup");   // Welcome › Quick PR
+    mounted = await mountBoard(tryStep(), "?area=welcome&focus=try", true, "welcome");   // Welcome › Quick PR
     await type(q(document.body, "su-try-input"), "Fix the typo in README");
     await doubleClick(q(document.body, "su-try-open"));
     api.release();

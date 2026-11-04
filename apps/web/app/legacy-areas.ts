@@ -62,6 +62,7 @@ export const RAIL_LABEL_AREAS: Readonly<Record<string, AreaId>> = {
   evidence: "reports",
   qa: "reports",
   repo_and_models: "setup",
+  get_started: "welcome",
   skills_mcp: "skills",
   skills_and_mcp: "skills",
   communications: "comms",

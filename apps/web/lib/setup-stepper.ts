@@ -147,5 +147,3 @@ export const SETUP_BADGE_EVENT = "boss:setup-badge";
 
 /** The board tells the rail whether Get started still shows (no reload needed). */
 export const GET_STARTED_EVENT = "boss:setup-get-started";
-/** The rail's Get started asks the board for the Welcome. */
-export const OPEN_WELCOME_EVENT = "boss:setup-open-welcome";

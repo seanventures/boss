@@ -27,8 +27,10 @@ export async function fetchSetupSummary(projectId: string): Promise<SetupSummary
   }
 }
 
-/** Where a sign-in with no `area` lands: Repo and models while setup is not ready. */
+/** Where a sign-in with no `area` lands: Get started (the Welcome) while GitHub, a model or a
+ *  first PR is missing (BOSSAPP-808); else Repo and models while setup is not ready. */
 export function landingArea(requestedArea: string | undefined, summary: SetupSummary | null): string | null {
   if (requestedArea && requestedArea.trim()) return null;
+  if (summary && summary.get_started === true && summary.ready === false) return "welcome";
   return summary && summary.ready === false ? "setup" : null;
 }

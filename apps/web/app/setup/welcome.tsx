@@ -11,15 +11,10 @@ import { Check, GitBranch, Lightbulb } from "@phosphor-icons/react";
 
 import type { SetupView } from "../../lib/setup-types";
 import type { SigninStatus } from "../../lib/identity/github-signin";
-import { AddAccountPanel } from "./add-account-panel";
-import { AddModelPanel } from "./add-model-drawer";
-import { Drawer } from "./drawer";
 import { useBoard } from "./parts";
 import { Pill } from "./pill";
 import { TryRow } from "./try-row";
 import { accountsOf, reposOf } from "./setup-blocks";
-import { fetchSetup } from "../../lib/setup-client";
-import { defaultAdd } from "../../lib/setup-stepper";
 
 export const NEW_PROJECT_HREF = {
   sample: "/?new_project=sample",
@@ -57,7 +52,7 @@ export function welcomeDone(state: WelcomeState): boolean {
 
 export { getStarted } from "../../lib/setup-stepper";
 
-export { GET_STARTED_EVENT, OPEN_WELCOME_EVENT } from "../../lib/setup-stepper";
+export { GET_STARTED_EVENT } from "../../lib/setup-stepper";
 
 function Circle({ n, done, current }: { n: number; done: boolean; current: boolean }) {
   return (
@@ -82,16 +77,35 @@ function LastRun({ run }: { run: NonNullable<SetupView["try"]["last_run"]> }) {
   );
 }
 
+/** Into Repo and models on one row (`focus=`), in place: Get started → Setup → back. */
+function SetupLink({ focus, className, testid, children }: {
+  focus: "repository" | "models"; className: string; testid: string; children: React.ReactNode;
+}) {
+  const href = `/?area=setup&focus=${focus}`;
+  return (
+    <a className={className} href={href} data-testid={testid}
+       onClick={(e) => {
+         if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+         e.preventDefault();
+         try {
+           const url = new URL(window.location.href);
+           url.searchParams.set("focus", focus);
+           url.searchParams.delete("view");
+           window.history.replaceState(window.history.state, "", url.toString());
+           window.dispatchEvent(new CustomEvent("boss:navigate", { detail: "setup" }));
+         } catch { window.location.assign(href); }
+       }}>
+      {children}
+    </a>
+  );
+}
+
 export function Welcome({ onSetup }: { onSetup: () => void }) {
-  const { view, signin, projectId, apply } = useBoard();
+  const { view, signin } = useBoard();
   const [quickOpen, setQuickOpen] = useState<boolean>(() => {
     try { return new URLSearchParams(window.location.search).get("focus") === "try"; } catch { return false; }
   });
-  const [open, setOpenState] = useState<null | "account" | "model">(null);
-  const setOpen = (next: null | "account" | "model") => {
-    setOpenState(next);
-    if (next === null) void fetchSetup(projectId).then(apply).catch(() => undefined);
-  };
+
   const state = welcomeState(view, signin);
   const current = !state.github.done ? 1 : !state.model.done ? 2 : !state.sample.done ? 3 : 0;
   const s = (n: number) => (n === 1 ? "" : "s");
@@ -104,7 +118,8 @@ export function Welcome({ onSetup }: { onSetup: () => void }) {
           <span className="su-faint">About 10 minutes. You can change everything later in Setup.</span>
         </div>
         <span className="su-spacer" />
-        <button type="button" className="su-link" onClick={onSetup} data-testid="su-welcome-setup">Setup</button>
+        <a className="su-link" href="/?area=setup" data-testid="su-welcome-setup"
+           onClick={(e) => { e.preventDefault(); onSetup(); }}>Repo and models</a>
       </header>
 
       <ol className="su-wl-steps">
@@ -120,12 +135,10 @@ export function Welcome({ onSetup }: { onSetup: () => void }) {
           </div>
           <span className="su-spacer" />
           {state.github.done ? (
-            <button type="button" className="su-link" onClick={() => setOpen("account")} data-testid="su-wl-github-more">
-              Add another account
-            </button>
+            <SetupLink focus="repository" className="su-link" testid="su-wl-github-more">Add another account</SetupLink>
           ) : (
-            <button type="button" className={`su-btn${current === 1 ? " su-btn-primary" : ""}`}
-                    onClick={() => setOpen("account")} data-testid="su-wl-github-go">Connect GitHub</button>
+            <SetupLink focus="repository" className={`su-btn${current === 1 ? " su-btn-primary" : ""}`}
+                       testid="su-wl-github-go">Connect GitHub</SetupLink>
           )}
         </li>
 
@@ -141,12 +154,10 @@ export function Welcome({ onSetup }: { onSetup: () => void }) {
           </div>
           <span className="su-spacer" />
           {state.model.done ? (
-            <button type="button" className="su-link" onClick={() => setOpen("model")} data-testid="su-wl-model-more">
-              Add another model
-            </button>
+            <SetupLink focus="models" className="su-link" testid="su-wl-model-more">Add another model</SetupLink>
           ) : (
-            <button type="button" className={`su-btn${current === 2 ? " su-btn-primary" : ""}`}
-                    onClick={() => setOpen("model")} data-testid="su-wl-model-go">Add a model</button>
+            <SetupLink focus="models" className={`su-btn${current === 2 ? " su-btn-primary" : ""}`}
+                       testid="su-wl-model-go">Add a model</SetupLink>
           )}
         </li>
 
@@ -193,15 +204,6 @@ export function Welcome({ onSetup }: { onSetup: () => void }) {
         </div>
       </section>
 
-      {open === "account" ? (
-        <AddAccountPanel onClose={() => setOpen(null)} onAdvanced={() => { setOpen(null); onSetup(); }} />
-      ) : null}
-      {open === "model" ? (
-        <Drawer title="Add a model" onClose={() => setOpen(null)} testid="su-wl-model-drawer">
-          <AddModelPanel initialTile={defaultAdd(view).tile} initialProvider={defaultAdd(view).provider}
-                         onDone={() => setOpen(null)} />
-        </Drawer>
-      ) : null}
     </div>
   );
 }

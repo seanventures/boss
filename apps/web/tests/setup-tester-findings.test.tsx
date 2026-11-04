@@ -192,7 +192,7 @@ describe("every time on the board is the viewer's, not only the pill's", () => {
     const verdict = q(document.body, "su-verdict")!.getAttribute("title");
     mounted.unmount(); mounted = null;
     // Try it lives on the Welcome now (BOSSAPP-808); focus=try lands there.
-    mounted = await mountBoard(view, "?area=setup&focus=try", true, "setup");
+    mounted = await mountBoard(view, "?area=welcome&focus=try", true, "welcome");
     const reason = q(document.body, "su-try-blocked")?.getAttribute("data-tip");
     expect(verdict).toBe(`GitHub rate limit. Checks resume at ${local}.`);
     expect(reason).toBe(`GitHub rate limit. Checks resume at ${local}.`);
@@ -205,14 +205,14 @@ describe("Try it says why it cannot run", () => {
     const view = { ...everyRed(), next: "repository" as const, try: { workflow_key: "setup_first_pr",
                    last_run: null, done: false } };
     fakeApi(view);
-    mounted = await mountBoard(view, "?area=setup&focus=try", true, "setup");
+    mounted = await mountBoard(view, "?area=welcome&focus=try", true, "welcome");
     const tip = q(document.body, "su-try-blocked")?.getAttribute("data-tip");
     expect(tip).toBe("Token needs Contents: Read and write.");
   });
 
   it("'Your first PR is open.' is not said by a page that merely loads an old PR", async () => {
     fakeApi(board());
-    mounted = await mountBoard(board(), "?area=setup&view=welcome", true, "setup");
+    mounted = await mountBoard(board(), "?area=welcome", true, "welcome");
     expect(q(document.body, "su-try-pr")).not.toBeNull();
     expect(document.body.textContent).not.toContain("Your first PR is open.");
   });
