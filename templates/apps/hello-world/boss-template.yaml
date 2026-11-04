@@ -1,0 +1,22 @@
+schema: boss.template/v1
+id: hello-world
+name: Hello World
+version: 1.0.0
+summary: The sample app - one web page that says hello and shows the time, with one test; the fastest way to watch BOSS build from start to finish
+adds: [routes, ui]
+stacks:
+  node: {frameworks: [node-http], min_toolchain: node20}
+requires: []
+works_with: []
+secrets: []
+env: [{name: HELLO_NAME, default: World}]
+egress: []
+webhooks: []
+routes: [GET /]
+tests:
+  node: {command: node --test --test-reporter=junit --test-reporter-destination=boss-template-junit.xml tests/template_hello_world/hello-world.test.mjs, report: junit, min_tests: 1}
+security_note: SECURITY.md
+guide: guide.md
+labels: [idea, sample]
+license: Apache-2.0
+min_boss: 1.0.0
