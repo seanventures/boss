@@ -1464,7 +1464,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             one server view (app/setup/setup-board.tsx). Outgoing email lives in Skills and MCP. */}
         {shows("setup") ? (
         <section className="panel-stack" data-area="setup" aria-label="Repo and models">
-          <SetupBoard projectId={activeProjectId} actor={activeActorId} />
+          <SetupBoard projectId={activeProjectId} actor={activeActorId} layout="setup" />
         </section>
         ) : null}
 

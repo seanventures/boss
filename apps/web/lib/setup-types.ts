@@ -244,6 +244,45 @@ export type SetupView = {
   claude_credential?: ClaudeCredential | null;
   /** A background probe (signed-in CLIs, the secret store) is on its way: ask again soon. */
   detecting?: boolean;
+  /** Setup › GitHub accounts (BOSSAPP-808): one row per account. Absent on an older API. */
+  github_accounts?: GitHubAccount[];
+  /** Setup › Repositories BOSS can work on (BOSSAPP-808). Absent on an older API. */
+  repositories?: SetupRepository[];
+};
+
+/** How an account reaches GitHub (engine services/setup_accounts.py). */
+export type GitHubAccountKind = "personal_signin" | "org_app" | "token" | "org_token" | "install";
+
+export type GitHubAccount = {
+  id: string;
+  /** This project's GitHub connection (Replace token, Add repo); null for the org's own rows. */
+  connection_id: string | null;
+  scope: "project" | "org" | "install";
+  kind: GitHubAccountKind;
+  name: string;
+  login: string | null;
+  /** "Personal · signed in with GitHub", "Organisation · BOSS GitHub App", … */
+  how: string;
+  personal: boolean | null;
+  repo_count: number | null;
+  expires_at: string | null;
+  /** Server-decided: green Connected, amber expiring, red Broken (action says the fix). */
+  pill: Pill;
+  created_at?: string | null;
+};
+
+export type SetupRepository = {
+  full_name: string;
+  binding_id: string | null;
+  /** Bound to this project (false: allowed for the org, used elsewhere or nowhere yet). */
+  in_project: boolean;
+  default: boolean;
+  account_id: string | null;
+  /** The account's name ("via paramg"). */
+  via: string | null;
+  projects: { project_id: string; name: string }[];
+  checks: { read: CheckResult; write: CheckResult; pull_requests: CheckResult } | null;
+  pill: Pill | null;
 };
 
 /** Setup › Repo and models › Models is the org's: set once, every project uses it. */
