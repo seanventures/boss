@@ -14,7 +14,7 @@ lands on that row of the control board.
 | Daily cap (board row, Pace-only) | Limits › **Per day** (now directly editable via `POST /v1/govern/limits`). The board row, its evidence and Pace still work |
 | Monthly cap (board row editor + cap preview) | Limits › **Per month** (the same `set_budget` write, `via: govern`). The board editor and its 30-day preview are unchanged |
 | Burst (board row, Pace-only) | Limits › **Burst per minute** (now directly editable). The board row is unchanged |
-| Pace (slider, preview, Apply) | Board (More › Advanced limits). Unchanged |
+| Pace (slider, preview, Apply) | The **first card on Limits**, "How fast BOSS works". It uses the same `pace` and `pace_preview` ops. Moving the slider shows what Pace sets (month, day, burst, jobs, workers) and fills the caps below, which can still be fine-tuned. The single Save writes Pace first, then any cap changed from what Pace set. The "would have paused" line follows the new caps. Pace is also still on the board, unchanged |
 | Thresholds: Heads-up / Cheaper builds / No new servers / Risky work stops | Board. Unchanged. Heads-up also drives the Spend badge's "Near the cap" |
 | Token guides (project default, per step, edit) | Board. Unchanged |
 | Review lanes, Turn budget, Review rounds, Captain leads, Captain self-improves, Jobs at once, Workers | Board. Unchanged |
