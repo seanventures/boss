@@ -120,12 +120,22 @@ def project_limit(connection: Any, project_id: str) -> Optional[dict[str, Any]]:
 
 
 def month_spent(connection: Any, project_id: str, now: Optional[datetime] = None) -> dict[str, int]:
-    """This month's money (what the caps count) and the active holds, for one project."""
+    """This month's settled money and the active holds (what the caps count), for one project."""
     from .budget import period_spend
 
     spend = period_spend(connection, project_id, "month", now)
     return {"actual_usd_micros": int(spend["actual_usd_micros"]),
             "reserved_usd_micros": int(spend["reserved_usd_micros"])}
+
+
+def month_used(connection: Any, project_id: str, now: Optional[datetime] = None) -> int:
+    """This month's money SPENT, by the one definition Spend says (included_spend.ledger_spend):
+    a project's "used" here equals its By project row and Spend's hero."""
+    from .budget import budget_period
+    from .included_spend import ledger_spend
+
+    month = budget_period("month", now)
+    return int(ledger_spend(connection, project_id, month["start"], month["end"])["money_usd_micros"])
 
 
 def set_project_limit(connection: Any, project_id: str, limit_usd_micros: Optional[int], *,
@@ -173,7 +183,7 @@ def set_project_limit(connection: Any, project_id: str, limit_usd_micros: Option
     return {"project_id": project_id,
             "limit_usd_micros": (after or {}).get("limit_usd_micros"),
             "envelope_id": (after or {}).get("envelope_id"),
-            "used_usd_micros": month_spent(connection, project_id, now)["actual_usd_micros"]}
+            "used_usd_micros": month_used(connection, project_id, now)}
 
 
 def limit_period(connection: Any, project_id: str, snapshot: dict[str, Any],
@@ -225,5 +235,5 @@ def project_limits(connection: Any, projects: list[dict[str, Any]],
         out.append({"project_id": pid, "name": project.get("name") or pid,
                     "limit_usd_micros": (limit or {}).get("limit_usd_micros"),
                     "envelope_id": (limit or {}).get("envelope_id"),
-                    "used_usd_micros": month_spent(connection, pid, now)["actual_usd_micros"]})
+                    "used_usd_micros": month_used(connection, pid, now)})
     return out
