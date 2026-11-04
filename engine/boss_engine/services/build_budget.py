@@ -221,6 +221,20 @@ def cap_reached(budget: Any, connection: Any, project_id: str) -> Optional[dict[
     snapshot = budget.status_for_project(connection, project_id)
     periods = (snapshot or {}).get("periods") or {}
     capped = [p for p in periods.values() if int(p.get("cap_usd_micros") or 0)]
+    # BOSSAPP-807: the project's monthly limit stops a build like a cap, and the operator's
+    # at-limit choice `cheaper` lets a running build go on (red budget: low-cost models).
+    from . import spend_limits
+
+    try:
+        with connection.begin_nested():
+            extra = spend_limits.limit_period(connection, project_id, snapshot or {})
+    except Exception:  # noqa: BLE001 — no limit readable is no limit, never a stopped build
+        extra = None
+    if extra is not None:
+        capped.append(extra)
+    if capped and spend_limits.at_limit(connection, getattr(budget, "settings", None),
+                                        project_id) == "cheaper":
+        return None
     if not capped:
         return None  # unmetered, or no cap set: nothing to cross
     building = inflight_money(connection, project_id)

@@ -140,6 +140,15 @@ KNOBS: dict[str, dict[str, Any]] = {
                 "1 on, 0 to stop the build until a person waives the checks.",
         "kind": "int", "min": 0, "max": 1,
     },
+    # WHEN A SPEND LIMIT IS REACHED (BOSSAPP-807, spend_limits.at_limit): read by
+    # BudgetGovernor.reserve and build_budget.cap_reached at every reservation and stage boundary.
+    "budget_at_limit": {
+        "attr": "budget_at_limit",
+        "label": "When a limit is reached",
+        "help": "pause: new work waits and asks you. cheaper: work goes on with low-cost "
+                "models. stop: nothing runs until the period resets.",
+        "kind": "choice", "choices": ["pause", "cheaper", "stop"],
+    },
     # THE MODEL PRE-CHECK at the start door (workflow_precheck_agent.py). OFF unless turned on:
     # it is a model call, so it costs money and time on every start it runs at.
     "workflow_precheck_agent": {

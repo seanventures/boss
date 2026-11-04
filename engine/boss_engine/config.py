@@ -1174,6 +1174,10 @@ class Settings(BaseSettings):
     # BOSSAPP-622: what agents are given from the knowledge graph (project_settings `knowledge_graph`):
     # on | keyword | off (knowledge/runtime.MODES).
     knowledge_graph: str = Field(default="on", alias="BOSS_KNOWLEDGE_GRAPH")
+    # BOSSAPP-807: what happens when a spend cap (or a project's monthly limit) is reached —
+    # project_settings `budget_at_limit` (services/spend_limits.py): pause (ask a person, today's
+    # behaviour), cheaper (keep going on low-cost models) or stop (nothing runs until it resets).
+    budget_at_limit: str = Field(default="pause", alias="BOSS_BUDGET_AT_LIMIT")
     # THE CODE GRAPH OF A REGISTERED REPOSITORY (services/knowledge/repo_index.py): every repository
     # registered in a project is cloned (BOSS's own clone path) and parsed into the graph, and its
     # base branch is re-checked; parsing only, no model is called. 0 turns it off install-wide.
