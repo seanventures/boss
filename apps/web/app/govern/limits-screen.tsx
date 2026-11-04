@@ -15,7 +15,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { GatedButton } from "../../components/gated";
 import {
   governWrite, money, readGovern, readNumber, type AtLimit, type CapPreview as CapPreviewData, type GovernView,
-  type ProjectLimitRow, type ProjectLimitsView,
+  type Envelope, type ProjectLimitRow, type ProjectLimitsView,
 } from "../../lib/govern";
 import { showToast } from "../client-forms";
 import { FailureLine, failureOf, type Failure } from "./control-board";
@@ -102,6 +102,34 @@ export function LimitsScreen({ view, projectId, actor, unreachable, focus, onSav
   }, [start]);
   const edit = <T,>(set: (v: T) => void) => (v: T) => { touched.current = true; set(v); };
 
+  // PACE, the first card (operator, 2026-11-04: "I like the pace"): the board's own control and
+  // ops. Moving it fills the caps below with exactly what Pace writes (pace_preview); they can
+  // still be fine-tuned, and Save writes Pace first, then any cap changed from what it set.
+  const startPace = view?.pace?.value ?? null;
+  const [pace, setPace] = useState<number | null>(null);
+  const shownPace = pace ?? startPace ?? 50;
+  const askedPace = useDebounced(pace, 150);
+  const [envelope, setEnvelope] = useState<Envelope | null>(null);
+  const [paceBase, setPaceBase] = useState<{ month: string; day: string; burst: string } | null>(null);
+  useEffect(() => {
+    const ask = askedPace ?? startPace;
+    if (ask === null) { setEnvelope(null); return; }
+    let alive = true;
+    void governWrite("pace_preview", { project_id: projectId, intensity: ask }).then((r) => {
+      if (!alive || !r.ok) return;
+      const env = (r.data as unknown as { envelope: Envelope }).envelope;
+      setEnvelope(env);
+      if (askedPace !== null) {
+        const base = { month: dollars(env.monthly_cap_usd_micros), day: dollars(env.daily_cap_usd_micros),
+                       burst: dollars(env.burst_cap_usd_micros_per_min) };
+        setPaceBase(base);
+        setMonth(base.month); setDay(base.day); setBurst(base.burst);
+      }
+    });
+    return () => { alive = false; };
+  }, [askedPace, startPace, projectId]);
+  const paceMoved = pace !== null && pace !== startPace;
+
   const [rows, setRows] = useState<ProjectLimitRow[] | null>(null);
   const [rowText, setRowText] = useState<Record<string, string>>({});
   const loadRows = React.useCallback(async () => {
@@ -121,7 +149,9 @@ export function LimitsScreen({ view, projectId, actor, unreachable, focus, onSav
     return [r.project_id, t === "" ? null : readNumber(t, MONEY).error];
   }));
   const changedRows = (rows ?? []).filter((r) => (rowText[r.project_id] ?? "").trim() !== dollars(r.limit_usd_micros));
-  const capsChanged = month !== start.month || day !== start.day || burst !== start.burst || choice !== start.choice;
+  // After Pace moved, a cap is "changed" when it differs from what Pace sets.
+  const from = paceMoved && paceBase ? paceBase : start;
+  const capsChanged = month !== from.month || day !== from.day || burst !== from.burst || choice !== start.choice;
   // Only what was changed is sent, so only what was changed has to be valid; its reason shows.
   const monthErr = month !== start.month ? monthN.error : null;
   const dayErr = day !== start.day ? dayN.error : null;
@@ -140,13 +170,18 @@ export function LimitsScreen({ view, projectId, actor, unreachable, focus, onSav
     if (invalid || busy) return;
     setBusy(true);
     setFailure(null);
+    if (paceMoved) {
+      const r = await governWrite("pace", { project_id: projectId, actor, intensity: pace }, view?.versions.budget);
+      if (!r.ok) { setBusy(false); setFailure(failureOf(r, "pace")); return; }
+    }
     if (capsChanged) {
       const body: Record<string, unknown> = { project_id: projectId, actor };
-      if (month !== start.month) body.monthly_cap_usd = monthN.value;
-      if (day !== start.day) body.daily_cap_usd = dayN.value;
-      if (burst !== start.burst) body.burst_usd_per_min = burstN.value;
+      if (month !== from.month) body.monthly_cap_usd = monthN.value;
+      if (day !== from.day) body.daily_cap_usd = dayN.value;
+      if (burst !== from.burst) body.burst_usd_per_min = burstN.value;
       if (choice !== start.choice) body.at_limit = choice;
-      const r = await governWrite("limits", body, view?.versions.budget);
+      // Pace just moved the budget's version; this save follows it in the same press.
+      const r = await governWrite("limits", body, paceMoved ? null : view?.versions.budget);
       if (!r.ok) { setBusy(false); setFailure(failureOf(r, "limits")); return; }
     }
     for (const row of changedRows) {
@@ -157,16 +192,35 @@ export function LimitsScreen({ view, projectId, actor, unreachable, focus, onSav
     }
     setBusy(false);
     touched.current = false;
+    setPace(null); setPaceBase(null);
     showToast("success", "Limits saved");
     onSaved();
     void loadRows();
   };
-  const dirty = capsChanged || changedRows.length > 0;
+  const dirty = paceMoved || capsChanged || changedRows.length > 0;
 
   return (
     <form className="gv-limits" data-testid="gv-limits" noValidate
           onSubmit={(e) => { e.preventDefault(); void save(); }}>
       <button type="button" className="ag-link gv-back" data-testid="gv-back" onClick={onBack}>← Spend</button>
+
+      <section className="gv-card" aria-labelledby="gv-pace-h" data-testid="gv-pace-card">
+        <h3 id="gv-pace-h" className="gv-card-title">How fast BOSS works</h3>
+        <span className="gv-slider">
+          <span className="gv-slider-end">Careful</span>
+          <input type="range" min={0} max={100} step={1} value={shownPace} aria-label="Pace" data-testid="gv-limits-pace"
+                 onChange={(e) => { touched.current = true; setPace(Number(e.target.value)); }} />
+          <span className="gv-slider-end">Bold</span>
+          <b className="gv-slider-value" data-testid="gv-limits-pace-value">{startPace === null && pace === null ? "Not set" : shownPace}</b>
+        </span>
+        {envelope ? (
+          <span className="gv-pace-preview" data-testid="gv-limits-pace-sets" title="Exactly what Pace writes. Fine-tune the caps below.">
+            Sets {money(envelope.monthly_cap_usd_micros)}/month · {money(envelope.daily_cap_usd_micros)}/day
+            {" · "}{money(envelope.burst_cap_usd_micros_per_min, { perMin: true })} burst
+            {" · "}{envelope.max_concurrent_jobs} jobs · {envelope.max_workers_total} workers
+          </span>
+        ) : null}
+      </section>
 
       <section className="gv-card" aria-labelledby="gv-howmuch-h" data-testid="gv-howmuch">
         <h3 id="gv-howmuch-h" className="gv-card-title">How much BOSS may spend</h3>

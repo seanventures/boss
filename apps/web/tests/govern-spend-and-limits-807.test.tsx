@@ -266,6 +266,30 @@ describe("Screen B — Govern › Limits", () => {
     expect(toasts).toContain("Limits saved");
   });
 
+  it("Pace is the first card: moving it fills the caps below, which can be fine-tuned, and Save writes both", async () => {
+    await openLimits();
+    expect($("[data-testid=gv-limits] .gv-card")!.getAttribute("data-testid")).toBe("gv-pace-card");
+    const slider = $("[data-testid=gv-limits-pace]") as HTMLInputElement;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(slider, "60");
+      slider.dispatchEvent(new Event("input", { bubbles: true }));
+      slider.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await wait(400);
+    expect(t("[data-testid=gv-limits-pace-sets]")).toBe("Sets $5,040/month · $252/day · $5.25/min burst · 11 jobs · 15 workers");
+    const value = (id: string) => ($(`[data-testid=${id}]`) as HTMLInputElement).value;
+    expect([value("gv-input-month"), value("gv-input-day"), value("gv-input-burst")]).toEqual(["5040", "252", "5.25"]);
+    // The 30-day replay follows the caps Pace set.
+    await wait(400);
+    expect(posts("cap_preview").some((c) => c.body?.cap_usd === 5040)).toBe(true);
+    await setValue($("[data-testid=gv-input-day]"), "200");
+    await click($("[data-testid=gv-save-limits]"));
+    expect(posts("pace").map((c) => [c.body, c.ifMatch])).toEqual([
+      [{ op: "pace", project_id: "p1", actor: "ceo", intensity: 60 }, "7"]]);
+    expect(posts("limits").map((c) => [c.body, c.ifMatch ?? null])).toEqual([
+      [{ op: "limits", project_id: "p1", actor: "ceo", daily_cap_usd: 200 }, null]]);
+  });
+
   it("a bad number says why and cannot be saved", async () => {
     await openLimits();
     await setValue($("[data-testid=gv-input-month]"), "0");
