@@ -199,6 +199,11 @@ def mount_platform_routers(app: FastAPI) -> None:
 
     app.include_router(projects_archive_router)
 
+    # BOSSAPP-810 — New project: the project page's view and Import's repository facts (reads).
+    from .start_project import router as start_project_router
+
+    app.include_router(start_project_router)
+
     # BOSSAPP-768 — Rules review: the business rules agents propose, approved by a person
     try:
         from .knowledge_rules import router as knowledge_rules_router
