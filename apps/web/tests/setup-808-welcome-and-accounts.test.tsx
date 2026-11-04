@@ -104,7 +104,38 @@ describe("Screen 1 — Welcome", () => {
   });
 });
 
+describe("Welcome is honest", () => {
+  it("other PRs in the project do not tick the sample step; the install still lands on Setup", async () => {
+    const view = { ...withAccounts(board()), try: { workflow_key: "setup_first_pr", last_run: null, done: true } };
+    fakeApi(view);
+    const { container } = await mount(view, "?area=setup&view=welcome");
+    const circle = q(container, "su-wl-sample")!.querySelector(".su-wl-circle")!;
+    expect(circle.getAttribute("data-done")).toBeNull();
+    expect(q(container, "su-wl-github")!.querySelector(".su-wl-circle")!.getAttribute("data-done")).toBe("true");
+    mounted?.unmount(); mounted = null;
+    const again = await mount(view, "?area=setup");
+    expect(q(again.container, "su-accounts")).not.toBeNull();
+  });
+
+  it("the rail's Get started shows until GitHub, a model and a first PR exist", async () => {
+    const { summarize } = await import("../lib/setup-stepper");
+    expect(summarize(firstRun()).get_started).toBe(true);
+    expect(summarize(withAccounts(tryStep())).get_started).toBe(true);
+    expect(summarize(withAccounts(board())).get_started).toBe(false);
+  });
+});
+
 describe("Screen 2 — Setup on one page", () => {
+  it("a model whose login expired says so in Who does what", async () => {
+    const view = withAccounts(board());
+    view.jobs = view.jobs.map((j) => (j.job === "review" && j.resolved
+      ? { ...j, resolved: { ...j.resolved, pill: PILLS.loginExpired } } : j));
+    fakeApi(view);
+    const { container } = await mount(view);
+    expect(q(container, "su-who-pill-review")!.textContent).toContain("Login expired");
+    expect(q(container, "su-who-pill-build")).toBeNull();
+  });
+
   it("lists one row per GitHub account with how, repo count and the server's status", async () => {
     const view = withAccounts(board());
     fakeApi(view);

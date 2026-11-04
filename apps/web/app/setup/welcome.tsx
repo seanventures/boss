@@ -43,13 +43,19 @@ export function welcomeState(view: SetupView, signin?: SigninStatus | null): Wel
     github: { done: Boolean(green) || repoWorks, login: green?.login ?? green?.name ?? null,
               repos: reposOf(view).length },
     model: { done: Boolean(model), label: model?.label ?? null, kind: model?.kind ?? null },
-    sample: { done: Boolean(view.try.done) },
+    // TICKED ONLY FOR A REAL FIRST PR from the sample / Try it run (walk 2026-11-04: a green tick
+    // with no sample run). Other PRs in the project make the install established, not this step.
+    sample: { done: Boolean(view.try.last_run?.pr_url) },
   };
 }
 
 export function welcomeDone(state: WelcomeState): boolean {
   return state.github.done && state.model.done && state.sample.done;
 }
+
+export { getStarted } from "../../lib/setup-stepper";
+
+export { GET_STARTED_EVENT, OPEN_WELCOME_EVENT } from "../../lib/setup-stepper";
 
 function Circle({ n, done, current }: { n: number; done: boolean; current: boolean }) {
   return (

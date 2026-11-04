@@ -43,3 +43,12 @@ board, which every existing test mounts.
 * Token selection: `control_plane_token`, egress `_credential_for_run` and the registry prober use the
   org token that covers the repo (`org_token_for`); with one token this is the old behaviour.
 * No schema migration. An install with one connection shows it as the first account row.
+
+## Behaviour changes after the 2026-11-04 walk
+
+| Change | Why | Test changed |
+|---|---|---|
+| Add a model › a subscription already Working shows Working + Sign in again, no second Connect (row ⋯ › Test still re-checks it) | one state, one action | setup-models-one-list: "the drawer's Codex chip…" now expects no Connect |
+| A subscription whose login failed: routing headroom reads its pill (e.g. Login expired, state exhausted), its source is not working, and Who does what carries the pill | never "Plenty" beside an expired login | none (new tests) |
+| Welcome step 3 ticks only for the sample / Try it run's PR; other PRs make the install land on Setup | honest tick | none |
+| Rail: Get started (above the areas) while GitHub, a model or a first PR is missing; opens the Welcome | Welcome reachable from the left panel | none (ConsoleShell + page.tsx: one prop, one button) |

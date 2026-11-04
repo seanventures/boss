@@ -5,7 +5,7 @@ import { IDENTITY_PARAMS } from "./url-intent";
 import { rememberOrg, withOrgRestored } from "../lib/console-org";
 import { isInConsoleLink } from "./console-href";
 import { consoleParams, resolveLegacyArea } from "./legacy-areas";
-import { SETUP_BADGE_EVENT } from "../lib/setup-stepper";
+import { GET_STARTED_EVENT, OPEN_WELCOME_EVENT, SETUP_BADGE_EVENT } from "../lib/setup-stepper";
 import { onChanged } from "./changed";
 import { createRefreshCoordinator, registerConsoleRefresh, type RefreshCoordinator } from "../lib/console-refresh";
 import {
@@ -326,6 +326,8 @@ export type ConsoleShellProps = {
     /** Repo and models' rail badge, from GET /v1/setup: how many rows are unfinished or
      *  failing, red when any check is failing. Absent or 0: no badge. */
     setup?: { count: number; tone: "amber" | "red" } | null;
+    /** Setup is unfinished: the rail shows Get started (Setup's Welcome) above the areas. */
+    getStarted?: boolean;
     /** WHICH control plane this console is reading.
      *
      *  Two consoles with identical chrome and completely different worlds is how an operator
@@ -1285,6 +1287,14 @@ function ConsoleShellInner({
     window.addEventListener(SETUP_BADGE_EVENT, onBadge);
     return () => window.removeEventListener(SETUP_BADGE_EVENT, onBadge);
   }, []);
+  // GET STARTED (BOSSAPP-808): shown while GitHub, a model or a first PR is missing.
+  const [getStarted, setGetStarted] = useState(Boolean(status.getStarted));
+  useEffect(() => { setGetStarted(Boolean(status.getStarted)); }, [status.getStarted]);
+  useEffect(() => {
+    const on = (event: Event) => setGetStarted(Boolean((event as CustomEvent).detail));
+    window.addEventListener(GET_STARTED_EVENT, on);
+    return () => window.removeEventListener(GET_STARTED_EVENT, on);
+  }, []);
   const badgeFor = (id: AreaId): number | undefined => {
     if (id === "decisions" && status.pendingDecisions > 0) return status.pendingDecisions;
     if (id === "ops" && status.deadletters > 0) return status.deadletters;
@@ -1366,6 +1376,22 @@ function ConsoleShellInner({
           data-edition={resolvedEdition}
           data-community={community ? "true" : "false"}
         >
+          {getStarted ? (
+            <button type="button" className="bx-nav-item bx-nav-get-started" data-testid="nav-get-started"
+                    data-label="Get started" title="Get BOSS working in 3 steps"
+                    onClick={() => {
+                      go("setup");
+                      try {
+                        const url = new URL(window.location.href);
+                        url.searchParams.set("view", "welcome");
+                        window.history.replaceState(window.history.state, "", url.toString());
+                        window.dispatchEvent(new Event(OPEN_WELCOME_EVENT));
+                      } catch { /* no window */ }
+                    }}>
+              <Rocket size={17} aria-hidden />
+              <span>Get started</span>
+            </button>
+          ) : null}
           {GROUP_ORDER.map((group) => (
             <div key={group}>
               <div className="bx-nav-label">{group}</div>
