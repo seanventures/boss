@@ -15,7 +15,7 @@
  *                     Start → POST /api/delivery-workflows (the project's feature workflow on the
  *                     repo), five tiles, each piece of work with its state and one action
  */
-import React from "react";
+import React, { act } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ProjectStartCard } from "../app/start-project/project-start";
@@ -96,6 +96,16 @@ describe("the URL opens the flow at a choice", () => {
     expect(tid("start-project")).toBeNull();
     expect(new URL(window.location.href).searchParams.has("new_project")).toBe(false);
     expect(new URL(window.location.href).searchParams.get("org")).toBe("org_1");
+  });
+
+  it("an in-console link to /?new_project=sample opens the sample", async () => {
+    window.history.replaceState(null, "", "/?org=org_1");
+    stubFetch(() => undefined);
+    await mountAs(<ProjectMenu projects={[{ id: "p1", name: "Acme Shop" }]} activeId="p1" homeId="p1" />);
+    expect(tid("start-project")).toBeNull();
+    window.history.pushState(null, "", "/?org=org_1&new_project=sample");
+    await act(async () => { window.dispatchEvent(new PopStateEvent("popstate")); });
+    expect(tid("start-project")!.getAttribute("data-step")).toBe("sample");
   });
 
   it("/?new_project=idea opens the name-and-description form, with Back to the doors", async () => {

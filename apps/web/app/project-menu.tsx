@@ -64,10 +64,16 @@ export function ProjectMenu({ projects, activeId, homeId, orgId }: {
   // `/?new_project=sample|import|idea|1` opens it at that choice (the Welcome screen's links).
   const [step, setStep] = useState<StartStep | null>(null);
   useEffect(() => {
-    try {
-      const asked = stepFromParam(new URL(window.location.href).searchParams.get(NEW_PROJECT_PARAM));
-      if (asked) setStep(asked);
-    } catch { /* non-browser */ }
+    // On load, and on an in-console link (pushState + popstate) to `?new_project=…`.
+    const read = () => {
+      try {
+        const asked = stepFromParam(new URL(window.location.href).searchParams.get(NEW_PROJECT_PARAM));
+        if (asked) setStep(asked);
+      } catch { /* non-browser */ }
+    };
+    read();
+    window.addEventListener("popstate", read);
+    return () => window.removeEventListener("popstate", read);
   }, []);
   const closeStart = () => { setStep(null); clearStepParam(); };
   // The draft is the menu's, not the sheet's form: a passkey prompt or a refused step-up keeps it.
