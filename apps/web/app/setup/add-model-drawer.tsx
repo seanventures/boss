@@ -399,6 +399,9 @@ export function AddModelPanel({ initialTile, initialProvider, onDone, replaceSou
         {needsConsent ? <Consent checked={consent} onChange={setConsent} /> : null}
         <div className="su-line su-connect-bar">
           {tile === "subscription" && !notOnServer ? subscriptionStatus() : null}
+          {/* ONE STATE, ONE ACTION: a subscription already Working is not offered Connect again
+              (its row's ⋯ › Test re-checks it); Sign in again stays one click away. */}
+          {tile === "subscription" && rowWorks && !session && !again ? null : (
           <GatedButton permission="model_provider:manage" type="button" className="su-btn su-btn-primary" disabled={!ready}
                   data-testid="su-model-connect"
                   title={whyNotReady() || "Saves it, then asks one tiny question. Budgeted and receipted."}
@@ -406,6 +409,7 @@ export function AddModelPanel({ initialTile, initialProvider, onDone, replaceSou
                   onClick={connect}>
             {busy ? "Checking…" : "Connect"}
           </GatedButton>
+          )}
           {tile === "subscription" && signsIn && usable && !session ? (
             <button type="button" className="su-link" data-testid="su-signin-again"
                     title="Signs the current login out, then runs the provider's sign-in."

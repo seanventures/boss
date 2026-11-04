@@ -245,9 +245,12 @@ export function WhoDoesWhat({ view, onChange }: { view: SetupView; onChange: () 
     <div className="su-line su-who" data-testid="su-who-does-what">
       <span className="su-faint">Who does what:</span>
       {jobs.map((j) => (
-        <Tip key={j.job} tip={j.resolved!.why} className="su-chip" testid={`su-who-${j.job}`}>
-          {j.label} → {j.resolved!.label}
-        </Tip>
+        <React.Fragment key={j.job}>
+          <Tip tip={j.resolved!.why} className="su-chip" testid={`su-who-${j.job}`}>
+            {j.label} → {j.resolved!.label}
+          </Tip>
+          {j.resolved!.pill ? <Pill pill={j.resolved!.pill} testid={`su-who-pill-${j.job}`} /> : null}
+        </React.Fragment>
       ))}
       <button type="button" className="su-link" onClick={onChange} data-testid="su-who-change">Change</button>
     </div>

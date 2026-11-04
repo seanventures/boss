@@ -104,3 +104,22 @@ def test_the_whole_view_carries_the_new_fields_and_keeps_the_old_ones():
         view = setup_view.build(conn, get_settings(), pid)
     assert {"github_accounts", "repositories", "repository", "models", "jobs"} <= set(view)
     assert view["repository"]["connections"] and view["github_accounts"]
+
+
+def test_an_expired_login_reads_expired_in_routing_and_who_does_what_never_plenty():
+    expired = {"state": "login_expired", "tone": "red", "label": "Login expired",
+               "tip": "The provider refused this login. Sign in again.", "action": "sign_in"}
+    models = [{"provider": "codex", "kind": "subscription", "pill": expired},
+              {"provider": "claude_code", "kind": "subscription",
+               "pill": {"state": "working", "tone": "green", "label": "Working", "tip": ""}}]
+    jobs = [{"job": "review", "resolved": {"engine": "codex", "model": None, "label": "Codex", "why": "auto"}},
+            {"job": "build", "resolved": {"engine": "claude_code", "model": None, "label": "Claude Code", "why": "auto"}}]
+    routing = {"headroom": [{"engine": "codex", "state": "plenty", "label": "Plenty", "left": 0.9, "describe": "x"},
+                            {"engine": "claude_code", "state": "plenty", "label": "Plenty", "left": 0.8, "describe": "y"}],
+               "sources": [{"engine": "codex", "working": True}]}
+    setup_view._say_signed_out(models, jobs, routing)
+    codex = routing["headroom"][0]
+    assert codex["state"] == "exhausted" and codex["label"] == "Login expired" and codex["left"] == 0
+    assert routing["headroom"][1]["state"] == "plenty"
+    assert routing["sources"][0]["working"] is False
+    assert jobs[0]["resolved"]["pill"]["label"] == "Login expired" and "pill" not in jobs[1]["resolved"]
