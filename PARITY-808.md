@@ -53,3 +53,13 @@ board, which every existing test mounts.
 | Welcome step 3 ticks only for the sample / Try it run's PR; other PRs make the install land on Setup | honest tick | none |
 | Rail: Get started (above the areas) while GitHub, a model or a first PR is missing; opens the Welcome | Welcome reachable from the left panel | none (ConsoleShell + page.tsx: one prop, one button) |
 | Setup stepper is 1 GitHub · 2 Repos · 3 Model (Try it left Setup); `focus=try` opens the Welcome with Quick PR open | Setup is connections only | setup-signin-and-advanced (3 steps, no su-row-try), setup-deep-links (no `try` row; Next link text), setup-tester-findings and setup-one-press-one-effect (Try it tests mount the Welcome) |
+
+## Get started is its own area (operator, 2026-11-04)
+
+| Before | Now | Test changed |
+|---|---|---|
+| `?area=setup` showed the Welcome body under the title "Repo and models" | `?area=welcome` ("Get started", rail button above the groups while unfinished) is the Welcome; `?area=setup` is always Repo and models: the 1 GitHub · 2 Repos · 3 Model stepper while a repo or model is missing, then the board | setup-808 tests rewritten for the two areas |
+| A new install landed on `area=setup` | lands on `area=welcome` (summary `get_started`); an older summary without it still lands on Setup | setup-landing-and-badge: first-run landing now `welcome` |
+| Welcome's Connect GitHub / Add a model opened drawers on the Welcome | they deep-link into Setup (`focus=repository` / `focus=models`, in place); on the board these open Add GitHub account / Add model; Setup shows "Back to Get started" until a first PR | none |
+| `?area=setup&view=welcome`, `?area=setup&focus=try`, "Next: try a sample project" | open `area=welcome` (boss:navigate) | setup-deep-links (href `?area=welcome`), setup-tester-findings / setup-one-press-one-effect mount the welcome layout |
+| Rail label "Get started" | resolves to `welcome` (legacy-areas RAIL_LABEL_AREAS) | none |

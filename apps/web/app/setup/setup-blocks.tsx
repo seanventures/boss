@@ -86,9 +86,13 @@ function BlockHead({ title, tip, action }: { title: string; tip: string; action:
 type Opening = { kind: "account" } | { kind: "replace"; connectionId: string | null }
   | { kind: "repo"; connectionId: string | null } | { kind: "model" };
 
-export function SetupBlocks({ onAdvanced }: { onAdvanced: (focus?: string) => void }) {
+export function SetupBlocks({ onAdvanced, initialOpen = null }: {
+  onAdvanced: (focus?: string) => void;
+  /** A deep link from Get started: open Add GitHub account / Add model at once. */
+  initialOpen?: "account" | "model" | null;
+}) {
   const { view, signin, projectId, apply } = useBoard();
-  const [open, setOpen] = useState<Opening | null>(null);
+  const [open, setOpen] = useState<Opening | null>(initialOpen ? { kind: initialOpen } : null);
   // CLOSING RE-READS THE BOARD (as Models does): a sign-in or check that finished shows at once.
   const close = () => { setOpen(null); void fetchSetup(projectId).then(apply).catch(() => undefined); };
   const accounts = useMemo(() => accountsOf(view, signin), [view, signin]);

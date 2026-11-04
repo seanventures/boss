@@ -1478,6 +1478,13 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         </section>
         ) : null}
 
+        {/* GET STARTED (BOSSAPP-808): the 3-step Welcome, its own area; steps link into Setup. */}
+        {shows("welcome") ? (
+        <section className="panel-stack" data-area="welcome" aria-label="Get started">
+          <SetupBoard projectId={activeProjectId} actor={activeActorId} layout="welcome" />
+        </section>
+        ) : null}
+
         {shows("self_fixes") ? (
         <section className="panel-stack" data-area="self_fixes" aria-label="Self-fixes">
           {/* BOSS FIXES ITSELF (docs/product/BOSS_FIXES_ITSELF.md §10.3): reads its own data. */}

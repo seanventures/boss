@@ -105,7 +105,7 @@ describe("the seam to Skills and MCP", () => {
     mounted = await mountBoard(tryStep());
     const first = q(document.body, "su-next-try") as HTMLAnchorElement | null;
     expect(first?.textContent).toBe("Next: try a sample project");
-    expect(first?.getAttribute("href")).toBe("?area=setup&view=welcome");
+    expect(first?.getAttribute("href")).toBe("?area=welcome");
     expect(q(document.body, "su-next-skills")).toBeNull();
     mounted.unmount(); mounted = null; document.body.innerHTML = "";
     fakeApi(firstRun());

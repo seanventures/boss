@@ -44,6 +44,7 @@ export const AREA_ACCESS: Readonly<Record<AreaId, AreaAccess>> = {
   "ai-sre": p("reliability:read"),
   reports: p("activity:read"),
   setup: p("setup:read"),
+  welcome: p("setup:read"),
   skills: p("skill:read"),
   budget: p("budget:read"),
   comms: p("comms:read"),

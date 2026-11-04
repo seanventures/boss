@@ -5,7 +5,7 @@ import { IDENTITY_PARAMS } from "./url-intent";
 import { rememberOrg, withOrgRestored } from "../lib/console-org";
 import { isInConsoleLink } from "./console-href";
 import { consoleParams, resolveLegacyArea } from "./legacy-areas";
-import { GET_STARTED_EVENT, OPEN_WELCOME_EVENT, SETUP_BADGE_EVENT } from "../lib/setup-stepper";
+import { GET_STARTED_EVENT, SETUP_BADGE_EVENT } from "../lib/setup-stepper";
 import { onChanged } from "./changed";
 import { createRefreshCoordinator, registerConsoleRefresh, type RefreshCoordinator } from "../lib/console-refresh";
 import {
@@ -200,6 +200,8 @@ const ICONS = {
 //  and nobody should. The chat agent starts a WORKFLOW now (see start_workflow in builtin.py),
 //  so the dossier is a step's output and the run is what you open.
 const OFF_THE_NAV = new Set<AreaId>(["discovery", "meetings"]);
+/** Get started has its own rail button above the groups, shown only while setup is unfinished. */
+const OWN_RAIL_BUTTON = new Set<AreaId>(["welcome"]);
 
 const AREAS: AreaDef[] = [
   { id: "overview", label: "Command Center", sub: "What needs you · what's moving", group: "Platform", icon: ICONS.overview },
@@ -252,6 +254,8 @@ const AREAS: AreaDef[] = [
   // a model runs out of credit or a repo token expires was filed under a name that says
   // "already done". It carries a badge while anything on it is unfinished or failing.
   { id: "setup", label: "Repo and models", sub: "Where BOSS writes code and what it thinks with", group: "Settings", icon: Database },
+  // GET STARTED (BOSSAPP-808): the 3-step Welcome — its own place, never Repo and models' body.
+  { id: "welcome", label: "Get started", sub: "Get BOSS working in 3 steps", group: "Settings", icon: Rocket },
   // WHAT YOUR CREW CAN DO (skills-mcp spec §5.1): the Kit of abilities, who holds them, and every
   // skill and MCP server. Second in Settings: a repo and a model come first.
   { id: "skills", label: "Skills & MCP", sub: "What your crew can do", group: "Settings", icon: ICONS.capabilities },
@@ -1263,7 +1267,7 @@ function ConsoleShellInner({
   // cannot still lands — on <AccessDenied> naming the permission, never a blank page.
   const navAreas = useMemo(
     () => areasForEdition.filter(
-      (a) => isCommunityPrimaryNavVisible(a.id, resolvedEdition) && !OFF_THE_NAV.has(a.id) && areaCan(a.id).allowed),
+      (a) => isCommunityPrimaryNavVisible(a.id, resolvedEdition) && !OWN_RAIL_BUTTON.has(a.id) && !OFF_THE_NAV.has(a.id) && areaCan(a.id).allowed),
     [areasForEdition, resolvedEdition, areaCan],
   );
 
@@ -1376,18 +1380,12 @@ function ConsoleShellInner({
           data-edition={resolvedEdition}
           data-community={community ? "true" : "false"}
         >
-          {getStarted ? (
-            <button type="button" className="bx-nav-item bx-nav-get-started" data-testid="nav-get-started"
+          {getStarted && areaCan("welcome").allowed ? (
+            <button type="button" className={`bx-nav-item bx-nav-get-started${railSelected === "welcome" ? " active" : ""}`}
+                    data-testid="nav-get-started" data-area-nav="welcome"
+                    aria-current={railSelected === "welcome" ? "page" : undefined}
                     data-label="Get started" title="Get BOSS working in 3 steps"
-                    onClick={() => {
-                      go("setup");
-                      try {
-                        const url = new URL(window.location.href);
-                        url.searchParams.set("view", "welcome");
-                        window.history.replaceState(window.history.state, "", url.toString());
-                        window.dispatchEvent(new Event(OPEN_WELCOME_EVENT));
-                      } catch { /* no window */ }
-                    }}>
+                    onClick={() => go("welcome")}>
               <Rocket size={17} aria-hidden />
               <span>Get started</span>
             </button>

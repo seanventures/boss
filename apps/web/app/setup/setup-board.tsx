@@ -48,7 +48,7 @@ import { Tip } from "./pill";
 import { SectionLabel } from "../section-label";
 import { useOnScreen } from "../../lib/area-shown";
 import { SetupBlocks } from "./setup-blocks";
-import { GET_STARTED_EVENT, getStarted, OPEN_WELCOME_EVENT, Welcome } from "./welcome";
+import { GET_STARTED_EVENT, getStarted, Welcome } from "./welcome";
 
 /** One plain line per Advanced item (≤ 6 words), the detail in its tooltip. */
 const ADVANCED: Record<string, { line: string; tip: string }> = {
@@ -101,35 +101,39 @@ function currentParams(): SetupParams {
   try { return readParams(window.location.search); } catch { return { focus: null, add: null, source: null }; }
 }
 
-/** Setup's two screens (BOSSAPP-808): the 3-step Welcome and the one-page Setup. */
-export type SetupScreen = "welcome" | "setup";
-
-function screenFromUrl(): SetupScreen | null {
-  try {
-    const sp = new URLSearchParams(window.location.search);
-    const v = sp.get("view");
-    if (v === "welcome" || v === "setup") return v;
-    if (sp.get("focus") === "try") return "welcome";       // the sample and Quick PR live there
-    // A deep link into a row (or GitHub's return from the org App) is Setup, never the Welcome.
-    if (sp.get("focus") || sp.get("step") || sp.get("add") || sp.get("source") || sp.get("github")) return "setup";
-  } catch { /* no window */ }
-  return null;
-}
+/** The rows the Setup blocks answer themselves (Add GitHub account, Add model), not Advanced. */
+const BLOCK_FOCUS = new Set(["github", "repository", "models"]);
 
 function deepLinked(): boolean {
   try {
     const sp = new URLSearchParams(window.location.search);
-    return Boolean((sp.get("focus") && sp.get("focus") !== "try") || sp.get("step") || sp.get("add") || sp.get("source") || sp.get("github"));
+    const f = sp.get("focus");
+    return Boolean((f && f !== "try") || sp.get("step") || sp.get("add") || sp.get("source") || sp.get("github"));
   } catch { return false; }
 }
 
+/** An old link to the Welcome inside Setup (`view=welcome`, `focus=try`): the Welcome is its own area. */
+function oldWelcomeLink(): boolean {
+  try {
+    const sp = new URLSearchParams(window.location.search);
+    return sp.get("view") === "welcome" || sp.get("focus") === "try";
+  } catch { return false; }
+}
+
+function navigate(area: "welcome" | "setup"): void {
+  try { window.dispatchEvent(new CustomEvent("boss:navigate", { detail: area })); } catch { /* no window */ }
+}
+
 /**
- * `layout="setup"` (the console, BOSSAPP-808): Welcome until the three steps are done, then Setup —
- * GitHub accounts, Repositories, Models — with every earlier row and setting under Advanced settings.
- * `layout="classic"` (the default) is the board as it was, row for row.
+ * Three layouts over one server view (BOSSAPP-808):
+ *  - `"setup"` (area=setup, "Repo and models"): the 1 GitHub · 2 Repos · 3 Model stepper while a
+ *    repository or a model is missing, then the board — GitHub accounts, Repositories, Models —
+ *    with every earlier row and setting under Advanced settings. Never the Welcome.
+ *  - `"welcome"` (area=welcome, "Get started"): the 3-step Welcome. Its steps deep-link into Setup.
+ *  - `"classic"` (the default): the board as it was, row for row.
  */
 export function SetupBoard({ projectId, actor, initialView = null, layout = "classic" }: {
-  projectId: string; actor?: string; initialView?: SetupView | null; layout?: "classic" | "setup";
+  projectId: string; actor?: string; initialView?: SetupView | null; layout?: "classic" | "setup" | "welcome";
 }) {
   const [rawView, setView] = useState<SetupView | null>(initialView);
   const view = useMemo(() => (rawView ? localView(rawView) : null), [rawView]);
@@ -247,7 +251,6 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
   }, [checking]);
 
   const { status: signin } = useSignin();
-  const [screenChoice, setScreenChoice] = useState<SetupScreen | null>(() => screenFromUrl());
   // ADVANCED SETTINGS (the whole earlier board) opens on a deep link into it.
   const [classicOpen, setClassicOpen] = useState<boolean>(() => deepLinked());
   const classicRef = useRef<HTMLDetailsElement | null>(null);
@@ -264,19 +267,25 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
     if (params.focus && ADVANCED_ROWS.includes(params.focus)) setAdvancedOpen(true);
   }, [params.focus]);
   useEffect(() => {
-    if (params.focus === "try") { setScreenChoice("welcome"); return; }
-    if (params.focus || params.add || params.source) { setClassicOpen(true); setScreenChoice("setup"); }
+    if (params.focus === "try") return;
+    if (params.focus || params.add || params.source) setClassicOpen(true);
   }, [params.focus, params.add, params.source]);
-  // THE RAIL'S GET STARTED follows the board, and opens the Welcome when pressed.
+  // OLD LINKS KEEP WORKING: Setup's former Welcome (`view=welcome`, `focus=try`) opens Get started.
   useEffect(() => {
-    if (!view || layout !== "setup") return;
+    if (layout === "setup" && oldWelcomeLink()) navigate("welcome");
+  }, [layout]);
+  // THE RAIL'S GET STARTED follows the board.
+  useEffect(() => {
+    if (!view || layout === "classic") return;
     try { window.dispatchEvent(new CustomEvent(GET_STARTED_EVENT, { detail: getStarted(view) })); } catch { /* no window */ }
   }, [view, layout]);
+  // SHOWN AGAIN, READ AGAIN: Setup and Get started are two areas over one server view, so the one
+  // coming back on screen asks for it (a connection made in the other shows at once).
+  const wasOnScreen = useRef(onScreen);
   useEffect(() => {
-    const open = () => setScreenChoice("welcome");
-    window.addEventListener(OPEN_WELCOME_EVENT, open);
-    return () => window.removeEventListener(OPEN_WELCOME_EVENT, open);
-  }, []);
+    if (layout !== "classic" && onScreen && !wasOnScreen.current) void load();
+    wasOnScreen.current = onScreen;
+  }, [onScreen, layout, load]);
   const ctx = useMemo(() => view ? {
     projectId, view, apply: setView, checking, setChecking, signin,
   } : null, [projectId, view, checking, setChecking, signin]);
@@ -313,10 +322,10 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
   // With "Sign in with GitHub" shown as ①, the stepper's rows move down one: ② Repos ③ Model ④ Try it.
   const shift = (n: number | null) => (n && signin ? n + 1 : n);
 
-  const classic = (
+  const classicBody = (nested: boolean) => (
     <>
         <header className="su-head">
-          {layout === "classic" ? <h1>Repo and models</h1> : null}
+          {!nested ? <h1>Repo and models</h1> : null}
           <span className={`su-pill su-verdict su-tone-${view.verdict.tone}`} data-testid="su-verdict"
                 title={view.verdict.tip} data-tip={view.verdict.tip}>
             <Dot tone={view.verdict.tone} />{view.verdict.label}
@@ -326,11 +335,11 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
           {/* THE NEXT STEP FOLLOWS THE STEPPER: ready but no first PR yet is "open your first PR"
               (Try it, at the bottom), never a jump to Skills that skips the first build. */}
           {view.ready && view.next === "try" ? (
-            <a className="su-link" href="?area=setup&view=welcome" data-testid="su-next-try"
+            <a className="su-link" href="?area=welcome" data-testid="su-next-try"
                onClick={(e) => {
-                 if (layout !== "setup") return;
+                 if (layout === "classic") return;
                  e.preventDefault();
-                 try { window.dispatchEvent(new Event(OPEN_WELCOME_EVENT)); } catch { /* no window */ }
+                 navigate("welcome");
                }}
                title="BOSS builds a small sample app so you can watch every step once."
                data-tip="BOSS builds a small sample app so you can watch every step once.">
@@ -401,18 +410,20 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
     </>
   );
 
-  if (layout === "setup") {
-    const screen: SetupScreen = screenChoice ?? (getStarted(view) ? "welcome" : "setup");
-    const go = (next: SetupScreen) => {
-      setScreenChoice(next);
-      try {
-        const url = new URL(window.location.href);
-        url.searchParams.set("view", next);
-        window.history.replaceState(window.history.state, "", url.toString());
-      } catch { /* no window */ }
-    };
+  if (layout === "welcome") {
+    return (
+      <BoardContext.Provider value={ctx}>
+        <div className="su-board" data-testid="su-board" data-layout="welcome">
+          <Welcome onSetup={() => navigate("setup")} />
+        </div>
+      </BoardContext.Provider>
+    );
+  }
+
+  // THE STEPPER while a repository or a model is missing (1 GitHub · 2 Repos · 3 Model).
+  const stepper = view.next === "repository" || view.next === "model";
+  if (layout === "setup" && !stepper) {
     const openAdvanced = (row?: string) => {
-      go("setup");
       setClassicOpen(true);
       if (row) {
         landedOn.current = null;
@@ -421,38 +432,39 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
         window.setTimeout(() => classicRef.current?.scrollIntoView?.({ behavior: "smooth", block: "start" }), 50);
       }
     };
+    // Welcome's "Add another account / model" land on the block's own Add, not in Advanced.
+    const blockOpen = params.focus && BLOCK_FOCUS.has(params.focus) && !params.add && !params.source
+      ? (params.focus === "models" ? "model" as const : "account" as const) : null;
     return (
       <BoardContext.Provider value={ctx}>
-        <div className="su-board" data-testid="su-board" data-layout="setup" data-screen={screen}>
-          {screen === "welcome" ? <Welcome onSetup={() => go("setup")} /> : (
-            <>
-              <header className="su-head">
-                <h1>Setup</h1>
-                <span className={`su-pill su-verdict su-tone-${view.verdict.tone}`} data-testid="su-setup-verdict"
-                      title={view.verdict.tip} data-tip={view.verdict.tip}>
-                  <Dot tone={view.verdict.tone} />{view.verdict.label}
-                </span>
-                <span className="su-spacer" />
-                <button type="button" className="su-link" onClick={() => go("welcome")} data-testid="su-open-welcome">
-                  Get started
-                </button>
-                <button type="button" className="su-link" onClick={() => openAdvanced()} data-testid="su-open-advanced">
-                  Advanced settings
-                </button>
-              </header>
-              <SetupBlocks onAdvanced={openAdvanced} />
-              <details className="su-advanced su-advanced-all" data-testid="su-advanced-all" ref={classicRef}
-                       open={classicOpen}
-                       onToggle={(e) => setClassicOpen((e.currentTarget as HTMLDetailsElement).open)}>
-                <summary className="su-advanced-summary" data-testid="su-advanced-all-toggle"
-                         title="Sign-in, the org's GitHub App, model sources, routing, budget, CI, builds."
-                         data-tip="Sign-in, the org's GitHub App, model sources, routing, budget, CI, builds.">
-                  Advanced settings
-                </summary>
-                <div className="su-board su-board-inner">{classic}</div>
-              </details>
-            </>
-          )}
+        <div className="su-board" data-testid="su-board" data-layout="setup">
+          <header className="su-head">
+            <h1>Repo and models</h1>
+            <span className={`su-pill su-verdict su-tone-${view.verdict.tone}`} data-testid="su-setup-verdict"
+                  title={view.verdict.tip} data-tip={view.verdict.tip}>
+              <Dot tone={view.verdict.tone} />{view.verdict.label}
+            </span>
+            <span className="su-spacer" />
+            {getStarted(view) ? (
+              <a className="su-link" href="?area=welcome" data-testid="su-open-welcome"
+                 onClick={(e) => { e.preventDefault(); navigate("welcome"); }}>Back to Get started</a>
+            ) : null}
+            <button type="button" className="su-link" onClick={() => openAdvanced()} data-testid="su-open-advanced">
+              Advanced settings
+            </button>
+          </header>
+          <SetupBlocks onAdvanced={openAdvanced} initialOpen={blockOpen}
+                       key={blockOpen ?? "none"} />
+          <details className="su-advanced su-advanced-all" data-testid="su-advanced-all" ref={classicRef}
+                   open={classicOpen && !blockOpen}
+                   onToggle={(e) => setClassicOpen((e.currentTarget as HTMLDetailsElement).open)}>
+            <summary className="su-advanced-summary" data-testid="su-advanced-all-toggle"
+                     title="Sign-in, the org's GitHub App, model sources, routing, budget, CI, builds."
+                     data-tip="Sign-in, the org's GitHub App, model sources, routing, budget, CI, builds.">
+              Advanced settings
+            </summary>
+            <div className="su-board su-board-inner">{classicBody(true)}</div>
+          </details>
           <SharingAsk projectId={projectId} actor={actor ?? ""} />
         </div>
       </BoardContext.Provider>
@@ -461,8 +473,13 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
 
   return (
     <BoardContext.Provider value={ctx}>
-      <div className="su-board" data-testid="su-board" data-first-run={view.next !== null || undefined}>
-        {classic}
+      <div className="su-board" data-testid="su-board" data-first-run={view.next !== null || undefined}
+           data-layout={layout === "setup" ? "setup-stepper" : undefined}>
+        {layout === "setup" && getStarted(view) ? (
+          <a className="su-link" href="?area=welcome" data-testid="su-open-welcome"
+             onClick={(e) => { e.preventDefault(); navigate("welcome"); }}>Back to Get started</a>
+        ) : null}
+        {classicBody(false)}
         {/* The end of setup: Improve BOSS, asked once, and the heartbeat with its opt-out. */}
         <SharingAsk projectId={projectId} actor={actor ?? ""} />
       </div>
