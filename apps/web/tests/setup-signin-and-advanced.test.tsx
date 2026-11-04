@@ -38,21 +38,22 @@ function withSignin(api: FakeApi, status: unknown, extra: (url: string, op: stri
 
 /** Every row the page had before the redesign, by its test id. */
 const OLD_ROWS = ["su-row-repository", "su-row-github-access", "su-row-build-database", "su-row-models",
-                  "su-row-capacity", "su-row-jobs", "su-row-budget", "su-row-try", "su-row-toolchains",
+                  "su-row-capacity", "su-row-jobs", "su-row-budget", "su-row-toolchains",
                   "su-row-public-url"];
 const ADVANCED_ROWS = ["su-row-github-access", "su-row-build-database", "su-row-jobs",
                        "su-row-budget", "su-row-toolchains", "su-row-public-url", "su-row-ci"];
 
 describe("the order a new person sees", () => {
-  it("① GitHub, ② Repos, ③ Model, ④ Try it — then a folded Advanced", async () => {
+  // BOSSAPP-808: Try it left Setup for the Welcome (PARITY-808.md) — three steps.
+  it("① GitHub, ② Repos, ③ Model — then a folded Advanced", async () => {
     const api = fakeApi(firstRun());
     withSignin(api, SIGNED_OUT);
     mounted = await mountBoard(firstRun());
     await flush();
     const main = [...document.querySelectorAll("[data-testid=su-board] > section")].map((s) => s.getAttribute("data-testid"));
-    expect(main).toEqual(["su-row-github", "su-row-repository", "su-row-models", "su-row-try"]);
+    expect(main).toEqual(["su-row-github", "su-row-repository", "su-row-models"]);
     const steps = [...document.querySelectorAll("[data-testid=su-board] > section .su-step")].map((s) => s.textContent);
-    expect(steps).toEqual(["①", "②", "③", "④"]);
+    expect(steps).toEqual(["①", "②", "③"]);
     const adv = q(document.body, "su-advanced") as HTMLDetailsElement;
     expect(adv.open).toBe(false);
     expect(q(document.body, "gh-signin-start")!.textContent).toContain("Sign in with GitHub");

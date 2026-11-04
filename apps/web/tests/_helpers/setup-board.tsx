@@ -50,14 +50,15 @@ export function fakeApi(view: SetupView): FakeApi {
 
 export type Mounted = { root: Root; container: HTMLElement; unmount: () => void };
 
-export async function mountBoard(view: SetupView, search = "?area=setup", shown = true): Promise<Mounted> {
+export async function mountBoard(view: SetupView, search = "?area=setup", shown = true,
+                                 layout: "classic" | "setup" = "classic"): Promise<Mounted> {
   window.history.replaceState(null, "", `/${search}`);
   const { SetupBoard } = await import("../../app/setup/setup-board");
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
   await act(async () => {
-    root.render(<AreaShownContext.Provider value={shown}><SetupBoard projectId="p" initialView={view} /></AreaShownContext.Provider>);
+    root.render(<AreaShownContext.Provider value={shown}><SetupBoard projectId="p" initialView={view} layout={layout} /></AreaShownContext.Provider>);
   });
   await flush();
   return { root, container, unmount: () => { act(() => root.unmount()); container.remove(); } };

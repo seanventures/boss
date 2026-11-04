@@ -15,7 +15,8 @@ let mounted: Mounted | null = null;
 afterEach(() => { mounted?.unmount(); mounted = null; });
 
 describe("focus lands on the row", () => {
-  for (const row of ["repository", "models", "jobs", "budget", "try"]) {
+  // "try" left Setup for the Welcome (BOSSAPP-808): focus=try opens it there (setup-808 test).
+  for (const row of ["repository", "models", "jobs", "budget"]) {
     it(row, async () => {
       fakeApi(board());
       mounted = await mountBoard(board(), `?area=setup&focus=${row}`);
@@ -103,7 +104,8 @@ describe("the seam to Skills and MCP", () => {
     fakeApi(tryStep());
     mounted = await mountBoard(tryStep());
     const first = q(document.body, "su-next-try") as HTMLAnchorElement | null;
-    expect(first?.textContent).toBe("Next: open a PR");
+    expect(first?.textContent).toBe("Next: try a sample project");
+    expect(first?.getAttribute("href")).toBe("?area=setup&view=welcome");
     expect(q(document.body, "su-next-skills")).toBeNull();
     mounted.unmount(); mounted = null; document.body.innerHTML = "";
     fakeApi(firstRun());

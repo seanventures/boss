@@ -15,6 +15,8 @@ import { AddAccountPanel } from "./add-account-panel";
 import { AddModelPanel } from "./add-model-drawer";
 import { Drawer } from "./drawer";
 import { useBoard } from "./parts";
+import { Pill } from "./pill";
+import { TryRow } from "./try-row";
 import { accountsOf, reposOf } from "./setup-blocks";
 import { fetchSetup } from "../../lib/setup-client";
 import { defaultAdd } from "../../lib/setup-stepper";
@@ -66,8 +68,25 @@ function Circle({ n, done, current }: { n: number; done: boolean; current: boole
   );
 }
 
+/** The last sample / Try it run: its pill, the PR when open, the run when it failed. */
+function LastRun({ run }: { run: NonNullable<SetupView["try"]["last_run"]> }) {
+  const runHref = `?area=delivery_workflows&wfr=${encodeURIComponent(run.run_id)}`;
+  return (
+    <span className="su-line" data-testid="su-wl-last-run">
+      {run.pr_url ? (
+        <a className="su-pill su-tone-green" href={run.pr_url} target="_blank" rel="noreferrer noopener"
+           title={run.pill.tip} data-tip={run.pill.tip} data-testid="su-wl-last-pr">{run.pill.label}</a>
+      ) : <a href={runHref} className="su-plain"><Pill pill={run.pill} testid="su-wl-last-pill" /></a>}
+      {run.pill.tone === "red" ? <a className="su-link" href={runHref} data-testid="su-wl-last-open">Open run ↗</a> : null}
+    </span>
+  );
+}
+
 export function Welcome({ onSetup }: { onSetup: () => void }) {
   const { view, signin, projectId, apply } = useBoard();
+  const [quickOpen, setQuickOpen] = useState<boolean>(() => {
+    try { return new URLSearchParams(window.location.search).get("focus") === "try"; } catch { return false; }
+  });
   const [open, setOpenState] = useState<null | "account" | "model">(null);
   const setOpen = (next: null | "account" | "model") => {
     setOpenState(next);
@@ -145,12 +164,20 @@ export function Welcome({ onSetup }: { onSetup: () => void }) {
               ))}
             </ol>
             <span className="su-faint">~8 min · included in your subscription</span>
+            {view.try.last_run ? <LastRun run={view.try.last_run} /> : null}
           </div>
           <span className="su-spacer" />
           <a className={`su-btn${current === 3 ? " su-btn-primary" : ""}`} href={NEW_PROJECT_HREF.sample}
              data-testid="su-wl-sample-go">Start the sample</a>
         </li>
       </ol>
+
+      {/* QUICK PR (moved from Setup's Try it): one sentence becomes a pull request you review. */}
+      <details className="su-advanced" data-testid="su-wl-quick-pr" open={quickOpen}
+               onToggle={(e) => setQuickOpen((e.currentTarget as HTMLDetailsElement).open)}>
+        <summary className="su-advanced-summary">Or open one small PR</summary>
+        <TryRow mode={view.ready ? "open" : "waiting"} step={null} focused={quickOpen} />
+      </details>
 
       <section className="su-stack" aria-label="Your own work">
         <span className="su-strong">Or go straight to your own work</span>

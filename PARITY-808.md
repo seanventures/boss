@@ -10,7 +10,7 @@ board, which every existing test mounts.
 |---|---|---|
 | Header verdict pill | Setup header (verdict) + Advanced settings header | same server pill |
 | Test all | Advanced settings header | unchanged |
-| Next: open a PR / Next: add skills | Advanced settings header; Welcome step 3 | unchanged |
+| Next: open a PR / Next: add skills | "Next: try a sample project" → Welcome; Next: add skills unchanged | |
 | ① GitHub — Sign in with GitHub (device flow), Switch account | Add GitHub account › My own account; Advanced settings › GitHub row | same DeviceSignin |
 | Repos row: paste token, Create token link, Other ways, consent | Add GitHub account › Paste an access token; Advanced settings › Repos | same PasteTokenForm |
 | Repos row: Use the GitHub App (repo_app) | Add GitHub account › Paste an access token form (button when the App is installed); Advanced settings › Repos | unchanged |
@@ -30,7 +30,7 @@ board, which every existing test mounts.
 | Model routing Smart / Fixed, pins (Who does what) | Setup › Models › Who does what › Change → Advanced settings › routing | unchanged |
 | Budget row | Advanced settings › Advanced › Budget | unchanged |
 | Build database, Build speed, Toolchains, Public URL | Advanced settings › Advanced | unchanged |
-| Try it (open your first PR) | Advanced settings › Try it; Welcome step 3 links to the sample (`/?new_project=sample`) | the sample flow is BOSSAPP-810 |
+| Try it / Quick PR (one sentence → PR), its last run (PR link, Open run) | **Welcome only**: step 3 (Start the sample → `/?new_project=sample`, last run pill/PR/Open run) and "Or open one small PR" (the same TryRow). Removed from Setup and its stepper | operator 2026-11-04: Setup is connections only |
 | Improve BOSS sharing ask | bottom of the page, both screens | unchanged |
 | Deep links `?area=setup&focus=…&add=…&source=…`, legacy `step=` | open Setup with Advanced settings open on that row | Welcome never shown on a deep link |
 
@@ -52,3 +52,4 @@ board, which every existing test mounts.
 | A subscription whose login failed: routing headroom reads its pill (e.g. Login expired, state exhausted), its source is not working, and Who does what carries the pill | never "Plenty" beside an expired login | none (new tests) |
 | Welcome step 3 ticks only for the sample / Try it run's PR; other PRs make the install land on Setup | honest tick | none |
 | Rail: Get started (above the areas) while GitHub, a model or a first PR is missing; opens the Welcome | Welcome reachable from the left panel | none (ConsoleShell + page.tsx: one prop, one button) |
+| Setup stepper is 1 GitHub · 2 Repos · 3 Model (Try it left Setup); `focus=try` opens the Welcome with Quick PR open | Setup is connections only | setup-signin-and-advanced (3 steps, no su-row-try), setup-deep-links (no `try` row; Next link text), setup-tester-findings and setup-one-press-one-effect (Try it tests mount the Welcome) |

@@ -39,7 +39,6 @@ import { GitHubAccessRow, SETUP_TESTED_EVENT } from "./github-access-row";
 import { RepositoryRow } from "./repository-row";
 import { RepositoryRegistry } from "../multirepo/registry";
 import { RoutingRow } from "./routing-row";
-import { TryRow } from "./try-row";
 import { PublicUrlRow } from "./public-url-row";
 import { ToolchainsRow } from "./toolchains-row";
 import { SharingAsk } from "../improve/sharing-ask";
@@ -110,6 +109,7 @@ function screenFromUrl(): SetupScreen | null {
     const sp = new URLSearchParams(window.location.search);
     const v = sp.get("view");
     if (v === "welcome" || v === "setup") return v;
+    if (sp.get("focus") === "try") return "welcome";       // the sample and Quick PR live there
     // A deep link into a row (or GitHub's return from the org App) is Setup, never the Welcome.
     if (sp.get("focus") || sp.get("step") || sp.get("add") || sp.get("source") || sp.get("github")) return "setup";
   } catch { /* no window */ }
@@ -119,7 +119,7 @@ function screenFromUrl(): SetupScreen | null {
 function deepLinked(): boolean {
   try {
     const sp = new URLSearchParams(window.location.search);
-    return Boolean(sp.get("focus") || sp.get("step") || sp.get("add") || sp.get("source") || sp.get("github"));
+    return Boolean((sp.get("focus") && sp.get("focus") !== "try") || sp.get("step") || sp.get("add") || sp.get("source") || sp.get("github"));
   } catch { return false; }
 }
 
@@ -264,6 +264,7 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
     if (params.focus && ADVANCED_ROWS.includes(params.focus)) setAdvancedOpen(true);
   }, [params.focus]);
   useEffect(() => {
+    if (params.focus === "try") { setScreenChoice("welcome"); return; }
     if (params.focus || params.add || params.source) { setClassicOpen(true); setScreenChoice("setup"); }
   }, [params.focus, params.add, params.source]);
   // THE RAIL'S GET STARTED follows the board, and opens the Welcome when pressed.
@@ -325,14 +326,15 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
           {/* THE NEXT STEP FOLLOWS THE STEPPER: ready but no first PR yet is "open your first PR"
               (Try it, at the bottom), never a jump to Skills that skips the first build. */}
           {view.ready && view.next === "try" ? (
-            <a className="su-link" href="?area=setup&focus=try" data-testid="su-next-try"
+            <a className="su-link" href="?area=setup&view=welcome" data-testid="su-next-try"
                onClick={(e) => {
-                 const el = refs.current.try;
-                 if (el && typeof el.scrollIntoView === "function") { e.preventDefault(); el.scrollIntoView({ behavior: "smooth", block: "start" }); }
+                 if (layout !== "setup") return;
+                 e.preventDefault();
+                 try { window.dispatchEvent(new Event(OPEN_WELCOME_EVENT)); } catch { /* no window */ }
                }}
-               title="Describe one small change; BOSS opens a pull request on your repository."
-               data-tip="Describe one small change; BOSS opens a pull request on your repository.">
-              Next: open a PR
+               title="BOSS builds a small sample app so you can watch every step once."
+               data-tip="BOSS builds a small sample app so you can watch every step once.">
+              Next: try a sample project
             </a>
           ) : view.ready ? (
             <a className="su-link" href="?area=skills&setup=1" data-testid="su-next-skills"
@@ -373,8 +375,9 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
           {/* The org's one embedding model (meaning search), set once for every project. */}
           <div ref={ref("embedding_model")} data-focused={focus === "embedding_model" || undefined}><EmbeddingModelRow /></div>
         </ModelsRow>
-        <TryRow ref={ref("try")} mode={rowMode(view, "try")} step={shift(stepNumber(view, "try"))}
-                focused={focus === "try"} />
+        {/* NO TRY IT HERE (operator, 2026-11-04: "Why trying out sample project is in Repos and
+            Models"): Setup is connections only. The sample and the one-sentence PR live on the
+            Welcome (step 3); `focus=try` opens it. */}
         <details className="su-advanced" data-testid="su-advanced" ref={ref("advanced")} open={advancedOpen}
                  onToggle={(e) => setAdvancedOpen((e.currentTarget as HTMLDetailsElement).open)}>
           <summary className="su-advanced-summary" data-testid="su-advanced-toggle"

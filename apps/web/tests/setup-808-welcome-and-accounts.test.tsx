@@ -104,6 +104,27 @@ describe("Screen 1 — Welcome", () => {
   });
 });
 
+describe("Try it is not part of Setup", () => {
+  it("Setup shows connections only; the sample, Quick PR and the last run live on the Welcome", async () => {
+    const view = withAccounts(board());
+    fakeApi(view);
+    const { container } = await mount(view);
+    expect(q(container, "su-row-try")).toBeNull();
+    expect(q(container, "su-try-input")).toBeNull();
+    await click(q(container, "su-open-welcome"));
+    expect(q(container, "su-wl-quick-pr")!.querySelector('[data-testid="su-try-input"]')).not.toBeNull();
+    expect(q(container, "su-wl-last-pr")!.getAttribute("href")).toBe("https://github.com/owner/app/pull/12");
+  });
+
+  it("focus=try (older links) opens the Welcome with Quick PR open", async () => {
+    const view = withAccounts(board());
+    fakeApi(view);
+    const { container } = await mount(view, "?area=setup&focus=try");
+    expect(q(container, "su-welcome")).not.toBeNull();
+    expect((q(container, "su-wl-quick-pr") as HTMLDetailsElement).open).toBe(true);
+  });
+});
+
 describe("Welcome is honest", () => {
   it("other PRs in the project do not tick the sample step; the install still lands on Setup", async () => {
     const view = { ...withAccounts(board()), try: { workflow_key: "setup_first_pr", last_run: null, done: true } };
@@ -191,7 +212,7 @@ describe("Screen 2 — Setup on one page", () => {
     const { container } = await mount(view);
     const advanced = q(container, "su-advanced-all")!;
     expect((advanced as HTMLDetailsElement).open).toBe(false);
-    for (const id of ["su-row-repository", "su-row-models", "su-row-try", "su-test-all", "su-advanced", "su-row-ci"]) {
+    for (const id of ["su-row-repository", "su-row-models", "su-test-all", "su-advanced", "su-row-ci"]) {
       expect(advanced.querySelector(`[data-testid="${id}"]`), id).not.toBeNull();
     }
     await click(q(container, "su-open-advanced"));
