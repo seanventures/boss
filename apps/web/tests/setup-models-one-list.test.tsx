@@ -102,9 +102,11 @@ describe("one status everywhere", () => {
     mounted = await mountBoard(view, "?area=setup&add=codex");
     const chip = q(q(drawer(), "su-provider-codex")!, "su-provider-status")!;
     expect(chip.textContent).toBe("Working");
-    // And the drawer agrees: Working, Connect ready, no sign-in started.
+    // And the drawer agrees: Working, one action (Sign in again; no second Connect), no sign-in
+    // started (BOSSAPP-808 walk: "one state, one action" — listed in PARITY-808.md).
     expect(q(drawer(), "su-signed-in-on-server")!.textContent).toBe("Working");
-    expect((q(drawer(), "su-model-connect") as HTMLButtonElement).disabled).toBe(false);
+    expect(q(drawer(), "su-model-connect")).toBeNull();
+    expect(q(drawer(), "su-signin-again")).not.toBeNull();
     expect(q(drawer(), "su-signin-start")).toBeNull();
   });
 

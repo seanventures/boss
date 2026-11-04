@@ -110,7 +110,8 @@ export type Job = {
   label: string;
   more: boolean;
   choice: null | { engine: string; model: string | null };
-  resolved: null | { engine: string; model: string | null; label: string; why: string };
+  /** `pill`: the model's own red pill when its login failed ("Login expired"), BOSSAPP-808. */
+  resolved: null | { engine: string; model: string | null; label: string; why: string; pill?: Pill | null };
   metered: boolean;
   options: JobOption[];
   /** Whose choice: the org's (every project) or this project's pin. Absent on an older API. */

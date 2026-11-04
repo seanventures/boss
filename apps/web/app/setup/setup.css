@@ -777,7 +777,10 @@ svg.su-dot { background: none; width: 12px; height: 12px; color: var(--muted); }
 .su-wl-circle[data-current] { border-color: var(--accent); color: var(--accent-text); }
 .su-wl-circle[data-done] { border-color: var(--green); background: var(--green-soft); color: var(--green); }
 .su-wl-flow { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: 4px 0 0; padding: 0; list-style: none; }
-.su-wl-arrow { color: var(--faint); align-self: center; }
+.su-wl-arrow { color: var(--faint); align-self: center; font-size: 0.6875rem; }
+.su-wl-flow > .su-chip { height: 20px; padding: 0 6px; font-size: 0.6875rem; white-space: nowrap; }
+/* ONE LINE ON A DESKTOP (walk 2026-11-04: "Live preview" fell to a second line); phones wrap. */
+@media (min-width: 1280px) { .su-wl-flow { flex-wrap: nowrap; gap: 3px; } }
 .su-wl-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
 .su-wl-card { flex-direction: row; align-items: center; gap: 10px; }
 .su-wl-card:hover { border-color: var(--accent-line); }

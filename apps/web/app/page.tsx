@@ -987,6 +987,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         deadletters: deadletterCount,
         pendingDecisions: status.pendingDecisions,
         setup: setupSummary?.badge ?? null,
+        getStarted: setupSummary?.get_started ?? false,
         // Read here, on the server, because this is the URL the page's fetches actually use.
         controlPlane: API_URL,
       }}

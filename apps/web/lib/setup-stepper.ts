@@ -116,7 +116,18 @@ export function canAsk(view: SetupView): boolean {
   return view.models.some((m) => m.pill.tone === "green");
 }
 
-export type SetupSummary = { ready: boolean; badge: { count: number; tone: "amber" | "red" } | null };
+export type SetupSummary = { ready: boolean; badge: { count: number; tone: "amber" | "red" } | null;
+  /** The rail shows Get started (the Welcome) until GitHub, a model and a first PR exist. */
+  get_started?: boolean };
+
+/** Whether the Welcome is still the landing page and the rail shows Get started: GitHub, a model
+ *  and a first PR (any, `try.done`) are not all there yet (BOSSAPP-808). */
+export function getStarted(view: Pick<SetupView, "repository" | "models"> & Partial<SetupView>): boolean {
+  const github = (view.github_accounts ?? []).some((a) => a.pill.tone === "green")
+    || view.repository.repos.some((r) => r.pill.tone === "green");
+  const model = view.models.some((m) => m.pill.tone === "green");
+  return !(github && model && Boolean(view.try?.done));
+}
 
 /** The landing rule's and the rail badge's reading of the view: unfinished rows plus failing
  *  checks, red while any check fails. */
@@ -127,8 +138,14 @@ export function summarize(view: Pick<SetupView, "ready" | "next" | "problems" | 
   return {
     ready: view.ready,
     badge: count > 0 ? { count, tone: view.problems > 0 ? "red" : "amber" } : null,
+    get_started: getStarted(view),
   };
 }
 
 /** The event the board sends so the rail badge follows the board without a reload. */
 export const SETUP_BADGE_EVENT = "boss:setup-badge";
+
+/** The board tells the rail whether Get started still shows (no reload needed). */
+export const GET_STARTED_EVENT = "boss:setup-get-started";
+/** The rail's Get started asks the board for the Welcome. */
+export const OPEN_WELCOME_EVENT = "boss:setup-open-welcome";

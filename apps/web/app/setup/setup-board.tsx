@@ -49,7 +49,7 @@ import { Tip } from "./pill";
 import { SectionLabel } from "../section-label";
 import { useOnScreen } from "../../lib/area-shown";
 import { SetupBlocks } from "./setup-blocks";
-import { Welcome, welcomeDone, welcomeState } from "./welcome";
+import { GET_STARTED_EVENT, getStarted, OPEN_WELCOME_EVENT, Welcome } from "./welcome";
 
 /** One plain line per Advanced item (≤ 6 words), the detail in its tooltip. */
 const ADVANCED: Record<string, { line: string; tip: string }> = {
@@ -266,6 +266,16 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
   useEffect(() => {
     if (params.focus || params.add || params.source) { setClassicOpen(true); setScreenChoice("setup"); }
   }, [params.focus, params.add, params.source]);
+  // THE RAIL'S GET STARTED follows the board, and opens the Welcome when pressed.
+  useEffect(() => {
+    if (!view || layout !== "setup") return;
+    try { window.dispatchEvent(new CustomEvent(GET_STARTED_EVENT, { detail: getStarted(view) })); } catch { /* no window */ }
+  }, [view, layout]);
+  useEffect(() => {
+    const open = () => setScreenChoice("welcome");
+    window.addEventListener(OPEN_WELCOME_EVENT, open);
+    return () => window.removeEventListener(OPEN_WELCOME_EVENT, open);
+  }, []);
   const ctx = useMemo(() => view ? {
     projectId, view, apply: setView, checking, setChecking, signin,
   } : null, [projectId, view, checking, setChecking, signin]);
@@ -389,7 +399,7 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
   );
 
   if (layout === "setup") {
-    const screen: SetupScreen = screenChoice ?? (welcomeDone(welcomeState(view, signin)) ? "setup" : "welcome");
+    const screen: SetupScreen = screenChoice ?? (getStarted(view) ? "welcome" : "setup");
     const go = (next: SetupScreen) => {
       setScreenChoice(next);
       try {

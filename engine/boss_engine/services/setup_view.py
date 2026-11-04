@@ -1234,6 +1234,33 @@ def _try(connection: Connection, project_id: str) -> dict[str, Any]:
     return out
 
 
+def _say_signed_out(models: list[dict[str, Any]], jobs: list[dict[str, Any]],
+                    routing: Optional[dict[str, Any]]) -> None:
+    """A subscription whose login failed says so EVERYWHERE (BOSSAPP-808 walk): its routing
+    headroom reads its pill ("Login expired"), never "Plenty", and a job it would run carries the
+    same pill. Usage left says nothing about a login the provider refused."""
+    bad: dict[str, dict[str, Any]] = {}
+    for m in models:
+        if m.get("kind") == "subscription" and (m.get("pill") or {}).get("tone") == "red":
+            bad.setdefault(engine_for_provider(str(m.get("provider") or "")), m["pill"])
+    if not bad:
+        return
+    for job in jobs:
+        resolved = job.get("resolved")
+        if isinstance(resolved, dict) and resolved.get("engine") in bad:
+            resolved["pill"] = dict(bad[resolved["engine"]])
+    if not routing:
+        return
+    for h in routing.get("headroom") or []:
+        pill = bad.get(h.get("engine"))
+        if pill:
+            h.update({"state": "exhausted", "left": 0, "label": pill.get("label") or "Signed out",
+                      "describe": pill.get("tip") or "Sign in again.", "signed_out": True})
+    for src in routing.get("sources") or []:
+        if src.get("engine") in bad:
+            src["working"] = False
+
+
 def _accounts(connection: Connection, settings: Any, project_id: str, repository: dict[str, Any],
               now: datetime) -> dict[str, Any]:
     """Setup's accounts and repositories (setup_accounts.py). Never breaks the page."""
@@ -1282,6 +1309,8 @@ def _build(connection: Connection, settings: Any, project_id: str, *,
     detected = _detected(settings)
     trying = _try(connection, project_id)
     accounts = _accounts(connection, settings, project_id, repository, now)
+    routing = _routing(connection, settings, project_id)
+    _say_signed_out(models, jobs, routing)
 
     # READY MEANS PROVEN (PROVEN_REPOSITORY / PROVEN_MODEL): a row a check has not answered
     # still lets a workflow start (basics), but the header does not say Ready over it.
@@ -1342,7 +1371,7 @@ def _build(connection: Connection, settings: Any, project_id: str, *,
         "jobs": jobs,
         # Model routing (docs/product/MODEL_ROUTER.md): Smart / Fixed, tiers, floors, headroom,
         # the classifier and this week's mix. None when the router's tables are not there yet.
-        "routing": _routing(connection, settings, project_id),
+        "routing": routing,
         "budget": budget,
         "try": trying,
         # Build toolchains in this image (Python and Node always; Java when turned on).
