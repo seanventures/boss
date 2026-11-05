@@ -205,6 +205,32 @@ describe("GitHub access", () => {
 });
 
 
+describe("coming back from GitHub", () => {
+  it("confirms an access update and warns when an in-use repo was dropped", async () => {
+    const api = fakeApi(board());
+    withGitHub(api, NONE);
+    const toasts: { type: string; message: string }[] = [];
+    const on = (e: Event) => {
+      const detail = (e as CustomEvent<{ type: string; message: string }>).detail;
+      toasts.push({ type: detail.type, message: detail.message });
+    };
+    window.addEventListener("boss:toast", on);
+    try {
+      mounted = await mountBoard(board(), "?area=setup&focus=repository&github=app_updated&lost=acme/app,acme/billing");
+      expect(toasts.map((t) => t.message)).toEqual([
+        "GitHub repository access updated",
+        "acme/app, acme/billing lost access and an app still uses them",
+      ]);
+      expect(toasts[0].type).toBe("success");
+      expect(toasts[1].type).toBe("error");
+      expect(window.location.search).not.toContain("github=");
+      expect(window.location.search).not.toContain("lost=");
+    } finally {
+      window.removeEventListener("boss:toast", on);
+    }
+  });
+});
+
 describe("simple GitHub entry", () => {
   // Merged with github-simple (rc9 merge, scratchpad/rc9/MERGE.md): the one GitHub sign-in is
   // step ①, and the org's GitHub App lives in Advanced, so `focus=repository` lands on Repository

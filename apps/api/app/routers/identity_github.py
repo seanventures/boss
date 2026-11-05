@@ -22,20 +22,22 @@ Every credential lands in the vault and is used only by boss-egress; nothing her
 """
 from __future__ import annotations
 
+import re
 from typing import Any, Optional
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import text
 
 from boss_engine.config import get_settings
 from boss_engine.db import begin
 from boss_engine.identity import P, PublicReason, Scope, github_app, github_device, github_setup, permit, public
-from boss_engine.identity.authn import AuthnError
+from boss_engine.identity.authn import SESSION_COOKIE, AuthnError, authenticate
 from boss_engine.identity.authn_support import default_org_id, public_origin
 
-from .identity_auth import current_context, refusal
+from .identity_auth import credentials, current_context, refusal
 
 
 class _Body(BaseModel):
@@ -79,6 +81,66 @@ def _back(db: Any, **query: str) -> RedirectResponse:
                             status_code=303)
 
 
+def _console_session(request: Request, db: Any):
+    """The operator's session cookie, or nothing.
+
+    An update redirect carries no state. A missing cookie is anonymous: the network bridge and an
+    API key are not this session, so they are not asked. A cookie that was presented is checked
+    (a forgery raises AuthnError)."""
+    if not request.cookies.get(SESSION_COOKIE):
+        return None
+    return authenticate(credentials(request), db=db)
+
+
+def _unauthenticated() -> JSONResponse:
+    return JSONResponse(status_code=401, content={"error": "unauthenticated"},
+                        headers={"Cache-Control": "no-store"})
+
+
+_REPO_NAME = re.compile(r"^[a-z0-9_.-]+/[a-z0-9_.-]+$")
+
+
+def _in_use_repos(db: Any) -> list[str]:
+    """Active bindings an app builds from: the project's default repo, or one a component names.
+
+    A source binding with no component is not in use (it can be removed). The query is isolated
+    so an older schema still confirms the update."""
+    nested = getattr(db, "begin_nested", None)
+    point = nested() if callable(nested) else None
+    try:
+        rows = db.execute(text(
+            "SELECT DISTINCT lower(b.full_name) FROM github_repository_bindings b "
+            "WHERE b.status = 'active' AND ("
+            "b.role = 'primary' OR EXISTS ("
+            "SELECT 1 FROM app_components c WHERE c.binding_id = b.id)) ORDER BY 1")).scalars().all()
+    except Exception:  # noqa: BLE001 — an older schema: no warning, the update still confirms
+        if point is not None:
+            point.rollback()
+        return []
+    if point is not None:
+        point.commit()
+    return [str(name) for name in rows if _REPO_NAME.match(str(name))]
+
+
+def _lost_in_use(db: Any) -> list[str]:
+    """In-use repos the installation can no longer reach. A GitHub miss confirms with no warning.
+
+    The list is the stored installation's (installation_repositories), never the query's
+    installation_id. Only full_name is kept; a token on the payload is not."""
+    try:
+        listed = github_setup.installation_repositories(db)
+    except (github_setup.GitHubSetupError, github_app.GitHubRefused):
+        return []
+    reachable = set()
+    for item in listed or []:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("full_name") or "").strip().lower()
+        if _REPO_NAME.match(name):
+            reachable.add(name)
+    return [name for name in _in_use_repos(db) if name not in reachable][:20]
+
+
 def build_identity_github_router() -> APIRouter:
     router = APIRouter(tags=["identity"])
 
@@ -112,8 +174,9 @@ def build_identity_github_router() -> APIRouter:
         except Exception as exc:  # noqa: BLE001
             return _err(exc)
 
-    # Public: GitHub's browser redirects. The proof is a `state` this BOSS signed for the person who
-    # started, purpose-bound, expiring in 10 minutes and spent once (github_setup._check_state).
+    # Public: GitHub's browser redirect after the App is created. The proof is a `state` this BOSS
+    # signed for the person who started, purpose-bound, expiring in 10 minutes and spent once
+    # (github_setup._check_state).
     @router.get("/v1/identity/github/app/created")
     @public(reason=PublicReason.OAUTH_STATE_BOUND_CALLBACK, verifier=github_setup.complete_manifest)
     def app_created(code: str = "", state: str = ""):
@@ -126,14 +189,27 @@ def build_identity_github_router() -> APIRouter:
             with begin() as db:
                 return _back(db, github="app_failed", reason=getattr(exc, "code", "failed"))
 
+    # Install sends the signed state. setup_on_update does not: installation_id and setup_action
+    # only. The id in the query is not stored (it can be spoofed; GitHub already saved the change).
+    # Without a state, the console session cookie is the proof.
     @router.get("/v1/identity/github/app/installed")
     @public(reason=PublicReason.OAUTH_STATE_BOUND_CALLBACK, verifier=github_setup.complete_install)
-    def app_installed(installation_id: str = "", state: str = "", setup_action: str = ""):
+    def app_installed(request: Request, installation_id: str = "", state: str = "", setup_action: str = ""):
         try:
             with begin() as db:
-                github_setup.complete_install(installation_id=installation_id[:40], state=state[:600] or None,
-                                              org_id=default_org_id(db), db=db)
-                return _back(db, github="app_connected")
+                if (state or "").strip():
+                    github_setup.complete_install(installation_id=installation_id[:40], state=state[:600],
+                                                  org_id=default_org_id(db), db=db)
+                    return _back(db, github="app_connected")
+                if _console_session(request, db) is None:
+                    return _unauthenticated()
+                lost = _lost_in_use(db)
+                confirmed = {"github": "app_updated"}
+                if lost:
+                    confirmed["lost"] = ",".join(lost)
+                return _back(db, **confirmed)
+        except AuthnError as exc:
+            return refusal(exc)
         except (github_setup.GitHubSetupError, github_app.GitHubRefused) as exc:
             with begin() as db:
                 return _back(db, github="app_failed", reason=getattr(exc, "code", "failed"))

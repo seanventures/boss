@@ -54,6 +54,50 @@ describe("no session", () => {
   });
 });
 
+describe("the GitHub App update callback", () => {
+  const path = "/v1/identity/github/app/installed?installation_id=424242&setup_action=update";
+  const crossSite = { "sec-fetch-site": "cross-site", "sec-fetch-mode": "navigate", "sec-fetch-dest": "document" };
+
+  it("a cross-site navigation without a cookie is a same-origin retry, not a 401", async () => {
+    const r = await middleware(remote(path, { headers: crossSite }));
+    expect(r.status).toBe(200);
+    expect(r.headers.get("content-type")).toMatch(/text\/html/);
+    expect(r.headers.get("cache-control")).toMatch(/no-store/);
+    const html = await r.text();
+    expect(html).toContain("/v1/identity/github/app/installed?installation_id=424242&amp;setup_action=update");
+    expect(html).not.toContain("<script");
+    expect(html).not.toContain("424242%27");
+  });
+
+  it("does not echo a query that is not an installation id", async () => {
+    const r = await middleware(remote(
+      "/v1/identity/github/app/installed?installation_id=%3Cscript%3E&setup_action=update",
+      { headers: crossSite }));
+    expect(r.status).toBe(401);
+    expect(await r.text()).not.toContain("script");
+  });
+
+  it("a direct call and a same-origin retry without a cookie stay unauthenticated", async () => {
+    const direct = await middleware(remote(path));
+    expect(direct.status).toBe(401);
+    expect(await direct.json()).toEqual({ error: "unauthenticated" });
+    const again = await middleware(remote(path, { headers: { "sec-fetch-site": "same-origin", "sec-fetch-mode": "navigate" } }));
+    expect(again.status).toBe(401);
+    expect(await again.json()).toEqual({ error: "unauthenticated" });
+  });
+
+  it("a cross-site form POST is the same retry", async () => {
+    const r = await middleware(remote(path, { method: "POST", headers: crossSite }));
+    expect(r.status).toBe(200);
+    expect(await r.text()).toContain("installation_id=424242");
+  });
+
+  it("a session cookie is passed through for the API to confirm", async () => {
+    const r = await middleware(remote(path, { cookie: SESSION, headers: crossSite }));
+    expect(r.headers.get("x-middleware-next")).toBe("1");
+  });
+});
+
 describe("with a session cookie", () => {
   it("passes pages and API calls through: the API decides who it is", async () => {
     for (const p of ["/", "/identity", "/v1/identity/me", "/api/skills"]) {

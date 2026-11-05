@@ -101,6 +101,14 @@ export async function middleware(request: NextRequest) {
   if (networkTrustedConsole() || hasSessionCookie(request.headers.get("cookie"))) {
     return passThrough(request);
   }
+  // GitHub's setup_url redirect is a cross-site navigation. SameSite=Lax is not sent on that
+  // first hop when it is a form POST, so a signed-in operator would see the 401 below before
+  // the API could read the session. A document that refreshes to the same URL is a same-origin
+  // navigation, and the cookie is sent then. The retry has no cross-site mark, so a visitor
+  // who still has no cookie is refused below and this cannot loop. The page is built only from
+  // an installation id and an allowlisted action — the request's query is not copied in.
+  const githubRetry = githubInstallRetry(request);
+  if (githubRetry) return githubRetry;
   if (api) return NextResponse.json({ error: "unauthenticated" },
     { status: 401, headers: { "Cache-Control": "no-store" } });
   // Keep a local tunnel on its original browser host. Behind a TLS proxy,
@@ -168,6 +176,42 @@ function legacyRedirect(request: NextRequest): NextResponse | null {
   return new NextResponse(null, {
     status: 307,
     headers: { Location: `${browserOrigin(request)}/?${meant.params}`, "Cache-Control": "no-store" },
+  });
+}
+
+const GITHUB_INSTALL_CALLBACK = "/v1/identity/github/app/installed";
+const GITHUB_SETUP_ACTIONS = new Set(["install", "update", "request"]);
+
+/** HTML that navigates to this callback on this origin. Null unless the request is GitHub's
+ *  cross-site document navigation and its query is only an installation id and a known action. */
+export function githubInstallRetry(request: NextRequest): NextResponse | null {
+  if (request.method !== "GET" && request.method !== "POST") return null;
+  if (request.nextUrl.pathname !== GITHUB_INSTALL_CALLBACK) return null;
+  const site = (request.headers.get("sec-fetch-site") || "").toLowerCase();
+  const mode = (request.headers.get("sec-fetch-mode") || "").toLowerCase();
+  const dest = (request.headers.get("sec-fetch-dest") || "").toLowerCase();
+  if (site !== "cross-site" || mode !== "navigate" || dest === "empty") return null;
+  const id = request.nextUrl.searchParams.get("installation_id") ?? "";
+  const action = request.nextUrl.searchParams.get("setup_action") ?? "";
+  const state = request.nextUrl.searchParams.get("state") ?? "";
+  if (!/^[0-9]{1,40}$/.test(id)) return null;
+  if (action !== "" && !GITHUB_SETUP_ACTIONS.has(action)) return null;
+  if (state !== "" && !/^[A-Za-z0-9._-]{1,600}$/.test(state)) return null;
+  const params = new URLSearchParams({ installation_id: id });
+  if (action) params.set("setup_action", action);
+  if (state) params.set("state", state);
+  const href = `${GITHUB_INSTALL_CALLBACK}?${params.toString()}`.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
+  const html = "<!doctype html><html><head><meta charset=\"utf-8\">"
+    + `<meta http-equiv="refresh" content="0;url=${href}">`
+    + "<title>Returning to BOSS</title></head><body>"
+    + `<p><a href="${href}">Continue</a></p></body></html>`;
+  return new NextResponse(html, {
+    status: 200,
+    headers: {
+      "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": "no-store",
+      "Content-Security-Policy": "default-src 'none'; base-uri 'none'; form-action 'none'",
+    },
   });
 }
 
