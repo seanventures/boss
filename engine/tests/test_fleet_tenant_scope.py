@@ -1,4 +1,7 @@
-"""Fleet attach/retire must not cross a project boundary or sweep a neighbor's keys."""
+"""Fleet attach/retire must not cross an organisation boundary or sweep a neighbor's keys.
+
+Hosts are shared across the projects of ONE organisation (deployment_fleet.usable_hosts_sql):
+proj_a and proj_c share org_1; proj_b belongs to org_2."""
 
 from __future__ import annotations
 
@@ -23,12 +26,17 @@ def conn():
             "id TEXT PRIMARY KEY, project_id TEXT, host_id TEXT, target_ref TEXT, "
             "updated_at TEXT)"
         ))
+        c.execute(sa.text("CREATE TABLE workspaces (id TEXT PRIMARY KEY, org_id TEXT)"))
+        c.execute(sa.text("CREATE TABLE projects (id TEXT PRIMARY KEY, workspace_id TEXT)"))
+        c.execute(sa.text("INSERT INTO workspaces VALUES ('ws_1', 'org_1'), ('ws_2', 'org_2')"))
+        c.execute(sa.text("INSERT INTO projects VALUES ('proj_a', 'ws_1'), ('proj_c', 'ws_1'), "
+                          "('proj_b', 'ws_2')"))
         yield c
 
 
-def test_attach_target_refuses_a_host_from_another_project(conn):
-    """host_id is a global primary key. Without a project check, project A can attach
-    project B's VM and the next deploy follows that host's SSH key."""
+def test_attach_target_refuses_a_host_from_another_organisation(conn):
+    """host_id is a global primary key. Without an organisation check, project A can attach
+    another organisation's VM and the next deploy follows that host's SSH key."""
     conn.execute(sa.text(
         "INSERT INTO deployment_hosts (id, project_id, name, address, ssh_user, ssh_port, status) "
         "VALUES ('dh_victim', 'proj_b', 'prod', '10.0.0.9', 'root', 22, 'verified')"
@@ -37,12 +45,24 @@ def test_attach_target_refuses_a_host_from_another_project(conn):
         "INSERT INTO deployment_targets (id, project_id, host_id, target_ref) "
         "VALUES ('dt_attacker', 'proj_a', NULL, '')"
     ))
-    with pytest.raises(ValueError, match="project"):
+    with pytest.raises(ValueError, match="attach refused"):
         attach_target(conn, target_id="dt_attacker", host_id="dh_victim")
     host_id = conn.execute(
         sa.text("SELECT host_id FROM deployment_targets WHERE id = 'dt_attacker'")
     ).scalar()
     assert host_id in (None, "")
+
+
+def test_attach_target_onto_a_host_its_organisation_shares(conn):
+    conn.execute(sa.text(
+        "INSERT INTO deployment_hosts (id, project_id, name, address, ssh_user, ssh_port, status) "
+        "VALUES ('dh_shared', 'proj_c', 'box', '10.0.0.3', 'root', 22, 'verified')"
+    ))
+    conn.execute(sa.text(
+        "INSERT INTO deployment_targets (id, project_id, host_id, target_ref) "
+        "VALUES ('dt_sibling', 'proj_a', NULL, '')"
+    ))
+    assert attach_target(conn, target_id="dt_sibling", host_id="dh_shared")["host_id"] == "dh_shared"
 
 
 def test_attach_target_same_project_still_works(conn):

@@ -992,7 +992,7 @@ def _resolve_fleet(connection, project_id: str, ref: SubjectRef) -> SubjectEvide
         return ev
     hosts = _rows(connection,
                   "SELECT id, name, address, arch, status, last_preflight_at, last_preflight "
-                  "FROM deployment_hosts WHERE project_id = :p AND status <> 'retired' "
+                  f"FROM deployment_hosts WHERE {_usable_hosts()} AND status <> 'retired' "
                   "ORDER BY name", {"p": project_id})
     targets = _rows(connection,
                     "SELECT id, app_name, environment, host_id, target_kind, status "
@@ -1056,3 +1056,10 @@ def resolve_subject(connection, project_id: str, ref: SubjectRef) -> SubjectEvid
     except Exception as exc:  # noqa: BLE001 — a turn must still be answerable
         _log.warning("resolving %s failed (%s): %s", ref.label, type(exc).__name__, exc)
         return SubjectEvidence(ref)
+
+
+def _usable_hosts(alias: str = "") -> str:
+    """deployment_fleet.usable_hosts_sql: a project's hosts include the ones its organisation shares."""
+    from .deployment_fleet import usable_hosts_sql
+
+    return usable_hosts_sql(alias)

@@ -184,6 +184,27 @@ def get_host(connection, host_id: str) -> Optional[dict[str, Any]]:
     return dict(row) if row else None
 
 
+#: SHARED HOSTS (2026-11-05). A machine one project registered and verified is the ORGANISATION's:
+#: every project of the same org may deploy onto it, as every project may use the org's repos.
+#: Imported HelpDesk AI could not deploy anywhere because 2.29.2.202 had been registered under
+#: another project; BOSS's own agent found "attach refused across projects" and had no way on.
+#: Managing the machine (its key, verify, retire) stays with the project that registered it.
+#: A SQL predicate over deployment_hosts (alias optional) with the project bound as `:p`.
+def usable_hosts_sql(alias: str = "") -> str:
+    a = f"{alias}." if alias else ""
+    return (f"({a}project_id = :p OR {a}project_id IN (SELECT p2.id FROM projects p2 "
+            "JOIN workspaces w2 ON w2.id = p2.workspace_id WHERE w2.org_id = "
+            "(SELECT w1.org_id FROM projects p1 JOIN workspaces w1 ON w1.id = p1.workspace_id "
+            "WHERE p1.id = :p)))")
+
+
+def host_usable_by(connection, host_id: str, project_id: str) -> bool:
+    """May `project_id` deploy onto this host (its own, or one its organisation shares)?"""
+    return bool(connection.execute(
+        sql(f"SELECT 1 FROM deployment_hosts WHERE id = :h AND {usable_hosts_sql()}"),
+        {"h": host_id, "p": project_id}).first())
+
+
 def list_hosts(connection, project_id: str, *, include_retired: bool = False
                ) -> list[dict[str, Any]]:
     """Hosts with the apps riding on each — the map, read from the VM side.
@@ -206,7 +227,7 @@ def list_hosts(connection, project_id: str, *, include_retired: bool = False
             "  FROM deployment_targets WHERE host_id IS NOT NULL AND status = 'active' "
             "  GROUP BY host_id "
             ") t ON t.host_id = h.id "
-            f"WHERE h.project_id = :p{clause} "
+            f"WHERE {usable_hosts_sql('h')}{clause} "
             "ORDER BY h.created_at DESC"),
         {"p": project_id}).mappings().all()
     hosts = []
@@ -885,9 +906,10 @@ def attach_target(connection, *, target_id: str, host_id: str) -> dict[str, Any]
     ).mappings().first()
     if not target:
         raise ValueError(f"no such deployment target: {target_id}")
-    if target["project_id"] != host.get("project_id"):
+    if target["project_id"] != host.get("project_id") and not host_usable_by(
+            connection, host_id, target["project_id"]):
         raise ValueError(
-            "host and target belong to different projects; attach refused")
+            "host and target belong to different organisations; attach refused")
 
     connection.execute(
         sql("UPDATE deployment_targets SET host_id = :h, target_ref = :ref, "
@@ -1103,7 +1125,7 @@ def create_deployment_target(
     hosts = [dict(h) for h in list_hosts(connection, project_id)]
     verified = [h for h in hosts if h.get("status") == "verified"]
     if host_id:
-        host = get_host(connection, host_id)
+        host = get_host(connection, host_id) if host_usable_by(connection, host_id, project_id) else None
         if not host:
             return {"ok": False, "error": f"no such deployment host: {host_id}",
                     "hosts": [{"host_id": h["id"], "name": h["name"],
@@ -1118,6 +1140,12 @@ def create_deployment_target(
                 "WHERE project_id = :p AND host_id IS NOT NULL AND status = 'active'"),
             {"p": project_id}).mappings().all() if r["host_id"]}
         host = get_host(connection, next(iter(used))) if len(used) == 1 else None
+        if not host and not verified:
+            return {"ok": False,
+                    "error": ("no verified deployment host in this organisation yet: add one in "
+                              "Infra (Add host), verify it, then create the target."),
+                    "hosts": [{"host_id": h["id"], "name": h["name"], "address": h["address"],
+                               "status": h["status"]} for h in hosts]}
         if not host:
             return {"ok": False,
                     "error": ("this project deploys to more than one host, so which one this "

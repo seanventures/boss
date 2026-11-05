@@ -349,7 +349,7 @@ def _deploy_host_id(connection: Connection, project_id: str, run_id: str,
     if wanted.get("host_id"):
         return str(wanted["host_id"])
     verified = connection.execute(
-        text("SELECT id FROM deployment_hosts WHERE project_id = :p AND status = 'verified' "
+        text(f"SELECT id FROM deployment_hosts WHERE {_usable_hosts()} AND status = 'verified' "
              "LIMIT 2"), {"p": project_id}).scalars().all()
     return str(verified[0]) if len(verified) == 1 else None
 
@@ -413,3 +413,10 @@ def fixes_sentence(fixes: list[Mapping[str, Any]]) -> str:
         f"{f.get('build_run_id')}" + (f" (after deployment {f['deployment_id']})"
                                      if f.get("deployment_id") else "")
         for f in fixes if isinstance(f, Mapping))
+
+
+def _usable_hosts(alias: str = "") -> str:
+    """deployment_fleet.usable_hosts_sql: a project's hosts include the ones its organisation shares."""
+    from .deployment_fleet import usable_hosts_sql
+
+    return usable_hosts_sql(alias)

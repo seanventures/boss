@@ -50,3 +50,22 @@ def test_a_bound_value_beats_the_manifests_setting(tmp_path):
 def test_a_plain_setting_never_waits_for_a_person(tmp_path):
     env = resolve(needs_from_app_dir(_app(tmp_path)), purpose="deploy")
     assert not [n for n in env.needs if n.name in ("ALLOW_DEMO_SEED", "APP_ENV")]
+
+
+COMPOSE = """services:
+  app:
+    environment:
+      PORT: "3000"
+      SESSION_SECRET: ${SESSION_SECRET}
+      DATABASE_URL: ${DATABASE_URL:-postgresql://x}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+"""
+
+
+def test_a_session_key_the_compose_file_reads_is_generated_for_a_preview(tmp_path):
+    """prev_ec5be7a0201a47ad9143: "SESSION_SECRET must be set ... (BOSS generates one)"."""
+    (tmp_path / "docker-compose.yml").write_text(COMPOSE)
+    env = resolve(needs_from_app_dir(tmp_path), purpose="preview")
+    assert len(env.values.get("SESSION_SECRET", "")) >= 32
+    # A provider's credential or the database is not BOSS's to mint for a preview.
+    assert "GOOGLE_CLIENT_SECRET" not in env.values and "DATABASE_URL" not in env.values

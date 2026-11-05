@@ -1119,7 +1119,7 @@ def _fleet_parts(connection: Any, settings: Any, project_id: str, partial: list[
     now = _now()
     hosts = _guard(connection, partial, "hosts", lambda: [
         _host_ready(h) for h in _rows(connection,
-                                      "SELECT * FROM deployment_hosts WHERE project_id = :p",
+                                      f"SELECT * FROM deployment_hosts WHERE {_usable_hosts()}",
                                       {"p": project_id})], [])
     targets = _guard(connection, partial, "targets", lambda: _rows(
         connection,
@@ -2969,7 +2969,7 @@ def _hosts_unreachable(connection: Any, project_id: str) -> list[dict[str, Any]]
         connection,
         "SELECT h.*, (SELECT count(*) FROM deployment_targets t WHERE t.host_id = h.id "
         "             AND t.status <> 'retired') AS apps "
-        "FROM deployment_hosts h WHERE h.project_id = :p AND h.status <> 'retired'",
+        f"FROM deployment_hosts h WHERE {_usable_hosts('h')} AND h.status <> 'retired'",
         {"p": project_id})]
     out = []
     for h in hosts:
@@ -3002,3 +3002,10 @@ def attention(connection: Any, settings: Any, project_id: str) -> list[dict[str,
     items += _guard(connection, partial, "hosts",
                     lambda: _hosts_unreachable(connection, project_id), [])
     return items
+
+
+def _usable_hosts(alias: str = "") -> str:
+    """deployment_fleet.usable_hosts_sql: a project's hosts include the ones its organisation shares."""
+    from .deployment_fleet import usable_hosts_sql
+
+    return usable_hosts_sql(alias)
