@@ -26,7 +26,9 @@ export type PublishPreview = {
 };
 export type FieldsPreview = {
   kind: "fields";
-  fields: { name: string; label: string; value: string; redacted?: boolean; truncated?: boolean }[];
+  /** A release card: the first row is the what-ships sentence and the rest are commits. */
+  release?: boolean;
+  fields: { name?: string; label: string; value: string; redacted?: boolean; truncated?: boolean }[];
 };
 export type UnresolvedPreview = { kind: "unresolved"; reason: string };
 
@@ -138,6 +140,25 @@ function FieldList({ p }: { p: FieldsPreview }) {
   );
 }
 
+function ReleaseCommits({ p }: { p: FieldsPreview }) {
+  const [head, ...commits] = p.fields;
+  return (
+    <div data-testid="action-preview-release">
+      {head ? (
+        <p className="ap-what-ships" data-testid="ap-what-ships">{head.value ?? ""}</p>
+      ) : null}
+      <ol className="ap-commits" data-testid="ap-commits">
+        {commits.map((f, i) => (
+          <li key={`${f.label}-${i}`} className="ap-commit" data-testid="ap-commit">
+            <span className="ap-commit-id">{f.label}</span>
+            <span className="ap-commit-msg">{f.value ?? ""}</span>
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
 export function ActionPreview({ preview }: { preview: ActionPreviewData }) {
   return (
     <section className="ap" data-testid="action-preview" data-kind={preview.kind}
@@ -145,6 +166,7 @@ export function ActionPreview({ preview }: { preview: ActionPreviewData }) {
       {preview.kind === "email" ? <EmailCard p={preview} />
         : preview.kind === "issues" ? <IssuesList p={preview} />
         : preview.kind === "publish" ? <PublishCard p={preview} />
+        : preview.kind === "fields" && preview.release ? <ReleaseCommits p={preview} />
         : preview.kind === "fields" ? <FieldList p={preview} />
         : <p className="ap-unresolved" title={preview.reason}>Not resolvable yet: {preview.reason}</p>}
       {preview.redactions ? (

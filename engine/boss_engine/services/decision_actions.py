@@ -292,6 +292,24 @@ def _action(action: str, label: str, tone: str, effect: str,
     return {"action": action, "label": label, "tone": tone, "effect": effect, "needs": needs}
 
 
+# An incident fix raises two cards. This sentence is the order on both: the release is what
+# ships, and the pull request is merged only after recovery is verified.
+_RELEASE_THEN_MERGE = (
+    "Approve the release first — that is what ships. "
+    "Merge the pull request only after recovery is verified."
+)
+
+
+def _release_then_merge(decision: Mapping[str, Any]) -> bool:
+    return _rec(decision).get("incident_order") == "release_then_merge"
+
+
+def _with_order(effect: str) -> str:
+    if _RELEASE_THEN_MERGE in effect:
+        return effect
+    return f"{effect} {_RELEASE_THEN_MERGE}"
+
+
 def _delegate() -> dict[str, Any]:
     # "Escalate" in the old inbox, which posted an action the server never accepted. Handing a
     # decision to somebody else IS delegation, so it is called what it does and posts that.
@@ -403,11 +421,12 @@ def allowed_actions(decision: Mapping[str, Any]) -> list[dict[str, Any]]:
         # A RELEASE CARRYING REJECTED OR UNREVIEWED COMMITS (release_scope): shipping it is a
         # person's stated decision. The approval needs a reason and is sent forced, as a merge
         # with checks failing is; decisions.transition refuses anything else.
+        ship = ("Ships every commit the card lists, including those from rejected or "
+                "unreviewed runs. Say why: your reason is recorded with the release.")
+        if _release_then_merge(decision):
+            ship = _with_order(ship)
         return [
-            _action("approve", "Ship with unreviewed commits", "reject",
-                    "Ships every commit the card lists, including those from rejected or "
-                    "unreviewed runs. Say why: your reason is recorded with the release.",
-                    needs="note"),
+            _action("approve", "Ship with unreviewed commits", "reject", ship, needs="note"),
             _action("reject", "Don't ship", "reject",
                     "Nothing ships. Rebuild the fix from the serving commit to release it "
                     "on its own."),
@@ -477,6 +496,17 @@ def allowed_actions(decision: Mapping[str, Any]) -> list[dict[str, Any]]:
                     "Fails the step. Nothing is decided and the case stays open."),
             _delegate(),
         ]
+    if (kind == "workflow_gate" and _release_then_merge(decision)
+            and str(_rec(decision).get("capability") or "") == "release_approval"):
+        # AN INCIDENT'S RELEASE, beside the fix's pull request. This card is what ships.
+        # The pull request is merged only after recovery; its own card says so.
+        return [
+            _action("approve", "Approve the release", "approve",
+                    _with_order("Releases the step and the workflow continues from it.")),
+            _action("reject", "Don't ship", "reject",
+                    "Nothing ships. The pull request stays unmerged."),
+            _delegate(),
+        ]
     if kind == "workflow_gate":
         # No "Request changes": the workflow runner reads approved, rejected and expired, and
         # a gate parked in revision_requested left its run waiting for ever.
@@ -532,10 +562,12 @@ def allowed_actions(decision: Mapping[str, Any]) -> list[dict[str, Any]]:
             # CHECKS FAILING (checks_failing.py): the merge is a person's stated decision. The
             # approval needs a reason and is sent as a forced merge (ci_gate.refuse_approval
             # refuses anything else); keeping it blocked is the other answer.
+            failing = ("Merges this pull request although BOSS's checks are failing. Say why: "
+                       "your reason is recorded with the merge.")
+            if _release_then_merge(decision):
+                failing = _with_order(failing)
             return [
-                _action("approve", "Merge with checks failing", "reject",
-                        "Merges this pull request although BOSS's checks are failing. Say why: "
-                        "your reason is recorded with the merge.", needs="note"),
+                _action("approve", "Merge with checks failing", "reject", failing, needs="note"),
                 _action("reject", "Keep blocked", "reject",
                         "The pull request stays open and unmerged while its follow-up build "
                         "fixes the failing checks."),
@@ -544,6 +576,16 @@ def allowed_actions(decision: Mapping[str, Any]) -> list[dict[str, Any]]:
         # No "Request changes" either. Nothing reads a PR review's revision_requested, and the
         # status could no longer be approved, so a PR sent back that way could never be merged
         # from BOSS. Changing the code is a new build, which Factory starts from a note.
+        if _release_then_merge(decision):
+            # THE FIX'S PULL REQUEST, beside the release card. Merging is not what ships.
+            return [
+                _action("approve", "Merge after recovery", "approve", _RELEASE_THEN_MERGE),
+                _action("reject", "Keep blocked", "reject",
+                        "The pull request stays open and unmerged. To have BOSS change it, open "
+                        "the app in Factory and use Add a feature or Rebuild with a fresh spec, "
+                        "saying what to change."),
+                _delegate(),
+            ]
         return [
             _action("approve", "Approve and merge", "approve",
                     "Authorizes the merge; BOSS merges once its own checks pass."),

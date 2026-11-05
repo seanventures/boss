@@ -6757,6 +6757,14 @@ def _open_gate(
         recommendation = {**recommendation,
                           **regulatory_trace.review_card(connection, project_id, run_context),
                           "action": "review_proposed_trace"}
+    if capability_key == "release_approval":
+        # THE FIX'S TWO CARDS. The release is what ships; the pull request merges after
+        # recovery. Both say that. The deploy is not held back for the merge.
+        from .incident_response import WORKFLOW_KEY, link_release_and_merge
+
+        if str(run.get("workflow_key") or "") == WORKFLOW_KEY:
+            recommendation = link_release_and_merge(
+                connection, project_id, recommendation, _build_run_id(run_context))
     decision_id = subject.get("decision_id") or open_step_decision(
         connection,
         project_id,

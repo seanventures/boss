@@ -3520,9 +3520,16 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
                 if _decision_in_project(c, decision_id, project_id) is None:
                     return {"ok": False, "error": f"no decision {decision_id}"}
                 try:
+                    content_hash = args.get("content_hash")
+                    if not isinstance(content_hash, str) or not content_hash.strip():
+                        content_hash = None
+                    else:
+                        content_hash = content_hash.strip()
                     row = svc.transition(
                         c, decision_id, action=action, actor=who, note=note,
                         delegate_to=args.get("delegate_to"),
+                        content_hash=content_hash,
+                        force=args.get("force") is True,
                     )
                 except ApprovalPending as pending:     # recorded: this transaction commits it
                     return {"ok": True, "action": action, "actor": who, **pending.body()}

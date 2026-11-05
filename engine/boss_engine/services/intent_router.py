@@ -3294,6 +3294,13 @@ class IntentRouter:
         # SAY IT ONCE. Applied last, after every reconciler has had its say, so a correction
         # note is never mistaken for a repetition and stripped.
         reply = without_what_was_already_said(reply, history)
+        # A typed "approve" of a release is still a click. Bind it to the card's hash so that
+        # click approves the list the operator was shown. decide itself does not run here.
+        try:
+            from .release_scope import stamp_chat_approvals
+            stamp_chat_approvals(connection, project_id, proposed)
+        except Exception:  # noqa: BLE001 — the reply stands; an unbound offer is the old button
+            pass
         # A TURN THAT STOPPED SHORT ENDS WITH ONE PRESS THAT RESUMES IT (turn_budget.
         # continue_steps): "Keep waiting" for a wait that was cut short, "Continue" for a turn
         # that ran out — never "ask me again".
