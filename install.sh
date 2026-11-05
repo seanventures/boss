@@ -805,6 +805,13 @@ BOSS_CONSOLE_SESSION_SECRET="$(openssl rand -hex 32)"
 # The knowledge-graph MCP server listens on the compose network, not loopback, so it refuses to
 # start without a token (boss_engine serve-mcp). Outside agents use their own scoped keys.
 BOSS_KG_MCP_HTTP_TOKEN="$(openssl rand -hex 24)"
+# The database secret store's master key, kept OUT of the database (BOSSAPP-897). Without it BOSS
+# generates one and keeps it in Postgres, so a database backup would carry usable secrets, and
+# BOSS refuses to store a Claude sign-in at all ("needs the database store's key to live outside
+# the database"). 32 random bytes, urlsafe base64 (secret_backends._load_kms_master_key). A rerun
+# keeps the existing key below; secrets stored under an earlier in-database key still decrypt
+# (the provisioned-key fallback) and are re-encrypted under this one when next written.
+BOSS_KMS_MASTER_KEY="$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '\n')"
 
 # The directory that contains this installer, when it is already a BOSS checkout.
 # A downloaded one-liner lives in a temp file and returns nothing here.
@@ -1163,6 +1170,9 @@ if [ -f "$ENV_FILE" ]; then
   _keep_api="$(_existing BOSS_API_KEY)"
   _keep_kg="$(_existing BOSS_KG_MCP_HTTP_TOKEN || true)"
   if [ -n "$_keep_kg" ]; then BOSS_KG_MCP_HTTP_TOKEN="$_keep_kg"; fi
+  # NEVER REPLACED once written: secrets in the database were encrypted with it.
+  _keep_kms="$(_existing BOSS_KMS_MASTER_KEY || true)"
+  if [ -n "$_keep_kms" ]; then BOSS_KMS_MASTER_KEY="$_keep_kms"; fi
   if [ -n "$_keep_db" ]; then
     BOSS_DB_PASSWORD="$_keep_db"
     ui_info "Reusing the existing database password — the data volume already expects it"
@@ -1204,6 +1214,7 @@ BOSS_DB_PASSWORD=${BOSS_DB_PASSWORD}
 BOSS_CONSOLE_PASSWORD=${BOSS_CONSOLE_PASSWORD}
 BOSS_CONSOLE_SESSION_SECRET=${BOSS_CONSOLE_SESSION_SECRET}
 BOSS_KG_MCP_HTTP_TOKEN=${BOSS_KG_MCP_HTTP_TOKEN}
+BOSS_KMS_MASTER_KEY=${BOSS_KMS_MASTER_KEY}
 BOSS_DEFAULT_ORG_ID=org_boss
 BOSS_DEFAULT_WORKSPACE_ID=ws_boss
 BOSS_DEFAULT_PROJECT_ID=boss-dogfood
