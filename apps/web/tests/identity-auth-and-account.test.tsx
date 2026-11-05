@@ -437,6 +437,17 @@ describe("My account", () => {
     expect(identityCopyAudit(el)).toEqual({ labels: [], prose: [], tips: [] });
   });
 
+  it("a passkey-only person sets a password; one who has one changes it", async () => {
+    const none = { ...ME, sign_in: { ...ME.sign_in, password: false } };
+    const el = await mount(asOperator(<AccountSecurity me={none} factors={F.factors(NOW).usr_sam} identities={[]} host="boss.acme.dev" />));
+    expect(el.querySelector("[data-testid='pw-submit']")?.textContent).toBe("Set password");
+    expect(el.querySelector("[data-testid='pw-change-note']")).toBeNull();
+    expect(el.querySelector("#pw-current")).toBeNull();
+    const el2 = await mount(asOperator(<AccountSecurity me={ME} factors={F.factors(NOW).usr_sam} identities={[]} host="boss.acme.dev" />));
+    expect(el2.querySelector("[data-testid='pw-submit']")?.textContent).toBe("Change password");
+    expect(el2.querySelector("[data-testid='pw-change-note']")?.textContent).toBe("Every other session ends when it changes.");
+  });
+
   it("revoking a grant shows the cascade first", async () => {
     routes({ "POST /v1/identity/me/delegations/dlg_01JB7Q/revoke": { body: { halts: 3, items: [{ kind: "runs", label: "Halts running agents", detail: "Atlas, Forge, Vera", count: 3 }] } } });
     const el = await mount(asOperator(<AgentsForMe delegations={F.delegations(NOW).filter((d) => d.user.id === "usr_sam")} agents={null} connections={[]} untilRevokedAllowed={false} openNew={false} />));

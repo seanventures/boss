@@ -241,8 +241,11 @@ export function AccountSecurity({ me, factors: initialFactors, identities: initi
           <form className="idn-form" onSubmit={(e) => {
             e.preventDefault();
             setPwError(null);
-            guarded("Changing your password signs you out elsewhere.", () => idPost("/v1/identity/me/password", { current: pw.current, new: pw.next }))
-              .then(() => { setPw({ current: "", next: "" }); showToast("success", "Password changed"); })
+            // A PASSKEY-ONLY PERSON SETS one; only an existing password is changed.
+            const had = Boolean(me?.sign_in.password);
+            guarded(had ? "Changing your password signs you out elsewhere." : "Setting a password.",
+                    () => idPost("/v1/identity/me/password", { current: pw.current, new: pw.next }))
+              .then(() => { setPw({ current: "", next: "" }); showToast("success", had ? "Password changed" : "Password set"); })
               .catch((err) => setPwError(err instanceof IdentityError && err.code === "password_too_short" ? `Use at least ${passwordMin} characters` : said(err)));
           }}>
             {me?.sign_in.password ? (
@@ -258,9 +261,13 @@ export function AccountSecurity({ me, factors: initialFactors, identities: initi
             </div>
             <ErrorLine error={pwError} />
             <div className="idn-full idn-row">
-              <span className="idn-dim" data-copy="prose">Every other session ends when it changes.</span>
+              {me?.sign_in.password ? (
+                <span className="idn-dim" data-copy="prose" data-testid="pw-change-note">Every other session ends when it changes.</span>
+              ) : null}
               <span className="idn-spacer" />
-              <button type="submit" className="idn-btn" disabled={pw.next.length < passwordMin}>Change password</button>
+              <button type="submit" className="idn-btn" data-testid="pw-submit" disabled={pw.next.length < passwordMin}>
+                {me?.sign_in.password ? "Change password" : "Set password"}
+              </button>
             </div>
           </form>
         </section>
