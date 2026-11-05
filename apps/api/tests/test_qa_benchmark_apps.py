@@ -119,3 +119,156 @@ def test_simulated_defaults_to_direct_and_rejects_open_pr(client):
     )
     assert rejected.status_code == 422, rejected.text
     assert "cannot open a PR" in rejected.text
+
+
+def test_a_meeting_launched_benchmark_report_is_returned(client, engine):
+    """Panel launch stamps the benchmark on the meeting. The catalog calls that run built.
+
+    GET /report has to return that benchmark's report. The code task itself has no
+    finalize_ctx.qa_benchmark — that is the run the audit 404'd.
+    """
+    import json
+
+    from sqlalchemy import text
+
+    from apps.api.app.db import begin
+
+    with begin(engine) as connection:
+        connection.execute(
+            text(
+                "INSERT INTO meeting_runs (id, project_id, task_id, status, phase, directive, "
+                "constraints) VALUES ('mrun_panel_bugbox', 'boss-dogfood', 'task_panel_bugbox', "
+                "'completed', 'done', 'Convene the panel for the issue tracker', "
+                "CAST(:constraints AS JSONB))"
+            ),
+            {"constraints": json.dumps({"source": "qa_benchmark", "benchmark_id": "bugbox"})},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO code_task_runs (id, project_id, task_id, status, phase, title) "
+                "VALUES ('ctr_panel_bugbox', 'boss-dogfood', 'task_panel_bugbox', 'completed', "
+                "'done', 'Panel build of the issue tracker')"
+            )
+        )
+
+    catalog = client.get("/v1/qa/benchmark-apps", params={"project_id": "boss-dogfood"})
+    assert catalog.status_code == 200, catalog.text
+    apps = {item["id"]: item for item in catalog.json()["benchmark_apps"]}
+    built = apps["bugbox"]["built"]
+    assert built["run_id"] == "ctr_panel_bugbox"
+    assert built["matched_on"] == "launched_as_benchmark"
+    assert built["reportable"] is True
+
+    report = client.get("/v1/qa/benchmark-apps/runs/ctr_panel_bugbox/report")
+    assert report.status_code == 200, report.text
+    body = report.json()
+    assert body["run_id"] == "ctr_panel_bugbox"
+    assert body["benchmark_id"] == "bugbox"
+    assert body["benchmark_name"] == "BugBox"
+
+    from apps.api.app import identity_guard
+    from apps.api.app.main import app
+    from boss_engine.identity.declarations import Permit
+
+    declared = [
+        entry for entry in identity_guard.route_inventory(app)
+        if entry.path == "/v1/qa/benchmark-apps/runs/{run_id}/report" and "GET" in entry.methods
+    ]
+    assert len(declared) == 1
+    assert isinstance(declared[0].access, Permit)
+    assert declared[0].access.describe() == "permit code_task:read @ code_task(path=run_id)"
+
+
+def _insert_code_task(connection, *, run_id: str, title: str, task_id: str | None = None) -> None:
+    from sqlalchemy import text
+
+    connection.execute(
+        text(
+            "INSERT INTO code_task_runs (id, project_id, task_id, status, phase, title) "
+            "VALUES (:id, 'boss-dogfood', :task_id, 'completed', 'done', :title)"
+        ),
+        {"id": run_id, "task_id": task_id, "title": title},
+    )
+
+
+def test_a_code_task_that_is_not_a_benchmark_still_404s(client, engine):
+    from apps.api.app.db import begin
+
+    with begin(engine) as connection:
+        _insert_code_task(connection, run_id="ctr_plain", title="Ordinary fix")
+
+    missing = client.get("/v1/qa/benchmark-apps/runs/ctr_plain/report")
+    assert missing.status_code == 404
+    assert missing.json()["detail"] == "code task is not a QA benchmark run"
+
+
+def test_a_name_match_is_not_a_benchmark_report(client, engine):
+    from apps.api.app.db import begin
+
+    with begin(engine) as connection:
+        _insert_code_task(
+            connection, run_id="ctr_name_only", title="QA benchmark: BugBox"
+        )
+
+    catalog = client.get("/v1/qa/benchmark-apps", params={"project_id": "boss-dogfood"})
+    apps = {item["id"]: item for item in catalog.json()["benchmark_apps"]}
+    assert "built" not in apps["bugbox"]
+    assert apps["bugbox"]["related"]["matched_on"] == "name"
+    assert apps["bugbox"]["related"]["reportable"] is False
+
+    report = client.get("/v1/qa/benchmark-apps/runs/ctr_name_only/report")
+    assert report.status_code == 404
+    assert report.json()["detail"] == "code task is not a QA benchmark run"
+
+
+def test_an_unknown_meeting_benchmark_id_is_not_a_report(client, engine):
+    import json
+
+    from sqlalchemy import text
+
+    from apps.api.app.db import begin
+
+    with begin(engine) as connection:
+        connection.execute(
+            text(
+                "INSERT INTO meeting_runs (id, project_id, task_id, status, phase, directive, "
+                "constraints) VALUES ('mrun_unknown_bench', 'boss-dogfood', 'task_unknown_bench', "
+                "'completed', 'done', 'Build something else', CAST(:constraints AS JSONB))"
+            ),
+            {"constraints": json.dumps({"source": "qa_benchmark", "benchmark_id": "not-a-catalog-app"})},
+        )
+        _insert_code_task(
+            connection,
+            run_id="ctr_unknown_bench",
+            title="Unlabeled build",
+            task_id="task_unknown_bench",
+        )
+
+    report = client.get("/v1/qa/benchmark-apps/runs/ctr_unknown_bench/report")
+    assert report.status_code == 404
+    assert report.json()["detail"] == "code task is not a QA benchmark run"
+
+
+def test_a_meeting_on_another_task_does_not_make_this_run_a_benchmark(client, engine):
+    import json
+
+    from sqlalchemy import text
+
+    from apps.api.app.db import begin
+
+    with begin(engine) as connection:
+        connection.execute(
+            text(
+                "INSERT INTO meeting_runs (id, project_id, task_id, status, phase, directive, "
+                "constraints) VALUES ('mrun_other_task', 'boss-dogfood', 'task_other', "
+                "'completed', 'done', 'Convene BugBox', CAST(:constraints AS JSONB))"
+            ),
+            {"constraints": json.dumps({"source": "qa_benchmark", "benchmark_id": "bugbox"})},
+        )
+        _insert_code_task(
+            connection, run_id="ctr_unlinked", title="Different work", task_id="task_this"
+        )
+
+    report = client.get("/v1/qa/benchmark-apps/runs/ctr_unlinked/report")
+    assert report.status_code == 404
+    assert report.json()["detail"] == "code task is not a QA benchmark run"

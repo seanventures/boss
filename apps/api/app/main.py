@@ -7785,11 +7785,20 @@ def qa_benchmark_app_report_endpoint(run_id: str):
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     from boss_engine.services.benchmark_apps import completion_report
+    from boss_engine.services.meeting_service import launched_benchmark_id
     from .services.code_task_service import load_code_task_run
 
     with begin(engine) as c:
         require_code_task_reader(c, run_id)
         run = load_code_task_run(c, run_id)
+        # Panel launch records the catalog id on the meeting, not on the code task.
+        # The catalog already calls that run reportable; the report has to agree.
+        if run is not None and not (run.get("finalize_ctx") or {}).get("qa_benchmark"):
+            benchmark_id = launched_benchmark_id(c, run.get("task_id"))
+            if benchmark_id:
+                ctx = dict(run.get("finalize_ctx") or {})
+                ctx["qa_benchmark"] = {"id": benchmark_id}
+                run = {**run, "finalize_ctx": ctx}
         calls = c.execute(
             text(
                 "SELECT total_tokens, cost_usd_micros, latency_ms, turns, ok "

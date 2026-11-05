@@ -718,6 +718,33 @@ def is_reportable(build: Optional[dict]) -> bool:
     return bool(build) and build.get("matched_on") in REPORTABLE_MATCHES
 
 
+def launched_benchmark_id(connection, task_id: Optional[str]) -> Optional[str]:
+    """Catalog id on the meeting that owns this task, when the code task has none.
+
+    A panel launch records constraints.benchmark_id on the meeting. The code task
+    started from that PRD does not copy qa_benchmark, and the catalog still marks
+    the run reportable (`launched_as_benchmark`). A name or subject match is not
+    this: nothing there recorded a catalog id.
+    """
+    if not task_id:
+        return None
+    rows = connection.execute(
+        text(
+            "SELECT constraints->>'benchmark_id' AS benchmark_id "
+            "FROM meeting_runs WHERE task_id = :task_id "
+            "ORDER BY created_at DESC"
+        ),
+        {"task_id": task_id},
+    ).mappings().all()
+    from .benchmark_apps import get_benchmark_app
+
+    for row in rows:
+        benchmark_id = str(row["benchmark_id"] or "").strip().lower()
+        if benchmark_id and get_benchmark_app(benchmark_id) is not None:
+            return benchmark_id
+    return None
+
+
 def completed_benchmark_build(connection, project_id: str, benchmark_id: str,
                               fingerprint: Optional[str] = None,
                               name: Optional[str] = None):
