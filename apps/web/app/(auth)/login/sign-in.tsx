@@ -31,6 +31,7 @@ import type { AuthOptions, SignInStep } from "../../../lib/identity/types";
 import { emailSignInOffered } from "../../../lib/identity/email-sign-in";
 import { conditionalMediationAvailable, getAssertion, PasskeyFailure, unwrapOptions, webauthnAvailable, type AssertionOptions, type Wrapped } from "../../../lib/identity/webauthn";
 import { sayAuth } from "../auth-flow";
+import { passkeyPlace } from "../../../lib/identity/passkey-support";
 import { methodWhyNot, passkeyWhyNot, providerOffers, type Method } from "../../../lib/identity/sign-in-offers";
 import { CodeInput, Face, Sheet } from "../../../components/identity/kit";
 import { AuthStage, HostLine, Live, Logo, MethodTabs, ProviderRow, safeNextClient, Tip } from "../auth-parts";
@@ -63,6 +64,8 @@ const WORDS: Record<string, string> = {
   insecure_origin: "Open BOSS over its HTTPS address",
   claim_first: "This BOSS has no Owner yet. Claim it first.",
   shared_password_retired: "The shared password no longer works. Ask an Owner to invite you.",
+  // The server named the refusal. "Reload and retry" hides that (BOSSAPP-671).
+  csrf_failed: "Sign-in was refused (csrf_failed). This page's address didn't match BOSS. Open it at its own address and try again.",
 };
 
 /** "6 Nov" for the shared password's last day (local time). */
@@ -73,6 +76,8 @@ function shortDate(iso: string | null | undefined): string | null {
 
 function say(e: unknown): string {
   if (e instanceof IdentityError) {
+    // A sentence the server wrote beats the short map, including csrf_failed's "Reload and retry".
+    if (e.detail && /\s/.test(e.detail)) return e.detail;
     if (e.code === "invalid_code" && e.attemptsLeft !== null) return `That code didn't work · ${e.attemptsLeft} left`;
     return WORDS[e.code] ?? sayAuth(e);
   }
@@ -103,7 +108,7 @@ export function SignIn({ options, next, initialStep = null, notice = null }: {
   const [why, setWhy] = useState<{ at: "idp" | "passkey" | "tabs"; text: string } | null>(null);
   const [sheet, setSheet] = useState<null | "invite-only" | "forgot">(null);
   // The page's own address and this browser's passkey support are known only once it runs here.
-  const [where, setWhere] = useState<{ hostname: string; protocol: string } | null>(null);
+  const [where, setWhere] = useState<{ hostname: string; protocol: string; secure: boolean } | null>(null);
   const [webauthn, setWebauthn] = useState(false);
   const target = safeNextClient(next);
   const emailRef = useRef<HTMLInputElement | null>(null);
@@ -114,7 +119,7 @@ export function SignIn({ options, next, initialStep = null, notice = null }: {
   // The API offers passkeys only once a public origin is bound (S1 `passkey`, `passkey_reason`),
   // and never on an address a browser can't hold a passkey for (an IP, plain http: passkey-support).
   useEffect(() => {
-    setWhere({ hostname: window.location.hostname, protocol: window.location.protocol });
+    setWhere(passkeyPlace());
     setWebauthn(webauthnAvailable());
   }, []);
   const passkeyWhy = passkeyWhyNot(options, where, webauthn);

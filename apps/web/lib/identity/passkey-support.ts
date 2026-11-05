@@ -19,21 +19,39 @@ export function isIpHost(hostname: string | null | undefined): boolean {
   return h.includes(":") && /^[0-9a-f:.]+$/.test(h);
 }
 
+/** The page a passkey would be created on. `secure` is `window.isSecureContext` when the caller has it. */
+export type PasskeyPlace = { hostname?: string; protocol?: string; secure?: boolean } | null | undefined;
+
+/** https, an explicit secure context, or localhost — not "plain HTTP". */
+function placeIsSecure(where: PasskeyPlace): boolean {
+  if (!where) return false;
+  if (where.secure === true) return true;
+  if (where.protocol === "https:") return true;
+  const host = (where.hostname ?? "").trim().toLowerCase();
+  return host === "localhost" || host.endsWith(".localhost");
+}
+
 /**
- * Why passkeys are impossible here, in words — or null when they can be offered. The API's reason
- * first; the page's own address as well, so an older API (or a reason it could not judge) still
- * never leads someone into a prompt the browser will refuse.
+ * Why passkeys are impossible here, in words — or null when they can be offered. An IP is always
+ * a domain problem. A page the browser already treats as a secure context is never "plain HTTP",
+ * even when the API judged a forwarded http scheme (`passkey_needs_https`). An unknown place
+ * (no `where`) still trusts that API reason.
  */
-export function passkeyBlockWords(reason: string | null | undefined,
-  where: { hostname?: string; protocol?: string } | null | undefined): string | null {
+export function passkeyBlockWords(reason: string | null | undefined, where: PasskeyPlace): string | null {
   if (reason === "passkey_needs_domain") return PASSKEY_NEEDS_DOMAIN_WORDS;
-  if (reason === "passkey_needs_https") return PASSKEY_NEEDS_HTTPS_WORDS;
   const hostname = where?.hostname ?? "";
-  if (!hostname) return null;      // nothing to judge (a server render, a stubbed location)
-  if (isIpHost(hostname)) return PASSKEY_NEEDS_DOMAIN_WORDS;
-  const local = hostname === "localhost" || hostname.endsWith(".localhost");
-  if (where?.protocol && where.protocol !== "https:" && !local) return PASSKEY_NEEDS_HTTPS_WORDS;
+  if (hostname && isIpHost(hostname)) return PASSKEY_NEEDS_DOMAIN_WORDS;
+  if (!placeIsSecure(where)) {
+    if (reason === "passkey_needs_https") return PASSKEY_NEEDS_HTTPS_WORDS;
+    if (hostname && where?.protocol && where.protocol !== "https:") return PASSKEY_NEEDS_HTTPS_WORDS;
+  }
   return null;
+}
+
+/** This page, including the browser's secure-context bit. Null during a server render. */
+export function passkeyPlace(): { hostname: string; protocol: string; secure: boolean } | null {
+  if (typeof window === "undefined") return null;
+  return { hostname: window.location.hostname, protocol: window.location.protocol, secure: window.isSecureContext };
 }
 
 /** The browser's own reasons a WebAuthn call failed (DOMException.name), as one short sentence. */

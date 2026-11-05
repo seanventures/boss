@@ -16,26 +16,28 @@ import type { AuthOptions, Factor } from "../../lib/identity/types";
 import { probeSsoLink, ssoLinkStartPath } from "../../lib/identity/sso-link";
 import { codesOf, type LinkedIdentity, type RecoveryCodes } from "../../lib/identity/types-auth";
 import { webauthnAvailable } from "../../lib/identity/webauthn";
-import { PASSKEY_NEEDS_DOMAIN_WORDS, PASSKEY_NEEDS_HTTPS_WORDS, passkeyBlockWords, passkeyFailureWords } from "../../lib/identity/passkey-support";
+import { PASSKEY_NEEDS_DOMAIN_WORDS, passkeyBlockWords, passkeyFailureWords, passkeyPlace } from "../../lib/identity/passkey-support";
 import { useGuardedCall, useIdentity } from "../../components/identity/identity-provider";
 import { Ago, ErrorLine, Face, Pill, Sheet } from "../../components/identity/kit";
 import type { MyProfile } from "../../lib/identity/types-account";
 import { showToast } from "../client-forms";
-import { registerPasskey } from "../(auth)/auth-flow";
+import { passkeyHttpsRefusal, registerPasskey } from "../(auth)/auth-flow";
 import { RecoveryCodesView } from "../(auth)/recovery-codes";
 import { TotpStep } from "../(auth)/enrol/totp-step";
 
 function said(e: unknown): string {
   const passkey = passkeyFailureWords(e);
   if (passkey) return passkey;
-  if (e instanceof IdentityError) return PASSKEY_CODES[e.code] ?? e.message;
+  if (e instanceof IdentityError) {
+    if (e.code === "passkey_needs_https") return passkeyHttpsRefusal();
+    return PASSKEY_CODES[e.code] ?? e.message;
+  }
   return refusalSentence(e);
 }
 
 /** The API's passkey refusals, in the same words the sign-in screens use. */
 const PASSKEY_CODES: Record<string, string> = {
   passkey_needs_domain: PASSKEY_NEEDS_DOMAIN_WORDS,
-  passkey_needs_https: PASSKEY_NEEDS_HTTPS_WORDS,
   passkey_limit_reached: "You already have 10 passkeys. Remove one first",
   passkey_verification_failed: "The device's answer didn't check out. Try again",
 };
@@ -126,7 +128,7 @@ export function AccountSecurity({ me, factors: initialFactors, identities: initi
   const [canPasskey, setCanPasskey] = useState(false);
   const [noPasskey, setNoPasskey] = useState<string | null>(null);
   useEffect(() => {
-    const blocked = passkeyBlockWords(passkeyReason, window.location);
+    const blocked = passkeyBlockWords(passkeyReason, passkeyPlace());
     setNoPasskey(blocked);
     setCanPasskey(webauthnAvailable() && !blocked);
   }, [passkeyReason]);

@@ -16,7 +16,7 @@ import { CaretRight, DeviceMobile, Eye, EyeSlash, Fingerprint, LockSimple } from
 import { idPost } from "../../../lib/identity/api";
 import { codesOf, type RecoveryCodes } from "../../../lib/identity/types-auth";
 import { webauthnAvailable } from "../../../lib/identity/webauthn";
-import { passkeyBlockWords } from "../../../lib/identity/passkey-support";
+import { passkeyBlockWords, passkeyPlace } from "../../../lib/identity/passkey-support";
 import { Face } from "../../../components/identity/kit";
 import { AuthStage, Live, Logo, safeNextClient } from "../auth-parts";
 import { primeCsrf, registerPasskey, sayAuth } from "../auth-flow";
@@ -45,7 +45,7 @@ export function Enrol({ host, next, who, passkeyReason = null, passwordMin = 12 
   const [showPassword, setShowPassword] = useState(false);
 
   useEffect(() => {
-    const blocked = passkeyBlockWords(passkeyReason, window.location);
+    const blocked = passkeyBlockWords(passkeyReason, passkeyPlace());
     setNoPasskey(blocked);
     setPasskeys(webauthnAvailable() && !blocked);
     // No passkey possible here: the authenticator app IS the choice, not a link under a dead button.

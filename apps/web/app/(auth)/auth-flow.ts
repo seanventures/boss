@@ -7,7 +7,7 @@ import { IdentityError, idGet, idPost, setCsrfToken } from "../../lib/identity/a
 import { ME_PATH, type MeResponse } from "../../lib/identity/contract";
 import { codesOf, type RecoveryCodes } from "../../lib/identity/types-auth";
 import { createCredential, type RegistrationOptions, type Wrapped } from "../../lib/identity/webauthn";
-import { PASSKEY_NEEDS_DOMAIN_WORDS, PASSKEY_NEEDS_HTTPS_WORDS, passkeyFailureWords } from "../../lib/identity/passkey-support";
+import { PASSKEY_NEEDS_DOMAIN_WORDS, passkeyBlockWords, passkeyFailureWords, passkeyPlace } from "../../lib/identity/passkey-support";
 
 /** Read /me once a session was just issued, so the writes that follow carry X-Boss-CSRF. */
 export async function primeCsrf(): Promise<MeResponse> {
@@ -62,7 +62,7 @@ const WORDS: Record<string, string> = {
   mfa_enrolment_required: "Add a second factor first",
   // The API refused passkey options (engine webauthn.passkey_blocker / its PasskeyError codes).
   passkey_needs_domain: PASSKEY_NEEDS_DOMAIN_WORDS,
-  passkey_needs_https: PASSKEY_NEEDS_HTTPS_WORDS,
+  // passkey_needs_https is decided in sayAuth: a secure page is not "plain HTTP".
   passkey_unavailable: "Passkeys aren't set up on this BOSS yet. Use an authenticator app",
   passkey_limit_reached: "You already have 10 passkeys. Remove one first",
   passkey_verification_failed: "The device's answer didn't check out. Try again",
@@ -102,10 +102,18 @@ export function ssoErrorWords(code: string | null | undefined): string | null {
   return "Single sign-on didn't finish. Try again, or use email.";
 }
 
+/** A passkey the API refused as plain HTTP, unless this page is already a secure context. */
+export function passkeyHttpsRefusal(): string {
+  return passkeyBlockWords("passkey_needs_https", passkeyPlace())
+    ?? "A passkey couldn't be created on this page. Your password still signs you in — add an authenticator app.";
+}
+
 export function sayAuth(e: unknown): string {
   const passkey = passkeyFailureWords(e);
   if (passkey) return passkey;
   if (e instanceof IdentityError) {
+    if (e.detail && /\s/.test(e.detail)) return e.detail;
+    if (e.code === "passkey_needs_https") return passkeyHttpsRefusal();
     if (e.code === "invalid_code" && e.attemptsLeft !== null) return `That code didn't work · ${e.attemptsLeft} left`;
     return WORDS[e.code] ?? e.message;
   }

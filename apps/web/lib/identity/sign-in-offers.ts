@@ -56,7 +56,7 @@ export function providerOffers(providers: AuthOptions["providers"], next: string
  * address (null on the server); `webauthn` is whether this browser has passkeys at all.
  */
 export function passkeyWhyNot(options: Pick<AuthOptions, "passkey" | "passkey_reason">,
-  where: { hostname?: string; protocol?: string } | null, webauthn: boolean): string | null {
+  where: { hostname?: string; protocol?: string; secure?: boolean } | null, webauthn: boolean): string | null {
   const blocked = passkeyBlockWords(options.passkey_reason, where);
   if (blocked) return blocked;
   if (options.passkey_reason === "public_origin_unset") return "Passkeys need BOSS's public address. It's set when an Owner claims BOSS.";
