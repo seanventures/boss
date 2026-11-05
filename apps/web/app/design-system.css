@@ -3675,6 +3675,16 @@ select.input:focus,
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.ap-what-ships { margin: 0; overflow-wrap: anywhere; }
+.ap-commits {
+  margin: 8px 0 0; padding: 0; list-style: none;
+  display: grid; gap: 6px; min-width: 0;
+}
+.ap-commit { display: grid; gap: 2px; min-width: 0; }
+.ap-commit-id, .ap-commit-msg { overflow-wrap: anywhere; min-width: 0; }
+.ap-commit-id {
+  font-family: var(--mono); font-size: 0.63158rem; color: var(--muted);
+}
 .ap-long { white-space: pre-wrap; display: block; max-height: 120px; overflow: auto; }
 .ap-more, .ap-redacted, .ap-unresolved { font-size: 0.63158rem; color: var(--muted); margin: 6px 0 0; }
 .dw-step-decide .ap { flex-basis: 100%; }

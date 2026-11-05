@@ -423,6 +423,75 @@ def refuse_approval(recommendation: Any, *, content_hash: Optional[str], force: 
             "could not list). Say why it should ship anyway: approve it with your reason.")
 
 
+_GENERIC_DECIDE = frozenset({"", "decide", "approve", "approve the release"})
+
+
+def _generic_decide_label(label: Any) -> bool:
+    text = " ".join(str(label or "").split()).lower()
+    return text in _GENERIC_DECIDE or text.startswith("decide:")
+
+
+def chat_approval_offer(entry: dict[str, Any], recommendation: Any,
+                        question: Any = None) -> dict[str, Any]:
+    """A typed approve of a release, as the button the operator still has to click.
+
+    The hash is the card's current hash, never one the model invented. `force` is set only
+    when that card needs a reason and the note is already the reason. A reject, or any
+    decision that is not a release card, is returned as it arrived. `question` is the
+    decision's question; the button binds the card, not that sentence.
+    """
+    del question
+    if not isinstance(entry, dict):
+        return entry
+    args_in = entry.get("args") if isinstance(entry.get("args"), dict) else {}
+    if str(args_in.get("action") or "") != "approve":
+        return entry
+    rec = _json(recommendation) if not isinstance(recommendation, dict) else recommendation
+    card = of_decision(rec)
+    if card is None:
+        return entry
+    preview = (rec or {}).get("action_preview") if isinstance(rec, dict) else None
+    bound = (preview or {}).get("content_hash") if isinstance(preview, dict) else None
+    bound = bound or card.get("content_hash")
+    if not isinstance(bound, str) or not bound:
+        return entry
+    args = dict(args_in)
+    args["content_hash"] = bound
+    if card.get("needs_reason") and str(args.get("note") or "").strip():
+        args["force"] = True
+    else:
+        args.pop("force", None)
+    label = "Approve the release" if _generic_decide_label(entry.get("label")) else entry.get("label")
+    return {**entry, "args": args, "label": label}
+
+
+def stamp_chat_approvals(connection, project_id: str, proposed: list) -> None:
+    """Bind each typed release approval in a chat turn to the card it would approve.
+
+    Nothing is approved here. The offer is what the console click carries.
+    """
+    if connection is None or not proposed:
+        return
+    for i, entry in enumerate(proposed):
+        if not isinstance(entry, dict) or entry.get("tool") != "decide":
+            continue
+        args = entry.get("args") if isinstance(entry.get("args"), dict) else {}
+        decision_id = str(args.get("decision_id") or "").strip()
+        if str(args.get("action") or "") != "approve" or not decision_id:
+            continue
+        try:
+            row = connection.execute(sql(
+                "SELECT question, recommendation FROM decisions "
+                "WHERE id = :d AND project_id = :p"),
+                {"d": decision_id, "p": project_id}).mappings().first()
+        except Exception:  # noqa: BLE001 — a lookup miss leaves the offer as the model made it
+            continue
+        if not row:
+            continue
+        proposed[i] = chat_approval_offer(
+            entry, row.get("recommendation"), row.get("question"))
+
+
 def approved_head(connection, workflow_run_id: str) -> Optional[str]:
     """The head commit an approved release card of this run listed, or None. The deploy ships
     exactly this commit — never a head that moved after the person approved."""

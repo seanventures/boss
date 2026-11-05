@@ -50,6 +50,48 @@ EVENT_OPENED = "incident.opened"
 EVENT_RESOLVED = "incident.resolved"
 #: The catalogue workflow that answers an app incident (workflow_catalogue "incident_response").
 WORKFLOW_KEY = "incident_response"
+#: On both cards of an incident fix: the release ships, the pull request merges after recovery.
+INCIDENT_ORDER = "release_then_merge"
+
+
+def link_release_and_merge(connection, project_id: str, recommendation: dict[str, Any],
+                           build_run_id: Optional[str]) -> dict[str, Any]:
+    """Say the order on an incident release and on the fix's open pull request.
+
+    Two cards stay two cards. Nothing is merged and nothing is approved here. The pull
+    request's question is left as it is, so the two cards do not collapse into one row.
+    """
+    from .decision_actions import OPEN_STATUSES, _RELEASE_THEN_MERGE
+
+    stamped = {**(recommendation or {}), "incident_order": INCIDENT_ORDER,
+               "why": _RELEASE_THEN_MERGE}
+    if connection is None or not build_run_id:
+        return stamped
+    try:
+        row = connection.execute(sql(
+            "SELECT d.id, d.status, d.recommendation FROM code_task_runs r "
+            "JOIN decisions d ON d.id = r.decision_id "
+            "WHERE r.id = :r AND r.project_id = :p AND d.project_id = :p"),
+            {"r": build_run_id, "p": project_id}).mappings().first()
+    except Exception:  # noqa: BLE001 — the release card still says the order
+        return stamped
+    if not row or str(row.get("status") or "") not in OPEN_STATUSES:
+        return stamped
+    existing = row.get("recommendation")
+    if isinstance(existing, str):
+        try:
+            existing = json.loads(existing)
+        except ValueError:
+            existing = None
+    if not isinstance(existing, dict) or existing.get("action") != "review_pull_request":
+        return stamped
+    connection.execute(sql(
+        "UPDATE decisions SET recommendation = COALESCE(recommendation, '{}'::jsonb) "
+        "|| CAST(:patch AS jsonb), updated_at = now() "
+        "WHERE id = :d AND project_id = :p"),
+        {"d": row["id"], "p": project_id, "patch": json.dumps({
+            "incident_order": INCIDENT_ORDER, "why": _RELEASE_THEN_MERGE})})
+    return stamped
 
 #: How far before the alert's onset to read logs from, and how many lines per container.
 LOG_LEAD_MINUTES = 10
