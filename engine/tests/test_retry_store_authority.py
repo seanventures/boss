@@ -69,6 +69,58 @@ def test_in_memory_retry_keeps_lineage_and_never_contacts_the_existing_pr(retry_
                for event in ports.events.events)
 
 
+def test_retry_does_not_update_the_pull_request_branch_before_the_child_job_is_admitted(
+        retry_store, monkeypatch):
+    """BOSSAPP-491: a retry must not call GitHub's branch update before the child job exists.
+
+    The recorder returns without HTTP, so a swallowed exception cannot hide the call. The
+    factory probe is what the old admission-time import constructed; the adapter patch is
+    what a direct ``github.update_pull_request_branch`` hits. Neither may run before admission,
+    and retry still has no receipted write to add afterwards.
+    """
+    settings, _ports, jobs, created = retry_store
+    from boss_engine.services import software_factory
+    from boss_engine.services.github_adapter import GitHubAdapter
+
+    timeline: list = []
+
+    def create_job(_connection, **job):
+        timeline.append("job_admitted")
+        created.append(job)
+
+    def update_pull_request_branch(_self, number):
+        timeline.append(("update_pull_request_branch", int(number), "job_admitted" in timeline))
+        return True
+
+    def refuse_live_github(_self, *_args, **_kwargs):
+        raise AssertionError("retry admission attempted a live GitHub request")
+
+    jobs.create_job = create_job
+    monkeypatch.setattr(GitHubAdapter, "update_pull_request_branch", update_pull_request_branch)
+    monkeypatch.setattr(GitHubAdapter, "_request", refuse_live_github)
+
+    class FactoryProbe:
+        def __init__(self, factory_settings, **_kwargs):
+            self.github = GitHubAdapter(
+                factory_settings, owner="owned", repo="repository", token="not-a-live-token")
+
+    monkeypatch.setattr(software_factory, "SoftwareFactoryService", FactoryProbe)
+    monkeypatch.setattr(code_task_service, "SoftwareFactoryService", FactoryProbe)
+
+    result = code_task_service.retry_code_task(
+        None, settings, jobs, "parent", fix_note="Handle the edge case."
+    )
+    assert result["run_id"] != "parent"
+    assert timeline[0] == "job_admitted"
+    early = [item for item in timeline
+             if isinstance(item, tuple) and item[0] == "update_pull_request_branch" and not item[2]]
+    assert early == [], "update_pull_request_branch ran before the child job was admitted"
+    assert not any(isinstance(item, tuple) for item in timeline), (
+        "retry_code_task must not write the PR branch; a later merge receipt is the governed path"
+    )
+    assert len(created) == 1 and created[0]["payload"]["run_id"] == result["run_id"]
+
+
 def test_missing_original_job_still_requires_current_caller_consent(retry_store, monkeypatch):
     settings, ports, jobs, created = retry_store
     checked = []
