@@ -45,9 +45,28 @@ def _service() -> WorkerAutoscalingService:
 def _authorize(connection, project_id: str, actor: str, permission: str) -> str:
     # The HTTP principal, when present, is the authority and the audit actor.
     # Keep the explicit actor for local, unauthenticated development calls.
-    from apps.api.app.main import current_api_principal, require_project_actor
+    # Under enforce the guard's actor (the console key's executive_console) is that
+    # principal; the transport id (sys_legacy_console) is not a second name. A supplied
+    # name that is neither is still someone else.
+    from apps.api.app import identity_guard
+    from apps.api.app.main import (
+        current_api_principal, request_actor_or_principal, require_project_actor,
+    )
 
-    checked_actor = current_api_principal.get() or actor
+    signed_in = request_actor_or_principal()
+    principal = current_api_principal.get() or ""
+    supplied = str(actor or "").strip()
+    other = identity_guard.named_other_actor()
+    if other:
+        checked_actor = other
+    elif identity_guard.identity_enforced() and signed_in:
+        if supplied and supplied not in (signed_in, principal):
+            checked_actor = supplied
+        else:
+            checked_actor = signed_in
+    else:
+        # Unauthenticated local calls keep the console member the reads used to name.
+        checked_actor = principal or supplied or "executive_console"
     # Return the same not-found result for unknown projects before attempting
     # default-member repair. Callers need a real project before any read/write.
     project_exists = connection.execute(
@@ -98,7 +117,7 @@ def list_policies(project_id: str = Query(...)) -> dict[str, Any]:
     svc = _service()
     try:
         with begin(get_engine()) as connection:
-            _authorize(connection, project_id, "executive_console", "providerops_manage")
+            _authorize(connection, project_id, "", "providerops_manage")
             ready = svc.ensure_tables(connection)
             items = svc.list_policies(connection, project_id)
             return {
@@ -209,7 +228,7 @@ def status(project_id: str = Query(...)) -> dict[str, Any]:
     svc = _service()
     try:
         with begin(get_engine()) as connection:
-            _authorize(connection, project_id, "executive_console", "providerops_manage")
+            _authorize(connection, project_id, "", "providerops_manage")
             svc.ensure_tables(connection)
             return svc.status(connection, project_id)
     except ProgrammingError as error:
@@ -247,7 +266,7 @@ def history(
     svc = _service()
     try:
         with begin(get_engine()) as connection:
-            _authorize(connection, project_id, "executive_console", "providerops_manage")
+            _authorize(connection, project_id, "", "providerops_manage")
             svc.ensure_tables(connection)
             items = svc.history(
                 connection, project_id, pool_key=pool_key, limit=limit

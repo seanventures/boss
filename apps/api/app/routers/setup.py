@@ -41,7 +41,14 @@ def build_setup_router(
         """A READ IS NOT AN ACT: the view never calls a provider, decrypts nothing and records
         nothing, so it asks the project read the route's SETUP_READ names — not the actor
         binding plus entitlement_manage a write needs. Binding the actor here refused the
-        documented key (boss-community.env.sh's BOSS_API_KEY) with 403 actor_mismatch."""
+        documented key (boss-community.env.sh's BOSS_API_KEY) with 403 actor_mismatch.
+        Naming a different actor still does: that name is not this principal."""
+        from apps.api.app import identity_guard
+
+        other = identity_guard.named_other_actor()
+        if other:
+            require_actor(connection, project_id, other, "entitlement_manage")
+            return
         if require_reader is not None:
             require_reader(connection, project_id)
         else:
@@ -419,7 +426,12 @@ def build_setup_router(
                             base_url: str = "") -> dict[str, Any]:
         """The provider's own model list, with the key this project stored for it."""
         with begin(engine) as connection:
-            require_actor(connection, project_id, actor_for(None), "entitlement_manage")
+            from apps.api.app import identity_guard
+
+            require_actor(
+                connection, project_id,
+                identity_guard.named_other_actor() or actor_for(None), "entitlement_manage",
+            )
             names = setup_actions.model_catalogue(connection, get_settings(), project_id,
                                                   provider, source_id=source_id,
                                                   base_url=base_url)
