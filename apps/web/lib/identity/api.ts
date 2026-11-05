@@ -182,25 +182,27 @@ const WRITE = new Set(["POST", "PUT", "PATCH", "DELETE"]);
  * /v1/identity/me (same-origin only) and is sent once more — the refusal happened before the API
  * did anything, so the retry is the first time it runs.
  */
-async function refreshCsrf(): Promise<boolean> {
+async function refreshCsrf(): Promise<void> {
   try {
     const res = await fetch(ME_PATH, { headers: { Accept: "application/json" }, credentials: "same-origin", cache: "no-store" });
-    if (!res.ok) return false;
+    if (!res.ok) return;
     const token = String(((await res.json()) as { csrf_token?: unknown }).csrf_token ?? "");
-    if (!token || token === csrfToken) return false;
-    csrfToken = token;
-    return true;
-  } catch {
-    return false;
-  }
+    if (token) csrfToken = token;
+  } catch { /* the retry is skipped: the refusal stands */ }
 }
 
 export async function idFetch<T>(method: string, path: string, body?: unknown, init: { signal?: AbortSignal } = {}): Promise<T> {
+  // COMPARED WITH WHAT WAS SENT, not with what is held now. After a step-up the provider re-reads
+  // /me on its own (the sheet closing, the tab coming back), so by the time the refusal arrives the
+  // held token is often already the new one; comparing the fresh token with it said "unchanged"
+  // and the first press after "Confirm it's you" showed "Reload and retry" (BOSSAPP-897).
+  const sent = csrfToken;
   try {
     return await idFetchOnce<T>(method, path, body, init);
   } catch (e) {
-    if (e instanceof IdentityError && e.status === 403 && e.code === "csrf_failed" && WRITE.has(method) && await refreshCsrf()) {
-      return idFetchOnce<T>(method, path, body, init);
+    if (e instanceof IdentityError && e.status === 403 && e.code === "csrf_failed" && WRITE.has(method)) {
+      await refreshCsrf();
+      if (csrfToken && csrfToken !== sent) return idFetchOnce<T>(method, path, body, init);
     }
     throw e;
   }
