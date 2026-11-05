@@ -96,7 +96,8 @@ describe("Setup asks once", () => {
     await settle();
     expect(f.calls.find((c) => c.op === "switch")?.body).toMatchObject({ switch: "improve", on: false });
     expect($("[data-testid=im-consent]")).toBeNull(); // asked: not again
-    expect($("[data-testid=su-sharing-state]")!.textContent).toBe("Off");
+    // Answered, it leaves Setup altogether (BOSSAPP-898); Govern › Sharing changes it later.
+    expect($("[data-testid=su-sharing]")).toBeNull();
   });
 });
 

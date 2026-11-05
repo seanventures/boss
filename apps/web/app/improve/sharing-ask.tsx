@@ -38,6 +38,9 @@ export function SharingAsk({ projectId, actor }: { projectId: string; actor: str
   };
   const sw = v.switches;
   const govern = "/?area=budget&tab=sharing";
+  // ASKED ONCE, THEN GONE (BOSSAPP-898, "this should have only Model and Repos setup"): once
+  // answered, or set off by the environment, Setup shows nothing; Govern › Sharing changes it.
+  if (v.env_disabled || sw.improve.asked) return null;
   return (
     <section className="im-ask" aria-label="Improve BOSS" data-testid="su-sharing">
       {v.env_disabled ? (
