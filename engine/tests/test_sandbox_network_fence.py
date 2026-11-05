@@ -26,7 +26,8 @@ def _block() -> str:
 
 
 def _run(tmp_path: Path, *, fail: str = '', fail2: str = '', missing: bool = False,
-         unavailable: bool = False, mode: str = 'enforce', ipv4_fail: str = ''):
+         unavailable: bool = False, mode: str = 'enforce', ipv4_fail: str = '',
+         restore_missing: bool = False):
     commands = tmp_path / 'commands'
     commands.mkdir()
     marker_root = tmp_path / 'shim'
@@ -52,7 +53,8 @@ printf '%s %s\\n' "${0##*/}" "$*" >> "$CALLS"
     (commands / 'iptables-restore').write_text('#!/bin/sh\n/bin/cat >/dev/null\n')
     if not missing:
         (commands / 'ip6tables').write_text(command)
-        (commands / 'ip6tables-restore').write_text('#!/bin/sh\n/bin/cat >/dev/null\n')
+        if not restore_missing:
+            (commands / 'ip6tables-restore').write_text('#!/bin/sh\n/bin/cat >/dev/null\n')
     for tool in commands.iterdir():
         if not tool.is_symlink():
             tool.chmod(0o700)
@@ -96,6 +98,17 @@ def test_existing_ipv6_chain_is_flushed_and_verified(tmp_path):
     result, root, calls = _run(tmp_path, fail='-N BOSS_SANDBOX')
     assert result.returncode == 0 and (root / '.network-fenced').exists()
     assert 'ip6tables -F BOSS_SANDBOX' in calls
+
+
+def test_unavailable_ip6tables_restore_does_not_report_ready(tmp_path):
+    """IPv6 filtering that cannot be installed must not leave the IPv4 fence marked ready."""
+    result, root, calls = _run(tmp_path, restore_missing=True)
+    assert result.returncode == 0, result.stderr
+    assert not (root / '.network-fenced').exists()
+    assert (root / '.network-unfenced').is_file()
+    assert 'builds are held' in result.stderr
+    assert 'iptables -A OUTPUT -m owner --uid-owner 61000-61999 -j BOSS_SANDBOX' in calls
+    assert 'ip6tables -L' in calls
 
 
 def test_positive_kernel_unavailability_can_skip_missing_ipv6_tools(tmp_path):

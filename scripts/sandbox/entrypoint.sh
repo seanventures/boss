@@ -76,9 +76,9 @@ fence_ipv6() {
   ip6tables -D OUTPUT -m owner --uid-owner "$UID_RANGE" -j BOSS_SANDBOX 2>/dev/null || true
   # The same preview rules on ::1 (a Node app listening on `::` is reachable there too).
   # preview_self_rules is defined by fence_network, which runs first.
-  if preview_self_rules | ip6tables-restore --noflush; then
-    ip6tables -A BOSS_SANDBOX -p tcp --dport "$PREVIEW_PORTS" -j BOSS_PREVIEW_SELF || return 1
-  fi
+  # A missing or failed ip6tables-restore must not be skipped: IPv4 success is not a fence.
+  preview_self_rules | ip6tables-restore --noflush || return 1
+  ip6tables -A BOSS_SANDBOX -p tcp --dport "$PREVIEW_PORTS" -j BOSS_PREVIEW_SELF || return 1
   ip6tables -A BOSS_SANDBOX -p tcp --dport "$PREVIEW_PORTS" -j REJECT || return 1
   ip6tables -A BOSS_SANDBOX -o lo -d ::1/128 -j ACCEPT || return 1
   ip6tables -A BOSS_SANDBOX -j REJECT || return 1
