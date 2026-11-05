@@ -29,6 +29,7 @@ CONSOLE_PAGES: tuple[tuple[str, str, str], ...] = (
     ("/identity/audit", "Audit", "audit:read"),
     ("/account/keys", "API keys", "api_key:manage_own"),
     ("/v2", "Factory", "code_task:read"),
+    ("/v2/missions", "Factory", "code_task:read"),
     ("/v2/missions/[id]", "Build", "code_task:read"),
     ("/v2/hive", "Hive", "assistant:chat"),
     ("/v2/factory", "Agent Studio", "agent:read"),

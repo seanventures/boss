@@ -285,18 +285,30 @@ const V2_ROUTES: Record<string, Record<string, string>> = {
 /** Who you are travels with you: the console gates on these. */
 const IDENTITY = ["org", "org_id", "project_id", "actor"];
 
-/**
- * Where a retired v2 route sends its visitor: a console href, or null when the path is not
- * one of them. Only identity crosses over; v2's own parameters mean nothing to the console.
- */
-export function resolveLegacyRoute(pathname: string, params: URLSearchParams): string | null {
-  const target = V2_ROUTES[pathname.replace(/\/+$/, "")];
-  if (!target) return null;
+function identitySearch(params: URLSearchParams): URLSearchParams {
   const next = new URLSearchParams();
   for (const key of IDENTITY) {
     const value = params.get(key);
     if (value) next.set(key, value);
   }
+  return next;
+}
+
+/**
+ * Where a retired v2 route sends its visitor: a console href, or null when the path is not
+ * one of them. Only identity crosses over; v2's own parameters mean nothing to the console.
+ * The bare missions index is the project list at /v2, not a console area.
+ */
+export function resolveLegacyRoute(pathname: string, params: URLSearchParams): string | null {
+  const clean = pathname.replace(/\/+$/, "") || "/";
+  // /v2/missions/[id] is one build and is not this path.
+  if (clean === "/v2/missions") {
+    const query = identitySearch(params).toString();
+    return query ? `/v2?${query}` : "/v2";
+  }
+  const target = V2_ROUTES[clean];
+  if (!target) return null;
+  const next = identitySearch(params);
   for (const [key, value] of Object.entries(target)) next.set(key, value);
   return `/?${next.toString()}`;
 }

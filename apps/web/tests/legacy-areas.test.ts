@@ -107,6 +107,14 @@ describe("resolveLegacyRoute", () => {
     expect(route("/v2/hive")).toBeNull();
     expect(route("/v2")).toBeNull();
   });
+
+  it("sends the missions index to the project list, keeping the org", () => {
+    // /v2 is the list; /v2/missions/[id] is one build. The bare index must not 404.
+    expect(route("/v2/missions", "org=org_boss")).toBe("/v2?org=org_boss");
+    expect(route("/v2/missions/", "org=org_boss&project_id=p1&view=x")).toBe("/v2?org=org_boss&project_id=p1");
+    expect(route("/v2/missions")).toBe("/v2");
+    expect(route("/v2/missions/build_9", "org=org_boss")).toBeNull();
+  });
 });
 
 describe("searchParamsFrom", () => {

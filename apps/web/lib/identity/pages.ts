@@ -26,6 +26,8 @@ export const PUBLIC_AUTH_PATHS: readonly string[] = [...new Set([
 
 /** Set by middleware.ts on every page request: the pathname, for a layout's guard. */
 export const PATH_HEADER = "x-boss-path";
+/** The query string of that same request (`?org=…`), so a sign-in can come back to it. */
+export const SEARCH_HEADER = "x-boss-search";
 
 export type PageAccess = { readonly permission: Permission } | { readonly authenticated: true }
   /** Held at the org or at ANY project (lib/identity/held-anywhere.ts): a project Admin's page. */
@@ -80,6 +82,7 @@ export const CONSOLE_PAGES: readonly IdentityPage[] = [
   { path: "/launch", label: "Launch", tip: "What BOSS is, and how to install it", access: { authenticated: true } },
   { path: "/enrol", label: "Enrol", tip: "Add the second factor your role needs", access: { authenticated: true } },
   { path: "/v2", label: "Factory", tip: "Projects and the builds in them", access: area("code_tasks") },
+  { path: "/v2/missions", label: "Factory", tip: "Projects and the builds in them", access: area("code_tasks") },
   { path: "/v2/missions/[id]", label: "Build", tip: "One build's workspace", access: area("code_tasks") },
   { path: "/v2/hive", label: "Hive", tip: "Ask BOSS", access: area("agent") },
   { path: "/v2/factory", label: "Agent Studio", tip: "Your agents", access: area("workforce") },

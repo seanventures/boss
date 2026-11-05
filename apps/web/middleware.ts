@@ -8,7 +8,7 @@ import { hasSessionCookie, isPreviewCapabilityPath } from "./lib/identity/forwar
 import { machineRequest, protocolKind } from "./lib/identity/protocol-proxy";
 import { isOidcPath } from "./lib/oidc-proxy";
 import { monitoringPath, oddMonitoringSpelling } from "./lib/monitoring-proxy";
-import { isPublicConsolePath, PATH_HEADER } from "./lib/identity/pages";
+import { isPublicConsolePath, PATH_HEADER, SEARCH_HEADER } from "./lib/identity/pages";
 import { githubWebOrigins, HANDOFF_PATH } from "./lib/identity/github-manifest";
 import { INTENT_HEADER, intentFromActionBody } from "./lib/api-write";
 import { consoleParams } from "./app/legacy-areas";
@@ -213,6 +213,8 @@ async function passThrough(request: NextRequest) {
   // overwritten), and stripped before any call reaches the API (every X-Boss-* is).
   const forwarded = (await pressIntentHeaders(request)) ?? new Headers(request.headers);
   forwarded.set(PATH_HEADER, request.nextUrl.pathname);
+  // The query too (a dead session's sign-in comes back to ?org=). Never the client's copy.
+  forwarded.set(SEARCH_HEADER, request.nextUrl.search);
   // THE CSP (IDENTITY.md §14.1 I, A10): pages only — never the /v1 proxy, which also serves the
   // previewed apps, nor the hand-written /api routes. Next reads the nonce from the request's
   // CSP header and stamps it on its own scripts; nothing else may run.

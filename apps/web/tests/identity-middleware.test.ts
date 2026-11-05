@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 
 import { contentSecurityPolicy, middleware } from "../middleware";
-import { PATH_HEADER } from "../lib/identity/pages";
+import { PATH_HEADER, SEARCH_HEADER } from "../lib/identity/pages";
 
 afterEach(() => vi.unstubAllEnvs());
 
@@ -95,6 +95,20 @@ describe("the pathname header layouts guard on", () => {
   it("is set from the URL, and a client's own copy is overwritten", async () => {
     const r = await middleware(remote("/identity/roles", { cookie: SESSION, headers: { [PATH_HEADER]: "/identity" } }));
     expect(forwarded(r, PATH_HEADER)).toBe("/identity/roles");
+  });
+
+  it("forwards the query, and a client's own copy is overwritten", async () => {
+    const r = await middleware(remote("/v2/timeline?org=org_boss", {
+      cookie: SESSION, headers: { [SEARCH_HEADER]: "?area=nope" },
+    }));
+    expect(forwarded(r, SEARCH_HEADER)).toBe("?org=org_boss");
+  });
+
+  it("an empty query clears a client's search header", async () => {
+    const r = await middleware(remote("/v2/timeline", {
+      cookie: SESSION, headers: { [SEARCH_HEADER]: "?org=org_evil" },
+    }));
+    expect(forwarded(r, SEARCH_HEADER)).toBe("");
   });
 });
 
