@@ -1781,6 +1781,23 @@ def _no_model_word(decision) -> str:
     return NO_MODEL_WORD
 
 
+def no_model_display(triage: Any) -> str:
+    """What a no_model alert says on the card and in a message.
+
+    A stored credit sentence is kept. An older row only kept the provider's error under the
+    generic word; that still names the credit cause (BOSSAPP-616)."""
+    t = triage if isinstance(triage, dict) else {}
+    word = str(t.get("word") or "")
+    if "credit balance too low" in word.lower():
+        return word
+    from . import provider_limits
+
+    if provider_limits.credit_exhausted(str(t.get("error") or "")):
+        who = str(t.get("provider") or "").strip() or "its provider"
+        return f"Not triaged: credit balance too low on {who}"
+    return NO_MODEL_WORD
+
+
 def _claim(engine, project_ids: Optional[set[str]], limit: int) -> list[str]:
     from ..db import begin
 

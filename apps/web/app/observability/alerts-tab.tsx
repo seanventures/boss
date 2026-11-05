@@ -342,7 +342,7 @@ export function AlertRow({ a, targetId, projectId, actor, onDone, showApp, onApp
 }
 
 export function AppAlertsTab({ projectId, actor, targetId, onIncident }: {
-  projectId: string; actor: string; targetId: string; onIncident: () => void;
+  projectId: string; actor: string; targetId: string; onIncident: (incidentId: string | null) => void;
 }) {
   const lt = useLocalTime();
   const rules = useRules(projectId, targetId);
@@ -438,7 +438,7 @@ export function AppAlertsTab({ projectId, actor, targetId, onIncident }: {
             <ul className="obs-list obs-alerts">
               {history.data.alerts.map((a) => <AlertRow key={a.id} a={a} targetId={targetId} projectId={projectId} actor={actor}
                                                         severities={history.data?.severities}
-                                                        onDone={refresh} onIncident={onIncident} />)}
+                                                        onDone={refresh} onIncident={() => onIncident(a.incident?.id ?? null)} />)}
             </ul>
           )}
       </DrawerSection>

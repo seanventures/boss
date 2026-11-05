@@ -838,9 +838,11 @@ def ask_model(adapter: Any, *, raw_adapter: Any = None, agent: str, evidence: Ma
                            "turns": int(got.turns or 0), "by": by}
     if got.decided and checked.get("decision") is not None:
         return {"decision": checked["decision"], **out}
+    provider = str(getattr(got, "provider", "") or "")
     if got.error:
-        return {"decision": None, "error": got.error, **out}
-    return {"decision": None, "refused": got.refused or got.reason or "no decision", **out}
+        return {"decision": None, "error": got.error, "provider": provider, **out}
+    return {"decision": None, "refused": got.refused or got.reason or "no decision",
+            "provider": provider, **out}
 
 
 # ── BOSS's coded triage: a hint handed to the model as `boss_triage`, never the decider ──────
@@ -932,12 +934,17 @@ def recovery_threshold(connection: Connection, settings: Any, project_id: str) -
 
 
 def no_model_ask(failure: Mapping[str, Any], triage: Mapping[str, Any], *, refused: str = "",
-                 error: str = "") -> dict[str, Any]:
+                 error: str = "", provider: str = "") -> dict[str, Any]:
     """No model decided (none connected, it failed, or its answer was refused twice): ONE
     question for a person, with BOSS's own reading as a suggestion — and no action taken."""
+    from .provider_limits import credit_exhausted
+
     headline = str(failure.get("headline") or failure.get("why") or failure.get("error")
                    or "the step failed").strip().rstrip(".")
+    who = (provider or "its provider").strip() or "its provider"
+    out_of_credit = credit_exhausted(error)
     why = (f"the model's answer was refused ({refused})" if refused else
+           f"credit balance too low on {who}" if out_of_credit else
            "BOSS needs a connected model to decide how to recover this step, and none answered"
            + (f" ({error[:160]})" if error else ""))
     suggests = str(triage.get("action") or "")
@@ -948,11 +955,15 @@ def no_model_ask(failure: Mapping[str, Any], triage: Mapping[str, Any], *, refus
                 "reasoning": f"{why}; {triage.get('reasoning') or ''}".strip("; ")[:600]}
     hint = (f" BOSS's own triage reads it as: {str(triage.get('cause') or headline)[:200]} → "
             f"{_DOING.get(suggests, suggests)}." if suggests and suggests != ASK_PERSON else "")
+    # Out of credit is not a missing connection: say the provider's cause, and where to add credit.
+    tail = ("Add credit there (or connect a different model in Repo and models) so BOSS's "
+            "agent can decide this itself." if out_of_credit else
+            "Connect a model in Repo and models so BOSS's agent can decide this itself.")
+    lead = f" {why}." if out_of_credit else ""
     return {"action": ASK_PERSON, "cause": str(triage.get("cause") or headline)[:300],
             "reasoning": why,
-            "question": (f"{headline}.{hint} Should BOSS do that, or will you change what it "
-                         "needs? Connect a model in Repo and models so BOSS's agent can decide "
-                         "this itself.")[:600],
+            "question": (f"{headline}.{hint}{lead} Should BOSS do that, or will you change what it "
+                         f"needs? {tail}")[:600],
             "after": "Press Retry on this step when it is done; the recovery starts again.",
             "evidence": [headline[:300]]}
 
@@ -1116,7 +1127,8 @@ def decide(connection: Connection, settings: Any, *, project_id: str, run_id: st
             # BOSS saw, what its triage would suggest, and why no model decided.
             decision = no_model_ask(evidence.get("failure") or {}, triage,
                                     refused=str(result.get("refused") or ""),
-                                    error=str(result.get("error") or ""))
+                                    error=str(result.get("error") or ""),
+                                    provider=str(result.get("provider") or ""))
             by = {"engine": "none", "model": "", "source": "no model decided",
                   **({"model_said": result.get("refused") or result.get("error")}
                      if (result.get("refused") or result.get("error")) else {})}

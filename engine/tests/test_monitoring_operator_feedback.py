@@ -294,6 +294,59 @@ def test_a_scrape_reaches_prometheus_raw_and_stamped():
     assert alerts[0][0]["__name__"] == "ALERTS" and alerts[0][0]["sev"] == "sev3"
 
 
+def test_a_restart_that_drops_the_5xx_series_reads_as_zero_error_rate():
+    """BOSSAPP-621: after a restart the 5xx counter is gone while 2xx continues, so
+    `100 * sum(rate(5xx)) / sum(rate(all))` is empty. The series ends and lastNotNull keeps
+    the old error rate. A missing 5xx numerator is 0; the window stays 5m."""
+    d = json.loads(bundled.render_dashboard("Order API", "staging"))
+    exprs = {p["title"]: p["targets"][0]["expr"] for p in d["panels"]}
+    ratio = exprs["Error rate"]
+    assert exprs["Error rate (5xx %)"] == ratio
+    assert "or vector(0)" in ratio and "[5m]" in ratio
+    pq.parse(ratio)
+    t0 = 1_700_000_000_000
+
+    def series(status: str, step: float) -> list[tuple[int, float]]:
+        return [(t0 + i * 60_000, float(i) * step) for i in range(8)]
+
+    def at(samples: list[tuple[str, float]]) -> float:
+        store = pq.Store()
+        for status, step in samples:
+            store.add({"__name__": "http_requests_total", "app": "Order API",
+                       "environment": "staging", "status": status}, series(status, step))
+        got = pq.instant_vector(ratio, store, t0 + 7 * 60_000)
+        assert got, "traffic is still arriving, so the ratio is a number"
+        return got[0].value
+
+    assert at([("200", 100.0)]) == 0.0
+    assert 40.0 < at([("200", 50.0), ("500", 50.0)]) < 60.0
+
+
+def test_the_stack_dashboard_5xx_series_is_zero_when_that_series_is_gone():
+    """BOSSAPP-621: the stack deploy writes the same Order API dashboard. Its 5xx rate ends
+    when the series is gone. Request rate stays empty with no traffic — a flat zero there
+    would read as a healthy app that was never instrumented."""
+    from boss_engine.services.observability_stack import render_dashboard
+
+    d = json.loads(render_dashboard({
+        "app": "Order API", "environment": "staging", "project": "p", "repo": "o/r",
+        "port": 1, "scrape_url": "h:1", "probe_url": "http://h/"}))
+    expr = next(p["targets"][0]["expr"] for p in d["panels"] if p["title"] == "Error rate (5xx/s)")
+    req = next(p["targets"][0]["expr"] for p in d["panels"] if p["title"] == "Request rate (req/s)")
+    assert "or vector(0)" in expr and "[5m]" in expr
+    assert "or vector(0)" not in req
+    pq.parse(expr)
+    t0 = 1_700_000_000_000
+    store = pq.Store()
+    store.add({"__name__": "http_requests_total", "app": "Order API", "status": "200"},
+              [(t0 + i * 60_000, float(i) * 100) for i in range(8)])
+    got = pq.instant_vector(expr, store, t0 + 7 * 60_000)
+    assert got and got[0].value == 0.0
+    bare = pq.instant_vector(expr, pq.Store(), t0 + 7 * 60_000)
+    # No traffic at all: the default is 0, which is what a missing counter means.
+    assert bare and bare[0].value == 0.0
+
+
 def test_each_app_gets_a_dashboard_with_the_golden_signals_and_its_alerts():
     d = json.loads(bundled.render_dashboard("Order API", "staging"))
     assert d["uid"] == "boss-order-api"

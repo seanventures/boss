@@ -72,6 +72,15 @@ def test_the_card_reads_a_reviewers_summary_as_one_plain_sentence():
     assert rs.first_sentence(s) == "pricing.py: The fix only changes get_bulk_price(sku) handling."
 
 
+def test_a_numbered_security_finding_is_not_cut_to_the_list_marker():
+    """BOSSAPP-618: the report's security summary was cut at the "1." of a numbered finding."""
+    summary = "1. FINDING: the token is logged in plain text. The key is also in the URL."
+    assert rs.first_sentence(summary) == "1. FINDING: the token is logged in plain text."
+    word, verdict = rs._stage_finding("security_check", {
+        "security_summary": summary, "security_verdict": "fail"})
+    assert word == "1. FINDING: the token is logged in plain text." and verdict == "fail"
+
+
 def test_the_build_crew_says_red_on_the_faulty_code_and_green_with_the_fix():
     state = {"test_files": ["order-api/tests/test_shipping_fee.py"], "tests_passed": True,
              "qa_summary": "All 42 tests pass. More words.",
@@ -89,6 +98,67 @@ def pg():
     with eng.begin() as c:
         pid = project(c)
     return eng, pid
+
+
+def _what(connection, incident_id: str) -> str:
+    return ir._timeline(connection, {"id": incident_id, "finalize_ctx": {}}, None)[0]["what"]
+
+
+def test_the_timeline_names_the_threshold_on_every_stored_alert_shape(pg):
+    """BOSSAPP-618: a joined firing spreads the rule's percent onto the payload, and a split
+    keeps it as `threshold`. The timeline read only a nested `rule.error_rate_percent` and
+    printed "threshold None%"."""
+    eng, pid = pg
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+
+    def one(payload: dict) -> str:
+        inc = f"inc_{uuid4().hex[:10]}"
+        with eng.begin() as c:
+            c.execute(text(
+                "INSERT INTO incidents (id, project_id, dedupe_key, title, status, first_seen, "
+                " last_seen) VALUES (:i, :p, :k, 'Order API', 'open', :t, :t)"),
+                {"i": inc, "p": pid, "k": f"k_{inc}", "t": now})
+            ir._evidence(c, inc, "alert", ref="AppErrorRate", payload=payload, at=now)
+            return _what(c, inc)
+
+    nested = one({"fired_at": now.isoformat(), "error_rate": 0.144, "requests": 220,
+                  "rule": {"error_rate_percent": 5.0, "kind": "error_rate", "alert": "AppErrorRate"}})
+    assert nested == "Alert fired: 14.4% of 220 requests failing (threshold 5.0%)"
+    # Joined and settling firings spread the rule at the top and keep `value` as the percent.
+    # They do not nest `rule` and they do not repeat error_rate or requests.
+    joined = one({"fired_at": now.isoformat(), "joined": True, "error_rate_percent": 5.0,
+                  "kind": "error_rate", "alert": "AppErrorRate", "value": 14.4})
+    assert "threshold 5" in joined and "None" not in joined and "14.4%" in joined
+    split = one({"fired_at": now.isoformat(), "value": 14.4, "threshold": 5.0,
+                 "rule": {"alert": "AppErrorRate", "kind": "error_rate"}})
+    assert "threshold 5" in split and "None" not in split and "14.4%" in split
+
+
+def test_a_recovered_check_replaces_the_waiting_note(pg):
+    """BOSSAPP-617: verify-recovery kept the note it wrote when it started waiting, so a
+    succeeded step still said "Waiting for enough traffic"."""
+    from boss_engine.services import workflow_capability_runner as runner
+
+    eng, pid = pg
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    inc, chk = f"inc_{uuid4().hex[:10]}", f"rcv_{uuid4().hex[:8]}"
+    summary = "Recovered: 0.4% of 260 requests failed over the last 10 min"
+    with eng.begin() as c:
+        c.execute(text(
+            "INSERT INTO incidents (id, project_id, dedupe_key, title, status, first_seen, "
+            " last_seen) VALUES (:i, :p, :k, 'Order API', 'resolved', :t, :t)"),
+            {"i": inc, "p": pid, "k": f"k_{inc}", "t": now})
+        c.execute(text(
+            "INSERT INTO incident_recovery_checks (id, project_id, incident_id, target_id, "
+            " since, deadline, status, summary) VALUES (:id, :p, :i, 'deptgt_x', :t, :t, "
+            " 'recovered', :s)"),
+            {"id": chk, "p": pid, "i": inc, "t": now, "s": summary})
+        evidence = runner._terminal_evidence(c, "recovery_check", chk)
+    assert evidence.get("note") == summary
+    assert evidence.get("recovery_summary") == summary
+    finished = {"status": "succeeded", "note": "Waiting for enough traffic on the new release",
+                **evidence}
+    assert finished["note"] == summary
 
 
 def test_a_reused_incident_shows_only_this_occurrence(pg):

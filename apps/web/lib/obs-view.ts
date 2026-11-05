@@ -353,7 +353,9 @@ export type ObsUrl = { view: ObsTab; win: Win; group: Group; metric: Metric; app
   atab: DrawerTab; aapp: string | null; astate: "firing" | "resolved" | "all"; asev: Sev | null;
   asrc: AlertSource | null; aflap: boolean | null; aack: boolean | null;
   /** `aatt=1`: Needs attention only (firing and not acknowledged). */
-  aatt: boolean };
+  aatt: boolean;
+  /** The incident opened from an alert. Null: the app's current incident. */
+  inc: string | null };
 const ALERT_SOURCE_KEYS = new Set<string>(ALERT_SOURCES.map((s) => s.key));
 const triOf = (v: string | null): boolean | null => (v === "true" ? true : v === "false" ? false : null);
 const OBS_TAB_KEYS = new Set<string>(OBS_TABS.map((t) => t.key));
@@ -371,6 +373,7 @@ export function readObsUrl(search: string): ObsUrl {
     asev: /^sev[1-4]$/.test(p.get("asev") ?? "") ? (p.get("asev") as Sev) : null,
     asrc: ALERT_SOURCE_KEYS.has(p.get("asrc") ?? "") ? (p.get("asrc") as AlertSource) : null,
     aflap: triOf(p.get("aflap")), aack: triOf(p.get("aack")), aatt: p.get("aatt") === "1",
+    inc: p.get("inc"),
   };
 }
 

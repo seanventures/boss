@@ -133,7 +133,7 @@ def _triage_wire(alert: dict) -> dict[str, Any]:
     t = alert.get("triage") or {}
     st = alert.get("triage_state")
     if st == "no_model":
-        return {"state": "no_model", "word": aa.NO_MODEL_WORD, "reason": None, "question": None,
+        return {"state": "no_model", "word": aa.no_model_display(t), "reason": None, "question": None,
                 "outcome": None, "by": None, "at": t.get("at"), "confidence": None,
                 "agent": None, "model": None,
                 "options": [], "answered": None}

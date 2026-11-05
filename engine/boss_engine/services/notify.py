@@ -400,7 +400,14 @@ def _triage_line(a: Mapping[str, Any]) -> str:
     t = _json(a.get("triage"), {}) or {}
     st = a.get("triage_state")
     if st == "no_model":
-        return TRIAGE_WORDS["no_model"]
+        from .app_alerts import NO_MODEL_WORD, no_model_display
+
+        word = no_model_display(t)
+        if word == NO_MODEL_WORD:
+            return TRIAGE_WORDS["no_model"]
+        if "this message did not wait" in word:
+            return word
+        return f"{word} (this message did not wait)"
     if st != "done" or not t:
         return TRIAGE_WORDS[None]
     line = f"Agent's triage: {t.get('word') or t.get('outcome')}. {t.get('reason') or ''}".strip()

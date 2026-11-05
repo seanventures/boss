@@ -877,6 +877,37 @@ def response_cost(connection, workflow_run_id: Optional[str]) -> dict[str, Any]:
             "estimated": bool(row["estimated"])}
 
 
+def _threshold_percent(p: dict) -> Any:
+    """Where the alert evidence kept the threshold. on_alert nests it on `rule`; a joined or
+    settling firing spreads the same payload at the top; a split stores `threshold`."""
+    rule = p.get("rule") if isinstance(p.get("rule"), dict) else {}
+    for candidate in (rule.get("error_rate_percent"), p.get("error_rate_percent"),
+                      p.get("threshold")):
+        if candidate is not None:
+            return candidate
+    params = rule.get("params") if isinstance(rule.get("params"), dict) else {}
+    if params.get("threshold") is not None and (
+            rule.get("kind") == "error_rate" or p.get("kind") == "error_rate"):
+        return params["threshold"]
+    return None
+
+
+def _alert_what(p: dict) -> str:
+    """One timeline line. on_alert stores a ratio and a request count. A joined or split row
+    stores `value` as the percent and often neither ratio nor count — those must not print
+    as 0.0% of None."""
+    rule = p.get("rule") if isinstance(p.get("rule"), dict) else {}
+    kind = p.get("kind") or rule.get("kind")
+    if p.get("error_rate") is not None:
+        pct = round(float(p["error_rate"]) * 100, 1)
+    elif kind in (None, "error_rate") and p.get("value") is not None:
+        pct = p["value"]
+    else:
+        pct = round(float(p.get("error_rate") or 0) * 100, 1)
+    traffic = f" of {p['requests']} requests" if p.get("requests") is not None else ""
+    return (f"Alert fired: {pct}%{traffic} failing (threshold {_threshold_percent(p)}%)")
+
+
 def _timeline(connection, inc: dict, workflow_run_id: Optional[str]) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     since = _occurrence(inc.get("finalize_ctx") or {})
@@ -887,9 +918,7 @@ def _timeline(connection, inc: dict, workflow_run_id: Optional[str]) -> list[dic
             {"i": inc["id"], "s": since}).mappings().all():
         p = _json(e["payload"]) or {}
         words = {
-            "alert": lambda: (f"Alert fired: {round(float(p.get('error_rate') or 0) * 100, 1)}% "
-                              f"of {p.get('requests')} requests failing (threshold "
-                              f"{(p.get('rule') or {}).get('error_rate_percent')}%)"),
+            "alert": lambda: _alert_what(p),
             "deployment": lambda: (f"Serving release {str(p.get('commit_sha'))[:7]} "
                                    f"(deployed {p.get('deployed_at')})"),
             "logs": lambda: f"Logs read: {p.get('word')}",

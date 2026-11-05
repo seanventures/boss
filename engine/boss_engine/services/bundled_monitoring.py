@@ -178,7 +178,10 @@ def render_dashboard(app: str, env: str, extra: Optional[list[dict[str, Any]]] =
 
     sel = f"app={quote(app)},environment={quote(env)}"
     reqs = f"sum(rate(http_requests_total{{{sel}}}[5m]))"
-    errs = f'sum(rate(http_requests_total{{{sel},status=~"5.."}}[5m]))'
+    # A restart drops the 5xx series while 2xx continues. An empty numerator makes the ratio
+    # empty, so the series ends and lastNotNull keeps the old rate. Missing 5xx is 0. `or`
+    # binds looser than `/`, so the default stays inside the numerator. [5m] is five scrapes.
+    errs = (f'(sum(rate(http_requests_total{{{sel},status=~"5.."}}[5m])) or vector(0))')
     def lat(quantile: str) -> str:
         return (f"1000 * histogram_quantile({quantile}, sum by (le) "
                 f"(rate(http_request_duration_seconds_bucket{{{sel}}}[5m])))")

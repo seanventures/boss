@@ -82,8 +82,15 @@ def first_sentence(text: Any, limit: int = 220) -> str:
     s = re.sub(r"(?m)^\s*(\*\*[^*\n]+\*\*|#+ [^\n]+)\s*$", "", s)
     s = re.sub(r"\*\*|`|^#+ ", "", s, flags=re.M)
     s = " ".join(s.split())
-    m = re.search(r"(.+?[.!?])(\s|$)", s)
-    out = (m.group(1) if m else s).strip()
+    # A numbered finding ("1. FINDING: …") is not a sentence. The dot of "1." is a list marker.
+    out = s
+    for m in re.finditer(r"(.+?[.!?])(?:\s|$)", s):
+        if re.fullmatch(r"\d+\.", m.group(1).strip()):
+            continue
+        out = s[:m.end(1)].strip()
+        break
+    else:
+        out = s.strip()
     return out if len(out) <= limit else out[: limit - 1].rstrip() + "…"
 
 

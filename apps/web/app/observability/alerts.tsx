@@ -196,7 +196,7 @@ export function AlertsTab(props: ObsTabProps & { onConnect?: () => void }) {
                           selected={picked.has(a.id)} onSelect={ackable.has(a.id) ? (on) => toggle(a.id, on) : undefined}
                           onAck={() => void ack([a.id])}
                           onApp={() => go({ app: a.targetId, atab: "alerts" }, "push")}
-                          onIncident={() => go({ app: a.targetId, atab: null }, "push")} />
+                          onIncident={() => go({ app: a.targetId, atab: null, inc: a.incident?.id ?? null }, "push")} />
               ))}
             </ul>
           )}

@@ -11,9 +11,9 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { FIRING_ALERT, allAlertsWire, historyWire, ruleWire, rulesWire } from "./_helpers/alerts-fixtures";
+import { FIRING_ALERT, NOISE_ALERT, allAlertsWire, historyWire, ruleWire, rulesWire } from "./_helpers/alerts-fixtures";
 import { $, click, settle, unmount } from "./_helpers/live-render";
-import { openObs, text } from "./_helpers/obs-render";
+import { openObs, params, text } from "./_helpers/obs-render";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
@@ -54,6 +54,36 @@ describe("one state per alert row", () => {
     expect(text(row.querySelector("[data-testid='obs-alert-duration']"))).toMatch(/^pending /);
     expect(text(row.querySelector("[data-testid='obs-alert-incident']"))).toBe("Incident");
     expect(text(row)).not.toMatch(/Resolved/);
+  });
+
+  it("a resolved alert's Incident button opens that alert's incident (BOSSAPP-620)", async () => {
+    // The app's live error-rate incident is inc_1. This alert was resolved against inc_old.
+    const resolved = {
+      ...NOISE_ALERT, state: "resolved", state_word: "Resolved",
+      incident: { id: "inc_old", title: "api (prod): yesterday's error rate", status: "resolved", word: "Resolved" },
+    };
+    const rec = await openObs("?view=alerts", { alerts: () => allAlertsWire([resolved]) });
+    await click($("[data-testid='obs-alert-alrt_lat'] [data-testid='obs-alert-incident']")!);
+    await settle();
+    expect(params().get("inc")).toBe("inc_old");
+    expect(params().get("app")).toBe("t_down");
+    const responses = rec.calls.filter((u) => /\/incidents\/[^/]+\/response/.test(u));
+    expect(responses.some((u) => u.includes("/incidents/inc_old/response"))).toBe(true);
+    expect(responses.some((u) => u.includes("/incidents/inc_1/response"))).toBe(false);
+  });
+
+  it("the same button in the app's alert history opens that incident too", async () => {
+    const resolved = {
+      ...NOISE_ALERT, state: "resolved",
+      incident: { id: "inc_old", title: "api (prod): yesterday's error rate", status: "resolved", word: "Resolved" },
+    };
+    const rec = await openObs("?view=apps&app=t_down&atab=alerts", { history: () => historyWire([resolved]) });
+    await click($("[data-testid='obs-alert-alrt_lat'] [data-testid='obs-alert-incident']")!);
+    await settle();
+    expect(params().get("inc")).toBe("inc_old");
+    const responses = rec.calls.filter((u) => /\/incidents\/[^/]+\/response/.test(u));
+    expect(responses.some((u) => u.includes("/incidents/inc_old/response"))).toBe(true);
+    expect(responses.some((u) => u.includes("/incidents/inc_1/response"))).toBe(false);
   });
 });
 

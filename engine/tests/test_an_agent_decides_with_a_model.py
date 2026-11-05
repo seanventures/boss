@@ -167,6 +167,47 @@ def test_with_no_model_a_recovery_asks_and_names_the_triage_suggestion():
     assert "connected model" in asked["reasoning"] and "cleaning it up" in asked["question"]
 
 
+def test_an_out_of_credit_recovery_names_the_cause_not_none_answered():
+    """BOSSAPP-616: a step the model could not answer because the account is out of credit
+    still said "none answered", which reads as a missing connection."""
+    from boss_engine.services import step_recovery as sr
+
+    error = "RuntimeError: Your credit balance is too low to access the Anthropic API."
+    asked = sr.no_model_ask({"headline": "the deploy failed"},
+                            {"action": "retry", "cause": "the deploy failed"},
+                            error=error)
+    blob = f"{asked['reasoning']} {asked['question']} {sr.sentence('Harbor', asked)}"
+    assert "none answered" not in blob
+    assert "credit balance too low" in asked["reasoning"]
+    assert "credit balance too low" in asked["question"]
+    assert "credit balance too low" in sr.sentence("Harbor", asked)
+
+
+def test_an_old_no_model_alert_names_an_out_of_credit_cause():
+    """BOSSAPP-616: rows stored before the credit sentence, and the wire that replaced every
+    no_model word with the generic one, still said "no model is answering"."""
+    from boss_engine.services.app_alerts import NO_MODEL_WORD
+    from boss_engine.services.app_alerts_view import _triage_wire
+    from boss_engine.services.notify import _triage_line
+
+    credit_error = "RuntimeError: Your credit balance is too low to access the Anthropic API."
+    old = {"triage_state": "no_model", "triage": {
+        "word": NO_MODEL_WORD, "error": credit_error}}
+    wire = _triage_wire(old)
+    assert "credit balance too low" in wire["word"]
+    assert "no model is answering" not in wire["word"]
+    line = _triage_line({"triage_state": "no_model", "triage": old["triage"]})
+    assert "credit balance too low" in line
+    stored = {"triage_state": "no_model", "triage": {
+        "word": "Not triaged: credit balance too low on anthropic_api", "error": credit_error}}
+    assert _triage_wire(stored)["word"] == "Not triaged: credit balance too low on anthropic_api"
+    generic = {"triage_state": "no_model", "triage": {
+        "word": NO_MODEL_WORD, "error": "RuntimeError: no model is connected"}}
+    assert _triage_wire(generic)["word"] == NO_MODEL_WORD
+    assert _triage_line({"triage_state": "no_model", "triage": generic["triage"]}) == \
+        "Not triaged: no model is answering (this message did not wait)"
+
+
 def test_an_unsure_choice_that_changes_nothing_is_taken_not_asked():
     """"Answer or look into it?" is not worth a question: neither acts."""
     cands = [ad.Candidate("answer", "answer it", acts=False),
