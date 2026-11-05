@@ -24,7 +24,7 @@ import { ArrowClockwise } from "@phosphor-icons/react";
 
 import { fetchSetup, SetupFailure, setupWrite } from "../../lib/setup-client";
 import {
-  ADVANCED_ROWS, readParams, rowMode, SETUP_BADGE_EVENT, stepNumber, summarize, type SetupParams,
+  ADVANCED_ROWS, defaultAdd, readParams, rowMode, SETUP_BADGE_EVENT, stepNumber, summarize, type SetupParams,
 } from "../../lib/setup-stepper";
 import type { RowKey, SetupView } from "../../lib/setup-types";
 import { BuildDatabaseRow } from "./build-database-row";
@@ -46,7 +46,7 @@ import { GitHubSigninRow, useSignin } from "./github-signin-row";
 import { Tip } from "./pill";
 import { SectionLabel } from "../section-label";
 import { useOnScreen } from "../../lib/area-shown";
-import { SetupBlocks } from "./setup-blocks";
+import { SetupBlocks, WhoDoesWhat } from "./setup-blocks";
 import { GET_STARTED_EVENT, getStarted, Welcome } from "./welcome";
 
 /** One plain line per Advanced item (≤ 6 words), the detail in its tooltip. */
@@ -103,11 +103,14 @@ function currentParams(): SetupParams {
 /** The rows the Setup blocks answer themselves (Add GitHub account, Add model), not Advanced. */
 const BLOCK_FOCUS = new Set(["github", "repository", "models"]);
 
+/** A link into Advanced settings: a row that lives there, or GitHub sending the person back from
+ *  the org App's install. Repos, Models, a model's add/menu and the embedding model are on the
+ *  board itself, so their links leave Advanced folded. */
 function deepLinked(): boolean {
   try {
     const sp = new URLSearchParams(window.location.search);
-    const f = sp.get("focus");
-    return Boolean((f && f !== "try") || sp.get("step") || sp.get("add") || sp.get("source") || sp.get("github"));
+    const f = readParams(window.location.search).focus;
+    return Boolean(sp.get("github")) || (f !== null && ADVANCED_ROWS.includes(f));
   } catch { return false; }
 }
 
@@ -266,9 +269,10 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
     if (params.focus && ADVANCED_ROWS.includes(params.focus)) setAdvancedOpen(true);
   }, [params.focus]);
   useEffect(() => {
-    if (params.focus === "try") return;
-    if (params.focus || params.add || params.source) setClassicOpen(true);
-  }, [params.focus, params.add, params.source]);
+    if (params.focus && ADVANCED_ROWS.includes(params.focus)) setClassicOpen(true);
+  }, [params.focus]);
+  // Get started's "Add a model" opens the Models block's drawer once; closing it is final.
+  const [modelAddDone, setModelAddDone] = useState(false);
   // OLD LINKS KEEP WORKING: Setup's former Welcome (`view=welcome`, `focus=try`) opens Get started.
   useEffect(() => {
     if (layout === "setup" && oldWelcomeLink()) navigate("welcome");
@@ -323,6 +327,34 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
   // (BOSSAPP-815), never a pill saying "This install uses the advanced path".
   const signinShown = signin?.configured ? signin : null;
   const shift = (n: number | null) => (n && signinShown ? n + 1 : n);
+
+  // EVERY SETTING NOT SHOWN ON THE BOARD, one plain line each: the classic board folds them under
+  // Advanced; Repo and models' board lists them under Advanced settings, and nothing else.
+  const advancedItems = (
+    <>
+          <div className="su-adv-item" ref={ref("github_app")}><Why id="github_app" /><GitHubAccessRow /></div>
+          {/* The org's registry: which repositories BOSS may use at all (multi-repo screen 1).
+              `focus=repositories` lands on it; it hides itself on an API without it. */}
+          <div className="su-adv-item" ref={ref("repositories")}><Why id="repositories" /><RepositoryRegistry projectId={projectId} /></div>
+          <div className="su-adv-item" ref={ref("ci")}><Why id="ci" /><CiPermission /></div>
+          <div className="su-adv-item" ref={ref("build_database")}><Why id="build_database" /><BuildDatabaseRow /></div>
+          <div className="su-adv-item" ref={ref("build_speed")}><Why id="build_speed" /><BuildSpeedRow /></div>
+          <div className="su-adv-item" ref={ref("toolchains")}><Why id="toolchains" /><ToolchainsRow /></div>
+          {/* Model routing — where "Who does what" lived; its rows are "Pin a job" inside. */}
+          <div className="su-adv-item"><Why id="jobs" /><RoutingRow ref={ref("jobs")} mode={rowMode(view, "jobs")} focused={focus === "jobs"} /></div>
+          {/* BUDGET LIVES IN GOVERN (operator, 2026-11-05: "The Budget things should move to
+              Governance"): one place to set it, Govern › Limits; here, a link to it. */}
+          <div className="su-adv-item" ref={ref("budget")}><Why id="budget" />
+            <section className="su-row" data-testid="su-row-budget" aria-label="Budget" data-focused={focus === "budget" || undefined}>
+              <div className="su-row-label"><SectionLabel as="span" tip="Monthly, daily and per-project caps.">Budget</SectionLabel></div>
+              <div className="su-row-body su-line">
+                <a className="su-link" href="?area=govern&tab=limits" data-testid="su-budget-govern">Set in Govern › Limits ↗</a>
+              </div>
+            </section>
+          </div>
+          <div className="su-adv-item" ref={ref("public_url")}><Why id="public_url" /><PublicUrlRow /></div>
+    </>
+  );
 
   const classicBody = (nested: boolean) => (
     <>
@@ -384,7 +416,7 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
           {/* rc9 (BOSS-434/437): the model sources sit inside Models, one heading and panel. */}
           <CapacityRow ref={ref("capacity")} actor={actor} focused={focus === "capacity"} />
           {/* The org's one embedding model (meaning search), set once for every project. */}
-          <div ref={ref("embedding_model")} data-focused={focus === "embedding_model" || undefined}><EmbeddingModelRow /></div>
+          <div ref={ref("embedding_model")} data-focused={focus === "embedding_model" || undefined}><EmbeddingModelRow startOpen={focus === "embedding_model"} /></div>
         </ModelsRow>
         {/* NO TRY IT HERE (operator, 2026-11-04: "Why trying out sample project is in Repos and
             Models"): Setup is connections only. The sample and the one-sentence PR live on the
@@ -396,27 +428,7 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
                    data-tip="The org's own GitHub App, CI, builds, models' routing and budget.">
             Advanced
           </summary>
-          <div className="su-adv-item" ref={ref("github_app")}><Why id="github_app" /><GitHubAccessRow /></div>
-          {/* The org's registry: which repositories BOSS may use at all (multi-repo screen 1).
-              `focus=repositories` lands on it; it hides itself on an API without it. */}
-          <div className="su-adv-item" ref={ref("repositories")}><Why id="repositories" /><RepositoryRegistry projectId={projectId} /></div>
-          <div className="su-adv-item" ref={ref("ci")}><Why id="ci" /><CiPermission /></div>
-          <div className="su-adv-item" ref={ref("build_database")}><Why id="build_database" /><BuildDatabaseRow /></div>
-          <div className="su-adv-item" ref={ref("build_speed")}><Why id="build_speed" /><BuildSpeedRow /></div>
-          <div className="su-adv-item" ref={ref("toolchains")}><Why id="toolchains" /><ToolchainsRow /></div>
-          {/* Model routing — where "Who does what" lived; its rows are "Pin a job" inside. */}
-          <div className="su-adv-item"><Why id="jobs" /><RoutingRow ref={ref("jobs")} mode={rowMode(view, "jobs")} focused={focus === "jobs"} /></div>
-          {/* BUDGET LIVES IN GOVERN (operator, 2026-11-05: "The Budget things should move to
-              Governance"): one place to set it, Govern › Limits; here, a link to it. */}
-          <div className="su-adv-item" ref={ref("budget")}><Why id="budget" />
-            <section className="su-row" data-testid="su-row-budget" aria-label="Budget" data-focused={focus === "budget" || undefined}>
-              <div className="su-row-label"><SectionLabel as="span" tip="Monthly, daily and per-project caps.">Budget</SectionLabel></div>
-              <div className="su-row-body su-line">
-                <a className="su-link" href="?area=govern&tab=limits" data-testid="su-budget-govern">Set in Govern › Limits ↗</a>
-              </div>
-            </section>
-          </div>
-          <div className="su-adv-item" ref={ref("public_url")}><Why id="public_url" /><PublicUrlRow /></div>
+          {advancedItems}
         </details>
     </>
   );
@@ -446,6 +458,7 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
     // Welcome's "Add another account / model" land on the block's own Add, not in Advanced.
     const blockOpen = params.focus && BLOCK_FOCUS.has(params.focus) && !params.add && !params.source
       ? (params.focus === "models" ? "model" as const : "account" as const) : null;
+    const modelAdd = blockOpen === "model" && !modelAddDone ? defaultAdd(view).provider : null;
     return (
       <BoardContext.Provider value={ctx}>
         <div className="su-board" data-testid="su-board" data-layout="setup">
@@ -455,26 +468,59 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
                   title={view.verdict.tip} data-tip={view.verdict.tip}>
               <Dot tone={view.verdict.tone} />{view.verdict.label}
             </span>
-            <span className="su-spacer" />
             {getStarted(view) ? (
               <a className="su-link" href="?area=welcome" data-testid="su-open-welcome"
                  onClick={(e) => { e.preventDefault(); navigate("welcome"); }}>Back to Get started</a>
             ) : null}
+            <span className="su-spacer" />
             <button type="button" className="su-link" onClick={() => openAdvanced()} data-testid="su-open-advanced">
               Advanced settings
             </button>
+            <GatedButton permission="setup:manage" type="button" className="su-btn" data-testid="su-test-all"
+                         disabled={checking.has("all") || (!view.repository.repos.length && !view.models.length)}
+                         onClick={testAll}
+                         title="Re-checks GitHub access and asks each model one tiny question."
+                         data-tip="Re-checks GitHub access and asks each model one tiny question.">
+              <ArrowClockwise size={14} aria-hidden="true" className={checking.has("all") ? "su-spin" : undefined} />
+              Test all
+            </GatedButton>
           </header>
-          <SetupBlocks onAdvanced={openAdvanced} initialOpen={blockOpen}
-                       key={blockOpen ?? "none"} />
+          <div ref={ref("repository")} className="su-stack">
+            <SetupBlocks onAdvanced={openAdvanced} initialOpen={blockOpen === "account" ? "account" : null}
+                         key={blockOpen ?? "none"} />
+          </div>
+          {/* ONE MODELS SECTION (operator, 2026-11-05: "We have two areas to add model"): the
+              full list — each model's status, its one fix, Details and ⋯, Claude's "pays with" —
+              then the org's embedding model and who does what. Nothing about models is repeated
+              under Advanced settings. */}
+          <ModelsRow block ref={ref("models")} mode="done" step={null}
+                     focused={focus === "models" || focus === "capacity"}
+                     add={params.add ?? modelAdd} source={params.source}
+                     onAddHandled={() => { setModelAddDone(true); setParams((p) => ({ ...p, add: null })); }}>
+            <CapacityRow ref={ref("capacity")} actor={actor} focused={focus === "capacity"} />
+            <div ref={ref("embedding_model")} data-focused={focus === "embedding_model" || undefined}>
+              <EmbeddingModelRow startOpen={focus === "embedding_model"} />
+            </div>
+            <WhoDoesWhat view={view} onChange={() => openAdvanced("jobs")} />
+          </ModelsRow>
           <details className="su-advanced su-advanced-all" data-testid="su-advanced-all" ref={classicRef}
-                   open={classicOpen && !blockOpen}
+                   open={classicOpen}
                    onToggle={(e) => setClassicOpen((e.currentTarget as HTMLDetailsElement).open)}>
             <summary className="su-advanced-summary" data-testid="su-advanced-all-toggle"
-                     title="Sign-in, the org's GitHub App, model sources, routing, budget, CI, builds."
-                     data-tip="Sign-in, the org's GitHub App, model sources, routing, budget, CI, builds.">
+                     title="The org's GitHub App, repo registry, CI, builds, routing, budget, public URL."
+                     data-tip="The org's GitHub App, repo registry, CI, builds, routing, budget, public URL.">
               Advanced settings
             </summary>
-            <div className="su-board su-board-inner">{classicBody(true)}</div>
+            <div className="su-board su-board-inner su-adv-list">
+              {signinShown ? (
+                <GitHubSigninRow ref={ref("github")} status={signinShown} focused={focus === "github"}
+                                 step={null} mode="open"
+                                 onAdvanced={() => {
+                                   window.setTimeout(() => refs.current.github_app?.scrollIntoView?.({ behavior: "smooth", block: "start" }), 50);
+                                 }} />
+              ) : null}
+              {advancedItems}
+            </div>
           </details>
           <SharingAsk projectId={projectId} actor={actor ?? ""} />
         </div>

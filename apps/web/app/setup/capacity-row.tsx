@@ -442,7 +442,13 @@ function SourceRow({ item, sessions, onBoard, formOpen, onForm, actions }: {
 
   // ONE PRIMARY ACTION, only when the row needs something.
   let primary: React.ReactNode = null;
-  if (!busy && !editing && signInProvider && (entry ? needs : offersSignIn(src!))) {
+  if (!busy && !editing && entry && staleGreen && !red && pill.tone !== "amber") {
+    // WORKING, JUST NOT RECENTLY PROVEN: Test, never a blue "Sign in" beside a green "Working"
+    // (boss-1, 2026-11-05: a long-lived token that renews in 2027 offered Sign in).
+    primary = <GatedButton permission="setup:manage" type="button" className="su-btn su-btn-sm"
+                           data-testid="su-model-test" onClick={test}
+                           title="Asks the model one tiny question." data-tip="Asks the model one tiny question.">Test</GatedButton>;
+  } else if (!busy && !editing && signInProvider && (entry ? needs : offersSignIn(src!))) {
     const next = subscriptionNext(view, signInProvider);
     primary = next === "connect" ? (
       <GatedButton permission="model_provider:manage" type="button" className="su-btn su-btn-sm su-btn-primary"
@@ -691,12 +697,17 @@ export const CapacityRow = forwardRef<HTMLElement, { actor?: string; focused: bo
   const confirmedUnused = (src: CapSource) => readsComplete && !error && !locked && src.credentialAbsent
     && src.connection === "not_connected"
     && ["declared", "needs_connection", "missing_credentials", "missing_oauth_connection"].includes(src.effective)
-    && src.capacity === "unknown" && (takesKey(src) || isLogin(src))
+    // EVERY KIND, not only keys and logins (boss-1, 2026-11-05): "Managed gateway · Not connected"
+    // and "Local model · Not configured" sat amber in the list, counted as needing you, though
+    // nobody had ever added them. Untouched is untouched; they wait under More sources.
+    && src.capacity === "unknown"
     && !onBoard.has(src.sourceId) && !sessions.some((x) => x.sourceId === src.sourceId);
   const picked = section.picked;
   const unused = (src: CapSource) => confirmedUnused(src) && open !== src.sourceId && !edited.has(src.sourceId)
     && picked !== src.sourceId;
-  const choices = (sources ?? []).filter(confirmedUnused);
+  // More sources offers what can be added from a row (a key or a login). A local host or a
+  // managed gateway nobody set up is simply not listed: it has nothing to press here.
+  const choices = (sources ?? []).filter((src) => confirmedUnused(src) && (takesKey(src) || isLogin(src)));
   const choiceKey = choices.map((c) => c.sourceId).join(",");
   // The drawer offers the unused sources ("More sources"); the list keeps only what is in use.
   useEffect(() => {
@@ -740,7 +751,9 @@ export const CapacityRow = forwardRef<HTMLElement, { actor?: string; focused: bo
                      onForm={(v) => { setEdited((prev) => new Set(prev).add(item.id)); setOpen(v ? item.id : null); }}
                      actions={{ who, after }} />
         ))}
-        <div className="su-line su-src-foot" data-testid="setup-entitlement-session">
+        {/* OFFICIAL-LOGIN SESSIONS, only when there are some: "Sessions · None started here"
+            on every install said nothing. */}
+        {sessions.length || sessionError ? <div className="su-line su-src-foot" data-testid="setup-entitlement-session">
           <Tip tip="Official logins started from a plan above." className="su-faint su-cap-label">Sessions</Tip>
           <span className="su-faint" data-testid="setup-entitlement-session-count">
             {sessionError ? <Tip tip={sessionError}>Can&apos;t load sessions</Tip>
@@ -751,7 +764,7 @@ export const CapacityRow = forwardRef<HTMLElement, { actor?: string; focused: bo
           </span>
           <span className="su-spacer" />
           <a className="su-link" href="?area=skills" data-testid="setup-broker-skills-link">Skills ↗</a>
-        </div>
+        </div> : null}
       </div>
     </section>
   );

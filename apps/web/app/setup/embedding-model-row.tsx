@@ -99,10 +99,17 @@ function CheckLine({ slot }: { slot: EmbeddingModel }) {
   );
 }
 
-export function EmbeddingModelRow() {
+export function EmbeddingModelRow({ startOpen = false }: {
+  /** A deep link to it (`focus=embedding_model`): the person came to set it, so the form is open. */
+  startOpen?: boolean;
+}) {
   const { projectId, view, apply } = useBoard();
   const slot = view.embedding_model;
   const [editing, setEditing] = useState(false);
+  // OPTIONAL, SO FOLDED (boss-1, 2026-11-05): an amber line and an empty form on every visit read
+  // as "Setup is broken". Not set is one quiet line and Set up; the form opens on a press.
+  const [settingUp, setSettingUp] = useState(startOpen);
+  useEffect(() => { if (startOpen) setSettingUp(true); }, [startOpen]);
   const [more, setMore] = useState(false);
   const [provider, setProvider] = useState<string>(slot?.provider ?? slot?.providers[0]?.provider ?? "openai");
   const chosen = slot?.providers.find((p) => p.provider === provider);
@@ -111,7 +118,7 @@ export function EmbeddingModelRow() {
   const [busy, setBusy] = useState(false);
   useEffect(() => { if (slot) setForm(initialForm(slot, chosen)); }, [provider]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!slot) return null;
-  const open = editing || !slot.configured;
+  const open = editing || (!slot.configured && settingUp);
   const needsConsent = view.secrets.needs_consent && Boolean(form.api_key?.trim());
   const derived = parseUrl(provider, form.url ?? "");
   const fields = chosen?.fields ?? [];
@@ -191,8 +198,21 @@ export function EmbeddingModelRow() {
                     data-testid="su-embedding-pending">Re-embedding: {slot.reembed_pending} left</span>
             ) : null}
           </span>
+        ) : !slot.configured ? (
+          <span className="su-line">
+            {/* The reason is the server's, whole, in the title; the line itself stays short. */}
+            <span className="su-line su-faint" data-testid="su-embedding-off" title={slot.reason}>
+              <Dot tone="grey" />Not set · search uses text and graph only
+            </span>
+            <GatedButton permission="model_provider:manage" type="button" className="su-btn su-btn-sm"
+                         data-testid="su-embedding-setup" aria-expanded={settingUp}
+                         title="Optional. Adds meaning search across every project."
+                         data-tip="Optional. Adds meaning search across every project."
+                         onClick={() => setSettingUp((v) => !v)}>
+              {settingUp ? "Cancel" : "Set up"}
+            </GatedButton>
+          </span>
         ) : (
-          // The reason is the server's, whole, in the title; the line itself stays short.
           <span className="su-line" data-testid="su-embedding-off" title={slot.reason}>
             <Dot tone="amber" />Search: text and graph only
           </span>

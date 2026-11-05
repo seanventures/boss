@@ -237,32 +237,75 @@ describe("Screen 2 — Setup on one page", () => {
     expect(boss.textContent).toContain("Can't write");
   });
 
-  it("shows a card per model with what it is used for, and Who does what with Change", async () => {
+  it("Models is one list: each model's status and what it is used for, then Who does what with Change", async () => {
     const view = withAccounts(board());
     fakeApi(view);
     const { container } = await mount(view);
-    const claude = q(container, "su-model-card-anthropic_claude_code")!;
+    const block = q(container, "su-models-block")!;
+    const claude = block.querySelector('[data-testid="su-model-anthropic_claude_code"]')!;
     expect(claude.textContent).toContain("Claude Code");
-    expect(claude.textContent).toContain("Subscription · signed in");
-    expect(claude.textContent).toContain("Used for: Build · Chat · Decisions");
-    expect(q(container, "su-model-card-setup-openrouter")!.textContent).toContain("API key");
+    expect(block.querySelector('[data-testid="su-model-setup-openrouter"]')).not.toBeNull();
     expect(q(container, "su-who-build")!.textContent).toBe("Build → Auto · Claude Code");
     expect(q(container, "su-who-review")!.textContent).toBe("Review → OpenRouter · openai/gpt-5");
     await click(q(container, "su-who-change"));
     expect((q(container, "su-advanced-all") as HTMLDetailsElement).open).toBe(true);
   });
 
-  it("keeps every earlier row under Advanced settings", async () => {
+  it("shows each thing once: one Add model, one repo list, nothing repeated under Advanced settings", async () => {
     const view = withAccounts(board());
     fakeApi(view);
     const { container } = await mount(view);
+    // Operator, 2026-11-05: "We have two areas to add model … which one is correct?"
+    expect(container.querySelectorAll('[data-testid="su-add-model-open"]').length).toBe(1);
+    expect(container.querySelectorAll('[data-testid="setup-claude-pays"]').length).toBeLessThanOrEqual(1);
     const advanced = q(container, "su-advanced-all")!;
     expect((advanced as HTMLDetailsElement).open).toBe(false);
-    for (const id of ["su-row-repository", "su-row-models", "su-test-all", "su-advanced", "su-row-ci"]) {
+    for (const id of ["su-row-repository", "su-row-models", "su-advanced", "su-verdict"]) {
+      expect(container.querySelector(`[data-testid="${id}"]`), id).toBeNull();
+    }
+    expect(container.querySelectorAll('[data-testid="su-row-capacity"]').length).toBe(1);
+    expect(q(container, "su-models-block")!.contains(q(container, "su-row-capacity"))).toBe(true);
+    // Every setting that is not on the board is still there, one line each.
+    for (const id of ["su-row-ci", "su-row-budget", "su-row-jobs"]) {
       expect(advanced.querySelector(`[data-testid="${id}"]`), id).not.toBeNull();
     }
+    expect(q(container, "su-test-all")!.closest('[data-testid="su-advanced-all"]')).toBeNull();
     await click(q(container, "su-open-advanced"));
     expect((advanced as HTMLDetailsElement).open).toBe(true);
+  });
+
+  it("each repository row has its own actions: Test, Make default, Remove after asking", async () => {
+    const view = withAccounts(board());
+    view.repository = { ...view.repository, repos: [
+      { ...view.repository.repos[0], full_name: "owner/app", binding_id: "ghb1", default: true },
+      { ...view.repository.repos[0], full_name: "seanventures/boss", binding_id: "ghb2", default: false },
+    ] };
+    const api = fakeApi(view);
+    const { container } = await mount(view);
+    const row = q(container, "su-repo-row-seanventures/boss")!;
+    await click(row.querySelector('[data-testid="su-repo-row-menu"]'));
+    expect(row.querySelector('[data-testid="su-repo-menu-default"]')).not.toBeNull();
+    await click(row.querySelector('[data-testid="su-repo-menu-test"]'));
+    expect(api.calls.some((c) => c.op === "checks" && (c.body as { target?: string }).target === "repository:ghb2")).toBe(true);
+    await click(row.querySelector('[data-testid="su-repo-row-menu"]'));
+    await click(row.querySelector('[data-testid="su-repo-menu-remove"]'));
+    expect(api.calls.some((c) => c.op === "repo_remove")).toBe(false);
+    await click(row.querySelector('[data-testid="su-repo-row-remove-yes"]'));
+    expect(api.calls.find((c) => c.op === "repo_remove")!.body).toMatchObject({ binding_id: "ghb2" });
+    // The default repo is never offered as "Make default" again.
+    const first = q(container, "su-repo-row-owner/app")!;
+    await click(first.querySelector('[data-testid="su-repo-row-menu"]'));
+    expect(first.querySelector('[data-testid="su-repo-menu-default"]')).toBeNull();
+  });
+
+  it("a link to Models or a model lands on the board, Advanced settings stays folded", async () => {
+    fakeApi(withAccounts(board()));
+    for (const focus of ["models", "capacity", "embedding_model"]) {
+      mounted?.unmount();
+      const { container } = await mount(withAccounts(board()), `?area=setup&focus=${focus}`);
+      expect((q(container, "su-advanced-all") as HTMLDetailsElement).open, focus).toBe(false);
+      expect(q(container, "su-models-block"), focus).not.toBeNull();
+    }
   });
 
   it("a deep link into a row opens Advanced settings on it", async () => {

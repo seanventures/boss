@@ -346,13 +346,11 @@ describe("the Sources badge is the Models row's pill", () => {
     expect(badge("xai_grok_build").className).toContain("su-tone-green");
   });
 
-  it("no session here says None started here, with why in the tooltip", async () => {
+  it("no session here shows no Sessions line at all (it said nothing on every install)", async () => {
     sourcesApi(board());
     mounted = await mountBoard(board());
     await settle(() => !!badge("openai_codex_chatgpt"));
-    const count = q(document.body, "setup-entitlement-session-count")!;
-    expect(count.textContent).toBe("None started here");
-    expect(count.querySelector("[data-tip]")!.getAttribute("data-tip")).toMatch(/sign-ins show on their source/);
+    expect(q(document.body, "setup-entitlement-session")).toBeNull();
   });
 });
 

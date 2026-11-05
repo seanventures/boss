@@ -279,11 +279,10 @@ export function SubscriptionSignIn({ provider, label, autoStart = false, fresh =
                 <code>{session.user_code}</code><Copy size={14} aria-label="copy" />
               </button>
             ) : null}
-            <p className="su-faint su-signin-step-hint" data-testid="su-signin-2fa-hint">
-              If {label}&apos;s page asks for a one-time password or authenticator code, that is
-              your own account&apos;s two-factor code, not the code shown here — use
-              &quot;Try another method&quot; if your usual method isn&apos;t offered.
-            </p>
+            <Tip tip={`${label} may ask your own two-factor code. That is not the code above.`}
+                 className="su-faint su-signin-step-hint" testid="su-signin-2fa-hint">
+              Asked for 2FA? Use your own.
+            </Tip>
           </div>
         )}
         {refusal ? <Stopped tone="red" headline={refusal.headline} fix={refusal.fix} state={refusal.state} /> : null}

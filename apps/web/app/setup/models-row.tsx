@@ -148,7 +148,10 @@ function Summary({ models }: { models: ModelEntry[] }) {
 export const ModelsRow = forwardRef<HTMLElement, {
   mode: string; step: number | null; focused: boolean; add: string | null; source: string | null;
   onAddHandled: () => void; children?: React.ReactNode;
-}>(function ModelsRow({ mode, step, focused, add, source, onAddHandled, children }, ref) {
+  /** Repo and models' board (BOSSAPP-808): the one Models block — a heading, the summary and
+   *  "+ Add model" over the full list — instead of a numbered row. Same drawer, same list. */
+  block?: boolean;
+}>(function ModelsRow({ mode, step, focused, add, source, onAddHandled, children, block = false }, ref) {
   const { view, projectId, apply } = useBoard();
   const [drawer, setDrawer] = useState<Opening | null>(null);
   const [more, setMore] = useState<MoreSource[]>([]);
@@ -214,24 +217,44 @@ export const ModelsRow = forwardRef<HTMLElement, {
   }
   const title = opening?.signIn ? "Sign in" : opening?.connect ? "Connect"
     : opening?.sourceId ? "Replace key" : "Add a model";
+  const drawerNode = showDrawer ? (
+    <Drawer title={title} onClose={close} testid="su-model-drawer">
+      <AddModelPanel key={`${opening!.provider}:${drawer?.sourceId ?? ""}:${opening!.signIn ? "in" : ""}`}
+                     initialTile={tileOf(view, opening!.provider)}
+                     initialProvider={opening!.provider} onDone={close}
+                     replaceSourceId={opening!.signIn || opening!.connect ? undefined : drawer?.sourceId}
+                     startSignIn={!!opening!.signIn} />
+      {!opening!.sourceId && !opening!.signIn && !opening!.connect ? (
+        <MoreSources more={more} onPick={pick} />
+      ) : null}
+    </Drawer>
+  ) : null;
+  if (block) {
+    return (
+      <Section.Provider value={ctx}>
+        <section ref={ref} className="su-block su-models-block" data-testid="su-models-block" id="su-models"
+                 aria-label="Models" data-focused={focused || undefined}>
+          <header className="su-block-head">
+            <h2 className="su-block-title" title="What BOSS thinks with: subscriptions, API keys and local models."
+                data-tip="What BOSS thinks with: subscriptions, API keys and local models.">Models</h2>
+            {view.models.length ? <Summary models={view.models} /> : null}
+            <span className="su-spacer" />
+            {addButton}
+          </header>
+          {view.models.length ? null : <span className="su-faint" data-testid="su-models-empty">No model yet</span>}
+          {children}
+          {drawerNode}
+        </section>
+      </Section.Provider>
+    );
+  }
   return (
     <Section.Provider value={ctx}>
       <SetupRow ref={ref} row="models" label="Models" step={step}
                 mode={mode} done={mode === "done"} focused={focused}
                 tip="What BOSS thinks with: subscriptions, keys and local models.">
         {body}
-        {showDrawer ? (
-          <Drawer title={title} onClose={close} testid="su-model-drawer">
-            <AddModelPanel key={`${opening!.provider}:${drawer?.sourceId ?? ""}:${opening!.signIn ? "in" : ""}`}
-                           initialTile={tileOf(view, opening!.provider)}
-                           initialProvider={opening!.provider} onDone={close}
-                           replaceSourceId={opening!.signIn || opening!.connect ? undefined : drawer?.sourceId}
-                           startSignIn={!!opening!.signIn} />
-            {!opening!.sourceId && !opening!.signIn && !opening!.connect ? (
-              <MoreSources more={more} onPick={pick} />
-            ) : null}
-          </Drawer>
-        ) : null}
+        {drawerNode}
         {children}
       </SetupRow>
     </Section.Provider>

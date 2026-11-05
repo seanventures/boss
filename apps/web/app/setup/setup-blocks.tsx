@@ -4,23 +4,25 @@
  * Setup on one page (BOSSAPP-808 screen 2): three blocks — GitHub accounts, Repositories BOSS can
  * work on, Models — each a short table with one "+ Add" action. Every pill comes from the server
  * (GET /v1/setup `github_accounts`, `repositories`, `models`); nothing here maps a state to a tone.
- * The forms are the existing ones (AddAccountPanel's steps, AddRepo, AddModelPanel, TokenForm), in
- * drawers; everything else stays under Advanced settings.
+ * The forms are the existing ones (AddAccountPanel's steps, AddRepo, TokenForm), in drawers.
+ *
+ * ONE PLACE PER THING (operator, 2026-11-05: "We have two areas to add model … which one is
+ * correct?"). Each repository row carries its own actions (Test, Make default, Replace token,
+ * Remove); Models is the full list (setup-board.tsx renders ModelsRow as a block after these);
+ * Advanced settings holds only what is not shown here.
  */
 import React, { useMemo, useState } from "react";
 import { Plus } from "@phosphor-icons/react";
 
 import { GatedButton } from "../../components/gated";
-import { fetchSetup } from "../../lib/setup-client";
-import { defaultAdd } from "../../lib/setup-stepper";
+import { fetchSetup, setupWrite } from "../../lib/setup-client";
+import { ageLabel } from "../../lib/setup-stepper";
 import type { GitHubAccount, Pill as PillT, SetupRepository, SetupView } from "../../lib/setup-types";
 import { AddAccountPanel } from "./add-account-panel";
-import { AddModelPanel } from "./add-model-drawer";
 import { Drawer } from "./drawer";
-import { usedForLabel, usedForTip } from "./models-row";
-import { useBoard } from "./parts";
-import { Pill, Tip } from "./pill";
-import { AddRepo, TokenForm } from "./repository-row";
+import { RowMenu, toast, useBoard, type MenuItem } from "./parts";
+import { Out, Pill } from "./pill";
+import { AddRepo, refusalOf, TokenForm } from "./repository-row";
 import type { SigninStatus } from "../../lib/identity/github-signin";
 
 const CHECK_NAMES = { read: "Read", write: "Write", pull_requests: "PRs" } as const;
@@ -84,14 +86,75 @@ function BlockHead({ title, tip, action }: { title: string; tip: string; action:
 }
 
 type Opening = { kind: "account" } | { kind: "replace"; connectionId: string | null }
-  | { kind: "repo"; connectionId: string | null } | { kind: "model" };
+  | { kind: "repo"; connectionId: string | null };
+
+/** One repository's actions, on its own row: Test, Make default, Replace token, Remove (asked
+ *  first). The same server operations the earlier Repos row used; a repo bound to another
+ *  project only (no binding here) has none. */
+function RepoActions({ repo, onReplace }: { repo: SetupRepository; onReplace: (connectionId: string | null) => void }) {
+  const { projectId, view, apply, checking, setChecking } = useBoard();
+  const [confirming, setConfirming] = useState(false);
+  const bound = view.repository.repos.filter((r) => r.binding_id);
+  const entry = bound.find((r) => r.full_name === repo.full_name) ?? null;
+  if (!entry) return null;
+  const key = `repository:${entry.binding_id}`;
+  const busy = checking.has(key) || checking.has("all");
+  const run = async (op: string, body: Record<string, unknown>, label: string, done?: string) => {
+    try {
+      apply(await setupWrite<SetupView>(projectId, op, body, { label }));
+      if (done) toast(done);
+    } catch (error) {
+      toast(refusalOf(error).headline, "error");
+    }
+  };
+  const test = async () => {
+    setChecking(key, true);
+    try { await run("checks", { target: key }, "Test"); } finally { setChecking(key, false); }
+  };
+  const single = bound.length === 1;
+  const account = view.github_accounts?.find((a) => a.id === repo.account_id || a.connection_id === repo.account_id);
+  const viaApp = account?.kind === "org_app" || /GitHub App/.test(account?.how ?? "");
+  const items: MenuItem[] = [
+    { label: "Test", onSelect: () => void test(), testid: "su-repo-menu-test", disabled: busy },
+    ...(!single && !repo.default ? [{ label: "Make default", testid: "su-repo-menu-default",
+      onSelect: () => void run("repo_default", { binding_id: entry.binding_id }, "Make default",
+                               `${repo.full_name} is the default`) }] : []),
+    // A GitHub App connection has no token to replace: its access renews itself.
+    ...(!viaApp ? [{ label: "Replace token", testid: "su-repo-menu-replace", onSelect: () => onReplace(repo.account_id) }] : []),
+    ...(!single ? [{ label: "Remove", danger: true, testid: "su-repo-menu-remove", onSelect: () => setConfirming(true) }] : []),
+  ];
+  return (
+    <span className="su-line su-row-actions">
+      {repo.pill?.action === "fix_link" && repo.pill.fix_url ? (
+        <Out href={repo.pill.fix_url} testid="su-repo-fix-github">Fix on GitHub</Out>
+      ) : null}
+      {repo.pill && (repo.pill.tone === "red" || repo.pill.tone === "amber") && repo.pill.action === "replace" ? (
+        <GatedButton permission="github:connect" type="button" className="su-btn su-btn-sm"
+                     data-testid="su-repo-replace" onClick={() => onReplace(repo.account_id)}>Replace token</GatedButton>
+      ) : null}
+      <RowMenu label={`${repo.full_name} actions`} testid="su-repo-row-menu" items={items} />
+      {confirming ? (
+        <span className="su-confirm" role="alertdialog" data-testid="su-repo-row-remove-confirm">
+          <strong>Remove {repo.full_name}?</strong>
+          <GatedButton permission="repository:manage" type="button" className="su-btn su-btn-sm su-btn-danger"
+                       data-testid="su-repo-row-remove-yes"
+                       onClick={() => { setConfirming(false);
+                                        void run("repo_remove", { binding_id: entry.binding_id }, "Remove", "Removed"); }}>
+            Remove
+          </GatedButton>
+          <button type="button" className="su-link" onClick={() => setConfirming(false)}>Keep</button>
+        </span>
+      ) : null}
+    </span>
+  );
+}
 
 export function SetupBlocks({ onAdvanced, initialOpen = null }: {
   onAdvanced: (focus?: string) => void;
-  /** A deep link from Get started: open Add GitHub account / Add model at once. */
-  initialOpen?: "account" | "model" | null;
+  /** A deep link from Get started: open Add GitHub account at once. */
+  initialOpen?: "account" | null;
 }) {
-  const { view, signin, projectId, apply } = useBoard();
+  const { view, signin, projectId, apply, checking } = useBoard();
   const [open, setOpen] = useState<Opening | null>(initialOpen ? { kind: initialOpen } : null);
   // CLOSING RE-READS THE BOARD (as Models does): a sign-in or check that finished shows at once.
   const close = () => { setOpen(null); void fetchSetup(projectId).then(apply).catch(() => undefined); };
@@ -156,9 +219,12 @@ export function SetupBlocks({ onAdvanced, initialOpen = null }: {
                    )} />
         {repos.length ? (
           <table className="su-table">
-            <thead><tr><th>Repository</th><th>Via</th><th>Used by</th><th>Access</th></tr></thead>
+            <thead><tr><th>Repository</th><th>Via</th><th>Used by</th><th>Access</th><th><span className="su-sr">Actions</span></th></tr></thead>
             <tbody>
-              {repos.map((r) => (
+              {repos.map((r) => {
+                const entry = view.repository.repos.find((x) => x.binding_id && x.full_name === r.full_name);
+                const busy = checking.has("all") || (entry ? checking.has(`repository:${entry.binding_id}`) : false);
+                return (
                 <tr key={r.full_name} data-testid={`su-repo-row-${r.full_name}`}>
                   <td>
                     <span className="su-mono" data-user-text>{r.full_name}</span>
@@ -168,40 +234,23 @@ export function SetupBlocks({ onAdvanced, initialOpen = null }: {
                   <td className="su-faint" data-user-text>{r.projects.length ? r.projects.map((p) => p.name).join(", ")
                     : r.in_project ? "This project" : "—"}</td>
                   <td>
-                    {r.pill && r.pill.tone !== "green" ? <Pill pill={r.pill} testid="su-repo-row-pill" />
-                      : <span data-testid="su-repo-access">{accessLine(r.checks)}</span>}
+                    {busy ? <Pill pill={{ state: "checking", tone: "busy", label: "Checking…",
+                                          tip: "Asking GitHub what BOSS can do here." }} testid="su-repo-row-pill" />
+                      : r.pill && r.pill.tone !== "green" ? <Pill pill={r.pill} testid="su-repo-row-pill" />
+                      : <span data-testid="su-repo-access"
+                              title={entry?.checked_at ? `Checked ${ageLabel(entry.checked_at)} ago.` : undefined}
+                              data-tip={entry?.checked_at ? `Checked ${ageLabel(entry.checked_at)} ago.` : undefined}>
+                          {accessLine(r.checks)}</span>}
+                  </td>
+                  <td className="su-td-actions">
+                    <RepoActions repo={r} onReplace={(connectionId) => setOpen({ kind: "replace", connectionId })} />
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         ) : <span className="su-faint" data-testid="su-repos-empty">No repos yet</span>}
-      </section>
-
-      {/* ── Models ── */}
-      <section className="su-block" data-testid="su-models-block" aria-label="Models">
-        <BlockHead title="Models" tip="What BOSS thinks with: subscriptions, API keys and local models."
-                   action={(
-                     <GatedButton permission="model_provider:manage" type="button" className="su-btn"
-                                  data-testid="su-add-model-block" onClick={() => setOpen({ kind: "model" })}>
-                       <Plus size={12} weight="bold" aria-hidden="true" />Add model
-                     </GatedButton>
-                   )} />
-        {view.models.length ? (
-          <div className="su-cards">
-            {view.models.map((m) => (
-              <article key={m.source_id} className="su-card" data-testid={`su-model-card-${m.source_id}`}>
-                <span className="su-strong" data-user-text>{m.label}</span>
-                <span className="su-faint">{m.kind === "subscription"
-                  ? (m.pill.tone === "green" ? "Subscription · signed in" : "Subscription")
-                  : m.kind === "local" ? "Local" : "API key"}</span>
-                <Pill pill={m.pill} testid="su-model-card-pill" />
-                <Tip tip={usedForTip(m.used_for)} className="su-faint">Used for: {usedForLabel(m.used_for)}</Tip>
-              </article>
-            ))}
-          </div>
-        ) : <span className="su-faint" data-testid="su-models-empty">No model yet</span>}
-        <WhoDoesWhat view={view} onChange={() => onAdvanced("jobs")} />
       </section>
 
       {open?.kind === "account" ? (
@@ -230,11 +279,6 @@ export function SetupBlocks({ onAdvanced, initialOpen = null }: {
             <button type="button" className="su-link" data-testid="su-add-repo-new-account"
                     onClick={() => setOpen({ kind: "account" })}>From another account</button>
           </div>
-        </Drawer>
-      ) : null}
-      {open?.kind === "model" ? (
-        <Drawer title="Add a model" onClose={close} testid="su-add-model-block-drawer">
-          <AddModelPanel initialTile={defaultAdd(view).tile} initialProvider={defaultAdd(view).provider} onDone={close} />
         </Drawer>
       ) : null}
     </>

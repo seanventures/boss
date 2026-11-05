@@ -305,14 +305,16 @@ async function choose(id: string) {
 }
 
 describe("unused model sources", () => {
-  it("offers eleven unselected actions from the thirteen-source catalog, preserving local and account rows without a write", async () => {
+  it("offers eleven unselected actions from the thirteen-source catalog; untouched local and account rows are not listed", async () => {
     const sources = freshCatalogSources();
     const ids = sources.items.slice(0, 11).map(x => x.source_id);
     const calls = api(firstRunView(), sources, { items: [] });
     mounted = await mountBoard(firstRunView());
     expect(q(document.body, "su-row-capacity")?.getAttribute("aria-label")).toBe("Model sources");
+    // boss-1, 2026-11-05: "Local model · Not configured" and "Managed gateway · Not connected" sat
+    // amber in the list though nobody had added them. Untouched, with nothing to press: not listed.
     expect([...document.querySelectorAll('[data-testid="setup-cap-source"]')].map(x => x.getAttribute("data-source")))
-      .toEqual(["approved_local_model_host", "managed_cloud_model_gateway"]);
+      .toEqual([]);
     // Offered in the Add a model drawer, under More sources — not among the rows.
     expect(q(document.body, "setup-cap-add")).toBeNull();
     await openAdd();
@@ -321,7 +323,7 @@ describe("unused model sources", () => {
     expect([...chooser.options].map(x => x.value)).toEqual(["", ...ids]);
     expect(chooser.options[1].textContent).toBe("Codex (ChatGPT)");
     await choose("openai_api");
-    expect([...document.querySelectorAll('[data-testid="setup-cap-source"]')].map(x => x.getAttribute("data-source"))).toEqual(["openai_api", "approved_local_model_host", "managed_cloud_model_gateway"]);
+    expect([...document.querySelectorAll('[data-testid="setup-cap-source"]')].map(x => x.getAttribute("data-source"))).toEqual(["openai_api"]);
     expect(q(src("openai_api"), "setup-cap-key-open")?.textContent).toBe("Add key");
     expect(writes(calls)).toEqual([]);
     await click(q(src("openai_api"), "setup-cap-key-open"));
@@ -373,7 +375,7 @@ describe("unused model sources", () => {
     expect(chooser.options).toHaveLength(12); // Empty choice plus eleven key/OAuth actions.
     expect([...chooser.options].map(x => x.value)).not.toContain("managed_cloud_model_gateway");
     expect([...document.querySelectorAll('[data-testid="setup-cap-source"]')].map(x => x.getAttribute("data-source")))
-      .toEqual(["approved_local_model_host"]);
+      .toEqual([]);
   });
 
   it("keeps unknown fields, connection states, credentials, models, blocked status and reported capacity visible", async () => {
@@ -395,7 +397,8 @@ describe("unused model sources", () => {
     mounted = await mountBoard(view);
     // Connected (a Models row) first, then the rest in the API's order.
     expect([...document.querySelectorAll('[data-testid="setup-cap-source"]')].map(x => x.getAttribute("data-source")))
-      .toEqual(["model", ...ids.slice(0, -1).filter((id) => id !== "model")]);
+      // "no-action" (nothing to press, never touched) is not listed, like "normal".
+      .toEqual(["model", ...ids.slice(0, -2).filter((id) => id !== "model")]);
     expect(q(src("model"), "su-model-menu")).not.toBeNull();
   });
 
@@ -536,11 +539,10 @@ describe("compact Models waiting summary", () => {
     mounted = await mountBoard(firstRun());
     const fallback = document.querySelector(".su-model-empty");
     expect(fallback?.textContent).toBe("Not connected");
-    expect(document.querySelector(".su-model-sources [data-connection-summary]")).not.toBeNull();
-    const local = src("approved_local_model_host");
-    expect(local.querySelector('[role="status"]')?.textContent).toBe("Not configured");
-    expect(local.querySelector(".su-src-line")?.firstElementChild?.textContent).toBe("Local model");
+    expect(src("approved_local_model_host")).toBeNull();
     await choose("anthropic_api");
+    expect(document.querySelector(".su-model-sources [data-connection-summary]")).not.toBeNull();
+    expect(src("anthropic_api").querySelector(".su-src-line")?.firstElementChild?.textContent).toBe("Anthropic API");
     expect(src("anthropic_api").querySelector('[role="status"]')?.textContent).toBe("Needs key");
     expect(q(src("anthropic_api"), "setup-cap-key-open")?.closest("details")).toBeNull();
     expect(writes(calls)).toEqual([]);
