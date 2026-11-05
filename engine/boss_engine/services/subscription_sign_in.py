@@ -728,6 +728,23 @@ def _spawn_on_terminal(argv: tuple[str, ...], env: dict[str, str]):
     return process, os.fdopen(controller, "r+b", buffering=0)
 
 
+def _cannot_keep_token(provider: str, settings: Any) -> Optional[str]:
+    """Why a captured token could not be stored on this install, or None (setup_service's rule)."""
+    if provider != "claude_code":
+        return None
+    try:
+        from ..config import get_settings
+        from .secret_backends import database_key_is_external, default_secret_backend
+
+        if default_secret_backend(settings or get_settings()) == "database" and not database_key_is_external():
+            return ("BOSS can't keep a Claude sign-in yet: its secret store's key is inside the "
+                    "database (BOSS_KMS_MASTER_KEY is missing from .env). Update BOSS — the "
+                    "installer now writes the key — then sign in. Nothing was signed in.")
+    except Exception:  # noqa: BLE001 — unsure is not a refusal; the store still checks
+        return None
+    return None
+
+
 def start(provider: str, *, project_id: str, actor: str, settings: Any = None,
           login_rejected: bool = False, fresh: bool = False,
           signed_in: Optional[Callable[[], bool]] = None,
@@ -774,6 +791,17 @@ def start(provider: str, *, project_id: str, actor: str, settings: Any = None,
         if not replace and _safe(check):
             session.state = "signed_in"
             session.expires = None
+            session.finished = now
+            _SESSIONS[session.sign_in_id] = session
+            return view(session)
+        # NEVER A SIGN-IN THAT CANNOT BE KEPT (BOSSAPP-897): Claude's token is refused by the
+        # database store when its key sits in the database (setup_service), and that refusal used to
+        # come AFTER the person signed in on claude.ai, wasting the sign-in and its one-time code.
+        # Asked first, with the same reason; a stub CLI (`argv`, tests) is not a real sign-in.
+        unkeepable = _cannot_keep_token(name, settings) if argv is None and login.captures_token else None
+        if unkeepable:
+            session.state = "failed"
+            session.reason = unkeepable
             session.finished = now
             _SESSIONS[session.sign_in_id] = session
             return view(session)

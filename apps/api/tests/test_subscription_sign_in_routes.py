@@ -84,6 +84,9 @@ def test_claude_code_is_pasted_back_and_cancel_kills(client, monkeypatch, tmp_pa
     as_ceo(monkeypatch)
     fakes(monkeypatch)
     _cli(tmp_path, "claude_code", monkeypatch)
+    # An install whose secret-store key is outside the database (the installer writes it): a
+    # Claude sign-in that could not be kept is refused before it starts (BOSSAPP-897).
+    monkeypatch.setenv("BOSS_KMS_MASTER_KEY", "dGVzdC1rZXktdGhhdC1pcy0zMi1ieXRlcy1sb25nISE=")
     # The route hands the printed token to the server-side store (claude_credential).
     from boss_engine.services import claude_credential
 

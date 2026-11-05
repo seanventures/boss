@@ -97,6 +97,14 @@ def reconcile(path: Path, *, ensure_worker: bool = False) -> None:
     # does not run install.sh, and compose refuses every service when it is missing.
     if ensure_worker and not values.get("BOSS_KG_MCP_HTTP_TOKEN", "").strip():
         lines = _set(lines, "BOSS_KG_MCP_HTTP_TOKEN", secrets.token_hex(24))
+    # THE SECRET STORE'S MASTER KEY, kept out of the database (BOSSAPP-897). No installer wrote it
+    # before, so every database-store install kept its key in Postgres and refused to store a
+    # Claude sign-in. Both an install (install.sh) and an archive update (remote.sh) pass through
+    # here, so a missing key is written on either; an existing one is never replaced, because the
+    # stored secrets were encrypted with it. 32 bytes, urlsafe base64 (secret_backends).
+    if not values.get("BOSS_KMS_MASTER_KEY", "").strip():
+        import base64
+        lines = _set(lines, "BOSS_KMS_MASTER_KEY", base64.urlsafe_b64encode(secrets.token_bytes(32)).decode("ascii"))
     # Remote archive updates apply this to the live .env; replace it atomically
     # so a failed write cannot leave the previous install without credentials.
     temporary: Path | None = None
