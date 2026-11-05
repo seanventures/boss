@@ -160,10 +160,10 @@ type GlyphId = keyof typeof GLYPHS;
 const DOMAIN_GRADIENTS: Record<string, [string, string, string]> = {
   Ops:      ["hsl(330 81% 58%)", "hsl(292 83% 60%)", "hsl(262 83% 63%)"],
   Money:    ["hsl(24 95% 58%)",  "hsl(38 94% 56%)",  "hsl(330 81% 58%)"],
-  Team:     ["hsl(262 83% 63%)", "hsl(228 87% 62%)", "hsl(199 89% 55%)"],
+  Team:     ["hsl(199 70% 48%)", "hsl(186 60% 42%)", "hsl(172 55% 40%)"],
   Content:  ["hsl(172 66% 45%)", "hsl(186 78% 48%)", "hsl(199 89% 55%)"],
   Sales:    ["hsl(24 95% 58%)",  "hsl(348 85% 60%)", "hsl(330 81% 58%)"],
-  Quality:  ["hsl(199 89% 55%)", "hsl(230 85% 62%)", "hsl(262 83% 63%)"],
+  Quality:  ["hsl(205 55% 46%)", "hsl(199 50% 42%)", "hsl(186 45% 40%)"],
   Learning: ["hsl(142 71% 45%)", "hsl(160 70% 44%)", "hsl(172 66% 45%)"],
   Growth:   ["hsl(330 81% 58%)", "hsl(0 84% 62%)",   "hsl(24 95% 58%)"],
 };

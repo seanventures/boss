@@ -98,7 +98,7 @@ export function LegacyHolds({ meter }: { meter: MeterData }) {
         <span>An earlier model call needs reconciliation. New paid work is held. Earlier estimate {money(historicalHold.original_estimate_usd_micros)};
           actual charge unknown. A cap reset will not clear this hold.</span>
         {historicalHold.decision_id ? <a className="ag-link" href={consoleHref({ area: "decisions", decision: historicalHold.decision_id })}>
-          Open decision ↗
+          Open decision
         </a> : null}
       </div> : null}
       {providerHold ? <div className="gv-legacy-hold" role="status" data-testid="gv-legacy-provider-hold">
@@ -106,7 +106,7 @@ export function LegacyHolds({ meter }: { meter: MeterData }) {
           Earlier estimate {money(providerHold.original_estimate_usd_micros)}; actual charge unknown.
           A cap reset will not clear this hold.</span>
         {providerHold.decision_id ? <a className="ag-link" href={consoleHref({ area: "decisions", decision: providerHold.decision_id })}>
-          Review provider attempt ↗
+          Review provider attempt
         </a> : null}
       </div> : null}
     </>

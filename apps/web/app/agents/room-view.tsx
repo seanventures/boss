@@ -111,7 +111,6 @@ export function RoomView({ projectId, actor, conversationId, question, book, onC
       <div className="ag-room" role="dialog" aria-modal="true" data-testid="ag-room"
            aria-label={title.full || "Room"}>
         <header className="ag-room-head">
-          <span className="ag-eyebrow">Room</span>
           <strong className="ag-room-title" data-testid="ag-room-title" data-user-text
                   data-empty={title.full ? undefined : "1"} title={title.full || undefined}>
             {conversation ? title.text : "Opening…"}

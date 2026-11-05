@@ -17,7 +17,6 @@ export function OnboardingHelpCard() {
     <article className="stack-card" data-testid="console-capabilities-card">
       <div className="section-head">
         <div>
-          <span className="eyebrow">Help</span>
           <h2>What you can do here</h2>
         </div>
       </div>
@@ -70,10 +69,10 @@ export function OnboardingHelpCard() {
       </div>
 
       <p className="detail help-foot">
-        Anything BOSS starts is inspectable — every run, its cost, and the evidence behind it.
+        Anything BOSS starts is inspectable: every run, its cost, and the evidence behind it.
         <a href="https://github.com/seanventures/boss/blob/main/docs/community/GETTING_STARTED.md"
            target="_blank" rel="noopener noreferrer">Read the getting started guide</a>
-        {" · "}
+        {" "}
         <a href="https://github.com/seanventures/boss/blob/main/docs/community/FEEDBACK_LOOP.md"
            target="_blank" rel="noopener noreferrer">Get help or report a problem</a>.
       </p>

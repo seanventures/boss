@@ -106,9 +106,9 @@ export function sayAuth(e: unknown): string {
   const passkey = passkeyFailureWords(e);
   if (passkey) return passkey;
   if (e instanceof IdentityError) {
-    if (e.code === "invalid_code" && e.attemptsLeft !== null) return `That code didn't work · ${e.attemptsLeft} left`;
+    if (e.code === "invalid_code" && e.attemptsLeft !== null) return `That code didn't work: ${e.attemptsLeft} left`;
     return WORDS[e.code] ?? e.message;
   }
   // Never the bare sentence: whatever failed says its name.
-  return e instanceof Error && e.message ? `That didn't work · ${e.message}` : "That didn't work · no answer";
+  return e instanceof Error && e.message ? `That didn't work: ${e.message}` : "That didn't work: no answer";
 }

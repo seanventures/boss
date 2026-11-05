@@ -111,7 +111,7 @@ export function KgIntroLegend({ onOpen }: { onOpen: () => void }) {
 /** Never an empty canvas: the designed way in, which opens the setup. */
 export function KgStart({ onStart, archived }: { onStart: () => void; archived?: boolean }) {
   return (
-    <StageCard testId="kg-start" eyebrow="Knowledge Graph" layers
+    <StageCard testId="kg-start" layers
                title="Start a knowledge graph for this project"
                body="Import the code, choose the agents who work on it, and run a first scan for business rules. BOSS maps the code; agents propose rules for a person to approve, and record what they learn as they work.">
       <button type="button" className="ag-btn ag-btn-primary" data-testid="kg-start-setup" disabled={archived}
@@ -174,7 +174,6 @@ export function KgSetup({ w, setup, error, onReload, onOpenTab, archived }: {
   return (
     <section className="kg-setup" data-testid="kg-setup" aria-label="Knowledge graph setup" data-next={setup.next ?? "done"}>
       <header className="kg-setup-head">
-        <span className="kg-empty-eyebrow">Knowledge Graph setup</span>
         <h3 className="kg-setup-title">{allDone ? "The knowledge graph is set up" : <>Set up the knowledge graph for <span data-user-text>{setup.name}</span></>}</h3>
         <span className="kg-setup-progress" data-testid="kg-setup-progress">
           <span className="kg-setup-pips" aria-hidden>

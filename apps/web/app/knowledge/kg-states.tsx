@@ -23,39 +23,26 @@ const LAYER_LINE: Record<(typeof KG_LAYERS)[number], { name: string; what: strin
   context: { name: "Context", what: "what agents did and decided: cases, decisions, fixes" },
 };
 
-/** Faint hop rings behind a card: the Focus view's motif, drawn in tokens. */
-export function Rings() {
-  return (
-    <svg className="kg-stage-rings" viewBox="0 0 800 460" preserveAspectRatio="xMidYMid slice" aria-hidden focusable="false">
-      <circle cx="400" cy="230" r="120" />
-      <circle cx="400" cy="230" r="210" />
-      <circle cx="400" cy="230" r="300" />
-    </svg>
-  );
-}
-
 export function Layers() {
   return (
     <ul className="kg-layers" aria-label="The layers">
       {KG_LAYERS.map((l) => (
         <li key={l} className="kg-layer">
           <span className="kg-dot" data-layer={l} aria-hidden />
-          <span><span className="kg-layer-name">{LAYER_LINE[l].name}</span> · {LAYER_LINE[l].what}</span>
+          <span><span className="kg-layer-name">{LAYER_LINE[l].name}</span>. {LAYER_LINE[l].what}</span>
         </li>
       ))}
     </ul>
   );
 }
 
-export function StageCard({ testId, eyebrow, title, body, children, layers = false, tone }: {
-  testId: string; eyebrow: string; title: string; body: React.ReactNode; children?: React.ReactNode; layers?: boolean;
+export function StageCard({ testId, title, body, children, layers = false, tone }: {
+  testId: string; title: string; body: React.ReactNode; children?: React.ReactNode; layers?: boolean;
   tone?: "red" | "amber";
 }) {
   return (
     <div className="kg-stage" data-testid={testId} data-tone={tone}>
-      <Rings />
       <div className="kg-empty" role="status">
-        <span className="kg-empty-eyebrow">{eyebrow}</span>
         <h3 className="kg-empty-title">{title}</h3>
         <div className="kg-empty-body">{body}</div>
         {layers ? <Layers /> : null}
@@ -114,7 +101,7 @@ export function CanvasLoading({ nodes }: { nodes?: number | null }) {
 /** Empty: no repository registered. */
 export function KgNoRepo({ orgId }: { orgId?: string | null }) {
   return (
-    <StageCard testId="kg-empty-graph" eyebrow="Graph" layers
+    <StageCard testId="kg-empty-graph" layers
                title="Connect a repository to see its graph"
                body="BOSS indexes the repository into a graph of its areas, packages, classes and calls. Rules and what agents learn while they work are drawn on the same graph.">
       <AreaLink area="setup" orgId={orgId ?? undefined} className="ag-btn ag-btn-primary">Open Repo and models</AreaLink>
@@ -136,7 +123,7 @@ export function KgIndexing({ repos, onIndex, busy }: { repos: KgRepository[]; on
   const working = repos.some((r) => r.status === "queued" || r.status === "running" || r.status === "pending");
   const failed = repos.filter((r) => r.status === "failed" || r.status === "too_large");
   return (
-    <StageCard testId="kg-indexing" eyebrow="Graph" tone={failed.length && !working ? "amber" : undefined}
+    <StageCard testId="kg-indexing" tone={failed.length && !working ? "amber" : undefined}
                title={working ? "Indexing the repository" : failed.length ? "The repository could not be indexed" : "The graph has not been built yet"}
                body={(
                  <>
@@ -173,9 +160,7 @@ export function KgReadError({ error, onRetry, testId, what }: {
   if (error.unavailable) {
     return (
       <div className="kg-stage kg-stage-short" data-testid={`${testId}-unavailable`} data-tone="amber">
-        <Rings />
         <div className="kg-empty" role="status">
-          <span className="kg-empty-eyebrow">{what}</span>
           <h3 className="kg-empty-title">Not on this install yet</h3>
           <p className="kg-empty-body">{what} arrives with this release&apos;s knowledge update. The code graph works now; this view fills in once the update is installed.</p>
           <div className="kg-empty-actions"><button type="button" className="ag-btn" onClick={onRetry}>Check again</button></div>
@@ -234,18 +219,18 @@ export function KgEmptyLayer({ layer, onScan, scope = "repo", children }: {
 }) {
   if (layer === "domain") {
     return (
-      <StageCard testId="kg-empty-layer" eyebrow="Domain" title={scope === "here" ? "No regulation connects to this" : "No regulations or documents yet"}
+      <StageCard testId="kg-empty-layer" title={scope === "here" ? "No regulation connects to this" : "No regulations or documents yet"}
                  body="Add a regulation in the Documents tab: BOSS splits it into clauses, and agents trace each clause to the rules and code that implement it." />
     );
   }
   if (layer === "context") {
     return (
-      <StageCard testId="kg-empty-layer" eyebrow="Context" title={scope === "here" ? "No agent decided anything about this yet" : "No agent decisions yet"}
+      <StageCard testId="kg-empty-layer" title={scope === "here" ? "No agent decided anything about this yet" : "No agent decisions yet"}
                  body="The Context Graph is what agents did and decided: each case, every step's decision with the agent, workflow version and fingerprint it ran under, the precedent it set and the remediation it proposed. Run a workflow and it appears here as the steps finish." />
     );
   }
   return layer === "rules" ? (
-    <StageCard testId="kg-empty-layer" eyebrow="Rules" title={scope === "here" ? "No rules here yet" : "No rules yet"}
+    <StageCard testId="kg-empty-layer" title={scope === "here" ? "No rules here yet" : "No rules yet"}
                body={scope === "here"
                  ? `No business rule governs this code yet. Scan it: ${scanReader()} reads it within a budget you set and proposes the rules it finds, each with the lines that show it. You approve them in Rules review.`
                  : `Scan an area for business rules: ${scanReader()} reads its code within a budget you set and proposes the rules it finds, each with the lines that show it. You approve them in Rules review.`}>
@@ -253,7 +238,7 @@ export function KgEmptyLayer({ layer, onScan, scope = "repo", children }: {
       {onScan ? <button type="button" className="ag-btn ag-btn-primary" data-testid="kg-empty-layer-scan" onClick={onScan}>Choose an area to scan</button> : null}
     </StageCard>
   ) : (
-    <StageCard testId="kg-empty-layer" eyebrow="Learning" title={scope === "here" ? "Nothing learned about this yet" : "Nothing learned yet"}
+    <StageCard testId="kg-empty-layer" title={scope === "here" ? "Nothing learned about this yet" : "Nothing learned yet"}
                body="Agents record what they try, rule out, find and fix while they work: test failures and their fixes, root causes, precedents. They appear here, linked to the code, within seconds." />
   );
 }
@@ -280,7 +265,7 @@ export function KgTruncation({ shown, hidden, level, onMore, maxed, max = 200, c
 /** Locked (entitlement): the add-on, explained; never a broken button. */
 export function KgLocked({ reason }: { reason: string }) {
   return (
-    <StageCard testId="kg-locked-state" eyebrow="Knowledge add-on" title="Rules and Learning are an add-on"
+    <StageCard testId="kg-locked-state" title="Rules and Learning are an add-on"
                body="The code graph stays fully available. Rules agents propose, and what they learn while they work, are part of the Knowledge add-on.">
       <LockedPanel label="Locked" reason={reason} testId="kg-locked" />
     </StageCard>

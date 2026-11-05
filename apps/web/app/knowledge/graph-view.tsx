@@ -761,7 +761,7 @@ export function GraphView({ projectId, actor, orgId, repos, onReposChanged, rule
       <div className="kg-stage-wrap">
         <KgError text={err.status === 404 && view.mode === "focus" ? "That node is no longer in the graph. It may have been re-indexed." : err.text}
                  onRetry={() => setNonce((n) => n + 1)} />
-        <StageCard testId="kg-error-stage" eyebrow="Graph" title="The graph could not be read"
+        <StageCard testId="kg-error-stage" title="The graph could not be read"
                    body="The tree and the detail panel still work. Retry, or open a node from the tree." />
       </div>
     );
@@ -771,7 +771,7 @@ export function GraphView({ projectId, actor, orgId, repos, onReposChanged, rule
     // Code in the graph, and its map could not be built (RCA 2026-10-31): said, with Rebuild —
     // never "No code yet" over 51k code nodes.
     stage = (
-      <StageCard testId="kg-map-error" eyebrow="Graph" tone="amber" title="The map of this code could not be built"
+      <StageCard testId="kg-map-error" tone="amber" title="The map of this code could not be built"
                  body={<p className="kg-map-err">BOSS has {o.totals.nodes.toLocaleString("en-US")} code nodes for this project but could not group them into areas: {o.map.error ?? "the build failed"}. Rebuild indexes the code again and builds the map.</p>}>
         <button type="button" className="ag-btn ag-btn-primary" data-testid="kg-map-rebuild" disabled={rebuilding || archived || !indexGate.allowed}
                 onClick={() => void rebuild()}>{rebuilding ? "Rebuilding…" : "Rebuild"}</button>

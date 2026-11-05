@@ -104,7 +104,7 @@ export function SpendTab({ projectId, paused }: { projectId: string; paused: boo
               <span>{money(s.spent_vs_cap.committed_usd_micros)} of {money(s.spent_vs_cap.cap_usd_micros)}</span>
               <span className="gv-state" data-state={s.spent_vs_cap.state}>{s.spent_vs_cap.state_label}</span>
               <a className="ag-link" href={consoleHref(search, { area: "observability", view: "models", win: "30d" })}
-                 title="Spend by agent and by model">Models ↗</a>
+                 title="Spend by agent and by model">Models</a>
             </span>
           </section>
           <div className="gv-pair">

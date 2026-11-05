@@ -777,7 +777,7 @@
 .ag-chip[data-stance="against"] .ag-dot { background: var(--red); }
 .ag-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
 .ag-muted { color: var(--faint); font-size: 0.63158rem; }
-.ag-eyebrow { font: 700 0.57895rem var(--sans); letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent-text); }
+.ag-eyebrow { font: 700 0.57895rem var(--sans); letter-spacing: 0; text-transform: none; color: var(--accent-text); }
 .ag-spacer { flex: 1; }
 .ag-link { color: var(--accent-text); font-weight: 600; text-decoration: none; }
 .ag-fail {

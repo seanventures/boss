@@ -26,7 +26,7 @@
 .spj-choice b { font-family: var(--display); font-size: 1.05rem; color: var(--ink); font-weight: 600; }
 .spj-choice:hover, .spj-choice:focus-visible { border-color: var(--accent-line); background: var(--accent-soft); }
 .spj-choice[data-highlight] { border-color: var(--accent-line); background: var(--accent-soft); }
-.spj-tag { font-size: 0.68rem; letter-spacing: 0.06em; color: var(--accent-text); font-weight: 700; }
+.spj-tag { font-size: 0.68rem; letter-spacing: 0; color: var(--accent-text); font-weight: 700; }
 .spj-line { font-size: 0.82rem; line-height: 1.4; }
 .spj-cta { margin-top: auto; color: var(--accent-text); font-weight: 600; font-size: 0.82rem; }
 

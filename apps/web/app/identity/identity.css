@@ -236,7 +236,7 @@ textarea.idn-input { min-height: 74px; line-height: 1.45; color: var(--ink-soft)
 .idn-hero::before { content: ""; position: absolute; inset: 0; background-image: radial-gradient(var(--idn-dots) 1px, transparent 1px); background-size: 22px 22px; mask-image: linear-gradient(90deg, transparent, var(--bg) 45%, var(--bg)); pointer-events: none; }
 .idn-hero-l { position: relative; padding: 32px 34px 30px; display: flex; flex-direction: column; gap: 16px; z-index: 1; }
 .idn-hero h1 { font: 600 1.78947rem/1.14 var(--display); letter-spacing: -0.015em; margin: 0; }
-.idn-hero h1 em { font-style: normal; background: linear-gradient(110deg, var(--idn-mint), var(--idn-sky) 60%, var(--idn-violet)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.idn-hero h1 em { font-style: normal; color: inherit; }
 .idn-lede { color: var(--muted); font-size: 0.76316rem; line-height: 1.55; max-width: 480px; margin: 0; }
 .idn-acts { display: flex; gap: 10px; flex-wrap: wrap; }
 .idn-score { display: flex; align-items: center; gap: 18px; margin-top: 4px; }
@@ -403,7 +403,7 @@ textarea.idn-input { min-height: 74px; line-height: 1.45; color: var(--ink-soft)
 .idn-dl .idn-tag { margin-left: auto; }
 .idn-imp { border: 1px solid color-mix(in srgb, var(--idn-sky) 35%, transparent); border-radius: var(--idn-r-card); padding: 16px; background: radial-gradient(400px 200px at 100% 0, color-mix(in srgb, var(--idn-sky) 16%, transparent), transparent 70%), var(--surface-2); }
 .idn-imp .idn-bigt { font: 600 1.57895rem var(--display); letter-spacing: -0.01em; margin: 6px 0 2px; }
-.idn-imp .idn-bigt span { background: linear-gradient(110deg, var(--idn-mint), var(--idn-sky)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.idn-imp .idn-bigt span { color: inherit; }
 .idn-ip { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent); font-size: 0.68421rem; }
 .idn-ip:last-child { border-bottom: 0; }
 .idn-ip .idn-r { margin-left: auto; font: 500 0.63158rem var(--mono); }
@@ -599,7 +599,7 @@ textarea.idn-input { min-height: 74px; line-height: 1.45; color: var(--ink-soft)
 
 /* ── sign-in (mockup e) ──────────────────────────────────────────────────────────────────── */
 .idn-auth { position: relative; min-height: 100vh; min-height: 100dvh; display: grid; place-items: center; padding: 34px 16px 50px; overflow: hidden; color: var(--ink); font-family: var(--sans); font-size: 0.73684rem;
-  background: radial-gradient(900px 500px at 15% -10%, color-mix(in srgb, var(--accent) 25%, transparent), transparent 60%), radial-gradient(800px 500px at 100% 30%, color-mix(in srgb, var(--teal) 14%, transparent), transparent 60%), radial-gradient(700px 500px at 40% 120%, color-mix(in srgb, var(--idn-violet) 14%, transparent), transparent 60%), var(--idn-stage); }
+  background: radial-gradient(900px 500px at 15% -10%, color-mix(in srgb, var(--accent) 25%, transparent), transparent 60%), radial-gradient(800px 500px at 100% 30%, color-mix(in srgb, var(--teal) 14%, transparent), transparent 60%), radial-gradient(700px 500px at 40% 120%, color-mix(in srgb, var(--teal) 12%, transparent), transparent 60%), var(--idn-stage); }
 .idn-auth::before { content: ""; position: absolute; inset: 0; background-image: radial-gradient(var(--idn-dots) 1px, transparent 1px); background-size: 24px 24px; pointer-events: none; }
 .idn-panel { position: relative; width: 100%; max-width: 420px; border: 1px solid var(--idn-panel-line); border-radius: var(--idn-r-hero); padding: 28px 28px 24px; background: linear-gradient(180deg, var(--idn-panel-a), var(--idn-panel-b)); box-shadow: 0 40px 80px -40px var(--idn-shadow), 0 0 0 6px color-mix(in srgb, var(--accent) 5%, transparent); backdrop-filter: blur(10px); }
 .idn-panel.wide { max-width: 460px; }

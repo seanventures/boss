@@ -132,7 +132,7 @@ export function Welcome({ onSetup }: { onSetup: () => void }) {
             <span className="su-strong">Connect GitHub</span>
             {state.github.done ? (
               <span className="su-faint" data-testid="su-wl-github-done">
-                Connected{state.github.login ? ` as ${state.github.login}` : ""} · {state.github.repos} repo{s(state.github.repos)} BOSS can use
+                Connected{state.github.login ? ` as ${state.github.login}` : ""}. {state.github.repos} repo{s(state.github.repos)} BOSS can use
               </span>
             ) : <span className="su-faint">Pick the repos BOSS may work on.</span>}
           </div>
@@ -151,7 +151,7 @@ export function Welcome({ onSetup }: { onSetup: () => void }) {
             <span className="su-strong">Add a model</span>
             {state.model.done ? (
               <span className="su-faint" data-testid="su-wl-model-done">
-                {state.model.label} {state.model.kind === "subscription" ? "signed in" : "connected"} · builds and reviews will use it
+                {state.model.label} {state.model.kind === "subscription" ? "signed in" : "connected"}. Builds and reviews use it.
               </span>
             ) : <span className="su-faint">A subscription, an API key or a local model.</span>}
           </div>
@@ -177,7 +177,7 @@ export function Welcome({ onSetup }: { onSetup: () => void }) {
                 </React.Fragment>
               ))}
             </ol>
-            <span className="su-faint">~8 min · included in your subscription</span>
+            <span className="su-faint">About 8 minutes, included in your subscription</span>
             {view.try.last_run ? <LastRun run={view.try.last_run} /> : null}
           </div>
           <span className="su-spacer" />

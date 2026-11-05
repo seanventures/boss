@@ -30,7 +30,7 @@ export function StepUpSheet({ reason, me, onDone }: { reason: string; me: MeResp
       await call();
       onDone(true);
     } catch (e) {
-      setError(passkeyFailureWords(e) ?? (e instanceof IdentityError ? (e.attemptsLeft !== null ? `Wrong code · ${e.attemptsLeft} left` : e.message)
+      setError(passkeyFailureWords(e) ?? (e instanceof IdentityError ? (e.attemptsLeft !== null ? `Wrong code: ${e.attemptsLeft} left` : e.message)
         : refusalSentence(e)));
       setBusy(false);
     }

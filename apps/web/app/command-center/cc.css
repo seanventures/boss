@@ -66,7 +66,7 @@
 .cc-aurora {
   position: absolute; z-index: 0; width: 620px; height: 620px; right: -120px; top: -260px; border-radius: 50%;
   background: conic-gradient(from 0deg, rgba(46, 197, 197, 0), rgba(46, 197, 197, .22), rgba(47, 111, 224, .25),
-              rgba(167, 139, 250, .18), rgba(46, 197, 197, 0));
+              rgba(46, 197, 197, .18), rgba(46, 197, 197, 0));
   filter: blur(60px); pointer-events: none;
 }
 .cc[data-motion="full"] .cc-aurora { animation: cc-spin 26s linear infinite; }
@@ -121,9 +121,7 @@
    headline reads in one or two lines instead of a tall stack of big words beside an empty hero. */
 @media (min-width: 1441px) { .cc-headline { max-width: 26em; } }
 .cc-headline em {
-  font-style: normal; color: transparent;
-  background: linear-gradient(110deg, #5EEAD4, #5B8CFF 60%, #A78BFA);
-  -webkit-background-clip: text; background-clip: text;
+  font-style: normal; color: inherit;
 }
 
 /* ── The composer, as the hero draws it (AskBossHero layout="hero"). Only the look. ── */
@@ -470,7 +468,7 @@
 .cc-tpl-art svg, .cc-app-art > svg { width: 100%; height: 100%; display: block; }
 .cc-tpl-art .askboss-idea-shot, .cc-app-art .askboss-idea-shot { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 1; z-index: 0; }
 .cc-tpl-body { padding: 12px 14px 14px; display: flex; flex-direction: column; gap: 4px; }
-.cc-tpl-tag { font: 500 0.52632rem var(--mono); letter-spacing: .18em; color: var(--teal); text-transform: uppercase; }
+.cc-tpl-tag { font: 500 0.52632rem var(--mono); letter-spacing: 0; color: var(--teal); text-transform: none; }
 .cc-tpl-body b { font-size: 0.78947rem; font-weight: 700; color: var(--ink); }
 .cc-tpl-who {
   font-size: 0.65789rem; color: var(--cc-dim); line-height: 1.4;
@@ -560,7 +558,7 @@
 .cc-gallery-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(12.63158rem, 1fr)); gap: 16px; }
 .cc-heat-legend { margin-left: auto; display: flex; align-items: center; gap: 4px; white-space: nowrap; }
 .cc-heat-legend i { width: 11px; height: 11px; border-radius: 3px; display: inline-block; }
-.cc-top-h { font: 500 0.55263rem var(--mono); letter-spacing: .18em; color: var(--cc-dim); text-transform: uppercase; border-top: 1px solid var(--cc-line); padding-top: 12px; }
+.cc-top-h { font: 500 0.55263rem var(--mono); letter-spacing: 0; color: var(--cc-dim); text-transform: none; border-top: 1px solid var(--cc-line); padding-top: 12px; }
 .cc-tops { display: flex; flex-direction: column; gap: 7px; }
 .cc-top-row { display: grid; grid-template-columns: 1.57895rem minmax(0, 10rem) minmax(0, 1fr) 2.10526rem; align-items: center; gap: 10px; font-size: 0.71053rem; border-radius: 8px; }
 .cc-top-row:hover .cc-top-name { color: #fff; }

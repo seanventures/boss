@@ -149,7 +149,7 @@ export function EnvelopesTab({ projectId, actor, paused }: { projectId: string; 
           <span className="gv-result" data-testid="gv-init-result" title={result.tip}>
             {result.text}
             {result.decision ? (
-              <> · <a className="ag-link" href={consoleHref(search, { area: "decisions", decision: result.decision })}>Open ↗</a></>
+              <> <a className="ag-link" href={consoleHref(search, { area: "decisions", decision: result.decision })}>Open decision</a></>
             ) : null}
           </span>
         ) : null}
@@ -183,7 +183,7 @@ export function EnvelopesTab({ projectId, actor, paused }: { projectId: string; 
                 <span>{money(r.actual_usd_micros)} of {money(r.committed_usd_micros)}</span>
                 <span className="gv-verdict" data-verdict={r.verdict} title={r.verdict}>{verdictWord(r.verdict)}</span>
                 {r.decision_id ? (
-                  <a className="ag-link" href={consoleHref(search, { area: "decisions", decision: r.decision_id })}>Decision ↗</a>
+                  <a className="ag-link" href={consoleHref(search, { area: "decisions", decision: r.decision_id })}>Decision</a>
                 ) : null}
               </li>
             ))}

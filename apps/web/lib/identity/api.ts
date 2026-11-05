@@ -75,7 +75,7 @@ export const REFUSAL_WORDS: Readonly<Record<string, (body: Body) => string>> = {
   step_up_required: () => "Confirm it's you",
   step_up_cancelled: () => "Not confirmed — press it again and confirm it's you",
   unauthenticated: () => "Sign in again",
-  csrf_failed: () => "Reload and retry",
+  csrf_failed: () => "Security check failed. Try again.",
   invalid_credentials: () => "Wrong email or password",
   account_disabled: () => "This account is disabled",
   ambiguous_credentials: () => "Sign out, then sign in once",
@@ -165,7 +165,7 @@ export function refusalSentence(e: unknown): string {
   // The API's own sentence when it wrote one (a bare code in `detail` is never shown).
   if (e instanceof IdentityError) return e.detail && /\s/.test(e.detail) ? e.detail : e.message;
   const why = e instanceof Error && e.message ? e.message : "";
-  return `That didn't work · ${why || "no answer"}`;
+  return `That didn't work: ${why || "no answer"}`;
 }
 
 let csrfToken = "";
