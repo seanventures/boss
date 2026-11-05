@@ -306,6 +306,40 @@ describe("GitHub Mission Control", async () => {
     expect(readOnlyHtml).not.toContain("github-easy-connect");
   });
 
+  it("warns when an active binding's allow-list will refuse the clone", () => {
+    const feed = {
+      ...emptyGitHubOperationsFeed(undefined, "boss-dogfood"),
+      apiReachable: true,
+      connections: [],
+      bindings: [
+        {
+          id: "bind_1",
+          project_id: "boss-dogfood",
+          connection_id: "conn_1",
+          owner: "example-org",
+          name: "boss",
+          full_name: "example-org/boss",
+          role: "primary" as const,
+          archived: false,
+          status: "active" as const,
+          permissions: {},
+          capabilities: [],
+          metadata: {},
+          created_by: "ceo",
+          created_at: "2026-07-26T00:00:00Z",
+          updated_at: "2026-07-26T00:00:00Z",
+          allow_list_warning: "example-org/boss: registration is active and the connection test passed, but the org allow-list says not_allowed. Egress will refuse the clone (repo_not_allowed).",
+        },
+      ],
+    };
+    const html = renderToStaticMarkup(
+      <GitHubOperations feed={feed} actor="ceo" canManage={false} />,
+    );
+    expect(html).toContain("ghx-allow-list-warning");
+    expect(html).toContain("repo_not_allowed");
+    expect(html).toContain("role=\"alert\"");
+  });
+
   it("surfaces easy connect CTA when the project has no GitHub connection", () => {
     const feed = {
       ...emptyGitHubOperationsFeed(undefined, "boss-dogfood"),

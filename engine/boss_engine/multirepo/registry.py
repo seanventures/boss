@@ -384,6 +384,92 @@ def save_allowed(db: Any, settings: Any, project_id: str, allowed_ids: list[str]
 
 # ── enforcement ──────────────────────────────────────────────────────────────────────────────
 
+def may_clone(db: Any, org_id: Optional[str], full_name: str) -> Optional[bool]:
+    """Whether egress will clone `full_name`. None when the registry is not in use.
+
+    One answer with `mint_allowed`: that list is what the registry refuses, and a clone
+    is allowed only when this name is not on it.
+    """
+    name = norm_repo(full_name)
+    if not name:
+        return None
+    refused = mint_allowed(db, org_id, [name])
+    if refused is None:
+        return None
+    return name not in {norm_repo(item) for item in refused}
+
+
+def registration_disagreement(*, binding_status: str = "", connection_status: str = "",
+                              last_test_status: str = "", may_clone: Optional[bool] = None,
+                              reason: Optional[str] = None,
+                              full_name: str = "") -> Optional[str]:
+    """Warn when the registration looks healthy and the allow-list says not_allowed.
+
+    Archived, unreachable, and an unused registry are different facts and do not warn.
+    """
+    if may_clone is not False or reason != "not_allowed":
+        return None
+    if str(binding_status or "") != "active":
+        return None
+    test_passed = str(last_test_status or "") == "passed"
+    connection_active = str(connection_status or "") == "active"
+    if not test_passed and not connection_active:
+        return None
+    name = full_name or "this repository"
+    healthy = "registration is active"
+    if test_passed:
+        healthy += " and the connection test passed"
+    else:
+        healthy += " and the connection is active"
+    return (f"{name}: {healthy}, but the org allow-list says not_allowed. "
+            f"Egress will refuse the clone (repo_not_allowed).")
+
+
+def refusal_reason(db: Any, org_id: Optional[str], full_name: str) -> Optional[str]:
+    """The registry row's state (`not_allowed`, `archived`, …), or None when it has no row."""
+    name = norm_repo(full_name)
+    if not org_id or not name:
+        return None
+    try:
+        with db.begin_nested():
+            row = db.execute(sql(
+                "SELECT allowed, archived, reachable, checks, checked_at FROM github_repos "
+                "WHERE org_id = :o AND lower(full_name) = :f"),
+                {"o": org_id, "f": name}).mappings().first()
+    except Exception:  # noqa: BLE001 — no registry is not itself a disagreement
+        return None
+    if row is None:
+        return None
+    return state_of(dict(row))
+
+
+def clone_note(db: Any, org_id: Optional[str], *, full_name: str, binding_status: Any,
+               connection_status: Any, last_test_status: Any,
+               registry_row: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    """`clone_allowed` and, when the records disagree, `allow_list_warning`."""
+    try:
+        verdict = may_clone(db, org_id, full_name)
+        if verdict is False and registry_row is not None:
+            reason = state_of(registry_row)
+        elif verdict is False:
+            reason = refusal_reason(db, org_id, full_name)
+        else:
+            reason = None
+        warning = registration_disagreement(
+            binding_status=str(binding_status or ""),
+            connection_status=str(connection_status or ""),
+            last_test_status=str(last_test_status or ""),
+            may_clone=verdict, reason=reason, full_name=full_name or "")
+    except Exception:  # noqa: BLE001 — a list of repositories still loads without the note
+        return {}
+    note: dict[str, Any] = {}
+    if verdict is not None:
+        note["clone_allowed"] = verdict
+    if warning:
+        note["allow_list_warning"] = warning
+    return note
+
+
 def mint_allowed(db: Any, org_id: Optional[str], repos: list[str]) -> Optional[list[str]]:
     """The repositories of `repos` the registry REFUSES (unticked, archived, unreachable), or None
     when the registry is not in use for this org (an install that never refreshed it)."""

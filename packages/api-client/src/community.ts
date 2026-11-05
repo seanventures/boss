@@ -3089,6 +3089,9 @@ export type GitHubRepositoryBindingSummary = {
   created_by: string;
   created_at: string;
   updated_at: string;
+  /** Set when this binding looks active/passed and the org allow-list says not_allowed. */
+  allow_list_warning?: string | null;
+  clone_allowed?: boolean | null;
 };
 
 export type GitHubRepositoryBindingListResponse = {

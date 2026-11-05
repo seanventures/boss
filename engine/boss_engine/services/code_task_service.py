@@ -2537,6 +2537,22 @@ def _persist_sandbox_id(connection, run_id: str, sbx_id: Optional[str]) -> None:
     )
 
 
+_RULES_403 = re.compile(
+    r"\b403\b|repo_not_allowed|\"error\"\s*:\s*\"forbidden\"", re.IGNORECASE)
+_RATE_LIMIT_NOT_A_RULE = re.compile(
+    r"\b429\b|rate[_ ]limit|too many requests|tokens per minute", re.IGNORECASE)
+
+
+def is_rules_forbidden(reason: str) -> bool:
+    """A rules 403 from egress or git. A 429, a 5xx and a timeout are not one."""
+    text = reason or ""
+    if _RATE_LIMIT_NOT_A_RULE.search(text):
+        return False
+    if re.search(r"\b5\d\d\b", text) and not _RULES_403.search(text):
+        return False
+    return _RULES_403.search(text) is not None
+
+
 def classify_pipeline_exception(reason: str) -> tuple[str, str]:
     """Map a pipeline exception onto the failure taxonomy. Most unexpected exceptions ARE infra
     (platform's fault) — but an agent that exhausted its turn cap is a RECOVERABLE task-shaped
@@ -2625,6 +2641,10 @@ def classify_pipeline_exception(reason: str) -> tuple[str, str]:
         return "needs_human", "sandbox_task_missing"
     if any(sig in r for sig in ("sandbox", "microvm", "not allowlisted", "rootfs")):
         return "infra", "sandbox_error"
+    # A rules 403 is an answer (the allow-list, the installation). Retrying the build
+    # meets the same refusal. A 5xx or a timeout stays infra and can be retried.
+    if is_rules_forbidden(reason):
+        return "needs_human", "rules_forbidden"
     if any(
         sig in r
         for sig in (

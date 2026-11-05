@@ -502,7 +502,8 @@ class GitHubConnectionService:
             ),
             params,
         ).mappings().all()
-        return [self._serialize_binding(row) for row in rows]
+        return self._with_allow_list(
+            connection, project_id, [self._serialize_binding(row) for row in rows])
 
     def get_repository_binding(
         self,
@@ -527,7 +528,37 @@ class GitHubConnectionService:
             raise GitHubRepositoryBindingNotFoundError(
                 "GitHub repository binding not found."
             )
-        return self._serialize_binding(row)
+        return self._with_allow_list(
+            connection, project_id, [self._serialize_binding(row)])[0]
+
+    def _with_allow_list(self, connection: Connection, project_id: str,
+                         items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """The allow-list is what egress clones. Say so when a healthy registration disagrees."""
+        from ..multirepo import registry
+        from ..multirepo.common import org_of_project
+
+        try:
+            org_id = org_of_project(connection, project_id)
+        except Exception:  # noqa: BLE001
+            org_id = None
+        conn_by_id: dict[Any, Any] = {}
+        try:
+            found = connection.execute(
+                text("SELECT id, status, last_test_status FROM github_connections "
+                     "WHERE project_id = :p"),
+                {"p": project_id}).mappings().all()
+            conn_by_id = {row["id"]: row for row in found}
+        except Exception:  # noqa: BLE001 — the binding list still loads
+            conn_by_id = {}
+        out = []
+        for item in items:
+            conn = conn_by_id.get(item.get("connection_id")) or {}
+            out.append({**item, **registry.clone_note(
+                connection, org_id, full_name=item.get("full_name") or "",
+                binding_status=item.get("status"),
+                connection_status=conn.get("status"),
+                last_test_status=conn.get("last_test_status"))})
+        return out
 
     def create_repository_binding(
         self,

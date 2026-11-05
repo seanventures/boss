@@ -363,6 +363,12 @@ def cause_signature(kind: str, failure: Mapping[str, Any]) -> tuple[str, dict[st
         return f"{family}:missing_tool:{tool}", {"pattern": "missing_tool", "tool": tool}
     if _SECRET_SCAN.search(said):
         return f"{family}:secret_scan", {"pattern": "secret_scan"}
+    from .code_task_service import is_rules_forbidden
+
+    if is_rules_forbidden(said):
+        # Before the transient bucket: a 403 is not a timeout, and the first build
+        # failure must not be retried just because it is the first one.
+        return f"{family}:rules_forbidden", {"pattern": "rules_forbidden"}
     if _BOSS_BUILD.search(said) or _BOSS_SAYS.search(said):
         stem = re.sub(r"\W+", "_", (_BOSS_BUILD.search(said) or _BOSS_SAYS.search(said))
                       .group(0).lower()).strip("_")
@@ -910,6 +916,14 @@ def coded_decision(kind: str, evidence: Mapping[str, Any], *, signature: str,
                   "reasoning": "the reviewers' findings are the app's code to fix; a person is "
                                "asked to waive them only if the fix does not hold",
                   "note": findings_note(failure)}
+    elif kind_of == "rules_forbidden":
+        choice = {"action": ASK_PERSON,
+                  "cause": "egress refused the clone with a rules 403",
+                  "reasoning": "A rules 403 is not a 5xx or a timeout, so it is not retried.",
+                  "question": "Egress refused this clone (403, repo_not_allowed). A rules 403 "
+                              "is not a 5xx or a timeout, and BOSS will not retry it. Allow the "
+                              "repository, or point the build at one egress will clone?",
+                  "after": "BOSS stops. It will not start this build again for the same refusal."}
     elif kind in ("build", "deploy_repair") and not last:
         choice = {"action": RETRY, "backoff_seconds": 0, "cause": "the build failed",
                   "reasoning": "one fresh attempt of the same lineage before asking anyone"}
@@ -1079,7 +1093,12 @@ def decide(connection: Connection, settings: Any, *, project_id: str, run_id: st
     caps = limits(connection, settings, project_id)
     ok, why_not = budget_left(connection, state, caps)
     result: dict[str, Any] = {}
-    if not ok:
+    if pattern.get("pattern") == "rules_forbidden":
+        # A model must not override this into a retry: the refusal is the rules, and the
+        # same build fails the same way.
+        decision = dict(triage)
+        by = {"engine": "coded", "model": "", "source": "rules_forbidden"}
+    elif not ok:
         failure = evidence.get("failure") or {}
         decision = {**_ask(failure, evidence.get("host_state") or {}),
                     "reasoning": why_not, "evidence": []}
