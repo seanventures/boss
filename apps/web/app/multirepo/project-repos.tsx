@@ -121,7 +121,16 @@ export function ProjectRepositories({ projectId }: { projectId: string }) {
                     const used = r.used_by_apps ?? [];
                     return (
                       <tr key={r.binding_id} data-testid={`mr-prj-row-${r.binding_id}`}>
-                        <td><RepoName name={r.full_name} sub={<Lang lang={r.language} />} /></td>
+                        <td>
+                          <RepoName name={r.full_name} sub={<Lang lang={r.language} />} />
+                          {r.allow_list_warning ? (
+                            <div className="mr-ui-note" data-tone="bad" role="alert"
+                                 data-testid={`mr-prj-allow-warn-${r.binding_id}`}>
+                              <Warning size={15} weight="bold" aria-hidden />
+                              <div>{r.allow_list_warning}</div>
+                            </div>
+                          ) : null}
+                        </td>
                         <td>
                           {/* ONE REPO HOLDS THE WHOLE APP: a role hint splits an app across several
                               repositories, and "No role" read as something missing. */}

@@ -41,8 +41,11 @@ def _set_layout(db: Any, project_id: str, app_key: str, mode: str, actor: str) -
 def _binding_rows(db: Any, project_id: str) -> list[dict[str, Any]]:
     return [dict(r) for r in db.execute(sql(
         "SELECT b.id, b.full_name, b.owner, b.name, b.role, b.role_hint, b.default_branch, b.checks, "
-        "b.checked_at, b.registry_repo_id, b.connection_id, b.created_at "
-        "FROM github_repository_bindings b WHERE b.project_id = :p AND b.status = 'active' "
+        "b.checked_at, b.registry_repo_id, b.connection_id, b.created_at, "
+        "c.status AS connection_status, c.last_test_status "
+        "FROM github_repository_bindings b "
+        "LEFT JOIN github_connections c ON c.id = b.connection_id "
+        "WHERE b.project_id = :p AND b.status = 'active' "
         "ORDER BY (b.role = 'primary') DESC, b.created_at"), {"p": project_id}).mappings().all()]
 
 
@@ -108,6 +111,10 @@ def list_project_repos(db: Any, project_id: str) -> dict[str, Any]:
             "base_branch": b.get("default_branch") or (rr or {}).get("default_branch") or "main",
             "state": _state(b, rr), "used_by_apps": using.get(b["id"], []),
             "checked_at": iso(b.get("checked_at")),
+            **registry.clone_note(
+                db, org_id, full_name=b["full_name"], binding_status="active",
+                connection_status=b.get("connection_status"),
+                last_test_status=b.get("last_test_status"), registry_row=rr),
         })
     addable = [{"id": r["id"], "full_name": r["full_name"], "language": r.get("language"),
                 "default_branch": r.get("default_branch") or "main", "state": registry.state_of(r)}

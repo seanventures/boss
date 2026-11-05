@@ -4947,6 +4947,9 @@ def _query_project_data(ctx: Any, project_id: str, args: dict) -> dict:
     if _PROJECT_DATA_DENY.search(table):
         return {"ok": False, "error": f"{table} holds credentials or identity secrets and is "
                 "never readable here"}
+    if table == "egress_decisions":
+        # Not a table. identity_egress_log stays refused; this is the redacted read.
+        return _egress_decisions(ctx, project_id, args)
     try:
         limit = max(1, min(int(args.get("limit") or 20), PROJECT_DATA_ROW_CAP))
     except (TypeError, ValueError):
@@ -5000,6 +5003,25 @@ def _query_project_data(ctx: Any, project_id: str, args: dict) -> dict:
         rows = c.execute(_text(sql), params).mappings().all()
     return {"table": table, "row_count": len(rows), "capped_at": limit,
             "rows": redact_for_agent([_json_safe(dict(r)) for r in rows])}
+
+
+def _egress_decisions(ctx: Any, project_id: str, args: dict) -> dict:
+    """Redacted egress decisions for this project's runs. No jti, chain, or header."""
+    from ..identity import egress_read
+
+    try:
+        limit = max(1, min(int(args.get("limit") or 20), PROJECT_DATA_ROW_CAP))
+    except (TypeError, ValueError):
+        limit = 20
+    where = args.get("where") if isinstance(args.get("where"), dict) else {}
+    run_id = str(where.get("run_id") or "").strip() or None
+    try:
+        with ctx.begin() as c:
+            rows = egress_read.for_project(c, project_id, run_id=run_id)
+    except Exception as exc:  # noqa: BLE001 — the log may not exist on this install
+        return {"ok": False, "error": f"egress decisions could not be read ({type(exc).__name__})"}
+    page = rows[:limit]
+    return {"table": "egress_decisions", "row_count": len(page), "capped_at": limit, "rows": page}
 
 
 def _is_read_only(sql: str) -> tuple[bool, str]:
@@ -6512,6 +6534,19 @@ def _register_diagnosis_tools(reg: ToolRegistry) -> None:
         if run["error"]:
             findings.append(f"the run records an error: {str(run['error'])[:200]}")
 
+        try:
+            from ..identity import egress_read
+
+            with ctx.begin() as c:
+                decisions = egress_read.for_project(c, pid, run_id=run_id)
+            for row in decisions:
+                said = egress_read.finding(row)
+                if said:
+                    findings.append(said)
+            checked.append("egress decisions for this run")
+        except Exception:  # noqa: BLE001 — a missing log must not hide the rest
+            could_not_check.append("why egress refused — the decision log could not be read")
+
         # THE ANSWER ENDS WITH THE FIX, NOT WITH THE DIAGNOSIS.
         #
         # "Your build hung on npm run verify" is a good explanation and leaves the operator
@@ -7969,7 +8004,8 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
         "the table (describe_schema lists them), optional equality filters on its columns, "
         "the columns you want and a column to sort newest-first by. Use it when no dedicated "
         "tool answers: 'which deployment target has no host', 'the last 5 events of type X'. "
-        "Not raw SQL; a table without a project_id column cannot be read here.",
+        "Why egress refused a run: table egress_decisions (redacted; not the raw identity "
+        "log). Not raw SQL; a table without a project_id column cannot be read here.",
         _obj({"table": {"type": "string", "description": "a public table with a project_id column"},
               "where": {"type": "object",
                         "description": "optional {column: value} equality filters"},

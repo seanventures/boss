@@ -59,7 +59,22 @@ def list_repositories(connection, project_id: str, *, limit: int = 50) -> list[d
         ),
         {"p": project_id, "lim": limit},
     ).mappings().all()
-    return [dict(r) for r in rows]
+    from ..multirepo import registry
+    from ..multirepo.common import org_of_project
+
+    try:
+        org_id = org_of_project(connection, project_id)
+    except Exception:  # noqa: BLE001 — the list still loads; the warning is absent
+        org_id = None
+    out = []
+    for row in rows:
+        item = dict(row)
+        item.update(registry.clone_note(
+            connection, org_id, full_name=item.get("full_name") or "",
+            binding_status=item.get("status"), connection_status=item.get("connection_status"),
+            last_test_status=item.get("last_test_status")))
+        out.append(item)
+    return out
 
 
 def repository_activity(

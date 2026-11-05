@@ -4684,6 +4684,9 @@ class GitHubRepositoryBindingSummary(BaseModel):
     created_by: str
     created_at: str
     updated_at: str
+    #: Set when this binding looks active/passed and the org allow-list says not_allowed.
+    allow_list_warning: Optional[str] = None
+    clone_allowed: Optional[bool] = None
 
 
 class GitHubRepositoryBindingListResponse(BaseModel):

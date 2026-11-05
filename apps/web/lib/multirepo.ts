@@ -51,6 +51,9 @@ export type ProjectRepo = {
   state?: RepoState | string | null;
   used_by_apps?: { app_key: string; app_name: string; components?: string[] }[];
   checked_at?: string | null;
+  /** Registration looks healthy; the org allow-list says not_allowed, so egress will refuse the clone. */
+  allow_list_warning?: string | null;
+  clone_allowed?: boolean | null;
 };
 export type ProjectApp = { app_key: string; app_name: string; chain?: string | null; deploys_with?: string | null;
                            components?: unknown[] };

@@ -240,6 +240,12 @@ export function GitHubOperations({
           <span>{feed.blockedReason ?? "No API evidence could be loaded."}</span>
         </div>
       ) : null}
+      {selectedBinding?.allow_list_warning ? (
+        <div className="ghx-alert bad" role="alert" data-testid="ghx-allow-list-warning">
+          <strong>Allow-list disagrees with this registration.</strong>
+          <span>{selectedBinding.allow_list_warning}</span>
+        </div>
+      ) : null}
       {feed.warnings.length > 0 ? (
         <details className="ghx-alert warn">
           <summary>{feed.warnings.length} evidence stream warning{feed.warnings.length === 1 ? "" : "s"}</summary>

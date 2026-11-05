@@ -121,6 +121,24 @@ describe("Factory › Repositories", () => {
     expect(calls.filter((c) => c.method !== "GET")).toHaveLength(0);
   });
 
+  it("warns when the registration looks healthy and the allow-list will refuse the clone", async () => {
+    const view = projectReposFixture();
+    const warned = {
+      ...view,
+      items: [{
+        ...view.items[0],
+        allow_list_warning: "acme/contracts: registration is active and the connection test passed, but the org allow-list says not_allowed. Egress will refuse the clone (repo_not_allowed).",
+      }, ...view.items.slice(1)],
+    };
+    stubFetch((c) => (c.method === "GET" && c.path === "/v1/projects/p1/repos" ? { body: warned } : undefined));
+    await mount();
+    const note = tid("mr-prj-allow-warn-bnd_contracts");
+    expect(note?.getAttribute("role")).toBe("alert");
+    expect(note?.textContent).toContain("repo_not_allowed");
+    expect(note?.textContent).toContain("not_allowed");
+    expect(tid("mr-prj-allow-warn-bnd_api")).toBeNull();
+  });
+
   it("the Factory deep-links Repositories and an app's Components", () => {
     expect(readFactoryUrl("?area=code_tasks&view=repositories")).toMatchObject({ view: "repositories", app: null });
     expect(readFactoryUrl("?area=code_tasks&view=components&app=storefront")).toMatchObject({ view: "components", app: "storefront" });
