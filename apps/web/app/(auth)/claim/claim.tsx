@@ -49,11 +49,11 @@ const SETUP_LINK = HOST_COMMANDS.setupLink;
 export const AFTER_CLAIM = "/?area=setup";
 
 const SEAT_WORDS: Record<string, string> = {
-  ceo: "ceo · approvals and history will show your name",
-  cto: "cto · builds and reviews will show your name",
-  cao: "cao · approvals will show your name",
-  vp_agents: "vp_agents · agent history will show your name",
-  release_manager: "release_manager · releases will show your name",
+  ceo: "ceo. Approvals and history will show your name",
+  cto: "cto. Builds and reviews will show your name",
+  cao: "cao. Approvals will show your name",
+  vp_agents: "vp_agents. Agent history will show your name",
+  release_manager: "release_manager. Releases will show your name",
 };
 
 function minutesLeft(iso: string | null, now: number): number | null {

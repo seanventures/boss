@@ -47,12 +47,12 @@ export function clearStepParam(): void {
 // ── The three choices and the presets ─────────────────────────────────────────────────────────
 
 export const CHOICES = [
-  { key: "sample", tag: "NEW HERE?", time: "8 MIN", title: "Try a sample",
-    line: "Watch BOSS build a Hello World app from start to finish.", cta: "Start →", highlight: true },
-  { key: "import", tag: "MOST COMMON", time: "2 MIN", title: "Import a repo",
-    line: "Bring an app you already have, then add features to it.", cta: "Choose repo →", highlight: false },
-  { key: "idea", tag: "FROM SCRATCH", time: "1 MIN", title: "New app from an idea",
-    line: "Describe it in a sentence. BOSS plans it, you approve, it builds.", cta: "Describe it →", highlight: false },
+  { key: "sample", time: "8 min", title: "Try a sample",
+    line: "Watch BOSS build a Hello World app from start to finish.", cta: "Start", highlight: true },
+  { key: "import", time: "2 min", title: "Import a repo",
+    line: "Bring an app you already have, then add features to it.", cta: "Choose repo", highlight: false },
+  { key: "idea", time: "1 min", title: "New app from an idea",
+    line: "Describe it in a sentence. BOSS plans it, you approve, it builds.", cta: "Describe it", highlight: false },
 ] as const;
 
 export type Preset =
@@ -62,9 +62,9 @@ export type Preset =
 /** The banking knowledge-graph presets: a knowledge-graph project, opened on its Documents tab,
  *  where each one's sample loads (AML alerts, the regulation trace, the DQ rulebook). */
 export const KG_PRESETS: Preset[] = [
-  { key: "aml", kind: "knowledge_graph", title: "AML alert investigation", label: "Banking · Knowledge graph", tab: "documents" },
-  { key: "regulatory", kind: "knowledge_graph", title: "Regulatory change", label: "Banking · Knowledge graph", tab: "documents" },
-  { key: "dq", kind: "knowledge_graph", title: "Data quality RCA", label: "Banking · Knowledge graph", tab: "documents" },
+  { key: "aml", kind: "knowledge_graph", title: "AML alert investigation", label: "Banking, knowledge graph", tab: "documents" },
+  { key: "regulatory", kind: "knowledge_graph", title: "Regulatory change", label: "Banking, knowledge graph", tab: "documents" },
+  { key: "dq", kind: "knowledge_graph", title: "Data quality RCA", label: "Banking, knowledge graph", tab: "documents" },
 ];
 
 export function slugOf(title: string): string {

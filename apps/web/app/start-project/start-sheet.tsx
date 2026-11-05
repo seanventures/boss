@@ -167,7 +167,7 @@ export function StartProjectSheet({ step, onStep, onClose, projectId, homeId, go
         <div className="spj-head">
           {step !== "choose" ? (
             <button type="button" className="spj-back" data-testid="start-back" disabled={!!busy}
-                    onClick={() => { setRefusal(null); setError(null); onStep("choose"); }}>← Back</button>
+                    onClick={() => { setRefusal(null); setError(null); onStep("choose"); }}>Back</button>
           ) : null}
           <h2 id={titleId} className="bx-np-title">{step === "import" ? "Import a repo" : step === "sample" ? "Try a sample" : step === "idea" ? "New app from an idea" : "New project"}</h2>
           <button type="button" className="spj-close" aria-label="Close" title="Close" data-testid="start-close"
@@ -181,7 +181,7 @@ export function StartProjectSheet({ step, onStep, onClose, projectId, homeId, go
                 <button key={c.key} type="button" className="spj-choice" data-highlight={c.highlight || undefined}
                         data-testid={`start-${c.key}`} disabled={!!busy}
                         onClick={() => onStep(c.key)}>
-                  <span className="spj-tag">{c.tag} · {c.time}</span>
+                  <span className="spj-tag">{c.time}</span>
                   <b>{c.title}</b>
                   <span className="spj-line">{c.line}</span>
                   <span className="spj-cta">{c.cta}</span>
@@ -203,7 +203,7 @@ export function StartProjectSheet({ step, onStep, onClose, projectId, homeId, go
                 {!all ? (
                   <button type="button" className="spj-preset spj-preset-all" data-testid="start-presets-all"
                           onClick={() => setAll(true)}>
-                    <b>See all {presets.length} →</b>
+                    <b>See all {presets.length}</b>
                   </button>
                 ) : null}
               </div>
@@ -220,7 +220,7 @@ export function StartProjectSheet({ step, onStep, onClose, projectId, homeId, go
               <li><b>Pull request</b><span>You merge</span></li>
               <li><b>Preview</b><span>Live</span></li>
             </ol>
-            <p className="spj-quiet">Hello World · one page and one test · about 8 minutes.</p>
+            <p className="spj-quiet">Hello World. One page and one test. About 8 minutes.</p>
             {refusal ? (
               <div data-testid="start-sample-readiness">
                 <ReadinessPanel readiness={refusal} accepted={startAnyway} onAccept={setStartAnyway} />

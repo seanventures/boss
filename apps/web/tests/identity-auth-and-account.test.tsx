@@ -141,7 +141,7 @@ describe("Claim this BOSS", () => {
     type(el.querySelector("#claim-pw"), "violet-otter-harbour-1987");
     expect(el.querySelector("[data-testid='claim-submit']")?.getAttribute("aria-disabled")).toBeNull();
     expect(navigator.credentials.create).not.toHaveBeenCalled();
-    expect(el.querySelector("#claim-seat")?.textContent).toContain("ceo · approvals and history will show your name");
+    expect(el.querySelector("#claim-seat")?.textContent).toContain("ceo. Approvals and history will show your name");
     accessible(el);
   });
 

@@ -80,7 +80,6 @@ export function RulesReview({ projectId, actor, orgId, archived, locked, initial
       <div className="kg-review" data-testid="kg-rules-locked">
         <div className="kg-stage kg-stage-short">
           <div className="kg-empty">
-            <span className="kg-empty-eyebrow">Rules review</span>
             <h3 className="kg-empty-title">Rules and Learning are an add-on</h3>
             <LockedPanel label="Locked" reason={locked} testId="kg-locked" />
             <p className="kg-empty-body">The code graph stays fully available. Rules agents propose and what they learn while they work need the Knowledge add-on.</p>
@@ -187,7 +186,6 @@ export function RulesReview({ projectId, actor, orgId, archived, locked, initial
           {data && !items.length ? (
             <div className="kg-stage kg-stage-short" data-testid="kg-review-empty">
               <div className="kg-empty">
-                <span className="kg-empty-eyebrow">Rules review</span>
                 <h3 className="kg-empty-title">{status === "proposed" ? "Nothing waiting for review" : `No ${status === "all" ? "" : `${status} `}rules${scan ? " from this scan" : ""}`}</h3>
                 <p className="kg-empty-body">
                   Agents propose business rules when they scan an area: pick an area or package in the graph and press
@@ -459,7 +457,6 @@ function FactsQueue({ w }: { w: { projectId: string; actor: string } }) {
       {items && !items.length ? (
         <div className="kg-stage kg-stage-short" data-testid="kg-facts-empty">
           <div className="kg-empty" role="status">
-            <span className="kg-empty-eyebrow">Facts</span>
             <h3 className="kg-empty-title">Nothing waiting for a person</h3>
             <p className="kg-empty-body">When an agent infers a fact while it works, it waits here until someone approves it as trusted input for every agent, or rejects it.</p>
           </div>

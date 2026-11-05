@@ -41,7 +41,7 @@ export function KgLifecycleCard({ projectId, actor, orgId, projectType }: {
   if (!setup) {
     return (
       <section className="kg-life" data-testid="kg-lifecycle" aria-busy={!error}>
-        <header className="kg-life-head"><span className="kg-empty-eyebrow">Knowledge graph</span></header>
+        <header className="kg-life-head"><h2>Knowledge graph</h2></header>
         {error ? <p className="kg-inline-err" role="alert">Couldn&apos;t read the knowledge graph: {error}</p>
           : <div className="kg-shimmer kg-life-loading" aria-hidden />}
       </section>
@@ -62,7 +62,7 @@ export function KgLifecycleCard({ projectId, actor, orgId, projectType }: {
   return (
     <section className="kg-life" data-testid="kg-lifecycle" aria-label="Knowledge graph">
       <header className="kg-life-head">
-        <span className="kg-empty-eyebrow">Knowledge graph</span>
+        <h2>Knowledge graph</h2>
         <span className="kg-life-progress" data-testid="kg-lifecycle-progress">{next ? `Setup · ${stepsLeftWords(setup)}` : "Set up"}</span>
         <span className="ag-spacer" />
         {next ? (

@@ -360,7 +360,7 @@ export function SharingTab({ projectId, actor, paused }: { projectId: string; ac
               <span title="Receive heartbeats and batches from other installs. For BOSS's own server.">
                 Receive other installs&apos; sends
               </span>
-              {sw.collector.on ? <a className="ag-link" href="/?area=observability&view=installs" data-testid="gv-installs-link">Installs ↗</a> : null}
+              {sw.collector.on ? <a className="ag-link" href="/?area=observability&view=installs" data-testid="gv-installs-link">Installs</a> : null}
             </span>
             <Toggle on={sw.collector.on} label="Collector mode" disabled={busy !== ""} testId="gv-switch-collector"
                     onFlip={() => void flip("collector", !sw.collector.on)} />

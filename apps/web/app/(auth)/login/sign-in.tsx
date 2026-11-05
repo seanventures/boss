@@ -73,7 +73,7 @@ function shortDate(iso: string | null | undefined): string | null {
 
 function say(e: unknown): string {
   if (e instanceof IdentityError) {
-    if (e.code === "invalid_code" && e.attemptsLeft !== null) return `That code didn't work · ${e.attemptsLeft} left`;
+    if (e.code === "invalid_code" && e.attemptsLeft !== null) return `That code didn't work: ${e.attemptsLeft} left`;
     return WORDS[e.code] ?? sayAuth(e);
   }
   return sayAuth(e);
@@ -332,7 +332,7 @@ export function SignIn({ options, next, initialStep = null, notice = null }: {
     <AuthStage label="Sign in">
       <Logo />
       <h1>Welcome back</h1>
-      <p className="idn-s" data-copy="prose">Sign in to {options.org_name} to pick up where your team left off.</p>
+      <p className="idn-s" data-copy="prose">Sign in to {options.org_name}.</p>
       {options.claim ? (
         <div className="idn-claim" data-testid="claim-how">
           <a className="idn-note info" href="/claim" data-testid="claim-door">

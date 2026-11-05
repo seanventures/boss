@@ -107,12 +107,12 @@ export function ProjectStartCard({ projectId, orgId, actor }: {
         <h2 id="spj-page-name">{view.name}</h2>
         {view.repo ? (
           <p data-testid="project-start-repo">
-            <span className="spj-mono">{view.repo.full_name}</span> · {view.repo.branch} ·{" "}
+            <span className="spj-mono">{view.repo.full_name}</span>, {view.repo.branch},{" "}
             <span data-done={view.repo.mapping.done || undefined} data-testid="project-start-mapped">
               {view.repo.mapping.done ? "code mapped ✓" : mappingWords(view.repo.mapping).toLowerCase()}
             </span>
           </p>
-        ) : <p className="spj-quiet" data-testid="project-start-repo">New app · BOSS makes its repo</p>}
+        ) : <p className="spj-quiet" data-testid="project-start-repo">New app. BOSS makes its repo.</p>}
       </header>
 
       <div className="spj-ask" data-testid="project-start-ask">

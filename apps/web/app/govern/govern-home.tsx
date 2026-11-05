@@ -127,9 +127,9 @@ export function GovernHome({ projectId, actor }: { projectId: string; actor: str
                       data-testid={`gv-tab-${t.key}`} title={t.tip} onClick={() => go(t.key)}>{t.label}</button>
             ))}
             <a className="ag-link" href={links.changes || undefined} data-testid="gv-changes"
-               title="Every limit someone changed, in the Log">Changes ↗</a>
+               title="Every limit someone changed, in the Log">Changes</a>
             <a className="ag-link" href={links.stopped || undefined} data-testid="gv-stopped"
-               title="Work a limit stopped, in the Log">Stopped ↗</a>
+               title="Work a limit stopped, in the Log">Stopped</a>
           </span>
         </details>
       </header>
@@ -140,7 +140,7 @@ export function GovernHome({ projectId, actor }: { projectId: string; actor: str
         <div className="gv-frozen" role="status" data-testid="gv-frozen">
           <span>New work is waiting for budget</span>
           <button type="button" className="ag-btn" onClick={() => go("limits", "monthly_cap")}>Raise monthly cap</button>
-          <a className="ag-link" href={links.stopped || undefined}>Stopped ↗</a>
+          <a className="ag-link" href={links.stopped || undefined}>Stopped</a>
         </div>
       ) : null}
       {tab === "overview" && !ready ? (

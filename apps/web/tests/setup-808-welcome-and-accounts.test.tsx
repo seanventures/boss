@@ -82,7 +82,7 @@ describe("Screen 1 — Get started is its own place", () => {
     expect(q(container, "su-wl-idea")!.getAttribute("href")).toBe("/?new_project=idea");
     const flow = [...container.querySelectorAll(".su-wl-flow > li.su-chip")].map((li) => li.textContent);
     expect(flow).toEqual(["Idea", "Plan (you approve)", "Build", "Review", "Pull request", "Live preview"]);
-    expect(container.textContent).toContain("~8 min · included in your subscription");
+    expect(container.textContent).toContain("About 8 minutes, included in your subscription");
     expect(q(container, "su-accounts")).toBeNull();
     expect(q(container, "su-row-repository")).toBeNull();
   });
@@ -102,8 +102,8 @@ describe("Screen 1 — Get started is its own place", () => {
     const view = withAccounts(tryStep());
     fakeApi(view);
     const { container } = await mount(view, "?area=welcome", "welcome");
-    expect(q(container, "su-wl-github-done")!.textContent).toBe("Connected as paramg · 2 repos BOSS can use");
-    expect(q(container, "su-wl-model-done")!.textContent).toBe("Claude Code signed in · builds and reviews will use it");
+    expect(q(container, "su-wl-github-done")!.textContent).toBe("Connected as paramg. 2 repos BOSS can use");
+    expect(q(container, "su-wl-model-done")!.textContent).toBe("Claude Code signed in. Builds and reviews use it.");
     expect(q(container, "su-wl-github-more")!.textContent).toBe("Add another account");
     expect(q(container, "su-wl-model-more")!.textContent).toBe("Add another model");
     expect(q(container, "su-wl-sample")!.getAttribute("data-current")).toBe("true");

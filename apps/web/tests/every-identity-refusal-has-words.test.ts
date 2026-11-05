@@ -62,7 +62,7 @@ describe("every identity refusal has words", () => {
     expect(errorSentence(403, "x_y", undefined, { detail: "Only Owners may do this." })).toBe("Only Owners may do this.");
     expect(refusalSentence(new IdentityError(403, "policy_refused", { body: { error: "policy_refused", detail: "Longer than your org allows." } })))
       .toBe("Longer than your org allows.");
-    expect(refusalSentence(new Error("socket hang up"))).toBe("That didn't work · socket hang up");
+    expect(refusalSentence(new Error("socket hang up"))).toBe("That didn't work: socket hang up");
   });
 
   it("keeps the bare words in refusalSentence alone across the identity screens", () => {

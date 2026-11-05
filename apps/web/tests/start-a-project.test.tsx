@@ -180,16 +180,16 @@ describe("screen 1 — New project", () => {
     stubFetch(() => undefined);
     await mountAs(<StartProjectSheet step="choose" onStep={() => {}} onClose={() => {}} projectId="p1" homeId="p1" />);
     const doors = ["sample", "import", "idea"].map((k) => tid(`start-${k}`)!);
-    expect(doors.map((d) => d.querySelector(".spj-tag")!.textContent)).toEqual(["NEW HERE? · 8 MIN", "MOST COMMON · 2 MIN", "FROM SCRATCH · 1 MIN"]);
+    expect(doors.map((d) => d.querySelector(".spj-tag")!.textContent)).toEqual(["8 min", "2 min", "1 min"]);
     expect(doors.map((d) => d.querySelector("b")!.textContent)).toEqual(["Try a sample", "Import a repo", "New app from an idea"]);
-    expect(doors.map((d) => d.querySelector(".spj-cta")!.textContent)).toEqual(["Start →", "Choose repo →", "Describe it →"]);
+    expect(doors.map((d) => d.querySelector(".spj-cta")!.textContent)).toEqual(["Start", "Choose repo", "Describe it"]);
     expect(doors[0].getAttribute("data-highlight")).toBe("true");
     const presets = $$('[data-testid="start-presets"] .spj-preset:not(.spj-preset-all)');
     expect(presets.map((p) => p.textContent)).toContain("Bug triage boardWeb app");
     for (const kg of ["AML alert investigation", "Regulatory change", "Data quality RCA"]) {
-      expect(presets.map((p) => p.textContent)).toContain(`${kg}Banking · Knowledge graph`);
+      expect(presets.map((p) => p.textContent)).toContain(`${kg}Banking, knowledge graph`);
     }
-    expect(tid("start-presets-all")!.textContent).toBe("See all 19 →");
+    expect(tid("start-presets-all")!.textContent).toBe("See all 19");
     await click(tid("start-presets-all"));
     expect($$('[data-testid="start-presets"] .spj-preset').length).toBe(19);
   });
@@ -357,7 +357,7 @@ describe("screen 3 — What should we add?", () => {
     const calls = api();
     await mountAs(<ProjectStartCard projectId="order-service" orgId="org_1" />);
     expect(tid("project-start")!.querySelector("h2")!.textContent).toBe("Order service");
-    expect(tid("project-start-repo")!.textContent).toBe("acme/order-service · develop · code mapped ✓");
+    expect(tid("project-start-repo")!.textContent).toBe("acme/order-service, develop, code mapped ✓");
     expect(tid("project-start-ask")!.querySelector("label")!.textContent).toBe("What should we add?");
     expect($$('[data-testid="project-start-chips"] button').map((b) => b.textContent))
       .toEqual(["Add an API endpoint", "Fix a bug", "Add tests", "Upgrade a library"]);

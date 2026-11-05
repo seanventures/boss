@@ -1056,8 +1056,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         <section className="panel-stack" data-area="dashboard" aria-label="Live dashboard">
           <div className="section-head">
             <div>
-              <span className="eyebrow">Live Dashboard</span>
-              <h2>Cross-phase control snapshot</h2>
+              <h2>Live dashboard</h2>
             </div>
           </div>
           <DashboardPanel feed={dashboardSnapshot} />
@@ -1074,11 +1073,10 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         <section className="panel-stack" data-area="assurance" aria-label="Security scanning">
           <div className="section-head">
             <div>
-              <span className="eyebrow">Security scan</span>
-              <h2>OSS vulnerability scanning with a governed go/no-go gate.</h2>
+              <h2>Security scan</h2>
             </div>
             <p className="status-meta">
-              Semgrep · Trivy · OSV · Gitleaks — receipted runs for project{" "}
+              Semgrep, Trivy, OSV, and Gitleaks. Receipted runs for project{" "}
               {activeProjectId}.
             </p>
           </div>
@@ -1108,11 +1106,10 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         <section className="panel-stack mission-roster-section" data-area="org" aria-label="Agent roster">
           <div className="section-head">
             <div>
-              <span className="eyebrow">Agent Roster</span>
-              <h2>Operators and autonomous roles active in this project.</h2>
+              <h2>Agent roster</h2>
             </div>
             <span className="ar-meta">
-              {ccRoster.length} specialized workers ·{" "}
+              {ccRoster.length} workers,{" "}
               <span className="ar-meta-active">
                 {ccRoster.filter((agent) => agent.state !== "idle").length} active
               </span>
@@ -1135,12 +1132,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         <section className="panel-stack" data-area="portfolio" aria-label="Release planning">
           <div className="section-head">
             <div>
-              <span className="eyebrow">Release planning</span>
-              <h2>Built / building / planned / blocked — release board and plans.</h2>
+              <h2>Release planning</h2>
             </div>
-            <p className="status-meta">
-              From BOSS&apos;s release board and plans for project {activeProjectId}.
-            </p>
           </div>
           <ReleasePlanningPanel
             snapshot={releaseStatus}
@@ -1202,13 +1195,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         <section className="panel-stack">
           <div className="section-head">
             <div>
-              <span className="eyebrow" data-area="org">Org Delegation</span>
-              <h2>Organization-wide actors with scoped project authorization.</h2>
+              <h2>Org delegation</h2>
             </div>
-            <p className="status-meta">
-              Delegated actors are explicit, scoped to the projects they may act on,
-              and every change to them is recorded in the audit log.
-            </p>
           </div>
 
           <div className="stack-grid">
@@ -1320,13 +1308,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         <section className="panel-stack">
           <div className="section-head">
             <div>
-              <span className="eyebrow" data-area="org">Break-Glass Access</span>
-              <h2>Emergency RBAC with TTL and postmortem tasks.</h2>
+              <h2>Break-glass access</h2>
             </div>
-            <p className="status-meta">
-              PRD 9.2 requires identity, reason, scope, TTL, event log, and a
-              postmortem task for emergency access.
-            </p>
           </div>
 
           <div className="stack-grid">
@@ -1505,8 +1488,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         <section className="panel-stack" data-area="ops" aria-label="Workflow health">
           <div className="section-head">
             <div>
-              <span className="eyebrow">Workflow Health</span>
-              <h2>Mission control — what is running, stuck, or failing.</h2>
+              <h2>Workflow health</h2>
             </div>
           </div>
           <CanaryCard projectId={activeProjectId} run={canaryRun} />
@@ -1529,12 +1511,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         <section className="panel-stack" data-area="ops" aria-label="Reusable workflow registry">
           <div className="section-head">
             <div>
-              <span className="eyebrow">Workflow Runtime</span>
-              <h2>Mapped playbooks with pinned versions and visible execution.</h2>
+              <h2>Workflow runtime</h2>
             </div>
-            <p className="status-meta">
-              Definitions, work-class mappings, live frontiers, and audit evidence share one durable control plane.
-            </p>
           </div>
           <WorkflowRegistryView
             apiReachable={workflowFeed.apiReachable}
@@ -1551,12 +1529,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         <section className="panel-stack">
           <div className="section-head">
             <div>
-              <span className="eyebrow" data-area="ops">Health Snapshots</span>
-              <h2>Durable system state for what changed and what is risky.</h2>
+              <h2>Health snapshots</h2>
             </div>
-            <p className="status-meta">
-              Metatron-style visibility now has a canonical snapshot object with queue, budget, workload, and incident state.
-            </p>
           </div>
 
           <div className="stack-grid">
@@ -1701,12 +1675,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         <section className="panel-stack" data-area="ops" aria-label="Safety & policy">
           <div className="section-head">
             <div>
-              <span className="eyebrow">Safety &amp; Policy</span>
-              <h2>The trust moat — every boundary decision, on the record.</h2>
+              <h2>Safety and policy</h2>
             </div>
-            <p className="status-meta">
-              Policy-eval audit trail, cost-anomaly scanning with auto-lite, and run tracing.
-            </p>
           </div>
           <div className="stack-grid">
             <PolicyEvalList items={policyEvals} />
@@ -1720,12 +1690,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         <section className="panel-stack" data-area="ops" aria-label="Autonomy, router & skills">
           <div className="section-head">
             <div>
-              <span className="eyebrow">Autonomy · Router · Skills</span>
-              <h2>Earned autonomy and the model/skill runtime.</h2>
+              <h2>Autonomy, router, and skills</h2>
             </div>
-            <p className="status-meta">
-              Evidence-based autonomy evaluation, router health + rationale, and mock skill invocation.
-            </p>
           </div>
           <div className="stack-grid">
             <AutonomyEvaluateCard projectId={activeProjectId} actor={activeActorId} />
@@ -1743,12 +1709,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         <section className="panel-stack" data-area="ops" aria-label="Resilience">
           <div className="section-head">
             <div>
-              <span className="eyebrow">Resilience</span>
-              <h2>Chaos &amp; load — prove recovery, not assume it.</h2>
+              <h2>Resilience</h2>
             </div>
-            <p className="status-meta">
-              Inject controlled faults against the live primitives and record how the system recovers.
-            </p>
           </div>
           <div className="stack-grid">
             <ChaosCard projectId={activeProjectId} runs={chaosRuns} />
@@ -1760,12 +1722,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         <section className="panel-stack">
           <div className="section-head">
             <div>
-              <span className="eyebrow" data-area="ops">Audit & Replay</span>
-              <h2>Exportable lineage for real runs.</h2>
+              <h2>Audit and replay</h2>
             </div>
-            <p className="status-meta">
-              Every receipt, reservation, routing choice, and event should be reconstructable through the API.
-            </p>
           </div>
 
           <div className="stack-grid">
@@ -1929,11 +1887,10 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         <section className="panel-stack">
           <div className="section-head">
             <div>
-              <span className="eyebrow" data-area="comms">Communications</span>
-              <h2>Outbox discipline before external sends.</h2>
+              <h2>Communications</h2>
             </div>
             <p className="status-meta">
-              Messages are drafted and queued through the API first. Real Slack delivery stays policy-gated and receipt-backed.
+              Slack sends stay policy-gated, and each send has a receipt.
             </p>
           </div>
 
@@ -2182,12 +2139,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         <section className="panel-stack">
           <div className="section-head">
             <div>
-              <span className="eyebrow" data-area="org">Company Pack</span>
-              <h2>Installed roles and operating charter.</h2>
+              <h2>Company pack</h2>
             </div>
-            <p className="status-meta">
-              Company structure is now installed from spec-backed packs, not hardcoded UI assumptions.
-            </p>
           </div>
 
           <div className="stack-grid">
@@ -2311,12 +2264,11 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         >
           <div className="section-head">
             <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-              <span className="eyebrow">Identity providers</span>
-              <CommunityIncludedBadge label="SSO · Community" />
+              <h2>Identity providers</h2>
+              <CommunityIncludedBadge label="SSO, Community" />
             </div>
-            <h2>Identity providers BOSS can record — and what sign-in uses today.</h2>
             <p className="status-meta">
-              Provider records for project {activeProjectId}. Secrets are referenced by name,
+              Records for project {activeProjectId}. Secrets are referenced by name,
               never shown. Included in Community.
             </p>
           </div>
@@ -2709,14 +2661,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         {shows("org") ? (
         <section className="panel-stack" data-area="org" aria-label="Agent marketplace">
           <div className="section-head">
-            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-              <span className="eyebrow" data-area="org">Agent Marketplace</span>
+            <div>
+              <h2>Agent marketplace</h2>
             </div>
-            <h2>Packaged worker modules with contained prompts, skills, and runtime policy.</h2>
-            <p className="status-meta">
-              Modules are installable catalog units that can own a role charter, prompt bundle,
-              runtime job kinds, and configuration defaults.
-            </p>
           </div>
 
           <article className="stack-card">
@@ -2866,8 +2813,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         <section className="panel-stack" data-area="reports" aria-label="Reports">
           <div className="section-head">
             <div>
-              <span className="eyebrow">Reports</span>
-              <h2>Holistic view — throughput, cost, and agent performance.</h2>
+              <h2>Reports</h2>
             </div>
           </div>
           {(() => {
@@ -2969,7 +2915,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     <span><small>Test duration</small><strong>{formatMsDuration(testDurationMs)}</strong></span>
                   </div>
                   <div className="mission-receipt-verification">
-                    <span className="eyebrow">Verification</span>
+                    <strong>Verification</strong>
                     {checks.map((c, i) => (
                       <p key={i}>
                         <span className={`dot ${c.ok ? "green" : "red"}`} aria-hidden /> {c.label}
@@ -2977,9 +2923,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     ))}
                   </div>
                   <div className="mission-receipt-files">
-                    <span className="eyebrow">
-                      Files changed{st.files_changed != null ? ` · ${st.files_changed}` : ""}
-                    </span>
+                    <strong>
+                      Files changed{st.files_changed != null ? ` (${st.files_changed})` : ""}
+                    </strong>
                     {paths.length > 0 ? (
                       paths.slice(0, 14).map((p, i) => <code key={i}>{p}</code>)
                     ) : (
@@ -2992,7 +2938,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     )}
                     {codeTask.pull_request_url ? (
                       <a href={codeTask.pull_request_url} target="_blank" rel="noreferrer">
-                        → {codeTask.pull_request_url}
+                        {codeTask.pull_request_url}
                       </a>
                     ) : null}
                   </div>
@@ -3016,7 +2962,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     <span><small>Dedupe key</small><strong>{receipt.dedupeKey}</strong></span>
                   </div>
                   <div className="mission-receipt-verification">
-                    <span className="eyebrow">Verification</span>
+                    <strong>Verification</strong>
                     <p><span className="dot green" aria-hidden /> Durable receipt recorded in the control plane</p>
                     <p><span className="dot green" aria-hidden /> Unique dedupe key prevents duplicate effects</p>
                     <p><span className="dot green" aria-hidden /> Provider and job lineage remain auditable</p>
@@ -3037,8 +2983,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         <section className="panel-stack" data-area="capabilities" aria-label="Capabilities">
           <div className="section-head">
             <div>
-              <span className="eyebrow">Capabilities</span>
-              <h2>Agent tools &amp; MCP servers — discover, audit, extend.</h2>
+              <h2>Capabilities</h2>
             </div>
           </div>
           <CapabilitiesView
@@ -3115,8 +3060,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         <section className="panel-stack" data-area="shepherd" aria-label="Task Shepherd">
           <div className="section-head">
             <div>
-              <span className="eyebrow">Task Shepherd</span>
-              <h2>An internal AI developer that owns a task until it ships — or asks you one clear question.</h2>
+              <h2>Task shepherd</h2>
             </div>
           </div>
           <ShepherdConsole initial={shepherdOverview} />
@@ -3167,8 +3111,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         <section className="panel-stack" data-area="reliability" aria-label="On-call SRE">
           <div className="section-head">
             <div>
-              <span className="eyebrow">On-call</span>
-              <h2>Schedules, escalation policies, and open pages for this project.</h2>
+              <h2>On-call</h2>
             </div>
             <p className="status-meta">
               Notify adapters default to dry-run until a token or webhook is configured.
@@ -3182,8 +3125,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         <section className="panel-stack" data-area="reliability" aria-label="Reliability">
           <div className="section-head">
             <div>
-              <span className="eyebrow">Reliability</span>
-              <h2>AI SRE — anomalies become incidents, incidents become governed fix PRs, and the loop learns.</h2>
+              <h2>Reliability</h2>
             </div>
           </div>
           <ReliabilityHome feed={reliabilityFeed} />
@@ -3194,11 +3136,10 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         <section className="panel-stack" data-area="ai-sre" aria-label="AI SRE">
           <div className="section-head">
             <div>
-              <span className="eyebrow">AI SRE</span>
-              <h2>Capability ledger — category, status, and the remaining gap. Missing stays missing.</h2>
+              <h2>AI SRE</h2>
             </div>
             <p className="status-meta">
-              A coverage ledger kept by BOSS. Not public GA.
+              Not public GA.
             </p>
           </div>
           <AiSreHome feed={aiSreFeed} />
@@ -3209,12 +3150,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         <section className="panel-stack" data-area="reliability" aria-label="Knowledge graph">
           <div className="section-head">
             <div>
-              <span className="eyebrow">Knowledge graph</span>
-              <h2>Service topology, known causes, and RCA context for reliability.</h2>
+              <h2>Knowledge graph</h2>
             </div>
-            <p className="status-meta">
-              Seed from infra fabric; query known causes per service.
-            </p>
           </div>
           <KnowledgeGraphPanel feed={knowledgeGraphFeed} />
           {/* Search, why, blast radius and the knowledge settings moved to Graph (KG spec §5.1). */}
@@ -3246,8 +3183,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         <section className="panel-stack" data-area="sandboxes" aria-label="Sandboxes">
           <div className="section-head">
             <div>
-              <span className="eyebrow">Execution Plane</span>
-              <h2>Inspect live sandboxes — browse the working tree and run a governed console.</h2>
+              <h2>Sandboxes</h2>
             </div>
           </div>
           <SandboxesHome
@@ -3285,8 +3221,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         <section className="panel-stack" data-area="work" aria-label="Task runs">
           <div className="section-head">
             <div>
-              <span className="eyebrow">Task Runs</span>
-              <h2>Workflow transitions — click a task to trace its run.</h2>
+              <h2>Task runs</h2>
             </div>
           </div>
           <MissionTaskBoard
@@ -3313,13 +3248,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         <section className="panel-stack">
           <div className="section-head">
             <div>
-              <span className="eyebrow" data-area="work">Company Workspace</span>
-              <h2>Tasks and artifacts with real lineage.</h2>
+              <h2>Company workspace</h2>
             </div>
-            <p className="status-meta">
-              The console reads canonical work objects directly from the control
-              plane API.
-            </p>
           </div>
 
           <div className="stack-grid">
@@ -3504,12 +3434,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         <section className="panel-stack">
           <div className="section-head">
             <div>
-              <span className="eyebrow" data-area="work">What Changed</span>
-              <h2>Recent events and visible failures.</h2>
+              <h2>Recent events and failures</h2>
             </div>
-            <p className="status-meta">
-              No silent drops: deadletters remain visible beside the event feed.
-            </p>
           </div>
 
           <div className="stack-grid">
@@ -3735,8 +3661,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         <section className="panel-stack approval-rules-section" aria-label="Approval rules">
           <div className="section-head">
             <div>
-              <span className="eyebrow" data-area="decisions">Approval Rules</span>
-              <h2>What requires your approval — and why.</h2>
+              <h2>What needs your approval</h2>
             </div>
           </div>
           <ApprovalRulesView rules={approvalRules.rules} apiReachable={approvalRules.apiReachable} />

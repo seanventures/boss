@@ -685,14 +685,11 @@ h1, h2, h3, h4, h5, h6 {
   color: var(--ink);
 }
 
-/* gradient text utility */
 .grad-text,
 .hero h1 {
-  background: var(--brand-grad);
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-  color: transparent;
+  background: none;
+  -webkit-text-fill-color: currentColor;
+  color: var(--ink);
 }
 
 /* ============================================================
@@ -3491,10 +3488,8 @@ select.input:focus {
 .ov-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; flex-wrap: wrap; padding: 4px 2px 2px; }
 .ov-header-copy { flex: 1 1 600px; max-width: 92ch; }
 .ov-header-copy h1 {
-  /* match the original hero: brand-gradient text + bold display sizing */
-  background: var(--brand-grad);
-  -webkit-background-clip: text; background-clip: text;
-  -webkit-text-fill-color: transparent; color: transparent;
+  background: none;
+  -webkit-text-fill-color: currentColor; color: var(--ink);
   font-weight: 800; font-size: clamp(2.1rem, 3.4vw, 3.1rem);
   line-height: 1.05; letter-spacing: -0.03em; margin: 10px 0 14px;
 }
@@ -5387,8 +5382,7 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   background: conic-gradient(from 0deg,
     rgba(76, 141, 246, .00) 0deg,
     rgba(76, 141, 246, .16) 70deg,
-    rgba(46, 209, 195, .14) 150deg,
-    rgba(139, 106, 245, .14) 240deg,
+    rgba(46, 209, 195, .14) 200deg,
     rgba(76, 141, 246, .00) 360deg);
   filter: blur(52px);
   opacity: .34;

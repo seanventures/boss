@@ -206,7 +206,7 @@ describe("states", () => {
   it("frozen: one line above the board, with the way out", async () => {
     g.view = governView({ meter: { ...(governView().meter as object), state: "red", state_label: "Frozen" } });
     await mount(<GovernHome projectId="p1" actor="ceo" />);
-    expect(t("[data-testid=gv-frozen]")).toBe("New work is waiting for budgetRaise monthly capStopped ↗");
+    expect(t("[data-testid=gv-frozen]")).toBe("New work is waiting for budgetRaise monthly capStopped");
     expect(t("[data-testid=gv-meter-state]")).toBe("Frozen");
   });
 
