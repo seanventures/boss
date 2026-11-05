@@ -60,6 +60,8 @@ const BADGE_TIP: Record<string, string> = {
   unknown: "Set a cap in Limits",
 };
 
+const OTHER_TIP = "Money no model call explains: tools, provider charges, unattributed";
+
 export type Badge = { tone: "green" | "yellow" | "red" | "unknown"; text: string };
 
 function periodOf(meter: Meter | null | undefined, which: "day" | "month"): Period | null {
@@ -111,9 +113,8 @@ function HeroBar({ period, tone }: { period: Period; tone: Badge["tone"] }) {
 function BarRows({ rows: all, testid, empty, mine }: {
   rows: { id: string; name: string; money: number; included: number }[]; testid: string; empty: string; mine?: string;
 }) {
-  // Nothing spent and nothing included says nothing: folded into one quiet count.
+  // Only what spent (or ran included) in the window is listed: a zero row is a catalogue entry.
   const rows = all.filter((r) => r.money > 0 || r.included > 0 || r.id === mine);
-  const quiet = all.length - rows.length;
   const peak = Math.max(1, ...rows.map((r) => r.money || r.included));
   if (!rows.length) return <span className="gv-muted" data-testid={`${testid}-empty`}>{empty}</span>;
   return (
@@ -121,7 +122,7 @@ function BarRows({ rows: all, testid, empty, mine }: {
     <ul className="gv-hbars" data-testid={testid}>
       {rows.map((r) => (
         <li key={r.id} data-testid={`${testid}-row`} data-mine={r.id === mine || undefined}>
-          <span className="gv-hbar-name" data-user-text title={r.id === mine ? `${r.id} · this project` : r.id}>{r.name}</span>
+          <span className="gv-hbar-name" data-user-text title={r.id === "other" ? OTHER_TIP : r.id === mine ? `${r.id} · this project` : r.id}>{r.name}</span>
           <span className="gv-hbar-track" aria-hidden="true">
             <span className="gv-hbar-fill" data-included={!r.money || undefined}
                   style={{ width: `${Math.max(2, ((r.money || r.included) / peak) * 100).toFixed(1)}%` }} />
@@ -132,7 +133,6 @@ function BarRows({ rows: all, testid, empty, mine }: {
         </li>
       ))}
     </ul>
-    {quiet ? <span className="gv-muted" data-testid={`${testid}-quiet`}>+{quiet} with no spend</span> : null}
     </>
   );
 }

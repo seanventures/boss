@@ -153,7 +153,9 @@ describe("Screen A — Govern › Spend is the landing", () => {
     // a model with nothing spent or included is folded into a count.
     expect(rows("gv-home-models")).toEqual([["Claude Opus 4.8 (1M)", "$390"], ["GPT-4o", "$20.00"],
                                             ["Other spend", "$2.00"], ["Claude Sonnet 4.5", "Included"]]);
-    expect(t("[data-testid=gv-home-models-quiet]")).toBe("+1 with no spend");
+    expect($("[data-testid$=-quiet]")).toBeNull(); // zero rows are catalogue entries: not listed, not counted
+    const other = $$("[data-testid=gv-home-models-row]").find((li) => li.children[0].textContent === "Other spend")!;
+    expect(other.children[0].getAttribute("title")).toBe("Money no model call explains: tools, provider charges, unattributed");
     expect(rows("gv-home-projects")).toEqual([["HelpDesk AI", "$412"], ["Billing", "$172"]]);
     expect(t("[data-testid=gv-hero-scope]")).toBe("This project · HelpDesk AI");
     await click($("[data-testid=gv-where]"));
