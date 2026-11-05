@@ -16,6 +16,7 @@ from . import owned_process
 from . import decision_actions
 from .core import create_artifact, create_blocking_decision, emit_event, make_id
 from .github_adapter import GitHubAdapter
+from .low_trust import Ledger, blocked, outside_origin, remember, sink_for_skill
 from .mcp_client import MCPClient
 from .mcp_registry import auth_headers
 from .mcp_registry import list_mcp_servers
@@ -2164,6 +2165,94 @@ def resume_agent_run(connection: Connection, settings: Settings, run_id: str) ->
     return _drive_run(connection, settings, run_id, None)
 
 
+def _sink_for_call(name: str, mcp_map: dict, skill_map: dict) -> Optional[str]:
+    """`external_provider` or `write` when this call would send text out, else None."""
+    if name in _WRITE_FNS:
+        return "write"
+    if name in mcp_map:
+        return "external_provider"
+    skill = skill_map.get(name)
+    return sink_for_skill(skill) if isinstance(skill, dict) else None
+
+
+def _origin_for_call(name: str, mcp_map: dict, skill_map: dict) -> Optional[str]:
+    """How this call's result arrived from outside, or None for the operator's own data."""
+    if name in mcp_map:
+        _server, tool = mcp_map[name]
+        real = str(tool.get("name") or name)
+        return outside_origin(real, kind="mcp", mcp_tool=real)
+    skill = skill_map.get(name)
+    if isinstance(skill, dict):
+        policy = skill.get("policy") or {}
+        return outside_origin(
+            str(skill.get("id") or name),
+            kind=str(skill.get("kind") or ""),
+            mcp_tool=str(policy.get("mcp_tool") or ""),
+        )
+    return outside_origin(name)
+
+
+def _hold_for_untrusted_content(
+    connection, project_id, task_id, run_id, step, name, args, sink, hold,
+    mcp_map, skill_map, skill_resolution,
+) -> tuple[dict, dict]:
+    """Pause the run on a decision. Resume executes the pending call; this is not checked again."""
+    origin = str(hold.get("origin") or "tool_result").replace("_", " ")
+    question = (
+        f"Approve {name}? It carries content that arrived from outside the operator "
+        f"({origin}), and it has not been sent."
+    )
+    recommendation: dict[str, Any] = {
+        "action": "resume_agent_run",
+        "run_id": run_id,
+        "tool": name,
+        "args": args,
+        "task_id": task_id,
+        "sink": sink,
+        "untrusted_origin": hold.get("origin"),
+    }
+    if name in mcp_map:
+        server, tool = mcp_map[name]
+        tool_name = str(tool.get("name") or "tool")
+        recommendation.update({
+            "kind": "mcp", "server_id": server["id"], "tool_name": tool_name,
+        })
+        pending: dict[str, Any] = {
+            "kind": "mcp", "tool": name, "server_id": server["id"],
+            "tool_name": tool_name, "args": args, "step": step,
+        }
+    elif name in skill_map:
+        skill = skill_map[name]
+        skill_id = str(skill.get("id") or name)
+        caller = str(
+            skill.get("caller") or skill.get("role_key")
+            or (skill_resolution or {}).get("role_key") or "agent_loop"
+        )
+        recommendation.update({"kind": "skill", "skill_id": skill_id, "caller": caller})
+        pending = {
+            "kind": "skill", "tool": name, "skill_id": skill_id,
+            "caller": caller, "args": args,
+        }
+    else:
+        pending = {"tool": name, "args": args}
+    decision_id = create_blocking_decision(
+        connection, project_id, task_id, question, recommendation, {},
+        "untrusted_content_requires_approval",
+    )
+    pending["decision_id"] = decision_id
+    emit_event(
+        connection, project_id, "agent.tool_deferred", "agent_loop", "decision",
+        decision_id, {"tool": name, "sink": sink, "step": step, "untrusted": True},
+    )
+    return {
+        "status": "deferred_for_approval",
+        "decision_id": decision_id,
+        "untrusted": True,
+        "sent": False,
+        "message": hold.get("message") or question,
+    }, pending
+
+
 def _drive_run(connection: Connection, settings: Settings, run_id: str, max_steps: Optional[int]) -> dict:
     run = load_agent_run(connection, run_id)
     project_id = run["project_id"]
@@ -2298,6 +2387,10 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
         occupied,
         [spec for spec in eager if str(spec["id"]) not in _bundled],
     )
+    # Spans survive a clipped tool message: the run row keeps them, and a resumed drive
+    # rebuilds from that plus any tool message that still carries the mark.
+    _untrusted = Ledger.load(finalize_ctx.get("untrusted_spans"))
+    _untrusted.absorb_messages(messages)
     on_demand_loader: Optional[str] = None
     if skill_resolution["on_demand"]:
         on_demand_loader = _unique_tool_name(
@@ -2411,12 +2504,27 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
             identity_refused = (_identity_refusal(connection, project_id, name, mcp_map=mcp_map, repo_map=repo_map,
                                                   skill_map=skill_map, on_demand_loader=on_demand_loader)
                                 if deferred is None and budget_wait is None else None)
+            # OUTSIDE TEXT DOES NOT LEAVE. A page, a tool result, or a document remembered
+            # earlier in this run waits here instead of being sent. Resume runs the pending
+            # call without asking this again, so an approval can release it.
+            sink = None
+            untrusted_hold = None
+            if deferred is None and budget_wait is None and identity_refused is None:
+                sink = _sink_for_call(name, mcp_map, skill_map)
+                if sink is not None:
+                    untrusted_hold = blocked(args, sink=sink, ledger=_untrusted)
             if deferred is not None:
                 result = {"status": "skipped", "note": "a prior action this turn awaits approval"}
             elif budget_wait is not None:
                 result = {"status": "skipped", "note": BUDGET_BUSY_MESSAGE}
             elif identity_refused is not None:
                 result = identity_refused
+            elif untrusted_hold is not None:
+                result, deferred = _hold_for_untrusted_content(
+                    connection, project_id, task_id, run_id, step, name, args, sink,
+                    untrusted_hold, mcp_map, skill_map, skill_resolution,
+                )
+                is_deferred = True
             elif on_demand_loader is not None and name == on_demand_loader:
                 requested_id = str(args.get("skill_id") or "")
                 current_resolution = _skill_resolution_for_run(
@@ -2754,6 +2862,17 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
             else:
                 result = _dispatch(connection, project_id, settings, name, args)
                 emit_event(connection, project_id, "agent.tool_invoked", "agent_loop", "task", task_id or project_id, {"tool": name, "step": step})
+            arrived = _origin_for_call(name, mcp_map, skill_map)
+            if (
+                arrived
+                and isinstance(result, dict)
+                and result.get("status") not in (
+                    "deferred_for_approval", "skipped", "denied", "refused",
+                    "awaiting_approval",
+                )
+            ):
+                result = remember(result, origin=arrived, ledger=_untrusted, echoed=args)
+                finalize_ctx["untrusted_spans"] = _untrusted.export()
             step_obj = {"step": step, "tool": name, "args": args, "result_preview": _preview_of(result), "deferred": is_deferred}
             if tc_idx == 0 and thought:
                 step_obj["thought"] = thought
