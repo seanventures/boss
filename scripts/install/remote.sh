@@ -163,6 +163,15 @@ TTY_OPT=()
 [[ -t 1 ]] && TTY_OPT=(-t)
 
 rsh()  { ssh "${SSH_OPTS[@]}" "$HOST" "$@"; }
+# THE PREVIOUS TREE GOES, OR MOVES ASIDE. Docker creates the read-only mount point
+# .boss/selfsrc as root, so a plain `rm -rf $DIR.prev` failed after every good update and the
+# NEXT update stopped at "previous source remains" (boss-1, 2026-11-05: eight such leftovers).
+# An empty root-owned mount point holds nothing: rm, else sudo -n rm, else rename with a stamp.
+clear_prev() {
+  rsh "rm -rf '$DIR.prev' 2>/dev/null; [ ! -e '$DIR.prev' ] && exit 0
+       sudo -n rm -rf '$DIR.prev' 2>/dev/null; [ ! -e '$DIR.prev' ] && exit 0
+       mv '$DIR.prev' '$DIR.prev.'\$(date +%s)"
+}
 rshq() { ssh "${SSH_OPTS[@]}" "$HOST" "$@" 2>/dev/null; }
 
 # Shell text, run ON THE SERVER, that sets variable $1 to the host tools' key: BOSS_HOST_API_KEY
@@ -314,7 +323,7 @@ cmd_install() {
   # silent block at the end.
   ssh "${SSH_OPTS[@]}" ${TTY_OPT[@]+"${TTY_OPT[@]}"} "$HOST" "cd '$DIR' && bash install.sh ${args[*]}" \
     || die "the installer failed on $HOST; previous source remains at $DIR.prev and private backup was printed above"
-  rsh "rm -rf '$DIR.prev'" || warn "previous source remains at $DIR.prev; remove it after verifying this install"
+  clear_prev || warn "previous source remains at $DIR.prev; remove it after verifying this install"
   prune_remote
   ok "installer finished"
 
@@ -467,7 +476,7 @@ cmd_update() {
       [ \"\$t\" -lt '$update_started' ] && echo \"\$c\"; done | grep -v infisical || true")
     [[ -z "$stale" ]] || die "these services were not rebuilt and still run the old build: $stale"
   fi
-  rsh "rm -rf '$DIR.prev'" || warn "previous source remains at $DIR.prev; remove it after verifying this update"
+  clear_prev || warn "previous source remains at $DIR.prev; remove it after verifying this update"
 
   prune_remote
   ok "updated $was → $(rshq "cat '$DIR/.boss-shipped-commit'")"
