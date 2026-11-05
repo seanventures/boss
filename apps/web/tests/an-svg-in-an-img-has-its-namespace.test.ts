@@ -58,6 +58,23 @@ describe("where a passkey can be made", () => {
     // Not bound yet is not a reason to hide them: the claim binds the origin.
     expect(passkeyBlockWords("public_origin_unset", { hostname: "boss.example.com", protocol: "https:" })).toBeNull();
   });
+
+  it("an HTTPS or other secure context is not told the page is plain HTTP (BOSSAPP-662)", () => {
+    // The API judged a forwarded http scheme. The page the operator has open is already secure.
+    const https = passkeyBlockWords("passkey_needs_https", { hostname: "boss.example.com", protocol: "https:", secure: true });
+    expect(https).not.toBe(PASSKEY_NEEDS_HTTPS_WORDS);
+    expect(https ?? "").not.toMatch(/plain HTTP/);
+    // isSecureContext, even when the protocol string the API saw was http.
+    const trusted = passkeyBlockWords("passkey_needs_https", { hostname: "boss.example.com", protocol: "http:", secure: true });
+    expect(trusted ?? "").not.toMatch(/plain HTTP/);
+    // Loopback http is a secure context: an IP still needs a domain, never the plain-HTTP sentence.
+    const loopback = passkeyBlockWords("passkey_needs_https", { hostname: "127.0.0.1", protocol: "http:", secure: true });
+    expect(loopback).toBe(PASSKEY_NEEDS_DOMAIN_WORDS);
+    expect(loopback).not.toMatch(/plain HTTP/);
+    // A page that really is plain HTTP, and a location we cannot see, still say so.
+    expect(passkeyBlockWords("passkey_needs_https", { hostname: "boss.lan", protocol: "http:" })).toBe(PASSKEY_NEEDS_HTTPS_WORDS);
+    expect(passkeyBlockWords("passkey_needs_https", null)).toBe(PASSKEY_NEEDS_HTTPS_WORDS);
+  });
 });
 
 describe("a passkey failure always says why", () => {

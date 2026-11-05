@@ -28,7 +28,7 @@ import { idPost } from "../../../lib/identity/api";
 import type { AuthOptions } from "../../../lib/identity/types";
 import { codesOf, type RecoveryCodes } from "../../../lib/identity/types-auth";
 import { claimOrigin, claimPathFor, claimProof } from "../../../lib/identity/claim-path";
-import { passkeyBlockWords } from "../../../lib/identity/passkey-support";
+import { passkeyBlockWords, passkeyPlace } from "../../../lib/identity/passkey-support";
 import { webauthnAvailable } from "../../../lib/identity/webauthn";
 import { AuthStage, Live, Logo, linkToken } from "../auth-parts";
 import { primeCsrf, registerPasskey, sayAuth } from "../auth-flow";
@@ -103,7 +103,7 @@ function ClaimForm({ options, claim }: { options: AuthOptions; claim: Claim }) {
     setPageOrigin(window.location.origin);
     // An address no browser can hold a passkey for (an IP, plain http): the authenticator app is
     // the way in, said in one plain line — never a prompt the browser will refuse.
-    setNoPasskey(passkeyBlockWords(options.passkey_reason, window.location));
+    setNoPasskey(passkeyBlockWords(options.passkey_reason, passkeyPlace()));
     setMins(minutesLeft(claim.expires_at, Date.now()));
   }, [claim.expires_at, options.passkey_reason]);
 

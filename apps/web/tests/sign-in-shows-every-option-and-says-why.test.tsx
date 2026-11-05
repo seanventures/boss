@@ -228,6 +228,9 @@ describe("the offers, as rules", () => {
 
   it("passkeys: the API's reason first, then the page's own address, then the browser", () => {
     expect(passkeyWhyNot({ passkey_reason: "passkey_needs_https" }, null, true)).toMatch(/HTTPS/);
+    // A known secure page is not "plain HTTP", even when the API's reason says so (BOSSAPP-662).
+    expect(passkeyWhyNot({ passkey_reason: "passkey_needs_https" }, { hostname: "boss.example.com", protocol: "https:", secure: true }, true)).toBeNull();
+    expect(passkeyWhyNot({ passkey_reason: "passkey_needs_https" }, { hostname: "boss.lan", protocol: "http:" }, true)).toMatch(/plain HTTP/);
     expect(passkeyWhyNot({}, { hostname: "10.0.0.5", protocol: "https:" }, true)).toBe(PASSKEY_NEEDS_DOMAIN_WORDS);
     expect(passkeyWhyNot({ passkey_reason: "public_origin_unset" }, null, true)).toMatch(/public address/);
     expect(passkeyWhyNot({}, { hostname: "boss.example.com", protocol: "https:" }, false)).toBe("This browser has no passkeys");

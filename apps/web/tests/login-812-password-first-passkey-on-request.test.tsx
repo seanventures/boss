@@ -176,6 +176,34 @@ describe("email + password, then the second step", () => {
     expect(el.querySelector("[role='alert']")?.textContent).toBe("Wrong email or password");
     expect(el.querySelector("[data-testid='try-another-way']")).toBeNull();
   });
+
+  it("a sign-in the server accepts starts the session (BOSSAPP-671)", async () => {
+    const assign = vi.fn();
+    vi.spyOn(window.location, "assign").mockImplementation(assign);
+    routes({ "POST /v1/auth/login": { body: { next: "done" } } });
+    const el = await mount(<SignIn options={ON} next="/?area=setup" />);
+    await signInWithPassword(el);
+    expect(assign).toHaveBeenCalledWith("/?area=setup");
+    expect(el.querySelector("[role='alert']")).toBeNull();
+  });
+
+  it("csrf_failed shows the cause the server named, not Reload and retry (BOSSAPP-671)", async () => {
+    routes({ "POST /v1/auth/login": { status: 403, body: { error: "csrf_failed", detail: "Origin does not match this BOSS." } } });
+    const el = await mount(<SignIn options={ON} next="/" />);
+    await signInWithPassword(el);
+    const said = el.querySelector("[role='alert']")?.textContent ?? "";
+    expect(said).toBe("Origin does not match this BOSS.");
+    expect(said).not.toContain("Reload and retry");
+  });
+
+  it("csrf_failed with only the code still names that refusal, not Reload and retry (BOSSAPP-671)", async () => {
+    routes({ "POST /v1/auth/login": { status: 403, body: { error: "csrf_failed" } } });
+    const el = await mount(<SignIn options={ON} next="/" />);
+    await signInWithPassword(el);
+    const said = el.querySelector("[role='alert']")?.textContent ?? "";
+    expect(said).not.toContain("Reload and retry");
+    expect(said).toMatch(/csrf_failed/);
+  });
 });
 
 describe("claim: a password first, then protect your account", () => {
@@ -196,6 +224,53 @@ describe("claim: a password first, then protect your account", () => {
     await click(el.querySelector("[data-testid='claim-factor-totp']"));
     expect(el.querySelector("[data-testid='totp-step']")).not.toBeNull();
     expect(create).not.toHaveBeenCalled();
+  });
+
+  it("Claim and add an authenticator enables once the form is filled on a secure context (BOSSAPP-672)", async () => {
+    vi.stubGlobal("PublicKeyCredential", undefined);
+    Object.defineProperty(navigator, "credentials", { value: undefined, configurable: true });
+    window.history.replaceState(null, "", "/claim#t=setup_abc");
+    const el = await mount(<ClaimFlow options={{ ...ON, passkey: false, passkey_reason: "passkey_needs_domain", claim: { path: "setup_token", origin: null, expires_at: null, seats: [] } }} />);
+    const submit = el.querySelector("[data-testid='claim-submit']") as HTMLButtonElement;
+    expect(submit.textContent).toContain("Claim and add an authenticator");
+    expect(submit.getAttribute("aria-disabled")).toBe("true");
+    type(el.querySelector("#claim-name"), "Param");
+    type(el.querySelector("#claim-email"), "param@example.com");
+    type(el.querySelector("#claim-pw"), PW);
+    expect(submit.disabled).toBe(false);
+    expect(submit.getAttribute("aria-disabled")).toBeNull();
+  });
+
+  it("an HTTPS page does not say passkeys are impossible because of plain HTTP, and a password claim still posts (BOSSAPP-662)", async () => {
+    const dom = (window as unknown as { happyDOM?: { setURL: (u: string) => void } }).happyDOM;
+    if (dom?.setURL) dom.setURL("https://boss.example.com/claim#t=setup_abc");
+    else window.history.replaceState(null, "", "https://boss.example.com/claim#t=setup_abc");
+    routes({
+      "POST /v1/auth/setup/claim": { body: { next: "enrol", methods: [], who: null } },
+      "GET /v1/identity/me": { body: { csrf_token: "c" } },
+      "POST /v1/identity/me/passkeys/options": { status: 409, body: { error: "passkey_needs_https" } },
+    });
+    const el = await mount(<ClaimFlow options={{ ...ON, passkey_reason: "passkey_needs_https", claim: { path: "setup_token", origin: null, expires_at: null, seats: [] } }} />);
+    expect(el.textContent ?? "").not.toMatch(/plain HTTP/);
+    expect(el.querySelector("#claim-pw")).not.toBeNull();
+    type(el.querySelector("#claim-name"), "Param");
+    type(el.querySelector("#claim-email"), "param@example.com");
+    type(el.querySelector("#claim-pw"), PW);
+    await click(el.querySelector("[data-testid='claim-submit']"));
+    expect(calls.find((c) => c.url === "/v1/auth/setup/claim")?.body).toMatchObject({ setup_token: "setup_abc", password: PW, name: "Param" });
+    // The password claim stands. A passkey the server still refuses leaves an authenticator.
+    const passkey = el.querySelector("[data-testid='claim-factor-passkey']");
+    if (passkey) {
+      await click(passkey);
+      expect(el.textContent ?? "").not.toMatch(/plain HTTP/);
+      const alt = [...el.querySelectorAll("button")].find((b) => b.textContent?.includes("Use an authenticator app") || b.textContent?.includes("Authenticator app"));
+      expect(alt).toBeTruthy();
+      await click(alt ?? null);
+      expect(el.querySelector("[data-testid='totp-step']")).not.toBeNull();
+    } else {
+      expect(el.querySelector("[data-testid='totp-step']")).not.toBeNull();
+      expect(el.textContent ?? "").not.toMatch(/plain HTTP/);
+    }
   });
 });
 
