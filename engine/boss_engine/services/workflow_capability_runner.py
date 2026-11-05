@@ -3271,6 +3271,24 @@ def _existing_app_note(connection: Connection, project_id: str, run_id: str) -> 
             "existing tests must keep passing.")
 
 
+def _existing_code_note(run_input: dict) -> str:
+    """A feature for a repository BOSS did not build (Import a repo → "What should we add?"):
+    the panel and the coder were never told the repo already holds an app, so the PRD described
+    a new product and the build could write a parallel one beside it (2026-11-05). Said when the
+    run names a repository and builds onto no BOSS app; worded for a repo that may be empty."""
+    run_input = run_input or {}
+    if str(run_input.get("extends_run_id") or "").strip():
+        return ""
+    repo = str(run_input.get("repository") or "").strip()
+    if not repo:
+        return ""
+    return (f"The work happens in the repository {repo}. If it already holds an app, this is a "
+            "change to that EXISTING codebase: read its code first, then write and build this "
+            "feature only, in its folders, its stack and its conventions. Do not re-scaffold the "
+            "app, do not start a parallel app beside it, and do not redesign what exists. Its "
+            "existing behaviour and its existing tests must keep passing.")
+
+
 #: Tool-less capabilities that start work on the build's branch (extend_code_task): they take
 #: the builder's authority themselves, in _start_on_the_branch.
 _ON_THE_BRANCH = frozenset({"plrr", "more_tests"})
@@ -3788,6 +3806,8 @@ def _perform_capability(
         existing = _existing_app_note(
             connection, project_id,
             str((context.get("input") or {}).get("extends_run_id") or "").strip())
+        if not existing:
+            existing = _existing_code_note(context.get("input") or {})
         if existing:
             objective = f"{objective}\n\n{existing}".strip()
         if objective:
@@ -3827,6 +3847,11 @@ def _perform_capability(
             fixed_title = str(_from_any_step(context, "title") or "").strip()
             if fixed_title.startswith("Fix "):
                 inputs = {**inputs, "title": fixed_title}
+    if key == "build":
+        # THE CODER IS TOLD TOO: a repository BOSS did not build is changed, not rebuilt.
+        note = _existing_code_note(context.get("input") or {})
+        if note and note not in str(inputs.get("instructions") or ""):
+            inputs = {**inputs, "instructions": f"{str(inputs.get('instructions') or '').strip()}\n\n{note}".strip()}
     if key == "build":
         spec = str(inputs.get("spec_markdown") or "").strip()
         inputs = {k: v for k, v in inputs.items() if k != "spec_markdown"}
