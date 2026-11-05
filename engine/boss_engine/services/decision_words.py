@@ -25,6 +25,7 @@ _BY_ACTION: dict[str, tuple[str, str]] = {
     "stack_deploy_requires_approval": ("Approve a deploy", "Deploys"),
     "agent_tool_requires_approval": ("Let an agent use a tool", "Agent tools"),
     "execute_agent_tool": ("Let an agent use a tool", "Agent tools"),
+    "activate_authored_skill": ("Approve a skill draft", "Skills"),
     "review_cost_anomaly": ("Review unusual spend", "Spend guard"),
     "approve_initiative_budget": ("Approve an initiative budget", "Budget"),
     "publish_document": ("Publish a document", "Documents"),

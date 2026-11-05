@@ -43,7 +43,7 @@ from typing import Any, Iterable, Optional
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
-from .core import emit_event, make_id
+from .core import create_blocking_decision, emit_event, make_id
 
 #: At or above this tier a step must be approved by a person. The same floor every capability
 #: obeys — imported rather than restated so the two cannot drift.
@@ -531,6 +531,140 @@ def save_skill(
                {"skill_key": key, "behaviour": behaviour, "risk_tier": tier,
                 "trusted": bool(trusted)})
     return item
+
+
+_DIFF_FIELDS = ("label", "summary", "behaviour_kind", "knowledge", "risk_tier",
+                "config", "inputs", "produces")
+
+
+def _brief(value: Any) -> str:
+    shown = value if isinstance(value, str) else json.dumps(value, sort_keys=True, default=str)
+    shown = " ".join(str(shown).split())
+    if len(shown) > 500:
+        return shown[:500] + "…"
+    return shown
+
+
+def _skill_diff(before: Optional[dict[str, Any]], after: dict[str, Any]) -> str:
+    """The change a person is asked to approve, in the decision question so the card shows it."""
+    lines = [f"skill {after['skill_key']}"]
+    for field in _DIFF_FIELDS:
+        new = after.get(field)
+        if before is None:
+            lines.append(f"+ {field}: {_brief(new)}")
+            continue
+        old = before.get(field)
+        if old != new:
+            lines.append(f"- {field}: {_brief(old)}")
+            lines.append(f"+ {field}: {_brief(new)}")
+    return "\n".join(lines)
+
+
+def _proposed(item: dict[str, Any]) -> dict[str, Any]:
+    return {field: item.get(field) for field in ("skill_key", *_DIFF_FIELDS, "trusted")}
+
+
+def _save_then_undo(connection: Connection, **kwargs: Any) -> dict[str, Any]:
+    """Run save_skill so its checks fire, then put the row back. The returned dict is the draft."""
+    nested = connection.begin_nested()
+    try:
+        saved = save_skill(connection, **kwargs)
+    except Exception:
+        nested.rollback()
+        raise
+    nested.rollback()
+    return saved
+
+
+def draft_for_approval(
+    connection: Connection,
+    *,
+    project_id: str,
+    actor: str,
+    skill_key: str,
+    label: str,
+    behaviour_kind: str,
+    summary: str = "",
+    knowledge: str = "",
+    inputs: Any = (),
+    produces: Any = (),
+    config: Optional[dict[str, Any]] = None,
+    risk_tier: int = 1,
+    mode: str = "create",
+) -> dict[str, Any]:
+    """An agent draft is not a usable skill. A create is stored disabled; an update is checked
+    and then undone, so a skill other agents already run does not change. The decision carries
+    the diff. Approving it is what writes the skill enabled."""
+    intent = str(mode or "create").strip().lower()
+    fields = dict(
+        project_id=project_id, actor=actor, skill_key=skill_key, label=label,
+        behaviour_kind=behaviour_kind, summary=summary, knowledge=knowledge,
+        inputs=inputs, produces=produces, config=config or {}, risk_tier=risk_tier,
+    )
+    if intent == "update":
+        before = get_skill(connection, project_id, str(skill_key or "").strip().lower())
+        trusted = bool(before["trusted"]) if before else False
+        preview = _save_then_undo(connection, **fields, trusted=trusted, enabled=True,
+                                  mode="update")
+    else:
+        before = None
+        preview = save_skill(connection, **fields, trusted=False, enabled=False, mode=intent)
+    diff = _skill_diff(before, preview)
+    question = f"{'Change' if before else 'Create'} skill {preview['skill_key']}?\n\n{diff}"
+    decision_id = create_blocking_decision(
+        connection,
+        project_id,
+        None,
+        question,
+        {
+            "action": "activate_authored_skill",
+            "skill_key": preview["skill_key"],
+            "mode": intent,
+            "diff": diff,
+            "proposed": _proposed(preview),
+        },
+        {},
+        "skill_draft",
+        risk_tier=int(preview["risk_tier"]),
+    )
+    return {
+        "status": "pending",
+        "skill_key": preview["skill_key"],
+        "behaviour_kind": preview["behaviour_kind"],
+        "risk_tier": preview["risk_tier"],
+        "decision_id": decision_id,
+        "diff": diff,
+        "next": "The skill is not usable until a person approves this decision.",
+    }
+
+
+def activate_authored_skill(
+    connection: Connection, decision: dict[str, Any], actor: str,
+) -> dict[str, Any]:
+    """Write the draft the decision showed, enabled. Called only when that decision is approved."""
+    rec = decision.get("recommendation") or {}
+    if isinstance(rec, str):
+        rec = json.loads(rec)
+    proposed = rec.get("proposed") if isinstance(rec, dict) else None
+    if not isinstance(proposed, dict):
+        raise SkillDefinitionError("this decision has no skill draft to activate.")
+    return save_skill(
+        connection,
+        project_id=str(decision["project_id"]),
+        actor=actor,
+        skill_key=str(proposed.get("skill_key") or ""),
+        label=str(proposed.get("label") or ""),
+        behaviour_kind=str(proposed.get("behaviour_kind") or ""),
+        summary=str(proposed.get("summary") or ""),
+        knowledge=str(proposed.get("knowledge") or ""),
+        inputs=proposed.get("inputs") or [],
+        produces=proposed.get("produces") or [],
+        config=proposed.get("config") or {},
+        risk_tier=proposed.get("risk_tier", 1),
+        trusted=bool(proposed.get("trusted", False)),
+        enabled=True,
+        mode="upsert",
+    )
 
 
 def set_skill_enabled(

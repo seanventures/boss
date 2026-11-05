@@ -104,6 +104,8 @@ CARRIED_OUT_ON_APPROVAL = frozenset({
     # Approving a BOSS self-fix issues its signed, single-use install ticket for the host
     # self-installer (services/self_fix_install.on_approved).
     "self_fix.install",
+    # Approving an agent-drafted skill writes that draft enabled. Until then it is not usable.
+    "activate_authored_skill",
     # Approving the removal of installed self-fixes issues the signed `remove` / `remove_all`
     # ticket (services/self_fix_install.on_remove_approved).
     "self_fix.remove",

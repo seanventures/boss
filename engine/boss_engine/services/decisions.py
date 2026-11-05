@@ -1095,6 +1095,12 @@ class DecisionService:
             from .governed_host_deploy import on_decision_approved as approve_host
 
             approve_host(connection, self.settings, row, actor)
+        elif action == "activate_authored_skill":
+            # The draft the card showed becomes the skill other agents can run. Until this, a
+            # create is stored disabled and an update has not been written.
+            from .skill_definitions import activate_authored_skill
+
+            activate_authored_skill(connection, row, actor)
         elif action in ("architecture_reconciliation", "typed_decision_reconciliation"):
             # A paid call whose outcome was never settled. Approving settles it: a reply the
             # receipt holds is recorded (usage and cost) and replayed by the step, never paid
@@ -2362,9 +2368,11 @@ def approve_by_policy(connection: Connection, decision_id: str, *, project_id: s
         {"id": decision_id, "p": project_id}).mappings().first()
     if row is None or row["status"] != "pending":
         return False
-    if row.get("action") in ("review_architecture", "self_fix.install", "self_fix.remove"):
-        # An architecture, and a BOSS self-fix install, are approved by a person, never by a
-        # setting (architecture_docs, self_fix_install; auto-install is off in v1).
+    if row.get("action") in ("review_architecture", "self_fix.install", "self_fix.remove",
+                             "activate_authored_skill"):
+        # An architecture, a BOSS self-fix, and an agent-drafted skill are approved by a person,
+        # never by a setting. Policy approval would mark the card approved and skip the
+        # follow-on, so the skill would stay unusable and nobody could approve it again.
         return False
     tier = int(row["risk_tier"] or 0)
     if _approvals.seats_for_tier(tier) or tier in _approvals.TWO_PERSON_TIERS:

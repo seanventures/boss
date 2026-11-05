@@ -1911,7 +1911,9 @@ def _register_write_tools(reg: ToolRegistry) -> None:
         pid = args.get("project_id") or project_id
         with ctx.begin() as c:
             try:
-                created = skills.save_skill(
+                # NOT save_skill. The description says the operator approves the draft with one
+                # press; saving it here made the draft the live skill, with no decision.
+                return skills.draft_for_approval(
                     c,
                     project_id=pid,
                     actor=actor,
@@ -1933,15 +1935,6 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                 # the model can fix the draft and re-propose from them. Flattening them to
                 # "invalid" would cost the operator a round trip for nothing.
                 return {"ok": False, "error": f"{type(error).__name__}: {str(error)[:300]}"}
-        return {
-            "status": "defined",
-            "skill_key": created.get("skill_key"),
-            "behaviour_kind": created.get("behaviour_kind"),
-            "risk_tier": created.get("risk_tier"),
-            # A skill on its own is not yet placeable. Saying so here is what stops the next
-            # answer being "it's created" followed by an operator who cannot find it anywhere.
-            "next": "draft_custom_step binds this skill to a workflow step so it can be placed.",
-        }
 
     @reg.tool(
         "list_capabilities",
