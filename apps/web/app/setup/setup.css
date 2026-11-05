@@ -809,3 +809,12 @@ button.su-chip[aria-checked="true"] { color: var(--accent); border-color: var(--
   .su-td-actions { width: auto; text-align: left; }
   .su-row-actions { justify-content: flex-start; }
 }
+/* Inside the Models block the embedding model is one line like "Who does what:", not a row
+   with its own big label column. */
+.su-models-block #su-embedding-model { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 6px 12px; padding: 0; border: 0; }
+.su-models-block #su-embedding-model > .su-row-label { flex: 0 0 auto; padding-top: 3px; }
+.su-models-block #su-embedding-model > .su-row-label,
+.su-models-block #su-embedding-model > .su-row-label * {
+  font: 400 0.8125rem/1.4 var(--sans); letter-spacing: normal; text-transform: none; color: var(--faint);
+}
+.su-models-block #su-embedding-model > .su-row-body { flex: 1 1 360px; min-width: 0; }

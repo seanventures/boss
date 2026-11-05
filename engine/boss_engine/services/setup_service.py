@@ -432,6 +432,16 @@ def _json_object(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+# THE VALUES BOSS SHIPS OUTSIDE config.py: the Community compose points Ollama at the host
+# (scripts/install/community-compose.yml), so every container install had a value different from
+# the code's default — and listed "Ollama · Can't reach · needs you" on boxes with no Ollama
+# (boss-1, 2026-11-05). A shipped default is still a shipped default.
+_SHIPPED_DEFAULTS: dict[str, frozenset[str]] = {
+    "ollama_base_url": frozenset({"http://host.docker.internal:11434/v1",
+                                  "http://host.docker.internal:11434"}),
+}
+
+
 def _set_deliberately(settings: Settings, attr: str) -> bool:
     """Is this setting a value somebody CHOSE, rather than the one BOSS ships?
 
@@ -446,6 +456,8 @@ def _set_deliberately(settings: Settings, attr: str) -> bool:
     fields = getattr(type(settings), "model_fields", {}) or {}
     field = fields.get(attr)
     default = getattr(field, "default", None) if field is not None else None
+    if value.rstrip("/") in _SHIPPED_DEFAULTS.get(attr, frozenset()):
+        return False
     return value != str(default or "").strip()
 
 
