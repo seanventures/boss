@@ -182,10 +182,38 @@ def _shape(row: dict[str, Any], used_by: list[dict[str, Any]]) -> dict[str, Any]
     }
 
 
-def list_registry(db: Any, project_id: str) -> dict[str, Any]:
+_FILL_TRIED: dict[str, float] = {}
+_FILL_EVERY_S = 600.0
+
+
+def _may_fill(org_id: str) -> bool:
+    """At most one GitHub read per org every ten minutes while it lists nothing."""
+    import time
+
+    now = time.monotonic()
+    if now - _FILL_TRIED.get(org_id, -_FILL_EVERY_S) < _FILL_EVERY_S:
+        return False
+    _FILL_TRIED[org_id] = now
+    return True
+
+
+def list_registry(db: Any, project_id: str, *, settings: Any = None,
+                  lister: Optional[Lister] = None) -> dict[str, Any]:
+    """The org's registry. FIRST READ FILLS IT (boss-1, 2026-11-05): nothing had ever pressed
+    "Refresh from GitHub", so Advanced › Repositories said "reaches 0 repositories · Save · 0
+    allowed" beside two working repos, and Import a repo listed nothing to import. With `settings`
+    (the API's read), an org whose registry was never filled is read from GitHub once — the first
+    refresh allows every repository a project already uses, so nothing working is taken away. A
+    GitHub that cannot be reached leaves the empty list, as before."""
     org_id = org_of_project(db, project_id)
     if not org_id:
         raise MultiRepoError(404, "unknown_project", "No such project.")
+    if settings is not None and not _registry_in_use(db, org_id) and _may_fill(org_id):
+        try:
+            with db.begin_nested():
+                refresh(db, settings, project_id, actor="system", lister=lister)
+        except Exception:  # noqa: BLE001 — unreachable GitHub: show what is known (nothing)
+            pass
     rows = [dict(r) for r in db.execute(sql(
         "SELECT * FROM github_repos WHERE org_id = :o ORDER BY allowed DESC, archived, lower(full_name)"),
         {"o": org_id}).mappings().all()]

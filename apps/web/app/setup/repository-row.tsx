@@ -401,7 +401,7 @@ function RepoLine({ repo, onReplace, single }: { repo: RepoEntry; onReplace: () 
             <GatedButton permission="github:connect" type="button" className="su-btn su-btn-sm" onClick={onReplace}
                     data-testid="su-replace-token">Replace token</GatedButton>
           ) : null}
-          <GatedButton permission="setup:manage" type="button" className="su-btn su-btn-sm" onClick={test} disabled={busy}
+          <GatedButton permission="setup:check" type="button" className="su-btn su-btn-sm" onClick={test} disabled={busy}
                   data-testid="su-repo-test">Test</GatedButton>
           {red ? <AskBoss row="Repository" pillLabel={repo.pill.label} tip={repo.pill.tip} /> : null}
         </div>

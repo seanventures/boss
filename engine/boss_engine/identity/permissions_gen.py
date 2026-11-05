@@ -7,7 +7,7 @@ from enum import StrEnum
 from .catalogue import AccessRoleMeta, PassportPreset, PermissionMeta, SystemPrincipalMeta
 
 CATALOGUE_VERSION = 1
-CATALOGUE_FINGERPRINT = "f55e4c6f84929b4d"
+CATALOGUE_FINGERPRINT = "99dfa6f62784c79d"
 
 
 class Permission(StrEnum):
@@ -161,6 +161,7 @@ class Permission(StrEnum):
     CICD_MANAGE = "cicd:manage"
     SETUP_READ = "setup:read"
     SETUP_MANAGE = "setup:manage"
+    SETUP_CHECK = "setup:check"
     MODEL_PROVIDER_READ = "model_provider:read"
     MODEL_PROVIDER_MANAGE = "model_provider:manage"
     MODEL_PROVIDER_ROTATE = "model_provider:rotate"
@@ -367,6 +368,7 @@ PERMISSION_META: dict[str, PermissionMeta] = {
     "cicd:manage": PermissionMeta(key="cicd:manage", title="Manage CI/CD", description="Generate, validate and run CI/CD pipelines.", category="Deploy and infra", roles=('owner', 'admin', 'operator'), scope='project', step_up=False, delegable=False, critical=False, system_only=False, readonly_post=False),
     "setup:read": PermissionMeta(key="setup:read", title="View setup", description="See the Repo and models checklist.", category="Models, spend and policy", roles=('owner', 'admin', 'operator', 'viewer', 'auditor'), scope='project', step_up=False, delegable=False, critical=False, system_only=False, readonly_post=False),
     "setup:manage": PermissionMeta(key="setup:manage", title="Manage setup", description="Choose the repo, models and coding agents during setup.", category="Models, spend and policy", roles=('owner', 'admin'), scope='project', step_up=True, delegable=False, critical=False, system_only=False, readonly_post=False),
+    "setup:check": PermissionMeta(key="setup:check", title="Check setup", description="Re-check GitHub access and ask each model one tiny question.", category="Models, spend and policy", roles=('owner', 'admin', 'operator'), scope='project', step_up=False, delegable=False, critical=False, system_only=False, readonly_post=False),
     "model_provider:read": PermissionMeta(key="model_provider:read", title="View model providers", description="See model sources, providers, usage, health and SLOs.", category="Models, spend and policy", roles=('owner', 'admin', 'operator', 'viewer', 'auditor'), scope='project', step_up=False, delegable=True, critical=False, system_only=False, readonly_post=False),
     "model_provider:manage": PermissionMeta(key="model_provider:manage", title="Manage model providers", description="Add, enable, disable, test and remove model providers.", category="Models, spend and policy", roles=('owner', 'admin'), scope='project', step_up=True, delegable=False, critical=True, system_only=False, readonly_post=False),
     "model_provider:rotate": PermissionMeta(key="model_provider:rotate", title="Rotate model provider credentials", description="Rotate a provider's credential.", category="Models, spend and policy", roles=('owner', 'admin'), scope='project', step_up=True, delegable=False, critical=True, system_only=False, readonly_post=False),
@@ -435,7 +437,7 @@ ACCESS_ROLES: dict[str, AccessRoleMeta] = {
 
 #: Built-in role -> its permissions. Derived ONLY from each entry's `roles`.
 ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
-    "owner": frozenset({  # 193
+    "owner": frozenset({  # 194
         "directory:read",
         "user:read",
         "user:invite",
@@ -583,6 +585,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "cicd:manage",
         "setup:read",
         "setup:manage",
+        "setup:check",
         "model_provider:read",
         "model_provider:manage",
         "model_provider:rotate",
@@ -630,7 +633,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "knowledge:manage",
         "knowledge:review",
     }),
-    "admin": frozenset({  # 184
+    "admin": frozenset({  # 185
         "directory:read",
         "user:read",
         "user:invite",
@@ -770,6 +773,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "cicd:manage",
         "setup:read",
         "setup:manage",
+        "setup:check",
         "model_provider:read",
         "model_provider:manage",
         "model_provider:rotate",
@@ -816,7 +820,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "knowledge:manage",
         "knowledge:review",
     }),
-    "operator": frozenset({  # 94
+    "operator": frozenset({  # 95
         "directory:read",
         "access_role:read",
         "api_key:manage_own",
@@ -888,6 +892,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "cicd:read",
         "cicd:manage",
         "setup:read",
+        "setup:check",
         "model_provider:read",
         "entitlement:read",
         "budget:read",

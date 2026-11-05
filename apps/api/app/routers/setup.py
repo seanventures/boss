@@ -98,7 +98,7 @@ def build_setup_router(
             return view(connection, project_id)
 
     @router.post("/v1/setup/checks", response_model=SetupView, response_model_by_alias=True)
-    @permit(P.SETUP_MANAGE, scope=Scope.project(body="project_id"))
+    @permit(P.SETUP_CHECK, scope=Scope.project(body="project_id"))
     def post_checks(body: ChecksBody) -> dict[str, Any]:
         """Prove things now and record when: GitHub's three probes, one question per model."""
         actor = actor_for(body.actor)

@@ -260,3 +260,30 @@ def test_suggestions_come_from_names_and_languages(eng, world):
         ("Frontend", "acme/web", "code"), ("Deploy config", "acme/infra", "deploy_config")]
     assert out[2]["depends_on"] == ["Contracts", "Backend"] and "web" in out[2]["reason"]
     assert out[3]["access"] == "read"
+
+
+def test_the_first_read_fills_an_empty_registry_from_github(eng, world):
+    # boss-1, 2026-11-05: "reaches 0 repositories · Save · 0 allowed" beside two working repos, and
+    # Import a repo listed nothing — nobody had pressed Refresh. The API's read fills it once.
+    registry._FILL_TRIED.clear()
+    bind(eng, world, world["projects"][0], "acme/web", role="primary")
+    with eng.begin() as db:
+        reg = registry.list_registry(db, world["projects"][0], settings=get_settings(), lister=lister_for(ACME))
+    by = {i["full_name"]: i for i in reg["items"]}
+    assert len(by) == 6
+    assert by["acme/web"]["allowed"] is True                     # in use: kept
+    assert by["acme/api"]["allowed"] is False
+
+
+def test_an_unreachable_github_leaves_the_read_empty_and_is_not_asked_again_at_once(eng, world):
+    registry._FILL_TRIED.clear()
+    calls = []
+
+    def broken(db, settings, org, project):
+        calls.append(org)
+        raise RuntimeError("GitHub unreachable")
+
+    for _ in range(2):
+        with eng.begin() as db:
+            assert registry.list_registry(db, world["projects"][0], settings=get_settings(), lister=broken)["items"] == []
+    assert len(calls) == 1

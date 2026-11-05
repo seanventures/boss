@@ -135,7 +135,8 @@ function RepoActions({ repo, onReplace }: { repo: SetupRepository; onReplace: (c
       <RowMenu label={`${repo.full_name} actions`} testid="su-repo-row-menu" items={items} />
       {confirming ? (
         <span className="su-confirm" role="alertdialog" data-testid="su-repo-row-remove-confirm">
-          <strong>Remove {repo.full_name}?</strong>
+          <strong>Remove {repo.full_name} from this project?</strong>
+          <span className="su-faint">Nothing changes on GitHub.</span>
           <GatedButton permission="repository:manage" type="button" className="su-btn su-btn-sm su-btn-danger"
                        data-testid="su-repo-row-remove-yes"
                        onClick={() => { setConfirming(false);
@@ -182,7 +183,7 @@ export function SetupBlocks({ onAdvanced, initialOpen = null }: {
                    )} />
         {accounts.length ? (
           <table className="su-table">
-            <thead><tr><th>Account</th><th>How</th><th>Repos</th><th>Status</th></tr></thead>
+            <thead><tr><th>Account</th><th>How</th><th>Repos</th><th>Status</th><th><span className="su-sr">Actions</span></th></tr></thead>
             <tbody>
               {accounts.map((a) => (
                 <tr key={a.id} data-testid={`su-account-${a.id}`}>
@@ -198,6 +199,17 @@ export function SetupBlocks({ onAdvanced, initialOpen = null }: {
                         </button>
                       ) : null}
                     </span>
+                  </td>
+                  <td className="su-td-actions">
+                    {/* THE ACCOUNT'S OWN ACTIONS (tester, 2026-11-05: none here, all in Advanced). */}
+                    <RowMenu label={`${a.name} actions`} testid="su-account-menu" items={[
+                      ...(a.connection_id ? [{ label: "Add a repo from it", testid: "su-account-menu-add-repo",
+                        onSelect: () => setOpen({ kind: "repo", connectionId: a.connection_id }) }] : []),
+                      ...((a.kind === "token" || a.kind === "org_token") && a.connection_id ? [{ label: "Replace token", testid: "su-account-menu-replace",
+                        onSelect: () => setOpen({ kind: "replace", connectionId: a.connection_id }) }] : []),
+                      { label: "GitHub access settings", testid: "su-account-menu-access",
+                        onSelect: () => onAdvanced("github_app") },
+                    ]} />
                   </td>
                 </tr>
               ))}
@@ -264,6 +276,11 @@ export function SetupBlocks({ onAdvanced, initialOpen = null }: {
       {open?.kind === "repo" ? (
         <Drawer title="Add repo" onClose={close} testid="su-add-repo-drawer">
           <div className="su-stack">
+            <span className="su-faint" data-testid="su-add-repo-context">
+              To this project
+              {(() => { const a = connectable.find((x) => x.connection_id === open.connectionId);
+                        return a ? ` · via ${a.name}` : ""; })()}
+            </span>
             {connectable.length > 1 ? (
               <div className="su-chips" role="radiogroup" aria-label="Account">
                 {connectable.map((a) => (
@@ -286,7 +303,7 @@ export function SetupBlocks({ onAdvanced, initialOpen = null }: {
 }
 
 /** "Who does what:" one chip per main job, "Build → Claude Code", and Change (routing). */
-export function WhoDoesWhat({ view, onChange }: { view: SetupView; onChange: () => void }) {
+export function WhoDoesWhat({ view, onChange }: { view: SetupView; onChange: (job?: string) => void }) {
   const jobs = view.jobs.filter((j) => !j.more && j.resolved);
   if (!jobs.length) return null;
   return (
@@ -296,7 +313,7 @@ export function WhoDoesWhat({ view, onChange }: { view: SetupView; onChange: () 
         <React.Fragment key={j.job}>
           {/* EACH JOB IS ITS OWN CHOICE (operator: "we should provide options ... so customers
               can use multiple models"): a chip opens routing on that job. */}
-          <button type="button" className="su-chip su-chip-btn" onClick={onChange} data-testid={`su-who-${j.job}`}
+          <button type="button" className="su-chip su-chip-btn" onClick={() => onChange(j.label)} data-testid={`su-who-${j.job}`}
                   title={`${j.resolved!.why} Click to choose the model for ${j.label}.`}
                   data-tip={`${j.resolved!.why} Click to choose the model for ${j.label}.`}>
             {j.label} → {j.resolved!.label}
@@ -304,7 +321,7 @@ export function WhoDoesWhat({ view, onChange }: { view: SetupView; onChange: () 
           {j.resolved!.pill ? <Pill pill={j.resolved!.pill} testid={`su-who-pill-${j.job}`} /> : null}
         </React.Fragment>
       ))}
-      <button type="button" className="su-link" onClick={onChange} data-testid="su-who-change">Change</button>
+      <button type="button" className="su-link" onClick={() => onChange()} data-testid="su-who-change">Change</button>
     </div>
   );
 }

@@ -66,7 +66,10 @@ PROVIDERS: tuple[dict[str, Any], ...] = (
      "example_model": "text-embedding-3-small", "example_base_url": "https://api.openai.com/v1"},
     {"provider": "ollama", "label": "Ollama (local)", "needs_key": False,
      "fields": ["url", "model"], "more": ["dimension"],
-     "example_model": "nomic-embed-text", "example_base_url": "http://localhost:11434"},
+     "example_model": "nomic-embed-text",
+     # Inside the Community containers localhost is the container itself; the host's Ollama is
+     # host.docker.internal (the compose's own default for the chat lane).
+     "example_base_url": "http://host.docker.internal:11434"},
 )
 _BY_PROVIDER = {p["provider"]: p for p in PROVIDERS}
 

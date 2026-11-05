@@ -248,7 +248,7 @@ def test_the_row_says_which_credential_runs(monkeypatch):
         "expires_at": "2027-10-27T10:00:00+00:00"})
     summary = cc.credential_summary(object(), "p")
     assert summary["kind"] == "long_lived_token"
-    assert summary["label"] == "long-lived subscription token (renews Oct 27, 2027)"
+    assert summary["label"] == "long-lived subscription token (until Oct 27, 2027)"
     monkeypatch.setattr(cc, "long_lived_token_info", lambda _c, _p: None)
     login = cc.credential_summary(object(), "p", login={"state": "ok", "seconds_left": 7 * 3600 + 5})
     assert login == {"kind": "cli_login", "label": "CLI login (expires in 7 h)", "expires_at": None}

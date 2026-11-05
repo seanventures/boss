@@ -10,7 +10,7 @@ import React, { useMemo, useState } from "react";
 import type { TokenFound } from "../../lib/setup-types";
 
 export function RepoPicker({ repos, busy, onConnect, exclude = [], preselect = null }: {
-  repos: TokenFound["repos"];
+  repos: TokenFound["repos"] | undefined;
   busy: boolean;
   onConnect: (fullName: string) => void;
   exclude?: string[];
@@ -18,7 +18,8 @@ export function RepoPicker({ repos, busy, onConnect, exclude = [], preselect = n
   preselect?: string | null;
 }) {
   const connectGate = useGate("repository:register");
-  const choices = useMemo(() => repos.filter((r) => !exclude.includes(r.full_name)),
+  // An answer without a list (an older API, an empty installation) is "no repos", never a crash.
+  const choices = useMemo(() => (repos ?? []).filter((r) => !exclude.includes(r.full_name)),
                           [repos, exclude]);
   const [query, setQuery] = useState("");
   const [picked, setPicked] = useState<string | null>(

@@ -81,7 +81,9 @@ function LastRun({ run }: { run: NonNullable<SetupView["try"]["last_run"]> }) {
 function SetupLink({ focus, className, testid, children }: {
   focus: "repository" | "models"; className: string; testid: string; children: React.ReactNode;
 }) {
-  const href = `/?area=setup&focus=${focus}`;
+  // `open=add`: Get started's "Add another …" opens that block's Add. A plain `focus=` link (a
+  // fix elsewhere in the console) only lands on the section.
+  const href = `/?area=setup&focus=${focus}&open=add`;
   return (
     <a className={className} href={href} data-testid={testid}
        onClick={(e) => {
@@ -90,6 +92,7 @@ function SetupLink({ focus, className, testid, children }: {
          try {
            const url = new URL(window.location.href);
            url.searchParams.set("focus", focus);
+           url.searchParams.set("open", "add");
            url.searchParams.delete("view");
            window.history.replaceState(window.history.state, "", url.toString());
            window.dispatchEvent(new CustomEvent("boss:navigate", { detail: "setup" }));

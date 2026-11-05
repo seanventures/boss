@@ -51,9 +51,9 @@ import { GET_STARTED_EVENT, getStarted, Welcome } from "./welcome";
 
 /** One plain line per Advanced item (≤ 6 words), the detail in its tooltip. */
 const ADVANCED: Record<string, { line: string; tip: string }> = {
-  github_app: { line: "Org admin: per-build tokens, one repo",
-                tip: "Your org's own GitHub App: each build gets a token for its repo only." },
-  repositories: { line: "Which repos projects may use",
+  github_app: { line: "BOSS GitHub App and access",
+                tip: "Each build gets a short-lived token for its own repo only." },
+  repositories: { line: "Repos BOSS may use, org-wide",
                   tip: "The org's list of repositories BOSS may build in." },
   ci: { line: "Let builds edit CI workflows",
         tip: "Off by default. Asked for only when a build needs to change CI." },
@@ -165,8 +165,12 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
   useEffect(() => { if (!initialView) void load(); }, [load, initialView]);
 
   // THE URL SAYS WHERE TO LAND, on first paint and on every in-console link (popstate).
+  const [openAdd, setOpenAdd] = useState(false);
   useEffect(() => {
-    const read = () => setParams(currentParams());
+    const read = () => {
+      setParams(currentParams());
+      try { setOpenAdd(new URLSearchParams(window.location.search).get("open") === "add"); } catch { /* no window */ }
+    };
     read();
     window.addEventListener("popstate", read);
     return () => window.removeEventListener("popstate", read);
@@ -201,7 +205,7 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
   // STALE ROWS ARE RE-CHECKED IN THE BACKGROUND, once per open, so a token that expired or was
   // revoked overnight says so without anybody pressing Test.
   // A viewer who may not run checks (setup:manage) is not made to: the API would refuse it.
-  const mayCheck = useGate("setup:manage").allowed;
+  const mayCheck = useGate("setup:check").allowed;
   useEffect(() => {
     if (!view || autoChecked.current || !mayCheck) return;
     autoChecked.current = true;
@@ -273,6 +277,18 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
   }, [params.focus]);
   // Get started's "Add a model" opens the Models block's drawer once; closing it is final.
   const [modelAddDone, setModelAddDone] = useState(false);
+  // BUDGET LIVES IN GOVERN: an old `focus=budget` link goes straight to Govern › Limits, never to a
+  // row that only says "Set in Govern" (tester, 2026-11-05).
+  useEffect(() => {
+    if (layout !== "setup" || params.focus !== "budget") return;
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.set("area", "govern");
+      url.searchParams.set("tab", "limits");
+      url.searchParams.delete("focus");
+      window.location.replace(url.toString());
+    } catch { /* no window */ }
+  }, [layout, params.focus]);
   // OLD LINKS KEEP WORKING: Setup's former Welcome (`view=welcome`, `focus=try`) opens Get started.
   useEffect(() => {
     if (layout === "setup" && oldWelcomeLink()) navigate("welcome");
@@ -388,7 +404,7 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
           ) : null}
           <span className="su-spacer" />
           {/* Nothing connected, nothing to test: the button waits for something to check. */}
-          <GatedButton permission="setup:manage" type="button" className="su-btn" data-testid="su-test-all"
+          <GatedButton permission="setup:check" type="button" className="su-btn" data-testid="su-test-all"
                   disabled={checking.has("all")
                     || (!view.repository.repos.length && !view.models.length)}
                   onClick={testAll}
@@ -455,8 +471,10 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
         window.setTimeout(() => classicRef.current?.scrollIntoView?.({ behavior: "smooth", block: "start" }), 50);
       }
     };
-    // Welcome's "Add another account / model" land on the block's own Add, not in Advanced.
-    const blockOpen = params.focus && BLOCK_FOCUS.has(params.focus) && !params.add && !params.source
+    // Welcome's "Add another account / model" (`open=add`) land on the block's own Add; any
+    // other link to a block only lands on it (tester, 2026-11-05: focus=repository opened "Add a
+    // GitHub account", focus=models the Add a model drawer).
+    const blockOpen = openAdd && params.focus && BLOCK_FOCUS.has(params.focus) && !params.add && !params.source
       ? (params.focus === "models" ? "model" as const : "account" as const) : null;
     const modelAdd = blockOpen === "model" && !modelAddDone ? defaultAdd(view).provider : null;
     return (
@@ -473,10 +491,7 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
                  onClick={(e) => { e.preventDefault(); navigate("welcome"); }}>Back to Get started</a>
             ) : null}
             <span className="su-spacer" />
-            <button type="button" className="su-link" onClick={() => openAdvanced()} data-testid="su-open-advanced">
-              Advanced settings
-            </button>
-            <GatedButton permission="setup:manage" type="button" className="su-btn" data-testid="su-test-all"
+            <GatedButton permission="setup:check" type="button" className="su-btn" data-testid="su-test-all"
                          disabled={checking.has("all") || (!view.repository.repos.length && !view.models.length)}
                          onClick={testAll}
                          title="Re-checks GitHub access and asks each model one tiny question."
@@ -501,7 +516,17 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
             <div ref={ref("embedding_model")} data-focused={focus === "embedding_model" || undefined}>
               <EmbeddingModelRow startOpen={focus === "embedding_model"} />
             </div>
-            <WhoDoesWhat view={view} onChange={() => openAdvanced("jobs")} />
+            <WhoDoesWhat view={view} onChange={(job) => {
+              openAdvanced("jobs");
+              // A job's chip lands on THAT job's model menu, not the whole Routing block.
+              if (job) {
+                window.setTimeout(() => {
+                  const pick = Array.from(document.querySelectorAll<HTMLSelectElement>("select"))
+                    .find((el) => el.getAttribute("aria-label") === job);
+                  pick?.focus?.();
+                }, 700);
+              }
+            }} />
           </ModelsRow>
           <details className="su-advanced su-advanced-all" data-testid="su-advanced-all" ref={classicRef}
                    open={classicOpen}

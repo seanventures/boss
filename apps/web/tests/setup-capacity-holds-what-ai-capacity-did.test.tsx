@@ -234,8 +234,8 @@ describe("Capacity on Repo and models", () => {
       return v;
     };
     for (const [credential, text] of [
-      [{ kind: "long_lived_token", label: "long-lived subscription token (renews Oct 27, 2027)", expires_at: "2027-10-27T10:00:00+00:00" },
-        "· long-lived subscription token (renews Oct 27, 2027)"],
+      [{ kind: "long_lived_token", label: "long-lived subscription token (until Oct 27, 2027)", expires_at: "2027-10-27T10:00:00+00:00" },
+        "· long-lived subscription token (until Oct 27, 2027)"],
       [{ kind: "cli_login", label: "CLI login (expires in 7 h)", expires_at: null }, "· CLI login (expires in 7 h)"],
     ] as const) {
       api(view(credential));

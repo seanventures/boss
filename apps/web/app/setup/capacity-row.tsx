@@ -201,7 +201,7 @@ function ClaudePaysWith() {
         </GatedButton>
       ))}
       <span className="su-faint" data-testid="setup-claude-pays-now">
-        Now: {onKey ? "the API key (billed per call)" : cred.active === "none" ? "nothing connected"
+        Using {onKey ? "the API key (billed per call)" : cred.active === "none" ? "nothing connected"
               : "the subscription"}
       </span>
     </div>
@@ -445,7 +445,7 @@ function SourceRow({ item, sessions, onBoard, formOpen, onForm, actions }: {
   if (!busy && !editing && entry && staleGreen && !red && pill.tone !== "amber") {
     // WORKING, JUST NOT RECENTLY PROVEN: Test, never a blue "Sign in" beside a green "Working"
     // (boss-1, 2026-11-05: a long-lived token that renews in 2027 offered Sign in).
-    primary = <GatedButton permission="setup:manage" type="button" className="su-btn su-btn-sm"
+    primary = <GatedButton permission="setup:check" type="button" className="su-btn su-btn-sm"
                            data-testid="su-model-test" onClick={test}
                            title="Asks the model one tiny question." data-tip="Asks the model one tiny question.">Test</GatedButton>;
   } else if (!busy && !editing && signInProvider && (entry ? needs : offersSignIn(src!))) {
@@ -479,7 +479,7 @@ function SourceRow({ item, sessions, onBoard, formOpen, onForm, actions }: {
     } else if (action === "budget") {
       primary = <a className="su-link" href="?area=setup&focus=budget">Budget</a>;
     } else {
-      primary = <GatedButton permission="setup:manage" type="button" className="su-btn su-btn-sm"
+      primary = <GatedButton permission="setup:check" type="button" className="su-btn su-btn-sm"
                              data-testid="su-model-test" onClick={test}>Test</GatedButton>;
     }
   } else if (!entry && keyed && !onBoard) {
@@ -505,8 +505,11 @@ function SourceRow({ item, sessions, onBoard, formOpen, onForm, actions }: {
     menu.push({ label: "Replace key", onSelect: replace, testid: "su-menu-replace" });
   }
   if (canPick) menu.push({ label: "Default model…", onSelect: () => setPicking(true), testid: "su-menu-default-model" });
+  // ONE RED ACTION per row (tester, 2026-11-05: "Disconnect session" and "Remove", both red, side
+  // by side, no difference said): Remove takes the model away; Sign out only ends its login.
   if (login && src!.connection === "connected") {
-    menu.push({ label: "Disconnect session", onSelect: () => setDisconnecting(true), danger: true, testid: "setup-cap-disconnect" });
+    menu.push({ label: entry ? "Sign out (keep the model)" : "Disconnect session", onSelect: () => setDisconnecting(true),
+                danger: !entry, testid: "setup-cap-disconnect" });
   }
   if (entry?.source === "connected") {
     menu.push({ label: "Remove", danger: true, onSelect: () => void remove(false), testid: "su-menu-remove" });
@@ -637,6 +640,8 @@ export const CapacityRow = forwardRef<HTMLElement, { actor?: string; focused: bo
   const [sessions, setSessions] = useState<CapSession[]>([]);
   const [readsComplete, setReadsComplete] = useState(false);
   const [sessionError, setSessionError] = useState<string | null>(null);
+  /** The first read of both lists has finished (whatever it proved): nothing waits after that. */
+  const [settled, setSettled] = useState(false);
   const [edited, setEdited] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [locked, setLocked] = useState<string | null>(null);
@@ -679,6 +684,7 @@ export const CapacityRow = forwardRef<HTMLElement, { actor?: string; focused: bo
       setError(e instanceof Error ? e.message : String(e));
       setSources((prev) => prev ?? []);
     }
+    setSettled(true);
   }, [projectId]);
   // THE LIST FOLLOWS THE BOARD: every new view (a connect, a sign-in's Connect, a check, a
   // disconnect, a drawer closing) re-reads the sources, so no row keeps an older answer than
@@ -703,6 +709,10 @@ export const CapacityRow = forwardRef<HTMLElement, { actor?: string; focused: bo
     && src.capacity === "unknown"
     && !onBoard.has(src.sourceId) && !sessions.some((x) => x.sourceId === src.sourceId);
   const picked = section.picked;
+  /** Untouched by its own record (the reads are not in yet): may still prove unused. */
+  const confirmedUnusedShape = (src: CapSource) => src.credentialAbsent && src.connection === "not_connected"
+    && ["declared", "needs_connection", "missing_credentials", "missing_oauth_connection"].includes(src.effective)
+    && src.capacity === "unknown" && !onBoard.has(src.sourceId);
   const unused = (src: CapSource) => confirmedUnused(src) && open !== src.sourceId && !edited.has(src.sourceId)
     && picked !== src.sourceId;
   // More sources offers what can be added from a row (a key or a login). A local host or a
@@ -733,7 +743,13 @@ export const CapacityRow = forwardRef<HTMLElement, { actor?: string; focused: bo
   const byId = new Map((sources ?? []).map((s) => [s.sourceId, s]));
   const items: Item[] = [
     ...view.models.map((entry) => ({ id: entry.source_id, entry, src: byId.get(entry.source_id) })),
-    ...(sources ?? []).filter((src) => !onBoard.has(src.sourceId) && !unused(src))
+    // NO FLICKER (tester, 2026-11-05): until both reads are in, nothing can be proved unused, so
+    // every catalogue source flashed into the list and out again. Wait for them; a source picked
+    // or edited here still shows at once.
+    ...(sources ?? []).filter((src) => !onBoard.has(src.sourceId) && !unused(src)
+                                       && (readsComplete || settled || sessionError !== null || edited.has(src.sourceId)
+                                           || picked === src.sourceId || open === src.sourceId
+                                           || !confirmedUnusedShape(src)))
       .map((src) => ({ id: src.sourceId, src })),
   ];
 

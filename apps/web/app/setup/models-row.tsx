@@ -177,7 +177,7 @@ export const ModelsRow = forwardRef<HTMLElement, {
                  title="Connect a subscription, an API key or a local model."
                  data-tip="Connect a subscription, an API key or a local model."
                  onClick={() => setDrawer({ provider: start.provider })}>
-      <Plus size={14} weight="bold" aria-hidden="true" />Add a model
+      <Plus size={14} weight="bold" aria-hidden="true" />Add model
     </GatedButton>
   );
   let body: React.ReactNode;

@@ -201,6 +201,7 @@ This is the first draft of the one catalogue every BOSS API route, MCP tool, con
 |---|---|:-:|:-:|:-:|:-:|:-:|---|
 | `setup:read` | See the Repo and models checklist. | ● | ● | ● | ● | ● |  |
 | `setup:manage` | Choose the repo, models and coding agents during setup. | ● | ● |  |  |  | step-up |
+| `setup:check` | Re-check GitHub access and ask each model one tiny question. | ● | ● | ● |  |  |  |
 | `model_provider:read` | See model sources, providers, usage, health and SLOs. | ● | ● | ● | ● | ● | delegable |
 | `model_provider:manage` | Add, enable, disable, test and remove model providers. | ● | ● |  |  |  | step-up, critical |
 | `model_provider:rotate` | Rotate a provider's credential. | ● | ● |  |  |  | step-up, critical |
@@ -694,7 +695,7 @@ The rules are a first pass. During the build every route gets a hand-checked `@p
 | `setup:read` | GET | `/v1/setup/status` | main.py |
 | `setup:read` | GET | `/v1/setup/model-providers` | main.py |
 | `setup:read` | GET | `/v1/setup/coding-agents` | main.py |
-| `setup:manage` | POST | `/v1/setup/checks` | setup.py |
+| `setup:check` | POST | `/v1/setup/checks` | setup.py |
 | `setup:manage` | PUT | `/v1/setup/jobs/{job}` | setup.py |
 | `setup:manage` | PUT | `/v1/setup/budget` | setup.py |
 | `model_provider:read` | GET | `/v1/model-adapters` | main.py |

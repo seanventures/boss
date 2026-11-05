@@ -91,8 +91,8 @@ describe("Screen 1 — Get started is its own place", () => {
     fakeApi(firstRun());
     const seen = navigations();
     const { container } = await mount(firstRun(), "?area=welcome", "welcome");
-    expect(q(container, "su-wl-github-go")!.getAttribute("href")).toBe("/?area=setup&focus=repository");
-    expect(q(container, "su-wl-model-go")!.getAttribute("href")).toBe("/?area=setup&focus=models");
+    expect(q(container, "su-wl-github-go")!.getAttribute("href")).toBe("/?area=setup&focus=repository&open=add");
+    expect(q(container, "su-wl-model-go")!.getAttribute("href")).toBe("/?area=setup&focus=models&open=add");
     await click(q(container, "su-wl-github-go"));
     expect(seen).toContain("setup");
     expect(new URLSearchParams(window.location.search).get("focus")).toBe("repository");
@@ -140,8 +140,31 @@ describe("Repo and models never shows the Welcome", () => {
   it("Welcome's Add another account lands on the board's Add GitHub account", async () => {
     const view = withAccounts(board());
     fakeApi(view);
-    await mount(view, "?area=setup&focus=repository");
+    await mount(view, "?area=setup&focus=repository&open=add");
     expect(q(document.body, "su-add-account")).not.toBeNull();
+  });
+
+  it("each GitHub account has its own actions: add a repo from it, replace its token, access settings", async () => {
+    const view = withAccounts(board());
+    fakeApi(view);
+    const { container } = await mount(view);
+    const org = q(container, "su-account-ghc2")!;
+    await click(org.querySelector('[data-testid="su-account-menu"]'));
+    expect(org.querySelector('[data-testid="su-account-menu-replace"]')).not.toBeNull();
+    expect(org.querySelector('[data-testid="su-account-menu-access"]')).not.toBeNull();
+    await click(org.querySelector('[data-testid="su-account-menu-add-repo"]'));
+    expect(q(document.body, "su-add-repo-drawer")!.textContent).toContain("via sean-bot (org)");
+  });
+
+  it("a plain link to Repos or Models lands on the section and opens nothing", async () => {
+    const view = withAccounts(board());
+    fakeApi(view);
+    for (const focus of ["repository", "models"]) {
+      mounted?.unmount();
+      await mount(view, `?area=setup&focus=${focus}`);
+      expect(q(document.body, "su-add-account"), focus).toBeNull();
+      expect(q(document.body, "su-model-drawer"), focus).toBeNull();
+    }
   });
 
   it("old links (view=welcome, focus=try) open Get started", async () => {
@@ -270,8 +293,8 @@ describe("Screen 2 — Setup on one page", () => {
       expect(advanced.querySelector(`[data-testid="${id}"]`), id).not.toBeNull();
     }
     expect(q(container, "su-test-all")!.closest('[data-testid="su-advanced-all"]')).toBeNull();
-    await click(q(container, "su-open-advanced"));
-    expect((advanced as HTMLDetailsElement).open).toBe(true);
+    // ONE way into Advanced settings: its own disclosure (tester: a header link and a disclosure).
+    expect(q(container, "su-open-advanced")).toBeNull();
   });
 
   it("each repository row has its own actions: Test, Make default, Remove after asking", async () => {
@@ -310,7 +333,7 @@ describe("Screen 2 — Setup on one page", () => {
 
   it("a deep link into a row opens Advanced settings on it", async () => {
     fakeApi(board());
-    const { container } = await mount(board(), "?area=setup&focus=budget");
+    const { container } = await mount(board(), "?area=setup&focus=ci");
     expect(q(container, "su-welcome")).toBeNull();
     expect((q(container, "su-advanced-all") as HTMLDetailsElement).open).toBe(true);
   });

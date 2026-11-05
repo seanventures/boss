@@ -719,7 +719,7 @@ def credential_summary(connection: Any, project_id: Optional[str], *,
                        login: Optional[dict] = None) -> Optional[dict[str, Any]]:
     """What the Claude Code subscription row says it runs on, reading no secret:
 
-    - {"kind": "long_lived_token", "label": "long-lived subscription token (renews Oct 27, 2027)"}
+    - {"kind": "long_lived_token", "label": "long-lived subscription token (until Oct 27, 2027)"}
     - {"kind": "cli_login", "label": "CLI login (expires in 7 h)"}
 
     or None when neither is held. Same order as the resolution: the token wins."""
@@ -730,7 +730,8 @@ def credential_summary(connection: Any, project_id: Optional[str], *,
         label = "long-lived subscription token"
         try:
             expires = datetime.fromisoformat(str(info.get("expires_at") or ""))
-            label += f" (renews {expires.strftime('%b')} {expires.day}, {expires.year})"
+            # UNTIL, NOT "RENEWS" (2026-11-05): nothing renews a setup token; it works to that day.
+            label += f" (until {expires.strftime('%b')} {expires.day}, {expires.year})"
         except ValueError:
             pass
         return {"kind": "long_lived_token", "label": label,

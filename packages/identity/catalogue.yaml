@@ -1112,6 +1112,15 @@ categories:
         roles: [owner, admin]
         scope: project
         flags: [step_up]
+      # TEST CHANGES NOTHING (boss-1, 2026-11-05: every Test and Test all opened "Confirm it's
+      # you", and a cancelled one silently put the old status back). A check proves access and
+      # asks a model one tiny question; it never asks for a second factor.
+      - key: setup:check
+        title: "Check setup"
+        description: "Re-check GitHub access and ask each model one tiny question."
+        roles: [owner, admin, operator]
+        scope: project
+        flags: []
       - key: model_provider:read
         title: "View model providers"
         description: "See model sources, providers, usage, health and SLOs."

@@ -818,3 +818,7 @@ button.su-chip[aria-checked="true"] { color: var(--accent); border-color: var(--
   font: 400 0.8125rem/1.4 var(--sans); letter-spacing: normal; text-transform: none; color: var(--faint);
 }
 .su-models-block #su-embedding-model > .su-row-body { flex: 1 1 360px; min-width: 0; }
+/* Embedding form: the URL and key fields fit a whole Azure endpoint and a placeholder. */
+#su-embedding-model .su-field input { min-width: 0; width: 100%; }
+#su-embedding-model [data-testid="su-embedding-form"] .su-line > .su-field { flex: 1 1 280px; }
+.su-account-menu-gap { width: 1%; }

@@ -53,7 +53,7 @@ describe("the header says what works and offers + Add a model", () => {
     mounted = await mountBoard(board());
     const head = q(document.body, "su-models-head")!;
     const add = q(head, "su-add-model-open") as HTMLButtonElement;
-    expect(add.textContent).toBe("Add a model");
+    expect(add.textContent).toBe("Add model");
     expect(add.className).toContain("su-btn-primary");
     expect(q(head, "su-models-summary")!.textContent).toContain("2 working");
     await click(add);

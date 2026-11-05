@@ -81,7 +81,7 @@ def build_multirepo_router() -> APIRouter:
     def list_repos(project_id: str) -> Any:
         try:
             with begin() as db:
-                return registry.list_registry(db, project_id)
+                return registry.list_registry(db, project_id, settings=_settings())
         except MultiRepoError as exc:
             return _refuse(exc)
 
