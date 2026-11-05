@@ -1,74 +1,60 @@
 ---
-title: Delegate one useful software change
+title: Home
 hide:
-  - navigation
   - toc
 ---
 
-<div class="boss-manual-intro" markdown="1">
+<div class="boss-home" markdown="1">
 
-<p class="boss-eyebrow">BOSS Community · Self-hosted · Apache 2.0</p>
+# A self-hosted control plane for AI software work
 
-# Delegate one useful software change
+<p class="boss-lede">An agent can plan, spend, and change things. You review the plan, the result, and the cost. BOSS keeps the receipt.</p>
 
-Know what ran, what it cost, what needs your decision, and how to continue safely.
+## Who it is for
 
-BOSS keeps the plan, work history, decisions and evidence around an AI-assisted repository change. Start with one Owner, one repository, one model and a change you can check yourself.
+A technical founder who will run BOSS on a server they administer. You should be comfortable with one Linux machine, Docker, a GitHub repository you are allowed to change, and a diff. The people you invite share that install. It is not a hosted service.
 
-[Start a useful change](FIRST_USEFUL_CHANGE.md){ .md-button .md-button--primary }
-[Install the release](QUICKSTART.md){ .md-button }
+## The path
 
-</div>
+<div class="boss-path" markdown="1">
 
-## A place to return to the work
-
-Use **Command Center** for the current next action, **Approvals** for decisions, **Workflows** for a run's steps and **Factory** for code work and its deliverable. **Activity log** links recorded events, jobs, receipts and failures. A completed job is a record to inspect; accepting its result is your decision.
-
-<div class="boss-product-shot" markdown="1">
-
-![Installed Command Center showing repository and model setup actions with no work running.](assets/screenshots/home-28d75d69.jpg)
-
-Actual console capture after named Owner sign-in on a fresh disposable install using the qualified RC8 API and web images. This shows setup actions and no in-flight work, not a completed provider-backed software change. [Screenshot provenance](assets/screenshots/provenance.json)
+1. [Install](QUICKSTART.md#install) <span class="boss-path__note">Pin v1.0-rc10.10 on a machine you administer.</span>
+2. [Claim](QUICKSTART.md#claim-the-install) <span class="boss-path__note">Open the one-hour link and become the Owner.</span>
+3. [Repository](QUICKSTART.md#connect-a-repository) <span class="boss-path__note">Connect one GitHub repository you may change.</span>
+4. [Model](QUICKSTART.md#connect-a-model) <span class="boss-path__note">Connect one model. A coding subscription signs in inside BOSS.</span>
+5. [One pull request](QUICKSTART.md#open-one-pull-request) <span class="boss-path__note">Describe one small change, then review what opened.</span>
 
 </div>
 
-## What you need before delegating
+The [quickstart](QUICKSTART.md) is that path. [Your hostname](hostname.md) is where TLS goes. The page after the pull request is the [first change](FIRST_USEFUL_CHANGE.md).
 
-You should be comfortable administering a single-tenant Linux/Docker installation, reviewing a GitHub diff and running your repository's checks. Allow time for installation, named Owner enrollment, repository permissions and model setup. A CPU-only local model can be slow; the [Getting started transcript](GETTING_STARTED.md) gives historical timings, not a current performance guarantee.
+## What you get
 
-Choose a small correction or bug fix with a clear result. The [first useful change guide](FIRST_USEFUL_CHANGE.md) helps you define the task, follow the existing workflow, review the exact output and handle a hold or uncertain attempt.
+<dl class="boss-gets">
+  <dt>A plan you can read</dt>
+  <dd>A governed workflow turns a goal into a plan before the work runs.</dd>
+  <dt>A budget reservation before work</dt>
+  <dd>The reservation is an estimate. It is not a cap on a provider's invoice. Review held and uncertain exposure before you continue.</dd>
+  <dt>An approval when it matters</dt>
+  <dd>Gated steps wait, with the context for the decision. A recommendation is not permission.</dd>
+  <dt>A receipt after</dt>
+  <dd>The receipt and its dedupe key identify an attempt. A dedupe key does not make every provider idempotent. Reconcile an ambiguous provider outcome before a retry.</dd>
+</dl>
 
-## The operating contract
+## Limits
 
-| You need to know | Where to look | What the record means |
-| --- | --- | --- |
-| What will run | The selected workflow and drafted PRD | Read the scope and checks before required approval. The default Standard path has no separate Architecture step. |
-| What needs you | Command Center and Approvals | Open the actual decision and its evidence; a recommendation is not permission. |
-| What it cost | The run report, budget and receipt evidence | Estimated, reserved, observed and reconciled amounts are different. A reservation is not a hard ceiling on a provider invoice. |
-| What happened | Workflows, Factory and Activity log | Inspect the deliverable, checked revision and receipt together. A dedupe key alone cannot resolve an ambiguous external outcome. |
-| How to continue | The failed or held step and its linked records | Fix the stated cause. Reconcile an uncertain accepted effect before retrying. Stop may leave usage or budget held. |
+This is a release candidate, not a promise that every path is qualified. The bounded installed checks behind this candidate are an owned Linux arm64 machine that already had Docker. A clean-host install and useful provider work are separate checks. The [v1.0-rc10.10 notes](RELEASE_NOTES_v1.0-rc10.10.md) and the [RC9 validation record](RC9_VALIDATION.md) say what has been checked, and what has not.
 
-See [Architecture approval and spending](ARCHITECTURE_GOVERNANCE.md), [build isolation](SANDBOX.md) and [release validation](RC8_VALIDATION.md) for the controls and their current limits.
+Credentials stay on the install. A hosted model receives the authentication and the task data for the calls you authorize. No telemetry collector is set, so nothing is sent until you set one. "Improve BOSS" is off unless you turn it on. `BOSS_TELEMETRY=off` or `DO_NOT_TRACK=1` sends nothing. [What a payload can contain](https://github.com/seanventures/boss/blob/main/docs/product/RUN_SCORECARDS.md).
 
-## Choose your entrance
+## Where to go next
 
-| I want to | Read |
-| --- | --- |
-| Delegate and review one bounded repository change | [First useful change](FIRST_USEFUL_CHANGE.md) |
-| Install, claim the Owner account and check the services | [Quickstart](QUICKSTART.md) |
-| Follow the longer recorded installation and build transcript | [Getting started](GETTING_STARTED.md) |
-| See the console and terminal controls | [Walkthroughs](walkthroughs.md) |
-| Connect a model or coding subscription | [Model connections](MODEL_CONNECTIONS.md) |
-| Serve my install over HTTPS | [Deploy](hostname.md) |
-| Invite people or control agent authority | [People and access](PEOPLE_AND_ACCESS.md) · [Agents and access](AGENTS_AND_ACCESS.md) |
-| Work from the keyboard or my existing coding agent | [Terminal and API](TERMINAL_API.md) · [MCP](MCP.md) |
-| Inspect the full capability list | [Features](FEATURES.md) · [Use cases](use-cases.md) |
-| Upgrade, back up or recover an install | [Installer guide](https://github.com/seanventures/boss/blob/v1.0-rc8/scripts/install/README.md) |
+- [Do the work](FIRST_USEFUL_CHANGE.md), then [review a result](RESULT_REVIEW.md) and [return to it](RETURNING_TO_WORK.md)
+- [People](PEOPLE_AND_ACCESS.md), [spend and approvals](ARCHITECTURE_GOVERNANCE.md)
+- [GitHub](CONNECT_GITHUB.md), [models](MODEL_CONNECTIONS.md), [terminal](terminal.md), [MCP](MCP.md), [CLI](cli.md)
+- [Features](FEATURES.md) and the [release notes](RELEASE_NOTES_v1.0-rc10.10.md)
+- The [fifteen example workflows](https://github.com/seanventures/boss/blob/main/examples/README.md). Installing an example does not start work.
+- [Contributing](https://github.com/seanventures/boss/blob/main/CONTRIBUTING.md) and the [Apache License 2.0](https://github.com/seanventures/boss/blob/main/LICENSE)
+- [Report a problem](FEEDBACK_LOOP.md). Security reports go to the address in the [security policy](https://github.com/seanventures/boss/blob/main/SECURITY.md), not a public issue.
 
-## Release status and help
-
-The [RC8 source release](https://github.com/seanventures/boss/releases/tag/v1.0-rc8) is available. The [validation record](RC8_VALIDATION.md) separates source tests, disposable installed-runtime checks, live provider work, supported clean-host qualification and hosted deployment. A useful live-provider result, independent first use and safe reconciliation remain release qualification work. This guide does not claim those outcomes have been observed.
-
-Use local **Help** without losing the page you are on. [Report a problem](FEEDBACK_LOOP.md) with your version, the failing step and redacted record IDs. Keep credentials and private task data out of public issues. Report suspected vulnerabilities privately through the [security policy](https://github.com/seanventures/boss/blob/main/SECURITY.md).
-
-BOSS Community is licensed under the Apache License 2.0. [View the source](https://github.com/seanventures/boss) or read the [contributing guide](https://github.com/seanventures/boss/blob/main/CONTRIBUTING.md).
+</div>

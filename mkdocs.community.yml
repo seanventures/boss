@@ -1,5 +1,5 @@
 site_name: BOSS
-site_description: Delegate one useful software change with plans, decisions, cost evidence and a work history you can inspect
+site_description: A self-hosted control plane for AI software work. A person reviews the plan, the result, and the cost.
 site_url: https://boss.sean.network/docs/
 repo_url: https://github.com/seanventures/boss
 repo_name: seanventures/boss
@@ -59,62 +59,68 @@ markdown_extensions:
 
 nav:
   - Home: README.md
-  - Get started:
-      - First useful change: FIRST_USEFUL_CHANGE.md
-      - Review the work agreement: WORK_AGREEMENT.md
-      - Review a result (RC9): RESULT_REVIEW.md
-      - Return to work (RC9): RETURNING_TO_WORK.md
-      - Reuse accepted checks (RC9): ACCEPTANCE_CHECKS.md
-      - Getting started: GETTING_STARTED.md
-      - Quickstart: QUICKSTART.md
-      - Deploy: hostname.md
-      - Deploy an app: DEPLOY_A_STACK.md
+  - Start:
+      - The path: QUICKSTART.md
+      - Your hostname: hostname.md
+  - Do the work:
+      - First change: FIRST_USEFUL_CHANGE.md
+      - Review a result: RESULT_REVIEW.md
+      - Return to it: RETURNING_TO_WORK.md
+      - The work agreement: WORK_AGREEMENT.md
+      - Reuse accepted checks: ACCEPTANCE_CHECKS.md
+  - Govern:
+      - People and access: PEOPLE_AND_ACCESS.md
+      - Spend and approvals: ARCHITECTURE_GOVERNANCE.md
+      - Sign-in setup: SIGN_IN_SETUP.md
       - Sign in: CONSOLE_AUTH.md
       - Upgrade to named accounts: IDENTITY_UPGRADE.md
-  - People and access:
-      - People and access: PEOPLE_AND_ACCESS.md
-      - Sign-in setup: SIGN_IN_SETUP.md
-      - Email: EMAIL.md
+      - Identity administration: IDENTITY_ADMIN.md
       - Agents and access: AGENTS_AND_ACCESS.md
       - Build sandbox: SANDBOX.md
-      - Architecture approval and spending: ARCHITECTURE_GOVERNANCE.md
-      - Build toolchains: TOOLCHAINS.md
-      - Supported stacks: SUPPORTED_STACKS.md
-      - Hearing an agent's voice: AGENT_VOICE_TESTS.md
       - Conversation costs and retries: CONVERSATION_STREAMS.md
       - Provider apply and recovery: PROVIDER_RECOVERY.md
       - Restored data and startup holds: RESTORED_STATE_HOLD.md
       - Historical financial exposure: LEGACY_FINANCIAL_HOLD.md
-      - Identity administration: IDENTITY_ADMIN.md
-      - Connect models: MODEL_CONNECTIONS.md
-      - Use cases: use-cases.md
-      - Walkthroughs: walkthroughs.md
-      - Workflow retries, timeouts and error paths: WORKFLOW_STEP_ERRORS.md
-      - Starting a workflow from a webhook: WORKFLOW_WEBHOOKS.md
-      - Workflow test runs and running again from a step: WORKFLOW_TEST_RUNS.md
-      - Workflow for each: WORKFLOW_FOR_EACH.md
-  - Interfaces:
-      - Overview: interfaces.md
-      - Metatron terminal: terminal.md
-      - Terminal and API reference: TERMINAL_API.md
+  - Connect:
+      - Interfaces: interfaces.md
+      - GitHub: CONNECT_GITHUB.md
+      - Models: MODEL_CONNECTIONS.md
+      - Terminal: terminal.md
+      - Terminal and API: TERMINAL_API.md
       - MCP: MCP.md
       - CLI: cli.md
-      - Remote API: remote-api.md
       - Grok CLI: GROK_CLI.md
+      - Remote API: remote-api.md
+      - Email: EMAIL.md
+      - Workflow webhooks: WORKFLOW_WEBHOOKS.md
   - Reference:
       - Features: FEATURES.md
+      - Use cases: use-cases.md
+      - Walkthroughs: walkthroughs.md
+      - Deploy an app: DEPLOY_A_STACK.md
       - Control surfaces: CONTROL_SURFACES.md
       - Terminal capability matrix: TERMINAL_CAPABILITY_MATRIX.md
-      - Release notes (v1.0-rc10.10): RELEASE_NOTES_v1.0-rc10.10.md
+      - Supported stacks: SUPPORTED_STACKS.md
+      - Build toolchains: TOOLCHAINS.md
+      - Hearing an agent's voice: AGENT_VOICE_TESTS.md
+      - Workflow retries, timeouts and error paths: WORKFLOW_STEP_ERRORS.md
+      - Workflow test runs and running again from a step: WORKFLOW_TEST_RUNS.md
+      - Workflow for each: WORKFLOW_FOR_EACH.md
+      - Release notes for v1.0-rc10.10: RELEASE_NOTES_v1.0-rc10.10.md
+      - Release notes for v1.0-rc10.9: RELEASE_NOTES_v1.0-rc10.9.md
+      - Release notes for v1.0-rc10.8: RELEASE_NOTES_v1.0-rc10.8.md
+      - Release notes for v1.0-rc10.7: RELEASE_NOTES_v1.0-rc10.7.md
+      - Release notes for v1.0-rc10.6: RELEASE_NOTES_v1.0-rc10.6.md
+      - Release notes for v1.0-rc10.5: RELEASE_NOTES_v1.0-rc10.5.md
       - RC9 candidate changes: RELEASE_NOTES_v1.0-rc9.md
-      - RC9 validation in progress: RC9_VALIDATION.md
-      - Release notes (v1.0-rc8): RELEASE_NOTES_v1.0-rc8.md
+      - RC9 validation: RC9_VALIDATION.md
+      - Release notes for v1.0-rc8: RELEASE_NOTES_v1.0-rc8.md
       - RC8 validation: RC8_VALIDATION.md
-      - Release notes (v1.0-rc6.2): RELEASE_NOTES_v1.0-rc6.2.md
-      - Release notes (v1.0-rc6.1): RELEASE_NOTES_v1.0-rc6.1.md
-      - Release notes (v1.0-rc6): RELEASE_NOTES_v1.0-rc6.md
-      - Release notes (v1.0-rc5): RELEASE_NOTES_v1.0-rc5.md
-  - Community:
+      - Release notes for v1.0-rc6.2: RELEASE_NOTES_v1.0-rc6.2.md
+      - Release notes for v1.0-rc6.1: RELEASE_NOTES_v1.0-rc6.1.md
+      - Release notes for v1.0-rc6: RELEASE_NOTES_v1.0-rc6.md
+      - Release notes for v1.0-rc5: RELEASE_NOTES_v1.0-rc5.md
+      - Getting started: GETTING_STARTED.md
       - Feedback: FEEDBACK_LOOP.md
       - Publishing the docs: publishing.md
 
