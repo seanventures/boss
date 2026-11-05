@@ -442,9 +442,11 @@ export function SignIn({ options, next, initialStep = null, notice = null }: {
 
       <p className="idn-new">
         New here?{" "}
-        {options.signup
-          ? <a href="/signup" data-testid="create-account">Create account</a>
-          : <button type="button" data-testid="create-account" onClick={() => setSheet("invite-only")}>Create account</button>}
+        {options.claim
+          ? <a href="/claim" data-testid="create-account">Create account</a>
+          : options.signup
+            ? <a href="/signup" data-testid="create-account">Create account</a>
+            : <button type="button" data-testid="create-account" onClick={() => setSheet("invite-only")}>Create account</button>}
       </p>
       <HostLine host={options.host}>
         {sharedOffered && method === "password" && stage.kind === "start" ? (

@@ -6,5 +6,5 @@ export const metadata = { title: "Create account · BOSS" };
 
 export default async function SignUpPage() {
   const options = await loadAuthOptions();
-  return <SignUp host={options.host} org={options.org_name} enabled={options.signup} />;
+  return <SignUp host={options.host} org={options.org_name} enabled={options.signup} unclaimed={options.claim != null} />;
 }
