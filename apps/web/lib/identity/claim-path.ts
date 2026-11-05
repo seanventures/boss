@@ -23,12 +23,18 @@ function accepted(claim: Claim): string[] {
   return [claim.path === "network_bridge" ? "network" : claim.path];
 }
 
-export function claimPathFor(claim: Claim, fragmentToken: string): ClaimPath {
-  if (fragmentToken && accepted(claim).includes("setup_token")) return "setup_token";
+/**
+ * The claim page never asks for the shared console password (operator, 2026-11-05: "asking for
+ * password for the first sign up page and claiming your instance" is wrong). Compose always sets
+ * one, so a fresh install opened without `#t=` asked for a password nobody was shown. Wherever the
+ * API accepts a setup link, the setup link is the proof; the page says how to get one. The API
+ * still accepts the shared password (older clients), the console just never offers it.
+ */
+export function claimPathFor(claim: Claim, _fragmentToken: string): ClaimPath {
+  if (accepted(claim).includes("setup_token") && claim.path === "legacy_password") return "setup_token";
   return claim.path;
 }
 
-/** The origin a network claim binds: the API's, else the page's own (null on the server). */
 export function claimOrigin(claim: Claim, pageOrigin: string | null): string | null {
   return claim.origin || pageOrigin || null;
 }

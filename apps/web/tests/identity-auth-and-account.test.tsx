@@ -131,12 +131,27 @@ describe("Claim this BOSS", () => {
     expect((el.querySelector("#claim-pw") as HTMLInputElement).type).toBe("text");
     type(el.querySelector("#claim-name"), "Param");
     type(el.querySelector("#claim-email"), "param@example.com");
-    expect((el.querySelector("[data-testid='claim-submit']") as HTMLButtonElement).disabled).toBe(true);
+    // Not ready: the button says why on click instead of sitting silently disabled (2026-11-05).
+    type(el.querySelector("#claim-pw"), "short-pw");
+    expect(el.querySelector("[data-testid='claim-pw-hint']")?.className).toContain("idn-err");
+    expect(el.querySelector("[data-testid='claim-pw-hint']")?.textContent).toMatch(/\d+ more characters needed/);
+    expect(el.querySelector("[data-testid='claim-submit']")?.getAttribute("aria-disabled")).toBe("true");
+    await click(el.querySelector("[data-testid='claim-submit']"));
+    expect(el.querySelector("[data-testid='claim-missing']")?.textContent).toMatch(/Your password needs \d+ more characters/);
     type(el.querySelector("#claim-pw"), "violet-otter-harbour-1987");
-    expect((el.querySelector("[data-testid='claim-submit']") as HTMLButtonElement).disabled).toBe(false);
+    expect(el.querySelector("[data-testid='claim-submit']")?.getAttribute("aria-disabled")).toBeNull();
     expect(navigator.credentials.create).not.toHaveBeenCalled();
     expect(el.querySelector("#claim-seat")?.textContent).toContain("ceo · approvals and history will show your name");
     accessible(el);
+  });
+
+  it("a fresh install never asks for the shared console password: no link → get the link (2026-11-05)", async () => {
+    window.history.replaceState(null, "", "/");
+    const el = await mount(<ClaimFlow options={options({ path: "legacy_password", paths: ["setup_token", "legacy_password"], origin: null, expires_at: null, seats: SEATS })} />);
+    expect(el.querySelector("[data-testid='claim-legacy-password']")).toBeNull();
+    expect(el.querySelector("[data-testid='claim-no-token']")).not.toBeNull();
+    expect(el.querySelector("form")).toBeNull();
+    expect(el.textContent).toContain("boss identity setup-link");
   });
 
   it("setup link with no token says how to print a new one", async () => {
@@ -201,9 +216,9 @@ describe("Claim this BOSS", () => {
     type(el.querySelector("#claim-email"), "param@example.com");
     type(el.querySelector("#claim-pw"), "violet-otter-harbour-1987");
     const submit = el.querySelector("[data-testid='claim-submit']") as HTMLButtonElement;
-    expect(submit.disabled).toBe(true);
+    expect(submit.getAttribute("aria-disabled")).toBe("true");
     await click(el.querySelector("[data-testid='claim-origin-confirm']"));
-    expect(submit.disabled).toBe(false);
+    expect(submit.getAttribute("aria-disabled")).toBeNull();
     await click(submit);
     const claim = calls.find((c) => c.url === "/v1/auth/setup/claim");
     expect(claim?.body).toMatchObject({ confirm_origin: origin, name: "Param Gnanaguru", email: "param@example.com", seat: "ceo", password: "violet-otter-harbour-1987" });

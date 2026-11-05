@@ -274,7 +274,7 @@ if [ "${#DOCKER[@]}" -gt 0 ] &&
   bad "sandbox: this host cannot fence the build network, so builds are held — see docs/community/SANDBOX.md (or set BOSS_SANDBOX_NETWORK=off in .env and restart)"
 fi
 case "$claim" in
-  unclaimed) warn "identity: unclaimed — nobody owns this BOSS yet. Run: boss identity setup-link (prints a one-hour link that makes you the Owner; or open $CONSOLE_URL/claim with the password from boss password)" ;;
+  unclaimed) warn "identity: unclaimed — nobody owns this BOSS yet. Run: boss identity setup-link (prints a one-hour link that makes you the Owner; open it in your browser)" ;;
   claimed*) ok "identity: $claim" ;;
   *) : ;;   # an older image without the identity CLI: nothing to say
 esac

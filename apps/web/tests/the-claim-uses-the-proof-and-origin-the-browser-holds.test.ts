@@ -25,8 +25,8 @@ describe("which proof", () => {
     expect(claimPathFor(base, "tok")).toBe("setup_token");
     expect(claimProof(claimPathFor(base, "tok"), { token: "tok", legacy: "", origin: null })).toEqual({ setup_token: "tok" });
   });
-  it("without a link, the API's path stands", () => {
-    expect(claimPathFor(base, "")).toBe("legacy_password");
+  it("without a link, the console asks for the setup link, never the shared password (2026-11-05)", () => {
+    expect(claimPathFor(base, "")).toBe("setup_token");
     expect(claimPathFor({ ...base, path: "network_bridge", paths: ["setup_token", "network"] }, "")).toBe("network_bridge");
   });
   it("a link the API does not accept here is not used", () => {

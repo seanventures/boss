@@ -78,6 +78,7 @@ function ClaimForm({ options, claim }: { options: AuthOptions; claim: Claim }) {
   const [email, setEmail] = useState("");
   const [seat, setSeat] = useState(claim.seats[0] ?? "");
   const [legacy, setLegacy] = useState("");
+  const [tried, setTried] = useState(false);
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   /** The recovery codes issued with the FIRST factor, held while a second one is added. */
@@ -110,6 +111,15 @@ function ClaimForm({ options, claim }: { options: AuthOptions; claim: Claim }) {
     || (network && (!originOk || !origin));
   // The password is ALWAYS required (BOSSAPP-812): the way in from any browser.
   const ready = name.trim() && email.includes("@") && password.length >= minPw && !proofMissing;
+  // Why Claim cannot go yet, in one line — a silent disabled button left people guessing.
+  const missing = path === "setup_token" && !token ? "Open the setup link first"
+    : !name.trim() ? "Add your name"
+    : !email.includes("@") ? "Add your email"
+    : password.length < minPw ? `Your password needs ${minPw - password.length} more characters`
+    : path === "legacy_password" && !legacy ? "Add the shared console password"
+    : network && (!originOk || !origin) ? "Confirm the address"
+    : "";
+  const pwShort = password.length > 0 && password.length < minPw;
 
   /** The codes issued with the first factor; only when there were none, ask for a set. */
   const showCodes = async (issued: string[] = []) => {
@@ -145,7 +155,10 @@ function ClaimForm({ options, claim }: { options: AuthOptions; claim: Claim }) {
       // Step 2: where no passkey is possible the authenticator app is the factor; else choose.
       setStage(fallback ? "totp" : "protect");
     } catch (e) {
-      setError(sayAuth(e));
+      const said = sayAuth(e);
+      setError(path === "legacy_password" && said === "Wrong password"
+        ? "That's not the shared console password."
+        : said);
       setBusy(false);
     }
   };
@@ -235,6 +248,24 @@ function ClaimForm({ options, claim }: { options: AuthOptions; claim: Claim }) {
     );
   }
 
+  // No setup link in the address: one thing to do — get the link. No form to fill in first.
+  // The link lives in the fragment, read after mount: show nothing until it has been read.
+  if (pageOrigin === null && path === "setup_token") return <AuthStage label="Claim this BOSS"><Logo host={options.host} /><h1>Claim this BOSS</h1></AuthStage>;
+  if (path === "setup_token" && !token) {
+    return (
+      <AuthStage label="Claim this BOSS">
+        <Logo host={options.host} />
+        <h1>Open your setup link</h1>
+        <div data-testid="claim-no-token">
+          <p className="idn-s" data-copy="prose">{claim.link_over_api
+            ? "Claiming needs a one-hour link. Ask whoever holds this install's admin key to issue one, or run this on the machine BOSS runs on:"
+            : "Claiming needs a one-hour link from the server. On the machine BOSS runs on:"}</p>
+          <CopyCommand command={SETUP_LINK} />
+        </div>
+      </AuthStage>
+    );
+  }
+
   return (
     <AuthStage label="Claim this BOSS" wide>
       <Logo host={options.host} right={path === "setup_token" && mins !== null ? `setup link · expires in ${mins} min` : network ? "network bridge" : options.host} />
@@ -246,16 +277,7 @@ function ClaimForm({ options, claim }: { options: AuthOptions; claim: Claim }) {
             ? "You'll be its first Owner. Being on this network proves you run it. From now on everyone signs in as themselves."
             : "You'll be its first Owner. The setup link proves you installed it. From now on everyone signs in as themselves."}
       </p>
-      <form onSubmit={(e) => { e.preventDefault(); if (ready) submit(); }} noValidate>
-        {path === "setup_token" && !token ? (
-          <div className="idn-note bad" role="alert" data-testid="claim-no-token">
-            <Warning size={15} aria-hidden />
-            <span data-copy="prose">{claim.link_over_api
-              ? "Claiming needs a one-hour link. Ask whoever holds this install's admin key to issue one, or run this on the machine BOSS runs on:"
-              : "Claiming needs a one-hour link from the server. On the machine BOSS runs on:"}</span>
-          </div>
-        ) : null}
-        {path === "setup_token" && !token ? <CopyCommand command={SETUP_LINK} /> : null}
+      <form onSubmit={(e) => { e.preventDefault(); setTried(true); if (ready) submit(); }} noValidate>
 
         {network ? (
           <div className="idn-f" data-testid="claim-origin">
@@ -304,12 +326,13 @@ function ClaimForm({ options, claim }: { options: AuthOptions; claim: Claim }) {
               {showPassword ? <EyeSlash size={18} aria-hidden /> : <Eye size={18} aria-hidden />}
             </button>
           </div>
-          <span id="claim-pw-hint" className="idn-dim idn-hint">{password.length && password.length < minPw ? `${minPw - password.length} more characters needed` : `${minPw} characters or more`}</span>
+          <span id="claim-pw-hint" className={pwShort ? "idn-err idn-hint" : "idn-dim idn-hint"} data-testid="claim-pw-hint">{password.length && password.length < minPw ? `${minPw - password.length} more characters needed` : `${minPw} characters or more`}</span>
         </div>
 
         {noPasskey ? <div className="idn-note" data-copy="prose" data-testid="no-passkey-here">{noPasskey}</div> : null}
         {error ? <div className="idn-err" role="alert">{error}</div> : null}
-        <button type="submit" className="idn-big p" disabled={!ready || busy} aria-disabled={!ready || busy || undefined} data-testid="claim-submit">
+        {!error && tried && missing ? <div className="idn-err" role="alert" data-testid="claim-missing">{missing}</div> : null}
+        <button type="submit" className="idn-big p" disabled={busy} aria-disabled={!ready || busy || undefined} data-testid="claim-submit">
           <ShieldCheck size={18} aria-hidden />
           {busy ? "Claiming…" : fallback ? "Claim and add an authenticator" : "Claim and continue"}
         </button>
