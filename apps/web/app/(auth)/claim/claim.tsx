@@ -7,14 +7,17 @@
  *   setup_token      the link from the install output (`#t=`), valid an hour;
  *   legacy_password  the shared console password proves you are the operator (D25);
  *   network_bridge   being on this trusted network proves it (D27). The claim binds BOSS to
- *                    the origin shown, and a passkey is required.
+ *                    the origin shown.
  *
- * Then a passkey on this device (an authenticator app only where the browser has no passkeys),
- * and recovery codes, shown once. Owners must use MFA, so nothing is skippable.
+ * PASSWORD FIRST (BOSSAPP-812): step 1 is name, email and a PASSWORD — the way in from any
+ * browser. Step 2 "Protect your account": a passkey on this device (recommended; it is also the
+ * one-tap sign-in) or an authenticator app. After a passkey, an authenticator is offered too,
+ * because a passkey lives in one browser profile. Then recovery codes, shown once. Owners must
+ * use MFA, so the second factor is not skippable. A passkey is never the only way in.
  */
 import { passwordMin, type AuthOptionsWithPolicy } from "../../../lib/identity/types-account";
 import React, { useEffect, useState } from "react";
-import { Fingerprint, ShieldCheck, Warning } from "@phosphor-icons/react";
+import { DeviceMobile, Eye, EyeSlash, Fingerprint, LockSimple, ShieldCheck, Warning } from "@phosphor-icons/react";
 
 import { idPost } from "../../../lib/identity/api";
 import type { AuthOptions } from "../../../lib/identity/types";
@@ -30,7 +33,7 @@ import { RecoveryCodesView } from "../recovery-codes";
 import { TotpStep } from "../enrol/totp-step";
 
 type Claim = NonNullable<AuthOptions["claim"]>;
-type Stage = "form" | "passkey" | "totp" | "codes";
+type Stage = "form" | "protect" | "passkey" | "also-totp" | "totp" | "codes";
 
 const SHOW_ON_SERVER = HOST_COMMANDS.password;
 const SHOW_OVER_SSH = overSsh(SHOW_ON_SERVER);
@@ -76,6 +79,9 @@ function ClaimForm({ options, claim }: { options: AuthOptions; claim: Claim }) {
   const [seat, setSeat] = useState(claim.seats[0] ?? "");
   const [legacy, setLegacy] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  /** The recovery codes issued with the FIRST factor, held while a second one is added. */
+  const [issuedCodes, setIssuedCodes] = useState<string[]>([]);
   const [originOk, setOriginOk] = useState(false);
   const [passkeys, setPasskeys] = useState(true);
   const [codes, setCodes] = useState<string[] | null>(null);
@@ -99,10 +105,11 @@ function ClaimForm({ options, claim }: { options: AuthOptions; claim: Claim }) {
   const path = claimPathFor(claim, token);
   const origin = claimOrigin(claim, pageOrigin);
   const network = path === "network_bridge";
-  const fallback = !passkeys || Boolean(noPasskey); // no passkey here: password + authenticator app instead
+  const fallback = !passkeys || Boolean(noPasskey); // no passkey here: the authenticator app is the factor
   const proofMissing = (path === "setup_token" && !token) || (path === "legacy_password" && !legacy)
-    || (network && (!originOk || !origin)) || (fallback && password.length < minPw);
-  const ready = name.trim() && email.includes("@") && !proofMissing;
+    || (network && (!originOk || !origin));
+  // The password is ALWAYS required (BOSSAPP-812): the way in from any browser.
+  const ready = name.trim() && email.includes("@") && password.length >= minPw && !proofMissing;
 
   /** The codes issued with the first factor; only when there were none, ask for a set. */
   const showCodes = async (issued: string[] = []) => {
@@ -110,13 +117,14 @@ function ClaimForm({ options, claim }: { options: AuthOptions; claim: Claim }) {
     setStage("codes");
   };
 
-  const secondFactor = async () => {
+  /** Step 2 with a passkey: the ceremony starts only on this click. Then offer an authenticator too. */
+  const withPasskey = async () => {
     setError(null);
     setBusy(true);
     try {
-      if (fallback) { setStage("totp"); return; }
       setStage("passkey");
-      await showCodes(await registerPasskey());
+      setIssuedCodes(await registerPasskey());
+      setStage("also-totp");
     } catch (e) {
       setError(sayAuth(e));
     } finally {
@@ -129,11 +137,13 @@ function ClaimForm({ options, claim }: { options: AuthOptions; claim: Claim }) {
     setError(null);
     try {
       const proof = claimProof(path, { token, legacy, origin });
-      await idPost("/v1/auth/setup/claim", { ...proof, name: name.trim(), email: email.trim(), seat: seat || null, ...(fallback ? { password } : {}) });
+      await idPost("/v1/auth/setup/claim", { ...proof, name: name.trim(), email: email.trim(), seat: seat || null, password });
       setLegacy("");
+      setPassword("");
       await primeCsrf();
       setBusy(false);
-      await secondFactor();
+      // Step 2: where no passkey is possible the authenticator app is the factor; else choose.
+      setStage(fallback ? "totp" : "protect");
     } catch (e) {
       setError(sayAuth(e));
       setBusy(false);
@@ -145,7 +155,7 @@ function ClaimForm({ options, claim }: { options: AuthOptions; claim: Claim }) {
       <AuthStage label="Recovery codes">
         <Logo host={options.host} />
         <h1>Save your recovery codes</h1>
-        <p className="idn-s" data-copy="prose">If you lose every passkey, one of these gets you back in. You're this BOSS's first Owner.</p>
+        <p className="idn-s" data-copy="prose">If you lose your second factor, one of these gets you back in. You're this BOSS's first Owner.</p>
         <RecoveryCodesView codes={codes} host={options.host} continueLabel="Continue setup" onContinue={() => { setCodes(null); window.location.assign(AFTER_CLAIM); }} />
       </AuthStage>
     );
@@ -156,10 +166,47 @@ function ClaimForm({ options, claim }: { options: AuthOptions; claim: Claim }) {
       <AuthStage label="Authenticator">
         <Logo host={options.host} />
         <h1>Add an authenticator</h1>
-        <p className="idn-s" data-copy="prose">{noPasskey ? `${noPasskey.replace(/\.$/, "")}.` : "Passkeys aren't available here."} Scan the code with an authenticator app, then enter the 6 digits it shows.</p>
-        <div className="idn-note" data-copy="prose"><Warning size={15} aria-hidden /> Posture will show &ldquo;No passkey on the only Owner&rdquo; until you add one.</div>
-        <TotpStep onDone={(issued) => { showCodes(issued).catch((e) => setError(sayAuth(e))); }} />
+        <p className="idn-s" data-copy="prose">{fallback ? `${(noPasskey ?? "Passkeys aren't available here.").replace(/\.$/, "")}. ` : ""}Scan the code with an authenticator app, then enter the 6 digits it shows.</p>
+        {issuedCodes.length ? null : <div className="idn-note" data-copy="prose"><Warning size={15} aria-hidden /> Posture will show &ldquo;No passkey on the only Owner&rdquo; until you add one.</div>}
+        <TotpStep onDone={(issued) => { showCodes(issuedCodes.length ? issuedCodes : issued).catch((e) => setError(sayAuth(e))); }} />
         {error ? <div className="idn-err" role="alert">{error}</div> : null}
+      </AuthStage>
+    );
+  }
+
+  if (stage === "protect") {
+    return (
+      <AuthStage label="Protect your account">
+        <Logo host={options.host} />
+        <h1>Protect your account</h1>
+        <p className="idn-s" data-copy="prose">Owners need a second factor. Your password still signs you in from any browser.</p>
+        <button type="button" className="idn-big p" onClick={withPasskey} disabled={busy} data-testid="claim-factor-passkey">
+          <Fingerprint size={18} weight="bold" aria-hidden /> Passkey on this device
+        </button>
+        <p className="idn-fine" data-copy="prose">Recommended. It is also your one-tap sign-in on this device.</p>
+        {!network ? (
+          <button type="button" className="idn-big s" onClick={() => { setError(null); setStage("totp"); }} data-testid="claim-factor-totp">
+            <DeviceMobile size={18} aria-hidden /> Authenticator app (code)
+          </button>
+        ) : null}
+        {error ? <div className="idn-err" role="alert">{error}</div> : null}
+      </AuthStage>
+    );
+  }
+
+  if (stage === "also-totp") {
+    return (
+      <AuthStage label="Add an authenticator too">
+        <Logo host={options.host} />
+        <h1>Add an authenticator too?</h1>
+        <p className="idn-s" data-copy="prose">Your passkey lives in this browser. With an authenticator app, your password and a code sign you in from any other browser.</p>
+        <button type="button" className="idn-big p" onClick={() => { setError(null); setStage("totp"); }} data-testid="claim-also-totp">
+          <DeviceMobile size={18} aria-hidden /> Add an authenticator
+        </button>
+        <button type="button" className="idn-big s" disabled={busy} data-testid="claim-skip-totp"
+          onClick={() => { showCodes(issuedCodes).catch((e) => setError(sayAuth(e))); }}>Skip for now</button>
+        {error ? <div className="idn-err" role="alert">{error}</div> : null}
+        <p className="idn-fine" data-copy="prose">You can add one later in My account › Security.</p>
       </AuthStage>
     );
   }
@@ -179,7 +226,7 @@ function ClaimForm({ options, claim }: { options: AuthOptions; claim: Claim }) {
         </div>
         {error ? (
           <div className="idn-alt">
-            <button type="button" onClick={secondFactor} disabled={busy}><Fingerprint size={16} aria-hidden /> Try again</button>
+            <button type="button" onClick={withPasskey} disabled={busy}><Fingerprint size={16} aria-hidden /> Try again</button>
             {!network ? <button type="button" onClick={() => { setError(null); setStage("totp"); }}><ShieldCheck size={16} aria-hidden /> Use an authenticator app</button> : null}
           </div>
         ) : null}
@@ -246,20 +293,25 @@ function ClaimForm({ options, claim }: { options: AuthOptions; claim: Claim }) {
               onChange={(e) => setLegacy(e.target.value)} data-testid="claim-legacy-password" />
           </div>
         ) : null}
-        {fallback ? (
-          <div className="idn-f">
-            <label htmlFor="claim-pw">Choose a password</label>
-            <input id="claim-pw" className="idn-i" type="password" autoComplete="new-password" minLength={minPw} value={password}
+        <div className="idn-f">
+          <label htmlFor="claim-pw">Choose a password</label>
+          <div className="idn-ig">
+            <LockSimple size={18} className="idn-ig-ico" aria-hidden />
+            <input id="claim-pw" className="idn-i" type={showPassword ? "text" : "password"} autoComplete="new-password" minLength={minPw} required value={password}
               onChange={(e) => setPassword(e.target.value)} aria-describedby="claim-pw-hint" />
-            <span id="claim-pw-hint" className="idn-dim idn-hint">{minPw} characters or more</span>
+            <button type="button" className="idn-eye" aria-label={showPassword ? "Hide password" : "Show password"} aria-pressed={showPassword}
+              onClick={() => setShowPassword(!showPassword)} data-testid="claim-pw-eye">
+              {showPassword ? <EyeSlash size={18} aria-hidden /> : <Eye size={18} aria-hidden />}
+            </button>
           </div>
-        ) : null}
+          <span id="claim-pw-hint" className="idn-dim idn-hint">{password.length && password.length < minPw ? `${minPw - password.length} more characters needed` : `${minPw} characters or more`}</span>
+        </div>
 
         {noPasskey ? <div className="idn-note" data-copy="prose" data-testid="no-passkey-here">{noPasskey}</div> : null}
         {error ? <div className="idn-err" role="alert">{error}</div> : null}
         <button type="submit" className="idn-big p" disabled={!ready || busy} aria-disabled={!ready || busy || undefined} data-testid="claim-submit">
-          {fallback ? <ShieldCheck size={18} aria-hidden /> : <Fingerprint size={18} weight="bold" aria-hidden />}
-          {busy ? "Claiming…" : fallback ? "Claim and add an authenticator" : "Create a passkey and continue"}
+          <ShieldCheck size={18} aria-hidden />
+          {busy ? "Claiming…" : fallback ? "Claim and add an authenticator" : "Claim and continue"}
         </button>
       </form>
 
@@ -272,7 +324,7 @@ function ClaimForm({ options, claim }: { options: AuthOptions; claim: Claim }) {
           <CopyCommand command={SHOW_OVER_SSH} />
         </details>
       ) : null}
-      <p className="idn-fine" data-copy="prose">Owners must use MFA. You&apos;ll get recovery codes next.</p>
+      <p className="idn-fine" data-copy="prose">Owners must use MFA: next you&apos;ll add a passkey or an authenticator app.</p>
       <Live text={busy ? "Claiming" : ""} />
     </AuthStage>
   );

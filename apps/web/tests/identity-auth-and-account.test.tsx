@@ -117,12 +117,24 @@ function options(claim: AuthOptions["claim"], extra: Partial<AuthOptions> = {}):
 const SEATS = ["ceo", "cto"];
 
 describe("Claim this BOSS", () => {
-  it("setup link: reads the token from the fragment and asks only for who you are", async () => {
+  it("setup link: reads the token from the fragment and asks for who you are and a password (812)", async () => {
     window.history.replaceState(null, "", "/claim#t=setup_abc");
     const el = await mount(<ClaimFlow options={options({ path: "setup_token", origin: null, expires_at: new Date(Date.now() + 52 * 60_000).toISOString(), seats: SEATS })} />);
     expect(el.querySelector("[data-testid='claim-no-token']")).toBeNull();
     expect(el.textContent).toMatch(/setup link · expires in 5\d min/);
-    expect(el.textContent).toContain("Create a passkey and continue");
+    // BOSSAPP-812: a password first, always (the way in from any browser); no passkey yet.
+    expect(el.textContent).toContain("Claim and continue");
+    expect(el.textContent).not.toContain("Create a passkey");
+    const pw = el.querySelector("#claim-pw") as HTMLInputElement;
+    expect(pw.type).toBe("password");
+    await click(el.querySelector("[data-testid='claim-pw-eye']"));
+    expect((el.querySelector("#claim-pw") as HTMLInputElement).type).toBe("text");
+    type(el.querySelector("#claim-name"), "Param");
+    type(el.querySelector("#claim-email"), "param@example.com");
+    expect((el.querySelector("[data-testid='claim-submit']") as HTMLButtonElement).disabled).toBe(true);
+    type(el.querySelector("#claim-pw"), "violet-otter-harbour-1987");
+    expect((el.querySelector("[data-testid='claim-submit']") as HTMLButtonElement).disabled).toBe(false);
+    expect(navigator.credentials.create).not.toHaveBeenCalled();
     expect(el.querySelector("#claim-seat")?.textContent).toContain("ceo · approvals and history will show your name");
     accessible(el);
   });
@@ -152,7 +164,7 @@ describe("Claim this BOSS", () => {
     accessible(el);
   });
 
-  it("a setup link on a shared-password install is the proof: no password asked, the token is sent (J2)", async () => {
+  it("a setup link on a shared-password install is the proof: no shared password asked, the token is sent (J2)", async () => {
     routes({ "POST /v1/auth/setup/claim": { body: { next: "enrol", methods: ["passkey"], who: null } } });
     window.history.replaceState(null, "", "/claim#t=setup_abc");
     const el = await mount(<ClaimFlow options={options({ path: "legacy_password", paths: ["setup_token", "legacy_password"], origin: null, expires_at: null, seats: [] })} />);
@@ -160,9 +172,10 @@ describe("Claim this BOSS", () => {
     expect(el.querySelector("[data-testid='console-password-hint']")).toBeNull();
     type(el.querySelector("#claim-name"), "Param Gnanaguru");
     type(el.querySelector("#claim-email"), "param@example.com");
+    type(el.querySelector("#claim-pw"), "violet-otter-harbour-1987");
     await click(el.querySelector("[data-testid='claim-submit']"));
     const claim = calls.find((c) => c.url === "/v1/auth/setup/claim");
-    expect(claim?.body).toMatchObject({ setup_token: "setup_abc" });
+    expect(claim?.body).toMatchObject({ setup_token: "setup_abc", password: "violet-otter-harbour-1987" });
     expect(claim?.body).not.toHaveProperty("legacy_password");
     window.history.replaceState(null, "", "/claim");
   });
@@ -186,14 +199,22 @@ describe("Claim this BOSS", () => {
     expect(el.querySelector("[data-testid='claim-origin']")?.textContent).toContain(origin);
     type(el.querySelector("#claim-name"), "Param Gnanaguru");
     type(el.querySelector("#claim-email"), "param@example.com");
+    type(el.querySelector("#claim-pw"), "violet-otter-harbour-1987");
     const submit = el.querySelector("[data-testid='claim-submit']") as HTMLButtonElement;
     expect(submit.disabled).toBe(true);
     await click(el.querySelector("[data-testid='claim-origin-confirm']"));
     expect(submit.disabled).toBe(false);
     await click(submit);
     const claim = calls.find((c) => c.url === "/v1/auth/setup/claim");
-    expect(claim?.body).toMatchObject({ confirm_origin: origin, name: "Param Gnanaguru", email: "param@example.com", seat: "ceo" });
+    expect(claim?.body).toMatchObject({ confirm_origin: origin, name: "Param Gnanaguru", email: "param@example.com", seat: "ceo", password: "violet-otter-harbour-1987" });
+    // Step 2 "Protect your account": the passkey ceremony starts only on its button (812).
+    expect(el.querySelector("h1")?.textContent).toBe("Protect your account");
+    expect(calls.some((c) => c.url === "/v1/identity/me/passkeys/options")).toBe(false);
+    await click(el.querySelector("[data-testid='claim-factor-passkey']"));
     expect(calls.some((c) => c.url === "/v1/identity/me/passkeys" && c.method === "POST")).toBe(true);
+    // A passkey lives in one browser: an authenticator is offered too; skipping goes to the codes.
+    expect(el.querySelector("h1")?.textContent).toBe("Add an authenticator too?");
+    await click(el.querySelector("[data-testid='claim-skip-totp']"));
     expect(el.querySelector("[data-testid='recovery-codes']")?.textContent).toContain(CODES[0]);
   });
 

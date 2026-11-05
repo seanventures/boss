@@ -58,6 +58,7 @@ function BannerLink({ b }: { b: MeBanner }) {
   if (b.kind === "recovery_codes_low") return <a href="/account">Make new codes</a>;
   if (b.kind === "api_key_expiring") return <a href="/account/keys">API keys</a>;
   if (b.kind === "new_device") return <a href="/account/sessions">Sessions</a>;
+  if (b.kind === "no_password") return <a href="/account#acc-pw-h" data-testid="banner-set-password">Set a password</a>;
   if (b.kind === "owner_recovered") return <a href="/identity/audit">Open the audit log</a>;
   return null;
 }

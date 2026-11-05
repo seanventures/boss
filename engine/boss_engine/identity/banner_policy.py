@@ -61,6 +61,9 @@ RULES: dict[str, Rule] = {
     "new_device": Rule("dismissible"),
     "recovery_codes_low": Rule("dismissible"),
     "api_key_expiring": Rule("dismissible"),
+    #: BOSSAPP-812: a passkey-only account (claimed before passwords were required). Shown once
+    #: per person: closing it hides it for good (the instance never changes).
+    "no_password": Rule("dismissible"),
     "owner_recovered": Rule("acknowledge"),
 }
 

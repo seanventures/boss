@@ -227,7 +227,7 @@ Rate-limit counters live in Postgres (`identity_rate_limits`, an unlogged table)
 **Fresh install**
 1. When the API starts with zero people, it creates a **setup token**: 32 bytes, stored hashed, with a 1-hour TTL.
 2. It prints the claim URL to the logs. `install.sh` prints it too, and `boss identity setup-link` regenerates it.
-3. `/claim` asks for a name, email, password, and **mandatory** MFA enrolment (a passkey is offered first).
+3. `/claim` asks for a name, email and **password** (always; the API refuses a claim without one, `password_required`), then **mandatory** MFA enrolment: "Protect your account" offers a passkey on this device (recommended) or an authenticator app, and after a passkey offers an authenticator too. A passkey is never the only way in (BOSSAPP-812).
 4. The claimant becomes the first Owner.
 5. The setup endpoint then answers **404 for good**.
 

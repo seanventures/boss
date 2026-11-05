@@ -121,21 +121,20 @@ def test_setup_link_claim_enrols_an_authenticator_and_signs_the_owner_in(real_wo
     _enrol_and_prove_signed_in(engine, client)
 
 
-@pytest.mark.parametrize("password", [STRONG, None], ids=["with-password", "passkey-first"])
-def test_shared_password_claim_enrols_an_authenticator_and_signs_the_owner_in(real_world, engine, password):
+def test_shared_password_claim_enrols_an_authenticator_and_signs_the_owner_in(real_world, engine):
+    # BOSSAPP-812: the "passkey-first" (no password) case is gone: a claim always sets a password.
     client = fresh_client()
-    body = {"name": "Shared Owner", "email": "shared@example.test", "legacy_password": SHARED}
-    if password:
-        body["password"] = password
+    body = {"name": "Shared Owner", "email": "shared@example.test", "legacy_password": SHARED,
+            "password": STRONG}
     res = client.post("/v1/auth/setup/claim", headers=HEADERS, json=body)
     assert res.status_code == 200, res.text
     methods = sorted(_session_row(engine, client).auth_methods)
     # never "network": this claim was proved by the shared password, not the network bridge
-    assert methods == (["legacy_password", "pwd"] if password else ["legacy_password"])
+    assert methods == ["legacy_password", "pwd"]
     with engine.begin() as db:
         has_pw = db.execute(text("SELECT password_hash IS NOT NULL FROM identity_users "
                                  "WHERE email = 'shared@example.test'")).scalar()
-    assert has_pw is bool(password)
+    assert has_pw is True
     _enrol_and_prove_signed_in(engine, client)
 
 
