@@ -5282,6 +5282,16 @@ def _terminal_evidence(
             return {"ci_wait_id": awaited_id, "ci_status": row["status"],
                     "ci_summary": row["summary"], "failing_check_url": row["failing_url"],
                     "note": row["summary"]}
+        if kind == "recovery_check":
+            # The start note is "Waiting for enough traffic…". The check's own summary is the
+            # verdict, and it has to replace that note or a succeeded step still says it is waiting.
+            row = connection.execute(
+                text("SELECT status, summary FROM incident_recovery_checks WHERE id = :r"),
+                {"r": awaited_id}).mappings().first()
+            if not row:
+                return {}
+            return {"recovery_check_id": awaited_id, "recovery_status": row["status"],
+                    "recovery_summary": row["summary"], "note": row["summary"]}
         if kind == "stack_deployment":
             row = connection.execute(
                 text("SELECT status, open_url, commit_sha FROM stack_deployments WHERE id = :r"),

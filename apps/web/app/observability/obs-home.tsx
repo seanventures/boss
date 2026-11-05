@@ -61,8 +61,12 @@ export function ObsHome({ projectId, actor, orgId }: { projectId: string; actor:
   const [query, setQuery] = useState(url.q);
   const [connecting, setConnecting] = useState(false);
   const go = useCallback((patch: Record<string, string | null>, mode: "push" | "replace" = "push") => {
-    // `tab=` is read once and rewritten as `view=`.
-    writeUrl({ tab: null, ...patch }, mode);
+    // `tab=` is read once and rewritten as `view=`. Opening an app without naming an incident
+    // drops the previous one, so a later app open (including the Pulse, which only passes `app`)
+    // cannot keep another alert's incident.
+    const next: Record<string, string | null> = { tab: null, ...patch };
+    if ("app" in patch && !("inc" in patch)) next.inc = null;
+    writeUrl(next, mode);
     reread();
   }, [reread]);
   // Narrow layouts ask the server for fewer, wider cells (§5.3); the web never re-buckets.

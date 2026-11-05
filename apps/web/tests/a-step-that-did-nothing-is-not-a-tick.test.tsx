@@ -93,6 +93,21 @@ describe("a step that did nothing does not read as work done", () => {
   it("real work that succeeded is still ✓", () => {
     expect(phaseOf(step({ capability: "build", output: { status: "succeeded" } }))).toBe("done");
   });
+
+  it("a written run report is done, not skipped (BOSSAPP-617)", () => {
+    // The runner records status `recorded` even when the artifact was written. A bare
+    // social_publish has no artifact and stays "nothing"; a report that names one was done.
+    const s = step({
+      step_id: "report", capability: "report", status: "succeeded",
+      output: { status: "recorded", artifact_id: "art_1",
+                note: "4 of 4 steps, 12 min working, $0.00. Nothing went wrong that was recorded." },
+    });
+    expect(didNothing(s)).toBe(false);
+    expect(phaseOf(s)).toBe("done");
+    expect(laneStateOf(s).phase).not.toBe("skipped");
+    const html = view(runOf("completed", [s]));
+    expect(html).toMatch(/data-step-id="report"[^>]*data-phase="done"/);
+  });
 });
 
 describe("leftovers from the legacy rewrite read as what they were", () => {

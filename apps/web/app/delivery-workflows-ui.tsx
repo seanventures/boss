@@ -391,16 +391,20 @@ function failedButContinued(step: RunStep): boolean {
   return out.recorded_as === "failed_continued" || out.status === "failed_continued";
 }
 
-/** A step that succeeded by DOING NOTHING: a bare notify, video_edit or social_publish, which
- *  no tool performs, records an honest `status: recorded` no-op.
+/** A step that succeeded by DOING NOTHING: a bare video_edit or social_publish, which no tool
+ *  performs, records an honest `status: recorded` no-op.
  *
  *  NOT A ✓. "Publish to a channel" showed a green tick when nothing was published, while the
  *  engine's own test said it "must not read as work done" — the test checked the engine and
  *  not what the operator sees (review of c8de36b). Its own state, saying what to do: bind a
- *  skill or a custom step that does the work. */
+ *  skill or a custom step that does the work.
+ *
+ *  A report the runner wrote also records `status: recorded`, and names the artifact. That is
+ *  the work: the lane must not draw it as skipped (BOSSAPP-617). */
 export function didNothing(step: RunStep): boolean {
-  return step.status === "succeeded"
-    && (step.output as { status?: string } | undefined)?.status === "recorded";
+  const out = (step.output ?? {}) as { status?: string; artifact_id?: unknown; document_id?: unknown };
+  if (out.artifact_id || out.document_id) return false;
+  return step.status === "succeeded" && out.status === "recorded";
 }
 
 /** Why a step did not apply — the sentence the capability recorded when it stood aside. */
