@@ -24,23 +24,15 @@ import { ArrowClockwise } from "@phosphor-icons/react";
 
 import { fetchSetup, SetupFailure, setupWrite } from "../../lib/setup-client";
 import {
-  ADVANCED_ROWS, readParams, rowMode, SETUP_BADGE_EVENT, stepNumber, summarize, type SetupParams,
+  readParams, rowMode, SETUP_BADGE_EVENT, stepNumber, summarize, type SetupParams,
 } from "../../lib/setup-stepper";
 import type { RowKey, SetupView } from "../../lib/setup-types";
-import { BudgetRow } from "./budget-row";
-import { BuildDatabaseRow } from "./build-database-row";
-import { BuildSpeedRow } from "./build-speed-row";
-import { EmbeddingModelRow } from "./embedding-model-row";
 import { CapacityRow } from "./capacity-row";
 import { ModelsRow } from "./models-row";
 import { BoardContext, toast, useBoard } from "./parts";
 import { Dot, localView } from "./pill";
-import { GitHubAccessRow, SETUP_TESTED_EVENT } from "./github-access-row";
+import { FAILED_WORDS as GITHUB_FAILED, SETUP_TESTED_EVENT } from "./github-access-row";
 import { RepositoryRow } from "./repository-row";
-import { RepositoryRegistry } from "../multirepo/registry";
-import { RoutingRow } from "./routing-row";
-import { PublicUrlRow } from "./public-url-row";
-import { ToolchainsRow } from "./toolchains-row";
 import { SharingAsk } from "../improve/sharing-ask";
 import { CiWorkflowsToggle } from "./ci-workflows-toggle";
 import { GitHubSigninRow, useSignin } from "./github-signin-row";
@@ -50,45 +42,11 @@ import { useOnScreen } from "../../lib/area-shown";
 import { SetupBlocks } from "./setup-blocks";
 import { GET_STARTED_EVENT, getStarted, Welcome } from "./welcome";
 
-/** One plain line per Advanced item (≤ 6 words), the detail in its tooltip. */
-const ADVANCED: Record<string, { line: string; tip: string }> = {
-  github_app: { line: "Org admin: per-build tokens, one repo",
-                tip: "Your org's own GitHub App: each build gets a token for its repo only." },
-  repositories: { line: "Which repos projects may use",
-                  tip: "The org's list of repositories BOSS may build in." },
-  ci: { line: "Let builds edit CI workflows",
-        tip: "Off by default. Asked for only when a build needs to change CI." },
-  build_database: { line: "Postgres for builds that need it", tip: "Auto, Always or Never." },
-  build_speed: { line: "How many agents write a build at once", tip: "Balanced or Fastest." },
-  toolchains: { line: "What builds can compile and run", tip: "Python and Node always; others on the host." },
-  jobs: { line: "Which model does which job", tip: "Pin a model to a job, or let BOSS route." },
-  budget: { line: "Monthly spend cap", tip: "BOSS pauses model spend at the cap." },
-  public_url: { line: "Address used in emailed links", tip: "Sign-in, passkeys and emailed links use it." },
+/** OLD LINKS INTO WHAT WAS ADVANCED land where the setting lives now (BOSSAPP-898). */
+export const MOVED: Record<string, string> = {
+  budget: "?area=govern&tab=limits",
+  repositories: "?area=govern&tab=repositories",
 };
-
-function Why({ id }: { id: keyof typeof ADVANCED }) {
-  const a = ADVANCED[id];
-  return <Tip tip={a.tip} className="su-adv-why su-faint" testid={`su-adv-why-${id}`}>{a.line}</Tip>;
-}
-
-/** Advanced › CI permission: the per-repository opt-in, one line per connected repository. */
-function CiPermission() {
-  const { view } = useBoard();
-  const bound = view.repository.repos.filter((r) => r.binding_id);
-  return (
-    <section className="su-row" data-testid="su-row-ci" aria-label="CI permission" id="su-ci">
-      <div className="su-row-label"><SectionLabel as="span" tip="Builds may change .github/workflows (per repo).">CI permission</SectionLabel></div>
-      <div className="su-row-body su-stack">
-        {bound.length ? bound.map((r) => (
-          <div key={r.binding_id} className="su-stack" data-testid={`su-ci-${r.full_name}`}>
-            <span className="su-mono" data-user-text>{r.full_name}</span>
-            <CiWorkflowsToggle bindingId={r.binding_id as string} />
-          </div>
-        )) : <span className="su-faint">Connect a repo first</span>}
-      </div>
-    </section>
-  );
-}
 
 function staleTargets(view: SetupView): string[] {
   return [
@@ -103,14 +61,6 @@ function currentParams(): SetupParams {
 
 /** The rows the Setup blocks answer themselves (Add GitHub account, Add model), not Advanced. */
 const BLOCK_FOCUS = new Set(["github", "repository", "models"]);
-
-function deepLinked(): boolean {
-  try {
-    const sp = new URLSearchParams(window.location.search);
-    const f = sp.get("focus");
-    return Boolean((f && f !== "try") || sp.get("step") || sp.get("add") || sp.get("source") || sp.get("github"));
-  } catch { return false; }
-}
 
 /** An old link to the Welcome inside Setup (`view=welcome`, `focus=try`): the Welcome is its own area. */
 function oldWelcomeLink(): boolean {
@@ -251,25 +201,23 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
   }, [checking]);
 
   const { status: signin } = useSignin();
-  // ADVANCED SETTINGS (the whole earlier board) opens on a deep link into it.
-  const [classicOpen, setClassicOpen] = useState<boolean>(() => deepLinked());
-  const classicRef = useRef<HTMLDetailsElement | null>(null);
-  // ADVANCED IS FOLDED unless a link lands inside it, or GitHub just sent the person back from
-  // the org App's install (that row reads `?github=` itself).
-  const [advancedOpen, setAdvancedOpen] = useState<boolean>(() => {
+  // A link to a setting that moved goes to its new place.
+  useEffect(() => {
+    const to = params.focus ? MOVED[params.focus] : undefined;
+    if (to) window.location.replace(to);
+  }, [params.focus]);
+  // GitHub sent the person back (Connect GitHub, BOSSAPP-815): say what happened once, then drop it.
+  useEffect(() => {
     try {
       const sp = new URLSearchParams(window.location.search);
-      const f = readParams(window.location.search).focus;
-      return Boolean(sp.get("github")) || (f !== null && ADVANCED_ROWS.includes(f));
-    } catch { return false; }
-  });
-  useEffect(() => {
-    if (params.focus && ADVANCED_ROWS.includes(params.focus)) setAdvancedOpen(true);
-  }, [params.focus]);
-  useEffect(() => {
-    if (params.focus === "try") return;
-    if (params.focus || params.add || params.source) setClassicOpen(true);
-  }, [params.focus, params.add, params.source]);
+      const said = sp.get("github");
+      if (!said) return;
+      if (said === "app_connected") toast("GitHub connected");
+      else toast(GITHUB_FAILED[sp.get("reason") ?? ""] ?? "GitHub was not connected. Start again.", "error");
+      sp.delete("github"); sp.delete("reason");
+      window.history.replaceState(null, "", `${window.location.pathname}?${sp.toString()}`);
+    } catch { /* no window */ }
+  }, []);
   // OLD LINKS KEEP WORKING: Setup's former Welcome (`view=welcome`, `focus=try`) opens Get started.
   useEffect(() => {
     if (layout === "setup" && oldWelcomeLink()) navigate("welcome");
@@ -372,10 +320,7 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
                          step={stepNumber(view, "repository") ? 1 : null}
                          mode={view.next === "repository" && !view.repository.repos.length
                            && !(signin?.me?.status === "active") ? "current" : "open"}
-                         onAdvanced={() => {
-                           setAdvancedOpen(true);
-                           window.setTimeout(() => refs.current.github_app?.scrollIntoView?.({ behavior: "smooth", block: "start" }), 50);
-                         }} /> : null}
+                         onAdvanced={() => undefined} /> : null}
         <RepositoryRow ref={ref("repository")} mode={rowMode(view, "repository")}
                        step={shift(stepNumber(view, "repository"))} focused={focus === "repository"} />
         <ModelsRow ref={ref("models")} mode={rowMode(view, "models")}
@@ -384,32 +329,17 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
                    onAddHandled={() => setParams((p) => ({ ...p, add: null }))}>
           {/* rc9 (BOSS-434/437): the model sources sit inside Models, one heading and panel. */}
           <CapacityRow ref={ref("capacity")} actor={actor} focused={focus === "capacity"} />
-          {/* The org's one embedding model (meaning search), set once for every project. */}
-          <div ref={ref("embedding_model")} data-focused={focus === "embedding_model" || undefined}><EmbeddingModelRow /></div>
         </ModelsRow>
         {/* NO TRY IT HERE (operator, 2026-11-04: "Why trying out sample project is in Repos and
             Models"): Setup is connections only. The sample and the one-sentence PR live on the
             Welcome (step 3); `focus=try` opens it. */}
-        <details className="su-advanced" data-testid="su-advanced" ref={ref("advanced")} open={advancedOpen}
-                 onToggle={(e) => setAdvancedOpen((e.currentTarget as HTMLDetailsElement).open)}>
-          <summary className="su-advanced-summary" data-testid="su-advanced-toggle"
-                   title="The org's own GitHub App, CI, builds, models' routing and budget."
-                   data-tip="The org's own GitHub App, CI, builds, models' routing and budget.">
-            Advanced
-          </summary>
-          <div className="su-adv-item" ref={ref("github_app")}><Why id="github_app" /><GitHubAccessRow /></div>
-          {/* The org's registry: which repositories BOSS may use at all (multi-repo screen 1).
-              `focus=repositories` lands on it; it hides itself on an API without it. */}
-          <div className="su-adv-item" ref={ref("repositories")}><Why id="repositories" /><RepositoryRegistry projectId={projectId} /></div>
-          <div className="su-adv-item" ref={ref("ci")}><Why id="ci" /><CiPermission /></div>
-          <div className="su-adv-item" ref={ref("build_database")}><Why id="build_database" /><BuildDatabaseRow /></div>
-          <div className="su-adv-item" ref={ref("build_speed")}><Why id="build_speed" /><BuildSpeedRow /></div>
-          <div className="su-adv-item" ref={ref("toolchains")}><Why id="toolchains" /><ToolchainsRow /></div>
-          {/* Model routing — where "Who does what" lived; its rows are "Pin a job" inside. */}
-          <div className="su-adv-item"><Why id="jobs" /><RoutingRow ref={ref("jobs")} mode={rowMode(view, "jobs")} focused={focus === "jobs"} /></div>
-          <div className="su-adv-item"><Why id="budget" /><BudgetRow ref={ref("budget")} mode={rowMode(view, "budget")} focused={focus === "budget"} /></div>
-          <div className="su-adv-item" ref={ref("public_url")}><Why id="public_url" /><PublicUrlRow /></div>
-        </details>
+        {/* SETUP IS REPOS AND MODELS, NOTHING MORE (operator, 2026-11-05: "this should have only
+            Model and Repos setup and nothing more"). What was under Advanced moved to where it
+            belongs (BOSSAPP-898): budget → Govern › Limits; allowed repos → Govern › Repositories;
+            embedding model → Models › Manage; routing, the GitHub App and CI changes → the
+            Models and Repositories blocks' own Manage panels; build database (Auto), build speed
+            (Balanced), toolchains (installer) and the public URL (bound at the claim) are set
+            once and not shown. */}
     </>
   );
 
@@ -426,18 +356,13 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
   // THE STEPPER while a repository or a model is missing (1 GitHub · 2 Repos · 3 Model).
   const stepper = view.next === "repository" || view.next === "model";
   if (layout === "setup" && !stepper) {
-    const openAdvanced = (row?: string) => {
-      setClassicOpen(true);
-      if (row) {
-        landedOn.current = null;
-        setParams((p) => ({ ...p, focus: row as RowKey }));
-      } else {
-        window.setTimeout(() => classicRef.current?.scrollIntoView?.({ behavior: "smooth", block: "start" }), 50);
-      }
-    };
     // Welcome's "Add another account / model" land on the block's own Add, not in Advanced.
     const blockOpen = params.focus && BLOCK_FOCUS.has(params.focus) && !params.add && !params.source
-      ? (params.focus === "models" ? "model" as const : "account" as const) : null;
+      ? (params.focus === "models" ? "model" as const : "account" as const)
+      : params.focus === "jobs" ? "routing" as const
+      : params.focus === "github_app" ? "github_app" as const
+      : params.focus === "ci" ? "repos" as const
+      : params.focus === "capacity" || params.focus === "embedding_model" ? "models" as const : null;
     return (
       <BoardContext.Provider value={ctx}>
         <div className="su-board" data-testid="su-board" data-layout="setup">
@@ -452,22 +377,8 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
               <a className="su-link" href="?area=welcome" data-testid="su-open-welcome"
                  onClick={(e) => { e.preventDefault(); navigate("welcome"); }}>Back to Get started</a>
             ) : null}
-            <button type="button" className="su-link" onClick={() => openAdvanced()} data-testid="su-open-advanced">
-              Advanced settings
-            </button>
           </header>
-          <SetupBlocks onAdvanced={openAdvanced} initialOpen={blockOpen}
-                       key={blockOpen ?? "none"} />
-          <details className="su-advanced su-advanced-all" data-testid="su-advanced-all" ref={classicRef}
-                   open={classicOpen && !blockOpen}
-                   onToggle={(e) => setClassicOpen((e.currentTarget as HTMLDetailsElement).open)}>
-            <summary className="su-advanced-summary" data-testid="su-advanced-all-toggle"
-                     title="Sign-in, the org's GitHub App, model sources, routing, budget, CI, builds."
-                     data-tip="Sign-in, the org's GitHub App, model sources, routing, budget, CI, builds.">
-              Advanced settings
-            </summary>
-            <div className="su-board su-board-inner">{classicBody(true)}</div>
-          </details>
+          <SetupBlocks initialOpen={blockOpen} key={blockOpen ?? "none"} />
           <SharingAsk projectId={projectId} actor={actor ?? ""} />
         </div>
       </BoardContext.Provider>

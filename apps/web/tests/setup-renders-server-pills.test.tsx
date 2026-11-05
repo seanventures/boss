@@ -14,8 +14,7 @@ let mounted: Mounted | null = null;
 afterEach(() => { mounted?.unmount(); mounted = null; });
 
 function pillsOf(view: SetupView): Pill[] {
-  return [...view.repository.repos.map((r) => r.pill), ...view.models.map((m) => m.pill),
-          view.budget.pill];
+  return [...view.repository.repos.map((r) => r.pill), ...view.models.map((m) => m.pill)];
 }
 
 describe("pills are the server's", () => {
@@ -38,7 +37,7 @@ describe("pills are the server's", () => {
   }
 
   it("no component maps a state to a colour", () => {
-    for (const file of ["pill", "repository-row", "models-row", "jobs-row", "budget-row", "try-row",
+    for (const file of ["pill", "repository-row", "models-row", "jobs-row", "try-row",
                         "setup-board"]) {
       const source = codeOnly(`app/setup/${file}.tsx`);
       expect(source).not.toMatch(/state === "(working|cant_write|key_rejected|rate_limited)"/);

@@ -5,10 +5,10 @@
  * Readiness, model failures, the composer and the dock all link this way.
  */
 import React from "react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { resolveLegacyArea } from "../app/legacy-areas";
-import { fakeApi, mountBoard, q, type Mounted } from "./_helpers/setup-board";
+import { click, fakeApi, mountBoard, q, type Mounted } from "./_helpers/setup-board";
 import { board, firstRun, tryStep } from "./_helpers/setup-fixtures";
 
 let mounted: Mounted | null = null;
@@ -16,7 +16,7 @@ afterEach(() => { mounted?.unmount(); mounted = null; });
 
 describe("focus lands on the row", () => {
   // "try" left Setup for the Welcome (BOSSAPP-808): focus=try opens it there (setup-808 test).
-  for (const row of ["repository", "models", "jobs", "budget"]) {
+  for (const row of ["repository", "models"]) {
     it(row, async () => {
       fakeApi(board());
       mounted = await mountBoard(board(), `?area=setup&focus=${row}`);
@@ -24,10 +24,73 @@ describe("focus lands on the row", () => {
     });
   }
 
-  it("focus=jobs opens the More jobs too, even in first run", async () => {
-    fakeApi(firstRun());
-    mounted = await mountBoard(firstRun(), "?area=setup&focus=jobs");
+  // BOSSAPP-898: Setup holds only Repos and Models. What was Advanced opens from the block it
+  // belongs to, and an old link lands there.
+  it("focus=jobs opens the routing drawer, and More jobs shows every job", async () => {
+    fakeApi(board());
+    mounted = await mountBoard(board(), "?area=setup&focus=jobs", true, "setup");
+    expect(q(document.body, "su-routing-drawer")).not.toBeNull();
+    expect(q(document.body, "su-advanced")).toBeNull();
+    await click(q(document.body, "su-more-jobs"));
     expect(q(document.body, "su-job-hard")).not.toBeNull();
+  });
+
+  it("focus=github_app opens the GitHub App drawer", async () => {
+    fakeApi(board());
+    mounted = await mountBoard(board(), "?area=setup&focus=github_app", true, "setup");
+    expect(q(document.body, "su-github-app-drawer")).not.toBeNull();
+    expect(q(document.body, "su-row-github-access")).not.toBeNull();
+  });
+
+  it("focus=ci opens the repository menus drawer with the CI changes toggles", async () => {
+    fakeApi(board());
+    mounted = await mountBoard(board(), "?area=setup&focus=ci", true, "setup");
+    expect(q(document.body, "su-manage-repos-drawer")).not.toBeNull();
+    expect(q(document.body, "su-row-ci")).not.toBeNull();
+  });
+
+  it("focus=embedding_model opens the Manage models drawer, which holds the embedding model", async () => {
+    fakeApi(board());
+    mounted = await mountBoard(board(), "?area=setup&focus=embedding_model", true, "setup");
+    const drawer = q(document.body, "su-manage-models-drawer")!;
+    expect(drawer).not.toBeNull();
+    expect(drawer.querySelector('[data-testid="su-row-capacity"]')).not.toBeNull();
+  });
+
+  it("focus=capacity opens the model sources drawer", async () => {
+    fakeApi(board());
+    mounted = await mountBoard(board(), "?area=setup&focus=capacity", true, "setup");
+    expect(q(document.body, "su-manage-models-drawer")).not.toBeNull();
+  });
+});
+
+describe("old links to settings that left Setup", () => {
+  const cases: Array<[string, string]> = [
+    ["budget", "?area=govern&tab=limits"],
+    ["repositories", "?area=govern&tab=repositories"],
+  ];
+  for (const [focus, to] of cases) {
+    it(`focus=${focus} redirects to ${to}`, async () => {
+      fakeApi(board());
+      const replace = vi.spyOn(window.location, "replace").mockImplementation(() => {});
+      try {
+        mounted = await mountBoard(board(), `?area=setup&focus=${focus}`);
+        expect(replace).toHaveBeenCalledWith(to);
+      } finally {
+        replace.mockRestore();
+      }
+    });
+  }
+
+  it("Setup has no Advanced fold in any layout", async () => {
+    for (const layout of ["classic", "setup"] as const) {
+      fakeApi(board());
+      mounted = await mountBoard(board(), "?area=setup", true, layout);
+      expect(q(document.body, "su-advanced")).toBeNull();
+      expect(q(document.body, "su-advanced-toggle")).toBeNull();
+      expect(q(document.body, "su-open-advanced")).toBeNull();
+      mounted.unmount(); mounted = null; document.body.innerHTML = "";
+    }
   });
 });
 

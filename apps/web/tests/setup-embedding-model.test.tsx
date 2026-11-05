@@ -1,10 +1,8 @@
 // @vitest-environment happy-dom
 /**
- * Setup › Repo and models › Embedding model: ONE for the org, in the Models step (operator
- * decisions 2026-10-22/23: "why is it not in Repo and models, so all projects can use it?").
- *
- * The row sits in the Models step, never under Advanced, and `focus=embedding_model` lands on
- * it. Azure asks for one URL (the endpoint or the whole Target URI) and the key: the deployment
+ * The org's ONE embedding model (operator decisions 2026-10-22/23). Since BOSSAPP-898 it lives in
+ * the Models › Manage drawer, and `focus=embedding_model` opens that drawer. The row is mounted
+ * on its own here. Azure asks for one URL (the endpoint or the whole Target URI) and the key: the deployment
  * is read out of the URI, the dimension is not asked (the check learns it), and both sit under
  * "More" for an override.
  *
@@ -16,10 +14,10 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { parseUrl } from "../app/setup/embedding-model-row";
+import { EmbeddingModelRow, parseUrl } from "../app/setup/embedding-model-row";
 import { readParams } from "../lib/setup-stepper";
 import type { EmbeddingModel } from "../lib/setup-types";
-import { click, fakeApi, mountBoard, q, type, type Mounted } from "./_helpers/setup-board";
+import { click, fakeApi, mountBoard, mountInBoard, q, type, type Mounted } from "./_helpers/setup-board";
 import { board } from "./_helpers/setup-fixtures";
 
 let mounted: Mounted | null = null;
@@ -57,21 +55,28 @@ describe("Setup › Embedding model", () => {
   it("with no model, says search is off and why, and offers the three providers", async () => {
     const view = { ...board(), embedding_model: NONE };
     fakeApi(view);
-    mounted = await mountBoard(view, open);
+    mounted = await mountInBoard(view, <EmbeddingModelRow />);
     expect(q(document, "su-embedding-off")!.textContent).toContain("text and graph only");
     expect(q(document, "su-embedding-off")!.getAttribute("title")).toContain("no embedding model is set");
     for (const p of ["azure", "openai", "ollama"]) expect(q(document, `su-embedding-provider-${p}`)).not.toBeNull();
   });
 
-  it("sits in the Models step, not under Advanced, and the deep link lands on it", async () => {
+  it("is not on Setup's page: the Models › Manage drawer holds it, and the old link opens that drawer", async () => {
     expect(readParams(open).focus).toBe("embedding_model");
     const view = { ...board(), embedding_model: WORKING };
     fakeApi(view);
-    mounted = await mountBoard(view, open);
-    const row = q(document, "su-row-embedding-model")!;
-    expect(row.closest('[data-testid="su-advanced"]')).toBeNull();
-    expect(q(document, "su-row-models")!.contains(row)).toBe(true);
-    expect(row.textContent).toContain("All projects");
+    mounted = await mountBoard(view, open, true, "setup");
+    const drawer = q(document, "su-manage-models-drawer")!;
+    expect(drawer).not.toBeNull();
+    expect(drawer.querySelector('[data-testid="su-row-embedding-model"]')).not.toBeNull();
+    expect(q(document, "su-advanced")).toBeNull();
+  });
+
+  it("reads as the org's model, for all projects", async () => {
+    const view = { ...board(), embedding_model: WORKING };
+    fakeApi(view);
+    mounted = await mountInBoard(view, <EmbeddingModelRow />);
+    expect(q(document, "su-row-embedding-model")!.textContent).toContain("All projects");
   });
 
   it("reads the Azure Target URI apart, as the engine does", () => {
@@ -85,7 +90,7 @@ describe("Setup › Embedding model", () => {
   it("Azure asks for one URL and the key; the deployment comes from the URI, no dimension", async () => {
     const view = { ...board(), embedding_model: NONE };
     const api = fakeApi(view);
-    mounted = await mountBoard(view, open);
+    mounted = await mountInBoard(view, <EmbeddingModelRow />);
     await click(q(document, "su-embedding-provider-azure"));
     expect(q(document, "su-embedding-dimension")).toBeNull();
     expect(q(document, "su-embedding-deployment")).toBeNull();
@@ -103,7 +108,7 @@ describe("Setup › Embedding model", () => {
   it("a base Azure endpoint asks for the deployment in the row", async () => {
     const view = { ...board(), embedding_model: NONE };
     fakeApi(view);
-    mounted = await mountBoard(view, open);
+    mounted = await mountInBoard(view, <EmbeddingModelRow />);
     await click(q(document, "su-embedding-provider-azure"));
     await type(q(document, "su-embedding-url"), "https://boss-kg.openai.azure.com/");
     expect(q(document, "su-embedding-deployment")).not.toBeNull();
@@ -116,7 +121,7 @@ describe("Setup › Embedding model", () => {
       ? { status: 200, body: { ...view, embedding_model: { ...FAILED, check: { state: "ok", reply: "1536 numbers from text-embedding-3-small" },
                                                            model: "text-embedding-3-small", search: true, reason: "" } } }
       : null;
-    mounted = await mountBoard(view, open);
+    mounted = await mountInBoard(view, <EmbeddingModelRow />);
     await click(q(document, "su-embedding-provider-openai"));
     await type(q(document, "su-embedding-api_key"), KEY);
     await click(q(document, "su-embedding-save"));
@@ -131,7 +136,7 @@ describe("Setup › Embedding model", () => {
   it("shows the model's real reply, the background re-embed, and checks again or removes", async () => {
     const view = { ...board(), embedding_model: WORKING };
     const api = fakeApi(view);
-    mounted = await mountBoard(view, open);
+    mounted = await mountInBoard(view, <EmbeddingModelRow />);
     expect(q(document, "su-embedding-check")!.getAttribute("data-state")).toBe("ok");
     expect(q(document, "su-embedding-reply")!.textContent).toBe("768 numbers from nomic-embed-text");
     expect(q(document, "su-embedding-pending")!.textContent).toBe("Re-embedding: 12 left");
@@ -145,7 +150,7 @@ describe("Setup › Embedding model", () => {
   it("a failed check shows the provider's error and why search is off", async () => {
     const view = { ...board(), embedding_model: FAILED };
     fakeApi(view);
-    mounted = await mountBoard(view, open);
+    mounted = await mountInBoard(view, <EmbeddingModelRow />);
     expect(q(document, "su-embedding-check")!.getAttribute("data-state")).toBe("failed");
     expect(q(document, "su-embedding-reply")!.textContent).toContain("does not support embeddings");
     expect(q(document, "su-embedding-off")!.getAttribute("title")).toContain("check failed");
@@ -153,7 +158,7 @@ describe("Setup › Embedding model", () => {
 
   it("an older API without the slot shows no row", async () => {
     fakeApi(board());
-    mounted = await mountBoard(board(), open);
+    mounted = await mountInBoard(board(), <EmbeddingModelRow />);
     expect(q(document, "su-row-embedding-model")).toBeNull();
   });
 });

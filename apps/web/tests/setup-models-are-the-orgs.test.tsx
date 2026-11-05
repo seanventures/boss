@@ -7,13 +7,13 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { click, fakeApi, mountBoard, q, type Mounted } from "./_helpers/setup-board";
+import { click, fakeApi, mountBoard, mountInBoard, q, type Mounted } from "./_helpers/setup-board";
+import { RoutingRow } from "../app/setup/routing-row";
 import { board } from "./_helpers/setup-fixtures";
 
 let mounted: Mounted | null = null;
 afterEach(() => { mounted?.unmount(); mounted = null; vi.restoreAllMocks(); });
 
-const open = "?area=setup&focus=routing";
 
 describe("Setup › Models are the org's", () => {
   it("an org choice reads All projects; a pin reads This project and is removable", async () => {
@@ -22,7 +22,7 @@ describe("Setup › Models are the org's", () => {
       ? { ...j, choice: { engine: "claude_code", model: "sonnet" }, scope: "org" as const }
       : j.job === "review" ? { ...j, scope: "project" as const } : j);
     const api = fakeApi(view);
-    mounted = await mountBoard(view, open);
+    mounted = await mountInBoard(view, <RoutingRow mode="open" focused />);
     expect(q(document.body, "su-job-scope-build")!.textContent).toBe("All projects");
     expect(q(document.body, "su-job-scope-review")!.textContent).toBe("This project");
     expect(q(document.body, "su-job-unpin-build")).toBeNull();
@@ -34,7 +34,7 @@ describe("Setup › Models are the org's", () => {
   it("choosing a model for a job writes the org's choice (no scope sent)", async () => {
     const view = board();
     const api = fakeApi(view);
-    mounted = await mountBoard(view, open);
+    mounted = await mountInBoard(view, <RoutingRow mode="open" focused />);
     const select = q(document.body, "su-job-select-chat") as HTMLSelectElement;
     select.value = "claude_code::sonnet";
     select.dispatchEvent(new Event("change", { bubbles: true }));

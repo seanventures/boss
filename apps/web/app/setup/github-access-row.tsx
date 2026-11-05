@@ -59,7 +59,7 @@ type Installation = { id: string; account: string | null; account_type?: Account
 type Tone = "green" | "amber" | "red" | "grey";
 
 const SANDBOX_TIP = "Egress adds the credential to each request. The build's sandbox never holds it.";
-const FAILED_WORDS: Record<string, string> = {
+export const FAILED_WORDS: Record<string, string> = {
   bad_state: "The link expired or was used. Start again.",
   state_expired: "That took over 10 minutes. Start again.",
   state_replayed: "That link was already used.",

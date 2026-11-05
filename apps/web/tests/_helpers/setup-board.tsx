@@ -96,3 +96,25 @@ export async function press(el: Element | null, key: string): Promise<void> {
 
 export const q = (root: ParentNode, testid: string) =>
   root.querySelector(`[data-testid="${testid}"]`);
+
+/** One Setup row on its own, in the board's context (BOSSAPP-898: rows that left Setup's page now
+ *  live in Manage panels, Govern and Knowledge, so a row's own behaviour is tested by itself). */
+export async function mountInBoard(view: SetupView, element: React.ReactElement, shown = true): Promise<Mounted> {
+  const { BoardContext } = await import("../../app/setup/parts");
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  const Host = () => {
+    const [v, setV] = React.useState(view);
+    const [checking, setChk] = React.useState<Set<string>>(new Set());
+    const setChecking = (k: string, on: boolean) => setChk((p) => { const n = new Set(p); if (on) n.add(k); else n.delete(k); return n; });
+    return (
+      <AreaShownContext.Provider value={shown}>
+        <BoardContext.Provider value={{ projectId: "p", view: v, apply: setV, checking, setChecking }}>{element}</BoardContext.Provider>
+      </AreaShownContext.Provider>
+    );
+  };
+  await act(async () => { root.render(<Host />); });
+  await flush();
+  return { root, container, unmount: () => { act(() => root.unmount()); container.remove(); } };
+}

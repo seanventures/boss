@@ -29,7 +29,6 @@ import { probeSsoLink, ssoLinkStartPath } from "../lib/identity/sso-link";
 import { sayAuth } from "../app/(auth)/auth-flow";
 import { SignIn } from "../app/(auth)/login/sign-in";
 import { emailSignInOffered } from "../lib/identity/email-sign-in";
-import { PublicUrlRow, PUBLIC_URL_TIP } from "../app/setup/public-url-row";
 import { AccountSecurity } from "../app/account/security";
 import { pageFor } from "../lib/identity/pages";
 import { detailOf } from "../app/identity/agents/delegations/[id]/detail";
@@ -189,17 +188,9 @@ describe("G12 · an enrolment-only session", () => {
 });
 
 describe("G13/G14 · the public URL", () => {
-  it("Setup shows the public URL in use, and where it came from", async () => {
-    const el = await mount(<PublicUrlRow initial={{ public_origin: "https://boss.acme.dev", public_origin_source: "env" }} />);
-    expect(el.querySelector("[data-testid='public-url']")?.textContent).toContain("https://boss.acme.dev");
-    expect(el.querySelector("[data-testid='public-url']")?.getAttribute("data-tip")).toContain("BOSS_PUBLIC_URL");
-  });
-
-  it("Setup says how to set BOSS_PUBLIC_URL when none is bound", async () => {
-    const el = await mount(<PublicUrlRow initial={{ public_origin: null, public_origin_source: null }} />);
-    expect(el.querySelector("[data-testid='public-url-unset']")?.getAttribute("data-tip")).toBe(PUBLIC_URL_TIP);
-    expect(PUBLIC_URL_TIP).toContain("BOSS_PUBLIC_URL");
-    expect(read("app/setup/setup-board.tsx")).toContain("<PublicUrlRow />");
+  it("Setup no longer shows it: it is bound at the claim and shown under Identity › Sign-in (BOSSAPP-898)", () => {
+    expect(read("app/setup/setup-board.tsx")).not.toContain("PublicUrlRow");
+    expect(read("app/identity/sign-in/sign-in-settings.tsx")).toContain("public-url");
   });
 
   it("email sign-in is offered only with SMTP and a public URL (otherwise shown disabled, saying why)", async () => {

@@ -5,7 +5,11 @@
  * work on, Models — each a short table with one "+ Add" action. Every pill comes from the server
  * (GET /v1/setup `github_accounts`, `repositories`, `models`); nothing here maps a state to a tone.
  * The forms are the existing ones (AddAccountPanel's steps, AddRepo, AddModelPanel, TokenForm), in
- * drawers; everything else stays under Advanced settings.
+ * drawers. NOTHING ELSE (BOSSAPP-898, operator: "this should have only Model and Repos setup and
+ * nothing more"): managing what is connected opens from each block's own Manage — the GitHub App's
+ * grants, each repository's menu and CI changes, each model's details and keys, and which model
+ * does which job. There is no Advanced section; budget, allowed repos and the embedding model live
+ * in Govern, the embedding model is under Models › Manage, and build settings are installer defaults.
  */
 import React, { useMemo, useState } from "react";
 import { Plus } from "@phosphor-icons/react";
@@ -20,7 +24,12 @@ import { Drawer } from "./drawer";
 import { usedForLabel, usedForTip } from "./models-row";
 import { useBoard } from "./parts";
 import { Pill, Tip } from "./pill";
-import { AddRepo, TokenForm } from "./repository-row";
+import { AddRepo, RepositoryRow, TokenForm } from "./repository-row";
+import { CapacityRow } from "./capacity-row";
+import { CiWorkflowsToggle } from "./ci-workflows-toggle";
+import { EmbeddingModelRow } from "./embedding-model-row";
+import { GitHubAccessRow } from "./github-access-row";
+import { RoutingRow } from "./routing-row";
 import type { SigninStatus } from "../../lib/identity/github-signin";
 
 const CHECK_NAMES = { read: "Read", write: "Write", pull_requests: "PRs" } as const;
@@ -84,12 +93,37 @@ function BlockHead({ title, tip, action }: { title: string; tip: string; action:
 }
 
 type Opening = { kind: "account" } | { kind: "replace"; connectionId: string | null }
-  | { kind: "repo"; connectionId: string | null } | { kind: "model" };
+  | { kind: "repo"; connectionId: string | null } | { kind: "model" }
+  | { kind: "github_app" } | { kind: "repos" } | { kind: "models" } | { kind: "routing" };
+export type BlockOpen = "account" | "model" | "github_app" | "repos" | "models" | "routing";
 
-export function SetupBlocks({ onAdvanced, initialOpen = null }: {
-  onAdvanced: (focus?: string) => void;
-  /** A deep link from Get started: open Add GitHub account / Add model at once. */
-  initialOpen?: "account" | "model" | null;
+/** Manage › Repositories: each repository's menu (default, replace, remove) and, per repository,
+ *  whether builds may change its CI workflows (off unless turned on). */
+function ManageRepos() {
+  const { view } = useBoard();
+  const bound = view.repository.repos.filter((r) => r.binding_id);
+  return (
+    <div className="su-stack" data-testid="su-manage-repos">
+      <RepositoryRow mode="open" step={null} focused={false} />
+      {bound.length ? (
+        <section className="su-stack" data-testid="su-row-ci" aria-label="CI changes">
+          <Tip tip="Off unless turned on: builds may then change .github/workflows in that repo."
+               className="su-strong">Let builds change CI workflows</Tip>
+          {bound.map((r) => (
+            <div key={r.binding_id} className="su-line" data-testid={`su-ci-${r.full_name}`}>
+              <span className="su-mono" data-user-text>{r.full_name}</span>
+              <CiWorkflowsToggle bindingId={r.binding_id as string} />
+            </div>
+          ))}
+        </section>
+      ) : null}
+    </div>
+  );
+}
+
+export function SetupBlocks({ initialOpen = null }: {
+  /** A deep link: open that panel at once (Get started's Add, or an old link into Advanced). */
+  initialOpen?: BlockOpen | null;
 }) {
   const { view, signin, projectId, apply } = useBoard();
   const [open, setOpen] = useState<Opening | null>(initialOpen ? { kind: initialOpen } : null);
@@ -101,7 +135,7 @@ export function SetupBlocks({ onAdvanced, initialOpen = null }: {
 
   const fix = (a: GitHubAccount) => {
     const action = a.pill.action;
-    if (a.kind === "org_app" || action === "fix_link") { onAdvanced("github_app"); return; }
+    if (a.kind === "org_app" || action === "fix_link") { setOpen({ kind: "github_app" }); return; }
     if (action === "sign_in") { setOpen({ kind: "account" }); return; }
     setOpen({ kind: "replace", connectionId: a.connection_id });
   };
@@ -147,12 +181,18 @@ export function SetupBlocks({ onAdvanced, initialOpen = null }: {
       <section className="su-block" data-testid="su-repos" aria-label="Repositories BOSS can work on">
         <BlockHead title="Repositories BOSS can work on" tip="BOSS writes branches and opens pull requests here."
                    action={(
+                     <span className="su-line">
+                     {repos.length ? (
+                       <button type="button" className="su-link" data-testid="su-manage-repos-open"
+                               onClick={() => setOpen({ kind: "repos" })}>Manage</button>
+                     ) : null}
                      <GatedButton permission="repository:register" type="button" className="su-btn"
                                   data-testid="su-add-repo-open"
                                   onClick={() => setOpen(connectable.length ? { kind: "repo", connectionId: connectable[0].connection_id }
                                                                             : { kind: "account" })}>
                        <Plus size={12} weight="bold" aria-hidden="true" />Add repo
                      </GatedButton>
+                     </span>
                    )} />
         {repos.length ? (
           <table className="su-table">
@@ -182,10 +222,16 @@ export function SetupBlocks({ onAdvanced, initialOpen = null }: {
       <section className="su-block" data-testid="su-models-block" aria-label="Models">
         <BlockHead title="Models" tip="What BOSS thinks with: subscriptions, API keys and local models."
                    action={(
+                     <span className="su-line">
+                     {view.models.length ? (
+                       <button type="button" className="su-link" data-testid="su-manage-models-open"
+                               onClick={() => setOpen({ kind: "models" })}>Manage</button>
+                     ) : null}
                      <GatedButton permission="model_provider:manage" type="button" className="su-btn"
                                   data-testid="su-add-model-block" onClick={() => setOpen({ kind: "model" })}>
                        <Plus size={12} weight="bold" aria-hidden="true" />Add model
                      </GatedButton>
+                     </span>
                    )} />
         {view.models.length ? (
           <div className="su-cards">
@@ -201,11 +247,11 @@ export function SetupBlocks({ onAdvanced, initialOpen = null }: {
             ))}
           </div>
         ) : <span className="su-faint" data-testid="su-models-empty">No model yet</span>}
-        <WhoDoesWhat view={view} onChange={() => onAdvanced("jobs")} />
+        <WhoDoesWhat view={view} onChange={() => setOpen({ kind: "routing" })} />
       </section>
 
       {open?.kind === "account" ? (
-        <AddAccountPanel onClose={close} onAdvanced={() => { close(); onAdvanced("github_app"); }} />
+        <AddAccountPanel onClose={close} onAdvanced={() => setOpen({ kind: "github_app" })} />
       ) : null}
       {open?.kind === "replace" ? (
         <Drawer title="Fix GitHub access" onClose={close} testid="su-fix-account">
@@ -230,6 +276,31 @@ export function SetupBlocks({ onAdvanced, initialOpen = null }: {
             <button type="button" className="su-link" data-testid="su-add-repo-new-account"
                     onClick={() => setOpen({ kind: "account" })}>From another account</button>
           </div>
+        </Drawer>
+      ) : null}
+      {open?.kind === "github_app" ? (
+        <Drawer title="GitHub App" onClose={close} testid="su-github-app-drawer">
+          <GitHubAccessRow />
+        </Drawer>
+      ) : null}
+      {open?.kind === "repos" ? (
+        <Drawer title="Manage repositories" onClose={close} testid="su-manage-repos-drawer">
+          <ManageRepos />
+        </Drawer>
+      ) : null}
+      {open?.kind === "models" ? (
+        <Drawer title="Manage models" onClose={close} testid="su-manage-models-drawer">
+          <div className="su-stack">
+            <CapacityRow focused={false} />
+            {/* The embedding model is a model connection too (an Azure or OpenAI key and
+                deployment); Knowledge uses it for meaning search (operator, BOSSAPP-898). */}
+            <EmbeddingModelRow />
+          </div>
+        </Drawer>
+      ) : null}
+      {open?.kind === "routing" ? (
+        <Drawer title="Which model does which job" onClose={close} testid="su-routing-drawer">
+          <RoutingRow mode="open" focused={false} />
         </Drawer>
       ) : null}
       {open?.kind === "model" ? (

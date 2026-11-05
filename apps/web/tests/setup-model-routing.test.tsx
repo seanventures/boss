@@ -8,7 +8,8 @@ import { act } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { overBudget } from "./_helpers/copy-budget";
-import { click, fakeApi, flush, mountBoard, q, type Mounted } from "./_helpers/setup-board";
+import { click, fakeApi, flush, mountBoard, mountInBoard, q, type Mounted } from "./_helpers/setup-board";
+import { RoutingRow } from "../app/setup/routing-row";
 import { board, ROUTING } from "./_helpers/setup-fixtures";
 
 let mounted: Mounted | null = null;
@@ -30,7 +31,7 @@ const writes = (api: ReturnType<typeof fakeApi>) =>
 describe("Model routing", () => {
   it("shows Smart routing whole: tiers, floors, headroom, classifier, this week", async () => {
     fakeApi(board());
-    mounted = await mountBoard(board());
+    mounted = await mountInBoard(board(), <RoutingRow mode="open" focused={false} />);
     const body = document.body;
     expect(q(body, "mr-mode-smart")?.getAttribute("aria-pressed")).toBe("true");
     for (const tier of ["fast", "balanced", "frontier"]) expect(q(body, `mr-tier-${tier}`)).not.toBeNull();
@@ -46,7 +47,7 @@ describe("Model routing", () => {
 
   it("stays within the copy budget with every part open", async () => {
     fakeApi(board());
-    mounted = await mountBoard(board());
+    mounted = await mountInBoard(board(), <RoutingRow mode="open" focused={false} />);
     await click(q(document.body, "mr-floor-add"));
     (q(document.body, "mr-criteria") as HTMLDetailsElement).open = true;
     await click(q(document.body, "su-more-jobs"));
@@ -59,7 +60,7 @@ describe("Model routing", () => {
 
   it("switching mode writes the mode with the version it read", async () => {
     const api = fakeApi(board());
-    mounted = await mountBoard(board());
+    mounted = await mountInBoard(board(), <RoutingRow mode="open" focused={false} />);
     await click(q(document.body, "mr-mode-fixed"));
     expect(writes(api)).toEqual([{ op: "routing", project_id: "p",
                                    policy: { mode: "fixed" }, version: 3 }]);
@@ -67,7 +68,7 @@ describe("Model routing", () => {
 
   it("a tier's model keeps its fallback: picking the fallback swaps them", async () => {
     const api = fakeApi(board());
-    mounted = await mountBoard(board());
+    mounted = await mountInBoard(board(), <RoutingRow mode="open" focused={false} />);
     await choose(q(document.body, "mr-tier-select-fast"), "openrouter::deepseek/deepseek-chat");
     // The new first was the fallback: the two swap, so neither is lost or listed twice.
     expect(writes(api)[0].policy).toEqual({ tiers: { fast: [
@@ -81,7 +82,7 @@ describe("Model routing", () => {
 
   it("floors: remove one, add one, choose a preset", async () => {
     const api = fakeApi(board());
-    mounted = await mountBoard(board());
+    mounted = await mountInBoard(board(), <RoutingRow mode="open" focused={false} />);
     await click(document.body.querySelector('[aria-label="Remove Security check floor"]'));
     expect(writes(api)[0].policy).toEqual({ floor_preset: "custom", floors: [
       { match: { step: "review_code" }, tier: "frontier" },
@@ -98,7 +99,7 @@ describe("Model routing", () => {
 
   it("the headroom rule: Frontier is never offered to move", async () => {
     const api = fakeApi(board());
-    mounted = await mountBoard(board());
+    mounted = await mountInBoard(board(), <RoutingRow mode="open" focused={false} />);
     expect(q(document.body, "mr-rule-tier-frontier")).toBeNull();
     await click(q(document.body, "mr-rule-tier-balanced"));
     expect(writes(api)[0].policy).toEqual({ headroom: [
@@ -108,7 +109,7 @@ describe("Model routing", () => {
   it("Fixed mode is the old page: the jobs, open; no tiers", async () => {
     const view = { ...board(), routing: { ...ROUTING, mode: "fixed" as const } };
     fakeApi(view);
-    mounted = await mountBoard(view);
+    mounted = await mountInBoard(view, <RoutingRow mode="open" focused={false} />);
     expect(q(document.body, "mr-tier-fast")).toBeNull();
     // Headroom is shown in Fixed too (the meter), but nothing moves: no rule.
     expect(q(document.body, "mr-headroom-claude_code")).not.toBeNull();
@@ -120,7 +121,7 @@ describe("Model routing", () => {
   it("saving never disables the pressed control (keyboard focus stays on it)", async () => {
     const api = fakeApi(board());
     api.hold = true;
-    mounted = await mountBoard(board());
+    mounted = await mountInBoard(board(), <RoutingRow mode="open" focused={false} />);
     const fixed = q(document.body, "mr-mode-fixed") as HTMLButtonElement;
     fixed.focus();
     await click(fixed);
@@ -132,7 +133,7 @@ describe("Model routing", () => {
 
   it("a control that goes away hands focus to its neighbour, never to <body>", async () => {
     fakeApi(board());
-    mounted = await mountBoard(board());
+    mounted = await mountInBoard(board(), <RoutingRow mode="open" focused={false} />);
     await click(q(document.body, "mr-floor-add"));
     expect(document.activeElement).toBe(q(document.body, "mr-floor-step"));
     await act(async () => {
@@ -147,7 +148,7 @@ describe("Model routing", () => {
 
   it("on Smart a job pin is a preference, and Always is an explicit choice", async () => {
     const api = fakeApi(board());
-    mounted = await mountBoard(board());
+    mounted = await mountInBoard(board(), <RoutingRow mode="open" focused={false} />);
     await click(q(document.body, "su-more-jobs"));
     expect(q(document.body, "su-more-jobs")?.textContent).toContain("Prefer for a job");
     const always = q(document.body, "mr-always-review") as HTMLInputElement;
@@ -161,17 +162,18 @@ describe("Model routing", () => {
     view.jobs = view.jobs.map((j) => j.job === "build"
       ? { ...j, choice: { engine: "claude_code", model: "opus" } } : j);
     fakeApi(view);
-    mounted = await mountBoard(view);
+    mounted = await mountInBoard(view, <RoutingRow mode="open" focused={false} />);
     await click(q(document.body, "su-more-jobs"));
     const select = q(document.body, "su-job-select-build") as HTMLSelectElement;
     expect(select.value).toBe("claude_code::opus");
     expect(select.selectedOptions[0]?.textContent).toBe("Claude Code · opus");
   });
 
-  it("focus=routing lands on the row with the jobs open", async () => {
+  it("focus=jobs opens the routing drawer with the tiers; the Setup page itself has no routing row", async () => {
     fakeApi(board());
-    mounted = await mountBoard(board(), "?area=setup&focus=routing");
-    expect(q(document.body, "su-row-jobs")?.getAttribute("data-focused")).toBe("true");
-    expect(q(document.body, "su-job-hard")).not.toBeNull();
+    mounted = await mountBoard(board(), "?area=setup&focus=jobs", true, "setup");
+    expect(q(document.body, "su-routing-drawer")).not.toBeNull();
+    expect(q(document.body, "su-row-jobs")).not.toBeNull();
+    expect(q(document.body, "mr-tier-fast")).not.toBeNull();
   });
 });

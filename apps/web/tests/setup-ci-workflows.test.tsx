@@ -7,7 +7,8 @@
 import { act } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { fakeApi, flush, mountBoard, type Mounted } from "./_helpers/setup-board";
+import { fakeApi, flush, mountInBoard, type Mounted } from "./_helpers/setup-board";
+import { CiWorkflowsToggle } from "../app/setup/ci-workflows-toggle";
 import { board } from "./_helpers/setup-fixtures";
 
 let mounted: Mounted | null = null;
@@ -27,7 +28,7 @@ describe("CI workflows opt-in", () => {
     const api = fakeApi(view);
     api.answer = (call) => (call.url.includes("ci_workflows=") ? { status: 200, body: OFF }
       : call.op === "ci_workflows" ? { status: 200, body: ON } : null);
-    mounted = await mountBoard(view);
+    mounted = await mountInBoard(view, <CiWorkflowsToggle bindingId="ghb1" />);
     const row = document.body.querySelector('[data-testid="su-ci-workflows"]')!;
     expect(row).toBeTruthy();
     expect(row.querySelector("[data-tip]")!.getAttribute("data-tip")).toBe(HELP);

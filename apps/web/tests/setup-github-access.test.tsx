@@ -6,7 +6,8 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { click, fakeApi, flush, mountBoard, type FakeApi, type Mounted } from "./_helpers/setup-board";
+import { click, fakeApi, flush, mountBoard, mountInBoard, type FakeApi, type Mounted } from "./_helpers/setup-board";
+import { GitHubAccessRow } from "../app/setup/github-access-row";
 import { board, firstRun } from "./_helpers/setup-fixtures";
 
 let mounted: Mounted | null = null;
@@ -31,7 +32,7 @@ describe("GitHub access", () => {
   it("shows the server's pill and all three ways, the App marked recommended and the token less safe", async () => {
     const api = fakeApi(board());
     withGitHub(api, NONE);
-    mounted = await mountBoard(board());
+    mounted = await mountInBoard(board(), <GitHubAccessRow />);
     const pill = document.querySelector('[data-testid="gh-mode"]')!;
     expect(pill.textContent).toBe("Builds can't reach GitHub");
     expect(pill.className).toContain("su-tone-red");
@@ -51,7 +52,7 @@ describe("GitHub access", () => {
     const real = window.location;
     Object.defineProperty(window, "location", { configurable: true, value: { ...real, assign, href: real.href, origin: real.origin } });
     try {
-      mounted = await mountBoard(board());
+      mounted = await mountInBoard(board(), <GitHubAccessRow />);
       await click(document.querySelector('[data-testid="gh-app-create"]'));
       await flush();
       // Not posted from Setup (its CSP is form-action 'self'): kept for this tab, then the hand-off opens.
@@ -71,7 +72,7 @@ describe("GitHub access", () => {
                                       links: { install: "https://github.com/apps/boss-x/installations/new" } } };
     withGitHub(api, created, (url) => url.endsWith("/app/installations")
       ? { installations: [{ id: "42", account: "acme", repository_selection: "selected" }] } : null);
-    mounted = await mountBoard(board());
+    mounted = await mountInBoard(board(), <GitHubAccessRow />);
     expect(document.querySelector('[data-testid="gh-app-install"]')!.getAttribute("href"))
       .toBe("https://github.com/apps/boss-x/installations/new");
     await click(document.querySelector('[data-testid="gh-app-pick"]'));
@@ -85,7 +86,7 @@ describe("GitHub access", () => {
   it("BOSS_GITHUB_TOKEN gets one button that moves it into the vault for the bound repos", async () => {
     const api = fakeApi(board());
     withGitHub(api, { ...NONE, env_token: { present: true, read_by_builds: false } });
-    mounted = await mountBoard(board());
+    mounted = await mountInBoard(board(), <GitHubAccessRow />);
     const move = document.querySelector('[data-testid="gh-env-move"]')!;
     await click(move);
     const posted = api.calls.find((c) => c.method === "POST" && c.url.endsWith("/token/migrate-env"));
@@ -96,7 +97,7 @@ describe("GitHub access", () => {
   it("an answer that is not a status reads as Not reported, never a broken row", async () => {
     const api = fakeApi(board());
     withGitHub(api, { something: "else" });
-    mounted = await mountBoard(board());
+    mounted = await mountInBoard(board(), <GitHubAccessRow />);
     expect(document.querySelector('[data-testid="su-row-github-access"]')!.textContent).toContain("Not reported");
   });
 
@@ -145,7 +146,7 @@ describe("GitHub access", () => {
       links: PERSONAL_LINKS };
     // A stored answer with a gap is asked again on open; GitHub still says the same.
     withGitHub(api, installedPersonal(verified), (url, method) => (method === "POST" && url.endsWith("/app/verify") ? verified : null));
-    mounted = await mountBoard(board());
+    mounted = await mountInBoard(board(), <GitHubAccessRow />);
     expect(api.calls.some((c) => c.url.endsWith("/app/verify"))).toBe(true);
     const wf = document.querySelector('[data-testid="gh-perm-workflows"]')!;
     expect(wf.getAttribute("data-state")).toBe("waiting");
@@ -166,7 +167,7 @@ describe("GitHub access", () => {
       permissions: [{ name: "workflows", wanted: "write", granted: "write", state: "accepted", fix_url: null }],
       repos: [], links: PERSONAL_LINKS };
     withGitHub(api, installedPersonal(null), (url, method) => (method === "POST" && url.endsWith("/app/verify") ? answer : null));
-    mounted = await mountBoard(board());
+    mounted = await mountInBoard(board(), <GitHubAccessRow />);
     await flush();
     expect(api.calls.filter((c) => c.url.endsWith("/app/verify")).length).toBe(1);
     expect(document.querySelector('[data-testid="gh-perm-workflows"]')!.textContent).toContain("Workflows: accepted ✓");
@@ -187,11 +188,11 @@ describe("GitHub access", () => {
     const on = (e: Event) => toasts.push(String((e as CustomEvent<{ message: string }>).detail.message));
     window.addEventListener("boss:toast", on);
     try {
-      mounted = await mountBoard(board(), "?area=knowledge", false);
+      mounted = await mountInBoard(board(), <GitHubAccessRow />, false);
       await flush();
       expect(api.calls.filter((c) => c.url.endsWith("/app/verify"))).toEqual([]);
       mounted.unmount();
-      mounted = await mountBoard(board());
+      mounted = await mountInBoard(board(), <GitHubAccessRow />);
       await flush();
       expect(api.calls.filter((c) => c.url.endsWith("/app/verify")).length).toBe(1);
       expect(toasts).toEqual([]);
@@ -215,8 +216,7 @@ describe("simple GitHub entry", () => {
     view.secrets.needs_consent = true;
     const api = fakeApi(view);
     withGitHub(api, NONE);
-    mounted = await mountBoard(view, "?area=setup&focus=github_app");
-    const repo = document.querySelector('[data-testid="su-row-repository"]')!;
+    mounted = await mountInBoard(view, <GitHubAccessRow focused />);
     const alternatives = document.querySelector('[data-testid="gh-other-ways"]') as HTMLDetailsElement;
     expect(alternatives.open).toBe(false);
     expect(alternatives.querySelector("summary")?.textContent).toBe("Other ways");
@@ -225,6 +225,11 @@ describe("simple GitHub entry", () => {
     expect(alternatives.open).toBe(true);
     expect(alternatives.textContent).toContain("Less safe");
     expect(alternatives.querySelector('[data-testid="gh-as-me-link"]')).not.toBeNull();
+    mounted.unmount();
+    // The Repository row is on the page without the App row (BOSSAPP-898: the App moved to a drawer).
+    mounted = await mountBoard(view, "?area=setup&focus=repository");
+    expect(document.querySelector('[data-testid="su-row-github-access"]')).toBeNull();
+    const repo = document.querySelector('[data-testid="su-row-repository"]')!;
     // Repos opens on Connect GitHub; the token (and its storage consent) is under its Other ways.
     expect(repo.querySelector('[data-testid="gh-connect-start"]')).not.toBeNull();
     await click(repo.querySelector('[data-testid="su-use-token"]'));
@@ -243,7 +248,7 @@ describe("simple GitHub entry", () => {
     it(`keeps alternatives exposed for ${JSON.stringify(patch)}`, async () => {
       const api = fakeApi(firstRun());
       withGitHub(api, { ...NONE, ...patch });
-      mounted = await mountBoard(firstRun());
+      mounted = await mountInBoard(firstRun(), <GitHubAccessRow />);
       const alternatives = document.querySelector('[data-testid="gh-other-ways"]') as HTMLDetailsElement;
       expect(alternatives.open).toBe(true);
       expect(document.querySelector('[data-testid="gh-way-token"]')).not.toBeNull();
@@ -257,7 +262,7 @@ describe("simple GitHub entry", () => {
     mounted = await mountBoard(board(), "?area=setup&focus=repository");
     expect(landed[0]).toBe(document.querySelector('[data-testid="su-row-repository"]'));
     expect(document.querySelector('[data-testid="su-row-repository"]')?.getAttribute("data-focused")).toBe("true");
-    expect(document.querySelector('[data-testid="su-row-github-access"]')?.getAttribute("data-focused")).toBeNull();
-    expect((document.querySelector('[data-testid="gh-other-ways"]') as HTMLDetailsElement).open).toBe(true);
+    // The App row is no longer on Setup's page at all; it opens from the GitHub accounts block.
+    expect(document.querySelector('[data-testid="su-row-github-access"]')).toBeNull();
   });
 });

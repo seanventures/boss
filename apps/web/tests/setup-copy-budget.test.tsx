@@ -7,8 +7,9 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import { EmbeddingModelRow } from "../app/setup/embedding-model-row";
 import { overBudget } from "./_helpers/copy-budget";
-import { click, fakeApi, mountBoard, q, type Mounted } from "./_helpers/setup-board";
+import { click, fakeApi, mountBoard, mountInBoard, q, type Mounted } from "./_helpers/setup-board";
 import { board, everyRed, firstRun, repoDone, tryStep } from "./_helpers/setup-fixtures";
 
 const BANNED = ["environment variable", " env ", "harness", "entitlement", "binding", "governed",
@@ -63,7 +64,7 @@ describe("the board stays within the copy budget", () => {
     for (const slot of [none, failed, working]) {
       const view = { ...board(), embedding_model: slot };
       fakeApi(view);
-      mounted = await mountBoard(view, "?area=setup&focus=embedding_model");
+      mounted = await mountInBoard(view, <EmbeddingModelRow />);
       if (slot.configured) await click(q(document.body, "su-embedding-change"));
       await click(q(document.body, "su-embedding-provider-azure"));
       audit(document.body);
@@ -86,12 +87,23 @@ describe("the board stays within the copy budget", () => {
     expect(used.getAttribute("data-tip")).toContain("Hard problems, Routine work");
   });
 
-  it("with More jobs open and the budget being edited", async () => {
+  it("with the routing drawer open and More jobs open", async () => {
     fakeApi(board());
-    mounted = await mountBoard(board());
+    mounted = await mountBoard(board(), "?area=setup&focus=jobs", true, "setup");
+    expect(q(document.body, "su-routing-drawer")).not.toBeNull();
     await click(q(document.body, "su-more-jobs"));
-    await click(q(document.body, "su-budget-edit"));
     audit(document.body);
+  });
+
+  it("with each Manage drawer open: GitHub App, repositories (CI toggles), model sources", async () => {
+    for (const focus of ["github_app", "ci", "capacity"]) {
+      fakeApi(board());
+      mounted = await mountBoard(board(), `?area=setup&focus=${focus}`, true, "setup");
+      audit(document.body);
+      mounted.unmount();
+      mounted = null;
+      document.body.innerHTML = "";
+    }
   });
 
   it("with Add a model open on every tile and provider", async () => {
