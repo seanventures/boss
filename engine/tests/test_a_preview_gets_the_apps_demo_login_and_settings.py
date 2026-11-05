@@ -1,0 +1,52 @@
+"""A preview runs the app as its boss.deploy.yaml says (prev_e3a41482afaa4b228abe).
+
+HelpDesk AI declares `ALLOW_DEMO_SEED: "true"` and `DEMO_PASSWORD: {generate: password}`. Its
+preview got neither the setting nor a password the reviewer could read, so the demo seed never ran
+and nobody could sign in to review the change.
+"""
+from pathlib import Path
+
+from boss_engine.templates.run_env import needs_from_app_dir, resolve
+
+MANIFEST = """version: 1
+name: helpdesk-ai
+kind: compose
+compose:
+  file: docker-compose.yml
+health: [{url: "{target.public_url}/auth/providers", expect: 200}]
+env:
+  ALLOW_DEMO_SEED: "true"
+  DEMO_PASSWORD: {generate: password}
+  APP_ENV: staging
+  APP_BASE_URL: "{target.public_url}"
+"""
+
+
+def _app(tmp_path: Path) -> Path:
+    (tmp_path / "boss.deploy.yaml").write_text(MANIFEST)
+    (tmp_path / "docker-compose.yml").write_text("services: {}\n")
+    return tmp_path
+
+
+def test_a_preview_gets_the_apps_plain_settings(tmp_path):
+    env = resolve(needs_from_app_dir(_app(tmp_path)), purpose="preview")
+    assert env.values["ALLOW_DEMO_SEED"] == "true" and env.values["APP_ENV"] == "staging"
+    # A setting with something to fill in is the deploy's: a preview is not given `{target.…}`.
+    assert "APP_BASE_URL" not in env.values
+
+
+def test_the_generated_demo_password_is_shown_to_the_reviewer(tmp_path):
+    needs = needs_from_app_dir(_app(tmp_path))
+    assert needs["DEMO_PASSWORD"].kind == "demo"
+    env = resolve(needs, purpose="preview")
+    assert env.values["DEMO_PASSWORD"] and "DEMO_PASSWORD" in env.shown
+
+
+def test_a_bound_value_beats_the_manifests_setting(tmp_path):
+    env = resolve(needs_from_app_dir(_app(tmp_path)), purpose="preview", bound={"APP_ENV": "review"})
+    assert env.values["APP_ENV"] == "review"
+
+
+def test_a_plain_setting_never_waits_for_a_person(tmp_path):
+    env = resolve(needs_from_app_dir(_app(tmp_path)), purpose="deploy")
+    assert not [n for n in env.needs if n.name in ("ALLOW_DEMO_SEED", "APP_ENV")]

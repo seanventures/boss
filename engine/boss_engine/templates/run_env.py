@@ -86,14 +86,16 @@ def is_demo_login_name(name: str) -> bool:
 
 @dataclass(frozen=True)
 class Need:
-    """One variable the app declares. `kind`: generated | demo | secret | stub | listed.
+    """One variable the app declares. `kind`: generated | demo | secret | stub | listed | literal.
     `deploy_only`: a person sets it for a DEPLOY (boss.deploy.yaml `{secret}`); a throwaway run
-    never waits for it."""
+    never waits for it. `value`: a literal's setting (boss.deploy.yaml `KEY: "true"`), never a
+    secret."""
     name: str
     kind: str
     required: bool
     source: str
     deploy_only: bool = False
+    value: Optional[str] = None
 
     def where(self) -> str:
         return f"declared by {self.source}"
@@ -220,6 +222,8 @@ def decide(need: Need, *, has_value: bool, purpose: str) -> str:
         return "generate"           # fresh every run, whatever is stored
     if has_value:
         return "use"
+    if need.kind == "literal":
+        return "literal"            # the app's own setting, unless something bound a value
     if need.kind == "demo":
         # A demo login's password: minted for a throwaway run (shown to a preview's reviewer); a
         # deploy has the person's value or none.
@@ -265,6 +269,8 @@ def resolve(declared: Mapping[str, Need], *, purpose: str,
                 env.shown.append(name)
         elif verdict == "use":
             env.values[name] = bound[name]
+        elif verdict == "literal":
+            env.values[name] = need.value or ""
         elif verdict == "unset":
             env.unset.append(name)
         else:
@@ -335,10 +341,17 @@ def needs_from_env_example(text: str, *, source: str = ".env.example") -> dict[s
 
 
 def needs_from_deploy_manifest(manifest, *, source: str = "boss.deploy.yaml") -> dict[str, Need]:
+    """A generated DEMO LOGIN password is a demo login (shown to the reviewer, kept for every
+    preview), as it is in .env.example; a plain literal (`ALLOW_DEMO_SEED: "true"`, no `{…}` to
+    fill in) is the app's own setting and every run of it gets it. HelpDesk AI's preview got
+    neither: its demo seed never ran and nobody could sign in (prev_e3a41482afaa4b228abe)."""
     out: dict[str, Need] = {}
     for item in getattr(manifest, "env", ()) or ():
         if item.source == "generate":
-            out[item.key] = Need(item.key, "generated", True, source)
+            out[item.key] = Need(item.key, "demo" if is_demo_login_name(item.key) else "generated",
+                                 True, source)
+        elif item.source == "literal" and "{" not in str(item.value or ""):
+            out[item.key] = Need(item.key, "literal", False, source, value=str(item.value or ""))
         elif item.source == "secret":
             # A DEPLOY's value (its DATABASE_URL, a live key): a throwaway run never waits for it.
             out[item.key] = Need(item.key, "secret", True, source, deploy_only=True)
