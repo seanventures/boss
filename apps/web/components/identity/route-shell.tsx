@@ -16,8 +16,8 @@ import { API_URL, PROJECT_ID } from "../../lib/client";
 import { networkTrustedConsole } from "../../lib/console-session";
 import { checkWith } from "../../lib/identity/check";
 import { snapshotFrom } from "../../lib/identity/contract";
-import { enrolHref, needsEnrolment } from "../../lib/identity/enrolment";
-import { ACCOUNT_TABS, IDENTITY_TABS, PATH_HEADER, pageFor, type IdentityPage } from "../../lib/identity/pages";
+import { enrolHref, needsEnrolment, signInAgainHref } from "../../lib/identity/enrolment";
+import { ACCOUNT_TABS, IDENTITY_TABS, PATH_HEADER, SEARCH_HEADER, pageFor, type IdentityPage } from "../../lib/identity/pages";
 import { heldAnywhere, heldSomewhere } from "../../lib/identity/held-anywhere";
 import { serverGet } from "../../lib/identity/server";
 import { loadIdentityCached } from "../../lib/identity/server-cache";
@@ -106,7 +106,12 @@ export function accessUncheckable(boot: { org: unknown; problem: string | null }
 export async function consolePageAllowed(path: string): Promise<boolean> {
   const page = pageFor(path);
   const boot = await loadIdentityCached(PROJECT_ID);
-  if (boot.problem === "unauthenticated") redirect(`/login?next=${encodeURIComponent(path)}`);
+  if (boot.problem === "unauthenticated") {
+    const search = (await headers()).get(SEARCH_HEADER);
+    // A query only: a client-supplied header must not put a fragment or a break into the return path.
+    const place = search && /^\?[^#\\\u0000-\u001f]*$/.test(search) ? `${path}${search}` : path;
+    redirect(signInAgainHref("unauthenticated", place) ?? "/login");
+  }
   if (!page || !("permission" in page.access)) return true;
   // FAIL CLOSED: a page that needs a permission is not drawn when its access cannot be checked
   // (the identity API is unreachable); <PageDenied> then says so, with Retry.
