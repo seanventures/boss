@@ -48,7 +48,7 @@ def test_each_sample_is_classified_as_its_kind(kind):
 @pytest.mark.parametrize("kind", da.KINDS)
 def test_every_offered_action_is_one_the_transition_accepts(kind):
     """A button whose action the server rejects is the Escalate bug in another shape."""
-    supported = {"approve", "reject", "revise", "delegate", "execute"}
+    supported = {"approve", "reject", "revise", "delegate", "execute", "settle"}
     for offered in da.allowed_actions(SAMPLES[kind]):
         assert offered["action"] in supported
         assert offered["label"] and offered["effect"]

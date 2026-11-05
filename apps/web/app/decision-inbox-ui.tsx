@@ -1177,7 +1177,10 @@ export function DecisionActions({ decision, projectId, actorId }: {
   decision: DecisionFeedItem; projectId: string; actorId: string;
 }) {
   const offers = offeredActions(decision).filter((a) => a.action !== "execute");
-  const direct = offers.filter((a) => !a.needs);
+  // Two settles share the action name. Each button carries its own settle_at, or they
+  // would submit the same value and React would reuse one key.
+  const settles = offers.filter((a) => a.action === "settle" && a.settle_at);
+  const direct = offers.filter((a) => !a.needs && a.action !== "settle");
   // AN APPROVAL THAT NEEDS A REASON (a merge with checks failing): drawn open, never behind
   // "More", with the reason box; sent as the forced merge the engine requires.
   const reasoned = offers.find((a) => a.action === "approve" && a.needs === "note");
@@ -1223,6 +1226,21 @@ export function DecisionActions({ decision, projectId, actorId }: {
       {startsWork ? <input type="hidden" name="starts_work" value="1" /> : null}
       {dismiss ? <input type="hidden" name="reject_label" value="Dismiss" /> : null}
       {contentHash ? <input type="hidden" name="content_hash" value={contentHash} /> : null}
+      {settles.length > 0 && direct.length === 0 && !reasoned && !revise && !delegate ? (
+        <input type="hidden" name="action" value="settle" />
+      ) : null}
+      {settles.map((offer) => (
+        <SubmitButton permission="decision:approve"
+          key={offer.settle_at}
+          className={`dq-btn ${offer.tone === "neutral" ? "neutral" : offer.tone}`}
+          name="settle_at"
+          value={offer.settle_at ?? ""}
+          title={offer.effect || undefined}
+          data-testid={`decision-settle-${offer.settle_at}`}
+        >
+          {offer.label}
+        </SubmitButton>
+      ))}
       {reasoned ? (
         <div className="dq-reasoned" data-testid="decision-reasoned-approve">
           <input type="hidden" name="force" value="true" />

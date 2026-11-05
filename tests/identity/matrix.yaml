@@ -505,6 +505,7 @@
 "POST /v1/decisions/{decision_id}/execute": ["permit decision:execute @ decision(path=decision_id)", "OAP"]
 "POST /v1/decisions/{decision_id}/reject": ["permit decision:approve @ decision(path=decision_id)", "OAP"]
 "POST /v1/decisions/{decision_id}/revise": ["permit decision:approve @ decision(path=decision_id)", "OAP"]
+"POST /v1/decisions/{decision_id}/settle": ["permit decision:approve @ decision(path=decision_id)", "OAP"]
 "GET /v1/delivery-workflows": ["permit workflow:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/delivery-workflows/agreement": ["permit workflow:read @ project(body=project_id)", "OAPVU"]
 "POST /v1/delivery-workflows/apply": ["permit workflow:publish @ project(body=project_id)", "OAP"]

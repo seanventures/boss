@@ -54,7 +54,9 @@ export type DecisionKind =
   | "general";
 
 export type DecisionActionOffer = {
-  action: "approve" | "reject" | "revise" | "delegate" | "execute";
+  action: "approve" | "reject" | "revise" | "delegate" | "execute" | "settle";
+  /** Which settlement a legacy-exposure card records. Both buttons share action "settle". */
+  settle_at?: "zero" | "estimate" | null;
   label: string;
   tone: "approve" | "reject" | "neutral";
   effect: string;

@@ -2808,6 +2808,12 @@ class DecisionInboxResponse(BaseModel):
     offset: int = 0
 
 
+class LegacyExposureSettleRequest(BaseModel):
+    """Settle a reconcile_legacy_*_exposure decision at $0 or at its estimate."""
+    actor: str = "executive_console"
+    settle_at: Literal["zero", "estimate"]
+
+
 class DecisionActionRequest(BaseModel):
     actor: str = "executive_console"
     note: Optional[str] = None

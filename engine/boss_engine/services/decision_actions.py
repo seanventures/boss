@@ -423,6 +423,22 @@ def allowed_actions(decision: Mapping[str, Any]) -> list[dict[str, Any]]:
             "Records what was carried out and where, for the audit trail.", needs="note")]
     if status not in _OPEN and not reopenable(decision):
         return []
+    if _action_of(decision) in (
+            "reconcile_legacy_model_exposure", "reconcile_legacy_provider_exposure"):
+        # Approving recorded a go-ahead and started nothing, so the hold stayed open.
+        # These two settles are what BudgetGovernor.resolve_legacy_exposure does.
+        return [
+            {**_action(
+                "settle", "Settle at $0 (provider refused)", "approve",
+                "Records that the provider refused the call, so nothing was spent, "
+                "and closes this hold."),
+             "settle_at": "zero"},
+            {**_action(
+                "settle", "Settle at the estimate", "neutral",
+                "Records the original estimate as the cost, because the outcome could "
+                "not be confirmed, and closes this hold."),
+             "settle_at": "estimate"},
+        ]
     kind = kind_of(decision)
     from .release_scope import needs_reason as _release_needs_reason
 

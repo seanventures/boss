@@ -2047,6 +2047,11 @@ export type DecisionActionRequest = {
   force?: boolean;
 };
 
+export type LegacyExposureSettleRequest = {
+  actor?: string;
+  settle_at: "zero" | "estimate";
+};
+
 export type DecisionDigestRequest = {
   project_id: string;
   channel?: string;
@@ -8934,6 +8939,13 @@ export function createBossApiClient(config: BossApiClientConfig) {
       return request<DecisionCard>(
         "POST",
         `/v1/decisions/${encodeURIComponent(decisionId)}/execute`,
+        { body: payload },
+      );
+    },
+    settleDecision(decisionId: string, payload: LegacyExposureSettleRequest) {
+      return request<DecisionCard>(
+        "POST",
+        `/v1/decisions/${encodeURIComponent(decisionId)}/settle`,
         { body: payload },
       );
     },

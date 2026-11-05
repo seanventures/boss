@@ -211,6 +211,7 @@ from .schemas import (
     DeploymentTargetListResponse,
     DeploymentTargetSummary,
     DecisionActionRequest,
+    LegacyExposureSettleRequest,
     DecisionCard,
     DecisionDigestRequest,
     DecisionDigestResponse,
@@ -24257,6 +24258,34 @@ def execute_decision(
                 delegate_to=payload.delegate_to,
                 external_ref=payload.external_ref,
                 force=payload.force,
+            )
+        except DecisionNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except InvalidDecisionTransitionError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except (ProjectMemberNotFoundError, ProjectMemberPermissionError) as error:
+            raise_decision_actor_error(decision_id, payload.actor, error)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return decision_card_from_row(row)
+
+
+@app.post("/v1/decisions/{decision_id}/settle", response_model=DecisionCard)
+@permit(P.DECISION_APPROVE, scope=Scope.of("decision", path="decision_id"))
+def settle_decision(
+    decision_id: str, payload: LegacyExposureSettleRequest
+) -> DecisionCard:
+    with begin(engine) as connection:
+        payload.actor = _decision_route_actor(connection, decision_id, payload.actor)
+        require_decision_actor_binding(connection, decision_id, payload.actor)
+        try:
+            row = decisions.transition(
+                connection,
+                decision_id,
+                action="settle",
+                actor=payload.actor,
+                note=None,
+                settle_at=payload.settle_at,
             )
         except DecisionNotFoundError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error

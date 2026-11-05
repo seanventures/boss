@@ -4,11 +4,11 @@
   "canonical_key": "method + path",
   "request_body_type_enforcement_note": "pass_through_documented fields appear in OpenAPI but SkipValidation preserves the handler's existing input coercion and error statuses; runtime_validated_input_schema is a legacy schema-presence flag",
   "edition": "community",
-  "operation_count": 1652,
+  "operation_count": 1653,
   "counts": {
     "api_policy_gated": 1404,
     "excluded": 104,
-    "human_confirmation_gated": 72,
+    "human_confirmation_gated": 73,
     "operator_only_unavailable": 72
   },
   "operations": [
@@ -8244,6 +8244,24 @@
       "alias": "post_v1_decisions_decision_id_revise_1260be4c",
       "domain": "core",
       "summary": "Revise Decision",
+      "mcp_status": "human_confirmation_gated",
+      "reason": "fresh_human_confirmation_required",
+      "input_schema_quality": "typed_json_body",
+      "mounted_input_schema_quality": "typed_json_body",
+      "request_body_type_enforcement": "pydantic_fields",
+      "curated_input_fields": false,
+      "typed_input_schema": true,
+      "runtime_validated_input_schema": true,
+      "domain_scoped_direct_tool": true,
+      "requires_explicit_bound_api_credential": true,
+      "read_only_available": false
+    },
+    {
+      "method": "POST",
+      "path": "/v1/decisions/{decision_id}/settle",
+      "alias": "post_v1_decisions_decision_id_settle_088ebe2e",
+      "domain": "core",
+      "summary": "Settle Decision",
       "mcp_status": "human_confirmation_gated",
       "reason": "fresh_human_confirmation_required",
       "input_schema_quality": "typed_json_body",

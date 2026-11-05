@@ -661,6 +661,7 @@ export async function resolveDecisionAction(formData: FormData): Promise<ActionR
   const delegateTo = formData.get("delegate_to");
   const externalRef = formData.get("external_ref");
   const contentHash = formData.get("content_hash");
+  const settleAt = formData.get("settle_at");
 
   if (typeof decisionId != "string" || !decisionId) return missingInput("decisionId");
   if (!isDecisionAction(action)) {
@@ -698,7 +699,15 @@ export async function resolveDecisionAction(formData: FormData): Promise<ActionR
   // NO CATCH HERE. This used to swallow every API error into console.error and then report
   // "Decision recorded" — a refused Approve read as success. act() turns the refusal into
   // the sentence the API wrote (the engine's decision_actions says what to do instead).
-  if (action === "approve") {
+  if (action === "settle") {
+    if (settleAt !== "zero" && settleAt !== "estimate") {
+      return {
+        ok: false,
+        error: "Say whether to settle at $0 or at the estimate.",
+      };
+    }
+    await client.settleDecision(decisionId, { actor: getActor(formData), settle_at: settleAt });
+  } else if (action === "approve") {
     await client.approveDecision(decisionId, payload);
   } else if (action === "reject") {
     await client.rejectDecision(decisionId, payload);
@@ -724,6 +733,7 @@ export async function resolveDecisionAction(formData: FormData): Promise<ActionR
     revise: "Sent back with your note.",
     delegate: `Handed to ${target}.`,
     execute: "Marked as executed.",
+    settle: settleAt === "zero" ? "Settled at $0." : "Settled at the estimate.",
   };
   // THE ANSWER NAMES ITS DECISION, so every gate in the console reads it at once
   // (lib/decided-gates.ts, BOSSAPP-511) instead of waiting for the next poll.
@@ -742,7 +752,7 @@ export async function resolveDecisionAction(formData: FormData): Promise<ActionR
   return { ok: true, message: done[action], ...(answered ? { data: answered } : {}) };
 }); }
 
-const DECISION_ACTIONS = ["approve", "reject", "revise", "delegate", "execute"] as const;
+const DECISION_ACTIONS = ["approve", "reject", "revise", "delegate", "execute", "settle"] as const;
 type DecisionAction = (typeof DECISION_ACTIONS)[number];
 function isDecisionAction(value: unknown): value is DecisionAction {
   return typeof value === "string" && (DECISION_ACTIONS as readonly string[]).includes(value);
