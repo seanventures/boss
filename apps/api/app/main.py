@@ -12039,8 +12039,11 @@ async def preview_web_proxy(preview_id: str, request: Request, path: str = ""):
                if k.lower() not in {"content-security-policy", "access-control-allow-origin",
                                     "access-control-allow-credentials", "set-cookie"}}
     answer = Response(content=data, status_code=status, media_type=ctype, headers={**headers, **isolation})
+    from boss_engine.services.preview_cookies import for_the_sandbox, is_secure_context
+    secure = is_secure_context(request.headers.get("x-forwarded-proto") or request.url.scheme,
+                               request.headers.get("host") or "")
     for cookie in set_cookies:   # already tagged and scoped by preview_cookies.outbound_set_cookie
-        answer.headers.append("set-cookie", cookie)
+        answer.headers.append("set-cookie", for_the_sandbox(cookie, secure_context=secure))
     return answer
 
 

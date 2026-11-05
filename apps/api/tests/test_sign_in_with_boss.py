@@ -433,6 +433,11 @@ def test_the_login_template_node_app_signs_a_member_in_inside_a_preview(w, tmp_p
     try:
         member = w.person("ada", role="viewer", project="a")
         browser = TestClient(preview_only(main.app), base_url=previews, follow_redirects=False)
+        # A browser keeps a Secure cookie on http://localhost (preview_cookies.for_the_sandbox makes
+        # the app's cookies SameSite=None; Secure there); httpx never sends one over http. This test
+        # is the sign-in flow, so its "browser" is served as on plain http: the cookies as made.
+        from boss_engine.services import preview_cookies as _pc
+        monkeypatch.setattr(_pc, "is_secure_context", lambda *_a, **_k: False)
         browser.cookies.set("__Host-boss_session", member.cookie)          # the console's, as a browser holds it
         import httpx
 

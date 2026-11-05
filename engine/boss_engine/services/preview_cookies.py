@@ -103,6 +103,30 @@ def outbound_set_cookie(preview_id: str, value: str) -> Optional[str]:
     return "; ".join([f"{cookie_tag(preview_id)}{name}={cookie_value.strip()}", *kept, f"Path={own}"])
 
 
+def for_the_sandbox(value: str, *, secure_context: bool) -> str:
+    """A relayed (tagged, scoped) Set-Cookie as the sandboxed preview page can use it.
+
+    THE SANDBOX MAKES EVERY REQUEST CROSS-SITE. The preview's CSP sandbox has no allow-same-origin,
+    so its page has an opaque origin and the browser refuses a SameSite=Lax or Strict cookie in its
+    fetches' answers: HelpDesk AI's sign-in answered 200 and its session cookie never landed
+    (prev_7b65d5d7165c4c829b1b). SameSite=None widens nothing (the cookie is tagged and held to
+    this preview's own path) but needs Secure, which a browser keeps only in a secure context
+    (https, or localhost): on plain http elsewhere the cookie is left as the app made it."""
+    if not secure_context:
+        return value
+    parts = [p.strip() for p in str(value).split(";")]
+    kept = [p for p in parts[1:] if p and p.split("=", 1)[0].strip().lower() not in ("samesite", "secure")]
+    return "; ".join([parts[0], *kept, "SameSite=None", "Secure"])
+
+
+def is_secure_context(scheme: str, host: str) -> bool:
+    """Would a browser keep a Secure cookie for this origin? https, or a loopback host."""
+    name = (host or "").rsplit("@", 1)[-1].lower()
+    name = name[1:name.index("]")] if name.startswith("[") and "]" in name else name.split(":", 1)[0]
+    return (scheme or "").lower() == "https" or name in ("localhost", "127.0.0.1", "::1") \
+        or name.endswith(".localhost")
+
+
 def is_relayable_set_cookie(preview_id: str, value: str) -> bool:
     """The edge check: a Set-Cookie leaves the preview origin only when it is one
     `outbound_set_cookie` made for THIS preview (tagged, its path exactly, no Domain)."""
