@@ -80,6 +80,42 @@ def test_the_view_is_the_live_board_plus_its_own_reads(engine, client):
     assert not [k for k in _keys(body) if str(k).lower() in BANNED_KEYS]
 
 
+def test_the_view_is_the_operator_board_and_shares_the_console_recent_slice(engine, client):
+    """The operator view is not a second dump of GET /v1/console/command-center.
+
+    `recent` is command_center's frozen slice (the newest 8 finished runs). Those
+    run ids match on purpose. The rest of the view is the operator board.
+    """
+    with engine.begin() as c:
+        for i in range(9):
+            wf = seed.workflow(c, name=f"Delivery {i}")
+            at = NOW - timedelta(hours=1 + i)
+            seed.run(
+                c, wf, status="completed",
+                created=at - timedelta(minutes=5), completed=at, title=f"Finished {i}",
+            )
+
+    console = client.get("/v1/console/command-center", params={"project_id": PID})
+    view = client.get("/v1/command-center/view", params={"project_id": PID})
+    assert console.status_code == 200, console.text
+    assert view.status_code == 200, view.text
+    console_body = console.json()
+    view_body = view.json()
+
+    assert console_body != view_body
+    recent_ids = [row["run_id"] for row in console_body["recent"]]
+    assert recent_ids == [row["run_id"] for row in view_body["recent"]]
+    assert len(recent_ids) == 8
+    assert len(set(recent_ids)) == 8
+    assert "running" in console_body and "needs_you" in console_body and "counts" in console_body
+    assert "missions" not in console_body and "today" not in console_body
+    for key in ("status", "missions", "attention", "today", "week", "systems", "budget"):
+        assert key in view_body, key
+    assert "running" not in view_body and "needs_you" not in view_body
+    assert isinstance(view_body["missions"], list)
+    assert isinstance(view_body["today"], dict) and "hours" in view_body["today"]
+
+
 def test_week_counts_every_run_not_the_first_sixty(engine):
     with engine.begin() as c:
         wf = seed.workflow(c)
