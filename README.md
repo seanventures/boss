@@ -3,267 +3,71 @@
 </p>
 
 <p align="center">
-  <strong>The self-hosted control plane for AI software work.</strong><br>
-  Delegate a bounded change. Review the plan, the result, and the cost evidence.
-</p>
-
-<p align="center">
   <a href="https://github.com/seanventures/boss/releases/tag/v1.0-rc10.10"><img alt="Release v1.0-rc10.10" src="https://img.shields.io/badge/release-v1.0--rc10.10-1aa89a?style=flat-square"></a>
   <a href="LICENSE"><img alt="License: Apache 2.0" src="https://img.shields.io/badge/license-Apache%202.0-101820?style=flat-square"></a>
   <img alt="Self-hosted" src="https://img.shields.io/badge/deploy-self--hosted-101820?style=flat-square">
   <img alt="Interfaces: web, terminal, CLI, MCP" src="https://img.shields.io/badge/interfaces-web%20%C2%B7%20terminal%20%C2%B7%20CLI%20%C2%B7%20MCP-101820?style=flat-square">
 </p>
 
-<p align="center">
-  <a href="https://boss.sean.network">Website</a> ·
-  <a href="#deploy">Deploy</a> ·
-  <a href="docs/community/QUICKSTART.md">Quickstart</a> ·
-  <a href="https://boss.sean.network/docs/">Documentation</a> ·
-  <a href="docs/community/FEATURES.md">Features</a> ·
-  <a href="examples/README.md">Examples</a> ·
-  <a href="CONTRIBUTING.md">Contributing</a>
-</p>
+BOSS is a self-hosted control plane for AI software work. An agent can plan, spend, and change things. BOSS makes a person review the plan, the result, and the cost, and keeps the receipt.
 
----
+## Who it is for
 
-AI agents can write code, open pull requests, call paid APIs, and touch infrastructure. BOSS is the layer that decides whether they should, and keeps the proof when they do.
+A technical founder who will run BOSS on a server they administer. You should be comfortable with one Linux machine, Docker, a GitHub repository you are allowed to change, and a diff. The people you invite share that install. It is not a hosted service.
 
-Governed workflows turn a goal into a plan you can read, budget reservations, leased jobs, required decisions and effect receipts. Drive them from the web console, the Metatron terminal, or your coding agents over MCP. It runs on hardware you control. Credentials are stored locally; connecting or using a hosted model sends authentication and the selected task data to that provider. This candidate's qualified paths and remaining limits are recorded in the [release notes](docs/community/RELEASE_NOTES_v1.0-rc10.10.md).
+Credentials stay on the machine. A call to a hosted model sends that provider the authentication and the task data the call needs. A local model can keep inference on the machine.
 
-```text
-Goal  →  Plan  →  Budget  →  Work  →  Evidence  →  Decision  →  Receipt
-```
+## The shortest path
 
-## Why BOSS
+1. Install v1.0-rc10.10.
+2. Claim the install.
+3. Connect a repository.
+4. Connect a model.
+5. Open one pull request.
 
-**Keep the work history.** Governed effect paths use receipts and unique dedupe keys to identify attempts. An ambiguous provider outcome needs reconciliation before retry; recording a key alone cannot guarantee that every provider avoids a repeated effect.
+The [quickstart](docs/community/QUICKSTART.md) is those steps. A hostname and TLS are in the [hostname guide](docs/community/hostname.md). Passkeys, passwords, and an SSH tunnel are in [sign-in](docs/community/CONSOLE_AUTH.md).
 
-**Reserve spending before work.** Governed model and tool jobs use a quote, reserve, consume, and release cycle. Admission can refuse further work, but the reservation is an estimate, not a hard cap on a provider's invoice. Review held and uncertain exposure before continuing.
+You need Git on the install machine. If GitHub asks you to sign in, use an account that can read the repository. On Ubuntu or Debian without Git, first run `sudo apt-get update && sudo apt-get install -y git`.
 
-**People decide where it matters.** Gated steps land in an approval inbox with the context needed to decide. BOSS proposes changes to itself as pull requests and config diffs, never as silent writes.
-
-**No silent failures.** Every job holds a lease with a TTL and heartbeat. A failure is retried, dead-lettered, or escalated to a person. It is never dropped.
-
-**Yours to run.** Apache 2.0, self-hosted on your own infrastructure, bring your own models. Installer keys live in a private `.env`; console connections use your selected secret backend. Hosted providers receive the authentication and task data needed for the calls you authorize. A local model can keep model inference on your machine.
-
-## How it works
-
-```mermaid
-flowchart LR
-    G([Goal]) --> P[Plan]
-    P --> B{Budget<br/>reservation}
-    B --> J[Leased job]
-    J --> E[Evidence<br/>tests · PRs · artifacts]
-    E --> D{Approval}
-    D --> R[(Receipt)]
-    J -. failure .-> X[Retry · dead-letter · escalate]
-```
-
-BOSS runs as a small set of services on one machine: **Postgres** as the durable system of record, a **FastAPI** control plane, a **worker** that leases jobs, and **Mission Control**, the web console. Everything the console does is an authenticated API call first, so the Metatron terminal, the CLI, and your MCP-connected agents all work against the same product.
-
-## Deploy
-
-BOSS runs on a server you control, and your team reaches Mission Control over HTTPS on your domain or your private network. The installer targets Ubuntu 22.04/24.04 and Debian 12/13: it can set up Docker, generate credentials, start the services, seed your first project and check service health. The current candidate has bounded installed checks on an owned Linux arm64 environment with existing Docker; supported clean-host installation and useful provider work remain separate qualification steps. Read the [RC9 validation record](docs/community/RC9_VALIDATION.md) before relying on those paths.
-
-**1. Pick an address.** Use a domain such as `boss.example.com` with a DNS record pointing at the server, or the server's private IP on your network, such as `192.168.1.50`.
-
-**2. Install RC10.5** from its release checkout. You need Git and repository access; if GitHub asks you to sign in, use an account with access. On Ubuntu or Debian without Git, first run `sudo apt-get update && sudo apt-get install -y git`.
-
-```sh
+```bash
 (
   set -e
   git clone --branch v1.0-rc10.10 https://github.com/seanventures/boss.git boss-rc10.10
   cd boss-rc10.10
   BOSS_RELEASE_COMMIT="$(git rev-parse HEAD)"
-  ./install.sh --dir "$PWD" --ref "$BOSS_RELEASE_COMMIT" --console-origin https://boss.example.com
+  ./install.sh --dir "$PWD" --ref "$BOSS_RELEASE_COMMIT"
 )
 ```
 
-Use a new directory named `boss-rc10.10`. The command stops if cloning fails, and pins the install to the exact release commit. Continue from `cd boss-rc10.10` afterward. `boss upgrade --to REF` selects a later release deliberately.
+Use a new directory named `boss-rc10.10`. The command stops if the clone fails, and it pins the install to that commit. Continue from `cd boss-rc10.10`. Services listen on the machine itself. Add `--console-origin https://boss.example.com`, with your hostname, when the console will be opened from somewhere else. Omit it to open `http://127.0.0.1:3000` on the install machine.
 
-Use `--console-origin https://192.168.1.50` for a private IP, and add `--yes` to skip the optional model-key question. The installer writes that address to `.env` as `BOSS_CONSOLE_PUBLIC_ORIGIN`, and BOSS uses it as its public address (a `BOSS_PUBLIC_URL` you set yourself takes precedence). Email links, passkeys and SSO redirects use that configured address. Setup shows the URL BOSS uses.
+`boss upgrade` writes a backup, then moves to a later release. `boss upgrade --to REF` picks the release. `boss uninstall` stops BOSS and keeps the data. Ports, flags, and recovery are in the [installer guide](scripts/install/README.md).
 
-The [website installer](https://boss.sean.network/install.sh) and hosted manual are deployed separately. The Git checkout above selects RC10.5 directly; website parity remains part of release qualification.
+The copy at [boss.sean.network/install.sh](https://boss.sean.network/install.sh) is published separately. This page does not treat it as v1.0-rc10.10. The manual in this repository is the source. The [hosted docs](https://boss.sean.network/docs/) are published separately too.
 
-**3. Put HTTPS in front.** BOSS services listen only on the server itself, so nothing is exposed until your proxy is in place. [Caddy](https://caddyserver.com) handles certificates for you. On Ubuntu or Debian, `sudo apt install -y caddy`, replace the contents of `/etc/caddy/Caddyfile` with this block, then `sudo systemctl reload caddy`:
+The installer targets Ubuntu 22.04/24.04 and Debian 12/13, and it can set up Docker. The bounded installed checks behind this candidate are an owned Linux arm64 machine that already had Docker. A clean-host install and useful provider work are separate checks. Read the [release notes](docs/community/RELEASE_NOTES_v1.0-rc10.10.md) and the [RC9 validation record](docs/community/RC9_VALIDATION.md) before you rely on a path.
 
-```caddy
-boss.example.com {
-    reverse_proxy 127.0.0.1:3000 {
-        header_up Host boss.example.com
-        header_up X-Forwarded-Host boss.example.com
-        header_up X-Forwarded-Proto https
-    }
-}
-```
+## What you get
 
-On a private IP, use `https://192.168.1.50` as the site address and in the three header lines, and add `tls internal` inside the block. Caddy then issues the certificate from its own local authority, which each browser trusts once: copy `/var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt` from the server (`ssh user@your-server sudo cat …`) and add it to each device's trusted roots — on a Mac, `sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain root.crt`. Installed without `--console-origin`? [Add the address to a running install](docs/community/hostname.md#add-a-hostname-to-a-running-install).
+A governed workflow gives you four records.
 
-**4. Claim it.** Nobody owns a new install until you claim it. On the server, run:
+- **A plan you can read,** before the work runs.
+- **A budget reservation before work.** The reservation is an estimate. It is not a cap on a provider's invoice. Admission can refuse more work. Review held and uncertain exposure before you continue.
+- **An approval when it matters.** Gated steps wait, with the context for the decision. BOSS proposes changes to itself as pull requests and config diffs, not as silent writes.
+- **A receipt after.** The receipt and its dedupe key identify an attempt. A dedupe key does not make every provider idempotent. An ambiguous provider outcome needs reconciliation before a retry.
 
-```sh
-boss identity setup-link
-```
+A failure is retried, dead-lettered, or escalated to a person. It is not dropped.
 
-It prints a one-hour, single-use link. Open it in the browser you will sign in with, enter your name and email, and create a passkey (on an IP address, where browsers allow no passkeys, choose a password and scan the code with an authenticator app). Save the recovery codes, then press **Continue setup**. `boss open`, `boss doctor` and the sign-in page all say "not claimed yet" with the same command until you do. Upgrading an existing install? [Upgrade to named accounts](docs/community/IDENTITY_UPGRADE.md) explains the claim and the 30-day window for the shared password.
+This is a release candidate, not a promise that every path is qualified.
 
-**5. Connect GitHub.** BOSS opens on **Setup**. Under **Repos**, choose **My GitHub account** or **An organisation**, then click **Connect GitHub**. On GitHub, click **Create GitHub App**, tick the repos BOSS may work on, and click **Install**. Back in BOSS, pick your repo and click **Connect**. There's no token to copy, and access never expires. Step by step, with fixes for common problems: [Connect GitHub](docs/community/CONNECT_GITHUB.md).
+No telemetry collector is set, so the daily heartbeat sends nothing until you set one (`BOSS_TELEMETRY_URL`, or in Govern › Sharing). "Improve BOSS" is off unless you turn it on. `BOSS_TELEMETRY=off` or `DO_NOT_TRACK=1` sends nothing, heartbeat included. [What a payload can contain](docs/product/RUN_SCORECARDS.md).
 
-**6. Connect a model.** Under **Model**, add a provider key or a coding subscription (models the installer found are already there; `boss connect` does the same from a terminal). It turns green once it answers a test question.
+The console, the Metatron terminal, the CLI, and MCP call the same API. [How they fit](docs/community/interfaces.md).
 
-**7. Open your first pull request.** The header says **Next: open your first PR**. In **Try it**, describe one small change and press **Open a PR**. The first time, BOSS asks you to allow its agents to act for you on that repository; allow it. The pull request appears on GitHub for you to review.
+## Where to go next
 
-**8. Deploy.** Add the machine apps run on: **Infra › + Add › Host**, its address and SSH user, then **Add host**. In the host's drawer press **Generate key**, copy the command and run it from your own computer (name your key file there if your SSH key is not the default one), then press **I ran it**. Now start a build that ends in a deploy (**+ New build**, e.g. **Standard**). Its deploy step asks only **Where**: your machine, or "Ask me at deploy time". The app's first deploy creates its place on the machine (a free port, its URL and a health check); the approval card shows all of it, with a link to change it, before anything ships.
-
-Optional, when builds should be allowed to change GitHub Actions: on the repository's row turn **CI changes** on, then follow **Accept on GitHub** until the row says **Workflows accepted ✓**. A build that needs a database gets its own PostgreSQL automatically when the brief, its plan or the app's code says so (**Build database: Auto**).
-
-Models found by the installer appear there already; `boss connect` does the same from a terminal. The [deployment guide](docs/community/hostname.md) covers nginx, publishing the API for remote clients, and adding a domain to a running install. Ports, flags, and recovery are in the [installer guide](scripts/install/README.md).
-
-> [!TIP]
-> **Just evaluating?** Skip the address and the proxy. Clone and install on your laptop or a dev box, then open `http://127.0.0.1:3000`. The [Quickstart](docs/community/QUICKSTART.md) walks you from there to your first goal. [Getting started](docs/community/GETTING_STARTED.md) goes on to your first project and a pull request BOSS built.
-
-Optional host copies of the Claude Code, Codex CLI, and Grok Build binaries install with `--install-coding-clis`; you sign in to each one on the server.
-
-## Four ways to drive BOSS
-
-The console, terminal and API-backed MCP use the authenticated HTTP API. Each operation applies its required permissions, budgets, approvals and receipts. Native engine tools use their local typed boundary, described below.
-
-| Interface | Open it with | Guide |
-| --- | --- | --- |
-| **Mission Control** (web) | `https://boss.example.com`, or your server's private IP | [Console access](docs/community/CONSOLE_AUTH.md) |
-| **Metatron** (terminal) | `boss metatron` on the install machine (or `make metatron`) | [Terminal and API](docs/community/TERMINAL_API.md) |
-| **MCP** (agents) | `make mcp-setup`, then point your agent at `make mcp` | [MCP](docs/community/MCP.md) |
-| **CLI and HTTP API** | `boss` on the host, or a personal API key from **My account › API keys** | [CLI](docs/community/cli.md) |
-
-### Metatron: BOSS in your terminal
-
-Metatron is BOSS in your terminal. Talk to BOSS in plain text: it is the same agent, thread and actions as the console's Ask BOSS. You can also work the task list and decision inbox, and reach any API operation, without leaving the keyboard.
-
-```sh
-boss metatron        # on the install machine: native colours, keys and window size
-```
-
-It opens with a welcome panel: what's new in the release, and a connection checklist with a fix for anything missing. The reply scrolls in your terminal. Only the input line and its status bar stay at the bottom:
-
-```text
-❯ is anything stuck right now?
-  › reading the running work
-● BOSS
-  One build is waiting on a failed step: HelpDesk AI, step build. GitHub refused the push (HTTP 403)
-  because the App's install lost write access to example-org/helpdesk.
-  ● describe_workflow_run — ok
-  ● test_github_access — failed  403: Resource not accessible by integration
-╭─ You decide ─────────────────────────────────────────────────────────────────────────────────────╮
-│ 1 Retry the build step  retry_workflow_step                                                      │
-│   the saved work is pushed; no rebuild                                                           │
-│ 2 Investigate further                                                                            │
-│                                                                                                  │
-│ Nothing has run yet. Type a number, or /pick to choose with the arrows.                          │
-╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
-❯
- ⬡ boss-dogfood · BOSS · Claude Sonnet (subscription) · $1.84 of $25.00 today
- Enter send  Esc cancel  ↑↓ history  Tab complete  / commands  Ctrl-D quit
-```
-
-- Type `/` to list every command, each with a one-line description.
-- `/agent`, `/project` and `/model` open pickers.
-- Plans arrive as checklists, runs as step progress lines, diffs with line numbers, and lists as tables.
-- Errors are red panels that end with the fix.
-- You can keep typing while BOSS works: your lines wait their turn.
-- A slow turn is never reported as a failure.
-
-`/ops` searches the live operation catalog, `/describe` shows an operation's parameters and body without calling it, and `/op` invokes it. For scripts and CI, one-shot mode returns the same JSON as before. A pipe, `--plain` or `NO_COLOR` gives plain text:
-
-```sh
-boss metatron --print '/api GET /v1/tasks?project_id=boss-dogfood' --json
-```
-
-See the [terminal and API reference](docs/community/TERMINAL_API.md) for every command and a recorded session, and the [capability matrix](docs/community/TERMINAL_CAPABILITY_MATRIX.md) for what the terminal can reach.
-
-### MCP: plug BOSS into your agents
-
-BOSS speaks the Model Context Protocol, so Claude Code, Codex, and any other MCP client can discover and drive governed work, with BOSS enforcing the rules on every call.
-
-```sh
-make mcp-setup   # once: creates a dedicated, project-scoped MCP member and key (never printed)
-make mcp         # the stdio command your MCP client launches
-```
-
-- **Project-scoped by design.** Each MCP credential belongs to one project and one principal. The client cannot change the URL, headers, or credentials it calls with.
-- **API reach with operation-specific checks.** Agents search, describe, and call the mounted BOSS API through a handful of tools, with the permissions, budgets, approvals and receipts required by that operation.
-- **People confirm the risky calls.** Sensitive actions require a separate human to approve the exact request, by digest, before the agent can run it once.
-- **Native engine tools.** Engine-only sessions on the install machine expose typed tools for starting code tasks, steering runs, reading pull requests, and authoring workflows, with a `--read-only` mode for inspection.
-
-Remote MCP over HTTP requires a bearer token in `BOSS_MCP_HTTP_TOKEN`. The [MCP guide](docs/community/MCP.md) covers transports, permissions, and the confirmation flow.
-
-## What's inside
-
-**Mission Control.** Start in **Command Center**. **Approvals** is where people decide, **Activity log** shows every receipt and failure, **Workflows** holds your runs (**Runs**) and what they follow (**Library**), and **Agent Studio** holds who does the work: the **Roster**, the planned **Team** and decision **Panels**. Add one with **+ New agent**; an agent's page shows its **Profile**, which you can test before it does anything.
-
-**Software Factory.** Turn an outcome into a governed code task, from spec and architecture through implementation and tests to a pull request with evidence attached. Each run stops for the approvals, budget checks, and receipts it needs along the way.
-
-**Agents and workflows.** A starter catalog of agent definitions, role and skill packs, and [fifteen example workflows](examples/README.md) covering engineering, product, support, sales and operations use cases — research, triage, drafting, and handoff to a person for approval. Installing a definition or a workflow never starts work on its own.
-
-**Bring your own models.** OpenAI, Anthropic, and OpenAI-compatible endpoints, plus the Claude Code, Codex CLI, and Grok Build subscriptions you already have. See [Model connections](docs/community/MODEL_CONNECTIONS.md).
-
-**GitHub.** Repository binding, branch policies, fenced branch leases, and pull request review packets.
-
-The complete, status-tagged list is in [Features](docs/community/FEATURES.md).
-
-> [!NOTE]
-> **About this release candidate.** `v1.0-rc10.10` follows rc10.9 and adds BOSS's knowledge graph: a code graph and learned facts in BOSS's own database, fused text, graph and vector retrieval, and a knowledge setting of on, keyword or off. The default database image is now Postgres 16 on Alpine with pgvector and Apache AGE; upgrading swaps the image after the protected backup. Metatron and the console now talk to the same BOSS agent through one pipeline, and the captain autopilot is retired. You can create projects from the console, the API or the agent. Email (SMTP) is a connector, and the Mailpit test inbox is opt-in. Alerting keeps an app's monitoring through a change and settles after a verified fix. See the [release notes](docs/community/RELEASE_NOTES_v1.0-rc10.10.md) for what changed and what is still unverified. Named Owner accounts and the governed approval path remain in place; upgrading from rc5 still requires [claiming the install](docs/community/IDENTITY_UPGRADE.md).
-
-## Documentation
-
-| Guide | What it covers |
-| --- | --- |
-| [Getting started](docs/community/GETTING_STARTED.md) | From install to a first project and a pull request BOSS built |
-| [Quickstart](docs/community/QUICKSTART.md) | Install, sign in, and run a first goal |
-| [Deploy](docs/community/hostname.md) | HTTPS on your domain or private network, and publishing the API |
-| [Use cases](docs/community/use-cases.md) | What a fresh install can do today |
-| [Walkthroughs](docs/community/walkthroughs.md) | Guided tours of the console and terminal |
-| [Interfaces](docs/community/interfaces.md) | Choosing between web, terminal, API, and MCP |
-| [Terminal and API](docs/community/TERMINAL_API.md) | Every Metatron command, plus one-shot JSON for scripts |
-| [MCP](docs/community/MCP.md) | Connecting agents, transports, and the human confirmation flow |
-| [Control surfaces](docs/community/CONTROL_SURFACES.md) | How the API, terminal, and MCP fit together |
-| [People and access](docs/community/PEOPLE_AND_ACCESS.md) | Invite people, roles, groups, service accounts, and your own account |
-| [Sign-in setup](docs/community/SIGN_IN_SETUP.md) | Email, single sign-on, social sign-in, SCIM |
-| [Agents and access](docs/community/AGENTS_AND_ACCESS.md) | What agents may do, acting for a person, GitHub access |
-| [Build sandbox](docs/community/SANDBOX.md) | How builds are isolated, and hosts that cannot fence them |
-| [Architecture approval](docs/community/ARCHITECTURE_GOVERNANCE.md) | Approved PRDs, model spending, revisions and reconciliation |
-| [Identity administration](docs/community/IDENTITY_ADMIN.md) | The security audit log, posture, policy, and the move to enforcement |
-| [Upgrade to named accounts](docs/community/IDENTITY_UPGRADE.md) | Moving an existing install off the shared password |
-
-Everything else is linked from the [documentation home](docs/community/README.md).
-
-## Upgrade and uninstall
-
-From any directory:
-
-```sh
-boss upgrade      # writes a private backup, then moves to the newest release (and rolls back if it cannot start)
-boss uninstall    # stops BOSS, keeps data and credentials
-```
-
-Without the `boss` command, run `./scripts/install/upgrade.sh --dir "$PWD"` and `./scripts/install/uninstall.sh --dir "$PWD" --yes` from the install directory.
-
-Deleting data takes a separate confirmation. See [upgrade, backup, and restore](scripts/install/README.md#upgrade--recover).
-
-## What BOSS sends home
-
-**A daily heartbeat, on by default, once a collector is set.** No collector is set in this release, so nothing is sent until you set one (`BOSS_TELEMETRY_URL`, or in Govern › Sharing); a later release names a public one. Once a day, one small request says only that this install is alive: a random install id, the BOSS version and edition, the install method, OS and CPU type, days since install (as a range), and whether any work ran in the last 24 hours. Nothing else.
-
-**"Improve BOSS", off by default.** If you turn it on (at the end of setup, or in Govern › Sharing), the same daily request also carries how runs turned out, your ratings and which features you use, as names, counts and ranges. Never your code, prompts, briefs, file or repo names, or secrets.
-
-Govern › Sharing shows the exact next payload before it is sent, a log of the last 30 sends, and buttons to export a batch, rotate the install id, and delete what was sent. To send nothing at all, heartbeat included, set `BOSS_TELEMETRY=off` (or the standard `DO_NOT_TRACK=1`) in `.env`. Details: [run scorecards and sharing](docs/product/RUN_SCORECARDS.md).
-
-## Community
-
-- **Bugs, install problems, and ideas:** open an issue with the bug, install, or feature form. The [feedback process](docs/community/FEEDBACK_LOOP.md) explains how a report becomes a shipped change.
-- **Contributing:** start with [CONTRIBUTING.md](CONTRIBUTING.md). Small, focused pull requests with tests are the fastest way in.
-- **Security:** report vulnerabilities privately to [boss@sean.net](mailto:boss@sean.net), never in a public issue. See [SECURITY.md](SECURITY.md).
-- **Conduct:** everyone in project spaces follows the [Code of Conduct](CODE_OF_CONDUCT.md).
-
-## License
-
-BOSS Community is licensed under the [Apache License 2.0](LICENSE). Third-party components keep their own licenses; see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+- [Documentation](https://boss.sean.network/docs/)
+- The [fifteen example workflows](examples/README.md). Installing an example, or an agent definition, does not start work.
+- [Contributing](CONTRIBUTING.md)
+- [Apache License 2.0](LICENSE). Other components keep their own licenses ([notices](THIRD-PARTY-NOTICES.md)).
+- Security reports go to [boss@sean.net](mailto:boss@sean.net), not a public issue. See [SECURITY.md](SECURITY.md). Project spaces follow the [Code of Conduct](CODE_OF_CONDUCT.md).

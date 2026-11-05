@@ -6,7 +6,7 @@ RC10.5 builds on the published rc10.4 candidate. It carries the work prepared on
 
 ### Engines and agents
 
-- **One contract for every engine.** Claude Code, Codex, the Claude Agent SDK and BOSS's own agent run the same pipeline, gates, fix rounds and failure messages. Where an engine lacks a feature (session resume, a read-only flag), BOSS supplies it. See [Engine contract](../engineering/ENGINE_CONTRACT.md).
+- **One contract for every engine.** Claude Code, Codex, the Claude Agent SDK and BOSS's own agent run the same pipeline, gates, fix rounds and failure messages. Where an engine lacks a feature (session resume, a read-only flag), BOSS supplies it. See [Engine contract](https://github.com/seanventures/boss/blob/main/docs/engineering/ENGINE_CONTRACT.md).
 - **A conformance gate with no model.** `e2e-gate.sh engines` runs the real pipeline on a scripted engine and checks every gate on the poorest and the richest profile.
 - **Every agent knows BOSS's fundamentals.** Every role, including new and custom ones, holds read access to logs, code and run history. It can query its own project's data read-only and propose a fix for a person to approve.
 - **An agent session never holds the model API key.** Calls go through a loopback proxy, which records their usage.
