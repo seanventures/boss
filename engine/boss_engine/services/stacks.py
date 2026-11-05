@@ -882,6 +882,12 @@ def operator_text(instructions: str) -> str:
     return _ARCHITECTURE_PROSE.sub("", text)
 
 
+def directive_text(instructions: str) -> str:
+    """The operator's request in a build brief: operator_text up to the first `---`, where the
+    product spec (or the approved architecture) begins. What the spec weighs is not asked for."""
+    return re.split(r"\n-{3,}\s*\n", operator_text(instructions), maxsplit=1)[0]
+
+
 def check_build(instructions: str, *, template_stack: Optional[str] = None) -> StackVerdict:
     """The build's last guard before anything is spent: the approved architecture's declared
     stack when the brief carries one, else the directive (the text before the spec) and the
@@ -896,8 +902,7 @@ def check_build(instructions: str, *, template_stack: Optional[str] = None) -> S
         return StackVerdict(result.ok, result.unsupported, result.off,
                             result.message.replace("The architecture", "This build's approved "
                                                    "architecture", 1))
-    directive = re.split(r"\n-{3,}\s*\n", operator_text(text), maxsplit=1)[0]
-    return check_text(directive, template_stack=template_stack, where="This build")
+    return check_text(directive_text(text), template_stack=template_stack, where="This build")
 
 
 # ── The services an app directory holds ─────────────────────────────────────────────────────
@@ -1264,8 +1269,14 @@ def layout_prompt(layout: Layout, app_root: Optional[str], *, template_command: 
 def build_layout(instructions: str, title: str = "", *, template_stack: Optional[str] = None,
                  template_framework: Optional[str] = None) -> Optional[Layout]:
     """intended_layout for a build brief: the architecture's Stack line wherever it is, else the
-    operator's own words (operator_text), never the template's or the architecture's prose."""
-    return intended_layout(f"{title}\n{operator_text(instructions)}",
+    operator's own words — the directive, as check_build reads it — never the template's, the
+    architecture's or the product spec's prose.
+
+    THE SPEC IS NOT A REQUEST FOR A STACK. HelpDesk AI's "add SLA timers" PRD told the builder to
+    "confirm whether the backend is Python (FastAPI/Flask/Django) or Node (… Next.js)"; read for
+    language names, that became "a Python backend in backend/ and a Next front end in frontend/"
+    and failed an existing Node app whose 133 tests passed (crun_db8299feecc449fcbe60)."""
+    return intended_layout(f"{title}\n{directive_text(instructions)}",
                            template_stack=template_stack, template_framework=template_framework,
                            declared=declared_stack(instructions))
 
