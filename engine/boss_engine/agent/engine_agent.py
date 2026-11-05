@@ -33,6 +33,7 @@ from .._compat import services_module
 from ..services import protocol_reply
 from ..tools import ToolError, ToolRegistry, build_discuss_read_registry
 from ..tools.registry import offer_warning
+from ..services.low_trust import Ledger, outside_origin, release, remember
 from ..services.tool_result_text import clip_for_model
 
 
@@ -426,6 +427,9 @@ class EngineAgent:
         self._notes: list[str] = []
         #: Values every tool call gets whether the model asked for them or not — see invoke.
         self.ambient: dict[str, Any] = {}
+        #: Outside text seen this turn. chat() rebuilds it from the turn's history so one
+        #: shared agent does not carry another conversation's pages into a write.
+        self._ledger = Ledger()
 
     def _adapter_obj(self, project_id: Optional[str] = None):
         if self._adapter is None:
@@ -480,6 +484,9 @@ class EngineAgent:
                           if isinstance(b, dict) and b.get("type") == "text")
         ) or ""
         self._notes = []
+        # This agent object is shared across conversations. The ledger is this turn's only.
+        self._ledger = Ledger()
+        self._ledger.absorb_messages(history)
         schemas = [schema for schema in self.registry.openai_schema()
                    if schema["function"]["name"] not in _UNSCOPED_SQL_TOOLS]
         messages: list[dict] = [{"role": "system", "content": system or _SYSTEM_PROMPT}]
@@ -749,6 +756,7 @@ class EngineAgent:
                         name, args, project_id=project_id, actor=actor,
                         allow_writes=allow_writes, pending=pending,
                     )
+                result = _note_outside(name, args, result, self._ledger)
                 trace.append({"tool": name, "args": args, "result": result})
                 messages.append(
                     {
@@ -973,21 +981,54 @@ class EngineAgent:
                     "note": f"'{name}' NOT run; a write never finds anything out.",
                     "proposed": proposal,
                 }
-        result = self.registry.invoke(
-            # AMBIENT CONTEXT THE MODEL CANNOT KNOW AND MUST NOT HAVE TO GUESS.
-            #
-            # An investigation posts its result back into the conversation that asked for it,
-            # which means it needs the thread id — a value that exists in the router and never
-            # in the model's head. Asking the model to pass one would produce an invented
-            # `athr_...`, which is the exact failure mode `_placeholder_argument` exists for.
-            name, self.ctx, project_id=project_id, actor=actor,
-            # `_writes_allowed` records WHO decided, which a tool cannot otherwise tell. The
-            # write gate above has already passed, so reaching this line means the operator
-            # instructed an action rather than asking a question — the distinction a tool that
-            # escalates its own permissions (a fixing investigation) has to be able to make.
-            args={**(self.ambient or {}), **args, "_writes_allowed": bool(allow_writes)},
-        )
-        return _consent_offer(name, args, result, pending)
+        # AMBIENT CONTEXT THE MODEL CANNOT KNOW AND MUST NOT HAVE TO GUESS.
+        #
+        # An investigation posts its result back into the conversation that asked for it,
+        # which means it needs the thread id — a value that exists in the router and never
+        # in the model's head. Asking the model to pass one would produce an invented
+        # `athr_...`, which is the exact failure mode `_placeholder_argument` exists for.
+        #
+        # `_writes_allowed` records WHO decided, which a tool cannot otherwise tell. The
+        # write gate above has already passed, so reaching this line means the operator
+        # instructed an action rather than asking a question — the distinction a tool that
+        # escalates its own permissions (a fixing investigation) has to be able to make.
+        outgoing = {**(self.ambient or {}), **args, "_writes_allowed": bool(allow_writes)}
+
+        def send(sent: dict) -> dict:
+            return self.registry.invoke(
+                name, self.ctx, project_id=project_id, actor=actor, args=sent)
+
+        # OUTSIDE TEXT DOES NOT LEAVE ON A WRITE. A page, a tool result, or a document that
+        # arrived this turn is marked; a write that would send it waits for the operator.
+        # The press path (operator_confirmed) does not come through here, so approval still runs.
+        if spec.kind == "write":
+            outcome = release(outgoing, sink="write", ledger=self._ledger, send=send)
+            if outcome["status"] == "awaiting_approval":
+                pending.append({"tool": name, "args": args})
+                return {
+                    "ok": True, "proposed": True, "tool": name, "args": args,
+                    "status": "awaiting_approval", "untrusted": True, "sent": False,
+                    "origin": outcome.get("origin"),
+                    "label": _propose_label(name, args),
+                    "why": "sends content that arrived from outside the operator",
+                    "note": (
+                        "NOT run. The arguments include content that arrived from outside "
+                        "the operator (a fetched page, a tool result, or an untrusted "
+                        "document). It is waiting for approval. Do not describe it as sent."
+                    ),
+                }
+            return _consent_offer(name, args, outcome["result"], pending)
+        return _consent_offer(name, args, send(outgoing), pending)
+
+
+def _note_outside(name: str, args: dict, result: Any, ledger: Ledger) -> Any:
+    """Mark a tool result that arrived from outside, and remember its text for later calls."""
+    origin = outside_origin(name)
+    if origin is None or not isinstance(result, dict):
+        return result
+    if result.get("status") in ("awaiting_approval", "confirmation_required", "skipped"):
+        return result
+    return remember(result, origin=origin, ledger=ledger, echoed=args)
 
 
 def _consent_offer(name: str, args: dict, result: Any, pending: list[dict]) -> Any:
