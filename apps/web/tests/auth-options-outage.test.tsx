@@ -18,6 +18,7 @@ import { loadAuthOptionsState } from "../app/(auth)/auth-options";
 import { AuthUnavailable } from "../app/(auth)/auth-unavailable";
 import ClaimPage from "../app/(auth)/claim/page";
 import LoginPage from "../app/(auth)/login/page";
+import SignUpPage from "../app/(auth)/signup/page";
 import SsoLandingPage from "../app/(auth)/signin/page";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -106,6 +107,12 @@ describe("claim, login and SSO landing do not infer identity state from an outag
     expect(recovered).toContain("Claim this BOSS");
     // The setup link is read from the fragment after mount; the server render shows the heading only.
     expect(recovered).not.toContain("Already claimed");
+  });
+  it("an unclaimed install's create-account page does not ask for an admin (BOSSAPP-656)", async () => {
+    get.mockImplementation(async (path: string) => path === "/v1/auth/options" ? healthy(unclaimed) : failure);
+    const html = renderToStaticMarkup(await SignUpPage());
+    expect(html).not.toMatch(/\badmin\b/i);
+    expect(html).toContain('href="/claim"');
   });
   it("an unclaimed install's login goes straight to the claim (BOSSAPP-813)", async () => {
     get.mockImplementation(async (path: string) => path === "/v1/auth/options" ? healthy(unclaimed) : failure);

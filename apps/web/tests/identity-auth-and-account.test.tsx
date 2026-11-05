@@ -281,6 +281,17 @@ describe("Claim this BOSS", () => {
     accessible(el);
   });
 
+  it("the setup-link step does not contradict itself (BOSSAPP-655)", async () => {
+    window.history.replaceState(null, "", "/claim");
+    const el = await mount(<ClaimFlow options={options({ path: "setup_token", paths: ["setup_token"], network: null, origin: null, expires_at: null, seats: [] })} />);
+    const text = el.textContent ?? "";
+    expect(el.querySelector("form")).toBeNull();
+    expect(text).toContain("boss identity setup-link");
+    expect(text).toContain("not a web address");
+    // Off the network, this screen is not the form. Saying both is the page arguing with itself.
+    expect(/not on the server's own network/.test(text) && /this page is the claim form/.test(text)).toBe(false);
+  });
+
   it("no claim pending: a short panel that sends you to sign in", async () => {
     const el = await mount(<ClaimFlow options={options(null)} />);
     expect(el.querySelector("h1")?.textContent).toBe("Already claimed");
@@ -379,6 +390,13 @@ describe("The real API's shapes (S1)", () => {
     expect(ssoErrorWords("saml_signature_invalid")).toContain("SAML");
     expect(ssoErrorWords("weird_code")).toContain("didn't finish");
     expect(ssoErrorWords(null)).toBeNull();
+  });
+
+  it("?error=invalid does not say single sign-on failed on an untouched password form (BOSSAPP-673)", async () => {
+    const el = await mount(<SignIn options={options(null)} next="/" notice={ssoErrorWords("invalid")} />);
+    expect((el.querySelector("#email") as HTMLInputElement | null)?.value).toBe("");
+    expect((el.querySelector("#password") as HTMLInputElement | null)?.value).toBe("");
+    expect(el.textContent).not.toMatch(/single sign-on/i);
   });
 
   it("an API session row reads as a device, a client and when it started", () => {

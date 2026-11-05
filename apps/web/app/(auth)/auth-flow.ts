@@ -97,6 +97,9 @@ const SSO_WORDS: Record<string, string> = {
 export function ssoErrorWords(code: string | null | undefined): string | null {
   if (!code) return null;
   const c = code.toLowerCase();
+  // `invalid` is not an SSO result. A password form opened at ?error=invalid, with nothing
+  // typed, must not be told single sign-on failed (BOSSAPP-673).
+  if (c === "invalid") return null;
   if (SSO_WORDS[c]) return SSO_WORDS[c];
   if (c.startsWith("saml_")) return "The SAML sign-in was refused. Ask an admin to check the provider.";
   return "Single sign-on didn't finish. Try again, or use email.";

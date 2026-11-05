@@ -155,6 +155,15 @@ describe("all off: the page keeps its shape and says what turns each thing on", 
     expect(calls).toEqual([]);
   });
 
+  it("create account on an unclaimed install does not ask for an admin who cannot exist yet (BOSSAPP-656)", async () => {
+    const el = await mount({ ...OFF, claim: { path: "setup_token", origin: null, seats: [], expires_at: null } });
+    const create = el.querySelector("[data-testid='create-account']");
+    expect(create).not.toBeNull();
+    await click(create);
+    expect(document.querySelector("[data-testid='invite-only-sheet']")).toBeNull();
+    expect(el.textContent).not.toMatch(/ask an admin/i);
+  });
+
   it("the host is at the foot; nothing says phone or SMS; the copy fits its budget", async () => {
     const el = await mount(OFF);
     expect(el.querySelector(".idn-hostline")?.textContent).toContain("100.64.0.20");

@@ -272,7 +272,6 @@ function ClaimForm({ options, claim }: { options: AuthOptions; claim: Claim }) {
           {claim.link_over_api
             ? <p className="idn-fine" data-copy="prose">No shell there? Ask whoever holds this install&apos;s admin key to issue the link.</p>
             : null}
-          <p className="idn-fine" data-copy="prose">From the server&apos;s own network (its LAN or tailnet), this page is the claim form itself.</p>
         </div>
       </AuthStage>
     );

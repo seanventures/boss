@@ -12,13 +12,24 @@ import { idPost } from "../../../lib/identity/api";
 import { AuthStage, Live, Logo, linkToken } from "../auth-parts";
 import { sayAuth } from "../auth-flow";
 
-export function SignUp({ host, org, enabled }: { host: string; org: string; enabled: boolean }) {
+export function SignUp({ host, org, enabled, unclaimed = false }: { host: string; org: string; enabled: boolean; unclaimed?: boolean }) {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [sent, setSent] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // No Owner yet, so there is nobody to ask (BOSSAPP-656).
+  if (unclaimed) {
+    return (
+      <AuthStage label="Create account">
+        <Logo host={host} />
+        <h1>Claim this BOSS first</h1>
+        <p className="idn-s" data-copy="prose" data-testid="signup-unclaimed">Nobody owns this BOSS yet. Claiming makes you the Owner.</p>
+        <a className="idn-big p" href="/claim">Claim this BOSS</a>
+      </AuthStage>
+    );
+  }
   if (!enabled) {
     return (
       <AuthStage label="Create account">
