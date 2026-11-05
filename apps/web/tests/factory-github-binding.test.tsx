@@ -29,14 +29,13 @@ afterEach(() => { unmount(); vi.unstubAllGlobals(); });
 
 describe("Factory repository binding honesty", () => {
   it.each([null, "", "  ", "/", " / ", "acme/", "/sandbox", "acme", "acme/repo/extra"])(
-    "does not present incomplete settings repository %j as a PR destination",
+    "shows an unconfigured binding when settings report no complete repository %j",
     async (githubFullName) => {
       await mount(home({ githubPlane: "legacy_env", githubFullName }));
-      expect(header().textContent).toBe("GitHub · Repository unknown");
-      expect(header().title).toContain("No complete repository is reported.");
-      expect(header().title).toContain("settings");
-      expect(header().title).toContain("Check GitHub access in Connect");
-      expect(header().title).not.toMatch(/PRs open|settings token|connected|ready/i);
+      expect(header().textContent).toBe("GitHub · unconfigured");
+      expect(header().title).toBe("GitHub binding is unconfigured.");
+      expect(header().textContent).not.toMatch(/\/|\d/);
+      expect(header().title).not.toMatch(/PRs open|settings token|settings|connected|ready|\//i);
     },
   );
 
