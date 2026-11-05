@@ -22,6 +22,22 @@ URL = os.environ.get("BOSS_LEGACY_FINANCIAL_TEST_DATABASE_URL", "")
 pytestmark = pytest.mark.skipif(not URL, reason="requires owned disposable Postgres")
 
 
+def engine_test(module: str):
+    """A sibling under engine/tests.
+
+    The repo-root suite imports `engine.tests`. A run whose root is the engine tree
+    has no top-level `engine` package; the same modules are `tests`.
+    """
+    import importlib
+
+    try:
+        return importlib.import_module(f"engine.tests.{module}")
+    except ModuleNotFoundError as error:
+        if getattr(error, "name", None) not in {None, "engine", "engine.tests"}:
+            raise
+        return importlib.import_module(f"tests.{module}")
+
+
 @pytest.fixture(scope="module")
 def database():
     engine = create_engine(URL, connect_args={"options": "-c statement_timeout=8000"})
@@ -141,13 +157,15 @@ def failed_typed(engine, p, *, status="released"):
     return old
 
 
-def failed_auth_rejected(engine, p, *, status="released"):
+def failed_auth_rejected(engine, p, *, status="released", reason=None):
     """A row recorded before the structured `typed_decision_nonacceptance` proof existed: the
     provider's own 401 answered, kept only as the legacy owner's free-text `reason` (boss-1
     rc10.9's actual stuck row — a TypeSafe key proof, $0.01 estimate, released). No spend
-    happened; the provider refused before the call was ever accepted."""
+    happened; the provider refused before the call was ever accepted. `reason` overrides that
+    text so a near-miss can be shown not to be the same refusal."""
     old = legacy(engine, p, status=status)
-    error = json.dumps({"reason": "TypeSafe 401: authentication_error, invalid api key"})
+    text_reason = reason or "TypeSafe 401: authentication_error, invalid api key"
+    error = json.dumps({"reason": text_reason})
     with engine.begin() as c:
         c.execute(
             text("UPDATE model_gateway_invocations SET status='failed',error=CAST(:error AS JSONB) "
@@ -164,7 +182,7 @@ def failed_auth_rejected(engine, p, *, status="released"):
                  "VALUES(:id,:p,'typed_decision.attempt_failed','owned-owner',"
                  "'typed_decision_attempt',:id,CAST(:data AS JSONB))"),
             {"id": old, "p": p, "data": json.dumps(
-                {"attempt": 1, "receipt_id": old, "message": "TypeSafe 401: authentication_error"})},
+                {"attempt": 1, "receipt_id": old, "message": text_reason})},
         )
     return old
 
@@ -254,6 +272,26 @@ def test_a_legacy_401_row_no_longer_blocks(database, status):
         assert snap["legacy_financial_hold"] is None
         allowed = reserve(c, p, 1)
         assert allowed["status"] == "reserved"
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "ticket 401 authentication_error was only the author's note",
+        "TypeSafe 401: the author's note was lost",
+    ],
+)
+def test_a_near_miss_401_string_is_not_a_provider_refusal(database, reason):
+    """Free text clears the hold only as a provider status (`Word 401:` or `Word 403:`
+    followed by authentication_error). A sentence that merely contains 401, "auth", or
+    even authentication_error is still unresolved exposure — not that refusal."""
+    p = new_project(database)
+    failed_auth_rejected(database, p, reason=reason)
+    g = BudgetGovernor(Settings(_env_file=None))
+    with database.begin() as c:
+        assert g.status_for_project(c, p)["legacy_financial_hold"] is not None
+        denied = reserve(c, p, 1)
+        assert denied["refusal"] == "legacy_reconciliation_required" and not denied["transient"]
 
 
 def test_an_in_progress_row_still_blocks_until_settled_via_the_new_action(database):
@@ -619,7 +657,9 @@ def test_exact_zero_included_authority_can_start_but_paid_fallback_cannot(databa
 
 def test_new_included_local_adapter_still_runs_without_paid_fallback(database):
     from boss_engine.services.entitlements import EntitlementBrokerService
-    from engine.tests.test_architecture_governance import Scripted, generate, spender
+
+    arch = engine_test("test_architecture_governance")
+    Scripted, generate, spender = arch.Scripted, arch.generate, arch.spender
 
     p = new_project(database)
     settings = Settings(_env_file=None).model_copy(
@@ -904,8 +944,8 @@ def test_actual_typed_before_call_cleanup_does_not_match_postcontact_history(dat
         TypedDecisionSpend,
         TypedDecisionSpendError,
     )
-    from engine.tests.test_architecture_governance import metered
-    from engine.tests.test_typed_decision_spend import _binding
+    metered = engine_test("test_architecture_governance").metered
+    _binding = engine_test("test_typed_decision_spend")._binding
 
     p = new_project(database)
     settings = Settings(_env_file=None).model_copy(

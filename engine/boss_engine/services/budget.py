@@ -298,20 +298,19 @@ class BudgetGovernor:
             "AND e.entity_id=i.dedupe_key AND e.data->>'receipt_id'=i.receipt_id "
             # Only the new owner's exact structured proof, persisted atomically in
             # both canonical errors and this event, establishes a TypeSafe 401 refusal — OR a
-            # row recorded before that structured proof existed, with the provider's own
-            # 401/403 auth rejection as free text ("TypeSafe 401: …authentication_error…", the
-            # legacy owner's only record of it). No spend happened either way: a provider's
-            # auth rejection is non-acceptance whether it was written down in the new shape or
-            # the old one (boss-1 rc10.9 — this exact row blocked every paid connect for good).
+            # row recorded before that structured proof existed, whose reason is the provider
+            # status itself: a leading "Word 401:" or "Word 403:" followed by
+            # authentication_error ("TypeSafe 401: authentication_error…", the legacy owner's
+            # only record of it). A nearby sentence that merely contains 401 and "auth" is
+            # not that refusal. No spend happened either way (boss-1 rc10.9).
             "AND NOT (COALESCE(i.error->'typed_decision_nonacceptance'=jsonb_build_object("
             "'version',1,'project_id',r.project_id,'invocation_id',i.id,'receipt_id',i.receipt_id,"
             "'reservation_id',r.id,'kind','provider_auth_rejected','provider','typesafe','http_status',401) "
             "AND receipt.error->'typed_decision_nonacceptance'=i.error->'typed_decision_nonacceptance' "
             "AND e.data->'typed_decision_nonacceptance'=i.error->'typed_decision_nonacceptance',false) "
-            "OR (COALESCE(i.error->>'reason', i.error->>'message', receipt.error->>'reason', "
-            "receipt.error->>'message', '') ~* '40[13]' "
-            "AND COALESCE(i.error->>'reason', i.error->>'message', receipt.error->>'reason', "
-            "receipt.error->>'message', '') ~* 'auth'))))) "
+            "OR COALESCE(i.error->>'reason', i.error->>'message', receipt.error->>'reason', "
+            "receipt.error->>'message', '') ~* "
+            "'^\\w+ 40[13]:.*authentication_error')))) "
             "AND NOT EXISTS (SELECT 1 FROM cost_receipts c "
             "WHERE c.project_id=r.project_id AND c.reservation_id=r.id AND c.receipt_id=i.receipt_id) LIMIT 1")
         row = connection.execute(query, {"p": project_id}).mappings().first()
