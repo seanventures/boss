@@ -16,6 +16,7 @@ now go through the person who turns the server on.
 """
 from __future__ import annotations
 
+import json
 import os
 import uuid
 from contextlib import contextmanager
@@ -56,7 +57,7 @@ def project(eng):
     yield pid
     with eng.begin() as c:
         for table in ("workflow_custom_steps", "skill_definitions", "seed_exclusions",
-                      "mcp_servers", "events"):
+                      "mcp_servers", "events", "decisions", "project_members"):
             c.execute(text(f"DELETE FROM {table} WHERE project_id=:p"), {"p": pid})
         c.execute(text("DELETE FROM projects WHERE id=:p"), {"p": pid})
 
@@ -201,6 +202,81 @@ def test_draft_skill_keeps_tier_zero_and_does_not_overwrite(call, project):
     assert again["ok"] is False and "already exists" in again["error"]
 
 
+def _decision_row(eng, decision_id):
+    with eng.begin() as c:
+        row = c.execute(text(
+            "SELECT status, question, recommendation FROM decisions WHERE id = :i"),
+            {"i": decision_id}).mappings().one()
+    rec = row["recommendation"]
+    if isinstance(rec, str):
+        rec = json.loads(rec)
+    return row["status"], row["question"], rec
+
+
+def _usable(eng, project, skill_key):
+    """What a workflow publish and the catalogue agree the skill may do right now."""
+    from boss_engine.services.skill_catalogue import entry, risk_facts
+
+    with eng.begin() as c:
+        return risk_facts(entry(c, project, skill_key), skill_key)
+
+
+def _approver(eng, project):
+    with eng.begin() as c:
+        c.execute(text(
+            "INSERT INTO project_members (id, project_id, member_id, display_name, "
+            "member_type, role_keys, permissions) VALUES (:i, :p, 'ceo', 'ceo', 'human', "
+            "CAST(:r AS JSONB), CAST(:perm AS JSONB)) ON CONFLICT DO NOTHING"),
+            {"i": f"pm_{project}_ceo", "p": project,
+             "r": json.dumps(["ceo"]), "perm": json.dumps(["decision_resolve"])})
+
+
+def test_an_unapproved_draft_skill_is_not_usable_until_its_decision_is_approved(call, eng,
+                                                                                project):
+    """An agent draft must not become a skill other agents can run. The decision shows the
+    diff; approving that decision is what activates it. A later draft of the same skill does
+    not replace the live one until its own decision is approved."""
+    from boss_engine.config import get_settings
+    from boss_engine.services.decisions import DecisionService
+    from boss_engine.services.skill_definitions import get_skill
+
+    drafted = call("draft_skill", project, skill_key="lookup_notes", label="Look up notes",
+                   summary="Reads the notes", behaviour_kind="builtin",
+                   config={"executor_id": "model.generate_text"}, risk_tier=0)
+    facts = _usable(eng, project, "lookup_notes")
+    assert facts["usable"] is False, facts
+    listed = next(s for s in call("list_skills", project)["skills"]
+                  if s["skill_key"] == "lookup_notes")
+    assert listed["usable"] is False
+
+    status, question, rec = _decision_row(eng, drafted["decision_id"])
+    assert status == "pending"
+    assert rec["action"] == "activate_authored_skill"
+    assert rec["diff"] == drafted["diff"]
+    assert "Look up notes" in rec["diff"] and rec["diff"] in question
+
+    _approver(eng, project)
+    with eng.begin() as c:
+        DecisionService(get_settings()).transition(
+            c, drafted["decision_id"], action="approve", actor="ceo", note=None)
+    assert _usable(eng, project, "lookup_notes")["usable"] is True
+
+    changed = call("draft_skill", project, skill_key="lookup_notes", label="Other notes",
+                   summary="Reads the notes", behaviour_kind="builtin",
+                   config={"executor_id": "model.generate_text"}, risk_tier=0, mode="update")
+    with eng.begin() as c:
+        assert get_skill(c, project, "lookup_notes")["label"] == "Look up notes"
+    assert _usable(eng, project, "lookup_notes")["usable"] is True
+    _status, changed_question, changed_rec = _decision_row(eng, changed["decision_id"])
+    assert _status == "pending"
+    assert "Look up notes" in changed_rec["diff"] and "Other notes" in changed_rec["diff"]
+    assert changed_rec["diff"] in changed_question
+    with eng.begin() as c:
+        DecisionService(get_settings()).transition(
+            c, changed["decision_id"], action="approve", actor="ceo", note=None)
+        assert get_skill(c, project, "lookup_notes")["label"] == "Other notes"
+
+
 def test_list_skills_lists_each_skill_once_with_whether_it_can_run(call, project):
     call("draft_skill", project, skill_key="lookup_notes", label="Look up notes",
          behaviour_kind="builtin", config={"executor_id": "model.generate_text"}, risk_tier=0)
@@ -208,5 +284,6 @@ def test_list_skills_lists_each_skill_once_with_whether_it_can_run(call, project
     keys = [s["skill_key"] for s in skills]
     assert keys.count("lookup_notes") == 1
     mine = next(s for s in skills if s["skill_key"] == "lookup_notes")
-    assert mine["ships_with_boss"] is False and mine["usable"] is True
+    # The draft is listed. It cannot run until its decision is approved.
+    assert mine["ships_with_boss"] is False and mine["usable"] is False
     assert "model.generate_text" in keys
