@@ -172,6 +172,24 @@ clear_prev() {
        sudo -n rm -rf '$DIR.prev' 2>/dev/null; [ ! -e '$DIR.prev' ] && exit 0
        mv '$DIR.prev' '$DIR.prev.'\$(date +%s)"
 }
+# THE KNOWN STICKY MOUNT, AND NOTHING ELSE. A previous update's `rm` leaves
+# `$DIR.prev/.boss/selfsrc` when root or the container user owns it, and the
+# next swap then refuses forever. That directory is not a source tree: remove
+# it, or rename it off the blocking name when rm and sudo cannot. Any other
+# leftover is a real previous source — this returns non-zero and deletes nothing.
+recover_sticky_selfsrc() {
+  rsh "prev='$DIR.prev'
+       [ ! -e \"\$prev\" ] && exit 0
+       [ -d \"\$prev\" ] && [ ! -L \"\$prev\" ] || exit 3
+       unexpected=\$(find \"\$prev\" -mindepth 1 \\( -path \"\$prev/.boss/selfsrc\" \\) -prune -o ! -path \"\$prev/.boss\" -print 2>/dev/null) || exit 3
+       [ -z \"\$unexpected\" ] || exit 3
+       [ -d \"\$prev/.boss/selfsrc\" ] && [ ! -L \"\$prev/.boss\" ] && [ ! -L \"\$prev/.boss/selfsrc\" ] || exit 3
+       rm -rf \"\$prev\" 2>/dev/null || true
+       [ ! -e \"\$prev\" ] && exit 0
+       sudo -n rm -rf \"\$prev\" 2>/dev/null || true
+       [ ! -e \"\$prev\" ] && exit 0
+       mv \"\$prev\" \"\$prev.\$(date +%s)\" && [ ! -e \"\$prev\" ]"
+}
 rshq() { ssh "${SSH_OPTS[@]}" "$HOST" "$@" 2>/dev/null; }
 
 # Shell text, run ON THE SERVER, that sets variable $1 to the host tools' key: BOSS_HOST_API_KEY
@@ -270,8 +288,13 @@ ship_source() {
        done" || die "could not carry private configuration into staging; live source unchanged"
   # Retain the previous tree until install/recreation succeeds. If the stage
   # cannot be moved into place, put the previous tree back immediately.
-  rsh "[ ! -e '$DIR.prev' ]" ||
-    die "previous source remains at $DIR.prev; recover or move it before another source swap"
+  # A container-owned or root-owned .boss/selfsrc is not that tree: recover it
+  # so the swap is not wedged. Anything else still refuses, untouched.
+  if ! rsh "[ ! -e '$DIR.prev' ]"; then
+    recover_sticky_selfsrc || true
+    rsh "[ ! -e '$DIR.prev' ]" ||
+      die "previous source remains at $DIR.prev; recover or move it before another source swap"
+  fi
   rsh "if [ -d '$DIR' ]; then mv '$DIR' '$DIR.prev' || exit 1; fi
        if ! mv '$stage' '$DIR'; then
          [ -d '$DIR.prev' ] && mv '$DIR.prev' '$DIR'
