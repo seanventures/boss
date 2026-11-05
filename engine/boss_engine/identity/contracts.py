@@ -39,7 +39,8 @@ class MeBanner(_Frozen):
     ("persistent"). Rules and lifetimes: identity/banner_policy.py."""
     id: str
     kind: Literal["network_bridge", "legacy_password", "legacy_api_key", "owner_recovered",
-                  "mfa_enrolment_required", "recovery_codes_low", "api_key_expiring", "new_device"]
+                  "mfa_enrolment_required", "recovery_codes_low", "api_key_expiring", "new_device",
+                  "no_password"]
     policy: Literal["dismissible", "acknowledge", "persistent"]
     message: str
     until: Optional[datetime] = None

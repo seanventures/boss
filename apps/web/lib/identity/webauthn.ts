@@ -36,6 +36,18 @@ export function webauthnAvailable(): boolean {
   return typeof window !== "undefined" && typeof window.PublicKeyCredential === "function" && !!navigator.credentials;
 }
 
+/**
+ * Whether this browser offers passkeys in the email field's autofill without a modal
+ * (conditional mediation, autocomplete="username webauthn"). False wherever it cannot be asked.
+ */
+export async function conditionalMediationAvailable(): Promise<boolean> {
+  if (!webauthnAvailable()) return false;
+  const check = (window.PublicKeyCredential as unknown as { isConditionalMediationAvailable?: () => Promise<boolean> })
+    .isConditionalMediationAvailable;
+  if (typeof check !== "function") return false;
+  try { return (await check.call(window.PublicKeyCredential)) === true; } catch { return false; }
+}
+
 function fromB64u(value: B64): ArrayBuffer {
   const pad = "=".repeat((4 - (value.length % 4)) % 4);
   const raw = atob((value + pad).replace(/-/g, "+").replace(/_/g, "/"));
@@ -83,14 +95,20 @@ function failure(error: unknown): unknown {
   return error;
 }
 
-/** Ask the device for a passkey assertion. Throws PasskeyCancelled when the person backs out. */
-export async function getAssertion(given: Wrapped<AssertionOptions>): Promise<Record<string, unknown>> {
+/**
+ * Ask the device for a passkey assertion. Throws PasskeyCancelled when the person backs out.
+ * `conditional`: no modal — the browser offers its passkeys in the email field's autofill and
+ * answers only when the person picks one (abort it with `signal` before any other request).
+ */
+export async function getAssertion(given: Wrapped<AssertionOptions>, how: { conditional?: boolean; signal?: AbortSignal } = {}): Promise<Record<string, unknown>> {
   const options = unwrapOptions(given);
-  if (options.stub) return { stub: true };
+  if (options.stub && !how.conditional) return { stub: true };
   if (!webauthnAvailable()) throw new PasskeyFailure("webauthn_unavailable");
   let cred: Credential | null;
   try {
     cred = await navigator.credentials.get({
+      ...(how.conditional ? { mediation: "conditional" as CredentialMediationRequirement } : {}),
+      ...(how.signal ? { signal: how.signal } : {}),
       publicKey: {
         challenge: fromB64u(options.challenge),
         rpId: options.rpId,

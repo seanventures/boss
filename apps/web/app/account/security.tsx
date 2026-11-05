@@ -118,6 +118,9 @@ export function AccountSecurity({ me, factors: initialFactors, identities: initi
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pw, setPw] = useState({ current: "", next: "" });
+  // "Set password" until there is one (a passkey-first account has none — BOSSAPP-812).
+  const [pwSet, setPwSet] = useState<boolean | null>(null);
+  const hasPassword = pwSet ?? !!me?.sign_in.password;
   const [pwError, setPwError] = useState<string | null>(null);
   // Known only in the browser: read after mount, so the server's first paint and hydration agree.
   const [canPasskey, setCanPasskey] = useState(false);
@@ -236,38 +239,35 @@ export function AccountSecurity({ me, factors: initialFactors, identities: initi
         <section className="idn-card" aria-labelledby="acc-pw-h">
           <div className="idn-card-h">
             <h2 id="acc-pw-h">Password</h2>
-            <span className="idn-sub">{me?.sign_in.password ? "You have one" : "None yet"}</span>
+            <span className="idn-sub" data-testid="pw-state">{hasPassword ? "You have one" : "None yet · add one to sign in from any browser"}</span>
           </div>
           <form className="idn-form" onSubmit={(e) => {
             e.preventDefault();
             setPwError(null);
-            // A PASSKEY-ONLY PERSON SETS one; only an existing password is changed.
-            const had = Boolean(me?.sign_in.password);
-            guarded(had ? "Changing your password signs you out elsewhere." : "Setting a password.",
-                    () => idPost("/v1/identity/me/password", { current: pw.current, new: pw.next }))
-              .then(() => { setPw({ current: "", next: "" }); showToast("success", had ? "Password changed" : "Password set"); })
+            guarded(hasPassword ? "Changing your password signs you out elsewhere." : "Setting a password changes how you sign in.", () => idPost("/v1/identity/me/password", hasPassword ? { current: pw.current, new: pw.next } : { new: pw.next }))
+              .then(() => { setPw({ current: "", next: "" }); showToast("success", hasPassword ? "Password changed" : "Password set"); setPwSet(true); })
               .catch((err) => setPwError(err instanceof IdentityError && err.code === "password_too_short" ? `Use at least ${passwordMin} characters` : said(err)));
           }}>
-            {me?.sign_in.password ? (
+            {hasPassword ? (
               <div className="idn-field">
                 <label htmlFor="pw-current">Current password</label>
                 <input id="pw-current" className="idn-input" type="password" autoComplete="current-password" value={pw.current} onChange={(e) => setPw({ ...pw, current: e.target.value })} />
               </div>
             ) : null}
             <div className="idn-field">
-              <label htmlFor="pw-new">New password</label>
+              <label htmlFor="pw-new">{hasPassword ? "New password" : "Choose a password"}</label>
               <input id="pw-new" className="idn-input" type="password" autoComplete="new-password" minLength={passwordMin} value={pw.next} onChange={(e) => setPw({ ...pw, next: e.target.value })} aria-describedby="pw-new-hint" />
               <span id="pw-new-hint" className="idn-dim idn-hint">{passwordMin} characters or more</span>
             </div>
             <ErrorLine error={pwError} />
             <div className="idn-full idn-row">
-              {me?.sign_in.password ? (
+              {hasPassword ? (
                 <span className="idn-dim" data-copy="prose" data-testid="pw-change-note">Every other session ends when it changes.</span>
-              ) : null}
+              ) : (
+                <span className="idn-dim" data-copy="prose">Then email and password sign you in from any browser.</span>
+              )}
               <span className="idn-spacer" />
-              <button type="submit" className="idn-btn" data-testid="pw-submit" disabled={pw.next.length < passwordMin}>
-                {me?.sign_in.password ? "Change password" : "Set password"}
-              </button>
+              <button type="submit" className="idn-btn" disabled={pw.next.length < passwordMin} data-testid="pw-submit">{hasPassword ? "Change password" : "Set password"}</button>
             </div>
           </form>
         </section>

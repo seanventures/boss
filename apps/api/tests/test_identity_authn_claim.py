@@ -113,7 +113,8 @@ def test_network_bridge_claim_binds_the_browsers_origin(world, engine, monkeypat
                               json={"name": "Op", "email": "op@example.test", "confirm_origin": "https://other.example"})
     assert unconfirmed.status_code == 400
     ok = client.post("/v1/auth/setup/claim", headers={"Origin": ORIGIN},
-                     json={"name": "Op", "email": "op@example.test", "confirm_origin": ORIGIN})
+                     json={"name": "Op", "email": "op@example.test", "confirm_origin": ORIGIN,
+                           "password": STRONG})
     assert ok.status_code == 200, ok.text
     with engine.begin() as db:
         bound = db.execute(text("SELECT policy->>'public_origin' FROM identity_settings")).scalar()
@@ -270,15 +271,19 @@ def test_another_orgs_person_is_not_found(world, engine):
             db.execute(text("DELETE FROM orgs WHERE id = 'org_other_s1'"))
 
 
-def test_a_passkey_first_claim_needs_no_password(world, engine, capsys):
-    """Integration: the console's passkey path sends no password; the claim succeeds, the Owner
-    has no password to phish, and must enrol MFA (the passkey) next."""
+def test_a_claim_without_a_password_is_refused_and_spends_nothing(world, engine, capsys):
+    """BOSSAPP-812 (was test_a_passkey_first_claim_needs_no_password): a passkey-only claim left
+    the first Owner with one way in that lives in one browser profile. The password is required;
+    a claim without one is refused, creates no Owner, and leaves the setup link usable."""
     token = _setup_token(capsys)
     client = fresh_client()
     res = client.post("/v1/auth/setup/claim", headers=HEADERS,
                       json={"name": "Pat Key", "email": "pat@example.test", "setup_token": token})
-    assert res.status_code == 200, res.text
-    assert res.json()["mfa_enrolment_required"] is True
+    assert res.status_code == 422 and res.json()["error"] == "password_required", res.text
     with engine.begin() as db:
-        assert db.execute(text("SELECT password_hash FROM identity_users WHERE lower(email) = "
-                               "'pat@example.test'")).scalar() is None
+        assert db.execute(text("SELECT count(*) FROM identity_users WHERE lower(email) = "
+                               "'pat@example.test'")).scalar() == 0
+    again = client.post("/v1/auth/setup/claim", headers=HEADERS, json={
+        "name": "Pat Key", "email": "pat@example.test", "setup_token": token, "password": STRONG})
+    assert again.status_code == 200, again.text
+    assert again.json()["mfa_enrolment_required"] is True

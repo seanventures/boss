@@ -35,7 +35,7 @@ export interface MeBanner {
   /** kind.instance: a new event of the same kind is a new id, so it shows again. */
   id: string;
   policy: BannerPolicy;
-  kind: "network_bridge" | "legacy_password" | "legacy_api_key" | "owner_recovered" | "mfa_enrolment_required" | "recovery_codes_low" | "api_key_expiring" | "new_device";
+  kind: "network_bridge" | "legacy_password" | "legacy_api_key" | "owner_recovered" | "mfa_enrolment_required" | "recovery_codes_low" | "api_key_expiring" | "new_device" | "no_password";
   message: string;
   until: string | null;
 }

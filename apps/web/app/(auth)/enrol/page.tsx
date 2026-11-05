@@ -6,9 +6,10 @@ import { ME_PATH, type MeResponse } from "../../../lib/identity/contract";
 import { serverGet } from "../../../lib/identity/server";
 import { loadAuthOptions } from "../auth-options";
 import { Enrol } from "./enrol";
+import { passwordMin } from "../../../lib/identity/types-account";
 
 export const dynamic = "force-dynamic";
-export const metadata = { title: "Add a second factor · BOSS" };
+export const metadata = { title: "Protect your account · BOSS" };
 
 type Props = { searchParams: Promise<{ next?: string }> };
 
@@ -20,5 +21,5 @@ export default async function EnrolPage({ searchParams }: Props) {
   if (!me.ok) redirect(`/login?next=${encodeURIComponent(`/enrol?next=${next}`)}`);
   const options = await loadAuthOptions();
   const who = { name: me.data.display_name, email: me.data.email ?? "", hue: avatarTone(me.data.principal_id, me.data.avatar_seed) };
-  return <Enrol host={options.host} next={next} who={who} passkeyReason={options.passkey_reason ?? null} />;
+  return <Enrol host={options.host} next={next} who={who} passkeyReason={options.passkey_reason ?? null} passwordMin={passwordMin(options)} />;
 }

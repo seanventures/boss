@@ -233,6 +233,11 @@ def raw_banners(db: Any, ctx: AuthContext, *, user: Any = None, required: Option
     if required and not f.any_second_factor:
         out.append({"kind": "mfa_enrolment_required", "instance": None, "until": None,
                     "message": "Your access needs a second factor. Add a passkey or an authenticator app."})
+    if user is not None and not user.password_hash and f.passkeys > 0:
+        # BOSSAPP-812: a passkey lives in one browser profile; without a password this person
+        # cannot sign in from any other browser. Nothing is locked: passkey and code still work.
+        out.append({"kind": "no_password", "instance": None, "until": None,
+                    "message": "Add a password so you can sign in from any browser."})
     if user is not None and not smtp_configured():
         # Without SMTP, a sign-in from a new device is told here (with SMTP it was emailed), for
         # 48 hours. The event's seq is the instance: the NEXT new device shows again.

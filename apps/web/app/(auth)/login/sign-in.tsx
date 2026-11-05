@@ -13,15 +13,23 @@
  * buttons. Then the second factor (code, passkey or recovery code) when the account has one. No
  * phone or SMS anywhere. The API decides every step; the page only carries the person through
  * it, and keeps every message uniform (an unknown address gets exactly the words a known one does).
+ *
+ * PASSWORD FIRST, PASSKEY ON REQUEST (BOSSAPP-812): the page opens on the Password tab with the
+ * email field focused and NEVER starts a WebAuthn ceremony by itself (a browser without your
+ * passkey popped "Insert your security key" and there was nothing else to do). "Sign in with a
+ * passkey" is a complete sign-in on its own, started only by its button; if it fails or is
+ * cancelled, one calm line points back to email and password. Email + password then asks for the
+ * second factor the account has: the authenticator code, or its passkey (on a click) — the user
+ * can switch between them, and a recovery code always works.
  */
 import { afterEnrolStep, ENROLMENT_GRANT_WORDS } from "../../../lib/identity/enrolment";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { ArrowRight, CaretRight, EnvelopeSimple, Eye, EyeSlash, Fingerprint, Hash, Key, LockSimple, ShieldCheck, Sparkle, UserPlus } from "@phosphor-icons/react";
 
 import { IdentityError, idPost } from "../../../lib/identity/api";
 import type { AuthOptions, SignInStep } from "../../../lib/identity/types";
 import { emailSignInOffered } from "../../../lib/identity/email-sign-in";
-import { getAssertion, webauthnAvailable, type AssertionOptions, type Wrapped } from "../../../lib/identity/webauthn";
+import { conditionalMediationAvailable, getAssertion, PasskeyFailure, unwrapOptions, webauthnAvailable, type AssertionOptions, type Wrapped } from "../../../lib/identity/webauthn";
 import { sayAuth } from "../auth-flow";
 import { methodWhyNot, passkeyWhyNot, providerOffers, type Method } from "../../../lib/identity/sign-in-offers";
 import { CodeInput, Face, Sheet } from "../../../components/identity/kit";
@@ -98,6 +106,10 @@ export function SignIn({ options, next, initialStep = null, notice = null }: {
   const [where, setWhere] = useState<{ hostname: string; protocol: string } | null>(null);
   const [webauthn, setWebauthn] = useState(false);
   const target = safeNextClient(next);
+  const emailRef = useRef<HTMLInputElement | null>(null);
+  const passwordRef = useRef<HTMLInputElement | null>(null);
+  /** The calm line after a passkey sign-in that did not happen (cancelled, or no passkey here). */
+  const [noPasskeyHere, setNoPasskeyHere] = useState(false);
 
   // The API offers passkeys only once a public origin is bound (S1 `passkey`, `passkey_reason`),
   // and never on an address a browser can't hold a passkey for (an IP, plain http: passkey-support).
@@ -107,6 +119,34 @@ export function SignIn({ options, next, initialStep = null, notice = null }: {
   }, []);
   const passkeyWhy = passkeyWhyNot(options, where, webauthn);
   const hasPasskeys = where !== null && passkeyWhy === null;
+  // PASSKEY AUTOFILL (conditional mediation): where the browser supports it, the passkeys saved
+  // here appear in the email field's autofill. No modal, no "Insert your security key": the
+  // browser answers only when the person picks one. Aborted before any other passkey request.
+  const autofill = useRef<AbortController | null>(null);
+  const stopAutofill = () => { autofill.current?.abort(); autofill.current = null; };
+  useEffect(() => {
+    if (!hasPasskeys || initialStep) return;
+    let live = true;
+    (async () => {
+      if (!(await conditionalMediationAvailable()) || !live) return;
+      const ctrl = new AbortController();
+      autofill.current = ctrl;
+      try {
+        const opts = await idPost<Wrapped<AssertionOptions>>("/v1/auth/webauthn/options", { purpose: "login" });
+        if (!live || ctrl.signal.aborted || unwrapOptions(opts).stub) return;
+        const credential = await getAssertion(opts, { conditional: true, signal: ctrl.signal });
+        if (!live || ctrl.signal.aborted) return;
+        setBusy(true);
+        after(await idPost<SignInStep>("/v1/auth/webauthn/verify", { purpose: "login", credential }));
+      } catch {
+        // Aborted, dismissed, or not offered: the page stays as it is, quietly.
+      } finally {
+        if (live) setBusy(false);
+        if (autofill.current === ctrl) autofill.current = null;
+      }
+    })();
+    return () => { live = false; stopAutofill(); };
+  }, [hasPasskeys]); // eslint-disable-line react-hooks/exhaustive-deps
   const sharedOffered = !!options.shared_password && (!options.shared_password.until || Date.parse(options.shared_password.until) > Date.now());
   useEffect(() => {
     if (resendIn <= 0) return;
@@ -127,8 +167,9 @@ export function SignIn({ options, next, initialStep = null, notice = null }: {
       if (step.enrolment_grant === false) { setStage({ kind: "start" }); setError(ENROLMENT_GRANT_WORDS); return; }
       window.location.assign(afterEnrolStep(step, target)); return;
     }
-    const methods = step.methods ?? [];
-    setStage(methods.includes("totp") || !methods.includes("passkey") ? { kind: "mfa", step } : { kind: "passkey", purpose: "mfa", step });
+    // The second factor screen. It never starts a passkey ceremony by itself: the passkey is a
+    // button there, pressed by the person (BOSSAPP-812).
+    setStage({ kind: "mfa", step });
   };
 
   const run = async (call: () => Promise<void>) => {
@@ -141,12 +182,36 @@ export function SignIn({ options, next, initialStep = null, notice = null }: {
     } finally { setBusy(false); }
   };
 
-  const passkey = (purpose: "login" | "mfa", step?: SignInStep) => run(async () => {
-    setStage({ kind: "passkey", purpose, step });
-    const opts = await idPost<Wrapped<AssertionOptions>>("/v1/auth/webauthn/options", { purpose });
-    const credential = await getAssertion(opts);
-    after(await idPost<SignInStep>("/v1/auth/webauthn/verify", { purpose, credential }));
-  });
+  const passkey = (purpose: "login" | "mfa", step?: SignInStep) => {
+    stopAutofill();
+    if (purpose === "login") return passkeyLogin();
+    return run(async () => {
+      setStage({ kind: "passkey", purpose, step });
+      const opts = await idPost<Wrapped<AssertionOptions>>("/v1/auth/webauthn/options", { purpose });
+      const credential = await getAssertion(opts);
+      after(await idPost<SignInStep>("/v1/auth/webauthn/verify", { purpose, credential }));
+    });
+  };
+
+  /** "Sign in with a passkey": a whole sign-in on its own, started only by its button. A device
+   *  that has no passkey here (or a cancel) comes back to email and password, calmly. */
+  const passkeyLogin = async () => {
+    setBusy(true);
+    setError(null);
+    setNoPasskeyHere(false);
+    setStage({ kind: "passkey", purpose: "login" });
+    try {
+      const opts = await idPost<Wrapped<AssertionOptions>>("/v1/auth/webauthn/options", { purpose: "login" });
+      const credential = await getAssertion(opts);
+      after(await idPost<SignInStep>("/v1/auth/webauthn/verify", { purpose: "login", credential }));
+    } catch (e) {
+      setStage({ kind: "start" });
+      setMethod("password");
+      if (e instanceof PasskeyFailure) setNoPasskeyHere(true);
+      else setError(say(e));
+      window.setTimeout(() => (email ? passwordRef.current : emailRef.current)?.focus(), 0);
+    } finally { setBusy(false); }
+  };
 
   const tabs = [
     { id: "password" as const, label: "Password", icon: <Key size={14} weight="bold" aria-hidden /> },
@@ -160,6 +225,11 @@ export function SignIn({ options, next, initialStep = null, notice = null }: {
   if (stage.kind === "mfa" || stage.kind === "recovery") {
     const who = stage.step.who;
     const recovery = stage.kind === "recovery";
+    const methods = stage.step.methods ?? [];
+    // The authenticator code is the default second step; a passkey-only account gets its passkey
+    // as a button (never auto-started). Either way the person can switch.
+    const codeOffered = methods.includes("totp") || !methods.includes("passkey");
+    const passkeyOffered = methods.includes("passkey") && hasPasskeys;
     return (
       <AuthStage label="Second factor">
         <Logo />
@@ -170,9 +240,11 @@ export function SignIn({ options, next, initialStep = null, notice = null }: {
             <button type="button" onClick={() => { setStage({ kind: "start" }); setError(null); }}>Not you?</button>
           </div>
         ) : null}
-        <h1>{recovery ? "Use a recovery code" : "Enter your code"}</h1>
+        <h1>{recovery ? "Use a recovery code" : codeOffered ? "Enter your code" : "Use your passkey"}</h1>
         <p className="idn-s" data-copy="prose">
-          {recovery ? "One of the ten codes you saved. Each works once." : <>Open your authenticator app and enter the 6-digit code for <b>BOSS · {options.org_name}</b>.</>}
+          {recovery ? "One of the ten codes you saved. Each works once."
+            : codeOffered ? <>Open your authenticator app and enter the 6-digit code for <b>BOSS · {options.org_name}</b>.</>
+            : <>Your password was right. Confirm it&apos;s you with the passkey for <b>{options.host}</b>.</>}
         </p>
         {recovery ? (
           <form onSubmit={(e) => { e.preventDefault(); run(async () => after(await idPost<SignInStep>("/v1/auth/mfa/recovery", { code }))); }}>
@@ -183,6 +255,11 @@ export function SignIn({ options, next, initialStep = null, notice = null }: {
             </div>
             <button type="submit" className="idn-big p" disabled={busy || code.replace(/[\s-]/g, "").length < 12}>Verify</button>
           </form>
+        ) : !codeOffered ? (
+          passkeyOffered ? (
+            <button type="button" className="idn-big p" disabled={busy} data-testid="mfa-passkey"
+              onClick={() => passkey("mfa", stage.step)}><Fingerprint size={18} weight="bold" aria-hidden /> Use your passkey</button>
+          ) : <p className="idn-s" data-copy="prose">{passkeyWhy ?? "Passkeys aren't available in this browser."} Use a recovery code.</p>
         ) : (
           <>
             <CodeInput value={code} onChange={setCode} label="Authenticator code" invalid={!!error}
@@ -192,12 +269,13 @@ export function SignIn({ options, next, initialStep = null, notice = null }: {
           </>
         )}
         {error ? <div className="idn-err" role="alert">{error}</div> : null}
-        <div className="idn-alt">
-          {stage.step.methods.includes("passkey") && hasPasskeys ? (
+        <p className="idn-fine" data-copy="prose" data-testid="try-another-way">Try another way</p>
+        <div className="idn-alt" role="group" aria-label="Try another way">
+          {codeOffered && passkeyOffered ? (
             <button type="button" onClick={() => passkey("mfa", stage.step)}><Fingerprint size={16} aria-hidden /> Use a passkey instead <CaretRight size={13} className="idn-chev" aria-hidden /></button>
           ) : null}
           {recovery ? (
-            <button type="button" onClick={() => { setStage({ kind: "mfa", step: stage.step }); setCode(""); setError(null); }}><ShieldCheck size={16} aria-hidden /> Use your authenticator <CaretRight size={13} className="idn-chev" aria-hidden /></button>
+            <button type="button" onClick={() => { setStage({ kind: "mfa", step: stage.step }); setCode(""); setError(null); }}><ShieldCheck size={16} aria-hidden /> {codeOffered ? "Use your authenticator" : "Use your passkey"} <CaretRight size={13} className="idn-chev" aria-hidden /></button>
           ) : (
             <button type="button" onClick={() => { setStage({ kind: "recovery", step: stage.step }); setCode(""); setError(null); }}><LockSimple size={16} aria-hidden /> Use a recovery code <CaretRight size={13} className="idn-chev" aria-hidden /></button>
           )}
@@ -222,8 +300,11 @@ export function SignIn({ options, next, initialStep = null, notice = null }: {
         <div className="idn-wait" role="status">{error ? <span className="idn-err">{error}</span> : <><span className="idn-blink" aria-hidden /> Waiting for your device…</>}</div>
         <div className="idn-alt">
           <button type="button" onClick={() => passkey(stage.purpose, stage.step)}><Key size={16} aria-hidden /> {error ? "Try again" : "Use a security key"} <CaretRight size={13} className="idn-chev" aria-hidden /></button>
-          <button type="button" onClick={() => { setError(null); setStage(stage.step ? { kind: "mfa", step: stage.step } : { kind: "start" }); }}>
-            <EnvelopeSimple size={16} aria-hidden /> {stage.step ? "Use a code instead" : "Use email instead"} <CaretRight size={13} className="idn-chev" aria-hidden />
+          <button type="button" onClick={() => {
+            setError(null); stopAutofill(); setStage(stage.step ? { kind: "mfa", step: stage.step } : { kind: "start" });
+            if (!stage.step) { setMethod("password"); window.setTimeout(() => (email ? passwordRef.current : emailRef.current)?.focus(), 0); }
+          }}>
+            <EnvelopeSimple size={16} aria-hidden /> {stage.step ? ((stage.step.methods ?? []).includes("totp") ? "Use a code instead" : "Try another way") : "Use your password instead"} <CaretRight size={13} className="idn-chev" aria-hidden />
           </button>
         </div>
         <p className="idn-fine" data-copy="prose">Your passkey never leaves your device. BOSS stores only its public key.</p>
@@ -318,8 +399,8 @@ export function SignIn({ options, next, initialStep = null, notice = null }: {
               <label htmlFor="email">Email</label>
               <div className="idn-ig">
                 <EnvelopeSimple size={18} className="idn-ig-ico" aria-hidden />
-                <input id="email" className="idn-i" type="email" autoComplete="username webauthn" required value={email} placeholder="you@example.com"
-                  onChange={(e) => setEmail(e.target.value)} aria-invalid={!!error || undefined} aria-describedby={error ? "signin-error" : undefined} />
+                <input id="email" ref={emailRef} className="idn-i" type="email" autoComplete="username webauthn" required value={email} placeholder="you@example.com"
+                  autoFocus onChange={(e) => setEmail(e.target.value)} aria-invalid={!!error || undefined} aria-describedby={error ? "signin-error" : undefined} />
               </div>
             </div>
           )}
@@ -333,7 +414,7 @@ export function SignIn({ options, next, initialStep = null, notice = null }: {
               </span>
               <div className="idn-ig">
                 <LockSimple size={18} className="idn-ig-ico" aria-hidden />
-                <input id="password" className="idn-i" type={showPassword ? "text" : "password"} autoComplete="current-password" required value={password}
+                <input id="password" ref={passwordRef} className="idn-i" type={showPassword ? "text" : "password"} autoComplete="current-password" required value={password}
                   placeholder="••••••••••" onChange={(e) => setPassword(e.target.value)} aria-invalid={!!error || undefined} />
                 <button type="button" className="idn-eye" aria-label={showPassword ? "Hide password" : "Show password"} aria-pressed={showPassword}
                   onClick={() => setShowPassword(!showPassword)}>
@@ -346,6 +427,9 @@ export function SignIn({ options, next, initialStep = null, notice = null }: {
             <p className="idn-fine" data-copy="prose" data-testid="shared-password-note">
               Signs you in as Operator{sharedUntil ? ` until ${sharedUntil}` : ""}. Then ask an Owner to invite you.
             </p>
+          ) : null}
+          {noPasskeyHere && method === "password" ? (
+            <p className="idn-s" role="status" data-copy="prose" data-testid="no-passkey-here-line">No passkey here? Use your password instead.</p>
           ) : null}
           {error ? <div className="idn-err" id="signin-error" role="alert">{error}</div> : null}
           <button type="submit" className="idn-big p go" disabled={busy} data-testid="email-submit">

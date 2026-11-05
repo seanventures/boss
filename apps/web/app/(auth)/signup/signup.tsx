@@ -99,8 +99,8 @@ export function SignUpVerify({ host }: { host: string }) {
           <h1>Your account is ready</h1>
           {next ? (
             <>
-              <p className="idn-s" data-copy="prose">{next === "enrol" ? "Add a passkey next. An admin will give you access." : "You're signed in. An admin will give you access."}</p>
-              <a className="idn-big p" href={next === "enrol" ? "/enrol?next=%2F" : "/"}>{next === "enrol" ? "Add a passkey" : "Continue"}</a>
+              <p className="idn-s" data-copy="prose">{next === "enrol" ? "Next, protect your account and choose a password. An admin will give you access." : "You're signed in. An admin will give you access."}</p>
+              <a className="idn-big p" href={next === "enrol" ? "/enrol?next=%2F" : "/"}>{next === "enrol" ? "Protect your account" : "Continue"}</a>
             </>
           ) : (
             <>
