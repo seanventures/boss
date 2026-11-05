@@ -154,7 +154,9 @@ RESULT_KEYS = ("summary", "usage", "cost_usd_micros", "cost_unreported", "turns"
                "model", "session_id", "stop_reason", "engine")
 
 #: Why a session stopped. "turn_cap" and "deadline" are partial attempts, never verdicts.
-STOP_REASONS = ("done", "turn_cap", "deadline", "error")
+#: "awaiting_approval" is a build-agent tool call that is waiting, not a finished session
+#: and not a failure (tool_gateway): normalise must not rewrite it to "done".
+STOP_REASONS = ("done", "turn_cap", "deadline", "error", "awaiting_approval")
 
 #: THE ONE PHRASE a partial attempt carries, whatever engine made it. The pipeline's
 #: `check_is_inconclusive` and the implement continuation read it; before this, only Claude's

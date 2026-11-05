@@ -1805,6 +1805,7 @@ class NativeCodeAgent:
         """
         from .code_agent_tools import SandboxToolset, tool_schemas
         from .openai_adapter import estimate_cost_usd_micros
+        from .tool_gateway import DENY, WAIT, verdict
 
         from .code_agent_tools import resolve_autonomy
 
@@ -1838,6 +1839,7 @@ class NativeCodeAgent:
         max_turns = int(max_turns) if max_turns else self._max_turns(read_only)
         capped = True
         stop_reason = "turn_cap"
+        pending_tool: Optional[str] = None
         # THE STAGE'S WALL-TIME DEADLINE bounds this session as it bounds a CLI session
         # (_cap_to_deadline): checked before every model turn.
         deadline = None if read_only else _stage_deadline()
@@ -1913,19 +1915,42 @@ class NativeCodeAgent:
                     for c in calls
                 ],
             })
+            held = False
             for call in calls:
                 tool_calls_made += 1
+                name = call.get("name") or ""
                 try:
                     args = json.loads(call.get("arguments") or "{}")
                     if not isinstance(args, dict):
                         args = {}
                 except Exception:
                     args = {}
-                _turn({"direction": "tool_call", "tool_name": call.get("name") or "",
-                       "content": args})
+                _turn({"direction": "tool_call", "tool_name": name, "content": args})
+                # Checked before the tool runs. Ask waits: nothing in this turn runs after it.
+                # Off does not run, and the model is told so it can continue without the effect.
+                decision = verdict(name, getattr(self, "tool_policy", None))
+                if decision == DENY:
+                    note = f"error: '{name}' is turned off and did not run."
+                    _turn({"direction": "tool_result", "tool_name": name, "content": note,
+                           "ok": False, "latency_ms": 0})
+                    messages.append({"role": "tool", "tool_call_id": call.get("id"),
+                                     "content": note})
+                    continue
+                if decision == WAIT:
+                    note = f"waiting for approval: '{name}' has not run."
+                    _turn({"direction": "tool_result", "tool_name": name, "content": note,
+                           "ok": False, "latency_ms": 0})
+                    messages.append({"role": "tool", "tool_call_id": call.get("id"),
+                                     "content": note})
+                    summary = note
+                    stop_reason = "awaiting_approval"
+                    pending_tool = name
+                    capped = False
+                    held = True
+                    break
                 _t0 = time.monotonic()
-                outcome = toolset.call(call.get("name") or "", args)
-                _turn({"direction": "tool_result", "tool_name": call.get("name") or "",
+                outcome = toolset.call(name, args)
+                _turn({"direction": "tool_result", "tool_name": name,
                        "content": outcome.text, "ok": not bool(getattr(outcome, "is_error", False)),
                        "latency_ms": int((time.monotonic() - _t0) * 1000)})
                 messages.append({
@@ -1933,6 +1958,8 @@ class NativeCodeAgent:
                     "tool_call_id": call.get("id"),
                     "content": outcome.text,
                 })
+            if held:
+                break
 
         if capped:
             # The turn cap is a real outcome, not a crash: BOSS re-runs the tests itself
@@ -1957,6 +1984,8 @@ class NativeCodeAgent:
             "tool_calls": tool_calls_made,
             "files_touched": sorted(set(toolset.written_paths)),
             "stop_reason": stop_reason,
+            "awaiting_approval": stop_reason == "awaiting_approval",
+            "pending_tool": pending_tool,
         }
 
     @tidies_workspace
