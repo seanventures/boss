@@ -14,6 +14,7 @@ import {
 } from "./actions";
 import { LedgerStrip } from "./memory-ui";
 import { apiWrite } from "../lib/api-write";
+import { parseSubjectRef } from "../lib/dock-subject";
 
 import { callAction } from "../lib/call-action";
 import { askConsent, consentFromBody, withConsentResult, type ConsentLink } from "../lib/identity/consent";
@@ -1152,6 +1153,14 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
   }, [pendingPlan, runTurn]);
 
   const task = context?.task as Record<string, unknown> | undefined;
+  // A dock opened on a workflow step or a build is about that run. The task-context fetch
+  // keys on a task id, so a step ref comes back with no projects — and used to render the
+  // empty-task sentence on a chat that already has an app (BOSSAPP-570).
+  const dockSubject = sel !== GENERAL ? parseSubjectRef(sel) : null;
+  const aboutSubject = dockSubject
+    ? `${dockSubject.kind.replace(/_/g, " ")} ${dockSubject.id}`
+      + (dockSubject.step ? ` / ${dockSubject.step}` : "")
+    : null;
 
   // Only cross-cutting conversations belong on this page. A thread with an external_ref is a
   // TASK thread and is reachable from that task's own panel; showing it here too is what made
@@ -1253,7 +1262,8 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
         ) : (
           <div className="ct-block" style={{ marginBottom: 10 }}>
             <div className="ct-block-title">
-              {String(task?.title ?? "Task")} <span className="cap-badge tone-blue">{String(task?.status ?? "")}</span>
+              {String((task?.title && String(task.title).trim()) || aboutSubject || "Task")}{" "}
+              <span className="cap-badge tone-blue">{String(task?.status ?? "")}</span>
             </div>
             {context?.code_tasks?.length ? (
               <div className="detail" style={{ marginTop: 6, display: "flex", gap: 12, flexWrap: "wrap" }}>
@@ -1264,6 +1274,10 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
                   </span>
                 ))}
               </div>
+            ) : aboutSubject ? (
+              <p className="detail" data-testid="agent-about" style={{ marginTop: 6 }}>
+                This chat is about {aboutSubject}.
+              </p>
             ) : <p className="detail" style={{ marginTop: 6 }}>No projects yet for this task — ask BOSS to build or improve it.</p>}
           </div>
         )}

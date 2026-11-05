@@ -2702,19 +2702,41 @@ class IntentRouter:
         # spent; answering from evidence gathered…" — the loop below spent its round-trips, each
         # a CLI call with ~48 tool schemas and this ~250-line persona, re-finding what the
         # subject block already said. The owner: "these things should be quick". So the first
-        # answer is one tool-less call inside a hard budget (subject_answer.py), and the loop
-        # runs only when the operator presses "Investigate further" or "Do the fix".
+        # answer is one tool-less call inside a hard budget (subject_answer.py). The loop runs
+        # when the operator presses "Investigate further" or "Do the fix", when they instruct
+        # an action, when they ask for a live read, or when the record does not hold the cause.
+        # A decision of "investigate" does not reopen that loop on a record that already says
+        # what failed (BOSSAPP-570).
+        _deeper_label = ""
         if subject_ref is not None and subject_ev is not None:
-            from .subject_answer import wants_first_answer
+            from .subject_answer import INVESTIGATE, context_holds_the_cause, wants_first_answer
 
-            if wants_first_answer(_question or latest, subject_ev, depth,
-                                  has_images=bool(latest_blocks), looking_only=not writes,
-                                  live_look=getattr(self, "_turn_action", None) != "answer"):
+            question = _question or latest
+            action = getattr(self, "_turn_action", None)
+            holds = context_holds_the_cause(subject_ev)
+            if action is None:
+                # No decision was made. The words are the only signal left: a question looks,
+                # an instruction acts. route_turn always decides before it calls here.
+                looking_only = asked_only_to_look(question)
+                decided_live = False
+            else:
+                looking_only = not bool(writes)
+                decided_live = action != "answer" and not holds
+            if wants_first_answer(question, subject_ev, depth,
+                                  has_images=bool(latest_blocks), looking_only=looking_only,
+                                  live_look=decided_live):
                 first = self._first_answer(connection, project_id, subject_ev,
-                                           _question or latest, history=history, role=role,
+                                           question, history=history, role=role,
                                            thread_id=thread_id)
                 if first is not None:
                     return first
+            # Said before the tool loop, so a deeper look is not a silent multi-minute wait.
+            # Not when they already pressed Investigate, and not when the record settles it
+            # and the loop is only there to act or to read the live machine.
+            if depth != INVESTIGATE and getattr(subject_ev, "found", False) and not holds:
+                _deeper_label = (
+                    f"the record of {subject_ev.ref.label} does not settle this — "
+                    "looking deeper")
         reply = ""
         # WHY THE ANSWER IS MISSING, IF IT IS.
         #
@@ -2747,6 +2769,8 @@ class IntentRouter:
                     # could repeat a write that had already succeeded.
                     _looking_only = not writes
                     _report = _progress_reporter(project_id, thread_id)
+                    if _deeper_label and _report is not None:
+                        _report(_deeper_label)
                     # ONE BUDGET FOR THE WHOLE TURN — see turn_budget.py. Every pass below
                     # draws from it, so a first pass, a grounding re-ask and a continuation can
                     # no longer add up to 32 model calls and 276 seconds.
