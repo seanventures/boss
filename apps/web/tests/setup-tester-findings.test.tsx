@@ -97,18 +97,11 @@ describe("the drawer", () => {
 
 describe("removing a repository asks first", () => {
   it("Remove opens a confirm; nothing is sent until it is pressed", async () => {
-    // Two repos (the only one is never removable), reached where it lives now: Repositories ›
-    // Manage (BOSSAPP-898; Setup has no other place for the repository's menu).
     const view = board();
-    const first = view.repository.repos[0];
-    view.repository.repos = [first, { ...first, binding_id: "ghb_second", full_name: "owner/second", default: false }];
+    view.repository.repos = [{ ...view.repository.repos[0], default: false }];
     const api = fakeApi(view);
-    mounted = await mountBoard(view, "?area=setup", true, "setup");
-    await click(q(document.body, "su-manage-repos-open"));
-    const second = [...document.querySelectorAll('[data-testid="su-repo-menu"]')]
-      .find((m) => (m.getAttribute("aria-label") ?? m.textContent ?? "").includes("owner/second")
-                || m.closest("[data-testid]")?.textContent?.includes("owner/second")) ?? null;
-    await click(second);
+    mounted = await mountBoard(view);
+    await click(q(document.body, "su-repo-menu"));
     await click(q(document.body, "su-menu-remove"));
     expect(api.calls.some((c) => c.op === "repo_remove")).toBe(false);
     await click(q(document.body, "su-repo-remove-yes"));

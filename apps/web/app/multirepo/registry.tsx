@@ -10,8 +10,7 @@
  * it ends.
  *
  * Owner/Admin write (repository:register, step-up); everyone else sees the same table with the
- * controls disabled and the reason on them. Govern › More › Allowed repos (`?area=govern&tab=repositories`,
- * and the old `?area=setup&focus=repositories`, which Setup forwards) lands here.
+ * controls disabled and the reason on them. `?area=setup&focus=repositories` lands here.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowClockwise, ArrowSquareOut, Check, GithubLogo, MagnifyingGlass, Warning } from "@phosphor-icons/react";
@@ -36,10 +35,7 @@ const FILTERS: { key: RegistryFilter; label: string; tip: string }[] = [
 const TICK_TIP = "Allow BOSS to use this repository. Ticking runs the three checks first.";
 
 function wantsFocus(): boolean {
-  try {
-    const q = new URLSearchParams(window.location.search);
-    return q.get("focus") === "repositories" || q.get("tab") === "repositories";
-  } catch { return false; }
+  try { return new URLSearchParams(window.location.search).get("focus") === "repositories"; } catch { return false; }
 }
 
 export function RepositoryRegistry({ projectId }: { projectId: string }) {

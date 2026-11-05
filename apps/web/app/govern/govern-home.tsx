@@ -17,7 +17,6 @@ import { EnvelopesTab } from "./envelopes-tab";
 import { LimitsScreen } from "./limits-screen";
 import { GovernMeter } from "./meter";
 import { SelfFixTab } from "./self-fix-tab";
-import { RepositoryRegistry } from "../multirepo/registry";
 import { SharingTab } from "./sharing-tab";
 import { SPEND_PERIODS, SpendHome, type SpendPeriod } from "./spend-home";
 import { SpendTab } from "./spend-tab";
@@ -30,7 +29,7 @@ export const GOVERN_POLL_MS = 15_000;
  * Sharing and Self-fix. Old links keep working: ?tab=spend|envelopes|sharing|selffix open what
  * they opened, ?focus=… still lands on that row of the board.
  */
-type Tab = "overview" | "limits" | "board" | "spend" | "envelopes" | "sharing" | "selffix" | "repositories";
+type Tab = "overview" | "limits" | "board" | "spend" | "envelopes" | "sharing" | "selffix";
 const MAIN: { key: Tab; label: string; tip: string }[] = [
   { key: "overview", label: "Spend", tip: "How much, on which model and project" },
   { key: "limits", label: "Limits", tip: "Caps, what happens at them, per project" },
@@ -39,8 +38,6 @@ const MORE: { key: Tab; label: string; tip: string }[] = [
   { key: "spend", label: "Where the money went", tip: "By agent, by step, savings and top drivers" },
   { key: "board", label: "Advanced limits", tip: "Pace, thresholds, token guides, review rounds" },
   { key: "envelopes", label: "Envelopes", tip: "Allocations, initiatives and commitments" },
-  // Moved from Setup's Advanced (BOSSAPP-898): which repositories projects may use is a rule.
-  { key: "repositories", label: "Allowed repos", tip: "Which repositories projects may use" },
   { key: "sharing", label: "Sharing", tip: "What this install tells the BOSS project, and the switch" },
   { key: "selffix", label: "Self-fix", tip: "BOSS fixing its own bugs: the switch and the caps" },
 ];
@@ -161,8 +158,6 @@ export function GovernHome({ projectId, actor }: { projectId: string; actor: str
         <SpendTab projectId={projectId} paused={!live} />
       ) : tab === "sharing" ? (
         <SharingTab projectId={projectId} actor={actor} paused={!live} />
-      ) : tab === "repositories" ? (
-        <RepositoryRegistry projectId={projectId} />
       ) : tab === "selffix" ? (
         <SelfFixTab projectId={projectId} actor={actor} paused={!live} />
       ) : (

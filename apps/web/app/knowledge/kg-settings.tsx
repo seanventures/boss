@@ -5,7 +5,6 @@
  * settings, moved here whole — what agents get, each repository's code graph with Index now,
  * retention, the embedding model and vector index, budget, sources, the case study and its cost.
  */
-
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 
 import { GatedButton } from "../../components/gated";
@@ -101,8 +100,8 @@ export function KgSettings({ projectId, actor, initial }: { projectId: string; a
             <dd data-testid="knowledge-embedding">
               {em ? `${em.model} (${em.dimension} dimensions), check ${em.check}.` : "No embedding model is set."}{" "}
               {status.retrieval?.reason ? <span data-testid="knowledge-search-off">{status.retrieval.reason}. </span> : null}
+              <a className="inf-link" href="?area=setup&focus=embedding_model">Setup › Repo and models › Embedding model</a>.{" "}
               Vector index: {status.vector_index === "not_created" || !status.vector_index ? "not created" : status.vector_index}.
-              <a className="inf-link" href="?area=setup&focus=embedding_model" data-testid="knowledge-embedding-set">Set it in Setup › Models › Manage</a>.
             </dd>
           </div>
           <div className="kg-setting"><dt>Budget</dt><dd>Budget category: {status.budget_category ?? "knowledge"}</dd></div>

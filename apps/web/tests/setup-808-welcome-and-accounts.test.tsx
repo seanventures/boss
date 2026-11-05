@@ -249,35 +249,27 @@ describe("Screen 2 — Setup on one page", () => {
     expect(q(container, "su-who-build")!.textContent).toBe("Build → Auto · Claude Code");
     expect(q(container, "su-who-review")!.textContent).toBe("Review → OpenRouter · openai/gpt-5");
     await click(q(container, "su-who-change"));
-    expect(q(document.body, "su-routing-drawer")).not.toBeNull();
-    expect(q(document.body, "su-row-jobs")).not.toBeNull();
+    expect((q(container, "su-advanced-all") as HTMLDetailsElement).open).toBe(true);
   });
 
-  it("Setup holds only Repos and Models: no Advanced fold, and each moved setting opens from its block", async () => {
+  it("keeps every earlier row under Advanced settings", async () => {
     const view = withAccounts(board());
     fakeApi(view);
     const { container } = await mount(view);
-    for (const id of ["su-advanced-all", "su-advanced-all-toggle", "su-open-advanced", "su-advanced", "su-advanced-toggle"]) {
-      expect(q(container, id), id).toBeNull();
+    const advanced = q(container, "su-advanced-all")!;
+    expect((advanced as HTMLDetailsElement).open).toBe(false);
+    for (const id of ["su-row-repository", "su-row-models", "su-test-all", "su-advanced", "su-row-ci"]) {
+      expect(advanced.querySelector(`[data-testid="${id}"]`), id).not.toBeNull();
     }
-    // The Repositories block's Manage holds the repository menus and the CI changes toggles.
-    await click(q(container, "su-manage-repos-open"));
-    expect(q(document.body, "su-manage-repos-drawer")!.querySelector('[data-testid="su-row-ci"]')).not.toBeNull();
-    // The Models block's Manage holds the model sources.
-    mounted!.unmount(); document.body.innerHTML = "";
-    fakeApi(view);
-    const again = await mount(view);
-    await click(q(again.container, "su-manage-models-open"));
-    expect(q(document.body, "su-manage-models-drawer")).not.toBeNull();
+    await click(q(container, "su-open-advanced"));
+    expect((advanced as HTMLDetailsElement).open).toBe(true);
   });
 
-  it("a deep link to a setting that moved goes to its new place", async () => {
+  it("a deep link into a row opens Advanced settings on it", async () => {
     fakeApi(board());
-    const replace = vi.spyOn(window.location, "replace").mockImplementation(() => {});
     const { container } = await mount(board(), "?area=setup&focus=budget");
     expect(q(container, "su-welcome")).toBeNull();
-    expect(replace).toHaveBeenCalledWith("?area=govern&tab=limits");
-    replace.mockRestore();
+    expect((q(container, "su-advanced-all") as HTMLDetailsElement).open).toBe(true);
   });
 
   it("an older API without github_accounts still shows its one connection", async () => {

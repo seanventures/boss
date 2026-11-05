@@ -28,9 +28,7 @@ describe("knowledge console", () => {
     );
     expect(html).toContain("one year");
     expect(html).toContain("No embedding model is set.");
-    expect(html).toContain("knowledge-embedding-set");
     expect(html).toContain("focus=embedding_model");
-    expect(html).toContain("Set it in Setup › Models › Manage");
     expect(html).toContain("not created");
     expect(html).toContain("knowledge");
     expect(html).toContain("has not been run");

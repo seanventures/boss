@@ -1,18 +1,23 @@
 // @vitest-environment happy-dom
 /**
  * Repo and models, simplified: ① GitHub (the one sign-in) ② Repos ③ Model ④ Try it, and everything
- * else moved out (BOSSAPP-898): Setup holds ONLY Repos and Models. The GitHub App, model routing, the
- * repository menus and CI toggles open in drawers from their blocks; the budget, allowed repos and the
- * embedding model live in Govern and Knowledge, and old links go there.
+ * else folded under Advanced — with every old row still on the page (parity), and a deep link to an
+ * Advanced row opening the fold.
  */
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { overBudget } from "./_helpers/copy-budget";
 import { click, fakeApi, flush, mountBoard, q, type FakeApi, type Mounted } from "./_helpers/setup-board";
 import { board as plainBoard, firstRun } from "./_helpers/setup-fixtures";
 import type { SetupView } from "../lib/setup-types";
 
-const board = plainBoard;
+/** The board with every optional row present (build database and toolchains report here). */
+const board = (): SetupView => ({
+  ...plainBoard(),
+  build_database: { key: "build_services", mode: "auto", enabled: true, source: "default", configured: true,
+                    permission: "settings:update" },
+  toolchains: [{ name: "python", label: "Python", installed: true, builtin: true, versions: {} }],
+} as SetupView);
 
 let mounted: Mounted | null = null;
 afterEach(() => { mounted?.unmount(); mounted = null; });
@@ -31,9 +36,16 @@ function withSignin(api: FakeApi, status: unknown, extra: (url: string, op: stri
   };
 }
 
+/** Every row the page had before the redesign, by its test id. */
+const OLD_ROWS = ["su-row-repository", "su-row-github-access", "su-row-build-database", "su-row-models",
+                  "su-row-capacity", "su-row-jobs", "su-row-budget", "su-row-toolchains",
+                  "su-row-public-url"];
+const ADVANCED_ROWS = ["su-row-github-access", "su-row-build-database", "su-row-jobs",
+                       "su-row-budget", "su-row-toolchains", "su-row-public-url", "su-row-ci"];
+
 describe("the order a new person sees", () => {
   // BOSSAPP-808: Try it left Setup for the Welcome (PARITY-808.md) — three steps.
-  it("① GitHub, ② Repos, ③ Model — and no Advanced", async () => {
+  it("① GitHub, ② Repos, ③ Model — then a folded Advanced", async () => {
     const api = fakeApi(firstRun());
     withSignin(api, SIGNED_OUT);
     mounted = await mountBoard(firstRun());
@@ -42,7 +54,8 @@ describe("the order a new person sees", () => {
     expect(main).toEqual(["su-row-github", "su-row-repository", "su-row-models"]);
     const steps = [...document.querySelectorAll("[data-testid=su-board] > section .su-step")].map((s) => s.textContent);
     expect(steps).toEqual(["①", "②", "③"]);
-    expect(q(document.body, "su-advanced")).toBeNull();
+    const adv = q(document.body, "su-advanced") as HTMLDetailsElement;
+    expect(adv.open).toBe(false);
     expect(q(document.body, "gh-signin-start")!.textContent).toContain("Sign in with GitHub");
     expect(q(document.body, "su-signin-first")).not.toBeNull();     // Repos waits for the sign-in
     expect(overBudget(document.body)).toEqual([]);
@@ -62,67 +75,42 @@ describe("the order a new person sees", () => {
   });
 });
 
-describe("parity: every capability still reachable (BOSSAPP-898)", () => {
-  it("Setup's page is only Repos and Models; the moved rows are not on it and there is no Advanced", async () => {
+describe("parity: every capability still reachable", () => {
+  it("every old row is on the page; the advanced ones inside the fold, each with one plain line", async () => {
     const api = fakeApi(board());
     withSignin(api, SIGNED_IN);
     mounted = await mountBoard(board());
     await flush();
-    for (const id of ["su-row-repository", "su-row-models"]) expect(q(document.body, id), id).not.toBeNull();
-    for (const id of ["su-advanced", "su-advanced-toggle", "su-advanced-all", "su-advanced-all-toggle", "su-open-advanced",
-                      "su-row-github-access", "su-row-jobs", "su-row-budget", "su-row-ci"]) {
-      expect(q(document.body, id), id).toBeNull();
+    for (const id of OLD_ROWS) expect(q(document.body, id), id).not.toBeNull();
+    const adv = q(document.body, "su-advanced")!;
+    for (const id of ADVANCED_ROWS) expect(adv.querySelector(`[data-testid="${id}"]`), id).not.toBeNull();
+    for (const why of ["github_app", "repositories", "ci", "build_database", "toolchains", "jobs",
+                       "budget", "public_url"]) {
+      const line = q(adv, `su-adv-why-${why}`)!;
+      expect(line.textContent!.split(/\s+/).length, why).toBeLessThanOrEqual(6);
+      expect(line.getAttribute("data-tip")).toBeTruthy();
     }
-    expect(document.querySelector('[data-testid^="su-adv-why-"]')).toBeNull();
-    // the CI opt-in is not on the repo line either; it is in the repository menus drawer
+    // rc9 grouped the model sources (capacity) inside ③ Model, not the fold
+    expect(q(document.body, "su-row-models")!.querySelector('[data-testid="su-row-capacity"]')).not.toBeNull();
+    // the CI opt-in moved out of the repo line into Advanced › CI permission
     expect(q(document.body, "su-row-repository")!.querySelector("[data-testid^=su-ci-workflows]")).toBeNull();
   });
 
-  for (const [focus, drawer, row] of [["jobs", "su-routing-drawer", "su-row-jobs"],
-                                      ["github_app", "su-github-app-drawer", "su-row-github-access"],
-                                      ["ci", "su-manage-repos-drawer", "su-row-ci"],
-                                      ["capacity", "su-manage-models-drawer", "su-row-capacity"],
-                                      ["embedding_model", "su-manage-models-drawer", "su-row-embedding-model"]] as const) {
-    it(`?focus=${focus} opens its drawer on the Setup board`, async () => {
+  for (const focus of ["budget", "jobs", "ci", "github_app", "toolchains", "public_url", "build_database"]) {
+    it(`?focus=${focus} opens Advanced`, async () => {
       const api = fakeApi(board());
       withSignin(api, SIGNED_IN);
-      mounted = await mountBoard(board(), `?area=setup&focus=${focus}`, true, "setup");
-      const d = q(document.body, drawer);
-      expect(d, drawer).not.toBeNull();
-      // (the embedding row itself needs the server's slot; setup-embedding-model.test covers its content)
-      if (focus !== "embedding_model") expect(d!.querySelector(`[data-testid="${row}"]`), row).not.toBeNull();
-      expect(q(document.body, "su-advanced")).toBeNull();
-    });
-  }
-
-  for (const [focus, to] of [["budget", "?area=govern&tab=limits"], ["repositories", "?area=govern&tab=repositories"]] as const) {
-    it(`?focus=${focus} goes to ${to}`, async () => {
-      const api = fakeApi(board());
-      withSignin(api, SIGNED_IN);
-      const replace = vi.spyOn(window.location, "replace").mockImplementation(() => {});
       mounted = await mountBoard(board(), `?area=setup&focus=${focus}`);
-      expect(replace).toHaveBeenCalledWith(to);
-      replace.mockRestore();
+      expect((q(document.body, "su-advanced") as HTMLDetailsElement).open).toBe(true);
     });
   }
 
-  for (const [query, say] of [["github=app_connected", "GitHub connected"],
-                              ["github=app_failed", "GitHub was not connected. Start again."]] as const) {
-    it(`GitHub sending the person back (${query}) says so once and drops it from the URL`, async () => {
-      const api = fakeApi(board());
-      withSignin(api, SIGNED_IN);
-      const said: string[] = [];
-      const on = (e: Event) => said.push(String((e as CustomEvent<{ message: string }>).detail.message));
-      window.addEventListener("boss:toast", on);
-      try {
-        mounted = await mountBoard(board(), `?area=setup&focus=repository&${query}`);
-        expect(said).toEqual([say]);
-        expect(window.location.search).not.toContain("github=");
-      } finally {
-        window.removeEventListener("boss:toast", on);
-      }
-    });
-  }
+  it("GitHub sending the org admin back from the App install opens Advanced", async () => {
+    const api = fakeApi(board());
+    withSignin(api, SIGNED_IN);
+    mounted = await mountBoard(board(), "?area=setup&focus=repository&github=app_connected");
+    expect((q(document.body, "su-advanced") as HTMLDetailsElement).open).toBe(true);
+  });
 });
 
 describe("sign in, then pick repos", () => {
