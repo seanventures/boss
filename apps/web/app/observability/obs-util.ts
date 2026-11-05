@@ -80,3 +80,34 @@ export function obsAsks(pulse: Pulse | null): MonitoringAsk[] {
     target_id: r.targetId, app_name: r.app, environment: r.env, status: r.state,
   })));
 }
+
+/** Outer width cap of `.obs-ask-menu`. A starter is a sentence, so the menu is this wide. */
+export const ASK_MENU_MAX_PX = 420;
+
+/** The width the menu will take on this window: the cap, or the window minus a 8px inset each side. */
+export function askMenuWidth(viewportWidth: number): number {
+  return Math.min(ASK_MENU_MAX_PX, Math.max(0, viewportWidth - 16));
+}
+
+/**
+ * Which way the menu opens. `end` grows left from the trigger (`right: 0`); `start` grows
+ * right (`left: 0`). A wrapped header leaves the trigger near the left, and growing left then
+ * crosses the screen edge. When both sides fit, keep growing left — the trigger is at the end
+ * of the row. When neither fits, grow toward the side that hides less of the menu.
+ */
+export function askMenuSide(
+  trigger: { left: number; right: number },
+  viewportWidth: number,
+  menuWidth: number,
+): "start" | "end" {
+  const pad = 8;
+  const fitsEnd = trigger.right - menuWidth >= pad;
+  const fitsStart = trigger.left + menuWidth <= viewportWidth - pad;
+  if (fitsEnd === fitsStart) {
+    if (fitsEnd) return "end";
+    const endOverflow = pad - (trigger.right - menuWidth);
+    const startOverflow = trigger.left + menuWidth - (viewportWidth - pad);
+    return endOverflow <= startOverflow ? "end" : "start";
+  }
+  return fitsEnd ? "end" : "start";
+}

@@ -19,7 +19,7 @@ import { openDockAbout } from "../../lib/dock-subject";
 import { deployHref, hostHref } from "../../lib/infra-view";
 import { ms, pct, type PulseRow, type Pulse } from "../../lib/obs-view";
 import { plainClick } from "../agents/live-util";
-import { HEAD, SPAN, dur, leaveTo, obsAsks, timeTicks } from "./obs-util";
+import { HEAD, SPAN, askMenuSide, askMenuWidth, dur, leaveTo, obsAsks, timeTicks } from "./obs-util";
 import type { ObsTabProps } from "./obs-home";
 import { AppDrawer } from "./app-drawer";
 import { PulseStrip, StripTable } from "./pulse-strip";
@@ -206,7 +206,17 @@ export function AppsTab(props: ObsTabProps) {
 
 export function ObsAskBoss({ pulse }: ObsTabProps) {
   const [open, setOpen] = useState(false);
+  const [side, setSide] = useState<"start" | "end">("end");
   const box = useRef<HTMLSpanElement>(null);
+  // A right-anchored menu grows left. On a wrapped header the trigger is near the left edge,
+  // and that growth leaves the screen. Measure first, then open on the side that fits.
+  const toggle = () => {
+    if (!open) {
+      const r = box.current?.getBoundingClientRect();
+      if (r) setSide(askMenuSide({ left: r.left, right: r.right }, window.innerWidth, askMenuWidth(window.innerWidth)));
+    }
+    setOpen((v) => !v);
+  };
   useEffect(() => {
     if (!open) return undefined;
     const close = (e: MouseEvent) => { if (box.current && !box.current.contains(e.target as Node)) setOpen(false); };
@@ -219,9 +229,9 @@ export function ObsAskBoss({ pulse }: ObsTabProps) {
   return (
     <span className="inf-pop" ref={box}>
       <button type="button" className="ag-btn" aria-haspopup="menu" aria-expanded={open} data-testid="obs-ask"
-              title="Ask BOSS about what is on this screen" onClick={() => setOpen((v) => !v)}>Ask BOSS</button>
+              title="Ask BOSS about what is on this screen" onClick={toggle}>Ask BOSS</button>
       {open ? (
-        <span className="inf-menu obs-ask-menu" role="menu" data-testid="obs-ask-menu">
+        <span className="inf-menu obs-ask-menu" role="menu" data-side={side} data-testid="obs-ask-menu">
           {asks.map((a) => (
             // The starter IS the question the dock will be prefilled with (data, editable there),
             // so it is shown whole and is not a tooltip.
