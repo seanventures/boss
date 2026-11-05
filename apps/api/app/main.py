@@ -2779,6 +2779,15 @@ def request_actor_or_principal() -> Optional[str]:
     return identity_guard.request_actor() or current_api_principal.get()
 
 
+def read_actor(fallback: str = "") -> str:
+    """Who a signed-in read is checked as.
+
+    The guard's actor when the client named nobody, or named this principal. A different
+    name is returned unchanged so the actor_mismatch check still refuses it. The transport
+    principal alone (sys_legacy_console) is not that name."""
+    return str(identity_guard.named_other_actor() or request_actor_or_principal() or fallback)
+
+
 def require_project_actor(connection, project_id: str, actor: str, permission: str) -> None:
     # Authenticate the claimed actor before inspecting its permissions. Checking
     # permissions first can turn an impersonation attempt into a target-member
@@ -9332,7 +9341,11 @@ def list_secrets_endpoint(project_id: str):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     from .services.secrets_service import list_secrets
     with begin(engine) as connection:
-        require_project_actor(connection, project_id, _secret_actor(), "integration_manage")
+        # No actor was named. The transport principal (sys_legacy_console) is not a second
+        # name; the guard's actor is the one the binding compares (executive_console).
+        require_project_actor(
+            connection, project_id, read_actor(_secret_actor()), "integration_manage",
+        )
         return {"project_id": project_id, "secrets": list_secrets(connection, project_id)}
 
 
@@ -9428,7 +9441,9 @@ def get_secret_metadata_endpoint(secret_ref_id: str, project_id: str):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     from .services.secrets_service import list_secrets
     with begin(engine) as connection:
-        require_project_actor(connection, project_id, _secret_actor(), "integration_manage")
+        require_project_actor(
+            connection, project_id, read_actor(_secret_actor()), "integration_manage",
+        )
         for item in list_secrets(connection, project_id):
             if item.get("secret_ref_id") == secret_ref_id:
                 return item
@@ -13663,7 +13678,7 @@ def agent_briefing_endpoint(project_id: str):
     from boss_engine.services.factory_briefing import factory_briefing
 
     with begin(engine) as connection:
-        actor = current_api_principal.get() or "system"
+        actor = read_actor("system")
         require_project_actor(connection, project_id, actor, "agent_chat")
         return factory_briefing(connection, project_id)
 
@@ -18284,8 +18299,7 @@ def setup_status_endpoint(project_id: str, response: Response) -> dict:
     _deprecated(response, "/v1/setup")
     with begin(engine) as connection:
         require_project_actor(
-            connection, project_id, current_api_principal.get() or "ceo",
-            "entitlement_manage",
+            connection, project_id, read_actor("ceo"), "entitlement_manage",
         )
         return setup_status(connection, settings, project_id)
 
@@ -18316,8 +18330,13 @@ def setup_coding_agents(response: Response, project_id: str = "") -> dict:
     if project_id:
         with begin(engine) as connection:
             # A read (SETUP_READ): the project read, not a write's actor binding (see
-            # routers/setup.require_read).
-            require_project_reader(connection, project_id)
+            # routers/setup.require_read). A different actor name is still a mismatch.
+            if identity_guard.named_other_actor():
+                require_project_actor(
+                    connection, project_id, read_actor("ceo"), "entitlement_manage",
+                )
+            else:
+                require_project_reader(connection, project_id)
             agents = list_coding_agents(runtime_settings)
             # Keep detection useful if the recorded connection lookup fails. An authority
             # failure must reach the caller instead of becoming connected=False.
@@ -18347,8 +18366,7 @@ def setup_decision_model_status(project_id: str, response: Response) -> dict:
     _deprecated(response, "/v1/setup")
     with begin() as connection:
         require_project_actor(
-            connection, project_id, current_api_principal.get() or "ceo",
-            "entitlement_manage",
+            connection, project_id, read_actor("ceo"), "entitlement_manage",
         )
         return decision_model_status(connection, get_settings(), project_id)
 

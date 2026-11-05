@@ -250,6 +250,7 @@ async def enforce_access(conn: HTTPConnection) -> None:
 
 
 async def _enforce_access(conn: HTTPConnection) -> None:
+    CLAIMED_OTHER.set(None)
     route = conn.scope.get("route")
     endpoint = getattr(route, "endpoint", None) or conn.scope.get("endpoint")
     settings = get_settings()
@@ -389,6 +390,9 @@ async def _enforce_access(conn: HTTPConnection) -> None:
 
 ACTOR_FIELD = "actor"
 REQUEST_ACTOR: ContextVar[Optional[str]] = ContextVar("boss_request_actor", default=None)
+#: A name the client sent that is not this principal and not its legacy member. The guard still
+#: replaces it (R6). Read handlers that must refuse a second actor pass it to the binding check.
+CLAIMED_OTHER: ContextVar[Optional[str]] = ContextVar("boss_claimed_other_actor", default=None)
 
 
 def actor_for(ctx: Any) -> str:
@@ -403,6 +407,16 @@ def actor_for(ctx: Any) -> str:
 def request_actor() -> Optional[str]:
     """The enforced request's actor (None when the guard did not enforce this request)."""
     return REQUEST_ACTOR.get() if identity_enforced() else None
+
+
+def named_other_actor() -> Optional[str]:
+    """An actor the client named that is not the signed-in principal.
+
+    None when they named nobody, or named this principal or its legacy member. The guard has
+    already replaced the value the handler will read; this is the name it replaced."""
+    if not identity_enforced():
+        return None
+    return CLAIMED_OTHER.get()
 
 
 def actor_is_a_filter(fn: Any) -> Any:
@@ -440,7 +454,15 @@ def _route_takes_actor(route: Any) -> tuple[bool, bool]:
     return in_body, in_query
 
 
+def _same_principal(ctx: Any, actor: str) -> set[str]:
+    principal = ctx.principal
+    same = {str(actor), str(principal.id)}
+    same.update(str(member) for member in (principal.legacy_member_ids or ()))
+    return same
+
+
 def _bind_actor(conn: HTTPConnection, route: Any, ctx: Any, body: Any) -> None:
+    CLAIMED_OTHER.set(None)
     actor = actor_for(ctx)
     REQUEST_ACTOR.set(actor)
     conn.state.identity_actor = actor
@@ -465,6 +487,11 @@ def _bind_actor(conn: HTTPConnection, route: Any, ctx: Any, body: Any) -> None:
             conn.scope["query_string"] = urlencode(pairs).encode("latin-1")
             if hasattr(conn, "_query_params"):
                 del conn._query_params       # Starlette caches it; FastAPI reads it after us
+    same = _same_principal(ctx, actor)
+    foreign = [str(value).strip() for value in claimed
+               if str(value).strip() and str(value).strip() not in same]
+    if foreign:
+        CLAIMED_OTHER.set(foreign[0])
     for value in claimed[:1]:
         try:
             legacy.note_claimed_actor(ctx, value)
