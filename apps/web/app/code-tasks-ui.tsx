@@ -226,7 +226,13 @@ function completeGithubRepository(value?: string | null): string | null {
   return name && /^[^/\s]+\/[^/\s]+$/.test(name) ? name : null;
 }
 
+/** Empty settings still advertise legacy_env and a full name such as "/". That is not a binding. */
+function githubBindingUnconfigured(plane?: string | null, repo?: string | null): boolean {
+  return plane === "legacy_env" && !repo;
+}
+
 function githubTip(plane?: string | null, label?: string | null, repo?: string | null): string {
+  if (githubBindingUnconfigured(plane, repo)) return "GitHub binding is unconfigured.";
   const source = plane === "mission_control_binding"
     ? `Project GitHub binding${repo ? ` for ${repo}` : ""}.`
     : plane === "legacy_env"
@@ -334,6 +340,7 @@ export function CodeTasksHome({ projectId, orgId, codeTasks, codeTaskTotal, apiR
   const counts = floor.data?.counts;
   const needs = counts?.needsYou ?? 0;
   const githubRepository = completeGithubRepository(githubFullName);
+  const githubUnconfigured = githubBindingUnconfigured(githubPlane, githubRepository);
 
   if (!apiReachable) {
     return (
@@ -372,7 +379,7 @@ export function CodeTasksHome({ projectId, orgId, codeTasks, codeTaskTotal, apiR
           </span>
         ) : null}
         <span className="fx-muted fx-head-gh" data-testid="fx-github-plane" title={githubTip(githubPlane, githubPlaneLabel, githubRepository)}>
-          GitHub · {githubRepository ? <span data-user-text>{githubRepository}</span> : "Repository unknown"}
+          GitHub · {githubRepository ? <span data-user-text>{githubRepository}</span> : githubUnconfigured ? "unconfigured" : "Repository unknown"}
         </span>
         {previewBlockedReason ? (
           <span className="fx-err" role="status" data-testid="fx-preview-list-error" title={previewBlockedReason}>Previews unavailable</span>
