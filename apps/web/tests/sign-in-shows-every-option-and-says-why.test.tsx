@@ -84,11 +84,13 @@ describe("all off: the page keeps its shape and says what turns each thing on", 
     expect(calls).toEqual([]);
   });
 
-  it("an unclaimed install says how to claim it without the logs: the host's setup-link command", async () => {
+  it("an unclaimed install's banner is only the door to /claim: no command box (BOSSAPP-813)", async () => {
+    // The login page redirects to /claim while unclaimed (app/(auth)/login/page.tsx); the banner
+    // stays as a door, and the setup-link command lives only on /claim, for a public address.
     await mount({ ...OFF, claim: { path: "setup_token", seats: [], expires_at: null } as unknown as AuthOptions["claim"] });
     const how = document.querySelector("[data-testid='claim-how']")!;
     expect(how.querySelector("[data-testid='claim-door']")!.getAttribute("href")).toBe("/claim");
-    expect(how.textContent).toContain("boss identity setup-link");
+    expect(how.textContent).not.toContain("boss identity setup-link");
   });
 
   it("every provider square is there, disabled, naming where an Owner turns it on", async () => {

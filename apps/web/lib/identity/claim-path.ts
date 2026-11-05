@@ -30,7 +30,10 @@ function accepted(claim: Claim): string[] {
  * API accepts a setup link, the setup link is the proof; the page says how to get one. The API
  * still accepts the shared password (older clients), the console just never offers it.
  */
-export function claimPathFor(claim: Claim, _fragmentToken: string): ClaimPath {
+export function claimPathFor(claim: Claim, fragmentToken: string): ClaimPath {
+  // A page opened from a setup link claims with it, even on a private network (BOSSAPP-813),
+  // where the API names the on-site network path: the link the person holds is never ignored.
+  if (fragmentToken && accepted(claim).includes("setup_token")) return "setup_token";
   if (accepted(claim).includes("setup_token") && claim.path === "legacy_password") return "setup_token";
   return claim.path;
 }

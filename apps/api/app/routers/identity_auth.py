@@ -34,12 +34,15 @@ from boss_engine.identity.signin import Answer, RequestFacts
 def credentials(request: Request) -> RequestCredentials:
     """The same framework-free view the enforcement point builds (identity_guard._credentials)."""
     client = request.client.host if request.client else None
+    # The SOCKET peer (apps/api/serve.py records it before uvicorn's proxy-header layer rewrites
+    # request.client): every trusted-proxy decision is about who actually connected.
+    peer = request.scope.get("boss.raw_peer") or client
     from apps.api.app import identity_guard
 
     return RequestCredentials(
         method=request.method, path=request.url.path,
         headers={k.lower(): v for k, v in request.headers.items()},
-        cookies=dict(request.cookies), client_ip=client, peer_ip=client,
+        cookies=dict(request.cookies), client_ip=client, peer_ip=peer,
         request_id=request.headers.get("x-request-id"),
         legacy_member_id=identity_guard._legacy_member(),
         legacy_auth_method=identity_guard._legacy_method())
@@ -218,6 +221,17 @@ def _browser_origin(request: Request) -> Optional[str]:
     return None
 
 
+def _private_client(request: Request) -> Optional[str]:
+    """The browser's real, private client address when it may claim on the site itself
+    (BOSSAPP-813, claim.site_claim_client): resolved from the socket peer and the
+    X-Forwarded-For of trusted proxies only. None: the setup link is the way in — also when the
+    browser is not on an https origin, which the network path alone would bind (_authorise)."""
+    if not (_browser_origin(request) or "").startswith("https://"):
+        return None
+    creds = credentials(request)
+    return claim_module.site_claim_client(creds.peer_ip, creds.headers.get("x-forwarded-for"))
+
+
 def build_identity_auth_router() -> APIRouter:
     router = APIRouter(tags=["identity-auth"])
 
@@ -245,7 +259,8 @@ def build_identity_auth_router() -> APIRouter:
             claim_info = None
             if not claim_module.is_claimed(db):
                 # read-only (R5): the API's lifespan keeps a live claim link printed
-                paths = claim_module.available_paths(db, bridged)
+                private = _private_client(request) if not bridged else None
+                paths = claim_module.available_paths(db, bridged, private_client=bool(private))
                 path = ("network_bridge" if "network" in paths
                         else "legacy_password" if "legacy_password" in paths else "setup_token")
                 claim_info = {
@@ -263,6 +278,10 @@ def build_identity_auth_router() -> APIRouter:
                     # whoever holds the install's admin key can issue a link over the API
                     # (POST /v1/identity/setup-link): the way in on a host with no shell
                     "link_over_api": claim_module.links_over_api(),
+                    # why the network path applies (BOSSAPP-813): "bridge" (BOSS_CONSOLE_AUTH=
+                    # network) or "private_network" (this browser's real address is private, so
+                    # it claims on the site itself). None: the setup link is the way in.
+                    "network": ("bridge" if bridged else "private_network" if private else None),
                 }
             from boss_engine.config import get_settings
 
@@ -402,7 +421,8 @@ def build_identity_auth_router() -> APIRouter:
             claimed = claim_module.is_claimed(db)
             body: dict[str, Any] = {"claimed": claimed}
             if not claimed:
-                body["paths"] = claim_module.available_paths(db, bridged)
+                private = _private_client(request) if not bridged else None
+                body["paths"] = claim_module.available_paths(db, bridged, private_client=bool(private))
                 if "network" in body["paths"]:
                     body["origin"] = origin_of(request.headers.get("origin", "")) or None
             return JSONResponse(body, headers={"Cache-Control": "no-store"})
@@ -430,11 +450,13 @@ def build_identity_auth_router() -> APIRouter:
                     name=body.name, email=body.email, password=body.password,
                     setup_token=body.setup_token, legacy_password=body.legacy_password,
                     confirm_origin=body.confirm_origin or body.origin, seat=body.seat), ip=ip, bridged=bridged,
-                    headers=dict(creds.headers), peer_ip=creds.peer_ip)
+                    headers=dict(creds.headers), peer_ip=creds.peer_ip,
+                    private_client=None if bridged else _private_client(request))
                 f = facts(request, db)
                 # The session records what this claim PROVED (IDENTITY.md §4.11): the claim's own
                 # proof (setup link, shared password, network bridge), plus the password the Owner
-                # chose. Never "network" for a claim that was not network-bridged.
+                # chose. "network" only for a claim the network proved: bridged, or a private
+                # client address (BOSSAPP-813).
                 proof = claim_module.proof_method(setup_token=body.setup_token,
                                                   legacy_password=body.legacy_password)
                 answer = signin.finish(db, user, f, methods=[proof] + (["pwd"] if body.password else []),

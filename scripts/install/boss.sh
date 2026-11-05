@@ -262,11 +262,18 @@ cmd_open() {
   # NOT CLAIMED YET: say how, with the command, so nobody has to find the link in a log.
   case "$(identity_cli claim-status 2>/dev/null | tail -n 1 || true)" in
     unclaimed)
-      printf '\nNot claimed yet: nobody owns this BOSS. To become its Owner, run\n\n'
-      printf '  boss identity setup-link\n\n'
-      printf 'and open the one-hour link it prints, in the browser you will sign in with.\n'
-      [[ -z "$(env_value BOSS_CONSOLE_PASSWORD)" ]] ||
-        printf 'Or open /claim and prove it is you with the password from: boss password\n' ;;
+      # BOSSAPP-813: from the server's own network (LAN, tailnet) the console's https address IS
+      # the claim — the first visitor sets up the Owner on the site. The setup link is for
+      # everywhere else (and for an install with no https origin).
+      if [[ -n "$origin" ]]; then
+        printf '\nNot claimed yet. Open %s to claim this BOSS (from your own network);\n' "${origin%/}"
+        printf 'from elsewhere run, on this server: boss identity setup-link\n'
+        printf '(it prints a one-hour link; open it in the browser you will sign in with).\n'
+      else
+        printf '\nNot claimed yet: nobody owns this BOSS. To become its Owner, run\n\n'
+        printf '  boss identity setup-link\n\n'
+        printf 'and open the one-hour link it prints, in the browser you will sign in with.\n'
+      fi ;;
     *) printf 'Sign in with your own account. Teammates without one yet: boss password, until it stops.\n' ;;
   esac
 }

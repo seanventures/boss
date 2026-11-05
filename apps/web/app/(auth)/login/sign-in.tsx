@@ -338,10 +338,6 @@ export function SignIn({ options, next, initialStep = null, notice = null }: {
           <a className="idn-note info" href="/claim" data-testid="claim-door">
             <ShieldCheck size={16} aria-hidden /> <span><b>This BOSS has no Owner yet.</b> Claim it <ArrowRight size={12} aria-hidden /></span>
           </a>
-          {/* HOW, without the logs: the claim link is printed by the host command, so a
-              stranger who never saw the API log can still claim. */}
-          <p className="idn-s" data-copy="prose">On the server, print a one-hour claim link:</p>
-          <CopyCommand command={HOST_COMMANDS.setupLink} />
         </div>
       ) : null}
       {hasExternalMethod ? <>

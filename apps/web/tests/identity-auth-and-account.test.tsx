@@ -166,7 +166,7 @@ describe("Claim this BOSS", () => {
     const el = await mount(<ClaimFlow options={options({ path: "setup_token", origin: null, expires_at: null, seats: [], link_over_api: true })} />);
     const note = el.querySelector("[data-testid='claim-no-token']")?.textContent ?? "";
     expect(note).toContain("whoever holds this install's admin key");
-    expect(note).toContain("machine BOSS runs on");
+    expect(note).toContain("server where BOSS is installed");
     expect(el.textContent).toContain("boss identity setup-link");
     accessible(el);
   });
@@ -231,6 +231,54 @@ describe("Claim this BOSS", () => {
     expect(el.querySelector("h1")?.textContent).toBe("Add an authenticator too?");
     await click(el.querySelector("[data-testid='claim-skip-totp']"));
     expect(el.querySelector("[data-testid='recovery-codes']")?.textContent).toContain(CODES[0]);
+  });
+
+  it("private network (BOSSAPP-813): the claim form is the page — no link, no terminal, no shared password", async () => {
+    routes({
+      "POST /v1/auth/setup/claim": { body: { next: "enrol", methods: ["passkey"], who: null } },
+      "GET /v1/identity/me": { body: { csrf_token: "csrf_1" } },
+    });
+    window.history.replaceState(null, "", "/claim");
+    const origin = "https://boss-1.tail18604a.ts.net";
+    const el = await mount(<ClaimFlow options={options({ path: "network_bridge", paths: ["setup_token", "legacy_password", "network"], network: "private_network", origin, expires_at: null, seats: SEATS })} />);
+    expect(el.querySelector("[data-testid='claim-no-token']")).toBeNull();
+    expect(el.querySelector("[data-testid='claim-legacy-password']")).toBeNull();
+    expect(el.textContent).not.toContain("boss identity setup-link");
+    expect(el.textContent).toContain("private network");
+    expect(el.querySelector("[data-testid='claim-origin'] code")?.textContent).toBe(origin);
+    type(el.querySelector("#claim-name"), "Param");
+    type(el.querySelector("#claim-email"), "param@example.com");
+    type(el.querySelector("#claim-pw"), "violet-otter-harbour-1987");
+    await click(el.querySelector("[data-testid='claim-origin-confirm']"));
+    await click(el.querySelector("[data-testid='claim-submit']"));
+    const claim = calls.find((c) => c.url === "/v1/auth/setup/claim");
+    expect(claim?.body).toMatchObject({ confirm_origin: origin, password: "violet-otter-harbour-1987" });
+    expect(claim?.body).not.toHaveProperty("setup_token");
+    expect(claim?.body).not.toHaveProperty("legacy_password");
+    // Then "Protect your account" (812), with both factors offered.
+    expect(el.querySelector("h1")?.textContent).toBe("Protect your account");
+    expect(el.querySelector("[data-testid='claim-factor-passkey']")).not.toBeNull();
+    expect(el.querySelector("[data-testid='claim-factor-totp']")).not.toBeNull();
+  });
+
+  it("a setup link the page holds is still the proof on a private network", async () => {
+    window.history.replaceState(null, "", "/claim#t=setup_abc");
+    const el = await mount(<ClaimFlow options={options({ path: "network_bridge", paths: ["setup_token", "network"], network: "private_network", origin: "https://boss.acme.dev", expires_at: null, seats: [] })} />);
+    expect(el.querySelector("[data-testid='claim-origin']")).toBeNull();
+    expect(el.querySelector("[data-testid='claim-no-token']")).toBeNull();
+  });
+
+  it("public address (BOSSAPP-813): the setup-link step says it is a terminal command for the server, not an address", async () => {
+    window.history.replaceState(null, "", "/claim");
+    const el = await mount(<ClaimFlow options={options({ path: "setup_token", paths: ["setup_token"], network: null, origin: null, expires_at: null, seats: [] })} />);
+    const step = el.querySelector("[data-testid='claim-no-token']")?.textContent ?? "";
+    expect(el.querySelector("form")).toBeNull();
+    expect(step).toContain("in a terminal on the server where BOSS is installed");
+    expect(step).toContain("over SSH");
+    expect(step).toContain("not a web address");
+    expect(step).toContain("It prints a link");
+    expect(el.textContent).toContain("boss identity setup-link");
+    accessible(el);
   });
 
   it("no claim pending: a short panel that sends you to sign in", async () => {

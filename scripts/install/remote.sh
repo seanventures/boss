@@ -281,6 +281,20 @@ again() {
 }
 
 # ---------------------------------------------------------------------------- commands
+# NOT CLAIMED YET (BOSSAPP-813): from the server's own network (LAN, tailnet) the console's https
+# address is the claim itself; from anywhere else, the setup link the host prints.
+claim_next() {
+  local state origin
+  state="$(rshq "bash '$DIR/scripts/install/boss.sh' --dir '$DIR' identity claim-status 2>/dev/null | tail -n 1" || true)"
+  [[ "$state" == unclaimed ]] || return 0
+  origin="$(rshq "grep '^BOSS_CONSOLE_PUBLIC_ORIGIN=' '$DIR/.env' 2>/dev/null | tail -n 1 | cut -d= -f2-" || true)"
+  if [[ -n "$origin" ]]; then
+    say "Claim it:        open ${origin%/} to claim this BOSS (from your own network); from elsewhere run on the host: ${D}boss identity setup-link${N}"
+  else
+    say "Claim it:        on the host run ${D}boss identity setup-link${N}, then open the link it prints"
+  fi
+}
+
 cmd_install() {
   head_ "Install BOSS on $HOST"
   preflight
@@ -311,6 +325,7 @@ cmd_install() {
   say "Console   http://127.0.0.1:${WEB_PORT} after connecting the tunnel"
   say "API       http://127.0.0.1:${API_PORT} after connecting the tunnel"
   printf "\n${B}What next${N}\n\n"
+  claim_next
   say "Check it:        ${D}$(again) smoke${N}"
   say "An API key:      ${D}$(again) model --provider openrouter${N} (hidden prompt)"
   say "A subscription:  ${D}$(again) subscription --provider codex${N} (or claude_code, grok): signs in inside BOSS through the provider's own login"

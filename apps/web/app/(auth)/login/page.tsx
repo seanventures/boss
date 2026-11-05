@@ -22,5 +22,9 @@ export default async function LoginPage({ searchParams }: Props) {
   if (me.ok) redirect(next);
   const state = await loadAuthOptionsState();
   if (!state.available) return <AuthUnavailable host={state.host} />;
+  // NOBODY CAN SIGN IN TO AN UNCLAIMED BOSS (BOSSAPP-813): no "Welcome back", no form, no
+  // provider tiles — straight to the claim (the form itself on a private network, else the
+  // setup-link step). `/` reaches here through middleware's no-session redirect.
+  if (state.options.claim) redirect("/claim");
   return <SignIn options={state.options} next={next} notice={ssoErrorWords(params.error)} />;
 }

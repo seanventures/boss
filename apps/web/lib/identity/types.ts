@@ -462,6 +462,10 @@ export interface AuthOptions {
     /** The install has an admin key that can issue a claim link over the API
      *  (POST /v1/identity/setup-link), for a host with no shell. */
     link_over_api?: boolean;
+    /** Why the network path applies (BOSSAPP-813): "bridge" (BOSS_CONSOLE_AUTH=network) or
+     *  "private_network" (this browser's real address is private: it claims on the site itself).
+     *  Null/absent: the setup link is the way in. */
+    network?: "bridge" | "private_network" | null;
   };
 }
 

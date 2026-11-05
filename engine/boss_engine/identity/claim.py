@@ -7,6 +7,11 @@
   network bridge    a BOSS_CONSOLE_AUTH=network install: the request is bridged to
                     usr_network_operator by S5's legacy.bridge; the claim binds the browser's
                     origin (Origin == Host, https) as the public origin — no env, no logs
+  private network   (BOSSAPP-813) any install, while unclaimed: the browser's REAL client address,
+                    resolved through BOSS_TRUSTED_PROXIES (`site_claim_client`), is private
+                    (loopback, RFC 1918, ULA, the tailnet). The same proof and origin checks as
+                    the network bridge — the first visitor claims on the site itself, like
+                    Gitea, n8n or Portainer — with no terminal and no shared password
 
 Every path is single use, rate-limited (10/h per IP) and answers 404 for good once a real Owner
 exists (A14). The claimant becomes the first Owner; `bootstrap.claimed` arms the last-Owner trigger.
@@ -113,13 +118,111 @@ def setup_expires_at(db: Any) -> Optional[str]:
     return row.isoformat() if row else None
 
 
-def available_paths(db: Any, ctx: Optional[AuthContext]) -> list[str]:
+def available_paths(db: Any, ctx: Optional[AuthContext], *, private_client: bool = False) -> list[str]:
+    """Every proof this browser may claim with. `network` (Origin == Host, https, confirmed on
+    screen) is offered to a network-bridged request AND to a browser whose real client address is
+    private (`site_claim_client`): both mean "being on this network proves you run it"."""
     paths = ["setup_token"]
     if _legacy_password():
         paths.append("legacy_password")
-    if is_network_bridged(ctx):
+    if is_network_bridged(ctx) or private_client:
         paths.append("network")
     return paths
+
+
+# ---- who may claim on the site itself (BOSSAPP-813) -----------------------------------------------------
+
+def _container_networks() -> list[Any]:
+    """The networks a container running BOSS sits on (its directly connected subnets and their
+    gateways, from /proc/net/route), or [] outside a container. An address in them is BOSS's own
+    machinery — the docker bridge gateway (docker-proxy: ANY process on the host, a host reverse
+    proxy included, arrives from it), the console container, a worker — never a person's browser."""
+    import ipaddress
+    import os
+    import socket
+    import struct
+
+    if not (os.path.exists("/.dockerenv") or os.path.exists("/run/.containerenv")):
+        return []
+    nets: list[Any] = []
+    try:
+        with open("/proc/net/route", encoding="ascii") as fh:
+            next(fh, None)
+            for line in fh:
+                cols = line.split()
+                if len(cols) < 8 or cols[0] == "lo":
+                    continue
+                dest, gateway, mask = (int(cols[i], 16) for i in (1, 2, 7))
+                to_ip = lambda v: socket.inet_ntoa(struct.pack("<L", v))  # noqa: E731
+                if gateway:
+                    nets.append(ipaddress.ip_network(to_ip(gateway)))
+                if dest and mask:
+                    nets.append(ipaddress.ip_network(f"{to_ip(dest)}/{to_ip(mask)}", strict=False))
+    except (OSError, ValueError):
+        return nets
+    return nets
+
+
+def site_claim_client(peer: Optional[str], forwarded: Optional[str], *,
+                      trusted: Optional[str] = None, machinery: Optional[list[Any]] = None) -> Optional[str]:
+    """The browser's REAL address when it may claim this unclaimed BOSS on the site itself (it is
+    private: loopback, RFC 1918, ULA, the tailnet), else None. Never a hostname — a *.ts.net or
+    LAN name can be published to the internet (Tailscale Funnel); only the resolved IP counts.
+
+      * `peer` is the SOCKET peer (never one a proxy-header layer rewrote).
+      * Only a peer in BOSS_TRUSTED_PROXIES is believed about X-Forwarded-For: the client is the
+        right-most hop it reports that is not itself trusted (or, every hop trusted, the first —
+        what the first trusted proxy saw). A trusted proxy that reports NO hop reported nobody:
+        None (compose's console with BOSS_CONSOLE_PROXY_HOPS=0 behind a host proxy).
+      * An X-Forwarded-For from any other peer is ignored; the peer itself is the client.
+      * A trusted proxy is never the client, except a loopback hop a trusted proxy REPORTED
+        (a browser on the host, or an SSH tunnel). A loopback socket peer reporting nobody is
+        not a client: a tunnel or proxy daemon on the host could be forwarding anyone.
+      * The container networks BOSS runs on (`_container_networks`: the docker gateway, the
+        console, a worker) are never the client: the gateway stands for the whole host."""
+    import ipaddress
+
+    from .authn_support import _trusted_networks
+    from .legacy import is_private_peer
+
+    nets = _trusted_networks(get_settings_trusted() if trusted is None else trusted)
+    inside = _container_networks() if machinery is None else machinery
+
+    def ip_of(value: str) -> Optional[Any]:
+        try:
+            ip = ipaddress.ip_address((value or "").strip().split("%", 1)[0])
+        except ValueError:
+            return None
+        return ip.ipv4_mapped if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped else ip
+
+    def is_trusted(ip: Any) -> bool:
+        return any(ip.version == n.version and ip in n for n in nets)
+
+    sock = ip_of(peer or "")
+    if sock is None:
+        return None
+    if is_trusted(sock):
+        hops = [ip for ip in (ip_of(h) for h in (forwarded or "").split(",")) if ip is not None]
+        if not hops:
+            return None
+        untrusted = [ip for ip in hops if not is_trusted(ip)]
+        client, reported = (untrusted[-1] if untrusted else hops[0]), True
+    else:
+        client, reported = sock, False
+    if any(client.version == n.version and client in n for n in inside):
+        return None
+    if client.is_loopback:
+        if not reported:
+            return None
+    elif is_trusted(client):
+        return None
+    return str(client) if is_private_peer(str(client)) else None
+
+
+def get_settings_trusted() -> str:
+    from ..config import get_settings
+
+    return str(getattr(get_settings(), "trusted_proxies", "") or "")
 
 
 def is_network_bridged(ctx: Optional[AuthContext]) -> bool:
@@ -188,7 +291,8 @@ def count_attempt(db: Any, ip: Optional[str]) -> Optional[int]:
 
 
 def claim(db: Any, req: ClaimRequest, *, ip: Optional[str], bridged: Optional[AuthContext],
-          headers: dict[str, str], peer_ip: Optional[str] = None) -> users.UserRow:
+          headers: dict[str, str], peer_ip: Optional[str] = None,
+          private_client: Optional[str] = None) -> users.UserRow:
     """Create the first Owner. Raises ClaimRefused (404 once claimed; 401 for a wrong credential).
     Serialised by an advisory lock so two claims cannot both win, and by a DB constraint (L4: one
     `bootstrap.claimed` per org, identity_one_claim_per_org) should the lock ever be bypassed.
@@ -200,7 +304,8 @@ def claim(db: Any, req: ClaimRequest, *, ip: Optional[str], bridged: Optional[Au
     org_id = default_org_id(db)
     if not org_id or is_claimed(db, org_id):
         raise ClaimRefused("not_found", 404)
-    path = _authorise(db, req, bridged=bridged, headers=headers, peer_ip=peer_ip)
+    path = _authorise(db, req, bridged=bridged, headers=headers, peer_ip=peer_ip,
+                      private_client=private_client)
     email = (req.email or "").strip()
     if "@" not in email or len(email) > 320:
         raise ClaimRefused("invalid_email", 422)
@@ -243,7 +348,8 @@ def claim(db: Any, req: ClaimRequest, *, ip: Optional[str], bridged: Optional[Au
 
 def proof_method(*, setup_token: Optional[str], legacy_password: Optional[str]) -> str:
     """The sign-in method a successful claim's session records: the proof `_authorise` accepted,
-    in its precedence (a setup link, then the shared password, then the network bridge)."""
+    in its precedence (a setup link, then the shared password, then the network — the bridge or
+    a private client address, both "being on this network")."""
     if setup_token:
         return "setup_link"
     if legacy_password:
@@ -267,7 +373,8 @@ def claim_origin(path: str, req: ClaimRequest, headers: dict[str, str]) -> str:
 
 
 def _authorise(db: Any, req: ClaimRequest, *, bridged: Optional[AuthContext],
-               headers: dict[str, str], peer_ip: Optional[str] = None) -> str:
+               headers: dict[str, str], peer_ip: Optional[str] = None,
+               private_client: Optional[str] = None) -> str:
     if req.setup_token:
         ch = challenge_by_secret(db, kind="setup", secret=req.setup_token)
         if ch is None or not consume_challenge(db, ch.id_hash):
@@ -277,7 +384,10 @@ def _authorise(db: Any, req: ClaimRequest, *, bridged: Optional[AuthContext],
         if not _shared_password_is_claim_credential(db, req.legacy_password):
             raise ClaimRefused("invalid_credentials", 401)
         return "legacy_password"
-    if is_network_bridged(bridged):
+    # The network path: a bridged request, or (BOSSAPP-813) a browser whose real client address
+    # is private (`site_claim_client`, resolved by the caller from the socket peer). The proof is
+    # the same either way: the browser's own https origin, confirmed on screen.
+    if is_network_bridged(bridged) or private_client:
         from .authn_support import is_trusted_proxy
 
         origin = origin_of(headers.get("origin", ""))

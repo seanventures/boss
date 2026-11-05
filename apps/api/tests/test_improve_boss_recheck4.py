@@ -154,7 +154,9 @@ def test_the_client_address_is_worked_out_off_the_event_loop():
 
 def test_compose_ships_no_proxy_hop():
     compose = (ROOT / "scripts/install/community-compose.yml").read_text()
-    assert "BOSS_CONSOLE_PROXY_HOPS: ${BOSS_CONSOLE_PROXY_HOPS:-0}" in compose
+    # BOSSAPP-813: no hop unless an https console origin says a TLS proxy is in front of the
+    # loopback-only console; an explicit value in .env always wins.
+    assert "BOSS_CONSOLE_PROXY_HOPS: ${BOSS_CONSOLE_PROXY_HOPS:-${BOSS_CONSOLE_PUBLIC_ORIGIN:+1}}" in compose
     assert "BOSS_CONSOLE_PROXY_HOPS=" in (ROOT / ".env.example").read_text()
 
 

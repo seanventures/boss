@@ -93,7 +93,9 @@ def test_xff_is_believed_only_from_the_console_by_name(monkeypatch):
 def test_compose_wires_the_trust_and_the_hops():
     compose = (ROOT / "scripts/install/community-compose.yml").read_text()
     assert "BOSS_TRUSTED_PROXIES: ${BOSS_TRUSTED_PROXIES:-127.0.0.0/8,::1/128,web}" in compose
-    assert "BOSS_CONSOLE_PROXY_HOPS: ${BOSS_CONSOLE_PROXY_HOPS:-0}" in compose
+    # BOSSAPP-813: no hop unless an https console origin says a TLS proxy is in front of the
+    # loopback-only console; an explicit value in .env always wins.
+    assert "BOSS_CONSOLE_PROXY_HOPS: ${BOSS_CONSOLE_PROXY_HOPS:-${BOSS_CONSOLE_PUBLIC_ORIGIN:+1}}" in compose
 
 
 # ------------------------------------------------------------------ nits

@@ -7,7 +7,12 @@
  *   setup_token      the link from the install output (`#t=`), valid an hour;
  *   legacy_password  the shared console password proves you are the operator (D25);
  *   network_bridge   being on this trusted network proves it (D27). The claim binds BOSS to
- *                    the origin shown.
+ *                    the origin shown. Also (BOSSAPP-813) any unclaimed install opened from a
+ *                    browser whose REAL address is private (`claim.network: "private_network"`):
+ *                    the first visitor claims on the site itself, like Gitea or n8n.
+ *
+ * From a public address there is no form: the setup link screen says, in words nobody can read as
+ * an address to type, that `boss identity setup-link` is a terminal command for the server.
  *
  * PASSWORD FIRST (BOSSAPP-812): step 1 is name, email and a PASSWORD — the way in from any
  * browser. Step 2 "Protect your account": a passkey on this device (recommended; it is also the
@@ -106,6 +111,9 @@ function ClaimForm({ options, claim }: { options: AuthOptions; claim: Claim }) {
   const path = claimPathFor(claim, token);
   const origin = claimOrigin(claim, pageOrigin);
   const network = path === "network_bridge";
+  // The network BRIDGE (BOSS_CONSOLE_AUTH=network) keeps its passkey-first step; a private-network
+  // claim on the site offers both factors.
+  const bridgeOnly = network && claim.network !== "private_network";
   const fallback = !passkeys || Boolean(noPasskey); // no passkey here: the authenticator app is the factor
   const proofMissing = (path === "setup_token" && !token) || (path === "legacy_password" && !legacy)
     || (network && (!originOk || !origin));
@@ -197,7 +205,7 @@ function ClaimForm({ options, claim }: { options: AuthOptions; claim: Claim }) {
           <Fingerprint size={18} weight="bold" aria-hidden /> Passkey on this device
         </button>
         <p className="idn-fine" data-copy="prose">Recommended. It is also your one-tap sign-in on this device.</p>
-        {!network ? (
+        {!bridgeOnly ? (
           <button type="button" className="idn-big s" onClick={() => { setError(null); setStage("totp"); }} data-testid="claim-factor-totp">
             <DeviceMobile size={18} aria-hidden /> Authenticator app (code)
           </button>
@@ -240,7 +248,7 @@ function ClaimForm({ options, claim }: { options: AuthOptions; claim: Claim }) {
         {error ? (
           <div className="idn-alt">
             <button type="button" onClick={withPasskey} disabled={busy}><Fingerprint size={16} aria-hidden /> Try again</button>
-            {!network ? <button type="button" onClick={() => { setError(null); setStage("totp"); }}><ShieldCheck size={16} aria-hidden /> Use an authenticator app</button> : null}
+            {!bridgeOnly ? <button type="button" onClick={() => { setError(null); setStage("totp"); }}><ShieldCheck size={16} aria-hidden /> Use an authenticator app</button> : null}
           </div>
         ) : null}
         <p className="idn-fine" data-copy="prose">Your passkey never leaves your device. BOSS stores only its public key.</p>
@@ -255,12 +263,16 @@ function ClaimForm({ options, claim }: { options: AuthOptions; claim: Claim }) {
     return (
       <AuthStage label="Claim this BOSS">
         <Logo host={options.host} />
-        <h1>Open your setup link</h1>
+        <h1>Claim this BOSS from its server</h1>
         <div data-testid="claim-no-token">
-          <p className="idn-s" data-copy="prose">{claim.link_over_api
-            ? "Claiming needs a one-hour link. Ask whoever holds this install's admin key to issue one, or run this on the machine BOSS runs on:"
-            : "Claiming needs a one-hour link from the server. On the machine BOSS runs on:"}</p>
+          <p className="idn-s" data-copy="prose">You&apos;re not on the server&apos;s own network, so claiming needs a one-hour link from the server.</p>
+          <p className="idn-s" data-copy="prose" data-testid="claim-terminal-step">Run this <b>in a terminal on the server where BOSS is installed</b> (over SSH). It&apos;s a command, not a web address.</p>
           <CopyCommand command={SETUP_LINK} />
+          <p className="idn-s" data-copy="prose">It prints a link. Open that link in this browser to claim.</p>
+          {claim.link_over_api
+            ? <p className="idn-fine" data-copy="prose">No shell there? Ask whoever holds this install&apos;s admin key to issue the link.</p>
+            : null}
+          <p className="idn-fine" data-copy="prose">From the server&apos;s own network (its LAN or tailnet), this page is the claim form itself.</p>
         </div>
       </AuthStage>
     );
@@ -268,7 +280,7 @@ function ClaimForm({ options, claim }: { options: AuthOptions; claim: Claim }) {
 
   return (
     <AuthStage label="Claim this BOSS" wide>
-      <Logo host={options.host} right={path === "setup_token" && mins !== null ? `setup link · expires in ${mins} min` : network ? "network bridge" : options.host} />
+      <Logo host={options.host} right={path === "setup_token" && mins !== null ? `setup link · expires in ${mins} min` : bridgeOnly ? "network bridge" : network ? "private network" : options.host} />
       <h1>Claim this BOSS</h1>
       <p className="idn-s" data-copy="prose">
         {path === "legacy_password"

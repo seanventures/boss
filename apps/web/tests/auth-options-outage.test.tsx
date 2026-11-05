@@ -107,12 +107,18 @@ describe("claim, login and SSO landing do not infer identity state from an outag
     // The setup link is read from the fragment after mount; the server render shows the heading only.
     expect(recovered).not.toContain("Already claimed");
   });
-  it("keeps the healthy login and claim door", async () => {
+  it("an unclaimed install's login goes straight to the claim (BOSSAPP-813)", async () => {
     get.mockImplementation(async (path: string) => path === "/v1/auth/options" ? healthy(unclaimed) : failure);
+    redirect.mockImplementationOnce(() => { throw new Error("NEXT_REDIRECT"); });
+    await expect(LoginPage({ searchParams: Promise.resolve({ next: "/account" }) })).rejects.toThrow("NEXT_REDIRECT");
+    expect(redirect).toHaveBeenCalledWith("/claim");
+  });
+  it("keeps the healthy login once claimed", async () => {
     const html = renderToStaticMarkup(await LoginPage({ searchParams: Promise.resolve({ next: "/account" }) }));
     expect(html).toContain("Welcome back");
-    expect(html).toContain("This BOSS has no Owner yet");
+    expect(html).not.toContain("This BOSS has no Owner yet");
     expect(html).not.toContain("Sign-in unavailable");
+    expect(redirect).not.toHaveBeenCalled();
   });
   it("keeps the healthy SSO landing's second-factor step", async () => {
     const html = renderToStaticMarkup(await SsoLandingPage({ searchParams: Promise.resolve({ step: "mfa", next: "/account" }) }));

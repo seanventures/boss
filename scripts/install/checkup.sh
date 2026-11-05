@@ -274,7 +274,14 @@ if [ "${#DOCKER[@]}" -gt 0 ] &&
   bad "sandbox: this host cannot fence the build network, so builds are held — see docs/community/SANDBOX.md (or set BOSS_SANDBOX_NETWORK=off in .env and restart)"
 fi
 case "$claim" in
-  unclaimed) warn "identity: unclaimed — nobody owns this BOSS yet. Run: boss identity setup-link (prints a one-hour link that makes you the Owner; open it in your browser)" ;;
+  unclaimed)
+    # BOSSAPP-813: from the server's own network the console's https address is the claim itself.
+    claim_origin="$(env_value BOSS_CONSOLE_PUBLIC_ORIGIN)"
+    if [ -n "$claim_origin" ]; then
+      warn "identity: unclaimed — nobody owns this BOSS yet. Open ${claim_origin%/} to claim this BOSS (from your own network); from elsewhere run: boss identity setup-link"
+    else
+      warn "identity: unclaimed — nobody owns this BOSS yet. Run on this server: boss identity setup-link (prints a one-hour link that makes you the Owner; open it in your browser)"
+    fi ;;
   claimed*) ok "identity: $claim" ;;
   *) : ;;   # an older image without the identity CLI: nothing to say
 esac

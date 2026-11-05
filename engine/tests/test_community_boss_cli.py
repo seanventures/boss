@@ -368,6 +368,19 @@ def test_boss_open_status_and_logs(world) -> None:
     assert unclaimed.returncode == 0, unclaimed.stderr
     assert "Not claimed yet" in unclaimed.stdout and "  boss identity setup-link" in unclaimed.stdout
 
+    # BOSSAPP-813: with an https console origin, that address IS the claim from the server's own
+    # network; the setup link is for everywhere else.
+    dotenv = world["install"] / ".env"
+    before = dotenv.read_text()
+    dotenv.write_text("".join(line for line in before.splitlines(keepends=True)
+                              if not line.startswith("BOSS_CONSOLE_PUBLIC_ORIGIN="))
+                      + "\nBOSS_CONSOLE_PUBLIC_ORIGIN=https://boss-1.example.ts.net\n")
+    onsite = _run(boss, "open", env={**env, "BOSS_TEST_CLAIM": "unclaimed"})
+    dotenv.write_text(before)
+    assert onsite.returncode == 0, onsite.stderr
+    assert "Open https://boss-1.example.ts.net to claim this BOSS (from your own network)" in onsite.stdout
+    assert "from elsewhere run, on this server: boss identity setup-link" in onsite.stdout
+
     status = _run(boss, "status", env=env)
     assert status.returncode == 0, status.stdout + status.stderr
     assert "healthy at http://127.0.0.1:59731" in status.stdout
