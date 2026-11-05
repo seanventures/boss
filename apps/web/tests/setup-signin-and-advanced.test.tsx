@@ -61,15 +61,17 @@ describe("the order a new person sees", () => {
     expect(overBudget(document.body)).toEqual([]);
   });
 
-  it("says plainly when this install uses the advanced path, and opens it", async () => {
+  it("without sign-in on this install there is no ① GitHub row: Repos is ① and says how to connect", async () => {
     const api = fakeApi(firstRun());
     withSignin(api, UNCONFIGURED);
     mounted = await mountBoard(firstRun());
     await flush();
-    expect(q(document.body, "gh-signin-unconfigured")!.textContent).toContain("This install uses the advanced path");
-    expect(q(document.body, "su-token-form")).not.toBeNull();       // the token path, as before
-    await click(q(document.body, "gh-signin-advanced"));
-    expect((q(document.body, "su-advanced") as HTMLDetailsElement).open).toBe(true);
+    expect(q(document.body, "gh-signin-unconfigured")).toBeNull();   // no "advanced path" jargon
+    expect(document.body.textContent).not.toContain("advanced path");
+    const steps = [...document.querySelectorAll("[data-testid=su-board] > section .su-step")].map((s) => s.textContent);
+    expect(steps[0]).toBe("①");
+    // GitHub access unreadable in this fake: the token path, exactly as before.
+    expect(q(document.body, "su-token-form")).not.toBeNull();
   });
 });
 

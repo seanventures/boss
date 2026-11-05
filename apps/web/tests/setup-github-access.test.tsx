@@ -100,7 +100,7 @@ describe("GitHub access", () => {
     expect(document.querySelector('[data-testid="su-row-github-access"]')!.textContent).toContain("Not reported");
   });
 
-  it("with the App installed, Repository offers it first and lists what it can reach — no token", async () => {
+  it("with the App installed, Repository lists what it can reach at once — no token, nothing to press", async () => {
     const view = firstRun();
     const api = fakeApi(view);
     const installed = { ...NONE, mode: "app",
@@ -118,11 +118,11 @@ describe("GitHub access", () => {
       return null;
     };
     mounted = await mountBoard(view);
-    const use = document.querySelector('[data-testid="su-use-app"]')!;
-    expect(use.textContent).toContain("@acme");
-    await click(use);
+    await flush();
     expect(api.calls.some((c) => c.op === "repo_app")).toBe(true);
-    expect(document.querySelector('[data-testid="su-token-found"]')!.textContent).toContain("GitHub App on");
+    expect(document.querySelector('[data-testid="gh-connect-pick"]')!.textContent).toContain("GitHub connected · @acme");
+    expect(document.querySelector('[data-testid="su-repo-option-acme/web"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="su-token-input"]')).toBeNull();
     expect(document.body.textContent).toContain("acme/web");
   });
 
@@ -225,6 +225,9 @@ describe("simple GitHub entry", () => {
     expect(alternatives.open).toBe(true);
     expect(alternatives.textContent).toContain("Less safe");
     expect(alternatives.querySelector('[data-testid="gh-as-me-link"]')).not.toBeNull();
+    // Repos opens on Connect GitHub; the token (and its storage consent) is under its Other ways.
+    expect(repo.querySelector('[data-testid="gh-connect-start"]')).not.toBeNull();
+    await click(repo.querySelector('[data-testid="su-use-token"]'));
     expect(repo.querySelector('[data-testid="su-consent"]')?.getAttribute("title")).toContain("Encrypted in Postgres");
     expect(api.calls.filter(x => x.method !== "GET")).toEqual([]);
   });

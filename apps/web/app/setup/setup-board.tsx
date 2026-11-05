@@ -320,7 +320,10 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
   const focus = params.focus;
   const ref = (row: RowKey) => (el: HTMLElement | null) => { refs.current[row] = el; };
   // With "Sign in with GitHub" shown as ①, the stepper's rows move down one: ② Repos ③ Model ④ Try it.
-  const shift = (n: number | null) => (n && signin ? n + 1 : n);
+  // Not offered on this install: no ① row at all — ② Repos' "Connect GitHub" is the way in
+  // (BOSSAPP-815), never a pill saying "This install uses the advanced path".
+  const signinShown = signin?.configured ? signin : null;
+  const shift = (n: number | null) => (n && signinShown ? n + 1 : n);
 
   const classicBody = (nested: boolean) => (
     <>
@@ -365,14 +368,14 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
           </GatedButton>
         </header>
         {/* ① GitHub — the one sign-in (absent on an API without it: then Repos is step ①). */}
-        <GitHubSigninRow ref={ref("github")} status={signin} focused={focus === "github"}
-                         step={signin && stepNumber(view, "repository") ? 1 : null}
+        {signinShown ? <GitHubSigninRow ref={ref("github")} status={signinShown} focused={focus === "github"}
+                         step={stepNumber(view, "repository") ? 1 : null}
                          mode={view.next === "repository" && !view.repository.repos.length
                            && !(signin?.me?.status === "active") ? "current" : "open"}
                          onAdvanced={() => {
                            setAdvancedOpen(true);
                            window.setTimeout(() => refs.current.github_app?.scrollIntoView?.({ behavior: "smooth", block: "start" }), 50);
-                         }} />
+                         }} /> : null}
         <RepositoryRow ref={ref("repository")} mode={rowMode(view, "repository")}
                        step={shift(stepNumber(view, "repository"))} focused={focus === "repository"} />
         <ModelsRow ref={ref("models")} mode={rowMode(view, "models")}

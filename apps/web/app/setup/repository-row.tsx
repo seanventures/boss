@@ -5,7 +5,7 @@
  * list, and three real checks run — Read, Write, Pull requests — before anything says Working.
  */
 import { GatedButton, useGate } from "../../components/gated";
-import React, { forwardRef, useEffect, useRef, useState } from "react";
+import React, { forwardRef, useCallback, useEffect, useRef, useState } from "react";
 import { CircleNotch, Plus } from "@phosphor-icons/react";
 
 import { idGet } from "../../lib/identity/api";
@@ -16,6 +16,7 @@ import type { CheckResult, RepoEntry, SetupRefusal, SetupView, TokenFound } from
 import { INSTALL_TIP, installLabel, type InstallNeeded } from "../../lib/identity/github-signin";
 import { Drawer } from "./drawer";
 import { statusOf } from "./github-access-row";
+import { ConnectGitHub } from "./connect-github";
 import { AskBoss, CONSENT_REFUSAL, Consent, RowMenu, toast, useBoard } from "./parts";
 import { Out, Pill, Refusal, Tip } from "./pill";
 import { RepoPicker } from "./repo-picker";
@@ -35,7 +36,7 @@ export function createTokenUrl(host: string): string {
   return newFineGrainedTokenUrl({
     name: `BOSS (${host})`.slice(0, 40),
     description: "BOSS writes branches and opens pull requests",
-    expires_in: "90",
+    expires_in: "366",               // GitHub's longest: builds stop when a token expires
     contents: "write",
     pull_requests: "write",
     metadata: "read",
@@ -123,11 +124,14 @@ function SigninPicker({ onDone, makeDefault }: { onDone?: () => void; makeDefaul
 }
 
 /** Paste a token → signed in → pick a repository → Connect. `connectionId` means Replace. */
-export function TokenForm({ connectionId, onDone, makeDefault = true }: {
+export function TokenForm({ connectionId, onDone, makeDefault = true, replace = false }: {
   connectionId?: string | null; onDone?: () => void; makeDefault?: boolean;
+  /** Replace token: always the token form (an install's repository has no connection id). */
+  replace?: boolean;
 }) {
   const { signin } = useBoard();
   const [otherWays, setOtherWays] = useState(false);
+  const useToken = useCallback(() => setOtherWays(true), []);
   // THE ONE SIGN-IN FIRST: with "Sign in with GitHub" offered here, repos come from it; a token
   // and the org's App stay one click away ("Use a token instead").
   if (!connectionId && signin?.configured && !otherWays) {
@@ -143,6 +147,12 @@ export function TokenForm({ connectionId, onDone, makeDefault = true }: {
         </button>
       </div>
     );
+  }
+  // CONNECT GITHUB FIRST (BOSSAPP-815): this install's own GitHub App, created and installed in two
+  // clicks on GitHub, whose access never expires. A token stays under "Other ways".
+  if (!connectionId && !replace && !otherWays) {
+    return <ConnectGitHub onDone={onDone} makeDefault={makeDefault} onOtherWays={useToken}
+                          tokenForm={<PasteTokenForm onDone={onDone} makeDefault={makeDefault} />} />;
   }
   return <PasteTokenForm connectionId={connectionId} onDone={onDone} makeDefault={makeDefault} />;
 }
@@ -496,7 +506,7 @@ export const RepositoryRow = forwardRef<HTMLElement, {
                     onReplace={() => setDrawer("replace")} />
         ))}
         {mode === "current" && drawer === "replace" ? (
-          <TokenForm connectionId={replaceId} onDone={close} />
+          <TokenForm connectionId={replaceId} onDone={close} replace />
         ) : null}
         {connection && connection.source === "connected" ? (
           adding ? <AddRepo connectionId={connection.id} onDone={() => setAdding(false)} /> : (
@@ -523,7 +533,7 @@ export const RepositoryRow = forwardRef<HTMLElement, {
       ) : null}
       {drawer && mode !== "current" ? (
         <Drawer title="Connect GitHub" onClose={close} testid="su-github-drawer">
-          <TokenForm connectionId={drawer === "replace" ? replaceId : null} onDone={close} />
+          <TokenForm connectionId={drawer === "replace" ? replaceId : null} onDone={close} replace={drawer === "replace"} />
         </Drawer>
       ) : null}
     </SetupRow>

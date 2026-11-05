@@ -181,7 +181,7 @@ function unusedAccess(raw: unknown): boolean {
     && s.env_token?.present === false && s.env_token.read_by_builds === false);
 }
 
-function sentence(error: unknown): string {
+export function sentence(error: unknown): string {
   if (error instanceof IdentityError) {
     const code = String(error.body.error ?? error.code);
     return FAILED_WORDS[code] ?? (typeof error.body.message === "string" ? error.body.message : error.message);
@@ -191,7 +191,7 @@ function sentence(error: unknown): string {
 
 /** Hand the manifest to /github-app, the one page whose CSP lets a form go to GitHub
  *  (lib/identity/github-manifest.ts); it posts it there (GitHub's manifest flow). */
-function postManifest(postUrl: string, manifest: unknown): void {
+export function postManifest(postUrl: string, manifest: unknown): void {
   try {
     window.sessionStorage.setItem(HANDOFF_KEY, JSON.stringify({ post_url: postUrl, manifest }));
   } catch {

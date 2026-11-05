@@ -209,7 +209,7 @@ export function SetupBlocks({ onAdvanced, initialOpen = null }: {
       ) : null}
       {open?.kind === "replace" ? (
         <Drawer title="Fix GitHub access" onClose={close} testid="su-fix-account">
-          <TokenForm connectionId={open.connectionId} onDone={close} />
+          <TokenForm connectionId={open.connectionId} onDone={close} replace />
         </Drawer>
       ) : null}
       {open?.kind === "repo" ? (

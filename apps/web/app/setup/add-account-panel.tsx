@@ -17,6 +17,9 @@ import { GatedButton } from "../../components/gated";
 import { setupWrite } from "../../lib/setup-client";
 import type { SetupRefusal, SetupView, TokenFound } from "../../lib/setup-types";
 import { Drawer } from "./drawer";
+import { useGuardedCall } from "../../components/identity/identity-provider";
+import { idPost } from "../../lib/identity/api";
+import { postManifest } from "./github-access-row";
 import { DeviceSignin } from "./github-signin-row";
 import { Consent, CONSENT_REFUSAL, toast, useBoard } from "./parts";
 import { Out, Refusal, Tip } from "./pill";
@@ -122,8 +125,14 @@ export function AddAccountPanel({ onClose, onAdvanced, initial = null }: {
   const signedIn = signin?.me?.status === "active";
   // THE APP THAT WORKS HERE: the org's GitHub App when it is installed (repo_app lists its repos).
   const app = (view.github_accounts ?? []).find((a) => a.kind === "org_app") ?? null;
+  // NO SIGN-IN AND NO APP YET (BOSSAPP-815): "My own account" and "An organisation" create this
+  // install's own GitHub App there (two clicks on GitHub, access that never expires).
+  // Only with nothing connected yet: an App, once there, is what every build uses.
+  const appFlow = !signinReady && !app && !(view.github_accounts ?? []).length && !view.repository.connection;
+  const guarded = useGuardedCall();
+  const [orgName, setOrgName] = useState("");
   // RECOMMENDED IS A PATH THAT WORKS ON THIS INSTALL, never a greyed-out one.
-  const recommended: How = signinReady ? "own" : app ? "org" : "token";
+  const recommended: How = signinReady || appFlow ? "own" : app ? "org" : "token";
   const [how, setHow] = useState<How>(initial ?? recommended);
   const [token, setToken] = useState("");
   const [consent, setConsent] = useState(false);
@@ -181,6 +190,20 @@ export function AddAccountPanel({ onClose, onAdvanced, initial = null }: {
     setRefusal(null);
     if (step === 1) {
       if (how === "token") { await sendToken(); return; }
+      if (appFlow) {
+        if (how === "org" && !orgName.trim()) {
+          setRefusal({ state: "none", headline: "Type the organisation's name", fix: "As it appears in github.com/<name>." });
+          return;
+        }
+        setBusy(true);
+        try {
+          const out = await guarded("Connecting GitHub lets BOSS write branches and open pull requests on the repos you pick.",
+            () => idPost<{ post_url: string; manifest: unknown }>("/v1/identity/github/app/manifest",
+                                                                  how === "org" ? { owner: orgName.trim() } : {}));
+          postManifest(out.post_url, out.manifest);
+        } catch (error) { setRefusal(refusalOf(error)); setBusy(false); }
+        return;
+      }
       if (how === "org") {
         if (app) { await useApp(); return; }
         if (signinReady && signedIn) { await listSignin(); return; }
@@ -220,9 +243,11 @@ export function AddAccountPanel({ onClose, onAdvanced, initial = null }: {
       <div className="su-stack">
         <div className="su-radio-cards" role="radiogroup" aria-label="How to connect">
           {HOW.map((h) => {
-            const off = h.key === "own" && !signinReady;
+            const off = h.key === "own" && !signinReady && !appFlow;
             const why = "Sign in with GitHub is not set up on this install.";
             const line = off ? why
+              : appFlow && h.key === "own" ? "Connect GitHub. No token to copy, and access never expires."
+              : appFlow && h.key === "org" ? "Connect an organisation you own. Same two clicks on GitHub."
               : h.key === "org" && app ? `Use the BOSS GitHub App on @${app.login ?? app.name}.` : h.line;
             return (
               <label key={h.key} className="su-radio-card" data-checked={how === h.key || undefined}
@@ -244,7 +269,12 @@ export function AddAccountPanel({ onClose, onAdvanced, initial = null }: {
           <Tip tip="One GitHub sign-in per person. For another personal account, paste its token."
                className="su-faint" testid="su-how-signed-in">Signed in as @{signin?.me?.login ?? "you"}</Tip>
         ) : null}
-        {how === "org" && !app ? (
+        {appFlow && how === "org" ? (
+          <input className="su-input" value={orgName} placeholder="organisation name, e.g. acme"
+                 aria-label="Organisation name" maxLength={100} data-testid="su-how-org-name"
+                 onChange={(e) => setOrgName(e.target.value.replace(/[^A-Za-z0-9-]/g, ""))} />
+        ) : null}
+        {how === "org" && !app && !appFlow ? (
           <div className="su-line">
             {signin?.install_url ? (
               <Out href={signin.install_url} testid="su-how-install"
@@ -284,7 +314,7 @@ export function AddAccountPanel({ onClose, onAdvanced, initial = null }: {
     body = <CheckAccess names={picked} />;
   }
 
-  const continueLabel = step === 3 ? "Done"
+  const continueLabel = step === 3 ? "Done" : step === 1 && appFlow && how !== "token" ? "Connect GitHub"
     : step === 2 && picked.length ? `Add ${picked.length} repo${picked.length === 1 ? "" : "s"}` : "Continue";
   return (
     <Drawer title="Add a GitHub account" onClose={onClose} testid="su-add-account">
