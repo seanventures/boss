@@ -11,7 +11,8 @@
  *                     the repos picked in Repository above (pasting one there puts it here)
  *
  * An install that still carries BOSS_GITHUB_TOKEN gets one button that moves it into the vault.
- * GitHub's redirects land back here with `?github=app_connected|app_failed`.
+ * GitHub's redirects land back here with `?github=app_connected|app_updated|app_failed`.
+ * An update may also name `lost` repositories that an app still uses.
  */
 import { GatedButton } from "../../components/gated";
 import React, { forwardRef, useCallback, useEffect, useRef, useState } from "react";
@@ -59,6 +60,19 @@ type Installation = { id: string; account: string | null; account_type?: Account
 type Tone = "green" | "amber" | "red" | "grey";
 
 const SANDBOX_TIP = "Egress adds the credential to each request. The build's sandbox never holds it.";
+const LOST_REPO = /^[a-z0-9_.-]+\/[a-z0-9_.-]+$/i;
+
+/** Repositories named on the update redirect. Anything else in the query is ignored. */
+function lostRepos(raw: string | null): string[] {
+  if (!raw) return [];
+  const names: string[] = [];
+  for (const part of raw.split(",")) {
+    const name = part.trim();
+    if (LOST_REPO.test(name) && names.length < 20) names.push(name);
+  }
+  return names;
+}
+
 const FAILED_WORDS: Record<string, string> = {
   bad_state: "The link expired or was used. Start again.",
   state_expired: "That took over 10 minutes. Start again.",
@@ -497,8 +511,15 @@ export const GitHubAccessRow = forwardRef<HTMLElement, { initial?: GitHubStatus 
       const said = params.get("github");
       if (!said) return;
       if (said === "app_connected") { toast("GitHub App connected"); setBack(true); }
+      else if (said === "app_updated") {
+        toast("GitHub repository access updated");
+        setBack(true);
+        const lost = lostRepos(params.get("lost"));
+        if (lost.length === 1) toast(`${lost[0]} lost access and an app still uses it`, "error");
+        else if (lost.length > 1) toast(`${lost.join(", ")} lost access and an app still uses them`, "error");
+      }
       else { setRedirectFailed(true); toast(FAILED_WORDS[params.get("reason") ?? ""] ?? "GitHub App not connected", "error"); }
-      params.delete("github"); params.delete("reason");
+      params.delete("github"); params.delete("reason"); params.delete("lost");
       window.history.replaceState(null, "", `${window.location.pathname}?${params.toString()}`);
     } catch { /* no window */ }
   }, []);
