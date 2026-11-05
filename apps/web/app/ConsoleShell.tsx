@@ -864,10 +864,14 @@ function ConsoleShellInner({
     // fetch the right URL but lose the payload when the router catches up.
     // A rail click (go()) DEFERS its URL until the area arrives (deferredUrl, below), so there
     // the URL is not waited for: it is this shell's own, not a restore Next is still committing.
-    const urlCommitted = new URLSearchParams(queryString).get("area") === active
+    // A BARE URL HAS NOTHING TO RESTORE. `/?org=x` reopens the area remembered in this browser
+    // (shownArea: stored), which the server never rendered; waiting for `?area=` to name it
+    // waited forever: "Loading Get started…" until a reload or another page (2026-11-05).
+    const urlArea = new URLSearchParams(queryString).get("area");
+    const urlCommitted = urlArea === active || (!urlArea && !routeMode)
       || deferredUrl.current?.id === active;
     if (activeLoading && areaLoadAsked?.id !== active && urlCommitted) ensureLoaded(active);
-  }, [activeLoading, active, areaLoadAsked, ensureLoaded, queryString]);
+  }, [activeLoading, active, areaLoadAsked, ensureLoaded, queryString, routeMode]);
   // A REFRESH THAT CAME BACK WITHOUT THE AREA IS ASKED AGAIN AT ONCE.
   //
   // The area-load refresh can settle without the area in it (it raced another refresh in
