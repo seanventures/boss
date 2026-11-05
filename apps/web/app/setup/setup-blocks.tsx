@@ -250,9 +250,13 @@ export function WhoDoesWhat({ view, onChange }: { view: SetupView; onChange: () 
       <span className="su-faint">Who does what:</span>
       {jobs.map((j) => (
         <React.Fragment key={j.job}>
-          <Tip tip={j.resolved!.why} className="su-chip" testid={`su-who-${j.job}`}>
+          {/* EACH JOB IS ITS OWN CHOICE (operator: "we should provide options ... so customers
+              can use multiple models"): a chip opens routing on that job. */}
+          <button type="button" className="su-chip su-chip-btn" onClick={onChange} data-testid={`su-who-${j.job}`}
+                  title={`${j.resolved!.why} Click to choose the model for ${j.label}.`}
+                  data-tip={`${j.resolved!.why} Click to choose the model for ${j.label}.`}>
             {j.label} → {j.resolved!.label}
-          </Tip>
+          </button>
           {j.resolved!.pill ? <Pill pill={j.resolved!.pill} testid={`su-who-pill-${j.job}`} /> : null}
         </React.Fragment>
       ))}

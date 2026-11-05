@@ -27,7 +27,6 @@ import {
   ADVANCED_ROWS, readParams, rowMode, SETUP_BADGE_EVENT, stepNumber, summarize, type SetupParams,
 } from "../../lib/setup-stepper";
 import type { RowKey, SetupView } from "../../lib/setup-types";
-import { BudgetRow } from "./budget-row";
 import { BuildDatabaseRow } from "./build-database-row";
 import { BuildSpeedRow } from "./build-speed-row";
 import { EmbeddingModelRow } from "./embedding-model-row";
@@ -62,7 +61,7 @@ const ADVANCED: Record<string, { line: string; tip: string }> = {
   build_speed: { line: "How many agents write a build at once", tip: "Balanced or Fastest." },
   toolchains: { line: "What builds can compile and run", tip: "Python and Node always; others on the host." },
   jobs: { line: "Which model does which job", tip: "Pin a model to a job, or let BOSS route." },
-  budget: { line: "Monthly spend cap", tip: "BOSS pauses model spend at the cap." },
+  budget: { line: "Monthly spend cap", tip: "Set in Govern › Limits, with what happens at the cap." },
   public_url: { line: "Address used in emailed links", tip: "Sign-in, passkeys and emailed links use it." },
 };
 
@@ -407,7 +406,16 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
           <div className="su-adv-item" ref={ref("toolchains")}><Why id="toolchains" /><ToolchainsRow /></div>
           {/* Model routing — where "Who does what" lived; its rows are "Pin a job" inside. */}
           <div className="su-adv-item"><Why id="jobs" /><RoutingRow ref={ref("jobs")} mode={rowMode(view, "jobs")} focused={focus === "jobs"} /></div>
-          <div className="su-adv-item"><Why id="budget" /><BudgetRow ref={ref("budget")} mode={rowMode(view, "budget")} focused={focus === "budget"} /></div>
+          {/* BUDGET LIVES IN GOVERN (operator, 2026-11-05: "The Budget things should move to
+              Governance"): one place to set it, Govern › Limits; here, a link to it. */}
+          <div className="su-adv-item" ref={ref("budget")}><Why id="budget" />
+            <section className="su-row" data-testid="su-row-budget" aria-label="Budget" data-focused={focus === "budget" || undefined}>
+              <div className="su-row-label"><SectionLabel as="span" tip="Monthly, daily and per-project caps.">Budget</SectionLabel></div>
+              <div className="su-row-body su-line">
+                <a className="su-link" href="?area=govern&tab=limits" data-testid="su-budget-govern">Set in Govern › Limits ↗</a>
+              </div>
+            </section>
+          </div>
           <div className="su-adv-item" ref={ref("public_url")}><Why id="public_url" /><PublicUrlRow /></div>
         </details>
     </>

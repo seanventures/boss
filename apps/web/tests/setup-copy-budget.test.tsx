@@ -86,11 +86,10 @@ describe("the board stays within the copy budget", () => {
     expect(used.getAttribute("data-tip")).toContain("Hard problems, Routine work");
   });
 
-  it("with More jobs open and the budget being edited", async () => {
+  it("with More jobs open (the budget is set in Govern › Limits now)", async () => {
     fakeApi(board());
     mounted = await mountBoard(board());
     await click(q(document.body, "su-more-jobs"));
-    await click(q(document.body, "su-budget-edit"));
     audit(document.body);
   });
 

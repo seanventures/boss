@@ -97,11 +97,16 @@ describe("the drawer", () => {
 
 describe("removing a repository asks first", () => {
   it("Remove opens a confirm; nothing is sent until it is pressed", async () => {
+    // Two repos: the only repo is never offered for removal (RepoLine `single`), so a one-repo
+    // fixture had no Remove to press and this test failed for a reason that was not the product.
     const view = board();
-    view.repository.repos = [{ ...view.repository.repos[0], default: false }];
+    const first = view.repository.repos[0];
+    view.repository.repos = [first, { ...first, binding_id: "ghb_second", full_name: "owner/second", default: false }];
     const api = fakeApi(view);
     mounted = await mountBoard(view);
-    await click(q(document.body, "su-repo-menu"));
+    const menus = document.querySelectorAll('[data-testid="su-repo-menu"]');
+    expect(menus).toHaveLength(2);
+    await click(menus[1]);
     await click(q(document.body, "su-menu-remove"));
     expect(api.calls.some((c) => c.op === "repo_remove")).toBe(false);
     await click(q(document.body, "su-repo-remove-yes"));
