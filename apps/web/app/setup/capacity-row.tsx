@@ -176,6 +176,8 @@ function ClaudePaysWith() {
   const cred = view.claude_credential;
   if (!cred) return null;
   const onKey = cred.active === "stored_key" || cred.active === "env_key";
+  // "API key first" needs a key to run on (tester, 2026-11-05: selectable with none connected).
+  const hasKey = onKey || view.models.some((m) => m.provider === "anthropic");
   const save = async (order: "subscription_first" | "api_key_first", label: string) => {
     if (busy || order === cred.order) return;
     setBusy(true);
@@ -191,15 +193,20 @@ function ClaudePaysWith() {
     <div className="su-line su-claude-pays" role="group" aria-label="Claude Code pays with"
          data-testid="setup-claude-pays">
       <span className="su-faint">Claude Code pays with</span>
-      {PAYS_WITH.map((o) => (
+      {PAYS_WITH.map((o) => {
+        const noKey = o.order === "api_key_first" && !hasKey && cred.order !== "api_key_first";
+        const tip = noKey ? "Add an Anthropic API key first (Add model › API key)." : o.tip;
+        return (
         <GatedButton key={o.order} permission="setup:manage" type="button"
                      className={`su-btn su-btn-sm${o.order === cred.order ? " su-btn-primary" : ""}`}
                      aria-pressed={o.order === cred.order} aria-busy={busy || undefined}
-                     title={o.tip} data-tip={o.tip} data-testid={`setup-claude-pays-${o.order}`}
+                     disabled={noKey || undefined}
+                     title={tip} data-tip={tip} data-testid={`setup-claude-pays-${o.order}`}
                      onClick={() => void save(o.order, o.label)}>
           {o.label}
         </GatedButton>
-      ))}
+        );
+      })}
       <span className="su-faint" data-testid="setup-claude-pays-now">
         Using {onKey ? "the API key (billed per call)" : cred.active === "none" ? "nothing connected"
               : "the subscription"}

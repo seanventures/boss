@@ -304,7 +304,8 @@ export function SetupBlocks({ onAdvanced, initialOpen = null }: {
 
 /** "Who does what:" one chip per main job, "Build → Claude Code", and Change (routing). */
 export function WhoDoesWhat({ view, onChange }: { view: SetupView; onChange: (job?: string) => void }) {
-  const jobs = view.jobs.filter((j) => !j.more && j.resolved);
+  // EVERY JOB, as Routing lists them (tester, 2026-11-05: four chips here, six jobs in Advanced).
+  const jobs = view.jobs.filter((j) => j.resolved);
   if (!jobs.length) return null;
   return (
     <div className="su-line su-who" data-testid="su-who-does-what">

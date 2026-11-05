@@ -61,4 +61,18 @@ describe("Claude Code pays with", () => {
     const write = calls.find((c) => c.method !== "GET" && c.body.op === "claude_credential");
     expect(write?.body.order).toBe("subscription_first");
   });
+
+  it("API key first waits for a key: no Anthropic key connected, it cannot be pressed", async () => {
+    const view = board();
+    view.claude_credential = { order: "subscription_first", active: "subscription", billing: null };
+    view.models = view.models.filter((m) => m.provider !== "anthropic");
+    const calls = api(view);
+    mounted = await mountBoard(view);
+    await vi.waitFor(() => expect(pays()).not.toBeNull());
+    const key = q(pays() as HTMLElement, "setup-claude-pays-api_key_first") as HTMLButtonElement;
+    expect(key.disabled).toBe(true);
+    expect(key.getAttribute("data-tip")).toContain("Add an Anthropic API key first");
+    await click(key);
+    expect(calls.filter((c) => c.method !== "GET")).toHaveLength(0);
+  });
 });
