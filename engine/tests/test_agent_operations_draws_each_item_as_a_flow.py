@@ -83,7 +83,8 @@ def test_a_resolved_item_ends_in_a_decision_by_a_person_and_an_outcome_node(eng,
     assert ("workflow_run:wfr_rollback_1", "outcome", "resulted") in kinds
     decision_node = next(n for n in g["nodes"] if n["id"] == did)
     assert "dissent" in decision_node["badges"] and "person" in decision_node["badges"]
-    assert g["nodes"][-1]["type"] == "outcome" and g["nodes"][-1]["label"].startswith("Resolved")
+    # an incident that ends resolved has recovered (the outcome node says so)
+    assert g["nodes"][-1]["type"] == "outcome" and g["nodes"][-1]["label"].startswith("Recovered")
     assert g["badges"]["outcome"] == "resolved_by_agents" and g["badges"]["cost_usd"] == 1.84
     assert g["badges"]["dissent"] is True
     assert all(n.get("ref") for n in g["nodes"]), "every node opens its detail in one click"

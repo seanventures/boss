@@ -14,7 +14,7 @@ ledger.record_decision writes `decision`, board.finish writes `resolve`). `a2a.p
     proposal    {action (catalogue), summary, verify?, undo?, confidence?}
     critique    reply_to=<proposal>  {position: agree|object|concern|unsafe, summary}
     vote        reply_to=<proposal>  {vote: approve|reject|abstain, reason?}   one per voter
-    handoff     {to: <party>, summary}
+    handoff     {to: <party>, summary, seat?}   seat: the receiver's squad seat on this item
     escalate    {to: <party>, reason}
     claim / decision / resolve       written by board / ledger only
 
@@ -50,7 +50,7 @@ from sqlalchemy.engine import Connection
 from ..meeting_consensus import tally_votes
 from . import task_classes as tc
 from ._common import (clean_text, emit, new_id, party, party_kind, serialize_row,
-                      verify_evidence)
+                      short_label, verify_evidence)
 
 KINDS = ("claim", "finding", "hypothesis", "proposal", "critique", "vote", "decision", "handoff",
          "escalate", "resolve")
@@ -142,8 +142,14 @@ def _body(connection: Connection, project_id: str, kind: str, body: Mapping[str,
             raise ValueError(f"no decision {act_id}")
         return {"act_id": act_id, "chosen": found[0]}
     if kind == "handoff":
-        return {"to": party(b.get("to")), "from": b.get("from"),
-                "summary": clean_text(b.get("summary"), 300)}
+        out = {"to": party(b.get("to")), "from": b.get("from"),
+               "summary": clean_text(b.get("summary"), 300)}
+        # The seat the receiver takes on this item's squad ("Investigator"): the diagram's label
+        # for that party on this item (read_model.graph), its role kept as metadata.
+        seat = short_label(b.get("seat"), 4)
+        if seat:
+            out["seat"] = seat
+        return out
     if kind == "escalate":
         return {"to": party(b.get("to")), "reason": need("reason", 300)}
     if kind == "resolve":

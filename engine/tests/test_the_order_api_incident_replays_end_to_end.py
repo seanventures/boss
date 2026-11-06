@@ -33,8 +33,11 @@ def test_the_production_replay_draws_the_squad_up_to_the_persons_decision(eng, p
     g = out["graph"]
     assert out["stages"] == ["needs_you"]
     labels = {n["label"] for n in g["nodes"]}
-    assert {"Chief of Staff", "SRE", "Operations Engineer", "Backend Engineer",
-            "Adversarial Reviewer", "Squad", "Roll back prod", "Needs you"} <= labels
+    assert {"Chief of Staff", "SRE lead", "Investigator", "Engineer", "Reviewer", "Squad",
+            "Roll back prod", "Needs you"} <= labels
+    seats = {n["seat"]: n["role"] for n in g["nodes"] if n.get("seat")}
+    assert seats == {"SRE lead": "SRE", "Investigator": "Operations Engineer",
+                     "Engineer": "Backend Engineer", "Reviewer": "Adversarial Reviewer"}
     assert {"Release 6bf2672", "Reuse INC-31 fix", "Recommend rollback"} <= labels
     assert _types(g)[0] == "signal" and "needs_you" in _types(g)
     dissent = [e for e in g["edges"] if e["dissent"]]
@@ -59,6 +62,7 @@ def test_approved_from_the_card_the_replay_ends_resolved_with_every_step_drawn(e
     assert types[-1] == "outcome" and g["item"]["lifecycle"] == "resolved"
     assert {"person", "run", "decision", "action"} <= set(types)
     assert {"Pull request", "Incident", "Recovered"} <= {n["label"] for n in g["nodes"]}
+    assert g["nodes"][-1]["label"].startswith("Recovered ")
     assert [d["question"] for d in decisions] == [
         "Who works this signal?", squad.Q_TRIAGE, squad.Q_CAUSE, squad.Q_LEARN,
         squad.Q_MITIGATE, squad.Q_MITIGATE, squad.Q_FIX, squad.Q_VERIFY, squad.Q_CLOSE]
@@ -74,6 +78,7 @@ def test_the_staging_replay_needs_nobody(eng, project):
     with eng.begin() as c:
         out = demo.run_scenario(c, project, environment="staging")
     g = out["graph"]
+    assert g["nodes"][-1]["label"] == "Recovered 4m12s"
     assert out["stages"] == ["resolved"]
     assert "needs_you" not in _types(g) and "person" not in _types(g)
     assert g["badges"]["outcome"] == "resolved_by_agents"
@@ -110,3 +115,49 @@ def test_the_cli_loads_the_scenario_and_prints_the_flow(eng, project, capsys, mo
     assert printed["stages"] == ["resolved"]
     assert printed["flow"][0].startswith("0 signal")
     assert printed["flow"][-1].startswith("5 outcome")
+
+
+def test_the_replay_keeps_the_d2_pace_and_its_order(eng, project):
+    from sqlalchemy import text
+
+    with eng.begin() as c:
+        out = demo.run_scenario(c, project, environment="staging")
+        item = c.execute(text("SELECT created_at, resolved_at, outcome FROM work_items "
+                              "WHERE id = :w"), {"w": out["item_id"]}).mappings().one()
+        rows = ledger.list_decisions(c, project, work_item_id=out["item_id"])
+        msgs = c.execute(text("SELECT kind, created_at FROM work_item_messages WHERE "
+                              "work_item_id = :w ORDER BY created_at, id"),
+                         {"w": out["item_id"]}).mappings().all()
+        now = c.execute(text("SELECT clock_timestamp()")).scalar()
+    after = {d["question"]: (_dt(d["created_at"]) - item["created_at"]).total_seconds()
+             for d in rows}
+    assert round(after[squad.Q_TRIAGE]) == 40
+    assert round(after[squad.Q_CAUSE] - after[squad.Q_TRIAGE]) == 110
+    assert round(after[squad.Q_VERIFY] - after[squad.Q_FIX]) == 13
+    assert round((item["resolved_at"] - item["created_at"]).total_seconds()) == 252
+    assert item["outcome"].endswith("in 4m12s")
+    assert item["resolved_at"] <= now                    # never dated in the future
+    assert [m["kind"] for m in msgs][:2] == ["decision", "handoff"]
+    assert msgs[-1]["kind"] == "resolve"
+
+
+def test_a_real_run_keeps_real_time(eng, project):
+    import pytest
+
+    with eng.begin() as c:
+        prepared = demo.prepare(c, project, environment="staging")
+        squad.route_incident(c, project_id=project, item_id=prepared["item_id"],
+                             mind=demo.demo_mind("staging"), effects=demo.FixtureEffects())
+        g = read_model.graph(c, prepared["item_id"], project_id=project)
+        c.execute(__import__("sqlalchemy").text(
+            "UPDATE work_items SET subject_ref = 'app:order-api' WHERE id = :w"),
+            {"w": prepared["item_id"]})
+        with pytest.raises(ValueError, match="demo items only"):
+            demo.apply_scenario_clock(c, project, prepared["item_id"])
+    assert g["nodes"][-1]["label"].endswith("s") and "m" not in g["nodes"][-1]["label"][10:]
+
+
+def _dt(value):
+    from datetime import datetime
+
+    return datetime.fromisoformat(value) if isinstance(value, str) else value

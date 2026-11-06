@@ -189,8 +189,8 @@ def seed(connection: Connection, project_id: str, *, environment: str = "product
          now: Optional[datetime] = None) -> dict[str, Any]:
     """Write the scenario's rows. Returns {incident_id, alert_id, precedent_id, code}."""
     now = now or datetime.now(timezone.utc)
-    fired = now - timedelta(minutes=4)
-    released = now - timedelta(minutes=11)
+    fired = now - timedelta(seconds=5)
+    released = now - timedelta(minutes=7)
     tag = uuid4().hex[:8]
     incident_id = f"inc_demo_{tag}"
     alert_id = f"aal_demo_{tag}"
@@ -249,11 +249,130 @@ def seed(connection: Connection, project_id: str, *, environment: str = "product
             "code": code}
 
 
+# ── the scenario clock (demo only) ───────────────────────────────────────────────────────────
+#
+# A scripted run takes a fraction of a second, so its diagram would read "Recovered 0s". The
+# REPLAY re-times its own rows onto the D2 incident's pace, measured from the moment the item
+# opened: each decision lands at its milestone and every other row is interpolated between
+# them, keeping their order. This is never called on a real run: real incidents keep real time.
+# The ledger and the board are append-only, so their rows are re-written the way a retention
+# job removes them (boss.ledger_purge) and inserted again, unchanged but for their time.
+
+#: Seconds after the item opened at which each decision lands (question -> one per occurrence).
+MILESTONES: dict[str, list[int]] = {
+    "Who works this signal?": [5],
+    squad.Q_TRIAGE: [40],
+    squad.Q_CAUSE: [150],                  # RCA 1m50s after triage
+    squad.Q_LEARN: [158],
+    squad.Q_MITIGATE: [165, 185],          # the squad's call; a person's answer
+    squad.Q_FIX: [237],                    # after a 50s rollback
+    squad.Q_VERIFY: [250],
+    squad.Q_CLOSE: [252],                  # recovered 4m12s after the alert opened the item
+}
+
+
+def _interp(points: list[tuple[datetime, datetime]], at: datetime) -> datetime:
+    if at <= points[0][0]:
+        return points[0][1] - (points[0][0] - at)
+    for (r0, t0), (r1, t1) in zip(points, points[1:]):
+        if at <= r1:
+            span = (r1 - r0).total_seconds()
+            share = (at - r0).total_seconds() / span if span > 0 else 1.0
+            return t0 + (t1 - t0) * share
+    return points[-1][1] + (at - points[-1][0])
+
+
+def apply_scenario_clock(connection: Connection, project_id: str, item_id: str) -> None:
+    """Re-time the replay's item onto MILESTONES (demo only; see above)."""
+    item = connection.execute(text(
+        "SELECT created_at FROM work_items WHERE id = :w AND project_id = :p AND "
+        "subject_ref LIKE 'demo:%'"), {"w": item_id, "p": project_id}).mappings().first()
+    if item is None:
+        raise ValueError("the scenario clock re-times demo items only")
+    base = item["created_at"]
+    rows = connection.execute(text(
+        "SELECT act_id, question, created_at FROM agent_act_decisions WHERE work_item_id = :w "
+        "ORDER BY created_at"), {"w": item_id}).mappings().all()
+    seen: dict[str, int] = {}
+    points = [(base, base)]
+    for r in rows:
+        n = seen.get(r["question"], 0)
+        seen[r["question"]] = n + 1
+        marks = MILESTONES.get(r["question"]) or []
+        if n < len(marks):
+            target = base + timedelta(seconds=marks[n])
+            if target > points[-1][1] and r["created_at"] > points[-1][0]:
+                points.append((r["created_at"], target))
+
+    # Pinned at the END: the last milestone keeps its real time and everything before it moves
+    # back, so nothing is dated in the future (a person's later answer still comes after).
+    shift = points[-1][1] - points[-1][0]
+
+    def at(value: Optional[datetime]) -> Optional[datetime]:
+        return None if value is None else _interp(points, value) - shift
+
+    # work_items' own times are now() — the transaction's start — so they are re-timed from the
+    # board rows that mark the same moments (clock_timestamp): the resolve, the ask, the answer.
+    marks = connection.execute(text(
+        "SELECT max(created_at) FILTER (WHERE kind = 'resolve') AS resolved, "
+        "max(created_at) AS last FROM work_item_messages WHERE work_item_id = :w"),
+        {"w": item_id}).mappings().one()
+    asked = connection.execute(text(
+        "SELECT max(created_at) FILTER (WHERE decided_by LIKE 'squad:%') AS asked, "
+        "min(created_at) FILTER (WHERE decided_by LIKE 'person:%') AS answered "
+        "FROM agent_act_decisions WHERE work_item_id = :w"), {"w": item_id}).mappings().one()
+    connection.execute(text("SET LOCAL boss.ledger_purge = 'on'"))
+    for table, key, cols in (("work_item_messages", "work_item_id", ("created_at",)),
+                             ("agent_act_decisions", "work_item_id",
+                              ("created_at", "outcome_at"))):
+        kept = connection.execute(text(
+            f"SELECT to_jsonb(t) AS row FROM {table} t WHERE {key} = :w ORDER BY created_at"),
+            {"w": item_id}).scalars().all()
+        connection.execute(text(f"DELETE FROM {table} WHERE {key} = :w"), {"w": item_id})
+        for row in kept:
+            for col in cols:
+                if row.get(col):
+                    row[col] = at(datetime.fromisoformat(row[col])).isoformat()
+            connection.execute(text(
+                f"INSERT INTO {table} SELECT (jsonb_populate_record(NULL::{table}, "
+                "CAST(:r AS JSONB))).*"), {"r": json.dumps(row)})
+    connection.execute(text("SET LOCAL boss.ledger_purge = 'off'"))
+    for act in connection.execute(text(
+            "SELECT act_id, started_at, ended_at FROM agent_acts WHERE subject_id = :w"),
+            {"w": item_id}).mappings().all():
+        connection.execute(text("UPDATE agent_acts SET started_at = :s, ended_at = :e "
+                                "WHERE act_id = :a"),
+                           {"s": at(act["started_at"]), "e": at(act["ended_at"]),
+                            "a": act["act_id"]})
+    opened = base - shift
+    connection.execute(text("UPDATE work_item_links SET created_at = :t WHERE work_item_id = :w"),
+                       {"t": opened, "w": item_id})
+    connection.execute(text(
+        "UPDATE signals SET first_seen_at = :t, last_seen_at = :t, observed_at = :t, "
+        "created_at = :t WHERE work_item_id = :w AND source = 'alert'"),
+        {"t": opened - timedelta(seconds=3), "w": item_id})
+    times = connection.execute(text(
+        "SELECT resolved_at, needs_you_at, answered_at, outcome FROM work_items "
+        "WHERE id = :w"), {"w": item_id}).mappings().one()
+    outcome = times["outcome"]
+    resolved = at(marks["resolved"]) if times["resolved_at"] else None
+    if resolved is not None and outcome:
+        took = int(round((resolved - opened).total_seconds()))
+        outcome = outcome.split(" in ")[0] + f" in {took // 60}m{took % 60:02d}s"
+    connection.execute(text(
+        "UPDATE work_items SET created_at = :c, updated_at = :u, resolved_at = :r, "
+        "needs_you_at = :n, answered_at = :a, outcome = :o WHERE id = :w"),
+        {"c": opened, "u": at(marks["last"]), "r": resolved,
+         "n": at(asked["asked"]) if times["needs_you_at"] else None,
+         "a": at(asked["answered"]) if times["answered_at"] else None, "o": outcome,
+         "w": item_id})
+
+
 # ── the run ──────────────────────────────────────────────────────────────────────────────────
 
 def run_scenario(connection: Connection, project_id: str, *, environment: str = "production",
                  approve_as: Optional[str] = None, settings: Any = None) -> dict[str, Any]:
-    """prepare() then run the squad on the scripted engine; with
+    """prepare() then run the squad on the scripted engine, then the scenario clock; with
     `approve_as`, answer the production Needs-you card as that person. Returns the stages and
     the Agent Operations graph of the item."""
     prepared = prepare(connection, project_id, environment=environment, settings=settings)
@@ -265,6 +384,7 @@ def run_scenario(connection: Connection, project_id: str, *, environment: str = 
                                    answer="approve", actor=approve_as,
                                    mind=demo_mind(environment), effects=FixtureEffects(),
                                    note="Approved: roll back, the fix follows"))
+    apply_scenario_clock(connection, project_id, item_id)
     graph = read_model.graph(connection, item_id, project_id=project_id)
     return {"project_id": project_id, **prepared, "stages": [s["stage"] for s in stages],
             "needs_you_decision_id": stages[-1].get("decision_id"), "graph": graph}

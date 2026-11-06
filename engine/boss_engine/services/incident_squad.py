@@ -115,6 +115,9 @@ class Squad:
         return [self.investigator, self.engineer, self.critic]
 
 
+#: The seat each party takes on the item: the diagram's node label (read_model.graph).
+SEAT_TITLES = {"lead": "SRE lead", "investigator": "Investigator", "engineer": "Engineer",
+               "critic": "Reviewer"}
 SEAT_JOBS = {"investigator": "Find the cause", "engineer": "Confirm the code",
              "critic": "Challenge the plan"}
 
@@ -743,7 +746,8 @@ class _Pass:
                     confidence=0.9)
         for seat in ("investigator", "engineer", "critic"):
             self.post("handoff", lead, {"to": self.squad.seats()[seat], "from": lead,
-                                        "summary": SEAT_JOBS[seat]})
+                                        "summary": SEAT_JOBS[seat],
+                                        "seat": SEAT_TITLES[seat]})
         return None
 
     # 2. root cause ------------------------------------------------------------------------
@@ -1459,7 +1463,8 @@ def intake(connection: Connection, *, project_id: str, signal_id: str, settings:
         evidence=[{"kind": "signal", "ref": signal_id}], work_item_id=item["id"],
         signal_ids=[signal_id], action="propose", confidence=0.95)
     collab.post(connection, item["id"], kind="handoff", sender=cos,
-                body={"to": lead, "from": cos, "summary": "Incident: SRE squad"})
+                body={"to": lead, "from": cos, "summary": "Incident: SRE squad",
+                      "seat": SEAT_TITLES["lead"]})
     return {**opened, "item": board.get(connection, item["id"])}
 
 
