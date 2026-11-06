@@ -250,3 +250,7 @@ Every shape above is served as written; these are the extra fields and the decis
   `workforce&role=` for an agent, `delivery_workflows&wfr=`, `code_tasks&view=apps&build=`,
   `decisions&decision=`, `infra&view=deploys&deploy=`, `agent_ops&item=`, `meetings&meeting=`.
   `area=project` / `area=projects` are the console's new ids (§10).
+
+## 15. Models and GitHub accounts are global
+
+Models and GitHub accounts are workspace settings (Setup › Models, Setup › GitHub, routing in Setup › Advanced). The project page never offers a model or account picker. The first-run checklist starts at "Add project"; above it a read-only "Workspace ready" row shows GitHub ✓ and Model ✓ with links to the global pages. If either is missing, "Only you can" shows a card linking to the global page. Onboarding's model check is read-only.
