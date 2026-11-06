@@ -13,6 +13,7 @@
  * re-buckets. `?watch=<app>|<env>` — the workflow "Set up monitoring" step's link — opens that
  * app's drawer, or Find with its name when no row matches.
  */
+import { Heartbeat } from "@phosphor-icons/react";
 import { consoleHref } from "../console-href";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
@@ -86,7 +87,8 @@ function PulseRowView({ row, pulse, onOpen, changed, now }: {
         {/* ONE PROJECT'S HEALTH LIVES ON ITS PROJECT PAGE (BOSSAPP-914 screen 15); this view keeps
             the cross-app comparison and links each app there (Project › Health links back). */}
         <a className="inf-link obs-project-health" href={projectHealthHref()} data-testid="obs-app-project-health"
-           title={`${row.app}: its project's Health tab`} aria-label={`Project health for ${name}`}>Project › Health</a>
+           title={`Project › Health — ${row.app}'s alerts, incidents and monitoring`} aria-label={`Project health for ${name}`}>
+          <Heartbeat size={14} aria-hidden /></a>
       </span>
       {table ? (
         <div className="obs-prow-table">

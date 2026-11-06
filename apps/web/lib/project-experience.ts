@@ -509,7 +509,12 @@ export function usePxRead<T>(url: string | null, parse: (raw: unknown) => T, opt
     };
   }, [url, every, demoMode]);
 
-  useEffect(() => { if (shown) kick.current(); }, [shown]);
+  // Coming back on screen asks at once (not on mount: the effect above has just asked).
+  const wasShown = useRef(shown);
+  useEffect(() => {
+    if (shown && !wasShown.current) kick.current();
+    wasShown.current = shown;
+  }, [shown]);
   const refresh = useCallback(() => kick.current(), []);
   return { data, state, error, demo: demoMode && Boolean(opts.demo), refresh };
 }
