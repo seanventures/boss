@@ -161,3 +161,17 @@ describe("Agents at work", () => {
     expect(tid("aa-score-accepted")?.getAttribute("title")).toContain("80%");
   });
 });
+
+describe("each node type has its own mark", () => {
+  it("draws a signal, a proposal and a run with their glyphs, an agent with its face", async () => {
+    fakeAmbientApi();
+    setConsoleLive(true);
+    window.history.replaceState({}, "", "/?area=agent_ops&item=work_order_api");
+    await mountAs(<AgentOpsHome projectId="p1" actor="ceo" />, "owner");
+    await settle();
+    const of = (type: string) => $$('[data-testid="aa-node"]').find((n) => n.dataset.type === type)!;
+    for (const t of ["signal", "action", "run", "outcome"]) expect(of(t).querySelector(".aa-node-icon")?.textContent, t).toBeTruthy();
+    expect(of("agent").querySelector(".ag-avatar")).toBeTruthy();
+    expect(of("agent").querySelector(".aa-node-icon")).toBeNull();
+  });
+});

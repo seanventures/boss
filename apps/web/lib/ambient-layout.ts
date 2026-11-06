@@ -15,9 +15,9 @@
  */
 import type { FlowEdge, FlowNode } from "./ambient";
 
-export const NODE_W = 150;
-export const NODE_H = 62;
-export const GAP_X = 70;
+export const NODE_W = 132;
+export const NODE_H = 70;
+export const GAP_X = 66;
 export const GAP_Y = 26;
 export const PAD = 24;
 
@@ -49,7 +49,10 @@ export function layoutFlow(nodes: FlowNode[], edges: FlowEdge[]): Layout {
     state.set(id, 2);
   };
   for (const n of order) if (!state.get(n.id)) visit(n.id);
-  const forward = usable.filter((e) => !back.has(e));
+  // An override comes AFTER the decision it overrides: rank it as overridden → override (the
+  // arrow itself is drawn back, as an arc, pointing at the row it overrode).
+  const forward = [...usable.filter((e) => !back.has(e)),
+                   ...usable.filter((e) => e.kind === "overrides").map((e) => ({ ...e, from: e.to, to: e.from }))];
 
   // 2. longest-path ranks (Kahn order).
   const rank = new Map<string, number>(order.map((n) => [n.id, 0]));
@@ -63,6 +66,13 @@ export function layoutFlow(nodes: FlowNode[], edges: FlowEdge[]): Layout {
       indeg.set(e.to, indeg.get(e.to)! - 1);
       if (indeg.get(e.to) === 0) queue.push(e.to);
     }
+  }
+  // A voice with no arrow in (a reviewer who only voted) sits just before what it acted on,
+  // not back beside the signal with a long arrow across the chart.
+  for (const n of [...order].reverse()) {
+    if (n.type === "signal" || forward.some((e) => e.to === n.id)) continue;
+    const next = forward.filter((e) => e.from === n.id).map((e) => rank.get(e.to)!);
+    if (next.length) rank.set(n.id, Math.max(rank.get(n.id)!, Math.min(...next) - 1));
   }
   // A node no edge reaches sits by its stage; the outcome closes the chart.
   const linked = new Set(usable.flatMap((e) => [e.from, e.to]));
@@ -129,19 +139,31 @@ export function layoutFlow(nodes: FlowNode[], edges: FlowEdge[]): Layout {
     const b = placed.get(e.to)!;
     const isBack = back.has(e) || b.col <= a.col;
     if (isBack) {
-      const x1 = a.x + a.w / 2, y1 = a.y, x2 = b.x + b.w / 2, y2 = b.y;
+      // Over the top, unless a node sits above either end in its column: then underneath.
+      const below = a.row > 0 || b.row > 0;
+      const x1 = a.x + a.w / 2, y1 = below ? a.y + a.h : a.y, x2 = b.x + b.w / 2, y2 = below ? b.y + b.h : b.y;
       const lift = Math.max(36, Math.abs(x2 - x1) / 3);
-      const top = Math.min(y1, y2) - lift;
-      return { ...e, key, count, back: true, d: `M ${x1} ${y1} C ${x1} ${top}, ${x2} ${top}, ${x2} ${y2}`, lx: (x1 + x2) / 2, ly: top + lift * 0.25 };
+      const turn = below ? Math.max(y1, y2) + lift : Math.min(y1, y2) - lift;
+      return { ...e, key, count, back: true, d: `M ${x1} ${y1} C ${x1} ${turn}, ${x2} ${turn}, ${x2} ${y2}`,
+               lx: (x1 + x2) / 2, ly: below ? turn - lift * 0.25 : turn + lift * 0.25 };
     }
     const x1 = a.x + a.w, y1 = a.y + a.h / 2 + port(e.from, "out", key);
     const x2 = b.x, y2 = b.y + b.h / 2 + port(e.to, "in", key);
     const dx = Math.max(24, (x2 - x1) / 2);
     const d = `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`;
-    // The label sits at the curve's midpoint (t = .5 of the cubic).
-    return { ...e, key, count, back: false, d, lx: (x1 + x2) / 2, ly: (y1 + y2) / 2 };
+    // The label sits at the curve's midpoint (t = .5 of the cubic) — or, for an arrow that
+    // skips columns, in the last gap before its target, so it never lands on a node it passes.
+    const skips = b.col - a.col > 1;
+    return { ...e, key, count, back: false, d, lx: skips ? x2 - GAP_X / 2 : (x1 + x2) / 2, ly: skips ? y2 : (y1 + y2) / 2 };
   });
+  // Two labels on one spot (votes fanning into a proposal) step apart vertically.
+  const seen: PlacedEdge[] = [];
+  for (const e of edgesOut) {
+    while (seen.some((o) => Math.abs(o.lx - e.lx) < 56 && Math.abs(o.ly - e.ly) < 14)) e.ly += 15;
+    seen.push(e);
+  }
   // Top-of-canvas room for arcs.
+  const arcBottom = Math.max(height, ...edgesOut.filter((e) => e.back).map((e) => e.ly + 18));
   const arcTop = Math.min(0, ...edgesOut.filter((e) => e.back).map((e) => e.ly - 18));
   if (arcTop < 0) {
     const shift = -arcTop;
@@ -150,9 +172,9 @@ export function layoutFlow(nodes: FlowNode[], edges: FlowEdge[]): Layout {
       e.d = e.d.replace(/(-?\d+(?:\.\d+)?) (-?\d+(?:\.\d+)?)/g, (_m, x: string, y: string) => `${x} ${Number(y) + shift}`);
       e.ly += shift;
     }
-    return { width, height: height + shift, nodes: order.map((n) => placed.get(n.id)!), edges: edgesOut, cols };
+    return { width, height: arcBottom + shift, nodes: order.map((n) => placed.get(n.id)!), edges: edgesOut, cols };
   }
-  return { width, height, nodes: order.map((n) => placed.get(n.id)!), edges: edgesOut, cols };
+  return { width, height: arcBottom, nodes: order.map((n) => placed.get(n.id)!), edges: edgesOut, cols };
 }
 
 /** The node the eye should go to while an item is live: Needs you, else the furthest node. */

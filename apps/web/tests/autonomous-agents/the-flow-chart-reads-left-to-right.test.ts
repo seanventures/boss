@@ -25,6 +25,13 @@ describe("the flow chart layout", () => {
     expect(col("proposal:wim_rb")).toBeLessThan(col("decision:act_rb"));
   });
 
+  it("seats a voice with no arrow in (a reviewer who only voted) just before what it voted on", () => {
+    const g = graphOf("work_order_api");
+    const l = layoutFlow(g.nodes, g.edges);
+    const col = (id: string) => l.nodes.find((n) => n.id === id)!.col;
+    expect(col("party:agent:adversarial_reviewer")).toBe(col("proposal:wim_rb") - 1);
+  });
+
   it("never overlaps two nodes", () => {
     for (const id of ["work_order_api", "work_payments", "work_dep", "work_ci"]) {
       const g = graphOf(id);
@@ -46,6 +53,10 @@ describe("the flow chart layout", () => {
     expect(over.back).toBe(true);
     expect(over.dissent).toBe(true);
     expect(over.d.startsWith("M ")).toBe(true);
+    // A person's override sits after the agent's decision it overrides, then the outcome.
+    const col = (id: string) => l.nodes.find((n) => n.id === id)!.col;
+    expect(col("decision:act_dep_o")).toBeGreaterThan(col("decision:act_dep"));
+    expect(col("outcome")).toBeGreaterThan(col("decision:act_dep_o"));
   });
 
   it("keeps a dissenting vote as its own red arrow among the agreeing ones", () => {

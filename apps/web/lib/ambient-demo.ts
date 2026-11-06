@@ -205,7 +205,10 @@ function strip(i: Item): Wire[] {
   for (const kind of ["signal", "agent", "person", "decision", "needs_you", "outcome"]) {
     const found = i.nodes.filter((n) => n.type === kind);
     if (!found.length) continue;
-    const chosen = kind === "decision" || kind === "agent" ? found[found.length - 1] : found[0];
+    // The owner is the agent the thumbnail shows (the read model's _strip takes the last agent
+    // node today; integration note for 906 — see the PR).
+    const owner = kind === "agent" ? found.find((n) => n.id === `party:${i.owner}`) : undefined;
+    const chosen = owner ?? (kind === "decision" || kind === "agent" ? found[found.length - 1] : found[0]);
     if (!pick.includes(chosen)) pick.push(chosen);
   }
   return pick.slice(0, 6).map((n) => ({ type: n.type, label: n.label, badges: (n.badges ?? []).slice(0, 2) }));

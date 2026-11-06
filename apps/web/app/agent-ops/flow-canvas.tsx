@@ -11,7 +11,7 @@
  * Nodes are HTML (focusable buttons with faces); arrows are one SVG beneath them, placed by
  * lib/ambient-layout.ts. Wide charts scroll inside their own frame, never the page.
  */
-import React, { useId, useMemo } from "react";
+import React, { useEffect, useId, useMemo, useRef, useState } from "react";
 
 import { AgentAvatar } from "../agent-avatar";
 import { type FlowEdge, type FlowNode, partyOfNode, roleOfParty } from "../../lib/ambient";
@@ -21,7 +21,7 @@ export const TYPE_WORDS: Record<string, string> = {
   signal: "Signal", agent: "Agent", person: "Person", policy: "Policy", squad: "Squad", boss: "BOSS",
   action: "Proposed action", decision: "Decision", needs_you: "Needs you", run: "Work started", outcome: "Outcome",
 };
-const ICON: Record<string, string> = { signal: "🔔", policy: "§", squad: "⚑", boss: "◆", action: "▶", run: "⚙" };
+const ICON: Record<string, string> = { signal: "↯", policy: "§", squad: "⚑", boss: "◆", action: "▶", run: "⚙" };
 
 function outcomeTone(n: FlowNode): "ok" | "bad" | "quiet" {
   if (n.badges.includes("failed")) return "bad";
@@ -40,7 +40,7 @@ export function NodeFace({ node, size = 28 }: { node: FlowNode; size?: number })
 }
 
 function NodeBody({ node, active }: { node: PlacedNode; active: boolean }) {
-  const face = <NodeFace node={node} />;
+  const face = ["agent", "person", "boss"].includes(node.type) ? <NodeFace node={node} /> : null;
   const chips = node.badges.filter((b) => b && b !== node.type).slice(0, 2);
   return (
     <>
@@ -73,10 +73,23 @@ export function FlowCanvas({ nodes, edges, lifecycle, selected, onSelect, onAnsw
   const uid = useId().replace(/:/g, "");
   const layout = useMemo(() => layoutFlow(nodes, edges), [nodes, edges]);
   const active = activeNodeId(layout, lifecycle);
+  // FIT THE FRAME: a wide chart shrinks to the frame (down to 60%, still legible), then scrolls.
+  const frame = useRef<HTMLDivElement>(null);
+  const [room, setRoom] = useState<number | null>(null);
+  useEffect(() => {
+    const el = frame.current;
+    if (!el || typeof ResizeObserver === "undefined") return undefined;
+    const ro = new ResizeObserver(() => setRoom(el.clientWidth));
+    ro.observe(el);
+    setRoom(el.clientWidth);
+    return () => ro.disconnect();
+  }, []);
+  const scale = room ? Math.max(0.6, Math.min(1, (room - 2) / layout.width)) : 1;
   if (!nodes.length) return <div className="aa-canvas-empty" data-testid="aa-canvas-empty">Nothing drawn yet</div>;
   return (
-    <div className="aa-canvas-frame" data-testid="aa-canvas" data-compact={compact || undefined}>
-      <div className="aa-canvas" style={{ width: layout.width, height: layout.height }}>
+    <div className="aa-canvas-frame" data-testid="aa-canvas" data-compact={compact || undefined} ref={frame} data-scale={scale.toFixed(2)}>
+      <div className="aa-canvas-fit" style={{ width: layout.width * scale, height: layout.height * scale }}>
+      <div className="aa-canvas" style={{ width: layout.width, height: layout.height, transform: scale < 1 ? `scale(${scale})` : undefined }}>
         <svg className="aa-edges" width={layout.width} height={layout.height} aria-hidden>
           <defs>
             <marker id={`${uid}-a`} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
@@ -120,6 +133,7 @@ export function FlowCanvas({ nodes, edges, lifecycle, selected, onSelect, onAnsw
           <button key={`ans-${n.id}`} type="button" className="aa-node-answer" data-testid="aa-needs-you-answer"
                   style={{ left: n.x + n.w / 2, top: n.y + n.h }} onClick={onAnswer}>Answer</button>
         )) : null}
+      </div>
       </div>
     </div>
   );
