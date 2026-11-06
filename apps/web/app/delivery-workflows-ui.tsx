@@ -6,7 +6,7 @@ import { routeForStep, useRunRoutes } from "./why-this-model";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, CornersIn, CornersOut } from "@phosphor-icons/react";
 import { ShareRunButton } from "./improve/share-run";
-import { humanDuration } from "../lib/datetime";
+import { OPEN_GATE, needsYou as gateNeedsYou, personWait, stepClock, waitsForMerge as mergeWait } from "../lib/step-timing";
 
 import { ActionPreview, actionPreviewOf } from "./action-preview";
 import { appIdentity, identityKey, type AppRun } from "./app-identity";
@@ -461,7 +461,9 @@ export function stoppedStep(run: { status: string; standing?: RunStanding;
  *  rule the bucket, the page's opening run and the run card all read, so they cannot disagree. */
 export function runNeedsYou(run: { status: string; standing?: RunStanding;
                                    steps?: RunStep[] | null }): boolean {
-  return (run.steps ?? []).some(needsYou) || stoppedStep(run) !== null;
+  // A stack deployment awaiting approval waits on a person too (lib/step-timing.ts personWait):
+  // the rail says "needs you", so the bucket must count it.
+  return (run.steps ?? []).some((s) => needsYou(s) || personWait(s) !== null) || stoppedStep(run) !== null;
 }
 
 /** Which heading a run is listed under. Exported so the rule is tested, not only rendered. */
@@ -1410,19 +1412,10 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
 
 /* ── Running ─────────────────────────────────────────────────────────────────── */
 
-/** How long a step took, or has been going. The single most asked question of a pipeline. */
-function stepDuration(step: { started_at?: string | null; completed_at?: string | null;
-                              decision_approved_at?: string | null }): string {
-  if (!step.started_at) return "";
-  // WORKING TIME, NOT WAITING TIME. A gated step starts when it is created and then waits for a
-  // person; timing it from there showed "14h 16m" for a deploy that ran in under a minute. The
-  // clock starts when its gate was answered, if that came later.
-  const approved = step.decision_approved_at ? Date.parse(step.decision_approved_at) : NaN;
-  const start = Math.max(Date.parse(step.started_at), Number.isFinite(approved) ? approved : -Infinity);
-  const end = step.completed_at ? Date.parse(step.completed_at) : Date.now();
-  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return "";
-  const text = humanDuration((end - start) / 1000);
-  return step.completed_at ? text : `${text}…`;
+/** How long a step took, or "waiting on you · since …" while a person holds it — from the one
+ *  clock (lib/step-timing.ts), which never counts waiting on a person as working time. */
+function stepDuration(step: RunStep): string {
+  return stepClock(step)?.text ?? "";
 }
 
 /**
@@ -1992,10 +1985,6 @@ export function runToOpen(runs: Run[]): string | null {
   return (live ?? runs[0]).id;
 }
 
-/** A step needing a person, right now. The one thing on this page that is an instruction. */
-/** Gate states that can still be answered. Anything else has been decided or has lapsed. */
-const OPEN_GATE = new Set(["pending", "delegated"]);
-
 /** What a rail node says under its name — or nothing, when nothing is worth saying.
  *
  *  Ten nodes wrapped to two rows, and half their second lines read "0s" or "succeeded". A step
@@ -2026,7 +2015,14 @@ export function errorPathTaken(step: RunStep): string | null {
 }
 
 export function laneStateOf(step: RunStep): { phase: string; meta: string; tip?: string; errorPath?: boolean } {
-  if (needsYou(step)) return { phase: "needs_you", meta: "needs you" };
+  // WAITING ON A PERSON IS NOT A TIMER. A gate, a merge, a stack deployment awaiting approval:
+  // the node says who it waits on and since when, never "6h 50m…" (lib/step-timing.ts).
+  if (needsYou(step) || personWait(step)) {
+    const clock = stepClock(step);
+    return clock?.kind === "waiting" && clock.short !== "needs you"
+      ? { phase: "needs_you", meta: clock.short, tip: clock.title }
+      : { phase: "needs_you", meta: "needs you" };
+  }
   switch (phaseOf(step)) {
     case "nothing": return { phase: "skipped", meta: "nothing done", tip: DID_NOTHING };
     case "skipped": {
@@ -2058,30 +2054,10 @@ export function timedOut(step: RunStep): boolean {
   return [step.error, out.reason, out.error].some((v) => typeof v === "string" && /\bstep_timeout\b/.test(v));
 }
 
-/** A deploy held until its pull request is merged (runner._merge_wait). Its question may
- *  already be approved — BOSS does not merge on every install — and the merge is still a
- *  person's to do, so it needs them until GitHub shows it merged. */
-export function waitsForMerge(step: RunStep): boolean {
-  const awaited = (step.output as { await?: { kind?: string } } | undefined)?.await;
-  return step.status === "waiting" && awaited?.kind === "merge";
-}
-
-export function needsYou(step: RunStep): boolean {
-  if (waitsForMerge(step)) return true;
-  // THE GATE'S STATE, NOT ONLY THE STEP'S.
-  //
-  // This was `decision_id && status === "waiting"`, which is true for a gate nobody has
-  // answered AND for one answered thirty seconds ago — the step stays `waiting` until a worker
-  // picks the answer up. So an operator approved a deploy, came back to the workflow, and was
-  // shown the same "Review and decide" button as before, with no sign their click had landed.
-  //
-  // It is worse for an expired gate: the step waits forever, and the button leads to a decision
-  // that cannot be answered from there.
-  if (!step.decision_id || step.status !== "waiting") return false;
-  // Unknown (an older API, or a decision row that has gone) keeps the old behaviour: offering
-  // an answerable gate is recoverable, hiding one is not.
-  return !step.decision_status || OPEN_GATE.has(step.decision_status);
-}
+// The gate and merge waits live with the step clock (lib/step-timing.ts): "does this step need
+// a person" and "is its time working time" are one question and must never disagree.
+export function waitsForMerge(step: RunStep): boolean { return mergeWait(step); }
+export function needsYou(step: RunStep): boolean { return gateNeedsYou(step); }
 
 /** A gate that has been answered but whose step has not moved yet. */
 export function decidedButNotMoved(step: RunStep): string {
@@ -3357,6 +3333,7 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
   busy: string | null;
 }) {
   const phase = phaseOf(step);
+  const clock = stepClock(step);
   // A DEPLOY THAT SHIPS TO A STACK TARGET. Its deployment's decision is the step's only
   // approval, so none of the per-app container flow below applies to it: no Set target, no
   // "Approve the release", no Ship now.
@@ -3550,8 +3527,9 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
             {capability.summary}
           </Explain>
         ) : null}
-        {stepDuration(step) && phase !== "skipped" ? (
-          <span className="dw-step-took" data-testid="dw-step-took">{stepDuration(step)}</span>
+        {clock && phase !== "skipped" ? (
+          <span className="dw-step-took" data-testid="dw-step-took" data-clock={clock.kind}
+                title={clock.title}>{clock.text}</span>
         ) : null}
         {approval?.mode === "manual" ? (
           <span className="dw-gate" data-tone={gateWaiting ? "waiting" : undefined}
