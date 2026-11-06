@@ -115,7 +115,8 @@ export function StartProjectSheet({ step, onStep, onClose, projectId, homeId, go
       const made = await guarded(`Create the ${p.title} project.`, () => createFresh(p.title, {
         type: p.kind === "knowledge_graph" ? "knowledge_graph" : "app" }));
       if (p.kind === "knowledge_graph") { go(knowledgePresetHref(made.id, homeId)); return; }
-      const href = projectPageHref(made.id, homeId);
+      // A preset's brief waits in the Command Center's "What should we build?" (project-start.tsx).
+      const href = projectPageHref(made.id, homeId, "overview");
       go(`${href}&start_preset=${encodeURIComponent(p.key)}`);
     } catch (e) {
       setError(refusalText(e));
@@ -165,11 +166,29 @@ export function StartProjectSheet({ step, onStep, onClose, projectId, homeId, go
       <div className="bx-np-sheet spj-sheet" role="dialog" aria-modal="true" aria-labelledby={titleId}
            data-testid="start-project" data-step={step}>
         <div className="spj-head">
-          {step !== "choose" ? (
+          {/* ADD A PROJECT (BOSSAPP-914 screen 3): New · from an idea | Existing · repo, as tabs, with
+              Try a sample beside them. The choice screen (presets) stays one press away. */}
+          {step === "idea" || step === "import" ? (
+            <>
+              <h2 id={titleId} className="bx-np-title" style={{ flex: "none" }}>Add a project</h2>
+              <div className="spj-seg" role="tablist" aria-label="New or existing">
+                <button type="button" role="tab" aria-selected={step === "idea"} data-testid="start-tab-idea" disabled={!!busy}
+                        onClick={() => { setRefusal(null); setError(null); onStep("idea"); }}>New · from an idea</button>
+                <button type="button" role="tab" aria-selected={step === "import"} data-testid="start-tab-import" disabled={!!busy}
+                        onClick={() => { setRefusal(null); setError(null); onStep("import"); }}>Existing · repo</button>
+              </div>
+              <span style={{ flex: 1 }} />
+              <button type="button" className="spj-more" data-testid="start-tab-sample" disabled={!!busy} onClick={() => onStep("sample")}>Try a sample</button>
+              <button type="button" className="spj-more" data-testid="start-tab-presets" disabled={!!busy} onClick={() => onStep("choose")}>Presets</button>
+            </>
+          ) : null}
+          {step !== "choose" && step !== "idea" && step !== "import" ? (
             <button type="button" className="spj-back" data-testid="start-back" disabled={!!busy}
                     onClick={() => { setRefusal(null); setError(null); onStep("choose"); }}>Back</button>
           ) : null}
-          <h2 id={titleId} className="bx-np-title">{step === "import" ? "Import a repo" : step === "sample" ? "Try a sample" : step === "idea" ? "New app from an idea" : "New project"}</h2>
+          {step === "idea" || step === "import" ? null : (
+            <h2 id={titleId} className="bx-np-title">{step === "sample" ? "Try a sample" : "New project"}</h2>
+          )}
           <button type="button" className="spj-close" aria-label="Close" title="Close" data-testid="start-close"
                   disabled={!!busy} onClick={onClose}>×</button>
         </div>

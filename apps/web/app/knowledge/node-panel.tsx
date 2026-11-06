@@ -920,7 +920,7 @@ export function PanelActions({ w, node, detail, archived, rulesLocked, onEditRul
           </GatedButton>
         </div>
       ) : null}
-      {run ? <a className="ag-btn" href={run} data-testid="kg-panel-open-run">Open in Factory run</a> : null}
+      {run ? <a className="ag-btn" href={run} data-testid="kg-panel-open-run">Open in Code Tasks</a> : null}
       {thread ? (
         <a className="ag-btn" href={conversationHref(thread, orgId)} data-testid="kg-panel-open-conversation"
            title="The brief, the agent's answer and what it did">Open conversation</a>

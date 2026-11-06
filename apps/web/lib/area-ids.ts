@@ -9,6 +9,9 @@
  * toAreaId first.
  */
 export const AREA_IDS = [
+  // Projects (BOSSAPP-914): the list and first run, and one project's page (`&tab=`).
+  "projects",
+  "project",
   "workforce",
   // The Graph area (KNOWLEDGE_GRAPH_PRODUCT_SPEC.md §5.1): code, rules and what agents learned.
   "knowledge",

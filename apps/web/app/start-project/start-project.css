@@ -134,3 +134,13 @@
 .spj-idea-actions { justify-content: space-between; align-items: center; }
 .spj-more { border: 0; background: none; color: var(--accent-text); font: inherit; font-size: 0.8rem; cursor: pointer; padding: 0; }
 .spj-more:hover { text-decoration: underline; }
+
+/* Add a project (BOSSAPP-914 screen 3): New | Existing as one segmented control in the head. */
+.spj-seg { display: inline-flex; border: 1px solid var(--border-strong); border-radius: 10px; overflow: hidden; }
+.spj-seg > button { padding: 7px 14px; font: inherit; font-size: 0.8rem; color: var(--muted); background: transparent; border: 0; cursor: pointer; white-space: nowrap; }
+.spj-seg > button[aria-selected="true"] { background: var(--accent-soft); color: var(--ink); box-shadow: inset 0 -2px 0 var(--accent); }
+.spj-seg > button:focus-visible { outline: 2px solid var(--accent-text); outline-offset: -2px; }
+.spj-head { flex-wrap: wrap; }
+.spj-captain { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--accent-line); border-radius: 8px; background: var(--surface-2); }
+.spj-captain small { color: var(--faint); }
+.spj-live { display: inline-flex; align-items: center; gap: 4px; font-size: 0.7rem; color: var(--accent-text); background: var(--accent-soft); border-radius: 999px; padding: 1px 8px; margin-left: 6px; }

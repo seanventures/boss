@@ -219,7 +219,7 @@ export function linksOf(item: ActivityLogItem, search: string): LineLink[] {
     }
   }
   if (item.runId) {
-    out.push({ key: "build", label: "Build ↗", tip: "Open the build in Factory",
+    out.push({ key: "build", label: "Build ↗", tip: "Open the build in Code Tasks",
                href: consoleHref(search, { area: "code_tasks", run: item.runId }) });
   }
   if (item.workflowRunId) {

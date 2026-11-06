@@ -35,7 +35,9 @@ describe("every rail label opens its area", () => {
   const labels = railLabels();
   it("reads the rail", () => {
     expect(labels.length).toBeGreaterThan(20);
-    expect(labels).toContainEqual(["code_tasks", "Factory"]);
+    expect(labels).toContainEqual(["code_tasks", "Code Tasks"]);
+    // The old name still lands (BOSSAPP-914: Factory → Code Tasks).
+    expect(landsOn("Factory")).toBe("code_tasks");
   });
   for (const [id, label] of labels) {
     it(`“${label}” → ${id}`, () => {

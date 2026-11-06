@@ -11,6 +11,9 @@ import { codeOnly } from "./_helpers/source";
  *
  * So this asserts the split: no visible copy says "code task", and every identifier still
  * does.
+ *
+ * THE AREA IS "Code Tasks" (BOSSAPP-914, operator 2026-11-06: "Factory → Code Tasks"). That is the
+ * place's proper name, capitalised; a row in it is still a build, never "a code task".
  */
 const FILES = [
   "app/ConsoleShell.tsx", "app/code-tasks-ui.tsx", "app/page.tsx",
@@ -32,7 +35,9 @@ describe("the visible copy", () => {
       .replace(/id: "code_tasks"/g, "")
       .replace(/\/v1\/code-tasks[^"'`]*/g, "")
       .replace(/code_task[a-z_]*/g, "")
-      .replace(/CodeTask[A-Za-z]*/g, "");
+      .replace(/CodeTask[A-Za-z]*/g, "")
+      // The area's proper name (BOSSAPP-914). Only the capitalised name; "a code task" still fails.
+      .replace(/Code Tasks/g, "");
     expect(src).not.toMatch(/code tasks?/i);
   });
 
@@ -40,8 +45,8 @@ describe("the visible copy", () => {
     expect(visible("app/code-tasks-ui.tsx")).toContain("+ New build");
   });
 
-  it("labels the nav area Factory", () => {
-    expect(visible("app/ConsoleShell.tsx")).toContain('label: "Factory"');
+  it("labels the nav area Code Tasks (was Factory, BOSSAPP-914)", () => {
+    expect(visible("app/ConsoleShell.tsx")).toContain('label: "Code Tasks"');
   });
 });
 

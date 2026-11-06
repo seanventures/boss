@@ -132,6 +132,8 @@ import { emptyOrgChart, emptyWorkforce, fetchOrgChart, fetchWorkforce } from "..
 import { ShepherdConsole } from "./shepherd-ui";
 import { getShepherdOverviewAction } from "./actions";
 import { InfraHome } from "./infra/infra-home";
+import { ProjectsHome } from "./projects/projects-home";
+import { ProjectPage } from "./projects/project-page";
 import { ObsHome } from "./observability/obs-home";
 import { GraphArea } from "./knowledge/graph-area";
 import { KgLifecycleCard } from "./knowledge/kg-lifecycle";
@@ -1466,6 +1468,23 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         {shows("welcome") ? (
         <section className="panel-stack" data-area="welcome" aria-label="Get started">
           <SetupBoard projectId={activeProjectId} actor={activeActorId} layout="welcome" />
+        </section>
+        ) : null}
+
+        {/* PROJECTS (BOSSAPP-914): the list and the first run, and one project's page. Each reads
+            its own data client-side (contract §1-§12); nothing for them is fetched here. */}
+        {shows("projects") ? (
+        <section className="panel-stack" data-area="projects" aria-label="Projects">
+          <ProjectsHome projectId={activeProjectId} actor={activeActorId} orgId={activeOrgId}
+                        projects={projects.items.filter((p) => p.orgId === activeOrgId).map((p) => ({ id: p.id, name: p.name }))}
+                        homeId={selectedOrg.project_id}
+                        setupUnfinished={Boolean(setupSummary?.get_started && setupSummary.ready === false)} />
+        </section>
+        ) : null}
+
+        {shows("project") ? (
+        <section className="panel-stack" data-area="project" aria-label="Project">
+          <ProjectPage projectId={activeProjectId} actor={activeActorId} orgId={activeOrgId} />
         </section>
         ) : null}
 
@@ -3081,7 +3100,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             Monitoring, so "where is my ApproveIt?" had no answer and was reconstructed by
             hand. This groups the runs into apps and puts each one's life on a single row. */}
         {shows("code_tasks") ? (
-        <section className="panel-stack" data-area="code_tasks" aria-label="Factory">
+        <section className="panel-stack" data-area="code_tasks" aria-label="Code Tasks">
           <CodeTasksHome
             projectId={activeProjectId}
             orgId={activeOrgId}

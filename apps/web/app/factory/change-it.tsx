@@ -180,7 +180,7 @@ export function ChangeIt({ projectId, runId, actor, onClose, onStarted, app = ""
           <div className="fx-sheet-body" data-testid="fx-change-proposal">
             <span className="fx-out-links">
               <span className="fx-out-sub" title={proposal.proposal.path === "workflow"
-                ? `Runs as the ${proposal.proposal.workflow_name ?? ""} workflow` : "Runs inline in the Factory"}>
+                ? `Runs as the ${proposal.proposal.workflow_name ?? ""} workflow` : "Runs inline in Code Tasks"}>
                 {proposal.proposal.path === "workflow" ? proposal.proposal.workflow_name : "Inline"}
               </span>
               {/* How big the agent judged it (the old proposal's badge). */}

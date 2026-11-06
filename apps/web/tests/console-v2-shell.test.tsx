@@ -100,7 +100,7 @@ describe("the v2 shell", () => {
     for (const label of [
       // v1 renamed its own: "Agent work" is Agents and "Workflow" is Workflows (Workflow
       // Studio), and /v2/factory, /v2/org and /v2/boss open those v1 areas.
-      "Factory", "Hive", "Agent Studio", "Team structure", "Approvals",
+      "Code Tasks", "Hive", "Agent Studio", "Team structure", "Approvals",
       "Workflows", "Receipts", "Infra & Models", "Settings",
     ]) {
       expect(shell).toContain(`label: "${label}"`);

@@ -253,11 +253,15 @@ export async function createFresh(name: string, opts: { description?: string; ty
 }
 
 /** Where a project opens (its page), keeping the org. */
-export function projectPageHref(projectId: string, homeId: string): string {
+export function projectPageHref(projectId: string, homeId: string, area: "project" | "overview" = "project"): string {
   const url = typeof window === "undefined" ? new URL("http://x/") : new URL(window.location.href);
   const p = new URLSearchParams(url.search);
   for (const k of [NEW_PROJECT_PARAM, "task", "run", "build", "role", "kg_tab", "kg_node", "kg_scan", "kg_sub", "wfr"]) p.delete(k);
   if (projectId === homeId) p.delete("project_id"); else p.set("project_id", projectId);
-  p.set("area", "overview");
+  // THE PROJECT PAGE (BOSSAPP-914): a new project opens where Helm's onboarding shows. From the
+  // first run (`first_run=1`) it opens the guided first run beside it instead.
+  if (p.get("first_run") === "1" && p.get("area") === "projects") { p.set("project_id", projectId); return `/?${p.toString()}`; }
+  p.set("area", area);
+  p.delete("tab"); p.delete("drawer");
   return `/?${p.toString()}`;
 }

@@ -29,7 +29,7 @@ describe("console capabilities help card", () => {
     expect(html).toMatch(/<b>Talk to BOSS<\/b>/);
     // Where the work appears — areas the rail actually shows.
     expect(html).toMatch(/<b>Workflow<\/b>/);
-    expect(html).toMatch(/<b>Factory<\/b>/);
+    expect(html).toMatch(/<b>Code Tasks<\/b>/);
     expect(html).toMatch(/<b>Approvals<\/b>/);
   });
 
