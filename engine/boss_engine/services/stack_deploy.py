@@ -1768,6 +1768,8 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
     try:
         try:
             manifest = load_manifest(manifest_text)
+            manifest_text, manifest = own_place_on_host(engine, manifest_text, manifest,
+                                                        target, host)
             rendered = render(manifest, _deployment_ctx(target, host, commit, ref))
         except ManifestError as exc:
             raise StackDeployError(f"{path} at {commit[:12]} is not valid: {exc}",
@@ -3043,6 +3045,59 @@ def undeclared_deploy_refusal(connection: Connection, run_id: Optional[str]) -> 
                 "`resources: {db: {capability: database.relational, engine: postgres}}`, then "
                 "deploy again.")
     return None
+
+
+def own_place_on_host(engine: Any, manifest_text: str, manifest: Any,
+                      target: Mapping[str, Any], host: Mapping[str, Any]) -> tuple[str, Any]:
+    """(manifest text, manifest) with THIS target's own folder and compose project on the host,
+    when the manifest names neither and another target on the host already holds the default.
+
+    SHARED HOSTS MADE THIS POSSIBLE. A verified host is usable by every project in its
+    organisation, so two projects' apps with the same name — boss-dogfood's old helpdesk-ai and
+    the helpdesk-ai project's HelpDesk AI — both defaulted to /opt/boss-apps/helpdesk-ai and the
+    compose project helpdesk-ai on 2.29.2.202, and the second deploy was refused (2026-11-06).
+    The target keeps the place it last used; a new one is named after the target's id. The
+    text with the place written in is what the plan stores, so apply renders the same place."""
+    import yaml
+
+    from .app_deploy_manifest import DEFAULT_BASE_DIR, parse_manifest
+
+    try:
+        data = yaml.safe_load(manifest_text) or {}
+    except yaml.YAMLError:
+        return manifest_text, manifest
+    if not isinstance(data, dict) or data.get("dir") or (
+            isinstance(data.get("compose"), dict) and data["compose"].get("project")):
+        return manifest_text, manifest
+    tid, hid = str(target.get("id") or ""), str(host.get("id") or "")
+    if not tid or not hid:
+        return manifest_text, manifest
+    with engine.connect() as connection:
+        last = connection.execute(
+            text("SELECT deploy_dir FROM stack_deployments WHERE target_id = :t AND host_id = :h "
+                 "AND COALESCE(deploy_dir, '') <> '' ORDER BY created_at DESC LIMIT 1"),
+            {"t": tid, "h": hid}).scalar()
+        taken = connection.execute(
+            text("SELECT 1 FROM stack_deployments d JOIN deployment_targets t "
+                 "ON t.id = d.target_id WHERE d.host_id = :h AND d.deploy_dir = :dir "
+                 "AND d.target_id <> :t AND t.status = 'active' AND d.status <> 'rejected' "
+                 "LIMIT 1"), {"h": hid, "dir": manifest.dir, "t": tid}).first()
+    if last and str(last) == manifest.dir:
+        return manifest_text, manifest
+    if not taken and not last:
+        return manifest_text, manifest
+    suffix = re.sub(r"[^a-z0-9]", "", tid.rsplit("_", 1)[-1].lower())[:6]
+    place = (str(last).rstrip("/").rsplit("/", 1)[-1] if last
+             else f"{manifest.name}-{suffix}")
+    data["dir"] = f"{DEFAULT_BASE_DIR}/{place}" if not last else str(last)
+    if manifest.kind == "compose":
+        data["compose"] = {**(data.get("compose") or {}), "project": place}
+    placed = ("# BOSS: another app on this host uses the default place; this target's own.\n"
+              + yaml.safe_dump(data, sort_keys=False))
+    try:
+        return placed, parse_manifest(data, source_text=placed)
+    except Exception:  # noqa: BLE001 — never worse than the manifest as written
+        return manifest_text, manifest
 
 
 def _imported_app_name(connection: Connection, project_id: str, run: Mapping[str, Any],

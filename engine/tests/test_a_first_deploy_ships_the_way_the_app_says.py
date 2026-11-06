@@ -418,3 +418,35 @@ def test_a_feature_on_an_imported_app_deploys_to_the_projects_own_target(db):
                   {"p": db.project})
         c.execute(text("DELETE FROM github_connections WHERE project_id = :p"), {"p": db.project})
     assert got and got.get("id") == own, got
+
+
+# ── two apps with one name on one shared host each get their own place ────────────────────────
+
+def test_a_second_app_with_the_same_name_on_a_shared_host_gets_its_own_place(db):
+    """helpdesk-ai 2026-11-06: with hosts shared across an organisation, boss-dogfood's old
+    helpdesk-ai and the helpdesk-ai project's HelpDesk AI both defaulted to
+    /opt/boss-apps/helpdesk-ai and compose project helpdesk-ai on one host; the second deploy
+    was refused. The second gets a place of its own, and keeps it on later deploys."""
+    from boss_engine.services.app_deploy_manifest import load_manifest
+    from boss_engine.services.stack_deploy import own_place_on_host
+
+    text_ = ("version: 1\nname: helpdesk-ai\nkind: compose\ncompose:\n  file: docker-compose.yml\n"
+             "health: [{url: \"{target.public_url}/\", expect: 200}]\n")
+    manifest = load_manifest(text_)
+    with db.engine.begin() as c:
+        first = _target(c, db.project, db.host, "helpdesk-ai", 8000)
+        second = _target(c, db.project, db.host, "HelpDesk AI", 8002)
+        c.execute(text("INSERT INTO stack_deployments (id, project_id, target_id, host_id, "
+                       " repository, ref, commit_sha, created_by, status, deploy_dir) VALUES "
+                       " (:i, :p, :t, :h, 'acme/app', 'main', :c, 'ceo', 'healthy', :d)"),
+                  {"i": f"sdep_{uuid.uuid4().hex[:10]}", "p": db.project, "t": first,
+                   "h": db.host, "c": "a" * 40, "d": manifest.dir})
+    host = {"id": db.host}
+    kept_text, kept = own_place_on_host(db.engine, text_, manifest, {"id": first}, host)
+    assert kept.dir == "/opt/boss-apps/helpdesk-ai" and kept_text == text_
+    placed_text, placed = own_place_on_host(db.engine, text_, manifest, {"id": second}, host)
+    assert placed.dir != manifest.dir and placed.dir.startswith("/opt/boss-apps/helpdesk-ai-")
+    assert placed.compose_project == placed.dir.rsplit("/", 1)[-1]
+    assert load_manifest(placed_text).dir == placed.dir, "apply renders the same place"
+    with db.engine.begin() as c:
+        c.execute(text("DELETE FROM stack_deployments WHERE project_id = :p"), {"p": db.project})

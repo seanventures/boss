@@ -3598,6 +3598,12 @@ def _perform_capability(
     # its host, and held for approval like every governed effect. Its manifest's health checks
     # are the proof it runs; a platform of several services cannot be previewed as one
     # container, so requiring a preview would make such apps undeployable from a workflow.
+    # EVERY DEPLOY WAITS FOR ITS MERGE FIRST (`_merge_wait`) — the stack path below included:
+    # it plans from the pull request's head, and shipped PR #3 unmerged (helpdesk-ai, 2026-11-06).
+    if key == "deploy" and not pass_2_of:
+        waiting = _merge_wait(connection, project_id, str(inputs.get("run_id") or ""))
+        if waiting:
+            return waiting
     if key == "deploy":
         from .stack_deploy import plan_for_workflow_step, stack_target_for_deploy
 
@@ -3727,9 +3733,6 @@ def _perform_capability(
         if undeclared:
             # Settled, in words, before anything is planned (see `_gate_subject`).
             raise SettledCapabilityError(undeclared)
-        waiting = _merge_wait(connection, project_id, str(inputs.get("run_id") or ""))
-        if waiting:
-            return waiting
         missing = _preview_missing_for_run(connection, context)
         if missing:
             return {"capability": key, "tool": None, "status": "failed",
