@@ -18,9 +18,15 @@ decide through the one agent path, and work still runs as workflows and builds.
     guards.py       loop/duplicate guards: depth, cooldown, caps, concurrency, circuit breaker
     task_classes.py the task-class and action catalogue (code, not config)
     read_model.py   Agent Operations: per-item flow graph, filtered lists, the scorecard
+    squads.py       the squad for an item: templates per task class, seats, the lead (908)
+    squad_turns.py  a member's turn through the one agent pipeline; consensus settled (908)
+    squad_memory.py what a squad tried and what failed; promoted to a KG learning at close
+    squad_plugins.py panels deliberate, workflows execute: handoff packets, results back
+    squad_demo.py   the non-production demo: a CVE squad with a critique and a dissent
 """
 from . import (adapters, board, collab, guards, ledger, policy, read_model, signals,  # noqa: F401
                task_classes)
+from . import squad_memory, squad_plugins, squad_turns, squads  # noqa: F401,E402
 
 __all__ = ["adapters", "board", "collab", "guards", "ledger", "policy", "read_model", "signals",
-           "task_classes"]
+           "task_classes", "squads", "squad_turns", "squad_memory", "squad_plugins"]
