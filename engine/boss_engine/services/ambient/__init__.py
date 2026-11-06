@@ -19,8 +19,8 @@ decide through the one agent path, and work still runs as workflows and builds.
     task_classes.py the task-class and action catalogue (code, not config)
     read_model.py   Agent Operations: per-item flow graph, filtered lists, the scorecard
 """
-from . import (adapters, board, collab, guards, ledger, policy, signals,  # noqa: F401
+from . import (adapters, board, collab, guards, ledger, policy, read_model, signals,  # noqa: F401
                task_classes)
 
-__all__ = ["adapters", "board", "collab", "guards", "ledger", "policy", "signals",
+__all__ = ["adapters", "board", "collab", "guards", "ledger", "policy", "read_model", "signals",
            "task_classes"]
