@@ -82,8 +82,8 @@ const githubWords = (s: WelcomeState) => ["Connected", s.github.login, `${s.gith
 
 /** One workspace step's card: configured (read-only, Manage ›), to do (a button to Repo and models),
  *  or unknown (status can't be read: a neutral link, never a false "Configured"). */
-function WorkspaceDoor({ id, step, title, icon, tone, known, done, doneText, todoText, todoLabel, focus, primary }: {
-  id: string; step: number; title: string; icon: typeof Brain; tone: "teal" | "violet"; known: boolean; done: boolean;
+function WorkspaceDoor({ id, step, title, icon, tone, known, loading, done, doneText, todoText, todoLabel, focus, primary }: {
+  id: string; step: number; title: string; icon: typeof Brain; tone: "teal" | "violet"; known: boolean; loading: boolean; done: boolean;
   doneText: string; todoText: string; todoLabel: string; focus: "repository" | "models"; primary: boolean;
 }) {
   const href = setupHref(focus);
@@ -95,8 +95,8 @@ function WorkspaceDoor({ id, step, title, icon, tone, known, done, doneText, tod
       <h3>{title}</h3>
       {!known ? (
         <>
-          <p className="px-faint">Status not read yet.</p>
-          <a className="px-btn" data-kind="ghost" data-size="s" href={href} data-testid={`px-fr-${id}-check`}>Check in Repo and models ›</a>
+          <p className="px-faint" role="status">{loading ? "Checking…" : "Couldn't read this just now."}</p>
+          {loading ? null : <a className="px-btn" data-kind="ghost" data-size="s" href={href} data-testid={`px-fr-${id}-check`}>Check in Repo and models ›</a>}
         </>
       ) : done ? (
         <>
@@ -146,9 +146,9 @@ export function FirstRun({ projectId, cards }: { projectId: string; actor: strin
       </section>
 
       <div className="px-grid px-g3">
-        <WorkspaceDoor id="github" step={1} title="Connect GitHub" icon={GithubLogo} tone="teal" known={known} done={s.github.done}
+        <WorkspaceDoor id="github" step={1} title="Connect GitHub" icon={GithubLogo} tone="teal" known={known} loading={status === "loading"} done={s.github.done}
                        doneText={githubWords(s)} todoText="Pick the repos the crew may work on." todoLabel="Connect GitHub ›" focus="repository" primary={current === 1} />
-        <WorkspaceDoor id="model" step={2} title="Add a model" icon={Brain} tone="violet" known={known} done={s.model.done}
+        <WorkspaceDoor id="model" step={2} title="Add a model" icon={Brain} tone="violet" known={known} loading={status === "loading"} done={s.model.done}
                        doneText={modelWords(s)} todoText="A subscription, an API key, or a local model." todoLabel="Add a model ›" focus="models" primary={current === 2} />
         <div className="px-door" data-current={current === 3 || undefined} data-testid="px-fr-project">
           <div className="px-row"><Ico icon={FolderPlus} c="green" size="l" /><span className="px-tag" data-tone="blue">Step 3</span></div>
@@ -221,7 +221,7 @@ function Guided({ card, s, known }: { card: ProjectCard; s: WelcomeState; known:
     { label: "Add project", sub: card.repo || card.name, state: "done", icon: <FolderPlus size={13} /> },
     { label: "Helm onboards", sub: discover ? `Discover · ${discover.sub || discover.state}` : "starting", state: !o ? "now" : discover?.state === "done" ? "done" : "now", icon: <Compass size={13} /> },
     { label: "Ready for work", sub: ready?.sub || "checks the agent runs", state: ready?.state === "done" ? "done" : ready?.state === "now" ? "now" : "todo", icon: <Signpost size={13} /> },
-    { label: "First work", sub: "suggested → your PR", state: o?.first_work ? "now" : "todo", icon: <GitPullRequest size={13} /> },
+    { label: "First work", sub: "suggested → your PR", state: o?.first_work && ready?.state === "done" ? "now" : "todo", icon: <GitPullRequest size={13} /> },
   ];
   const done = steps.filter((x) => x.state === "done").length;
   const [said, setSaid] = useState("");
@@ -245,7 +245,7 @@ function Guided({ card, s, known }: { card: ProjectCard; s: WelcomeState; known:
             <span className="px-lbl">Workspace</span>
             <a className="px-chip" href={setupHref("repository")} data-testid="px-guide-ws-github" title="GitHub accounts live in Setup › Repo and models"
                style={{ color: known && s.github.done ? "var(--green)" : "var(--amber)" }}>
-              <GithubLogo size={11} aria-hidden /> {!known ? "GitHub ?" : s.github.done ? `GitHub ✓ ${s.github.login ?? ""} · ${s.github.repos} repos` : "GitHub — connect"}</a>
+              <GithubLogo size={11} aria-hidden /> {!known ? "GitHub ?" : s.github.done ? `GitHub ✓ ${s.github.login ?? ""} · ${s.github.repos} repo${s.github.repos === 1 ? "" : "s"}` : "GitHub — connect"}</a>
             <a className="px-chip" href={setupHref("models")} data-testid="px-guide-ws-model" title="Models live in Setup › Repo and models"
                style={{ color: known && s.model.done ? "var(--green)" : "var(--amber)" }}>
               <Brain size={11} aria-hidden /> {!known ? "Model ?" : s.model.done ? `Model ✓ ${s.model.label ?? ""}` : "Model — add"}</a>
