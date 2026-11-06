@@ -45,6 +45,7 @@ from ..schemas import FileChange
 from ..templates import run_env as _run_env
 from . import agent_acts, baseline_verify, ci_gate, design_prompts, plane_sync, review_comments, verification_target
 from . import red_first, review_input
+from . import approved_prd_design
 from .knowledge import learning_context, learning_writeback  # learning while executing (BOSSAPP-768)
 from .bakeoff import (
     fixture_for_run as bakeoff_fixture_for_run,
@@ -3791,6 +3792,57 @@ def _split_design(text: str) -> dict:
     return out
 
 
+def _design_from_approved_prd(engine, project_id, run_id, fctx, *, title, instructions,
+                              criteria, root, route) -> Optional[dict]:
+    """The design from the APPROVED PRD this build came from, or None to run the full design.
+
+    One read-only session under the plan's route, capped at PRD_DESIGN_MAX_TURNS, maps the PRD's
+    solution onto the repo. Records `code_task.design_from_prd` (the short path ran) or
+    `code_task.design_from_prd_declined` (why the full design runs instead) — the latter only
+    when there WAS an approved PRD, so ordinary builds are not cluttered. Never raises."""
+    try:
+        with _transaction(engine) as c:
+            prd = approved_prd_design.find_approved_prd(c, project_id, fctx or {})
+        if prd is None:
+            return None
+        solution = approved_prd_design.solution_section(prd["markdown"])
+
+        def _declined(why: str) -> None:
+            with _transaction(engine) as c:
+                emit_event(c, project_id, "code_task.design_from_prd_declined", "boss",
+                           "code_task_run", run_id,
+                           {"decision_id": prd["decision_id"], "why": why[:400],
+                            "path": "full"})
+
+        if not solution:
+            _declined("the approved PRD has no solution / proposed-design section")
+            return None
+        set_llm_context(stage="design")
+        agent, model = route("plan")
+        started = time.monotonic()
+        answer = agent.run_role(
+            approved_prd_design.prompt(_ctx_block(title, instructions, criteria), solution),
+            root, read_only=True, model=model,
+            max_turns=approved_prd_design.PRD_DESIGN_MAX_TURNS)
+        design, why = approved_prd_design.design_from_answer(
+            prd, solution, str(answer.get("summary") or ""))
+        if design is None:
+            _declined(why)
+            return None
+        design["cost_usd_micros"] = int(answer.get("cost_usd_micros") or 0)
+        with _transaction(engine) as c:
+            emit_event(c, project_id, "code_task.design_from_prd", "boss", "code_task_run",
+                       run_id, {"decision_id": prd["decision_id"], "path": "approved_prd",
+                                "seconds": round(time.monotonic() - started, 1),
+                                "solution_chars": len(solution),
+                                "packages": len(_parallel_build.parse_packages(
+                                    design.get("packages")))})
+        return design
+    except Exception:  # noqa: BLE001 — the full design is always there to fall back to
+        _log_caught(logger)
+        return None
+
+
 def _review_plan_prompt(title, plan):
     return (
         "You are a design reviewer with FRESH context. FIRST decide whether this task ASKS FOR "
@@ -5984,49 +6036,65 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         elif do_design:
             with _transaction(engine) as c:
                 _phase(c, "design")
-            # ONE SESSION FOR STANDARDS, SPEC AND PLAN. They were three cold sessions, each
-            # re-reading the same repository (a HelpDesk AI build: 0.6 + 2.2 + 5.3 minutes).
-            # One read produces all three, under the plan's route (the strongest of the
-            # three). A part the session did not deliver is written by its own session as
-            # before, so a short answer never becomes a thin design. The plan review below
-            # stays its OWN session with fresh context: a plan is never reviewed by its author.
-            set_llm_context(stage="design")
-            a, m = _route("plan")
-            joint = a.run_role(_design_prompt(title, instructions, criteria), root,
-                               read_only=True, model=m)
-            parts = _split_design(joint.get("summary", ""))
-            d1 = {"summary": parts["standards"], "cost_usd_micros": joint.get("cost_usd_micros")}
-            d2 = {"summary": parts["spec"], "cost_usd_micros": 0}
-            d3 = {"summary": parts["plan"], "cost_usd_micros": 0}
-            if not parts["standards"]:
-                set_llm_context(stage="standards")
-                a, m = _route("standards")
-                d1 = a.run_role(_standards_prompt(), root, read_only=True, model=m)
-                d1["cost_usd_micros"] = int(d1.get("cost_usd_micros") or 0) + int(
-                    joint.get("cost_usd_micros") or 0)
-            if not parts["spec"]:
-                set_llm_context(stage="spec")
-                a, m = _route("spec")
-                d2 = a.run_role(_spec_prompt(title, instructions, criteria), root,
-                                read_only=True, model=m)
-            if not parts["plan"]:
-                set_llm_context(stage="plan")
+            # AN APPROVED PRD IS THE DESIGN (approved_prd_design). HelpDesk AI's SLA-timers build
+            # (crun_c8e2a5f8) spent 572 s here re-planning a PRD whose "Proposed Solution" the
+            # owner had just approved (dec_13a8cd75). When the origin carries one, a short,
+            # turn-bounded read maps that solution onto the repo and yields every field below
+            # (standards/spec/plan/plan_review/plan_ok/packages). Any doubt — no solution
+            # section, an incomplete answer, the repo contradicting the PRD — runs the full
+            # design exactly as before, and the event says which path ran and why.
+            design = _design_from_approved_prd(
+                engine, project_id, run_id, fctx, title=title, instructions=instructions,
+                criteria=criteria, root=root, route=_route)
+            if design is not None:
+                cost += int(design.pop("cost_usd_micros", 0) or 0)
+                fctx["design_path"] = "approved_prd"
+            else:
+                fctx["design_path"] = "full"
+            if design is None:
+                # ONE SESSION FOR STANDARDS, SPEC AND PLAN. They were three cold sessions, each
+                # re-reading the same repository (a HelpDesk AI build: 0.6 + 2.2 + 5.3 minutes).
+                # One read produces all three, under the plan's route (the strongest of the
+                # three). A part the session did not deliver is written by its own session as
+                # before, so a short answer never becomes a thin design. The plan review below
+                # stays its OWN session with fresh context: a plan is never reviewed by its author.
+                set_llm_context(stage="design")
                 a, m = _route("plan")
-                d3 = a.run_role(_plan_prompt(title, d2.get("summary", "")), root,
+                joint = a.run_role(_design_prompt(title, instructions, criteria), root,
+                                   read_only=True, model=m)
+                parts = _split_design(joint.get("summary", ""))
+                d1 = {"summary": parts["standards"], "cost_usd_micros": joint.get("cost_usd_micros")}
+                d2 = {"summary": parts["spec"], "cost_usd_micros": 0}
+                d3 = {"summary": parts["plan"], "cost_usd_micros": 0}
+                if not parts["standards"]:
+                    set_llm_context(stage="standards")
+                    a, m = _route("standards")
+                    d1 = a.run_role(_standards_prompt(), root, read_only=True, model=m)
+                    d1["cost_usd_micros"] = int(d1.get("cost_usd_micros") or 0) + int(
+                        joint.get("cost_usd_micros") or 0)
+                if not parts["spec"]:
+                    set_llm_context(stage="spec")
+                    a, m = _route("spec")
+                    d2 = a.run_role(_spec_prompt(title, instructions, criteria), root,
+                                    read_only=True, model=m)
+                if not parts["plan"]:
+                    set_llm_context(stage="plan")
+                    a, m = _route("plan")
+                    d3 = a.run_role(_plan_prompt(title, d2.get("summary", "")), root,
+                                    read_only=True, model=m)
+                set_llm_context(stage="review_plan")
+                a, m = _route("review_plan")
+                d4 = a.run_role(_review_plan_prompt(title, d3.get("summary", "")), root,
                                 read_only=True, model=m)
-            set_llm_context(stage="review_plan")
-            a, m = _route("review_plan")
-            d4 = a.run_role(_review_plan_prompt(title, d3.get("summary", "")), root,
-                            read_only=True, model=m)
-            for d in (d1, d2, d3, d4):
-                cost += int(d.get("cost_usd_micros") or 0)
-            plan_ok = "REVISE" not in d4.get("summary", "").upper()
-            design = {"standards": d1.get("summary", ""), "spec": d2.get("summary", ""),
-                      "plan": d3.get("summary", ""), "plan_review": d4.get("summary", ""),
-                      "plan_ok": plan_ok,
-                      # The partition BOSS runs the writing stages in parallel from
-                      # (parallel_build); empty when the change is too small to split.
-                      "packages": parts.get("packages", "")}
+                for d in (d1, d2, d3, d4):
+                    cost += int(d.get("cost_usd_micros") or 0)
+                plan_ok = "REVISE" not in d4.get("summary", "").upper()
+                design = {"standards": d1.get("summary", ""), "spec": d2.get("summary", ""),
+                          "plan": d3.get("summary", ""), "plan_review": d4.get("summary", ""),
+                          "plan_ok": plan_ok,
+                          # The partition BOSS runs the writing stages in parallel from
+                          # (parallel_build); empty when the change is too small to split.
+                          "packages": parts.get("packages", "")}
             # PERSIST THE PLAN THE MOMENT IT EXISTS.
             # `state` was only written when a run FINISHED, so a mid-run death lost the design
             # along with everything else — both spend-limit failures recorded an EMPTY state, and
@@ -6065,8 +6133,11 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         status="blocked", failure_class="needs_human",
                         reason_code="not_a_code_task")
             # feed the refined spec + plan forward so write-tests/implement are spec-driven
-            instructions = (f"{instructions}\n\nREFINED SPEC:\n{d2.get('summary', '')}"
-                            f"\n\nTECHNICAL PLAN:\n{d3.get('summary', '')}")
+            if design.get("source") == "approved_prd":
+                instructions = f"{instructions}{approved_prd_design.brief_addendum(instructions, design)}"
+            else:
+                instructions = (f"{instructions}\n\nREFINED SPEC:\n{design.get('spec', '')}"
+                                f"\n\nTECHNICAL PLAN:\n{design.get('plan', '')}")
             # HUMAN APPROVE-PLAN GATE (Wire-Phase 2b): top risk pauses for sign-off before code.
             if _requires_plan_approval(risk_tier):
                 return _block_for_plan_approval(
@@ -7796,7 +7867,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         if iac_result is not None:
             gates.update(_iac_gates(iac_result))
 
-        steps_run = (["standards", "spec", "plan", "review_plan"] if do_design else []) \
+        steps_run = ((["prd_design"] if (design or {}).get("source") == "approved_prd"
+                      else ["standards", "spec", "plan", "review_plan"]) if do_design else []) \
             + (["write_tests"] if do_separate_tests else []) + ["implement"] \
             + (["review_code", "security_check", "check_tests", "run_all_tests", "consistency_check"]
                if do_review else []) \
