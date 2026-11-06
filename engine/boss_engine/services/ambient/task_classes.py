@@ -109,6 +109,10 @@ TASK_CLASSES: dict[str, TaskClass] = {c.key: c for c in (
               ("workflow", "build")),
     TaskClass("system_health", "System health", "A1", "A2", "medium", "infra_steward",
               ("doctor",)),
+    # BOSSAPP-911: a Recommended-roadmap item. BOSS only ever PROPOSES here (ceiling A1): a
+    # person accepts it into a ticket, an epic or a PRD panel, or rejects it with a reason.
+    TaskClass("roadmap_item", "Roadmap item", "A1", "A1", "low", "pm",
+              ("kg", "cost", "ci", "build", "person")),
 )}
 
 ACTIONS: dict[str, Action] = {a.key: a for a in (

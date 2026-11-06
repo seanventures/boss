@@ -301,9 +301,14 @@ def list_view(connection: Connection, project_id: str, *, filter_: str = "all",
             else None}
 
 
-def scorecard(connection: Connection, project_id: str, *, days: int = 7) -> dict[str, Any]:
+def scorecard(connection: Connection, project_id: str, *, days: int = 7,
+              task_class: Optional[str] = None) -> dict[str, Any]:
     """Design §11.7, computed: decisions/day by level and decider, accepted/overridden/reverted %
-    per class, time to a human decision, MTTR, noise, cost against the envelope, guard trips."""
+    per class, time to a human decision, MTTR, noise, cost against the envelope, guard trips.
+    `outcomes` (BOSSAPP-912) adds design §8's success metrics — optionally for one task class —
+    and the Recommended roadmap's acceptance per detector (BOSSAPP-911)."""
+    from . import outcomes, roadmap
+
     days = max(1, min(int(days), 90))
     window = {"p": project_id, "d": days}
     per_day = [serialize_row(r) for r in connection.execute(text(
@@ -371,6 +376,10 @@ def scorecard(connection: Connection, project_id: str, *, days: int = 7) -> dict
                  "envelope_today": policy.envelope(connection, project_id)},
         "guards": {r["event_type"].split(".", 1)[1]: int(r["n"]) for r in guard_rows},
         "stopped": policy.stop_state(connection, project_id),
+        "outcomes": {**outcomes.metrics(connection, project_id, days=days,
+                                        task_class=task_class),
+                     "recommendations": roadmap.metrics(connection, project_id,
+                                                        days=max(days, 30))},
     }
 
 

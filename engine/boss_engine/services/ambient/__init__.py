@@ -18,9 +18,14 @@ decide through the one agent path, and work still runs as workflows and builds.
     guards.py       loop/duplicate guards: depth, cooldown, caps, concurrency, circuit breaker
     task_classes.py the task-class and action catalogue (code, not config)
     read_model.py   Agent Operations: per-item flow graph, filtered lists, the scorecard
+    learning.py     continuous learning: the detector framework and grouping (BOSSAPP-911)
+    detectors.py    the built-in detectors over the KG, incidents, reviews, cost, stages, friction
+    roadmap.py      the Recommended roadmap: score, rank, open, accept/reject/snooze, the tick
+    outcomes.py     outcomes time decides (ignored, recurred, merged, reverted) + metrics (912)
 """
 from . import (adapters, board, collab, guards, ledger, policy, read_model, signals,  # noqa: F401
                task_classes)
+from . import learning, outcomes, roadmap  # noqa: F401,E402
 
 __all__ = ["adapters", "board", "collab", "guards", "ledger", "policy", "read_model", "signals",
-           "task_classes"]
+           "task_classes", "learning", "outcomes", "roadmap"]
