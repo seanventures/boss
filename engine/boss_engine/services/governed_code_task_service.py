@@ -3139,7 +3139,7 @@ def _spawn_deferred_findings_task(
     engine, settings, jobs, *, project_id, task_id, spec, base_branch,
     findings: list[dict], parent_run_id: str, parent_title: str,
     parent_root: Optional[str] = None, parent_origin: Optional[dict] = None,
-    checks_failing: Optional[dict] = None,
+    checks_failing: Optional[dict] = None, parent_workflow_run_id: Optional[str] = None,
 ):
     """Queue sub-threshold review findings as their own code task on the shipped branch.
 
@@ -3209,7 +3209,13 @@ def _spawn_deferred_findings_task(
                           # follow-up — and therefore reported "Research: none / Spec: none" for
                           # an app that came from a panel and has a PRD. Same reasoning as the
                           # root_run_id note above: lineage must survive the hop.
-                          **({"origin": parent_origin} if parent_origin else {})},
+                          **({"origin": parent_origin} if parent_origin else {}),
+                          # AND THE WORKFLOW RUN IT BELONGS TO. Without it the follow-up's merge
+                          # approval was invisible on the run: helpdesk-ai's run showed "More
+                          # tests: waiting" while its approval sat elsewhere, and the operator
+                          # asked "how does the user know?" (2026-11-06). Retries carry it too.
+                          **({"workflow_run_id": parent_workflow_run_id}
+                             if parent_workflow_run_id else {})},
             jobs=jobs, profile=spec.get("profile"),
             # BOSS ITSELF continues this lineage: it acts under the person and grant the lineage
             # was started under (a standing grant, or the workflow run's), never the worker key's.
@@ -9277,7 +9283,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     parent_run_id=run_id, parent_title=title,
                     parent_root=(fctx.get("root_run_id") or run_id),
                     parent_origin=fctx.get("origin"),
-                    checks_failing=_checks)
+                    checks_failing=_checks,
+                    parent_workflow_run_id=fctx.get("workflow_run_id"))
                 with _transaction(engine) as c:
                     emit_event(c, project_id, "code_task.deferred_findings_task", "boss",
                                "code_task_run", run_id,

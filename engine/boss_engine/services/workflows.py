@@ -7498,6 +7498,8 @@ _AWAIT_LABELS: dict[str, str] = {
     "architecture": "a person to approve the architecture",
     # A finished panel's step held until its PRD is approved (runner._hold_for_spec).
     "spec_decision": "the spec (the panel's PRD) to be approved",
+    # A deploy step held until its build's pull request is merged (runner._merge_wait).
+    "merge": "the pull request to be merged",
 }
 
 
