@@ -1770,6 +1770,11 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
             manifest = load_manifest(manifest_text)
             manifest_text, manifest = own_place_on_host(engine, manifest_text, manifest,
                                                         target, host)
+            workdir_ = manifest_workdir(path)
+            manifest_text, manifest = with_compose_owned_secrets(
+                manifest_text, manifest,
+                lambda p: github.read_file(owner, repo, f"{workdir_}/{p}" if workdir_ else p,
+                                           commit))
             rendered = render(manifest, _deployment_ctx(target, host, commit, ref))
         except ManifestError as exc:
             raise StackDeployError(f"{path} at {commit[:12]} is not valid: {exc}",
@@ -3065,6 +3070,49 @@ def undeclared_deploy_refusal(connection: Connection, run_id: Optional[str]) -> 
                 "`resources: {db: {capability: database.relational, engine: postgres}}`, then "
                 "deploy again.")
     return None
+
+
+def with_compose_owned_secrets(manifest_text: str, manifest: Any,
+                               read: Callable[[str], Optional[str]]) -> tuple[str, Any]:
+    """(manifest text, manifest) that also GENERATES every session/signing key the app's compose
+    file reads and the manifest does not declare — the deploy's half of the rule previews follow
+    (run_env.needs_from_compose).
+
+    HelpDesk AI's docker-compose.yml reads SESSION_SECRET; its boss.deploy.yaml named only the
+    demo password, so the deployed server exited on "SESSION_SECRET must be set" and a repair
+    build had to add it to the manifest (helpdesk-ai PR #4, 2026-11-06). A key BOSS owns (it signs
+    the app's own sessions; no person chooses it) is minted per target, like any {generate}."""
+    import yaml
+
+    from ..templates.run_env import _BOSS_OWNED_NAME
+    from .app_deploy_manifest import parse_manifest
+
+    if manifest.kind != "compose" or not manifest.compose_file:
+        return manifest_text, manifest
+    try:
+        compose = yaml.safe_load(read(manifest.compose_file) or "") or {}
+        data = yaml.safe_load(manifest_text) or {}
+    except Exception:  # noqa: BLE001 — never worse than the manifest as written
+        return manifest_text, manifest
+    services = compose.get("services") if isinstance(compose, dict) else None
+    wanted: list[str] = []
+    for svc in (services or {}).values() if isinstance(services, dict) else ():
+        env = svc.get("environment") if isinstance(svc, dict) else None
+        names = ([str(k) for k in env] if isinstance(env, dict) else
+                 [str(e).split("=", 1)[0] for e in env] if isinstance(env, list) else [])
+        wanted += [n for n in names if _BOSS_OWNED_NAME.match(n) and n not in wanted]
+    declared = {e.key for e in manifest.env or ()}
+    missing = [n for n in wanted if n not in declared]
+    if not missing or not isinstance(data, dict):
+        return manifest_text, manifest
+    env = data.get("env") if isinstance(data.get("env"), dict) else {}
+    data["env"] = {**env, **{n: {"generate": "hex32"} for n in missing}}
+    placed = ("# BOSS: generates the session keys the compose file reads: "
+              + ", ".join(missing) + "\n" + yaml.safe_dump(data, sort_keys=False))
+    try:
+        return placed, parse_manifest(data, source_text=placed)
+    except Exception:  # noqa: BLE001
+        return manifest_text, manifest
 
 
 def own_place_on_host(engine: Any, manifest_text: str, manifest: Any,

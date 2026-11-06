@@ -484,3 +484,25 @@ def test_an_imported_apps_manifest_a_repair_edited_is_still_not_judged_by_its_fi
                   {"p": db.project})
         c.execute(text("DELETE FROM github_connections WHERE project_id = :p"), {"p": db.project})
     assert got is None, got
+
+
+def test_a_deploy_generates_the_session_key_its_compose_file_reads():
+    """helpdesk-ai 2026-11-06: docker-compose.yml read SESSION_SECRET, boss.deploy.yaml named only
+    the demo password, and the deployed server exited on "SESSION_SECRET must be set"."""
+    from boss_engine.services.stack_deploy import with_compose_owned_secrets
+
+    text_ = ("version: 1\nname: helpdesk-ai\nkind: compose\ncompose:\n  file: docker-compose.yml\n"
+             "health: [{url: \"{target.public_url}/auth/providers\", expect: 200}]\n"
+             "env:\n  DEMO_PASSWORD: {generate: password}\n")
+    compose = ("services:\n  app:\n    environment:\n      SESSION_SECRET: ${SESSION_SECRET}\n"
+               "      DATABASE_URL: postgres://db/x\n      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET}\n")
+    placed_text, placed = with_compose_owned_secrets(text_, load_manifest(text_),
+                                                     {"docker-compose.yml": compose}.get)
+    generated = placed.summary()["generated_env_keys"]
+    assert "SESSION_SECRET" in generated and "DEMO_PASSWORD" in generated
+    assert "GITHUB_CLIENT_SECRET" not in generated, "a provider's secret is never minted"
+    assert load_manifest(placed_text).summary()["generated_env_keys"] == generated
+    declared = text_ + "  SESSION_SECRET: {generate: hex32}\n"
+    same_text, _ = with_compose_owned_secrets(declared, load_manifest(declared),
+                                              {"docker-compose.yml": compose}.get)
+    assert same_text == declared, "a manifest that declares it is left as written"
