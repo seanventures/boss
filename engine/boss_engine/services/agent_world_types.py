@@ -17,10 +17,11 @@ from typing import Any, Literal, Optional, TypedDict
 
 # ── Vocabularies ─────────────────────────────────────────────────────────────────────────────
 
-ActKind = Literal["run", "step", "stage", "seat", "chat", "approval", "handoff"]
+ActKind = Literal["run", "step", "stage", "seat", "chat", "approval", "handoff", "decision"]
 ActStatus = Literal["pending", "active", "awaiting_input", "complete", "error", "stale", "skipped"]
 ActHow = Literal["named", "only_holder", "only_candidate", "model_pick", "captain", "run_actor",
-                 "next_stage", "seated", "asked_by_person", "asked_by_agent", "approved", "started"]
+                 "next_stage", "seated", "asked_by_person", "asked_by_agent", "approved", "started",
+                 "signal", "board"]
 HandedByKind = Literal["person", "agent", "boss"]
 Lifecycle = Literal["active", "paused", "retired"]
 ChangeKind = Literal["born", "persona", "remit", "instructions", "grant", "revoke", "model",
@@ -45,6 +46,11 @@ EDGE_LABELS: dict[str, str] = {
     "asked_by_agent": "Asked by {agent}",
     "approved": "Approved by you",
     "started": "Started by you",
+    # AUTONOMOUS WORK (services/ambient, BOSSAPP-906): a decision act reached its decider from a
+    # signal (no person or agent handed it over: a sensor saw a problem) or from the work board
+    # (the item it decides was on the shared board; the message that raised it is on the item).
+    "signal": "Raised by a signal",
+    "board": "From the work board",
 }
 
 #: Every role key the shipped cast answers to after the Agent World packs land (§0.1, §8).
@@ -61,6 +67,8 @@ CANONICAL_ROLE_KEYS: frozenset[str] = frozenset({
     "operations_engineer", "sre",
     # runs an incident on one timeline (BOSSAPP-768: the knowledge-graph project's cast)
     "incident_commander",
+    # triages every signal BOSS notices on its own into one routed work item (BOSSAPP-904)
+    "chief_of_staff",
     # approves a regulatory remediation once its evidence stands up (KG P5b/P6a)
     "compliance_officer",
     # the banking-regulatory pack's judging roles (2026-10-31: they were prompt files only, so

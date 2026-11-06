@@ -50,6 +50,12 @@ GUARDED: dict[str, str] = {
     "services/factory_flow.py::tick": "tick",
     "services/process_manager.py::tick": "tick",
     "services/person_wait.py::poll_due": "poll_due",
+    # Autonomous agents (BOSSAPP-902): the Chief of Staff's tick triages live projects only
+    # (and its owners' turn picks items with live_sql); the learning tick runs detectors for
+    # live projects only; the SRE squad's watch skips an archived project.
+    "services/ambient/chief_of_staff.py::tick": "tick",
+    "services/ambient/roadmap.py::tick": "tick",
+    "services/incident_squad.py::tick": "tick",
 }
 
 #: New work refused at its door (ProjectArchived -> 409), checked the same way.
@@ -70,6 +76,16 @@ _TARGETS = "probes only the targets deployment_health.sweep picked, which skips 
 
 EXEMPT: dict[str, str] = {
     "identity/claim.py::claim": "the owner claim at install time, not a scheduler",
+    "services/ambient/signals.py::sweep": "records what the sensors saw; starts no work — the "
+                                          "Chief of Staff's tick (guarded) never triages an "
+                                          "archived project's signals",
+    "services/ambient/answers.py::sweep": "carries a person's answer; called only from the "
+                                          "Chief of Staff's triage of a project its guarded "
+                                          "tick picked",
+    "services/ambient/outcomes.py::sweep": "writes the outcomes time decides on ledger rows; "
+                                           "starts no work",
+    "services/ambient/board.py::claim": "an agent's lease on an item a guarded tick handed it; "
+                                        "opens nothing new",
     "services/lineage_sandbox.py::claim": "provisions or reuses a sandbox for a run.id already "
                                           "started elsewhere (that start refused an archived "
                                           "project); claim itself starts no new project work",
@@ -133,6 +149,8 @@ WORKER_ROUTES: dict[str, str] = {
     "/v1/self/host-stall": _HOUSE,
     "/v1/activity/retention/prune": _HOUSE,
     "/v1/telemetry/tick": "install-wide Improve BOSS telemetry",
+    "/v1/ambient/tick": "tick:services/ambient/chief_of_staff.py::tick",
+    "/v1/ambient/learning/tick": "tick:services/ambient/roadmap.py::tick",
     "/v1/qa/benchmark-apps/tuning-sweep": "the install's benchmark ledger",
     "/v1/model-gateway/leases": _LEASE, "/v1/model-gateway/leases/{x}/heartbeat": _LEASE,
     "/v1/model-gateway/leases/{x}/invocations": _LEASE,

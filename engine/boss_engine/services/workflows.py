@@ -7352,6 +7352,11 @@ def cancel_run(
     # The run's "stop" action decides the rest: a run busy compensating is refused (stopping it
     # would race the undo), in the words the console shows on its disabled Stop.
     require(connection, project_id, run_id, "stop")
+    # A PERSON STOPPING A RUN an ambient agent started takes its work item over (autonomous
+    # agents, design §4 L4): the agent loses its lease and does not start it again.
+    from .ambient.person_actions import on_run_cancelled
+
+    on_run_cancelled(connection, project_id=project_id, run_id=run_id, actor=actor)
 
     # STOP THE WORK, NOT JUST THE BOOKKEEPING.
     #

@@ -1099,6 +1099,14 @@ class InboundWebhookService:
                 "duplicate": True,
             }
 
+        if normalized_source == "github" and project_id and not own_sender:
+            # A PERSON ON A PR OR BRANCH AN AMBIENT AGENT IS WORKING takes it over at once
+            # (autonomous agents, design §4 L4): the agent's lease is cancelled and it stops.
+            # Never fails the delivery (person_actions swallows its own errors).
+            from .ambient.person_actions import on_github_event
+
+            on_github_event(connection, project_id=project_id, event=provider_event,
+                            payload=payload, bot_login=self.settings.github_app_bot_login)
         event_type = (
             community_event_type
             if community_routed and community_event_type

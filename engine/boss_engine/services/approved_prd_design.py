@@ -138,7 +138,8 @@ def prompt(ctx_block: str, solution: str) -> str:
 
 
 def split(text: str) -> dict:
-    """The pass's sections; a missing one is "" (and a missing verdict means fall back)."""
+    """The pass's sections; a missing one is "" (a missing verdict falls back unless the plan
+    maps the solution — see design_from_answer)."""
     out = {key: "" for key, _ in _HEADS}
     marks = []
     for key, head in _HEADS:
@@ -152,12 +153,31 @@ def split(text: str) -> dict:
     return out
 
 
+#: The PLAN's closing line, as the prompt asks for it — its presence means the plan was not cut off.
+_PLAN_END = re.compile(r"^\W*database:\s*(?:postgres|none)\b", re.IGNORECASE | re.MULTILINE)
+#: A repository path: a token with a directory separator or a file extension.
+_PLAN_PATH = re.compile(r"[\w.-]+/[\w./-]*\w|\b[\w-]+\.[A-Za-z][A-Za-z0-9]{0,5}\b")
+
+
+def plan_maps_solution(plan: str) -> bool:
+    """True when the short pass's PLAN parses (it reached its closing `database:` line) and maps
+    the solution onto this repository (it names at least one file)."""
+    plan = str(plan or "")
+    return bool(_PLAN_END.search(plan) and _PLAN_PATH.search(_PLAN_END.sub("", plan)))
+
+
 def design_from_answer(prd: dict, solution: str, answer: str) -> tuple[Optional[dict], str]:
     """(design, "") when the short pass confirms the PRD fits the repo, else (None, why)."""
     parts = split(answer)
     verdict = parts["contradictions"].strip()
     if not verdict:
-        return None, "the short pass gave no contradictions verdict"
+        # crun_719a19f0b9c74bae8bfd: the pass mapped the solution file by file and simply left
+        # the CONTRADICTIONS section out — declining cost a 7.3 min full design. A plan that is
+        # complete (ends on its `database:` line) and names files is the verdict: nothing it
+        # found contradicted the PRD. A plan cut short or naming no file still falls back.
+        if not plan_maps_solution(parts["plan"]):
+            return None, "the short pass gave no contradictions verdict"
+        verdict = "NONE"
     if not re.match(r"^\W*none\b", verdict, re.IGNORECASE):
         return None, f"the repository contradicts the PRD: {verdict[:300]}"
     if not parts["plan"].strip():

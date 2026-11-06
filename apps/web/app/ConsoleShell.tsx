@@ -80,6 +80,7 @@ import {
   Wallet,
   Wrench,
   Bandaids,
+  ShareNetwork,
   X,
   type Icon,
 } from "@phosphor-icons/react";
@@ -138,6 +139,7 @@ const ICONS = {
   overview: House,
   decisions: CheckCircle,
   self_fixes: Bandaids,
+  agent_ops: ShareNetwork,
   work: Rows,
   activity: List,
   portfolio: SlidersHorizontal,
@@ -211,6 +213,9 @@ const AREAS: AreaDef[] = [
   // after; they were first only because they come first chronologically, which is not the same
   // as being what an operator opens the console to look at.
   { id: "code_tasks", label: "Factory", sub: "Builds, apps and gated PRs", group: "Run", icon: ICONS.code_tasks },
+  // AGENTS AT WORK (autonomous agents, design §11.3): what agents noticed and resolved on their
+  // own, each as a flow chart. Beside the Factory: the other place work is done.
+  { id: "agent_ops", label: "Agents at work", sub: "What agents resolved on their own, as diagrams", group: "Run", icon: ICONS.agent_ops },
   // ONE HOME PER OBJECT. Workflow, Agent work, Team structure and Agent Studio were four rows
   // for two things: workflows (built, run and watched in one area) and the agents that work
   // them (roster, team and panels in one area). Old links to the retired two still land —

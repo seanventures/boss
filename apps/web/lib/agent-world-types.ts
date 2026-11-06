@@ -42,8 +42,9 @@ export type Presence = { state: AvatarState; actId?: string; line: string; since
 // ── Acts (signed work) ──────────────────────────────────────────────────────────────────────
 
 export type ActHow = "named" | "only_holder" | "only_candidate" | "model_pick" | "captain" | "run_actor"
-  | "next_stage" | "seated" | "asked_by_person" | "asked_by_agent" | "approved" | "started";
-export type ActKind = "run" | "step" | "stage" | "seat" | "chat" | "approval" | "handoff";
+  | "next_stage" | "seated" | "asked_by_person" | "asked_by_agent" | "approved" | "started"
+  | "signal" | "board";
+export type ActKind = "run" | "step" | "stage" | "seat" | "chat" | "approval" | "handoff" | "decision";
 export type ActStatus = "pending" | "active" | "awaiting_input" | "complete" | "error" | "stale" | "skipped";
 export type Act = {
   actId: string; roleKey: string | null; kind: ActKind;

@@ -199,9 +199,44 @@ def test_a_repository_that_contradicts_the_prd_runs_the_full_design(db):
 
 def test_an_answer_cut_short_runs_the_full_design():
     prd = {"decision_id": "dec_x", "markdown": PRD}
-    cut = ANSWER_FITS.split("=== CONTRADICTIONS ===")[0]
+    # Cut off mid-plan: no closing `database:` line, no verdict.
+    cut = ANSWER_FITS.split("database: postgres")[0]
     design, why = apd.design_from_answer(prd, apd.solution_section(PRD), cut)
     assert design is None and "no contradictions verdict" in why
+
+
+# crun_719a19f0b9c74bae8bfd: the short pass mapped the solution but left out the CONTRADICTIONS
+# section; declining it cost a 7.3 min full design.
+ANSWER_NO_VERDICT = ANSWER_FITS.replace("=== CONTRADICTIONS ===\nNONE\n", "")
+
+
+def test_a_complete_mapping_plan_without_a_verdict_is_the_design():
+    assert "CONTRADICTIONS" not in ANSWER_NO_VERDICT
+    prd = {"decision_id": "dec_719", "markdown": PRD}
+    design, why = apd.design_from_answer(prd, apd.solution_section(PRD), ANSWER_NO_VERDICT)
+    assert why == "" and design is not None and design["plan_ok"]
+    assert "server/sla.py" in design["plan"] and design["source"] == "approved_prd"
+    assert [p.name for p in parallel_build.parse_packages(design["packages"])] == \
+        ["scaffold", "api", "ui"]
+
+
+def test_an_explicit_contradiction_still_declines_whatever_the_plan():
+    prd = {"decision_id": "dec_x", "markdown": PRD}
+    design, why = apd.design_from_answer(prd, apd.solution_section(PRD), ANSWER_CONTRADICTS)
+    assert design is None and "contradicts the PRD" in why and "Rails" in why
+
+
+@pytest.mark.parametrize("plan", [
+    "",                                                      # no plan at all
+    "- server/sla.py: get_sla_deadline(priority, created_at)\n",  # cut off: no database line
+    "- add the helper and the filter as the PRD says\ndatabase: none\n",  # names no file
+])
+def test_no_verdict_and_a_plan_that_does_not_map_still_declines(plan):
+    answer = (f"=== STANDARDS ===\n- pytest\n=== PLAN ===\n{plan}"
+              f"=== WORK PACKAGES ===\n```json\n{PACKAGES}\n```\n")
+    prd = {"decision_id": "dec_x", "markdown": PRD}
+    design, why = apd.design_from_answer(prd, apd.solution_section(PRD), answer)
+    assert design is None and why == "the short pass gave no contradictions verdict"
 
 
 # ── Downstream stays fed ────────────────────────────────────────────────────────────────────

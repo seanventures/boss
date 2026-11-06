@@ -40,6 +40,8 @@ installs:
     - sre
     # Runs an incident on one timeline, reading the knowledge graph's precedent first.
     - incident_commander
+    # Triage for everything BOSS notices on its own (BOSSAPP-904): one item per problem, routed.
+    - chief_of_staff
     # OWNS THE PUBLIC CHANNELS. Captain for the `social_publish` step, and the role a
     # per-platform publishing agent reports to — a credential that reaches a real audience
     # belongs to somebody whose remit is the audience, not to whichever step needed it.
