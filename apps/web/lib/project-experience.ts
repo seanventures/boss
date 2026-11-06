@@ -17,6 +17,7 @@ import { onChanged } from "../app/changed";
 import { obsWrite } from "../app/observability/obs-write";
 import { useAreaShown } from "./area-shown";
 import { isConsoleLive, subscribeConsoleLive } from "./console-live";
+import { markHydrated } from "./local-time";
 
 // ── shared enums (§ Shared enums) ────────────────────────────────────────────────────────────
 
@@ -440,6 +441,8 @@ export function usePxRead<T>(url: string | null, parse: (raw: unknown) => T, opt
   const every = opts.everyMs ?? 20_000;
 
   useEffect(() => {
+    // Times on these screens are the viewer's (lib/local-time.ts): mounted means hydrated.
+    markHydrated();
     if (demoMode && demo.current) {
       setData(demo.current()); setState("ready"); setError(null);
       return undefined;

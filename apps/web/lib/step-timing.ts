@@ -16,6 +16,7 @@
  * else in the workflow view.
  */
 import { humanDuration } from "./datetime";
+import { sinceLocal, stampLocal } from "./local-time";
 
 /** The minimal step shape the clock reads (delivery-workflows-ui's RunStep satisfies it). */
 export type ClockStep = {
@@ -127,18 +128,10 @@ export function workingSeconds(step: ClockStep, nowMs: number = Date.now()): num
   return (end - start - waited) / 1000;
 }
 
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-
-/** "3:23 PM" today, "Nov 5" on an earlier day — UTC, like every time the console prints. */
-export function sinceWords(sinceMs: number, nowMs: number): string {
-  const d = new Date(sinceMs);
-  const now = new Date(nowMs);
-  if (d.getUTCFullYear() !== now.getUTCFullYear() || d.getUTCMonth() !== now.getUTCMonth()
-      || d.getUTCDate() !== now.getUTCDate()) {
-    return `${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}`;
-  }
-  const h = d.getUTCHours() % 12 || 12;
-  return `${h}:${String(d.getUTCMinutes()).padStart(2, "0")} ${d.getUTCHours() >= 12 ? "PM" : "AM"}`;
+/** "3:23 PM" today, "Nov 5" on an earlier day — in the VIEWER'S zone (lib/local-time.ts), which is
+ *  UTC only until the page has hydrated (so the server's paint and the browser's first agree). */
+export function sinceWords(sinceMs: number, nowMs: number, zone?: string): string {
+  return sinceLocal(sinceMs, nowMs, zone);
 }
 
 export type StepClock =
@@ -158,10 +151,9 @@ export function stepClock(step: ClockStep, nowMs: number = Date.now()): StepCloc
       return { kind: "waiting", text: "waiting on you", short: "needs you",
                title: "Waiting for a person — not working time" };
     }
-    const iso = new Date(wait.since).toISOString().replace("T", " ").slice(0, 16);
     const since = sinceWords(wait.since, nowMs);
     return { kind: "waiting", text: `waiting on you · since ${since}`, short: `needs you · ${since}`,
-             title: `Waiting for a person since ${iso} UTC — not counted as working time` };
+             title: `Waiting for a person since ${stampLocal(wait.since)} — not counted as working time` };
   }
   if (!step.started_at) return null;
   const seconds = workingSeconds(step, nowMs);

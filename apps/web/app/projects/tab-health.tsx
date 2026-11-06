@@ -13,6 +13,7 @@ import {
 import { PX_PATHS, parseHealth, pxHref, usePxRead, type HealthView } from "../../lib/project-experience";
 import { FX_HEALTH } from "../../lib/project-experience-fixtures";
 import { Empty, EngineNotReady, Face, Flow, HEALTH_TONE, HEALTH_WORD, Ico, PxLink, ReadGate, Ring, Spark, Tag } from "./kit";
+import { whenLocal } from "../../lib/local-time";
 import type { PxCtx } from "./project-page";
 
 export function HealthTab({ ctx }: { ctx: PxCtx }) {
@@ -80,7 +81,7 @@ export function HealthTab({ ctx }: { ctx: PxCtx }) {
                   {h.alerts.length ? h.alerts.map((a) => (
                     <div key={a.id} className="px-li">
                       <span className="px-dot" data-s={a.state === "firing" ? "bad" : "done"} aria-hidden />
-                      <span><b>{a.href ? <PxLink href={a.href} className="">{a.label}</PxLink> : a.label}</b><small>{a.severity} · {a.state === "firing" ? `firing since ${a.since}` : `resolved ${a.since}`}</small></span>
+                      <span><b>{a.href ? <PxLink href={a.href} className="">{a.label}</PxLink> : a.label}</b><small>{a.severity} · {a.state === "firing" ? `firing since ${whenLocal(a.since)}` : `resolved ${whenLocal(a.since)}`}</small></span>
                       <Tag tone={a.state === "firing" ? "red" : "green"}>{a.state}</Tag>
                     </div>
                   )) : <p className="px-faint">No alert rules yet.</p>}

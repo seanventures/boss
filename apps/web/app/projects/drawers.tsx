@@ -18,6 +18,7 @@ import { FX_DEPLOYMENTS } from "../../lib/project-experience-fixtures";
 import { Drawer, Empty, Face, Flow, HEALTH_WORD, Ico, PxLink, STATE_WORD, Tag } from "./kit";
 import { ActionButton } from "./tab-overview";
 import { DemoLoginRow } from "./tab-settings";
+import { whenLocal } from "../../lib/local-time";
 import type { PxCtx } from "./project-page";
 
 const STEP_WORDS: Record<string, string> = { plan: "Plan", design: "You approved", decide: "You approved", build: "Build", review: "Review & test", pr: "Merge", ship: "Staging" };
@@ -175,7 +176,7 @@ function DeployDrawer({ ctx, drawer, onClose }: { ctx: PxCtx; drawer: { kind: st
           {env.p95_ms !== null ? <><dt>p95</dt><dd>{env.p95_ms}ms</dd></> : null}
           <dt>Deploys</dt><dd>{env.policy === "auto" ? "automatically after merge" : "when a person approves"}</dd>
           {env.host ? <><dt>Server</dt><dd><PxLink href={env.host_href || "?area=infra&view=fleet"}>runs on {env.host}</PxLink></dd></> : null}
-          {env.last_deploy ? <><dt>Last deploy</dt><dd>{env.last_deploy.label} · {env.last_deploy.at} · {env.last_deploy.by}</dd></> : null}
+          {env.last_deploy ? <><dt>Last deploy</dt><dd>{env.last_deploy.label} · {whenLocal(env.last_deploy.at)} · {env.last_deploy.by}</dd></> : null}
         </dl>
         {env.demo_logins.map((l) => <DemoLoginRow key={l.user} projectId={ctx.projectId} login={{ label: l.label, value: l.user, sub: env.label, reveal: l.reveal, href: "" }} />)}
         <button type="button" className="px-chip" onClick={() => ctx.tab("health")}>Health</button>

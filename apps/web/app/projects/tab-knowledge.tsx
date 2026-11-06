@@ -13,6 +13,7 @@ import {
 import { PX_PATHS, parseKnowledge, pxHref, usePxRead, type Knowledge, type Repo } from "../../lib/project-experience";
 import { FX_KNOWLEDGE } from "../../lib/project-experience-fixtures";
 import { Empty, Face, Flow, Ico, PxLink, ReadGate, Ring, Tag } from "./kit";
+import { whenLocal } from "../../lib/local-time";
 import type { PxCtx } from "./project-page";
 
 export function KnowledgeTab({ ctx }: { ctx: PxCtx }) {
@@ -40,7 +41,7 @@ export function KnowledgeTab({ ctx }: { ctx: PxCtx }) {
                 <div className="px-card-h"><Ico icon={Notebook} c="blue" /><h2 id="px-kn-docs">Docs &amp; decisions</h2>
                   <a className="px-more" href={pxHref("?area=meetings")}><Plus size={11} /> Add doc</a></div>
                 {[...k.docs.map((d) => ({ ...d, icon: <FileText size={16} aria-hidden /> })),
-                  ...k.decisions.map((d) => ({ label: d.label, sub: `Decision · ${d.at}`, href: d.href, kind: "decision", icon: <Atom size={16} aria-hidden /> }))].map((d, i) => (
+                  ...k.decisions.map((d) => ({ label: d.label, sub: `Decision · ${whenLocal(d.at)}`, href: d.href, kind: "decision", icon: <Atom size={16} aria-hidden /> }))].map((d, i) => (
                   <div key={`${d.label}-${i}`} className="px-li">
                     <span className="px-ico" data-c={d.kind === "decision" ? "amber" : "blue"} style={{ width: 26, height: 26 }}>{d.icon}</span>
                     <span><b>{d.href ? <PxLink href={d.href} className="">{d.label}</PxLink> : d.label}</b><small>{d.sub}</small></span>
@@ -104,7 +105,7 @@ function Dossier({ k }: { k: Knowledge }) {
   return (
     <section className="px-card" aria-labelledby="px-kn-dossier" data-testid="px-kn-dossier">
       <div className="px-card-h"><Ico icon={Notebook} c="blue" /><h2 id="px-kn-dossier">Dossier</h2>
-        <small className="px-faint">by Helm{d.built_at ? ` · re-read ${d.built_at}` : ""}</small>
+        <small className="px-faint">by Helm{d.built_at ? ` · re-read ${whenLocal(d.built_at)}` : ""}</small>
         {d.href ? <PxLink href={d.href} className="px-more">Full dossier</PxLink> : null}</div>
       <div className="px-row px-wrap" style={{ marginBottom: 12 }}>{d.stack.map((s) => <span key={s} className="px-tag">{s}</span>)}</div>
       <div className="px-grid px-g2">

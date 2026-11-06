@@ -14,6 +14,7 @@ import { PX_PATHS, parseDeployments, pxHref, usePxRead, type Deployments, type E
 import { FX_DEPLOYMENTS } from "../../lib/project-experience-fixtures";
 import { EngineNotReady, Face, Flow, HEALTH_TONE, HEALTH_WORD, Ico, PxLink, ReadGate, Ring, Tag } from "./kit";
 import { DemoLoginRow } from "./tab-settings";
+import { whenLocal } from "../../lib/local-time";
 import type { PxCtx } from "./project-page";
 
 export function DeploymentsTab({ ctx }: { ctx: PxCtx }) {
@@ -97,7 +98,7 @@ function EnvCard({ e, ctx }: { e: Environment; ctx: PxCtx }) {
       </div>
       <div className="px-row px-wrap" style={{ borderTop: "1px solid var(--border)", paddingTop: 10, fontSize: ".6rem" }}>
         <Face agent={{ name: "Beacon", role_key: "sre" }} size={20} />
-        {e.last_deploy ? <span>Last deploy <b>{e.last_deploy.label}</b> · {e.last_deploy.at} <span className="px-mono px-faint">{e.last_deploy.commit}</span></span> : <span className="px-faint">Not deployed yet</span>}
+        {e.last_deploy ? <span>Last deploy <b>{e.last_deploy.label}</b> · {whenLocal(e.last_deploy.at)} <span className="px-mono px-faint">{e.last_deploy.commit}</span></span> : <span className="px-faint">Not deployed yet</span>}
         <span className="px-spacer" />
         {e.last_deploy?.href ? <PxLink href={e.last_deploy.href} onOpen={() => ctx.open("deploy", e.key)}><Terminal size={11} aria-hidden /> Logs</PxLink> : null}
         {e.host ? (

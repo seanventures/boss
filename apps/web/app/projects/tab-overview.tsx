@@ -15,6 +15,7 @@ import { GatedButton } from "../../components/gated";
 import { WORK_ORDER, WORK_WORDS, acceptRecommendation, navigateTo, pxHref, type WorkItem } from "../../lib/project-experience";
 import { Empty, Face, Flow, HEALTH_WORD, Ico, Journey, PxLink, Ring, Said, Spark, Stations, Tag } from "./kit";
 import { DemoLoginRow } from "./tab-settings";
+import { whenLocal } from "../../lib/local-time";
 import type { PxCtx } from "./project-page";
 
 const WORK_TONE: Record<string, string> = { running: "var(--teal)", needs_you: "var(--amber)", planned: "var(--quiet)", done: "var(--green)", failed: "var(--red)" };
@@ -124,7 +125,7 @@ export function OverviewTab({ ctx }: { ctx: PxCtx }) {
                   <React.Fragment key={`${w.label}-${i}`}>
                     {i ? <span className="px-jr-wire" data-s="done" aria-hidden style={{ marginTop: 20 }} /> : null}
                     <div className="px-jr-node" role="listitem" style={{ cursor: "default", width: 110 }}>
-                      <span className="px-jr-meta">{w.at}</span>
+                      <span className="px-jr-meta">{whenLocal(w.at)}</span>
                       <span className="px-dot" data-round style={{ width: 12, height: 12, background: w.kind === "idea" ? "#8b7cf6" : w.kind === "pr" ? "var(--amber)" : "var(--green)" }} aria-hidden />
                       <span className="px-jr-cap" style={{ fontWeight: 500 }}>{w.label}</span>
                     </div>
