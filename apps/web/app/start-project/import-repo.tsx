@@ -24,6 +24,7 @@ import {
   accountsOf, factRows, importable, mappingWords, startProjectApi, type RepoFacts,
 } from "../../lib/start-project";
 import { consoleHref } from "../console-href";
+import { AgentAvatar } from "../agent-avatar";
 
 export function ImportRepo({ projectId, onCreated }: {
   /** The project open now: the org registry is read through it. */
@@ -135,7 +136,8 @@ export function ImportRepo({ projectId, onCreated }: {
       </section>
 
       <section className="spj-col" aria-labelledby="spj-col-read" data-empty={!repo || undefined}>
-        <h3 id="spj-col-read" className="spj-col-title"><span>2</span> BOSS reads it</h3>
+        <h3 id="spj-col-read" className="spj-col-title"><span>2</span> Helm reads it{repo ? <span className="spj-live" data-testid="import-live">live</span> : null}</h3>
+        {repo ? <p className="spj-quiet" style={{ display: "flex", alignItems: "center", gap: 6 }}><AgentAvatar agent="engineering_captain" size={22} state={facts ? "idle" : "working"} aiBadge={false} /> Reading <code>{repo.full_name.split("/")[1]}</code>…</p> : null}
         {!repo ? <p className="spj-quiet">Pick a repo.</p> : null}
         {repo && !facts && !factsError ? <p className="spj-quiet" data-testid="import-reading">Reading {repo.full_name}…</p> : null}
         {factsError ? <p className="spj-quiet" role="status" data-testid="import-facts-error">Couldn&apos;t read it now: {factsError}</p> : null}
@@ -161,7 +163,7 @@ export function ImportRepo({ projectId, onCreated }: {
       </section>
 
       <section className="spj-col" aria-labelledby="spj-col-name">
-        <h3 id="spj-col-name" className="spj-col-title"><span>3</span> Name it</h3>
+        <h3 id="spj-col-name" className="spj-col-title"><span>3</span> Name &amp; captain</h3>
         <label className="bx-np-field">
           <span>Project name</span>
           <input className="input" data-testid="import-name" maxLength={120} value={name} disabled={!repo}
@@ -171,12 +173,18 @@ export function ImportRepo({ projectId, onCreated }: {
           <input type="checkbox" data-testid="import-rules" checked={rules} onChange={(e) => setRules(e.target.checked)} />
           {" "}Map business rules too
         </label>
+        {/* THE CAPTAIN (BOSSAPP-913): Helm takes the project over once it exists — onboards it, plans
+            it, answers for it. Change it later in Project › Settings. */}
+        <div className="spj-captain" data-testid="import-captain">
+          <AgentAvatar agent="engineering_captain" size={24} aiBadge={false} />
+          <span><b>Helm</b> <small>Engineering Captain · default crew · change later</small></span>
+        </div>
         <p className="spj-quiet">BOSS&apos;s agents, checks and budget are set up for you.</p>
         <GatedButton permission="project:create" className="ag-btn ag-btn-primary spj-wide" data-testid="import-create"
                      disabled={!repo || !name.trim() || busy}
-                     title="Create the project with this repo; mapping starts by itself"
+                     title="Create the project with this repo; Helm starts onboarding it"
                      onClick={() => void create()}>
-          {busy ? "Creating…" : "Create project"}
+          {busy ? "Creating…" : "Start onboarding"}
         </GatedButton>
         {error ? <p className="bx-np-error" role="alert" data-testid="import-error">{error}</p> : null}
       </section>

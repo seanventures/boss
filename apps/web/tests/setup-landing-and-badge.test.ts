@@ -10,9 +10,9 @@ import { board, everyRed, firstRun, repoDone } from "./_helpers/setup-fixtures";
 
 describe("landing", () => {
   // BOSSAPP-808 (PARITY-808.md): a new install lands on Get started, its own area.
-  it("opens Get started when nothing is asked for and setup is not ready", () => {
-    expect(landingArea(undefined, summarize(firstRun()))).toBe("welcome");
-    expect(landingArea("", summarize(repoDone()))).toBe("welcome");
+  it("opens Projects (its first run, which absorbed Get started) when nothing is asked for and setup is not ready", () => {
+    expect(landingArea(undefined, summarize(firstRun()))).toBe("projects");
+    expect(landingArea("", summarize(repoDone()))).toBe("projects");
   });
 
   it("an older summary without get_started still opens Repo and models", () => {

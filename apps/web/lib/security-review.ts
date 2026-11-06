@@ -174,7 +174,7 @@ export const STEP_TIP: Record<string, string> = {
   fix_2: "Round 2: fixes what the re-scan still found",
   rescan_2: "Round 2 re-scan",
   rereview_2: "Round 2 re-review: the last",
-  report: "The before/after, in the Factory",
+  report: "The before/after, in Code Tasks",
 };
 
 /** A step's state in one word. `not_applicable` rows (round 2 after a pass) read "Not needed". */

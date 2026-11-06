@@ -318,7 +318,7 @@ describe("screen 2 — Import a repo", () => {
     expect(calls.find((c) => c.method === "POST" && c.path === "/v1/projects")!.body).toEqual({ name: "Orders" });
     expect(calls.some((c) => c.method === "PUT" && c.path === "/v1/projects/orders/repos/ghr_api")).toBe(true);
     const href = new URLSearchParams(String(go.mock.calls[0][0]).split("?")[1]);
-    expect([href.get("project_id"), href.get("area")]).toEqual(["orders", "overview"]);
+    expect([href.get("project_id"), href.get("area")]).toEqual(["orders", "project"]);
   });
 
   it("another account lists its own repos; Map business rules too makes a knowledge-graph project", async () => {

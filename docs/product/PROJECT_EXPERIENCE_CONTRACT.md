@@ -15,6 +15,9 @@ Rules every response follows:
 - Works with the ambient preview OFF (`BOSS_AMBIENT_COS=off`): onboarding and the captain are explicit
   per-project actions, not background autonomy.
 
+Times: every ISO time the console shows on these screens is formatted in the VIEWER's zone
+(`apps/web/lib/local-time.ts` `whenLocal`/`sinceLocal`); fields already in words ("2h ago") show as sent.
+
 ## Shared enums
 - `stage`: `onboarding | ready | backlog | working | staging | production`
 - `state` (step/node): `done | now | waiting | todo | failed | skipped`
@@ -85,11 +88,17 @@ unchanged so the console's existing sheets handle them.
 ## 5. Deployments — `GET /v1/projects/{project_id}/deployments`
 ```json
 {"environments": [{"key": "staging", "label": "Staging", "url": "…", "health": "healthy",
-  "host": "203.0.113.20", "last_deploy": {"commit": "f3f130c", "at": "…", "by": "…", "href": "…"},
+  "host": "203.0.113.20", "host_href": "?area=infra&host=<host id>", "target_id": "tgt_…", "last_deploy": {"commit": "f3f130c", "at": "…", "by": "…", "href": "…"},
   "demo_logins": [{"user": "agent@demo.test", "label": "Agent", "reveal": {"href": "…"}}],
   "policy": "auto|person", "href": "…"}], "production": {"state": "none|needs_host|ready", "action": {…}}}
 ```
 Demo-login reveal: owner/admin with step-up (existing secrets reveal path), returns user + password.
+`reveal.href` is a GET (like today's `GET /v1/apps/{app}/demo-logins?env=`) answering `{"password": "…"}` or
+`{"demo_logins": [{"user"|"name": "…", "password"|"value": "…"}]}`; a stale second factor answers
+`401 step_up_required` and the console opens "Confirm it's you" (console, 2026-11-06).
+`environments[].target_id` is the deploy target (Observability's app id): Health shows its alert rules with it.
+**Infra cross-link:** `GET /v1/infra/hosts/{id}` residents carry `"project": {"id": "…", "name": "…"}` so a
+shared server lists "Projects on this server", each linking to that Project › Deployments.
 
 ## 6. Roadmap — existing `GET /v1/ambient/roadmap?project_id=…&status=open`
 (+ `POST /v1/ambient/roadmap/{work_item_id}/accept {as: ticket|epic|prd, note, project_id}`, `/reject {reason,
@@ -101,7 +110,9 @@ reads/writes on stored items; generation is the captain's.
 ## 7. Captain
 - `GET /v1/projects/{project_id}/captain` → captain + squad (§2 shape) + `last_said`.
 - `POST /v1/projects/{project_id}/captain {"agent_id": "…"}` (owner/admin) — change captain.
-- Chat: the existing Ask BOSS dock with subject `{"kind": "project", "id": project_id}` — one agent
+- Chat: the existing Ask BOSS dock with subject `{"kind": "project", "id": project_id}` (console: `project` is in
+  `apps/web/lib/dock-subject.ts` SUBJECT_KINDS, so the engine's `turn_subject.RESOLVERS` needs a `project`
+  resolver — engine/tests/test_an_ask_about_this_is_answered_from_its_record.py checks it) — one agent
   path (no second chat engine); answers may cite `[act:<id>]` / work hrefs.
 
 ## 8. Onboarding agent — `POST /v1/projects/{project_id}/onboarding/start`, `GET …/onboarding`
@@ -167,7 +178,7 @@ index the KG / build the dossier) and asks only for what it cannot (`owner: "you
 - Header: a health dot beside the live-URL chip on every tab (opens Health).
 - `GET /v1/projects/{project_id}/health`:
 ```json
-{"environments": [{"key": "staging", "label": "Staging", "health": "healthy", "uptime_pct": 99.9,
+{"environments": [{"key": "staging", "label": "Staging", "target_id": "tgt_…", "health": "healthy", "uptime_pct": 99.9,
    "error_rate": 0.4, "p95_ms": 180, "series": {"errors": [..], "latency": [..]},
    "slo": {"target": 99.5, "burn": "ok|warning|breach"}, "href": "…"}],
  "alerts": [{"id": "…", "label": "5xx on /api/tickets", "severity": "page|ticket|info", "state": "firing|resolved",
@@ -177,6 +188,9 @@ index the KG / build the dossier) and asks only for what it cannot (`owner: "you
  "monitoring_pack": {"rules": 6, "managed_in": "repo", "href": "…"},
  "links": {"grafana": "…", "logs": "…", "observability": "?area=observability&app=…"}}
 ```
+Below the summary, the console renders Observability's own per-app alert-rules component for each
+`target_id` (rules, Tune, Silence, Respond automatically, + New alert rule, sources, history) — same data,
+same actions; on an engine without §12 it uses the project's apps from `GET /v1/observability/apps`.
 Built from the existing app alerts / incident squad / monitoring pack / stack health checks; empty states
 explain how monitoring gets set up (Beacon's pack on deploy).
 

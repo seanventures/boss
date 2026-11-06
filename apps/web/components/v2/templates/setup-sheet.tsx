@@ -21,6 +21,7 @@
  * viewer sees every control greyed with the reason (components/gated.tsx). An address inside BOSS
  * (api:3001) is never offered as one to register.
  */
+import { MovedToProjectSettings } from "../../../app/projects/moved";
 import React, { useCallback, useEffect, useId, useMemo, useState } from "react";
 
 import { GatedButton, useGate } from "../../gated";
@@ -655,6 +656,7 @@ function SettingsView({ ctx, cards }: { ctx: Ctx; cards: ConnectorCard[] }) {
 
       <div className="tpl-set-group" data-testid="tpl-deploy-values">
         <h3 title="Settings you set: the app reads them at deploy (and preview, when its own files declare them). Write-only.">Your settings</h3>
+        <MovedToProjectSettings section="deploy_values" testid="tpl-deploy-values-moved" />
         {yours.length ? (
           <ul className="tpl-rows">
             {yours.map((r) => (
@@ -738,6 +740,8 @@ export function DemoLogins({ projectId, appKey, compact = false }: { projectId: 
   return (
     <div className="tpl-demo" data-testid={compact ? "tpl-demo-logins-row" : "tpl-demo-logins"}>
       {compact ? null : <h4 title="The password BOSS generated for the app's demo users, for its previews and its deploy">Demo logins</h4>}
+      {/* Demo logins live on Project › Settings now, with their user names (contract §11). */}
+      <MovedToProjectSettings section="demo_logins" testid={compact ? "tpl-demo-logins-moved-row" : "tpl-demo-logins-moved"} />
       {shown === null ? (
         <GatedButton permission="app_secret:write" projectId={projectId} type="button" className="cap-btn"
                      data-testid={compact ? "tpl-demo-logins-row-show" : "tpl-demo-logins-show"} onClick={() => void show()}

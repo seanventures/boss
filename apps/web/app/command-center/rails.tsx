@@ -225,7 +225,7 @@ export function AppsShelf({ apps, attention = [], orgId }: {
         </div>
         <span className="cc-spacer" />
         <Go className="cc-link" patch={{ area: "code_tasks", view: "apps", build: null, role: null }} orgId={orgId}
-            testId="cc-factory-link">Factory ↗</Go>
+            testId="cc-factory-link">Code Tasks ↗</Go>
       </div>
       <Rail label="Apps" testId="cc-apps-rail" resetKey={filter}>
         {list.map((a) => {

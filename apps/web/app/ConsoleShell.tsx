@@ -31,6 +31,8 @@ import { useTitleCount } from "../lib/tab-title";
 import { ConverseHost } from "./agents/converse-host";
 import { useLoadIdentities } from "../lib/use-agent-identities";
 import { CONVERSE_COMMANDS } from "../lib/agent-converse";
+import { ProjectsNav } from "./projects/nav";
+import { JumpResults } from "./projects/jump";
 
 import React, {
   useCallback,
@@ -61,6 +63,7 @@ import {
   List,
   MagnifyingGlass,
   CaretRight,
+  Folders,
   FlowArrow,
   Heartbeat,
   Siren,
@@ -202,6 +205,8 @@ const ICONS = {
 //  and nobody should. The chat agent starts a WORKFLOW now (see start_workflow in builtin.py),
 //  so the dossier is a step's output and the run is what you open.
 const OFF_THE_NAV = new Set<AreaId>(["discovery", "meetings"]);
+/** The Project page (BOSSAPP-914) is reached from Projects (its rail list), never as a row of its own. */
+const UNDER_PROJECTS = new Set<AreaId>(["project"]);
 /** Get started has its own rail button above the groups, shown only while setup is unfinished. */
 const OWN_RAIL_BUTTON = new Set<AreaId>(["welcome"]);
 
@@ -212,7 +217,12 @@ const AREAS: AreaDef[] = [
   // then where it ships and whether it is alive. Discovery and Meetings are ways IN and follow
   // after; they were first only because they come first chronologically, which is not the same
   // as being what an operator opens the console to look at.
-  { id: "code_tasks", label: "Factory", sub: "Builds, apps and gated PRs", group: "Run", icon: ICONS.code_tasks },
+  // PROJECTS FIRST (BOSSAPP-914): one home per project — its work, repo, deploys and health —
+  // with the projects listed under it in the rail. First run lives here too (Get started's steps).
+  { id: "projects", label: "Projects", sub: "Every project: its work, repo and deploys", group: "Run", icon: Folders },
+  { id: "project", label: "Project", sub: "One project's work, repo, deploys and health", group: "Run", icon: Folders },
+  // CODE TASKS, was Factory (BOSSAPP-914): the same area id, tabs and links; only the name changed.
+  { id: "code_tasks", label: "Code Tasks", sub: "Builds, apps and gated PRs (was Factory)", group: "Run", icon: ICONS.code_tasks },
   // AGENTS AT WORK (autonomous agents, design §11.3): what agents noticed and resolved on their
   // own, each as a flow chart. Beside the Factory: the other place work is done.
   { id: "agent_ops", label: "Agents at work", sub: "What agents resolved on their own, as diagrams", group: "Run", icon: ICONS.agent_ops },
@@ -1276,7 +1286,7 @@ function ConsoleShellInner({
   // cannot still lands — on <AccessDenied> naming the permission, never a blank page.
   const navAreas = useMemo(
     () => areasForEdition.filter(
-      (a) => isCommunityPrimaryNavVisible(a.id, resolvedEdition) && !OWN_RAIL_BUTTON.has(a.id) && !OFF_THE_NAV.has(a.id) && areaCan(a.id).allowed),
+      (a) => isCommunityPrimaryNavVisible(a.id, resolvedEdition) && !OWN_RAIL_BUTTON.has(a.id) && !UNDER_PROJECTS.has(a.id) && !OFF_THE_NAV.has(a.id) && areaCan(a.id).allowed),
     [areasForEdition, resolvedEdition, areaCan],
   );
 
@@ -1301,6 +1311,14 @@ function ConsoleShellInner({
     return () => window.removeEventListener(SETUP_BADGE_EVENT, onBadge);
   }, []);
   // GET STARTED (BOSSAPP-808): shown while GitHub, a model or a first PR is missing.
+  // The rail's project list: open by default, the operator's choice remembered.
+  const [projectsOpen, setProjectsOpen] = useState(true);
+  useEffect(() => {
+    try { if (localStorage.getItem("boss.nav.projects") === "0") setProjectsOpen(false); } catch { /* private mode */ }
+  }, []);
+  useEffect(() => {
+    try { localStorage.setItem("boss.nav.projects", projectsOpen ? "1" : "0"); } catch { /* private mode */ }
+  }, [projectsOpen]);
   const [getStarted, setGetStarted] = useState(Boolean(status.getStarted));
   useEffect(() => { setGetStarted(Boolean(status.getStarted)); }, [status.getStarted]);
   useEffect(() => {
@@ -1389,12 +1407,14 @@ function ConsoleShellInner({
           data-edition={resolvedEdition}
           data-community={community ? "true" : "false"}
         >
-          {getStarted && areaCan("welcome").allowed ? (
-            <button type="button" className={`bx-nav-item bx-nav-get-started${railSelected === "welcome" ? " active" : ""}`}
-                    data-testid="nav-get-started" data-area-nav="welcome"
-                    aria-current={railSelected === "welcome" ? "page" : undefined}
-                    data-label="Get started" title="Get BOSS working in 3 steps"
-                    onClick={() => go("welcome")}>
+          {/* GET STARTED IS PART OF PROJECTS NOW (BOSSAPP-914): while setup is unfinished the rail's
+              Projects opens the first run (its 3 steps, then Helm onboarding the first project). The
+              old Welcome stays reachable by URL (`?area=welcome`) for its quick-PR row. */}
+          {getStarted && areaCan("projects").allowed && !navAreas.some((a) => a.id === "projects") ? (
+            <button type="button" className={`bx-nav-item bx-nav-get-started${railSelected === "projects" ? " active" : ""}`}
+                    data-testid="nav-get-started" data-area-nav="projects"
+                    data-label="Get started" title="Get BOSS working: GitHub, a model, your first project"
+                    onClick={() => go("projects")}>
               <Rocket size={17} aria-hidden />
               <span>Get started</span>
             </button>
@@ -1461,6 +1481,13 @@ function ConsoleShellInner({
                         </div>
                       ) : null}
                     </div>
+                  );
+                }
+                if (a.id === "projects") {
+                  return (
+                    <ProjectsNav key="projects" items={projects?.items ?? []} active={railSelected ?? ""}
+                                 activeProjectId={scope.projectId ?? null} onGo={() => go("projects")}
+                                 open={projectsOpen} onToggle={() => setProjectsOpen((v) => !v)} />
                   );
                 }
                 const badge = badgeFor(a.id);
@@ -1687,7 +1714,7 @@ function ConsoleShellInner({
         ) : null}
 
         {/* The Factory's Floor IS the list of builds (walk D19): no second strip of them. */}
-        {active !== "code_tasks" && !routeMode && !fullPage ? <ProjectStrip projectId={scope.projectId ?? scope.project} area={active} /> : null}
+        {active !== "code_tasks" && active !== "projects" && active !== "project" && !routeMode && !fullPage ? <ProjectStrip projectId={scope.projectId ?? scope.project} area={active} /> : null}
 
         {/* The console gets out of the panel's way rather than hiding behind it. The dock is
             fixed-position, so without this inset the right-hand column of cards sat underneath
@@ -1833,6 +1860,10 @@ function ConsoleShellInner({
                   </button>
                 );
               })}
+              {/* PROJECT RECORDS (BOSSAPP-914 §9): runs, PRs, builds, deploys and agents of the open
+                  project, and the other projects — one keystroke from anywhere. */}
+              <JumpResults query={query} projectId={scope.projectId ?? scope.project}
+                           projects={projects?.items ?? []} onDone={() => setPaletteOpen(false)} />
               {/* START SOMETHING: the New project composer, like the top bar's New build. */}
               {!query.trim() || "new build new project".includes(query.trim().toLowerCase()) ? (
                 <button type="button" className={`bx-palette-item${filtered.length ? "" : " active"}`}

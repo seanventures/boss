@@ -201,7 +201,7 @@ export function PulseRow({ pulse, week, prsOpen, now, orgId }: {
           <h2>Latest from your team</h2>
           <span className="cc-spacer" />
           <Go className="cc-link" patch={{ area: "code_tasks", view: "apps", build: null, role: null }} orgId={orgId}
-              testId="cc-latest-factory">Factory ↗</Go>
+              testId="cc-latest-factory">Code Tasks ↗</Go>
         </header>
         {pulse.latest.length === 0 ? (
           <div className="cc-quiet-line"><span>Nothing yet</span></div>

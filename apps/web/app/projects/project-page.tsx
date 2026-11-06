@@ -1,0 +1,245 @@
+"use client";
+
+/**
+ * THE PROJECT PAGE (BOSSAPP-914 screens 4-13, contract §2-§12): `?project_id=<id>&area=project&tab=…`.
+ *
+ *   Projects / HelpDesk AI Demo / Work                                       (breadcrumb)
+ *   [HD] HelpDesk AI Demo  repo ↗ · staging ↗ · ● Healthy · Working   [Helm · Ask]  [+ New work]
+ *   ! 2 need you  [Merge PR #3] [Pick prod host]                             (always visible)
+ *   Overview · Work · Roadmap · Repo & knowledge · Deployments · Health · Settings
+ *   <tab>                                                   drawers: &drawer=<kind>:<id>
+ *
+ * Everything about ONE project is here, at most two clicks away; shared things (servers, the
+ * cross-app view) stay in Infra and Observability, linked both ways.
+ */
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  ArrowSquareOut, ChatCircleDots, Check, ClipboardText, GearSix, GitBranch, Globe, HandWaving, Heartbeat, House, Kanban, MapTrifold,
+  Plus, RocketLaunch, TreeStructure, type Icon,
+} from "@phosphor-icons/react";
+
+import { GatedButton } from "../../components/gated";
+import { openDockAbout } from "../../lib/dock-subject";
+import {
+  PX_PATHS, TAB_WORDS, isMissingStatus, overviewFromStart, parseOnboarding, parseOverview, parseWork, pxHref, readPxUrl, usePxRead,
+  workFromStartRow, writePxUrl, type Overview, type Onboarding, type PxUrl, type Tab, type WorkList, a, o,
+} from "../../lib/project-experience";
+import { FX_ONBOARDING, FX_ONBOARDING_PROJECT, FX_OVERVIEW, FX_WORK } from "../../lib/project-experience-fixtures";
+import { DemoBanner, Face, HEALTH_TONE, HEALTH_WORD, Loading, Failed, Empty, closeDrawer, openDrawer, usePxUrl } from "./kit";
+export { usePxUrl };
+import { OverviewTab } from "./tab-overview";
+import { WorkTab } from "./tab-work";
+import { RoadmapTab } from "./tab-roadmap";
+import { KnowledgeTab } from "./tab-knowledge";
+import { DeploymentsTab } from "./tab-deployments";
+import { HealthTab } from "./tab-health";
+import { SettingsTab } from "./tab-settings";
+import { DrawerHost } from "./drawers";
+import { OnboardingView } from "./onboarding";
+import "./px.css";
+
+export const TAB_ICONS: Record<Tab, Icon> = {
+  overview: House, work: Kanban, roadmap: MapTrifold, knowledge: TreeStructure, deployments: RocketLaunch, health: Heartbeat, settings: GearSix,
+};
+
+
+export type PxCtx = {
+  projectId: string; actor: string; orgId: string | null; overview: Overview; demo: boolean;
+  work: WorkList | null; workState: "loading" | "ready" | "missing" | "error"; refreshWork: () => void;
+  /** Switch tab (push: Back returns). */
+  tab: (t: Tab, extra?: Record<string, string | null>) => void;
+  open: (kind: string, id: string) => void;
+  ask: (question?: string) => void;
+};
+
+/** The captain drawer IS the Ask BOSS dock, scoped to this project and talking as its captain (§7). */
+export function askCaptain(projectId: string, captain: { name: string; role_key: string } | null, question = ""): void {
+  openDockAbout({ subject: { kind: "project", id: projectId }, question, role: captain?.name ?? null, roleKey: captain?.role_key || null, history: "push" });
+}
+
+export function ProjectPage({ projectId, actor, orgId }: { projectId: string; actor: string; orgId?: string | null }) {
+  const url = usePxUrl();
+  const demoOnboarding = projectId === FX_ONBOARDING_PROJECT;
+  const ov = usePxRead<Overview>(PX_PATHS.overview(projectId), parseOverview, {
+    everyMs: 15_000,
+    demo: () => {
+      const base = parseOverview(FX_OVERVIEW);
+      return demoOnboarding ? { ...base, project: { ...base.project, id: projectId, name: "NorthPeak Retail", initials: "NP", stage: "onboarding", status_label: "Onboarding", live_url: "", health: "unknown" }, needs_you: [] } : base;
+    },
+  });
+  // AN ENGINE WITHOUT §2: the overview is built from the project page's existing start view.
+  const start = usePxRead<unknown>(ov.state === "missing" ? PX_PATHS.start(projectId) : null, (raw) => raw, { everyMs: 20_000 });
+  const overview: Overview | null = ov.data ?? (ov.state === "missing" && start.data ? overviewFromStart(start.data, projectId) : null);
+  const onboarding = usePxRead<Onboarding>(PX_PATHS.onboarding(projectId), parseOnboarding, {
+    everyMs: overview?.project.stage === "onboarding" ? 5_000 : 60_000,
+    demo: demoOnboarding ? () => parseOnboarding(FX_ONBOARDING) : () => null,
+  });
+  const work = usePxRead<WorkList>(PX_PATHS.work(projectId), parseWork, { everyMs: 15_000, demo: () => parseWork(FX_WORK) });
+  const workFallback = useMemo<WorkList | null>(() => (work.state === "missing" && start.data
+    ? { items: a(o(start.data).work).map((r) => workFromStartRow(r, projectId)) } : null), [work.state, start.data, projectId]);
+
+  const tab = useCallback((t: Tab, extra: Record<string, string | null> = {}) => writePxUrl({ tab: t === "overview" ? null : t, drawer: null, ...extra }), []);
+  const ctxBase = { projectId, actor, orgId: orgId ?? null };
+
+  if (!overview) {
+    const failed = ov.state === "error" || (ov.state === "missing" && start.state === "error");
+    const gone = ov.state === "missing" && start.state === "missing";
+    return (
+      <div className="px" data-testid="px-project">
+        <Crumbs name="Project" tab={url.tab} />
+        {failed ? <Failed what="This project" error={ov.error ?? start.error} onRetry={() => { ov.refresh(); start.refresh(); }} />
+          : gone ? <Empty title="Project not found" line="It may have been archived, or you may not have access to it." testid="px-project-gone">
+              <a className="px-btn" href={pxHref("?area=projects")}>All projects</a></Empty>
+          : <Loading rows={3} label="Loading the project" />}
+      </div>
+    );
+  }
+  const captain = overview.captain;
+  const ctx: PxCtx = {
+    ...ctxBase, overview, demo: ov.demo,
+    work: work.data ?? workFallback, workState: work.data ? "ready" : workFallback ? "ready" : work.state === "missing" ? (start.state === "missing" ? "missing" : start.state) : work.state,
+    refreshWork: () => { work.refresh(); start.refresh(); },
+    tab, open: openDrawer, ask: (q) => askCaptain(projectId, captain, q),
+  };
+  const ob = onboarding.data;
+  const onboardingNow = overview.project.stage === "onboarding" && ob !== null;
+  const openCount = overview.tiles.open_work?.count ?? ctx.work?.items.filter((w) => w.state !== "done").length;
+
+  return (
+    <div className="px" data-testid="px-project" data-tab={url.tab}>
+      {ov.demo ? <DemoBanner /> : null}
+      {ov.state === "missing" ? <div className="px-note" role="note" data-testid="px-project-note">Journey, health and cost for this page arrive with the next BOSS update; work and repo are live.</div> : null}
+      <div className="px-sticky">
+        <Crumbs name={overview.project.name} tab={url.tab} onboarding={onboardingNow && url.tab === "overview"} />
+        <Header ctx={ctx} onboarding={onboardingNow} />
+        <NeedsBar ctx={ctx} onboarding={onboardingNow ? ob : null} />
+        <div className="px-tabs" role="tablist" aria-label="Project" data-testid="px-tabs"
+             onKeyDown={(e) => {
+               if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+               const order = Object.keys(TAB_WORDS) as Tab[];
+               const next = order[(order.indexOf(url.tab) + (e.key === "ArrowRight" ? 1 : order.length - 1)) % order.length];
+               tab(next, {});
+               requestAnimationFrame(() => document.querySelector<HTMLElement>(`[data-testid="px-tab-${next}"]`)?.focus());
+             }}>
+          {(Object.keys(TAB_WORDS) as Tab[]).map((t) => {
+            const I = TAB_ICONS[t];
+            const count = t === "work" ? openCount : undefined;
+            return (
+              <button key={t} type="button" role="tab" className="px-tab" aria-selected={url.tab === t} tabIndex={url.tab === t ? 0 : -1}
+                      aria-controls="px-tabpanel" data-testid={`px-tab-${t}`} onClick={() => tab(t)}>
+                <I size={14} weight={url.tab === t ? "fill" : "regular"} aria-hidden />{TAB_WORDS[t]}
+                {count ? <span className="px-nbadge">{count}</span> : null}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      <div id="px-tabpanel" role="tabpanel" aria-label={TAB_WORDS[url.tab]} data-testid={`px-panel-${url.tab}`}>
+        {url.tab === "overview" ? (onboardingNow && ob ? <OnboardingView projectId={projectId} ob={ob} /> : <OverviewTab ctx={ctx} />)
+          : url.tab === "work" ? <WorkTab ctx={ctx} />
+          : url.tab === "roadmap" ? <RoadmapTab ctx={ctx} />
+          : url.tab === "knowledge" ? <KnowledgeTab ctx={ctx} />
+          : url.tab === "deployments" ? <DeploymentsTab ctx={ctx} />
+          : url.tab === "health" ? <HealthTab ctx={ctx} />
+          : <SettingsTab ctx={ctx} />}
+      </div>
+      {url.drawer ? <DrawerHost ctx={ctx} drawer={url.drawer} onClose={closeDrawer} /> : null}
+    </div>
+  );
+}
+
+function Crumbs({ name, tab, onboarding }: { name: string; tab: Tab; onboarding?: boolean }) {
+  return (
+    <nav className="px-crumbs" aria-label="Breadcrumb" data-testid="px-crumbs">
+      <a href={pxHref("?area=projects")}>Projects</a><span aria-hidden>/</span>
+      {tab === "overview" && !onboarding ? <span aria-current="page">{name}</span> : (
+        <><a href="#" onClick={(e) => { e.preventDefault(); writePxUrl({ tab: null, drawer: null }); }}>{name}</a><span aria-hidden>/</span>
+          <span aria-current="page">{onboarding ? "Onboarding" : TAB_WORDS[tab]}</span></>
+      )}
+    </nav>
+  );
+}
+
+function Header({ ctx, onboarding }: { ctx: PxCtx; onboarding: boolean }) {
+  const p = ctx.overview.project;
+  const repo = p.repos[0];
+  const staging = ctx.overview.tiles.staging;
+  const health = staging?.health ?? p.health;
+  const captain = ctx.overview.captain;
+  return (
+    <div className="px-head" data-testid="px-head">
+      <span className="px-mark" aria-hidden>{p.initials}</span>
+      <div className="px-title">
+        <h1>{p.name}</h1>
+        <div className="px-row">
+          {repo ? (
+            <a className="px-hchip" href={repo.external_url || `https://github.com/${repo.full_name}`} target="_blank" rel="noreferrer noopener" data-testid="px-head-repo"
+               title="Open the repository on GitHub"><GitBranch size={11} aria-hidden />{repo.full_name}<ArrowSquareOut size={10} aria-label="opens in a new tab" /></a>
+          ) : (
+            <a className="px-hchip" href="#" data-testid="px-head-norepo" onClick={(e) => { e.preventDefault(); ctx.tab("settings", { section: "repos" }); }}>
+              <Plus size={11} aria-hidden /> Add a repo</a>
+          )}
+          {p.live_url ? (
+            <a className="px-hchip" href={p.live_url} target="_blank" rel="noreferrer noopener" data-testid="px-head-live" title="Open the running app">
+              <Globe size={11} aria-hidden />{p.live_url.replace(/^https?:\/\//, "")}<ArrowSquareOut size={10} aria-label="opens in a new tab" /></a>
+          ) : null}
+          {p.live_url || health !== "unknown" ? (
+            <button type="button" className="px-hchip" style={{ border: 0, cursor: "pointer", color: health === "healthy" ? "var(--green)" : health === "unknown" ? "var(--faint)" : `var(--${HEALTH_TONE[health]})` }}
+                    data-testid="px-head-health" title="Open Health" onClick={() => ctx.tab("health")}>
+              <span className="px-dot" data-s={health} data-round aria-hidden />{HEALTH_WORD[health]}</button>
+          ) : null}
+          <span className="px-tag" data-tone={onboarding ? "blue" : "green"} data-testid="px-head-status">{onboarding ? "Onboarding" : p.status_label || "Ready"}</span>
+        </div>
+      </div>
+      <span className="px-spacer" />
+      {captain ? (
+        <span className="px-captain" data-testid="px-head-captain">
+          <Face agent={captain} size={30} state={onboarding ? "working" : "idle"} />
+          <span><b>{captain.name}</b><small>{onboarding ? "Onboarding" : "Captain"}</small></span>
+          <button type="button" className="px-btn" data-size="s" data-testid="px-head-ask" onClick={() => ctx.ask()} title={`Ask ${captain.name} about this project`}>
+            <ChatCircleDots size={13} aria-hidden /> Ask</button>
+        </span>
+      ) : (
+        <button type="button" className="px-btn" data-testid="px-head-ask" onClick={() => ctx.ask()}><ChatCircleDots size={13} aria-hidden /> Ask BOSS</button>
+      )}
+      {!onboarding ? (
+        <GatedButton permission="workflow_run:start" projectId={ctx.projectId} className="px-btn" data-kind="primary" data-size="l" data-testid="px-head-new-work"
+                     title="Describe a feature, a bug or paste a ticket" onClick={() => ctx.tab("work", { compose: "1" })}>
+          <Plus size={14} weight="bold" aria-hidden /> New work
+        </GatedButton>
+      ) : null}
+    </div>
+  );
+}
+
+/** NEEDS YOU, on every tab: what waits on a person, each one press from its action. */
+function NeedsBar({ ctx, onboarding }: { ctx: PxCtx; onboarding: Onboarding | null }) {
+  const items = ctx.overview.needs_you;
+  const yours = onboarding?.only_you ?? [];
+  const n = items.length + yours.length;
+  if (!n) {
+    return (
+      <div className="px-needs-bar" data-calm data-testid="px-needs-bar" role="status">
+        <Check size={14} weight="bold" style={{ color: "var(--green)" }} aria-hidden /> <span>Nothing needs you</span>
+      </div>
+    );
+  }
+  return (
+    <div className="px-needs-bar" data-testid="px-needs-bar" role="region" aria-label={`${n} need you`}>
+      <span className="px-ny-ico" aria-hidden>!</span>
+      <b>{n} need{n === 1 ? "s" : ""} you</b>
+      {items.map((it) => (
+        <button key={it.id} type="button" className="px-needs-item" data-testid={`px-needs-${it.id}`} onClick={() => ctx.open("needs", it.id)}>
+          {it.kind === "merge" ? <GitBranch size={12} aria-hidden /> : it.kind === "deploy" ? <RocketLaunch size={12} aria-hidden /> : <HandWaving size={12} aria-hidden />}{it.label}
+        </button>
+      ))}
+      {yours.map((it) => (
+        <a key={it.key} className="px-needs-item" href={it.action ? pxHref(it.action.href) : "#"} data-testid={`px-needs-ob-${it.key}`}
+           onClick={it.action ? undefined : (e) => { e.preventDefault(); ctx.tab("overview"); }}>
+          <ClipboardText size={12} aria-hidden />{it.label}</a>
+      ))}
+    </div>
+  );
+}
+
+export { isMissingStatus };

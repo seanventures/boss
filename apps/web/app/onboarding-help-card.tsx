@@ -28,7 +28,7 @@ export function OnboardingHelpCard() {
             <li>
               <b>Build</b> — describe what you want. BOSS starts a workflow run: a panel writes the
               plan, an agent builds and tests it and opens a pull request. Watch every step in
-              {" "}<b>Workflow</b>; the finished project is in <b>Factory</b>.
+              {" "}<b>Workflow</b>; the finished project is in <b>Code Tasks</b>.
             </li>
             <li>
               <b>Talk to BOSS</b> — ask about your work. BOSS answers from live state and can act
