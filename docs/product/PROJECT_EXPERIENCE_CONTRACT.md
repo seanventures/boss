@@ -77,7 +77,7 @@ unchanged so the console's existing sheets handle them.
 {"repos": [<repo as in §2>], "dossier": {"stack": ["Node", "React"], "commands": {"build": "…", "test": "…", "run": "…"},
  "hotspots": [{"path": "server/sla.mjs", "label": "SLA engine", "why": "…"}], "todo_clusters": [..],
  "owners": [..], "built_at": "…", "href": "…"},
- "graph": {"nodes": [..], "edges": [..], "href": "?area=knowledge_graph&project_id=…"},
+ "graph": {"nodes": [..], "edges": [..], "href": "?project_id=…&area=knowledge"},
  "docs": [{"label": "PRD: SLA timers", "kind": "prd|adr|readme|runbook", "href": "…"}],
  "decisions": [{"label": "Timer from created_at", "at": "…", "href": "…"}]}
 ```
@@ -91,9 +91,12 @@ unchanged so the console's existing sheets handle them.
 ```
 Demo-login reveal: owner/admin with step-up (existing secrets reveal path), returns user + password.
 
-## 6. Roadmap — existing `GET /v1/ambient/recommendations?project_id=…&status=open`
-(+ `/{id}/accept {as}`, `/{id}/reject {reason, category}`, `/{id}/snooze {days}`). Must work with the
-ambient preview off: listing/accept/reject are reads/writes on stored items; generation is the captain's.
+## 6. Roadmap — existing `GET /v1/ambient/roadmap?project_id=…&status=open`
+(+ `POST /v1/ambient/roadmap/{work_item_id}/accept {as_: ticket|epic|prd, note}`, `/reject {reason,
+category}`, `/snooze {until, reason}`; `GET /v1/ambient/roadmap/detectors`). There is no
+`/v1/ambient/recommendations` route: the recommendations live at `/v1/ambient/roadmap` (table
+`ambient_recommendations`). Must work with the ambient preview off: listing/accept/reject are
+reads/writes on stored items; generation is the captain's.
 
 ## 7. Captain
 - `GET /v1/projects/{project_id}/captain` → captain + squad (§2 shape) + `last_said`.
@@ -176,3 +179,63 @@ index the KG / build the dossier) and asks only for what it cannot (`owner: "you
 ```
 Built from the existing app alerts / incident squad / monitoring pack / stack health checks; empty states
 explain how monitoring gets set up (Beacon's pack on deploy).
+
+## 13. As built (backend, `feat/px-api`) — additions the console can rely on
+Every shape above is served as written; these are the extra fields and the decisions taken.
+- **Stations.** `WorkItem.stages[]` is always the six keys `plan|design|build|review|pr|ship` with
+  `label` `P|D|B|R|PR|S` and `name` `Plan|Decide|Build|Review|PR|Ship`; `state` is the shared step
+  enum (`done|now|waiting|todo|failed|skipped`): `waiting` = a person's gate or merge, `skipped` = the
+  workflow has no such step. WorkItem also carries `source` (`workflow_run|code_task|roadmap`),
+  `title` (full), `status` (raw), `created_at`, `links.decision` and `decision_ids`. `GET …/work` adds
+  `counts` (whole project, unfiltered) and `new_work`. `q` matches words or a PR number (`#3`).
+- **New work.** `POST …/work` also takes `title`, `source_ref`, `start_anyway`, `accept`, `dedupe_key`
+  (the start door's own fields, so the readiness sheet can re-send) and answers
+  `{work, run_id, href, duplicate, readiness?, precheck?}`. Permission `workflow_run:start`.
+- **Projects list.** `GET /v1/projects/summary` adds `status_label`, `onboarding`, `archived` per item
+  and top-level `first_run` / `first_run_href` (`?area=projects&first_run=1` when no project has a repo).
+- **Overview.** `project.health` (worst environment), `needs_you[]` also holds the onboarding agent's
+  "only you" items (`kind: setup`, `id: onb:<key>`, `action.decision_id: null`); `onboarding {state,
+  stages, href}`; `try_it.env` and `try_it.users_from` (`manifest|repository|none`).
+- **Captain.** `GET/POST …/captain` add `role`, `chosen` (`chosen|default|none`), `candidates[]` and
+  `ask {subject: {kind: "project", id}, role_key, href}`. `POST` needs `project:update` (owner/admin,
+  step-up); an unknown or retired agent answers 422 `{"error": "not_an_agent"}`. The Ask BOSS dock now
+  knows subject kind `project` (`turn_subject.SUBJECT_KINDS` and `apps/web/lib/dock-subject.ts`).
+  The default captain is recorded when a project is created; Marshal (`chief_of_staff`) is never the
+  default.
+- **Onboarding.** `GET …/onboarding` → `state` may also be `not_started`; adds `run_id`, `trigger`
+  (`created|repo_added|manual`), `backlog[]` (ranked, each with `score`, `source`, `kind`, `text`,
+  `external_url`), `error`, `started_at`, `finished_at`, `start {href, method}`. Checklist labels:
+  Repo access · Models · Code mapped (`knowledge`) · Tests · Baseline build · Deploy target · Secrets.
+  `first_work.start = {href: "/v1/projects/{id}/work", method: "POST", body: {kind, text, title,
+  source_ref}}`. `POST …/onboarding/start` needs `workflow_run:start` and is idempotent (a moving run is
+  returned). It runs as the `project.onboarding` job (worker → `POST /v1/projects/onboarding/execute`,
+  worker lease only); a pass that waits for the code graph re-queues itself in 20 s (≤ 15 min, then it
+  carries on from GitHub's file list). Baseline build/tests are read from the default branch's CI;
+  with no CI the item is `skipped` ("the first build runs the tests in its own sandbox") — BOSS never
+  runs a repository's code outside a sandbox. A deploy target is *proposed* on a verified (shared) host
+  (`owner: you`, creating one needs the person's step-up). Secrets and demo users are names only.
+- **Deployments.** Environments add `target_id`, `app`, `status`, `uptime_pct`, `p95_ms`, `host_status`,
+  `paused`, `manage_href`; `production.state` is `ready|none|needs_host`; plus `preview {demo_logins}`,
+  `demo_logins` (the §11 listing) and `history[]`.
+- **Demo logins.** `GET …/demo-logins` (project:read, names only):
+  `{source, users[{user,label,password_key}], environments[{key,label,keys,logins[{user,label,env,
+  password_key,reveal}]}]}`. Reveal: `GET /v1/projects/{id}/demo-logins/reveal?env=<key>` —
+  `secret:manage` (owner/admin, step-up; 401 `step_up_required` otherwise), `Cache-Control: no-store`,
+  audited as `project.demo_logins_revealed`; answers `{env, label, logins[{user,label,password_key,
+  password}]}` or 404 `no_demo_login`. Never exposed to agents' MCP tools. `boss.deploy.yaml` accepts
+  `demo_logins: [{user, label?, password?: ENV_KEY}]` (or plain user names). The old
+  `GET /v1/apps/{app}/demo-logins` now also returns `users`, `users_from` and per-row `users`.
+- **Settings.** Each section's `actions[]` is `{label, method, href, requires?, permission?, body?}`
+  naming the existing write route; sections add their own fields (`captain`, `candidates`, `ambient`,
+  `budget`, `apps`, `users_from`, `hint`).
+- **Health.** Environments add `app`, `target_id`, `url`, `status`, `last_checked`, `last_error`,
+  `deployed_commit`, `deployed_at`; the SLO target is 99.5 % availability until a rule sets one
+  (`burn` from the last 24 h). `links.grafana` is a URL only when BOSS's check says Grafana answers
+  (`grafana_state`, `grafana_reason` say why not). `empty {label, detail, href}` when nothing is
+  deployed or no rule exists yet.
+- **Jump.** Items add `project_id` (and `external_url` for PRs, `full_href` for runs); with no `q`
+  the palette gets the newest items; a `project_id` the caller cannot read answers 404.
+- **Area ids.** The console's ids are used as they exist: `knowledge` (not `knowledge_graph`),
+  `workforce&role=` for an agent, `delivery_workflows&wfr=`, `code_tasks&view=apps&build=`,
+  `decisions&decision=`, `infra&view=deploys&deploy=`, `agent_ops&item=`, `meetings&meeting=`.
+  `area=project` / `area=projects` are the console's new ids (§10).
