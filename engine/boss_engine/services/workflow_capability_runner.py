@@ -6048,6 +6048,12 @@ def _follow_merge(connection: Connection, *, project_id: str, run_id: str, step:
                  "CAST(:o AS JSONB), updated_at = now() WHERE id = :i AND status = 'waiting'"),
             {"i": step["id"], "o": json.dumps({
                 "await": {**handle, "decision_id": qid, "looked_at": now_utc().isoformat()},
+                # Refreshed on every look, so the console's "Merge PR #N in GitHub" link is there
+                # for a step that started waiting before it carried one.
+                "merge": {"state": seen.get("state"), "pull_request_number": seen.get("number"),
+                          "pull_request_url": connection.execute(
+                              text("SELECT pull_request_url FROM code_task_runs WHERE id = :i"),
+                              {"i": build_run_id}).scalar()},
                 "note": _merge_note(seen, question)})})
         return None
     workflows.requeue_waiting_step(

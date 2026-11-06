@@ -61,6 +61,7 @@ class _Conn:
 
     def execute(self, stmt, params=None):
         self.sql.append(str(stmt))
+        return type("R", (), {"scalar": lambda _self: "https://github.com/a/b/pull/3"})()
 
 
 def _held(looked_ago=60):
@@ -79,6 +80,7 @@ def test_the_held_step_shows_the_current_question_and_never_releases_on_the_appr
     assert runner._follow_merge(c, project_id="p", run_id="r", step=step, output=output,
                                 handle=handle) is None
     assert any("decision_id = :d" in q and "released_for" in q for q in c.sql)
+    assert any("pull_request_url FROM code_task_runs" in q for q in c.sql), "the PR link is refreshed"
     assert not requeued
 
 
