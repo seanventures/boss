@@ -1663,7 +1663,10 @@ class DecisionService:
         # has already run the authoritative suite itself. Fall back to BOSS's own gate: if its
         # tests passed and it did not weaken the existing ones, proceed and record WHY. An
         # explicit CI failure (handled above) still blocks.
-        if validation_status in ("unavailable", "missing", "incomplete") and own:
+        # "timed_out" is the same absence: a repo with no CI never reports a check, so the wait
+        # for one always ends in a timeout. Leaving it out blocked every no-CI repo's merge AFTER
+        # the person approved it (helpdesk-ai PR #2, 2026-11-05, all eleven BOSS gates green).
+        if validation_status in ("unavailable", "missing", "incomplete", "timed_out") and own:
             _blocking = {"written_tests_pass", "nothing_broke", "existing_tests_intact"}
             _bad = sorted(_blocking.intersection(own["failed"]))
             if not _bad:
