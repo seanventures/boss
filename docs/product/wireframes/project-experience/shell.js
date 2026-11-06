@@ -64,13 +64,15 @@
   if (B.project) {
     const tab = B.tab || "overview";
     const TABS = [["overview", "house", "Overview"], ["work", "kanban", "Work", "9"], ["roadmap", "map-trifold", "Roadmap", "5"],
-                  ["repo", "git-branch", "Repo & knowledge"], ["deploy", "rocket-launch", "Deployments"]];
+                  ["repo", "git-branch", "Repo & knowledge"], ["deploy", "rocket-launch", "Deployments"],
+                  ["health", "heartbeat", "Health"], ["settings", "gear", "Settings"]];
     pj = `<div class="pj-sticky">
       <div class="pj-head">
         <span class="pj-mark" title="HelpDesk AI Demo">HD</span>
         <div class="pj-title"><h1>HelpDesk AI Demo</h1>
           <div class="row wrap"><a class="link-chip" title="Repository — opens Repo & knowledge"><i class="ph ph-github-logo"></i>paramg/helpdesk-ai-demo</a>
-          <a class="link-chip" title="Staging — healthy; opens the live app"><span class="dot" data-s="done"></span>staging · 2.29.2.202:8004 <i class="ph ph-arrow-square-out"></i></a>
+          <a class="link-chip" title="Staging — opens the live app"><i class="ph ph-globe"></i>staging · 2.29.2.202:8004 <i class="ph ph-arrow-square-out"></i></a>
+          <a class="link-chip health-chip" title="Healthy · 99.9% · p95 180ms — opens Health"><span class="dot" data-s="done"></span>Healthy</a>
           <span class="tag" data-tone="green" title="Project stage on the journey"><i class="ph ph-hammer"></i>Working</span></div></div>
         <span class="wf-spacer"></span>
         <div class="pj-captain" title="Helm captains this project. Click to talk to Helm.">
@@ -117,10 +119,11 @@
 (function () {
   const ORDER = ["00a-first-run-empty", "00b-first-run-guided", "01-nav", "02-projects", "03-new-project",
     "04-overview", "05-work", "05b-work-drawer", "06-repo-knowledge", "07-roadmap", "08-deployments",
-    "09-captain-drawer", "10-onboarding", "11-jump-palette"];
+    "09-captain-drawer", "10-onboarding", "11-jump-palette", "12-health", "13-settings", "14-infra-host",
+    "15-observability-app"];
   const here = (location.pathname.split("/").pop() || "").replace(/\.html$/, "");
   const i = ORDER.indexOf(here);
-  if (i < 0) return;
+  if (i < 0 || navigator.webdriver) return;
   const go = (j) => { if (j >= 0 && j < ORDER.length) location.href = ORDER[j] + ".html"; };
   document.addEventListener("keydown", (e) => {
     if (e.target && /input|textarea|select/i.test(e.target.tagName)) return;

@@ -1,0 +1,50 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Infra host</title>
+<link rel="stylesheet" href="../console.css"><link rel="stylesheet" href="../project.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/fill/style.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/bold/style.css">
+</head>
+<body data-active="infra" data-crumb="Infra|Servers|2.29.2.202">
+<div id="content">
+<div class="page-h"><span class="ico" data-size="l" data-c="teal"><i class="ph ph-hard-drives"></i></span><div><h1>2.29.2.202</h1><span class="muted" style="font-size:.6rem">Docker host · Ubuntu 22.04 · shared by 3 projects</span></div>
+  <span class="tag" data-tone="green" style="margin-left:8px"><span class="dot" data-s="done"></span>Reachable</span></div>
+
+<section class="grid g4">
+  <div class="card tile"><span class="lbl">CPU</span><div class="row"><div class="ring" style="--p:34;--c:var(--teal)"><span>34%</span></div><span class="s">8 vCPU</span></div></div>
+  <div class="card tile"><span class="lbl">Memory</span><div class="row"><div class="ring" style="--p:61;--c:#7aa2f7"><span>61%</span></div><span class="s">16 GB</span></div></div>
+  <div class="card tile"><span class="lbl">Disk</span><div class="row"><div class="ring" style="--p:72;--c:var(--amber)"><span>72%</span></div><span class="s">200 GB</span></div></div>
+  <div class="card tile"><span class="lbl">Ports used</span><span class="v">7</span><span class="s">8001–8104</span></div>
+</section>
+
+<section class="card">
+  <div class="card-h"><span class="ico"><i class="ph ph-folders"></i></span><h3>Projects on this server</h3><span class="pin">1</span></div>
+  <div class="wk">
+    <div class="wk-row" style="grid-template-columns:32px minmax(0,1fr) auto auto auto"><span class="pj-mark" style="width:28px;height:28px;font-size:.55rem;border-radius:7px">HD</span>
+      <div><div class="wk-t">HelpDesk AI Demo</div><div class="wk-sub"><span>staging</span><span class="mono">:8004</span></div></div>
+      <span class="tag" data-tone="green"><span class="dot" data-s="done"></span>Healthy</span><span class="faces"><span class="face" data-a="beacon" data-size="s"></span></span>
+      <div class="wk-links"><a class="link-chip"><i class="ph ph-rocket-launch"></i>Project › Deployments</a></div></div>
+    <div class="wk-row" style="grid-template-columns:32px minmax(0,1fr) auto auto auto"><span class="pj-mark" style="width:28px;height:28px;font-size:.55rem;border-radius:7px;background:linear-gradient(135deg,#34d399,#2ec5c5)">HW</span>
+      <div><div class="wk-t">Hello World</div><div class="wk-sub"><span>preview</span><span class="mono">:8001</span></div></div>
+      <span class="tag" data-tone="green"><span class="dot" data-s="done"></span>Healthy</span><span class="faces"><span class="face" data-a="beacon" data-size="s"></span></span>
+      <div class="wk-links"><a class="link-chip"><i class="ph ph-rocket-launch"></i>Project › Deployments</a></div></div>
+    <div class="wk-row" style="grid-template-columns:32px minmax(0,1fr) auto auto auto"><span class="pj-mark" style="width:28px;height:28px;font-size:.55rem;border-radius:7px;background:linear-gradient(135deg,#8b7cf6,#2f6fe0)">NP</span>
+      <div><div class="wk-t">NorthPeak Retail</div><div class="wk-sub"><span>preview</span><span class="mono">:8104</span></div></div>
+      <span class="tag" data-tone="amber"><span class="dot" data-s="you"></span>Degraded</span><span class="faces"><span class="face" data-a="beacon_live" data-size="s"></span></span>
+      <div class="wk-links"><a class="link-chip"><i class="ph ph-rocket-launch"></i>Project › Deployments</a></div></div>
+  </div>
+</section>
+
+<section class="grid g2">
+  <section class="card"><div class="card-h"><span class="ico" data-c="blue"><i class="ph ph-plugs"></i></span><h3>Host plugins</h3></div>
+    <div class="row wrap" style="gap:6px"><span class="tag"><i class="ph ph-package"></i>Docker 27</span><span class="tag"><i class="ph ph-chart-line"></i>node-exporter</span><span class="tag"><i class="ph ph-lock"></i>Caddy TLS</span></div></section>
+  <section class="card"><div class="card-h"><span class="ico" data-c="violet"><i class="ph ph-clock-counter-clockwise"></i></span><h3>Recent changes</h3></div>
+    <div class="ck"><div class="ck-i" data-s="done"><span class="ck-b">✓</span><span class="ck-t">HelpDesk staging deploy<small>2h ago · Beacon</small></span><span></span></div></div></section>
+</section>
+
+<div class="notes"><b>Design notes</b><ol>
+  <li><b>1</b> The org-wide/shared view stays in Infra: the server, its capacity, plugins and changes. What runs on it is a list of projects, each linking to its Project › Deployments. Project › Deployments links back here with "runs on 2.29.2.202 ↗". Rule: ONE project → Project page; shared → Infra/Observability; linked both ways.</li>
+</ol></div>
+</div>
+<script src="../shell.js"></script>
+</body></html>
