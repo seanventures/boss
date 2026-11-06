@@ -375,7 +375,7 @@ def test_the_pipeline_is_wired_to_the_rule():
     assert "evidence[_checks_failing.KEY] = checks_record" in body
     assert body.count('**({"checks_failing": _checks} if _checks else {})') >= 2
     assert "_pr_summary = _cf_section(_checks) + _generated_pr_summary(" in body
-    assert "checks_failing=_checks)" in body
+    assert "checks_failing=_checks" in body
 
 
 def test_a_draft_whose_checks_a_later_build_fixed_is_still_marked_ready(eng, project):

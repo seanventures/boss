@@ -1768,6 +1768,13 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
     try:
         try:
             manifest = load_manifest(manifest_text)
+            manifest_text, manifest = own_place_on_host(engine, manifest_text, manifest,
+                                                        target, host)
+            workdir_ = manifest_workdir(path)
+            manifest_text, manifest = with_compose_owned_secrets(
+                manifest_text, manifest,
+                lambda p: github.read_file(owner, repo, f"{workdir_}/{p}" if workdir_ else p,
+                                           commit))
             rendered = render(manifest, _deployment_ctx(target, host, commit, ref))
         except ManifestError as exc:
             raise StackDeployError(f"{path} at {commit[:12]} is not valid: {exc}",
@@ -2709,12 +2716,15 @@ def _declared_stack_target(connection: Connection, project_id: str,
             text("SELECT * FROM deployment_targets WHERE project_id = :p AND status = 'active' "
                  "AND environment = :e AND host_id IS NOT NULL ORDER BY created_at"),
             {"p": project_id, "e": environment}).mappings().all()]
+        # A target recorded without its repo (one made from Infra or Ask BOSS) is still this
+        # app's when its NAME says so; pick_deploy_target matches by identity, never by repo alone.
         candidates = [t for t in candidates
-                      if str(t.get("repo") or "").rsplit("/", 1)[-1].lower() == repo_name]
+                      if str(t.get("repo") or "").rsplit("/", 1)[-1].lower() in (repo_name, "")]
         host_id = str(inputs.get("host_id") or "").strip()
         if host_id:
             candidates = [t for t in candidates if t.get("host_id") == host_id]
-        app_name = app_name_of_run(run)
+        app_name = _imported_app_name(connection, project_id, run, repository, path) \
+            or app_name_of_run(run)
         target = pick_deploy_target(candidates, app_name)
         if target is None and app_name and not [
                 t for t in candidates if _same_app(t, app_name)]:
@@ -2909,7 +2919,12 @@ def manifest_misfit(connection: Connection, *, manifest: Any, rendered: Mapping[
                 "Allow the demo/seed password BOSS provides in production, and make demo seeding "
                 "an explicit opt-in (e.g. ALLOW_DEMO_SEED) instead of refusing the password; "
                 "then deploy again.")
-    if served is not None:
+    # ONLY A MANIFEST THIS BUILD WROTE is judged against the files this build wrote. An imported
+    # app's own boss.deploy.yaml health-checks a route its existing code serves (helpdesk-ai's
+    # /auth/providers in server/auth/routes.mjs, untouched by the SLA build), and judging it
+    # against the build's few changed files dead-lettered a correct deploy (2026-11-06).
+    if served is not None and _build_wrote(connection, run_id, path) \
+            and not _is_imported_apps_manifest(connection, run_id, path):
         for check in rendered.get("health") or []:
             route = urlsplit(str(check.get("url") or "")).path.rstrip("/")
             # Mounted routes (a router at /api serving /health) are judged by their last part.
@@ -2971,6 +2986,35 @@ _SERVED_SUFFIXES = (".js", ".mjs", ".cjs", ".ts", ".py", ".go", ".rb", ".java", 
                     ".php", ".conf", ".yml", ".yaml", ".json", ".toml")
 
 
+def _is_imported_apps_manifest(connection: Connection, run_id: Optional[str], path: str) -> bool:
+    """Whether `path` is the root manifest of the app its project imported (the repo IS the app).
+
+    Its health route is served by the app's existing code, not by the few files a build of a
+    feature writes — even when a repair build edits the manifest itself (helpdesk-ai PR #4 added
+    SESSION_SECRET to boss.deploy.yaml, and the route check then refused it, 2026-11-06)."""
+    if not run_id or "/" in str(path or "/"):
+        return False
+    run = connection.execute(
+        text("SELECT id, project_id, spec, finalize_ctx FROM code_task_runs WHERE id = :i"),
+        {"i": run_id}).mappings().first()
+    if not run:
+        return False
+    spec = run["spec"] if isinstance(run["spec"], dict) else json.loads(run["spec"] or "{}")
+    repository = f"{spec.get('owner') or ''}/{spec.get('repo') or ''}".strip("/")
+    return bool(_imported_app_name(connection, str(run["project_id"]), dict(run), repository,
+                                   path))
+
+
+def _build_wrote(connection: Connection, run_id: Optional[str], path: str) -> bool:
+    """Whether any attempt of this run's lineage wrote `path` (the manifest)."""
+    want = str(path or "").strip().lstrip("./")
+    if not run_id or not want:
+        return False
+    return any(str(f).strip().lstrip("./") == want
+               for attempt in lineage_of(connection, run_id)
+               for f in ((attempt["state"] or {}).get("impl_files") or []))
+
+
 def _served_text(connection: Connection, run_id: Optional[str], workdir: str,
                  read: Callable[[str], Optional[str]]) -> Optional[str]:
     """The source the build wrote under the manifest's directory, joined (bounded), or None when
@@ -3026,6 +3070,127 @@ def undeclared_deploy_refusal(connection: Connection, run_id: Optional[str]) -> 
                 "`resources: {db: {capability: database.relational, engine: postgres}}`, then "
                 "deploy again.")
     return None
+
+
+def with_compose_owned_secrets(manifest_text: str, manifest: Any,
+                               read: Callable[[str], Optional[str]]) -> tuple[str, Any]:
+    """(manifest text, manifest) that also GENERATES every session/signing key the app's compose
+    file reads and the manifest does not declare — the deploy's half of the rule previews follow
+    (run_env.needs_from_compose).
+
+    HelpDesk AI's docker-compose.yml reads SESSION_SECRET; its boss.deploy.yaml named only the
+    demo password, so the deployed server exited on "SESSION_SECRET must be set" and a repair
+    build had to add it to the manifest (helpdesk-ai PR #4, 2026-11-06). A key BOSS owns (it signs
+    the app's own sessions; no person chooses it) is minted per target, like any {generate}."""
+    import yaml
+
+    from ..templates.run_env import _BOSS_OWNED_NAME
+    from .app_deploy_manifest import parse_manifest
+
+    if manifest.kind != "compose" or not manifest.compose_file:
+        return manifest_text, manifest
+    try:
+        compose = yaml.safe_load(read(manifest.compose_file) or "") or {}
+        data = yaml.safe_load(manifest_text) or {}
+    except Exception:  # noqa: BLE001 — never worse than the manifest as written
+        return manifest_text, manifest
+    services = compose.get("services") if isinstance(compose, dict) else None
+    wanted: list[str] = []
+    for svc in (services or {}).values() if isinstance(services, dict) else ():
+        env = svc.get("environment") if isinstance(svc, dict) else None
+        names = ([str(k) for k in env] if isinstance(env, dict) else
+                 [str(e).split("=", 1)[0] for e in env] if isinstance(env, list) else [])
+        wanted += [n for n in names if _BOSS_OWNED_NAME.match(n) and n not in wanted]
+    declared = {e.key for e in manifest.env or ()}
+    missing = [n for n in wanted if n not in declared]
+    if not missing or not isinstance(data, dict):
+        return manifest_text, manifest
+    env = data.get("env") if isinstance(data.get("env"), dict) else {}
+    data["env"] = {**env, **{n: {"generate": "hex32"} for n in missing}}
+    placed = ("# BOSS: generates the session keys the compose file reads: "
+              + ", ".join(missing) + "\n" + yaml.safe_dump(data, sort_keys=False))
+    try:
+        return placed, parse_manifest(data, source_text=placed)
+    except Exception:  # noqa: BLE001
+        return manifest_text, manifest
+
+
+def own_place_on_host(engine: Any, manifest_text: str, manifest: Any,
+                      target: Mapping[str, Any], host: Mapping[str, Any]) -> tuple[str, Any]:
+    """(manifest text, manifest) with THIS target's own folder and compose project on the host,
+    when the manifest names neither and another target on the host already holds the default.
+
+    SHARED HOSTS MADE THIS POSSIBLE. A verified host is usable by every project in its
+    organisation, so two projects' apps with the same name — boss-dogfood's old helpdesk-ai and
+    the helpdesk-ai project's HelpDesk AI — both defaulted to /opt/boss-apps/helpdesk-ai and the
+    compose project helpdesk-ai on the shared server, and the second deploy was refused (2026-11-06).
+    The target keeps the place it last used; a new one is named after the target's id. The
+    text with the place written in is what the plan stores, so apply renders the same place."""
+    import yaml
+
+    from .app_deploy_manifest import DEFAULT_BASE_DIR, parse_manifest
+
+    try:
+        data = yaml.safe_load(manifest_text) or {}
+    except yaml.YAMLError:
+        return manifest_text, manifest
+    if not isinstance(data, dict) or data.get("dir") or (
+            isinstance(data.get("compose"), dict) and data["compose"].get("project")):
+        return manifest_text, manifest
+    tid, hid = str(target.get("id") or ""), str(host.get("id") or "")
+    if not tid or not hid:
+        return manifest_text, manifest
+    with engine.connect() as connection:
+        last = connection.execute(
+            text("SELECT deploy_dir FROM stack_deployments WHERE target_id = :t AND host_id = :h "
+                 "AND COALESCE(deploy_dir, '') <> '' ORDER BY created_at DESC LIMIT 1"),
+            {"t": tid, "h": hid}).scalar()
+        taken = connection.execute(
+            text("SELECT 1 FROM stack_deployments d JOIN deployment_targets t "
+                 "ON t.id = d.target_id WHERE d.host_id = :h AND d.deploy_dir = :dir "
+                 "AND d.target_id <> :t AND t.status = 'active' AND d.status <> 'rejected' "
+                 "LIMIT 1"), {"h": hid, "dir": manifest.dir, "t": tid}).first()
+    if last and str(last) == manifest.dir:
+        return manifest_text, manifest
+    if not taken and not last:
+        return manifest_text, manifest
+    suffix = re.sub(r"[^a-z0-9]", "", tid.rsplit("_", 1)[-1].lower())[:6]
+    place = (str(last).rstrip("/").rsplit("/", 1)[-1] if last
+             else f"{manifest.name}-{suffix}")
+    data["dir"] = f"{DEFAULT_BASE_DIR}/{place}" if not last else str(last)
+    if manifest.kind == "compose":
+        data["compose"] = {**(data.get("compose") or {}), "project": place}
+    placed = ("# BOSS: another app on this host uses the default place; this target's own.\n"
+              + yaml.safe_dump(data, sort_keys=False))
+    try:
+        return placed, parse_manifest(data, source_text=placed)
+    except Exception:  # noqa: BLE001 — never worse than the manifest as written
+        return manifest_text, manifest
+
+
+def _imported_app_name(connection: Connection, project_id: str, run: Mapping[str, Any],
+                       repository: str, manifest_path: str) -> str:
+    """The project's own name when this build adds to the app the project imported: no recorded
+    app name, the project's primary repository, and the app's manifest at that repository's
+    root (the repo IS the app; `app_dir` is only where the build worked, e.g. `web`). Else "".
+
+    ADDING TO AN EXISTING APP IS THE MAIN USE CASE. Such a build has no app name of its own, so
+    its title stood in: helpdesk-ai's SLA build made a second target, "Add SLA timers to
+    tickets", beside "HelpDesk AI", and deployed to neither (2026-11-06)."""
+    fctx = run.get("finalize_ctx") or {}
+    if isinstance(fctx, str):
+        try:
+            fctx = json.loads(fctx)
+        except ValueError:
+            fctx = {}
+    if str((fctx or {}).get("app_name") or "").strip() or "/" in str(manifest_path or "/"):
+        return ""
+    row = connection.execute(
+        text("SELECT p.name FROM projects p JOIN github_repository_bindings b "
+             "ON b.project_id = p.id AND b.role = 'primary' AND b.status = 'active' "
+             "WHERE p.id = :p AND lower(b.full_name) = lower(:r)"),
+        {"p": project_id, "r": repository}).first()
+    return str(row[0]).strip() if row and row[0] else ""
 
 
 def _same_app(target: Mapping[str, Any], app_name: str) -> bool:
@@ -3128,6 +3293,11 @@ def plan_for_workflow_step(engine, settings: Settings, *, project_id: str, actor
 
     with engine.begin() as connection:
         merge = pr_merge.observe(connection, settings, project_id, run_id)
+        # MERGED SHIPS WHAT WAS MERGED. A workflow's deploy now waits for the merge, so its pinned
+        # pass-1 head (or the PR's head) is behind what landed: helpdesk-ai planned 2d0ea0a, the
+        # PR as first opened, while main held its repair and follow-up at merge 256bb1d.
+        if merge.get("state") == pr_merge.MERGED and _SHA.match(str(merge.get("sha") or "")):
+            ref = str(merge["sha"])
         unmerged = pr_merge.sentence(merge)
         if unmerged:
             from .core import emit_event

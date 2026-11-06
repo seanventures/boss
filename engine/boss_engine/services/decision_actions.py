@@ -277,14 +277,23 @@ def kind_of(decision: Mapping[str, Any]) -> str:
     return "general"
 
 
+def is_ambient_card(decision: Mapping[str, Any]) -> bool:
+    """An autonomous agent's Needs-you card (ambient/board.needs_you): its recommendation names
+    the work item and who asked. Its `action` is the asker's own (a squad's proposed action,
+    "ambient_route", "incident_squad.mitigate"); whatever it is, the answer is carried to the
+    item's owner by ambient/answers.on_answered — approve, reject and request changes alike."""
+    rec = _rec(decision)
+    return bool(rec.get("work_item_id") and rec.get("asked_by"))
+
+
 def carries_out_on_approval(decision: Mapping[str, Any]) -> bool:
     """True when approving makes BOSS do something itself, not only record the answer."""
-    return _action_of(decision) in CARRIED_OUT_ON_APPROVAL
+    return _action_of(decision) in CARRIED_OUT_ON_APPROVAL or is_ambient_card(decision)
 
 
 def consumes_revision(decision: Mapping[str, Any]) -> bool:
     """True when something reads `revision_requested` for this decision and acts on the note."""
-    return _action_of(decision) in REVISE_CONSUMED
+    return _action_of(decision) in REVISE_CONSUMED or is_ambient_card(decision)
 
 
 def _action(action: str, label: str, tone: str, effect: str,

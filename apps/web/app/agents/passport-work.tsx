@@ -35,10 +35,11 @@ export const WORK_FILTERS: { key: "" | ActKind; label: string }[] = [
 
 const KIND_ICON: Record<ActKind, React.ComponentType<{ size?: number; "aria-hidden"?: boolean }>> = {
   run: Play, step: ListChecks, stage: Hammer, seat: UsersThree, chat: ChatCircle, approval: CheckSquare,
-  handoff: Gavel,
+  handoff: Gavel, decision: Gavel,
 };
 const KIND_WORD: Record<ActKind, string> = {
   run: "Run", step: "Step", stage: "Build", seat: "Panel", chat: "Chat", approval: "Approval", handoff: "Handoff",
+  decision: "Decision",
 };
 
 /** The act's status as a face state, so a row's dot and the face say the same thing. */

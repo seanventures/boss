@@ -33,16 +33,17 @@ describe("the Run group order", () => {
   it("opens with the place work is done, then the path it follows", () => {
     // Workflows and Agents are one row each now: Team structure and Agent Studio are views of
     // Agents, and their old links redirect (tests/legacy-areas.test.ts).
-    expect(runOrder().slice(0, 5)).toEqual([
+    expect(runOrder().slice(0, 6)).toEqual([
       "code_tasks",          // Factory / Projects
+      "agent_ops",           // Agents at work: what BOSS's agents picked up (AUTONOMOUS_AGENTS_SPEC §1)
       "delivery_workflows",  // Workflows
       "workforce",           // Agents
       "knowledge",           // Knowledge Graph: what they work on (KNOWLEDGE_GRAPH_PRODUCT_SPEC §5.1)
       "decisions",           // Approvals
     ]);
     // Infra, then Observability: where it runs, then whether it is alive.
-    expect(runOrder()[5]).toBe("infra");
-    expect(runOrder()[6]).toBe("observability");
+    expect(runOrder()[6]).toBe("infra");
+    expect(runOrder()[7]).toBe("observability");
     expect(runOrder()).not.toContain("org_chart");
     expect(runOrder()).not.toContain("studio");
   });

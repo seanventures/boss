@@ -185,7 +185,7 @@ def test_the_story_reads_in_the_lines_order(client, engine):
         fx.stage(engine, run_id, step)
     fx.finish(engine, run_id)
     stations = [r["station"] for r in _cockpit(client, run_id)["story"]]
-    order = ["plan", "you_plan", "tests", "build", "check", "review", "pr", "preview", "ship"]
+    order = ["plan", "you_plan", "tests", "build", "check", "review", "pr", "ship"]
     assert stations == sorted(stations, key=order.index)
     assert stations.count("check") >= 1
     seen = [s for i, s in enumerate(stations) if i == 0 or stations[i - 1] != s]

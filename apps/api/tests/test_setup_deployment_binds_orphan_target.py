@@ -157,6 +157,19 @@ def test_error_no_longer_sends_the_operator_to_a_panel_that_cannot_help(client, 
     assert "Hosts panel" not in response.text
 
 
+def _victim_project(engine) -> str:
+    """A project in ANOTHER organisation: hosts are shared by the projects of one organisation
+    (deployment_fleet.usable_hosts_sql), so the fence these tests hold is the organisation's.
+    It stays after the test (its events are append-only); its ids are unique to the test."""
+    org, project = f"org_victim_{_uid()}", f"proj_victim_{_uid()}"
+    with engine.begin() as c:
+        c.execute(text("INSERT INTO orgs (id, name) VALUES (:o, :o)"), {"o": org})
+        c.execute(text("INSERT INTO workspaces (id, org_id, name) VALUES (:w, :o, :o)"), {"w": f"ws_{org}", "o": org})
+        c.execute(text("INSERT INTO projects (id, workspace_id, name, slug) VALUES (:p, :w, 'Victim fleet', :p)"),
+                  {"p": project, "w": f"ws_{org}"})
+    return project
+
+
 def test_setup_deployment_refuses_a_host_from_another_project(client, engine, seeded):
     """Set target must not bind another project's VM (or inherit its SSH key).
 
@@ -164,13 +177,9 @@ def test_setup_deployment_refuses_a_host_from_another_project(client, engine, se
     whatever host_id was supplied. A host from project B can then be scheduled from
     project A; deploy resolves the victim host's key_secret_ref and SSHes in.
     """
-    victim_project = f"proj_victim_{_uid()}"
+    victim_project = _victim_project(engine)
     victim_host = f"dh_{_uid()}"
     with engine.begin() as c:
-        c.execute(text(
-            "INSERT INTO projects (id, workspace_id, name, slug) "
-            "VALUES (:id, 'ws_boss', 'Victim fleet', :id) ON CONFLICT (id) DO NOTHING"),
-            {"id": victim_project})
         c.execute(text(
             "INSERT INTO deployment_hosts (id, project_id, name, address, ssh_user, ssh_port, "
             "status) VALUES (:i, :p, :n, '198.51.100.10', 'root', 22, 'verified')"),
@@ -194,19 +203,17 @@ def test_setup_deployment_refuses_a_host_from_another_project(client, engine, se
 
     with engine.begin() as c:
         c.execute(text("DELETE FROM deployment_hosts WHERE id = :i"), {"i": victim_host})
-        c.execute(text("DELETE FROM projects WHERE id = :i"), {"i": victim_project})
+    # The victim project stays: its events are append-only (they hold its project id), and its
+    # id and organisation are unique to this test, so nothing later can trip over it.
 
 
-def test_attach_refuses_a_host_from_another_project(client, engine, seeded):
-    """The Hosts-panel attach path has the same tenant fence."""
+def test_attach_refuses_a_host_from_another_organisation(client, engine, seeded):
+    """The Hosts-panel attach path has the same tenant fence: the organisation (hosts are shared
+    by the projects of one organisation, deployment_fleet.usable_hosts_sql)."""
     target_id = _orphan_target(engine, seeded["app_name"])
-    victim_project = f"proj_victim_{_uid()}"
+    victim_project = _victim_project(engine)
     victim_host = f"dh_{_uid()}"
     with engine.begin() as c:
-        c.execute(text(
-            "INSERT INTO projects (id, workspace_id, name, slug) "
-            "VALUES (:id, 'ws_boss', 'Victim fleet', :id) ON CONFLICT (id) DO NOTHING"),
-            {"id": victim_project})
         c.execute(text(
             "INSERT INTO deployment_hosts (id, project_id, name, address, ssh_user, ssh_port, "
             "status) VALUES (:i, :p, :n, '198.51.100.11', 'root', 22, 'verified')"),
@@ -220,7 +227,7 @@ def test_attach_refuses_a_host_from_another_project(client, engine, seeded):
     assert response.status_code in (403, 404, 422), response.text
     from boss_engine.services.deployment_fleet import attach_target
 
-    with engine.begin() as c, pytest.raises(ValueError, match="different projects"):
+    with engine.begin() as c, pytest.raises(ValueError, match="attach refused"):
         attach_target(c, target_id=target_id, host_id=victim_host)
     with engine.begin() as c:
         row = c.execute(text("SELECT host_id FROM deployment_targets WHERE id = :i"),
@@ -229,7 +236,6 @@ def test_attach_refuses_a_host_from_another_project(client, engine, seeded):
 
     with engine.begin() as c:
         c.execute(text("DELETE FROM deployment_hosts WHERE id = :i"), {"i": victim_host})
-        c.execute(text("DELETE FROM projects WHERE id = :i"), {"i": victim_project})
 
 
 def test_retiring_a_target_requires_an_authorized_actor(client, engine, seeded):

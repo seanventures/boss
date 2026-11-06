@@ -498,7 +498,7 @@ def run_on_investigation_host(*, host: str, command: str, project_id: str,
     ephemeral = None
     with begin(get_engine(settings)) as c:
         row = c.execute(
-            sql("SELECT * FROM deployment_hosts WHERE project_id = :p AND (id = :h OR name = :h)"),
+            sql(f"SELECT * FROM deployment_hosts WHERE {_usable_hosts()} AND (id = :h OR name = :h)"),
             {"p": project_id, "h": host.strip()}).mappings().first()
         if row is None:
             names = [r["name"] for r in c.execute(
@@ -573,7 +573,7 @@ def _briefing(connection, *, project_id: str, question: str, run_id: Optional[st
                      + "\n```\n")
 
     _rows("Deployment hosts",
-          "SELECT id, name, address, status, arch FROM deployment_hosts WHERE project_id = :p",
+          f"SELECT id, name, address, status, arch FROM deployment_hosts WHERE {_usable_hosts()}",
           {"p": project_id})
     _rows("Deployment targets",
           "SELECT id, app_name, environment, status, domains, host_id, health_checks "
@@ -1282,3 +1282,10 @@ def get_investigation(connection, *, project_id: str,
 __all__ = ["open_investigation", "run_investigation", "get_investigation",
            "host_command_allowed", "sql_is_read_only", "sql_is_allowed",
            "run_on_investigation_host", "authorise", "run_db", "run_operation"]
+
+
+def _usable_hosts(alias: str = "") -> str:
+    """deployment_fleet.usable_hosts_sql: a project's hosts include the ones its organisation shares."""
+    from .deployment_fleet import usable_hosts_sql
+
+    return usable_hosts_sql(alias)

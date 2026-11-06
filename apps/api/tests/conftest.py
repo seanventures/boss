@@ -109,6 +109,9 @@ def clean_tables(engine):
     members = MemberDirectoryService(settings)
     specpack = SpecPackService(settings)
     with engine.begin() as connection:
+        # The decision ledger is append-only by trigger; a reset says it is purging, as a
+        # retention job would (services/ambient/ledger.py).
+        connection.execute(text("SET LOCAL boss.ledger_purge = 'on'"))
         # Delete only tables inside this run's confined schema, in child-to-parent order.
         # Missing tables in partial Community schemas are skipped.
         for tbl in [
@@ -195,6 +198,16 @@ def clean_tables(engine):
             "sre_postmortems",
             "incident_evidence",
             "reliability_policies",
+            # Autonomous agents (services/ambient): the board, the ledger's decision detail
+            # (1:1 with its act), signals and the autonomy/envelope settings.
+            "work_item_messages",
+            "work_item_links",
+            "agent_act_decisions",
+            "signals",
+            "signal_adapter_cursors",
+            "ambient_autonomy",
+            "ambient_autonomy_changes",
+            "ambient_settings",
             # Agent World: the signed-work ledger (self-referencing, no FK out; one DELETE).
             "agent_acts",
             "llm_calls",

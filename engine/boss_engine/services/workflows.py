@@ -5925,8 +5925,14 @@ def force_complete_waiting_step(
     project_id: str,
     step_run_id: str,
     output: dict[str, Any],
+    finished_at: Optional[Any] = None,
 ) -> dict[str, Any]:
     """Complete a step that was PARKED, not leased.
+
+    `finished_at`: when the awaited work itself ended, if BOSS only noticed later. A run that
+    sat stopped kept its step's clock going: More tests read "1h 46m" for a 20-minute pass
+    because the stopped run was revived 90 minutes after the pass finished (helpdesk-ai,
+    2026-11-06). The step ends when its work did, never before it started.
 
     `complete_step` requires the caller to hold the lease, which is right for work a worker is
     executing. A parked step deliberately holds none — nothing is running, it is waiting for a
@@ -5939,12 +5945,17 @@ def force_complete_waiting_step(
             """
             UPDATE workflow_step_runs
             SET status='succeeded', output=CAST(:output AS JSONB),
-                completed_at=clock_timestamp(), updated_at=now()
+                completed_at=GREATEST(COALESCE(started_at, clock_timestamp()),
+                                      LEAST(clock_timestamp(),
+                                            COALESCE(CAST(:finished AS timestamptz),
+                                                     clock_timestamp()))),
+                updated_at=now()
             WHERE id=:id AND project_id=:project_id AND status='waiting'
             RETURNING *
             """
         ),
-        {"id": step_run_id, "project_id": project_id, "output": json.dumps(output)},
+        {"id": step_run_id, "project_id": project_id, "output": json.dumps(output),
+         "finished": finished_at},
     ).mappings().first()
     if not row:
         raise WorkflowNotFoundError("Waiting workflow step not found.")
@@ -7341,6 +7352,11 @@ def cancel_run(
     # The run's "stop" action decides the rest: a run busy compensating is refused (stopping it
     # would race the undo), in the words the console shows on its disabled Stop.
     require(connection, project_id, run_id, "stop")
+    # A PERSON STOPPING A RUN an ambient agent started takes its work item over (autonomous
+    # agents, design §4 L4): the agent loses its lease and does not start it again.
+    from .ambient.person_actions import on_run_cancelled
+
+    on_run_cancelled(connection, project_id=project_id, run_id=run_id, actor=actor)
 
     # STOP THE WORK, NOT JUST THE BOOKKEEPING.
     #
@@ -7498,6 +7514,8 @@ _AWAIT_LABELS: dict[str, str] = {
     "architecture": "a person to approve the architecture",
     # A finished panel's step held until its PRD is approved (runner._hold_for_spec).
     "spec_decision": "the spec (the panel's PRD) to be approved",
+    # A deploy step held until its build's pull request is merged (runner._merge_wait).
+    "merge": "the pull request to be merged",
 }
 
 
@@ -7526,12 +7544,17 @@ def waiting_on_label(step: dict[str, Any]) -> Optional[str]:
     So the fallback is None: the status pill already says `waiting`, and silence is the honest
     answer to a question we cannot answer.
     """
+    awaited = (step.get("output") or {}).get("await")
+    # A DEPLOY HELD FOR ITS MERGE says so, before its approver: the run list read "waiting on a
+    # decision" while the thing to do was merge PR #3 in GitHub (helpdesk-ai, 2026-11-06).
+    if isinstance(awaited, dict) and str(awaited.get("kind") or "") == "merge":
+        number = ((step.get("output") or {}).get("merge") or {}).get("pull_request_number")
+        return f"PR #{number} to be merged" if number else _AWAIT_LABELS["merge"]
     approver = (step.get("approval") or {}).get("approver_role")
     if approver:
         return str(approver)
     if step.get("decision_id"):
         return "a decision"
-    awaited = (step.get("output") or {}).get("await")
     if isinstance(awaited, dict):
         kind = str(awaited.get("kind") or "").strip()
         # NOT EVERY CODE TASK IS THE BUILD. Readiness extends the build's task, and its run

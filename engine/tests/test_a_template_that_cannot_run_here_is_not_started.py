@@ -37,8 +37,22 @@ from .test_workflow_capability_runner import (  # noqa: F401 - fixtures used by 
 @pytest.fixture(autouse=True)
 def _tidy(eng, project):
     """The rows these tests add, removed before the shared fixture deletes the project — roles
-    and the rest have no ON DELETE CASCADE, so leaving them would fail every later setup."""
+    and the rest have no ON DELETE CASCADE, so leaving them would fail every later setup.
+
+    A BARE PROJECT IS ALONE IN ITS ORGANISATION. Verified hosts are shared across an organisation
+    (deployment_fleet.usable_hosts_sql), and the shared fixture puts every test project in the
+    first workspace, where other tests leave verified hosts: moved to an organisation of its own
+    for the test, so "nothing to deploy to" means this project's org has nothing."""
+    org = f"org_bare_{project}"
+    with eng.begin() as c:
+        home = c.execute(text("SELECT workspace_id FROM projects WHERE id = :p"), {"p": project}).scalar()
+        c.execute(text("INSERT INTO orgs (id, name) VALUES (:o, :o) ON CONFLICT DO NOTHING"), {"o": org})
+        c.execute(text("INSERT INTO workspaces (id, org_id, name) VALUES (:w, :o, :o) ON CONFLICT DO NOTHING"),
+                  {"w": f"ws_{org}", "o": org})
+        c.execute(text("UPDATE projects SET workspace_id = :w WHERE id = :p"), {"w": f"ws_{org}", "p": project})
     yield
+    with eng.begin() as c:
+        c.execute(text("UPDATE projects SET workspace_id = :w WHERE id = :p"), {"w": home, "p": project})
     with eng.begin() as c:
         for table in ("roles", "entitlement_sources", "github_repository_bindings",
                       "github_connections", "deployment_hosts", "work_tracker_providers",

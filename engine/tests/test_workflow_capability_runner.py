@@ -2217,3 +2217,28 @@ def test_timeout_approve_on_a_work_step_still_runs_the_tool(eng, project, monkey
     assert steps["m"]["status"] == "waiting"
     assert steps["m"]["output"]["meeting_run_id"] == "mrun_sla"
     assert released["performed"][0]["outcome"] == "awaiting"
+
+
+def test_a_step_whose_work_finished_while_the_run_was_stopped_ends_when_the_work_did(eng, project):
+    """helpdesk-ai 2026-11-06: More tests read "1h 46m" for a 20-minute pass — the run sat stopped
+    and was revived 90 minutes after the pass finished, and the step ended when BOSS noticed."""
+    from datetime import timedelta
+
+    with eng.begin() as c:
+        _, version = _publish(c, project, "endswhenworkdid", [
+            {"id": "more", "kind": "capability",
+             "binding": {"capability": "more_tests", "inputs": {"run_id": "crun_x"}}, "next": []},
+        ], "more")
+        run = _start(c, project, version["id"], {})
+        sid = c.execute(text("SELECT id FROM workflow_step_runs WHERE workflow_run_id=:r"),
+                        {"r": run["id"]}).scalar()
+        c.execute(text("UPDATE workflow_step_runs SET status='waiting', "
+                       "started_at = now() - interval '2 hours' WHERE id=:i"), {"i": sid})
+        ended = c.execute(text("SELECT now() - interval '100 minutes'")).scalar()
+        workflows.force_complete_waiting_step(c, project_id=project, step_run_id=sid,
+                                              output={"status": "succeeded"}, finished_at=ended)
+        started, completed = c.execute(text(
+            "SELECT started_at, completed_at FROM workflow_step_runs WHERE id=:i"),
+            {"i": sid}).one()
+    assert abs((completed - ended).total_seconds()) < 1
+    assert completed - started == timedelta(minutes=20)

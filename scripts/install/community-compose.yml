@@ -401,6 +401,10 @@ services:
       #
       # Defaults match config.py, so an unset key behaves exactly as a stock install.
       BOSS_CODE_AGENT_MAX_CONCURRENCY: ${BOSS_CODE_AGENT_MAX_CONCURRENCY:-1}
+      # BOSS MERGES THE PULL REQUEST A PERSON APPROVED (decisions: merge follow-on). Off by
+      # default; with it off an approved merge asks the person to merge in GitHub. Never reached
+      # the container before, so .env had no way to turn it on (2026-11-06).
+      BOSS_ENABLE_SANDBOX_MERGE: ${BOSS_ENABLE_SANDBOX_MERGE:-false}
       BOSS_CODE_AGENT_MAX_TURNS: ${BOSS_CODE_AGENT_MAX_TURNS:-90}
       BOSS_CODE_AGENT_REVIEW_MAX_TURNS: ${BOSS_CODE_AGENT_REVIEW_MAX_TURNS:-48}
       BOSS_CODE_AGENT_TIMEOUT_SECONDS: ${BOSS_CODE_AGENT_TIMEOUT_SECONDS:-2700}
@@ -604,6 +608,10 @@ services:
       #
       # Defaults match config.py, so an unset key behaves exactly as a stock install.
       BOSS_CODE_AGENT_MAX_CONCURRENCY: ${BOSS_CODE_AGENT_MAX_CONCURRENCY:-1}
+      # BOSS MERGES THE PULL REQUEST A PERSON APPROVED (decisions: merge follow-on). Off by
+      # default; with it off an approved merge asks the person to merge in GitHub. Never reached
+      # the container before, so .env had no way to turn it on (2026-11-06).
+      BOSS_ENABLE_SANDBOX_MERGE: ${BOSS_ENABLE_SANDBOX_MERGE:-false}
       BOSS_CODE_AGENT_MAX_TURNS: ${BOSS_CODE_AGENT_MAX_TURNS:-90}
       BOSS_CODE_AGENT_REVIEW_MAX_TURNS: ${BOSS_CODE_AGENT_REVIEW_MAX_TURNS:-48}
       BOSS_CODE_AGENT_TIMEOUT_SECONDS: ${BOSS_CODE_AGENT_TIMEOUT_SECONDS:-2700}

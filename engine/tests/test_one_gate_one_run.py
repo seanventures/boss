@@ -130,10 +130,22 @@ def test_no_step_decision_is_raised_except_through_open_step_decision():
         "releases both. Use run_decisions.open_step_decision:\n  " + "\n  ".join(offenders))
 
 
+#: Steps that SHOW a decision another producer owns, without being released by it. A deploy
+#: waiting for its build's merge points at the PR's merge question so the step reads Needs you,
+#: and marks `released_for` so the answered-gate sweep never runs the step on that approval:
+#: the observed merge releases it. Every run waiting on that PR's merge is meant to go on then.
+DISPLAY_ONLY = {("engine/boss_engine/services/workflow_capability_runner.py", "_follow_merge")}
+
+
 def test_every_step_that_waits_on_a_decision_got_it_from_open_step_decision():
     offenders = []
     for rel, func, source in _functions():
         if not _links_a_step_to_a_decision(func, source):
+            continue
+        if (rel, func.name) in DISPLAY_ONLY:
+            assert "released_for" in ast.get_source_segment(source, func), (
+                f"{rel} {func.name} shows another producer's decision on a step; it must mark "
+                "the step released_for that decision so its approval never releases the step")
             continue
         if _calls(func, PRODUCERS) or not _calls(func, {"open_step_decision"}):
             offenders.append(f"{rel}:{func.lineno} {func.name}")

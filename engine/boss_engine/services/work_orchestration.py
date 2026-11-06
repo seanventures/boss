@@ -1000,7 +1000,10 @@ class WorkOrchestrationService:
         limit: int = 100,
         estimated_cost_usd_micros: Optional[int] = None,
         order_by_value_density: bool = False,
+        ambient: Optional[bool] = None,
     ) -> list[dict[str, Any]]:
+        """`ambient` True/False narrows to/away from the work BOSS raised itself
+        (services/ambient/board.py); None lists the whole portfolio."""
         filters = ["project_id=:project_id"]
         params: dict[str, Any] = {
             "project_id": project_id,
@@ -1009,6 +1012,9 @@ class WorkOrchestrationService:
         if status:
             filters.append("status=:status")
             params["status"] = status
+        if ambient is not None:
+            filters.append("ambient = :ambient")
+            params["ambient"] = bool(ambient)
         rows = connection.execute(
             text(
                 f"""

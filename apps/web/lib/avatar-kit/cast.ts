@@ -75,6 +75,8 @@ export const CAST: readonly CastMember[] = [
   picked("archivist", "Archivist", ["dome", "page", "slate", "glasses"]),
   // The knowledge-graph case studies' roles (incident response, banking-regulatory, banking-aml).
   picked("incident_commander", "Incident Commander", ["siren", "flag", "coral", "slit"]),
+  // Autonomous agents (BOSSAPP-904): triages what BOSS notices and routes it.
+  picked("chief_of_staff", "Chief of Staff", ["crown", "compass", "blue", "band"]),
   picked("compliance_officer", "Compliance Officer", ["crest", "check", "slate", "glasses"]),
   picked("compliance_analyst", "Compliance Analyst", ["magnifier", "page", "blue", "lens"]),
   picked("pipeline_orchestrator", "Pipeline Orchestrator", ["antenna", "flag", "blue", "band"]),

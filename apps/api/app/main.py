@@ -26999,7 +26999,7 @@ def prepare_delivery_deploy_target(run_id: str, payload: WorkflowDeployTargetBod
 
         host = connection.execute(
             text("SELECT id, name, address, ssh_user, ssh_port, port_min, port_max, status "
-                 "FROM deployment_hosts WHERE id=:h AND project_id=:p"),
+                 f"FROM deployment_hosts WHERE id=:h AND {_usable_hosts()}"),
             {"h": host_id, "p": project_id},
         ).mappings().first()
         if not host:
@@ -31600,6 +31600,41 @@ from .routers.work_agreement import build_work_agreement_router
 app.include_router(build_work_agreement_router(
     engine=engine, settings=lambda: settings, require_reader=require_project_reader,
     actor_of=_delivery_workflow_actor))
+# AUTONOMOUS AGENTS (routers/ambient.py; docs/product/AUTONOMOUS_AGENTS_SPEC.md §7): the ambient
+# board, its flow graphs, the decision ledger, autonomy per task class, the envelope and the stop.
+from .routers.ambient import build_ambient_router
+
+
+def _ambient_org_actor(connection, claimed_actor: str | None) -> str:
+    """The install-wide stop/resume's actor: the enforced principal, or (legacy auth) a member who
+    may change agent autonomy in the default project."""
+    enforced = identity_guard.request_actor()
+    if enforced:
+        return enforced
+    return require_project_write_actor(connection, settings.default_project_id, claimed_actor,
+                                       "role_review")
+
+
+app.include_router(build_ambient_router(
+    engine=engine, settings=lambda: settings, require_reader=require_project_reader,
+    require_write_actor=require_project_write_actor, org_actor=_ambient_org_actor))
+# The AI SRE incident squad (routers/incident_squad.py, services/incident_squad.py).
+from .routers.incident_squad import build_incident_squad_router
+
+app.include_router(build_incident_squad_router(
+    engine=engine, settings=lambda: settings, require_write_actor=require_project_write_actor))
+# The Chief of Staff's tick, Discovery's dossier and the demo (routers/ambient_cos.py, §7.2).
+from .routers.ambient_cos import build_ambient_cos_router
+
+app.include_router(build_ambient_cos_router(
+    engine=engine, settings=lambda: settings, require_reader=require_project_reader,
+    require_write_actor=require_project_write_actor))
+# Continuous learning -> the Recommended roadmap, and outcomes (BOSSAPP-911/912).
+from .routers.ambient_learning import build_ambient_learning_router
+
+app.include_router(build_ambient_learning_router(
+    engine=engine, settings=lambda: settings, require_reader=require_project_reader,
+    require_write_actor=require_project_write_actor))
 from .routers.acceptance_templates import build_acceptance_templates_router
 
 app.include_router(build_acceptance_templates_router(
@@ -31978,3 +32013,10 @@ def _openapi_with_stable_operation_ids() -> dict[str, Any]:
 
 
 app.openapi = _openapi_with_stable_operation_ids
+
+
+def _usable_hosts(alias: str = "") -> str:
+    """deployment_fleet.usable_hosts_sql: a project's hosts include the ones its organisation shares."""
+    from boss_engine.services.deployment_fleet import usable_hosts_sql
+
+    return usable_hosts_sql(alias)

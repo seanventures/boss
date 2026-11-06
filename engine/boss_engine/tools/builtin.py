@@ -944,7 +944,7 @@ def _register_read_tools(reg: ToolRegistry) -> None:
                     "SELECT id, name, address, ssh_user, ssh_port, arch, status, labels, "
                     "       port_min, port_max, max_apps, last_preflight_at, last_preflight, "
                     "       key_secret_ref, key_public, admin_identity_file "
-                    "FROM deployment_hosts WHERE project_id=:p "
+                    f"FROM deployment_hosts WHERE {_usable_hosts()} "
                     "ORDER BY name LIMIT :l"
                 ),
                 {"p": pid, "l": limit},
@@ -7128,7 +7128,8 @@ def _register_role_experience_tools(reg: ToolRegistry) -> None:
         _obj({"role": {"type": "string",
                        "description": "the agent's role key; defaults to the caller"},
               "kind": {"type": "string",
-                       "enum": ["step", "stage", "seat", "chat", "approval", "handoff"]},
+                       "enum": ["step", "stage", "seat", "chat", "approval", "handoff",
+                                "decision"]},
               "limit": _LIMIT,
               "project_id": {"type": "string"}},
              []),
@@ -8925,3 +8926,10 @@ def build_discuss_read_registry(*, edition: str | None = None) -> ToolRegistry:
             )
         )
     return reg
+
+
+def _usable_hosts(alias: str = "") -> str:
+    """deployment_fleet.usable_hosts_sql: a project's hosts include the ones its organisation shares."""
+    from ..services.deployment_fleet import usable_hosts_sql
+
+    return usable_hosts_sql(alias)

@@ -203,6 +203,13 @@ def check_named(values: RequestValues, *, org_id: str, project_id: Optional[str]
         _confine_one(rule, object_id, org_id=org_id, project_id=project_id, db=db)
 
 
+#: Kinds that belong to the ORGANISATION, not to the project that recorded them. A verified
+#: deployment host is usable by every project in its org (deployment_fleet.usable_hosts_sql), so
+#: confining its id to the project that added it refused the host's own page in every other
+#: project ("Can't read this machine", helpdesk-ai on boss-dogfood's host, 2026-11-05).
+ORG_SHARED_KINDS = frozenset({"deployment_host"})
+
+
 def _confine_one(rule: Confine, object_id: str, *, org_id: str, project_id: Optional[str],
                  db: Any) -> None:
     found_any = False
@@ -211,7 +218,8 @@ def _confine_one(rule: Confine, object_id: str, *, org_id: str, project_id: Opti
         if found is None:
             continue
         found_any = True
-        if found[0] == org_id and (project_id is None or found[1] == project_id):
+        shared = kind in ORG_SHARED_KINDS
+        if found[0] == org_id and (project_id is None or shared or found[1] == project_id):
             return
     if found_any:
         raise Confined(rule, object_id)

@@ -45,7 +45,7 @@ const HOWS = Object.keys(LABELS);
 describe("the web renders exactly the API's edge label", () => {
   it("knows the engine's whole vocabulary (or this test proves nothing)", () => {
     expect(HOWS.sort()).toEqual(["approved", "asked_by_agent", "asked_by_person", "captain", "model_pick", "named",
-      "next_stage", "only_candidate", "only_holder", "run_actor", "seated", "started"]);
+      "next_stage", "only_candidate", "only_holder", "run_actor", "board", "seated", "signal", "started"].sort());
   });
 
   it.each(HOWS)("the Act card says %s as the API said it", (how) => {

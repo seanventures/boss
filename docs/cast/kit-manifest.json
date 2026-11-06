@@ -396,6 +396,14 @@
       "palette": "coral",
       "visor": "slit"
     },
+    "chief_of_staff": {
+      "kit": "boss-v1",
+      "seed": "chief_of_staff",
+      "hat": "crown",
+      "emblem": "compass",
+      "palette": "blue",
+      "visor": "band"
+    },
     "compliance_officer": {
       "kit": "boss-v1",
       "seed": "compliance_officer",

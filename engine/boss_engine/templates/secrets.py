@@ -470,6 +470,16 @@ def demo_login_values(c, *, org_id: str, project_id: str, app_key: str, env: str
             for r in rows if is_demo_login_name(r["name"])}
 
 
+def _is_the_projects_own_app(c, project_id: str, app_name: str) -> bool:
+    """Whether `app_name` is the project's own name and the project imports one primary repo."""
+    row = c.execute(text(
+        "SELECT p.name, (SELECT count(*) FROM github_repository_bindings b WHERE b.project_id = p.id "
+        "  AND b.role = 'primary' AND b.status = 'active') AS repos FROM projects p WHERE p.id = :p"),
+        {"p": project_id}).mappings().first()
+    return bool(row and row["repos"] == 1 and str(row["name"] or "").strip().lower()
+                == str(app_name or "").strip().lower())
+
+
 def deploy_target_demo_logins(c, settings, *, project_id: str, app_key: str) -> list[dict]:
     """The demo login passwords this app's DEPLOY TARGETS actually run with, when a stack deploy
     generated them from the app's own boss.deploy.yaml (`DEMO_PASSWORD: {generate: password}`):
@@ -499,6 +509,12 @@ def deploy_target_demo_logins(c, settings, *, project_id: str, app_key: str) -> 
             key = resolve_app_key(c, project_id, str(t["app_name"] or ""))
         except Exception:  # noqa: BLE001 — a target no app claims is not this app's
             key = None
+        if key is None and _is_the_projects_own_app(c, project_id, str(t["app_name"] or "")):
+            # AN IMPORTED PROJECT'S APP IS NAMED AFTER THE PROJECT (stack_deploy._imported_app_name)
+            # and has no app-links row, so its target matched no app: Setup › Demo logins showed
+            # only the Preview password and the deployed app refused it (helpdesk-ai-demo,
+            # 2026-11-06). A single-app imported project's target is that app's.
+            key = app_key
         if key != app_key:
             continue
         manifest = t["manifest"] if isinstance(t["manifest"], dict) else json.loads(t["manifest"] or "{}")

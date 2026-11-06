@@ -136,7 +136,7 @@ passport_presets:
     external_ceiling: {github: {contents: read, pull_requests: write}}
   - key: planner
     name: Planner
-    agents: [juno, atlas, keystone, rally, vector, cadence]
+    agents: [juno, atlas, keystone, rally, vector, cadence, marshal]
     permissions: [knowledge:read, code_task:read, code_task:create, meeting:read, meeting:convene, discovery:read,
                   discovery:create, workflow:read, workflow:create, workflow_run:read, workflow_run:start,
                   work_item:read, work_item:manage, decision:read, memory:read, memory:manage, spend:reserve,

@@ -378,7 +378,44 @@ def needs_from_app_dir(app_dir: Optional[Path]) -> dict[str, Need]:
             found.append(needs_from_env_example(example.read_text(errors="ignore")))
         except OSError:
             pass
+    for name in ("docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"):
+        compose = app_dir / name
+        if compose.is_file():
+            found.append(needs_from_compose(compose))
+            break
     return merge(*found)
+
+
+def needs_from_compose(path: Path) -> dict[str, Need]:
+    """The names a compose file's services take from the environment (`SESSION_SECRET:
+    ${SESSION_SECRET}`) that are BOSS's to mint: a session/signing key, generated; a demo login's
+    password, a demo login. Everything else there is the deploy's business, not a preview's.
+
+    HelpDesk AI's compose file reads SESSION_SECRET, which nothing else declares: its preview
+    died on "SESSION_SECRET must be set ... (BOSS generates one)" (prev_ec5be7a0201a47ad9143),
+    while an earlier build had passed only because its coder made the app mint its own."""
+    try:
+        import yaml
+
+        doc = yaml.safe_load(path.read_text(errors="ignore")) or {}
+    except Exception:  # noqa: BLE001 — an unreadable compose file declares nothing
+        return {}
+    out: dict[str, Need] = {}
+    services = doc.get("services") if isinstance(doc, Mapping) else None
+    for svc in (services or {}).values() if isinstance(services, Mapping) else ():
+        env = svc.get("environment") if isinstance(svc, Mapping) else None
+        if isinstance(env, Mapping):
+            names = [str(k) for k in env]
+        elif isinstance(env, list):
+            names = [str(e).split("=", 1)[0] for e in env]
+        else:
+            names = []
+        for name in names:
+            if _BOSS_OWNED_NAME.match(name):
+                out.setdefault(name, Need(name, "generated", True, path.name))
+            elif is_demo_login_name(name):
+                out.setdefault(name, Need(name, "demo", False, path.name))
+    return out
 
 
 def app_needs(c, *, project_id: str, app_key: Optional[str], app_dir: Optional[Path] = None,

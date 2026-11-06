@@ -1500,3 +1500,25 @@ def test_code_task_generic_failure_still_deadletters():
     names = [c[0] for c in client.calls]
     assert "fail" in names
     assert "complete" not in names
+
+
+def test_a_merge_the_api_could_not_perform_fails_the_job_instead_of_succeeding():
+    """helpdesk-ai-demo PR #1 (2026-11-06): the API answered "blocked" (no credentials for the
+    repository), the job was marked succeeded, and the approved PR stayed open with nothing said."""
+    leased_job = LeasedJob(
+        id="job_merge_blocked", project_id="boss-dogfood", task_id="tsk_test",
+        kind="github.pull_request.merge",
+        payload={"decision_id": "dec_merge", "dedupe_key": "merge-blocked",
+                 "pull_request_number": 1,
+                 "pull_request_url": "https://github.com/example-org/app/pull/1",
+                 "title": "Merge Demo", "branch_name": "boss/demo-pr"},
+        attempt=1, max_attempts=3, lease_token="lease_token", lease_expires_at="future",
+    )
+    client = FakeControlPlaneClient(leased_job)
+    client.merge_pull_request = lambda payload: (client.calls.append(("merge_pull_request", payload))
+                                                 or {"status": "blocked",
+                                                     "message": "No GitHub credentials for /"})
+    run_worker_cycle(client, SimpleNamespace(worker_id="worker-test", lease_ttl_seconds=60,
+                                             poll_interval_seconds=1))
+    names = [call[0] for call in client.calls]
+    assert "complete" not in names and names[-1] == "fail", names

@@ -39,8 +39,13 @@ def _short(sha: Optional[str]) -> str:
     return (sha or "")[:7] or "—"
 
 
+def _usable() -> str:
+    from ..services.deployment_fleet import usable_hosts_sql
+    return usable_hosts_sql()
+
+
 def _verified_host(db: Any, project_id: str) -> Optional[dict[str, Any]]:
-    row = db.execute(sql("SELECT id, name, address FROM deployment_hosts WHERE project_id = :p AND status = 'verified' "
+    row = db.execute(sql(f"SELECT id, name, address FROM deployment_hosts WHERE {_usable()} AND status = 'verified' "
                          "ORDER BY created_at LIMIT 1"), {"p": project_id}).mappings().first()
     return dict(row) if row else None
 

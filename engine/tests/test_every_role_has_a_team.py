@@ -25,7 +25,7 @@ def _shipped() -> dict[str, dict]:
 
 def test_every_shipped_role_names_a_shipped_team():
     roles = _shipped()
-    assert len(roles) == 55  # + the ten DQ pipeline role agents (dq_*), + rulebook analyst, + archivist (BOSSAPP-622), + incident_commander, + compliance_officer,
+    assert len(roles) == 56  # + chief_of_staff (BOSSAPP-904), + the ten DQ pipeline role agents (dq_*), + rulebook analyst, + archivist (BOSSAPP-622), + incident_commander, + compliance_officer,
     # + the KG pack role agents (compliance_analyst, pipeline_orchestrator, lane_agent,
     # remediation_advisor, aml_network_mapper, aml_analyst, sar_narrator, rulebook_analyst)
     shipped_teams = set(agent_identity.TEAM_KEYS) - {"yours"}

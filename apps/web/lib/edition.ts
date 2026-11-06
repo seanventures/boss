@@ -92,6 +92,8 @@ const V1_COMMUNITY_PRIMARY_NAV = new Set([
   "decisions",
   // BOSS fixes itself: the open-source wedge, so never a paid feature.
   "self_fixes",
+  // Agents at work: the marquee of autonomous agents (BOSSAPP-902) — what agents did on their own.
+  "agent_ops",
   "code_tasks",
   "budget",
   "enterprise",

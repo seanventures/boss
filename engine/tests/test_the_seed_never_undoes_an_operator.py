@@ -39,6 +39,10 @@ WRITERS = {
     "services/agents.py::create_agent": "operator",
     "services/agents.py::grant_mcp": "operator",
     "services/specpack.py::_upsert_role_spec": "seed",
+    # Load demo on a DEMO project (ambient/demo.load_all → squad_demo): a seed that adds the
+    # four CVE-squad roles only where the project has none (ON CONFLICT DO NOTHING) and asks
+    # seed_exclusions first, so a role an operator removed is never brought back.
+    "services/ambient/squad_demo.py::ensure_demo_roles": "seed",
 }
 
 #: Every place one of the writers above is called from, and why that is safe.
@@ -48,6 +52,7 @@ CALLERS = {
     "services/skill_definitions.py::sync_role_skills -> assign_skill_to_role": "seed path below",
     "services/specpack.py::* -> _upsert_role_spec": "the writer itself asks seed_exclusions",
     "services/agent_studio.py::_seed_agent -> _upsert_role_spec": "seed path below",
+    "services/ambient/squad_demo.py::seed -> ensure_demo_roles": "seed path below",
     "services/agent_instructions.py::skill_from_file -> assign_skill_to_role":
         "operator: a person imports a guide and explicitly grants it in the same transaction",
     "services/skill_packaging.py::import_mcp -> ensure_mcp_server":
@@ -123,6 +128,7 @@ SEED_PATHS = [
     __import__("boss_engine.services.shipped_cast", fromlist=["x"])._ensure_builtin_mcp_servers,
     __import__("boss_engine.services.kit", fromlist=["x"]).sync_role_abilities,
     __import__("boss_engine.services.kit", fromlist=["x"])._grant_quietly,
+    __import__("boss_engine.services.ambient.squad_demo", fromlist=["x"]).ensure_demo_roles,
 ]
 
 
@@ -228,6 +234,8 @@ SPEC_WRITERS = {
     "services/agents.py::update_agent": "operator",
     # Fills only ABSENT persona/MCP fields, and asks whether the operator edited the role.
     "services/shipped_cast.py::install_or_fill": "seed",
+    # Load demo on a demo project: inserts a missing role only, never updates one (see WRITERS).
+    "services/ambient/squad_demo.py::ensure_demo_roles": "seed",
 }
 
 
