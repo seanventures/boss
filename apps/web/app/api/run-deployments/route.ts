@@ -85,9 +85,9 @@ function acquireProcessSlot(deadline: number): Promise<(() => void) | null> {
   });
 }
 
-async function lookupDeployment(
+function lookupDeployment(
   id: string, name: string, remainingMs: number,
-): Promise<RunEntry> {
+): { result: Promise<RunEntry>; done: Promise<void> } {
   const controller = new AbortController();
   const timeoutError = { error: "deployment lookup timed out" };
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -113,11 +113,11 @@ async function lookupDeployment(
       return [id, { error: String((error as Error)?.message ?? error) }];
     }
   })();
-  try {
-    return await Promise.race([request, timedOut]);
-  } finally {
+  const result = Promise.race([request, timedOut]).finally(() => {
     if (timer !== undefined) clearTimeout(timer);
-  }
+  });
+  const done = request.then(() => undefined, () => undefined);
+  return { result, done };
 }
 
 export async function GET(req: Request) {
@@ -156,24 +156,46 @@ export async function GET(req: Request) {
   const results: RunEntry[] = ids.map((id) => [id, { error: "deployment lookup budget exhausted" }]);
   let next = 0;
   async function worker() {
-    while (next < ids.length) {
-      if (Date.now() >= deadline) return;
+    while (next < ids.length && Date.now() < deadline) {
       const index = next++;
       const release = await acquireProcessSlot(deadline);
       if (!release) return;
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) {
+        release();
+        return;
+      }
+      const lookup = lookupDeployment(ids[index], names[index], remainingMs);
       try {
-        const remainingMs = deadline - Date.now();
-        if (remainingMs > 0) {
-          results[index] = await lookupDeployment(ids[index], names[index], remainingMs);
-        }
+        results[index] = await lookup.result;
       } finally {
+        // Abort does not release the API connection. The next id waits until this
+        // read settles so a hang cannot overlap another upstream read on the same slot.
+        if (next >= ids.length || Date.now() >= deadline) {
+          void lookup.done.finally(release);
+          return;
+        }
+        await lookup.done;
         release();
       }
     }
   }
-  await Promise.all(Array.from(
-    { length: Math.min(MAX_CONCURRENT_LOOKUPS, ids.length) }, () => worker(),
-  ));
+  const workers = Array.from(
+    { length: Math.min(MAX_CONCURRENT_LOOKUPS, ids.length) },
+    () => worker(),
+  );
+  // A read that ignores abort must not hold the HTTP response open until the API's
+  // own 30s failure. The slot stays occupied until that read settles.
+  await new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, Math.max(0, deadline - Date.now()));
+    void Promise.all(workers).then(() => {
+      clearTimeout(timer);
+      resolve();
+    }, () => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
 
   return NextResponse.json({ runs: Object.fromEntries(results) });
 }
