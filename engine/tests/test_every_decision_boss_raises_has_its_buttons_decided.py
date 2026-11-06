@@ -52,6 +52,11 @@ NO_ACTION_BY_DESIGN = {
     # A live app secret awaiting a person (templates.secrets): Approve records the approval,
     # and a deploy reads it (_live_approved) before passing the live value. No follow-on.
     ("engine/boss_engine/templates/secrets.py", "_live_decision"),
+    # An autonomous agent's Needs-you card (ambient/board.needs_you): the asker's own action
+    # rides in the recommendation (a squad's proposal, ambient_route, incident_squad.mitigate)
+    # and decision_actions.is_ambient_card classifies it by work_item_id + asked_by: the answer
+    # is carried out by ambient/answers.on_answered (test_an_ambient_card_is_carried_out).
+    ("engine/boss_engine/services/ambient/board.py", "needs_you"),
 }
 
 #: Functions that write a decision row themselves instead of through create_blocking_decision.
@@ -544,3 +549,10 @@ def test_the_classification_sets_do_not_overlap():
     for i, a in enumerate(groups):
         for b in groups[i + 1:]:
             assert not (a & b), a & b
+
+
+def test_an_ambient_card_is_carried_out():
+    card = {"recommendation": {"action": "start_workflow", "work_item_id": "work_1",
+                               "asked_by": "agent:security_reviewer", "proposal_id": "wim_1"}}
+    assert da.carries_out_on_approval(card) and da.consumes_revision(card)
+    assert not da.carries_out_on_approval({"recommendation": {"action": "start_workflow"}})

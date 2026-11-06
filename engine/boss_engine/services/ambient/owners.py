@@ -54,6 +54,8 @@ SQUAD_RECHECK_MINUTES = 30
 #: Default items worked per tick, install-wide (BOSS_AMBIENT_SQUAD_ITEMS overrides).
 DEFAULT_ITEMS_PER_TICK = 3
 NO_SQUAD = "No squad could be seated"
+#: pg advisory lock key for the owners' turn ("ambient owners").
+LOCK_KEY = 0x0A0B5E
 
 
 def enabled(settings: Any) -> bool:
@@ -172,11 +174,32 @@ def work(engine: Any, settings: Any, *, project_id: Optional[str] = None,
     `model`/`decider`/`launchers` reach squad_turns (tests and demos pass scripted ones; None =
     the project's routed model through the one agent path and the real tool doors);
     `incident_mind`/`incident_effects` reach the incident squad the same way."""
-    from .. import incident_squad
-
     report: dict[str, Any] = {"worked": [], "watching": {}}
     if not enabled(settings):
         return {**report, "skipped": "BOSS_AMBIENT_SQUADS=0"}
+    # ONE OWNERS' TURN AT A TIME, install-wide. The worker knocks every minute over HTTP with a
+    # 30 s timeout while a squad's turns may take longer: a second tick must not run the same
+    # squad beside the first (both would hold the lead's token). A session-level advisory lock
+    # on a connection of its own, held for the whole turn; a tick that cannot take it skips.
+    with engine.connect() as guard:
+        if not guard.execute(text("SELECT pg_try_advisory_lock(:k)"), {"k": LOCK_KEY}).scalar():
+            return {**report, "skipped": "busy"}
+        try:
+            return _work(engine, settings, report, project_id=project_id, limit=limit,
+                         model=model, decider=decider, launchers=launchers,
+                         incident_mind=incident_mind, incident_effects=incident_effects,
+                         rounds=rounds)
+        finally:
+            guard.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": LOCK_KEY})
+            guard.commit()
+
+
+def _work(engine: Any, settings: Any, report: dict[str, Any], *, project_id: Optional[str],
+          limit: Optional[int], model: Any, decider: Any,
+          launchers: Optional[squad_plugins.Launchers], incident_mind: Any,
+          incident_effects: Any, rounds: int) -> dict[str, Any]:
+    from .. import incident_squad
+
     with engine.begin() as c:
         if policy.stop_state(c, None)["stopped"]:
             return {**report, "skipped": "stopped"}

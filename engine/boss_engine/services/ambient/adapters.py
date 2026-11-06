@@ -38,6 +38,8 @@ from typing import Any, Iterable, Mapping, Optional
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
+from ..decision_actions import OPEN_STATUSES
+
 from .signals import adapter
 
 #: Every adapter reads one project when the sweep names one, else the whole install.
@@ -192,10 +194,11 @@ def stale_prs(connection: Connection, since: Any,
         "d.id AS decision_id, d.created_at AS asked_at, "
         "floor(EXTRACT(EPOCH FROM (now() - d.created_at)) / 86400)::int AS days "
         "FROM code_task_runs c JOIN decisions d ON d.id = c.decision_id "
-        "WHERE c.pull_request_url IS NOT NULL AND d.status IN ('pending', 'delegated') "
+        "WHERE c.pull_request_url IS NOT NULL AND d.status = ANY(:open_statuses) "
         "AND d.created_at < now() - make_interval(days => :n) "
         f"{_SCOPE.format(t='c.')} ORDER BY d.created_at LIMIT 200"),
-        {"n": STALE_PR_DAYS, "p": project_id}).mappings().all()
+        {"n": STALE_PR_DAYS, "p": project_id,
+         "open_statuses": sorted(OPEN_STATUSES)}).mappings().all()
     for r in rows:
         number = f"#{r['pull_request_number']}" if r["pull_request_number"] else "PR"
         yield {

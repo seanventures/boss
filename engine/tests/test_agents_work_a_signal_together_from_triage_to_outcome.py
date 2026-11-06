@@ -245,3 +245,17 @@ def test_load_demo_populates_every_story_on_a_fresh_demo_project(eng, project, m
     assert len(joined) >= 2
     again = demo.load_all(eng, settings(), project_id=project, actor=PERSON)
     assert "order_api_incident" in again["skipped"]
+
+
+def test_a_second_owners_turn_waits_for_the_first(eng, project):
+    """The worker's HTTP knock times out before a long squad turn ends; the next knock must not
+    run the same squads beside it."""
+    with eng.connect() as holder:
+        assert holder.execute(text("SELECT pg_try_advisory_lock(:k)"),
+                              {"k": owners.LOCK_KEY}).scalar()
+        try:
+            assert owners.work(eng, settings(), project_id=project)["skipped"] == "busy"
+        finally:
+            holder.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": owners.LOCK_KEY})
+            holder.commit()
+    assert "skipped" not in owners.work(eng, settings(), project_id=project)

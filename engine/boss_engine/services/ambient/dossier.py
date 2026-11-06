@@ -43,6 +43,8 @@ from typing import Any, Callable, Iterable, Mapping, Optional
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
+from ..decision_actions import OPEN_STATUSES
+
 from ._common import clean_text, emit, new_id, serialize_row
 
 log = logging.getLogger(__name__)
@@ -363,8 +365,9 @@ def boss_view(connection: Connection, project_id: str, repo: str) -> dict[str, A
     prs = connection.execute(text(
         "SELECT c.pull_request_url, c.title FROM code_task_runs c JOIN decisions d ON "
         "d.id = c.decision_id WHERE c.project_id = :p AND c.pull_request_url ILIKE :r "
-        "AND d.status IN ('pending', 'delegated') ORDER BY c.created_at DESC LIMIT 5"),
-        {"p": project_id, "r": f"%github.com/{repo}/pull/%"}).mappings().all()
+        "AND d.status = ANY(:open_statuses) ORDER BY c.created_at DESC LIMIT 5"),
+        {"p": project_id, "r": f"%github.com/{repo}/pull/%",
+         "open_statuses": sorted(OPEN_STATUSES)}).mappings().all()
     items = int(connection.execute(text(
         "SELECT count(*) FROM work_items WHERE project_id = :p AND ambient "
         "AND lifecycle IN ('proposed', 'claimed', 'in_progress', 'needs_you')"),

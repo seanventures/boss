@@ -58,6 +58,8 @@ from typing import Any, Iterable, Mapping, Optional, Sequence
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
+from ..decision_actions import OPEN_STATUSES
+
 from . import board, collab, guards, ledger, policy, signals
 from . import task_classes as tc
 from ._common import clean_text, now, person
@@ -455,13 +457,14 @@ def run_already_asks(connection: Connection, project_id: str,
         return None
     return connection.execute(text(
         "SELECT d.id FROM decisions d WHERE d.project_id = :p "
-        "AND d.status IN ('pending', 'delegated') AND ("
+        "AND d.status = ANY(:open) AND ("
         " d.recommendation->>'workflow_run_id' = ANY(:r) OR d.recommendation->>'run_id' = ANY(:r)"
         " OR d.id IN (SELECT decision_id FROM workflow_step_runs WHERE workflow_run_id = ANY(:r) "
         "   AND decision_id IS NOT NULL)"
         " OR d.id IN (SELECT decision_id FROM code_task_runs WHERE id = ANY(:r) "
         "   AND decision_id IS NOT NULL)) "
-        "ORDER BY d.created_at DESC LIMIT 1"), {"p": project_id, "r": sorted(runs)}).scalar()
+        "ORDER BY d.created_at DESC LIMIT 1"),
+        {"p": project_id, "r": sorted(runs), "open": sorted(OPEN_STATUSES)}).scalar()
 
 
 # ── project-less signals ─────────────────────────────────────────────────────────────────────
@@ -697,7 +700,7 @@ _ANSWERED = (
     "FROM work_items w JOIN decisions d ON d.id = w.needs_you_decision_id "
     "JOIN agent_act_decisions x ON x.act_id = d.recommendation->>'act_id' "
     "WHERE w.project_id = :p AND w.ambient AND w.lifecycle IN ('needs_you', 'proposed') "
-    "AND d.recommendation->>'asked_by' = :cos AND d.status NOT IN ('pending', 'delegated') "
+    "AND d.recommendation->>'asked_by' = :cos AND NOT (d.status = ANY(:open_statuses)) "
     "AND x.outcome IS NULL AND (CAST(:w AS TEXT) IS NULL OR w.id = :w) "
     "ORDER BY d.updated_at LIMIT 50")
 
@@ -738,7 +741,8 @@ def _answered_rows(connection: Connection, project_id: Optional[str],
     return [dict(r) for r in connection.execute(text(_ANSWERED.replace(
         "WHERE w.project_id = :p", "WHERE (CAST(:p AS TEXT) IS NULL OR w.project_id = :p)")
         .replace("SELECT w.id,", "SELECT w.id, w.project_id,")),
-        {"p": project_id, "cos": PARTY, "w": item_id}).mappings()]
+        {"p": project_id, "cos": PARTY, "w": item_id,
+         "open_statuses": sorted(OPEN_STATUSES)}).mappings()]
 
 
 def carry_answer(connection: Connection, *, item_id: str,
@@ -834,11 +838,11 @@ def projects_with_work(connection: Connection, limit: int = MAX_PROJECTS_PER_TIC
         "SELECT project_id FROM (SELECT project_id FROM signals WHERE status = 'new' "
         "AND project_id IS NOT NULL UNION SELECT w.project_id FROM work_items w "
         "JOIN decisions d ON d.id = w.needs_you_decision_id WHERE w.ambient "
-        "AND w.lifecycle IN ('needs_you', 'proposed') AND d.status NOT IN ('pending', "
-        "'delegated') AND d.recommendation->>'asked_by' IS NOT NULL "
+        "AND w.lifecycle IN ('needs_you', 'proposed') AND NOT (d.status = ANY(:open_statuses)) "
+        "AND d.recommendation->>'asked_by' IS NOT NULL "
         "AND (d.recommendation->>'asked_by' = :cos OR w.lifecycle = 'needs_you')) x "
         "JOIN projects p ON p.id = x.project_id ORDER BY project_id LIMIT :n"),
-        {"cos": PARTY, "n": limit}).scalars().all()
+        {"cos": PARTY, "n": limit, "open_statuses": sorted(OPEN_STATUSES)}).scalars().all()
     return [str(r) for r in rows]
 
 
