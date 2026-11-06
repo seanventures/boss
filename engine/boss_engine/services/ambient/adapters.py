@@ -9,14 +9,16 @@ Chief-of-Staff, BOSSAPP-904). What it does decide is IDENTITY:
 * the FINGERPRINT — what makes two observations the same problem (the same alert rule on the
   same app; the same step failing the same way in the same workflow; the same doctor finding);
 * the SOURCE_REF — what makes one observation distinct from a re-read of the same row (an
-  alert's id AND its fire count, so a re-fire is a new occurrence and a re-sweep is not).
+  alert's id AND its fire count, so a re-fire is a new occurrence and a re-sweep is not);
+* the `_cursor` — the value of the column it filtered `since` on, so a sweep that hit an
+  adapter's row limit resumes after the last row it read instead of skipping the rest.
 
 The stores and why each is a signal (design §3.3 gap 1, §5):
 
   app_alerts           alert.firing          firing app alerts, BOSS's own rules, pushed app
                                              signals (incident_signals) and external sources
   workflow_failures    workflow.step_failed  failed/deadlettered workflow steps
-                       build.failed          failed code-task builds
+  build_failures       build.failed          failed code-task builds
   system_doctor        doctor.<kind>         open system_findings (install-wide)
   shepherd             shepherd.escalation   open shepherd escalations (a run that needs a call)
   stale_prs            pr.stale              a BOSS PR whose merge question has waited days
@@ -64,10 +66,11 @@ def app_alerts(connection: Connection, since: Any,
     rows = connection.execute(text(
         "SELECT a.id, a.project_id, a.fingerprint, a.alertname, a.labels, a.annotations, "
         "a.urgency, a.fire_count, a.value, a.threshold, a.unit, a.source_kind, a.subject_id, "
-        "COALESCE(a.fired_at, a.active_at) AS fired_at, t.app_name "
+        "COALESCE(a.fired_at, a.active_at) AS fired_at, t.app_name, "
+        "COALESCE(a.last_eval_at, a.fired_at, a.active_at) AS seen_at "
         "FROM app_alerts a LEFT JOIN deployment_targets t ON t.id = a.target_id "
         "WHERE a.state = 'firing' AND COALESCE(a.last_eval_at, a.fired_at, a.active_at) > :s "
-        f"{_SCOPE.format(t='a.')} ORDER BY a.active_at LIMIT 500"),
+        f"{_SCOPE.format(t='a.')} ORDER BY seen_at LIMIT 500"),
         {"s": since, "p": project_id}).mappings().all()
     for r in rows:
         labels = r["labels"] or {}
@@ -84,6 +87,7 @@ def app_alerts(connection: Connection, since: Any,
                                   f"{r['unit'] or ''}"}],
             "source_ref": f"app_alert:{r['id']}#{int(r['fire_count'] or 1)}",
             "observed_at": r["fired_at"], "dedupe_window_seconds": 3600,
+            "_cursor": r["seen_at"],
         }
 
 
@@ -109,8 +113,13 @@ def workflow_failures(connection: Connection, since: Any,
             "evidence": [{"kind": "step_run", "ref": r["id"], "note": klass},
                          {"kind": "workflow_run", "ref": r["workflow_run_id"]}],
             "source_ref": f"step_run:{r['id']}:{r['status']}", "observed_at": r["updated_at"],
-            "dedupe_window_seconds": 6 * 3600,
+            "dedupe_window_seconds": 6 * 3600, "_cursor": r["updated_at"],
         }
+
+
+@adapter("build_failures")
+def build_failures(connection: Connection, since: Any,
+                   project_id: Optional[str] = None) -> Iterable[dict[str, Any]]:
     builds = connection.execute(text(
         "SELECT id, project_id, title, error, updated_at FROM code_task_runs "
         f"WHERE status = 'failed' AND updated_at > :s {_SCOPE.format(t='')} "
@@ -124,7 +133,7 @@ def workflow_failures(connection: Connection, since: Any,
             "subject_kind": "code_task", "subject_id": r["id"], "severity": "medium",
             "evidence": [{"kind": "code_task", "ref": r["id"], "note": r["title"]}],
             "source_ref": f"code_task:{r['id']}:failed", "observed_at": r["updated_at"],
-            "dedupe_window_seconds": 6 * 3600,
+            "dedupe_window_seconds": 6 * 3600, "_cursor": r["updated_at"],
         }
 
 
@@ -136,7 +145,7 @@ def system_doctor(connection: Connection, since: Any,
         "WHERE status IN ('open', 'snoozed') AND last_seen > :s "
         # a finding with no project is install-wide: every project's sweep may see it
         "AND (CAST(:p AS TEXT) IS NULL OR project_id = :p OR project_id IS NULL) "
-        "ORDER BY first_seen LIMIT 200"), {"s": since, "p": project_id}).mappings().all()
+        "ORDER BY last_seen LIMIT 200"), {"s": since, "p": project_id}).mappings().all()
     for r in rows:
         yield {
             "project_id": r["project_id"], "source": "doctor", "kind": f"doctor.{r['kind']}",
@@ -146,6 +155,7 @@ def system_doctor(connection: Connection, since: Any,
                 str(r["severity"]), "medium"),
             "evidence": [{"kind": "finding", "ref": r["id"]}],
             "source_ref": f"system_finding:{r['id']}", "observed_at": r["first_seen"],
+            "_cursor": r["last_seen"],
         }
 
 
@@ -163,6 +173,7 @@ def shepherd(connection: Connection, since: Any,
             "subject_kind": "task", "subject_id": r["task_ref"], "severity": "high",
             "evidence": [{"kind": "escalation", "ref": r["id"]}],
             "source_ref": f"shepherd_escalation:{r['id']}", "observed_at": r["created_at"],
+            "_cursor": r["created_at"],
         }
 
 
@@ -199,4 +210,5 @@ def stale_prs(connection: Connection, since: Any,
 def register() -> list[str]:
     """The built-in adapters register on import (the decorators above); calling this is how the
     sweep makes sure that import happened. Returns their names."""
-    return ["app_alerts", "workflow_failures", "system_doctor", "shepherd", "stale_prs"]
+    return ["app_alerts", "workflow_failures", "build_failures", "system_doctor", "shepherd",
+            "stale_prs"]

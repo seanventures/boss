@@ -9,7 +9,7 @@ This package is that layer. It adds no executor and no second decision engine: a
 decide through the one agent path, and work still runs as workflows and builds.
 
     signals.py      one normalised, deduplicated signal inbox + the pull-adapter sweep
-    adapters.py     the first five adapters (app alerts, failed steps/builds, the doctor,
+    adapters.py     the first adapters (app alerts, failed steps, failed builds, the doctor,
                     shepherd escalations, stale PRs)
     board.py        ambient work items on work_items: lifecycle, owner leases, takeover, links
     collab.py       typed board messages and consensus by risk

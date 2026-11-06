@@ -9,6 +9,7 @@ occurrence of the same signal; one broken store is reported and never stops the 
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from sqlalchemy import text
@@ -89,10 +90,12 @@ def test_failed_steps_fold_by_workflow_step_and_error_shape_and_a_failed_build_i
         c.execute(text("INSERT INTO code_task_runs (id, project_id, title, status, error) VALUES "
                        "(:i, :p, 'Fix the cart', 'failed', 'pytest: 3 failed')"),
                   {"i": f"crun_{uuid4().hex[:8]}", "p": project})
-        report = signals.sweep(c, project_id=project, only=["workflow_failures"])
+        report = signals.sweep(c, project_id=project, only=["workflow_failures",
+                                                             "build_failures"])
         rows = c.execute(text("SELECT kind, title, severity, occurrences FROM signals WHERE "
                               "project_id = :p ORDER BY title"), {"p": project}).mappings().all()
-    assert report["workflow_failures"]["outcomes"] == {"created": 3, "repeat": 1}
+    assert report["workflow_failures"]["outcomes"] == {"created": 2, "repeat": 1}
+    assert report["build_failures"]["outcomes"] == {"created": 1}
     steps = [r for r in rows if r["kind"] == "workflow.step_failed"]
     assert [(r["title"], r["occurrences"], r["severity"]) for r in steps] == [
         ("Step build failed in Ship it", 2, "medium"),
@@ -170,7 +173,22 @@ def test_one_broken_store_is_reported_and_the_others_still_sweep(eng, project, m
         "a failed adapter's cursor does not move: its rows are read again next time"
 
 
-def test_the_five_built_in_adapters_are_registered():
+def test_a_sweep_that_hits_an_adapters_row_limit_resumes_after_the_last_row_it_read(
+        eng, project, monkeypatch):
+    rows = [{"project_id": project, "source": "scan", "kind": "scan.todo", "title": f"TODO {i}",
+             "fingerprint_parts": ("todo", i), "source_ref": f"todo:{i}",
+             "_cursor": datetime.now(timezone.utc) - timedelta(hours=5 - i)} for i in range(3)]
+    monkeypatch.setitem(signals.ADAPTERS, "limited", lambda c, since, p=None: rows[:2])
+    with eng.begin() as c:
+        signals.sweep(c, project_id=project, only=["limited"])
+        cursor = c.execute(text("SELECT cursor_at FROM signal_adapter_cursors WHERE adapter = :a"),
+                           {"a": f"limited@{project}"}).scalar()
+        c.execute(text("DELETE FROM signal_adapter_cursors WHERE adapter LIKE :a"),
+                  {"a": f"%@{project}"})
+    assert cursor == rows[1]["_cursor"], "the cursor is the last row read, not the sweep's start"
+
+
+def test_the_built_in_adapters_are_registered():
     assert set(adapters.register()) <= set(signals.ADAPTERS)
     assert adapters.error_class("Timeout after 600s on crun_abc12345") == \
         adapters.error_class("Timeout after 900s on crun_9f9f9f9f")

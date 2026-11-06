@@ -289,10 +289,18 @@ def sweep(connection: Connection, *, project_id: Optional[str] = None,
         since = (cursor - CURSOR_OVERLAP) if cursor else (started - FIRST_LOOKBACK)
         outcomes: dict[str, int] = {}
         error = None
+        # THE NEXT CURSOR is the newest `_cursor` the adapter yielded (the column it filtered on),
+        # so an adapter that hit its row limit resumes after the last row it read; an adapter
+        # that yields no cursor (state-based, like stale PRs) moves to the sweep's start.
+        seen: list[Any] = []
         try:
             with connection.begin_nested():
                 for observation in ADAPTERS[name](connection, since, project_id):
-                    result = record_signal(connection, actor=actor, **dict(observation))
+                    fields = dict(observation)
+                    mark = fields.pop("_cursor", None)
+                    if mark is not None:
+                        seen.append(mark)
+                    result = record_signal(connection, actor=actor, **fields)
                     outcomes[result["outcome"]] = outcomes.get(result["outcome"], 0) + 1
         except Exception as exc:  # noqa: BLE001 — one store's failure is reported, not raised
             error = f"{type(exc).__name__}: {exc}"[:500]
@@ -304,6 +312,7 @@ def sweep(connection: Connection, *, project_id: Optional[str] = None,
             "cursor_at = CASE WHEN EXCLUDED.last_error IS NULL THEN EXCLUDED.cursor_at ELSE "
             "signal_adapter_cursors.cursor_at END, last_run_at = now(), "
             "last_recorded = EXCLUDED.last_recorded, last_error = EXCLUDED.last_error"),
-            {"a": key, "c": started, "n": outcomes.get("created", 0), "e": error})
+            {"a": key, "c": max(seen) if seen else started, "n": outcomes.get("created", 0),
+             "e": error})
         report[name] = {"since": iso(since), "outcomes": outcomes, "error": error}
     return report
