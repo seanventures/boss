@@ -11,12 +11,15 @@ ledger.record_decision writes `decision`, board.finish writes `resolve`). `a2a.p
 
     finding     {summary, evidence[]}
     hypothesis  {summary, confidence 0..1, evidence[]}
-    proposal    {action (catalogue), summary, verify?, undo?, confidence?}
+    proposal    {action (catalogue), summary, verify?, undo?, confidence?, workflow?}
     critique    reply_to=<proposal>  {position: agree|object|concern|unsafe, summary}
     vote        reply_to=<proposal>  {vote: approve|reject|abstain, reason?}   one per voter
-    handoff     {to: <party>, summary}
+    handoff     {to: <party>, summary, seat?: lead, via?: {kind, ref}, packet?: {...}}
+                (a lead handing the lead on; work handed to a workflow or a panel `via` its
+                run, with the packet it carries; a result handed back `returned_from` it)
     escalate    {to: <party>, reason}
     claim / decision / resolve       written by board / ledger only
+    squad       {template, lead, members[{party, seat, why}], unfilled[]}  squads.assemble only
 
 NO HERDING (design §11.4): a vote never reads another agent's vote before casting its own.
 `messages(..., viewer=...)` hides the votes on a proposal from a viewer who has not voted on it
@@ -53,7 +56,10 @@ from ._common import (clean_text, emit, new_id, party, party_kind, serialize_row
                       verify_evidence)
 
 KINDS = ("claim", "finding", "hypothesis", "proposal", "critique", "vote", "decision", "handoff",
-         "escalate", "resolve")
+         "escalate", "resolve", "squad")
+#: What a handoff may travel through: a workflow run (execute) or a panel (deliberate).
+VIA_KINDS = ("workflow_run", "meeting", "code_task")
+SEATS = ("lead", "specialist", "critic")
 #: Kinds anyone on the item may post; the rest are written by the board's own moves.
 OPEN_KINDS = frozenset({"finding", "hypothesis", "proposal", "critique", "vote", "handoff",
                         "escalate"})
@@ -121,6 +127,9 @@ def _body(connection: Connection, project_id: str, kind: str, body: Mapping[str,
                 "action": clean_text(b["undo"], 120)}
         if b.get("confidence") is not None:
             out["confidence"] = round(float(b["confidence"]), 3)
+        if b.get("workflow"):
+            # The workflow a start_workflow / open_draft_pr proposal hands the work to.
+            out["workflow"] = clean_text(b["workflow"], 80)
         return out
     if kind in ("critique", "vote"):
         if reply is None or reply["kind"] != "proposal":
@@ -142,12 +151,41 @@ def _body(connection: Connection, project_id: str, kind: str, body: Mapping[str,
             raise ValueError(f"no decision {act_id}")
         return {"act_id": act_id, "chosen": found[0]}
     if kind == "handoff":
-        return {"to": party(b.get("to")), "from": b.get("from"),
-                "summary": clean_text(b.get("summary"), 300)}
+        out = {"to": party(b.get("to")), "from": b.get("from"),
+               "summary": clean_text(b.get("summary"), 300)}
+        if b.get("seat"):
+            if b["seat"] not in SEATS:
+                raise ValueError(f"a handoff's seat is one of {', '.join(SEATS)}")
+            out["seat"] = b["seat"]
+        for key in ("via", "returned_from"):
+            if b.get(key):
+                ref = b[key] if isinstance(b[key], Mapping) else {}
+                if ref.get("kind") not in VIA_KINDS or not str(ref.get("ref") or "").strip():
+                    raise ValueError(f"a handoff's {key} is {{kind: {'|'.join(VIA_KINDS)}, ref}}")
+                out[key] = {"kind": ref["kind"], "ref": clean_text(ref["ref"], 120)}
+        if b.get("packet"):
+            if not isinstance(b["packet"], Mapping):
+                raise ValueError("a handoff packet is an object")
+            out["packet"] = json.loads(json.dumps(dict(b["packet"]), default=str))
+        return out
     if kind == "escalate":
         return {"to": party(b.get("to")), "reason": need("reason", 300)}
     if kind == "resolve":
         return {"outcome": need("outcome", 60), "summary": clean_text(b.get("summary"), 300)}
+    if kind == "squad":
+        members = []
+        for m in b.get("members") or ():
+            if m.get("seat") not in SEATS:
+                raise ValueError(f"a squad seat is one of {', '.join(SEATS)}")
+            members.append({"party": party(m.get("party"), allow_boss=False), "seat": m["seat"],
+                            "why": clean_text(m.get("why"), 120)})
+        leads = [m["party"] for m in members if m["seat"] == "lead"]
+        if len(leads) != 1:
+            raise ValueError("a squad has exactly one lead")
+        return {"template": need("template", 60), "lead": leads[0], "members": members,
+                "unfilled": [{"seat": clean_text(u.get("seat"), 20),
+                              "reason": clean_text(u.get("reason"), 200)}
+                             for u in b.get("unfilled") or ()]}
     raise ValueError(f"a message kind is one of {', '.join(KINDS)}")
 
 

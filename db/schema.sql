@@ -10955,7 +10955,8 @@ CREATE TABLE IF NOT EXISTS work_item_messages (
   project_id TEXT NOT NULL,
   work_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
   kind TEXT NOT NULL CHECK (kind IN ('claim', 'finding', 'hypothesis', 'proposal', 'critique',
-                                     'vote', 'decision', 'handoff', 'escalate', 'resolve')),
+                                     'vote', 'decision', 'handoff', 'escalate', 'resolve',
+                                     'squad')),
   sender TEXT NOT NULL,                      -- agent:<role> | person:<id> | policy:<id> | boss
   body JSONB NOT NULL DEFAULT '{}'::jsonb,
   reply_to TEXT REFERENCES work_item_messages(id) ON DELETE CASCADE,
@@ -10968,6 +10969,19 @@ CREATE INDEX IF NOT EXISTS idx_work_item_messages_item ON work_item_messages (wo
 -- One vote per voter per proposal: a voter changing its mind posts a critique, not a 2nd vote.
 CREATE UNIQUE INDEX IF NOT EXISTS uq_work_item_messages_vote
   ON work_item_messages (reply_to, sender) WHERE kind = 'vote';
+-- THE SQUAD ON THE BOARD (BOSSAPP-908, ambient/squads.py): the roster assembled for an item is
+-- itself a board message (kind 'squad'), so who was seated, why, and what could not be filled
+-- is on the same append-only record the diagram draws. Older installs get the kind added here.
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'work_item_messages_kind_check'
+             AND conrelid = 'work_item_messages'::regclass
+             AND pg_get_constraintdef(oid) NOT LIKE '%squad%') THEN
+    ALTER TABLE work_item_messages DROP CONSTRAINT work_item_messages_kind_check;
+    ALTER TABLE work_item_messages ADD CONSTRAINT work_item_messages_kind_check
+      CHECK (kind IN ('claim', 'finding', 'hypothesis', 'proposal', 'critique', 'vote',
+                      'decision', 'handoff', 'escalate', 'resolve', 'squad'));
+  END IF;
+END $$;
 
 -- THE DECISION LEDGER (design §11.2; BOSSAPP-906). A decision is an ACT: agent_acts gains the
 -- kind 'decision', so who decided, when, at what cost and after whom is the same row every act

@@ -7,7 +7,7 @@ different like a block diagram or flow chart how agents communicated and resolve
 So this module never returns a narrative. `graph(...)` returns NODES (signal, agent, person,
 policy, squad, BOSS, proposal/action, decision, run, needs-you, outcome) with labels of at most
 four words, EDGES (raised, claimed, proposed, critique, vote, handoff, escalate, decided, settles,
-overrides, acted, asks, resulted) with a dissent flag the console draws as a split arrow, and
+overrides, acted, asks, resulted; a squad adds assembled, seated, returned) with a dissent flag the console draws as a split arrow, and
 item BADGES (problem type, outcome, Needs you, autonomy level, cost). Every node carries a `ref`
 the console opens in a drawer — the evidence, the rationale, the thread, the receipts are one
 click away and never on the canvas. Each node has a `stage` (0 signal → 5 outcome) so the
@@ -36,6 +36,10 @@ FILTERS = ("needs_you", "running", "resolved_by_agents", "overridden", "failed",
 STAGES = {"signal": 0, "boss": 1, "agent": 1, "person": 1, "policy": 1, "squad": 1,
           "action": 2, "decision": 3, "needs_you": 3, "run": 4, "outcome": 5}
 MAX_SIGNAL_NODES = 5
+_ACRONYMS = {"Sre": "SRE", "Qa": "QA", "Pm": "PM", "Cto": "CTO", "Coo": "COO", "Cao": "CAO",
+             "Vp": "VP", "Aml": "AML", "Dq": "DQ"}
+_RUN_WORDS = {"workflow_run": "Run", "code_task": "Build", "pull_request": "Pull request",
+              "meeting": "Panel", "incident": "Incident"}
 
 _FILTER_SQL = {
     "needs_you": "w.lifecycle = 'needs_you'",
@@ -59,7 +63,8 @@ def _party_label(who: str) -> str:
     if kind == "agent":
         if ident == "chief_of_staff":
             return "Chief of Staff"
-        return short_label(ident.replace("_", " ").title().replace("Sre", "SRE"), 3)
+        words = ident.replace("_", " ").title().split()
+        return short_label(" ".join(_ACRONYMS.get(w, w) for w in words), 3)
     if kind == "policy":
         return "Policy"
     if kind == "squad":
@@ -166,12 +171,35 @@ def graph(connection: Connection, item_id: str, *, project_id: str) -> dict[str,
     for m in board_msgs:
         sender = m["sender"]
         body = m.get("body") or {}
-        if m["kind"] == "claim":
+        if m["kind"] == "squad":
+            # The roster: one squad node (the same node a squad:<item> decision comes from),
+            # an edge to each member labelled with its seat.
+            from .squads import TEMPLATES
+
+            template = TEMPLATES.get(str(body.get("template")))
+            sq = node(f"party:squad:{item_id}", "squad",
+                      template.title if template else "Squad",
+                      ref={"kind": "message", "id": m["id"]})
+            members = list(body.get("members") or ())
+            nodes[sq]["badges"] = [f"{len(members)} agents"] + (
+                [f"{len(body.get('unfilled') or ())} unfilled"] if body.get("unfilled") else [])
+            edge(origin, sq, "assembled", "assembled", ref={"kind": "message", "id": m["id"]})
+            for member in members:
+                try:
+                    who = actor(member["party"])
+                except (ValueError, IndexError, KeyError):
+                    continue
+                if member.get("seat") and member["seat"] not in nodes[who]["badges"]:
+                    nodes[who]["badges"].append(member["seat"])
+                edge(sq, who, "seated", str(member.get("seat") or "seated"))
+        elif m["kind"] == "claim":
             who = actor(sender)
             if who != origin:
                 edge(origin, who, "claimed", "claimed", ref={"kind": "message", "id": m["id"]})
             last_actor = who
         elif m["kind"] in ("finding", "hypothesis"):
+            if sender == "boss":
+                continue    # a run's or panel's result: drawn as its "reported back" edge
             who = actor(sender)
             findings[who] = findings.get(who, 0) + 1
         elif m["kind"] == "proposal":
@@ -187,6 +215,23 @@ def graph(connection: Connection, item_id: str, *, project_id: str) -> dict[str,
                 edge(actor(sender), target, m["kind"], str(said or m["kind"]),
                      dissent=said in ("object", "unsafe", "reject"),
                      ref={"kind": "message", "id": m["id"]})
+        elif m["kind"] == "handoff" and (body.get("via") or body.get("returned_from")):
+            # Work handed to a run or a panel, and its result handed back: the run is a node
+            # between the agents, so the diagram shows deliberate → execute → report back.
+            ref = body.get("via") or body.get("returned_from")
+            word = _RUN_WORDS.get(ref["kind"], "Run")
+            rid = node(f"{ref['kind']}:{ref['ref']}", "run", word,
+                       ref={"kind": ref["kind"], "id": ref["ref"]})
+            try:
+                if body.get("via"):
+                    edge(actor(sender), rid, "handoff", "handed off",
+                         ref={"kind": "message", "id": m["id"]})
+                else:
+                    nodes[rid]["badges"] = [str((body.get("packet") or {}).get("status") or "")]
+                    edge(rid, actor(body.get("to")), "returned", "reported back",
+                         ref={"kind": "message", "id": m["id"]})
+            except (ValueError, IndexError):
+                continue
         elif m["kind"] in ("handoff", "escalate"):
             src = body.get("from") or sender
             try:
@@ -203,7 +248,8 @@ def graph(connection: Connection, item_id: str, *, project_id: str) -> dict[str,
 
     last_decision: Optional[str] = None
     for d in decisions:
-        did = node(f"decision:{d['act_id']}", "decision", d["chosen"],
+        chosen = tc.ACTIONS[d["chosen"]].title if d["chosen"] in tc.ACTIONS else d["chosen"]
+        did = node(f"decision:{d['act_id']}", "decision", chosen,
                    ref={"kind": "act", "id": d["act_id"]})
         badges = [d.get("autonomy_level") or "", d["decider_kind"]]
         if (d.get("consensus") or {}).get("dissent"):
@@ -221,18 +267,24 @@ def graph(connection: Connection, item_id: str, *, project_id: str) -> dict[str,
 
     anchor = last_decision or last_actor
     for l in links:
-        if l["kind"] in ("workflow_run", "code_task", "pull_request", "meeting", "incident"):
-            word = {"workflow_run": "Run", "code_task": "Build", "pull_request": "Pull request",
-                    "meeting": "Panel", "incident": "Incident"}[l["kind"]]
-            rid = node(f"{l['kind']}:{l['ref']}", "run", word,
+        if l["kind"] in _RUN_WORDS:
+            rid = node(f"{l['kind']}:{l['ref']}", "run", _RUN_WORDS[l["kind"]],
                        ref={"kind": l["kind"], "id": l["ref"]})
-            edge(anchor, rid, "acted", "started")
+            if not any(e["to"] == rid for e in edges):
+                edge(anchor, rid, "acted",
+                     "opened" if l["kind"] == "pull_request" else "started")
             anchor = rid
     if item["lifecycle"] == "needs_you":
         nid = node("needs_you", "needs_you", "Needs you",
                    ref={"kind": "decision", "id": item.get("needs_you_decision_id")})
         nodes[nid]["badges"] = ["needs_you"]
-        edge(anchor, nid, "asks", "asks")
+        # A squad's card asks about ONE proposal: the arrow comes from it, not from the last
+        # thing that happened.
+        asked = connection.execute(text(
+            "SELECT recommendation->>'proposal_id' FROM decisions WHERE id = :d"),
+            {"d": item.get("needs_you_decision_id")}).scalar()
+        edge(f"proposal:{asked}" if asked and f"proposal:{asked}" in nodes else anchor, nid,
+             "asks", "asks")
     if item["lifecycle"] in board.TERMINAL:
         took = _minutes(_dt(item.get("created_at")), _dt(item.get("resolved_at")))
         words = {"resolved": "Resolved", "failed": "Failed", "dismissed": "Dismissed"}

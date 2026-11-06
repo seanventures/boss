@@ -50,7 +50,9 @@ def purge(eng, pid: str) -> None:
         for table in AMBIENT_TABLES:
             c.execute(text(f"DELETE FROM {table} WHERE project_id = :p"), {"p": pid})
         c.execute(text("DELETE FROM signals WHERE project_id = :p"), {"p": pid})
-        for table in ("work_items", "cost_receipts", "budget_reservations", "budget_refusals",
+        for table in ("agent_messages", "agent_threads", "agent_session_ledger", "kg_usage",
+                      "kg_edges", "kg_nodes", "meeting_runs", "roles",
+                      "work_items", "cost_receipts", "budget_reservations", "budget_refusals",
                       "policy_evaluations", "decisions", "events", "workflow_step_runs",
                       "workflow_runs", "workflow_versions", "workflow_definitions",
                       "code_task_runs", "app_alerts", "shepherd_escalations", "budget_policies"):
