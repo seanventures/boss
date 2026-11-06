@@ -18,9 +18,10 @@ decide through the one agent path, and work still runs as workflows and builds.
     guards.py       loop/duplicate guards: depth, cooldown, caps, concurrency, circuit breaker
     task_classes.py the task-class and action catalogue (code, not config)
     read_model.py   Agent Operations: per-item flow graph, filtered lists, the scorecard
+    chief_of_staff.py  the CoS tick: dedupe, classify, score, decide per level, route (904)
 """
-from . import (adapters, board, collab, guards, ledger, policy, read_model, signals,  # noqa: F401
-               task_classes)
+from . import (adapters, board, chief_of_staff, collab, guards, ledger, policy,  # noqa: F401
+               read_model, signals, task_classes)
 
-__all__ = ["adapters", "board", "collab", "guards", "ledger", "policy", "read_model", "signals",
-           "task_classes"]
+__all__ = ["adapters", "board", "chief_of_staff", "collab", "guards", "ledger", "policy",
+           "read_model", "signals", "task_classes"]
