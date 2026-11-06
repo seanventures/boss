@@ -49,3 +49,40 @@ def test_a_stack_generated_demo_password_is_listed_for_its_target(monkeypatch):
     assert other == []
     # SESSION_SECRET is generated too, but it is not a demo login: never returned.
     assert all(r["name"] == "DEMO_PASSWORD" for r in got)
+
+
+def test_an_imported_projects_own_target_shows_its_deploy_demo_password(monkeypatch):
+    """helpdesk-ai-demo 2026-11-06: the target is named after the project ("HelpDesk AI Demo"), no
+    app-links row resolves that name, so Setup › Demo logins showed only the Preview password and
+    the deployed app refused it. A single-app imported project's own target is that app's."""
+    eng = pg_engine()
+    from boss_engine.app_links import service as links
+    from boss_engine.services import secret_backends, stack_deploy
+
+    with eng.begin() as c:
+        pid = project(c)
+        c.execute(text("UPDATE projects SET name = 'HelpDesk AI Demo' WHERE id = :p"), {"p": pid})
+        c.execute(text("INSERT INTO github_connections (id, project_id, connection_label, auth_method, "
+                       " credential_ref, created_by) VALUES (:i, :p, 't', 'github_app', 'env:NONE', 't')"),
+                  {"i": f"ghc_{pid}", "p": pid})
+        c.execute(text("INSERT INTO github_repository_bindings (id, project_id, connection_id, owner, name, "
+                       " full_name, role, default_branch, status, created_by) VALUES (:i, :p, :c, 'acme', "
+                       " 'app', 'acme/app', 'primary', 'main', 'active', 't')"),
+                  {"i": f"ghr_{pid}", "p": pid, "c": f"ghc_{pid}"})
+        tid = f"t_{uuid.uuid4().hex[:8]}"
+        c.execute(text("INSERT INTO deployment_targets (id, project_id, app_name, repo, environment, "
+                       " target_kind, target_ref, status, created_by) VALUES (:t, :p, 'HelpDesk AI Demo', "
+                       " '', 'staging', 'ssh', 'x', 'active', 'test')"), {"t": tid, "p": pid})
+        c.execute(text("INSERT INTO stack_deployments (id, project_id, target_id, repository, ref, "
+                       " commit_sha, manifest, status, created_by) VALUES (:i, :p, :t, 'acme/app', "
+                       " 'main', 'c1', CAST(:m AS JSONB), 'healthy', 'test')"),
+                  {"i": f"sd_{uuid.uuid4().hex[:8]}", "p": pid, "t": tid, "m": json.dumps({
+                      "name": "helpdesk-ai", "generated_env_keys": ["DEMO_PASSWORD"]})})
+        monkeypatch.setattr(links, "resolve_app_key", lambda db, p, raw: None)
+        monkeypatch.setattr(stack_deploy, "_find_secret_ref", lambda db, p, keys: "sref_x")
+        monkeypatch.setattr(secret_backends, "resolve_secret_ref", lambda db, ref, s: "pw-deploy-32")
+        got = secrets_service.deploy_target_demo_logins(c, SimpleNamespace(), project_id=pid,
+                                                        app_key="app_779e")
+        c.execute(text("DELETE FROM github_repository_bindings WHERE project_id = :p"), {"p": pid})
+        c.execute(text("DELETE FROM github_connections WHERE project_id = :p"), {"p": pid})
+    assert [(r["name"], r["label"]) for r in got] == [("DEMO_PASSWORD", "Staging")], got
