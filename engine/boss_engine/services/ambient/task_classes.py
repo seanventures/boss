@@ -112,6 +112,10 @@ TASK_CLASSES: dict[str, TaskClass] = {c.key: c for c in (
     # BOSSAPP-909: a repository Discovery finds with no CI at all. Setting it up is a draft PR a
     # person reviews; no class gains more than A2 without CI to check its own work.
     TaskClass("ci_setup", "Set up CI", "A1", "A2", "low", "operations_engineer", ("scan",)),
+    # BOSSAPP-911: a Recommended-roadmap item. BOSS only ever PROPOSES here (ceiling A1): a
+    # person accepts it into a ticket, an epic or a PRD panel, or rejects it with a reason.
+    TaskClass("roadmap_item", "Roadmap item", "A1", "A1", "low", "pm",
+              ("kg", "cost", "ci", "build", "person")),
 )}
 
 ACTIONS: dict[str, Action] = {a.key: a for a in (

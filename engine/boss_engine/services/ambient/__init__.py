@@ -24,11 +24,16 @@ decide through the one agent path, and work still runs as workflows and builds.
     squad_plugins.py panels deliberate, workflows execute: handoff packets, results back
     squad_demo.py   the non-production demo: a CVE squad with a critique and a dissent
     chief_of_staff.py  the CoS tick: dedupe, classify, score, decide per level, route (904)
+    learning.py     continuous learning: the detector framework and grouping (BOSSAPP-911)
+    detectors.py    the built-in detectors over the KG, incidents, reviews, cost, stages, friction
+    roadmap.py      the Recommended roadmap: score, rank, open, accept/reject/snooze, the tick
+    outcomes.py     outcomes time decides (ignored, recurred, merged, reverted) + metrics (912)
 """
 from . import (adapters, board, chief_of_staff, collab, guards, ledger, policy,  # noqa: F401
                read_model, signals, task_classes)
 from . import squad_memory, squad_plugins, squad_turns, squads  # noqa: F401,E402
+from . import learning, outcomes, roadmap  # noqa: F401,E402
 
 __all__ = ["adapters", "board", "chief_of_staff", "collab", "guards", "ledger", "policy",
            "read_model", "signals", "task_classes", "squads", "squad_turns", "squad_memory",
-           "squad_plugins"]
+           "squad_plugins", "learning", "outcomes", "roadmap"]

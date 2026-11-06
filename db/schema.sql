@@ -11150,3 +11150,68 @@ CREATE TABLE IF NOT EXISTS project_dossiers (
   built_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (project_id, repo)
 );
+
+-- ============================================================================================
+-- AUTONOMOUS AGENTS: CONTINUOUS LEARNING -> THE RECOMMENDED ROADMAP (BOSSAPP-911) AND OUTCOMES
+-- (BOSSAPP-912). Design §14; contracts: docs/product/AUTONOMOUS_AGENTS_SPEC.md §9;
+-- code: engine/boss_engine/services/ambient/{learning,roadmap,outcomes}.py.
+-- ============================================================================================
+-- A RECOMMENDATION IS A WORK ITEM (task class roadmap_item) — the board's one-live-copy rule,
+-- the loop guards, the cooldown after a reject and the ledger all apply unchanged. This 1:1 row
+-- holds only what the Recommended roadmap needs and a work item does not carry: which detector
+-- saw it, the evidence it rests on, the score's parts (value, evidence strength, freshness,
+-- effort, risk, the detector's learned weight), what shape it should take if accepted, and what
+-- a person did with it (accepted as what / rejected why / snoozed until when). Outcomes are NOT
+-- stored here: they live on the ledger (agent_act_decisions.outcome, spec §9 "no parallel
+-- proposal_outcomes table"); proposal_act_id and decision_act_id point at those rows.
+CREATE TABLE IF NOT EXISTS ambient_recommendations (
+  work_item_id TEXT PRIMARY KEY REFERENCES work_items(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL,
+  detector TEXT NOT NULL,                    -- the lead detector (learning.DETECTORS)
+  detectors JSONB NOT NULL DEFAULT '[]'::jsonb,  -- every detector whose finding was grouped in
+  kind TEXT NOT NULL CHECK (kind IN ('hardening', 'test_gap', 'refactor', 'feature',
+                                     'design_fix', 'cost', 'process')),
+  fingerprint TEXT NOT NULL,                 -- the work item's fingerprint (one live per fp)
+  subject TEXT,                              -- file:repo/path, workflow:key, stage:key ...
+  title TEXT NOT NULL,
+  why TEXT NOT NULL,                         -- at most three sentences
+  proposed_shape TEXT NOT NULL CHECK (proposed_shape IN ('ticket', 'epic', 'prd')),
+  squad JSONB NOT NULL DEFAULT '[]'::jsonb,  -- roles that would do it
+  evidence JSONB NOT NULL DEFAULT '[]'::jsonb,   -- [{kind, ref, note?, at?}] newest first
+  evidence_count INTEGER NOT NULL DEFAULT 0,
+  source_kinds JSONB NOT NULL DEFAULT '[]'::jsonb,  -- independent sources (incident, code ...)
+  facts JSONB NOT NULL DEFAULT '{}'::jsonb,  -- the detector's numbers, for the drawer
+  value NUMERIC(6, 2) NOT NULL DEFAULT 0,
+  evidence_strength NUMERIC(5, 3) NOT NULL DEFAULT 0,
+  freshness NUMERIC(5, 3) NOT NULL DEFAULT 1,
+  effort_units INTEGER NOT NULL DEFAULT 1,
+  risk NUMERIC(5, 3) NOT NULL DEFAULT 1,
+  detector_weight NUMERIC(5, 3) NOT NULL DEFAULT 1,
+  priority_score NUMERIC(7, 2) NOT NULL DEFAULT 0,  -- work_value_scoring.compute_priority_score
+  estimated_cost_usd_micros BIGINT NOT NULL DEFAULT 0,
+  score NUMERIC(14, 3) NOT NULL DEFAULT 0,   -- value density (rank_by_value_density)
+  evidence_at TIMESTAMPTZ,                   -- the newest evidence (freshness decays from it)
+  status TEXT NOT NULL DEFAULT 'open'
+    CHECK (status IN ('open', 'snoozed', 'accepted', 'rejected', 'resolved_by_change')),
+  snoozed_until TIMESTAMPTZ,
+  proposal_act_id TEXT,                      -- the ledger row: agent proposed this
+  decision_act_id TEXT,                      -- the ledger row: a person accepted/rejected/snoozed
+  decided_by TEXT,
+  decided_at TIMESTAMPTZ,
+  reject_reason TEXT,
+  reject_category TEXT,
+  accepted_as TEXT CHECK (accepted_as IS NULL OR accepted_as IN ('ticket', 'epic', 'prd')),
+  artifact JSONB NOT NULL DEFAULT '{}'::jsonb,   -- {work_item_id?, plane_issue?, meeting_run_id?}
+  evidence_count_at_decision INTEGER,
+  resurfaced_from TEXT,                      -- the rejected recommendation this one re-opens
+  recurred_at TIMESTAMPTZ,                   -- the problem came back after it was accepted
+  last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),  -- the last run that still found it
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_ambient_recommendations_rank
+  ON ambient_recommendations (project_id, status, score DESC);
+CREATE INDEX IF NOT EXISTS idx_ambient_recommendations_fp
+  ON ambient_recommendations (project_id, fingerprint, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ambient_recommendations_detector
+  ON ambient_recommendations (project_id, detector, status);

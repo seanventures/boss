@@ -31602,6 +31602,12 @@ from .routers.ambient_cos import build_ambient_cos_router
 app.include_router(build_ambient_cos_router(
     engine=engine, settings=lambda: settings, require_reader=require_project_reader,
     require_write_actor=require_project_write_actor))
+# Continuous learning -> the Recommended roadmap, and outcomes (BOSSAPP-911/912).
+from .routers.ambient_learning import build_ambient_learning_router
+
+app.include_router(build_ambient_learning_router(
+    engine=engine, settings=lambda: settings, require_reader=require_project_reader,
+    require_write_actor=require_project_write_actor))
 from .routers.acceptance_templates import build_acceptance_templates_router
 
 app.include_router(build_acceptance_templates_router(

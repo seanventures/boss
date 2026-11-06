@@ -371,6 +371,27 @@ def _tick_improve(client: ControlPlaneClient, settings) -> None:
         LOGGER.debug("improve_tick_failed", exc_info=True)
 
 
+#: Continuous learning → the Recommended roadmap, and the outcome sweep (BOSSAPP-911/912). Every
+#: 10 minutes the API is asked; it runs the detectors for a project at most every 6 hours
+#: (services/ambient/roadmap.RUN_EVERY) and honours the ambient stop and BOSS_AMBIENT_DISABLED.
+AMBIENT_LEARNING_INTERVAL_SECONDS = 600
+_last_ambient_learning_monotonic = 0.0
+
+
+def _tick_ambient_learning(client: ControlPlaneClient) -> None:
+    """Never kill the worker; never retry here."""
+    global _last_ambient_learning_monotonic
+    now = time.monotonic()
+    if now - _last_ambient_learning_monotonic < AMBIENT_LEARNING_INTERVAL_SECONDS:
+        return
+    _last_ambient_learning_monotonic = now
+    try:
+        got = client.ambient_learning_tick()
+        LOGGER.debug("ambient_learning %s", (got or {}).get("skipped") or "ran")
+    except Exception:  # noqa: BLE001
+        LOGGER.debug("ambient_learning_failed", exc_info=True)
+
+
 #: Event-driven knowledge ingest (operator decision 2026-10-21): a finished run or a resolved
 #: incident is queued by a database trigger and drained this often; every
 #: KNOWLEDGE_SWEEP_INTERVAL_SECONDS the same call also sweeps for what the triggers missed.
@@ -815,6 +836,7 @@ def main() -> None:
             _tick_factory_flow(client, settings)
             _tick_agent_wakeups(client, settings)
             _tick_improve(client, settings)
+            _tick_ambient_learning(client)
             _tick_control_plane_tokens()
             if _STOPPING:
                 break
