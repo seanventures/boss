@@ -8,7 +8,7 @@ console's real tokens (`console.css`, which is copied verbatim from `apps/web/ap
 Each page accepts `?theme=light`, `?nav=collapsed` and `?notes=0`. Walk the screens with → / ← (Esc returns to the index).
 The API the screens build on: `docs/product/PROJECT_EXPERIENCE_CONTRACT.md` (on feat/project-experience; §11 Settings, §12 Health).
 
-The sample project is **HelpDesk AI Demo** (`paramg/helpdesk-ai-demo`, staging `2.29.2.202:8004`). PR #1 (SLA timers) and
+The sample project is **HelpDesk AI Demo** (`paramg/helpdesk-ai-demo`, staging `203.0.113.20:8004`). PR #1 (SLA timers) and
 PR #2 (UI refresh) are merged. PR #3 (visual refresh finish) is waiting for a person to merge it. Helm is the captain,
 Marshal ranks the backlog, and the crew is Juno, Forge, Vera and Beacon.
 
@@ -68,7 +68,7 @@ Marshal ranks the backlog, and the crew is Juno, Forge, Vera and Beacon.
    deployments, health, demo logins, deploy values, targets, captain, autonomy and budget, repos and notifications.
    Anything shared stays in its org-wide area: Infra (servers, cloud, plugins), Observability (all apps, BOSS's own
    platform, alert sources, contact points, Grafana) and Govern (org caps). The two are cross-linked both ways:
-   Deployments › "runs on 2.29.2.202 ↗" ⇄ Infra › server › "Projects on this server"; Health › "Observability ›
+   Deployments › "runs on 203.0.113.20 ↗" ⇄ Infra › server › "Projects on this server"; Health › "Observability ›
    this app" ⇄ Observability › app › "Project › Health".
 10. **Settings move, nothing is lost.** Each old home keeps working as a single line, "Moved to Project › Settings".
     Demo logins also show read-only (user + reveal) on Overview › Try it and Deployments.
@@ -99,7 +99,7 @@ Everything about a project is at most 2 clicks from its page, and ⌘K reaches i
 | Adding work | `New work` in the header, the inline box on Work, or the captain chat | 1 |
 | Is it healthy / any incidents | The health dot in the header (every tab) → Health | 0 / 1 |
 | A demo password | Settings › Demo logins › Reveal (step-up); read-only on Overview › Try it and Deployments | 1 |
-| Which server it runs on | Deployments › "runs on 2.29.2.202 ↗" → Infra › server | 1 / 2 |
+| Which server it runs on | Deployments › "runs on 203.0.113.20 ↗" → Infra › server | 1 / 2 |
 | A deploy value / secret name | Settings › Deploy values | 1 |
 | Change captain, autonomy or budget | Settings › Captain & squad / Autonomy & budget | 1 |
 
@@ -113,7 +113,7 @@ Overview ─┬─ Needs-you item ─→ drawer (action inside)
           ├─ Health dot ─────→ Health ─→ incident flow → Agents at work graph · Grafana ↗ · Observability › app
           └─ Tabs ───────────→ Work · Roadmap · Repo & knowledge · Deployments · Health · Settings (each item → drawer)
 
-Deployments ─ "runs on 2.29.2.202 ↗" ─→ Infra › server ─ "Projects on this server" ─→ back to each Project › Deployments
+Deployments ─ "runs on 203.0.113.20 ↗" ─→ Infra › server ─ "Projects on this server" ─→ back to each Project › Deployments
 Health ─ "Observability › this app" ─→ Observability › apps ─ "Project › Health" ─→ back
 Settings ─ Demo logins › Reveal ─→ "Confirm it's you" (step-up) ─→ password shown 30s
 ```

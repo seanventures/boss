@@ -22,7 +22,7 @@
 <section class="grid g2">
   <section class="card env">
     <div class="env-h"><span class="ico" data-c="green"><i class="ph ph-flask"></i></span><h3>Staging</h3><span class="tag" data-tone="green"><span class="dot" data-s="done"></span>Healthy</span><span class="wf-spacer"></span><span class="btn" data-size="s"><i class="ph ph-arrow-counter-clockwise"></i>Redeploy</span></div>
-    <a class="env-url"><i class="ph ph-globe"></i>http://2.29.2.202:8004 <i class="ph ph-arrow-square-out"></i></a>
+    <a class="env-url"><i class="ph ph-globe"></i>http://203.0.113.20:8004 <i class="ph ph-arrow-square-out"></i></a>
     <div class="row" style="gap:16px">
       <div class="ring" style="--p:99.9;width:56px;height:56px"><span>99.9%</span></div>
       <div style="flex:1;min-width:0"><span class="lbl">24h</span>
@@ -30,7 +30,7 @@
       <div class="kv" style="font-size:.6rem"><dt>p95</dt><dd class="mono">180ms</dd><dt>Errors</dt><dd class="mono">0.1%</dd></div>
     </div>
     <div class="row wrap" style="gap:8px;font-size:.6rem;padding-top:10px;border-top:1px solid var(--border)">
-      <span class="face" data-a="beacon" data-size="s"></span><span>Last deploy <b>PR #2</b> · 2h ago</span><span class="mono faint">a41c9e2</span><span class="wf-spacer"></span><a class="link-chip"><i class="ph ph-terminal-window"></i>Logs</a><a class="link-chip" title="Opens this server in Infra (shared by 3 projects)"><i class="ph ph-hard-drives"></i>runs on 2.29.2.202 ↗</a></div>
+      <span class="face" data-a="beacon" data-size="s"></span><span>Last deploy <b>PR #2</b> · 2h ago</span><span class="mono faint">a41c9e2</span><span class="wf-spacer"></span><a class="link-chip"><i class="ph ph-terminal-window"></i>Logs</a><a class="link-chip" title="Opens this server in Infra (shared by 3 projects)"><i class="ph ph-hard-drives"></i>runs on 203.0.113.20 ↗</a></div>
   </section>
 
   <section class="card env locked">
@@ -63,7 +63,7 @@
 
 <div class="notes"><b>Design notes</b><ol>
   <li><b>1</b> The ship path as a diagram; the gates come from Govern policy (staging auto, prod a person). Prod's node is amber + locked until a person sets it up and approves.</li>
-  <li><b>2</b> Demo logins here are read-only (user + reveal); they are managed in Project › Settings. Reveal = owner/admin with step-up, audited, hides after 30s. "runs on 2.29.2.202 ↗" opens the shared server in Infra, which lists every project on it and links back.</li>
+  <li><b>2</b> Demo logins here are read-only (user + reveal); they are managed in Project › Settings. Reveal = owner/admin with step-up, audited, hides after 30s. "runs on 203.0.113.20 ↗" opens the shared server in Infra, which lists every project on it and links back.</li>
 </ol></div>
 </div>
 <script src="../shell.js"></script>

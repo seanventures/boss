@@ -26,7 +26,7 @@ Rules every response follows:
 {"items": [{"id": "helpdesk-ai-demo", "name": "HelpDesk AI Demo", "initials": "HD",
   "repo": "paramg/helpdesk-ai-demo", "stage": "working",
   "journey": [{"key": "onboarding", "label": "Onboarded", "state": "done"}, …],
-  "needs_you": 2, "running": 1, "health": "healthy", "live_url": "http://2.29.2.202:8004",
+  "needs_you": 2, "running": 1, "health": "healthy", "live_url": "http://203.0.113.20:8004",
   "captain": {"name": "Helm", "role_key": "engineering_captain", "avatar": "…"},
   "updated_at": "…", "href": "?project_id=helpdesk-ai-demo&area=project"}]}
 ```
@@ -85,7 +85,7 @@ unchanged so the console's existing sheets handle them.
 ## 5. Deployments — `GET /v1/projects/{project_id}/deployments`
 ```json
 {"environments": [{"key": "staging", "label": "Staging", "url": "…", "health": "healthy",
-  "host": "2.29.2.202", "last_deploy": {"commit": "f3f130c", "at": "…", "by": "…", "href": "…"},
+  "host": "203.0.113.20", "last_deploy": {"commit": "f3f130c", "at": "…", "by": "…", "href": "…"},
   "demo_logins": [{"user": "agent@demo.test", "label": "Agent", "reveal": {"href": "…"}}],
   "policy": "auto|person", "href": "…"}], "production": {"state": "none|needs_host|ready", "action": {…}}}
 ```

@@ -71,7 +71,7 @@
         <span class="pj-mark" title="HelpDesk AI Demo">HD</span>
         <div class="pj-title"><h1>HelpDesk AI Demo</h1>
           <div class="row wrap"><a class="link-chip" title="Repository — opens Repo & knowledge"><i class="ph ph-github-logo"></i>paramg/helpdesk-ai-demo</a>
-          <a class="link-chip" title="Staging — opens the live app"><i class="ph ph-globe"></i>staging · 2.29.2.202:8004 <i class="ph ph-arrow-square-out"></i></a>
+          <a class="link-chip" title="Staging — opens the live app"><i class="ph ph-globe"></i>staging · 203.0.113.20:8004 <i class="ph ph-arrow-square-out"></i></a>
           <a class="link-chip health-chip" title="Healthy · 99.9% · p95 180ms — opens Health"><span class="dot" data-s="done"></span>Healthy</a>
           <span class="tag" data-tone="green" title="Project stage on the journey"><i class="ph ph-hammer"></i>Working</span></div></div>
         <span class="wf-spacer"></span>
