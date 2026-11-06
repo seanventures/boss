@@ -41,7 +41,7 @@
  * the request behaves exactly as before.
  */
 import { noteDecisionWrite } from "./decided-gates";
-import { currentMirror } from "./identity/mirror";
+import { currentMirror, liveMirror } from "./identity/mirror";
 
 export const IDEMPOTENCY_HEADER = "Idempotency-Key";
 /** The form field SubmitButton renders, and the request header middleware.ts lifts it into. */
@@ -209,13 +209,31 @@ async function stepUpOnce(url: string, init: WriteInit, options: WriteOptions, h
     // more with a fresh key (the refused key would replay the refusal). One place, so no action
     // path (Infra's sheets, Setup, the workflow builder) can show the code instead.
     if (first.status === 401 && !options.noStepUp && await isStepUp(first)) {
-      const mirror = currentMirror();
+      const mirror = currentMirror() ?? liveMirror();
       if (mirror && await mirror.stepUp("Confirm it's you to continue.")) {
         return pressed(url, init, { ...options, key: undefined }, has);
       }
+      // NOT CONFIRMED (cancelled, or no sheet could open): the refusal is SAID, in words, by the
+      // one write path — never the bare code `step_up_required` in a panel's error line, and
+      // never nothing. Same status and code, so callers that branch on them still can.
+      return stepUpNotConfirmed(options.press?.label);
     }
     return first;
   }
+}
+
+/** What a press refused for a stale second factor says when "Confirm it's you" was not
+ *  completed. One sentence for every write in the console. */
+export function stepUpNotConfirmedSentence(label?: string): string {
+  return `${label || "This action"} was not sent — it needs you to confirm it's you, and that `
+    + `was not completed. Press ${label || "it"} again to confirm.`;
+}
+
+function stepUpNotConfirmed(label?: string): Response {
+  return new Response(
+    JSON.stringify({ error: "step_up_required", code: "step_up_not_confirmed",
+                     detail: stepUpNotConfirmedSentence(label) }),
+    { status: 401, headers: { "Content-Type": "application/json" } });
 }
 
 /** Whether a refusal is the API asking for a fresh second factor, in any proxy's wrapping. */

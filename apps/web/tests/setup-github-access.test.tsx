@@ -216,15 +216,17 @@ describe("coming back from GitHub", () => {
     };
     window.addEventListener("boss:toast", on);
     try {
-      mounted = await mountBoard(board(), "?area=setup&focus=repository&github=app_updated&lost=acme/app,acme/billing");
+      mounted = await mountBoard(board(), "?area=setup&focus=repository&github=app_updated&lost=acme/app,acme/billing"
+                                          + "&repos=acme/web,acme/notes&repo_count=2");
       expect(toasts.map((t) => t.message)).toEqual([
-        "GitHub repository access updated",
+        "Access updated · BOSS sees 2 repos: acme/web, acme/notes",
         "acme/app, acme/billing lost access and an app still uses them",
       ]);
       expect(toasts[0].type).toBe("success");
       expect(toasts[1].type).toBe("error");
       expect(window.location.search).not.toContain("github=");
       expect(window.location.search).not.toContain("lost=");
+      expect(window.location.search).not.toContain("repos=");
     } finally {
       window.removeEventListener("boss:toast", on);
     }

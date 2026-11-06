@@ -240,8 +240,10 @@ describe("watching the outer workflow, step by step", () => {
 
   it("distinguishes a step still running from one that finished", () => {
     // `${text}…` on an unfinished step: "8m" and "8m…" are different facts.
-    const fn = DW.slice(DW.indexOf("function stepDuration"), DW.indexOf("function stepLinks"));
-    expect(fn).toContain("step.completed_at ? text");
+    // The one step clock lives in lib/step-timing.ts (a person-wait is not a timer at all).
+    const clock = readFileSync(new URL("../lib/step-timing.ts", import.meta.url), "utf8");
+    expect(clock).toMatch(/return step\.completed_at\s*\?\s*\{ kind: "working", text,/);
+    expect(clock).toContain("text: `${text}…`");
   });
 
   it("links to what the step produced, for debugging", () => {

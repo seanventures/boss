@@ -85,7 +85,8 @@ describe("what counts as the person asking", () => {
 describe("every step-up path goes through the one gate", () => {
   it("the provider's stepUp refuses without a press, before any sheet is shown", () => {
     const provider = codeOnly("components/identity/identity-provider.tsx");
-    expect(provider).toMatch(/if \(!isInteractive\(\)\) return Promise\.resolve\(false\);\s*return new Promise<boolean>\(\(resolve\) => setAsk/);
+    // The gesture test comes before the sheet is asked for (and a joined ask is still a press's).
+    expect(provider).toMatch(/if \(!isInteractive\(\)\) return Promise\.resolve\(false\);\s*return new Promise<boolean>\(\(resolve\) => \{[\s\S]{0,200}setAsk\(/);
     // apiWrite, callAction, useGuardedCall: all reach the sheet through the provider's stepUp.
     expect(codeOnly("lib/api-write.ts")).toContain("mirror.stepUp(");
     expect(codeOnly("lib/call-action.ts")).toContain("mirror.stepUp(");
