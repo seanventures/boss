@@ -21,6 +21,7 @@ import { CircleNotch, GithubLogo } from "@phosphor-icons/react";
 import { IdentityError, idDelete, idGet, idPost } from "../../lib/identity/api";
 import { HANDOFF_KEY, HANDOFF_PATH } from "../../lib/identity/github-manifest";
 import { useGuardedCall } from "../../components/identity/identity-provider";
+import { HelpTip } from "../help-tip";
 import { SectionLabel } from "../section-label";
 import { toast, useBoard } from "./parts";
 import { useOnScreen } from "../../lib/area-shown";
@@ -376,8 +377,9 @@ function AppCard({ status, reload, back = false, repos = [] }: {
   }
   return (
     <div className="su-way" data-testid="gh-way-app" data-active={status.mode === "app" || undefined}>
-      <div className="su-line"><strong>GitHub App</strong><span className="su-chip su-chip-good">Recommended</span></div>
-      <p className="su-way-text">A token per build, only for its repos, gone when it ends.</p>
+      <div className="su-line"><strong>GitHub App</strong>
+        <HelpTip label="GitHub App" text="A token per build, only for its repos, gone when it ends." />
+        <span className="su-chip su-chip-good">Recommended</span></div>
       {body}
       {picker ? (
         <ul className="su-picker-list" data-testid="gh-app-installations">
@@ -407,8 +409,9 @@ function AsMeCard({ status }: { status: GitHubStatus }) {
   const n = status.people_connected;
   return (
     <div className="su-way" data-testid="gh-way-as-me" data-active={status.mode === "as_me" || undefined}>
-      <div className="su-line"><strong>As me</strong></div>
-      <p className="su-way-text">Runs you approve “as me on GitHub” use your own connection.</p>
+      <div className="su-line"><strong>As me</strong>
+        <HelpTip label="As me" text="Runs you approve “as me on GitHub” use your own connection." />
+      </div>
       <span className="su-line su-faint">{n === 0 ? "Nobody connected" : n === 1 ? "1 person connected" : `${n} people connected`}</span>
       <a className="su-link" href="/account/agents" data-testid="gh-as-me-link">My GitHub connection</a>
     </div>
@@ -430,9 +433,9 @@ function TokenCard({ status, reload }: { status: GitHubStatus; reload: () => voi
   return (
     <div className="su-way" data-testid="gh-way-token" data-active={status.mode === "token" || undefined}>
       <div className="su-line"><strong>Fine-grained token</strong>
+        <HelpTip label="Fine-grained token" text="Kept in the vault, used only by egress, only for these repos." />
         <Tip tip="Long-lived and acts as whoever made it. Egress still applies every rule."
              className="su-chip su-chip-metered">Less safe</Tip></div>
-      <p className="su-way-text">Kept in the vault, used only by egress, only for these repos.</p>
       {token ? (
         <>
           <span className="su-line">

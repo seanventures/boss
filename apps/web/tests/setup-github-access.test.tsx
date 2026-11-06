@@ -246,7 +246,10 @@ describe("simple GitHub entry", () => {
     const alternatives = document.querySelector('[data-testid="gh-other-ways"]') as HTMLDetailsElement;
     expect(alternatives.open).toBe(false);
     expect(alternatives.querySelector("summary")?.textContent).toBe("Other ways");
-    expect(document.querySelector('[data-testid="gh-way-app"]')!.textContent).toContain("A token per build, only for its repos, gone when it ends.");
+    const appWay = document.querySelector('[data-testid="gh-way-app"]')!;
+    expect(appWay.querySelector("p")).toBeNull();
+    expect(appWay.textContent).not.toContain("A token per build, only for its repos, gone when it ends.");
+    expect(appWay.querySelector('[aria-label="Help: GitHub App"]')?.textContent).toBe("?");
     await click(alternatives.querySelector("summary"));
     expect(alternatives.open).toBe(true);
     expect(alternatives.textContent).toContain("Less safe");

@@ -8,6 +8,8 @@ export function HelpTip({ label, text }: { label: string; text: string }) {
   const id = useId();
   const buttonRef = useRef<HTMLButtonElement>(null);
   const tipRef = useRef<HTMLSpanElement>(null);
+  // Escape moves focus back here. That focus must not open the tip again.
+  const suppressFocusOpen = useRef(false);
   const [open, setOpen] = useState(false);
   const [pinned, setPinned] = useState(false);
   const [position, setPosition] = useState<{ top: number; left: number } | null>(null);
@@ -25,6 +27,7 @@ export function HelpTip({ label, text }: { label: string; text: string }) {
     };
     const escape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
+      suppressFocusOpen.current = true;
       close();
       buttonRef.current?.focus();
     };
@@ -71,8 +74,9 @@ export function HelpTip({ label, text }: { label: string; text: string }) {
       aria-describedby={open ? id : undefined}
       onPointerEnter={(event) => { if (event.pointerType === "mouse") setOpen(true); }}
       onPointerLeave={(event) => { if (event.pointerType === "mouse" && !pinned) setOpen(false); }}
-      onFocus={() => setOpen(true)}
+      onFocus={() => { if (!suppressFocusOpen.current) setOpen(true); }}
       onBlur={(event) => {
+        suppressFocusOpen.current = false;
         if (!pinned && !tipRef.current?.contains(event.relatedTarget as Node)) setOpen(false);
       }}
       onClick={() => {
