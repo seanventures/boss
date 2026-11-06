@@ -47,6 +47,8 @@ def test_the_morning_runs_every_branch_of_the_flow(eng, project, demo_ok):
         kinds = [e["kind"] for e in g["edges"]]
         assert {"raised", "handoff", "proposed", "critique", "decided", "resulted"} <= set(kinds)
         assert g["badges"]["outcome"] == "resolved_by_agents"
+        decided = [n["label"] for n in g["nodes"] if n["type"] == "decision"]
+        assert decided == ["Hand to Software Engineer", "Open draft PR"], "words, not keys"
         deciders = [d["decided_by"] for d in ledger.list_decisions(
             c, project, work_item_id=items["ci_fix_boss_pr"]["id"])]
         assert deciders == ["agent:chief_of_staff", "agent:software_engineer"]

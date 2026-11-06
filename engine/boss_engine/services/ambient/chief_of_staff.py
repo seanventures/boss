@@ -497,7 +497,7 @@ def triage_group(connection: Connection, settings: Any, project_id: str,
                   undo={"action": "dismiss", "work_item_id": item_id},
                   cost_usd_micros=cost)
     options = [{"key": "observe", "label": "Observe only"},
-               {"key": f"propose:{owner_role}", "label": f"Ask, then hand to {who}"},
+               {"key": f"propose:{owner_role}", "label": f"Propose {who}"},
                {"key": f"route:{owner_role}", "label": f"Hand to {who}"},
                {"key": "ask", "label": "Ask what it is"}]
     board.assert_lease(connection, item_id, owner=PARTY, token=token, lock=True)

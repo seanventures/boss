@@ -203,7 +203,12 @@ def graph(connection: Connection, item_id: str, *, project_id: str) -> dict[str,
 
     last_decision: Optional[str] = None
     for d in decisions:
-        did = node(f"decision:{d['act_id']}", "decision", d["chosen"],
+        # The chosen OPTION's label when the decider gave one ("Hand to SRE"), not its key
+        # ("route:sre"): the diagram speaks words, never identifiers (§11.0).
+        said = next((o.get("label") for o in d.get("options") or []
+                     if isinstance(o, dict) and o.get("key") == d["chosen"] and o.get("label")),
+                    None)
+        did = node(f"decision:{d['act_id']}", "decision", said or d["chosen"],
                    ref={"kind": "act", "id": d["act_id"]})
         badges = [d.get("autonomy_level") or "", d["decider_kind"]]
         if (d.get("consensus") or {}).get("dissent"):

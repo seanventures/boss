@@ -114,7 +114,9 @@ def _engineer_fixes_ci(connection: Connection, project_id: str, item_id: str) ->
     ledger.record_decision(
         connection, project_id=project_id, decided_by=engineer, work_item_id=item_id,
         question="Fix CI on PR #41?", chosen="open_draft_pr", action="open_draft_pr",
-        options=["open_draft_pr", "ask_author"], proposal_id=proposal["id"], consensus=record,
+        options=[{"key": "open_draft_pr", "label": "Open draft PR"},
+                 {"key": "ask_author", "label": "Ask the author"}],
+        proposal_id=proposal["id"], consensus=record,
         rationale="The PR changed rounding and one test still expects the old value. A one-line "
                   "test fix keeps the behaviour.",
         reversibility="reversible", undo={"action": "close_pr"}, confidence=0.86,
