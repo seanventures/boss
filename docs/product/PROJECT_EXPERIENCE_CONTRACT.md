@@ -153,3 +153,26 @@ index the KG / build the dossier) and asks only for what it cannot (`owner: "you
 - Demo users come from the app itself: a `demo_logins:` list in boss.deploy.yaml if present, else the
   app's seed file / login page hint (HelpDesk lists customer@ / agent@ / admin@demo.test); password = the
   generated DEMO_PASSWORD for that environment (preview / staging…), shown per environment.
+
+## 12. Health tab — project-scoped observability (operator, 2026-11-06)
+> "it makes sense to open the app through the project page and then go to the deployment tab to see that
+> project deployment.. same thing for Observability too right?"
+
+- 7th tab **Health** (`tab=health`, heartbeat icon). Rule: anything about ONE project lives on the Project
+  page; anything shared (Infra servers/cloud/plugins, Observability across apps + BOSS's own platform,
+  alert sources, contact points, Grafana) stays in its org-wide area. Cross-links both ways.
+- Header: a health dot beside the live-URL chip on every tab (opens Health).
+- `GET /v1/projects/{project_id}/health`:
+```json
+{"environments": [{"key": "staging", "label": "Staging", "health": "healthy", "uptime_pct": 99.9,
+   "error_rate": 0.4, "p95_ms": 180, "series": {"errors": [..], "latency": [..]},
+   "slo": {"target": 99.5, "burn": "ok|warning|breach"}, "href": "…"}],
+ "alerts": [{"id": "…", "label": "5xx on /api/tickets", "severity": "page|ticket|info", "state": "firing|resolved",
+             "since": "…", "href": "…"}],
+ "incidents": [{"id": "wi_…", "label": "order-api 5xx 6.6%", "state": "running|needs_you|resolved",
+                "graph_href": "?area=agent_ops&item=…", "mini": [{"label": "Alert", "state": "done"}, …]}],
+ "monitoring_pack": {"rules": 6, "managed_in": "repo", "href": "…"},
+ "links": {"grafana": "…", "logs": "…", "observability": "?area=observability&app=…"}}
+```
+Built from the existing app alerts / incident squad / monitoring pack / stack health checks; empty states
+explain how monitoring gets set up (Beacon's pack on deploy).
