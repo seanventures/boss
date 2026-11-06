@@ -19,7 +19,7 @@ export const FX_SUMMARY = {
     { id: P, name: "HelpDesk AI Demo", initials: "HD", repo: "paramg/helpdesk-ai-demo", stage: "working",
       journey: [{ key: "onboarding", label: "Onboard", state: "done" }, { key: "ready", label: "Ready", state: "done" },
                 { key: "working", label: "Working", state: "now" }, { key: "staging", label: "Deployed", state: "done" }],
-      needs_you: 2, running: 1, health: "healthy", live_url: "http://2.29.2.202:8004", captain: helm, cost_week: 14.2,
+      needs_you: 2, running: 1, health: "healthy", live_url: "http://203.0.113.20:8004", captain: helm, cost_week: 14.2,
       series: [3, 5, 4, 7, 5, 8, 6], updated_at: "2026-11-06T10:00:00Z", href: href({}) },
     { id: "northpeak-retail", name: "NorthPeak Retail", initials: "NP", repo: "northpeak/saleor", stage: "onboarding",
       journey: [{ key: "onboarding", label: "Onboard", state: "done" }, { key: "ready", label: "Ready", state: "now" },
@@ -29,7 +29,7 @@ export const FX_SUMMARY = {
     { id: "hello-world", name: "Hello World", initials: "HW", repo: "paramg/hello-world", stage: "staging",
       journey: [{ key: "onboarding", label: "Onboard", state: "done" }, { key: "ready", label: "Ready", state: "done" },
                 { key: "working", label: "Working", state: "done" }, { key: "staging", label: "Deployed", state: "done" }],
-      needs_you: 0, running: 0, health: "healthy", live_url: "http://2.29.2.202:8100", captain: helm, cost_week: 1.5, series: [1, 1, 0, 0, 1, 0, 0],
+      needs_you: 0, running: 0, health: "healthy", live_url: "http://203.0.113.20:8100", captain: helm, cost_week: 1.5, series: [1, 1, 0, 0, 1, 0, 0],
       updated_at: "2026-11-02T09:00:00Z", href: `?${new URLSearchParams({ project_id: "hello-world", area: "project" })}` },
   ],
 };
@@ -39,7 +39,7 @@ const WORK = [
     stages: STAGES6(["done", "done", "done", "done", "now", "todo"]), agents: [juno, forge, vera], cost_usd: 2.1,
     links: { workflow_run: `?${new URLSearchParams({ project_id: P, area: "delivery_workflows", wfr: "wfr_43" })}`,
              build: `?${new URLSearchParams({ project_id: P, area: "code_tasks", build: "crun_43" })}`,
-             pr: { number: 3, external_url: "https://github.com/paramg/helpdesk-ai-demo/pull/3" }, deploy: "", preview: "http://2.29.2.202:8104" },
+             pr: { number: 3, external_url: "https://github.com/paramg/helpdesk-ai-demo/pull/3" }, deploy: "", preview: "http://203.0.113.20:8104" },
     detail: "Ready to merge: tests 148/148, review clean. Only a person merges.", href: href({ tab: "work", drawer: "work:wi_visual" }) },
   { id: "wi_search", label: "Ticket search filters", kind: "feature", state: "running", age: "12m", source: "roadmap",
     stages: STAGES6(["done", "done", "now"]), agents: [juno, forge], cost_usd: 0.9,
@@ -73,7 +73,7 @@ export const FX_OVERVIEW = {
   project: { id: P, name: "HelpDesk AI Demo", initials: "HD", stage: "working", status_label: "Working", health: "healthy",
              repos: [{ full_name: "paramg/helpdesk-ai-demo", branch: "main", access: { read: true, write: true, pr: true },
                        external_url: "https://github.com/paramg/helpdesk-ai-demo" }],
-             live_url: "http://2.29.2.202:8004" },
+             live_url: "http://203.0.113.20:8004" },
   journey: [
     { key: "onboarding", label: "Onboarded", state: "done", sub: "Nov 2", href: href({ drawer: "stage:onboarding" }) },
     { key: "ready", label: "Ready", state: "done", sub: "6/6", href: href({ drawer: "stage:ready" }) },
@@ -105,7 +105,7 @@ export const FX_OVERVIEW = {
     { id: "rec_alert", label: "Alert on /api/tickets 5xx", source: "roadmap", state: "proposed", href: href({ tab: "roadmap", drawer: "rec:rec_alert" }),
       accept: { href: "/v1/ambient/roadmap/rec_alert/accept" } },
   ],
-  try_it: { url: "http://2.29.2.202:8004",
+  try_it: { url: "http://203.0.113.20:8004",
             demo_logins: [{ user: "admin@helpdesk.demo", label: "Admin", reveal: { href: "/v1/apps/helpdesk/demo-logins?project_id=helpdesk-ai-demo&env=deploy", requires: "step_up" } }] },
   week: [
     { at: "Mon", label: "PR #1 merged", kind: "merge" }, { at: "Mon", label: "Staging deploy", kind: "deploy" },
@@ -141,7 +141,7 @@ export const FX_KNOWLEDGE = {
 export const FX_DEPLOYMENTS = {
   ship_path: [{ label: "PR merged", state: "done" }, { label: "Image built", state: "done" }, { label: "Staging · auto", state: "done" },
               { label: "Smoke test", state: "done" }, { label: "Prod · you approve", state: "waiting" }],
-  environments: [{ key: "staging", label: "Staging", url: "http://2.29.2.202:8004", health: "healthy", host: "2.29.2.202",
+  environments: [{ key: "staging", label: "Staging", url: "http://203.0.113.20:8004", health: "healthy", host: "203.0.113.20",
                    host_href: "?area=infra&host=h_202", uptime_pct: 99.9, p95_ms: 180, error_rate: 0.1,
                    series: [1, 1, 1, 1, 1, 1, 1, 1, 0.6, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
                    last_deploy: { commit: "a41c9e2", at: "2h ago", by: "Beacon", label: "PR #2", href: href({ tab: "deployments", drawer: "deploy:dep_2" }) },
@@ -203,7 +203,7 @@ export const FX_JUMP = {
     { label: "PR #3 · Visual refresh finish", kind: "pr", href: "https://github.com/paramg/helpdesk-ai-demo/pull/3", sub: "needs you" },
     { label: "Run #43 · workflow run", kind: "run", href: `?${new URLSearchParams({ project_id: P, area: "delivery_workflows", wfr: "wfr_43" })}`, sub: "Workflows" },
     { label: "Build · Visual refresh finish", kind: "build", href: `?${new URLSearchParams({ project_id: P, area: "code_tasks", build: "crun_43" })}`, sub: "Code Tasks" },
-    { label: "Staging · 2.29.2.202:8004", kind: "deploy", href: "http://2.29.2.202:8004", sub: "open" },
+    { label: "Staging · 203.0.113.20:8004", kind: "deploy", href: "http://203.0.113.20:8004", sub: "open" },
   ],
 };
 
@@ -220,7 +220,7 @@ export const FX_SETTINGS = {
               { label: "DEMO_PASSWORD", value: "generated", sub: "secret", href: "?area=infra&view=deploys" }],
       actions: [{ label: "Set values", href: "?area=infra&view=deploys", requires: "" }] },
     { key: "targets", label: "Targets & hosts", icon: "server", moved_from: "Infra › Targets",
-      items: [{ label: "Staging", value: "2.29.2.202:8004", sub: "auto on merge", href: "?area=infra&host=h_202" },
+      items: [{ label: "Staging", value: "203.0.113.20:8004", sub: "auto on merge", href: "?area=infra&host=h_202" },
               { label: "Production", value: "not set up", sub: "a person approves", href: "?area=infra&view=fleet" }],
       actions: [{ label: "Add target", href: "?area=infra&view=fleet", requires: "" }] },
     { key: "captain", label: "Captain & crew", icon: "robot", moved_from: "",

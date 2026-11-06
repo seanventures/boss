@@ -279,7 +279,7 @@ describe("the Project page header, Needs you and tabs (screen 4)", () => {
     await openProject();
     expect(tid("px-head-repo")!.getAttribute("href")).toBe("https://github.com/paramg/helpdesk-ai-demo");
     expect(tid("px-head-repo")!.getAttribute("target")).toBe("_blank");
-    expect(tid("px-head-live")!.getAttribute("href")).toBe("http://2.29.2.202:8004");
+    expect(tid("px-head-live")!.getAttribute("href")).toBe("http://203.0.113.20:8004");
     await press(tid("px-head-health"));
     expect(params().get("tab")).toBe("health");
     await press(tid("px-head-ask"));
@@ -353,7 +353,7 @@ describe("Overview (screen 4)", () => {
     await press(tid("px-ov-plan-week"));
     expect(params().get("dock_ask")).toBe("Plan next week for this project."); // the shell's dock reads it
     expect(params().get("agent")).toBe(`project:${P}`);
-    expect(tid("px-ov-try-url")!.getAttribute("href")).toBe("http://2.29.2.202:8004");
+    expect(tid("px-ov-try-url")!.getAttribute("href")).toBe("http://203.0.113.20:8004");
   });
 
   it("an engine without §2 builds the page from the existing start view", async () => {
@@ -486,7 +486,7 @@ describe("Deployments (screen 8) and the Infra cross-links (screen 14)", () => {
   it("environment cards open the app and say which server they run on, in Infra", async () => {
     engine();
     await openProject("&tab=deployments");
-    expect(tid("px-env-url-staging")!.getAttribute("href")).toBe("http://2.29.2.202:8004");
+    expect(tid("px-env-url-staging")!.getAttribute("href")).toBe("http://203.0.113.20:8004");
     const host = tid("px-env-host-staging")!.getAttribute("href")!;
     expect(new URLSearchParams(host.split("?")[1]).get("area")).toBe("infra");
     expect(new URLSearchParams(host.split("?")[1]).get("host")).toBe("h_202");
