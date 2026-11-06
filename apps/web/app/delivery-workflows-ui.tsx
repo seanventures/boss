@@ -24,7 +24,7 @@ import { openDockAbout, type DockSubject } from "../lib/dock-subject";
 import { missingRequired, suppliedInputs, workflowInputFields } from "../lib/workflow-inputs";
 import { HostAdviceBanner, useHostAdvice } from "./host-advice";
 import { StartRefusal, asReadiness, type PendingRefusal } from "./workflow-readiness-ui";
-import { RunReportPanel } from "./run-report-ui";
+import { RunReportPanel, OpenRunReportButton, runHasReport } from "./run-report-ui";
 import { plannedDeploymentFrom } from "./deploy-ui";
 import { WriteInFlightError, apiWrite, runPress } from "../lib/api-write";
 import { withAnsweredGates } from "../lib/decided-gates";
@@ -2285,6 +2285,12 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
   return (
     <div className="dw-path" data-testid="dw-path" data-full-page={fullPage ? "true" : undefined}>
       <div className="wf-run-bar">
+        {/* A FINISHED RUN IS READ FOR WHAT WAS DONE: its report, every section open, is the
+            first thing on its bar — not a collapsed panel below the lane. */}
+        {terminal && runHasReport(run.steps) ? (
+          <OpenRunReportButton runId={run.id} projectId={projectId} className="rr-open rr-open-top"
+                               researchAction={(run.actions ?? []).find((a) => a.key === "build_on_research")} />
+        ) : null}
         <button type="button" className="wf-tag" aria-pressed={showAgents}
                 data-testid="dw-run-agents" title={terminal ? "Agents, as run" : "Agents on this run"}
                 onClick={() => setShowAgents((v) => !v)}>
@@ -2393,7 +2399,7 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
           noise that teaches people to scroll past the panel before it ever has an answer. It
           appears as soon as one step has finished and keeps filling in, which is also what
           makes it useful DURING a long build rather than only after it. */}
-      {run.steps.some((s) => s.status === "succeeded" || s.status === "skipped") ? (
+      {runHasReport(run.steps) ? (
         <RunReportPanel runId={run.id} projectId={projectId}
                         researchAction={(run.actions ?? []).find(
                           (a) => a.key === "build_on_research")} />

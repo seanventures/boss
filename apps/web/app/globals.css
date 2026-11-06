@@ -8528,6 +8528,41 @@ details[open] > .skill-form-summary::before { transform: rotate(90deg); }
                 font-weight: 700; color: var(--amber, #d29922); }
 .rr-root[open] > summary { margin-bottom: 4px; }
 
+/* OPEN REPORT — the whole report in a dialog, every section open (run-report-ui.tsx).
+   On the panel's bar it sits at the right; on a finished run's bar it leads, accent-filled. */
+.rr-open {
+  display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 7px;
+  font-size: 0.75rem; font-weight: 600; cursor: pointer; white-space: nowrap;
+  border: 1px solid var(--accent-line, var(--accent, #58a6ff)); background: var(--accent-soft, rgba(88, 166, 255, 0.10));
+  color: var(--accent-text, var(--accent, #58a6ff));
+}
+.rr-open:hover { background: rgba(88, 166, 255, 0.18); }
+.rr-open:focus-visible { outline: 2px solid var(--accent, #58a6ff); outline-offset: 2px; }
+.rr-open-bar { margin-left: auto; align-self: center; }
+.rr-dialog {
+  display: grid; gap: 4px; width: min(56rem, 100%);
+  max-height: calc(100vh - clamp(12px, 4vh, 64px) - 12px); overflow-y: auto; overscroll-behavior: contain;
+  padding: 16px 20px 20px; border: 1px solid var(--border-strong); border-radius: var(--r-xl, 12px);
+  background: var(--surface); color: var(--ink); box-shadow: 0 32px 90px rgba(0, 0, 0, 0.5);
+  box-sizing: border-box;
+}
+.rr-dialog-head { position: sticky; top: -16px; z-index: 1; display: flex; align-items: center; justify-content: space-between;
+                  gap: 12px; margin: -16px -20px 0; padding: 14px 20px 10px; background: var(--surface);
+                  border-bottom: 1px solid var(--border); }
+.rr-dialog-title { margin: 0; font-family: var(--display); font-size: 1.1rem; font-weight: 600; }
+.rr-dialog-close {
+  display: inline-grid; place-items: center; width: 30px; height: 30px; border-radius: 7px; cursor: pointer;
+  border: 1px solid var(--border); background: transparent; color: var(--ink-soft);
+}
+.rr-dialog-close:hover { color: var(--ink); border-color: var(--border-strong); }
+.rr-expanded { margin: 0; border: 0; padding: 4px 0 0; background: transparent; }
+.rr-expanded .rr-root-summary .rr-title { display: none; }
+@media (max-width: 640px) {
+  .rr-dialog { padding: 12px 14px 16px; }
+  .rr-dialog-head { top: -12px; margin: -12px -14px 0; padding: 12px 14px 8px; }
+  .rr-dialog .rr-table { display: block; overflow-x: auto; }
+}
+
 /* Turn the findings into the next run rather than into a note somebody retypes. */
 .rr-build {
   display: inline-flex; align-items: center; gap: 6px; margin-top: 10px;
