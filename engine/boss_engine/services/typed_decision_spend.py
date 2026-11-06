@@ -369,7 +369,12 @@ class TypedDecisionSpend:
         self._ensure_lease(authority)
         try:
             with self._kept_alive(authority):
-                batch = self._call(decider, binding, state)
+                # OpenAI's own retry loop, and the Claude CLI's login recheck, would
+                # be a second provider call on this attempt's receipt.
+                from .openai_adapter import single_attempt
+
+                with single_attempt():
+                    batch = self._call(decider, binding, state)
         except Exception as error:
             reason = error
             if _uncertain(reason):
@@ -630,9 +635,14 @@ class TypedDecisionSpend:
         scope = self._scope(connection)
         prefix = model_receipt_dedupe(self.project_id, identity)
         rows = self.receipts.list_by_dedupe_prefix(connection, scope["org_id"], prefix)
+        # The careful role shares this question's prefix and adds ":second".
+        # Replaying the primary answer there would skip the second opinion and
+        # leave it without a receipt of its own.
+        careful = dedupe.endswith(":second")
         succeeded = [
             row for row in rows
             if row.get("status") == "succeeded" and _result_of(row).get("answer")
+            and str(row.get("dedupe_key") or "").endswith(":second") == careful
         ]
         if succeeded:
             original = succeeded[0]

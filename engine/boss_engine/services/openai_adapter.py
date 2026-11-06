@@ -128,6 +128,11 @@ def single_attempt():
         _SINGLE_ATTEMPT.reset(token)
 
 
+def in_single_attempt() -> bool:
+    """True while `single_attempt` forbids a hidden retry on the current receipt."""
+    return bool(_SINGLE_ATTEMPT.get())
+
+
 def _with_retry(call, *, tries: int = 8, base: float = 2.0, stats: Optional[dict] = None):
     """Call an OpenAI request, retrying on 429 / transient errors with exponential backoff +
     jitter. Honours a Retry-After header when the provider supplies one. ``stats`` (when
