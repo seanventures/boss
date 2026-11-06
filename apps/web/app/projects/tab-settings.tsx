@@ -19,7 +19,7 @@ import { GatedButton } from "../../components/gated";
 import { useGuardedCall } from "../../components/identity/identity-provider";
 import { IdentityError, idGet, refusalSentence } from "../../lib/identity/api";
 import {
-  PX_PATHS, a, isPxDemo, o, parseSettings, pxHref, s, setCaptain, usePxRead, writePxUrl, type Settings, type SettingsSection,
+  PX_PATHS, a, isPxDemo, usePageSearch, o, parseSettings, pxHref, s, setCaptain, usePxRead, writePxUrl, type Settings, type SettingsSection,
 } from "../../lib/project-experience";
 import { FX_SETTINGS } from "../../lib/project-experience-fixtures";
 import { Face, Ico, PxLink, ReadGate, Said, Tag, type Tone } from "./kit";
@@ -57,7 +57,7 @@ function fallbackSettings(ctx: PxCtx): Settings {
 export function SettingsTab({ ctx }: { ctx: PxCtx }) {
   const read = usePxRead<Settings>(PX_PATHS.settings(ctx.projectId), parseSettings, { everyMs: 60_000, demo: () => parseSettings(FX_SETTINGS) });
   const data = read.data ?? (read.state === "missing" ? fallbackSettings(ctx) : null);
-  const asked = typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("section");
+  const asked = usePageSearch().get("section");
   const [active, setActive] = useState<string>(asked ?? "demo_logins");
   const refs = useRef<Record<string, HTMLElement | null>>({});
   useEffect(() => {

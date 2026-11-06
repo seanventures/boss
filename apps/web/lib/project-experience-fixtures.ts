@@ -239,7 +239,7 @@ export const FX_SETTINGS = {
 };
 
 export const FX_HEALTH = {
-  environments: [{ key: "staging", label: "Staging", health: "healthy", uptime_pct: 99.9, error_rate: 0.4, p95_ms: 180,
+  environments: [{ key: "staging", label: "Staging", target_id: "tgt_staging", health: "healthy", uptime_pct: 99.9, error_rate: 0.4, p95_ms: 180,
                    series: { errors: [0.2, 0.3, 0.1, 0.6, 0.4, 0.2, 0.3, 0.5, 0.4, 0.3], latency: [170, 180, 175, 190, 182, 176, 181, 185, 178, 180] },
                    slo: { target: 99.5, burn: "ok" }, href: "?area=observability&app=helpdesk" }],
   alerts: [{ id: "al_5xx", label: "5xx on /api/tickets", severity: "page", state: "resolved", since: "Thu", href: "?area=observability&view=alerts" }],

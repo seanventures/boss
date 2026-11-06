@@ -10,10 +10,14 @@ import {
   ArrowRight, ArrowSquareOut, Bell, Buildings, ChartLine, FileText, Heartbeat, LinkSimple, Pulse, ShieldCheck, Siren, Terminal,
 } from "@phosphor-icons/react";
 
-import { PX_PATHS, parseHealth, pxHref, usePxRead, type HealthView } from "../../lib/project-experience";
+import { PX_PATHS, isPxDemo, navigateTo, parseHealth, pxHref, usePxRead, type HealthView } from "../../lib/project-experience";
 import { FX_HEALTH } from "../../lib/project-experience-fixtures";
 import { Empty, EngineNotReady, Face, Flow, HEALTH_TONE, HEALTH_WORD, Ico, PxLink, ReadGate, Ring, Spark, Tag } from "./kit";
 import { whenLocal } from "../../lib/local-time";
+import { AppAlertsTab } from "../observability/alerts-tab";
+import { usePulse } from "../../lib/obs-view";
+import "../infra/infra.css";
+import "../observability/obs.css";
 import type { PxCtx } from "./project-page";
 
 export function HealthTab({ ctx }: { ctx: PxCtx }) {
@@ -22,7 +26,10 @@ export function HealthTab({ ctx }: { ctx: PxCtx }) {
   return (
     <div className="px-stack" data-testid="px-health">
       <ReadGate read={read} what="Health" missing={
-        <EngineNotReady what="This project's health"><a className="px-btn" href={pxHref(obs)} data-testid="px-health-obs">Open Observability</a></EngineNotReady>
+        <>
+          <EngineNotReady what="This project's health summary"><a className="px-btn" href={pxHref(obs)} data-testid="px-health-obs">Open Observability</a></EngineNotReady>
+          <AlertRules ctx={ctx} envs={[]} />
+        </>
       }>
         {(h) => (
           <>
@@ -84,7 +91,7 @@ export function HealthTab({ ctx }: { ctx: PxCtx }) {
                       <span><b>{a.href ? <PxLink href={a.href} className="">{a.label}</PxLink> : a.label}</b><small>{a.severity} · {a.state === "firing" ? `firing since ${whenLocal(a.since)}` : `resolved ${whenLocal(a.since)}`}</small></span>
                       <Tag tone={a.state === "firing" ? "red" : "green"}>{a.state}</Tag>
                     </div>
-                  )) : <p className="px-faint">No alert rules yet.</p>}
+                  )) : <p className="px-faint">Nothing has fired.</p>}
                 </section>
               </div>
               <div className="px-stack">
@@ -107,9 +114,52 @@ export function HealthTab({ ctx }: { ctx: PxCtx }) {
                 </section>
               </div>
             </div>
+            <AlertRules ctx={ctx} envs={h.environments.map((e) => ({ label: e.label, targetId: e.target_id }))} />
           </>
         )}
       </ReadGate>
     </div>
+  );
+}
+
+/**
+ * THE SAME ALERT RULES AS OBSERVABILITY (operator, 2026-11-06: "we need to have same experience -
+ * dont kill these screens"). Each of this project's environments gets Observability's own app
+ * Alerts component — the rules with their PromQL and facts, state, Tune, Silence, Respond
+ * automatically, + New alert rule, signal sources and history — not a summary. Which environments:
+ * §12's `target_id`s, else this project's apps as Observability lists them.
+ */
+function AlertRules({ ctx, envs }: { ctx: PxCtx; envs: { label: string; targetId: string }[] }) {
+  const demo = isPxDemo();
+  const pulse = usePulse(demo ? "" : ctx.projectId, "24h");
+  const known = envs.filter((e) => e.targetId);
+  const targets = known.length ? known
+    : (pulse.data?.rows ?? []).filter((r) => r.state !== "not_deployed").map((r) => ({ label: `${r.app} · ${r.env}`, targetId: r.targetId }));
+  if (demo) {
+    return <p className="px-faint" data-testid="px-h-rules-demo">Sample mode: the alert rules (Tune, Silence, Respond automatically, New alert rule) load from the engine.</p>;
+  }
+  if (!targets.length) {
+    return pulse.loading ? null : (
+      <section className="px-card" data-testid="px-h-rules-none">
+        <Empty icon={Bell} tone="amber" title="No alert rules yet" line="Rules arrive with the first deploy: Beacon installs the monitoring pack." />
+      </section>
+    );
+  }
+  return (
+    <section aria-labelledby="px-h-rules" className="px-stack" style={{ gap: 10 }} data-testid="px-h-rules">
+      <div className="px-row"><Ico icon={Bell} c="amber" /><h2 id="px-h-rules" style={{ margin: 0, fontFamily: "var(--display)", fontSize: ".86rem" }}>Alert rules</h2>
+        <small className="px-faint">the same rules and actions as Observability</small></div>
+      {targets.map((t, i) => (
+        <details key={t.targetId} className="px-card" open={i === 0} data-testid={`px-h-rules-${t.targetId}`}>
+          <summary style={{ cursor: "pointer", fontWeight: 600 }}>{t.label}
+            <a className="px-chip" style={{ marginLeft: 8 }} href={pxHref(`?area=observability&app=${encodeURIComponent(t.targetId)}&atab=alerts`)}
+               data-testid={`px-h-rules-obs-${t.targetId}`}>In Observability</a></summary>
+          <div className="inf" style={{ marginTop: 10 }}>
+            <AppAlertsTab projectId={ctx.projectId} actor={ctx.actor} targetId={t.targetId}
+                          onIncident={(id) => navigateTo(pxHref(`?area=observability&app=${encodeURIComponent(t.targetId)}${id ? `&inc=${encodeURIComponent(id)}` : ""}`))} />
+          </div>
+        </details>
+      ))}
+    </section>
   );
 }

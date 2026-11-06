@@ -27,7 +27,7 @@ import { GatedButton } from "../../components/gated";
 import { fetchSetup } from "../../lib/setup-client";
 import type { SetupView } from "../../lib/setup-types";
 import {
-  PX_PATHS, navigateTo, parseOnboarding, projectHref, pxHref, readPxUrl, startWork, usePxRead, type Onboarding, type ProjectCard, type StepState,
+  PX_PATHS, navigateTo, usePageSearch, parseOnboarding, projectHref, pxHref, readPxUrl, startWork, usePxRead, type Onboarding, type ProjectCard, type StepState,
 } from "../../lib/project-experience";
 import { FX_ONBOARDING } from "../../lib/project-experience-fixtures";
 import { useSignin } from "../setup/github-signin-row";
@@ -63,7 +63,7 @@ export function FirstRun({ projectId, cards }: { projectId: string; actor: strin
   const { state, view, failed } = useWelcome(projectId);
   const url = usePxUrl();
   const withRepo = cards.filter((c) => c.repo);
-  const askedId = typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("project_id");
+  const askedId = usePageSearch().get("project_id");
   const guided = url.firstRun && withRepo.length > 0 ? (withRepo.find((c) => c.id === askedId) ?? withRepo[0]) : null;
   // Unknown setup (an older API, or it failed): every door is open; nothing is ticked that we don't know.
   const s: WelcomeState = state ?? { github: { done: false, login: null, repos: 0 }, model: { done: false, label: null, kind: null }, sample: { done: false } };

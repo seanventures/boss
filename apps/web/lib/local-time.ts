@@ -62,6 +62,10 @@ let hydrated = false;
 export function markHydrated(): void {
   if (typeof window !== "undefined") hydrated = true;
 }
+/** Whether this page has hydrated (a mount effect has run): before it, render as the server did. */
+export function isHydrated(): boolean {
+  return hydrated && typeof window !== "undefined";
+}
 export function localFull(v: number | string | null | undefined): string {
   if (hydrated && typeof window !== "undefined") return LOCAL.full(v);
   const ms = typeof v === "number" ? v : v ? Date.parse(v) : NaN;

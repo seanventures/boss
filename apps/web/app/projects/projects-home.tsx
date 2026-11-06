@@ -178,7 +178,7 @@ export function ProjectCardView({ card }: { card: ProjectCard }) {
               <span className="px-dot" data-s={card.health} data-round aria-hidden /> {card.live_url.replace(/^https?:\/\//, "")}
             </a>
           ) : <span className="px-faint">{card.stage === "onboarding" ? "Helm is reading it" : "not deployed yet"}</span>}
-          <span className="px-faint">{card.running ? `${card.running} running` : ""}</span>
+          {card.running ? <span className="px-faint" style={{ display: "block" }}>{card.running} running</span> : null}
         </div>
         {card.series.length > 1 ? <div style={{ width: 80 }}><Spark series={card.series} label={`${card.name} cost this week`} /></div> : null}
       </div>

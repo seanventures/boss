@@ -6,6 +6,7 @@
  * empty / loading / error states every surface uses. One look, repeated, so it becomes familiar.
  */
 import React, { useEffect, useId, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { createPortal } from "react-dom";
 import {
   ArrowSquareOut, ArrowsClockwise, Check, CloudSlash, Folders, Lock, Pause, Warning, X, type Icon,
@@ -276,7 +277,10 @@ export function openAddProject(step: "import" | "idea" | "sample" | "1" = "impor
 
 /** The URL, re-read on Back/Forward and on every in-page move. */
 export function usePxUrl(): PxUrl {
-  const [url, setUrl] = useState<PxUrl>(() => readPxUrl());
+  // The first render reads the URL the server rendered (Next's search params), so the tab drawn
+  // on the server is the one hydration expects; a test without Next's router reads the window.
+  const sp = useSearchParams();
+  const [url, setUrl] = useState<PxUrl>(() => readPxUrl(sp ? `?${sp.toString()}` : undefined));
   useEffect(() => {
     const read = () => setUrl(readPxUrl());
     read();

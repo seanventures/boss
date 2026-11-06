@@ -12,12 +12,13 @@
  * "Sample data" banner; writes in that mode send nothing.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 
 import { onChanged } from "../app/changed";
 import { obsWrite } from "../app/observability/obs-write";
 import { useAreaShown } from "./area-shown";
 import { isConsoleLive, subscribeConsoleLive } from "./console-live";
-import { markHydrated } from "./local-time";
+import { isHydrated, markHydrated } from "./local-time";
 
 // ── shared enums (§ Shared enums) ────────────────────────────────────────────────────────────
 
@@ -137,7 +138,7 @@ export type SettingsSection = {
 };
 export type Settings = { sections: SettingsSection[] };
 export type HealthView = {
-  environments: { key: string; label: string; health: Health; uptime_pct: number | null; error_rate: number | null; p95_ms: number | null;
+  environments: { key: string; label: string; target_id: string; health: Health; uptime_pct: number | null; error_rate: number | null; p95_ms: number | null;
                   series: { errors: number[]; latency: number[] }; slo: { target: number | null; burn: "ok" | "warning" | "breach" }; href: string }[];
   alerts: { id: string; label: string; severity: "page" | "ticket" | "info"; state: "firing" | "resolved"; since: string; href: string }[];
   incidents: { id: string; label: string; state: "running" | "needs_you" | "resolved"; graph_href: string; mini: { label: string; state: StepState }[] }[];
@@ -325,7 +326,7 @@ export const parseHealth = (v: unknown): HealthView => {
   return {
     environments: a(x.environments).map((e) => {
       const y = o(e); const ser = o(y.series); const slo = o(y.slo);
-      return { key: s(y.key), label: s(y.label, s(y.key)), health: oneOf(y.health, HEALTHS, "unknown"), uptime_pct: nn(y.uptime_pct),
+      return { key: s(y.key), label: s(y.label, s(y.key)), target_id: s(y.target_id), health: oneOf(y.health, HEALTHS, "unknown"), uptime_pct: nn(y.uptime_pct),
                error_rate: nn(y.error_rate), p95_ms: nn(y.p95_ms), series: { errors: nums(ser.errors), latency: nums(ser.latency) },
                slo: { target: nn(slo.target), burn: oneOf(slo.burn, ["ok", "warning", "breach"] as const, "ok") }, href: s(y.href) };
     }),
@@ -389,7 +390,9 @@ export function writePxUrl(patch: Record<string, string | null>, mode: "push" | 
 
 /** A contract `href` ("?project_id=…&area=…") as a console link that keeps the org and drops the
  *  rest of this page's state (a drawer, a filter); an absolute URL is returned as it is. */
-export function pxHref(href: string, search = typeof window === "undefined" ? "" : window.location.search): string {
+export function pxHref(href: string, search = isHydrated() ? window.location.search : ""): string {
+  // Before hydration the server's text (no org): the browser's first render must match it, and the
+  // shell's link handler restores the org on any in-console link that lacks it.
   if (!href) return "";
   if (/^(https?:)?\/\//.test(href) || href.startsWith("/v1/")) return href;
   const q = href.slice(href.indexOf("?") + 1);
@@ -413,6 +416,13 @@ export function isPxDemo(search = typeof window === "undefined" ? "" : window.lo
   return new URLSearchParams(search).get("px_demo") === "1";
 }
 
+/** The page's own search params, the same on the server and in the browser's first render
+ *  (Next's), or the window's where there is no Next router (a test). */
+export function usePageSearch(): URLSearchParams {
+  const sp = useSearchParams();
+  return new URLSearchParams(sp ? sp.toString() : typeof window === "undefined" ? "" : window.location.search);
+}
+
 // ── the read hook ────────────────────────────────────────────────────────────────────────────
 
 export type ReadState = "loading" | "ready" | "missing" | "error";
@@ -426,7 +436,7 @@ export const isMissingStatus = (status: number): boolean => status === 404 || st
  * console is Live; again on any console change (app/changed.ts). `demo` is what sample mode shows.
  */
 export function usePxRead<T>(url: string | null, parse: (raw: unknown) => T, opts: { everyMs?: number; demo?: () => T | null } = {}): PxRead<T> {
-  const demoMode = isPxDemo();
+  const demoMode = usePageSearch().get("px_demo") === "1";
   const [data, setData] = useState<T | null>(() => (demoMode && opts.demo ? opts.demo() : null));
   const [state, setState] = useState<ReadState>(demoMode && opts.demo ? "ready" : url ? "loading" : "missing");
   const [error, setError] = useState<string | null>(null);

@@ -13,6 +13,7 @@
  * re-buckets. `?watch=<app>|<env>` — the workflow "Set up monitoring" step's link — opens that
  * app's drawer, or Find with its name when no row matches.
  */
+import { consoleHref } from "../console-href";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
 import { openDockAbout } from "../../lib/dock-subject";
@@ -82,6 +83,10 @@ function PulseRowView({ row, pulse, onOpen, changed, now }: {
         ) : null}
         <button type="button" className="ag-link obs-go" aria-label={`Open ${name}`} data-testid="obs-app-open-row"
                 onClick={() => onOpen(row.targetId)}>↗</button>
+        {/* ONE PROJECT'S HEALTH LIVES ON ITS PROJECT PAGE (BOSSAPP-914 screen 15); this view keeps
+            the cross-app comparison and links each app there (Project › Health links back). */}
+        <a className="inf-link obs-project-health" href={projectHealthHref()} data-testid="obs-app-project-health"
+           title={`${row.app}: its project's Health tab`} aria-label={`Project health for ${name}`}>Project › Health</a>
       </span>
       {table ? (
         <div className="obs-prow-table">
@@ -248,4 +253,9 @@ export function ObsAskBoss({ pulse }: ObsTabProps) {
       ) : null}
     </span>
   );
+}
+
+/** This app's Project › Health (the Observability area is scoped to the open project). */
+export function projectHealthHref(): string {
+  return consoleHref({ area: "project", tab: "health", app: undefined, atab: undefined, inc: undefined, view: undefined, win: undefined });
 }

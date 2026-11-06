@@ -17,6 +17,7 @@
  * SSH is off); host writes only when `can.install_key` / `can.install_docker` / `can.retire`.
  * Never a dead button.
  */
+import { consoleHref } from "../console-href";
 import { GatedButton } from "../../components/gated";
 import React, { useEffect, useState } from "react";
 
@@ -433,6 +434,7 @@ export function HostDrawer({ projectId, actor, hostId, canWrite, onClose, onResi
               <ErrorLine error={error} />
             </DrawerSection>
           ) : null}
+          <ProjectsOnServer residents={h.residents} />
           <DrawerSection label="ON THIS MACHINE" testId="inf-host-residents">
             {h.residents.length ? (
               <ul className="inf-resident-rows">
@@ -462,5 +464,37 @@ export function HostDrawer({ projectId, actor, hostId, canWrite, onClose, onResi
         </>
       ) : null}
     </Drawer>
+  );
+}
+
+/** PROJECTS ON THIS SERVER (BOSSAPP-914 screen 14): a shared server stays in Infra; what runs on it
+ *  is grouped by project, each linking to that Project › Deployments (which links back here). */
+export function ProjectsOnServer({ residents }: { residents: HostDetail["residents"] }) {
+  const byProject = new Map<string, { name: string; apps: HostDetail["residents"] }>();
+  for (const r of residents) {
+    if (!r.project) continue;
+    const g = byProject.get(r.project.id) ?? { name: r.project.name, apps: [] };
+    g.apps.push(r);
+    byProject.set(r.project.id, g);
+  }
+  if (!byProject.size) return null;
+  return (
+    <DrawerSection label="PROJECTS ON THIS SERVER" testId="inf-host-projects">
+      <ul className="inf-resident-rows">
+        {[...byProject.entries()].map(([id, g]) => (
+          <li key={id} className="inf-row-btn" style={{ display: "flex", alignItems: "center", gap: 8 }} data-testid={`inf-host-project-${id}`}>
+            <span className="inf-trunc" style={{ flex: 1 }}>
+              <b>{g.name}</b>{" "}
+              <span className="inf-faint">{g.apps.map((a) => [a.env, a.port ? `:${a.port}` : ""].filter(Boolean).join(" ")).filter(Boolean).join(" · ")}</span>
+            </span>
+            <StateWord w={g.apps[0].health} />
+            <a className="inf-link" href={consoleHref({ project_id: id, area: "project", tab: "deployments", host: undefined, view: undefined })}
+               data-console-load data-testid={`inf-host-project-link-${id}`} title={`${g.name}: its deployments, demo logins and health`}>
+              Project › Deployments
+            </a>
+          </li>
+        ))}
+      </ul>
+    </DrawerSection>
   );
 }

@@ -50,7 +50,8 @@ export function ProjectsNav({ items, active, activeProjectId, onGo, open, onTogg
             const here = onProject && p.id === activeProjectId;
             return (
               <a key={p.id} className={`bx-nav-item bx-nav-child${here ? " active" : ""}`} aria-current={here ? "page" : undefined}
-                 href={projectHref(p.id)} data-console-load data-testid={`nav-project-${p.id}`} title={p.name}>
+                 href={projectHref(p.id)} data-console-load data-testid={`nav-project-${p.id}`} title={p.name}
+                 style={{ textDecoration: "none" }}>
                 <span aria-hidden style={{ width: 7, height: 7, borderRadius: 2, flex: "none",
                   background: p.dot === "you" ? "var(--amber)" : p.dot === "now" ? "var(--teal)" : p.dot === "done" ? "var(--green)" : "var(--quiet)" }} />
                 <span>{p.name}</span>

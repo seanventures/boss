@@ -1474,7 +1474,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         {/* PROJECTS (BOSSAPP-914): the list and the first run, and one project's page. Each reads
             its own data client-side (contract §1-§12); nothing for them is fetched here. */}
         {shows("projects") ? (
-        <section className="panel-stack" data-area="projects" aria-label="Projects">
+        <section data-area="projects" aria-label="Projects">
           <ProjectsHome projectId={activeProjectId} actor={activeActorId} orgId={activeOrgId}
                         projects={projects.items.filter((p) => p.orgId === activeOrgId).map((p) => ({ id: p.id, name: p.name }))}
                         homeId={selectedOrg.project_id}
@@ -1483,7 +1483,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         ) : null}
 
         {shows("project") ? (
-        <section className="panel-stack" data-area="project" aria-label="Project">
+        <section data-area="project" aria-label="Project">
           <ProjectPage projectId={activeProjectId} actor={activeActorId} orgId={activeOrgId} />
         </section>
         ) : null}
