@@ -3123,7 +3123,7 @@ def own_place_on_host(engine: Any, manifest_text: str, manifest: Any,
     SHARED HOSTS MADE THIS POSSIBLE. A verified host is usable by every project in its
     organisation, so two projects' apps with the same name — boss-dogfood's old helpdesk-ai and
     the helpdesk-ai project's HelpDesk AI — both defaulted to /opt/boss-apps/helpdesk-ai and the
-    compose project helpdesk-ai on 2.29.2.202, and the second deploy was refused (2026-11-06).
+    compose project helpdesk-ai on the shared server, and the second deploy was refused (2026-11-06).
     The target keeps the place it last used; a new one is named after the target's id. The
     text with the place written in is what the plan stores, so apply renders the same place."""
     import yaml

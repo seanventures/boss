@@ -1,6 +1,6 @@
 """A verified host belongs to the organisation, not to the one project that registered it.
 
-HelpDesk AI was imported as its own project and could not deploy anywhere: 2.29.2.202 was
+HelpDesk AI was imported as its own project and could not deploy anywhere: the shared server was
 registered and verified under another project of the same organisation, and BOSS's agent found
 "attach refused across projects" with no way on. Every project of an org may deploy onto the org's
 hosts, as every project may use the org's repositories; another organisation never sees them.

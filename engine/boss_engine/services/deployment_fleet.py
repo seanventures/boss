@@ -186,7 +186,7 @@ def get_host(connection, host_id: str) -> Optional[dict[str, Any]]:
 
 #: SHARED HOSTS (2026-11-05). A machine one project registered and verified is the ORGANISATION's:
 #: every project of the same org may deploy onto it, as every project may use the org's repos.
-#: Imported HelpDesk AI could not deploy anywhere because 2.29.2.202 had been registered under
+#: Imported HelpDesk AI could not deploy anywhere because the shared server had been registered under
 #: another project; BOSS's own agent found "attach refused across projects" and had no way on.
 #: Managing the machine (its key, verify, retire) stays with the project that registered it.
 #: A SQL predicate over deployment_hosts (alias optional) with the project bound as `:p`.
