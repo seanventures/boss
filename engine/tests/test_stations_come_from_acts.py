@@ -54,7 +54,7 @@ def test_a_pending_review_is_hollow_and_never_working():
 
 def test_machinery_is_boss_never_an_agent():
     got = line(run(), [act("implement", "software_engineer", "active", minutes_ago=5)])
-    for key in ("check", "pr", "preview"):
+    for key in ("check", "pr"):
         assert got[key]["face"] in ("boss", "none"), key
         assert got[key]["role_key"] is None, key
     done = line(run("completed", "done", pull_request_url="https://x/pull/9",
@@ -72,8 +72,8 @@ def test_a_lean_build_skips_tests_and_review():
     assert got["tests"]["tip"] == "Lean profile skips Tests"
     assert got["review"]["status"] == "skipped"
     k, n = fv.k_of_n(list(got.values()))
-    # Plan, Tests and Review did not run: five stations were planned, not eight.
-    assert n == 5 and k <= n
+    # Plan, Tests and Review did not run: four stations were planned, not seven.
+    assert n == 4 and k <= n
 
 
 def test_a_repair_round_increments_rounds():
@@ -121,13 +121,13 @@ def test_cancelled_stops_where_it_was_and_reaches_nothing_after():
     got = line(run("cancelled", "implement", fctx={"cancelled_by": "ceo"}),
                [act("implement", "software_engineer", "skipped", 5)])
     assert (got["build"]["status"], got["build"]["word"]) == ("stopped", "Stopped")
-    for k in ("check", "review", "pr", "preview", "ship"):
+    for k in ("check", "review", "pr", "ship"):
         assert (got[k]["status"], got[k]["word"], got[k].get("not_reached")) == \
             ("pending", "Not reached", True), k
         assert got[k]["face"] == "none" and got[k]["hollow_role"] is None, k
     # Still planned: a stop never shrinks the count. Plan and Tests were passed (skipped);
-    # Build and the five it never reached are the six planned.
-    assert fv.k_of_n(list(got.values()))[1] == 6
+    # Build and the four it never reached are the five planned.
+    assert fv.k_of_n(list(got.values()))[1] == 5
 
 
 def test_k_never_passes_n():
@@ -179,10 +179,10 @@ def test_a_failed_check_says_failed_with_the_reason_and_review_says_stopped():
     assert (got["check"]["status"], got["check"]["word"]) == ("failed", "Failed")
     assert got["check"]["tip"] == "app didn't start: port 8000 never answered"
     assert (got["review"]["status"], got["review"]["word"]) == ("stopped", "Stopped")
-    for k in ("pr", "preview", "ship"):
+    for k in ("pr", "ship"):
         assert (got[k]["word"], got[k].get("not_reached")) == ("Not reached", True), k
     assert not [s for s in got.values() if s["status"] == "stuck" or s["word"] == "Stuck"]
-    assert not [k for k in ("pr", "preview", "ship") if got[k]["word"] == "Next"]
+    assert not [k for k in ("pr", "ship") if got[k]["word"] == "Next"]
 
 
 def test_a_failed_build_fails_its_station_and_reaches_nothing_after():
@@ -192,7 +192,7 @@ def test_a_failed_build_fails_its_station_and_reaches_nothing_after():
     got = line(r, acts)
     assert (got["check"]["status"], got["check"]["word"], got["check"]["tip"]) == \
         ("failed", "Failed", "app didn't start")
-    for k in ("review", "pr", "preview", "ship"):
+    for k in ("review", "pr", "ship"):
         assert got[k]["word"] == "Not reached", k
 
 
@@ -275,7 +275,7 @@ def test_crun_db538dff_app_did_not_start_fails_check_not_review():
     assert got["review"]["status"] == "done", got["review"]
     assert {s["status"] for s in got["review"]["seats"]} == {"done"}
     assert "blocked" not in {s["verdict"] for s in got["review"]["seats"]}
-    for k in ("pr", "preview", "ship"):
+    for k in ("pr", "ship"):
         assert got[k]["word"] == "Not reached", k
     # NOW names the same station.
     assert fv.build_state(r, acts=_review_then_check(), now=NOW)["station"] == "check"
@@ -321,7 +321,7 @@ def test_a_blocked_build_with_no_acts_fails_its_first_station_with_the_error():
     assert (got["plan"]["status"], got["plan"]["word"]) == ("failed", "Failed")
     assert got["plan"]["tip"] == "the repository could not be cloned"
     assert all(got[k]["word"] == "Not reached" for k in ("tests", "build", "check", "review", "pr",
-                                                         "preview", "ship"))
+                                                         "ship"))
 
 
 def test_the_first_failing_gate_is_in_pipeline_order_not_list_order():
@@ -330,3 +330,18 @@ def test_the_first_failing_gate_is_in_pipeline_order_not_list_order():
     assert fv.failing_gate_stop({"failing_gates": ["code_review_passed"]}) == \
         ("code_review_passed", "review")
     assert fv.failing_gate_stop({"failing_gates": []}) is None
+
+
+def test_a_build_ends_at_its_pr_and_a_preview_is_a_link_never_a_stage():
+    """Operator 2026-11-05: a failed preview showed a finished build as Stuck. Build and test
+    end at the PR; a running preview is the PR's App link; a failed one is not on the line."""
+    done = dict(pull_request_url="https://x/pull/2", pull_request_number=2)
+    acts = [act("implement", "software_engineer", minutes_ago=9)]
+    failed = line(run("completed", "done", **done), acts,
+                  preview={"status": "failed", "url": None})
+    assert "preview" not in failed
+    assert all(s["status"] != "stuck" for s in failed.values())
+    up = line(run("completed", "done", **done), acts,
+              preview={"status": "running", "url": "http://app/"})
+    assert up["pr"]["links"] == [{"label": "#2 ↗", "url": "https://x/pull/2"},
+                                 {"label": "App ↗", "url": "http://app/"}]

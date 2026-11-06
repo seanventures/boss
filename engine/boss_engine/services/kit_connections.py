@@ -266,7 +266,7 @@ def verified_hosts(connection: Connection, project_id: str) -> int:
     try:
         with connection.begin_nested():
             return int(connection.execute(
-                text("SELECT count(*) FROM deployment_hosts WHERE project_id = :p "
+                text(f"SELECT count(*) FROM deployment_hosts WHERE {_usable_hosts()} "
                      "AND status IN ('verified', 'ready', 'active')"), {"p": project_id}).scalar() or 0)
     except Exception:  # noqa: BLE001 — no hosts table: none
         return 0
@@ -1148,3 +1148,10 @@ def disconnect(connection: Connection, settings: Any, project_id: str, ability: 
     else:
         raise KitFieldError(f"{ability['label']} is connected elsewhere.", None)
     emit_event(connection, project_id, "kit.disconnected", actor, "kit_ability", key, {})
+
+
+def _usable_hosts(alias: str = "") -> str:
+    """deployment_fleet.usable_hosts_sql: a project's hosts include the ones its organisation shares."""
+    from .deployment_fleet import usable_hosts_sql
+
+    return usable_hosts_sql(alias)

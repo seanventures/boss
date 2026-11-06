@@ -24,7 +24,7 @@ import { openDockAbout, type DockSubject } from "../lib/dock-subject";
 import { missingRequired, suppliedInputs, workflowInputFields } from "../lib/workflow-inputs";
 import { HostAdviceBanner, useHostAdvice } from "./host-advice";
 import { StartRefusal, asReadiness, type PendingRefusal } from "./workflow-readiness-ui";
-import { RunReportPanel } from "./run-report-ui";
+import { RunReportPanel, OpenRunReportButton, runHasReport } from "./run-report-ui";
 import { plannedDeploymentFrom } from "./deploy-ui";
 import { WriteInFlightError, apiWrite, runPress } from "../lib/api-write";
 import { withAnsweredGates } from "../lib/decided-gates";
@@ -2058,7 +2058,16 @@ export function timedOut(step: RunStep): boolean {
   return [step.error, out.reason, out.error].some((v) => typeof v === "string" && /\bstep_timeout\b/.test(v));
 }
 
+/** A deploy held until its pull request is merged (runner._merge_wait). Its question may
+ *  already be approved — BOSS does not merge on every install — and the merge is still a
+ *  person's to do, so it needs them until GitHub shows it merged. */
+export function waitsForMerge(step: RunStep): boolean {
+  const awaited = (step.output as { await?: { kind?: string } } | undefined)?.await;
+  return step.status === "waiting" && awaited?.kind === "merge";
+}
+
 export function needsYou(step: RunStep): boolean {
+  if (waitsForMerge(step)) return true;
   // THE GATE'S STATE, NOT ONLY THE STEP'S.
   //
   // This was `decision_id && status === "waiting"`, which is true for a gate nobody has
@@ -2076,6 +2085,7 @@ export function needsYou(step: RunStep): boolean {
 
 /** A gate that has been answered but whose step has not moved yet. */
 export function decidedButNotMoved(step: RunStep): string {
+  if (waitsForMerge(step)) return "";
   if (!step.decision_id || step.status !== "waiting" || !step.decision_status) return "";
   if (OPEN_GATE.has(step.decision_status)) return "";
   return step.decision_status;
@@ -2279,6 +2289,12 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
   return (
     <div className="dw-path" data-testid="dw-path" data-full-page={fullPage ? "true" : undefined}>
       <div className="wf-run-bar">
+        {/* A FINISHED RUN IS READ FOR WHAT WAS DONE: its report, every section open, is the
+            first thing on its bar — not a collapsed panel below the lane. */}
+        {terminal && runHasReport(run.steps) ? (
+          <OpenRunReportButton runId={run.id} projectId={projectId} className="rr-open rr-open-top"
+                               researchAction={(run.actions ?? []).find((a) => a.key === "build_on_research")} />
+        ) : null}
         <button type="button" className="wf-tag" aria-pressed={showAgents}
                 data-testid="dw-run-agents" title={terminal ? "Agents, as run" : "Agents on this run"}
                 onClick={() => setShowAgents((v) => !v)}>
@@ -2387,7 +2403,7 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
           noise that teaches people to scroll past the panel before it ever has an answer. It
           appears as soon as one step has finished and keeps filling in, which is also what
           makes it useful DURING a long build rather than only after it. */}
-      {run.steps.some((s) => s.status === "succeeded" || s.status === "skipped") ? (
+      {runHasReport(run.steps) ? (
         <RunReportPanel runId={run.id} projectId={projectId}
                         researchAction={(run.actions ?? []).find(
                           (a) => a.key === "build_on_research")} />
@@ -2871,6 +2887,22 @@ export function stepQuestion(step: Pick<RunStep, "step_id" | "status">, label?: 
  */
 function ReviewAndDecide({ step }: { step: RunStep }) {
   const role = (step.approval as { approver_role?: string })?.approver_role;
+  const merge = (step.output as { merge?: { pull_request_number?: number;
+                                            pull_request_url?: string } } | undefined)?.merge;
+  if (waitsForMerge(step) && merge?.pull_request_url
+      && (!step.decision_id || !OPEN_GATE.has(String(step.decision_status || "")))) {
+    // APPROVED, NOT MERGED: the one thing left is the merge itself, in GitHub. The step goes on
+    // by itself once GitHub shows it merged (runner._follow_merge).
+    return (
+      <div className="dw-step-decide" data-testid="dw-step-merge">
+        <a className="cap-btn primary dw-decide-btn" href={merge.pull_request_url}
+           target="_blank" rel="noreferrer" data-testid="dw-step-merge-link">
+          Merge PR #{merge.pull_request_number} in GitHub →
+        </a>
+        <span className="detail">This step deploys by itself once it is merged.</span>
+      </div>
+    );
+  }
   // WHAT IT WILL DO, ON THE STEP TOO. The decision card has the buttons; the step at least
   // shows what is waiting on them, so "Email the newsletter — needs you" says which email.
   const preview = actionPreviewOf(step.action_preview);

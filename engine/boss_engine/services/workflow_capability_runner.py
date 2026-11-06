@@ -1494,7 +1494,9 @@ def _write_the_run_report(
     return {
         "capability": "report",
         "tool": None,
-        "status": "recorded",
+        # NOT "recorded": that is the honest no-op word (didNothing in the console), so every
+        # written report read "nothing done" on the run lane (operator, 2026-11-06).
+        "status": "succeeded",
         "artifact_id": artifact_id,
         "report": report,
         "total_usd": report["total_usd"],
@@ -3596,6 +3598,12 @@ def _perform_capability(
     # its host, and held for approval like every governed effect. Its manifest's health checks
     # are the proof it runs; a platform of several services cannot be previewed as one
     # container, so requiring a preview would make such apps undeployable from a workflow.
+    # EVERY DEPLOY WAITS FOR ITS MERGE FIRST (`_merge_wait`) — the stack path below included:
+    # it plans from the pull request's head, and shipped PR #3 unmerged (helpdesk-ai, 2026-11-06).
+    if key == "deploy" and not pass_2_of:
+        waiting = _merge_wait(connection, project_id, str(inputs.get("run_id") or ""))
+        if waiting:
+            return waiting
     if key == "deploy":
         from .stack_deploy import plan_for_workflow_step, stack_target_for_deploy
 
@@ -5567,6 +5575,12 @@ def resume_awaited(
                 if resumed:
                     done.append(resumed)
             continue
+        if kind == MERGE_AWAIT_KIND:
+            followed = _follow_merge(connection, project_id=project_id, run_id=run_id,
+                                     step=step, output=output, handle=handle)
+            if followed:
+                done.append(followed)
+            continue
         table_spec = _AWAIT_TABLES.get(kind)
         if not table_spec or not awaited_id:
             # A step waiting for a timer, a gate or a subworkflow. Those have their own
@@ -5579,8 +5593,10 @@ def resume_awaited(
             _look_at_recovery(connection, awaited_id)
         try:
             row = connection.execute(
-                text(f"SELECT {_STATUS_COLUMN.get(table, 'status')} AS status FROM {table} "  # noqa: S608
-                     "WHERE id = :id"),  # fixed set
+                # `ended_at` through to_jsonb: not every awaited table has updated_at (previews).
+                text(f"SELECT t.{_STATUS_COLUMN.get(table, 'status')} AS status, "  # noqa: S608
+                     f"to_jsonb(t)->>'updated_at' AS ended_at FROM {table} t "
+                     "WHERE t.id = :id"),  # fixed set
                 {"id": awaited_id},
             ).mappings().first()
         except Exception as error:  # noqa: BLE001 — a missing optional table is not fatal
@@ -5718,7 +5734,7 @@ def resume_awaited(
                 continue
             workflows.force_complete_waiting_step(
                 connection, project_id=project_id, step_run_id=step["id"],
-                output=finished,
+                output=finished, finished_at=row.get("ended_at"),
             )
             done.append({"run_id": run_id, "step_id": step["step_id"],
                          "outcome": "succeeded", "awaited": kind})
@@ -5894,6 +5910,181 @@ def _mark_skipped_spec_gate(connection: Connection, *, run_id: str, step_run_id:
                 {"i": step_run_id, "o": json.dumps({_SPEC_GATE_CHECKED: True})})
     except Exception as error:  # noqa: BLE001 — a card's wording never stops the sweep
         log.warning("spec gate check for %s skipped: %s", run_id, error)
+
+
+# ── A DEPLOY WAITS FOR ITS MERGE ───────────────────────────────────────────────────────────────
+#
+# THE CASE (helpdesk-ai wfr_c8dbccd76a92488c99dc, 2026-11-06). The build step finished when PR #3
+# opened, the run went straight on, and the deploy step planned a release of the UNMERGED pull
+# request's head (`workflow.deploy_unmerged` was only logged). The merge question sat in the
+# inbox, outside the run: the run never said "Needs you", and each repair or follow-up build
+# withdrew it and raised another. Operator: "wherever the user approval is required wait for it,
+# if auto approval is configured it should keep going on."
+#
+# THE RULE. A deploy of a build whose pull request is not merged WAITS on the merge, on the
+# step, showing the PR's CURRENT merge question as its decision (so the console says Needs you
+# with that question). Merged means merged on GitHub (pr_merge.observe): by BOSS's merge job
+# (an approval, or an auto-approval policy) or by a person in GitHub. Then the step runs again,
+# from the top, and its own deploy approval is asked. A pull request closed unmerged fails it.
+
+#: The await kind of a deploy step held for its build's merge.
+MERGE_AWAIT_KIND = "merge"
+#: How often a held step asks GitHub (each look is one API read).
+_MERGE_LOOK_SECONDS = 30
+
+
+def _unmerged_build(connection: Connection, project_id: str, build_run_id: str,
+                    settings: Any = None) -> Optional[dict[str, Any]]:
+    """pr_merge.observe for a build whose PR is open or approved-but-unmerged, else None (no PR,
+    merged, or GitHub unreadable with nothing recorded — then the deploy is judged as before)."""
+    if not build_run_id:
+        return None
+    from . import pr_merge
+
+    # ITS OWN SHORT TRANSACTION, COMMITTED AT ONCE. `observe` records a merge it sees on the
+    # build's row; done inside the tick's transaction it held that row while the requeued deploy
+    # planned on a NEW connection whose own `observe` wrote the same row — the tick waited on the
+    # plan, the plan on the tick (helpdesk-ai PR #3, 2026-11-06: pids 960/952, 4 minutes).
+    own = getattr(connection, "engine", None)
+    try:
+        if own is not None:
+            with own.begin() as fresh:
+                seen = pr_merge.observe(fresh, settings or get_settings(), project_id,
+                                        build_run_id)
+        else:
+            with connection.begin_nested():
+                seen = pr_merge.observe(connection, settings or get_settings(), project_id,
+                                        build_run_id)
+    except Exception:  # noqa: BLE001 — unknown never invents a wait
+        return None
+    if seen.get("state") in (pr_merge.OPEN, pr_merge.MERGE_PENDING, pr_merge.CLOSED):
+        return seen
+    return None
+
+
+def _unmerged_on_record(connection: Connection, build_run_id: str) -> bool:
+    """A build with a pull request and no merge on record — read from BOSS alone, never GitHub
+    (the gate is asked wherever a run is drawn). The waiting step asks GitHub (`_follow_merge`)."""
+    from . import pr_merge
+
+    try:
+        with connection.begin_nested():
+            run = connection.execute(
+                text("SELECT pull_request_number, pull_request_url, finalize_ctx, decision_id "
+                     "FROM code_task_runs WHERE id = :i"), {"i": build_run_id}).mappings().first()
+            if not run or not (run["pull_request_number"] or run["pull_request_url"]):
+                return False
+            merged = pr_merge.recorded_sha(dict(run))
+    except Exception:  # noqa: BLE001
+        return False
+    return not merged
+
+
+def _merge_question(connection: Connection, project_id: str,
+                    build_run_id: str) -> Optional[dict[str, Any]]:
+    """The PR's CURRENT merge question: the newest not-withdrawn review decision for the build's
+    pull request — a repair's or follow-up's supersedes the one before."""
+    url = connection.execute(
+        text("SELECT pull_request_url FROM code_task_runs WHERE id = :i"),
+        {"i": build_run_id}).scalar()
+    if not url:
+        return None
+    row = connection.execute(
+        text("SELECT id, status FROM decisions WHERE project_id = :p "
+             "AND recommendation->>'action' = 'review_pull_request' "
+             "AND recommendation->>'pull_request_url' = :u AND status <> 'withdrawn' "
+             "ORDER BY created_at DESC LIMIT 1"),
+        {"p": project_id, "u": str(url)}).mappings().first()
+    return dict(row) if row else None
+
+
+def _merge_note(seen: dict[str, Any], question: Optional[dict[str, Any]]) -> str:
+    pr = f"PR #{seen.get('number')}" if seen.get("number") else "The pull request"
+    if seen.get("state") == "merge_pending" or (question or {}).get("status") in (
+            "approved", "executed"):
+        return (f"Waiting for the merge: {pr} is approved but not merged yet. Merge it in "
+                "GitHub; this step goes on by itself once GitHub shows it merged.")
+    return (f"Waiting for the merge: approve {pr} to merge it. Nothing is deployed until it is "
+            "merged.")
+
+
+def _merge_wait(connection: Connection, project_id: str,
+                build_run_id: str) -> Optional[dict[str, Any]]:
+    """The deploy step's await on its build's merge, or None when it is merged (or has no PR)."""
+    seen = _unmerged_build(connection, project_id, build_run_id)
+    if not seen:
+        return None
+    from . import pr_merge
+
+    if seen.get("state") == pr_merge.CLOSED:
+        raise SettledCapabilityError(
+            f"PR #{seen.get('number')} was closed without merging, so there is nothing to "
+            "deploy. Reopen and merge it, then Try again.")
+    question = _merge_question(connection, project_id, build_run_id)
+    return {"capability": "deploy", "tool": None, "status": workflow_outcomes.AWAITING,
+            "await": {"kind": MERGE_AWAIT_KIND, "id": build_run_id,
+                      "decision_id": (question or {}).get("id"),
+                      "looked_at": now_utc().isoformat()},
+            "merge": {"state": seen.get("state"), "pull_request_number": seen.get("number"),
+                      "pull_request_url": connection.execute(
+                          text("SELECT pull_request_url FROM code_task_runs WHERE id = :i"),
+                          {"i": build_run_id}).scalar() if connection is not None else None},
+            "note": _merge_note(seen, question)}
+
+
+def _follow_merge(connection: Connection, *, project_id: str, run_id: str, step: Any,
+                  output: dict[str, Any], handle: dict[str, Any]) -> Optional[dict[str, Any]]:
+    """Keep a held deploy step pointed at the PR's current merge question (Needs you on the step),
+    and run it again once the PR is merged. A closed PR fails the step."""
+    from datetime import datetime
+
+    build_run_id = str(handle.get("id") or "")
+    question = _merge_question(connection, project_id, build_run_id)
+    qid = (question or {}).get("id")
+    if qid and qid != step.get("decision_id"):
+        # The step SHOWS the question (decision_id → Needs you); `released_for` keeps the
+        # answered-gate sweep from running the deploy on a merge approval — the merge does that.
+        connection.execute(
+            text("UPDATE workflow_step_runs SET decision_id = :d, binding_snapshot = "
+                 "COALESCE(binding_snapshot, '{}'::jsonb) || jsonb_build_object('released_for', "
+                 "CAST(:d AS text)), updated_at = now() WHERE id = :i AND status = 'waiting'"),
+            {"d": qid, "i": step["id"]})
+    try:
+        last = datetime.fromisoformat(str(handle.get("looked_at") or ""))
+    except ValueError:
+        last = None
+    if last is not None and (now_utc() - last).total_seconds() < _MERGE_LOOK_SECONDS:
+        return None
+    from . import pr_merge
+
+    seen = _unmerged_build(connection, project_id, build_run_id)
+    if seen and seen.get("state") == pr_merge.CLOSED:
+        workflows.force_fail_waiting_step(
+            connection, project_id=project_id, step_run_id=step["id"],
+            error=(f"PR #{seen.get('number')} was closed without merging, so there is nothing "
+                   "to deploy. Reopen and merge it, then Try again."))
+        return {"run_id": run_id, "step_id": step["step_id"], "outcome": "merge_closed"}
+    if seen:
+        connection.execute(
+            text("UPDATE workflow_step_runs SET output = COALESCE(output, '{}'::jsonb) || "
+                 "CAST(:o AS JSONB), updated_at = now() WHERE id = :i AND status = 'waiting'"),
+            {"i": step["id"], "o": json.dumps({
+                "await": {**handle, "decision_id": qid, "looked_at": now_utc().isoformat()},
+                # Refreshed on every look, so the console's "Merge PR #N in GitHub" link is there
+                # for a step that started waiting before it carried one.
+                "merge": {"state": seen.get("state"), "pull_request_number": seen.get("number"),
+                          "pull_request_url": connection.execute(
+                              text("SELECT pull_request_url FROM code_task_runs WHERE id = :i"),
+                              {"i": build_run_id}).scalar()},
+                "note": _merge_note(seen, question)})})
+        return None
+    workflows.requeue_waiting_step(
+        connection, project_id=project_id, step_run_id=step["id"],
+        output={"note": "Merged — deploying.", "merged_build_run_id": build_run_id},
+        event="workflow.merge_landed", data={"build_run_id": build_run_id,
+                                              "decision_id": qid})
+    return {"run_id": run_id, "step_id": step["step_id"], "outcome": "merged_deploying",
+            "build": build_run_id}
 
 
 def _hold_for_spec(connection: Connection, *, project_id: str, run_id: str,
@@ -6477,6 +6668,11 @@ def _gate_subject(
             else:
                 point.commit()
             if undeclared:
+                return None
+            # A DEPLOY OF A PULL REQUEST NOBODY HAS MERGED ASKS NOBODY YET: the step runs and
+            # waits for the merge (`_merge_wait`); once merged it is run again and asks then.
+            # Asking first had a person approve a release of unmerged code.
+            if _unmerged_on_record(connection, str(ready["run_id"])):
                 return None
         # "DEPLOY AGAIN" THAT WILL SHIP NOTHING ASKS NOBODY: it runs, and says why (two_pass).
         pass_2_of = str(((binding.get("inputs") or {}).get("pass_2_of")) or "")

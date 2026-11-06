@@ -370,6 +370,19 @@ def detect_kind(spec: dict[str, Any], title: str = "") -> str:
 
 
 E2E_STEP = "npm run test:e2e"
+#: The browser suite run directly, for an app whose package.json names no `test:e2e`.
+E2E_STEP_DIRECT = "npx --package=@playwright/test playwright test"
+
+
+def _playwright_dir(app_dir: Path) -> str | None:
+    """"" when `app_dir` holds a Playwright config, the relative folder one or two levels down
+    that does (HelpDesk's web/), or None — never inside node_modules."""
+    for depth in ("", "*/", "*/*/"):
+        for found in sorted(app_dir.glob(f"{depth}playwright.config.*")):
+            rel = found.parent.relative_to(app_dir).as_posix()
+            if "node_modules" not in rel.split("/"):
+                return "" if rel == "." else rel
+    return None
 
 
 def web_test_commands() -> list[str]:
@@ -439,10 +452,19 @@ def web_gate_for(app_dir: Path | str) -> tuple[list[str], str | None]:
         # ONLY test:* SCRIPTS (`test:api`, `test:unit`): each one runs, or the app's tests never
         # ran while has_tests said they existed (pre-mortem finding 6).
         commands += [f"npm run {n}" for n in sub_tests]
-    if gate_runs_e2e() and (_defines(scripts, "test:e2e") or bool((current() or {}).get("e2e"))):
+    if gate_runs_e2e() and _defines(scripts, "test:e2e"):
         commands.append(E2E_STEP)
+    elif gate_runs_e2e() and bool((current() or {}).get("e2e")):
+        # THE PASS ASKED FOR A BROWSER SUITE THE APP DOES NOT NAME. `npm run test:e2e` here failed
+        # with `Missing script` and turned a passing More tests pass into "checks failing" plus an
+        # 11-minute follow-up build (helpdesk-ai crun_13587ba1, 2026-11-06: its Playwright suite
+        # lives in web/). Run Playwright where its config is; with no config there is no suite.
+        where = _playwright_dir(Path(app_dir))
+        if where is not None:
+            commands.append(E2E_STEP_DIRECT if where == "" else f"cd {where} && {E2E_STEP_DIRECT}")
     # TESTS THAT RUN, not tests that exist: a browser suite counts only where this gate runs it.
-    has_tests = _defines(scripts, "test") or bool(sub_tests) or E2E_STEP in commands
+    has_tests = (_defines(scripts, "test") or bool(sub_tests)
+                 or any(c == E2E_STEP or c.endswith(E2E_STEP_DIRECT) for c in commands))
     return commands, (None if has_tests else NO_TEST_SCRIPT)
 
 

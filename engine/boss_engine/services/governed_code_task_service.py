@@ -44,7 +44,8 @@ from ..ports import sql
 from ..schemas import FileChange
 from ..templates import run_env as _run_env
 from . import agent_acts, baseline_verify, ci_gate, design_prompts, plane_sync, review_comments, verification_target
-from . import red_first, review_input
+from . import red_first, repair_review_scope, review_input
+from . import approved_prd_design
 from .knowledge import learning_context, learning_writeback  # learning while executing (BOSSAPP-768)
 from .bakeoff import (
     fixture_for_run as bakeoff_fixture_for_run,
@@ -2388,7 +2389,7 @@ def _comment_signers(c, run_id: str, review_seat) -> dict:
 
 
 def _record_review_round(engine, run_id: str, project_id: str, *, round_i: int,
-                         seats: dict, kind: str = "") -> None:
+                         seats: dict, kind: str = "", reviewed: Optional[dict] = None) -> None:
     """One review round as it happened: each seat's verdict, its summary and whether it saw
     the change. The pull request gets one GitHub review per round (pr_review_post), so a person
     reads the review CONVERSATION, not only the last word. Re-recording a round replaces it."""
@@ -2396,6 +2397,9 @@ def _record_review_round(engine, run_id: str, project_id: str, *, round_i: int,
 
     entry = {"round": int(round_i), "at": _dt.now(_tz.utc).isoformat(),
              **({"kind": kind} if kind else {}),
+             # THE CHANGE THIS ROUND JUDGED, as {path: content hash} (repair_review_scope.
+             # snapshot): a later repair attempt re-reviews only what differs from it.
+             **({"reviewed": reviewed} if isinstance(reviewed, dict) else {}),
              "seats": {stage: {"verdict": str((s or {}).get("verdict") or "not_run"),
                                "summary": str((s or {}).get("summary") or "")[:4000],
                                "hollow": (s or {}).get("hollow")}
@@ -2910,6 +2914,67 @@ def _fix_round_change(prior_findings: str, fixed: dict, answers: str = "") -> st
             + "WHAT THE FIX CHANGED:\n" + files)
 
 
+def _repair_review_scope_blocks(engine, *, run_id: str, project_id: str, fctx: dict,
+                                change: "review_input.ChangeUnderReview", baseline: dict,
+                                enabled: bool = True) -> dict:
+    """{seat: scoped change block} for a repair attempt's first panel; {} = every seat reviews
+    the whole change, as before. One `code_task.repair_review_scope` event says which mode
+    each scopable seat ran and why, so the shortcut is never invisible.
+
+    The parent's own record decides: its review rounds (what each seat judged, and its
+    findings), its failing-test output and the operator's fix note (which files a repair may
+    legitimately touch). Any doubt — no parent, no recorded review, an unreadable record — is
+    the FULL review."""
+    parent_id = str((fctx or {}).get("parent_run_id") or "").strip()
+    if not parent_id or not enabled or change.empty:
+        return {}
+    parent = None
+    try:
+        with _transaction(engine) as c:
+            parent = load_code_task_run(c, parent_id)
+    except Exception:  # noqa: BLE001 — no parent record: the full review, as before
+        _log_caught(logger)
+    pf = (parent or {}).get("finalize_ctx") or {}
+    ps = (parent or {}).get("state") or {}
+    if isinstance(pf, str):
+        try:
+            pf = json.loads(pf)
+        except ValueError:
+            pf = {}
+    if isinstance(ps, str):
+        try:
+            ps = json.loads(ps)
+        except ValueError:
+            ps = {}
+    rounds = [r for r in (pf.get("review_rounds") or []) if isinstance(r, dict)]
+    # WHAT NAMES A FILE THE REPAIR MAY TOUCH: every seat's recorded findings, the comments the
+    # parent's review left, the failing test output, and the operator's fix note.
+    named = [str((s or {}).get("summary") or "") for r in rounds
+             for s in (r.get("seats") or {}).values()]
+    named += [f"{c.get('path') or ''} {c.get('body') or ''}"
+              for c in (pf.get("review_comments") or []) if isinstance(c, dict)]
+    if set(pf.get("failing_gates") or []) & {"written_tests_pass", "nothing_broke"}:
+        named.append(str(ps.get("last_verify_output") or "")[-8000:])
+    named += [str((h or {}).get("fix_note") or "")
+              for h in ((fctx or {}).get("feedback_history") or []) if isinstance(h, dict)]
+    blocks, record = {}, {}
+    for seat in repair_review_scope.SCOPABLE_SEATS:
+        p = repair_review_scope.plan(seat, parent_run_id=parent_id if parent else "",
+                                     parent_rounds=rounds, current=change, baseline=baseline,
+                                     named_text="\n".join(named), is_test=_is_test_path)
+        record[seat] = p.record()
+        if p.scoped:
+            blocks[seat] = repair_review_scope.render(p)
+    try:
+        with _transaction(engine) as c:
+            emit_event(c, project_id, "code_task.repair_review_scope", "boss", "code_task_run",
+                       run_id, {"parent_run_id": parent_id, "seats": record,
+                                "security_check": "full"})
+    except Exception:  # noqa: BLE001 — the record must not stop the review
+        _log_caught(logger)
+    return blocks
+
+
 def _render_change_for_review(files, *, max_total: int = 48000, max_per_file: int = 12000) -> str:
     """The exact files this task added/modified, inlined into the review prompt so a reviewer
     JUDGES the change instead of spending dozens of agentic turns (git diff / ls / cat / grep) to
@@ -3139,7 +3204,7 @@ def _spawn_deferred_findings_task(
     engine, settings, jobs, *, project_id, task_id, spec, base_branch,
     findings: list[dict], parent_run_id: str, parent_title: str,
     parent_root: Optional[str] = None, parent_origin: Optional[dict] = None,
-    checks_failing: Optional[dict] = None,
+    checks_failing: Optional[dict] = None, parent_workflow_run_id: Optional[str] = None,
 ):
     """Queue sub-threshold review findings as their own code task on the shipped branch.
 
@@ -3209,7 +3274,13 @@ def _spawn_deferred_findings_task(
                           # follow-up — and therefore reported "Research: none / Spec: none" for
                           # an app that came from a panel and has a PRD. Same reasoning as the
                           # root_run_id note above: lineage must survive the hop.
-                          **({"origin": parent_origin} if parent_origin else {})},
+                          **({"origin": parent_origin} if parent_origin else {}),
+                          # AND THE WORKFLOW RUN IT BELONGS TO. Without it the follow-up's merge
+                          # approval was invisible on the run: helpdesk-ai's run showed "More
+                          # tests: waiting" while its approval sat elsewhere, and the operator
+                          # asked "how does the user know?" (2026-11-06). Retries carry it too.
+                          **({"workflow_run_id": parent_workflow_run_id}
+                             if parent_workflow_run_id else {})},
             jobs=jobs, profile=spec.get("profile"),
             # BOSS ITSELF continues this lineage: it acts under the person and grant the lineage
             # was started under (a standing grant, or the workflow run's), never the worker key's.
@@ -3783,6 +3854,57 @@ def _split_design(text: str) -> dict:
         stop = marks[i + 1][0] if i + 1 < len(marks) else len(text)
         out[key] = text[end:stop].strip()
     return out
+
+
+def _design_from_approved_prd(engine, project_id, run_id, fctx, *, title, instructions,
+                              criteria, root, route) -> Optional[dict]:
+    """The design from the APPROVED PRD this build came from, or None to run the full design.
+
+    One read-only session under the plan's route, capped at PRD_DESIGN_MAX_TURNS, maps the PRD's
+    solution onto the repo. Records `code_task.design_from_prd` (the short path ran) or
+    `code_task.design_from_prd_declined` (why the full design runs instead) — the latter only
+    when there WAS an approved PRD, so ordinary builds are not cluttered. Never raises."""
+    try:
+        with _transaction(engine) as c:
+            prd = approved_prd_design.find_approved_prd(c, project_id, fctx or {})
+        if prd is None:
+            return None
+        solution = approved_prd_design.solution_section(prd["markdown"])
+
+        def _declined(why: str) -> None:
+            with _transaction(engine) as c:
+                emit_event(c, project_id, "code_task.design_from_prd_declined", "boss",
+                           "code_task_run", run_id,
+                           {"decision_id": prd["decision_id"], "why": why[:400],
+                            "path": "full"})
+
+        if not solution:
+            _declined("the approved PRD has no solution / proposed-design section")
+            return None
+        set_llm_context(stage="design")
+        agent, model = route("plan")
+        started = time.monotonic()
+        answer = agent.run_role(
+            approved_prd_design.prompt(_ctx_block(title, instructions, criteria), solution),
+            root, read_only=True, model=model,
+            max_turns=approved_prd_design.PRD_DESIGN_MAX_TURNS)
+        design, why = approved_prd_design.design_from_answer(
+            prd, solution, str(answer.get("summary") or ""))
+        if design is None:
+            _declined(why)
+            return None
+        design["cost_usd_micros"] = int(answer.get("cost_usd_micros") or 0)
+        with _transaction(engine) as c:
+            emit_event(c, project_id, "code_task.design_from_prd", "boss", "code_task_run",
+                       run_id, {"decision_id": prd["decision_id"], "path": "approved_prd",
+                                "seconds": round(time.monotonic() - started, 1),
+                                "solution_chars": len(solution),
+                                "packages": len(_parallel_build.parse_packages(
+                                    design.get("packages")))})
+        return design
+    except Exception:  # noqa: BLE001 — the full design is always there to fall back to
+        _log_caught(logger)
+        return None
 
 
 def _review_plan_prompt(title, plan):
@@ -5370,6 +5492,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # repair, fed the parent's failing gates, verify output and the operator's note.
         _seeded = 0
         _seeded_paths: list[str] = []
+        #: The parent's workspace text as seeded ({path: text}): what a repair's reviewers are
+        #: shown a diff against, when it is exactly the text the parent's seat reviewed.
+        _seed_baseline: dict[str, str] = {}
         _seed_from = str(fctx.get("seed_workspace_from") or "").strip()
         if _seed_from:
             def _load(rid: str) -> Optional[dict]:
@@ -5380,6 +5505,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 _seed_files = []  # each guest stage clones the branch; nothing to seed into
             _seeded = seed_workspace(root, _seed_files) if _seed_files else 0
             _seeded_paths[:] = [str(f["path"]) for f in _seed_files if _seeded]
+            _seed_baseline.update({str(f["path"]): f["content"] for f in _seed_files
+                                   if isinstance(f.get("content"), str)})
             with _transaction(engine) as c:
                 emit_event(c, project_id,
                            "code_task.workspace_seeded" if _seeded
@@ -5978,49 +6105,65 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         elif do_design:
             with _transaction(engine) as c:
                 _phase(c, "design")
-            # ONE SESSION FOR STANDARDS, SPEC AND PLAN. They were three cold sessions, each
-            # re-reading the same repository (a HelpDesk AI build: 0.6 + 2.2 + 5.3 minutes).
-            # One read produces all three, under the plan's route (the strongest of the
-            # three). A part the session did not deliver is written by its own session as
-            # before, so a short answer never becomes a thin design. The plan review below
-            # stays its OWN session with fresh context: a plan is never reviewed by its author.
-            set_llm_context(stage="design")
-            a, m = _route("plan")
-            joint = a.run_role(_design_prompt(title, instructions, criteria), root,
-                               read_only=True, model=m)
-            parts = _split_design(joint.get("summary", ""))
-            d1 = {"summary": parts["standards"], "cost_usd_micros": joint.get("cost_usd_micros")}
-            d2 = {"summary": parts["spec"], "cost_usd_micros": 0}
-            d3 = {"summary": parts["plan"], "cost_usd_micros": 0}
-            if not parts["standards"]:
-                set_llm_context(stage="standards")
-                a, m = _route("standards")
-                d1 = a.run_role(_standards_prompt(), root, read_only=True, model=m)
-                d1["cost_usd_micros"] = int(d1.get("cost_usd_micros") or 0) + int(
-                    joint.get("cost_usd_micros") or 0)
-            if not parts["spec"]:
-                set_llm_context(stage="spec")
-                a, m = _route("spec")
-                d2 = a.run_role(_spec_prompt(title, instructions, criteria), root,
-                                read_only=True, model=m)
-            if not parts["plan"]:
-                set_llm_context(stage="plan")
+            # AN APPROVED PRD IS THE DESIGN (approved_prd_design). HelpDesk AI's SLA-timers build
+            # (crun_c8e2a5f8) spent 572 s here re-planning a PRD whose "Proposed Solution" the
+            # owner had just approved (dec_13a8cd75). When the origin carries one, a short,
+            # turn-bounded read maps that solution onto the repo and yields every field below
+            # (standards/spec/plan/plan_review/plan_ok/packages). Any doubt — no solution
+            # section, an incomplete answer, the repo contradicting the PRD — runs the full
+            # design exactly as before, and the event says which path ran and why.
+            design = _design_from_approved_prd(
+                engine, project_id, run_id, fctx, title=title, instructions=instructions,
+                criteria=criteria, root=root, route=_route)
+            if design is not None:
+                cost += int(design.pop("cost_usd_micros", 0) or 0)
+                fctx["design_path"] = "approved_prd"
+            else:
+                fctx["design_path"] = "full"
+            if design is None:
+                # ONE SESSION FOR STANDARDS, SPEC AND PLAN. They were three cold sessions, each
+                # re-reading the same repository (a HelpDesk AI build: 0.6 + 2.2 + 5.3 minutes).
+                # One read produces all three, under the plan's route (the strongest of the
+                # three). A part the session did not deliver is written by its own session as
+                # before, so a short answer never becomes a thin design. The plan review below
+                # stays its OWN session with fresh context: a plan is never reviewed by its author.
+                set_llm_context(stage="design")
                 a, m = _route("plan")
-                d3 = a.run_role(_plan_prompt(title, d2.get("summary", "")), root,
+                joint = a.run_role(_design_prompt(title, instructions, criteria), root,
+                                   read_only=True, model=m)
+                parts = _split_design(joint.get("summary", ""))
+                d1 = {"summary": parts["standards"], "cost_usd_micros": joint.get("cost_usd_micros")}
+                d2 = {"summary": parts["spec"], "cost_usd_micros": 0}
+                d3 = {"summary": parts["plan"], "cost_usd_micros": 0}
+                if not parts["standards"]:
+                    set_llm_context(stage="standards")
+                    a, m = _route("standards")
+                    d1 = a.run_role(_standards_prompt(), root, read_only=True, model=m)
+                    d1["cost_usd_micros"] = int(d1.get("cost_usd_micros") or 0) + int(
+                        joint.get("cost_usd_micros") or 0)
+                if not parts["spec"]:
+                    set_llm_context(stage="spec")
+                    a, m = _route("spec")
+                    d2 = a.run_role(_spec_prompt(title, instructions, criteria), root,
+                                    read_only=True, model=m)
+                if not parts["plan"]:
+                    set_llm_context(stage="plan")
+                    a, m = _route("plan")
+                    d3 = a.run_role(_plan_prompt(title, d2.get("summary", "")), root,
+                                    read_only=True, model=m)
+                set_llm_context(stage="review_plan")
+                a, m = _route("review_plan")
+                d4 = a.run_role(_review_plan_prompt(title, d3.get("summary", "")), root,
                                 read_only=True, model=m)
-            set_llm_context(stage="review_plan")
-            a, m = _route("review_plan")
-            d4 = a.run_role(_review_plan_prompt(title, d3.get("summary", "")), root,
-                            read_only=True, model=m)
-            for d in (d1, d2, d3, d4):
-                cost += int(d.get("cost_usd_micros") or 0)
-            plan_ok = "REVISE" not in d4.get("summary", "").upper()
-            design = {"standards": d1.get("summary", ""), "spec": d2.get("summary", ""),
-                      "plan": d3.get("summary", ""), "plan_review": d4.get("summary", ""),
-                      "plan_ok": plan_ok,
-                      # The partition BOSS runs the writing stages in parallel from
-                      # (parallel_build); empty when the change is too small to split.
-                      "packages": parts.get("packages", "")}
+                for d in (d1, d2, d3, d4):
+                    cost += int(d.get("cost_usd_micros") or 0)
+                plan_ok = "REVISE" not in d4.get("summary", "").upper()
+                design = {"standards": d1.get("summary", ""), "spec": d2.get("summary", ""),
+                          "plan": d3.get("summary", ""), "plan_review": d4.get("summary", ""),
+                          "plan_ok": plan_ok,
+                          # The partition BOSS runs the writing stages in parallel from
+                          # (parallel_build); empty when the change is too small to split.
+                          "packages": parts.get("packages", "")}
             # PERSIST THE PLAN THE MOMENT IT EXISTS.
             # `state` was only written when a run FINISHED, so a mid-run death lost the design
             # along with everything else — both spend-limit failures recorded an EMPTY state, and
@@ -6059,8 +6202,11 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         status="blocked", failure_class="needs_human",
                         reason_code="not_a_code_task")
             # feed the refined spec + plan forward so write-tests/implement are spec-driven
-            instructions = (f"{instructions}\n\nREFINED SPEC:\n{d2.get('summary', '')}"
-                            f"\n\nTECHNICAL PLAN:\n{d3.get('summary', '')}")
+            if design.get("source") == "approved_prd":
+                instructions = f"{instructions}{approved_prd_design.brief_addendum(instructions, design)}"
+            else:
+                instructions = (f"{instructions}\n\nREFINED SPEC:\n{design.get('spec', '')}"
+                                f"\n\nTECHNICAL PLAN:\n{design.get('plan', '')}")
             # HUMAN APPROVE-PLAN GATE (Wire-Phase 2b): top risk pauses for sign-off before code.
             if _requires_plan_approval(risk_tier):
                 return _block_for_plan_approval(
@@ -7243,6 +7389,18 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                    "code_task_run", run_id,
                                    {"reason": _esc.reason, "files": len(_review_change.paths)})
 
+            # A REPAIR RE-REVIEWS WHAT IT CHANGED (repair_review_scope). crun_b32b4a26, the
+            # repair of HelpDesk's SLA timers, changed four files and its first panel re-read the
+            # whole 21-file change: review_code and consistency_check ~7 min each, to confirm
+            # fixes. Each scopable seat now judges the repair's delta against the change the
+            # parent's seat last reviewed, with its own findings to confirm — unless a guardrail
+            # (no prior review, a big repair, files nobody named) sends it to the full review.
+            # Same seats, same model routing; security_check is always full.
+            _scope_blocks = _repair_review_scope_blocks(
+                engine, run_id=run_id, project_id=project_id, fctx=fctx,
+                change=_review_change, baseline=_seed_baseline,
+                enabled=(lane != fix_lane_triage.LANE_FIX))
+
             def _make_review(seat, seat_agent, seat_model):
                 def _run():
                     # Each seat of a real panel signs its own act (factory §6.4); a panel of
@@ -7251,7 +7409,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                     stage="review_code",
                                     seat=(seat + 1) if panel_size > 1 else None)
                     _seat_prompt = _review_prompt(title, criteria, instructions=instructions,
-                                                  ui=ui_task, change=change_block,
+                                                  ui=ui_task,
+                                                  change=_scope_blocks.get("review_code")
+                                                  or change_block,
                                                   operator=_operator_review_block(
                                                       engine, run_id, project_id))
                     if lane == fix_lane_triage.LANE_FIX:
@@ -7313,7 +7473,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                 stage="consistency_check")
                 rr, hollow = _judge_seat("consistency_check", lambda pre: consistency_agent.run_role(
                     pre + _consistency_prompt(title, criteria, design, instructions=instructions,
-                                              change=change_block),
+                                              change=_scope_blocks.get("consistency_check")
+                                              or change_block),
                     review_root, read_only=True, model=consistency_model))
                 with lock:
                     panel_cost["v"] += int(rr.get("cost_usd_micros") or 0)
@@ -7790,7 +7951,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         if iac_result is not None:
             gates.update(_iac_gates(iac_result))
 
-        steps_run = (["standards", "spec", "plan", "review_plan"] if do_design else []) \
+        steps_run = ((["prd_design"] if (design or {}).get("source") == "approved_prd"
+                      else ["standards", "spec", "plan", "review_plan"]) if do_design else []) \
             + (["write_tests"] if do_separate_tests else []) + ["implement"] \
             + (["review_code", "security_check", "check_tests", "run_all_tests", "consistency_check"]
                if do_review else []) \
@@ -7956,7 +8118,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 "security_check": {"verdict": sec_verdict, "summary": r4.get("summary", ""),
                                    "hollow": _hollow_seats.get("security_check")},
                 "consistency_check": {"verdict": cons_verdict, "summary": r6.get("summary", ""),
-                                      "hollow": _hollow_seats.get("consistency_check")}})
+                                      "hollow": _hollow_seats.get("consistency_check")}},
+                reviewed=repair_review_scope.snapshot(_review_change))
 
         # ADVISORY first pass (web build, review=False): a failing quality check is SURFACED
         # (advisory_failing_gates → shown in the UI) but must NOT block. Record it and FALL THROUGH
@@ -8283,7 +8446,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                             round_i=round_i)
                         _record_review_round(engine, run_id, project_id, round_i=round_i, seats={
                             "review_code": {"verdict": verdict, "summary": rr.get("summary", ""),
-                                            "hollow": _hollow}})
+                                            "hollow": _hollow}},
+                            reviewed=repair_review_scope.snapshot(_review_change))
                         gates["code_review_passed"] = _rev_pass
                     if "consistent" in failing:
                         rc2, _hollow = _reseat["consistency_check"]
@@ -8309,7 +8473,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         _record_review_round(engine, run_id, project_id, round_i=round_i, seats={
                             "security_check": {"verdict": sec_verdict,
                                                "summary": rs2.get("summary", ""),
-                                               "hollow": _hollow}})
+                                               "hollow": _hollow}},
+                            reviewed=repair_review_scope.snapshot(_review_change))
                         gates["security_clean"] = sec_verdict == "clean"
                     if "tests_strong_enough" in failing:
                         # THE WEAK-SUITE SEAT RE-JUDGES: plant one bug again and expect the
@@ -9277,7 +9442,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     parent_run_id=run_id, parent_title=title,
                     parent_root=(fctx.get("root_run_id") or run_id),
                     parent_origin=fctx.get("origin"),
-                    checks_failing=_checks)
+                    checks_failing=_checks,
+                    parent_workflow_run_id=fctx.get("workflow_run_id"))
                 with _transaction(engine) as c:
                     emit_event(c, project_id, "code_task.deferred_findings_task", "boss",
                                "code_task_run", run_id,

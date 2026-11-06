@@ -38,6 +38,9 @@ P0:
     # Workflow runner core: gates, retry/skip, one approval per deploy
     - engine/tests/test_an_approved_gate_releases_the_work.py
     - engine/tests/test_one_approval_per_deploy.py
+    # Every approval holds the run: a deploy waits for its PR's merge, shown on the step
+    # (helpdesk-ai 2026-11-06: the deploy shipped the unmerged head, the merge sat outside the run)
+    - engine/tests/test_a_deploy_waits_for_its_merge.py
     # A deploy that promises a person always asks one, whatever the environment policy (D2)
     - engine/tests/test_a_promised_approval_is_always_asked.py
     - engine/tests/test_a_workflow_follows_a_retry.py

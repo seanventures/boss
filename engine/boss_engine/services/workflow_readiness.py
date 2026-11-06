@@ -517,7 +517,8 @@ def check(connection: Connection, settings: Any, project_id: str, key: str
             return True, f"a model is connected: {choose(connection, settings, project_id).describe()}"
         return False, basics.get("model_problem") or "no model is connected to this project"
     if key == "deployment_target":
-        hosts = _scalar(connection, "SELECT count(*) FROM deployment_hosts WHERE project_id=:p "
+        from .deployment_fleet import usable_hosts_sql
+        hosts = _scalar(connection, f"SELECT count(*) FROM deployment_hosts WHERE {usable_hosts_sql()} "
                                     "AND status IN ('verified','ready','active')", p) or 0
         targets = _scalar(connection, "SELECT count(*) FROM deployment_targets "
                                       "WHERE project_id=:p AND status='active'", p) or 0

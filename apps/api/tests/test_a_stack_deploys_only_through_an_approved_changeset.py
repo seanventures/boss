@@ -7,6 +7,8 @@ secret store, the idempotency, and the order — governance first, host second.
 """
 from __future__ import annotations
 
+import json
+
 import subprocess
 from uuid import uuid4
 
@@ -315,7 +317,11 @@ def test_a_decision_still_queues_the_apply_when_its_changeset_was_already_approv
     assert result["status"] == "healthy", result
 
 
-def test_a_planned_dir_another_target_on_the_host_uses_is_refused(client, engine, stack):
+def test_a_second_target_on_the_host_gets_its_own_dir_never_the_first_ones(client, engine, stack):
+    """Two targets on one host never share a directory (each has its own generated secrets and
+    deploy.env). A manifest that names no `dir` used to be REFUSED for the second; with hosts
+    shared across an organisation that refused HelpDesk AI beside boss-dogfood's helpdesk-ai
+    (2026-11-06), so the second now gets a place of its own (stack_deploy.own_place_on_host)."""
     first = _plan(client, stack)
     staging = client.post("/v1/deployments/stack/targets", json={
         "project_id": HOME, "host_id": stack["target"]["host_id"], "repository": "acme/shop",
@@ -324,11 +330,10 @@ def test_a_planned_dir_another_target_on_the_host_uses_is_refused(client, engine
     response = client.post("/v1/deployments/stack/plan", json={
         "project_id": HOME, "target_id": staging.json()["id"], "ref": "main", "actor": "ceo"})
 
-    assert response.status_code == 409, response.text
-    detail = response.json()["detail"]
-    assert "/opt/boss-apps/shop" in detail["headline"]
-    assert stack["target"]["id"] in detail["headline"] and "dir" in detail["action"]
+    assert response.status_code == 200, response.text
+    second = response.json()["deployment"]["dir"]
     assert first["dir"] == "/opt/boss-apps/shop"
+    assert second != first["dir"] and second.startswith("/opt/boss-apps/shop-")
 
 
 def test_two_plans_of_the_same_commit_at_once_are_one_deployment(client, engine, stack):
@@ -451,10 +456,12 @@ def test_the_workflow_deploy_step_plans_a_stack_without_a_preview(
     run_id = f"crun_{uuid4().hex[:10]}"
     with engine.begin() as connection:
         connection.execute(
+            # Merged: a workflow's deploy waits for its pull request's merge (_merge_wait).
             text("INSERT INTO code_task_runs (id, project_id, status, title, spec, "
-                 "pull_request_number, pull_request_url) VALUES (:i, :p, 'completed', "
-                 "'Add a shop feature', CAST(:s AS JSONB), 7, "
-                 "'https://github.com/acme/shop/pull/7')"),
+                 "pull_request_number, pull_request_url, finalize_ctx) VALUES (:i, :p, "
+                 "'completed', 'Add a shop feature', CAST(:s AS JSONB), 7, "
+                 "'https://github.com/acme/shop/pull/7', "
+                 "'{\"merge\": {\"sha\": \"mmmmmmmmmmmm\", \"source\": \"boss\"}}'::jsonb)"),
             {"i": run_id, "p": HOME, "s": '{"owner": "acme", "repo": "shop"}'})
     with engine.begin() as connection:
         ctx = SimpleNamespace(engine=engine, settings=api_main.settings)
@@ -472,14 +479,17 @@ def test_the_workflow_deploy_step_plans_a_stack_without_a_preview(
     assert deployment["code_task_run_id"] == run_id
 
 
-def _build(engine, spec: str, number: int = 7) -> str:
+def _build(engine, spec: str, number: int = 7, *, merged: bool = True) -> str:
+    """A finished build with PR #number. MERGED by default: a workflow's deploy waits for its
+    pull request's merge (runner._merge_wait), so a build these tests deploy has been merged."""
     run_id = f"crun_{uuid4().hex[:10]}"
+    fctx = {"merge": {"sha": "m" * 40, "source": "boss"}} if merged else {}
     with engine.begin() as connection:
         connection.execute(
             text("INSERT INTO code_task_runs (id, project_id, status, title, spec, "
-                 "pull_request_number) VALUES (:i, :p, 'completed', 'A feature', "
-                 "CAST(:s AS JSONB), :n)"),
-            {"i": run_id, "p": HOME, "s": spec, "n": number})
+                 "pull_request_number, finalize_ctx) VALUES (:i, :p, 'completed', 'A feature', "
+                 "CAST(:s AS JSONB), :n, CAST(:f AS JSONB))"),
+            {"i": run_id, "p": HOME, "s": spec, "n": number, "f": json.dumps(fctx)})
     return run_id
 
 

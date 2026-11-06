@@ -267,6 +267,16 @@ def test_a_manifest_on_another_port_or_an_unserved_health_route_is_refused_at_pl
         assert _misfit(c, run_id, "", health="/health", files=served) is None
 
 
+def test_an_imported_apps_own_manifest_is_not_judged_by_the_files_one_build_changed(db):
+    """helpdesk-ai 2026-11-06: the imported app's boss.deploy.yaml health-checks /auth/providers,
+    served by existing code the SLA build never touched. Judging it against the build's changed
+    files dead-lettered a correct deploy. Only a manifest the build wrote is judged that way."""
+    changed = {"notes/server.mjs": "app.get('/', home)"}
+    with db.engine.begin() as c:
+        run_id = _build(c, db.project, ["notes/server.mjs", "notes/package.json"])
+        assert _misfit(c, run_id, "", health="/auth/providers", files=changed) is None
+
+
 # ── #6: a target whose every deploy failed holds no port; an app keeps its port ──────────────
 
 def test_a_target_whose_deploys_all_failed_holds_no_port_and_the_app_gets_its_port_back(db):
@@ -377,3 +387,122 @@ def test_a_target_shipped_from_its_manifest_is_found_as_such(db):
         c.execute(text("DELETE FROM stack_deployments WHERE target_id = :t"), {"t": tid})
     assert got == {"manifest_path": "order-api/boss.deploy.yaml",
                    "repository": "acme/boss-sandbox"}
+
+
+# ── adding to an imported app deploys as that app, never as the task ─────────────────────────
+
+def test_a_feature_on_an_imported_app_deploys_to_the_projects_own_target(db):
+    """helpdesk-ai 2026-11-06: the SLA build recorded no app name, so its title stood in and the
+    deploy made a second target "Add SLA timers to tickets" beside "HelpDesk AI" (made from Ask
+    BOSS, with no repo recorded). A build at the root of the project's primary repository IS the
+    project's app."""
+    with db.engine.begin() as c:
+        c.execute(text("UPDATE projects SET name = 'HelpDesk AI' WHERE id = :p"), {"p": db.project})
+        c.execute(text("INSERT INTO github_connections (id, project_id, connection_label, "
+                       " auth_method, credential_ref, created_by) VALUES (:i, :p, 'test', "
+                       " 'github_app', 'env:NONE', 'ceo')"),
+                  {"i": f"ghconn_{db.project}", "p": db.project})
+        c.execute(text("INSERT INTO github_repository_bindings (id, project_id, connection_id, "
+                       " owner, name, full_name, role, default_branch, status, created_by) VALUES "
+                       " (:i, :p, :c, 'acme', 'boss-sandbox', 'acme/boss-sandbox', 'primary', "
+                       " 'main', 'active', 'ceo')"),
+                  {"i": f"ghrepo_{db.project}", "p": db.project, "c": f"ghconn_{db.project}"})
+        own = _target(c, db.project, db.host, "HelpDesk AI", 8000)
+        c.execute(text("UPDATE deployment_targets SET repo = '' WHERE id = :t"), {"t": own})
+        sla = _build(c, db.project, ["boss.deploy.yaml", "server/sla.mjs"],
+                     app="Add SLA timers to tickets")
+        c.execute(text("UPDATE code_task_runs SET finalize_ctx = '{\"app_dir\": \"web\"}' "
+                       "WHERE id = :i"), {"i": sla})
+        got = stack_target_for_deploy(c, db.project, {"run_id": sla, "host_id": db.host})
+        c.execute(text("DELETE FROM github_repository_bindings WHERE project_id = :p"),
+                  {"p": db.project})
+        c.execute(text("DELETE FROM github_connections WHERE project_id = :p"), {"p": db.project})
+    assert got and got.get("id") == own, got
+
+
+# ── two apps with one name on one shared host each get their own place ────────────────────────
+
+def test_a_second_app_with_the_same_name_on_a_shared_host_gets_its_own_place(db):
+    """helpdesk-ai 2026-11-06: with hosts shared across an organisation, boss-dogfood's old
+    helpdesk-ai and the helpdesk-ai project's HelpDesk AI both defaulted to
+    /opt/boss-apps/helpdesk-ai and compose project helpdesk-ai on one host; the second deploy
+    was refused. The second gets a place of its own, and keeps it on later deploys."""
+    from boss_engine.services.app_deploy_manifest import load_manifest
+    from boss_engine.services.stack_deploy import own_place_on_host
+
+    text_ = ("version: 1\nname: helpdesk-ai\nkind: compose\ncompose:\n  file: docker-compose.yml\n"
+             "health: [{url: \"{target.public_url}/\", expect: 200}]\n")
+    manifest = load_manifest(text_)
+    with db.engine.begin() as c:
+        first = _target(c, db.project, db.host, "helpdesk-ai", 8000)
+        second = _target(c, db.project, db.host, "HelpDesk AI", 8002)
+        c.execute(text("INSERT INTO stack_deployments (id, project_id, target_id, host_id, "
+                       " repository, ref, commit_sha, created_by, status, deploy_dir) VALUES "
+                       " (:i, :p, :t, :h, 'acme/app', 'main', :c, 'ceo', 'healthy', :d)"),
+                  {"i": f"sdep_{uuid.uuid4().hex[:10]}", "p": db.project, "t": first,
+                   "h": db.host, "c": "a" * 40, "d": manifest.dir})
+    host = {"id": db.host}
+    kept_text, kept = own_place_on_host(db.engine, text_, manifest, {"id": first}, host)
+    assert kept.dir == "/opt/boss-apps/helpdesk-ai" and kept_text == text_
+    placed_text, placed = own_place_on_host(db.engine, text_, manifest, {"id": second}, host)
+    assert placed.dir != manifest.dir and placed.dir.startswith("/opt/boss-apps/helpdesk-ai-")
+    assert placed.compose_project == placed.dir.rsplit("/", 1)[-1]
+    assert load_manifest(placed_text).dir == placed.dir, "apply renders the same place"
+    with db.engine.begin() as c:
+        c.execute(text("DELETE FROM stack_deployments WHERE project_id = :p"), {"p": db.project})
+
+
+def test_an_imported_apps_manifest_a_repair_edited_is_still_not_judged_by_its_files(db):
+    """helpdesk-ai PR #4 (2026-11-06): the repair build added SESSION_SECRET to the imported app's
+    root boss.deploy.yaml, so "the build wrote the manifest" held, and the route check refused
+    /auth/providers — served by the app's existing code, never by the repair's two files."""
+    with db.engine.begin() as c:
+        c.execute(text("UPDATE projects SET name = 'HelpDesk AI' WHERE id = :p"), {"p": db.project})
+        c.execute(text("INSERT INTO github_connections (id, project_id, connection_label, "
+                       " auth_method, credential_ref, created_by) VALUES (:i, :p, 'test', "
+                       " 'github_app', 'env:NONE', 'ceo')"),
+                  {"i": f"ghconn_{db.project}", "p": db.project})
+        c.execute(text("INSERT INTO github_repository_bindings (id, project_id, connection_id, "
+                       " owner, name, full_name, role, default_branch, status, created_by) VALUES "
+                       " (:i, :p, :c, 'acme', 'boss-sandbox', 'acme/boss-sandbox', 'primary', "
+                       " 'main', 'active', 'ceo')"),
+                  {"i": f"ghrepo_{db.project}", "p": db.project, "c": f"ghconn_{db.project}"})
+        repair = _build(c, db.project, ["boss.deploy.yaml", "tests/deploy_manifest.test.mjs"])
+        c.execute(text("UPDATE code_task_runs SET finalize_ctx = '{}'::jsonb WHERE id = :i"),
+                  {"i": repair})
+        manifest = load_manifest(MANIFEST % ("/auth/providers", ""))
+        rendered = render(manifest, {"commit": "c" * 40, "ref": "pull/7", "target.host": ADDRESS,
+                                     "target.user": "root",
+                                     "target.public_url": f"http://{ADDRESS}:8000"})
+        got = manifest_misfit(c, manifest=manifest, rendered=rendered, path="boss.deploy.yaml",
+                              target={"id": "deptgt_x", "target_kind": "ssh",
+                                      "domains": [f"{ADDRESS}:8000"], "host_id": "dh"},
+                              host={"id": "dh", "address": ADDRESS, "name": "vm"},
+                              run_id=repair,
+                              read=lambda p: {"tests/deploy_manifest.test.mjs": "test()"}.get(p))
+        c.execute(text("DELETE FROM github_repository_bindings WHERE project_id = :p"),
+                  {"p": db.project})
+        c.execute(text("DELETE FROM github_connections WHERE project_id = :p"), {"p": db.project})
+    assert got is None, got
+
+
+def test_a_deploy_generates_the_session_key_its_compose_file_reads():
+    """helpdesk-ai 2026-11-06: docker-compose.yml read SESSION_SECRET, boss.deploy.yaml named only
+    the demo password, and the deployed server exited on "SESSION_SECRET must be set"."""
+    from boss_engine.services.stack_deploy import with_compose_owned_secrets
+
+    text_ = ("version: 1\nname: helpdesk-ai\nkind: compose\ncompose:\n  file: docker-compose.yml\n"
+             "health: [{url: \"{target.public_url}/auth/providers\", expect: 200}]\n"
+             "env:\n  DEMO_PASSWORD: {generate: password}\n")
+    compose = ("services:\n  app:\n    environment:\n      SESSION_SECRET: ${SESSION_SECRET}\n"
+               "      DATABASE_URL: postgres://db/x\n      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET}\n")
+    placed_text, placed = with_compose_owned_secrets(text_, load_manifest(text_),
+                                                     {"docker-compose.yml": compose}.get)
+    generated = placed.summary()["generated_env_keys"]
+    assert "SESSION_SECRET" in generated and "DEMO_PASSWORD" in generated
+    assert "GITHUB_CLIENT_SECRET" not in generated, "a provider's secret is never minted"
+    assert load_manifest(placed_text).summary()["generated_env_keys"] == generated
+    declared = text_ + "  SESSION_SECRET: {generate: hex32}\n"
+    same_text, _ = with_compose_owned_secrets(declared, load_manifest(declared),
+                                              {"docker-compose.yml": compose}.get)
+    assert same_text == declared, "a manifest that declares it is left as written"

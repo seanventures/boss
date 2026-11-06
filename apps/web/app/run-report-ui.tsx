@@ -3,8 +3,9 @@
 import { GatedButton } from "../components/gated";
 import { usd } from "../lib/money";
 import { humanDuration } from "../lib/datetime";
-import React, { useCallback, useEffect, useState } from "react";
-import { FilePdf, Hammer, Warning } from "@phosphor-icons/react";
+import React, { useCallback, useEffect, useId, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { ArrowsOut, FilePdf, Hammer, Warning, X } from "@phosphor-icons/react";
 import { apiWrite } from "../lib/api-write";
 import { askConsent, consentFromBody } from "../lib/identity/consent";
 import { StartRefusal, asReadiness, type PendingRefusal } from "./workflow-readiness-ui";
@@ -98,9 +99,9 @@ export function benchmarkRows(b: Benchmark): [string, string][] {
   ];
 }
 
-export function BenchmarkRecord({ benchmark }: { benchmark: Benchmark }) {
+export function BenchmarkRecord({ benchmark, open }: { benchmark: Benchmark; open?: boolean }) {
   return (
-    <details className="rr-section" data-testid="run-report-benchmark">
+    <details className="rr-section" data-testid="run-report-benchmark" open={open}>
       <summary>Benchmark record</summary>
       <table className="rr-table">
         <tbody>
@@ -129,10 +130,102 @@ function duration(seconds: number | null | undefined): string {
 /** The run's own "Build on this research" verdict, as the server sent it with the run. */
 type ResearchAction = { key: string; enabled: boolean } | null | undefined;
 
-export function RunReportPanel(
-  { runId, projectId, researchAction }:
-    { runId: string; projectId: string; researchAction?: ResearchAction },
+/** A run has a report once one of its steps has finished — the rule the panel is shown by. */
+export function runHasReport(steps: Array<{ status: string }>): boolean {
+  return steps.some((s) => s.status === "succeeded" || s.status === "skipped");
+}
+
+/**
+ * THE WHOLE REPORT, OPEN, IN A DIALOG. The collapsed panel keeps the run page short, but the
+ * operator found the report "buried and not exposed": a finished run is read for what was done,
+ * and that should be one press away, every section already open. Same panel, `expanded`.
+ */
+export function RunReportDialog(
+  { runId, projectId, researchAction, onClose }:
+    { runId: string; projectId: string; researchAction?: ResearchAction; onClose: () => void },
 ) {
+  const titleId = useId();
+  const sheetRef = useRef<HTMLDivElement | null>(null);
+  const closeRef = useRef<HTMLButtonElement | null>(null);
+  useEffect(() => {
+    const opener = typeof document !== "undefined" ? document.activeElement as HTMLElement | null : null;
+    closeRef.current?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { e.stopPropagation(); onClose(); return; }
+      if (e.key !== "Tab" || !sheetRef.current) return;
+      // Focus stays inside the dialog: Tab past the last control comes back to the first.
+      const items = Array.from(sheetRef.current.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), summary, [tabindex]:not([tabindex="-1"])'));
+      if (!items.length) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      const active = document.activeElement;
+      if (e.shiftKey && (active === first || !sheetRef.current.contains(active))) {
+        e.preventDefault(); last.focus();
+      } else if (!e.shiftKey && (active === last || !sheetRef.current.contains(active))) {
+        e.preventDefault(); first.focus();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      opener?.focus?.();
+    };
+  }, [onClose]);
+  const dialog = (
+    <div className="bx-np-backdrop rr-dialog-backdrop" data-testid="run-report-dialog-backdrop"
+         onPointerDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div ref={sheetRef} className="rr-dialog" role="dialog" aria-modal="true" aria-labelledby={titleId}
+           data-testid="run-report-dialog">
+        <div className="rr-dialog-head">
+          <h2 id={titleId} className="rr-dialog-title">Run report</h2>
+          <button ref={closeRef} type="button" className="rr-dialog-close" aria-label="Close"
+                  data-testid="run-report-dialog-close" onClick={onClose}>
+            <X size={16} weight="bold" aria-hidden />
+          </button>
+        </div>
+        <RunReportPanel runId={runId} projectId={projectId} researchAction={researchAction} expanded />
+      </div>
+    </div>
+  );
+  return typeof document === "undefined" ? dialog : createPortal(dialog, document.body);
+}
+
+/** "Open report": the press that opens the dialog, for the run's own header. */
+export function OpenRunReportButton(
+  { runId, projectId, researchAction, className, testId }:
+    { runId: string; projectId: string; researchAction?: ResearchAction; className?: string; testId?: string },
+) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button type="button" className={className ?? "rr-open"} data-testid={testId ?? "run-open-report"}
+              title="The whole report — what was built, tests, cost, who did it — every section open"
+              onClick={() => setOpen(true)}>
+        <ArrowsOut size={13} weight="bold" aria-hidden /> Open report
+      </button>
+      {open ? (
+        <RunReportDialog runId={runId} projectId={projectId} researchAction={researchAction}
+                         onClose={() => setOpen(false)} />
+      ) : null}
+    </>
+  );
+}
+
+export function RunReportPanel(
+  { runId, projectId, researchAction, expanded = false }:
+    { runId: string; projectId: string; researchAction?: ResearchAction;
+      /** Every section open and no outer disclosure — the dialog's mode. */
+      expanded?: boolean },
+) {
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const closeDialog = useCallback(() => setDialogOpen(false), []);
+  // The press must not fold or unfold the <details> it sits in. Cancelled natively, on the
+  // button itself, so it is cancelled before the click reaches the <details> whatever the
+  // order React's delegated handler would run in.
+  const keepFolded = useCallback((el: HTMLButtonElement | null) => {
+    el?.addEventListener("click", (e) => e.preventDefault());
+  }, []);
   const [report, setReport] = useState<RunReport | null>(null);
   const [pdfHref, setPdfHref] = useState<string>("");
   const [saving, setSaving] = useState(false);
@@ -289,6 +382,10 @@ export function RunReportPanel(
   const waited = report.waiting_minutes ?? 0;
   const listed = report.list_usd ?? 0;
   const billed = report.total_usd ?? 0;
+  // In the dialog nothing is folded: the root is a plain block and every section starts open.
+  const Root = expanded ? "div" : "details";
+  const Summary = expanded ? "div" : "summary";
+  const open = expanded ? true : undefined;
   const money = `${done}/${steps.length} · ${report.working_minutes}min working`
     + (waited >= 1 ? ` · waited ${humanDuration(waited * 60)} for a person` : "")
     + ` · ${usd(billed)}${listed > billed ? ` (${usd(listed)} at list price, on the subscription)` : ""}`;
@@ -298,8 +395,9 @@ export function RunReportPanel(
        the app's name, the headline numbers, and whether anything is urgent. Feedback on
        the first version was that it is a lot of text — and it is, which is the point of a
        report and the reason none of it should be open until somebody asks for it. */
-    <details className="rr rr-root" data-testid="run-report">
-      <summary className="rr-root-summary">
+    <Root className={expanded ? "rr rr-expanded" : "rr rr-root"}
+          data-testid={expanded ? "run-report-expanded" : "run-report"}>
+      <Summary className="rr-root-summary">
         {/* A HEADING, INSIDE THE SUMMARY. Valid — <summary> takes flow content — and it is
             what keeps the panel findable as a landmark once the whole report is collapsed.
             Dropping to a <span> for the type would trade that away for nothing. The type is
@@ -312,7 +410,16 @@ export function RunReportPanel(
             <Warning size={13} weight="bold" aria-hidden /> {urgent.length} P1
           </span>
         ) : null}
-      </summary>
+        {expanded ? null : (
+          /* THE REPORT, ONE PRESS AWAY, every section open. A press on it never toggles the
+             disclosure it sits on. */
+          <button ref={keepFolded} type="button" className="rr-open rr-open-bar" data-testid="run-report-open"
+                  title="Read the whole report, every section open"
+                  onClick={(e) => { e.preventDefault(); e.stopPropagation(); setDialogOpen(true); }}>
+            <ArrowsOut size={13} weight="bold" aria-hidden /> Open report
+          </button>
+        )}
+      </Summary>
       <div className="rr-head">
         {pdfHref ? (
           <a className="rr-pdf" href={pdfHref} data-testid="run-report-pdf">
@@ -353,7 +460,7 @@ export function RunReportPanel(
         </div>
       ) : null}
 
-      <details className="rr-section">
+      <details className="rr-section" open={open}>
         <summary>What shipped<span className="rr-count">
           {build.files_changed ? `${build.files_changed} files` : "—"}
         </span></summary>
@@ -370,7 +477,7 @@ export function RunReportPanel(
       </details>
 
       {product.screens?.length ? (
-        <details className="rr-section">
+        <details className="rr-section" open={open}>
           <summary>How to use it<span className="rr-count">{product.screens.length} screens</span></summary>
           <ol className="rr-screens">
             {product.screens.map((screen) => (
@@ -380,7 +487,7 @@ export function RunReportPanel(
         </details>
       ) : null}
 
-      <details className="rr-section">
+      <details className="rr-section" open={open}>
         <summary>Does it work<span className="rr-count">
           {ran.length ? `${(build.test_files ?? []).length} written` : "—"}
         </span></summary>
@@ -404,7 +511,7 @@ export function RunReportPanel(
       </details>
 
       {product.acceptance?.length ? (
-        <details className="rr-section">
+        <details className="rr-section" open={open}>
           <summary>Acceptance criteria<span className="rr-count">{product.acceptance.length}</span></summary>
           <ul className="rr-acs">
             {product.acceptance.map((ac) => (
@@ -420,7 +527,7 @@ export function RunReportPanel(
       ) : null}
 
       {nextSteps.length ? (
-        <details className="rr-section">
+        <details className="rr-section" open={open}>
           <summary>What to do next<span className="rr-count">{nextSteps.length}</span></summary>
           {builtRunId ? (
             <p className="rr-built" data-testid="run-report-built">
@@ -444,7 +551,7 @@ export function RunReportPanel(
         </details>
       ) : null}
 
-      <details className="rr-section">
+      <details className="rr-section" open={open}>
         <summary>
           Run facts
           <span className="rr-count">
@@ -472,7 +579,11 @@ export function RunReportPanel(
           </tbody>
         </table>
       </details>
-      {report.benchmark ? <BenchmarkRecord benchmark={report.benchmark} /> : null}
-    </details>
+      {report.benchmark ? <BenchmarkRecord benchmark={report.benchmark} open={open} /> : null}
+      {dialogOpen ? (
+        <RunReportDialog runId={runId} projectId={projectId} researchAction={researchAction}
+                         onClose={closeDialog} />
+      ) : null}
+    </Root>
   );
 }

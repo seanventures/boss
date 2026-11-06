@@ -2459,6 +2459,15 @@ class SoftwareFactoryService:
         branch_name: Optional[str],
         created_by_job_id: Optional[str] = None,
     ) -> dict:
+        # THE PULL REQUEST'S OWN REPOSITORY. The merge ran on the factory's default adapter,
+        # bound to no repository, and failed "No GitHub credentials for /" — while the job said
+        # it succeeded (helpdesk-ai-demo PR #1, 2026-11-06). Bind to the repo the URL names.
+        from .ci_gate import parse_pr_url
+
+        owner_repo = (parse_pr_url(str(pull_request_url or "")) or (None, None))[0] or ""
+        if "/" in owner_repo:
+            owner, repo = owner_repo.split("/", 1)
+            self.bind_project_github(connection, project_id, owner=owner, repo=repo)
         if task_id is None:
             task_id = connection.execute(
                 sql(

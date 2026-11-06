@@ -26999,7 +26999,7 @@ def prepare_delivery_deploy_target(run_id: str, payload: WorkflowDeployTargetBod
 
         host = connection.execute(
             text("SELECT id, name, address, ssh_user, ssh_port, port_min, port_max, status "
-                 "FROM deployment_hosts WHERE id=:h AND project_id=:p"),
+                 f"FROM deployment_hosts WHERE id=:h AND {_usable_hosts()}"),
             {"h": host_id, "p": project_id},
         ).mappings().first()
         if not host:
@@ -31978,3 +31978,10 @@ def _openapi_with_stable_operation_ids() -> dict[str, Any]:
 
 
 app.openapi = _openapi_with_stable_operation_ids
+
+
+def _usable_hosts(alias: str = "") -> str:
+    """deployment_fleet.usable_hosts_sql: a project's hosts include the ones its organisation shares."""
+    from boss_engine.services.deployment_fleet import usable_hosts_sql
+
+    return usable_hosts_sql(alias)

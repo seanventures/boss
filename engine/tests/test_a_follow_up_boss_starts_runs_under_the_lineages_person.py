@@ -171,3 +171,19 @@ def test_every_follow_up_boss_spawns_says_it_continues_the_lineage():
             if depth == 0:
                 break
         assert "continuation=True" in source[match.start():end + 1]
+
+
+def test_a_follow_up_belongs_to_its_parents_workflow_run(env, staffed):  # noqa: F811
+    """helpdesk-ai 2026-11-06: the "checks failing" follow-up carried no workflow_run_id, so its
+    merge approval never showed on the run ("how does the user know?"). It carries the parent's
+    run, and still acts as the lineage's person under the run's grant."""
+    wf_run, crun, grant = _workflow_build(env)
+    _shipped(env, crun)
+    with lineage.acting(WORKER_KEY):
+        new = governed._spawn_deferred_findings_task(
+            env.engine, get_settings(), _Jobs(), project_id=env.project, task_id=None,
+            spec={"owner": "acme", "repo": "web"}, base_branch="boss/feature",
+            findings=FINDINGS, parent_run_id=crun, parent_title="HelpDesk", parent_root=crun,
+            checks_failing={"failed": ["written_tests_pass"]}, parent_workflow_run_id=wf_run)
+    assert _fctx(env, new).get("workflow_run_id") == wf_run
+    _runs_as_person(env, new, grant)
