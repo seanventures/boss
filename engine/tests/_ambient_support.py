@@ -62,12 +62,35 @@ def purge(eng, pid: str) -> None:
                       "work_items", "cost_receipts", "budget_reservations", "budget_refusals",
                       "policy_evaluations", "decisions", "events", "workflow_step_runs",
                       "workflow_runs", "workflow_versions", "workflow_definitions",
-                      "code_task_runs", "app_alerts", "shepherd_escalations", "budget_policies"):
+                      "code_task_runs", "app_alerts", "shepherd_escalations", "budget_policies",
+                      "project_members", "receipts"):
             try:
                 with c.begin_nested():
                     c.execute(text(f"DELETE FROM {table} WHERE project_id = :p"), {"p": pid})
             except Exception:  # noqa: BLE001 — a table some installs lack
                 pass
+        try:
+            with c.begin_nested():
+                c.execute(text("DELETE FROM projects WHERE id = :p"), {"p": pid})
+            return
+        except Exception:  # noqa: BLE001 — something else still points at the project
+            pass
+        # Whatever else a story wrote under the project (a demo loader touches many stores):
+        # every table whose project_id references projects, a few passes for chained keys.
+        referencing = list(c.execute(text(
+            "SELECT DISTINCT tc.table_name FROM information_schema.table_constraints tc "
+            "JOIN information_schema.key_column_usage k ON k.constraint_name = tc.constraint_name "
+            "JOIN information_schema.constraint_column_usage u "
+            "  ON u.constraint_name = tc.constraint_name "
+            "WHERE tc.constraint_type = 'FOREIGN KEY' AND u.table_name = 'projects' "
+            "AND k.column_name = 'project_id'")).scalars())
+        for _ in range(3):
+            for table in referencing:
+                try:
+                    with c.begin_nested():
+                        c.execute(text(f"DELETE FROM {table} WHERE project_id = :p"), {"p": pid})
+                except Exception:  # noqa: BLE001 — a row another row still needs: next pass
+                    pass
         c.execute(text("DELETE FROM projects WHERE id = :p"), {"p": pid})
 
 

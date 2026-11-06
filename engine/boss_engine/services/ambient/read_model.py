@@ -22,7 +22,7 @@ The scorecard (design §11.7) is COMPUTED from the ledger and the board, never e
 from __future__ import annotations
 
 from statistics import median
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
@@ -338,16 +338,39 @@ def _item_summary(item: dict[str, Any]) -> dict[str, Any]:
     return {k: item.get(k) for k in keys}
 
 
-def _strip(g: dict[str, Any]) -> list[dict[str, Any]]:
-    """The thumbnail: the first signal, the owner, the last decision, the end."""
+def owner_of(connection: Connection, item: Mapping[str, Any]) -> Optional[str]:
+    """Who owns the item now: the squad's lead, else the last party it was handed to, else the
+    agent holding it, else whoever ended it."""
+    from .squads import roster
+
+    squad = roster(connection, item["id"])
+    if squad and squad.get("lead"):
+        return str(squad["lead"])
+    to = connection.execute(text(
+        "SELECT body->>'to' FROM work_item_messages WHERE work_item_id = :w AND kind = 'handoff' "
+        "AND body->>'to' IS NOT NULL ORDER BY created_at DESC, id DESC LIMIT 1"),
+        {"w": item["id"]}).scalar()
+    if to:
+        return str(to)
+    if item.get("lease_owner"):
+        return str(item["lease_owner"])
+    return str(item["resolved_by"]) if item.get("resolved_by") else None
+
+
+def _strip(g: dict[str, Any], owner: Optional[str] = None) -> list[dict[str, Any]]:
+    """The thumbnail: the first signal, the OWNER, the last decision, the end."""
     nodes = g["nodes"]
     pick: list[dict[str, Any]] = []
-    for kind in ("signal", "agent", "person", "decision", "needs_you", "outcome"):
-        found = [n for n in nodes if n["type"] == kind]
-        if not found:
-            continue
-        chosen = found[-1] if kind in ("decision", "agent") else found[0]
-        if chosen not in pick:
+    by_id = {n["id"]: n for n in nodes}
+    owner_node = by_id.get(f"party:{owner}") if owner else None
+    for kind in ("signal", "owner", "person", "decision", "needs_you", "outcome"):
+        if kind == "owner":
+            agents = [n for n in nodes if n["type"] == "agent"]
+            chosen = owner_node or (agents[-1] if agents else None)
+        else:
+            found = [n for n in nodes if n["type"] == kind]
+            chosen = (found[-1] if kind == "decision" else found[0]) if found else None
+        if chosen is not None and chosen not in pick:
             pick.append(chosen)
     return [{"type": n["type"], "label": n["label"], "badges": n["badges"][:2]}
             for n in pick[:6]]
@@ -369,7 +392,9 @@ def list_view(connection: Connection, project_id: str, *, filter_: str = "all",
     items = []
     for item_id in rows:
         g = graph(connection, item_id, project_id=project_id)
-        items.append({**g["item"], "badges": g["badges"], "strip": _strip(g)})
+        owner = owner_of(connection, g["item"])
+        items.append({**g["item"], "badges": g["badges"], "owner": owner,
+                      "strip": _strip(g, owner)})
     counts = {f: int(connection.execute(text(
         f"SELECT count(*) FROM work_items w WHERE w.project_id = :p AND w.ambient AND "
         f"{_FILTER_SQL[f]} AND (CAST(:c AS TEXT) IS NULL OR w.task_class = :c)"),

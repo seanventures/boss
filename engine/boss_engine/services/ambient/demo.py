@@ -168,6 +168,82 @@ def load(connection: Connection, settings: Any, *, project_id: str, mode: str = 
             "triage": triage, "owners_played": played}
 
 
+
+# ── everything at once: the console's "Load demo" ────────────────────────────────────────────
+
+LOADERS = ("order_api_incident", "morning", "squad_cve", "roadmap")
+
+
+def status(connection: Connection, project_id: str) -> dict[str, Any]:
+    """Whether "Load demo" is offered on this project (a demo/test project only)."""
+    ok = allowed(connection, project_id)
+    return {"available": ok, "loaders": list(LOADERS),
+            "reason": "" if ok else "only a demo or test project (its name says demo, sample, "
+                                    "sandbox or test) can load the demo"}
+
+
+def load_all(engine: Any, settings: Any, *, project_id: str, actor: str) -> dict[str, Any]:
+    """Populate a fresh demo project with every story, through the real machinery:
+
+      order_api_incident  alert → signal → Chief of Staff → SRE squad → Needs you (production
+                          rollback, the squad's dissent on the card)
+      morning             the demo morning: CI, CVE, spend, stale PR, TODOs triaged; the second
+                          order-api alert JOINS the incident above (one problem, one item)
+      squad_cve           the four-agent CVE squad: critique, panel, dissent, run, Needs you
+      roadmap             the Recommended roadmap's history, detectors and two decided items
+
+    Each loader runs in its own transaction; one that cannot run (already loaded, refused) is
+    reported under `skipped` with why, and the rest still load."""
+    from .. import incident_squad_demo
+    from . import roadmap_demo, squad_demo
+
+    with engine.begin() as c:
+        if not allowed(c, project_id):
+            raise PermissionError(status(c, project_id)["reason"])
+    loaded: dict[str, Any] = {k: None for k in LOADERS}
+    skipped: dict[str, str] = {}
+
+    def run(key: str, fn: Any) -> None:
+        try:
+            loaded[key] = fn()
+        except Exception as exc:  # noqa: BLE001 — reported, the next loader still runs
+            skipped[key] = f"{type(exc).__name__}: {exc}"[:300]
+
+    def incident() -> dict[str, Any]:
+        with engine.begin() as c:
+            if c.execute(text("SELECT 1 FROM work_items WHERE project_id = :p AND ambient "
+                              "AND subject_ref = 'demo:order-api' LIMIT 1"),
+                         {"p": project_id}).first():
+                raise RuntimeError("already loaded")
+            out = incident_squad_demo.run_through_chief_of_staff(c, project_id,
+                                                                 settings=settings)
+        return {"item_id": out["item_id"], "stages": out["stages"],
+                "needs_you_decision_id": out["needs_you_decision_id"]}
+
+    def morning() -> dict[str, Any]:
+        with engine.begin() as c:
+            out = load(c, settings, project_id=project_id, mode="route")
+        return {"signals": len(out["signals"]), "counts": out["triage"].get("counts") or {},
+                "owners_played": out["owners_played"]}
+
+    def cve() -> dict[str, Any]:
+        out = squad_demo.seed(engine, settings, project_id=project_id, confirm_demo=True,
+                              ensure_roles=True)
+        return {"item_id": out["item_id"], "stopped": (out["run"].get("stopped") or {}).get(
+            "guard")}
+
+    def roadmap() -> dict[str, Any]:
+        with engine.begin() as c:
+            out = roadmap_demo.seed(c, project_id, settings=settings, actor=actor)
+        return {"report": out["report"], "decided": out["decided"]}
+
+    run("order_api_incident", incident)
+    run("morning", morning)
+    run("squad_cve", cve)
+    run("roadmap", roadmap)
+    return {"project_id": project_id, "loaded": loaded, "skipped": skipped}
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     """python -m boss_engine.services.ambient.demo --project <id> [--mode route|propose]"""
     from ...config import get_settings

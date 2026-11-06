@@ -29,12 +29,14 @@ def _by_class(c, pid):
 def test_the_morning_runs_every_branch_of_the_flow(eng, project, demo_ok):
     with eng.begin() as c:
         out = demo.load(c, None, project_id=project)
-    assert out["triage"]["counts"] == {"routed": 2, "proposed": 3, "observed": 1}
+    # In route mode an incident goes straight to the SRE squad (chief_of_staff.ROUTE_AT_ANY_LEVEL):
+    # it waits, handed over, for the owners' turn on the tick (owners.work).
+    assert out["triage"]["counts"] == {"routed": 3, "proposed": 2, "observed": 1}
     assert sorted(out["owners_played"]) == ["security_reviewer", "software_engineer"]
     with eng.begin() as c:
         items = _by_class(c, project)
         assert {k: i["lifecycle"] for k, i in items.items()} == {
-            "incident_response": "needs_you", "ci_fix_boss_pr": "resolved",
+            "incident_response": "proposed", "ci_fix_boss_pr": "resolved",
             "security_patch": "in_progress", "cost_anomaly": "needs_you",
             "stale_handoff": "needs_you", "todo_triage": "proposed"}
         # Two alerts, one incident.

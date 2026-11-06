@@ -1071,12 +1071,13 @@ class DecisionService:
                 on_remove_approved(connection, self.settings, row, actor)
             except InstallRefused as refused:
                 raise InvalidDecisionTransitionError(str(refused)) from refused
-        elif action == "incident_squad.mitigate":
-            # The incident squad's Needs-you card (services/incident_squad.py): approving it is
-            # the person's decision on the production rollback; the squad then acts and goes on.
-            from .incident_squad import on_needs_you_answered
+        elif recommendation.get("work_item_id") and recommendation.get("asked_by"):
+            # AN AMBIENT NEEDS-YOU CARD (board.needs_you): ONE path carries the answer to the
+            # item's owner — the incident squad, the Chief of Staff's handoff or the squad that
+            # asked (services/ambient/answers.py).
+            from .ambient.answers import on_answered
 
-            on_needs_you_answered(connection, self.settings, row, actor, "approve", note)
+            on_answered(connection, self.settings, row, actor, "approve", note)
         elif action == "deploy_stack":
             # A stack deployment held for approval: approving it approves its ChangeSet and
             # queues the apply as a durable worker job (services/stack_deploy.py).
@@ -1190,12 +1191,13 @@ class DecisionService:
                 on_revise(connection, row, actor, note)
             else:
                 on_rejected(connection, row, actor, note)
-        elif recommendation_action == "incident_squad.mitigate":
-            # Reject holds the incident for the person; request changes means "fix only, no
-            # rollback" (services/incident_squad.py).
-            from .incident_squad import on_needs_you_answered
+        elif recommendation.get("work_item_id") and recommendation.get("asked_by"):
+            # An ambient Needs-you card refused or sent back: the same one path
+            # (services/ambient/answers.py) — an incident holds or fixes only, the Chief of
+            # Staff's item is dismissed, a squad's proposal is held.
+            from .ambient.answers import on_answered
 
-            on_needs_you_answered(connection, self.settings, row, actor, action, note)
+            on_answered(connection, self.settings, row, actor, action, note)
         elif recommendation_action == "review_architecture":
             # Changes requested (the architect revises from the note) or rejected (the step
             # fails and the run stops) — architecture_docs.

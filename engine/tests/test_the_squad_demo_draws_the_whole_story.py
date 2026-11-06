@@ -37,7 +37,7 @@ def test_the_demo_draws_signal_squad_critique_panel_dissent_run_and_needs_you(en
     assert g["badges"]["problem_type"] == "Security patch"
     assert types.count("agent") == 5 and "squad" in types and "needs_you" in types
     assert {"CVE squad", "Convene a panel", "Open draft PR", "Merge", "Panel", "Run",
-            "revise"} <= labels
+            "Revise"} <= labels
     assert {"raised", "assembled", "seated", "proposed", "critique", "vote", "decided",
             "settles", "handoff", "returned", "asks"} <= set(kinds)
     # Two objections and a vote against: three split arrows, all from the critic.

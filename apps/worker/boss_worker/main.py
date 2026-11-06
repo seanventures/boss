@@ -634,6 +634,8 @@ def _run_background_sweeps(settings) -> None:
                 _sweep_deployment_health(client)
                 _monitor_tick(client)
                 _tick_ambient(client)
+                # Learning too: a 45-minute build must not hold the roadmap and outcomes back.
+                _tick_ambient_learning(client)
             except Exception:  # noqa: BLE001 — a sweep must never take the worker down
                 LOGGER.debug("background_sweep_failed", exc_info=True)
             for _ in range(5):
@@ -836,7 +838,6 @@ def main() -> None:
             _tick_factory_flow(client, settings)
             _tick_agent_wakeups(client, settings)
             _tick_improve(client, settings)
-            _tick_ambient_learning(client)
             _tick_control_plane_tokens()
             if _STOPPING:
                 break

@@ -415,6 +415,90 @@ def _estimate(connection: Connection, project_id: str, task_class: str) -> Optio
     return round(float(value) / 1e6, 2) if value is not None else None
 
 
+# ── noise control ────────────────────────────────────────────────────────────────────────────
+
+#: Classes the Chief of Staff routes straight to their squad in `route` mode at any level.
+ROUTE_AT_ANY_LEVEL = frozenset({"incident_response", "incident_staging_mitigation"})
+#: Chief-of-Staff Needs-you cards per class per project per day (BOSS_AMBIENT_COS_CARDS).
+DEFAULT_CARDS_PER_CLASS = 3
+
+
+def _seat(task_class: str) -> dict[str, str]:
+    """The seat the owner takes when it is handed an incident: the SRE squad's lead."""
+    if task_class in ROUTE_AT_ANY_LEVEL:
+        from ..incident_squad import SEAT_TITLES
+
+        return {"seat": SEAT_TITLES["lead"]}
+    return {}
+
+
+def cards_per_class(settings: Any) -> int:
+    value = getattr(settings, "ambient_cos_cards_per_class", None)
+    return max(0, int(DEFAULT_CARDS_PER_CLASS if value is None else value))
+
+
+def cards_today(connection: Connection, project_id: str, task_class: str) -> int:
+    """Cards the Chief of Staff raised on this class here since midnight (UTC)."""
+    return int(connection.execute(text(
+        "SELECT count(*) FROM decisions WHERE project_id = :p "
+        "AND recommendation->>'asked_by' = :cos AND recommendation->>'task_class' = :c "
+        "AND created_at >= date_trunc('day', now())"),
+        {"p": project_id, "cos": PARTY, "c": task_class}).scalar() or 0)
+
+
+def run_already_asks(connection: Connection, project_id: str,
+                     group: Sequence[Mapping[str, Any]]) -> Optional[str]:
+    """The open decision a failed run or build in this group already waits on, if any."""
+    runs = {str(s.get("subject_id")) for s in group
+            if s.get("subject_kind") in ("workflow_run", "code_task") and s.get("subject_id")}
+    if not runs:
+        return None
+    return connection.execute(text(
+        "SELECT d.id FROM decisions d WHERE d.project_id = :p "
+        "AND d.status IN ('pending', 'delegated') AND ("
+        " d.recommendation->>'workflow_run_id' = ANY(:r) OR d.recommendation->>'run_id' = ANY(:r)"
+        " OR d.id IN (SELECT decision_id FROM workflow_step_runs WHERE workflow_run_id = ANY(:r) "
+        "   AND decision_id IS NOT NULL)"
+        " OR d.id IN (SELECT decision_id FROM code_task_runs WHERE id = ANY(:r) "
+        "   AND decision_id IS NOT NULL)) "
+        "ORDER BY d.created_at DESC LIMIT 1"), {"p": project_id, "r": sorted(runs)}).scalar()
+
+
+# ── project-less signals ─────────────────────────────────────────────────────────────────────
+
+def adopt_install_wide(connection: Connection, settings: Any) -> int:
+    """Install-wide signals (the system doctor's findings have no project) are triaged in the
+    install's DEFAULT project (settings.default_project_id): that is where the operator works and
+    where their item, card and owner show up. A signal already open there under the same
+    fingerprint absorbs the project-less one (merged_into). No default project → they stay in
+    the inbox, observe-only (GET /v1/ambient/signals shows them). Returns how many moved."""
+    target = str(getattr(settings, "default_project_id", "") or "")
+    if not target or connection.execute(text("SELECT 1 FROM projects WHERE id = :p"),
+                                        {"p": target}).first() is None:
+        return 0
+    moved = 0
+    rows = connection.execute(text(
+        "SELECT id, fingerprint, occurrences FROM signals WHERE project_id IS NULL "
+        "AND status = 'new' ORDER BY last_seen_at LIMIT 100")).mappings().all()
+    for r in rows:
+        twin = connection.execute(text(
+            "SELECT id FROM signals WHERE project_id = :p AND fingerprint = :f "
+            "AND status IN ('new', 'triaged', 'suppressed') LIMIT 1"),
+            {"p": target, "f": r["fingerprint"]}).scalar()
+        if twin:
+            connection.execute(text(
+                "UPDATE signals SET occurrences = occurrences + :n, last_seen_at = now(), "
+                "updated_at = now() WHERE id = :t"), {"n": int(r["occurrences"] or 1), "t": twin})
+            signals.set_status(connection, r["id"], "merged_into", actor=PARTY, merged_into=twin,
+                               reason="the default project already holds this finding")
+        else:
+            connection.execute(text(
+                "UPDATE signals SET project_id = :p, updated_at = now() WHERE id = :s"),
+                {"p": target, "s": r["id"]})
+        moved += 1
+    return moved
+
+
 # ── one turn on one group ────────────────────────────────────────────────────────────────────
 
 def _hold(connection: Connection, group: Sequence[Mapping[str, Any]],
@@ -514,8 +598,43 @@ def triage_group(connection: Connection, settings: Any, project_id: str,
         return {"outcome": "observed", "work_item_id": item_id, "act_id": act["act_id"],
                 "task_class": klass.key, "level": level}
 
+    # NOISE CONTROL 1: a failed step or build whose run ALREADY asks a person (its own gate,
+    # plan approval, held step) gets no second card: the item links to that decision instead.
+    asks = run_already_asks(connection, project_id, group)
+    if asks is not None:
+        board.link(connection, item_id, "decision", asks, actor=PARTY, note="the run asks this")
+        act = ledger.record_decision(
+            connection, **{**common, "evidence": evidence + [{"kind": "decision", "ref": asks}]},
+            question=f"Who should own this {klass.title.lower()}?", chosen="observe",
+            action="observe", options=options,
+            rejected=[{"option": f"propose:{owner_role}", "why": "the run already asks a person"}],
+            rationale=f"{klass.title}: {reading.why}. The run already waits on a person's "
+                      "answer, so BOSS links that card instead of raising a second one.")
+        collab.post(connection, item_id, kind="finding", sender=PARTY, body={
+            "summary": "Run already asks you", "evidence": [{"kind": "decision", "ref": asks}]})
+        board.release(connection, item_id, owner=PARTY, token=token, reason="linked to the run")
+        return {"outcome": "linked", "work_item_id": item_id, "act_id": act["act_id"],
+                "decision_id": asks, "task_class": klass.key, "level": level}
+
+    # An incident goes straight to the SRE squad in `route` mode whatever its level: the squad
+    # only investigates on its own, and a production mitigation is still a person's call.
     direct = (mode == "route" and not reading.asked
-              and tc.level_rank(level) >= tc.level_rank("A2"))
+              and (tc.level_rank(level) >= tc.level_rank("A2")
+                   or klass.key in ROUTE_AT_ANY_LEVEL))
+    cap = cards_per_class(settings)
+    if not direct and not reading.asked and cards_today(connection, project_id, klass.key) >= cap:
+        # NOISE CONTROL 2: at most `cap` Chief-of-Staff cards per class per project per day;
+        # the rest are recorded for the digest (observe) and stay on the list.
+        act = ledger.record_decision(
+            connection, **common, question=f"What to do with this {klass.title.lower()}?",
+            chosen="observe", action="observe", options=options,
+            rejected=[{"option": f"propose:{owner_role}",
+                       "why": f"{cap} {klass.title.lower()} cards already today"}],
+            rationale=f"{klass.title}: {reading.why}. {cap} cards of this kind already asked "
+                      "today, so BOSS records it for the digest instead of asking again.")
+        board.release(connection, item_id, owner=PARTY, token=token, reason="daily card cap")
+        return {"outcome": "capped", "work_item_id": item_id, "act_id": act["act_id"],
+                "task_class": klass.key, "level": level}
     action_key = "ask_question" if reading.asked else "propose"
     summary = (f"Hand to {who}: {tc.ACTIONS[next_key].title.lower()}" if not reading.asked
                else f"Is this {klass.title.lower()}?")
@@ -545,7 +664,7 @@ def triage_group(connection: Connection, settings: Any, project_id: str,
                    f"{why_level[1:]}."))
     if direct:
         collab.post(connection, item_id, kind="handoff", sender=PARTY, body={
-            "to": owner, "from": PARTY,
+            "to": owner, "from": PARTY, **_seat(klass.key),
             "summary": f"{tc.ACTIONS[next_key].title}" + ("" if owner_free else " (asks you)")})
         board.release(connection, item_id, owner=PARTY, token=token, reason=f"routed to {owner}")
         return {"outcome": "routed", "work_item_id": item_id, "act_id": act["act_id"],
@@ -579,43 +698,67 @@ _ANSWERED = (
     "JOIN agent_act_decisions x ON x.act_id = d.recommendation->>'act_id' "
     "WHERE w.project_id = :p AND w.ambient AND w.lifecycle IN ('needs_you', 'proposed') "
     "AND d.recommendation->>'asked_by' = :cos AND d.status NOT IN ('pending', 'delegated') "
-    "AND x.outcome IS NULL ORDER BY d.updated_at LIMIT 50")
+    "AND x.outcome IS NULL AND (CAST(:w AS TEXT) IS NULL OR w.id = :w) "
+    "ORDER BY d.updated_at LIMIT 50")
+
+
+def _carry(connection: Connection, row: Mapping[str, Any]) -> dict[str, Any]:
+    rec = dict(row["recommendation"] or {})
+    answer = str(row["answer"])
+    who = person(row["approved_by"] or row["executed_by"] or "operator")
+    approved = answer in ("approved", "executed")
+    item_id = row["id"]
+    if row["lifecycle"] == "needs_you":
+        board.answered(connection, item_id, actor=who,
+                       to=None if approved else ("dismissed" if answer == "rejected"
+                                                 else None))
+    owner = str(rec.get("owner") or "")
+    chosen = "approve" if approved else ("dismiss" if answer == "rejected" else "no answer")
+    ledger.record_decision(
+        connection, project_id=row["project_id"], decided_by=who,
+        question=f"Hand to {rec.get('owner_label') or owner}?", chosen=chosen,
+        options=["approve", "dismiss"], rationale=f"Answered on the Needs-you card ({answer}).",
+        reversibility="compensable", work_item_id=item_id, task_class=row["task_class"],
+        evidence=[{"kind": "decision", "ref": row["decision_id"]}], how="approved",
+        decision_id=row["decision_id"])
+    ledger.record_outcome(connection, str(rec["act_id"]), actor=who, outcome=(
+        "accepted" if approved else "dismissed" if answer == "rejected" else "ignored"),
+        outcome_ref=row["decision_id"])
+    if approved and owner and owner != PARTY:
+        # The owner's squad (or the SRE squad for an incident) picks it up on the next tick
+        # (owners.work): the handoff below is what hands it over.
+        collab.post(connection, item_id, kind="handoff", sender=PARTY, body={
+            "to": owner, "from": PARTY, **_seat(str(row["task_class"])),
+            "summary": tc.ACTIONS.get(str(rec.get("next_action")), tc.ACTIONS["propose"]).title})
+    return {"work_item_id": item_id, "answer": answer, "owner": owner or None}
+
+
+def _answered_rows(connection: Connection, project_id: Optional[str],
+                   item_id: Optional[str] = None) -> list[dict[str, Any]]:
+    return [dict(r) for r in connection.execute(text(_ANSWERED.replace(
+        "WHERE w.project_id = :p", "WHERE (CAST(:p AS TEXT) IS NULL OR w.project_id = :p)")
+        .replace("SELECT w.id,", "SELECT w.id, w.project_id,")),
+        {"p": project_id, "cos": PARTY, "w": item_id}).mappings()]
+
+
+def carry_answer(connection: Connection, *, item_id: str,
+                 decision_id: Optional[str] = None) -> Optional[dict[str, Any]]:
+    """A person answered the Chief of Staff's card on this item: carry it through now (the
+    path decisions.py takes through answers.on_answered). Idempotent: an answer already carried
+    (its decision has an outcome) is not carried again."""
+    rows = _answered_rows(connection, None, item_id)
+    if decision_id:
+        rows = [r for r in rows if r["decision_id"] == decision_id]
+    return _carry(connection, rows[0]) if rows else None
 
 
 def follow_up(connection: Connection, project_id: str) -> list[dict[str, Any]]:
     """A person answered a card the Chief of Staff asked: carry the answer through. Approved →
     the item goes back on the board and is handed to its owner; rejected → dismissed (it cools
     down). Either way the Chief of Staff's decision gets its outcome, which is what earns or
-    loses a class its autonomy (policy.review_track_record)."""
-    done = []
-    for row in connection.execute(text(_ANSWERED), {"p": project_id, "cos": PARTY}).mappings():
-        rec = dict(row["recommendation"] or {})
-        answer = str(row["answer"])
-        who = person(row["approved_by"] or row["executed_by"] or "operator")
-        approved = answer in ("approved", "executed")
-        item_id = row["id"]
-        if row["lifecycle"] == "needs_you":
-            board.answered(connection, item_id, actor=who,
-                           to=None if approved else ("dismissed" if answer == "rejected"
-                                                     else None))
-        owner = str(rec.get("owner") or "")
-        chosen = "approve" if approved else ("dismiss" if answer == "rejected" else "no answer")
-        ledger.record_decision(
-            connection, project_id=project_id, decided_by=who,
-            question=f"Hand to {rec.get('owner_label') or owner}?", chosen=chosen,
-            options=["approve", "dismiss"], rationale=f"Answered on the Needs-you card ({answer}).",
-            reversibility="compensable", work_item_id=item_id, task_class=row["task_class"],
-            evidence=[{"kind": "decision", "ref": row["decision_id"]}], how="approved",
-            decision_id=row["decision_id"])
-        ledger.record_outcome(connection, str(rec["act_id"]), actor=who, outcome=(
-            "accepted" if approved else "dismissed" if answer == "rejected" else "ignored"),
-            outcome_ref=row["decision_id"])
-        if approved and owner and owner != PARTY:
-            collab.post(connection, item_id, kind="handoff", sender=PARTY, body={
-                "to": owner, "from": PARTY,
-                "summary": tc.ACTIONS.get(str(rec.get("next_action")), tc.ACTIONS["propose"]).title})
-        done.append({"work_item_id": item_id, "answer": answer, "owner": owner or None})
-    return done
+    loses a class its autonomy (policy.review_track_record). Normally decisions.py carries the
+    answer at once (answers.on_answered → carry_answer); this is the tick's safety net."""
+    return [_carry(connection, row) for row in _answered_rows(connection, project_id)]
 
 
 # ── the tick ─────────────────────────────────────────────────────────────────────────────────
@@ -636,6 +779,9 @@ def triage_project(connection: Connection, settings: Any, project_id: str, *,
     if mode == "off":
         return report
     report["follow_ups"] = follow_up(connection, project_id)
+    from . import answers
+
+    report["answers"] = answers.sweep(connection, settings, project_id)
     rows = connection.execute(text(
         "SELECT * FROM signals WHERE project_id = :p AND status = 'new' "
         "ORDER BY array_position(ARRAY['critical','high','medium','low','info'], severity), "
@@ -683,13 +829,14 @@ def triage_project(connection: Connection, settings: Any, project_id: str, *,
 
 
 def projects_with_work(connection: Connection, limit: int = MAX_PROJECTS_PER_TICK) -> list[str]:
-    """Projects with new signals, or with a card the Chief of Staff asked that a person answered."""
+    """Projects with new signals, or with an ambient card a person answered that is not carried yet."""
     rows = connection.execute(text(
         "SELECT project_id FROM (SELECT project_id FROM signals WHERE status = 'new' "
         "AND project_id IS NOT NULL UNION SELECT w.project_id FROM work_items w "
         "JOIN decisions d ON d.id = w.needs_you_decision_id WHERE w.ambient "
         "AND w.lifecycle IN ('needs_you', 'proposed') AND d.status NOT IN ('pending', "
-        "'delegated') AND d.recommendation->>'asked_by' = :cos) x "
+        "'delegated') AND d.recommendation->>'asked_by' IS NOT NULL "
+        "AND (d.recommendation->>'asked_by' = :cos OR w.lifecycle = 'needs_you')) x "
         "JOIN projects p ON p.id = x.project_id ORDER BY project_id LIMIT :n"),
         {"cos": PARTY, "n": limit}).scalars().all()
     return [str(r) for r in rows]
@@ -697,7 +844,8 @@ def projects_with_work(connection: Connection, limit: int = MAX_PROJECTS_PER_TIC
 
 def tick(engine: Any, settings: Any = None, *, project_id: Optional[str] = None,
          adapter: Any = None, decider: Any = None, sweep: Optional[bool] = None,
-         mode: Optional[str] = None) -> dict[str, Any]:
+         mode: Optional[str] = None, squad_model: Any = None, launchers: Any = None,
+         incident_mind: Any = None, incident_effects: Any = None) -> dict[str, Any]:
     """The worker's ambient tick: expire leases, sweep the adapters, triage every project with
     work. Each project in its own transaction, so one project's failure never stops another's."""
     from ...config import get_settings
@@ -716,6 +864,9 @@ def tick(engine: Any, settings: Any = None, *, project_id: Optional[str] = None,
             report["sweep"] = signals.sweep(c, project_id=project_id)
     if mode == "off":
         return report
+    if project_id is None:
+        with engine.begin() as c:
+            report["adopted"] = adopt_install_wide(c, settings)
     with engine.begin() as c:
         targets = [project_id] if project_id else projects_with_work(c)
     for pid in targets:
@@ -726,6 +877,13 @@ def tick(engine: Any, settings: Any = None, *, project_id: Optional[str] = None,
         except Exception as exc:  # noqa: BLE001 — one project's failure is reported, not raised
             log.warning("ambient triage failed for %s", pid, exc_info=True)
             report["projects"][pid] = {"error": f"{type(exc).__name__}: {exc}"[:300]}
+    # THE OWNERS' TURN: what was handed over (now, or on an earlier tick, or by a person's
+    # answer) is worked by its squad — bounded per tick, see owners.py.
+    from . import owners
+
+    report["owners"] = owners.work(engine, settings, project_id=project_id,
+                                   model=squad_model, decider=decider, launchers=launchers,
+                                   incident_mind=incident_mind, incident_effects=incident_effects)
     return report
 
 

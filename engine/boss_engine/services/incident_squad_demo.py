@@ -261,6 +261,7 @@ def seed(connection: Connection, project_id: str, *, environment: str = "product
 #: Seconds after the item opened at which each decision lands (question -> one per occurrence).
 MILESTONES: dict[str, list[int]] = {
     "Who works this signal?": [5],
+    "Who should own this incident?": [5],           # the Chief of Staff's own call
     squad.Q_TRIAGE: [40],
     squad.Q_CAUSE: [150],                  # RCA 1m50s after triage
     squad.Q_LEARN: [158],
@@ -387,6 +388,48 @@ def run_scenario(connection: Connection, project_id: str, *, environment: str = 
     apply_scenario_clock(connection, project_id, item_id)
     graph = read_model.graph(connection, item_id, project_id=project_id)
     return {"project_id": project_id, **prepared, "stages": [s["stage"] for s in stages],
+            "needs_you_decision_id": stages[-1].get("decision_id"), "graph": graph}
+
+
+
+def run_through_chief_of_staff(connection: Connection, project_id: str, *,
+                               environment: str = "production", settings: Any = None,
+                               approve_as: Optional[str] = None) -> dict[str, Any]:
+    """THE INTEGRATED PATH: the alert becomes a signal (the real app_alerts adapter), the CHIEF OF
+    STAFF triages it (rules, route mode: an incident goes straight to the SRE squad), and the
+    SRE squad works it through the same handler the owners' tick calls
+    (incident_squad.route_incident) on the scripted engine and fixture effects. The item is
+    marked `demo:` (subject_ref) so a person's answer resumes it on the same scripted engine."""
+    from .ambient import chief_of_staff
+
+    seeded = seed(connection, project_id, environment=environment)
+    signals.sweep(connection, project_id=project_id, only=["app_alerts"])
+    sig = connection.execute(text(
+        "SELECT id FROM signals WHERE project_id = :p AND evidence @> CAST(:e AS JSONB) "
+        "ORDER BY created_at DESC LIMIT 1"),
+        {"p": project_id, "e": json.dumps([{"kind": "alert", "ref": seeded["alert_id"]}])}
+    ).scalar()
+    if sig is None:
+        raise RuntimeError("the app_alerts adapter did not record the demo alert")
+    triage = chief_of_staff.triage_project(connection, settings, project_id, mode="route",
+                                           max_model_calls=0)
+    item_id = connection.execute(text("SELECT work_item_id FROM signals WHERE id = :s"),
+                                 {"s": sig}).scalar()
+    if item_id is None:
+        raise RuntimeError(f"the Chief of Staff did not open an item for the alert: {triage}")
+    connection.execute(text("UPDATE work_items SET subject_ref = :r WHERE id = :w"),
+                       {"r": f"demo:{APP}", "w": item_id})
+    stages = [squad.route_incident(connection, project_id=project_id, item_id=item_id,
+                                   mind=demo_mind(environment), effects=FixtureEffects())]
+    if approve_as and stages[-1]["stage"] == "needs_you":
+        stages.append(squad.resume(connection, project_id=project_id, item_id=item_id,
+                                   answer="approve", actor=approve_as,
+                                   mind=demo_mind(environment), effects=FixtureEffects(),
+                                   note="Approved: roll back, the fix follows"))
+    apply_scenario_clock(connection, project_id, item_id)
+    graph = read_model.graph(connection, item_id, project_id=project_id)
+    return {"project_id": project_id, **seeded, "signal_id": sig, "item_id": item_id,
+            "triage": triage.get("counts") or {}, "stages": [s["stage"] for s in stages],
             "needs_you_decision_id": stages[-1].get("decision_id"), "graph": graph}
 
 

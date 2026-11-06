@@ -78,3 +78,23 @@ def test_the_worker_tick_is_system_only_and_checks_the_principal():
     assert PERMISSION_META[entry.access.permission].system_only
     route = next(r for r in api_main.app.routes if getattr(r, "path", "") == "/v1/ambient/tick")
     assert "require_worker_principal()" in inspect.getsource(route.endpoint)
+
+
+def test_load_demo_is_offered_only_on_a_demo_project_and_loads_every_story(client, monkeypatch):
+    """The console's "Load demo": GET /v1/ambient/demo/status says whether it is offered; POST
+    /v1/ambient/demo/load runs every loader (each reported loaded or skipped with why)."""
+    monkeypatch.delenv("BOSS_AMBIENT_DEMO", raising=False)
+    off = client.get("/v1/ambient/demo/status", params={"project_id": HOME})
+    assert off.status_code == 200 and off.json()["available"] is False
+    assert client.post("/v1/ambient/demo/load",
+                       json={"project_id": HOME, "actor": "ceo"}).status_code == 403
+    monkeypatch.setenv("BOSS_AMBIENT_DEMO", "1")
+    on = client.get("/v1/ambient/demo/status", params={"project_id": HOME}).json()
+    assert on["available"] is True
+    assert on["loaders"] == ["order_api_incident", "morning", "squad_cve", "roadmap"]
+    got = client.post("/v1/ambient/demo/load", json={"project_id": HOME, "actor": "ceo"})
+    assert got.status_code == 200, got.text
+    body = got.json()
+    for key in on["loaders"]:
+        assert (body["loaded"][key] is not None) or key in body["skipped"], key
+    assert body["loaded"]["morning"] is not None

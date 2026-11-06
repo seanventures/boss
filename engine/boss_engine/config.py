@@ -1192,6 +1192,14 @@ class Settings(BaseSettings):
     # Model calls the Chief of Staff may make per project per tick for judgement (an ambiguous
     # classification, an unclear owner). Deterministic rules decide everything else; 0 = rules only.
     ambient_cos_model_calls: int = Field(default=3, alias="BOSS_AMBIENT_COS_MODEL_CALLS")
+    # Noise control: Chief-of-Staff Needs-you cards per task class per project per day; past it
+    # the item is recorded for the digest (observe) and stays on Agents at work. 0 = never ask.
+    ambient_cos_cards_per_class: int = Field(default=3, alias="BOSS_AMBIENT_COS_CARDS")
+    # THE OWNERS' TURN (services/ambient/owners.py): items the Chief of Staff handed over are
+    # worked by their squad (or the SRE incident squad) on the same tick. 0 = handoffs wait for
+    # a person; BOSS_AMBIENT_SQUAD_ITEMS bounds the items worked per tick install-wide.
+    ambient_squads: int = Field(default=1, alias="BOSS_AMBIENT_SQUADS")
+    ambient_squad_items: int = Field(default=3, alias="BOSS_AMBIENT_SQUAD_ITEMS")
     # Discovery's dossier asks OSV (api.osv.dev, through the proxy environment) which locked
     # packages have advisories: 5 s, and an offline install records "skipped". 0 = never ask.
     ambient_dossier_osv: int = Field(default=1, alias="BOSS_DOSSIER_OSV")

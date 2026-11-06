@@ -114,4 +114,24 @@ def build_ambient_cos_router(*, engine, settings: Callable[[], Any],
                     "counts": out["triage"].get("counts") or {},
                     "owners_played": out["owners_played"]}
 
+    @router.get("/v1/ambient/demo/status")
+    @permit(P.AUTONOMY_READ, scope=Scope.project(query="project_id"))
+    def demo_status(project_id: str) -> dict:
+        """Whether this project may load the demo (the console's "Load demo" control)."""
+        with begin(engine) as c:
+            require_reader(c, project_id)
+            return demo.status(c, project_id)
+
+    @router.post("/v1/ambient/demo/load")
+    @permit(P.AUTONOMY_MANAGE, scope=Scope.project(body="project_id"))
+    def load_everything(payload: _Body) -> dict:
+        """Every demo story at once on a demo project (services/ambient/demo.load_all)."""
+        with begin(engine) as c:
+            actor = require_write_actor(c, payload.project_id, payload.actor, "role_review")
+        try:
+            return demo.load_all(engine, settings(), project_id=payload.project_id,
+                                 actor=actor)
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+
     return router
