@@ -43,6 +43,7 @@ from sqlalchemy.engine import Connection
 from . import guards, policy
 from . import task_classes as tc
 from ._common import clean_text, emit, now, party, party_kind, person, serialize_row
+from .signals import SEVERITIES
 
 LIFECYCLES = ("proposed", "claimed", "in_progress", "needs_you", "resolved", "dismissed",
               "failed")
@@ -140,7 +141,17 @@ def open_item(connection: Connection, settings: Any = None, *, project_id: str,
         raise ValueError("an ambient item needs the fingerprint of the problem it is about")
     connection.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:k, 0))"),
                        {"k": f"boss-ambient-item:{project_id}:{fingerprint}"})
-    signal_ids = [str(s) for s in signal_ids if s]
+    if severity not in SEVERITIES:
+        raise ValueError(f"severity must be one of {', '.join(SEVERITIES)}")
+    signal_ids = list(dict.fromkeys(str(s) for s in signal_ids if s))
+    if signal_ids:
+        # Only this project's signals, or install-wide ones, may be held by its items.
+        found = set(connection.execute(text(
+            "SELECT id FROM signals WHERE id = ANY(:ids) AND (project_id = :p OR project_id IS "
+            "NULL)"), {"ids": signal_ids, "p": project_id}).scalars())
+        missing = [s for s in signal_ids if s not in found]
+        if missing:
+            raise LookupError(f"no signal {missing[0]} in this project")
     existing = live_for_fingerprint(connection, project_id, fingerprint)
     if existing is not None:
         for sid in signal_ids:

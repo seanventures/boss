@@ -189,3 +189,18 @@ def test_a_dismissal_says_why_and_an_item_cannot_jump_its_lifecycle(eng, project
             board._transition(c, item, "in_progress", actor="boss")
         gone = board.dismiss(c, item["id"], actor="ceo", reason="known flake, ignore")
     assert gone["lifecycle"] == "dismissed" and gone["outcome"].startswith("dismissed: known")
+
+
+def test_an_item_holds_only_its_own_projects_signals_and_a_known_severity(eng, project):
+    from ._ambient_support import make_project, purge
+
+    other = make_project(eng)
+    try:
+        with eng.begin() as c:
+            foreign = signal(c, other, source_ref="elsewhere")
+            with pytest.raises(LookupError, match="no signal"):
+                open_item(c, project, fingerprint="fp:foreign", signal_ids=[foreign["id"]])
+            with pytest.raises(ValueError, match="severity"):
+                open_item(c, project, fingerprint="fp:sev", severity="apocalyptic")
+    finally:
+        purge(eng, other)
