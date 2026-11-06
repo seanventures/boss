@@ -67,6 +67,8 @@ CANONICAL_ROLE_KEYS: frozenset[str] = frozenset({
     "operations_engineer", "sre",
     # runs an incident on one timeline (BOSSAPP-768: the knowledge-graph project's cast)
     "incident_commander",
+    # triages every signal BOSS notices on its own into one routed work item (BOSSAPP-904)
+    "chief_of_staff",
     # approves a regulatory remediation once its evidence stands up (KG P5b/P6a)
     "compliance_officer",
     # the banking-regulatory pack's judging roles (2026-10-31: they were prompt files only, so
