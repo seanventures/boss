@@ -206,7 +206,6 @@ def incident_cause(connection: Connection, project_id: str, *, since: datetime,
         critical = sum(1 for i in incs if i["severity"] == "critical")
         impact = clamp(40 + 12 * len(incs) + 10 * critical)
         newest = max(i["first_seen"] for i in incs)
-        where = entry["file"] or entry["service"] or "the service"
         out.append(Finding(
             "incident_cause", (key,), f"file:{entry['file']}" if entry["file"]
             else f"cause:{key}",

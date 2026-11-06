@@ -402,3 +402,47 @@ Engine (real Postgres, `BOSS_TEST_DATABASE_URL`; each test gets its own project 
 API: `apps/api/tests/test_people_see_and_steer_ambient_work_over_http.py` (flows in shadow mode; viewer / operator / owner under enforce).
 
 A stream that changes a module runs that module's file(s) above plus its own.
+
+---
+
+## 11. Continuous learning → the Recommended roadmap (911) and outcomes (912) — built
+
+**Code:** `ambient/learning.py` (framework, grouping) · `ambient/detectors.py` (the nine) · `ambient/roadmap.py` (score, rank, open, review, tick) · `ambient/roadmap_artifacts.py` (what an accepted item becomes) · `ambient/outcomes.py` (sweep + metrics) · `ambient/roadmap_demo.py` (demo seed + the writers' shapes the tests use) · `routers/ambient_learning.py`.
+
+```mermaid
+flowchart LR
+  S[KG · incidents · reviews<br/>scorecards · events] --> D[9 detectors]
+  D --> G[signals<br/>source kg/cost/ci/build/person]
+  G --> R[group by subject<br/>score · rank]
+  R --> I[roadmap_item<br/>+ CoS proposal]
+  I --> P{Person}
+  P -->|accept| T[ticket / epic / PRD panel]
+  P -->|reject + reason| X[suppress · weight ↓]
+  P -->|not now| Z[snooze]
+  T --> O[outcome on ledger]
+  X --> O
+```
+
+| Decision | Choice | Why |
+|---|---|---|
+| A recommendation is | a board item (class `roadmap_item`, A1/A1, owner `pm`) + 1:1 `ambient_recommendations` row | one live copy per fingerprint, guards, cooldown and the ledger apply unchanged; the row holds only evidence, score parts, detector, what a person did |
+| Detectors are | deterministic SQL over existing stores, NOT registered `signals.ADAPTERS` | they read 30-90-day windows, not a cursor; running them on every CoS sweep would be waste. They still enter through `record_signal` (`kind learn.<detector>`, `source_ref` = evidence digest, so a re-run is a no-op) |
+| Score | `compute_priority_score` drivers × evidence × freshness × detector weight, ranked by `rank_by_value_density` with cost = project median build × √effort × risk | design §14.3, reusing BOSSAPP-353's math |
+| Outcomes | on `agent_act_decisions.outcome` only (no new table) | spec §9 |
+| Cadence | worker `_tick_ambient_learning` every 10 min → `POST /v1/ambient/learning/tick` (worker principal); detectors ≤ every 6 h per project, ≤ 10 projects a tick; outcome sweep batched | no new daemon; stop + `BOSS_AMBIENT_DISABLED` / `BOSS_ROADMAP_DISABLED` honoured |
+
+Detectors: `hotspot` (PR churn × lines × incidents, fan-in = blast radius) · `incident_cause` (≥ 2 incidents, one cause) · `missing_tests` (≥ 3 PRs, no test file named for it) · `review_repeat` (same finding in ≥ 3 builds) · `design_drift` (consistency `drift`, PRD declined) · `cost_spike` (7-day median ≥ 1.5× the 8-60-day one, ≥ $5/week) · `flaky_test` (failing outside the change in ≥ 3 builds) · `slow_stage` (median ≥ 1.5× target over ≥ 5 builds) · `user_friction` (≥ 5 person steers/retries/waives… at one stage). Findings about one `file:` subject group into one item.
+
+Review: **accept** → person decision `accept_as_<shape>` (parent = the proposal), proposal outcome `accepted`, a non-ambient work item (`source='roadmap'`, plus the connected tracker's issue) or `convene_prd_meeting_core`; **reject** (reason required, category `not_valuable wrong duplicate already_planned too_small other`) → proposal `dismissed`, item dismissed (cooldown), signals suppressed until evidence grows ×1.5 (≥ 2 refs) or a new source kind; labelled example in `learning_examples` (agent `roadmap`); "too small" raises the detector's thresholds 25 % each (≤ 2×); weight = Laplace acceptance ÷ 0.5 (0.25–2); muted under 15 % after 20 decided (`ambient.detector_muted`); **snooze** → person decision, hidden until the date. Evidence gone → `resolved_by_change`. Accepted but evidence keeps coming > 7 days later → accept decision `recurred`.
+
+Outcome sweep: `ignored` (proposing action, 7 days, item still live, no person decision since) · `recurred` (resolved item's fingerprint opened again ≤ 14 days) · `reverted` (run scorecard `pr_reverted`) at once · `merged` after 14 days held. Metrics (`outcomes.metrics`, on `GET /v1/ambient/scorecard` as `outcomes`, `task_class` optional): acceptance %, noise %, override %, revert %, decisions by level/decider/day, time to human decision (Needs you + roadmap), MTTM/MTTR + agent-resolved % from `incidents`, cost per resolved item / merged change, ambient share (work items, builds), by task class, and `recommendations` (acceptance per detector, time to decision, cost per accepted).
+
+| Method · Path | Permission |
+|---|---|
+| `GET /v1/ambient/roadmap?project_id&status&kind&detector&limit` · `GET /v1/ambient/roadmap/{id}` | work_item:read |
+| `GET /v1/ambient/roadmap/detectors` | autonomy:read |
+| `POST /v1/ambient/roadmap/{id}/accept` `{as?, note?}` · `/reject` `{reason, category?}` · `/snooze` `{until, reason?}` · `POST /v1/ambient/roadmap/run` · `POST /v1/ambient/outcomes/sweep` | work_item:manage |
+| `POST /v1/ambient/roadmap/demo-seed` (demo projects only) | autonomy:manage |
+| `POST /v1/ambient/learning/tick` | worker principal |
+
+Events: `ambient.recommendation_opened` · `ambient.recommendation_accepted` · `ambient.recommendation_rejected` · `ambient.detector_muted`. Tests: `engine/tests/test_detectors_find_patterns_in_what_boss_already_knows.py` · `test_the_recommended_roadmap_ranks_dedupes_and_learns.py` · `test_outcomes_land_on_the_ledger_and_the_metrics_add_up.py` · `apps/api/tests/test_people_review_the_recommended_roadmap_over_http.py`.
