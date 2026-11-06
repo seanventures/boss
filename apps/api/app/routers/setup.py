@@ -190,6 +190,15 @@ def build_setup_router(
                 fail(error)
         raise AssertionError("unreachable")
 
+    @router.get("/v1/setup/repository/available")
+    @permit(P.GITHUB_READ, scope=Scope.project(query="project_id"))
+    def get_repository_available(project_id: str) -> dict[str, Any]:
+        """`+ Add repo`: every connected account's repositories, grouped by account (this
+        project's connections and the org's GitHub App). Asks GitHub; the view never does."""
+        with begin(engine) as connection:
+            require_actor(connection, project_id, actor_for(None), "github_manage")
+            return setup_actions.available_repositories(connection, get_settings(), project_id)
+
     @router.post("/v1/setup/repository/select", response_model=SetupView,
                  response_model_by_alias=True)
     @permit(P.REPOSITORY_REGISTER, scope=Scope.project(body="project_id"))
@@ -199,8 +208,12 @@ def build_setup_router(
         with begin(engine) as connection:
             require_actor(connection, body.project_id, actor, "github_manage")
             try:
+                # A repository the org's GitHub App reaches binds through this project's App
+                # connection, made first when there is none (`org_app`, from Add repo).
+                connection_id = setup_actions.resolve_pick_connection(
+                    connection, get_settings(), body.project_id, body.connection_id, actor=actor)
                 setup_actions.select_repository(
-                    connection, get_settings(), body.project_id, body.connection_id,
+                    connection, get_settings(), body.project_id, connection_id,
                     body.full_name, make_default=body.make_default, actor=actor)
             except setup_actions.SetupActionError as error:
                 fail(error)

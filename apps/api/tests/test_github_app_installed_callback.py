@@ -159,3 +159,70 @@ def test_a_github_miss_still_confirms_without_a_warning(world, engine, api_auth_
     assert "github=app_updated" in res.headers["location"]
     assert "lost=" not in res.headers["location"]
     assert "app_failed" not in res.headers["location"]
+
+
+# ── GitHub's own return carrying a state that no longer opens the install path (2026-11-06) ──
+# Changing the App's repository access at github.com/settings/installations sent the operator
+# back with a state that had expired or was used, and Setup said "The link expired or was used".
+
+
+def _signed_in_owner(engine, email: str):
+    make_user(engine, email, role="owner", name="Op")
+    client = fresh_client()
+    assert sign_in(client, email).status_code == 200
+    promote_fresh_mfa(engine, client.cookies.get(authn.SESSION_COOKIE))
+    return client
+
+
+def test_a_stale_state_on_githubs_return_says_access_updated_with_the_repos(world, engine, api_auth_required,
+                                                                               monkeypatch):
+    monkeypatch.setattr(api_auth_required, "authz_mode", "enforce")
+    monkeypatch.setattr(
+        "apps.api.app.routers.identity_github.github_setup.installation_repositories",
+        lambda db: [{"full_name": "paramg/helpdesk-ai-demo"}, {"full_name": "paramg/boss"}])
+    asked: list[str] = []
+    monkeypatch.setattr("apps.api.app.routers.identity_github.github_setup.confirm_installation",
+                        lambda **kw: asked.append(kw["installation_id"]) or "paramg")
+    # The signing key this install would check the state with (no vault key in the test DB).
+    monkeypatch.setattr("boss_engine.identity.github_app._state_mac", lambda payload: "the-real-mac")
+    client = _signed_in_owner(engine, "dee@example.test")
+    for state in ("not-a-signed-state", "eyJwIjoxfQ.forged-mac"):
+        res = client.get("/v1/identity/github/app/installed",
+                         params={"installation_id": "424242", "setup_action": "update", "state": state},
+                         follow_redirects=False)
+        assert res.status_code == 303, res.text
+        query = parse_qs(urlparse(res.headers["location"]).query)
+        assert query["github"] == ["app_updated"], res.headers["location"]
+        assert "reason" not in query
+        assert query["repos"] == ["paramg/helpdesk-ai-demo,paramg/boss"]
+        assert query["repo_count"] == ["2"]
+    assert asked == ["424242", "424242"]
+
+
+def test_an_installation_the_apps_api_does_not_know_is_refused(world, engine, api_auth_required, monkeypatch):
+    monkeypatch.setattr(api_auth_required, "authz_mode", "enforce")
+    _no_github(monkeypatch)
+
+    def unknown(**kw):
+        raise github_setup.GitHubSetupError("not_this_apps_installation", 403)
+
+    monkeypatch.setattr("apps.api.app.routers.identity_github.github_setup.confirm_installation", unknown)
+    client = _signed_in_owner(engine, "eve@example.test")
+    res = client.get("/v1/identity/github/app/installed",
+                     params={"installation_id": "777", "setup_action": "update", "state": "stale"},
+                     follow_redirects=False)
+    assert res.status_code == 303, res.text
+    query = parse_qs(urlparse(res.headers["location"]).query)
+    assert query["github"] == ["app_failed"]
+    assert query["reason"] == ["not_this_apps_installation"]
+
+
+def test_a_stale_state_without_a_session_stays_unauthenticated(world, engine, api_auth_required, monkeypatch):
+    monkeypatch.setattr(api_auth_required, "authz_mode", "enforce")
+    _no_github(monkeypatch)
+    client = fresh_client()
+    res = client.get("/v1/identity/github/app/installed",
+                     params={"installation_id": "424242", "setup_action": "update", "state": "stale"},
+                     follow_redirects=False)
+    assert res.status_code == 401, res.text
+    assert res.json() == {"error": "unauthenticated"}

@@ -9,7 +9,7 @@ import { apiWrite } from "./api-write";
 import { askConsent, consentFromBody } from "./identity/consent";
 import { identityRefusal, identitySentence } from "./identity/guarded-action";
 import type { SignInSession } from "@boss/api-client";
-import type { SetupRefusal, SetupView, TokenFound } from "./setup-types";
+import type { AvailableRepos, SetupRefusal, SetupView, TokenFound } from "./setup-types";
 
 export class SetupFailure extends Error {
   status: number;
@@ -60,6 +60,13 @@ export async function fetchRepos(projectId: string, connectionId: string): Promi
   const r = await fetch(`/api/setup?project_id=${encodeURIComponent(projectId)}`
                         + `&repos=${encodeURIComponent(connectionId)}`, { cache: "no-store" });
   return read<TokenFound>(r);
+}
+
+/** `+ Add repo`: every connected account's repositories, grouped by account. */
+export async function fetchAvailableRepos(projectId: string): Promise<AvailableRepos> {
+  const r = await fetch(`/api/setup?project_id=${encodeURIComponent(projectId)}&available=1`,
+                        { cache: "no-store" });
+  return read<AvailableRepos>(r);
 }
 
 export async function fetchModelList(projectId: string, provider: string,
