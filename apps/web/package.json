@@ -2,7 +2,7 @@
   "name": "boss-web",
   "private": true,
   "license": "Apache-2.0",
-  "version": "1.0.0-rc.10.10",
+  "version": "1.0.0-rc.10.11",
   "scripts": {
     "dev": "next dev",
     "build": "next build --webpack",
