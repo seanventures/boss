@@ -135,3 +135,30 @@ def test_the_current_question_is_the_newest_one_not_withdrawn():
         c.execute(text("DELETE FROM events WHERE project_id = :p"), {"p": pid})
         c.execute(text("DELETE FROM projects WHERE id = :p"), {"p": pid})
     assert got and got["id"] == f"dec_cur_{pid}"
+
+
+def test_a_merge_is_observed_in_its_own_committed_transaction(monkeypatch):
+    """The tick held the build's row (observe recorded the merge on it) while the requeued deploy
+    planned on a new connection that wrote the same row: each waited on the other for minutes."""
+    from boss_engine.services import pr_merge
+
+    used: list = []
+
+    class _Own:
+        def __enter__(self):
+            used.append("own")
+            return "fresh"
+
+        def __exit__(self, *a):
+            return False
+
+    class _Tick:
+        engine = type("E", (), {"begin": lambda _self: _Own()})()
+
+        def begin_nested(self):
+            raise AssertionError("observed inside the tick's transaction")
+
+    monkeypatch.setattr(pr_merge, "observe", lambda conn, *a, **k: {"state": "open", "number": 3,
+                                                                    "conn": conn})
+    seen = runner._unmerged_build(_Tick(), "p", "crun_1", settings=object())
+    assert used == ["own"] and seen["conn"] == "fresh"

@@ -5929,10 +5929,20 @@ def _unmerged_build(connection: Connection, project_id: str, build_run_id: str,
         return None
     from . import pr_merge
 
+    # ITS OWN SHORT TRANSACTION, COMMITTED AT ONCE. `observe` records a merge it sees on the
+    # build's row; done inside the tick's transaction it held that row while the requeued deploy
+    # planned on a NEW connection whose own `observe` wrote the same row — the tick waited on the
+    # plan, the plan on the tick (helpdesk-ai PR #3, 2026-11-06: pids 960/952, 4 minutes).
+    own = getattr(connection, "engine", None)
     try:
-        with connection.begin_nested():
-            seen = pr_merge.observe(connection, settings or get_settings(), project_id,
-                                    build_run_id)
+        if own is not None:
+            with own.begin() as fresh:
+                seen = pr_merge.observe(fresh, settings or get_settings(), project_id,
+                                        build_run_id)
+        else:
+            with connection.begin_nested():
+                seen = pr_merge.observe(connection, settings or get_settings(), project_id,
+                                        build_run_id)
     except Exception:  # noqa: BLE001 — unknown never invents a wait
         return None
     if seen.get("state") in (pr_merge.OPEN, pr_merge.MERGE_PENDING, pr_merge.CLOSED):
