@@ -300,3 +300,7 @@ button.inf-slot:hover { border-color: var(--accent-line); color: var(--accent-te
 
 /* Live is what is running; a newer attempt that failed is said beside it (decision 2026-10-04). */
 .inf-failed-after, .inf .inf-link.inf-failed-after { color: var(--red); font-size: 0.74rem; white-space: nowrap; }
+
+/* Projects on this server (BOSSAPP-914): one row per project, linking to its Project › Deployments. */
+.inf-host-project { display: flex; align-items: center; gap: 8px; }
+.inf-host-project-name { flex: 1; min-width: 0; }

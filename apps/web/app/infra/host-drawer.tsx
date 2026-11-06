@@ -482,8 +482,8 @@ export function ProjectsOnServer({ residents }: { residents: HostDetail["residen
     <DrawerSection label="PROJECTS ON THIS SERVER" testId="inf-host-projects">
       <ul className="inf-resident-rows">
         {[...byProject.entries()].map(([id, g]) => (
-          <li key={id} className="inf-row-btn" style={{ display: "flex", alignItems: "center", gap: 8 }} data-testid={`inf-host-project-${id}`}>
-            <span className="inf-trunc" style={{ flex: 1 }}>
+          <li key={id} className="inf-row-btn inf-host-project" data-testid={`inf-host-project-${id}`}>
+            <span className="inf-trunc inf-host-project-name">
               <b>{g.name}</b>{" "}
               <span className="inf-faint">{g.apps.map((a) => [a.env, a.port ? `:${a.port}` : ""].filter(Boolean).join(" ")).filter(Boolean).join(" · ")}</span>
             </span>

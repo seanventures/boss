@@ -1286,7 +1286,7 @@ function ConsoleShellInner({
   // cannot still lands — on <AccessDenied> naming the permission, never a blank page.
   const navAreas = useMemo(
     () => areasForEdition.filter(
-      (a) => isCommunityPrimaryNavVisible(a.id, resolvedEdition) && !OWN_RAIL_BUTTON.has(a.id) && !OFF_THE_NAV.has(a.id) && !UNDER_PROJECTS.has(a.id) && areaCan(a.id).allowed),
+      (a) => isCommunityPrimaryNavVisible(a.id, resolvedEdition) && !OWN_RAIL_BUTTON.has(a.id) && !UNDER_PROJECTS.has(a.id) && !OFF_THE_NAV.has(a.id) && areaCan(a.id).allowed),
     [areasForEdition, resolvedEdition, areaCan],
   );
 
