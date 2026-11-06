@@ -176,3 +176,15 @@ index the KG / build the dossier) and asks only for what it cannot (`owner: "you
 ```
 Built from the existing app alerts / incident squad / monitoring pack / stack health checks; empty states
 explain how monitoring gets set up (Beacon's pack on deploy).
+
+## 13. Parity: no feature is killed (operator, 2026-11-06)
+> "moving out is fine but we need to have same experience - dont kill these screens / features"
+
+- Observability › app › **Alerts** (rules with query, Every/Window/For/Keep firing/Threshold/Min req/Severity/
+  Routes to/Data, state chip, **Respond automatically**, **Tune**, **Silence**, **+ New alert rule**) and
+  **Overview** stay as they are. Project › Health reuses the SAME component for its Alerts section (same
+  data and every action), scoped to the project's environments; summary cards on top, full rules below.
+- The same applies to every screen whose content now also appears on the Project page (Infra deploys,
+  Code Tasks build pages, Workflows runs, Setup demo logins, Approvals): the project view reuses the real
+  component or links to it; the original screen keeps every capability. The independent tester checks a
+  parity list: each moved/duplicated capability works in both places.
