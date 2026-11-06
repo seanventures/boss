@@ -198,8 +198,15 @@ def demo_script() -> dict[str, list[Move]]:
 
 
 def ensure_demo_roles(connection: Connection, project_id: str) -> list[str]:
+    """A SEED (Load demo on a demo project): adds each demo role the project lacks, never one an
+    operator removed (seed_exclusions, kind `role`), never touching a role that exists."""
+    from ..seed_exclusions import excluded
+
+    removed = excluded(connection, project_id, "role")
     added = []
     for key, name in DEMO_ROLES.items():
+        if key in removed:
+            continue
         got = connection.execute(text(
             "INSERT INTO roles (id, project_id, role_key, display_name, spec) VALUES "
             "(:id, :p, :k, :n, CAST(:s AS JSONB)) ON CONFLICT (project_id, role_key) DO NOTHING "
