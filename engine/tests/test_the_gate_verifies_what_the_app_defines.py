@@ -81,8 +81,12 @@ def test_the_browser_suite_follows_the_pass_and_what_the_app_defines(tmp_path):
     assert _plan(root).commands[-1] == vt.E2E_STEP           # outside a build: it is defined
     plain = _app(tmp_path / "plain", {"test": "node --test"})
     assert vt.E2E_STEP not in _plan(plain).commands           # outside a build: not defined
-    # A pass 2 that asked for browser tests requires them, defined yet or not.
-    assert _plan(plain, scope=pass2).commands[-1] == vt.E2E_STEP
+    # A pass 2 that asked for browser tests runs Playwright where its config is, even when the
+    # app names no test:e2e script; with no config there is no suite to run (helpdesk-ai
+    # crun_13587ba1; test_a_browser_suite_runs_where_its_config_is.py has the cases).
+    assert vt.E2E_STEP not in _plan(plain, scope=pass2).commands
+    (plain / "app" / "playwright.config.ts").write_text("export default {}\n")
+    assert _plan(plain, scope=pass2).commands[-1] == vt.E2E_STEP_DIRECT
 
 
 def test_the_briefs_test_commands_still_win(tmp_path):

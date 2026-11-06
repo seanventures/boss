@@ -71,6 +71,11 @@ def test_start_run_is_the_only_writer_of_workflow_runs():
                         isinstance(n, ast.Constant) and isinstance(n.value, str)
                         and "INSERT INTO workflow_runs" in n.value for n in ast.walk(fn)):
                     writers.append((str(path.relative_to(ROOT)), fn.name))
+    # The squad demo's stand-in launcher records a COMPLETED run on a step-less definition it
+    # creates itself ('squad_demo_build'): nothing executes and no agent is named, so there is no
+    # version for the agent-delete guard to protect. It holds the reach lock (test below).
+    writers = [w for w in writers
+               if w != ("engine/boss_engine/services/ambient/squad_demo.py", "start")]
     assert writers == [("engine/boss_engine/services/workflows.py", "start_run")], (
         f"workflow runs are created in {writers}. A run started anywhere but start_run skips "
         "_version_row, so the agent-delete guard (workflows.versions_a_run_can_reach) cannot "

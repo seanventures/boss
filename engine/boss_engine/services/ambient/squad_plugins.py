@@ -244,7 +244,7 @@ def collect_results(connection: Connection, item_id: str) -> list[dict[str, Any]
                 board.link(connection, item_id, "pull_request", pr, actor="boss")
         else:
             row = connection.execute(text(
-                "SELECT status, title, state, error FROM meeting_runs WHERE id = :r "
+                "SELECT status, state, error FROM meeting_runs WHERE id = :r "
                 "AND project_id = :p"), {"r": ref, "p": item["project_id"]}).mappings().first()
             if row is None or row["status"] not in TERMINAL_MEETING:
                 continue
