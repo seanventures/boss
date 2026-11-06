@@ -32,6 +32,8 @@ import { cleanUpOldAction } from "./actions";
 import { GatedButton } from "../../components/gated";
 import { Go } from "./hero";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
+import type { ListView } from "../../lib/ambient";
+import { AmbientNeedRows } from "./agents-at-work";
 
 /** Rows a card shows before `+n more` (the copy and row budgets of the approved look). */
 export const NEEDS_ROWS = 3;
@@ -132,10 +134,12 @@ function NeedLine({ row, projectId, actor, orgId, open, onToggle, onDone, onRefr
 }
 
 export function NeedsCard({ view, lead, olderStopped, needsYou, projectId, actor, orgId, now, reachable,
-                            onGone, onRefresh }: {
+                            onGone, onRefresh, ambient = null }: {
   view: CommandCenterView | null; lead: AttentionItem[]; olderStopped: AttentionItem[];
   needsYou: number | null; projectId: string; actor: string; orgId?: string | null; now: number | null;
   reachable: boolean; onGone: (id: string) => void; onRefresh: () => void;
+  /** Agents at work's items (autonomous agents): one waiting on a person is a row here too. */
+  ambient?: ListView | null;
 }) {
   useIdentityVersion(); // names and faces re-resolve when the install's identities load
   const [openId, setOpenId] = useState<string | null>(null);
@@ -145,6 +149,10 @@ export function NeedsCard({ view, lead, olderStopped, needsYou, projectId, actor
   const setup = all.filter((r) => r.item.kind === "readiness");
   const rows = all.filter((r) => r.item.kind !== "readiness");
   const shown = [...(more ? rows : rows.slice(0, NEEDS_ROWS)), ...setup];
+  // ONE QUEUE: an ambient item whose decision is already a row above is not listed twice.
+  const listed = new Set(lead.map((i) => i.decisionId ?? i.id));
+  const ambientRows = <AmbientNeedRows view={ambient} listedDecisionIds={listed} />;
+  const hasAmbient = (ambient?.items ?? []).some((i) => i.badges.outcome === "needs_you" && !(i.needs_you_decision_id && listed.has(i.needs_you_decision_id)));
   return (
     <section className="cc-card cc-needs cc-sec" id="cc2-needs-you" aria-labelledby="cc2-needs-you-h"
              data-quiet={view && all.length === 0 ? "true" : undefined}>
@@ -171,7 +179,9 @@ export function NeedsCard({ view, lead, olderStopped, needsYou, projectId, actor
       </header>
       {/* Can't reach BOSS: the rows stay (the last thing BOSS said) but nothing can be pressed. */}
       <fieldset className="cc-card-body" disabled={!reachable} title={reachable ? undefined : "Can't reach BOSS"}>
-        {!view ? null : all.length === 0 ? (
+        {!view ? null : all.length === 0 && hasAmbient ? (
+          <div className="cc-needs-list">{ambientRows}</div>
+        ) : all.length === 0 ? (
           <div className="cc-quiet-line" data-testid="cc2-needs-you-empty">
             <span className="cc-ok" aria-hidden>✓</span>
             <span title="Gates, plans, failed steps and setup gaps appear here.">Nothing needs you</span>
@@ -185,6 +195,7 @@ export function NeedsCard({ view, lead, olderStopped, needsYou, projectId, actor
                         onDone={() => { setOpenId(null); onGone(r.item.id); onRefresh(); }}
                         onRefresh={onRefresh} />
             ))}
+            {ambientRows}
             {rows.length > NEEDS_ROWS ? (
               <button type="button" className="cc-more" aria-expanded={more} data-testid="cc-att-more"
                       onClick={() => setMore((v) => !v)}>

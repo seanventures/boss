@@ -17,6 +17,7 @@ import { EnvelopesTab } from "./envelopes-tab";
 import { LimitsScreen } from "./limits-screen";
 import { GovernMeter } from "./meter";
 import { SelfFixTab } from "./self-fix-tab";
+import { AutonomyPanel } from "../agent-ops/autonomy-panel";
 import { SharingTab } from "./sharing-tab";
 import { SPEND_PERIODS, SpendHome, type SpendPeriod } from "./spend-home";
 import { SpendTab } from "./spend-tab";
@@ -29,10 +30,13 @@ export const GOVERN_POLL_MS = 15_000;
  * Sharing and Self-fix. Old links keep working: ?tab=spend|envelopes|sharing|selffix open what
  * they opened, ?focus=… still lands on that row of the board.
  */
-type Tab = "overview" | "limits" | "board" | "spend" | "envelopes" | "sharing" | "selffix";
+type Tab = "overview" | "limits" | "autonomy" | "board" | "spend" | "envelopes" | "sharing" | "selffix";
 const MAIN: { key: Tab; label: string; tip: string }[] = [
   { key: "overview", label: "Spend", tip: "How much, on which model and project" },
   { key: "limits", label: "Limits", tip: "Caps, what happens at them, per project" },
+  // AUTONOMY & SAFETY (autonomous agents, BOSSAPP-905): what agents may do on their own, their
+  // track record, today's ambient budget and the stop switch — one surface.
+  { key: "autonomy", label: "Autonomy", tip: "What agents may do on their own, and the stop switch" },
 ];
 const MORE: { key: Tab; label: string; tip: string }[] = [
   { key: "spend", label: "Where the money went", tip: "By agent, by step, savings and top drivers" },
@@ -133,7 +137,7 @@ export function GovernHome({ projectId, actor }: { projectId: string; actor: str
           </span>
         </details>
       </header>
-      {tab !== "overview" && tab !== "limits" ? (
+      {tab !== "overview" && tab !== "limits" && tab !== "autonomy" ? (
         <GovernMeter meter={data?.meter ?? null} error={view.error} onRetry={view.reload} />
       ) : null}
       {frozen ? (
@@ -151,6 +155,8 @@ export function GovernHome({ projectId, actor }: { projectId: string; actor: str
       ) : tab === "limits" ? (
         <LimitsScreen view={data} projectId={projectId} actor={actor} unreachable={!data && !!view.error}
                       focus={focus} onSaved={view.reload} onAdvanced={() => go("board")} onBack={() => go("overview")} />
+      ) : tab === "autonomy" ? (
+        <AutonomyPanel projectId={projectId} />
       ) : tab === "board" ? (
         <ControlBoard view={data} projectId={projectId} actor={actor} unreachable={!data && !!view.error}
                       focus={focus} onSaved={view.reload} />

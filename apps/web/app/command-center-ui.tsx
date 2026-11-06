@@ -17,6 +17,7 @@ import type { AttentionItem } from "../lib/agents-live-board";
 import { splitAttention } from "./agents/live-board";
 import { ago, reducedMotion, useNow } from "./agents/live-util";
 import { FlightCard, HealthCard, NeedsCard } from "./command-center/cards";
+import { AgentsAtWorkCard, useAmbientToday } from "./command-center/agents-at-work";
 import { Go, Proof, TeamGrid, proofOf } from "./command-center/hero";
 import { PulseRow } from "./command-center/pulse";
 import { AppsShelf, TemplatesShelf } from "./command-center/rails";
@@ -145,6 +146,7 @@ export function CommandCenter({ projectId, orgId, actor, initial: given, initial
   const error = polled.error ?? (view ? null : initialError);
   const reachable = !error && !!view;
   const apps = useCcApps(projectId, initialApps);
+  const ambient = useAmbientToday(projectId);
   const [templatesOpen, setTemplatesOpen] = useState(false);
 
   const live = useConsoleLive();
@@ -229,7 +231,7 @@ export function CommandCenter({ projectId, orgId, actor, initial: given, initial
       <div className="cc-now" data-fresh={fresh ? "true" : undefined}>
         <NeedsCard view={view} lead={lead} olderStopped={olderStopped} needsYou={view ? view.counts.needsYou : null}
                    projectId={projectId} actor={actor} orgId={orgId} now={now} reachable={reachable}
-                   onGone={(id) => setGone((g) => new Set(g).add(id))} onRefresh={refresh} />
+                   onGone={(id) => setGone((g) => new Set(g).add(id))} onRefresh={refresh} ambient={ambient} />
         <FlightCard view={view} projectId={projectId} actor={actor} orgId={orgId} now={now}
                     onRefresh={refresh} onStart={startWork} />
         <HealthCard view={view} reachable={reachable} orgId={orgId} />
@@ -289,6 +291,7 @@ export function CommandCenter({ projectId, orgId, actor, initial: given, initial
       <ReturningBrief view={view} projectId={projectId} orgId={orgId} viewer={viewer ?? actor}
                       reachable={reachable} visible={visible} container={rootRef} />
       {nowCards}
+      <AgentsAtWorkCard view={ambient} orgId={orgId} />
       <AppsShelf apps={appRows} attention={attention} orgId={orgId} />
       <details className="cc-secondary" data-testid="cc-template-details"
                onToggle={(e) => setTemplatesOpen((e.currentTarget as HTMLDetailsElement).open)}>
