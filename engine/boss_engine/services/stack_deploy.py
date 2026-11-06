@@ -2709,12 +2709,15 @@ def _declared_stack_target(connection: Connection, project_id: str,
             text("SELECT * FROM deployment_targets WHERE project_id = :p AND status = 'active' "
                  "AND environment = :e AND host_id IS NOT NULL ORDER BY created_at"),
             {"p": project_id, "e": environment}).mappings().all()]
+        # A target recorded without its repo (one made from Infra or Ask BOSS) is still this
+        # app's when its NAME says so; pick_deploy_target matches by identity, never by repo alone.
         candidates = [t for t in candidates
-                      if str(t.get("repo") or "").rsplit("/", 1)[-1].lower() == repo_name]
+                      if str(t.get("repo") or "").rsplit("/", 1)[-1].lower() in (repo_name, "")]
         host_id = str(inputs.get("host_id") or "").strip()
         if host_id:
             candidates = [t for t in candidates if t.get("host_id") == host_id]
-        app_name = app_name_of_run(run)
+        app_name = _imported_app_name(connection, project_id, run, repository, path) \
+            or app_name_of_run(run)
         target = pick_deploy_target(candidates, app_name)
         if target is None and app_name and not [
                 t for t in candidates if _same_app(t, app_name)]:
@@ -2909,7 +2912,11 @@ def manifest_misfit(connection: Connection, *, manifest: Any, rendered: Mapping[
                 "Allow the demo/seed password BOSS provides in production, and make demo seeding "
                 "an explicit opt-in (e.g. ALLOW_DEMO_SEED) instead of refusing the password; "
                 "then deploy again.")
-    if served is not None:
+    # ONLY A MANIFEST THIS BUILD WROTE is judged against the files this build wrote. An imported
+    # app's own boss.deploy.yaml health-checks a route its existing code serves (helpdesk-ai's
+    # /auth/providers in server/auth/routes.mjs, untouched by the SLA build), and judging it
+    # against the build's few changed files dead-lettered a correct deploy (2026-11-06).
+    if served is not None and _build_wrote(connection, run_id, path):
         for check in rendered.get("health") or []:
             route = urlsplit(str(check.get("url") or "")).path.rstrip("/")
             # Mounted routes (a router at /api serving /health) are judged by their last part.
@@ -2971,6 +2978,16 @@ _SERVED_SUFFIXES = (".js", ".mjs", ".cjs", ".ts", ".py", ".go", ".rb", ".java", 
                     ".php", ".conf", ".yml", ".yaml", ".json", ".toml")
 
 
+def _build_wrote(connection: Connection, run_id: Optional[str], path: str) -> bool:
+    """Whether any attempt of this run's lineage wrote `path` (the manifest)."""
+    want = str(path or "").strip().lstrip("./")
+    if not run_id or not want:
+        return False
+    return any(str(f).strip().lstrip("./") == want
+               for attempt in lineage_of(connection, run_id)
+               for f in ((attempt["state"] or {}).get("impl_files") or []))
+
+
 def _served_text(connection: Connection, run_id: Optional[str], workdir: str,
                  read: Callable[[str], Optional[str]]) -> Optional[str]:
     """The source the build wrote under the manifest's directory, joined (bounded), or None when
@@ -3026,6 +3043,31 @@ def undeclared_deploy_refusal(connection: Connection, run_id: Optional[str]) -> 
                 "`resources: {db: {capability: database.relational, engine: postgres}}`, then "
                 "deploy again.")
     return None
+
+
+def _imported_app_name(connection: Connection, project_id: str, run: Mapping[str, Any],
+                       repository: str, manifest_path: str) -> str:
+    """The project's own name when this build adds to the app the project imported: no recorded
+    app name, the project's primary repository, and the app's manifest at that repository's
+    root (the repo IS the app; `app_dir` is only where the build worked, e.g. `web`). Else "".
+
+    ADDING TO AN EXISTING APP IS THE MAIN USE CASE. Such a build has no app name of its own, so
+    its title stood in: helpdesk-ai's SLA build made a second target, "Add SLA timers to
+    tickets", beside "HelpDesk AI", and deployed to neither (2026-11-06)."""
+    fctx = run.get("finalize_ctx") or {}
+    if isinstance(fctx, str):
+        try:
+            fctx = json.loads(fctx)
+        except ValueError:
+            fctx = {}
+    if str((fctx or {}).get("app_name") or "").strip() or "/" in str(manifest_path or "/"):
+        return ""
+    row = connection.execute(
+        text("SELECT p.name FROM projects p JOIN github_repository_bindings b "
+             "ON b.project_id = p.id AND b.role = 'primary' AND b.status = 'active' "
+             "WHERE p.id = :p AND lower(b.full_name) = lower(:r)"),
+        {"p": project_id, "r": repository}).first()
+    return str(row[0]).strip() if row and row[0] else ""
 
 
 def _same_app(target: Mapping[str, Any], app_name: str) -> bool:

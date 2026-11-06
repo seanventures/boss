@@ -18,14 +18,16 @@ from typing import Any, Literal, Optional, TypedDict
 
 # ── the stations (§4.3) ─────────────────────────────────────────────────────────────────────
 
-StationKey = Literal["plan", "you_plan", "tests", "build", "check", "review", "pr", "preview",
-                     "ship"]
+StationKey = Literal["plan", "you_plan", "tests", "build", "check", "review", "pr", "ship"]
 #: In order. `you_plan` appears only when the plan needs approval.
+# NO PREVIEW STATION. Build and test end at the PR; a preview is for looking, never a stage
+# of the build (operator, 2026-11-05: "why do we need it there?" — a failed preview showed the
+# finished build as Stuck). A running preview is the PR station's "App ↗" link.
 STATION_ORDER: tuple[str, ...] = ("plan", "you_plan", "tests", "build", "check", "review", "pr",
-                                  "preview", "ship")
+                                  "ship")
 STATION_LABELS: dict[str, str] = {
     "plan": "Plan", "you_plan": "You", "tests": "Tests", "build": "Build", "check": "Check",
-    "review": "Review", "pr": "PR", "preview": "Preview", "ship": "Ship",
+    "review": "Review", "pr": "PR", "ship": "Ship",
 }
 #: Build stage keys (agent_acts.STAGE_PHASES + the governed phases) → their station.
 STAGE_STATION: dict[str, str] = {
@@ -457,18 +459,17 @@ from sqlalchemy import text  # noqa: E402
 
 from .build_detail import kept_stations, kept_word, now_summary  # noqa: E402
 
-CORE_STATIONS: tuple[str, ...] = ("plan", "tests", "build", "check", "review", "pr", "preview",
-                                  "ship")
+CORE_STATIONS: tuple[str, ...] = ("plan", "tests", "build", "check", "review", "pr", "ship")
 #: Stations where an agent stands. The rest are BOSS's machinery (Check when no qa act ran it).
 AGENT_STATIONS = frozenset({"plan", "tests", "build", "review"})
-MACHINE_STATIONS = frozenset({"check", "pr", "preview"})
+MACHINE_STATIONS = frozenset({"check", "pr"})
 #: The role a pending station's hollow face may show: only where the role is certain.
 CERTAIN_ROLE: dict[str, str] = {
     "plan": "chief_architect", "tests": "qa", "review": "adversarial_reviewer",
 }
 STATION_VERB: dict[str, str] = {
     "plan": "Planning", "you_plan": "Needs you", "tests": "Testing", "build": "Coding",
-    "check": "Testing", "review": "Reviewing", "pr": "Working", "preview": "Deploying",
+    "check": "Testing", "review": "Reviewing", "pr": "Working",
     "ship": "Deploying",
 }
 BOSS_TIP = "BOSS machinery. No agent at this station."
@@ -1256,18 +1257,11 @@ def stations_for(run: Mapping[str, Any], *, acts: Optional[list[Mapping[str, Any
                 s.update(status="done", face="boss", tip=BOSS_TIP)
                 s["links"] = [{"label": f"#{pr_n} ↗" if pr_n else "PR ↗",
                                "url": run.get("pull_request_url")}]
+                if flag and flag["status"] == "running" and flag.get("url"):
+                    s["links"].append({"label": "App ↗", "url": flag["url"]})
             elif state_key == "done_no_pr":
                 s.update(status="skipped", face="none",
                          tip=st.get("tip") or "This build opens no PR")
-        if key == "preview":
-            if flag:
-                s.update(face="boss", tip=BOSS_TIP,
-                         status={"running": "done", "starting": "working",
-                                 "failed": "stuck"}[flag["status"]])
-                if flag["status"] == "running" and flag.get("url"):
-                    s["links"] = [{"label": "Open ↗", "url": flag["url"]}]
-            elif finished:
-                s.update(status="pending", face="boss", tip=BOSS_TIP)
         if key == "ship":
             if state_key == "pr_open":
                 s.update(status="needs_you", face="you", word="Needs you",
@@ -2170,7 +2164,7 @@ def _story(connection: Any, project_id: str, run: Mapping[str, Any], facts: Fact
     preview = facts.previews.get(rid)
     if preview:
         steps = [s for s in _j(preview.get("steps"), []) or [] if isinstance(s, dict)]
-        boss.append({"id": "preview", "type": "boss", "station": "preview",
+        boss.append({"id": "preview", "type": "boss", "station": "pr",
                      "what": "started_preview", "text": "Started preview",
                      "at": _iso(preview.get("created_at")) or "",
                      "detail": {"steps_done": sum(1 for s in steps

@@ -1494,7 +1494,9 @@ def _write_the_run_report(
     return {
         "capability": "report",
         "tool": None,
-        "status": "recorded",
+        # NOT "recorded": that is the honest no-op word (didNothing in the console), so every
+        # written report read "nothing done" on the run lane (operator, 2026-11-06).
+        "status": "succeeded",
         "artifact_id": artifact_id,
         "report": report,
         "total_usd": report["total_usd"],
