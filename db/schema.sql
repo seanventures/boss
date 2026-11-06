@@ -11115,3 +11115,24 @@ CREATE TABLE IF NOT EXISTS ambient_settings (
   updated_by TEXT NOT NULL DEFAULT 'boss',
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- DISCOVERY DOSSIER (BOSSAPP-909; design §4 L1 "give it a directory and it starts working").
+-- When a repository is registered (its first code-graph index) or on request, BOSS reads it with
+-- no instructions and keeps ONE current dossier per project repository: stack, structure,
+-- test/CI commands, owners, docs and runbooks, TODO clusters, churn × size hotspots, the
+-- dependency surface and advisories, the open BOSS work and a knowledge-graph summary. What it
+-- finds that is worth doing ("no CI", "a hotspot with no tests") is seeded as signals the
+-- Chief of Staff triages, so a new project opens on a ranked list of proposals, not a blank page.
+CREATE TABLE IF NOT EXISTS project_dossiers (
+  id TEXT PRIMARY KEY,                             -- 'dos_' + ulid
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  repo TEXT NOT NULL,                              -- owner/name
+  head_sha TEXT,
+  facts JSONB NOT NULL DEFAULT '{}'::jsonb,
+  highlights JSONB NOT NULL DEFAULT '[]'::jsonb,   -- badge-sized lines (≤ 4 words each)
+  seeded_signals JSONB NOT NULL DEFAULT '[]'::jsonb,
+  read_from TEXT NOT NULL DEFAULT 'checkout' CHECK (read_from IN ('checkout', 'graph')),
+  version INTEGER NOT NULL DEFAULT 1,
+  built_by TEXT NOT NULL DEFAULT 'boss',
+  built_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, repo)
+);

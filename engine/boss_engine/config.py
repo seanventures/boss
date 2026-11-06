@@ -1192,6 +1192,9 @@ class Settings(BaseSettings):
     # Model calls the Chief of Staff may make per project per tick for judgement (an ambiguous
     # classification, an unclear owner). Deterministic rules decide everything else; 0 = rules only.
     ambient_cos_model_calls: int = Field(default=3, alias="BOSS_AMBIENT_COS_MODEL_CALLS")
+    # Discovery's dossier asks OSV (api.osv.dev, through the proxy environment) which locked
+    # packages have advisories: 5 s, and an offline install records "skipped". 0 = never ask.
+    ambient_dossier_osv: int = Field(default=1, alias="BOSS_DOSSIER_OSV")
     kg_repo_index: int = Field(default=1, alias="BOSS_KG_REPO_INDEX")
     # Bounds of one index run. A repository with more indexable files, or more source bytes, is
     # not indexed (status too_large, in words); a single file above the size limit is skipped

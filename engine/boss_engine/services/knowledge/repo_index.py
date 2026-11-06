@@ -659,6 +659,13 @@ def execute_job(engine: Any, settings: Any, *, job_id: str, worker_id: str, leas
         _finish(engine, row, job_id, state="failed", error=said, head=head)
         return {"status": "failed", "retry": True, "error": said}
     _finish(engine, row, job_id, state="indexed", head=head, run=run)
+    # DISCOVERY (autonomous agents, BOSSAPP-909): the same checkout, read once more for the
+    # project's dossier — stack, owners, hotspots, TODOs, dependencies — and the signals worth a
+    # proposal. Its own transaction; it never fails the index.
+    from ..ambient.dossier import after_index
+
+    after_index(engine, settings, project_id=row["project_id"], repo=row["repo"], root=dest,
+                head=head)
     return {"status": "succeeded", "head": head, **{k: run.get(k) for k in ("mode", "files", "nodes", "edges", "seconds")}}
 
 
