@@ -540,11 +540,20 @@ def build_templates_router() -> APIRouter:
                 targets = (secrets_service.deploy_target_demo_logins(
                     db, get_settings(), project_id=project_id, app_key=app_key)
                     if env == "deploy" else [])
+                # WHO signs in with each password (BOSSAPP-914 §11: the sheet showed a password
+                # and no user name): the app's demo users, by name, from its boss.deploy.yaml
+                # `demo_logins:` or the users onboarding found in its seed file.
+                from boss_engine.services.project_experience import demo_logins as demo_users
+
+                people, users_from = demo_users.users(db, project_id)
         except TemplateError as exc:
             return _refused(exc)
-        return JSONResponse({"app_key": app_key, "env": env,
-                             "demo_logins": [{"name": k, "value": v} for k, v in values.items()]
-                             + targets},
+        rows = [{"name": k, "value": v} for k, v in values.items()] + targets
+        for row in rows:
+            row["users"] = [p for p in people if p["password_key"] == row["name"]] or (
+                people if len(rows) == 1 or len({p["password_key"] for p in people}) == 1 else [])
+        return JSONResponse({"app_key": app_key, "env": env, "demo_logins": rows,
+                             "users": people, "users_from": users_from},
                             headers={"Cache-Control": "no-store"})
 
     @router.delete("/v1/apps/{app_key}/secrets/{name}")
