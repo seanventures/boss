@@ -254,3 +254,5 @@ Every shape above is served as written; these are the extra fields and the decis
 ## 15. Models and GitHub accounts are global
 
 Models and GitHub accounts are workspace settings (Setup › Models, Setup › GitHub, routing in Setup › Advanced). The project page never offers a model or account picker. The first-run checklist starts at "Add project"; above it a read-only "Workspace ready" row shows GitHub ✓ and Model ✓ with links to the global pages. If either is missing, "Only you can" shows a card linking to the global page. Onboarding's model check is read-only.
+
+The Projects empty state reads the real status. A connected model or GitHub account shows as configured (✓, name, "Manage ›" to Repo and models), and its strip node ticks. A missing one's button opens the Repo and models page, never an inline picker. The first step not yet done is the primary action. If the status can't be read, the card shows a neutral "Check in Repo and models ›", never a false ✓.
