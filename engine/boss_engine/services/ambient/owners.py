@@ -62,7 +62,7 @@ def enabled(settings: Any) -> bool:
     return bool(int(getattr(settings, "ambient_squads", 1) or 0))
 
 
-def items_per_tick(settings: Any) -> int:
+def item_limit(settings: Any) -> int:
     return max(0, int(getattr(settings, "ambient_squad_items", DEFAULT_ITEMS_PER_TICK)
                       if getattr(settings, "ambient_squad_items", None) is not None
                       else DEFAULT_ITEMS_PER_TICK))
@@ -84,7 +84,7 @@ _HANDED = (
     "  EXISTS (SELECT 1 FROM work_item_messages m WHERE m.work_item_id = w.id "
     "     AND m.kind = 'escalate' AND m.body->>'reason' LIKE :nosquad) AS no_squad "
     "FROM work_items w WHERE w.ambient AND w.task_class <> 'roadmap_item' "
-    "AND (CAST(:p AS TEXT) IS NULL OR w.project_id = :p) "
+    "AND (CAST(:p AS TEXT) IS NULL OR w.project_id = :p) AND {live} "
     "AND w.lifecycle IN ('proposed', 'claimed', 'in_progress') "
     "AND COALESCE(w.lease_kind, '') <> 'person' "
     "AND EXISTS (SELECT 1 FROM work_item_messages h WHERE h.work_item_id = w.id "
@@ -110,7 +110,10 @@ def due_items(connection: Connection, *, project_id: Optional[str] = None,
     """The handed-over items the owners should work this tick, highest priority first."""
     incident = set(_incident_classes())
     out: list[dict[str, Any]] = []
-    rows = connection.execute(text(_HANDED), {"p": project_id, "cos": COS,
+    from .. import projects_archive   # an archived project's items are never worked
+
+    rows = connection.execute(text(_HANDED.format(live=projects_archive.live_sql("w.project_id"))),
+                              {"p": project_id, "cos": COS,
                                               "nosquad": f"{NO_SQUAD}%"}).mappings().all()
     for r in rows:
         if len(out) >= limit:
@@ -204,7 +207,7 @@ def _work(engine: Any, settings: Any, report: dict[str, Any], *, project_id: Opt
         if policy.stop_state(c, None)["stopped"]:
             return {**report, "skipped": "stopped"}
         todo = due_items(c, project_id=project_id,
-                         limit=items_per_tick(settings) if limit is None else limit)
+                         limit=item_limit(settings) if limit is None else limit)
     for entry in todo:
         item_id = entry["id"]
         pid = entry["project_id"]
@@ -262,5 +265,5 @@ def projects_with_owner_work(connection: Connection) -> list[str]:
         "AND h.sender = :cos)"), {"cos": COS}).scalars()]
 
 
-__all__ = ["work", "due_items", "projects_with_owner_work", "enabled", "items_per_tick",
+__all__ = ["work", "due_items", "projects_with_owner_work", "enabled", "item_limit",
            "SQUAD_ROUNDS_PER_TICK", "SQUAD_RECHECK_MINUTES", "NO_SQUAD"]

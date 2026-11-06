@@ -1572,6 +1572,10 @@ def tick(connection: Connection, *, project_id: str, settings: Any = None,
          mind: Optional[Mind] = None, effects: Optional[Effects] = None) -> list[dict]:
     """The CoS tick's call: every incident item the squad is watching recover looks again; one
     that has a verdict is closed or escalated. Returns what moved."""
+    from . import projects_archive
+
+    if projects_archive.is_archived(connection, project_id):
+        return []
     rows = connection.execute(text(
         "SELECT id FROM work_items w WHERE project_id = :p AND ambient AND task_class = ANY(:c) "
         "AND lifecycle = 'proposed' AND EXISTS (SELECT 1 FROM work_item_messages m WHERE "

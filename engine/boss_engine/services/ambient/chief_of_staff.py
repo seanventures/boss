@@ -880,8 +880,12 @@ def tick(engine: Any, settings: Any = None, *, project_id: Optional[str] = None,
     if project_id is None:
         with engine.begin() as c:
             report["adopted"] = adopt_install_wide(c, settings)
+    from .. import projects_archive
+
     with engine.begin() as c:
-        targets = [project_id] if project_id else projects_with_work(c)
+        # An archived project takes no new work: its signals wait, nothing is triaged.
+        targets = projects_archive.live_ids(c, [project_id] if project_id
+                                            else projects_with_work(c))
     for pid in targets:
         try:
             with engine.begin() as c:
