@@ -56,7 +56,7 @@ from sqlalchemy.engine import Connection, Engine
 
 from . import board, collab, ledger, policy, squad_memory, squad_plugins, squads
 from . import task_classes as tc
-from ._common import (EvidenceError, clean_text, emit, party, party_id, party_kind, person,
+from ._common import (EvidenceError, clean_text, emit, party, party_id, person,
                       verify_evidence)
 
 #: Turns any squad may take on one item, ever. A squad that has not converged by then needs a
@@ -250,16 +250,16 @@ def _check_answer(connection: Connection, item: Mapping[str, Any], *, me: str,
                 verify_evidence(connection, item["project_id"], args["evidence"])
             except EvidenceError as exc:
                 return f"{exc}; cite only refs from the citable list"
-        if move in ("finding", "hypothesis", "proposal", "critique"):
-            said = _norm(args.get("summary"))
-            if any(m["sender"] == me and m["kind"] == move
-                   and _norm((m.get("body") or {}).get("summary")) == said for m in posted):
-                return "you already posted exactly that; add something new or pass"
         if move == "proposal":
             if args.get("action") not in PROPOSABLE:
                 return f"action is one of {', '.join(PROPOSABLE)}"
             if any(_norm(f"{args.get('action')}: {args.get('summary')}") in t for t in tried):
                 return "the squad already tried that and it was rejected; propose something else"
+        if move in ("finding", "hypothesis", "proposal", "critique"):
+            said = _norm(args.get("summary"))
+            if any(m["sender"] == me and m["kind"] == move
+                   and _norm((m.get("body") or {}).get("summary")) == said for m in posted):
+                return "you already posted exactly that; add something new or pass"
         if move == "critique" and args.get("position") not in collab.POSITIONS:
             return f"position is one of {', '.join(collab.POSITIONS)}"
         if move == "vote" and args.get("vote") not in collab.VOTES:

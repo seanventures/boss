@@ -228,8 +228,14 @@ def assemble(connection: Connection, item_id: str, *, actor: str = "agent:chief_
     held = board.claim(connection, item_id, owner=lead, minutes=lease_minutes)
     for m in seated:
         board._squad_add(connection, item_id, m["party"])
-    message = collab.post(connection, item_id, kind="squad", sender=party(actor), _internal=True,
+    assembler = party(actor)
+    message = collab.post(connection, item_id, kind="squad", sender=assembler, _internal=True,
                           body={"template": plan.key, "members": seated, "unfilled": unfilled})
+    if assembler not in {m["party"] for m in seated}:
+        # Whoever seated the squad (the Chief of Staff) is not on it: it does not count towards
+        # a squad vote's quorum.
+        connection.execute(text("UPDATE work_items SET squad = squad - CAST(:a AS TEXT) "
+                                "WHERE id = :w"), {"a": assembler, "w": item_id})
     from . import squad_memory
 
     squad_memory.open(connection, item_id, goal=item["title"], actor=lead,

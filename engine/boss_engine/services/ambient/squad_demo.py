@@ -33,7 +33,7 @@ from __future__ import annotations
 import json
 import re
 import uuid
-from typing import Any, Callable, Mapping, Optional, Union
+from typing import Any, Callable, Mapping, Union
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine

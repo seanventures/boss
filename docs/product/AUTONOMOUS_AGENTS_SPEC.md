@@ -274,6 +274,39 @@ list_view(c, project_id, *, filter_="all", task_class=None, limit=30, before=Non
 scorecard(c, project_id, *, days=7)
 ```
 
+### 4.8 Squads — how agents work an item together (908)
+
+Modules: `ambient/squads.py` (roster), `ambient/squad_turns.py` (turns, consensus, rounds), `ambient/squad_memory.py`, `ambient/squad_plugins.py` (panels, workflows, results back), `ambient/squad_demo.py` (non-production demo).
+
+```python
+squads.assemble(c, item_id, *, actor="agent:chief_of_staff", template=None, lease_minutes=60,
+                max_specialists=2) -> {"squad", "lease_token", "message", "outcome": "assembled"|"existing"}
+squads.roster(c, item_id) -> {template, title, execute_workflow, lead, members[{party, seat, why}],
+                              critics, unfilled, assembled_by} | None
+squads.hand_lead(c, item_id, *, to, token, summary) -> {lead, lease_token}
+squads.workforce(c, project_id, task_class) -> [{role_key, on_duty, live_items, has_room, record}]
+
+squad_turns.take_turn(c, settings, item_id, member, *, round_no=1, model=None, decider=None,
+                      read=None, launchers=None) -> {member, seat, move, status, message_id?, ...}
+squad_turns.settle(c, settings, item_id, *, end_of_round, launchers=None)
+    -> None | {state: decided|revise|needs_you|waiting, act_id?, decision_id?, dissent, ...}
+squad_turns.collaborate(engine_or_connection, settings, item_id, *, rounds=4, model=None,
+                        decider=None, read=None, launchers=None)
+    -> {rounds, turns, settled, results, stopped: {guard, reason}}
+squad_turns.person_answered(c, item_id, *, actor, approve, rationale) -> {item, decision}
+squad_memory.pack(c, item_id) / read / note(..., tried_and_failed=) / close(c, item_id, actor=)
+squad_plugins.collect_results(c, item_id) -> [{kind, ref, status, failed, finding_id}]
+squad_demo.seed(engine, settings, *, project_id, confirm_demo=True, ensure_roles=False)
+```
+
+- **Seats.** `lead` (holds the lease; proposes, convenes, hands off, resolves), `specialist`, `critic` (the checker of record; never the lead). Templates per task class: `incident`, `failing_ci`, `dependency_cve`, `design_question`, `general`. Only the project's own `roles`, `lifecycle = active`, on fewer than `MAX_LIVE_ITEMS_PER_AGENT` (3) live items; track record on the class breaks ties; an unfillable specialist seat is recorded as `unfilled` with the reason. No lead + different critic → `SquadError`. Whoever assembled the squad (the CoS) is not on it.
+- **A turn is the one agent path.** `AgentService.decide(external_ref="work_item:<id>", role=<role key>)` with the board moves as candidates (`finding hypothesis proposal critique vote hand_lead escalate resolve pass`, offered by seat and board state), argument schemas, the agent's own brief, and a caller `check` (evidence exists, enums, no repeat, no re-proposing what was rejected) with one re-ask. Context: the item, the seat, **squad memory first**, the board as the member may see it (no herding), the refs it may cite, and for the lead the gate's verdict per action. No model → no move.
+- **Consensus in practice.** A proposal settles at the end of a round (a `single` one at once). Approved → `record_decision` (decided by the lead for `single`, by `squad:<item>` for maker-checker) with the consensus record, then the action executes (`start_workflow`/`open_draft_pr` → workflow, `convene_meeting` → panel; other actions are carried out by their owner stream). Rejected → a `revise` decision by `squad:<item>` and a tried-and-failed entry. A person needed (gate, mode, unsafe, two objections, tie, no quorum, nobody checked in two turns each) → `board.needs_you` whose recommendation carries `proposal_id`, `recommended: approve|hold`, the consensus and every dissent. `person_answered` records the person's decision (it settles the proposal); what they approved executes at the next round, once. **Tie-break rules** are in `squad_turns`' docstring.
+- **Guards.** Per item: `MAX_TURNS_PER_ITEM` 40 (`ambient.squad_turn` events), `SQUAD_BUDGET_USD_MICROS` $1.50, `MAX_PROPOSALS_PER_ITEM` 4; the project envelope; the stop; a person's take-over; the lead's lease checked before every turn and effect; a whole round of passes ends the run. A lapsed lead re-claims at the next round (never from a person, never while stopped).
+- **Squad memory** is `agent_session_ledger` thread `squad:<item>` (goal, phase, next step, tried-and-failed, artifacts); findings are read from the board. `close` promotes it to one `investigation` KG learning through `learning_writeback.record`.
+- **Plug-ins.** Production launchers are the `request_meeting` and `start_workflow` tools on the default registry, as the lead's role, confirmed. A launch posts a `handoff` `via` the run with the **packet** (goal, decision, found, tried-and-failed, dissent, verify, undo, report-back-to) and passes it as the run's `inputs.handoff` with `inputs.ambient_work_item_id`. `collect_results` (each round; the CoS tick may call it) posts a BOSS `finding` citing the run/panel (and its PR) and a `handoff` `returned_from` it to the lead; a failed run goes into tried-and-failed.
+- **For 904/906/907/910.** The CoS calls `squads.assemble` after `open_item` and `collaborate(engine, ...)` on its tick. 907 calls `squad_turns.person_answered` when a squad card (`recommendation.proposal_id`) is answered. 910 may pass `template="incident"`; its staging/prod actions are decided here and executed by its own executor.
+
 ---
 
 ## 5. Evidence refs
@@ -291,13 +324,14 @@ scorecard(c, project_id, *, days=7)
 | `claim` | `board.claim` only | `{lease_minutes}` |
 | `finding` | any party | `{summary, evidence[]}` (evidence verified) |
 | `hypothesis` | any party | `{summary, confidence 0..1, evidence[]}` |
-| `proposal` | any party | `{action (catalogue), summary, verify?, undo?, confidence?}` → stored with `risk`, `reversibility` |
+| `proposal` | any party | `{action (catalogue), summary, verify?, undo?, confidence?, workflow?}` → stored with `risk`, `reversibility` |
 | `critique` | any party, `reply_to` a proposal | `{position: agree|object|concern|unsafe, summary}` |
 | `vote` | any party, `reply_to` a proposal, once | `{vote: approve|reject|abstain, reason?}` |
 | `decision` | `ledger.record_decision` only | `{act_id, chosen}` |
-| `handoff` | any party (take-over writes one as `boss`) | `{to: party, from?, summary}` |
+| `handoff` | any party (take-over writes one as `boss`) | `{to: party, from?, summary, seat?: lead, via?: {kind: workflow_run\|meeting\|code_task, ref}, returned_from?: {kind, ref}, packet?: {...}}` |
 | `escalate` | any party | `{to: party, reason}` |
 | `resolve` | `board.finish` only | `{outcome, summary}` |
+| `squad` | `squads.assemble` only | `{template, lead, members: [{party, seat: lead\|specialist\|critic, why}], unfilled: [{seat, reason}]}` |
 
 A closed item takes no posts except `decision` (a late override) and `resolve`.
 
@@ -369,13 +403,13 @@ Illustrative — nodes from several moments of one item are shown together:
     "label": "reject", "dissent": true, "ref": {"kind": "message", "id": "wim_…"}}]}
 ```
 
-Node types: `signal agent person policy squad boss action decision needs_you run outcome`. Edge kinds: `raised claimed proposed critique vote handoff escalate decided settles overrides acted asks resulted`. Labels ≤ 4 words (nodes) / ≤ 3 (edges). `stage` 0–5 orders left to right. Every node has a `ref` for its drawer. List items carry `strip` (≤ 6 nodes: first signal, owner, last decision, Needs you / outcome) for the thumbnail.
+Node types: `signal agent person policy squad boss action decision needs_you run outcome`. Edge kinds: `raised claimed proposed critique vote handoff escalate decided settles overrides acted asks resulted`, and for squads (908) `assembled` (assembler → squad), `seated` (squad → member, labelled with the seat), `returned` (run/panel → the lead it reported back to). A handoff `via` a run is an edge from the lead to the run node; the squad node is `party:squad:<item id>`, the same node a `squad:<item>` decision comes from. A Needs-you node raised on a squad's proposal hangs off that proposal. Results BOSS posts back from a run are drawn as the `returned` edge, not as a BOSS node. Labels ≤ 4 words (nodes) / ≤ 3 (edges). `stage` 0–5 orders left to right. Every node has a `ref` for its drawer. List items carry `strip` (≤ 6 nodes: first signal, owner, last decision, Needs you / outcome) for the thumbnail.
 
 ---
 
 ## 8. Events (`core.emit_event`, entity in parentheses)
 
-`ambient.signal_recorded` (signal) · `ambient.signal_status` (signal) · `ambient.item_opened` (work_item) · `ambient.item_claimed` · `ambient.item_transitioned {from, to, decision_id?}` · `ambient.lease_released {cancelled?}` · `ambient.lease_expired` · `ambient.lease_taken_over {from, to}` · `ambient.message_posted {message_id, kind}` · `ambient.decision_recorded` (agent_act) · `ambient.decision_overridden` · `ambient.decision_outcome` · `ambient.autonomy_changed` (task_class) · `ambient.autonomy_demoted` · `ambient.promotion_suggested` · `ambient.settings_changed` (project) · `ambient.stopped {scope, reason, released}` · `ambient.resumed` · `ambient.breaker_tripped {failed, ended, ratio}` · `ambient.guard_refused {guard, reason}` · `ambient.envelope_refused`. Install-wide rows (no project) emit nothing. None of these is on the `event_dispatch` whitelist yet; a stream that wants a workflow triggered by one adds it there.
+`ambient.signal_recorded` (signal) · `ambient.signal_status` (signal) · `ambient.item_opened` (work_item) · `ambient.item_claimed` · `ambient.item_transitioned {from, to, decision_id?}` · `ambient.lease_released {cancelled?}` · `ambient.lease_expired` · `ambient.lease_taken_over {from, to}` · `ambient.message_posted {message_id, kind}` · `ambient.decision_recorded` (agent_act) · `ambient.decision_overridden` · `ambient.decision_outcome` · `ambient.autonomy_changed` (task_class) · `ambient.autonomy_demoted` · `ambient.promotion_suggested` · `ambient.settings_changed` (project) · `ambient.stopped {scope, reason, released}` · `ambient.resumed` · `ambient.breaker_tripped {failed, ended, ratio}` · `ambient.guard_refused {guard, reason}` · `ambient.envelope_refused` · `ambient.squad_turn {member, seat, round, move, status, message_id, cost_usd_micros}` (work_item; 908 — also what the per-item turn cap counts). Install-wide rows (no project) emit nothing. None of these is on the `event_dispatch` whitelist yet; a stream that wants a workflow triggered by one adds it there.
 
 ---
 
@@ -388,7 +422,7 @@ Node types: `signal agent person policy squad boss action decision needs_you run
 | **905** autonomy UI | the matrix screen, the envelope, the stop button (one surface; concise) | §7 autonomy/settings/stop routes | Stop is operator-level; resume/raise are owner/admin. Show `suggested_level` with one "Raise" button. |
 | **906** ledger + Agent Operations view | the console diagram (flow chart per item, list of thumbnails, five tabs, drawer per node) | `GET work-items`, `GET work-items/{id}`, decisions routes | **Draw `nodes`/`edges`; no prose on the canvas** (§11.0). Acceptance: a stranger says what happened in 10 s. |
 | **907** Needs you, digest, Ask BOSS | ambient item kinds in the attention inbox (BOSSAPP-875), the daily digest, Ask BOSS answering from `list_decisions` with `[act:<id>]` citations | `board.needs_you` / `answered`; `scorecard` | When a Needs-you decision is answered, call `board.answered`, then the agent proceeds; record the person's answer with `record_decision(decided_by="person:<id>")`. Promotion suggestions become a Needs-you card. |
-| **908** collaboration | squads (roster per class), squad memory → KG learnings at close, the watchdog | `collab.post/tally`, `board` | Add message kinds only in `collab.KINDS` + its `_body` schema + the table CHECK. |
+| **908** collaboration | **Built (§4.8):** squads (roster per class), turns on the one agent path, consensus in practice, squad memory → KG learning at close, panels and workflows with handoff packets, the demo. Open: the watchdog (BOSSAPP-880) | `collab.post/tally`, `board` | Add message kinds only in `collab.KINDS` + its `_body` schema + the table CHECK (908 added `squad`). |
 | **910** AI SRE squad | the incident squad on `incident_response` / `incident_staging_mitigation`; `incident_actions` rows written through the ledger | gate actions `staging_*`, `prod_*`, `silence_rule`; consensus modes | Mitigate first; prod rollback is `squad_vote_and_person`. Link incidents (`board.link(..., "incident", id)`). |
 | **911** recommended roadmap | KG detectors as `source="kg"` adapters; recommendations as items/links (`recommendation` link kind) | signals, board | Rejections → `dismiss` (cooldown) + `record_outcome("dismissed")`. |
 | **912** outcomes & metrics | the 7-day "ignored" sweep (`record_outcome(..., "ignored")`), PR merged/reverted hooks, extra scorecard metrics | `ledger.record_outcome` (the canonical outcome store), `read_model.scorecard` | Do NOT add a parallel `proposal_outcomes` table; if a per-proposal view is needed, make it a SQL view over `agent_act_decisions`. |
@@ -399,6 +433,7 @@ Node types: `signal agent person policy squad boss action decision needs_you run
 
 Engine (real Postgres, `BOSS_TEST_DATABASE_URL`; each test gets its own project via `engine/tests/_ambient_support.py`):
 `test_a_signal_is_recorded_once_per_problem.py` · `test_each_signal_adapter_reads_its_real_store.py` · `test_an_ambient_item_has_one_owner_and_one_live_copy.py` · `test_the_decision_ledger_is_append_only.py` · `test_autonomy_is_earned_per_task_class.py` · `test_the_ambient_stop_and_envelope_hold.py` · `test_loop_guards_stop_runaway_ambient_work.py` · `test_agents_agree_on_the_board_by_risk.py` · `test_agent_operations_draws_each_item_as_a_flow.py`.
+Squads (908): `test_a_squad_is_seated_from_the_projects_own_agents.py` · `test_a_squad_member_takes_its_turn_through_the_one_agent_pipeline.py` · `test_a_squad_agrees_by_risk_and_keeps_its_dissent.py` · `test_loop_guards_stop_a_squad.py` · `test_a_squad_hands_work_to_a_workflow_and_gets_the_result_back.py` · `test_the_squad_demo_draws_the_whole_story.py` (support: `_squad_support.py`; no model is called — members answer through `squad_demo.ScriptedSquadModel`).
 API: `apps/api/tests/test_people_see_and_steer_ambient_work_over_http.py` (flows in shadow mode; viewer / operator / owner under enforce).
 
 A stream that changes a module runs that module's file(s) above plus its own.
