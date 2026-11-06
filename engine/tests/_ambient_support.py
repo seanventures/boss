@@ -50,7 +50,14 @@ def purge(eng, pid: str) -> None:
         for table in AMBIENT_TABLES:
             c.execute(text(f"DELETE FROM {table} WHERE project_id = :p"), {"p": pid})
         c.execute(text("DELETE FROM signals WHERE project_id = :p"), {"p": pid})
-        for table in ("agent_messages", "agent_threads", "agent_session_ledger", "kg_usage",
+        try:
+            with c.begin_nested():   # the security scan's findings hang off the scan, not a project
+                c.execute(text("DELETE FROM security_findings WHERE scan_id IN (SELECT id FROM "
+                               "security_scans WHERE project_id = :p)"), {"p": pid})
+        except Exception:  # noqa: BLE001
+            pass
+        for table in ("project_dossiers", "cost_anomalies", "security_scans", "ci_waits",
+                      "agent_messages", "agent_threads", "agent_session_ledger", "kg_usage",
                       "kg_edges", "kg_nodes", "meeting_runs", "roles",
                       "work_items", "cost_receipts", "budget_reservations", "budget_refusals",
                       "policy_evaluations", "decisions", "events", "workflow_step_runs",

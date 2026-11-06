@@ -24,8 +24,10 @@ This is the contract the parallel streams build on. **Use these tables, function
 
 | Layer (§4) | Module | What it owns |
 |---|---|---|
+| L1 Discover (909) | `ambient/dossier.py` | the project dossier per repository, the signals Discovery seeds |
 | L2 Sense | `ambient/signals.py`, `ambient/adapters.py` | the `signals` inbox, fingerprints, pull adapters, the sweep |
-| L3 Decide (CoS writes here) | `ambient/board.py` | ambient work items on `work_items`, lifecycle, leases, links, Needs you |
+| L3 Decide (904) | `ambient/chief_of_staff.py` → `ambient/board.py` | the CoS tick (dedupe, classify, score, decide, route); ambient work items on `work_items`, lifecycle, leases, links, Needs you |
+| L4 Act (take-over wiring) | `ambient/person_actions.py` | a person's push/comment/review/Stop takes the item over |
 | L4 Act (coordination) | `ambient/collab.py` | typed board messages, consensus by risk |
 | L5 Govern | `ambient/policy.py`, `ambient/guards.py`, `ambient/task_classes.py` | the class × project matrix, the gate, envelope, stop, loop guards |
 | Visibility (§11) | `ambient/ledger.py`, `ambient/read_model.py` | the decision ledger; graphs, lists, scorecard |
@@ -45,7 +47,8 @@ This is the contract the parallel streams build on. **Use these tables, function
 | Where is "one live item per fingerprint"? | A **unique partial index** on `work_items(project_id, fingerprint)` over live lifecycles, plus an advisory lock in `open_item`. | §6 rule 1, generalising `self_fix._live_claim`; the database refuses what a race would create. |
 | The new `how` edges | `signal` ("Raised by a signal") and `board` ("From the work board"). An override uses `approved`. | A decision reaches its decider from a sensor or from the board; neither is a person's or agent's handoff. |
 | Permissions | No new catalogue permissions. Reads: `work_item:read`, `decision:read`, `autonomy:read`. Take over / dismiss / **stop**: `work_item:manage`. Override: `decision:approve`. **Resume**, levels, envelope, install-wide stop: `autonomy:manage`. | The safe direction (stop, take over) must be easy; giving agents more room is privileged. |
-| Sweep cadence | **Not wired into the worker yet.** `signals.sweep()` is a function; the CoS tick (904) calls it. `POST /v1/ambient/signals/sweep` runs it on request. | "No new daemon"; one tick owner (the CoS) rather than a second timer. |
+| Sweep cadence | **Wired (904):** the worker's background thread knocks on `POST /v1/ambient/tick` every 60 s → `chief_of_staff.tick` (expire leases → `signals.sweep()` → triage every project with work). `POST /v1/ambient/signals/sweep` and `POST /v1/ambient/chief-of-staff/run` run it on request. | "No new daemon"; one tick owner (the CoS). On the background thread because an alert during a 45-minute build must be triaged during it. |
+| How safe is the tick by default? (904) | `BOSS_AMBIENT_COS=propose` (default): every item at A1+ becomes a Needs-you card ("Hand to SRE?") whatever its class level; `route` honours the matrix (A2+ handed straight to the owner); `off` sweeps but triages nothing. `BOSS_AMBIENT_SIGNALS=0` stops the sweep. The stop wins over all of it. | The operator's "default ON, A1 propose, so it's safe"; a person raises a project to `route` deliberately. |
 
 ---
 
@@ -116,6 +119,12 @@ Added: `ambient` (bool), `fingerprint`, `lifecycle`, `task_class`, `autonomy_lev
 
 ---
 
+### 3.6 `project_dossiers` (909)
+
+One current dossier per `(project_id, repo)`: `id (dos_<ulid>), head_sha, facts (json), highlights (≤ 6 badge lines), seeded_signals ([{signal_id, kind, outcome}]), read_from checkout|graph, version, built_by, built_at`. `facts`: `stack, languages, structure, ci, commands {test, lint, build}, tests, owners {codeowners, rules, top_committers (names only)}, docs {readme, runbooks, adrs …}, todos {total, clusters}, hotspots [{file, churn, lines, score, has_tests}], dependencies, advisories {status ok|skipped, advisories}, boss {open_boss_prs, live_items, kg}`.
+
+---
+
 ## 4. Python API (engine)
 
 All functions take a SQLAlchemy `Connection` inside the caller's transaction and never commit. Parties are strings: `agent:<role>`, `person:<id>`, `policy:<id>`, `squad:<id>`, or `boss`.
@@ -137,7 +146,7 @@ sweep(c, *, project_id=None, only=None, actor="boss") -> {adapter: {since, outco
                    # + optional "_cursor": the value of the column filtered on `since`
 ```
 
-Built-in adapters (`ambient/adapters.py`): `app_alerts` (alert.firing — BOSS rules, pushed app signals, external sources), `workflow_failures` (workflow.step_failed, folded by workflow + step + error shape), `build_failures` (build.failed, folded by error shape), `system_doctor` (doctor.<kind>, install-wide), `shepherd` (shepherd.escalation), `stale_prs` (pr.stale: a merge question open ≥ 3 days). An adapter yields `_cursor` so a sweep that hit its row limit resumes after the last row read.
+Built-in adapters (`ambient/adapters.py`): `app_alerts` (alert.firing — BOSS rules, pushed app signals, external sources), `workflow_failures` (workflow.step_failed, folded by workflow + step + error shape), `build_failures` (build.failed, folded by error shape), `system_doctor` (doctor.<kind>, install-wide), `shepherd` (shepherd.escalation), `stale_prs` (pr.stale: a merge question open ≥ 3 days). **903 (built):** `ci_checks` (ci.failed — a failed `ci_waits` row on a PR BOSS opened; fingerprint = PR + failed check names; `caused_by_run_id` = the build), `dependency_advisories` (osv.vulnerable_dependency — open `osv` security findings; fingerprint `("osv", package, advisory)`, the same one Discovery uses), `cost_anomalies` (cost.anomaly — open `cost_anomalies`), `spend_spikes` (cost.spend_spike — 24 h spend ≥ 3× the 7-day mean and ≥ $1, subscription calls excluded; one per project per UTC day). `adapters.pr_ref(url)` → `pr:owner/repo#n`. An adapter yields `_cursor` so a sweep that hit its row limit resumes after the last row read.
 
 Rules: pass `source_ref` whenever there is one (the source row id, plus whatever makes a new occurrence distinct — e.g. `app_alert:<id>#<fire_count>`). A re-read of a folded-in ref returns `duplicate` and changes nothing. A signal caused by an ambient run deeper than `max_spawn_depth` is stored `suppressed` with the reason and an `ambient.guard_refused` event.
 
@@ -243,13 +252,44 @@ reserve(c, settings, *, project_id, work_item_id, amount_usd_micros, reason,
         expires_in_minutes=120, risk_tier=None)   # stop -> envelope -> BudgetGovernor('ambient')
 ```
 
-**Task classes** (key · default · ceiling · risk · owner role): `ci_fix_boss_pr A2/A3 low software_engineer` · `red_main A1/A2 medium sre` · `security_patch A2/A3 medium security_reviewer` · `dependency_upgrade A1/A3 low` · `flaky_test A1/A3 low qa` · `missing_tests A1/A2 low qa` · `doc_drift A1/A2 low docs_writer` · `todo_triage A0/A1 low chief_of_staff` · `dead_code A1/A2 medium` · `issue_triage A1/A2 low` · `incident_response A1/A3 high sre` · `incident_staging_mitigation A2/A3 medium sre` · `perf_regression A1/A2 medium sre` · `stale_handoff A1/A2 low chief_of_staff` · `cost_anomaly A1/A3 low finops_sentinel` · `platform_self_fix A1/A2 medium` · `release_notes A1/A2 low docs_writer` · `knowledge_refresh A1/A3 low archivist` · `iac_drift A1/A1 high infra_steward` · `workflow_failure A1/A2 medium` · `system_health A1/A2 medium infra_steward`.
+**Task classes** (key · default · ceiling · risk · owner role): `ci_setup A1/A2 low operations_engineer` (909) · `ci_fix_boss_pr A2/A3 low software_engineer` · `red_main A1/A2 medium sre` · `security_patch A2/A3 medium security_reviewer` · `dependency_upgrade A1/A3 low` · `flaky_test A1/A3 low qa` · `missing_tests A1/A2 low qa` · `doc_drift A1/A2 low docs_writer` · `todo_triage A0/A1 low chief_of_staff` · `dead_code A1/A2 medium` · `issue_triage A1/A2 low` · `incident_response A1/A3 high sre` · `incident_staging_mitigation A2/A3 medium sre` · `perf_regression A1/A2 medium sre` · `stale_handoff A1/A2 low chief_of_staff` · `cost_anomaly A1/A3 low finops_sentinel` · `platform_self_fix A1/A2 medium` · `release_notes A1/A2 low docs_writer` · `knowledge_refresh A1/A3 low archivist` · `iac_drift A1/A1 high infra_steward` · `workflow_failure A1/A2 medium` · `system_health A1/A2 medium infra_steward`.
 
 **Actions** (key · min level · risk · reversibility): `observe`, `record_finding` A0 · `propose`, `ask_question`, `comment` (compensable), `convene_meeting` A1 · `label`, `nudge` (compensable), `start_workflow`, `open_draft_pr`, `staging_rollback`, `staging_restart`, `silence_rule` A2 · `prod_rollback`, `prod_restart` A3 high · `quarantine_test` A3 low · **`merge`, `deploy_prod`, `send_external`, `pay` — always a person**.
 
 Gate semantics: stopped → not allowed. Always-a-person action → `needs_person`. Level below the action's → `needs_person` if the class is ≥ A1 (propose it), else observe only. Otherwise allowed; `needs_person` is still true when the consensus mode is `squad_vote_and_person` or `recommend_only`. The class's risk raises the risk only for acting actions (A2+).
 
 Track record: decisions by non-persons since the class's last level change; accepted = `accepted edited merged succeeded`; rejected = `dismissed ignored overridden failed`; demoting = `reverted incident_caused`. Any demoting outcome drops the class one level at once (`kind demoted`, actor `boss`). ≥ 20 decided, ≥ 85 % accepted, 0 reverted → one `promotion_suggested` change; **BOSS never raises a level itself**.
+
+### 4.4b The Chief of Staff — `ambient.chief_of_staff` (904)
+
+```python
+tick(engine, settings=None, *, project_id=None, adapter=None, decider=None, sweep=None, mode=None)
+    -> {mode, sweep, expired, projects: {pid: report}, stopped?}
+triage_project(c, settings, project_id, *, mode=None, adapter=None, decider=None,
+               max_model_calls=None) -> {mode, items: [{outcome, work_item_id, act_id, owner,
+               task_class, level}], follow_ups, counts, model_calls, model_cost_usd_micros}
+follow_up(c, project_id)          # carries a person's answer on a CoS card through
+rule_candidates(signal) / classify(...) / route(...) / scores(...) / subject_ref(signal)
+```
+
+Per project: breaker → stop → follow-ups → new signals grouped by `(task class, subject)` (subjects `app pull_request dependency repo provider budget`; else the signal's fingerprint) → classify (rules; `agent_decision.decide` only when ambiguous, ≤ `BOSS_AMBIENT_COS_MODEL_CALLS` per tick and only with ≥ $0.02 in the envelope; below the confidence bar → `ask_question`) → rank by `compute_priority_score` → per group `board.open_item(actor="agent:chief_of_staff")`. Outcomes: `joined` (a `finding` "Seen again ×n"), `refused` (signals suppressed until the guard lifts; stop/breaker leave them `new`), `observed` (A0: decision `observe`), `proposed`/`asked` (decision `propose:<role>`/`ask` + `board.needs_you`, recommendation `{action: "ambient_route", owner, next_action, owner_may_act, act_id, estimate_usd, priority}`), `routed` (`route` mode, A2+: decision `route:<role>` + `handoff`). Board sequence: `claim → finding → proposal → decision → handoff | Needs you`, lease released at the end of the turn. Routing: `ROUTES` lists the roles that may own a class; the one with ≥ 3 resolved and ≥ 70 % here wins, else the model's pick, else the catalogue owner. Follow-up: an answered card (`approved` → `board.answered` + `handoff` to the owner + the CoS decision's outcome `accepted`; `rejected` → dismissed + `dismissed`; other → `ignored`), recorded as a `person:<id>` decision. 907 may call `board.answered` first; `follow_up` handles either state.
+
+### 4.4c Discovery — `ambient.dossier` (909)
+
+```python
+build(c, *, project_id, repo, root=None, paths=None, head_sha=None, actor="boss", osv=None,
+      seed_signals=True) -> dossier row
+scan_tree(root, *, osv=None) / facts_from_paths(paths) / osv_lookup(packages) / get(c, pid, repo=None)
+after_index(engine, settings, *, project_id, repo, root, head)   # called by repo_index
+```
+
+Seeded signals (`source scan`, or `osv`): `scan.no_ci` → `ci_setup`, `scan.missing_tests` / `scan.untested_hotspot` (≤ 3) → `missing_tests`, `scan.todo_cluster` (≥ 5 in one dir) → `todo_triage` (A0), `scan.no_docs` → `doc_drift`, `osv.vulnerable_dependency` → `security_patch`. `source_ref` includes the head, so a rebuild at the same commit raises nothing.
+
+### 4.4d Person take-over wiring — `ambient.person_actions` and the demo
+
+`on_github_event(c, project_id=, event=, payload=, bot_login=)` (called by `InboundWebhookService.ingest` for every GitHub delivery with a project and not from BOSS's App): a person's `pull_request` / `pull_request_review(_comment)` / PR `issue_comment` → `pr:<repo>#n`; `push` → `branch:<repo>:<branch>`. `on_run_cancelled(c, project_id=, run_id=, actor=, kind=)` (called by `workflows.cancel_run` and `code_task_service.cancel_run`): `run:<id>` / `build:<id>` and every live item linked to the run. Bots, BOSS's App and BOSS's own actors never take over; failures never reach the caller.
+
+`ambient.demo.load(c, settings, *, project_id, mode="route")` — seven realistic signals through the real triage, plus the engineer/reviewer and security owners' first turns. Refused unless the project's name/slug says demo/sample/sandbox/test or `BOSS_AMBIENT_DEMO=1`. CLI: `python -m boss_engine.services.ambient.demo --project <id>`.
 
 ### 4.5 Guards — `ambient.guards`
 
@@ -311,7 +351,7 @@ squad_demo.seed(engine, settings, *, project_id, confirm_demo=True, ensure_roles
 
 ## 5. Evidence refs
 
-`{kind, ref, note?}`. Kinds checked to EXIST (in the project when the table has one): `signal work_item message act decision workflow_run step_run code_task alert incident kg_node meeting finding escalation deadletter receipt`. Kinds checked for SHAPE only: `commit` (7–40 hex), `url` (http/https), `pull_request` (URL or `owner/repo#n`), `query`, `log`. Anything else is refused. Add a kind in `_common.EVIDENCE_TABLES` / `SHAPE_ONLY` with a test.
+`{kind, ref, note?}`. Kinds checked to EXIST (in the project when the table has one): `signal work_item message act decision workflow_run step_run code_task alert incident kg_node meeting finding escalation deadletter receipt`. Kinds checked for SHAPE only: `commit` (7–40 hex), `url` (http/https), `pull_request` (URL or `owner/repo#n`), `query`, `log`, `file` (a repo-relative path, no `..`; 909). Added for 903/909: `ci_wait`, `security_finding`, `cost_anomaly`, `dossier` (checked to exist). Anything else is refused. Add a kind in `_common.EVIDENCE_TABLES` / `SHAPE_ONLY` with a test.
 
 ---
 
@@ -375,6 +415,16 @@ Writes take `{project_id, actor?, ...}` (actor is replaced by the signed-in prin
 
 Errors: 404 not found / other project's object (central id confinement), 403 permission or `GateRefused` (`detail: {refused, gate}`), 409 `Conflict`/`LeaseLost`/`LedgerConflict`, 422 validation / `EvidenceError`.
 
+### 7.2 Chief of Staff, Discovery, demo (`apps/api/app/routers/ambient_cos.py`)
+
+| Method · Path | Permission | Does |
+|---|---|---|
+| `POST /v1/ambient/tick` `{}` | **worker:lease** (system-only; handler checks the worker principal) | `chief_of_staff.tick` |
+| `POST /v1/ambient/chief-of-staff/run` `{sweep?}` | work_item:manage [decision_resolve] | Triage now for one project |
+| `GET /v1/ambient/dossier?project_id&repo` | work_item:read | `{dossiers}` |
+| `POST /v1/ambient/dossier` `{repo?}` | work_item:manage [decision_resolve] | build from the index's checkout, else the graph's files; 404 no repository, 409 not read yet |
+| `POST /v1/ambient/demo` `{mode?}` | autonomy:manage [role_review] | the demo morning; 403 on a real project |
+
 ### 7.1 The graph (what the console draws)
 
 Illustrative — nodes from several moments of one item are shown together:
@@ -403,13 +453,13 @@ Illustrative — nodes from several moments of one item are shown together:
     "label": "reject", "dissent": true, "ref": {"kind": "message", "id": "wim_…"}}]}
 ```
 
-Node types: `signal agent person policy squad boss action decision needs_you run outcome`. A party node (agent / person / …) also carries `role` (the party's own role name, for the tooltip and drawer) and, when a `handoff` on the item named it, `seat` (its squad seat on this item: "SRE lead", "Investigator", "Engineer", "Reviewer"); the label is then the seat. A resolved incident's outcome reads `Recovered <span>` (`4m12s` under 10 minutes). Edge kinds: `raised claimed proposed critique vote handoff escalate decided settles overrides acted asks resulted`, and for squads (908) `assembled` (assembler → squad), `seated` (squad → member, labelled with the seat), `returned` (run/panel → the lead it reported back to). A handoff `via` a run is an edge from the lead to the run node; the squad node is `party:squad:<item id>`, the same node a `squad:<item>` decision comes from. A Needs-you node raised on a squad's proposal hangs off that proposal. Results BOSS posts back from a run are drawn as the `returned` edge, not as a BOSS node. Labels ≤ 4 words (nodes) / ≤ 3 (edges). `stage` 0–5 orders left to right. Every node has a `ref` for its drawer. List items carry `strip` (≤ 6 nodes: first signal, owner, last decision, Needs you / outcome) for the thumbnail.
+A decision node's label is the chosen option's `label` when the decider gave one ("Hand to SRE"), else the action's catalogue title, else `chosen` (904). Node types: `signal agent person policy squad boss action decision needs_you run outcome`. A party node (agent / person / …) also carries `role` (the party's own role name, for the tooltip and drawer) and, when a `handoff` on the item named it, `seat` (its squad seat on this item: "SRE lead", "Investigator", "Engineer", "Reviewer"); the label is then the seat. A resolved incident's outcome reads `Recovered <span>` (`4m12s` under 10 minutes). Edge kinds: `raised claimed proposed critique vote handoff escalate decided settles overrides acted asks resulted`, and for squads (908) `assembled` (assembler → squad), `seated` (squad → member, labelled with the seat), `returned` (run/panel → the lead it reported back to). A handoff `via` a run is an edge from the lead to the run node; the squad node is `party:squad:<item id>`, the same node a `squad:<item>` decision comes from. A Needs-you node raised on a squad's proposal hangs off that proposal. Results BOSS posts back from a run are drawn as the `returned` edge, not as a BOSS node. Labels ≤ 4 words (nodes) / ≤ 3 (edges). `stage` 0–5 orders left to right. Every node has a `ref` for its drawer. List items carry `strip` (≤ 6 nodes: first signal, owner, last decision, Needs you / outcome) for the thumbnail.
 
 ---
 
 ## 8. Events (`core.emit_event`, entity in parentheses)
 
-`ambient.signal_recorded` (signal) · `ambient.signal_status` (signal) · `ambient.item_opened` (work_item) · `ambient.item_claimed` · `ambient.item_transitioned {from, to, decision_id?}` · `ambient.lease_released {cancelled?}` · `ambient.lease_expired` · `ambient.lease_taken_over {from, to}` · `ambient.message_posted {message_id, kind}` · `ambient.decision_recorded` (agent_act) · `ambient.decision_overridden` · `ambient.decision_outcome` · `ambient.autonomy_changed` (task_class) · `ambient.autonomy_demoted` · `ambient.promotion_suggested` · `ambient.settings_changed` (project) · `ambient.stopped {scope, reason, released}` · `ambient.resumed` · `ambient.breaker_tripped {failed, ended, ratio}` · `ambient.guard_refused {guard, reason}` · `ambient.envelope_refused` · `ambient.squad_turn {member, seat, round, move, status, message_id, cost_usd_micros}` (work_item; 908 — also what the per-item turn cap counts). Install-wide rows (no project) emit nothing. None of these is on the `event_dispatch` whitelist yet; a stream that wants a workflow triggered by one adds it there.
+`ambient.signal_recorded` (signal) · `ambient.signal_status` (signal) · `ambient.item_opened` (work_item) · `ambient.item_claimed` · `ambient.item_transitioned {from, to, decision_id?}` · `ambient.lease_released {cancelled?}` · `ambient.lease_expired` · `ambient.lease_taken_over {from, to}` · `ambient.message_posted {message_id, kind}` · `ambient.decision_recorded` (agent_act) · `ambient.decision_overridden` · `ambient.decision_outcome` · `ambient.autonomy_changed` (task_class) · `ambient.autonomy_demoted` · `ambient.promotion_suggested` · `ambient.settings_changed` (project) · `ambient.stopped {scope, reason, released}` · `ambient.resumed` · `ambient.breaker_tripped {failed, ended, ratio}` · `ambient.guard_refused {guard, reason}` · `ambient.envelope_refused` · `ambient.squad_turn {member, seat, round, move, status, message_id, cost_usd_micros}` (work_item; 908 — also what the per-item turn cap counts) · `ambient.dossier_built {dossier_id, repo, read_from, highlights, seeded}` (project; 909). Install-wide rows (no project) emit nothing. None of these is on the `event_dispatch` whitelist yet; a stream that wants a workflow triggered by one adds it there.
 
 ---
 
@@ -418,7 +468,7 @@ Node types: `signal agent person policy squad boss action decision needs_you run
 | Ticket | Builds | Uses | Notes / first tasks |
 |---|---|---|---|
 | **903** signals | more adapters (GitHub `check_run`/`workflow_run` on the dispatch whitelist, OSV via `security_scan`, `anomaly_detector`, deadletters, KG drift) | `@signals.adapter`, `record_signal` | Each adapter gets a test against its real table (pattern: `engine/tests/test_each_signal_adapter_reads_its_real_store.py`). |
-| **904** Chief-of-Staff | the `chief_of_staff` role pack; the tick (worker cadence) that calls `signals.sweep`, groups/classifies via the one agent path, `board.open_item`, records its triage as `ledger.record_decision(decided_by="agent:chief_of_staff", action="propose"|"observe")`, routes by naming the owner role (`task_classes.TaskClass.owner_role`, or its own pick, recorded as a decision); the owner's own turn calls `board.claim` | everything in §4 | Run `board.expire_leases` and `guards.check_breaker` on the tick. Wire `on_person_action` into the GitHub webhook and run-cancel paths. |
+| **904** Chief-of-Staff (**built**, §4.4b; settings `BOSS_AMBIENT_SIGNALS`, `BOSS_AMBIENT_COS`, `BOSS_AMBIENT_COS_MODEL_CALLS`) | the `chief_of_staff` role pack; the tick (worker cadence) that calls `signals.sweep`, groups/classifies via the one agent path, `board.open_item`, records its triage as `ledger.record_decision(decided_by="agent:chief_of_staff", action="propose"|"observe")`, routes by naming the owner role (`task_classes.TaskClass.owner_role`, or its own pick, recorded as a decision); the owner's own turn calls `board.claim` | everything in §4 | Run `board.expire_leases` and `guards.check_breaker` on the tick. Wire `on_person_action` into the GitHub webhook and run-cancel paths. |
 | **905** autonomy UI | the matrix screen, the envelope, the stop button (one surface; concise) | §7 autonomy/settings/stop routes | Stop is operator-level; resume/raise are owner/admin. Show `suggested_level` with one "Raise" button. |
 | **906** ledger + Agent Operations view | the console diagram (flow chart per item, list of thumbnails, five tabs, drawer per node) | `GET work-items`, `GET work-items/{id}`, decisions routes | **Draw `nodes`/`edges`; no prose on the canvas** (§11.0). Acceptance: a stranger says what happened in 10 s. |
 | **907** Needs you, digest, Ask BOSS | ambient item kinds in the attention inbox (BOSSAPP-875), the daily digest, Ask BOSS answering from `list_decisions` with `[act:<id>]` citations | `board.needs_you` / `answered`; `scorecard` | When a Needs-you decision is answered, call `board.answered`, then the agent proceeds; record the person's answer with `record_decision(decided_by="person:<id>")`. Promotion suggestions become a Needs-you card. |
@@ -447,5 +497,6 @@ Engine (real Postgres, `BOSS_TEST_DATABASE_URL`; each test gets its own project 
 `test_a_signal_is_recorded_once_per_problem.py` · `test_each_signal_adapter_reads_its_real_store.py` · `test_an_ambient_item_has_one_owner_and_one_live_copy.py` · `test_the_decision_ledger_is_append_only.py` · `test_autonomy_is_earned_per_task_class.py` · `test_the_ambient_stop_and_envelope_hold.py` · `test_loop_guards_stop_runaway_ambient_work.py` · `test_agents_agree_on_the_board_by_risk.py` · `test_agent_operations_draws_each_item_as_a_flow.py`.
 Squads (908): `test_a_squad_is_seated_from_the_projects_own_agents.py` · `test_a_squad_member_takes_its_turn_through_the_one_agent_pipeline.py` · `test_a_squad_agrees_by_risk_and_keeps_its_dissent.py` · `test_loop_guards_stop_a_squad.py` · `test_a_squad_hands_work_to_a_workflow_and_gets_the_result_back.py` · `test_the_squad_demo_draws_the_whole_story.py` (support: `_squad_support.py`; no model is called — members answer through `squad_demo.ScriptedSquadModel`).
 API: `apps/api/tests/test_people_see_and_steer_ambient_work_over_http.py` (flows in shadow mode; viewer / operator / owner under enforce).
+903/904/909: `test_the_chief_of_staff_triages_every_signal_into_one_routed_item.py` · `test_ci_dependency_and_cost_problems_reach_the_signal_inbox.py` · `test_discovery_reads_a_new_repository_into_a_dossier_and_proposals.py` · `test_a_person_acting_on_the_subject_stops_the_agent.py` · `test_the_demo_morning_shows_agents_working_together.py` · `apps/api/tests/test_the_chief_of_staff_and_discovery_answer_over_http.py` · `apps/worker/tests/test_the_ambient_tick_runs_while_the_worker_is_busy.py`.
 
 A stream that changes a module runs that module's file(s) above plus its own.

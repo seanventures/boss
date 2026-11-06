@@ -109,6 +109,9 @@ TASK_CLASSES: dict[str, TaskClass] = {c.key: c for c in (
               ("workflow", "build")),
     TaskClass("system_health", "System health", "A1", "A2", "medium", "infra_steward",
               ("doctor",)),
+    # BOSSAPP-909: a repository Discovery finds with no CI at all. Setting it up is a draft PR a
+    # person reviews; no class gains more than A2 without CI to check its own work.
+    TaskClass("ci_setup", "Set up CI", "A1", "A2", "low", "operations_engineer", ("scan",)),
 )}
 
 ACTIONS: dict[str, Action] = {a.key: a for a in (

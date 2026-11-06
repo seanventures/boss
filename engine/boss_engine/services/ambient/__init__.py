@@ -23,10 +23,12 @@ decide through the one agent path, and work still runs as workflows and builds.
     squad_memory.py what a squad tried and what failed; promoted to a KG learning at close
     squad_plugins.py panels deliberate, workflows execute: handoff packets, results back
     squad_demo.py   the non-production demo: a CVE squad with a critique and a dissent
+    chief_of_staff.py  the CoS tick: dedupe, classify, score, decide per level, route (904)
 """
-from . import (adapters, board, collab, guards, ledger, policy, read_model, signals,  # noqa: F401
-               task_classes)
+from . import (adapters, board, chief_of_staff, collab, guards, ledger, policy,  # noqa: F401
+               read_model, signals, task_classes)
 from . import squad_memory, squad_plugins, squad_turns, squads  # noqa: F401,E402
 
-__all__ = ["adapters", "board", "collab", "guards", "ledger", "policy", "read_model", "signals",
-           "task_classes", "squads", "squad_turns", "squad_memory", "squad_plugins"]
+__all__ = ["adapters", "board", "chief_of_staff", "collab", "guards", "ledger", "policy",
+           "read_model", "signals", "task_classes", "squads", "squad_turns", "squad_memory",
+           "squad_plugins"]

@@ -373,6 +373,14 @@ class ControlPlaneClient:
         response.raise_for_status()
         return response.json()
 
+    def ambient_tick(self) -> dict[str, Any]:
+        """Autonomous agents' tick (services/ambient/chief_of_staff.py): expire leases, sweep the
+        signal adapters, and let the Chief of Staff triage what is new. The API owns all of it
+        (kill switch, envelope, guards); this only knocks."""
+        response = self._client.post("/v1/ambient/tick", json={})
+        response.raise_for_status()
+        return response.json()
+
     def improve_tick(self) -> dict[str, Any]:
         """Scorecard upkeep and, once a day, the Improve BOSS / heartbeat send (the API owns
         both; this only knocks). Cheap when nothing is due."""

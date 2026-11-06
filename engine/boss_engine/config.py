@@ -1181,6 +1181,20 @@ class Settings(BaseSettings):
     # THE CODE GRAPH OF A REGISTERED REPOSITORY (services/knowledge/repo_index.py): every repository
     # registered in a project is cloned (BOSS's own clone path) and parsed into the graph, and its
     # base branch is re-checked; parsing only, no model is called. 0 turns it off install-wide.
+    # AUTONOMOUS AGENTS' TICK (services/ambient/chief_of_staff.py, BOSSAPP-904): the worker's
+    # periodic sweep of every signal adapter (1 on, 0 off) and the Chief of Staff's triage mode:
+    # `propose` (the default, safe) asks a person on a Needs-you card before ANY item is handed
+    # to an agent, whatever a class's level; `route` honours each class's autonomy level (A2+
+    # hands straight to the owning agent); `off` sweeps signals but triages nothing. The kill
+    # switch (BOSS_AMBIENT_DISABLED, Stop all, a project's Stop) wins over all three.
+    ambient_signals: int = Field(default=1, alias="BOSS_AMBIENT_SIGNALS")
+    ambient_cos_mode: str = Field(default="propose", alias="BOSS_AMBIENT_COS")
+    # Model calls the Chief of Staff may make per project per tick for judgement (an ambiguous
+    # classification, an unclear owner). Deterministic rules decide everything else; 0 = rules only.
+    ambient_cos_model_calls: int = Field(default=3, alias="BOSS_AMBIENT_COS_MODEL_CALLS")
+    # Discovery's dossier asks OSV (api.osv.dev, through the proxy environment) which locked
+    # packages have advisories: 5 s, and an offline install records "skipped". 0 = never ask.
+    ambient_dossier_osv: int = Field(default=1, alias="BOSS_DOSSIER_OSV")
     kg_repo_index: int = Field(default=1, alias="BOSS_KG_REPO_INDEX")
     # Bounds of one index run. A repository with more indexable files, or more source bytes, is
     # not indexed (status too_large, in words); a single file above the size limit is skipped

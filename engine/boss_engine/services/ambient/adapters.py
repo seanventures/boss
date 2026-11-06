@@ -1,4 +1,4 @@
-"""The first five signal adapters: BOSS's own stores, read into the one signal shape (BOSSAPP-903).
+"""The signal adapters: BOSS's own stores, read into the one signal shape (BOSSAPP-903).
 
 Each adapter is a PULL function `fn(connection, since, project_id=None) -> [observation]`
 (project_id None = the whole install) registered with
@@ -22,6 +22,10 @@ The stores and why each is a signal (design §3.3 gap 1, §5):
   system_doctor        doctor.<kind>         open system_findings (install-wide)
   shepherd             shepherd.escalation   open shepherd escalations (a run that needs a call)
   stale_prs            pr.stale              a BOSS PR whose merge question has waited days
+  ci_checks            ci.failed             a failed CI wait on a PR BOSS opened (ci_waits)
+  dependency_advisories osv.vulnerable_dependency  an open OSV finding from the security scan
+  cost_anomalies       cost.anomaly          an open cost anomaly (anomaly_detector)
+  spend_spikes         cost.spend_spike      a day's spend far above the trailing mean
 
 Adding a source (CI check_run, OSV, cost anomalies, KG drift ...) is one more function here, or
 anywhere that imports `signals.adapter`, with a test against its real table.
@@ -207,8 +211,178 @@ def stale_prs(connection: Connection, since: Any,
         }
 
 
+# ── BOSSAPP-903, the remaining sources: CI, dependencies, cost ───────────────────────────────
+
+def pr_ref(url: Any) -> Optional[str]:
+    """`pr:owner/repo#41` from a GitHub pull-request URL (the board's subject_ref for a PR), so a
+    signal, an item and a person's webhook all name the same PR the same way."""
+    found = re.search(r"github\.com/([\w.\-]+/[\w.\-]+)/pull/(\d+)", str(url or ""))
+    return f"pr:{found.group(1)}#{found.group(2)}" if found else None
+
+
+@adapter("ci_checks")
+def ci_checks(connection: Connection, since: Any,
+              project_id: Optional[str] = None) -> Iterable[dict[str, Any]]:
+    """RED CI ON A PR BOSS OPENED (design §5 class 1: the highest-value, lowest-risk class). BOSS
+    waits on the checks of every PR it opens (ci_gate → ci_waits); a wait that ended `failed` is
+    the signal. Identity is the PR and WHICH checks failed, so a re-run that fails the same way
+    is one problem and a different check failing is another. `caused_by_run_id` is the build that
+    opened the PR: when an ambient item started that build, this signal is one causal level
+    deeper (§6 rule 2/5: an ambient PR may wake CI for itself, and no further)."""
+    rows = connection.execute(text(
+        "SELECT id, project_id, repository, head_sha, pull_request_url, code_task_run_id, "
+        "workflow_run_id, checks, failing_url, summary, "
+        "COALESCE(finished_at, updated_at) AS seen_at FROM ci_waits "
+        "WHERE status = 'failed' AND COALESCE(finished_at, updated_at) > :s "
+        f"{_SCOPE.format(t='')} ORDER BY seen_at LIMIT 300"),
+        {"s": since, "p": project_id}).mappings().all()
+    for r in rows:
+        failed = sorted({str(c.get("name") or "check") for c in (r["checks"] or [])
+                         if isinstance(c, Mapping) and c.get("status") == "completed"
+                         and str(c.get("conclusion") or "").lower() not in
+                         ("success", "neutral", "skipped")}) or ["CI"]
+        subject = pr_ref(r["pull_request_url"]) or f"sha:{r['repository']}@{r['head_sha'][:12]}"
+        evidence: list[dict[str, Any]] = [{"kind": "ci_wait", "ref": r["id"],
+                                           "note": str(r["summary"] or "")[:200]}]
+        if r["failing_url"] and str(r["failing_url"]).startswith("http"):
+            evidence.append({"kind": "url", "ref": r["failing_url"]})
+        if r["code_task_run_id"]:
+            evidence.append({"kind": "code_task", "ref": r["code_task_run_id"]})
+        yield {
+            "project_id": r["project_id"], "source": "ci", "kind": "ci.failed",
+            "title": f"CI failed on BOSS PR: {', '.join(failed)[:120]}",
+            "fingerprint_parts": ("ci", subject, ",".join(failed)),
+            "subject_kind": "pull_request", "subject_id": subject,
+            "severity": "high", "evidence": evidence,
+            "source_ref": f"ci_wait:{r['id']}", "observed_at": r["seen_at"],
+            "caused_by_run_id": r["code_task_run_id"] or r["workflow_run_id"],
+            "dedupe_window_seconds": 6 * 3600, "_cursor": r["seen_at"],
+        }
+
+
+_OSV_SEVERITY = {"critical": "critical", "high": "high", "medium": "medium", "low": "low",
+                 "info": "info"}
+
+
+@adapter("dependency_advisories")
+def dependency_advisories(connection: Connection, since: Any,
+                          project_id: Optional[str] = None) -> Iterable[dict[str, Any]]:
+    """A KNOWN-VULNERABLE DEPENDENCY (design §5 class 3). The security scan runs OSV-Scanner over
+    the app's lockfiles (security_scan, online through boss-egress); every open `osv` finding is a
+    signal. One problem per package and advisory group — the scan already groups GHSA/CVE aliases
+    under one primary id — so a nightly re-scan that finds it again adds nothing. Offline installs
+    simply have no osv findings: this adapter reads, it never calls OSV itself."""
+    rows = connection.execute(text(
+        "SELECT f.id, f.rule_id, f.title, f.severity, f.location, f.evidence, s.project_id, "
+        "s.app_key, COALESCE(s.ended_at, s.started_at) AS seen_at "
+        "FROM security_findings f JOIN security_scans s ON s.id = f.scan_id "
+        "WHERE f.tool = 'osv' AND f.status = 'open' AND s.status = 'done' "
+        "AND COALESCE(s.ended_at, s.started_at) > :s "
+        f"{_SCOPE.format(t='s.')} ORDER BY seen_at LIMIT 500"),
+        {"s": since, "p": project_id}).mappings().all()
+    for r in rows:
+        loc = r["location"] or {}
+        package = str(loc.get("package") or "a dependency")
+        version = str(loc.get("version") or "")
+        evidence: list[dict[str, Any]] = [{"kind": "security_finding", "ref": r["id"],
+                                           "note": f"{package}@{version} {r['rule_id']}"[:200]}]
+        advisory = (r["evidence"] or {}).get("advisory") if isinstance(r["evidence"], Mapping) \
+            else None
+        if advisory and str(advisory).startswith("http"):
+            evidence.append({"kind": "url", "ref": advisory})
+        yield {
+            "project_id": r["project_id"], "source": "osv", "kind": "osv.vulnerable_dependency",
+            "title": f"{package} {version} has {r['rule_id']}".strip()[:300],
+            "fingerprint_parts": ("osv", package, r["rule_id"]),
+            "subject_kind": "dependency", "subject_id": package, "app": r["app_key"],
+            "severity": _OSV_SEVERITY.get(str(r["severity"]), "medium"),
+            "evidence": evidence, "source_ref": f"security_finding:{r['id']}",
+            "observed_at": r["seen_at"], "dedupe_window_seconds": 7 * 86400,
+            "_cursor": r["seen_at"],
+        }
+
+
+@adapter("cost_anomalies")
+def cost_anomalies(connection: Connection, since: Any,
+                   project_id: Optional[str] = None) -> Iterable[dict[str, Any]]:
+    """A COST ANOMALY the detector already opened (anomaly_detector → cost_anomalies, design §5
+    class 14). Identity is the provider and the anomaly type: the same runaway on the same
+    provider is one problem however many cost events tripped it."""
+    rows = connection.execute(text(
+        "SELECT id, project_id, provider, anomaly_type, severity, summary, amount_usd_micros, "
+        "threshold_usd_micros, created_at FROM cost_anomalies WHERE status = 'open' "
+        f"AND created_at > :s {_SCOPE.format(t='')} ORDER BY created_at LIMIT 200"),
+        {"s": since, "p": project_id}).mappings().all()
+    for r in rows:
+        sev = str(r["severity"] or "").lower()
+        yield {
+            "project_id": r["project_id"], "source": "cost", "kind": "cost.anomaly",
+            "title": r["summary"] or f"{r['anomaly_type']} on {r['provider']}",
+            "fingerprint_parts": ("cost", r["provider"], r["anomaly_type"]),
+            "subject_kind": "provider", "subject_id": r["provider"],
+            "severity": {"critical": "critical", "high": "high", "warning": "medium",
+                         "medium": "medium", "low": "low", "info": "info"}.get(sev, "medium"),
+            "evidence": [{"kind": "cost_anomaly", "ref": r["id"],
+                          "note": f"${int(r['amount_usd_micros'] or 0) / 1e6:.2f} vs "
+                                  f"${int(r['threshold_usd_micros'] or 0) / 1e6:.2f}"}],
+            "source_ref": f"cost_anomaly:{r['id']}", "observed_at": r["created_at"],
+            "dedupe_window_seconds": 86400, "_cursor": r["created_at"],
+        }
+
+
+#: A day's spend is a SPIKE when it is at least this many times the trailing daily mean …
+SPEND_SPIKE_RATIO = 3.0
+#: … and at least this much money (a $0.02 → $0.09 day is not a problem worth a card).
+SPEND_SPIKE_FLOOR_USD_MICROS = 1_000_000
+SPEND_BASELINE_DAYS = 7
+
+
+@adapter("spend_spikes")
+def spend_spikes(connection: Connection, since: Any,
+                 project_id: Optional[str] = None) -> Iterable[dict[str, Any]]:
+    """BOSS'S OWN SPEND JUMPED (design §5 class 14: "spend or retry spike"). State, not change:
+    the last 24 hours of money on cost receipts against the trailing 7-day daily mean, per
+    project. A subscription-covered call is $0 and never counts (included_spend). One signal per
+    project per UTC day (the source_ref), so the sweep every minute does not re-raise it; the
+    category that grew most is named so the triage can route it."""
+    from ..included_spend import MONEY_SQL
+
+    rows = connection.execute(text(
+        "WITH recent AS (SELECT project_id, category, "
+        f"sum({MONEY_SQL}) FILTER (WHERE created_at > now() - interval '1 day') AS day, "
+        f"sum({MONEY_SQL}) FILTER (WHERE created_at <= now() - interval '1 day') AS before "
+        "FROM cost_receipts WHERE created_at > now() - make_interval(days => :d + 1) "
+        f"{_SCOPE.format(t='')} GROUP BY project_id, category) "
+        "SELECT project_id, sum(COALESCE(day, 0)) AS day, sum(COALESCE(before, 0)) AS before, "
+        "(array_agg(category ORDER BY COALESCE(day, 0) - COALESCE(before, 0) / :d DESC))[1] "
+        "AS top_category FROM recent GROUP BY project_id"),
+        {"d": SPEND_BASELINE_DAYS, "p": project_id}).mappings().all()
+    from ._common import now
+
+    today = now().date().isoformat()
+    for r in rows:
+        day, before = int(r["day"] or 0), int(r["before"] or 0)
+        baseline = before / SPEND_BASELINE_DAYS
+        if day < SPEND_SPIKE_FLOOR_USD_MICROS or day < SPEND_SPIKE_RATIO * max(baseline, 1):
+            continue
+        ratio = day / baseline if baseline else None
+        words = f"{ratio:.0f}× the 7-day mean" if ratio else "with no spend the week before"
+        yield {
+            "project_id": r["project_id"], "source": "cost", "kind": "cost.spend_spike",
+            "title": f"Spend ${day / 1e6:.2f} in 24h, {words}",
+            "fingerprint_parts": ("spend_spike", r["project_id"]),
+            "subject_kind": "budget", "subject_id": str(r["top_category"] or "spend"),
+            "severity": "high" if (ratio or 10) >= 10 else "medium",
+            "evidence": [{"kind": "query", "ref": (
+                f"cost_receipts project={r['project_id']} last 24h ${day / 1e6:.2f}; "
+                f"7-day mean ${baseline / 1e6:.2f}/day; top category {r['top_category']}")}],
+            "source_ref": f"spend_spike:{r['project_id']}:{today}",
+            "dedupe_window_seconds": 86400,
+        }
+
+
 def register() -> list[str]:
     """The built-in adapters register on import (the decorators above); calling this is how the
     sweep makes sure that import happened. Returns their names."""
     return ["app_alerts", "workflow_failures", "build_failures", "system_doctor", "shepherd",
-            "stale_prs"]
+            "stale_prs", "ci_checks", "dependency_advisories", "cost_anomalies", "spend_spikes"]

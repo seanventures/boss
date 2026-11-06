@@ -147,6 +147,11 @@ EVIDENCE_TABLES: dict[str, tuple[str, str, Optional[str]]] = {
     "escalation": ("shepherd_escalations", "id", "project_id"),
     "deadletter": ("deadletters", "id", "project_id"),
     "receipt": ("receipts", "id", "project_id"),
+    # BOSSAPP-903/909: the stores the extra adapters and Discovery read.
+    "ci_wait": ("ci_waits", "id", "project_id"),
+    "security_finding": ("security_findings", "id", None),
+    "cost_anomaly": ("cost_anomalies", "id", "project_id"),
+    "dossier": ("project_dossiers", "id", "project_id"),
 }
 SHAPE_ONLY: dict[str, re.Pattern[str]] = {
     "commit": re.compile(r"^[0-9a-f]{7,40}$"),
@@ -154,6 +159,8 @@ SHAPE_ONLY: dict[str, re.Pattern[str]] = {
     "pull_request": re.compile(r"^(https?://\S+|[\w.\-]+/[\w.\-]+#\d+)$"),
     "query": re.compile(r"^.{1,2000}$", re.S),
     "log": re.compile(r"^.{1,500}$", re.S),
+    # A path inside a repository (Discovery's hotspots, TODO clusters): relative, no '..'.
+    "file": re.compile(r"^(?!/)(?!.*(^|/)\.\.(/|$))[^\0\n]{1,400}$"),
 }
 EVIDENCE_KINDS = frozenset(EVIDENCE_TABLES) | frozenset(SHAPE_ONLY)
 

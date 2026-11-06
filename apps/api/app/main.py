@@ -31596,6 +31596,12 @@ from .routers.incident_squad import build_incident_squad_router
 
 app.include_router(build_incident_squad_router(
     engine=engine, settings=lambda: settings, require_write_actor=require_project_write_actor))
+# The Chief of Staff's tick, Discovery's dossier and the demo (routers/ambient_cos.py, §7.2).
+from .routers.ambient_cos import build_ambient_cos_router
+
+app.include_router(build_ambient_cos_router(
+    engine=engine, settings=lambda: settings, require_reader=require_project_reader,
+    require_write_actor=require_project_write_actor))
 from .routers.acceptance_templates import build_acceptance_templates_router
 
 app.include_router(build_acceptance_templates_router(

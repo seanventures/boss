@@ -268,8 +268,13 @@ def graph(connection: Connection, item_id: str, *, project_id: str) -> dict[str,
 
     last_decision: Optional[str] = None
     for d in decisions:
+        # The chosen OPTION's label when the decider gave one ("Hand to SRE"), then the action's
+        # catalogue title, never a bare key ("route:sre"): the diagram speaks words (§11.0).
+        said = next((o.get("label") for o in d.get("options") or []
+                     if isinstance(o, dict) and o.get("key") == d["chosen"] and o.get("label")),
+                    None)
         chosen = tc.ACTIONS[d["chosen"]].title if d["chosen"] in tc.ACTIONS else d["chosen"]
-        did = node(f"decision:{d['act_id']}", "decision", chosen,
+        did = node(f"decision:{d['act_id']}", "decision", said or chosen,
                    ref={"kind": "act", "id": d["act_id"]})
         badges = [d.get("autonomy_level") or "", d["decider_kind"]]
         if (d.get("consensus") or {}).get("dissent"):

@@ -1406,6 +1406,12 @@ def cancel_run(connection, run_id: str, project_id: str, *, actor: str,
     ).scalar()
     if not recorded:
         raise CancelRefused("this build is already stopping")
+    # A PERSON STOPPING A BUILD an ambient agent started takes its work item over (autonomous
+    # agents, design §4 L4): the agent loses its lease and does not start it again.
+    from .ambient.person_actions import on_run_cancelled
+
+    on_run_cancelled(connection, project_id=project_id, run_id=run_id, actor=actor,
+                     kind="code_task")
     try:
         with connection.begin_nested():
             # Take the rows only if nobody holds them; never queue behind the worker.
