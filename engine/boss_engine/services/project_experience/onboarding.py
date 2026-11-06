@@ -288,14 +288,15 @@ def advance(engine: Any, settings: Any, run_id: str, *, pass_no: int = 1,
         _record(engine, run_id, state="failed", error=f"Onboarding stopped: {_err(error)}",
                 finished=True)
         return {"status": "failed", "retry": False, "error": _err(error)}
-    if again and requeue:
-        with engine.begin() as c:
-            _queue(c, row["project_id"], run_id, pass_no=pass_no + 1, delay=AGAIN_S)
+    if again:
+        if requeue:
+            with engine.begin() as c:
+                _queue(c, row["project_id"], run_id, pass_no=pass_no + 1, delay=AGAIN_S)
         return {"status": "succeeded", "state": "running", "again": True}
     with engine.begin() as c:
         state = _final_state(_get(c, run_id) or row)
-    _record(engine, run_id, state=state, finished=not again)
-    return {"status": "succeeded", "state": state, "again": again}
+    _record(engine, run_id, state=state, finished=True)
+    return {"status": "succeeded", "state": state, "again": False}
 
 
 def _final_state(row: Mapping[str, Any]) -> str:

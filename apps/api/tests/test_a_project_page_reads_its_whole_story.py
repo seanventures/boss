@@ -363,3 +363,51 @@ def test_each_tab_answers_in_one_fast_round_trip(world, client, helpdesk):
         if took > 1.0:
             slow[tab] = round(took, 2)
     assert not slow, slow
+
+
+def test_the_old_demo_logins_sheet_now_names_who_signs_in(world, client, helpdesk):
+    """The open bug: Settings › Demo logins showed the password but not the user names."""
+    with world.acting_as(world.ctx(world.owner)):
+        r = client.get("/v1/apps/helpdesk-ai-demo/demo-logins",
+                       params={"project_id": helpdesk["id"], "env": "deploy"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert [u["user"] for u in body["users"]] == [u["user"] for u in DEMO_USERS]
+    assert body["users_from"] == "manifest"
+    for row in body["demo_logins"]:
+        assert [u["user"] for u in row["users"]] == [u["user"] for u in DEMO_USERS]
+
+
+def test_a_manifest_names_its_demo_users_and_never_a_password():
+    from boss_engine.services.app_deploy_manifest import ManifestError, load_manifest
+
+    m = load_manifest("version: 1\nname: helpdesk\nkind: commands\n"
+                      "install: [{name: up, run: npm start}]\n"
+                      "env:\n  DEMO_PASSWORD: {generate: password}\n"
+                      "demo_logins:\n  - {user: agent@demo.test, label: Agent}\n"
+                      "  - customer@demo.test\n")
+    assert [dict(d) for d in m.demo_logins] == [
+        {"user": "agent@demo.test", "label": "Agent", "password": "DEMO_PASSWORD"},
+        {"user": "customer@demo.test", "label": "Customer", "password": "DEMO_PASSWORD"}]
+    assert m.summary()["demo_logins"][0]["user"] == "agent@demo.test"
+    for bad in ("demo_logins: {user: x}", "demo_logins: [{label: Agent}]",
+                "demo_logins: [{user: a@b.c, pass: hunter2}]",
+                "demo_logins: [{user: a@b.c, password: 'hunter2!'}]"):
+        with pytest.raises(ManifestError):
+            load_manifest("version: 1\nname: x\nkind: commands\n"
+                          "install: [{name: up, run: npm start}]\n" + bad + "\n")
+
+
+def test_the_captain_drawer_asks_about_the_whole_project(world, client, helpdesk, engine):
+    from boss_engine.services.turn_subject import parse_subject, resolve_subject
+
+    ref = parse_subject({"kind": "project", "id": helpdesk["id"]})
+    assert ref is not None and ref.external_ref == f"project:{helpdesk['id']}"
+    with engine.connect() as db:
+        ev = resolve_subject(db, helpdesk["id"], ref)
+        other = resolve_subject(db, "someone-elses-project", ref)
+    assert ev.found and ev.title == "HelpDesk AI Demo"
+    assert "1 running" in ev.status and "2 needs you" in ev.status
+    assert ev.facts["repositories"] == REPO
+    assert any("Ticket search filters" in line for line in ev.linked)
+    assert not other.found
