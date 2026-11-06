@@ -115,7 +115,8 @@ function Dossier({ k }: { k: Knowledge }) {
             {Object.entries(d.commands).map(([k2, v]) => (
               <React.Fragment key={k2}><dt>{k2[0].toUpperCase() + k2.slice(1)}</dt>
                 <dd><code className="px-code">{v}</code> <button type="button" className="px-icon-btn" style={{ width: 20, height: 20 }} aria-label={`Copy ${k2} command`}
-                        onClick={() => void navigator.clipboard?.writeText(v)}><Copy size={11} /></button></dd></React.Fragment>
+                        onClick={(e) => { void navigator.clipboard?.writeText(v); const b = e.currentTarget; b.dataset.copied = "1"; b.title = "Copied"; window.setTimeout(() => { delete b.dataset.copied; b.title = ""; }, 1500); }}>
+                  <Copy size={11} /></button></dd></React.Fragment>
             ))}
           </dl>
         </div>

@@ -164,49 +164,104 @@ describe("Projects (screen 2)", () => {
 // ── 0a / 0b · First run ──────────────────────────────────────────────────────────────────────
 
 describe("the first run (screens 0a, 0b) keeps every Get started item", () => {
-  it("0a: a fresh install gets the three steps, each to its real place", async () => {
+  const setupGo = (id: string) => new URLSearchParams(tid(id)!.getAttribute("href")!.split("?")[1]);
+
+  it("0a: a fresh install gets the three steps; GitHub and the model go to Repo and models, never a picker here", async () => {
     engine((c) => (c.path === "/v1/projects/summary" ? { body: { items: [] } } : (c.path === "/v1/setup" || c.path === "/api/setup") ? { body: setupView(false) } : undefined));
     at("area=projects");
     await mountAs(<ProjectsHome projectId={P} actor="ceo" projects={[]} />);
     await settle();
     expect(tid("px-first-run")!.dataset.step).toBe("1");
-    const go = (id: string) => new URLSearchParams(tid(id)!.getAttribute("href")!.split("?")[1]);
-    // Connect GitHub and Add a model open their rows in Repo and models.
-    expect([go("px-fr-github-go").get("area"), go("px-fr-github-go").get("focus")]).toEqual(["setup", "repository"]);
-    expect([go("px-fr-model-go").get("area"), go("px-fr-model-go").get("focus")]).toEqual(["setup", "models"]);
+    expect(tid("px-fr-github")!.dataset.state).toBe("todo");
+    expect(tid("px-fr-model")!.dataset.state).toBe("todo");
+    // The first step not done is the primary action; each goes to its section of Repo and models.
+    expect(tid("px-fr-github-go")!.dataset.kind).toBe("primary");
+    expect(tid("px-fr-model-go")!.dataset.kind).toBeUndefined();
+    expect([setupGo("px-fr-github-go").get("area"), setupGo("px-fr-github-go").get("focus")]).toEqual(["setup", "repository"]);
+    expect([setupGo("px-fr-model-go").get("area"), setupGo("px-fr-model-go").get("focus")]).toEqual(["setup", "models"]);
+    expect($$("[data-testid='px-first-run'] select, [data-testid='px-first-run'] [role=listbox], [data-testid='px-first-run'] [role=dialog]")).toEqual([]);
     // Step 3: Existing repo, From an idea, Try a sample (the sheet's doors), One small PR (Get started's quick PR).
     await press(tid("px-fr-existing")); expect(params().get("new_project")).toBe("import");
     await press(tid("px-fr-idea")); expect(params().get("new_project")).toBe("idea");
     await press(tid("px-fr-sample")); expect(params().get("new_project")).toBe("sample");
-    expect([go("px-fr-quick-pr").get("area"), go("px-fr-quick-pr").get("focus")]).toEqual(["welcome", "try"]);
+    expect([setupGo("px-fr-quick-pr").get("area"), setupGo("px-fr-quick-pr").get("focus")]).toEqual(["welcome", "try"]);
     // What happens to each piece of work, as a flow; Repo and models is one link away.
     expect($$("[data-testid='px-fr-flow'] .px-fl-n").map((n) => n.textContent)).toEqual(["Idea", "Plan", "You approve", "Build", "Review", "Pull request", "Live preview"]);
-    expect($("[data-testid='px-first-run'] a[href*='area=setup']")).not.toBeNull();
+    expect(setupGo("px-fr-setup").get("area")).toBe("setup");
   });
 
-  it("0a: done steps say who is connected and offer another account / model; the sample's PR is linked", async () => {
+  it("0a: configured steps say so (account · repos, model · mode) with Manage ›; Add a project is then the primary", async () => {
     engine((c) => (c.path === "/v1/projects/summary" ? { body: { items: [] } } : undefined));
     at("area=projects");
     await mountAs(<ProjectsHome projectId={P} actor="ceo" projects={[]} />);
     await settle();
-    expect(tid("px-fr-github-done")!.textContent).toMatch(/Connected as paramg · 1 repo/);
-    expect(tid("px-fr-github-more")!.textContent).toMatch(/Another account/);
-    expect(tid("px-fr-model-more")!.textContent).toMatch(/Another model/);
+    expect(tid("px-fr-github")!.dataset.state).toBe("configured");
+    expect(tid("px-fr-github-done")!.textContent).toMatch(/Connected · paramg · 1 repo/);
+    expect(tid("px-fr-model-done")!.textContent).toMatch(/Claude · subscription/);
+    expect(tid("px-fr-github-go")).toBeNull();
+    expect(tid("px-fr-model-go")).toBeNull();
+    expect(setupGo("px-fr-model-manage").get("focus")).toBe("models");
+    expect(setupGo("px-fr-github-manage").get("focus")).toBe("repository");
+    expect($$("[data-testid='px-fr-strip'] [data-s='done']").map((n) => n.dataset.testid)).toEqual(expect.arrayContaining(["px-fr-strip-github", "px-fr-strip-model"]));
+    expect(tid("px-fr-strip-project")!.dataset.s).toBe("now");
+    expect(tid("px-fr-existing")!.dataset.kind).toBe("primary");
     expect(tid("px-fr-last-pr")!.getAttribute("href")).toBe("https://github.com/x/y/pull/1");
   });
 
-  it("0b: the guide beside Helm's live onboarding, ending at first work you can start", async () => {
+  it("0a: while the status loads, and when it can't be read, nothing claims Configured", async () => {
+    engine((c) => (c.path === "/v1/projects/summary" ? { body: { items: [] } } : c.path === "/api/setup" ? { status: 500, body: { error: "down" } } : undefined));
+    at("area=projects");
+    await mountAs(<ProjectsHome projectId={P} actor="ceo" projects={[]} />);
+    await settle();
+    expect(tid("px-first-run")!.dataset.status).toBe("failed");
+    for (const id of ["github", "model"]) {
+      expect(tid(`px-fr-${id}`)!.dataset.state).toBe("unknown");
+      expect(tid(`px-fr-${id}-check`)!.textContent).toBe("Check in Repo and models ›");
+      expect(tid(`px-fr-${id}-done`)).toBeNull();
+    }
+    expect(tid("px-fr-existing")!.dataset.kind).toBe("primary");
+  });
+
+  it("0a: coming back from Repo and models re-reads the status (no manual refresh)", async () => {
+    let connected = false;
+    engine((c) => (c.path === "/v1/projects/summary" ? { body: { items: [] } } : c.path === "/api/setup" ? { body: setupView(connected) } : undefined));
+    at("area=projects");
+    await mountAs(<ProjectsHome projectId={P} actor="ceo" projects={[]} />);
+    await settle();
+    expect(tid("px-fr-model")!.dataset.state).toBe("todo");
+    connected = true;
+    await act(async () => { window.dispatchEvent(new Event("focus")); });
+    await settle();
+    expect(tid("px-fr-model")!.dataset.state).toBe("configured");
+  });
+
+  it("0b: the project's guide starts at Add project; the workspace is a read-only row linking to Setup; no pickers", async () => {
     const calls = engine();
     at("area=projects&first_run=1&project_id=northpeak-retail");
     await mountAs(<ProjectsHome projectId={P} actor="ceo" projects={[]} />);
     await settle();
     expect(tid("px-first-run-guided")).not.toBeNull();
-    expect($$("[data-testid='px-guide-steps'] li b").map((b) => b.textContent)).toEqual(
-      ["Connect GitHub", "Add a model", "Add project", "Helm onboards", "Ready for work", "First work"]);
+    expect($$("[data-testid='px-guide-steps'] li b").map((b) => b.textContent)).toEqual(["Add project", "Helm onboards", "Ready for work", "First work"]);
+    expect(tid("px-guide-ws-github")!.textContent).toContain("GitHub ✓ paramg");
+    expect(tid("px-guide-ws-model")!.textContent).toContain("Model ✓ Claude");
+    expect(setupGo("px-guide-ws-model").get("focus")).toBe("models");
+    expect(tid("px-guide-account")).toBeNull();
+    expect(tid("px-guide-model")).toBeNull();
+    expect($$("[data-testid='px-first-run-guided'] select, [data-testid='px-first-run-guided'] [role=listbox]")).toEqual([]);
     expect(tid("px-discover")).not.toBeNull();
     expect(tid("px-guide-you-secrets")!.textContent).toContain("App secret");
     await press(tid("px-guide-start"));
     expect(calls.find((c) => c.method === "POST" && c.path === "/v1/projects/northpeak-retail/work")?.body).toEqual({ kind: "ticket", text: "Fix 6 failing tests" });
+  });
+
+  it("0b: a missing model or GitHub account is an Only-you card that links to Setup, never a picker", async () => {
+    engine((c) => (c.path === "/api/setup" ? { body: setupView(false) } : undefined));
+    at("area=projects&first_run=1&project_id=northpeak-retail");
+    await mountAs(<ProjectsHome projectId={P} actor="ceo" projects={[]} />);
+    await settle();
+    expect(tid("px-guide-you-model")!.textContent).toContain("Connect a model in Setup ›");
+    expect(new URLSearchParams(tid("px-guide-you-model")!.querySelector("a")!.getAttribute("href")!.split("?")[1]).get("focus")).toBe("models");
+    expect(new URLSearchParams(tid("px-guide-you-github")!.querySelector("a")!.getAttribute("href")!.split("?")[1]).get("focus")).toBe("repository");
   });
 });
 

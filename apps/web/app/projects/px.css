@@ -396,3 +396,4 @@ textarea.px-input { resize: vertical; min-height: 64px; }
   .px-cred > :nth-child(3) { grid-column: 1 / -1; grid-row: 2; }
   .px-cred > :nth-child(4) { grid-column: 3; grid-row: 1; }
 }
+.px-icon-btn[data-copied] { color: var(--green); border-color: var(--green); }
