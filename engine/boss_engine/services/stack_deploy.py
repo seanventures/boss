@@ -3225,6 +3225,11 @@ def plan_for_workflow_step(engine, settings: Settings, *, project_id: str, actor
 
     with engine.begin() as connection:
         merge = pr_merge.observe(connection, settings, project_id, run_id)
+        # MERGED SHIPS WHAT WAS MERGED. A workflow's deploy now waits for the merge, so its pinned
+        # pass-1 head (or the PR's head) is behind what landed: helpdesk-ai planned 2d0ea0a, the
+        # PR as first opened, while main held its repair and follow-up at merge 256bb1d.
+        if merge.get("state") == pr_merge.MERGED and _SHA.match(str(merge.get("sha") or "")):
+            ref = str(merge["sha"])
         unmerged = pr_merge.sentence(merge)
         if unmerged:
             from .core import emit_event

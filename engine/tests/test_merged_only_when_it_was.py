@@ -171,3 +171,27 @@ def test_the_deploy_step_never_ships_an_unmerged_head_silently(db, monkeypatch):
         said = c.execute(text("SELECT data FROM events WHERE project_id = :p AND "
                               "event_type = 'workflow.deploy_unmerged'"), {"p": pid}).scalar()
     assert said and said["manual_merge_pending"] is True
+
+
+def test_a_merged_build_deploys_its_merge_commit_not_its_pinned_head(db, monkeypatch):
+    """helpdesk-ai 2026-11-06: the deploy waited for PR #3's merge, then planned 2d0ea0a — the PR as
+    first opened (pass 1's pinned head) — while main held its repair and follow-up at 256bb1d."""
+    engine, pid = db
+    with engine.begin() as c:
+        run_id, _decision = _insert(c, pid, decision_status="executed")
+    monkeypatch.setattr(ci_gate, "reader_for_project", lambda *a, **k: _GitHub(
+        {"state": "closed", "merged": True, "merged_at": "now", "merge_commit_sha": "c" * 40}))
+    planned: dict = {}
+
+    def plan(engine, settings, **kw):
+        planned.update(kw)
+        return {"id": "sdep_1", "commit": kw.get("ref"), "repository": "acme/helpdesk",
+                "decision_id": "dec_deploy"}
+    monkeypatch.setattr(stack_deploy, "plan_stack_deploy", plan)
+    stack_deploy.plan_for_workflow_step(
+        engine, None, project_id=pid, actor="ceo",
+        target={"id": "deptgt_1", "repo": "acme/helpdesk", "app_name": "HelpDesk AI",
+                "target_kind": "ssh"},
+        inputs={"run_id": run_id}, workflow_run_id="wfr_x", step_id="deploy",
+        commit="d" * 40)
+    assert planned.get("ref") == "c" * 40, planned
