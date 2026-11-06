@@ -450,3 +450,37 @@ def test_a_second_app_with_the_same_name_on_a_shared_host_gets_its_own_place(db)
     assert load_manifest(placed_text).dir == placed.dir, "apply renders the same place"
     with db.engine.begin() as c:
         c.execute(text("DELETE FROM stack_deployments WHERE project_id = :p"), {"p": db.project})
+
+
+def test_an_imported_apps_manifest_a_repair_edited_is_still_not_judged_by_its_files(db):
+    """helpdesk-ai PR #4 (2026-11-06): the repair build added SESSION_SECRET to the imported app's
+    root boss.deploy.yaml, so "the build wrote the manifest" held, and the route check refused
+    /auth/providers — served by the app's existing code, never by the repair's two files."""
+    with db.engine.begin() as c:
+        c.execute(text("UPDATE projects SET name = 'HelpDesk AI' WHERE id = :p"), {"p": db.project})
+        c.execute(text("INSERT INTO github_connections (id, project_id, connection_label, "
+                       " auth_method, credential_ref, created_by) VALUES (:i, :p, 'test', "
+                       " 'github_app', 'env:NONE', 'ceo')"),
+                  {"i": f"ghconn_{db.project}", "p": db.project})
+        c.execute(text("INSERT INTO github_repository_bindings (id, project_id, connection_id, "
+                       " owner, name, full_name, role, default_branch, status, created_by) VALUES "
+                       " (:i, :p, :c, 'acme', 'boss-sandbox', 'acme/boss-sandbox', 'primary', "
+                       " 'main', 'active', 'ceo')"),
+                  {"i": f"ghrepo_{db.project}", "p": db.project, "c": f"ghconn_{db.project}"})
+        repair = _build(c, db.project, ["boss.deploy.yaml", "tests/deploy_manifest.test.mjs"])
+        c.execute(text("UPDATE code_task_runs SET finalize_ctx = '{}'::jsonb WHERE id = :i"),
+                  {"i": repair})
+        manifest = load_manifest(MANIFEST % ("/auth/providers", ""))
+        rendered = render(manifest, {"commit": "c" * 40, "ref": "pull/7", "target.host": ADDRESS,
+                                     "target.user": "root",
+                                     "target.public_url": f"http://{ADDRESS}:8000"})
+        got = manifest_misfit(c, manifest=manifest, rendered=rendered, path="boss.deploy.yaml",
+                              target={"id": "deptgt_x", "target_kind": "ssh",
+                                      "domains": [f"{ADDRESS}:8000"], "host_id": "dh"},
+                              host={"id": "dh", "address": ADDRESS, "name": "vm"},
+                              run_id=repair,
+                              read=lambda p: {"tests/deploy_manifest.test.mjs": "test()"}.get(p))
+        c.execute(text("DELETE FROM github_repository_bindings WHERE project_id = :p"),
+                  {"p": db.project})
+        c.execute(text("DELETE FROM github_connections WHERE project_id = :p"), {"p": db.project})
+    assert got is None, got

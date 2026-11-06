@@ -2918,7 +2918,8 @@ def manifest_misfit(connection: Connection, *, manifest: Any, rendered: Mapping[
     # app's own boss.deploy.yaml health-checks a route its existing code serves (helpdesk-ai's
     # /auth/providers in server/auth/routes.mjs, untouched by the SLA build), and judging it
     # against the build's few changed files dead-lettered a correct deploy (2026-11-06).
-    if served is not None and _build_wrote(connection, run_id, path):
+    if served is not None and _build_wrote(connection, run_id, path) \
+            and not _is_imported_apps_manifest(connection, run_id, path):
         for check in rendered.get("health") or []:
             route = urlsplit(str(check.get("url") or "")).path.rstrip("/")
             # Mounted routes (a router at /api serving /health) are judged by their last part.
@@ -2978,6 +2979,25 @@ def refuses_in_production(source: str, name: str) -> bool:
 
 _SERVED_SUFFIXES = (".js", ".mjs", ".cjs", ".ts", ".py", ".go", ".rb", ".java", ".kt", ".rs",
                     ".php", ".conf", ".yml", ".yaml", ".json", ".toml")
+
+
+def _is_imported_apps_manifest(connection: Connection, run_id: Optional[str], path: str) -> bool:
+    """Whether `path` is the root manifest of the app its project imported (the repo IS the app).
+
+    Its health route is served by the app's existing code, not by the few files a build of a
+    feature writes — even when a repair build edits the manifest itself (helpdesk-ai PR #4 added
+    SESSION_SECRET to boss.deploy.yaml, and the route check then refused it, 2026-11-06)."""
+    if not run_id or "/" in str(path or "/"):
+        return False
+    run = connection.execute(
+        text("SELECT id, project_id, spec, finalize_ctx FROM code_task_runs WHERE id = :i"),
+        {"i": run_id}).mappings().first()
+    if not run:
+        return False
+    spec = run["spec"] if isinstance(run["spec"], dict) else json.loads(run["spec"] or "{}")
+    repository = f"{spec.get('owner') or ''}/{spec.get('repo') or ''}".strip("/")
+    return bool(_imported_app_name(connection, str(run["project_id"]), dict(run), repository,
+                                   path))
 
 
 def _build_wrote(connection: Connection, run_id: Optional[str], path: str) -> bool:
