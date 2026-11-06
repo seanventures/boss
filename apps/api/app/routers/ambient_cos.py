@@ -64,11 +64,16 @@ def build_ambient_cos_router(*, engine, settings: Callable[[], Any],
     @router.post("/v1/ambient/chief-of-staff/run")
     @permit(P.WORK_ITEM_MANAGE, scope=Scope.project(body="project_id"))
     def run_now(payload: RunBody) -> dict:
-        """Triage now: this project's sweep and the Chief of Staff's turn, at once."""
+        """Triage now: this project's sweep and the Chief of Staff's turn, at once. A person
+        pressing it while BOSS_AMBIENT_COS is off (the rc10.11 default) gets `propose`: every
+        handover is a Needs-you card, nothing is handed to an agent without them."""
         with begin(engine) as c:
             require_write_actor(c, payload.project_id, payload.actor, "decision_resolve")
-        return chief_of_staff.tick(engine, settings(), project_id=payload.project_id,
-                                   sweep=payload.sweep)
+        current = settings()
+        mode = chief_of_staff.mode_of(current)
+        return chief_of_staff.tick(engine, current, project_id=payload.project_id,
+                                   sweep=payload.sweep,
+                                   mode="propose" if mode == "off" else mode)
 
     @router.get("/v1/ambient/dossier")
     @permit(P.WORK_ITEM_READ, scope=Scope.project(query="project_id"))

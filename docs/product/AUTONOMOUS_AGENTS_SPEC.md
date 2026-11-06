@@ -1,12 +1,27 @@
 # Engineering spec: autonomous agents — Chief of Staff, squads, AI SRE and learning
 
-**Status:** Built and integrated (foundation + 903–912) · **Epic:** BOSSAPP-902 · **Branch:** `feat/autonomous-agents` · **Date:** 2026-11-06
+**Status:** Built and integrated (foundation + 903–912); ships in v1.0-rc10.11 as a **preview, off by default** · **Epic:** BOSSAPP-902 · **Branch:** `feat/autonomous-agents` · **Date:** 2026-11-06
 **Design:** `boss-autonomous-agents-design.md` (Option B, approved 2026-11-05; attached to BOSSAPP-902). Section numbers `§n` below refer to it.
 **Code:** `engine/boss_engine/services/ambient/` · `engine/boss_engine/services/incident_squad*.py` · `apps/api/app/routers/ambient*.py`, `incident_squad.py` · `apps/web/app/agent-ops/` · `db/schema.sql` (block "AUTONOMOUS AGENTS").
 
 BOSS notices problems on its own, decides who should work them, and its agents work them TOGETHER on a shared board — every decision on an append-only ledger, every action through the autonomy gate, and all of it visible as a diagram. This document is the one description of that system: what happens, in which module, under which setting, and how to see it. **Use these tables, functions, endpoints and events; never add a second copy of any of them.** To extend, change the module that owns the thing (each section names it) and add a test there.
 
 ---
+
+## 0. Off by default (v1.0-rc10.11)
+
+The autonomous agents ship as a **preview, off by default**. With nothing set, the worker's minute tick only expires leases: no signal sweep, no Chief-of-Staff triage, no squad turn, no automatic Discovery dossier and no Recommended-roadmap tick. The **Agents at work** area still shows, **Load demo** still works on a demo project, and a person's **Triage now** runs once in `propose` mode (every handover is a Needs-you card).
+
+To turn it on, set in the install's `.env` and restart the API and worker:
+
+```sh
+BOSS_AMBIENT_COS=propose   # safe: every handover asks a person first (route = act on A2+ classes)
+# optional, both follow the mode when unset:
+# BOSS_AMBIENT_SIGNALS=1   # the sweep + automatic dossier, even with the Chief of Staff off
+# BOSS_AMBIENT_LEARNING=1  # the Recommended-roadmap tick, even with the Chief of Staff off
+```
+
+`BOSS_AMBIENT_DISABLED=1`, **Stop all** and a project's **Stop** still win over every setting. The gates live in `services/ambient/policy.py` (`cos_mode`, `signals_on`, `learning_on`); `engine/tests/test_the_autonomous_agents_ship_off_by_default.py` pins them.
 
 ## 1. How to see it
 
@@ -24,8 +39,9 @@ BOSS notices problems on its own, decides who should work them, and its agents w
 
 | Setting | Default | Does |
 |---|---|---|
-| `BOSS_AMBIENT_COS` | `propose` | `propose`: every handover is a Needs-you card first; `route`: A2+ classes (and incidents at any level) go straight to their squad; `off`: sweep only, no triage, no squads |
-| `BOSS_AMBIENT_SIGNALS` | `1` | the worker's sweep of every signal adapter |
+| `BOSS_AMBIENT_COS` | `off` | `off` (the rc10.11 default): no triage, no squads, and the sweep and learning tick stop unless set; `propose`: every handover is a Needs-you card first; `route`: A2+ classes (and incidents at any level) go straight to their squad |
+| `BOSS_AMBIENT_SIGNALS` | follows the mode | the worker's sweep of every signal adapter and Discovery's automatic dossier; unset = on unless `BOSS_AMBIENT_COS=off` |
+| `BOSS_AMBIENT_LEARNING` | follows the mode | the worker's Recommended-roadmap tick; unset = on unless `BOSS_AMBIENT_COS=off` |
 | `BOSS_AMBIENT_COS_MODEL_CALLS` | `3` | model calls the Chief of Staff may make per project per tick (ambiguous class / owner) |
 | `BOSS_AMBIENT_COS_CARDS` | `3` | Chief-of-Staff Needs-you cards per class per project per day; the rest are observed |
 | `BOSS_AMBIENT_SQUADS` | `1` | owners' turns on the tick (0 = handed-over items wait) |
@@ -112,7 +128,7 @@ One path at each step: a problem enters only as a **signal**; work exists only a
 | The new `how` edges | `signal` ("Raised by a signal") and `board` ("From the work board"). An override uses `approved`. | A decision reaches its decider from a sensor or from the board; neither is a person's or agent's handoff. |
 | Permissions | No new catalogue permissions. Reads: `work_item:read`, `decision:read`, `autonomy:read`. Take over / dismiss / **stop**: `work_item:manage`. Override: `decision:approve`. **Resume**, levels, envelope, install-wide stop: `autonomy:manage`. | The safe direction (stop, take over) must be easy; giving agents more room is privileged. |
 | Sweep cadence | **Wired (904):** the worker's background thread knocks on `POST /v1/ambient/tick` every 60 s → `chief_of_staff.tick` (expire leases → `signals.sweep()` → triage every project with work). `POST /v1/ambient/signals/sweep` and `POST /v1/ambient/chief-of-staff/run` run it on request. | "No new daemon"; one tick owner (the CoS). On the background thread because an alert during a 45-minute build must be triaged during it. |
-| How safe is the tick by default? (904) | `BOSS_AMBIENT_COS=propose` (default): every item at A1+ becomes a Needs-you card ("Hand to SRE?") whatever its class level; `route` honours the matrix (A2+ handed straight to the owner); `off` sweeps but triages nothing. `BOSS_AMBIENT_SIGNALS=0` stops the sweep. The stop wins over all of it. | The operator's "default ON, A1 propose, so it's safe"; a person raises a project to `route` deliberately. |
+| How safe is the tick by default? (904) | rc10.11 ships `BOSS_AMBIENT_COS=off` (preview; §0). Once on, `propose`: every item at A1+ becomes a Needs-you card ("Hand to SRE?") whatever its class level; `route` honours the matrix (A2+ handed straight to the owner); `off` sweeps but triages nothing. `BOSS_AMBIENT_SIGNALS=0` stops the sweep. The stop wins over all of it. | The operator's "default ON, A1 propose, so it's safe"; a person raises a project to `route` deliberately. |
 | Who works an item after the Chief of Staff hands it over? | **A squad, on the same tick** (`owners.work`, called at the end of `chief_of_staff.tick`): `squads.assemble` from the project's own agents + `squad_turns.collaborate` for 2 rounds; incident classes go to `incident_squad.route_incident`. Bounded by `BOSS_AMBIENT_SQUAD_ITEMS` (3/tick), an idle squad runs again only when its board has news (a person answered, a run came back, a non-member posted) or after 30 min. | One tick owner; a handoff that nobody picks up was the gap between 904 and 908/910. Re-running an idle squad every minute would spend model calls on nothing. |
 | Who carries a person's answer to an ambient card? | **One function, `answers.on_answered`**, called by `DecisionService` on approve / reject / revise for any decision whose recommendation names a `work_item_id` and `asked_by`. Incident card → `incident_squad.on_needs_you_answered`; Chief-of-Staff card → `chief_of_staff.carry_answer` (handoff, its decision's outcome); squad card → `squad_turns.person_answered`; otherwise `board.answered`. | Three streams each owned a piece of "a person answered"; one carrier means no double handling. The tick's `follow_up` / `answers.sweep` are idempotent safety nets over the same carriers (an answer that bypassed the service). |
 | Noise from propose-by-default | (1) A failed step/build whose run **already asks a person** (an open decision on the run/build) gets no card: the item links that decision and is observed. (2) At most **3 Chief-of-Staff cards per class per project per day** (`BOSS_AMBIENT_COS_CARDS`); the rest are recorded `observe` for the digest and stay on the list. (3) Guards' 10 items/class/day still cap item creation. | The operator should see one question per problem, not a second card for a run that is already waiting on them. |

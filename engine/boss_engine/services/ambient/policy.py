@@ -74,6 +74,49 @@ REJECTED_OUTCOMES = frozenset({"dismissed", "ignored", "overridden", "failed"})
 DEMOTING_OUTCOMES = frozenset({"reverted", "incident_caused"})
 
 
+# ── what runs by default (v1.0-rc10.11: the autonomous agents are a preview, off) ────────────
+
+#: BOSS_AMBIENT_COS when it is unset: the Chief of Staff triages nothing and no squad works.
+DEFAULT_COS_MODE = "off"
+
+
+def cos_mode(settings: Any) -> str:
+    """off | propose | route (BOSS_AMBIENT_COS). Unset → off; an unknown value → propose."""
+    value = str(getattr(settings, "ambient_cos_mode", None) or DEFAULT_COS_MODE).strip().lower()
+    return value if value in ("off", "propose", "route") else "propose"
+
+
+def _explicit(value: Any) -> Optional[bool]:
+    """1/0 (or true/false, yes/no, on/off) as set by a person; None when unset or blank."""
+    if value is None or isinstance(value, bool):
+        return value
+    text_value = str(value).strip().lower()
+    if not text_value:
+        return None
+    if text_value in ("1", "true", "yes", "on"):
+        return True
+    if text_value in ("0", "false", "no", "off"):
+        return False
+    try:
+        return bool(int(text_value))
+    except ValueError:
+        return None
+
+
+def signals_on(settings: Any) -> bool:
+    """The signal sweep and Discovery's automatic dossier (BOSS_AMBIENT_SIGNALS): an explicit
+    1/0 wins; unset, they run only while the Chief of Staff is on."""
+    explicit = _explicit(getattr(settings, "ambient_signals", None))
+    return explicit if explicit is not None else cos_mode(settings) != "off"
+
+
+def learning_on(settings: Any) -> bool:
+    """The Recommended-roadmap tick (BOSS_AMBIENT_LEARNING): an explicit 1/0 wins; unset, it
+    runs only while the Chief of Staff is on."""
+    explicit = _explicit(getattr(settings, "ambient_learning", None))
+    return explicit if explicit is not None else cos_mode(settings) != "off"
+
+
 # ── settings and the stop ────────────────────────────────────────────────────────────────────
 
 def settings_for(connection: Connection, project_id: str) -> dict[str, Any]:

@@ -515,7 +515,9 @@ def after_index(engine: Any, settings: Any, *, project_id: str, repo: str, root:
                 head: str) -> Optional[dict[str, Any]]:
     """Called by the code-graph index once a repository's checkout is indexed: build the dossier
     from the same checkout. Its own transaction; a failure is logged, never fails the index."""
-    if not bool(getattr(settings, "ambient_signals", 1)):
+    from . import policy
+
+    if not policy.signals_on(settings):
         return None
     use_osv = bool(int(getattr(settings, "ambient_dossier_osv", 1) or 0))
     try:

@@ -161,6 +161,12 @@ def build_ambient_learning_router(*, engine, settings: Callable[[], Any],
         from apps.api.app.main import require_worker_principal
 
         require_worker_principal()
-        return roadmap.tick(engine, settings=settings())
+        from boss_engine.services.ambient import policy
+
+        current = settings()
+        if not policy.learning_on(current):
+            return {"skipped": "off (BOSS_AMBIENT_COS=off; set BOSS_AMBIENT_LEARNING=1 to run it)",
+                    "outcomes": {}, "projects": {}}
+        return roadmap.tick(engine, settings=current)
 
     return router

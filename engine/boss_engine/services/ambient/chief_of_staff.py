@@ -120,9 +120,9 @@ NEXT_ACTION: dict[str, str] = {
 # ── the mode ─────────────────────────────────────────────────────────────────────────────────
 
 def mode_of(settings: Any) -> str:
-    """off | propose | route (BOSS_AMBIENT_COS). Unknown → propose: the safe one."""
-    value = str(getattr(settings, "ambient_cos_mode", None) or "propose").strip().lower()
-    return value if value in MODES else "propose"
+    """off | propose | route (BOSS_AMBIENT_COS). Unset → off (the rc10.11 default: the feature
+    is a preview); an unknown value → propose, the safe one of the two that act."""
+    return policy.cos_mode(settings)
 
 
 # ── classification ───────────────────────────────────────────────────────────────────────────
@@ -865,7 +865,7 @@ def tick(engine: Any, settings: Any = None, *, project_id: Optional[str] = None,
 
     settings = settings or get_settings()
     mode = mode or mode_of(settings)
-    do_sweep = bool(getattr(settings, "ambient_signals", 1)) if sweep is None else bool(sweep)
+    do_sweep = policy.signals_on(settings) if sweep is None else bool(sweep)
     report: dict[str, Any] = {"mode": mode, "sweep": None, "expired": [], "projects": {}}
     with engine.begin() as c:
         stop = policy.stop_state(c, None)

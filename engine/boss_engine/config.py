@@ -1183,12 +1183,17 @@ class Settings(BaseSettings):
     # base branch is re-checked; parsing only, no model is called. 0 turns it off install-wide.
     # AUTONOMOUS AGENTS' TICK (services/ambient/chief_of_staff.py, BOSSAPP-904): the worker's
     # periodic sweep of every signal adapter (1 on, 0 off) and the Chief of Staff's triage mode:
-    # `propose` (the default, safe) asks a person on a Needs-you card before ANY item is handed
-    # to an agent, whatever a class's level; `route` honours each class's autonomy level (A2+
-    # hands straight to the owning agent); `off` sweeps signals but triages nothing. The kill
-    # switch (BOSS_AMBIENT_DISABLED, Stop all, a project's Stop) wins over all three.
-    ambient_signals: int = Field(default=1, alias="BOSS_AMBIENT_SIGNALS")
-    ambient_cos_mode: str = Field(default="propose", alias="BOSS_AMBIENT_COS")
+    # `off` (the default in v1.0-rc10.11: the feature is a preview) triages nothing, works no
+    # squad item and runs no learning tick; `propose` asks a person on a Needs-you card before
+    # ANY item is handed to an agent, whatever a class's level; `route` honours each class's
+    # autonomy level (A2+ hands straight to the owning agent). The kill switch
+    # (BOSS_AMBIENT_DISABLED, Stop all, a project's Stop) wins over all three.
+    # BOSS_AMBIENT_SIGNALS (the sweep and Discovery's automatic dossier) and BOSS_AMBIENT_LEARNING
+    # (the Recommended-roadmap tick) follow the mode when unset: on unless the mode is `off`.
+    # Set either to 1 to run it while the Chief of Staff stays off, or 0 to stop it.
+    ambient_signals: Optional[str] = Field(default=None, alias="BOSS_AMBIENT_SIGNALS")
+    ambient_cos_mode: str = Field(default="off", alias="BOSS_AMBIENT_COS")
+    ambient_learning: Optional[str] = Field(default=None, alias="BOSS_AMBIENT_LEARNING")
     # Model calls the Chief of Staff may make per project per tick for judgement (an ambiguous
     # classification, an unclear owner). Deterministic rules decide everything else; 0 = rules only.
     ambient_cos_model_calls: int = Field(default=3, alias="BOSS_AMBIENT_COS_MODEL_CALLS")
