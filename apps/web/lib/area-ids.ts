@@ -17,6 +17,8 @@ export const AREA_IDS = [
   "overview",
   "decisions",
   "self_fixes",
+  // Agents at work (autonomous agents, BOSSAPP-902/906): each work item agents took on by themselves, as a flow chart.
+  "agent_ops",
   "work",
   "activity",
   "delivery_workflows",

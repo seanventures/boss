@@ -8,7 +8,7 @@
  */
 import React, { useEffect, useMemo, useState } from "react";
 
-import { type CitedName, citedIdsIn, withCitationLinks } from "../../lib/answer-citations";
+import { type CitedName, citedIdsIn, withActLinks, withCitationLinks } from "../../lib/answer-citations";
 import { getNodeNames, kgNodeHref } from "../../lib/kg-view";
 import { Markdown } from "../markdown";
 
@@ -25,7 +25,9 @@ export function CitedAnswer({ projectId, actor, text, className }: {
     return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, projectId, actor]);
-  const linked = useMemo(() => withCitationLinks(text, names, (id) => kgNodeHref(id)), [text, names]);
+  // Ledger rows ([act:…], autonomous agents) link to their flow chart; graph nodes to the KG.
+  const linked = useMemo(() => withActLinks(withCitationLinks(text, names, (id) => kgNodeHref(id)),
+                                            typeof window === "undefined" ? "" : window.location.search), [text, names]);
   const named = ids.filter((id) => names[id]);
   return (
     <>

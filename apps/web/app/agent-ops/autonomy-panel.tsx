@@ -1,0 +1,202 @@
+"use client";
+
+/**
+ * AUTONOMY & SAFETY (design §4 L5, §9; spec §7 autonomy/settings/stop; stream 905) — Govern › Autonomy.
+ *
+ *   [ ■ STOP ALL AGENT WORK ]            Today  ████████░░  $3.35 spent · $0.40 held · $5 cap
+ *   Task class        A0  A1  A2  A3   Track record
+ *   CI fix            ●   ●   ◉   ○    ███████▉ 92% of 24   [Raise to A3]
+ *   IaC drift         ●   ◉   ┄   ┄    —
+ *
+ * The safe direction is easy: Stop needs work_item:manage (operators too) and one confirmation.
+ * Giving agents more room is privileged: Resume, and every level change, need autonomy:manage
+ * (owner/admin). BOSS never raises a level itself; it suggests, and the "Raise" chip is the one
+ * press that accepts the suggestion.
+ */
+import React, { useState } from "react";
+
+import { GatedButton, useGate } from "../../components/gated";
+import { useConsoleLive } from "../../lib/console-live";
+import { usePolledRead } from "../../lib/log-stream";
+import {
+  LEVEL_WORDS, MISSING, autonomyPath, money, microsUsd, parseAutonomy, parseScorecard, parseSettings, polled, resumeAgents,
+  scorecardPath, setLevel, settingsPath, stopAgents, type ClassRow, type Envelope, type StopState,
+} from "../../lib/ambient";
+import { showToast } from "../client-forms";
+import "./agent-ops.css";
+
+const LEVELS = ["A0", "A1", "A2", "A3"];
+const rank = (l: string) => Math.max(0, LEVELS.indexOf(l));
+
+export function KillSwitch({ projectId, stop, onChanged }: { projectId: string; stop: StopState; onChanged: () => void }) {
+  const [confirming, setConfirming] = useState(false);
+  const [reason, setReason] = useState("");
+  const [everywhere, setEverywhere] = useState(false);
+  const org = useGate("autonomy:manage");
+  if (stop.stopped) {
+    const global = stop.scope === "global";
+    return (
+      <div className="aa-kill" data-stopped data-testid="aa-kill">
+        <b>⛔ Agent work is stopped{global ? " on every project" : ""}</b>
+        <span className="aa-sub">{[stop.by && `by ${stop.by}`, stop.reason].filter(Boolean).join(" · ")}</span>
+        {stop.scope === "env" ? <span className="aa-sub">Set on the server; clear BOSS_AMBIENT_DISABLED to resume.</span> : (
+          <GatedButton permission="autonomy:manage" projectId={projectId} className="aa-kill-btn" data-resume data-testid="aa-resume"
+                       title="Let agents act again within their levels"
+                       onClick={() => void resumeAgents(projectId, "", global).then((r) => { showToast(r.ok ? "success" : "error", r.ok ? "Agents resumed" : `Not resumed: ${r.error}`); onChanged(); })}>
+            Resume agents
+          </GatedButton>
+        )}
+      </div>
+    );
+  }
+  return (
+    <div className="aa-kill" data-testid="aa-kill">
+      {confirming ? (
+        <form className="aa-confirm" data-testid="aa-kill-confirm"
+              onSubmit={(e) => { e.preventDefault(); void stopAgents(projectId, reason.trim() || "stopped by a person", everywhere).then((r) => { showToast(r.ok ? "success" : "error", r.ok ? "Stopped — every agent lease released" : `Not stopped: ${r.error}`); setConfirming(false); onChanged(); }); }}>
+          <b>Stop all agent work{everywhere ? " on every project" : " here"}?</b>
+          <span className="aa-sub">Agents drop what they hold now. Nothing is undone.</span>
+          <input type="text" aria-label="Reason" placeholder="Reason (optional)" value={reason} onChange={(e) => setReason(e.target.value)} maxLength={500} />
+          <label className="aa-sub" title={org.allowed ? "Stops agents on every project" : org.reason}>
+            <input type="checkbox" checked={everywhere} disabled={!org.allowed} onChange={(e) => setEverywhere(e.target.checked)} data-testid="aa-kill-everywhere" /> Every project
+          </label>
+          <span style={{ display: "flex", gap: 6 }}>
+            <GatedButton permission="work_item:manage" projectId={projectId} type="submit" className="aa-kill-btn" data-testid="aa-kill-confirm-go">Stop now</GatedButton>
+            <button type="button" className="ag-btn" onClick={() => setConfirming(false)}>Cancel</button>
+          </span>
+        </form>
+      ) : (
+        <>
+          <GatedButton permission="work_item:manage" projectId={projectId} className="aa-kill-btn" data-testid="aa-kill-btn"
+                       title="Stop every agent here at once" onClick={() => setConfirming(true)}>■ Stop all agent work</GatedButton>
+          <span className="aa-sub">Agents are on. They act only within the levels below.</span>
+        </>
+      )}
+    </div>
+  );
+}
+
+export function EnvelopeMeter({ env }: { env: Envelope }) {
+  const cap = env.cap_usd_micros || 1;
+  const spent = Math.min(1, env.spent_usd_micros / cap);
+  const held = Math.min(1 - spent, env.held_usd_micros / cap);
+  return (
+    <div className="aa-env" data-testid="aa-envelope" title={`Daily ambient budget; resets ${env.resets}`}>
+      <b>Today's agent budget</b>
+      <span className="aa-env-bar" aria-hidden>
+        <span data-k="spent" style={{ width: `${spent * 100}%` }} /><span data-k="held" style={{ width: `${held * 100}%` }} />
+      </span>
+      <span className="aa-env-nums">
+        <span><b>{money(microsUsd(env.spent_usd_micros))}</b> spent</span>
+        <span><b>{money(microsUsd(env.held_usd_micros))}</b> held</span>
+        <span><b>{money(microsUsd(env.available_usd_micros))}</b> left of {money(microsUsd(env.cap_usd_micros))}</span>
+      </span>
+    </div>
+  );
+}
+
+function Track({ rec }: { rec: { decided: number; accepted_pct: number } | undefined }) {
+  if (!rec || !rec.decided) return <span className="aa-sub" title="No agent decisions with an outcome yet">—</span>;
+  const tone = rec.accepted_pct >= 85 ? "ok" : rec.accepted_pct >= 50 ? "warn" : "bad";
+  return (
+    <span className="aa-track" title={`${rec.accepted_pct}% of ${rec.decided} decisions accepted (85% over 20 earns a raise)`} data-testid="aa-track">
+      <span className="aa-track-bar"><span data-tone={tone} style={{ width: `${rec.accepted_pct}%` }} /></span>
+      {Math.round(rec.accepted_pct)}% · {rec.decided}
+    </span>
+  );
+}
+
+export function AutonomyMatrix({ projectId, classes, track, onChanged }: {
+  projectId: string; classes: ClassRow[]; track: Record<string, { decided: number; accepted_pct: number }>; onChanged: () => void;
+}) {
+  const gate = useGate("autonomy:manage", projectId);
+  const [pending, setPending] = useState<{ cls: ClassRow; level: string } | null>(null);
+  const choose = (cls: ClassRow, level: string) => {
+    if (!gate.allowed || level === cls.level || rank(level) > rank(cls.ceiling)) return;
+    setPending({ cls, level });
+  };
+  const apply = async () => {
+    if (!pending) return;
+    const r = await setLevel(projectId, pending.cls.task_class, pending.level, rank(pending.level) > rank(pending.cls.level) ? "raised in console" : "lowered in console");
+    showToast(r.ok ? "success" : "error", r.ok ? `${pending.cls.title} is now ${pending.level}` : `Not changed: ${r.error}`);
+    setPending(null);
+    onChanged();
+  };
+  return (
+    <div className="aa-matrix-wrap">
+      <table className="aa-matrix" data-testid="aa-matrix">
+        <thead>
+          <tr>
+            <th>Task class</th>
+            {LEVELS.map((l) => <th key={l} title={LEVEL_WORDS[l]}>{l}<br /><span className="aa-sub">{LEVEL_WORDS[l]}</span></th>)}
+            <th>Track record</th><th />
+          </tr>
+        </thead>
+        <tbody>
+          {classes.map((c) => (
+            <React.Fragment key={c.task_class}>
+              <tr data-testid="aa-class" data-class={c.task_class} data-level={c.level}>
+                <td title={`Risk ${c.risk}${c.owner_role ? ` · owner ${c.owner_role.replace(/_/g, " ")}` : ""}`}>{c.title}</td>
+                {LEVELS.map((l) => {
+                  const locked = rank(l) > rank(c.ceiling);
+                  return (
+                    <td key={l}>
+                      <button type="button" className="aa-cell" data-testid="aa-cell" data-level={l}
+                              data-on={c.level === l || undefined} data-below={rank(l) < rank(c.level) || undefined}
+                              data-locked={locked || undefined} data-suggested={c.suggested_level === l || undefined}
+                              {...gate.props}
+                              aria-label={`${c.title}: ${l}${c.level === l ? " (current)" : locked ? " (above the ceiling)" : ""}`}
+                              title={!gate.allowed ? gate.reason : locked ? `Ceiling is ${c.ceiling}` : c.level === l ? `Now: ${LEVEL_WORDS[l]}` : `Set to ${l} · ${LEVEL_WORDS[l]}`}
+                              onClick={() => choose(c, l)}>{c.level === l ? "●" : ""}{gate.sr}</button>
+                    </td>
+                  );
+                })}
+                <td><Track rec={track[c.task_class]} /></td>
+                <td>
+                  {c.suggested_level && rank(c.suggested_level) > rank(c.level) ? (
+                    <GatedButton permission="autonomy:manage" projectId={projectId} className="aa-raise" data-testid="aa-raise"
+                                 title="BOSS earned it: 85%+ accepted, nothing reverted" onClick={() => choose(c, c.suggested_level!)}>
+                      Raise to {c.suggested_level}
+                    </GatedButton>
+                  ) : null}
+                </td>
+              </tr>
+              {pending && pending.cls.task_class === c.task_class ? (
+                <tr className="aa-level-confirm" data-testid="aa-level-confirm">
+                  <td colSpan={7}>
+                    {rank(pending.level) > rank(c.level) ? "Raise" : "Lower"} {c.title} to <b>{pending.level} · {LEVEL_WORDS[pending.level]}</b>?{" "}
+                    <GatedButton permission="autonomy:manage" projectId={projectId} className="ag-btn primary" data-testid="aa-level-apply" onClick={() => void apply()}>
+                      Set {pending.level}
+                    </GatedButton>{" "}
+                    <button type="button" className="ag-btn" onClick={() => setPending(null)}>Cancel</button>
+                  </td>
+                </tr>
+              ) : null}
+            </React.Fragment>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+export function AutonomyPanel({ projectId }: { projectId: string }) {
+  const live = useConsoleLive();
+  const auto = usePolledRead({ key: autonomyPath(projectId), read: polled(autonomyPath(projectId), parseAutonomy), pollMs: 30_000, paused: !live, enabled: !!projectId });
+  const settings = usePolledRead({ key: settingsPath(projectId), read: polled(settingsPath(projectId), parseSettings), pollMs: 15_000, paused: !live, enabled: !!projectId });
+  const score = usePolledRead({ key: scorecardPath(projectId, 30), read: polled(scorecardPath(projectId, 30), parseScorecard), pollMs: 120_000, paused: !live, enabled: !!projectId });
+  if (auto.error === MISSING) {
+    return <div className="aa-empty" data-testid="aa-autonomy-missing"><b>Autonomous agents aren't on this install yet</b><span>Upgrade BOSS to set what agents may do on their own.</span></div>;
+  }
+  const track = Object.fromEntries((score.data?.by_class ?? []).map((c) => [c.task_class, c]));
+  const reload = () => { auto.reload(); settings.reload(); };
+  return (
+    <section className="aa aa-safety" data-testid="aa-autonomy" aria-label="Autonomy and safety">
+      <div className="aa-safety-top">
+        {settings.data ? <KillSwitch projectId={projectId} stop={settings.data.stop} onChanged={reload} /> : <div className="aa-kill" />}
+        {settings.data ? <EnvelopeMeter env={settings.data.envelope} /> : <div className="aa-env" />}
+      </div>
+      {auto.data ? <AutonomyMatrix projectId={projectId} classes={auto.data.classes} track={track} onChanged={reload} /> : null}
+    </section>
+  );
+}

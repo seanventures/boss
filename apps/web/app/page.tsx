@@ -64,6 +64,7 @@ import { ProcessManager } from "./process-manager-ui";
 import { LogExplorer } from "./activity/log-explorer";
 import { GovernHome } from "./govern/govern-home";
 import { SelfFixesHome } from "./self-fix/self-fixes-home";
+import { AgentOpsHome } from "./agent-ops/agent-ops-home";
 import { DeliveryWorkflows } from "./delivery-workflows-ui";
 import { fetchWorkOrchestrationFeed } from "../lib/work-orchestration";
 import { WorkOrchestration } from "./work-orchestration-ui";
@@ -1482,6 +1483,13 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         {shows("welcome") ? (
         <section className="panel-stack" data-area="welcome" aria-label="Get started">
           <SetupBoard projectId={activeProjectId} actor={activeActorId} layout="welcome" />
+        </section>
+        ) : null}
+
+        {shows("agent_ops") ? (
+        <section className="panel-stack" data-area="agent_ops" aria-label="Agents at work">
+          {/* AUTONOMOUS AGENTS (AUTONOMOUS_AGENTS_SPEC.md §7.1): reads its own data, client-side. */}
+          <AgentOpsHome projectId={activeProjectId} actor={activeActorId} orgId={activeOrgId} />
         </section>
         ) : null}
 
