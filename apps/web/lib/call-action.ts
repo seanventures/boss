@@ -3,7 +3,7 @@
 import { runPressedAction } from "../app/press-relay";
 import { INTENT_FIELD, type Press, runPress } from "./api-write";
 import { noteDecisionResult } from "./decided-gates";
-import { currentMirror, wantsStepUp, wasForbidden } from "./identity/mirror";
+import { currentMirror, liveMirror, wantsStepUp, wasForbidden } from "./identity/mirror";
 import type { Permission } from "./identity/permissions.gen";
 import { permissionName } from "./identity/words";
 
@@ -121,7 +121,8 @@ export function callAction<A extends unknown[], R>(
   return async (...args: A) => {
     let first: { value?: R; error?: unknown };
     try { first = { value: await once(...args) }; } catch (error) { first = { error }; }
-    const mirror = currentMirror();
+    // The installed mirror, or the provider still on the page (lib/identity/mirror.ts).
+    const mirror = currentMirror() ?? liveMirror();
     if (mirror && askedForStepUp(first)) {
       const reason = permission ? `This needs “${permissionName(permission)}”.` : "This needs a fresh check.";
       if (await mirror.stepUp(reason)) {

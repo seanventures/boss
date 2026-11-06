@@ -122,23 +122,62 @@ def _in_use_repos(db: Any) -> list[str]:
     return [str(name) for name in rows if _REPO_NAME.match(str(name))]
 
 
-def _lost_in_use(db: Any) -> list[str]:
-    """In-use repos the installation can no longer reach. A GitHub miss confirms with no warning.
-
-    The list is the stored installation's (installation_repositories), never the query's
-    installation_id. Only full_name is kept; a token on the payload is not."""
+def _reachable(db: Any) -> Optional[list[str]]:
+    """The repositories the stored installation reaches now, or None when GitHub did not say.
+    Only full_name is kept; a token on the payload is not."""
     try:
         listed = github_setup.installation_repositories(db)
-    except (github_setup.GitHubSetupError, github_app.GitHubRefused):
-        return []
-    reachable = set()
+    except Exception:  # noqa: BLE001 — a GitHub miss (or no App here) confirms with no list
+        return None
+    names: list[str] = []
     for item in listed or []:
         if not isinstance(item, dict):
             continue
-        name = str(item.get("full_name") or "").strip().lower()
-        if _REPO_NAME.match(name):
-            reachable.add(name)
-    return [name for name in _in_use_repos(db) if name not in reachable][:20]
+        name = str(item.get("full_name") or "").strip()
+        if _REPO_NAME.match(name.lower()) and name.lower() not in {n.lower() for n in names}:
+            names.append(name)
+    return names
+
+
+def _lost_in_use(db: Any, reachable: Optional[list[str]] = None) -> list[str]:
+    """In-use repos the installation can no longer reach. A GitHub miss confirms with no warning.
+
+    The list is the stored installation's (installation_repositories), never the query's
+    installation_id."""
+    if reachable is None:
+        reachable = _reachable(db)
+    if reachable is None:
+        return []
+    have = {n.lower() for n in reachable}
+    return [name for name in _in_use_repos(db) if name not in have][:20]
+
+
+#: How many repository names the "Access updated" redirect names (the rest are counted).
+_NAMED_REPOS = 20
+
+
+def _access_updated(db: Any, installation_id: str) -> RedirectResponse:
+    """GITHUB'S OWN RETURN, CONFIRMED (operator, 2026-11-06: changing the App's repository access
+    at github.com/settings/installations came back to "The link expired or was used"). The
+    signed-in session is the proof of who; the App's API says whether the installation is ITS
+    own; then the stored verification is refreshed and the repositories the App reaches now are
+    named, so Setup says "Access updated" with them instead of a failure."""
+    org_id = default_org_id(db)
+    github_setup.confirm_installation(installation_id=installation_id[:40], org_id=org_id, db=db)
+    try:
+        with db.begin_nested():
+            github_setup.verify(db, org_id)
+    except Exception:  # noqa: BLE001 — the access row asks again on its own; the update stands
+        pass
+    reachable = _reachable(db)
+    confirmed = {"github": "app_updated"}
+    lost = _lost_in_use(db, reachable)
+    if lost:
+        confirmed["lost"] = ",".join(lost)
+    if reachable:
+        confirmed["repos"] = ",".join(reachable[:_NAMED_REPOS])
+        confirmed["repo_count"] = str(len(reachable))
+    return _back(db, **confirmed)
 
 
 def build_identity_github_router() -> APIRouter:
@@ -190,24 +229,29 @@ def build_identity_github_router() -> APIRouter:
                 return _back(db, github="app_failed", reason=getattr(exc, "code", "failed"))
 
     # Install sends the signed state. setup_on_update does not: installation_id and setup_action
-    # only. The id in the query is not stored (it can be spoofed; GitHub already saved the change).
-    # Without a state, the console session cookie is the proof.
+    # only. The id in the query is not stored (it can be spoofed; GitHub already saved the change);
+    # it is checked against the App's own API. Without a usable state — none, or one that expired
+    # or was used — the console session cookie is the proof.
     @router.get("/v1/identity/github/app/installed")
     @public(reason=PublicReason.OAUTH_STATE_BOUND_CALLBACK, verifier=github_setup.complete_install)
     def app_installed(request: Request, installation_id: str = "", state: str = "", setup_action: str = ""):
         try:
+            if (state or "").strip():
+                try:
+                    with begin() as db:
+                        github_setup.complete_install(installation_id=installation_id[:40], state=state[:600],
+                                                      org_id=default_org_id(db), db=db)
+                        return _back(db, github="app_connected")
+                except github_setup.GitHubSetupError as exc:
+                    # A state that no longer opens the install path is GitHub's own return (an
+                    # access change made on github.com), not an expired link: confirmed below
+                    # through the session and the App's API, exactly as a stateless update.
+                    if exc.code not in github_setup.STALE_STATE_CODES:
+                        raise
             with begin() as db:
-                if (state or "").strip():
-                    github_setup.complete_install(installation_id=installation_id[:40], state=state[:600],
-                                                  org_id=default_org_id(db), db=db)
-                    return _back(db, github="app_connected")
                 if _console_session(request, db) is None:
                     return _unauthenticated()
-                lost = _lost_in_use(db)
-                confirmed = {"github": "app_updated"}
-                if lost:
-                    confirmed["lost"] = ",".join(lost)
-                return _back(db, **confirmed)
+                return _access_updated(db, installation_id)
         except AuthnError as exc:
             return refusal(exc)
         except (github_setup.GitHubSetupError, github_app.GitHubRefused) as exc:

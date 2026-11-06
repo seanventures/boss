@@ -24,7 +24,7 @@ import type { Permission } from "../../lib/identity/permissions.gen";
 import { checkWith } from "../../lib/identity/check";
 import { IdentityError, idGet, setCsrfToken } from "../../lib/identity/api";
 import { StepUpSheet } from "./step-up-sheet";
-import { currentMirror, installMirror } from "../../lib/identity/mirror";
+import { currentMirror, installMirror, liveMirror, registerLiveMirror, type Mirror } from "../../lib/identity/mirror";
 import { installReadGate } from "../../lib/identity/read-gates";
 import { installGestureTracking, isInteractive } from "../../lib/user-gesture";
 
@@ -135,27 +135,66 @@ export function IdentityProvider({ me: initialMe, org: initialOrg, project: init
   // one place that decides: a write the person did not start in the last few seconds (an
   // effect, a timer, a background sync) is answered "not confirmed" at once and its caller
   // shows its own inline state. "Confirm it's you" no longer appears on a plain refresh.
+  //
+  // ONE SHEET, EVERY ASKER ANSWERED, NO PROMISE LEFT WAITING (boss-1, 2026-11-06: Approve on a
+  // Deploy step's stack deployment got one 401 step_up_required, no sheet, and every later press
+  // went nowhere). A second ask while the sheet is open JOINS it — it used to replace the first
+  // ask, whose caller then waited forever. An ask made of a provider that is not mounted (React
+  // rendered it and threw it away, or it has left the page) goes to the provider that is
+  // (lib/identity/mirror.ts liveMirror), or is answered "not confirmed" at once; and a provider
+  // leaving the page answers its open ask "not confirmed". A press is never wedged behind a
+  // sheet nobody can see.
   useEffect(() => { installGestureTracking(); }, []);
-  const stepUp = useCallback((reason: string) => {
-    installGestureTracking();
-    if (!isInteractive()) return Promise.resolve(false);
-    return new Promise<boolean>((resolve) => setAsk({ reason, resolve }));
+  const mounted = useRef(false);
+  const waiting = useRef<{ reason: string; resolvers: ((ok: boolean) => void)[] } | null>(null);
+  const settle = useCallback((ok: boolean) => {
+    const open = waiting.current;
+    waiting.current = null;
+    setAsk(null);
+    for (const resolve of open?.resolvers ?? []) resolve(ok);
   }, []);
+  const stepUp = useCallback((reason: string): Promise<boolean> => {
+    installGestureTracking();
+    if (!mounted.current) {
+      const live = liveMirror();
+      return live && live !== mirrorRef.current ? live.stepUp(reason) : Promise.resolve(false);
+    }
+    if (!isInteractive()) return Promise.resolve(false);
+    return new Promise<boolean>((resolve) => {
+      if (waiting.current) { waiting.current.resolvers.push(resolve); return; }
+      waiting.current = { reason, resolvers: [resolve] };
+      setAsk({ reason, resolve: settle });
+    });
+  }, [settle]);
 
   // Code outside components (lib/call-action.ts, the read gate) mirrors through the same check
   // and step-up. Installed DURING RENDER as well as in the effect: a child's mount effect (the
   // shell's first reads) runs before this provider's effects, and the read gate must already
   // know who is looking (lib/identity/read-gates.ts).
-  const mirror = useMemo(() => ({ check: (p: Permission) => check(p), stepUp, refresh, projectId }),
+  const mirror = useMemo<Mirror>(() => ({ check: (p: Permission) => check(p), stepUp, refresh, projectId }),
     [check, stepUp, refresh, projectId]);
+  const mirrorRef = useRef<Mirror>(mirror);
   if (typeof window !== "undefined" && currentMirror() !== mirror) {
     installMirror(mirror);
     installReadGate();
   }
   useEffect(() => {
+    mirrorRef.current = mirror;
     installMirror(mirror);
-    return () => installMirror(null);
   }, [mirror]);
+  // On the page: registered as live; leaving it, the mirror passes to the provider still here
+  // (never nulled under it) and the open ask, if any, is answered "not confirmed".
+  useEffect(() => {
+    mounted.current = true;
+    const leave = registerLiveMirror(mirrorRef);
+    return () => {
+      mounted.current = false;
+      leave();
+      const open = waiting.current;
+      waiting.current = null;
+      for (const resolve of open?.resolvers ?? []) resolve(false);
+    };
+  }, []);
 
   const value = useMemo<Ctx>(() => ({ me, org, project, projectId, stub, mirrored, check, refresh, stepUp }),
     [me, org, project, projectId, stub, mirrored, check, refresh, stepUp]);

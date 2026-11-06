@@ -338,6 +338,19 @@ export type SetupRefusal = {
 };
 
 /** POST /v1/setup/repository/token. */
+/** Add repo's list: one group per connected account (GET /v1/setup/repository/available).
+ *  `connection_id` is what the select sends; "org_app" connects the org's App to the project. */
+export type AvailableRepoGroup = {
+  id: string;
+  connection_id: string;
+  kind: "org_app" | "personal_signin" | "token";
+  account: string;
+  repos: Array<{ full_name: string; private: boolean; default_branch: string | null;
+                 owner_type: string | null; in_project: boolean }>;
+  error: SetupRefusal | null;
+};
+export type AvailableRepos = { groups: AvailableRepoGroup[] };
+
 export type TokenFound = {
   /** Replace token: the bindings re-checked with the new token. */
   rechecked?: string[];
