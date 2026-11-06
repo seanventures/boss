@@ -30,7 +30,7 @@
       <div class="kv" style="font-size:.6rem"><dt>p95</dt><dd class="mono">180ms</dd><dt>Errors</dt><dd class="mono">0.1%</dd></div>
     </div>
     <div class="row wrap" style="gap:8px;font-size:.6rem;padding-top:10px;border-top:1px solid var(--border)">
-      <span class="face" data-a="beacon" data-size="s"></span><span>Last deploy <b>PR #2</b> · 2h ago</span><span class="mono faint">a41c9e2</span><span class="wf-spacer"></span><a class="link-chip"><i class="ph ph-terminal-window"></i>Logs</a><a class="link-chip"><i class="ph ph-hard-drives"></i>Host</a></div>
+      <span class="face" data-a="beacon" data-size="s"></span><span>Last deploy <b>PR #2</b> · 2h ago</span><span class="mono faint">a41c9e2</span><span class="wf-spacer"></span><a class="link-chip"><i class="ph ph-terminal-window"></i>Logs</a><a class="link-chip" title="Opens this server in Infra (shared by 3 projects)"><i class="ph ph-hard-drives"></i>runs on 2.29.2.202 ↗</a></div>
   </section>
 
   <section class="card env locked">
@@ -44,11 +44,11 @@
 </section>
 
 <section class="card">
-  <div class="card-h"><span class="ico" data-c="green"><i class="ph ph-key"></i></span><h3>Demo logins</h3><span class="tag">Staging</span><span class="pin">2</span><a class="more"><i class="ph ph-plus"></i> Add login</a></div>
+  <div class="card-h"><span class="ico" data-c="green"><i class="ph ph-key"></i></span><h3>Demo logins</h3><span class="tag">Staging</span><span class="pin">2</span><a class="more"><i class="ph ph-gear"></i> Manage in Settings</a></div>
   <div>
-    <div class="cred"><span class="tag" data-tone="blue"><i class="ph ph-crown"></i>Admin</span><span class="mono ell">admin@helpdesk.demo</span><span class="secret">••••••••••</span><span class="row"><i class="ph ph-eye" title="Reveal — owners only, audited"></i><i class="ph ph-copy" title="Copy"></i></span></div>
-    <div class="cred"><span class="tag"><i class="ph ph-headset"></i>Agent</span><span class="mono ell">agent@helpdesk.demo</span><span class="row"><span class="mono">demo-agent-24</span><span class="tag" data-tone="amber" title="Revealed for 30s">29s</span></span><span class="row"><i class="ph ph-eye-slash"></i><i class="ph ph-copy"></i></span></div>
-    <div class="cred"><span class="tag"><i class="ph ph-user"></i>Customer</span><span class="mono ell">customer@helpdesk.demo</span><span class="secret">••••••••••</span><span class="row"><i class="ph ph-eye"></i><i class="ph ph-copy"></i></span></div>
+    <div class="cred"><span class="tag" data-tone="blue"><i class="ph ph-crown"></i>Admin</span><span class="mono ell">admin@demo.test</span><span class="secret">••••••••••</span><span class="row"><i class="ph ph-eye" title="Reveal — owners only, audited"></i><i class="ph ph-copy" title="Copy"></i></span></div>
+    <div class="cred"><span class="tag"><i class="ph ph-headset"></i>Agent</span><span class="mono ell">agent@demo.test</span><span class="row"><span class="mono">demo-agent-24</span><span class="tag" data-tone="amber" title="Revealed for 30s">29s</span></span><span class="row"><i class="ph ph-eye-slash"></i><i class="ph ph-copy"></i></span></div>
+    <div class="cred"><span class="tag"><i class="ph ph-user"></i>Customer</span><span class="mono ell">customer@demo.test</span><span class="secret">••••••••••</span><span class="row"><i class="ph ph-eye"></i><i class="ph ph-copy"></i></span></div>
   </div>
 </section>
 
@@ -63,7 +63,7 @@
 
 <div class="notes"><b>Design notes</b><ol>
   <li><b>1</b> The ship path as a diagram; the gates come from Govern policy (staging auto, prod a person). Prod's node is amber + locked until a person sets it up and approves.</li>
-  <li><b>2</b> Demo logins: user shown, password masked; Reveal is owner-only, audited, auto-hides after 30s; Copy never shows it. Stored as project secrets, never in page source.</li>
+  <li><b>2</b> Demo logins here are read-only (user + reveal); they are managed in Project › Settings. Reveal = owner/admin with step-up, audited, hides after 30s. "runs on 2.29.2.202 ↗" opens the shared server in Infra, which lists every project on it and links back.</li>
 </ol></div>
 </div>
 <script src="../shell.js"></script>

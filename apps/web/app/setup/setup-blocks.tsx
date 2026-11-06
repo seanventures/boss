@@ -19,6 +19,7 @@ import { fetchSetup, setupWrite } from "../../lib/setup-client";
 import { ageLabel } from "../../lib/setup-stepper";
 import type { GitHubAccount, Pill as PillT, SetupRepository, SetupView } from "../../lib/setup-types";
 import { AddAccountPanel } from "./add-account-panel";
+import { AddRepoFromAnyAccount } from "./add-repo-any-account";
 import { Drawer } from "./drawer";
 import { RowMenu, toast, useBoard, type MenuItem } from "./parts";
 import { Out, Pill } from "./pill";
@@ -224,8 +225,8 @@ export function SetupBlocks({ onAdvanced, initialOpen = null }: {
                    action={(
                      <GatedButton permission="repository:register" type="button" className="su-btn"
                                   data-testid="su-add-repo-open"
-                                  onClick={() => setOpen(connectable.length ? { kind: "repo", connectionId: connectable[0].connection_id }
-                                                                            : { kind: "account" })}>
+                                  onClick={() => setOpen(accounts.length ? { kind: "repo", connectionId: null }
+                                                                         : { kind: "account" })}>
                        <Plus size={12} weight="bold" aria-hidden="true" />Add repo
                      </GatedButton>
                    )} />
@@ -279,22 +280,16 @@ export function SetupBlocks({ onAdvanced, initialOpen = null }: {
             <span className="su-faint" data-testid="su-add-repo-context">
               To this project
               {(() => { const a = connectable.find((x) => x.connection_id === open.connectionId);
-                        return a ? ` · via ${a.name}` : ""; })()}
+                        return a ? ` · via ${a.name}` : " · from every connected account"; })()}
             </span>
-            {connectable.length > 1 ? (
-              <div className="su-chips" role="radiogroup" aria-label="Account">
-                {connectable.map((a) => (
-                  <button key={a.id} type="button" role="radio" aria-checked={open.connectionId === a.connection_id}
-                          className="su-chip" data-testid={`su-add-repo-via-${a.id}`}
-                          onClick={() => setOpen({ kind: "repo", connectionId: a.connection_id })}>
-                    {a.name}
-                  </button>
-                ))}
-              </div>
-            ) : null}
-            {open.connectionId ? <AddRepo key={open.connectionId} connectionId={open.connectionId} onDone={close} /> : null}
+            {/* EVERY ACCOUNT BY DEFAULT: Add repo lists what each connected account reaches,
+                grouped (add-repo-any-account.tsx). An account's own "Add a repo from it" still
+                narrows to that one connection. */}
+            {open.connectionId
+              ? <AddRepo key={open.connectionId} connectionId={open.connectionId} onDone={close} />
+              : <AddRepoFromAnyAccount onDone={close} />}
             <button type="button" className="su-link" data-testid="su-add-repo-new-account"
-                    onClick={() => setOpen({ kind: "account" })}>From another account</button>
+                    onClick={() => setOpen({ kind: "account" })}>Connect another GitHub account</button>
           </div>
         </Drawer>
       ) : null}

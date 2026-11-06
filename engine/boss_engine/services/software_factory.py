@@ -119,6 +119,20 @@ def fallback_review_packet(
     return "\n".join(lines)
 
 
+def _repo_name(adapter: Any) -> Optional[str]:
+    """The adapter's bound repository, or None when it is bound to none (it can raise then)."""
+    try:
+        return str(adapter.repository_full_name or "") or None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _failed_effect_cause(effect_kind: str, **where: Any) -> dict:
+    from .cleared_causes import failed_effect_cause
+
+    return failed_effect_cause(effect_kind, **where)
+
+
 class SoftwareFactoryService:
     def __init__(
         self,
@@ -1919,7 +1933,10 @@ class SoftwareFactoryService:
                 project_id,
                 task_id,
                 "GitHub integration is not configured",
-                {"action": "provide_github_token"},
+                # WHAT CLEARS IT (cleared_causes): a GitHub effect that succeeds later.
+                {**_failed_effect_cause("github.pull_request.create",
+                                        repository=_repo_name(self.github)),
+                 "action": "provide_github_token"},
                 {},
                 "missing_github_credentials",
             )
@@ -2556,7 +2573,13 @@ class SoftwareFactoryService:
                 project_id,
                 task_id,
                 "GitHub integration is not configured",
-                {"action": "provide_github_token"},
+                # WHAT CLEARS IT (cleared_causes): a GitHub effect that succeeds later, or
+                # this pull request merging some other way.
+                {**_failed_effect_cause("github.pull_request.merge",
+                                        repository=_repo_name(self.github),
+                                        pull_request_url=pull_request_url,
+                                        pull_request_number=pull_request_number),
+                 "action": "provide_github_token"},
                 {},
                 "missing_github_credentials",
             )
@@ -2849,7 +2872,11 @@ class SoftwareFactoryService:
                 project_id,
                 task_id,
                 "GitHub integration is not configured",
-                {"action": "provide_github_token"},
+                # WHAT CLEARS IT (cleared_causes): a GitHub effect that succeeds later.
+                {**_failed_effect_cause("github.deployment.create",
+                                        repository=_repo_name(self.github),
+                                        pull_request_url=pull_request_url),
+                 "action": "provide_github_token"},
                 {},
                 "missing_github_credentials",
             )

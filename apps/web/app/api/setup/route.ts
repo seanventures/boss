@@ -11,7 +11,8 @@ import { rawRequestUrl } from "../../../lib/raw-request-url";
  * the console's credentials — and a pasted token or key travels in the body, never a URL.
  *
  * GET  ?project_id=                        -> GET /v1/setup (the whole view)
- * GET  ?project_id=&repos=<connection_id>  -> what the stored token can see (+ Add repo)
+ * GET  ?project_id=&repos=<connection_id>  -> what the stored token can see
+ * GET  ?project_id=&available=1           -> every connected account's repos, grouped (+ Add repo)
  * GET  ?project_id=&catalogue=<provider>   -> the provider's model list (stored key)
  * GET  ?project_id=&ci_workflows=<binding>  -> "Builds may change CI workflows" for a repo
  * GET  ?project_id=&sign_in=<sign_in_id>   -> a subscription sign-in's state (polled)
@@ -93,6 +94,7 @@ export async function GET(req: Request) {
   const url = rawRequestUrl(req);
   const projectId = (url.searchParams.get("project_id") ?? "").trim();
   const repos = url.searchParams.get("repos");
+  const available = url.searchParams.get("available") === "1";
   const catalogue = url.searchParams.get("catalogue");
   const ciWorkflows = url.searchParams.get("ci_workflows");
   const signIn = url.searchParams.get("sign_in");
@@ -101,6 +103,8 @@ export async function GET(req: Request) {
     : ciWorkflows
     ? `/v1/setup/repository/${enc(ciWorkflows)}/ci-workflows?project_id=${enc(projectId)}`
       + (url.searchParams.get("recheck") === "1" ? "&recheck=true" : "")
+    : available
+    ? `/v1/setup/repository/available?project_id=${enc(projectId)}`
     : repos
     ? `/v1/setup/repository/repos?project_id=${enc(projectId)}&connection_id=${enc(repos)}`
     : catalogue
@@ -113,7 +117,7 @@ export async function GET(req: Request) {
       cache: "no-store",
       // A read is answered from what the API recorded; it never needs long. A model list
       // (catalogue=) asks the provider, so it gets more room.
-      signal: AbortSignal.timeout(catalogue || repos ? 30_000 : 10_000),
+      signal: AbortSignal.timeout(catalogue || repos || available ? 30_000 : 10_000),
     });
     return await forward(r);
   } catch (e) {

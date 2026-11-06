@@ -1579,6 +1579,17 @@ async def lifespan(_: FastAPI):
             print(f"[lifespan] stale build questions withdrawn: {len(stale)}")
     except Exception as exc:  # noqa: BLE001 — never block boot on a repair
         print(f"[lifespan] stale build-question sweep skipped: {exc}")
+    # QUESTIONS WHOSE CAUSE CLEARED (cleared_causes): a failed effect's "GitHub integration is
+    # not configured" after GitHub writes succeeded, a merge question after its PR merged.
+    try:
+        from boss_engine.services.cleared_causes import withdraw_cleared
+
+        with begin(engine) as connection:
+            cleared = withdraw_cleared(connection, actor="boss")
+        if cleared:
+            print(f"[lifespan] decisions whose cause cleared withdrawn: {len(cleared)}")
+    except Exception as exc:  # noqa: BLE001 — never block boot on a repair
+        print(f"[lifespan] cleared-cause sweep skipped: {exc}")
     # Preview lifecycle is independent from the API. Reconcile the durable rows against
     # live processes/containers/rootfs services; never blanket-kill healthy previews.
     try:
@@ -27823,8 +27834,20 @@ def run_delivery_capabilities(payload: open_bodies.DeliveryCapabilitiesRunBody) 
         moved.update({f"release:{k}": v for k, v in _release.advance_all(engine, ctx.settings).items()})
     except Exception as error:  # noqa: BLE001
         moved = {"error": type(error).__name__}
+    # QUESTIONS WHOSE CAUSE CLEARED while nothing was listening (cleared_causes): a PR merged by
+    # a person in GitHub, a GitHub write that worked after a credentials failure. Its own
+    # transaction; facts on record only, no GitHub call.
+    cleared: list[str] = []
+    try:
+        from boss_engine.services.cleared_causes import withdraw_cleared
+
+        with begin(engine) as connection:
+            cleared = withdraw_cleared(connection, actor="boss")
+    except Exception:  # noqa: BLE001 — a question left open never stops the tick
+        cleared = []
     return {**advanced, "gate_timeouts": timeouts, **({"other_projects": others} if others else {}),
-            **({"change_sets": moved} if moved else {})}
+            **({"change_sets": moved} if moved else {}),
+            **({"cleared_decisions": cleared} if cleared else {})}
 
 
 @app.get("/v1/workflows", response_model=WorkflowDefinitionListResponse)

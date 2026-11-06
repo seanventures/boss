@@ -102,8 +102,9 @@ export const API_READ_OPS: Readonly<Record<string, ApiRead>> = {
   "/api/sandboxes/{}/stats": one("sandboxes/{}/stats"),
   "/api/sandboxes/{}/tree": one("sandboxes/{}/tree"),
   "/api/setup": { op: (u) => (u.searchParams.get("ci_workflows") ? "ci_workflows"
-      : u.searchParams.get("repos") ? "repos" : u.searchParams.get("catalogue") ? "catalogue" : ""),
-    ops: { "": "setup", repos: "setup/repository/repos", catalogue: "setup/models/{}/catalogue",
+      : u.searchParams.get("repos") ? "repos" : u.searchParams.get("available") === "1" ? "available"
+      : u.searchParams.get("catalogue") ? "catalogue" : ""),
+    ops: { "": "setup", repos: "setup/repository/repos", available: "setup/repository/available", catalogue: "setup/models/{}/catalogue",
            ci_workflows: "setup/repository/{}/ci-workflows" } },
   "/api/skills": byView({ "": "skill-definitions", builtin: "skills", assignments: "role-skills" }),
   "/api/workflow-report": one("workflow-runs/{}/report"),

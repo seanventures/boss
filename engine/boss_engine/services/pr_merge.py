@@ -123,6 +123,11 @@ def record(connection: Any, run_id: str, sha: str, *, source: str) -> None:
              "WHERE id = :i"),
         {"i": run_id, "k": RECORD_KEY,
          "m": json.dumps({"sha": sha, "at": now_utc().isoformat(), "source": source})})
+    # A merged pull request answers its own merge question, and any question its failed
+    # effects raised (cleared_causes): withdrawn, with an event, never left in Needs you.
+    from .cleared_causes import on_pull_request_settled
+
+    on_pull_request_settled(connection, run_id, MERGED)
 
 
 def record_for_pull_request(connection: Any, project_id: str, pull_request_url: str, sha: str,
@@ -188,6 +193,9 @@ def observe(connection: Any, settings: Any, project_id: str, run_id: str, *,
                                        RECORD_KEY: {"sha": sha}}
             elif str(pr.get("state") or "") == "closed":
                 out["github"] = CLOSED
+                from .cleared_causes import on_pull_request_settled
+
+                on_pull_request_settled(connection, run_id, CLOSED)
             elif pr:
                 out["github"] = OPEN
         except Exception as error:  # noqa: BLE001 — GitHub unreachable: the record stands
