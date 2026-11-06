@@ -5925,8 +5925,14 @@ def force_complete_waiting_step(
     project_id: str,
     step_run_id: str,
     output: dict[str, Any],
+    finished_at: Optional[Any] = None,
 ) -> dict[str, Any]:
     """Complete a step that was PARKED, not leased.
+
+    `finished_at`: when the awaited work itself ended, if BOSS only noticed later. A run that
+    sat stopped kept its step's clock going: More tests read "1h 46m" for a 20-minute pass
+    because the stopped run was revived 90 minutes after the pass finished (helpdesk-ai,
+    2026-11-06). The step ends when its work did, never before it started.
 
     `complete_step` requires the caller to hold the lease, which is right for work a worker is
     executing. A parked step deliberately holds none — nothing is running, it is waiting for a
@@ -5939,12 +5945,17 @@ def force_complete_waiting_step(
             """
             UPDATE workflow_step_runs
             SET status='succeeded', output=CAST(:output AS JSONB),
-                completed_at=clock_timestamp(), updated_at=now()
+                completed_at=GREATEST(COALESCE(started_at, clock_timestamp()),
+                                      LEAST(clock_timestamp(),
+                                            COALESCE(CAST(:finished AS timestamptz),
+                                                     clock_timestamp()))),
+                updated_at=now()
             WHERE id=:id AND project_id=:project_id AND status='waiting'
             RETURNING *
             """
         ),
-        {"id": step_run_id, "project_id": project_id, "output": json.dumps(output)},
+        {"id": step_run_id, "project_id": project_id, "output": json.dumps(output),
+         "finished": finished_at},
     ).mappings().first()
     if not row:
         raise WorkflowNotFoundError("Waiting workflow step not found.")

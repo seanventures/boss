@@ -5583,8 +5583,10 @@ def resume_awaited(
             _look_at_recovery(connection, awaited_id)
         try:
             row = connection.execute(
-                text(f"SELECT {_STATUS_COLUMN.get(table, 'status')} AS status FROM {table} "  # noqa: S608
-                     "WHERE id = :id"),  # fixed set
+                # `ended_at` through to_jsonb: not every awaited table has updated_at (previews).
+                text(f"SELECT t.{_STATUS_COLUMN.get(table, 'status')} AS status, "  # noqa: S608
+                     f"to_jsonb(t)->>'updated_at' AS ended_at FROM {table} t "
+                     "WHERE t.id = :id"),  # fixed set
                 {"id": awaited_id},
             ).mappings().first()
         except Exception as error:  # noqa: BLE001 — a missing optional table is not fatal
@@ -5722,7 +5724,7 @@ def resume_awaited(
                 continue
             workflows.force_complete_waiting_step(
                 connection, project_id=project_id, step_run_id=step["id"],
-                output=finished,
+                output=finished, finished_at=row.get("ended_at"),
             )
             done.append({"run_id": run_id, "step_id": step["step_id"],
                          "outcome": "succeeded", "awaited": kind})
