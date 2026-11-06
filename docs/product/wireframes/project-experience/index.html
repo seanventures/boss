@@ -48,4 +48,6 @@ document.documentElement.dataset.theme = new URLSearchParams(location.search).ge
 new MutationObserver(draw).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
 draw();
 </script>
+<script>/* → opens the first screen; then → / ← walk through every screen. */
+document.addEventListener("keydown",e=>{if(e.key==="ArrowRight"||e.key===" "){e.preventDefault();location.href="screens/00a-first-run-empty.html";}});</script>
 </body></html>

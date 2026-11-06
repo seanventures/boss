@@ -111,3 +111,28 @@
     el.replaceWith(img);
   });
 })();
+
+/* KEYBOARD WALK-THROUGH (operator: "navigate by using the right arrow"). → next screen, ← previous,
+   Esc back to the index; a small "n / 14" counter shows where you are. */
+(function () {
+  const ORDER = ["00a-first-run-empty", "00b-first-run-guided", "01-nav", "02-projects", "03-new-project",
+    "04-overview", "05-work", "05b-work-drawer", "06-repo-knowledge", "07-roadmap", "08-deployments",
+    "09-captain-drawer", "10-onboarding", "11-jump-palette"];
+  const here = (location.pathname.split("/").pop() || "").replace(/\.html$/, "");
+  const i = ORDER.indexOf(here);
+  if (i < 0) return;
+  const go = (j) => { if (j >= 0 && j < ORDER.length) location.href = ORDER[j] + ".html"; };
+  document.addEventListener("keydown", (e) => {
+    if (e.target && /input|textarea|select/i.test(e.target.tagName)) return;
+    if (e.key === "ArrowRight" || e.key === " ") { e.preventDefault(); go(i + 1); }
+    else if (e.key === "ArrowLeft") { e.preventDefault(); go(i - 1); }
+    else if (e.key === "Escape") { location.href = "../index.html"; }
+  });
+  const tag = document.createElement("div");
+  tag.textContent = `${i + 1} / ${ORDER.length}  ·  ← →  ·  Esc index`;
+  tag.style.cssText = "position:fixed;right:14px;bottom:12px;z-index:9999;font:12px/1 system-ui;" +
+    "padding:7px 10px;border-radius:8px;background:rgba(15,23,42,.85);color:#cbd5e1;" +
+    "border:1px solid rgba(148,163,184,.25);pointer-events:none";
+  (document.body ? Promise.resolve() : new Promise((r) => addEventListener("DOMContentLoaded", r)))
+    .then(() => document.body.appendChild(tag));
+})();
