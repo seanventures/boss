@@ -4,7 +4,7 @@ Install BOSS Community on a machine you administer. This page is the installer r
 
 ## Install
 
-For the RC10.5 candidate, use the [commit-pinned GitHub checkout](#straight-from-github). You need Git and repository access; use an account with access if GitHub asks you to sign in. The website installer and hosted manual are deployed separately, so source publication alone does not verify their version.
+For v1.0-rc10.11, use the [commit-pinned GitHub checkout](#straight-from-github). You need Git and repository access; use an account with access if GitHub asks you to sign in. The website installer and hosted manual are deployed separately, so source publication alone does not verify their version.
 
 ### One command
 
@@ -138,12 +138,12 @@ This is the same command as [Install](#install): it installs the newest release 
 
 ### Straight from GitHub
 
-Install the reviewed RC10.5 source without the website. This uses Git authentication if the repository requires access, checks out the verified published commit, and installs that same commit:
+Install v1.0-rc10.11 without the website. This uses Git authentication if the repository requires access, checks out the published commit for that tag, and installs that same commit:
 
 ```bash
 (
   set -e
-  BOSS_RELEASE_COMMIT=cb278010b4cef68c55a9684c3e9bd74b14c8b520
+  BOSS_RELEASE_COMMIT=ae15726290b2044de556e4f9166de0d38690009c
   git clone --branch v1.0-rc10.11 https://github.com/seanventures/boss.git boss-rc10.11
   cd boss-rc10.11
   git checkout --detach "$BOSS_RELEASE_COMMIT"
@@ -419,7 +419,10 @@ The checks cover: containers running, the API answering, the address compiled in
 
 ```bash
 # Is the machine fit to start an expensive run?
-curl -s "$BOSS_API_URL/v1/projects/$BOSS_DEFAULT_PROJECT_ID/preflight"
+# boss-community.env.sh exports BOSS_API_URL, BOSS_API_KEY, and BOSS_PROJECT_ID.
+source ~/boss/boss-community.env.sh
+curl -fsS -H "Authorization: Bearer $BOSS_API_KEY" \
+  "$BOSS_API_URL/v1/projects/$BOSS_PROJECT_ID/preflight"
 ```
 
 `{"ready": true}` means no unresolved blockers from the last run and no recent host stalls. Warnings name what to fix first; running anyway spends real money to reach a known answer.
@@ -427,7 +430,9 @@ curl -s "$BOSS_API_URL/v1/projects/$BOSS_DEFAULT_PROJECT_ID/preflight"
 ### When a run is slower than expected
 
 ```bash
-curl -s "$BOSS_API_URL/v1/code-tasks/${RUN_ID:?the code task run id, from the console}/retrospective"
+source ~/boss/boss-community.env.sh
+curl -fsS -H "Authorization: Bearer $BOSS_API_KEY" \
+  "$BOSS_API_URL/v1/code-tasks/${RUN_ID:?the code task run id, from the console}/retrospective"
 ```
 
 Returns three separate grades (delivery, efficiency, host) deterministically, with no model call. If `host` is `degraded` or `critical`, the time was spent on the machine and re-running will not improve it.
