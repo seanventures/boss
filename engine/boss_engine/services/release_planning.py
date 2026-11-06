@@ -592,9 +592,13 @@ class ReleasePlanningService:
                     }
                 )
 
-        # Also fold open work_items that may lack bindings.
+        # Also fold open work_items that may lack bindings. Not the ones BOSS raised itself
+        # (services/ambient): those live on Agent Operations until a person accepts one into a
+        # ticket — an A0 "observe" item on the release board would be exactly the noise §10 of
+        # the autonomous-agents design warns switches the feature off.
         try:
-            work_items = self.work.list_work_items(connection, project_id, limit=200)
+            work_items = self.work.list_work_items(connection, project_id, limit=200,
+                                                   ambient=False)
             for item in work_items:
                 try:
                     column = _work_column(item.get("status"))
@@ -729,7 +733,8 @@ class ReleasePlanningService:
             pass
 
         try:
-            for item in self.work.list_work_items(connection, project_id, limit=200):
+            for item in self.work.list_work_items(connection, project_id, limit=200,
+                                                  ambient=False):
                 column = _work_column(item.get("status"))
                 if item.get("allocation_status") == "allocated" and column == "planned":
                     column = "building"
