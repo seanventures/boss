@@ -953,8 +953,11 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
                 "created_by_job_id": job.id,
             }
         )
-        if result.get("status") == "failed":
-            raise RuntimeError(result.get("message") or "Pull-request merge failed.")
+        # BLOCKED IS NOT MERGED. A merge the API could not perform returned "blocked" and the job
+        # was marked succeeded, so nothing said the approved PR was still open (2026-11-06).
+        if result.get("status") in ("failed", "blocked"):
+            raise RuntimeError(result.get("message") or result.get("reason")
+                               or "Pull-request merge failed.")
         return result
     if job.kind == "change_set.merge":
         # A multi-repo change after its one approval: merged as a set (heads re-checked, in
