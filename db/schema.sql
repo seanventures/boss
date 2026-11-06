@@ -10960,7 +10960,9 @@ CREATE TABLE IF NOT EXISTS work_item_messages (
   body JSONB NOT NULL DEFAULT '{}'::jsonb,
   reply_to TEXT REFERENCES work_item_messages(id) ON DELETE CASCADE,
   act_id TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  -- clock_timestamp, not now(): messages posted in one transaction keep the order they were
+  -- posted in (a proposal before its votes), as events.created_at does.
+  created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
 );
 CREATE INDEX IF NOT EXISTS idx_work_item_messages_item ON work_item_messages (work_item_id, created_at, id);
 -- One vote per voter per proposal: a voter changing its mind posts a critique, not a 2nd vote.
@@ -11018,7 +11020,9 @@ CREATE TABLE IF NOT EXISTS agent_act_decisions (
                        'incident_caused')),
   outcome_ref TEXT,
   outcome_at TIMESTAMPTZ,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  -- clock_timestamp: a track record counts decisions AFTER a level change, even when both
+  -- happen in one transaction.
+  created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
   CHECK (reversibility <> 'reversible' OR undo IS NOT NULL)
 );
 CREATE INDEX IF NOT EXISTS idx_agent_act_decisions_project ON agent_act_decisions (project_id, created_at DESC);
@@ -11086,7 +11090,7 @@ CREATE TABLE IF NOT EXISTS ambient_autonomy_changes (
   actor TEXT NOT NULL,
   reason TEXT NOT NULL DEFAULT '',
   evidence JSONB NOT NULL DEFAULT '{}'::jsonb,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
 );
 CREATE INDEX IF NOT EXISTS idx_ambient_autonomy_changes
   ON ambient_autonomy_changes (project_id, task_class, created_at DESC);
