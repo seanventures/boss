@@ -5854,6 +5854,14 @@ def onboard_org_endpoint(payload: OrgOnboardBody):
 def list_projects(request: Request, include_archived: bool = False) -> ProjectListResponse:
     """The projects the caller may read. An archived project (services/projects_archive.py) is
     left out unless `include_archived=true`; the console's "Show archived" asks for it."""
+    return ProjectListResponse(
+        items=[project_summary_from_row(row)
+               for row in visible_project_rows(request, include_archived=include_archived)])
+
+
+def visible_project_rows(request: Request, *, include_archived: bool = False) -> list:
+    """THE ONE ANSWER to "which projects may this caller read": GET /v1/projects, the Projects
+    list (GET /v1/projects/summary) and the jump search all read it, so they cannot disagree."""
     authenticated, principal = catalog_read_scope()
     with begin(engine) as connection:
         rows = connection.execute(
@@ -5889,10 +5897,7 @@ def list_projects(request: Request, include_archived: bool = False) -> ProjectLi
         ).mappings().all()
         # IDENTITY (S2): only projects the caller holds project:read in (§6.7).
         visible = _readable_projects(request, [str(row["id"]) for row in rows])
-        return ProjectListResponse(
-            items=[project_summary_from_row(row) for row in rows
-                   if visible is None or str(row["id"]) in visible]
-        )
+        return [row for row in rows if visible is None or str(row["id"]) in visible]
 
 
 @app.post("/v1/projects", status_code=201, response_model=ProjectCreatedResponse)

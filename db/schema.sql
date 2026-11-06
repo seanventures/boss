@@ -11215,3 +11215,39 @@ CREATE INDEX IF NOT EXISTS idx_ambient_recommendations_fp
   ON ambient_recommendations (project_id, fingerprint, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_ambient_recommendations_detector
   ON ambient_recommendations (project_id, detector, status);
+
+-- ============================================================================================
+-- PROJECT EXPERIENCE (BOSSAPP-913 / 914; docs/product/PROJECT_EXPERIENCE_CONTRACT.md §7, §8).
+-- code: engine/boss_engine/services/project_experience/{captain,onboarding}.py
+-- ============================================================================================
+-- THE PROJECT'S CAPTAIN: the agent that takes a project over once it is created (default the
+-- project's engineering_captain, "Helm"); Marshal (chief_of_staff) stays cross-project.
+CREATE TABLE IF NOT EXISTS project_captains (
+  project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+  role_key TEXT NOT NULL,
+  assigned_by TEXT NOT NULL DEFAULT 'boss',
+  assigned_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- ONE ONBOARDING RUN of a project: the onboarding agent's checklist, each item's state and why,
+-- the live discover nodes, the proposed backlog and the first work it suggests. Written stage by
+-- stage by the `project.onboarding` job, so the console can draw it while it runs.
+CREATE TABLE IF NOT EXISTS project_onboarding_runs (
+  id TEXT PRIMARY KEY,                               -- 'onb_' + hex
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  state TEXT NOT NULL DEFAULT 'running'
+    CHECK (state IN ('running', 'ready', 'needs_you', 'failed')),
+  trigger TEXT NOT NULL DEFAULT 'manual',            -- created | manual | repo_added
+  started_by TEXT NOT NULL DEFAULT 'boss',
+  job_id TEXT,
+  checklist JSONB NOT NULL DEFAULT '{}'::jsonb,      -- key -> {state, owner, detail, sub, action}
+  discover JSONB NOT NULL DEFAULT '[]'::jsonb,       -- [{label, state, sub}]
+  facts JSONB NOT NULL DEFAULT '{}'::jsonb,          -- {repo, commands, demo_users, secrets, ...}
+  backlog JSONB NOT NULL DEFAULT '[]'::jsonb,        -- proposed, ranked
+  first_work JSONB,
+  error TEXT,
+  started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  finished_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_project_onboarding_runs_project
+  ON project_onboarding_runs (project_id, started_at DESC);

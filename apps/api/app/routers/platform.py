@@ -204,6 +204,12 @@ def mount_platform_routers(app: FastAPI) -> None:
 
     app.include_router(start_project_router)
 
+    # BOSSAPP-913/914 — the Project experience: one read per Project-page tab, the captain, the
+    # onboarding agent, ⌘K and Project › Settings. Unguarded: a broken import fails the boot.
+    from .project_experience import router as project_experience_router
+
+    app.include_router(project_experience_router)
+
     # BOSSAPP-768 — Rules review: the business rules agents propose, approved by a person
     try:
         from .knowledge_rules import router as knowledge_rules_router
