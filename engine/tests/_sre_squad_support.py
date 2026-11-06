@@ -11,7 +11,19 @@ from sqlalchemy import text
 
 from ._ambient_support import make_project, pg_engine, purge
 
-SRE_TABLES = ("sre_postmortems", "incident_recovery_checks", "app_alerts", "kg_usage",
+def add_person(c, pid: str, member: str = "ceo") -> None:
+    """A person who may answer decisions in this project (DecisionService checks membership)."""
+    import json
+
+    c.execute(text(
+        "INSERT INTO project_members (id, project_id, member_id, display_name, member_type, "
+        "role_keys, permissions) VALUES (:i, :p, :m, :m, 'human', CAST(:r AS JSONB), "
+        "CAST(:perm AS JSONB)) ON CONFLICT DO NOTHING"),
+        {"i": f"pm_{pid}_{member}", "p": pid, "m": member, "r": json.dumps(["ceo"]),
+         "perm": json.dumps(["decision_resolve"])})
+
+
+SRE_TABLES = ("project_members", "sre_postmortems", "incident_recovery_checks", "app_alerts", "kg_usage",
               "kg_audit", "kg_edges", "kg_nodes")
 
 

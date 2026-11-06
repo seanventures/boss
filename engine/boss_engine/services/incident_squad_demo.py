@@ -253,9 +253,27 @@ def seed(connection: Connection, project_id: str, *, environment: str = "product
 
 def run_scenario(connection: Connection, project_id: str, *, environment: str = "production",
                  approve_as: Optional[str] = None, settings: Any = None) -> dict[str, Any]:
-    """Seed, sweep the alert into a signal, let the CoS stand-in route it, run the squad; with
+    """prepare() then run the squad on the scripted engine; with
     `approve_as`, answer the production Needs-you card as that person. Returns the stages and
     the Agent Operations graph of the item."""
+    prepared = prepare(connection, project_id, environment=environment, settings=settings)
+    item_id = prepared["item_id"]
+    stages = [squad.route_incident(connection, project_id=project_id, item_id=item_id,
+                                   mind=demo_mind(environment), effects=FixtureEffects())]
+    if approve_as and stages[-1]["stage"] == "needs_you":
+        stages.append(squad.resume(connection, project_id=project_id, item_id=item_id,
+                                   answer="approve", actor=approve_as,
+                                   mind=demo_mind(environment), effects=FixtureEffects(),
+                                   note="Approved: roll back, the fix follows"))
+    graph = read_model.graph(connection, item_id, project_id=project_id)
+    return {"project_id": project_id, **prepared, "stages": [s["stage"] for s in stages],
+            "needs_you_decision_id": stages[-1].get("decision_id"), "graph": graph}
+
+
+def prepare(connection: Connection, project_id: str, *, environment: str = "production",
+            settings: Any = None) -> dict[str, Any]:
+    """Seed, sweep the alert into a signal (the real app_alerts adapter) and let the CoS
+    stand-in open and route the item. Returns the seeded ids plus signal_id and item_id."""
     seeded = seed(connection, project_id, environment=environment)
     signals.sweep(connection, project_id=project_id, only=["app_alerts"])
     sig_id = connection.execute(text(
@@ -267,18 +285,7 @@ def run_scenario(connection: Connection, project_id: str, *, environment: str = 
         raise RuntimeError("the app_alerts adapter did not record the demo alert")
     opened = squad.intake(connection, project_id=project_id, signal_id=sig_id,
                           settings=settings, subject_ref=f"demo:{APP}")
-    item_id = opened["item"]["id"]
-    stages = [squad.route_incident(connection, project_id=project_id, item_id=item_id,
-                                   mind=demo_mind(environment), effects=FixtureEffects())]
-    if approve_as and stages[-1]["stage"] == "needs_you":
-        stages.append(squad.resume(connection, project_id=project_id, item_id=item_id,
-                                   answer="approve", actor=approve_as,
-                                   mind=demo_mind(environment), effects=FixtureEffects(),
-                                   note="Approved: roll back, the fix follows"))
-    graph = read_model.graph(connection, item_id, project_id=project_id)
-    return {"project_id": project_id, "item_id": item_id, "signal_id": sig_id, **seeded,
-            "stages": [s["stage"] for s in stages],
-            "needs_you_decision_id": stages[-1].get("decision_id"), "graph": graph}
+    return {**seeded, "signal_id": sig_id, "item_id": opened["item"]["id"]}
 
 
 def main(argv: Optional[list[str]] = None) -> int:
