@@ -1,0 +1,97 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Project settings</title>
+<link rel="stylesheet" href="../console.css"><link rel="stylesheet" href="../project.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/fill/style.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/bold/style.css">
+<style>
+  .set { display: grid; grid-template-columns: 200px minmax(0,1fr); gap: 18px; }
+  .set-nav { display: flex; flex-direction: column; gap: 2px; position: sticky; top: 70px; align-self: start; }
+  .set-nav a { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 8px; color: var(--muted); font-size: .64rem; }
+  .set-nav a[aria-current] { background: var(--accent-soft); color: var(--ink); }
+  @media (max-width: 760px) { .set { grid-template-columns: minmax(0,1fr); } .set-nav { position: static; flex-direction: row; overflow-x: auto; } .set-nav a { white-space: nowrap; } }
+</style>
+</head>
+<body data-active="projects" data-project="1" data-tab="settings" data-crumb="Projects|HelpDesk AI Demo|Settings">
+<div id="content">
+<div class="set">
+  <nav class="set-nav" aria-label="Settings sections">
+    <a aria-current="true"><i class="ph ph-key"></i>Demo logins</a><a><i class="ph ph-lock-key"></i>Deploy values</a><a><i class="ph ph-hard-drives"></i>Targets &amp; hosts</a>
+    <a><i class="ph ph-steering-wheel"></i>Captain &amp; squad</a><a><i class="ph ph-sliders-horizontal"></i>Autonomy &amp; budget</a><a><i class="ph ph-github-logo"></i>Repos</a><a><i class="ph ph-bell"></i>Notifications</a>
+  </nav>
+  <div class="grid">
+
+    <section class="card">
+      <div class="card-h"><span class="ico" data-c="green"><i class="ph ph-key"></i></span><h3>Demo logins</h3><span class="pin">1</span>
+        <div class="seg" style="margin-left:auto"><span aria-selected="true">Staging</span><span>Preview</span><span>Prod</span></div></div>
+      <div>
+        <div class="cred"><span class="tag" data-tone="blue"><i class="ph ph-crown"></i>Admin</span><span class="mono ell">admin@demo.test</span><span class="secret">••••••••••</span><span class="row"><span class="btn" data-size="s" title="Owner/admin · asks you to confirm it's you"><i class="ph ph-eye"></i>Reveal</span><i class="ph ph-copy"></i></span></div>
+        <div class="cred"><span class="tag"><i class="ph ph-headset"></i>Agent</span><span class="mono ell">agent@demo.test</span><span class="secret">••••••••••</span><span class="row"><span class="btn" data-size="s"><i class="ph ph-eye"></i>Reveal</span><i class="ph ph-copy"></i></span></div>
+        <div class="cred"><span class="tag"><i class="ph ph-user"></i>Customer</span><span class="mono ell">customer@demo.test</span><span class="secret">••••••••••</span><span class="row"><span class="btn" data-size="s"><i class="ph ph-eye"></i>Reveal</span><i class="ph ph-copy"></i></span></div>
+      </div>
+      <div class="row wrap" style="gap:8px;margin-top:8px;font-size:.56rem;color:var(--faint)"><i class="ph ph-info"></i>Users from <code>boss.deploy.yaml</code> · one password per environment (DEMO_PASSWORD) <span class="wf-spacer"></span><a><i class="ph ph-arrows-clockwise"></i> Rotate</a></div>
+    </section>
+
+    <section class="card">
+      <div class="card-h"><span class="ico" data-c="violet"><i class="ph ph-lock-key"></i></span><h3>Deploy values</h3><span class="faint" style="font-size:.56rem">names only · values write-only</span><a class="more"><i class="ph ph-plus"></i> Add value</a></div>
+      <div class="ck">
+        <div class="ck-i" data-s="done"><span class="ck-b">✓</span><span class="ck-t mono">DATABASE_URL<small>BOSS manages · staging</small></span><span class="tag">generated</span></div>
+        <div class="ck-i" data-s="done"><span class="ck-b">✓</span><span class="ck-t mono">DEMO_PASSWORD<small>BOSS manages · per env</small></span><span class="tag">generated</span></div>
+        <div class="ck-i" data-s="you"><span class="ck-b">!</span><span class="ck-t mono">OPENAI_API_KEY<small>you set · missing in prod</small></span><span class="btn" data-kind="amber" data-size="s">Set</span></div>
+        <div class="ck-i" data-s="done"><span class="ck-b">✓</span><span class="ck-t mono">SMTP_URL<small>you set · rotated 12d ago</small></span><span class="row"><a class="link-chip">Rotate</a><a class="link-chip">Remove</a></span></div>
+      </div>
+    </section>
+
+    <section class="grid g2">
+      <section class="card">
+        <div class="card-h"><span class="ico" data-c="teal"><i class="ph ph-hard-drives"></i></span><h3>Targets &amp; hosts</h3></div>
+        <div class="ck">
+          <div class="ck-i" data-s="done"><span class="ck-b">✓</span><span class="ck-t">Staging<small>docker · port 8004</small></span><a class="link-chip" title="Opens the host in Infra">2.29.2.202 ↗</a></div>
+          <div class="ck-i" data-s="you"><span class="ck-b">!</span><span class="ck-t">Production<small>no host yet</small></span><span class="btn" data-kind="amber" data-size="s">Pick host</span></div>
+        </div>
+      </section>
+      <section class="card">
+        <div class="card-h"><span class="ico" data-c="blue"><i class="ph ph-steering-wheel"></i></span><h3>Captain &amp; squad</h3></div>
+        <div class="row"><span class="face" data-a="helm" data-size="m"></span><div style="flex:1"><b>Helm</b><div class="faint" style="font-size:.56rem">Engineering Captain</div></div><span class="btn" data-size="s">Change</span></div>
+        <div class="row" style="margin-top:10px"><span class="faces"><span class="face" data-a="juno" data-size="s"></span><span class="face" data-a="forge" data-size="s"></span><span class="face" data-a="vera" data-size="s"></span><span class="face" data-a="beacon" data-size="s"></span></span><span class="faint" style="font-size:.56rem">4 in squad</span><a class="more" style="margin-left:auto;font-size:.58rem">Edit squad</a></div>
+      </section>
+    </section>
+
+    <section class="grid g2">
+      <section class="card">
+        <div class="card-h"><span class="ico" data-c="amber"><i class="ph ph-sliders-horizontal"></i></span><h3>Autonomy &amp; budget</h3><span class="pin">2</span></div>
+        <span class="lbl" style="display:block">Level</span>
+        <div class="seg" style="margin:6px 0 12px"><span>A0 Ask</span><span aria-selected="true">A1 Propose</span><span>A2 Act</span><span>A3 Ship</span></div>
+        <span class="lbl" style="display:block">Ambient budget · week</span>
+        <div class="row" style="margin-top:6px"><div class="bar" style="flex:1;height:8px"><span style="width:28%;background:#8b7cf6"></span></div><span class="mono" style="font-size:.6rem">$14 / $50</span></div>
+        <span class="faint" style="font-size:.54rem;display:block;margin-top:6px">Org caps still apply (Govern)</span>
+      </section>
+      <section class="card">
+        <div class="card-h"><span class="ico"><i class="ph ph-github-logo"></i></span><h3>Repos</h3><a class="more"><i class="ph ph-plus"></i> Add</a></div>
+        <div class="row"><i class="ph ph-git-branch"></i><span class="mono">paramg/helpdesk-ai-demo</span><span class="tag">main</span><span class="wf-spacer"></span><span class="tag" data-tone="green">access ✓</span></div>
+      </section>
+    </section>
+
+    <section class="card">
+      <div class="card-h"><span class="ico" data-c="red"><i class="ph ph-bell"></i></span><h3>Notifications</h3></div>
+      <div class="grid g3" style="gap:8px;font-size:.62rem">
+        <div class="row"><i class="ph ph-hand-waving"></i>Needs you<span class="wf-spacer"></span><span class="tag" data-tone="blue">Email · Slack</span></div>
+        <div class="row"><i class="ph ph-siren"></i>Incidents<span class="wf-spacer"></span><span class="tag" data-tone="blue">Slack</span></div>
+        <div class="row"><i class="ph ph-git-merge"></i>PR ready<span class="wf-spacer"></span><span class="tag" data-tone="blue">Email</span></div>
+      </div>
+    </section>
+  </div>
+</div>
+
+<section class="card" style="border-style:dashed;max-width:560px">
+  <div class="card-h"><span class="ico" data-c="blue"><i class="ph ph-arrow-bend-up-right"></i></span><h3>Old homes, after the move</h3><span class="faint" style="font-size:.56rem">e.g. App › Setup › Settings</span></div>
+  <div class="needs-bar" style="background:var(--accent-soft);border-color:var(--accent-line)"><i class="ph ph-gear"></i><b>Moved to Project › Settings</b><span class="wf-spacer"></span><span class="btn" data-kind="primary" data-size="s">Open <i class="ph ph-arrow-right"></i></span></div>
+</section>
+
+<div class="notes"><b>Design notes</b><ol>
+  <li><b>1</b> Demo logins moved here from App › Setup › Settings (where they had no user names). Users come from boss.deploy.yaml / the app's seed; one password per environment. Reveal = owner/admin + step-up ("Confirm it's you"), audited, hides after 30s. Overview › Try it and Deployments show them read-only.</li>
+  <li><b>2</b> This project's autonomy level and ambient budget; Govern keeps the org-wide caps and shows "set per project" links. Every old home shows one line: "Moved to Project › Settings".</li>
+</ol></div>
+</div>
+<script src="../shell.js"></script>
+</body></html>

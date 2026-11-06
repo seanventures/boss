@@ -5,7 +5,8 @@ console's real tokens (`console.css`, which is copied verbatim from `apps/web/ap
 `agent-ops/agent-ops.css`) and the avatar kit's real faces (`faces/*.svg`, rendered by `lib/agent-avatar.ts`
 `avatarSvg`). Icons come from Phosphor, the set the console already uses: `ph-folders` is `<Folders/>` in
 `@phosphor-icons/react`. The PNGs in `png/` come from `render.py` at 1600×1000 in dark and light, and at 390×844 on a phone.
-Each page accepts `?theme=light`, `?nav=collapsed` and `?notes=0`.
+Each page accepts `?theme=light`, `?nav=collapsed` and `?notes=0`. Walk the screens with → / ← (Esc returns to the index).
+The API the screens build on: `docs/product/PROJECT_EXPERIENCE_CONTRACT.md` (on feat/project-experience; §11 Settings, §12 Health).
 
 The sample project is **HelpDesk AI Demo** (`paramg/helpdesk-ai-demo`, staging `2.29.2.202:8004`). PR #1 (SLA timers) and
 PR #2 (UI refresh) are merged. PR #3 (visual refresh finish) is waiting for a person to merge it. Helm is the captain,
@@ -29,6 +30,10 @@ Marshal ranks the backlog, and the crew is Juno, Forge, Vera and Beacon.
 | 9 | Ask the captain | A chat with Helm scoped to this project. Answers cite links and offer actions you can start. |
 | 10 | Onboarding | The project is in onboarding. Shows Discover → Ready checklist → Backlog proposed, with what the agent is doing now. |
 | 11 | Jump to (⌘K) | One keystroke reaches any run, PR, deploy, agent or action, scoped to the project. |
+| 12 | Health | Per environment: uptime, error rate and p95 sparklines, SLO burn. Shows alerts, incidents as mini flows (alert → SRE squad → root cause → fix → recovered) linking to Agents at work, Beacon's monitoring pack, and Grafana / logs / Observability. |
+| 13 | Settings | The project's own settings in one place: demo logins per environment (user names + reveal with step-up), deploy values (names only), targets & hosts, captain & squad, autonomy & ambient budget, repos, notifications. Old homes show "Moved to Project › Settings". |
+| 14 | Infra › server | The shared server stays org-wide. "Projects on this server" links to each Project › Deployments. |
+| 15 | Observability › apps | The cross-app view stays org-wide. Each app links to its Project › Health. |
 
 ## Key design decisions
 
@@ -37,7 +42,8 @@ Marshal ranks the backlog, and the crew is Juno, Forge, Vera and Beacon.
    The new Projects area is its home, and the top-bar menu becomes the rail list under Projects.
 2. **One persistent project header on every tab.** The header has the name, the repo chip, the live staging chip, the
    stage, the captain (Ask) and **New work** (the single primary action). Below it is the **Needs you bar**, which is
-   always visible, and then the tabs: Overview · Work · Roadmap · Repo & knowledge · Deployments.
+   always visible, and then the tabs: Overview · Work · Roadmap · Repo & knowledge · Deployments · Health · Settings.
+   A health dot sits beside the live-URL chip on every tab and opens Health.
 3. **Diagrams, not prose.** The same three visual primitives repeat everywhere, so they become recognisable:
    - the **journey strip** for the project's life,
    - the **station strip** for one piece of work,
@@ -57,6 +63,15 @@ Marshal ranks the backlog, and the crew is Juno, Forge, Vera and Beacon.
 8. **Premium, quiet visuals.** Every section has an icon tile in its own colour. The screens use real agent faces, ring
    charts (health, progress, tests), sparklines (cost, latency), illustrated empty states (0a, prod not set up), generous
    spacing and one primary button per view.
+
+9. **One project vs shared (operator, 2026-11-06).** Anything about ONE project lives on the Project page: its
+   deployments, health, demo logins, deploy values, targets, captain, autonomy and budget, repos and notifications.
+   Anything shared stays in its org-wide area: Infra (servers, cloud, plugins), Observability (all apps, BOSS's own
+   platform, alert sources, contact points, Grafana) and Govern (org caps). The two are cross-linked both ways:
+   Deployments › "runs on 2.29.2.202 ↗" ⇄ Infra › server › "Projects on this server"; Health › "Observability ›
+   this app" ⇄ Observability › app › "Project › Health".
+10. **Settings move, nothing is lost.** Each old home keeps working as a single line, "Moved to Project › Settings".
+    Demo logins also show read-only (user + reveal) on Overview › Try it and Deployments.
 
 ### Motion (to build, not visible in PNGs)
 - A live node (running step, current journey stage, an agent who is working) shows a soft ring pulse at 1.8s. This is
@@ -82,6 +97,11 @@ Everything about a project is at most 2 clicks from its page, and ⌘K reaches i
 | What's next | Overview › What's next; Roadmap tab | 0 / 1 |
 | Asking the captain | `Ask` on the header captain chip, or ⌘K "Ask Helm…" | 1 |
 | Adding work | `New work` in the header, the inline box on Work, or the captain chat | 1 |
+| Is it healthy / any incidents | The health dot in the header (every tab) → Health | 0 / 1 |
+| A demo password | Settings › Demo logins › Reveal (step-up); read-only on Overview › Try it and Deployments | 1 |
+| Which server it runs on | Deployments › "runs on 2.29.2.202 ↗" → Infra › server | 1 / 2 |
+| A deploy value / secret name | Settings › Deploy values | 1 |
+| Change captain, autonomy or budget | Settings › Captain & squad / Autonomy & budget | 1 |
 
 Click map from the Overview:
 ```
@@ -90,7 +110,12 @@ Overview ─┬─ Needs-you item ─→ drawer (action inside)
           ├─ Tile ───────────→ Work / drawer / Deployments / Govern
           ├─ Work row ───────→ drawer ─→ Workflow run · Code Tasks build · PR ↗ · logs
           ├─ Captain › Ask ──→ captain drawer
-          └─ Tabs ───────────→ Work · Roadmap · Repo & knowledge · Deployments (each item → drawer)
+          ├─ Health dot ─────→ Health ─→ incident flow → Agents at work graph · Grafana ↗ · Observability › app
+          └─ Tabs ───────────→ Work · Roadmap · Repo & knowledge · Deployments · Health · Settings (each item → drawer)
+
+Deployments ─ "runs on 2.29.2.202 ↗" ─→ Infra › server ─ "Projects on this server" ─→ back to each Project › Deployments
+Health ─ "Observability › this app" ─→ Observability › apps ─ "Project › Health" ─→ back
+Settings ─ Demo logins › Reveal ─→ "Confirm it's you" (step-up) ─→ password shown 30s
 ```
 
 ## Parity: today's Get started → where it lives now
@@ -113,6 +138,22 @@ From `apps/web/app/setup/welcome.tsx` and `lib/setup-stepper.ts`.
 | Stepper's collapsed "Who does what" / Budget defaults | Unchanged in Repo and models; per-project crew on 3 (Crew) and Overview |
 | Command Center first-run help rows | Replaced by 0a when there are no projects; Command Center keeps its cross-project role |
 
+## Parity: project settings that move to Project › Settings
+
+Each old home keeps working and shows one line, "Moved to Project › Settings".
+
+| Setting | Lives today | Lives now | Also shown |
+|---|---|---|---|
+| Demo logins (password) | App › Setup › Settings, "Show" on a generated value (`components/v2/templates/setup-sheet.tsx`); build preview hint "Demo login: … (Setup › Demo logins)" (`factory/legacy-build-parts.tsx`) | Settings › Demo logins, per environment, with user names; Reveal = owner/admin + step-up | Read-only on Overview › Try it and Deployments |
+| Demo login user names | Nowhere (not shown today) | Settings › Demo logins, from `boss.deploy.yaml` `demo_logins:` or the app's seed | Same |
+| Deploy values / app secrets | App › Setup › Settings (BOSS-managed + person-set; `/v1/apps/{key}/secrets`) and Connectors keys | Settings › Deploy values (names only; set/rotate/remove; write-only values) | Missing ones in Needs you |
+| Deploy targets & hosts for this project | Infra › Deploys (`infra/deploy-sheet.tsx`, `deploy-drawer.tsx`) | Settings › Targets & hosts (this project's targets) | Deployments; Infra › server keeps the shared view |
+| Captain & squad | Agent Studio (roster); no per-project captain today | Settings › Captain & squad | Overview captain card; header chip |
+| Autonomy level | Govern › Autonomy (`agent-ops/autonomy-panel.tsx`, org-wide) | Settings › Autonomy & budget (this project) | Govern keeps org caps + "set per project" links |
+| Ambient budget | Govern (spend caps) | Settings › Autonomy & budget (this project's week) | Overview cost tile |
+| Repo bindings | Repo and models; Knowledge Graph import (`PUT /v1/projects/{id}/repos/{repo}`) | Settings › Repos | Repo & knowledge |
+| Notifications | Communications (org outbox); alert contact points in Observability | Settings › Notifications (this project's routing) | Observability keeps contact points |
+
 Factory → Code Tasks keeps everything: the same area id `code_tasks`, the Builds/Apps tabs, cockpit and links. Only the
 label changes (plus the tooltip "was Factory" for one release, and edition copy in `lib/edition.ts`).
 
@@ -132,6 +173,10 @@ label changes (plus the tooltip "was Factory" for one release, and edition copy 
 | 9 | Ask BOSS dock (`bx-dock`, `AgentChat`), `agents/cited-answer.tsx`, `act-card.tsx` |
 | 10 | Onboarding agent (new). Checklist rows reuse `workflow-readiness-ui.tsx`'s `ReadinessPanel` model |
 | 11 | The existing `bx-palette` (⌘K), extended with project records |
+| 12 | `observability` area app health, app alerts, the incident squad graph (`agent-ops/flow-canvas.tsx`), Beacon's monitoring pack |
+| 13 | `components/v2/templates/setup-sheet.tsx` Settings rows and step-up (`useGuardedCall`), `agent-ops/autonomy-panel.tsx`, `govern/spend-tab.tsx`, `infra/deploy-sheet.tsx` |
+| 14 | `infra/host-drawer.tsx`, `infra/fleet.tsx`, `infra/plugins.tsx` |
+| 15 | `observability` area app list |
 
 ## Open questions for the operator
 
