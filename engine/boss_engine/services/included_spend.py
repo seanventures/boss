@@ -185,7 +185,8 @@ LLM_INCLUDED_SQL = ("CASE WHEN COALESCE(included_in_subscription, false) "
                     "THEN COALESCE(cost_usd_micros, 0) ELSE 0 END")
 
 
-def ledger_spend(connection: Any, project_id: str, start: Any, end: Any = None) -> dict[str, int]:
+def ledger_spend(connection: Any, project_id: str, start: Any, end: Any = None, *,
+                 with_calls: bool = True) -> dict[str, int]:
     """Money spent over [start, end) and how it splits:
 
       money_usd_micros         = under_cap + in_flight + not_under_cap (the figure to call
@@ -210,7 +211,10 @@ def ledger_spend(connection: Any, project_id: str, start: Any, end: Any = None) 
             "included_calls": 0}
     try:
         with connection.begin_nested():
-            calls = connection.execute(text(
+            # `with_calls=False`: money only (a sparkline's points); the call counts and the
+            # included estimate are skipped, every money figure is the same.
+            calls = {"included": 0, "metered_calls": 0, "included_calls": 0} if not with_calls \
+                else connection.execute(text(
                 # A build's subscription calls settle no receipt in any edition; every other
                 # included call is receipted (its estimate below, from cost_receipts).
                 f"SELECT COALESCE(SUM({LLM_INCLUDED_SQL}) FILTER "

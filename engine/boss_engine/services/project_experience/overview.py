@@ -137,19 +137,42 @@ def needs_you(connection: Connection, project_id: str, work_items: list[dict[str
 
 # ── tiles ───────────────────────────────────────────────────────────────────────────────────
 
-def _cost_week(connection: Connection, project_id: str, now: datetime) -> dict[str, Any]:
+#: A finished day's spend, per project, for this long: a past day's money barely moves, and the
+#: sparkline would otherwise cost 8 ledger reads on every Overview load.
+_DAY_TTL_S = 600.0
+_DAY_CACHE: dict[tuple[str, str, str], tuple[float, float]] = {}
+
+
+def _money(connection: Connection, project_id: str, start: datetime, end: Optional[datetime],
+           now: datetime) -> float:
+    """ledger_spend's money for [start, end), in dollars; a window that ended is cached."""
+    import time as _time
+
     from ..included_spend import ledger_spend
 
+    closed = end is not None and end <= now
+    key = (project_id, start.isoformat(), end.isoformat() if end else "")
+    hit = _DAY_CACHE.get(key) if closed else None
+    if hit and _time.monotonic() - hit[1] < _DAY_TTL_S:
+        return hit[0]
+    value = ledger_spend(connection, project_id, start, end,
+                         with_calls=False)["money_usd_micros"] / 1_000_000
+    if closed:
+        if len(_DAY_CACHE) > 5000:
+            _DAY_CACHE.clear()
+        _DAY_CACHE[key] = (value, _time.monotonic())
+    return value
+
+
+def _cost_week(connection: Connection, project_id: str, now: datetime) -> dict[str, Any]:
     day0 = now.replace(hour=0, minute=0, second=0, microsecond=0)
     days = [day0 - timedelta(days=i) for i in range(6, -1, -1)]
     series = []
     for i, start in enumerate(days):
         end = days[i + 1] if i + 1 < len(days) else None
-        series.append(round(ledger_spend(connection, project_id, start, end)["money_usd_micros"]
-                            / 1_000_000, 2))
+        series.append(round(_money(connection, project_id, start, end, now), 2))
     week = round(sum(series), 2)
-    before = ledger_spend(connection, project_id, days[0] - timedelta(days=7),
-                          days[0])["money_usd_micros"] / 1_000_000
+    before = _money(connection, project_id, days[0] - timedelta(days=7), days[0], now)
     delta = round((week - before) * 100.0 / before) if before > 0 else None
     policy = connection.execute(text(
         "SELECT daily_cap_usd_micros, monthly_cap_usd_micros FROM budget_policies "
@@ -207,7 +230,7 @@ def next_items(connection: Connection, project_id: str, onboarding: Mapping[str,
             "source": "roadmap", "state": "next",
             "href": project_href(project_id, tab="roadmap", drawer=f"rec:{r['work_item_id']}"),
             "accept": {"href": f"/v1/ambient/roadmap/{r['work_item_id']}/accept", "method": "POST",
-                       "body": {"as_": "ticket", "project_id": project_id}}} for r in recs]
+                       "body": {"as": "ticket", "project_id": project_id}}} for r in recs]
     for c in (onboarding.get("backlog") or [])[: max(0, limit - len(out))]:
         source = c.get("source") if c.get("source") in ("roadmap", "ticket", "bug", "ci") \
             else "roadmap"

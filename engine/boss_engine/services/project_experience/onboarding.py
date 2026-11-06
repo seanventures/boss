@@ -431,6 +431,7 @@ def _knowledge(engine: Any, settings: Any, run_id: str, row: Mapping[str, Any], 
         item = next((r for r in repo_index.status(c, project_id)["repositories"]
                      if str(r.get("repo") or "").lower() == full.lower()), None)
     m = mapping(item)
+    indexing = repo_index.Limits.from_settings(settings).enabled
     if m["state"] in ("queued", "not_started") and (item is None or item.get("status") in
                                                     (None, "pending")):
         with engine.begin() as c:
@@ -439,7 +440,7 @@ def _knowledge(engine: Any, settings: Any, run_id: str, row: Mapping[str, Any], 
         row["started_at"].replace(tzinfo=timezone.utc)
     waited = (datetime.now(timezone.utc) - started).total_seconds()
     files, parsed = int((item or {}).get("files") or 0), int((item or {}).get("parsed") or 0)
-    if not m["done"] and m["state"] != "failed" and waited < MAX_WAIT_S:
+    if indexing and not m["done"] and m["state"] != "failed" and waited < MAX_WAIT_S:
         sub = f"{parsed} / {files} files" if files else "Queued to map"
         _record(engine, run_id, items=[_item("knowledge", "now", sub=sub,
                                              detail="Mapping the code into the knowledge graph.")],
@@ -474,6 +475,10 @@ def _knowledge(engine: Any, settings: Any, run_id: str, row: Mapping[str, Any], 
                      "list instead.", sub="Graph failed",
                      action={"label": "Map again", "href": href(project_id,
                                                                  area="knowledge")})
+    elif not indexing:
+        done = _item("knowledge", "skipped", detail="Mapping code is off on this install "
+                     "(BOSS_KG_REPO_INDEX); the dossier was read from GitHub's file list.",
+                     sub="Mapping off")
     else:
         done = _item("knowledge", "now", detail="The code graph is still being mapped; the "
                      "dossier was read from GitHub's file list meanwhile.",
@@ -564,8 +569,9 @@ def _secrets(project_id: str, root: Optional[Path]
     from ...templates.run_env import needs_from_app_dir
 
     if root is None:
-        return (_item("secrets", "todo", detail="Read from the app's files once the code is "
-                      "mapped.", sub="After mapping"), {})
+        return (_item("secrets", "skipped", detail="The code is not mapped here, so the app's "
+                      "files were not read: its first build declares the secrets it needs.",
+                      sub="On first build"), {})
     needs = _safe(lambda: needs_from_app_dir(Path(root)), {})
     names = {"generated": sorted(n for n, d in needs.items() if d.kind == "generated"),
              "demo": sorted(n for n, d in needs.items() if d.kind == "demo"),

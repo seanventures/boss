@@ -11251,3 +11251,10 @@ CREATE TABLE IF NOT EXISTS project_onboarding_runs (
 );
 CREATE INDEX IF NOT EXISTS idx_project_onboarding_runs_project
   ON project_onboarding_runs (project_id, started_at DESC);
+-- The Project page's Work tab reads a project's builds by their workflow run and its own
+-- builds newest first; both were sequential scans of code_task_runs (39 ms + 28 ms on the
+-- laptop's 23-run project).
+CREATE INDEX IF NOT EXISTS idx_code_task_runs_workflow_run
+  ON code_task_runs ((finalize_ctx->>'workflow_run_id'));
+CREATE INDEX IF NOT EXISTS idx_code_task_runs_project_created
+  ON code_task_runs (project_id, created_at DESC);

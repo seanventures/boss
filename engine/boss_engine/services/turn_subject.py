@@ -1041,39 +1041,66 @@ def _resolve_fleet(connection, project_id: str, ref: SubjectRef) -> SubjectEvide
 def _resolve_project(connection, project_id: str, ref: SubjectRef) -> SubjectEvidence:
     """The project as its captain sees it: stage, repositories, every piece of work with its
     state and links, what waits on a person, environments and the onboarding record. Read from
-    stored rows only (project_experience reads) — never GitHub, never a host."""
-    from .project_experience import health, onboarding, work
-    from .project_experience.common import repos as project_repos
-
+    stored rows only (project_experience reads) — never GitHub, never a host. Each part is its
+    own savepoint: a part that cannot be read is left out, the rest still answers."""
     ev = SubjectEvidence(ref)
+    # The project IS the caller's: a ref naming another project is not this project's evidence.
     if ref.id != project_id:
         return ev
-    row = _rows(connection, "SELECT id, name, description FROM projects WHERE id = :p",
-                {"p": project_id})
-    if not row:
-        return ev
     ev.found = True
-    ev.title = str(row[0].get("name") or project_id)
-    items = work.everything(connection, project_id, limit=25)
-    counts = work.counts(items)
-    ev.status = ", ".join(f"{n} {k.replace('_', ' ')}" for k, n in counts.items() if n) or "no work yet"
+    row = _rows(connection, "SELECT name, description FROM projects WHERE id = :p",
+                {"p": project_id})
+    ev.title = str((row[0].get("name") if row else None) or project_id)
     ev.facts["project"] = project_id
-    if row[0].get("description"):
+    if row and row[0].get("description"):
         ev.facts["what it is for"] = _short(row[0]["description"], 400)
-    ev.facts["repositories"] = ", ".join(r["full_name"] for r in project_repos(connection,
-                                                                              project_id)) or "none"
-    for e in health.environments(connection, project_id):
-        ev.facts[f"environment {e['label']}"] = (
-            f"{e['health']} · {e.get('url') or 'no url'} · uptime {e.get('uptime_pct')}% · "
-            f"deployed {e.get('deployed_commit') or 'never'}")
-    onb = onboarding.view(connection, project_id)
-    ev.facts["onboarding"] = onb["state"]
-    for item in onb.get("only_you") or []:
-        ev.findings.append(f"only a person can: {item['label']} — {item.get('detail')}")
-    for w in items[:15]:
-        pr = (w["links"].get("pr") or {}).get("external_url")
-        ev.linked.append(f"[{w['source']} {w['id']}] {w['title']} — {w['state']}"
-                         + (f" · PR {pr}" if pr else "") + f" · {w['href']}")
+    counts = _rows(connection, "SELECT status, count(*) AS n FROM workflow_runs "
+                               "WHERE project_id = :p GROUP BY status", {"p": project_id})
+    ev.status = ", ".join(f"{int(r['n'])} {r['status']}" for r in counts) or "no work yet"
+
+    def part(fn):
+        try:
+            with connection.begin_nested():
+                fn()
+        except Exception as exc:  # noqa: BLE001 — evidence is an aid
+            _log.info("project subject part failed (%s): %s", type(exc).__name__, exc)
+
+    def work_part():
+        from .project_experience import work
+
+        items = work.everything(connection, project_id, limit=25)
+        found = work.counts(items)
+        ev.status = ", ".join(f"{n} {k.replace('_', ' ')}" for k, n in found.items() if n) \
+            or "no work yet"
+        for w in items[:15]:
+            pr = (w["links"].get("pr") or {}).get("external_url")
+            ev.linked.append(f"[{w['source']} {w['id']}] {w['title']} — {w['state']}"
+                             + (f" · PR {pr}" if pr else "") + f" · {w['href']}")
+
+    def repos_part():
+        from .project_experience.common import repos as project_repos
+
+        ev.facts["repositories"] = ", ".join(
+            r["full_name"] for r in project_repos(connection, project_id)) or "none"
+
+    def env_part():
+        from .project_experience import health
+
+        for e in health.environments(connection, project_id):
+            ev.facts[f"environment {e['label']}"] = (
+                f"{e['health']} · {e.get('url') or 'no url'} · uptime {e.get('uptime_pct')}% · "
+                f"deployed {e.get('deployed_commit') or 'never'}")
+
+    def onboarding_part():
+        from .project_experience import onboarding
+
+        onb = onboarding.view(connection, project_id)
+        ev.facts["onboarding"] = onb["state"]
+        for item in onb.get("only_you") or []:
+            ev.findings.append(f"only a person can: {item['label']} — {item.get('detail')}")
+
+    for fn in (work_part, repos_part, env_part, onboarding_part):
+        part(fn)
     ev.open_points = [("what waits on a person", "list_decisions"),
                       ("a piece of work in detail", "describe_workflow_run")]
     return ev

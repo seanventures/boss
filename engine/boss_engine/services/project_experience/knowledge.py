@@ -83,24 +83,29 @@ def dossier(connection: Connection, project_id: str) -> Optional[dict[str, Any]]
             "href": project_href(project_id, tab="knowledge", drawer="dossier")}
 
 
+#: The kinds a snippet draws, a few of each, newest first: the code's shape (modules, endpoints,
+#: tables) and what agents learned on it (decisions, workarounds, fixes).
+SNIPPET_KINDS = ("module", "endpoint", "table", "decision", "workaround", "fix")
+PER_KIND = 3
+
+
 def graph(connection: Connection, project_id: str, limit: int = GRAPH_NODES) -> dict[str, Any]:
-    """A small snippet: the heaviest current nodes and the edges among them."""
-    nodes = [dict(r) for r in connection.execute(text(
-        "SELECT id, kind, name, path FROM kg_nodes WHERE project_id = :p AND valid_to IS NULL "
-        "AND kind <> 'file' ORDER BY weight DESC NULLS LAST, id LIMIT :n"),
-        {"p": project_id, "n": limit}).mappings().all()]
-    if len(nodes) < limit:
-        nodes += [dict(r) for r in connection.execute(text(
-            "SELECT id, kind, name, path FROM kg_nodes WHERE project_id = :p AND valid_to IS NULL "
-            "AND kind = 'file' ORDER BY weight DESC NULLS LAST, id LIMIT :n"),
-            {"p": project_id, "n": limit - len(nodes)}).mappings().all()]
+    """A small snippet of the project's graph: a few current nodes of each kind that tells the
+    story (each read through the (project, kind, last_seen) index), and the edges among them.
+    Cheap on a graph of tens of thousands of nodes."""
+    parts = " UNION ALL ".join(
+        f"(SELECT id, kind, name, path FROM kg_nodes WHERE project_id = :p AND kind = :k{i} "
+        f"AND valid_to IS NULL ORDER BY last_seen DESC NULLS LAST LIMIT {PER_KIND})"
+        for i in range(len(SNIPPET_KINDS)))
+    params: dict[str, Any] = {"p": project_id, **{f"k{i}": k for i, k in enumerate(SNIPPET_KINDS)}}
+    nodes = [dict(r) for r in connection.execute(text(parts), params).mappings().all()][:limit]
     ids = [n["id"] for n in nodes]
     edges = [dict(r) for r in connection.execute(text(
         "SELECT src_id, dst_id, kind FROM kg_edges WHERE project_id = :p AND valid_to IS NULL "
         "AND src_id = ANY(:ids) AND dst_id = ANY(:ids) LIMIT 60"),
         {"p": project_id, "ids": ids}).mappings().all()] if ids else []
     total = int(connection.execute(text(
-        "SELECT count(*) FROM kg_nodes WHERE project_id = :p AND valid_to IS NULL"),
+        "SELECT COALESCE(sum(nodes), 0) FROM kg_repo_index WHERE project_id = :p"),
         {"p": project_id}).scalar() or 0)
     return {"nodes": [{"id": n["id"], "kind": n["kind"], "label": words(n["name"]),
                        "detail": n["path"] or n["name"]} for n in nodes],
@@ -110,12 +115,22 @@ def graph(connection: Connection, project_id: str, limit: int = GRAPH_NODES) -> 
 
 
 def mapping(connection: Connection, project_id: str) -> list[dict[str, Any]]:
-    from ..knowledge import repo_index
+    """How far each repository's code is mapped, from its index row (not a count of the graph)."""
     from ..start_project import mapping as mapped
 
-    return [{"repo": r.get("repo"), **mapped(r), "files": r.get("files"), "parsed": r.get("parsed"),
-             "indexed_at": r.get("indexed_at")}
-            for r in repo_index.status(connection, project_id).get("repositories") or []]
+    rows = connection.execute(text(
+        "SELECT b.full_name, r.status, r.files, r.parsed, r.nodes, r.error, r.indexed_at "
+        "FROM github_repository_bindings b LEFT JOIN kg_repo_index r ON r.binding_id = b.id "
+        "AND r.project_id = b.project_id WHERE b.project_id = :p AND b.status = 'active' "
+        "ORDER BY b.full_name"), {"p": project_id}).mappings().all()
+    out = []
+    for r in rows:
+        item = None if r["status"] is None else {
+            "status": r["status"], "files": r["files"], "parsed": r["parsed"],
+            "graph": {"nodes": r["nodes"] or 0}, "error": r["error"]}
+        out.append({"repo": r["full_name"], **mapped(item), "files": r["files"],
+                    "parsed": r["parsed"], "indexed_at": iso(r["indexed_at"])})
+    return out
 
 
 def docs(connection: Connection, project_id: str, facts_docs: dict[str, Any],

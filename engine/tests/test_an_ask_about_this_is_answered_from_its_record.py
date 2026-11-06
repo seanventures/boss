@@ -167,6 +167,9 @@ EXAMPLES = {
     # Infra's Ask BOSS: the fleet is the project's (its machines and targets are read in
     # test_the_fleet_is_a_subject.py against the real schema).
     "fleet": SubjectRef("fleet", "boss-dogfood"),
+    # The Project page's captain drawer: the whole project (read against the real schema in
+    # apps/api/tests/test_a_project_page_reads_its_whole_story.py).
+    "project": SubjectRef("project", "boss-dogfood"),
 }
 
 

@@ -92,7 +92,7 @@ unchanged so the console's existing sheets handle them.
 Demo-login reveal: owner/admin with step-up (existing secrets reveal path), returns user + password.
 
 ## 6. Roadmap — existing `GET /v1/ambient/roadmap?project_id=…&status=open`
-(+ `POST /v1/ambient/roadmap/{work_item_id}/accept {as_: ticket|epic|prd, note}`, `/reject {reason,
+(+ `POST /v1/ambient/roadmap/{work_item_id}/accept {as: ticket|epic|prd, note, project_id}`, `/reject {reason,
 category}`, `/snooze {until, reason}`; `GET /v1/ambient/roadmap/detectors`). There is no
 `/v1/ambient/recommendations` route: the recommendations live at `/v1/ambient/roadmap` (table
 `ambient_recommendations`). Must work with the ambient preview off: listing/accept/reject are
