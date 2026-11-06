@@ -101,7 +101,7 @@ def _recurred(connection: Connection, project_id: Optional[str],
         "SELECT DISTINCT ON (old.id) d.act_id, again.id AS again FROM work_items old "
         "JOIN work_items again ON again.project_id = old.project_id AND again.ambient "
         "AND again.fingerprint = old.fingerprint AND again.id <> old.id "
-        "AND again.created_at > old.resolved_at AND again.created_at <= old.resolved_at + :win "
+        "AND again.created_at >= old.resolved_at AND again.created_at <= old.resolved_at + :win "
         "JOIN agent_act_decisions d ON d.work_item_id = old.id AND d.outcome IS NULL "
         "AND d.decided_by NOT LIKE 'person:%' "
         "WHERE old.ambient AND old.lifecycle = 'resolved' AND old.resolved_at > :since "

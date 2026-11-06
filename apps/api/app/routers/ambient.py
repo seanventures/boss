@@ -281,9 +281,10 @@ def build_ambient_router(*, engine, settings: Callable[[], Any],
 
     @router.get("/v1/ambient/scorecard")
     @permit(P.AUTONOMY_READ, scope=Scope.project(query="project_id"))
-    def scorecard(project_id: str, days: int = Query(7, ge=1, le=90)) -> dict:
+    def scorecard(project_id: str, days: int = Query(7, ge=1, le=90),
+                  task_class: Optional[str] = None) -> dict:
         with begin(engine) as c:
             require_reader(c, project_id)
-            return read_model.scorecard(c, project_id, days=days)
+            return read_model.scorecard(c, project_id, days=days, task_class=task_class)
 
     return router

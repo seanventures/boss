@@ -373,6 +373,13 @@ class ControlPlaneClient:
         response.raise_for_status()
         return response.json()
 
+    def ambient_learning_tick(self) -> dict[str, Any]:
+        """Continuous learning (BOSSAPP-911/912): the API runs the outcome sweep and the detectors
+        for the projects that are due (bounded; cheap when nothing is due; no model call)."""
+        response = self._client.post("/v1/ambient/learning/tick", json={})
+        response.raise_for_status()
+        return response.json()
+
     def improve_tick(self) -> dict[str, Any]:
         """Scorecard upkeep and, once a day, the Improve BOSS / heartbeat send (the API owns
         both; this only knocks). Cheap when nothing is due."""

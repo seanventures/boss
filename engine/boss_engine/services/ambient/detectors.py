@@ -167,7 +167,11 @@ def _cause_key(payload: dict) -> tuple[str, str]:
     for field in ("cause_key", "exception", "suspect_file", "root_cause"):
         raw = str(payload.get(field) or "").strip()
         if raw:
-            words = _NOISE.sub("#", raw.splitlines()[0].lower())[:120]
+            first = raw.splitlines()[0].lower()
+            # A cause_key / file path is already a stable identity; free text (an exception,
+            # a root-cause sentence) has ids and numbers folded so repeats collide.
+            words = (first if field in ("cause_key", "suspect_file")
+                     else _NOISE.sub("#", first))[:120]
             said = str(payload.get("root_cause") or raw).strip().splitlines()[0]
             return f"{field}:{words}", said[:120]
     return "", ""
@@ -278,9 +282,10 @@ def finding_shape(body: str) -> str:
     return " ".join(re.findall(r"[a-z<>#]+", words)[:12])
 
 
-def _head(body: str, words: int = 7) -> str:
+def _head(body: str, words: int = 8) -> str:
     """The first words of a finding, for a title: 'Payment retry has no idempotency key…'."""
-    first = re.split(r"[.;:\n]", str(body or "").strip(), maxsplit=1)[0].split()
+    plain = re.sub(r"\s+", " ", _PATHISH.sub("", str(body or ""))).strip()
+    first = re.split(r"[.;:](?:\s|$)|\n", plain, maxsplit=1)[0].split()
     return " ".join(first[:words]) + ("…" if len(first) > words else "")
 
 

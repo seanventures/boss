@@ -968,7 +968,8 @@ MAX_PROJECTS_PER_TICK = 10
 
 
 def tick(engine: Any, *, settings: Any = None, max_projects: int = MAX_PROJECTS_PER_TICK,
-         every: timedelta = RUN_EVERY) -> dict[str, Any]:
+         every: timedelta = RUN_EVERY,
+         only_projects: Optional[Iterable[str]] = None) -> dict[str, Any]:
     from . import outcomes
 
     out: dict[str, Any] = {"skipped": None, "outcomes": {}, "projects": {}}
@@ -983,16 +984,24 @@ def tick(engine: Any, *, settings: Any = None, max_projects: int = MAX_PROJECTS_
         if policy.is_stopped(c, None):
             out["skipped"] = "stopped install-wide"
             return out
-        out["outcomes"] = outcomes.sweep(c)
+        scope = list(only_projects) if only_projects is not None else None
+        if scope is None:
+            out["outcomes"] = outcomes.sweep(c)
+        else:
+            out["outcomes"] = {"ignored": 0, "recurred": 0, "merged": 0, "reverted": 0}
+            for pid in scope:
+                for k, v in outcomes.sweep(c, project_id=pid).items():
+                    out["outcomes"][k] += v
         candidates = list(c.execute(text(
             "SELECT p.id FROM projects p LEFT JOIN signal_adapter_cursors s ON s.adapter = "
             "'roadmap@' || p.id WHERE (s.last_run_at IS NULL OR s.last_run_at <= now() - :every) "
+            "AND (CAST(:only AS TEXT[]) IS NULL OR p.id = ANY(CAST(:only AS TEXT[]))) "
             "AND (EXISTS (SELECT 1 FROM kg_change_links k WHERE k.project_id = p.id) "
             "OR EXISTS (SELECT 1 FROM incidents i WHERE i.project_id = p.id) "
             "OR EXISTS (SELECT 1 FROM code_task_runs r WHERE r.project_id = p.id "
             "AND r.created_at > now() - interval '90 days')) "
             "ORDER BY s.last_run_at NULLS FIRST LIMIT :n"),
-            {"every": every, "n": max(1, int(max_projects))}).scalars())
+            {"every": every, "n": max(1, int(max_projects)), "only": scope}).scalars())
     for project_id in candidates:
         try:
             with engine.begin() as c:
