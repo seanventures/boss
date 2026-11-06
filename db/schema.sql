@@ -10809,3 +10809,305 @@ CREATE TABLE IF NOT EXISTS workflow_stage_designs (
 );
 CREATE INDEX IF NOT EXISTS idx_workflow_stage_designs_stage
   ON workflow_stage_designs(project_id, workflow_definition_id, stage_id, design_version DESC);
+
+-- ============================================================================================
+-- AUTONOMOUS AGENTS: SIGNALS, THE WORK BOARD, THE DECISION LEDGER, AUTONOMY PER TASK CLASS
+-- (BOSSAPP-902..912; design: boss-autonomous-agents-design.md §4-§13; contracts:
+-- docs/product/AUTONOMOUS_AGENTS_SPEC.md; code: engine/boss_engine/services/ambient/).
+-- ============================================================================================
+-- ONE SIGNAL INBOX (design §3.3 gap 1, §4 L2). Signals sat in ten stores (alerts, doctor
+-- findings, shepherd escalations, failed steps, deadletters, stale PRs ...) with no shared shape
+-- and no dedupe across them, so the shepherd, the doctor and the captain could each raise the
+-- same problem. Every store keeps its own table; a pull adapter copies what matters into ONE
+-- normalised row here. A row is keyed by its FINGERPRINT (a stable hash of kind + subject): a
+-- repeat of the same problem counts an occurrence on the open row instead of opening another.
+-- `source_refs` lists every source row already folded in, so a sweep that sees the same failed
+-- step again is a no-op, and a closed problem is never reopened by its own stale evidence.
+-- project_id NULL = install-wide (the system doctor's findings have no project).
+CREATE TABLE IF NOT EXISTS signals (
+  id TEXT PRIMARY KEY,                       -- 'sig_' + hex
+  project_id TEXT,
+  source TEXT NOT NULL,                      -- ambient.signals.SOURCES
+  kind TEXT NOT NULL,                        -- 'alert.firing', 'workflow.step_failed', ...
+  subject_kind TEXT,                         -- app | workflow_run | code_task | pull_request | host ...
+  subject_id TEXT,
+  app TEXT,
+  fingerprint TEXT NOT NULL,
+  severity TEXT NOT NULL DEFAULT 'medium'
+    CHECK (severity IN ('info', 'low', 'medium', 'high', 'critical')),
+  title TEXT NOT NULL,
+  evidence JSONB NOT NULL DEFAULT '[]'::jsonb,     -- [{kind, ref, note?}]
+  source_refs JSONB NOT NULL DEFAULT '[]'::jsonb,  -- ["app_alert:al_1#3", ...] (bounded)
+  occurrences INTEGER NOT NULL DEFAULT 1 CHECK (occurrences >= 1),
+  dedupe_window_seconds INTEGER NOT NULL DEFAULT 3600 CHECK (dedupe_window_seconds >= 0),
+  status TEXT NOT NULL DEFAULT 'new'
+    CHECK (status IN ('new', 'triaged', 'merged_into', 'suppressed', 'done')),
+  status_reason TEXT,
+  merged_into TEXT,
+  suppressed_until TIMESTAMPTZ,              -- NULL while suppressed = until the evidence changes
+  work_item_id TEXT,
+  caused_by_run_id TEXT,                     -- an ambient run whose output raised this (loop guard)
+  causal_depth INTEGER NOT NULL DEFAULT 0 CHECK (causal_depth >= 0),
+  observed_at TIMESTAMPTZ NOT NULL,
+  first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_signals_open_fingerprint
+  ON signals (COALESCE(project_id, ''), fingerprint) WHERE status IN ('new', 'triaged', 'suppressed');
+CREATE INDEX IF NOT EXISTS idx_signals_fingerprint ON signals (fingerprint, last_seen_at DESC);
+CREATE INDEX IF NOT EXISTS idx_signals_project_status ON signals (project_id, status, last_seen_at DESC);
+CREATE INDEX IF NOT EXISTS idx_signals_work_item ON signals (work_item_id) WHERE work_item_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_signals_source_refs ON signals USING GIN (source_refs);
+-- Where each pull adapter got to: a sweep reads rows changed since (cursor - overlap).
+CREATE TABLE IF NOT EXISTS signal_adapter_cursors (
+  adapter TEXT PRIMARY KEY,
+  cursor_at TIMESTAMPTZ,
+  last_run_at TIMESTAMPTZ,
+  last_recorded INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT
+);
+
+-- THE WORK BOARD IS work_items (design §6 "blackboard", §13.1; BOSSAPP-830 makes work_items the
+-- canonical node). The ranked portfolio (work_orchestration.upsert_work_item / evaluate_admission
+-- / rank_by_value_density) already scores and admits work and "almost nothing feeds it" (§3.2).
+-- Ambient work joins it rather than starting a second backlog: an ambient row is an ordinary
+-- work item (subject_type 'ambient', subject_id = its own id, status 'active' while live and
+-- 'done' after) plus the lifecycle, lease and loop-guard columns below. The REAL subject is
+-- subject_ref ('app:order-api'), because one app has many problems over time and the portfolio's
+-- UNIQUE(project, subject_type, subject_id) is one row per subject for ever.
+ALTER TABLE work_items ADD COLUMN IF NOT EXISTS ambient BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE work_items ADD COLUMN IF NOT EXISTS fingerprint TEXT;
+ALTER TABLE work_items ADD COLUMN IF NOT EXISTS lifecycle TEXT;
+ALTER TABLE work_items ADD COLUMN IF NOT EXISTS task_class TEXT;
+ALTER TABLE work_items ADD COLUMN IF NOT EXISTS autonomy_level TEXT;
+ALTER TABLE work_items ADD COLUMN IF NOT EXISTS risk TEXT;
+ALTER TABLE work_items ADD COLUMN IF NOT EXISTS severity TEXT;
+ALTER TABLE work_items ADD COLUMN IF NOT EXISTS subject_ref TEXT;
+ALTER TABLE work_items ADD COLUMN IF NOT EXISTS app TEXT;
+ALTER TABLE work_items ADD COLUMN IF NOT EXISTS lease_owner TEXT;        -- agent:<role> | person:<id>
+ALTER TABLE work_items ADD COLUMN IF NOT EXISTS lease_kind TEXT;         -- agent | person
+ALTER TABLE work_items ADD COLUMN IF NOT EXISTS lease_token TEXT;        -- fencing token of the holder
+ALTER TABLE work_items ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ;  -- NULL for a person
+ALTER TABLE work_items ADD COLUMN IF NOT EXISTS causal_depth INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE work_items ADD COLUMN IF NOT EXISTS caused_by_run_id TEXT;
+ALTER TABLE work_items ADD COLUMN IF NOT EXISTS attempts INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE work_items ADD COLUMN IF NOT EXISTS outcome TEXT;
+ALTER TABLE work_items ADD COLUMN IF NOT EXISTS resolved_by TEXT;
+ALTER TABLE work_items ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ;
+ALTER TABLE work_items ADD COLUMN IF NOT EXISTS needs_you_at TIMESTAMPTZ;
+ALTER TABLE work_items ADD COLUMN IF NOT EXISTS needs_you_decision_id TEXT;
+ALTER TABLE work_items ADD COLUMN IF NOT EXISTS answered_at TIMESTAMPTZ;
+ALTER TABLE work_items ADD COLUMN IF NOT EXISTS cost_usd_micros BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE work_items ADD COLUMN IF NOT EXISTS squad JSONB NOT NULL DEFAULT '[]'::jsonb;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'work_items_lifecycle_check'
+                 AND conrelid = 'work_items'::regclass) THEN
+    ALTER TABLE work_items ADD CONSTRAINT work_items_lifecycle_check CHECK (lifecycle IS NULL OR
+      lifecycle IN ('proposed', 'claimed', 'in_progress', 'needs_you', 'resolved', 'dismissed',
+                    'failed'));
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'work_items_autonomy_level_check'
+                 AND conrelid = 'work_items'::regclass) THEN
+    ALTER TABLE work_items ADD CONSTRAINT work_items_autonomy_level_check
+      CHECK (autonomy_level IS NULL OR autonomy_level IN ('A0', 'A1', 'A2', 'A3'));
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'work_items_lease_kind_check'
+                 AND conrelid = 'work_items'::regclass) THEN
+    ALTER TABLE work_items ADD CONSTRAINT work_items_lease_kind_check
+      CHECK (lease_kind IS NULL OR lease_kind IN ('agent', 'person'));
+  END IF;
+END $$;
+-- ONE LIVE ITEM PER FINGERPRINT (design §6 rule 1, generalising self_fix._live_claim): the
+-- database refuses a second live item for a problem, whichever sensor raised it.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_work_items_live_fingerprint ON work_items (project_id, fingerprint)
+  WHERE fingerprint IS NOT NULL AND lifecycle IN ('proposed', 'claimed', 'in_progress', 'needs_you');
+CREATE INDEX IF NOT EXISTS idx_work_items_ambient
+  ON work_items (project_id, lifecycle, updated_at DESC) WHERE ambient;
+CREATE INDEX IF NOT EXISTS idx_work_items_fingerprint_history
+  ON work_items (project_id, fingerprint, updated_at DESC) WHERE fingerprint IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_work_items_agent_leases
+  ON work_items (lease_expires_at) WHERE lease_kind = 'agent';
+-- What a work item touched: its signals, runs, builds, decisions, acts, PRs, reservations.
+CREATE TABLE IF NOT EXISTS work_item_links (
+  work_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL CHECK (kind IN ('signal', 'workflow_run', 'code_task', 'decision', 'act',
+                                     'incident', 'meeting', 'pull_request', 'reservation',
+                                     'alert', 'recommendation')),
+  ref TEXT NOT NULL,
+  project_id TEXT NOT NULL,
+  note TEXT,
+  created_by TEXT NOT NULL DEFAULT 'boss',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (work_item_id, kind, ref)
+);
+CREATE INDEX IF NOT EXISTS idx_work_item_links_ref ON work_item_links (kind, ref);
+
+-- THE BOARD'S PROTOCOL (design §13.1, §13.3). Agents change shared state only by typed,
+-- validated messages: claim, finding, hypothesis, proposal, critique, vote, decision, handoff,
+-- escalate, resolve. A vote is a message, so the vote and its reasons are the same record the
+-- Agent Operations diagram draws. Append-only: nothing edits a message once posted (the trigger
+-- below); a correction is a new message.
+CREATE TABLE IF NOT EXISTS work_item_messages (
+  id TEXT PRIMARY KEY,                       -- 'wim_' + ulid-ish (time ordered)
+  project_id TEXT NOT NULL,
+  work_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL CHECK (kind IN ('claim', 'finding', 'hypothesis', 'proposal', 'critique',
+                                     'vote', 'decision', 'handoff', 'escalate', 'resolve')),
+  sender TEXT NOT NULL,                      -- agent:<role> | person:<id> | policy:<id> | boss
+  body JSONB NOT NULL DEFAULT '{}'::jsonb,
+  reply_to TEXT REFERENCES work_item_messages(id) ON DELETE CASCADE,
+  act_id TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_work_item_messages_item ON work_item_messages (work_item_id, created_at, id);
+-- One vote per voter per proposal: a voter changing its mind posts a critique, not a 2nd vote.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_work_item_messages_vote
+  ON work_item_messages (reply_to, sender) WHERE kind = 'vote';
+
+-- THE DECISION LEDGER (design §11.2; BOSSAPP-906). A decision is an ACT: agent_acts gains the
+-- kind 'decision', so who decided, when, at what cost and after whom is the same row every act
+-- reader already reads (agent_acts.py was written to end "eight answers in eight tables"; a
+-- ninth who-did-this table would undo it). What only a decision has (the question, the options,
+-- rationale, evidence, confidence, level, reversibility, consensus, override chain, outcome)
+-- lives in this 1:1 detail row keyed by the act. APPEND-ONLY: an override is a NEW row pointing
+-- at the row it overrides; the only later write is filling the outcome once.
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'agent_acts_kind_check'
+             AND conrelid = 'agent_acts'::regclass
+             AND pg_get_constraintdef(oid) NOT LIKE '%decision%') THEN
+    ALTER TABLE agent_acts DROP CONSTRAINT agent_acts_kind_check;
+    ALTER TABLE agent_acts ADD CONSTRAINT agent_acts_kind_check CHECK (kind IN ('run', 'step',
+      'stage', 'seat', 'chat', 'approval', 'handoff', 'decision'));
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'agent_acts_how_check'
+             AND conrelid = 'agent_acts'::regclass
+             AND pg_get_constraintdef(oid) NOT LIKE '%signal%') THEN
+    ALTER TABLE agent_acts DROP CONSTRAINT agent_acts_how_check;
+    ALTER TABLE agent_acts ADD CONSTRAINT agent_acts_how_check CHECK (how IN ('named',
+      'only_holder', 'only_candidate', 'model_pick', 'captain', 'run_actor', 'next_stage',
+      'seated', 'asked_by_person', 'asked_by_agent', 'approved', 'started', 'signal', 'board'));
+  END IF;
+END $$;
+CREATE TABLE IF NOT EXISTS agent_act_decisions (
+  act_id TEXT PRIMARY KEY REFERENCES agent_acts(act_id),
+  project_id TEXT NOT NULL,
+  work_item_id TEXT,
+  signal_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+  question TEXT NOT NULL,
+  decided_by TEXT NOT NULL CHECK (decided_by ~ '^(agent|policy|squad|person):.+$'),
+  chosen TEXT NOT NULL,
+  options JSONB NOT NULL DEFAULT '[]'::jsonb,      -- every option considered, chosen included
+  rejected JSONB NOT NULL DEFAULT '[]'::jsonb,     -- [{option, why?}]
+  rationale TEXT NOT NULL,                         -- at most 3 sentences (ledger.py checks)
+  evidence JSONB NOT NULL DEFAULT '[]'::jsonb,     -- [{kind, ref, note?}], each checked to exist
+  confidence NUMERIC(4, 3) CHECK (confidence IS NULL OR confidence BETWEEN 0 AND 1),
+  autonomy_level TEXT CHECK (autonomy_level IS NULL OR autonomy_level IN ('A0', 'A1', 'A2', 'A3')),
+  task_class TEXT,
+  action TEXT,                                     -- the catalogue action it allows, if any
+  reversibility TEXT NOT NULL CHECK (reversibility IN ('reversible', 'compensable', 'irreversible')),
+  undo JSONB,                                      -- {action, ...}: required when reversible
+  consensus JSONB,                                 -- collab.consensus_record(...)
+  proposal_id TEXT,                                -- the board proposal it settles
+  cost_usd_micros BIGINT NOT NULL DEFAULT 0 CHECK (cost_usd_micros >= 0),
+  overrides_act_id TEXT REFERENCES agent_act_decisions(act_id),
+  outcome TEXT CHECK (outcome IS NULL OR outcome IN ('accepted', 'edited', 'dismissed', 'ignored',
+                       'merged', 'reverted', 'recurred', 'overridden', 'succeeded', 'failed',
+                       'incident_caused')),
+  outcome_ref TEXT,
+  outcome_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (reversibility <> 'reversible' OR undo IS NOT NULL)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_act_decisions_project ON agent_act_decisions (project_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_act_decisions_item ON agent_act_decisions (work_item_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_agent_act_decisions_class ON agent_act_decisions (project_id, task_class, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_act_decisions_one_override
+  ON agent_act_decisions (overrides_act_id) WHERE overrides_act_id IS NOT NULL;
+-- APPEND-ONLY, ENFORCED BY THE DATABASE, not by every caller remembering. The one permitted
+-- update fills an outcome that was empty; a purge (retention, a test cleaning its rows) must say
+-- so with `SET LOCAL boss.ledger_purge = 'on'`.
+CREATE OR REPLACE FUNCTION boss_append_only_ledger() RETURNS trigger LANGUAGE plpgsql AS $ledger$
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    IF COALESCE(current_setting('boss.ledger_purge', true), '') = 'on' THEN
+      RETURN OLD;
+    END IF;
+    RAISE EXCEPTION '% is append-only: rows are never deleted', TG_TABLE_NAME;
+  END IF;
+  IF TG_TABLE_NAME = 'agent_act_decisions'
+     AND OLD.outcome IS NULL AND NEW.outcome IS NOT NULL
+     AND (to_jsonb(NEW) - 'outcome' - 'outcome_ref' - 'outcome_at')
+         = (to_jsonb(OLD) - 'outcome' - 'outcome_ref' - 'outcome_at') THEN
+    RETURN NEW;
+  END IF;
+  RAISE EXCEPTION '% is append-only: write a new row instead of changing one', TG_TABLE_NAME;
+END $ledger$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'agent_act_decisions_append_only'
+                 AND tgrelid = 'agent_act_decisions'::regclass) THEN
+    CREATE TRIGGER agent_act_decisions_append_only BEFORE UPDATE OR DELETE ON agent_act_decisions
+      FOR EACH ROW EXECUTE FUNCTION boss_append_only_ledger();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'work_item_messages_append_only'
+                 AND tgrelid = 'work_item_messages'::regclass) THEN
+    CREATE TRIGGER work_item_messages_append_only BEFORE UPDATE ON work_item_messages
+      FOR EACH ROW EXECUTE FUNCTION boss_append_only_ledger();
+  END IF;
+END $$;
+
+-- AUTONOMY PER TASK CLASS, EARNED (design §4 L5, §5; BOSSAPP-905). One row per (project, task
+-- class) the operator or the track record changed; a class with no row runs at its catalogue
+-- default (ambient/task_classes.py). `ceiling` is the operator's cap for the class here; the
+-- catalogue's own ceiling caps that. Merge, production deploy, external send and payment are
+-- never decided by a level (policy.ALWAYS_A_PERSON).
+CREATE TABLE IF NOT EXISTS ambient_autonomy (
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  task_class TEXT NOT NULL,
+  level TEXT NOT NULL CHECK (level IN ('A0', 'A1', 'A2', 'A3')),
+  ceiling TEXT NOT NULL CHECK (ceiling IN ('A0', 'A1', 'A2', 'A3')),
+  set_by TEXT NOT NULL,
+  reason TEXT NOT NULL DEFAULT '',
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (project_id, task_class),
+  CHECK (level <= ceiling)
+);
+-- Every change of level and every promotion BOSS suggests, with the track record behind it.
+CREATE TABLE IF NOT EXISTS ambient_autonomy_changes (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  task_class TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('set', 'ceiling', 'promotion_suggested', 'promoted',
+                                     'demoted')),
+  from_level TEXT,
+  to_level TEXT,
+  actor TEXT NOT NULL,
+  reason TEXT NOT NULL DEFAULT '',
+  evidence JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_ambient_autonomy_changes
+  ON ambient_autonomy_changes (project_id, task_class, created_at DESC);
+-- ONE ENVELOPE AND ONE STOP PER PROJECT (design §9): the ambient daily cap (reserved through
+-- BudgetGovernor under category 'ambient'), concurrency, the loop guards' limits, and the
+-- project's kill switch. The install-wide stop is system_state['ambient'] (+ BOSS_AMBIENT_DISABLED).
+CREATE TABLE IF NOT EXISTS ambient_settings (
+  project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+  daily_cap_usd_micros BIGINT NOT NULL DEFAULT 5000000 CHECK (daily_cap_usd_micros >= 0),
+  max_concurrent INTEGER NOT NULL DEFAULT 2 CHECK (max_concurrent >= 0),
+  max_spawn_depth INTEGER NOT NULL DEFAULT 2 CHECK (max_spawn_depth >= 0),
+  daily_attempt_cap INTEGER NOT NULL DEFAULT 10 CHECK (daily_attempt_cap >= 0),
+  cooldown_hours INTEGER NOT NULL DEFAULT 24 CHECK (cooldown_hours >= 0),
+  breaker_failure_ratio NUMERIC(4, 3) NOT NULL DEFAULT 0.5
+    CHECK (breaker_failure_ratio > 0 AND breaker_failure_ratio <= 1),
+  breaker_min_runs INTEGER NOT NULL DEFAULT 4 CHECK (breaker_min_runs >= 1),
+  stopped BOOLEAN NOT NULL DEFAULT false,
+  stopped_by TEXT,
+  stopped_at TIMESTAMPTZ,
+  stop_reason TEXT,
+  resumed_at TIMESTAMPTZ,                    -- the breaker counts only failures after this
+  updated_by TEXT NOT NULL DEFAULT 'boss',
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);

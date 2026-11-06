@@ -53,7 +53,9 @@ from .agent_world_types import ALIASES, EDGE_LABELS
 
 log = logging.getLogger("boss.agent_acts")
 
-KINDS = frozenset({"run", "step", "stage", "seat", "chat", "approval", "handoff"})
+#: 'decision' is an autonomous decision (services/ambient/ledger.py): written once, closed, with
+#: its 1:1 detail in agent_act_decisions.
+KINDS = frozenset({"run", "step", "stage", "seat", "chat", "approval", "handoff", "decision"})
 STATUSES = frozenset({"pending", "active", "awaiting_input", "complete", "error", "stale",
                       "skipped"})
 OPEN_STATUSES = frozenset({"pending", "active", "awaiting_input"})

@@ -31,6 +31,8 @@ def test_every_how_has_its_words():
     assert agent_acts.edge_label("asked_by_agent", agent="qa") == "Asked by qa"
     assert agent_acts.edge_label("approved") == "Approved by you"
     assert agent_acts.edge_label("started") == "Started by you"
+    assert agent_acts.edge_label("signal") == "Raised by a signal"
+    assert agent_acts.edge_label("board") == "From the work board"
     with pytest.raises(ValueError):
         agent_acts.edge_label("decided_to_delegate")
 
