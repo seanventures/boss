@@ -68,6 +68,21 @@ def _settings():
     return get_settings()
 
 
+def _onboard(db: Any, project_id: str, actor: str) -> None:
+    """A repository joined the project: the onboarding agent (re)starts on it (BOSSAPP-913).
+    Its own savepoint; adding the repository never fails because onboarding could not start."""
+    import logging
+
+    from boss_engine.services.project_experience import onboarding
+
+    try:
+        with db.begin_nested():
+            onboarding.start(db, project_id, trigger="repo_added", actor=actor)
+    except Exception:  # noqa: BLE001
+        logging.getLogger(__name__).warning("onboarding did not start for %s", project_id,
+                                            exc_info=True)
+
+
 def build_multirepo_router() -> APIRouter:
     from boss_engine.multirepo import components, grants, project_repos, registry
     from boss_engine.multirepo.common import MultiRepoError
@@ -171,9 +186,13 @@ def build_multirepo_router() -> APIRouter:
     def project_repo_put(project_id: str, repo_id: str, request: Request, payload: dict = Body(default={})) -> Any:
         try:
             with begin() as db:
-                return project_repos.put(db, _settings(), project_id, repo_id,
-                                         role_hint=payload["role_hint"] if "role_hint" in payload else ...,
-                                         base_branch=payload.get("base_branch"), actor=_actor(request))
+                added = project_repos.binding_for(db, project_id, repo_id) is None
+                out = project_repos.put(db, _settings(), project_id, repo_id,
+                                        role_hint=payload["role_hint"] if "role_hint" in payload else ...,
+                                        base_branch=payload.get("base_branch"), actor=_actor(request))
+                if added:
+                    _onboard(db, project_id, _actor(request))
+                return out
         except MultiRepoError as exc:
             return _refuse(exc)
 

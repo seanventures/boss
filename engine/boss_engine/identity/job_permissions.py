@@ -51,6 +51,9 @@ JOB_KIND_PERMISSIONS: dict[str, str] = {
     "security.scan": P.SECURITY_SCAN_RUN,           # F4: scanners in the sandbox, own app only
     # the code graph of a registered repository: parsing only, no model, no outside effect
     "knowledge.repository.index": P.KNOWLEDGE_READ,
+    # the onboarding agent (project_experience/onboarding.py): checks access, maps and reads the
+    # repository, reads its CI and issues; no model, no change to the repository
+    "project.onboarding": P.WORKFLOW_RUN_START,
     # repositories and GitHub
     "docs.update": P.GITHUB_MANAGE,
     "software_factory.propose_pr": P.CODE_TASK_CREATE,   # opens a PR from a build's boss/* branch

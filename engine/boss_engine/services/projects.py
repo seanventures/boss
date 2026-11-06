@@ -62,4 +62,23 @@ def create(connection, settings, *, auth: Any, name: Any, slug: Any = None,
             auth, "project.created", audit.Outcome.SUCCESS, target_type="project",
             target_id=project_id, permission=P.PROJECT_CREATE.value, scope=f"org:{org_id}",
             details=what), db=connection)
+    _take_over(connection, project_id, created["project_type"], actor=actor)
     return created
+
+
+def _take_over(connection, project_id: str, project_type: str, *, actor: str) -> None:
+    """THE CAPTAIN TAKES THE PROJECT OVER (BOSSAPP-913): the project's default captain is
+    recorded and the onboarding agent starts (an app project; a knowledge-graph project has its
+    own guided setup). Its own savepoint: onboarding is a help, it never fails a creation."""
+    import logging
+
+    from .project_experience import captain, onboarding
+
+    try:
+        with connection.begin_nested():
+            captain.ensure_default(connection, project_id, actor=actor)
+            if project_type != "knowledge_graph":
+                onboarding.start(connection, project_id, trigger="created", actor=actor)
+    except Exception:  # noqa: BLE001 — recorded in the log; the project is made either way
+        logging.getLogger(__name__).warning("onboarding did not start for %s", project_id,
+                                            exc_info=True)

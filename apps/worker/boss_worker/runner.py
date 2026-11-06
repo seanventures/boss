@@ -390,6 +390,9 @@ def capabilities() -> list[str]:
         # The code graph of a registered repository (knowledge/repo_index.py): the API fetches
         # the branch and indexes it under this lease. Declared here or it sits queued.
         "knowledge.repository.index",
+        # The onboarding agent (project_experience/onboarding.py): the API checks access, maps
+        # the repository and proposes the backlog under this lease. Declared here or it sits queued.
+        "project.onboarding",
         # Review this PR again (services/pr_review_again.py): the API runs the reviewer on the
         # pull request's real diff and posts the round. Declared here or it sits queued.
         "pull_request.review_again",
@@ -888,6 +891,12 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
                                               "lease_token": job.lease_token})
         if result.get("status") == "failed" and result.get("retry"):
             raise RuntimeError(result.get("error") or "Repository index failed.")
+        return result
+    if job.kind == "project.onboarding":
+        # One bounded pass of the onboarding agent; the API holds GitHub's credentials and the
+        # graph. A pass that waits on the code graph queues its own next pass, so this completes.
+        result = client.run_project_onboarding({"job_id": job.id, "worker_id": client.worker_id,
+                                                "lease_token": job.lease_token})
         return result
     if job.kind == "security.scan":
         # The scanners and the sandbox helper are in the api image: the API runs the scan. A
