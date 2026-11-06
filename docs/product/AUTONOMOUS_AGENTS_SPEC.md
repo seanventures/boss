@@ -393,6 +393,18 @@ Node types: `signal agent person policy squad boss action decision needs_you run
 | **911** recommended roadmap | KG detectors as `source="kg"` adapters; recommendations as items/links (`recommendation` link kind) | signals, board | Rejections → `dismiss` (cooldown) + `record_outcome("dismissed")`. |
 | **912** outcomes & metrics | the 7-day "ignored" sweep (`record_outcome(..., "ignored")`), PR merged/reverted hooks, extra scorecard metrics | `ledger.record_outcome` (the canonical outcome store), `read_model.scorecard` | Do NOT add a parallel `proposal_outcomes` table; if a per-proposal view is needed, make it a SQL view over `agent_act_decisions`. |
 
+### 9.1 What 910 (AI SRE incident squad) built — the contracts other streams call
+
+Code: `engine/boss_engine/services/incident_squad.py`, `incident_squad_demo.py`, `apps/api/app/routers/incident_squad.py`.
+
+| For | Contract |
+|---|---|
+| **904 CoS** | `incident_squad.HANDLERS[task_class]` = `route_incident(c, *, project_id, item_id, settings=None, mind=None, effects=None, squad=None) -> {stage}` for `incident_response` / `incident_staging_mitigation` (stage: `joined needs_you verifying resolved escalated`). Idempotent: routing an item twice continues it. Open the item with `incident_squad.incident_class(environment)`. Until 904 lands, `incident_squad.intake(c, project_id=, signal_id=)` is the stand-in (opens the item as `agent:chief_of_staff`, records the routing decision, hands off to `agent:sre`). On the tick call `incident_squad.tick(c, project_id=)` (items watching recovery). |
+| **907 Needs you** | The squad's card is a `board.needs_you` decision with `recommendation.action = "incident_squad.mitigate"` (options `approve` / `fix_only` / `hold`). `decisions.py` routes approve → `resume(answer="approve")`, reject → `hold`, revise → `fix_only`. `resume` calls `board.answered` itself when the item is still `needs_you`. |
+| **911 roadmap** | Hardening items are signals `source="kg"`, `kind="recommendation.hardening"`, fingerprint `(app, key)`, evidence `[kg_node: incident node, incident]`, linked to the incident item as `recommendation`. |
+| **906 view** | Seats are roles: lead `agent:sre`, investigator `agent:operations_engineer`, engineer `agent:backend_engineer`, reviewer `agent:adversarial_reviewer`; the squad's recommendation is `decided_by squad:<item>`. Decision `chosen` values are short labels ("Release 6bf2672", "Reuse INC-31 fix", "Recommend rollback"). |
+| **Demo** | `PYTHONPATH=engine python3 -m boss_engine.services.incident_squad_demo --project <id> [--env staging] [--approve-as <person>]`, or `POST /v1/ambient/demo/order-api-incident {project_id, environment?, approve?}` with `BOSS_DEMO_SCENARIOS=1` (autonomy:manage). Fixtures only; no host is touched. |
+
 ---
 
 ## 10. Tests
