@@ -8,13 +8,13 @@
  */
 import React from "react";
 
-import { acceptance, minutesWords, money, microsUsd, type Scorecard } from "../../lib/ambient";
+import { acceptance, minutesWords, money, microsUsd, type Outcomes, type Scorecard } from "../../lib/ambient";
 
-function Ring({ pct, label, tip, good, testId }: { pct: number | null; label: string; tip: string; good: "high" | "low"; testId: string }) {
+function Ring({ pct, label, tip, good, testId }: { pct: number | null; label: string; tip: string; good: "high" | "low" | "none"; testId: string }) {
   const r = 17;
   const c = 2 * Math.PI * r;
   const v = pct === null ? 0 : Math.max(0, Math.min(100, pct));
-  const tone = pct === null ? "quiet" : good === "high" ? (v >= 80 ? "ok" : v >= 50 ? "warn" : "bad") : (v <= 10 ? "ok" : v <= 30 ? "warn" : "bad");
+  const tone = pct === null || good === "none" ? "quiet" : good === "high" ? (v >= 80 ? "ok" : v >= 50 ? "warn" : "bad") : (v <= 10 ? "ok" : v <= 30 ? "warn" : "bad");
   return (
     <div className="aa-tile" title={tip} data-testid={testId}>
       <svg viewBox="0 0 44 44" className="aa-ring" data-tone={tone} aria-hidden>
@@ -60,6 +60,24 @@ export function DecisionBars({ card }: { card: Scorecard }) {
   );
 }
 
+/** What happened AFTER agents decided (BOSSAPP-912): merged, reverted, roadmap taken, BOSS-started. */
+export function OutcomeTiles({ out, days }: { out: Outcomes | null; days: number }) {
+  if (!out) return null;
+  const r = out.roadmap;
+  return (
+    <>
+      <Big value={String(out.merged)} label="Merged" testId="aa-score-merged"
+           tip={`Agent changes merged over ${days} days · ${out.reverted} reverted or caused an incident.`} />
+      <Ring pct={out.revert_pct} label="Reverted" good="low" testId="aa-score-reverted"
+            tip={`Merged agent changes later reverted or tied to an incident (${out.reverted} of ${out.merged + out.reverted}). Lower is better.`} />
+      <Ring pct={r.acceptance_pct} label="Roadmap taken" good="high" testId="aa-score-roadmap"
+            tip={`Recommendations a person accepted: ${r.accepted} accepted · ${r.rejected} rejected · ${r.ignored} ignored · ${r.recurred} recurred after acceptance.`} />
+      <Ring pct={out.boss_started.pct} label="BOSS-started" good="none" testId="aa-score-boss-started"
+            tip={`Work items BOSS opened itself: ${out.boss_started.boss} of ${out.boss_started.all}.`} />
+    </>
+  );
+}
+
 export function ScorecardStrip({ card }: { card: Scorecard | null }) {
   if (!card) return null;
   const acc = acceptance(card);
@@ -80,6 +98,7 @@ export function ScorecardStrip({ card }: { card: Scorecard | null }) {
       </Big>
       <Big value={minutesWords(card.time_to_human_decision_minutes.median)} label="You answer in" testId="aa-score-wait"
            tip={`Median time a Needs-you item waited for a person (${card.time_to_human_decision_minutes.n}).`} />
+      <OutcomeTiles out={card.outcomes} days={card.days} />
       <DecisionBars card={card} />
     </section>
   );

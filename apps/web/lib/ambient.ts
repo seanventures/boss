@@ -94,19 +94,46 @@ export type Scorecard = {
   items_ended: Record<string, number>; noise_rate: number | null;
   cost: { spent_usd: number; per_resolved_item_usd: number | null; envelope_today: Envelope };
   guards: Record<string, number>; stopped: StopState;
+  /** What happened AFTER agents decided (BOSSAPP-912, outcomes.metrics + roadmap.metrics); null on an older API. */
+  outcomes: Outcomes | null;
+};
+export type Outcomes = {
+  decided: number; with_outcome: number; merged: number; reverted: number; overridden: number;
+  acceptance_pct: number | null; revert_pct: number | null; override_pct: number | null;
+  /** The Recommended roadmap: how much of what agents suggested a person took, and what came back. */
+  roadmap: { shown: number; accepted: number; rejected: number; ignored: number; recurred: number; acceptance_pct: number | null };
+  /** The share of work items BOSS started itself. */
+  boss_started: { boss: number; all: number; pct: number | null };
 };
 
-// ── the recommended roadmap (BOSSAPP-911; shape spec'd here, endpoints land with that stream) ──
+// ── the recommended roadmap (BOSSAPP-911; engine services/ambient/roadmap.py list_roadmap/get) ──
 
 export type RecKind = "hardening" | "test_gap" | "refactor" | "feature" | "design_fix" | "cost" | "process";
 export type Level3 = "low" | "medium" | "high";
+export type RecStatus = "open" | "snoozed" | "accepted" | "rejected" | "resolved_by_change";
+/** One ranked recommendation as list_roadmap returns it: a summary, its badges and a ≤ 6-node
+ *  strip (sources → detector → recommendation → decision → artifact → outcome). Value / effort /
+ *  risk are the engine's numbers (value 0-100, effort 1-13 units, risk 1-1.5) bucketed to dots. */
 export type Recommendation = {
-  id: string; title: string; why: string; kind: RecKind | string;
-  value: Level3; effort: Level3; risk: Level3; confidence: number; score: number;
-  evidence: Array<Evidence & { label: string }>; proposed_shape: "ticket" | "epic" | "prd" | string;
-  squad: string[]; status: "open" | "accepted" | "rejected" | "snoozed" | string;
+  id: string; title: string; kind: RecKind | string; kindLabel: string; detector: string; detectorTitle: string;
+  proposed_shape: "ticket" | "epic" | "prd" | string; status: RecStatus | string; rank: number | null; score: number;
+  value: Level3; effort: Level3; risk: Level3; evidence: number; sources: number; single_source: boolean;
+  resurfaced: boolean; snoozed_until: string | null; strip: StripNode[];
 };
-export type RoadmapView = { recommendations: Recommendation[] };
+export type RoadmapView = { status: string; recommendations: Recommendation[]; counts: Record<string, number> };
+/** The drawer's text (GET /v1/ambient/roadmap/{id} → detail): only shown on ⓘ. */
+export type RecDetail = { why: string; evidence: Array<Evidence & { label: string }>; squad: string[] };
+
+/** The reasons the engine accepts for a reject (roadmap.REJECT_CATEGORIES); each teaches its detector. */
+export const REJECT_CATEGORIES = ["not_valuable", "wrong", "duplicate", "already_planned", "too_small", "other"] as const;
+export const REJECT_WORDS: Record<(typeof REJECT_CATEGORIES)[number], { label: string; tip: string }> = {
+  not_valuable: { label: "Not valuable", tip: "Worth less than it costs; the detector weighs it lower" },
+  wrong: { label: "Wrong", tip: "The evidence does not say this" },
+  duplicate: { label: "Duplicate", tip: "Already a ticket or recommendation" },
+  already_planned: { label: "Already planned", tip: "On the roadmap already" },
+  too_small: { label: "Too small", tip: "Raise this detector's threshold" },
+  other: { label: "Other", tip: "Something else — say why" },
+};
 
 // ── labels: ≤ 4 words on a node, ≤ 3 on an edge (design §11.0 rule 2) ──────────────────────
 
@@ -239,7 +266,9 @@ export const signalsPath = (projectId: string) => `/v1/ambient/signals?${q({ pro
 export const autonomyPath = (projectId: string) => `/v1/ambient/autonomy?${q({ project_id: projectId })}`;
 export const settingsPath = (projectId: string) => `/v1/ambient/settings?${q({ project_id: projectId })}`;
 export const scorecardPath = (projectId: string, days = 7) => `/v1/ambient/scorecard?${q({ project_id: projectId, days })}`;
-export const roadmapPath = (projectId: string) => `/v1/ambient/recommendations?${q({ project_id: projectId, status: "open" })}`;
+export const roadmapPath = (projectId: string, status = "open", limit = 30) => `/v1/ambient/roadmap?${q({ project_id: projectId, status, limit })}`;
+export const recPath = (projectId: string, id: string) => `/v1/ambient/roadmap/${encodeURIComponent(id)}?${q({ project_id: projectId })}`;
+export const demoStatusPath = (projectId: string) => `/v1/ambient/demo/status?${q({ project_id: projectId })}`;
 
 /** The console link to one item's flow chart (`act` resolves to its item on arrival). */
 export function flowHref(target: { item?: string; act?: string }, search = typeof window === "undefined" ? "" : window.location.search): string {
@@ -364,22 +393,68 @@ export const parseScorecard = (w: unknown): Scorecard => {
     noise_rate: typeof x.noise_rate === "number" ? x.noise_rate : null,
     cost: { spent_usd: n(cost.spent_usd), per_resolved_item_usd: typeof cost.per_resolved_item_usd === "number" ? cost.per_resolved_item_usd : null,
             envelope_today: parseEnvelope(cost.envelope_today) },
-    guards, stopped: parseStop(x.stopped),
+    guards, stopped: parseStop(x.stopped), outcomes: parseOutcomes(x.outcomes),
   };
 };
-const LEVEL3 = new Set(["low", "medium", "high"]);
-export const parseRoadmap = (w: unknown): RoadmapView => ({
-  recommendations: a(o(w).recommendations).map((r) => {
-    const y = o(r);
-    const l3 = (v: unknown): Level3 => (LEVEL3.has(s(v)) ? s(v) : "medium") as Level3;
-    return {
-      id: s(y.id), title: s(y.title), why: s(y.why), kind: s(y.kind, "hardening"), value: l3(y.value), effort: l3(y.effort),
-      risk: l3(y.risk), confidence: n(y.confidence), score: n(y.score),
-      evidence: a(y.evidence).map((e) => ({ kind: s(o(e).kind), ref: s(o(e).ref), note: sn(o(e).note), label: s(o(e).label || o(e).kind) })),
-      proposed_shape: s(y.proposed_shape, "ticket"), squad: a(y.squad).map((p) => s(p)), status: s(y.status, "open"),
-    };
-  }),
+const pctOrNull = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
+export const parseOutcomes = (w: unknown): Outcomes | null => {
+  if (!w || typeof w !== "object") return null;
+  const x = o(w);
+  const r = o(x.recommendations);
+  const share = o(o(x.ambient_share).work_items);
+  return {
+    decided: n(x.decided), with_outcome: n(x.with_outcome), merged: n(x.merged), reverted: n(x.reverted), overridden: n(x.overridden),
+    acceptance_pct: pctOrNull(x.acceptance_pct), revert_pct: pctOrNull(x.revert_pct), override_pct: pctOrNull(x.override_pct),
+    roadmap: { shown: n(r.shown), accepted: n(r.accepted), rejected: n(r.rejected), ignored: n(r.ignored), recurred: n(r.recurred),
+               acceptance_pct: pctOrNull(r.acceptance_pct) },
+    boss_started: { boss: n(share.boss), all: n(share.all), pct: pctOrNull(share.pct) },
+  };
+};
+/** The engine's numbers as three dots (value 0-100; effort 1-13 units; risk 1-1.5). */
+export const valueLevel = (v: number): Level3 => (v >= 70 ? "high" : v >= 40 ? "medium" : "low");
+export const effortLevel = (u: number): Level3 => (u <= 2 ? "low" : u <= 5 ? "medium" : "high");
+export const riskLevel = (r: number): Level3 => (r < 1.1 ? "low" : r < 1.3 ? "medium" : "high");
+
+const parseStrip = (w: unknown): StripNode[] => a(w).slice(0, 6).map((x) => {
+  const p = parseNode({ ...o(x), id: "s" });
+  return { type: p.type, label: p.label, badges: p.badges.slice(0, 2) };
 });
+
+export const parseRec = (w: unknown): Recommendation => {
+  const y = o(w);
+  const b = o(y.badges);
+  const rank = typeof y.rank === "number" ? y.rank : null;
+  return {
+    id: s(y.id || y.work_item_id), title: s(y.title), kind: s(y.kind, "hardening"), kindLabel: s(b.kind || y.kind),
+    detector: s(y.detector), detectorTitle: s(b.detector || y.detector), proposed_shape: s(y.proposed_shape || b.shape, "ticket"),
+    status: s(y.status || b.status, "open"), rank, score: n(y.score, n(b.score)),
+    value: valueLevel(n(b.value)), effort: effortLevel(n(b.effort, 1)), risk: riskLevel(n(b.risk, 1)),
+    evidence: n(b.evidence), sources: n(b.sources), single_source: b.single_source === true, resurfaced: b.resurfaced === true,
+    snoozed_until: sn(y.snoozed_until), strip: parseStrip(y.strip),
+  };
+};
+
+export const parseRoadmap = (w: unknown): RoadmapView => {
+  const x = o(w);
+  const counts: Record<string, number> = {};
+  for (const [k, v] of Object.entries(o(x.counts))) counts[k] = n(v);
+  return { status: s(x.status, "open"), recommendations: a(x.items).map(parseRec), counts };
+};
+
+export const evidenceLabel = (e: { kind: string; ref: string; note?: string | null }): string =>
+  clampWords(e.note || `${e.kind.replace(/_/g, " ")} ${e.ref}`, 3);
+
+export const parseRecDetail = (w: unknown): RecDetail => {
+  const d = o(o(w).detail);
+  return {
+    why: s(d.why),
+    evidence: a(d.evidence).map((e) => {
+      const ev = { kind: s(o(e).kind), ref: s(o(e).ref), note: sn(o(e).note) };
+      return { ...ev, label: evidenceLabel(ev) };
+    }),
+    squad: a(d.squad).map((p) => s(p)).filter(Boolean),
+  };
+};
 
 /** Aggregate acceptance across classes, weighted by decisions (null with none decided). */
 export function acceptance(card: Scorecard | null): number | null {
@@ -411,9 +486,30 @@ export const stopAgents = (projectId: string, reason: string, everywhere = false
 export const resumeAgents = (projectId: string, reason = "", everywhere = false) =>
   everywhere ? aaWrite("/v1/ambient/resume-all", { reason }, "Resume all")
              : aaWrite("/v1/ambient/resume", { project_id: projectId, reason }, "Resume");
-export const acceptRec = (projectId: string, id: string, as: string) =>
-  aaWrite(`/v1/ambient/recommendations/${encodeURIComponent(id)}/accept`, { project_id: projectId, as }, "Accept");
-export const rejectRec = (projectId: string, id: string, reason: string) =>
-  aaWrite(`/v1/ambient/recommendations/${encodeURIComponent(id)}/reject`, { project_id: projectId, reason }, "Reject");
-export const snoozeRec = (projectId: string, id: string, days = 14) =>
-  aaWrite(`/v1/ambient/recommendations/${encodeURIComponent(id)}/snooze`, { project_id: projectId, days }, "Not now");
+export type AcceptAs = "ticket" | "epic" | "prd";
+export type RejectCategory = (typeof REJECT_CATEGORIES)[number];
+const recWrite = (id: string, verb: string) => `/v1/ambient/roadmap/${encodeURIComponent(id)}/${verb}`;
+export const acceptRec = (projectId: string, id: string, as: AcceptAs, note = "") =>
+  aaWrite(recWrite(id, "accept"), { project_id: projectId, as, ...(note ? { note } : {}) }, "Accept");
+export const rejectRec = (projectId: string, id: string, reason: string, category: RejectCategory = "other") =>
+  aaWrite(recWrite(id, "reject"), { project_id: projectId, reason, category }, "Reject");
+/** Not now: hidden until `until` (now + days, an ISO datetime; the engine allows ≤ 180 days). */
+export const snoozeRec = (projectId: string, id: string, days = 14, nowMs = Date.now()) =>
+  aaWrite(recWrite(id, "snooze"), { project_id: projectId, until: new Date(nowMs + days * 86_400_000).toISOString() }, "Not now");
+
+// ── the demo loader (a demo project only; autonomy:manage) ─────────────────────────────────
+
+export type DemoLoader = "morning" | "order_api_incident" | "squad_cve" | "roadmap";
+export type DemoStatus = { available: boolean; reason: string; loaders: string[] };
+export const parseDemoStatus = (w: unknown): DemoStatus => {
+  const x = o(w);
+  return { available: x.available === true, reason: s(x.reason), loaders: a(x.loaders).map((l) => s(l)).filter(Boolean) };
+};
+export type DemoLoad = { loaded: string[]; skipped: Record<string, string> };
+export const parseDemoLoad = (w: unknown): DemoLoad => {
+  const x = o(w);
+  const skipped: Record<string, string> = {};
+  for (const [k, v] of Object.entries(o(x.skipped))) skipped[k] = s(v);
+  return { loaded: Object.entries(o(x.loaded)).filter(([, v]) => v != null).map(([k]) => k), skipped };
+};
+export const loadDemo = (projectId: string) => aaWrite("/v1/ambient/demo/load", { project_id: projectId }, "Load demo");

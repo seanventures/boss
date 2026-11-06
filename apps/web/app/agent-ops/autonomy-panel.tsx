@@ -144,9 +144,9 @@ export function AutonomyMatrix({ projectId, classes, track, onChanged }: {
                       <button type="button" className="aa-cell" data-testid="aa-cell" data-level={l}
                               data-on={c.level === l || undefined} data-below={rank(l) < rank(c.level) || undefined}
                               data-locked={locked || undefined} data-suggested={c.suggested_level === l || undefined}
-                              {...gate.props}
                               aria-label={`${c.title}: ${l}${c.level === l ? " (current)" : locked ? " (above the ceiling)" : ""}`}
-                              title={!gate.allowed ? gate.reason : locked ? `Ceiling is ${c.ceiling}` : c.level === l ? `Now: ${LEVEL_WORDS[l]}` : `Set to ${l} · ${LEVEL_WORDS[l]}`}
+                              title={locked ? `Ceiling is ${c.ceiling}` : c.level === l ? `Now: ${LEVEL_WORDS[l]}` : `Set to ${l} · ${LEVEL_WORDS[l]}`}
+                              {...gate.props}
                               onClick={() => choose(c, l)}>{c.level === l ? "●" : ""}{gate.sr}</button>
                     </td>
                   );

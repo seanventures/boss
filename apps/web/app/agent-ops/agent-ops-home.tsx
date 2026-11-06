@@ -19,15 +19,15 @@
  */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 
-import { GatedButton } from "../../components/gated";
+import { GatedButton, useGate } from "../../components/gated";
 import { useConsoleLive } from "../../lib/console-live";
 import { decisionHref } from "../../lib/command-center";
 import { openDockAbout } from "../../lib/dock-subject";
 import { usePolledRead } from "../../lib/log-stream";
 import {
-  AREA, MISSING, TABS, TAB_WORDS, aaRead, decisionPath, dismissItem, flowHref, isDemo, itemPath, listPath, messagesPath,
-  parseDecision, parseGraph, parseList, parseMessages, parseScorecard, parseSettings, polled, roleOfParty, scorecardPath,
-  settingsPath, sweepNow, takeOver, type Graph, type ListItem, type Tab,
+  AREA, MISSING, TABS, TAB_WORDS, aaRead, decisionPath, demoStatusPath, dismissItem, flowHref, isDemo, itemPath, listPath,
+  loadDemo, messagesPath, parseDecision, parseDemoLoad, parseDemoStatus, parseGraph, parseList, parseMessages, parseScorecard,
+  parseSettings, polled, roleOfParty, scorecardPath, settingsPath, sweepNow, takeOver, type Graph, type ListItem, type Tab,
 } from "../../lib/ambient";
 import { AgentAvatar } from "../agent-avatar";
 import { showToast } from "../client-forms";
@@ -97,6 +97,37 @@ function StopPill({ projectId }: { projectId: string }) {
        title={stop.stopped ? `Stopped${stop.by ? ` by ${stop.by}` : ""}${stop.reason ? ` · ${stop.reason}` : ""}. Open Autonomy & safety.` : "Agents may act within their levels. Open Autonomy & safety."}>
       <span className="aa-dot-live" aria-hidden />{stop.stopped ? "Stopped" : "On"}
     </a>
+  );
+}
+
+const LOADER_WORDS: Record<string, string> = {
+  morning: "morning brief", order_api_incident: "Order API incident", squad_cve: "CVE squad", roadmap: "roadmap",
+};
+
+/** "Load demo": seeds the sample stories into a DEMO project. Shown only when the API says this
+ *  project can take them AND the signed-in person may manage autonomy (owner / admin). */
+export function LoadDemoButton({ projectId, onLoaded }: { projectId: string; onLoaded: () => void }) {
+  const gate = useGate("autonomy:manage", projectId);
+  const status = usePolledRead({ key: demoStatusPath(projectId), read: polled(demoStatusPath(projectId), parseDemoStatus),
+                                 pollMs: null, paused: false, enabled: !!projectId && gate.allowed && !isDemo() });
+  const [busy, setBusy] = useState(false);
+  if (!gate.allowed || !status.data?.available) return null;
+  const what = status.data.loaders.map((l) => LOADER_WORDS[l] ?? l.replace(/_/g, " ")).join(", ");
+  const press = async () => {
+    setBusy(true);
+    const r = await loadDemo(projectId);
+    setBusy(false);
+    if (!r.ok) { showToast("error", `Not loaded: ${r.error}`); return; }
+    const d = parseDemoLoad(r.body);
+    const skipped = Object.keys(d.skipped);
+    showToast("success", `Demo loaded: ${d.loaded.length}${skipped.length ? ` · skipped ${skipped.map((k) => LOADER_WORDS[k] ?? k).join(", ")}` : ""}`);
+    onLoaded();
+  };
+  return (
+    <button type="button" className="ag-btn aa-demo-load" data-testid="aa-load-demo" disabled={busy}
+            title={`Add sample work to this demo project${what ? `: ${what}` : ""}`} onClick={() => void press()}>
+      {busy ? "Loading…" : "Load demo"}
+    </button>
   );
 }
 
@@ -209,6 +240,10 @@ export function AgentOpsHome({ projectId, orgId }: { projectId: string; actor?: 
     }
   }, [list.data, autoTabbed, counts, place.tab, setPlace]);
   const items = useMemo(() => list.data?.items ?? [], [list.data]);
+  const [roadmapRefresh, setRoadmapRefresh] = useState(0);
+  const { reload: reloadList } = list;
+  const { reload: reloadScore } = score;
+  const afterDemo = useCallback(() => { reloadList(); reloadScore(); setRoadmapRefresh((x) => x + 1); }, [reloadList, reloadScore]);
   const missing = list.error === MISSING;
   const demo = isDemo();
   const demoHref = useMemo(() => {
@@ -230,6 +265,7 @@ export function AgentOpsHome({ projectId, orgId }: { projectId: string; actor?: 
           ))}
         </span>
         <span className="aa-spacer" />
+        <LoadDemoButton projectId={projectId} onLoaded={afterDemo} />
         <GatedButton permission="work_item:manage" projectId={projectId} className="ag-btn" data-testid="aa-check-now"
                      title="Look for new problems now"
                      onClick={() => void sweepNow(projectId).then((r) => { showToast(r.ok ? "success" : "error", r.ok ? "Checked — new problems appear here" : `Not checked: ${r.error}`); list.reload(); })}>
@@ -238,7 +274,7 @@ export function AgentOpsHome({ projectId, orgId }: { projectId: string; actor?: 
         <button type="button" className="ag-btn" data-testid="aa-ask" title="Ask BOSS what the agents did and why" onClick={() => askAboutItem(null)}>Ask BOSS</button>
       </header>
 
-      {place.view === "roadmap" ? <Roadmap projectId={projectId} orgId={orgId} /> : place.item ? (
+      {place.view === "roadmap" ? <Roadmap projectId={projectId} orgId={orgId} refresh={roadmapRefresh} /> : place.item ? (
         <ItemView projectId={projectId} orgId={orgId} id={place.item} focusAct={place.act} onBack={() => setPlace({ item: null, act: null })} />
       ) : (
         <>

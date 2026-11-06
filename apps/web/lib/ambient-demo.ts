@@ -319,29 +319,72 @@ function scorecard(): Wire {
     items_ended: { resolved: 31, failed: 2, dismissed: 5 }, noise_rate: 0.13,
     cost: { spent_usd: 19.4, per_resolved_item_usd: 0.63, envelope_today: ENVELOPE },
     guards: { guard_refused: 3 }, stopped: NOT_STOPPED,
+    outcomes: {
+      days: 7, task_class: null, decided: 54, with_outcome: 47, pending: 7, accepted: 39, dismissed_or_ignored: 5, overridden: 4,
+      reverted: 1, merged: 18, acceptance_pct: 83, noise_pct: 10.6, override_pct: 7.4, revert_pct: 5.3,
+      decisions_by_level: { A0: 23, A1: 45, A2: 35, A3: 7 }, decisions_by_decider: { agent: 99, policy: 7, squad: 7, person: 7 },
+      decisions_per_day: 15.7, time_to_human_decision_minutes: { n: 9, median: 38, p90: 210 },
+      incidents: { n: 6, mttm_minutes: { n: 6, median: 3.1, p90: 8 }, mttr_minutes: { n: 6, median: 4.2, p90: 12 }, agent_resolved_pct: 66.7 },
+      cost: { spent_usd: 19.4, per_resolved_item_usd: 0.63, per_merged_change_usd: 1.08 },
+      ambient_share: { work_items: { boss: 38, all: 71, pct: 53.5 }, builds: { boss: 12, all: 30, pct: 40 } },
+      by_task_class: [],
+      recommendations: { shown: 12, accepted: 6, rejected: 3, ignored: 1, snoozed: 1, resolved_by_change: 1, recurred: 1,
+                         acceptance_pct: 60, noise_pct: 40, time_to_decision_minutes: { n: 10, median: 95, p90: 600 },
+                         cost_per_accepted_usd: 0.42, by_detector: [] },
+    },
   };
 }
 
+type Rec = {
+  id: string; title: string; why: string; kind: string; kindLabel: string; detector: string; detectorTitle: string;
+  value: number; effort: number; risk: number; score: number; shape: string; squad: string[];
+  sources: Array<[string, number]>; evidence: Wire[];
+};
+const REC_SOURCE: Record<string, string> = { incident: "Incidents", code: "Code graph", review: "Review findings", cost: "Cost" };
+const RECS: Rec[] = [
+  { id: "rec_orders_test", title: "Regression test + index for POST /orders ≥15 items", why: "Caused INC-31 and INC-44. 2nd-hottest file. No test covers ≥15 items.",
+    kind: "hardening", kindLabel: "Hardening", detector: "incident_hotspot", detectorTitle: "Incident hotspot", value: 82, effort: 2, risk: 1.05, score: 2.41,
+    shape: "ticket", squad: ["qa", "software_engineer"], sources: [["incident", 2], ["code", 1]],
+    evidence: [{ kind: "incident", ref: "inc_31", note: "INC-31" }, { kind: "incident", ref: "inc_44", note: "INC-44" },
+               { kind: "kg_node", ref: "kgn_orders", note: "orders.py hotspot" }] },
+  { id: "rec_review_lint", title: "Lint rule for unawaited promises", why: "Reviewers flagged the same thing 14 times in 30 days.",
+    kind: "process", kindLabel: "Process", detector: "review_repeat", detectorTitle: "Repeated review finding", value: 55, effort: 1, risk: 1.0, score: 1.72,
+    shape: "ticket", squad: ["code_reviewer"], sources: [["review", 14]],
+    evidence: [{ kind: "code_task", ref: "ct_r1", note: "14 review comments" }] },
+  { id: "rec_alert_gap", title: "Alert rule for /refunds endpoint", why: "New endpoint has no alert. Customers noticed INC-40 first.",
+    kind: "hardening", kindLabel: "Hardening", detector: "alert_gap", detectorTitle: "Alert gap", value: 74, effort: 2, risk: 1.08, score: 1.55,
+    shape: "ticket", squad: ["sre"], sources: [["code", 1], ["incident", 1]],
+    evidence: [{ kind: "kg_node", ref: "kgn_refunds", note: "/refunds route" }, { kind: "incident", ref: "inc_40", note: "INC-40" }] },
+  { id: "rec_model_route", title: "Route doc drift to a smaller model", why: "Doc drift spends $0.40 per item on the largest model; outcomes match on a small one.",
+    kind: "cost", kindLabel: "Cost", detector: "cost_outlier", detectorTitle: "Cost outlier", value: 48, effort: 4, risk: 1.2, score: 0.61,
+    shape: "prd", squad: ["finops_sentinel"], sources: [["cost", 6]],
+    evidence: [{ kind: "query", ref: "llm_calls by class", note: "Cost rows" }] },
+];
+function recSummary(r: Rec, rank: number): Wire {
+  const strip = [
+    ...r.sources.map(([src, k]) => ({ type: "signal", label: REC_SOURCE[src] ?? src, badges: [`×${k}`] })),
+    { type: "agent", label: r.detectorTitle, badges: [] },
+    { type: "action", label: `${r.kindLabel} ${r.title.split(" ").slice(0, 2).join(" ")}`, badges: [r.kindLabel, `score ${r.score.toFixed(1)}`] },
+  ].slice(0, 6);
+  return {
+    work_item_id: r.id, id: r.id, project_id: "demo", title: r.title, kind: r.kind, detector: r.detector, detectors: [r.detector],
+    subject: null, proposed_shape: r.shape, status: "open", score: r.score, rank, snoozed_until: null, accepted_as: null, artifact: null,
+    reject_category: null, resurfaced_from: null, recurred_at: null, created_at: at(-600), decided_at: null, evidence_at: at(-60),
+    badges: { kind: r.kindLabel, shape: r.shape, evidence: r.evidence.length, sources: r.sources.length, single_source: r.sources.length <= 1,
+              freshness: 0.9, effort: r.effort, risk: r.risk, score: r.score, value: r.value, status: "open", resurfaced: false, detector: r.detectorTitle },
+    strip,
+  };
+}
 function roadmap(): Wire {
-  return { recommendations: [
-    { id: "rec_orders_test", title: "Regression test + index for POST /orders ≥15 items", why: "Caused INC-31 and INC-44. 2nd-hottest file. No test covers ≥15 items.",
-      kind: "hardening", value: "high", effort: "low", risk: "low", confidence: 0.82, score: 8.4, proposed_shape: "ticket",
-      squad: ["agent:qa", "agent:software_engineer"], status: "open",
-      evidence: [{ kind: "incident", ref: "inc_31", label: "INC-31" }, { kind: "incident", ref: "inc_44", label: "INC-44" },
-                 { kind: "kg_node", ref: "kgn_orders", label: "orders.py hotspot" }] },
-    { id: "rec_review_lint", title: "Lint rule for unawaited promises", why: "Reviewers flagged the same thing 14 times in 30 days.",
-      kind: "process", value: "medium", effort: "low", risk: "low", confidence: 0.74, score: 6.1, proposed_shape: "ticket",
-      squad: ["agent:code_reviewer"], status: "open",
-      evidence: [{ kind: "finding", ref: "fnd_r1", label: "14 review comments" }] },
-    { id: "rec_alert_gap", title: "Alert rule for /refunds endpoint", why: "New endpoint has no alert. Customers noticed INC-40 first.",
-      kind: "hardening", value: "high", effort: "low", risk: "low", confidence: 0.69, score: 5.8, proposed_shape: "ticket",
-      squad: ["agent:sre"], status: "open",
-      evidence: [{ kind: "kg_node", ref: "kgn_refunds", label: "/refunds route" }, { kind: "incident", ref: "inc_40", label: "INC-40" }] },
-    { id: "rec_model_route", title: "Route doc drift to a smaller model", why: "Doc drift spends $0.40 per item on the largest model; outcomes match on a small one.",
-      kind: "cost", value: "medium", effort: "medium", risk: "low", confidence: 0.58, score: 3.2, proposed_shape: "prd",
-      squad: ["agent:finops_sentinel"], status: "open",
-      evidence: [{ kind: "query", ref: "llm_calls by class", label: "Cost rows" }] },
-  ] };
+  return { status: "open", items: RECS.map((r, i) => recSummary(r, i + 1)),
+           counts: { open: RECS.length, snoozed: 1, accepted: 3, rejected: 2, resolved_by_change: 1 }, detectors: [], last_run: null };
+}
+function recOne(id: string): Wire | undefined {
+  const i = RECS.findIndex((r) => r.id === id);
+  if (i < 0) return undefined;
+  const r = RECS[i];
+  return { ...recSummary(r, i + 1), nodes: [], edges: [],
+           detail: { why: r.why, evidence: r.evidence, squad: r.squad, value: r.value, effort_units: r.effort, risk: r.risk } };
 }
 
 /** The demo's answer to a GET of `path`, or undefined (a route the sample does not have). */
@@ -366,7 +409,9 @@ export function demoAnswer(path: string): unknown {
   if (p === "/v1/ambient/autonomy") return autonomy();
   if (p === "/v1/ambient/settings") return { settings: { daily_cap_usd_micros: 5_000_000, max_concurrent: 2 }, envelope: ENVELOPE, stop: NOT_STOPPED };
   if (p === "/v1/ambient/scorecard") return scorecard();
-  if (p === "/v1/ambient/recommendations") return roadmap();
+  if (p === "/v1/ambient/roadmap") return roadmap();
+  m = p.match(/^\/v1\/ambient\/roadmap\/([^/]+)$/);
+  if (m) return recOne(decodeURIComponent(m[1]));
   return undefined;
 }
 
