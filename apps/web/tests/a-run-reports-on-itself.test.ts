@@ -127,8 +127,12 @@ describe("the panel's plumbing", () => {
     // "Even the whole Run report should be collapsed... otherwise it will be lots of text
     //  which already got feedback that it is a lot of text". It is a lot of text — that is what a
     //  report is — so none of it opens uninvited.
-    expect(UI).toContain('<details className="rr rr-root"');
-    expect(UI).not.toMatch(/className="rr-section" open/);
+    // Only the Open report dialog (`expanded`) opens it, and that is off by default.
+    expect(UI).toContain('const Root = expanded ? "div" : "details";');
+    expect(UI).toContain('className={expanded ? "rr rr-expanded" : "rr rr-root"}');
+    expect(UI).toContain("expanded = false }");
+    expect(UI).toContain("const open = expanded ? true : undefined;");
+    expect(UI).not.toMatch(/className="rr-section" open(?!=\{open\})/);
     expect(UI).not.toContain("open={urgent.length > 0}");
   });
 
@@ -168,7 +172,8 @@ describe("the panel's plumbing", () => {
 
   it("appears only once a step has finished", () => {
     expect(HOST).toContain("<RunReportPanel runId={run.id}");
-    expect(HOST).toMatch(/run\.steps\.some\([\s\S]{0,120}?succeeded/);
+    expect(HOST).toContain("{runHasReport(run.steps) ? (");
+    expect(UI).toMatch(/export function runHasReport[\s\S]{0,160}?succeeded/);
   });
 
   it("reports time the machine took, without crying wolf at zero", () => {
