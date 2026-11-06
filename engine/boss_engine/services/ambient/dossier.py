@@ -534,7 +534,7 @@ def checkout_for(connection: Connection, settings: Any, project_id: str,
         "AND b.status = 'active' AND (CAST(:r AS TEXT) IS NULL OR lower(b.full_name) = "
         "lower(:r)) ORDER BY b.created_at LIMIT 1"), {"p": project_id, "r": repo}).mappings().first()
     if row is None:
-        return repo, None, []
+        return None, None, []
     full = str(row["full_name"])
     path = repo_index._work_dir(repo_index.Limits.from_settings(settings), row["id"])  # noqa: SLF001
     files = connection.execute(text(

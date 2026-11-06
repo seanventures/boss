@@ -398,6 +398,31 @@ def _tick_knowledge_ingest(client: ControlPlaneClient) -> None:
         LOGGER.debug("knowledge_ingest_failed", exc_info=True)
 
 
+#: AUTONOMOUS AGENTS (BOSSAPP-904): the ambient tick — lease expiry, the signal sweep, the
+#: Chief of Staff's triage — once a minute. It runs on the background thread: an alert that fires
+#: during a 45-minute build must be triaged during it, not after. The API decides everything
+#: (BOSS_AMBIENT_SIGNALS / BOSS_AMBIENT_COS, the stop, the envelope); this only knocks.
+AMBIENT_TICK_INTERVAL_SECONDS = 60
+_last_ambient_tick_monotonic = 0.0
+
+
+def _tick_ambient(client: ControlPlaneClient) -> None:
+    """Never kill the worker; never retry here (the next tick is a minute away)."""
+    global _last_ambient_tick_monotonic
+    now = time.monotonic()
+    if now - _last_ambient_tick_monotonic < AMBIENT_TICK_INTERVAL_SECONDS:
+        return
+    _last_ambient_tick_monotonic = now
+    try:
+        out = client.ambient_tick() or {}
+        triaged = {p: (r or {}).get("counts") for p, r in (out.get("projects") or {}).items()
+                   if (r or {}).get("counts")}
+        if triaged:
+            LOGGER.info("ambient_tick mode=%s triaged=%s", out.get("mode"), triaged)
+    except Exception:  # noqa: BLE001
+        LOGGER.debug("ambient_tick_failed", exc_info=True)
+
+
 CONTROL_PLANE_TOKEN_SWEEP_SECONDS = 60
 _last_token_sweep_monotonic = 0.0
 
@@ -587,6 +612,7 @@ def _run_background_sweeps(settings) -> None:
                 _watch_running_tasks(client)
                 _sweep_deployment_health(client)
                 _monitor_tick(client)
+                _tick_ambient(client)
             except Exception:  # noqa: BLE001 — a sweep must never take the worker down
                 LOGGER.debug("background_sweep_failed", exc_info=True)
             for _ in range(5):

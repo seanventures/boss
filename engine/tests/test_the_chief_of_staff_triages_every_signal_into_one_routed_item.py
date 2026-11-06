@@ -278,3 +278,27 @@ def test_off_mode_triages_nothing(eng, project):
     with eng.begin() as c:
         signal(c, project)
     assert _run(eng, project, mode="off")["items"] == []
+
+
+def test_the_tick_sweeps_a_real_alert_and_triages_it_in_one_pass(eng, project):
+    """The worker's tick end to end: a firing row in app_alerts → the sweep's signal → the Chief
+    of Staff's item, proposed to the SRE; leases past their time are expired on the way."""
+    from uuid import uuid4
+
+    with eng.begin() as c:
+        c.execute(text(
+            "INSERT INTO app_alerts (id, project_id, rule_kind, alertname, fingerprint, labels, "
+            "annotations, state, active_at, fired_at, last_eval_at, fire_count, value, "
+            "threshold, unit) VALUES (:i, :p, 'error_rate', 'HighErrorRate', :f, "
+            "'{\"severity\": \"sev2\", \"app\": \"order-api\"}'::jsonb, "
+            "'{\"summary\": \"order-api 5xx at 6.6%\"}'::jsonb, 'firing', now(), now(), now(), "
+            "1, 6.6, 5, '%')"), {"i": f"al_{uuid4().hex[:8]}", "p": project,
+                                  "f": f"afp_{uuid4().hex[:6]}"})
+    out = cos.tick(eng, _settings(), project_id=project, mode="propose")
+    assert out["sweep"]["app_alerts"]["outcomes"] == {"created": 1}
+    assert out["projects"][project]["counts"] == {"proposed": 1}
+    with eng.begin() as c:
+        [item] = _items(c, project)
+        assert item["task_class"] == "incident_response" and item["app"] == "order-api"
+    again = cos.tick(eng, _settings(), project_id=project, mode="propose")
+    assert again["projects"][project]["items"] == [], "a re-sweep raises nothing new"

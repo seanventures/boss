@@ -553,12 +553,15 @@ def triage_group(connection: Connection, settings: Any, project_id: str,
     estimate = _estimate(connection, project_id, klass.key)
     board.needs_you(
         connection, item_id, actor=PARTY, token=token,
-        question=(f"Is this {klass.title.lower()}?" if reading.asked else f"Hand to {who}?"),
+        question=(f"Is this {klass.title.lower()}?" if reading.asked
+                  else f"{tc.ACTIONS[next_key].title}?" if owner_role == ROLE
+                  else f"Hand to {who}?"),
         recommendation={"action": "ambient_route", "owner": owner, "owner_label": who,
                         "next_action": next_key, "owner_may_act": owner_free,
                         "act_id": act["act_id"], "estimate_usd": estimate,
                         "priority": round(priority(drivers), 1)},
-        options=[{"key": "approve", "label": f"Hand to {who}"},
+        options=[{"key": "approve", "label": tc.ACTIONS[next_key].title if owner_role == ROLE
+                  else f"Hand to {who}"},
                  {"key": "reject", "label": "Dismiss"}],
         risk_tier=1 if klass.risk == "low" else 2,
         cost_of_waiting=f"{severity} · ×{sum(int(s.get('occurrences') or 1) for s in group)}")
@@ -607,7 +610,7 @@ def follow_up(connection: Connection, project_id: str) -> list[dict[str, Any]]:
         ledger.record_outcome(connection, str(rec["act_id"]), actor=who, outcome=(
             "accepted" if approved else "dismissed" if answer == "rejected" else "ignored"),
             outcome_ref=row["decision_id"])
-        if approved and owner:
+        if approved and owner and owner != PARTY:
             collab.post(connection, item_id, kind="handoff", sender=PARTY, body={
                 "to": owner, "from": PARTY,
                 "summary": tc.ACTIONS.get(str(rec.get("next_action")), tc.ACTIONS["propose"]).title})
