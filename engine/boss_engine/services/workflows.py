@@ -7528,12 +7528,17 @@ def waiting_on_label(step: dict[str, Any]) -> Optional[str]:
     So the fallback is None: the status pill already says `waiting`, and silence is the honest
     answer to a question we cannot answer.
     """
+    awaited = (step.get("output") or {}).get("await")
+    # A DEPLOY HELD FOR ITS MERGE says so, before its approver: the run list read "waiting on a
+    # decision" while the thing to do was merge PR #3 in GitHub (helpdesk-ai, 2026-11-06).
+    if isinstance(awaited, dict) and str(awaited.get("kind") or "") == "merge":
+        number = ((step.get("output") or {}).get("merge") or {}).get("pull_request_number")
+        return f"PR #{number} to be merged" if number else _AWAIT_LABELS["merge"]
     approver = (step.get("approval") or {}).get("approver_role")
     if approver:
         return str(approver)
     if step.get("decision_id"):
         return "a decision"
-    awaited = (step.get("output") or {}).get("await")
     if isinstance(awaited, dict):
         kind = str(awaited.get("kind") or "").strip()
         # NOT EVERY CODE TASK IS THE BUILD. Readiness extends the build's task, and its run

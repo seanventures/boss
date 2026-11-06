@@ -6003,7 +6003,10 @@ def _merge_wait(connection: Connection, project_id: str,
             "await": {"kind": MERGE_AWAIT_KIND, "id": build_run_id,
                       "decision_id": (question or {}).get("id"),
                       "looked_at": now_utc().isoformat()},
-            "merge": {"state": seen.get("state"), "pull_request_number": seen.get("number")},
+            "merge": {"state": seen.get("state"), "pull_request_number": seen.get("number"),
+                      "pull_request_url": connection.execute(
+                          text("SELECT pull_request_url FROM code_task_runs WHERE id = :i"),
+                          {"i": build_run_id}).scalar() if connection is not None else None},
             "note": _merge_note(seen, question)}
 
 
