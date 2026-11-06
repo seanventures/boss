@@ -1,0 +1,97 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Project work</title>
+<link rel="stylesheet" href="../console.css"><link rel="stylesheet" href="../project.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/fill/style.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/bold/style.css">
+</head>
+<body data-active="projects" data-project="1" data-tab="work" data-crumb="Projects|HelpDesk AI Demo|Work">
+<div id="content">
+
+<!-- NEW WORK, inline: one box, three kinds -->
+<section class="card" style="border-color:var(--accent-line)">
+  <div class="row wrap" style="gap:10px">
+    <span class="ico"><i class="ph ph-plus-circle"></i></span>
+    <div class="seg" role="tablist" title="What kind of work"><span aria-selected="true"><i class="ph ph-sparkle"></i>Feature</span><span><i class="ph ph-bug"></i>Bug</span><span><i class="ph ph-ticket"></i>Ticket</span></div>
+    <div class="input" data-ph style="flex:1;min-width:220px">Describe it — e.g. "let agents tag tickets by product"</div>
+    <span class="btn" data-kind="primary"><i class="ph ph-paper-plane-tilt"></i>Start</span><span class="pin">1</span>
+  </div>
+  <div class="row wrap" style="margin-top:10px;gap:10px;font-size:.6rem">
+    <span class="lbl">Helm's plan</span>
+    <div class="fl" style="padding:0"><span class="fl-n" data-t="agent"><span class="face" data-a="juno" data-size="s"></span>Plan</span><span class="fl-w"></span><span class="fl-n" data-t="you">You approve</span><span class="fl-w"></span><span class="fl-n"><i class="ph ph-hammer"></i>Build</span><span class="fl-w"></span><span class="fl-n"><i class="ph ph-magnifying-glass"></i>Review</span><span class="fl-w"></span><span class="fl-n"><i class="ph ph-git-pull-request"></i>PR</span><span class="fl-w"></span><span class="fl-n"><i class="ph ph-rocket-launch"></i>Staging</span></div>
+    <span class="tag" data-tone="cost">≈ 25 min</span><span class="tag" data-tone="cost">≈ $3</span><span class="faint">Minor feature workflow · <a>change</a></span>
+  </div>
+</section>
+
+<div class="row wrap" style="gap:10px">
+  <div class="filters"><span aria-selected="true">All 9</span><span><span class="dot" data-s="you"></span> Needs you 1</span><span><span class="dot" data-s="run"></span> Running 1</span><span>Planned 4</span><span><span class="dot" data-s="done"></span> Done 3</span></div>
+  <span class="wf-spacer"></span>
+  <div class="st-legend hide-phone"><span><span class="st-n" style="width:14px;height:14px">P</span>Plan</span><span><span class="st-n" style="width:14px;height:14px">D</span>Decide</span><span><span class="st-n" style="width:14px;height:14px">B</span>Build</span><span><span class="st-n" style="width:14px;height:14px">R</span>Review</span><span>PR</span><span><span class="st-n" style="width:14px;height:14px">S</span>Staging</span></div>
+  <div class="seg hide-phone"><span aria-selected="true"><i class="ph ph-rows"></i>List</span><span><i class="ph ph-kanban"></i>Board</span></div>
+</div>
+
+<section class="card" style="padding:0">
+  <div class="wk">
+    <div class="wk-grp"><span class="dot" data-s="you"></span><b>Needs you</b></div>
+    <div class="wk-row" data-s="you"><span class="ico" data-c="amber" style="width:22px;height:22px;font-size:.7rem"><i class="ph-bold ph-git-merge"></i></span>
+      <div><div class="wk-t ell">Visual refresh finish</div><div class="wk-sub"><span class="tag">Feature</span><span>Waiting 3h</span><span class="mono">$2.10</span></div></div>
+      <div class="st"><span class="st-n" data-s="done">P</span><span class="st-w" data-s="done"></span><span class="st-n" data-s="done">D</span><span class="st-w" data-s="done"></span><span class="st-n" data-s="done">B</span><span class="st-w" data-s="done"></span><span class="st-n" data-s="done">R</span><span class="st-w" data-s="done"></span><span class="st-n" data-s="you">PR</span><span class="st-w"></span><span class="st-n">S</span></div>
+      <span class="faces"><span class="face" data-a="juno" data-size="s"></span><span class="face" data-a="forge" data-size="s"></span><span class="face" data-a="vera" data-size="s"></span></span>
+      <div class="wk-links"><a class="link-chip" title="Workflow run"><i class="ph ph-flow-arrow"></i>Run #43</a><a class="link-chip" title="Build page in Code Tasks"><i class="ph ph-code"></i>Build</a><a class="link-chip" title="Pull request on GitHub"><i class="ph ph-git-pull-request"></i>PR #3 ↗</a><span class="btn" data-kind="amber" data-size="s">Merge</span></div></div>
+
+    <div class="wk-grp"><span class="dot" data-s="run"></span><b>Running</b></div>
+    <div class="wk-row"><span class="ico" data-c="teal" style="width:22px;height:22px;font-size:.7rem"><i class="ph-fill ph-lightning"></i></span>
+      <div><div class="wk-t ell">Ticket search filters</div><div class="wk-sub"><span class="tag" data-tone="violet">from Roadmap</span><span>Build · 12m</span><span class="mono">$0.90</span></div></div>
+      <div class="st"><span class="st-n" data-s="done">P</span><span class="st-w" data-s="done"></span><span class="st-n" data-s="done">D</span><span class="st-w" data-s="done"></span><span class="st-n" data-s="run">B</span><span class="st-w"></span><span class="st-n">R</span><span class="st-w"></span><span class="st-n">PR</span><span class="st-w"></span><span class="st-n">S</span></div>
+      <span class="faces"><span class="face" data-a="juno" data-size="s"></span><span class="face" data-a="forge_live" data-size="s"></span></span>
+      <div class="wk-links"><a class="link-chip"><i class="ph ph-flow-arrow"></i>Run #44</a><a class="link-chip"><i class="ph ph-code"></i>Build</a><a class="link-chip"><i class="ph ph-terminal-window"></i>Live log</a></div></div>
+
+    <div class="wk-grp"><span class="dot"></span><b>Planned</b><span class="faint">· ranked by Marshal</span></div>
+    <div class="wk-row"><span class="ico" style="width:22px;height:22px;font-size:.7rem"><i class="ph ph-envelope-simple"></i></span>
+      <div><div class="wk-t ell">Email-to-ticket intake</div><div class="wk-sub"><span class="tag">Feature</span><span>Next up</span></div></div>
+      <div class="st"><span class="st-n">P</span><span class="st-w"></span><span class="st-n">D</span><span class="st-w"></span><span class="st-n">B</span><span class="st-w"></span><span class="st-n">R</span><span class="st-w"></span><span class="st-n">PR</span><span class="st-w"></span><span class="st-n">S</span></div>
+      <span class="faces"><span class="face" data-a="juno" data-size="s"></span></span>
+      <div class="wk-links"><span class="btn" data-size="s"><i class="ph ph-play"></i>Start now</span></div></div>
+    <div class="wk-row"><span class="ico" data-c="red" style="width:22px;height:22px;font-size:.7rem"><i class="ph ph-bug"></i></span>
+      <div><div class="wk-t ell">SLA timer ignores weekends</div><div class="wk-sub"><span class="tag" data-tone="red">Bug</span><a class="link-chip"><i class="ph ph-github-logo"></i>#12</a></div></div>
+      <div class="st"><span class="st-n">P</span><span class="st-w"></span><span class="st-n">D</span><span class="st-w"></span><span class="st-n">B</span><span class="st-w"></span><span class="st-n">R</span><span class="st-w"></span><span class="st-n">PR</span><span class="st-w"></span><span class="st-n">S</span></div>
+      <span class="faces"></span>
+      <div class="wk-links"><span class="btn" data-size="s"><i class="ph ph-play"></i>Start now</span></div></div>
+    <div class="wk-row"><span class="ico" data-c="red" style="width:22px;height:22px;font-size:.7rem"><i class="ph ph-x-circle"></i></span>
+      <div><div class="wk-t ell">Fix 6 failing tests</div><div class="wk-sub"><span class="tag" data-tone="red">CI</span><span>tests/test_notify.py</span></div></div>
+      <div class="st"><span class="st-n">P</span><span class="st-w"></span><span class="st-n">D</span><span class="st-w"></span><span class="st-n">B</span><span class="st-w"></span><span class="st-n">R</span><span class="st-w"></span><span class="st-n">PR</span><span class="st-w"></span><span class="st-n">S</span></div>
+      <span class="faces"></span>
+      <div class="wk-links"><span class="btn" data-size="s"><i class="ph ph-play"></i>Start now</span></div></div>
+    <div class="wk-row"><span class="ico" data-c="violet" style="width:22px;height:22px;font-size:.7rem"><i class="ph ph-database"></i></span>
+      <div><div class="wk-t ell">Index tickets by status</div><div class="wk-sub"><span class="tag" data-tone="violet">from Roadmap</span></div></div>
+      <div class="st"><span class="st-n">P</span><span class="st-w"></span><span class="st-n">D</span><span class="st-w"></span><span class="st-n">B</span><span class="st-w"></span><span class="st-n">R</span><span class="st-w"></span><span class="st-n">PR</span><span class="st-w"></span><span class="st-n">S</span></div>
+      <span class="faces"></span>
+      <div class="wk-links"><span class="btn" data-size="s"><i class="ph ph-play"></i>Start now</span></div></div>
+
+    <div class="wk-grp"><span class="dot" data-s="done"></span><b>Done</b></div>
+    <div class="wk-row"><span class="ico" data-c="green" style="width:22px;height:22px;font-size:.7rem"><i class="ph-bold ph-check"></i></span>
+      <div><div class="wk-t ell">UI refresh</div><div class="wk-sub"><span class="tag">Feature</span><span>Wed</span><span class="mono">$3.40</span></div></div>
+      <div class="st"><span class="st-n" data-s="done">P</span><span class="st-w" data-s="done"></span><span class="st-n" data-s="done">D</span><span class="st-w" data-s="done"></span><span class="st-n" data-s="done">B</span><span class="st-w" data-s="done"></span><span class="st-n" data-s="done">R</span><span class="st-w" data-s="done"></span><span class="st-n" data-s="done">PR</span><span class="st-w" data-s="done"></span><span class="st-n" data-s="done">S</span></div>
+      <span class="faces"><span class="face" data-a="forge" data-size="s"></span><span class="face" data-a="beacon" data-size="s"></span></span>
+      <div class="wk-links"><a class="link-chip"><i class="ph ph-flow-arrow"></i>Run #41</a><a class="link-chip"><i class="ph ph-git-merge"></i>PR #2 ↗</a><a class="link-chip"><i class="ph ph-globe"></i>Staging</a></div></div>
+    <div class="wk-row"><span class="ico" data-c="green" style="width:22px;height:22px;font-size:.7rem"><i class="ph-bold ph-check"></i></span>
+      <div><div class="wk-t ell">SLA timers</div><div class="wk-sub"><span class="tag">Feature</span><span>Mon</span><span class="mono">$4.80</span></div></div>
+      <div class="st"><span class="st-n" data-s="done">P</span><span class="st-w" data-s="done"></span><span class="st-n" data-s="done">D</span><span class="st-w" data-s="done"></span><span class="st-n" data-s="done">B</span><span class="st-w" data-s="done"></span><span class="st-n" data-s="done">R</span><span class="st-w" data-s="done"></span><span class="st-n" data-s="done">PR</span><span class="st-w" data-s="done"></span><span class="st-n" data-s="done">S</span></div>
+      <span class="faces"><span class="face" data-a="forge" data-size="s"></span><span class="face" data-a="vera" data-size="s"></span></span>
+      <div class="wk-links"><a class="link-chip"><i class="ph ph-flow-arrow"></i>Run #38</a><a class="link-chip"><i class="ph ph-git-merge"></i>PR #1 ↗</a><a class="link-chip"><i class="ph ph-globe"></i>Staging</a></div></div>
+    <div class="wk-row"><span class="ico" data-c="green" style="width:22px;height:22px;font-size:.7rem"><i class="ph-bold ph-check"></i></span>
+      <div><div class="wk-t ell">Onboarding</div><div class="wk-sub"><span class="tag">Setup</span><span>Nov 2</span><span class="mono">$1.20</span></div></div>
+      <div class="fl hide-phone" style="padding:0"><span class="fl-n" data-t="done">Discover</span><span class="fl-w" data-s="done"></span><span class="fl-n" data-t="done">Ready</span><span class="fl-w" data-s="done"></span><span class="fl-n" data-t="done">Backlog</span></div>
+      <span class="faces"><span class="face" data-a="helm" data-size="s"></span><span class="face" data-a="marshal" data-size="s"></span></span>
+      <div class="wk-links"><a class="link-chip"><i class="ph ph-flow-arrow"></i>Run #36</a></div></div>
+  </div>
+</section>
+
+<div class="notes"><b>Design notes</b><ol>
+  <li><b>1</b> New work lives where the work is listed: one box, Feature / Bug / Ticket; Helm shows the plan as a strip with time + cost before you press Start. Ticket = paste a GitHub/Plane issue link.</li>
+  <li>Each row is the same diagram everywhere (Overview, Projects card, Code Tasks): Plan · Decide · Build · Review · PR · Staging. The row opens the work drawer (05b); chips go straight to Workflow run, Code Tasks build, PR ↗.</li>
+  <li>Board view = the same rows as cards in columns (Needs you · Running · Planned · Done). Planned is ranked by Marshal; drag to re-rank.</li>
+</ol></div>
+</div>
+<script src="../shell.js"></script>
+</body></html>

@@ -1,0 +1,69 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Guided first run</title>
+<link rel="stylesheet" href="../console.css"><link rel="stylesheet" href="../project.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/fill/style.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/bold/style.css">
+</head>
+<body data-active="projects" data-crumb="Projects|First project">
+<div id="content">
+
+<div class="guide">
+  <aside class="card" style="align-self:start">
+    <div class="card-h"><span class="ico"><i class="ph ph-signpost"></i></span><h3>Your first project</h3><span class="mono faint" style="margin-left:auto;font-size:.56rem">3 / 6</span></div>
+    <div class="gstep" data-s="done"><span class="ck-b">✓</span><div><b>Connect GitHub</b><small>paramg · 14 repos</small></div></div>
+    <div class="gstep" data-s="done"><span class="ck-b">✓</span><div><b>Add a model</b><small>Claude · subscription</small></div></div>
+    <div class="gstep" data-s="done"><span class="ck-b">✓</span><div><b>Add project</b><small>helpdesk-ai-demo</small></div></div>
+    <div class="gstep" data-s="now"><span class="ck-b"><i class="ph-bold ph-compass"></i></span><div><b>Helm onboards</b><small>Discover · 2 of 4</small></div></div>
+    <div class="gstep"><span class="ck-b"><i class="ph ph-list-checks"></i></span><div><b>Ready for work</b><small>checks the agent runs</small></div></div>
+    <div class="gstep"><span class="ck-b"><i class="ph ph-git-pull-request"></i></span><div><b>First work</b><small>suggested → your PR</small></div></div>
+    <div style="border-top:1px solid var(--border);margin-top:8px;padding-top:8px;font-size:.56rem" class="row wrap"><a><i class="ph ph-plus"></i> another account</a><a><i class="ph ph-plus"></i> another model</a></div>
+  </aside>
+
+  <div class="grid">
+    <section class="card" style="background:radial-gradient(ellipse at 50% 40%, color-mix(in srgb, var(--teal) 10%, var(--surface)), var(--surface) 70%)">
+      <div class="card-h"><span class="ico" data-c="teal"><i class="ph ph-compass"></i></span><h3>Helm is reading your repo</h3><span class="tag" data-tone="blue"><span class="dot" data-s="run"></span>live</span><span class="mono faint" style="margin-left:auto;font-size:.56rem">1m 52s</span></div>
+      <svg viewBox="0 0 760 260" width="100%" height="260" role="img" aria-label="Live discovery">
+        <defs><marker id="a" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L8 4L0 8z" fill="var(--border-strong)"/></marker></defs>
+        <g stroke-width="2" fill="none">
+          <path d="M150 130 C230 130 250 60 330 60" stroke="var(--green)"/><path d="M150 130 C230 130 250 200 330 200" stroke="var(--green)"/>
+          <path d="M150 130 L330 130" stroke="var(--teal)" stroke-dasharray="5 4"/>
+          <path d="M470 60 C540 60 560 130 620 130" stroke="var(--border-strong)" stroke-dasharray="4 4"/><path d="M470 130 L620 130" stroke="var(--border-strong)" stroke-dasharray="4 4"/><path d="M470 200 C540 200 560 130 620 130" stroke="var(--border-strong)" stroke-dasharray="4 4"/>
+        </g>
+        <circle cx="105" cy="130" r="46" fill="color-mix(in srgb, #7aa2f7 18%, var(--surface))" stroke="#7aa2f7" stroke-width="2"/>
+        <image href="../faces/helm_live.svg" x="73" y="98" width="64" height="64"/>
+        <text x="105" y="196" text-anchor="middle" style="font: 600 12px var(--sans); fill: var(--ink)">Helm</text>
+        <g style="font: 600 12px var(--sans)">
+          <rect x="330" y="40" width="140" height="40" rx="10" fill="color-mix(in srgb, var(--green) 12%, var(--surface))" stroke="var(--green)" stroke-width="1.5"/><text x="352" y="65" fill="var(--ink)">✓  Stack found</text>
+          <rect x="330" y="110" width="140" height="40" rx="10" fill="color-mix(in srgb, var(--teal) 12%, var(--surface))" stroke="var(--teal)" stroke-width="2"/><text x="350" y="135" fill="var(--ink)">◌  Mapping code</text>
+          <rect x="330" y="180" width="140" height="40" rx="10" fill="color-mix(in srgb, var(--green) 12%, var(--surface))" stroke="var(--green)" stroke-width="1.5"/><text x="352" y="205" fill="var(--ink)">✓  Tests run</text>
+          <rect x="620" y="106" width="120" height="48" rx="24" fill="var(--surface)" stroke="var(--border-strong)" stroke-width="1.5" stroke-dasharray="4 3"/><text x="680" y="135" text-anchor="middle" fill="var(--faint)">Ready check</text>
+        </g>
+        <g style="font: 11px var(--mono); fill: var(--faint)"><text x="352" y="96">FastAPI · React</text><text x="350" y="166">118 / 214 files</text><text x="352" y="236">142 / 148 pass</text></g>
+      </svg>
+    </section>
+
+    <section class="grid g2">
+      <section class="card">
+        <div class="card-h"><span class="ico" data-c="amber"><i class="ph ph-hand-waving"></i></span><h3>Only you can</h3></div>
+        <div class="ny"><span class="ny-ico">!</span><div style="flex:1"><div class="ny-t">Add OPENAI_API_KEY</div><span class="faint" style="font-size:.56rem">The app needs it to run</span></div><span class="btn" data-kind="amber" data-size="s">Add</span></div>
+        <span class="faint" style="font-size:.56rem;display:block;margin-top:8px">Everything else Helm does itself.</span>
+      </section>
+      <section class="card" style="border-color:color-mix(in srgb, #8b7cf6 45%, transparent)">
+        <div class="card-h"><span class="ico" data-c="violet"><i class="ph ph-sparkle"></i></span><h3>First work, suggested</h3><span class="face" data-a="marshal" data-size="s" title="Ranked by Marshal"></span></div>
+        <div class="rc-t">Fix 6 failing tests</div>
+        <div class="row wrap" style="gap:6px"><span class="tag" data-tone="red"><i class="ph ph-x-circle"></i>CI</span><span class="tag" data-tone="cost">≈ 15 min</span><span class="tag" data-tone="cost">≈ $1.50</span></div>
+        <div class="row" style="margin-top:10px;gap:6px"><span class="btn" data-kind="primary" style="opacity:.55" title="Starts when Ready is done"><i class="ph ph-play"></i>Start when ready</span><span class="btn" data-kind="ghost">Other ideas</span></div>
+      </section>
+    </section>
+  </div>
+</div>
+
+<div class="notes"><b>Design notes</b><ol>
+  <li>The guided first run is the onboarding agent's flow with the setup steps in front of it: left = where you are (6 steps, done ones tick), right = the live diagram of what Helm is doing now. No forms after step 3.</li>
+  <li>"First work, suggested" is ready before onboarding ends, so the last step is a single press. It ends at a real PR you review — the old "Try a sample" goal, on your own repo.</li>
+  <li>Motion: the live node pulses; done edges turn green with a 200ms ease; nothing else moves.</li>
+</ol></div>
+</div>
+<script src="../shell.js"></script>
+</body></html>

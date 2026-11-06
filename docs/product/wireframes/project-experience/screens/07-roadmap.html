@@ -1,0 +1,66 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Project roadmap</title>
+<link rel="stylesheet" href="../console.css"><link rel="stylesheet" href="../project.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/fill/style.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/bold/style.css">
+</head>
+<body data-active="projects" data-project="1" data-tab="roadmap" data-crumb="Projects|HelpDesk AI Demo|Roadmap">
+<div id="content">
+
+<section class="card">
+  <div class="card-h"><span class="ico" data-c="violet"><i class="ph ph-map-trifold"></i></span><h3>Plan</h3><span class="faint" style="font-size:.56rem">Helm proposes · Marshal ranks · you decide</span><span class="pin">1</span>
+    <a class="more"><i class="ph ph-chat-circle-dots"></i> Plan with Helm</a></div>
+  <div class="grid g3">
+    <div class="card" style="background:var(--surface-2)"><div class="row"><span class="dot" data-s="run"></span><b>Now</b><span class="tag">2</span></div>
+      <div class="ck" style="margin-top:6px"><div class="ck-i" data-s="run"><span class="ck-b"></span><span class="ck-t">Search filters</span><span class="face" data-a="forge_live" data-size="s"></span></div>
+      <div class="ck-i" data-s="you"><span class="ck-b">!</span><span class="ck-t">Visual refresh</span><span class="face" data-a="you" data-size="s"></span></div></div></div>
+    <div class="card" style="background:var(--surface-2)"><div class="row"><span class="dot"></span><b>Next</b><span class="tag">3</span></div>
+      <div class="ck" style="margin-top:6px"><div class="ck-i"><span class="ck-b"></span><span class="ck-t">Email intake</span></div><div class="ck-i"><span class="ck-b"></span><span class="ck-t">Weekend SLA fix</span></div><div class="ck-i"><span class="ck-b"></span><span class="ck-t">Fix 6 tests</span></div></div></div>
+    <div class="card" style="background:var(--surface-2)"><div class="row"><span class="dot" style="background:var(--idle,#3e4d6b)"></span><b>Later</b><span class="tag">2</span></div>
+      <div class="ck" style="margin-top:6px"><div class="ck-i"><span class="ck-b"></span><span class="ck-t">Reply suggestions</span></div><div class="ck-i"><span class="ck-b"></span><span class="ck-t">Status index</span></div></div></div>
+  </div>
+</section>
+
+<div class="row wrap"><span class="ico" data-c="violet"><i class="ph ph-lightbulb"></i></span><h3 style="margin:0;font-family:var(--display);font-size:.8rem">Recommendations</h3><span class="tag" data-tone="violet">5 new</span>
+  <span class="wf-spacer"></span><div class="filters"><span aria-selected="true">Open 5</span><span>Accepted 7</span><span>Rejected 2</span><span>Snoozed 1</span></div></div>
+
+<div class="rc">
+  <div class="rc-card"><span class="rc-rank">1</span>
+    <div style="min-width:0"><div class="rc-t">Regression test for SLA weekend pause</div>
+      <div class="fl" style="padding:0"><span class="fl-n" data-t="signal"><i class="ph ph-warning"></i>2 incidents</span><span class="fl-w"></span><span class="fl-n" data-t="signal"><i class="ph ph-fire"></i>sla.py hot</span><span class="fl-w"></span><span class="fl-n" data-t="decision"><i class="ph ph-detective"></i>Incident hotspot</span><span class="fl-w"></span><span class="fl-n" data-t="agent"><span class="face" data-a="helm" data-size="s"></span>Test + fix</span></div>
+      <div class="row wrap" style="margin-top:8px;gap:8px"><span class="tag">Hardening</span><span class="score">Value <span class="bar"><span style="width:82%;background:var(--green)"></span></span></span><span class="score">Effort <b class="mono">S</b></span><span class="tag" data-tone="cost">≈ $2</span><a class="faint" style="font-size:.56rem">Why? <i class="ph ph-caret-right"></i></a></div></div>
+    <div class="rc-act"><span class="btn" data-kind="primary"><i class="ph ph-check"></i>Accept</span><span class="btn"><i class="ph ph-x"></i>Reject</span></div></div>
+
+  <div class="rc-card"><span class="rc-rank">2</span>
+    <div style="min-width:0"><div class="rc-t">Alert rule for /api/tickets 5xx</div>
+      <div class="fl" style="padding:0"><span class="fl-n" data-t="signal"><i class="ph ph-plug"></i>New endpoint</span><span class="fl-w"></span><span class="fl-n" data-t="decision"><i class="ph ph-bell-slash"></i>Alert gap</span><span class="fl-w"></span><span class="fl-n" data-t="agent"><span class="face" data-a="beacon" data-size="s"></span>Add alert</span></div>
+      <div class="row wrap" style="margin-top:8px;gap:8px"><span class="tag">Hardening</span><span class="score">Value <span class="bar"><span style="width:74%;background:var(--green)"></span></span></span><span class="score">Effort <b class="mono">S</b></span><span class="tag" data-tone="cost">≈ $1</span></div></div>
+    <div class="rc-act"><span class="btn" data-kind="primary"><i class="ph ph-check"></i>Accept</span><span class="btn"><i class="ph ph-x"></i>Reject</span></div></div>
+
+  <div class="rc-card" style="border-color:color-mix(in srgb, var(--red) 40%, transparent)"><span class="rc-rank">3</span>
+    <div style="min-width:0"><div class="rc-t">Agent reply suggestions (GPT)</div>
+      <div class="fl" style="padding:0"><span class="fl-n" data-t="signal"><i class="ph ph-chats"></i>3 asks in PRDs</span><span class="fl-w"></span><span class="fl-n" data-t="decision"><i class="ph ph-trend-up"></i>Feature demand</span><span class="fl-w"></span><span class="fl-n" data-t="agent"><span class="face" data-a="juno" data-size="s"></span>Write PRD</span></div>
+      <div style="margin-top:10px"><span class="lbl">Reject because</span><span class="pin">2</span>
+        <div class="row wrap" style="gap:6px;margin-top:6px"><span class="sug" style="border-color:var(--accent-line);background:var(--accent-soft)">Not now</span><span class="sug">Wrong idea</span><span class="sug">Duplicate</span><span class="sug">Won't do</span><span class="input" data-ph style="padding:3px 9px;flex:1;min-width:140px">Say more (optional)</span></div></div></div>
+    <div class="rc-act"><span class="btn" data-kind="primary">Reject</span><span class="btn" data-kind="ghost">Cancel</span></div></div>
+
+  <div class="rc-card"><span class="rc-rank">4</span>
+    <div style="min-width:0"><div class="rc-t">Index tickets(status, created_at)</div>
+      <div class="fl" style="padding:0"><span class="fl-n" data-t="signal"><i class="ph ph-timer"></i>List p95 1.4s</span><span class="fl-w"></span><span class="fl-n" data-t="decision"><i class="ph ph-gauge"></i>Slow query</span><span class="fl-w"></span><span class="fl-n" data-t="agent"><span class="face" data-a="forge" data-size="s"></span>Migration</span></div>
+      <div class="row wrap" style="margin-top:8px;gap:8px"><span class="tag">Performance</span><span class="score">Value <span class="bar"><span style="width:60%;background:var(--green)"></span></span></span><span class="score">Effort <b class="mono">S</b></span></div></div>
+    <div class="rc-act"><span class="btn" data-kind="primary"><i class="ph ph-check"></i>Accept</span><span class="btn"><i class="ph ph-x"></i>Reject</span></div></div>
+
+  <div class="rc-card" data-s="accepted"><span class="rc-rank" style="background:var(--green-soft);color:var(--green)"><i class="ph-bold ph-check"></i></span>
+    <div style="min-width:0"><div class="rc-t">Email-to-ticket intake</div>
+      <div class="fl" style="padding:0"><span class="fl-n" data-t="done"><i class="ph ph-check"></i>Accepted</span><span class="fl-w" data-s="done"></span><span class="fl-n"><i class="ph ph-kanban"></i>On Work · Next</span></div></div>
+    <div class="rc-act"><a class="link-chip">Open work <i class="ph ph-arrow-right"></i></a></div></div>
+</div>
+
+<div class="notes"><b>Design notes</b><ol>
+  <li><b>1</b> Now / Next / Later is the roadmap; recommendations feed it. Accept = it becomes Planned work on the Work tab in Marshal's rank (and appears in Next). Each card is a small diagram: evidence → detector (the learning detectors from Agents at work) → which agent would do it.</li>
+  <li><b>2</b> Reject always asks a reason in one tap (it teaches the detector, same as today's Agents-at-work roadmap). Snooze sits in the card's ⋯ menu.</li>
+</ol></div>
+</div>
+<script src="../shell.js"></script>
+</body></html>

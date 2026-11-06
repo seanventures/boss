@@ -1,0 +1,42 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Ask the captain</title>
+<link rel="stylesheet" href="../console.css"><link rel="stylesheet" href="../project.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/fill/style.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/bold/style.css">
+</head>
+<body data-active="projects" data-project="1" data-tab="overview" data-crumb="Projects|HelpDesk AI Demo">
+<div id="content">
+  <section class="card" style="height:120px;opacity:.5"><div class="card-h"><h3>Journey</h3></div></section>
+  <section class="grid g4" style="opacity:.5"><div class="card" style="height:120px"></div><div class="card"></div><div class="card"></div><div class="card"></div></section>
+  <section class="split" style="opacity:.5"><div class="card" style="height:300px"></div><div class="card"></div></section>
+</div>
+<div id="overlay">
+<div class="scrim"></div>
+<aside class="drawer" aria-label="Helm, captain of HelpDesk AI Demo" style="width:480px">
+  <div class="drawer-h"><span class="face" data-a="helm" data-size="m"></span>
+    <div style="flex:1;min-width:0"><b style="font-size:.78rem">Helm</b> <span class="tag" data-tone="blue">Captain</span>
+      <div class="row" style="font-size:.56rem;color:var(--faint)"><i class="ph ph-folders"></i>HelpDesk AI Demo only<span>·</span><span class="dot" data-s="done"></span>knows 412 facts</div></div>
+    <i class="ph ph-clock-counter-clockwise" title="Past conversations"></i><i class="ph ph-x" title="Close"></i></div>
+  <div class="drawer-b">
+    <div class="msg" data-from="you">What's left before I can demo this to the support team on Monday?</div>
+    <div class="msg" data-from="agent">
+      <div class="fl" style="padding:0 0 8px"><span class="fl-n" data-t="you">Merge PR #3</span><span class="fl-w"></span><span class="fl-n" data-t="run">Search filters</span><span class="fl-w"></span><span class="fl-n" data-t="done">Staging</span><span class="fl-w"></span><span class="fl-n" data-t="todo">Demo ready</span></div>
+      Two things. <b>Merge PR #3</b> (tests 148/148, review clean) — then Beacon redeploys staging in ~3 min. <b>Search filters</b> finishes building in ~20 min; I'd demo it too. Prod isn't needed for a demo.
+      <div class="cites"><a class="link-chip"><i class="ph ph-git-pull-request"></i>PR #3</a><a class="link-chip"><i class="ph ph-flow-arrow"></i>Run #44</a><a class="link-chip"><i class="ph ph-globe"></i>Staging</a><a class="link-chip"><i class="ph ph-key"></i>Demo logins</a></div></div>
+    <div class="msg" data-from="you">Also add a "VIP customer" flag that jumps the queue.</div>
+    <div class="msg" data-from="agent" style="max-width:100%;width:100%">I'll plan it as a minor feature. It touches the same SLA code as the open weekend bug, so I'd run them together.
+      <div class="act" style="margin-top:10px">
+        <div class="row"><span class="ico" data-c="teal" style="width:24px;height:24px"><i class="ph ph-sparkle"></i></span><b>New work · VIP customer flag</b><span class="wf-spacer"></span><span class="tag" data-tone="cost">≈ $3</span><span class="tag" data-tone="cost">≈ 30m</span></div>
+        <div class="fl" style="padding:8px 0 4px"><span class="fl-n" data-t="agent"><span class="face" data-a="juno" data-size="s"></span>Plan</span><span class="fl-w"></span><span class="fl-n" data-t="you">You approve</span><span class="fl-w"></span><span class="fl-n"><i class="ph ph-hammer"></i>Build</span><span class="fl-w"></span><span class="fl-n"><i class="ph ph-git-pull-request"></i>PR</span></div>
+        <div class="row" style="gap:6px;margin-top:6px"><span class="btn" data-kind="primary" data-size="s"><i class="ph ph-play"></i>Start</span><span class="btn" data-size="s">Edit</span><span class="btn" data-kind="ghost" data-size="s">Not now</span></div></div>
+      <div class="cites"><a class="link-chip"><i class="ph ph-bug"></i>#12 weekend SLA</a><a class="link-chip"><i class="ph ph-file-code"></i>sla.py</a></div></div>
+  </div>
+  <div class="drawer-f">
+    <div class="sugs"><span class="sug"><i class="ph ph-map-trifold"></i> Plan next week</span><span class="sug"><i class="ph ph-question"></i> Why is PR #3 waiting?</span><span class="sug"><i class="ph ph-coins"></i> What did this cost?</span></div>
+    <div class="composer"><i class="ph ph-paperclip"></i>Ask Helm, or describe new work…<span class="wf-spacer"></span><span class="btn" data-kind="primary" data-size="s"><i class="ph ph-paper-plane-tilt"></i></span></div>
+  </div>
+</aside>
+</div>
+<script src="../shell.js"></script>
+</body></html>

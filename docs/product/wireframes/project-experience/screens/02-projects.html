@@ -1,0 +1,70 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Projects</title>
+<link rel="stylesheet" href="../console.css"><link rel="stylesheet" href="../project.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/fill/style.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/bold/style.css">
+</head>
+<body data-active="projects" data-crumb="Projects">
+<div id="content">
+
+<div class="page-h"><span class="ico" data-size="l"><i class="ph ph-folders"></i></span><div><h1>Projects</h1><span class="muted" style="font-size:.6rem">Each one has a captain, its work, repo and deploys</span></div>
+  <span class="wf-spacer"></span><span class="btn" data-kind="primary"><i class="ph ph-plus"></i>Add project</span></div>
+
+<section class="grid g4">
+  <div class="card tile"><span class="lbl">Projects</span><span class="v">3</span></div>
+  <div class="card tile" style="border-color:color-mix(in srgb, var(--amber) 45%, transparent)"><span class="lbl">Need you</span><span class="v" style="color:var(--amber)">2</span><span class="s">in 1 project</span></div>
+  <div class="card tile"><span class="lbl">Running</span><span class="v" style="color:var(--teal)">2</span><span class="s"><span class="faces"><span class="face" data-a="forge_live" data-size="s"></span><span class="face" data-a="helm_live" data-size="s"></span></span></span></div>
+  <div class="card tile"><span class="lbl">Cost · week</span><span class="v">$22.60</span><span class="s">of $150 cap</span></div>
+</section>
+
+<div class="filters"><span aria-selected="true">All 3</span><span><span class="dot" data-s="you"></span> Needs you</span><span>Working</span><span>Onboarding</span><span>Archived</span></div>
+
+<section class="grid g3">
+  <a class="card link pc" data-needs title="Open HelpDesk AI Demo">
+    <div class="pc-h"><span class="pj-mark">HD</span><div style="min-width:0;flex:1"><div class="pc-name">HelpDesk AI Demo</div><div class="pc-repo">paramg/helpdesk-ai-demo</div></div><span class="tag" data-tone="amber">2 need you</span></div>
+    <div class="jr" data-size="s">
+      <div class="jr-node" data-s="done"><span class="jr-shape">✓</span><span class="jr-cap">Onboard</span></div><span class="jr-wire" data-s="done"></span>
+      <div class="jr-node" data-s="done"><span class="jr-shape">✓</span><span class="jr-cap">Ready</span></div><span class="jr-wire" data-s="now"></span>
+      <div class="jr-node" data-s="now"><span class="jr-shape"><i class="ph-fill ph-hammer"></i></span><span class="jr-cap">Working</span></div><span class="jr-wire" data-s="done"></span>
+      <div class="jr-node" data-s="done"><span class="jr-shape">✓</span><span class="jr-cap">Deployed</span></div></div>
+    <div class="row" style="gap:12px"><div class="ring" style="--p:99.9;width:36px;height:36px;font-size:.45rem"><span>99.9</span></div>
+      <div style="font-size:.58rem;flex:1"><div><span class="dot" data-s="done"></span> staging healthy</div><div class="faint">3 merged · 1 building</div></div>
+      <svg width="70" height="24" viewBox="0 0 70 24"><polyline fill="none" stroke="#8b7cf6" stroke-width="1.6" points="0,18 10,10 20,14 30,4 40,12 50,16 60,8 70,12"/></svg></div>
+    <div class="pc-foot"><span class="face" data-a="helm" data-size="s"></span>Helm<span class="faces" style="margin-left:4px"><span class="face" data-a="juno" data-size="s"></span><span class="face" data-a="forge_live" data-size="s"></span><span class="face" data-a="vera" data-size="s"></span></span><span class="wf-spacer"></span><span class="mono">$14.20</span></div>
+  </a>
+
+  <a class="card link pc">
+    <div class="pc-h"><span class="pj-mark" style="background:linear-gradient(135deg,#8b7cf6,#2f6fe0)">NP</span><div style="min-width:0;flex:1"><div class="pc-name">NorthPeak Retail</div><div class="pc-repo">northpeak/saleor · KG</div></div><span class="tag" data-tone="blue">Onboarding</span></div>
+    <div class="jr" data-size="s">
+      <div class="jr-node" data-s="done"><span class="jr-shape">✓</span><span class="jr-cap">Onboard</span></div><span class="jr-wire" data-s="now"></span>
+      <div class="jr-node" data-s="now"><span class="jr-shape"><i class="ph ph-list-checks"></i></span><span class="jr-cap">Ready</span></div><span class="jr-wire"></span>
+      <div class="jr-node" data-s="todo"><span class="jr-shape"></span><span class="jr-cap">Working</span></div><span class="jr-wire"></span>
+      <div class="jr-node" data-s="todo"><span class="jr-shape"></span><span class="jr-cap">Deployed</span></div></div>
+    <div class="row" style="gap:12px"><div class="ring" style="--p:70;--c:var(--teal);width:36px;height:36px;font-size:.45rem"><span>4/6</span></div>
+      <div style="font-size:.58rem;flex:1"><div><span class="dot" data-s="run"></span> mapping rules</div><div class="faint">1,284 nodes so far</div></div></div>
+    <div class="pc-foot"><span class="face" data-a="helm_live" data-size="s"></span>Helm<span class="wf-spacer"></span><span class="mono">$6.90</span></div>
+  </a>
+
+  <a class="card link pc">
+    <div class="pc-h"><span class="pj-mark" style="background:linear-gradient(135deg,#34d399,#2ec5c5)">HW</span><div style="min-width:0;flex:1"><div class="pc-name">Hello World</div><div class="pc-repo">paramg/hello-world · sample</div></div><span class="tag" data-tone="green">Live</span></div>
+    <div class="jr" data-size="s">
+      <div class="jr-node" data-s="done"><span class="jr-shape">✓</span><span class="jr-cap">Onboard</span></div><span class="jr-wire" data-s="done"></span>
+      <div class="jr-node" data-s="done"><span class="jr-shape">✓</span><span class="jr-cap">Ready</span></div><span class="jr-wire" data-s="done"></span>
+      <div class="jr-node" data-s="done"><span class="jr-shape">✓</span><span class="jr-cap">Working</span></div><span class="jr-wire" data-s="done"></span>
+      <div class="jr-node" data-s="done"><span class="jr-shape">✓</span><span class="jr-cap">Deployed</span></div></div>
+    <div class="row" style="gap:12px"><div class="ring" style="--p:100;width:36px;height:36px;font-size:.45rem"><span>100</span></div>
+      <div style="font-size:.58rem;flex:1"><div><span class="dot" data-s="done"></span> preview up</div><div class="faint">1 merged · idle</div></div></div>
+    <div class="pc-foot"><span class="face" data-a="helm" data-size="s"></span>Helm<span class="wf-spacer"></span><span class="mono">$1.50</span></div>
+  </a>
+
+  <a class="card pc-new" title="New from an idea, or an existing repo/folder"><div><span class="ico" data-size="l"><i class="ph ph-plus"></i></span><div style="margin-top:8px;font-weight:600;color:var(--ink)">Add project</div><div style="font-size:.58rem">New idea · existing repo</div></div></a>
+</section>
+
+<div class="notes"><b>Design notes</b><ol>
+  <li>One card = one project: its journey (4 nodes), health ring, cost sparkline, captain + live crew faces. Needs-you cards get an amber border and sort first.</li>
+  <li>The rail lists the same projects under Projects (dot = state) for one-click switching; the top-bar project menu becomes this rail list.</li>
+</ol></div>
+</div>
+<script src="../shell.js"></script>
+</body></html>
