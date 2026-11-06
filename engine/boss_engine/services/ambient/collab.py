@@ -14,9 +14,10 @@ ledger.record_decision writes `decision`, board.finish writes `resolve`). `a2a.p
     proposal    {action (catalogue), summary, verify?, undo?, confidence?, workflow?}
     critique    reply_to=<proposal>  {position: agree|object|concern|unsafe, summary}
     vote        reply_to=<proposal>  {vote: approve|reject|abstain, reason?}   one per voter
-    handoff     {to: <party>, summary, seat?: lead, via?: {kind, ref}, packet?: {...}}
-                (a lead handing the lead on; work handed to a workflow or a panel `via` its
-                run, with the packet it carries; a result handed back `returned_from` it)
+    handoff     {to: <party>, summary, seat?, via?: {kind, ref}, packet?: {...}}
+                seat: the receiver's seat on this item, <=4 words ("lead" hands the lead on;
+                "Investigator" labels an incident seat); work handed to a workflow or a panel
+                `via` its run, with the packet it carries; a result handed back `returned_from` it
     escalate    {to: <party>, reason}
     claim / decision / resolve       written by board / ledger only
     squad       {template, lead, members[{party, seat, why}], unfilled[]}  squads.assemble only
@@ -53,7 +54,7 @@ from sqlalchemy.engine import Connection
 from ..meeting_consensus import tally_votes
 from . import task_classes as tc
 from ._common import (clean_text, emit, new_id, party, party_kind, serialize_row,
-                      verify_evidence)
+                      short_label, verify_evidence)
 
 KINDS = ("claim", "finding", "hypothesis", "proposal", "critique", "vote", "decision", "handoff",
          "escalate", "resolve", "squad")
@@ -153,10 +154,11 @@ def _body(connection: Connection, project_id: str, kind: str, body: Mapping[str,
     if kind == "handoff":
         out = {"to": party(b.get("to")), "from": b.get("from"),
                "summary": clean_text(b.get("summary"), 300)}
-        if b.get("seat"):
-            if b["seat"] not in SEATS:
-                raise ValueError(f"a handoff's seat is one of {', '.join(SEATS)}")
-            out["seat"] = b["seat"]
+        # The seat the receiver takes on this item ("lead", "Investigator"): the diagram's label
+        # for that party on this item (read_model.graph), at most four words.
+        seat = short_label(b.get("seat"), 4)
+        if seat:
+            out["seat"] = seat
         for key in ("via", "returned_from"):
             if b.get(key):
                 ref = b[key] if isinstance(b[key], Mapping) else {}

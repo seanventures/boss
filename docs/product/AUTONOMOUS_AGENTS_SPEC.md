@@ -328,7 +328,7 @@ squad_demo.seed(engine, settings, *, project_id, confirm_demo=True, ensure_roles
 | `critique` | any party, `reply_to` a proposal | `{position: agree|object|concern|unsafe, summary}` |
 | `vote` | any party, `reply_to` a proposal, once | `{vote: approve|reject|abstain, reason?}` |
 | `decision` | `ledger.record_decision` only | `{act_id, chosen}` |
-| `handoff` | any party (take-over writes one as `boss`) | `{to: party, from?, summary, seat?: lead, via?: {kind: workflow_run\|meeting\|code_task, ref}, returned_from?: {kind, ref}, packet?: {...}}` |
+| `handoff` | any party (take-over writes one as `boss`) | `{to: party, from?, summary, seat? (≤4 words: `lead` hands the lead on; `Investigator` labels an incident seat), via?: {kind: workflow_run\|meeting\|code_task, ref}, returned_from?: {kind, ref}, packet?: {...}}` |
 | `escalate` | any party | `{to: party, reason}` |
 | `resolve` | `board.finish` only | `{outcome, summary}` |
 | `squad` | `squads.assemble` only | `{template, lead, members: [{party, seat: lead\|specialist\|critic, why}], unfilled: [{seat, reason}]}` |
@@ -403,7 +403,7 @@ Illustrative — nodes from several moments of one item are shown together:
     "label": "reject", "dissent": true, "ref": {"kind": "message", "id": "wim_…"}}]}
 ```
 
-Node types: `signal agent person policy squad boss action decision needs_you run outcome`. Edge kinds: `raised claimed proposed critique vote handoff escalate decided settles overrides acted asks resulted`, and for squads (908) `assembled` (assembler → squad), `seated` (squad → member, labelled with the seat), `returned` (run/panel → the lead it reported back to). A handoff `via` a run is an edge from the lead to the run node; the squad node is `party:squad:<item id>`, the same node a `squad:<item>` decision comes from. A Needs-you node raised on a squad's proposal hangs off that proposal. Results BOSS posts back from a run are drawn as the `returned` edge, not as a BOSS node. Labels ≤ 4 words (nodes) / ≤ 3 (edges). `stage` 0–5 orders left to right. Every node has a `ref` for its drawer. List items carry `strip` (≤ 6 nodes: first signal, owner, last decision, Needs you / outcome) for the thumbnail.
+Node types: `signal agent person policy squad boss action decision needs_you run outcome`. A party node (agent / person / …) also carries `role` (the party's own role name, for the tooltip and drawer) and, when a `handoff` on the item named it, `seat` (its squad seat on this item: "SRE lead", "Investigator", "Engineer", "Reviewer"); the label is then the seat. A resolved incident's outcome reads `Recovered <span>` (`4m12s` under 10 minutes). Edge kinds: `raised claimed proposed critique vote handoff escalate decided settles overrides acted asks resulted`, and for squads (908) `assembled` (assembler → squad), `seated` (squad → member, labelled with the seat), `returned` (run/panel → the lead it reported back to). A handoff `via` a run is an edge from the lead to the run node; the squad node is `party:squad:<item id>`, the same node a `squad:<item>` decision comes from. A Needs-you node raised on a squad's proposal hangs off that proposal. Results BOSS posts back from a run are drawn as the `returned` edge, not as a BOSS node. Labels ≤ 4 words (nodes) / ≤ 3 (edges). `stage` 0–5 orders left to right. Every node has a `ref` for its drawer. List items carry `strip` (≤ 6 nodes: first signal, owner, last decision, Needs you / outcome) for the thumbnail.
 
 ---
 
@@ -426,6 +426,18 @@ Node types: `signal agent person policy squad boss action decision needs_you run
 | **910** AI SRE squad | the incident squad on `incident_response` / `incident_staging_mitigation`; `incident_actions` rows written through the ledger | gate actions `staging_*`, `prod_*`, `silence_rule`; consensus modes | Mitigate first; prod rollback is `squad_vote_and_person`. Link incidents (`board.link(..., "incident", id)`). |
 | **911** recommended roadmap | KG detectors as `source="kg"` adapters; recommendations as items/links (`recommendation` link kind) | signals, board | Rejections → `dismiss` (cooldown) + `record_outcome("dismissed")`. |
 | **912** outcomes & metrics | the 7-day "ignored" sweep (`record_outcome(..., "ignored")`), PR merged/reverted hooks, extra scorecard metrics | `ledger.record_outcome` (the canonical outcome store), `read_model.scorecard` | Do NOT add a parallel `proposal_outcomes` table; if a per-proposal view is needed, make it a SQL view over `agent_act_decisions`. |
+
+### 9.1 What 910 (AI SRE incident squad) built — the contracts other streams call
+
+Code: `engine/boss_engine/services/incident_squad.py`, `incident_squad_demo.py`, `apps/api/app/routers/incident_squad.py`.
+
+| For | Contract |
+|---|---|
+| **904 CoS** | `incident_squad.HANDLERS[task_class]` = `route_incident(c, *, project_id, item_id, settings=None, mind=None, effects=None, squad=None) -> {stage}` for `incident_response` / `incident_staging_mitigation` (stage: `joined needs_you verifying resolved escalated`). Idempotent: routing an item twice continues it. Open the item with `incident_squad.incident_class(environment)`. Until 904 lands, `incident_squad.intake(c, project_id=, signal_id=)` is the stand-in (opens the item as `agent:chief_of_staff`, records the routing decision, hands off to `agent:sre`). On the tick call `incident_squad.tick(c, project_id=)` (items watching recovery). |
+| **907 Needs you** | The squad's card is a `board.needs_you` decision with `recommendation.action = "incident_squad.mitigate"` (options `approve` / `fix_only` / `hold`). `decisions.py` routes approve → `resume(answer="approve")`, reject → `hold`, revise → `fix_only`. `resume` calls `board.answered` itself when the item is still `needs_you`. |
+| **911 roadmap** | Hardening items are signals `source="kg"`, `kind="recommendation.hardening"`, fingerprint `(app, key)`, evidence `[kg_node: incident node, incident]`, linked to the incident item as `recommendation`. |
+| **906 view** | Seats are roles: lead `agent:sre`, investigator `agent:operations_engineer`, engineer `agent:backend_engineer`, reviewer `agent:adversarial_reviewer`; the squad's recommendation is `decided_by squad:<item>`. Decision `chosen` values are short labels ("Release 6bf2672", "Reuse INC-31 fix", "Recommend rollback"). |
+| **Demo** | The replay re-times its own rows to the D2 pace (`incident_squad_demo.MILESTONES`, pinned to the end, demo items only; real runs keep real time). `PYTHONPATH=engine python3 -m boss_engine.services.incident_squad_demo --project <id> [--env staging] [--approve-as <person>]`, or `POST /v1/ambient/demo/order-api-incident {project_id, environment?, approve?}` with `BOSS_DEMO_SCENARIOS=1` (autonomy:manage). Fixtures only; no host is touched. |
 
 ---
 

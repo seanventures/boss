@@ -40,6 +40,8 @@ _ACRONYMS = {"Sre": "SRE", "Qa": "QA", "Pm": "PM", "Cto": "CTO", "Coo": "COO", "
              "Vp": "VP", "Aml": "AML", "Dq": "DQ"}
 _RUN_WORDS = {"workflow_run": "Run", "code_task": "Build", "pull_request": "Pull request",
               "meeting": "Panel", "incident": "Incident"}
+#: An incident that ends resolved has RECOVERED: the outcome node says so ("Recovered 4m12s").
+INCIDENT_CLASSES = frozenset({"incident_response", "incident_staging_mitigation"})
 
 _FILTER_SQL = {
     "needs_you": "w.lifecycle = 'needs_you'",
@@ -83,6 +85,9 @@ def _span_words(minutes: Optional[float]) -> str:
         return ""
     if minutes < 1:
         return f"{int(minutes * 60)}s"
+    if minutes < 10:
+        whole = int(minutes)
+        return f"{whole}m{int(round((minutes - whole) * 60)):02d}s"
     if minutes < 90:
         return f"{int(minutes)}m"
     if minutes < 48 * 60:
@@ -139,10 +144,25 @@ def graph(connection: Connection, item_id: str, *, project_id: str) -> dict[str,
                               "stage": STAGES[kind], "badges": [], **extra}
         return node_id
 
+    # SQUAD SEATS: a handoff may name the seat its receiver takes on this item ("SRE lead",
+    # "Investigator"). The seat is the node's label — what the person does HERE — and the
+    # party's own role name rides along as `role` for the tooltip and the drawer.
+    # A generic squad seat ("lead", "specialist", "critic" — squads.assemble / a lead handing
+    # the lead on) is a badge, not a label: the node keeps the party's role name.
+    seats: dict[str, str] = {}
+    for m in board_msgs:
+        seat = str((m.get("body") or {}).get("seat") or "") if m["kind"] == "handoff" else ""
+        if seat and seat not in ("lead", "specialist", "critic"):
+            seats.setdefault(str(m["body"].get("to")), seat)
+
     def actor(who: str) -> str:
         kind = party_kind(who)
-        return node(f"party:{who}", kind if kind in STAGES else "boss", _party_label(who),
-                    ref={"kind": "party", "id": who})
+        role = _party_label(who)
+        extra: dict[str, Any] = {"role": role}
+        if who in seats:
+            extra["seat"] = seats[who]
+        return node(f"party:{who}", kind if kind in STAGES else "boss", seats.get(who, role),
+                    ref={"kind": "party", "id": who}, **extra)
 
     def edge(src: str, dst: str, kind: str, label: str = "", dissent: bool = False,
              ref: Optional[dict[str, Any]] = None) -> None:
@@ -287,7 +307,8 @@ def graph(connection: Connection, item_id: str, *, project_id: str) -> dict[str,
              "asks", "asks")
     if item["lifecycle"] in board.TERMINAL:
         took = _minutes(_dt(item.get("created_at")), _dt(item.get("resolved_at")))
-        words = {"resolved": "Resolved", "failed": "Failed", "dismissed": "Dismissed"}
+        words = {"resolved": "Recovered" if item.get("task_class") in INCIDENT_CLASSES
+                 else "Resolved", "failed": "Failed", "dismissed": "Dismissed"}
         oid = node("outcome", "outcome", f"{words[item['lifecycle']]} {_span_words(took)}".strip(),
                    ref={"kind": "work_item", "id": item_id})
         nodes[oid]["badges"] = [item["lifecycle"]]
