@@ -33,6 +33,9 @@ export const SUBJECT_KINDS = [
   "decision",
   // Infra's Ask BOSS: the machines and what runs on them. The id is the project id.
   "fleet",
+  // The Project page's captain drawer (BOSSAPP-913 §7): the whole project. The id is the
+  // project id.
+  "project",
 ] as const;
 
 export type SubjectKind = (typeof SUBJECT_KINDS)[number];

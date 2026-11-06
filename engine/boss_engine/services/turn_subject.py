@@ -61,6 +61,10 @@ SUBJECT_KINDS: tuple[str, ...] = (
     # Infra's Ask BOSS (infra-observability spec, operator decision 2026-10-04): the machines,
     # what is placed on them and how their last deploys went. The id is the project id.
     "fleet",
+    # The Project page's captain drawer (BOSSAPP-913 §7): the whole project — its stage, work,
+    # what waits on a person, deployments and the onboarding agent's record. The id is the
+    # project id.
+    "project",
 )
 
 #: An id prefix is enough to know the kind of an untyped legacy reference.
@@ -1034,6 +1038,47 @@ def _resolve_fleet(connection, project_id: str, ref: SubjectRef) -> SubjectEvide
     return ev
 
 
+def _resolve_project(connection, project_id: str, ref: SubjectRef) -> SubjectEvidence:
+    """The project as its captain sees it: stage, repositories, every piece of work with its
+    state and links, what waits on a person, environments and the onboarding record. Read from
+    stored rows only (project_experience reads) — never GitHub, never a host."""
+    from .project_experience import health, onboarding, work
+    from .project_experience.common import repos as project_repos
+
+    ev = SubjectEvidence(ref)
+    if ref.id != project_id:
+        return ev
+    row = _rows(connection, "SELECT id, name, description FROM projects WHERE id = :p",
+                {"p": project_id})
+    if not row:
+        return ev
+    ev.found = True
+    ev.title = str(row[0].get("name") or project_id)
+    items = work.everything(connection, project_id, limit=25)
+    counts = work.counts(items)
+    ev.status = ", ".join(f"{n} {k.replace('_', ' ')}" for k, n in counts.items() if n) or "no work yet"
+    ev.facts["project"] = project_id
+    if row[0].get("description"):
+        ev.facts["what it is for"] = _short(row[0]["description"], 400)
+    ev.facts["repositories"] = ", ".join(r["full_name"] for r in project_repos(connection,
+                                                                              project_id)) or "none"
+    for e in health.environments(connection, project_id):
+        ev.facts[f"environment {e['label']}"] = (
+            f"{e['health']} · {e.get('url') or 'no url'} · uptime {e.get('uptime_pct')}% · "
+            f"deployed {e.get('deployed_commit') or 'never'}")
+    onb = onboarding.view(connection, project_id)
+    ev.facts["onboarding"] = onb["state"]
+    for item in onb.get("only_you") or []:
+        ev.findings.append(f"only a person can: {item['label']} — {item.get('detail')}")
+    for w in items[:15]:
+        pr = (w["links"].get("pr") or {}).get("external_url")
+        ev.linked.append(f"[{w['source']} {w['id']}] {w['title']} — {w['state']}"
+                         + (f" · PR {pr}" if pr else "") + f" · {w['href']}")
+    ev.open_points = [("what waits on a person", "list_decisions"),
+                      ("a piece of work in detail", "describe_workflow_run")]
+    return ev
+
+
 RESOLVERS: dict[str, Callable[[Any, str, SubjectRef], SubjectEvidence]] = {
     "workflow_step": _resolve_workflow_step,
     "workflow_run": _resolve_workflow_run,
@@ -1043,6 +1088,7 @@ RESOLVERS: dict[str, Callable[[Any, str, SubjectRef], SubjectEvidence]] = {
     "deployment": _resolve_deployment,
     "decision": _resolve_decision,
     "fleet": _resolve_fleet,
+    "project": _resolve_project,
 }
 
 
