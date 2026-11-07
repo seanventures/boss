@@ -34,7 +34,7 @@ import {
 import { FX_ONBOARDING } from "../../lib/project-experience-fixtures";
 import { useSignin } from "../setup/github-signin-row";
 import { welcomeState, type WelcomeState } from "../setup/welcome";
-import { Face, Flow, Ico, Journey, Said, openAddProject, usePxUrl } from "./kit";
+import { Face, Flow, Ico, Journey, STATE_WORD, Said, openAddProject, usePxUrl } from "./kit";
 import { LiveDiagram, clockWords, useElapsed } from "./onboarding";
 
 /** Repo and models, at GitHub or Models: `add` opens its add sheet (a step still to do); a
@@ -216,19 +216,32 @@ function Orbit() {
   );
 }
 
+/** The guide's four steps (00b-07..11), read from the onboarding run's ONE state machine (the
+ *  engine's linear stage strip): at most one step is current, nothing after it is done, and
+ *  every sub is in words ("Discover · 214 / 214 files", never a raw state). */
+export function guideSteps(card: { repo?: string | null; name: string }, o: Onboarding | null): { label: string; sub: string; state: StepState; icon: React.ReactNode }[] {
+  const st = (key: string) => o?.stages.find((x) => x.key === key);
+  const discover = st("discover"), ready = st("ready"), first = st("first_work");
+  const notStarted = !o || o.state === "not_started";
+  const as = (s: StepState | undefined): StepState => (notStarted || !s ? "todo" : s === "skipped" ? "done" : s);
+  const onboardState = notStarted ? "todo" : as(discover?.state);
+  return [
+    { label: "Add project", sub: card.repo || card.name, state: "done", icon: <FolderPlus size={13} /> },
+    { label: "Helm onboards", icon: <Compass size={13} />, state: onboardState,
+      sub: !o ? "checking…" : o.state === "not_started" ? "not started yet" : `Discover · ${discover?.sub || STATE_WORD[as(discover?.state)]}` },
+    { label: "Ready for work", sub: (!notStarted && ready?.sub) || "checks the agent runs", state: as(ready?.state), icon: <Signpost size={13} /> },
+    { label: "First work", sub: "suggested → your PR", state: as(first?.state), icon: <GitPullRequest size={13} /> },
+  ];
+}
+
 /** 0b: the project's 4-step guide (workspace settings are a read-only row above it) beside Helm's live onboarding diagram, ending at suggested first work. */
 function Guided({ card, s, known }: { card: ProjectCard; s: WelcomeState; known: boolean }) {
   const ob = usePxRead<Onboarding>(PX_PATHS.onboarding(card.id), parseOnboarding, { everyMs: 5_000, demo: () => parseOnboarding(FX_ONBOARDING) });
   const o = ob.data;
   const elapsed = useElapsed(o);
-  const discover = o?.stages.find((x) => x.key === "discover");
+  const steps = guideSteps(card, o);
   const ready = o?.stages.find((x) => x.key === "ready");
-  const steps: { label: string; sub: string; state: StepState; icon: React.ReactNode }[] = [
-    { label: "Add project", sub: card.repo || card.name, state: "done", icon: <FolderPlus size={13} /> },
-    { label: "Helm onboards", sub: discover ? `Discover · ${discover.sub || discover.state}` : "starting", state: !o ? "now" : discover?.state === "done" ? "done" : "now", icon: <Compass size={13} /> },
-    { label: "Ready for work", sub: ready?.sub || "checks the agent runs", state: ready?.state === "done" ? "done" : ready?.state === "now" ? "now" : "todo", icon: <Signpost size={13} /> },
-    { label: "First work", sub: "suggested → your PR", state: o?.first_work && ready?.state === "done" ? "now" : "todo", icon: <GitPullRequest size={13} /> },
-  ];
+  const started = !!o && o.state !== "not_started";
   const done = steps.filter((x) => x.state === "done").length;
   const [said, setSaid] = useState("");
   const startFirst = async () => {
@@ -268,8 +281,13 @@ function Guided({ card, s, known }: { card: ProjectCard; s: WelcomeState; known:
         </section>
         <div className="px-stack">
           <section className="px-card" aria-labelledby="px-g-live">
-            <div className="px-card-h"><Ico icon={Compass} c="teal" /><h2 id="px-g-live">Helm is reading your repo</h2><span className="px-tag" data-tone="blue"><span className="px-dot" data-s="now" aria-hidden /> live</span>
-              {o ? <span className="px-more px-mono px-faint" data-testid="px-guide-clock">{clockWords(elapsed)}</span> : null}</div>
+            {/* ONE PHASE (00b-13): "live" and the clock only once Helm has started — the title,
+                tag and timer all come from the run's own state and real elapsed_s. */}
+            <div className="px-card-h"><Ico icon={Compass} c="teal" /><h2 id="px-g-live">{o ? o.title : "Helm is reading your repo"}</h2>
+              {o?.live ? <span className="px-tag" data-tone="blue" data-testid="px-guide-live"><span className="px-dot" data-s="now" aria-hidden /> live</span>
+                : o?.state === "failed" ? <span className="px-tag" data-tone="red">stopped</span>
+                  : started ? <span className="px-tag" data-tone="green">done</span> : null}
+              {started ? <span className="px-more px-mono px-faint" data-testid="px-guide-clock">{clockWords(elapsed)}</span> : null}</div>
             {o && o.state === "not_started" ? (
               <div className="px-row px-wrap" data-testid="px-guide-not-started">
                 <p className="px-faint" style={{ margin: 0 }}>Helm hasn&apos;t started reading this repo yet.</p>

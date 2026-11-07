@@ -287,3 +287,27 @@ def test_an_unreachable_github_leaves_the_read_empty_and_is_not_asked_again_at_o
         with eng.begin() as db:
             assert registry.list_registry(db, world["projects"][0], settings=get_settings(), lister=broken)["items"] == []
     assert len(calls) == 1
+
+
+def test_add_a_project_is_told_before_creating_whether_a_new_project_can_use_a_repo(eng, world,
+                                                                                  monkeypatch):
+    """03-25: a new project reaches a repository only through the org's GitHub App
+    (project_repos._connection_for); without it the attach is refused with
+    github_not_connected. The registry says so per row, so Add a project never creates a
+    project and then swallows the refusal."""
+    from boss_engine.identity import github_setup
+
+    bind(eng, world, world["projects"][0], "acme/web", role="primary")
+    _refresh(eng, world)
+    monkeypatch.setattr(github_setup, "app_ready", lambda db, org_id=None: False)
+    with eng.begin() as db:
+        items = registry.list_registry(db, world["projects"][0])["items"]
+    web = next(i for i in items if i["full_name"] == "acme/web")
+    assert web["new_project"] == {"ok": False, "code": "github_not_connected",
+                                  "message": registry.NOT_CONNECTED}
+    monkeypatch.setattr(github_setup, "app_ready", lambda db, org_id=None: True)
+    with eng.begin() as db:
+        items = registry.list_registry(db, world["projects"][0])["items"]
+    assert next(i for i in items if i["full_name"] == "acme/web")["new_project"] == {"ok": True}
+    # Not allowed in the registry: never offered to a new project.
+    assert all(not i["new_project"]["ok"] for i in items if not i["allowed"])

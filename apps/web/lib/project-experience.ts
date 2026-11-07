@@ -240,6 +240,7 @@ export type Recommendation = {
 };
 export type Roadmap = { now: NextItem[]; next: NextItem[]; later: NextItem[]; recommendations: Recommendation[]; counts: Record<string, number> };
 export type OnboardingItem = { key: string; label: string; state: StepState; owner: "agent" | "you"; action: { label: string; href: string } | null; detail: string; sub: string };
+export type OnboardingLog = { at: string; agent: string; label: string; state: StepState; text: string };
 export type Onboarding = {
   state: "not_started" | "running" | "ready" | "needs_you" | "failed";
   stages: Node[]; discover: { nodes: Node[]; live?: Node[] }; checklist: OnboardingItem[]; only_you: OnboardingItem[];
@@ -249,6 +250,10 @@ export type Onboarding = {
   backlog: NextItem[];
   /** What the agent is doing now, in words: the engine's `now`, else the checklist item in progress. */
   now: string; elapsed_s: number; error: string;
+  /** The Now line's agent (role key) and whether it moves now (10-09); the live log (Watch). */
+  now_agent: string; now_live: boolean; log: OnboardingLog[];
+  /** THE PHASE, one place (00b-13 / PX-15): live only while the run moves, and its title. */
+  live: boolean; title: string;
   /** Screen 10: the Ready card's rows (its words, the agent on each), the whole backlog's size,
    *  which candidates are already on the Roadmap, and the accept route ("Accept backlog"). */
   ready: (OnboardingItem & { agent: string })[]; backlog_total: number; accepted: string[]; accept_backlog: Accept | null;
@@ -628,6 +633,10 @@ export const parseOnboarding = (v: unknown): Onboarding => {
                                            estimate_runs: n(o(fw.estimate_basis).minutes_runs), estimate_basis: s(o(fw.estimate_basis).minutes),
                                            external_url: s(fw.external_url) } : null,
     backlog: a(x.backlog).map((b) => ({ ...parseNext(b), accepted: s(o(b).state) === "accepted" })), now, elapsed_s: n(x.elapsed_s), error: s(x.error),
+    now_agent: s(x.now_agent), now_live: typeof x.now_live === "boolean" ? x.now_live : state === "running",
+    log: a(x.log).map((z) => { const y = o(z); return { at: s(y.at), agent: s(y.agent), label: s(y.label), state: oneOf(y.state, STEP_STATES, "done"), text: s(y.text) }; }),
+    live: typeof x.live === "boolean" ? x.live : state === "running",
+    title: s(x.title, state === "running" ? "Helm is reading your repo" : state === "not_started" ? "Helm hasn't started" : state === "failed" ? "Onboarding stopped" : "Helm read your repo"),
     ready: (a(x.ready).length ? a(x.ready) : a(x.checklist)).map((z) => ({ ...item(z), agent: s(o(z).agent) })),
     backlog_total: n(x.backlog_total, a(x.backlog).length), accepted: a(x.accepted).map((i) => s(i)),
     accept_backlog: parseAccept(x.accept_backlog),

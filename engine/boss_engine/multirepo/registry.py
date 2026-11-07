@@ -170,8 +170,20 @@ def state_of(row: dict[str, Any]) -> str:
     return "needs_fix"
 
 
-def _shape(row: dict[str, Any], used_by: list[dict[str, Any]]) -> dict[str, Any]:
+#: What Add a project says when a repository cannot join a NEW project (03-25): the same refusal
+#: `project_repos._connection_for` gives, said before anything is created.
+NOT_CONNECTED = ("Connect GitHub first: a new project reaches a repository through the "
+                 "organisation's GitHub App (Repo and models › GitHub).")
+
+
+def _shape(row: dict[str, Any], used_by: list[dict[str, Any]], *, app: bool = False) -> dict[str, Any]:
     checks = jload(row.get("checks"), {}) or {}
+    # CAN A NEW PROJECT USE IT (03-25)? A brand-new project has no connection of its own, so it
+    # reaches a repository only through the org's GitHub App (project_repos._connection_for):
+    # the App is ready and lists this repository. Anything else is refused there with
+    # github_not_connected — Add a project says so on the row, before it creates anything.
+    attachable = bool(app and row.get("source") == "app" and row.get("reachable", True)
+                      and row.get("allowed") and not row.get("archived"))
     return {
         "id": row["id"], "full_name": row["full_name"], "description": row.get("description"),
         "default_branch": row.get("default_branch") or "main", "language": row.get("language"),
@@ -183,6 +195,8 @@ def _shape(row: dict[str, Any], used_by: list[dict[str, Any]]) -> dict[str, Any]
         "checked_at": iso(row.get("checked_at")), "state": state_of(row),
         "pushed_at": iso(row.get("pushed_at")),
         "used_by": used_by,
+        "new_project": ({"ok": True} if attachable else
+                        {"ok": False, "code": "github_not_connected", "message": NOT_CONNECTED}),
     }
 
 
@@ -228,7 +242,13 @@ def list_registry(db: Any, project_id: str, *, settings: Any = None,
     by_repo: dict[str, list[dict[str, Any]]] = {}
     for u in users:
         by_repo.setdefault(u["f"], []).append({"project_id": u["project_id"], "name": u["name"]})
-    items = [_shape(r, by_repo.get(norm_repo(r["full_name"]), [])) for r in rows]
+    from ..identity import github_setup
+
+    try:
+        app = bool(github_setup.app_ready(db, org_id))
+    except Exception:  # noqa: BLE001 — no identity tables: no App
+        app = False
+    items = [_shape(r, by_repo.get(norm_repo(r["full_name"]), []), app=app) for r in rows]
     counts = {"all": len(items), "allowed": sum(1 for i in items if i["allowed"]),
               "needs_fix": sum(1 for i in items if i["state"] in ("needs_fix", "read_only")),
               "not_allowed": sum(1 for i in items if not i["allowed"])}

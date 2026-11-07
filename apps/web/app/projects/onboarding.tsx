@@ -123,16 +123,18 @@ export function LiveDiagram({ nodes }: { nodes: Node[] }) {
 /** Helm in the middle, what it found around it: each a node that turns green when found. */
 export function DiscoverDiagram({ nodes }: { nodes: Node[] }) {
   const n = Math.max(nodes.length, 1);
-  const W = 300, H = 200, cx = 150, cy = 95;
-  // The wireframe's own five places (files · stack · tests · hot spots · docs); any other count
-  // goes round the circle.
-  const FIVE = [{ x: 60, y: 35 }, { x: 240, y: 35 }, { x: 45, y: 130 }, { x: 255, y: 130 }, { x: 150, y: 170 }];
+  // 10-11: every label sits OUTSIDE its node, on the side away from Helm, so no label ever
+  // crosses an edge or another label at any width (the edges come in from the centre).
+  const W = 400, H = 200, cx = 200, cy = 95;
+  const FIVE = [{ x: 132, y: 36 }, { x: 268, y: 36 }, { x: 108, y: 132 }, { x: 292, y: 132 }, { x: 200, y: 172 }];
   const pts = nodes.length === 5 ? FIVE : nodes.map((_, i) => {
     const a = -Math.PI / 2 - Math.PI / 4 + (i * 2 * Math.PI) / n;
-    return { x: cx + Math.cos(a) * 112, y: cy + Math.sin(a) * 68 };
+    return { x: cx + Math.cos(a) * 100, y: cy + Math.sin(a) * 70 };
   });
-  // A label sits under its node; the bottom node's sits to its right (as drawn).
-  const labelAt = (p: { x: number; y: number }) => (p.y > 160 ? { x: p.x + 20, y: p.y + 4, anchor: "start" as const } : { x: p.x, y: p.y + 29, anchor: "middle" as const });
+  const labelAt = (p: { x: number; y: number }) => (
+    Math.abs(p.x - cx) < 8 ? { x: p.x + 20, y: p.y + 4, anchor: "start" as const }
+      : p.x < cx ? { x: p.x - 21, y: p.y + 4, anchor: "end" as const }
+        : { x: p.x + 21, y: p.y + 4, anchor: "start" as const });
   return (
     <div style={{ position: "relative" }} data-testid="px-discover">
       <svg className="px-radial" viewBox={`0 0 ${W} ${H}`} role="img"
@@ -145,11 +147,13 @@ export function DiscoverDiagram({ nodes }: { nodes: Node[] }) {
         {pts.map((p, i) => {
           const st = nodes[i].state;
           const c = st === "done" ? "var(--green)" : st === "failed" ? "var(--red)" : st === "skipped" ? "var(--border-strong)" : "var(--teal)";
+          const l = labelAt(p);
           return (
             <g key={`n${i}`} data-testid={`px-discover-${nodes[i].key || i}`}>
-              <circle cx={p.x} cy={p.y} r={p.y > 160 ? 12 : 15} fill={st === "done" ? "var(--green-soft)" : "var(--surface)"} stroke={c} strokeWidth={2} />
+              <title>{`${nodes[i].label} · ${STATE_WORD[st]}`}</title>
+              <circle cx={p.x} cy={p.y} r={14} fill={st === "done" ? "var(--green-soft)" : "var(--surface)"} stroke={c} strokeWidth={2} />
               {st === "done" ? <path d={`M${p.x - 4.5} ${p.y} l3 3.2 l6 -6.5`} stroke="var(--green)" strokeWidth={2} fill="none" /> : null}
-              {(() => { const l = labelAt(p); return <text x={l.x} y={l.y} textAnchor={l.anchor}>{nodes[i].label}</text>; })()}
+              <text x={l.x} y={l.y} textAnchor={l.anchor} data-testid={`px-discover-label-${nodes[i].key || i}`}>{nodes[i].label}</text>
             </g>
           );
         })}
@@ -177,6 +181,33 @@ export function candidateSource(b: NextItem): { icon: React.ReactNode; words: st
 }
 
 type SaidT = { text: string; ok: boolean; link?: boolean } | null;
+
+/** The Discovered card's tag, from the same state machine as the strip and the live card
+ *  (10-08 / PX-15): live only while the run moves, done when Discover is done. */
+export function discoveredTag(runState: Onboarding["state"], discover: string | undefined): { word: string; tone?: "green" | "blue" | "red" | "amber" } {
+  if (runState === "not_started") return { word: "not started" };
+  if (discover === "done") return { word: "done", tone: "green" };
+  if (discover === "failed") return { word: "failed", tone: "red" };
+  if (runState === "running") return { word: "live", tone: "blue" };
+  if (discover === "waiting") return { word: "needs you", tone: "amber" };
+  return { word: "in progress" };
+}
+
+/** Watch (10-09): the onboarding agent's log — who did what, when, in its words — read from the
+ *  run's record (refreshed with it while it moves). */
+function OnboardingLogList({ ob }: { ob: Onboarding }) {
+  return (
+    <ol className="px-ob-log" id="px-ob-log" data-testid="px-ob-log" aria-label="Onboarding log">
+      {ob.log.length ? ob.log.map((e, i) => (
+        <li key={`${e.at}-${i}`} data-s={e.state}>
+          <time className="px-mono px-faint" dateTime={e.at}>{e.at ? new Date(e.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : ""}</time>
+          <Face agent={e.agent === "chief_of_staff" ? MARSHAL : crewOf(e.agent)} size={18} state={e.state === "now" ? "working" : "idle"} />
+          <b>{e.label}</b><span>{e.text}</span>
+        </li>
+      )) : <li className="px-faint">Nothing logged yet.</li>}
+    </ol>
+  );
+}
 
 /** The workspace's GitHub and model (§15): read-only, each a link to its own Setup page. */
 function WorkspaceRow({ ob }: { ob: Onboarding }) {
@@ -222,11 +253,14 @@ export function OnboardingView({ projectId, ob, onRefresh }: { projectId: string
     if (r.ok && !r.demo) { notifyChanged("project.onboarding"); onRefresh?.(); }
   };
   const nowAgent = useMemo(() => {
+    if (ob.now_agent) return ob.now_agent === "chief_of_staff" ? MARSHAL : crewOf(ob.now_agent);
     const doing = rows.find((c) => c.state === "now" && c.owner !== "you");
     const named = Object.values(CREW).find((c) => ob.now.startsWith(`${c.name} `));
     return named ?? crewOf(doing?.agent);
-  }, [rows, ob.now]);
-  const discoverDone = ob.stages.find((x) => x.key === "discover")?.state === "done";
+  }, [rows, ob.now, ob.now_agent]);
+  const [watching, setWatching] = useState(false);
+  const discover = ob.stages.find((x) => x.key === "discover");
+  const found = discoveredTag(ob.state, discover?.state);
   const live = ob.discover.live ?? [];
   return (
     <div className="px-stack px-ob-view" data-testid="px-onboarding" data-state={ob.state}>
@@ -241,13 +275,16 @@ export function OnboardingView({ projectId, ob, onRefresh }: { projectId: string
           ))}
         </div>
         {ob.now ? (
-          <div className="px-now" style={{ marginTop: 14 }} data-testid="px-ob-now" aria-live="polite">
-            <Face agent={nowAgent} size={22} state="working" />
+          <div className="px-now" style={{ marginTop: 14 }} data-testid="px-ob-now" data-live={ob.now_live || undefined} aria-live="polite">
+            <Face agent={nowAgent} size={22} state={ob.now_live ? "working" : "idle"} />
             <b>Now</b><span>{ob.now}</span>
             <span className="px-spacer" />
-            <a href={pxHref("?area=agent_ops")} data-testid="px-ob-watch" title="The agent's live log"><Terminal size={12} /> Watch</a>
+            <button type="button" className="px-linkbtn" data-testid="px-ob-watch" aria-expanded={watching} aria-controls="px-ob-log"
+                    title={ob.now_live ? "The onboarding agent's live log" : "What the onboarding agent did, step by step"}
+                    onClick={() => setWatching((w) => !w)}><Terminal size={12} aria-hidden /> {watching ? "Hide log" : "Watch"}</button>
           </div>
         ) : null}
+        {watching ? <OnboardingLogList ob={ob} /> : null}
         <div className="px-ob-foot">
           <WorkspaceRow ob={ob} />
           <span className="px-spacer" />
@@ -267,8 +304,8 @@ export function OnboardingView({ projectId, ob, onRefresh }: { projectId: string
 
       {ob.state !== "not_started" ? (
         <section className="px-card px-ob-livecard" aria-labelledby="px-ob-l" data-testid="px-ob-livecard">
-          <div className="px-card-h"><Ico icon={Compass} c="teal" /><h2 id="px-ob-l">{running ? "Helm is reading your repo" : "Helm read your repo"}</h2>
-            {running ? <span className="px-tag" data-tone="blue"><span className="px-dot" data-s="now" aria-hidden /> live</span>
+          <div className="px-card-h"><Ico icon={Compass} c="teal" /><h2 id="px-ob-l">{ob.title}</h2>
+            {ob.live ? <span className="px-tag" data-tone="blue" data-testid="px-ob-live-tag"><span className="px-dot" data-s="now" aria-hidden /> live</span>
               : ob.state === "failed" ? <span className="px-tag" data-tone="red">stopped</span> : <span className="px-tag" data-tone="green">done</span>}
             <span className="px-more px-mono px-faint" data-testid="px-ob-clock" title="Time since onboarding started">{clockWords(elapsed)}</span></div>
           <LiveDiagram nodes={live} />
@@ -278,8 +315,7 @@ export function OnboardingView({ projectId, ob, onRefresh }: { projectId: string
       <div className="px-grid px-g3 px-ob-cards">
         <section className="px-card" aria-labelledby="px-ob-d">
           <div className="px-card-h"><Ico icon={MagnifyingGlass} c="green" /><h2 id="px-ob-d">Discovered</h2>
-            {discoverDone ? <span className="px-tag" data-tone="green">done</span>
-              : ob.state === "not_started" ? <span className="px-tag">not started</span> : <span className="px-tag" data-tone="blue">live</span>}</div>
+            <span className="px-tag" data-tone={found.tone} data-testid="px-ob-discovered-tag">{found.tone === "blue" ? <span className="px-dot" data-s="now" aria-hidden /> : null}{found.word}</span></div>
           {ob.discover.nodes.length ? <DiscoverDiagram nodes={ob.discover.nodes} />
             : <p className="px-faint" style={{ margin: 0 }}>Files, stack, tests, hot spots and docs appear here as Helm finds them.</p>}
           <a href={projectHref(projectId, { tab: "knowledge" })} data-testid="px-ob-dossier">Open dossier →</a>

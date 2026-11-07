@@ -588,8 +588,11 @@ def seed_plan(db, project_id: str, *, now: datetime | None = None, actor: str = 
                    "sub": "Claude connected"},
         "knowledge": {"key": "knowledge", "state": "done", "owner": "agent",
                       "detail": "214 files mapped.", "sub": "214 / 214 files"},
-        "tests": {"key": "tests", "state": "failed", "owner": "agent",
-                  "detail": "6 tests fail on main.", "sub": "6 failing → backlog"},
+        # Tests RAN: the check is done and the six failures went to the backlog (10-16), exactly
+        # as the onboarding agent records it — never a red Discover.
+        "tests": {"key": "tests", "state": "done", "owner": "agent",
+                  "detail": "142 of 148 tests pass on main; 6 fail — fixing them is in the backlog.",
+                  "sub": "6 failing → backlog"},
         "baseline_build": {"key": "baseline_build", "state": "done", "owner": "agent",
                            "detail": "main builds clean.", "sub": "make setup · 1m 40s"},
         "deploy_target": {"key": "deploy_target", "state": "done", "owner": "agent",
@@ -618,7 +621,9 @@ def seed_plan(db, project_id: str, *, now: datetime | None = None, actor: str = 
         "CAST(:f AS JSONB), CAST(:b AS JSONB), CAST(:w AS JSONB), :s, :e, :e)"),
         {"i": run_id, "p": project_id, "c": json.dumps(checklist), "d": json.dumps(discover),
          "f": json.dumps({"demo_users": [{"user": d["user"], "label": d["label"]}
-                                         for d in DEMO_USERS], "demo_users_rule": 2}),
+                                         for d in DEMO_USERS], "demo_users_rule": 2,
+                          "stack": {"framework": "Express", "language": "Node"},
+                          "tests": {"passed": 142, "total": 148, "failing": 6}}),
          "b": json.dumps(cands), "w": json.dumps({"label": cands[0]["label"],
                                                    "detail": cands[0]["detail"],
                                                    "source": cands[0]["source"],
@@ -801,12 +806,20 @@ def seed_knowledge(db, project_id: str, *, binding_id: str, merged: list[dict[st
                               "# PRD: SLA timers\nEach priority gets a response deadline.", 4),
                              ("Finish the visual refresh the last change promised",
                               "# PRD: Visual refresh — ticket list and dashboard\nColoured chips.", 2)):
+        # A person approved each PRD at its gate (06-14 "Juno · approved Nov 3").
+        approval = _id("dec")
+        db.execute(text(
+            "INSERT INTO decisions (id, project_id, question, recommendation, status, approved_by, "
+            "approved_at, created_at) VALUES (:i, :p, :q, CAST(:r AS JSONB), 'approved', 'ceo', "
+            ":t, :t)"),
+            {"i": approval, "p": project_id, "q": f"Approve the PRD: {title}?",
+             "r": json.dumps({"action": "approve_prd"}), "t": now - timedelta(days=days)})
         db.execute(text(
             "INSERT INTO meeting_runs (id, project_id, directive, title, status, state, updated_at, "
-            "role_keys) VALUES (:i, :p, :d, :d, 'completed', CAST(:s AS JSONB), :t, "
-            "CAST('[\"product_manager\", \"engineer\"]' AS JSONB))"),
+            "role_keys, decision_id) VALUES (:i, :p, :d, :d, 'completed', CAST(:s AS JSONB), :t, "
+            "CAST('[\"product_manager\", \"engineer\"]' AS JSONB), :dec)"),
             {"i": _id("mrun"), "p": project_id, "d": title, "t": now - timedelta(days=days),
-             "s": json.dumps({"prd_markdown": prd})})
+             "s": json.dumps({"prd_markdown": prd}), "dec": approval})
     # The dossier as a checkout read leaves it: hotspots by churn, the code map by directory.
     db.execute(text(
         "UPDATE project_dossiers SET facts = facts || CAST(:f AS JSONB) WHERE project_id = :p"),

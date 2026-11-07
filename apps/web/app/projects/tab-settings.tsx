@@ -33,6 +33,7 @@ import { Face, Ico, PxLink, ReadGate, Said, Tag, type Tone } from "./kit";
 import type { PxCtx } from "./project-page";
 import { CaptainPicker, captainChoices } from "./captain-picker";
 import { ConfirmSheet } from "./confirm-sheet";
+import { AddRepoDrawer } from "./add-repo";
 
 /** The section nav and card icons, in the wireframe's order and colours (13-01). */
 const SECTION_ICON: Record<string, { icon: Icon; c: Tone | "grey" }> = {
@@ -163,6 +164,7 @@ function SectionCard({ sec, ctx, onChanged, setRef }: { sec: SettingsSection; ct
   const meta = SECTION_ICON[sec.key];
   const [adding, setAdding] = useState(false);
   const [env, setEnv] = useState<string | null>(null);
+  const [addingRepo, setAddingRepo] = useState(false);
   const raw = o(sec.raw);
   const head: React.ReactNode[] = [];
   if (sec.key === "deploy_values") {
@@ -170,11 +172,14 @@ function SectionCard({ sec, ctx, onChanged, setRef }: { sec: SettingsSection; ct
     head.push(<span key="sp" className="px-spacer" />);
     if (o(raw.add).href) head.push(<GatedButton key="add" permission="app_secret:write" projectId={ctx.projectId} className="px-more px-linkbtn" data-testid="px-set-add-value" onClick={() => setAdding((v) => !v)}><Plus size={11} aria-hidden /> Add value</GatedButton>);
   }
-  if (sec.key === "repos") openLinks(sec).filter((x) => x.label === "Add").forEach((x) => head.push(<PxLink key="add" href={x.open} className="px-more" testid="px-set-repos-add"><Plus size={11} aria-hidden /> Add</PxLink>));
+  // 13-23: + Add opens today's Import-a-repo picker on this page (add-repo.tsx), not the Add-account sheet.
+  if (sec.key === "repos") openLinks(sec).filter((x) => /^Add\b/.test(x.label)).slice(0, 1).forEach(() => head.push(
+    <button key="add" type="button" className="px-more px-linkbtn" data-testid="px-set-repos-add" title="Pick a repository to add to this project"
+            onClick={() => setAddingRepo(true)}><Plus size={11} aria-hidden /> Add</button>));
   if (sec.key === "notifications" && s(raw.href)) head.push(<PxLink key="cp" href={s(raw.href)} className="px-more" testid="px-set-notify-cps">Contact points</PxLink>);
   // A section the engine does not shape here (an older engine): its console links.
   const known = ["demo_logins", "deploy_values", "targets", "captain", "autonomy", "repos", "notifications"].includes(sec.key);
-  if (!known || (!Object.keys(raw).length && sec.key !== "captain")) openLinks(sec).forEach((x) => head.push(<PxLink key={`${x.label}-${x.open}`} href={x.open} className="px-more" testid={`px-set-act-${sec.key}`}>{x.label}</PxLink>));
+  if (!known || (!Object.keys(raw).length && sec.key !== "captain")) openLinks(sec).filter((x) => !(sec.key === "repos" && /^Add\b/.test(x.label))).forEach((x) => head.push(<PxLink key={`${x.label}-${x.open}`} href={x.open} className="px-more" testid={`px-set-act-${sec.key}`}>{x.label}</PxLink>));
   return (
     <section ref={setRef} className="px-card" aria-labelledby={`px-set-${sec.key}`} data-testid={`px-set-${sec.key}`} style={{ scrollMarginTop: 80 }}>
       <div className="px-card-h">
@@ -186,6 +191,7 @@ function SectionCard({ sec, ctx, onChanged, setRef }: { sec: SettingsSection; ct
         {head}
       </div>
       <SectionBody ctx={ctx} sec={sec} onChanged={onChanged} adding={adding} setAdding={setAdding} env={env} />
+      {addingRepo ? <AddRepoDrawer projectId={ctx.projectId} onClose={() => setAddingRepo(false)} onAdded={onChanged} /> : null}
     </section>
   );
 }

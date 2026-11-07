@@ -27,6 +27,7 @@ import type { KgUploadPreview } from "../../lib/kg-view";
 import { Drawer, Empty, Face, Flow, Ico, PxLink, ReadGate, Ring, Said, Tag, openDrawer } from "./kit";
 import { whenLocal } from "../../lib/local-time";
 import type { PxCtx } from "./project-page";
+import { AddRepoDrawer } from "./add-repo";
 
 const useKnowledge = (projectId: string, fast = false) =>
   usePxRead<Knowledge>(PX_PATHS.knowledge(projectId), parseKnowledge, { everyMs: fast ? 5_000 : 60_000, demo: () => parseKnowledge(FX_KNOWLEDGE) });
@@ -75,6 +76,8 @@ const accessWord = (v: boolean | null, what: string) => (v === true ? `${what}: 
 function Repos({ ctx, repos, onChecked }: { ctx: PxCtx; repos: KnowledgeRepo[]; onChecked?: () => void }) {
   const [busy, setBusy] = useState("");
   const [said, setSaid] = useState<{ text: string; tone?: "red" | "green" }>({ text: "" });
+  // 06-01: Add repo opens today's Import-a-repo picker on this page (add-repo.tsx).
+  const [adding, setAdding] = useState(false);
   const recheck = async (r: KnowledgeRepo) => {
     setBusy(r.full_name); setSaid({ text: "" });
     const w = await pxWrite("/v1/setup/checks", { project_id: ctx.projectId, target: r.binding_id ? `repository:${r.binding_id}` : "repository",
@@ -86,7 +89,8 @@ function Repos({ ctx, repos, onChecked }: { ctx: PxCtx; repos: KnowledgeRepo[]; 
   return (
     <section className="px-card" aria-labelledby="px-kn-repos" data-testid="px-kn-repos">
       <div className="px-card-h"><Ico icon={GithubLogo} c="teal" /><h2 id="px-kn-repos">Repositories</h2><span className="px-nbadge">{repos.length}</span>
-        <a className="px-more" href={pxHref("?area=setup&focus=repository&open=add")} data-testid="px-kn-add-repo"><Plus size={11} /> Add repo</a></div>
+        <button type="button" className="px-more px-linkbtn" onClick={() => setAdding(true)} data-testid="px-kn-add-repo"
+                title="Pick a repository to add to this project"><Plus size={11} aria-hidden /> Add repo</button></div>
       {repos.length ? repos.map((r) => (
         <div key={r.full_name} className="px-kn-repo" data-testid={`px-kn-repo-${r.full_name}`}>
           <div style={{ minWidth: 0 }}>
@@ -122,10 +126,11 @@ function Repos({ ctx, repos, onChecked }: { ctx: PxCtx; repos: KnowledgeRepo[]; 
         </div>
       )) : (
         <Empty icon={GithubLogo} tone="teal" title="No repo yet" line="Add the repo this project builds in; Helm reads it and gets it ready for work.">
-          <a className="px-btn" data-kind="primary" href={pxHref("?area=setup&focus=repository&open=add")}>Add a repo</a>
+          <button type="button" className="px-btn" data-kind="primary" onClick={() => setAdding(true)} data-testid="px-kn-add-repo-empty">Add a repo</button>
         </Empty>
       )}
       <Said text={said.text} tone={said.tone} />
+      {adding ? <AddRepoDrawer projectId={ctx.projectId} onClose={() => setAdding(false)} onAdded={onChecked} /> : null}
     </section>
   );
 }
@@ -320,26 +325,41 @@ function Docs({ k }: { k: Knowledge }) {
 
 export type Box = { x: number; y: number; w: number; h: number };
 export type Laid = { pos: Map<string, { x: number; y: number; r: number }>; labels: Map<string, { x: number; y: number; anchor: "start" | "middle" | "end"; box: Box; inside: boolean }> };
-const FONT = 10;
-const textWidth = (t: string, bold = false) => t.length * FONT * (bold ? 0.62 : 0.56) + 2;
+/** The labels' real size (px.css `.px-kg text` is 11 px): measured generously, so a layout that
+ *  clears its boxes clears the drawn text too (06-17: estimating at 10 px let labels touch). */
+const FONT = 11;
+const textWidth = (t: string, bold = false) => t.length * FONT * (bold ? 0.66 : 0.6) + 4;
 export const overlaps = (a: Box, b: Box) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
 export const circleBox = (p: { x: number; y: number; r: number }): Box => ({ x: p.x - p.r, y: p.y - p.r, w: 2 * p.r, h: 2 * p.r });
 
 /** Lay the snippet out: the hub in the centre, its neighbours on an ellipse, and each label on
  *  the side of its node that collides with nothing (no other label, no node, inside the frame).
  *  The SVG scales as one, so a layout without overlaps has none at any width. */
-export function layoutGraph(nodes: { id: string; label: string }[], W = 420, H = 240): Laid {
+export function layoutGraph(nodes: { id: string; label: string }[], W = 420, H = 240,
+                            edges: { from: string; to: string }[] = []): Laid {
   const pos = new Map<string, { x: number; y: number; r: number }>();
   const labels: Laid["labels"] = new Map();
   if (!nodes.length) return { pos, labels };
   const [hub, ...rest] = nodes;
-  pos.set(hub.id, { x: W / 2, y: H / 2, r: 24 });
+  pos.set(hub.id, { x: W / 2, y: H / 2, r: 26 });
   const rx = W * 0.34, ry = H * 0.3;
   rest.forEach((n, i) => {
     const a = (i / rest.length) * Math.PI * 2 - Math.PI / 2 + (rest.length % 2 ? 0 : Math.PI / rest.length);
     pos.set(n.id, { x: W / 2 + Math.cos(a) * rx, y: H / 2 + Math.sin(a) * ry, r: 13 });
   });
   const taken: Box[] = [...pos.values()].map(circleBox);
+  // 06-18: a label never sits on an edge either — each edge is a row of small boxes to avoid
+  // (a softer cost than a node or a label, so a crowded graph still finds the clearest side).
+  const wires: Box[] = [];
+  for (const e of edges) {
+    const a = pos.get(e.from), b = pos.get(e.to);
+    if (!a || !b) continue;
+    const len = Math.hypot(b.x - a.x, b.y - a.y), steps = Math.max(1, Math.floor(len / 6));
+    for (let i = 0; i <= steps; i++) {
+      const x = a.x + ((b.x - a.x) * i) / steps, y = a.y + ((b.y - a.y) * i) / steps;
+      if (Math.hypot(x - a.x, y - a.y) > a.r && Math.hypot(x - b.x, y - b.y) > b.r) wires.push({ x: x - 1, y: y - 1, w: 2, h: 2 });
+    }
+  }
   const inFrame = (b: Box) => b.x >= 1 && b.y >= 1 && b.x + b.w <= W - 1 && b.y + b.h <= H - 1;
   const place = (n: { id: string; label: string }, isHub: boolean) => {
     const p = pos.get(n.id)!;
@@ -353,17 +373,24 @@ export function layoutGraph(nodes: { id: string; label: string }[], W = 420, H =
     const above = { x: p.x - w / 2, y: p.y - p.r - 3 - h, anchor: "middle" as const };
     const right = { x: p.x + p.r + 4, y: p.y - h / 2, anchor: "start" as const };
     const left = { x: p.x - p.r - 4 - w, y: p.y - h / 2, anchor: "end" as const };
-    const order = Math.abs(dy) * 1.6 >= Math.abs(dx) ? (dy >= 0 ? [below, right, left, above] : [above, right, left, below])
-      : (dx >= 0 ? [right, below, above, left] : [left, below, above, right]);
+    // Diagonal seats too (beside the node, half a line up or down): a node whose edges leave
+    // on every side still has one that no wire crosses.
+    const upR = { x: p.x + p.r + 2, y: p.y - p.r - h + 2, anchor: "start" as const };
+    const dnR = { x: p.x + p.r + 2, y: p.y + p.r - 2, anchor: "start" as const };
+    const upL = { x: p.x - p.r - 2 - w, y: p.y - p.r - h + 2, anchor: "end" as const };
+    const dnL = { x: p.x - p.r - 2 - w, y: p.y + p.r - 2, anchor: "end" as const };
+    const order = [...(Math.abs(dy) * 1.6 >= Math.abs(dx) ? (dy >= 0 ? [below, right, left, above] : [above, right, left, below])
+      : (dx >= 0 ? [right, below, above, left] : [left, below, above, right])), ...(dx >= 0 ? [upR, dnR, upL, dnL] : [upL, dnL, upR, dnR])];
     // Each candidate, also nudged to stay in the frame and clear of the others; the first that collides with nothing wins.
     type Cand = { x: number; y: number; anchor: "start" | "middle" | "end" };
     let best: { c: Cand; box: Box; score: number } | null = null;
     for (const c of order as Cand[]) {
-      for (const shift of [0, 12, -12, 24, -24, 40, -40]) {
+      for (const shift of [0, 8, -8, 16, -16, 24, -24, 40, -40]) {
         const box = { x: c.x + (c.anchor === "middle" ? shift : 0), y: c.y + (c.anchor === "middle" ? 0 : shift), w, h };
         if (box.x < 1) box.x = 1;
         if (box.x + w > W - 1) box.x = W - 1 - w;
-        const hits = taken.filter((t) => overlaps(t, box)).length + (inFrame(box) ? 0 : 5);
+        const hits = taken.filter((t) => overlaps(t, box)).length * 10 + (inFrame(box) ? 0 : 50)
+          + wires.filter((t) => overlaps(t, box)).length;
         if (!best || hits < best.score) best = { c, box, score: hits };
         if (hits === 0) break;
       }
@@ -396,7 +423,7 @@ function GraphCard({ ctx, k, fallbackHref, onStarted }: { ctx: PxCtx; k: Knowled
     return hub ? [hub, ...g.nodes.filter((n) => n.id !== hub.id)].slice(0, 8) : [];
   }, [g.nodes, g.hub]);
   const W = 420, H = 240;
-  const laid = useMemo(() => layoutGraph(nodes, W, H), [nodes]);
+  const laid = useMemo(() => layoutGraph(nodes, W, H, g.edges), [nodes, g.edges]);
   return (
     <section className="px-card" aria-labelledby="px-kn-graph" data-testid="px-kn-graph">
       <div className="px-card-h"><Ico icon={Graph} c="violet" /><h2 id="px-kn-graph">Knowledge graph</h2>
