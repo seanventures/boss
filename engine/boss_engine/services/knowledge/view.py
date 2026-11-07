@@ -1220,7 +1220,25 @@ def _usage(connection: Connection, project_id: str, node_id: str) -> dict[str, i
                (SELECT count(DISTINCT src_id) FROM kg_edges WHERE dst_id = :id AND kind = 'reused'
                   AND valid_to IS NULL)
         """), {"p": project_id, "id": node_id}).one()
-    return {"shown": int(row[0]), "consulted_runs": int(row[1]), "reused_runs": int(row[2])}
+    # A lesson's incidents: the ones that taught it (`produced`) and the ones that applied it
+    # (`reused`), oldest first, by their short name ("INC-1").
+    incidents: list[dict[str, Any]] = []
+    for r in connection.execute(text(
+            "SELECT s.id, s.name, s.attrs->>'incident_id' AS incident_id, e.kind, "
+            "min(e.recorded_at) AS at FROM kg_edges e JOIN kg_nodes s ON s.id = e.src_id "
+            "WHERE e.dst_id = :id AND e.project_id = :p AND e.kind IN ('produced', 'reused') "
+            "AND s.kind = 'incident' AND e.valid_to IS NULL "
+            "GROUP BY s.id, s.name, s.attrs->>'incident_id', e.kind ORDER BY at"),
+            {"p": project_id, "id": node_id}).mappings():
+        ref = None
+        if r["incident_id"]:
+            from ..incident_squad import incident_ref
+
+            ref = incident_ref(connection, project_id, r["incident_id"])
+        incidents.append({"id": r["id"], "label": ref or str(r["name"] or "an incident")[:60],
+                          "how": "taught" if r["kind"] == "produced" else "reused"})
+    return {"shown": int(row[0]), "consulted_runs": int(row[1]), "reused_runs": int(row[2]),
+            "incidents": incidents}
 
 
 #: An audit action key said as a person reads it: knowledge.rule.approve → "approved".

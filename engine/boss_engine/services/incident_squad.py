@@ -82,6 +82,8 @@ NON_PROD_ENVS = frozenset({"staging", "stage", "preview", "dev", "development", 
 MAX_MODEL_CALLS = 6
 #: A past incident counts as "the same signature" at or above this similarity.
 MIN_SIMILARITY = 0.25
+#: With no model to judge, a precedent this similar is taken as the same lesson (RuleMind).
+SAME_LESSON_SIMILARITY = 0.5
 MAX_HARDENING = 3
 
 Q_TRIAGE = "How bad is it, and who works it?"
@@ -135,7 +137,8 @@ class Mind(Protocol):
     def choose(self, connection: Connection, *, project_id: str, item_id: str, seat: str,
                kind: str, question: str, options: list[dict[str, Any]],
                context: Mapping[str, Any]) -> dict[str, Any]:
-        """{key, reason, confidence, by, cost_usd_micros}. `kind` is verdict | critique | vote."""
+        """{key, reason, confidence, by, cost_usd_micros}. `kind` is verdict | critique | vote |
+        same_lesson (is today's incident the precedent's lesson again: same | different)."""
 
 
 class RuleMind:
@@ -146,6 +149,13 @@ class RuleMind:
     def choose(self, connection, *, project_id, item_id, seat, kind, question, options,
                context) -> dict[str, Any]:
         del connection, project_id, item_id, question
+        if kind == "same_lesson":
+            # No model: the same lesson only when the signatures match closely.
+            close = float(context.get("similarity") or 0) >= SAME_LESSON_SIMILARITY
+            return {"key": "same" if close else "different", "confidence": 0.6, "by": self.by,
+                    "reason": ("The signature matches the precedent closely (BOSS's evidence "
+                               "rule, no model verdict)." if close else
+                               "The signatures differ too much to call it the same lesson.")}
         if kind == "verdict":
             best = max(options, key=lambda o: float(o.get("confidence") or 0))
             return {"key": best["key"], "confidence": float(best.get("confidence") or 0),
@@ -574,7 +584,9 @@ def similar_incidents(connection: Connection, project_id: str, *, app: str,
                           "symptom": detail.get("symptom"),
                           "cause": detail.get("cause_summary"),
                           "fix": detail.get("fix_summary"),
-                          "incident": attrs.get("incident_id"),
+                          "incident": attrs.get("incident_ref") or attrs.get("incident_id"),
+                          "incident_id": attrs.get("incident_id"),
+                          "cause_key": attrs.get("cause_key"),
                           "similarity": round(min(score, 1.0), 2)})
     return sorted(found, key=lambda f: -f["similarity"])[:3]
 
@@ -864,8 +876,12 @@ class _Pass:
         if ctx.incident_id:
             from .incident_response import _evidence as add_evidence
 
+            self.cause_key = signature_key(ctx.app, ctx.failing_route, top.get("exc_type"),
+                                           changed_names)
             add_evidence(self.c, ctx.incident_id, "rca_hypothesis", ref=chosen["basis"],
                          payload={"root_cause": chosen["means"], "basis": chosen["basis"],
+                                  **({"cause_key": self.cause_key} if self.cause_key else {}),
+                                  "exception": top.get("exc_type"),
                                   "confidence": chosen["confidence"], "key": chosen["key"],
                                   "suspect_commit": commit or None,
                                   "changed": changed_names, "by": inv,
@@ -893,6 +909,7 @@ class _Pass:
                   {"how": "similar_incident", "similarity": p["similarity"],
                    "agent_role": party_id(self.squad.investigator),
                    "work_item_id": self.item_id})
+        self._log_use([p["node_id"] for p in found], "consulted", self.squad.investigator)
         for i, p in enumerate(found):
             p["choice"] = f"Reuse {_short_ref(p.get('incident'), i)} fix"
         reversible_fix = next((p for p in found if p.get("fix") and
@@ -911,6 +928,7 @@ class _Pass:
         _edge(self.c, self.p, node, applied["node_id"], "reused",
               {"how": "applied_fix", "agent_role": party_id(lead), "work_item_id": self.item_id,
                "similarity": applied["similarity"]})
+        self._log_use([applied["node_id"]], "reused", lead)
         self.c.execute(text(
             "UPDATE kg_nodes SET attrs = jsonb_set(attrs, '{detail,reuse_count}', "
             "to_jsonb(COALESCE((attrs->'detail'->>'reuse_count')::int, 0) + 1)), "
@@ -928,6 +946,20 @@ class _Pass:
                     + ["No precedent"], confidence=applied["similarity"])
         self.learning = applied
         return applied
+
+    def _log_use(self, ids: list[str], use_kind: str, seat: str) -> None:
+        """The incident used these learnings: kg_usage rows, anchored on the incident (the unit of
+        work), so "Learned on the job" and the Graph count the reuse."""
+        from .knowledge import learning_writeback as lw
+
+        try:
+            with self.c.begin_nested():
+                lw.log_incident_use(self.c, project_id=self.p,
+                                    incident_id=self.ctx.incident_id or self.item_id, ids=ids,
+                                    use_kind=use_kind, agent_role=party_id(seat),
+                                    step="incident_squad.apply_learnings")
+        except Exception:  # noqa: BLE001 — usage is a count, never a reason to stop the squad
+            LOG.info("incident squad: usage not logged for %s", self.item_id, exc_info=True)
 
     # 4. mitigate --------------------------------------------------------------------------
     def mitigation_action(self) -> Optional[str]:
@@ -1151,7 +1183,9 @@ class _Pass:
         lines = [f"Incident on {self.ctx.app} ({self.ctx.environment}): {self.ctx.item['title']}",
                  f"Cause (squad verdict): {cause.get('means') or cause.get('summary')}"]
         if learned:
-            lines.append(f"Known fix from a past incident: {learned.get('fix')}")
+            # The [L:<id>] marker is how a build cites a learning: its use is logged as reuse.
+            lines.append(f"Known fix from {learned.get('incident') or 'a past incident'} "
+                         f"[L:{learned['node_id']}]: {learned.get('fix')}")
         lines.append("Write a regression test that fails on the serving release, then the "
                      "smallest fix. State the root cause in the pull request.")
         return "\n".join(lines)
@@ -1218,7 +1252,9 @@ class _Pass:
         narrative = "\n".join(x for x in (
             f"{ctx.item['title']} ({ctx.environment}).",
             f"Cause: {cause.get('means') or cause.get('summary') or 'not established'}.",
-            f"Learning applied: {learned['title']}." if learned else "",
+            (f"Learning applied: {learned['title']} (from {learned.get('incident')})."
+             if learned and learned.get("incident") else
+             f"Learning applied: {learned['title']}." if learned else ""),
             f"Resolution: {fix_line}.",
             f"Squad: {', '.join(self.squad.seats().values())}.") if x)
         node = incident_node(self.c, self.p, ctx, body=narrative, attrs={
@@ -1280,25 +1316,67 @@ class _Pass:
         if row is None:
             return None
         attrs = row["attrs"] or {}
-        return {"node_id": row["id"], "title": row["name"], "incident": attrs.get("incident_id"),
+        return {"node_id": row["id"], "title": row["name"],
+                "incident": attrs.get("incident_ref") or attrs.get("incident_id"),
+                "incident_id": attrs.get("incident_id"), "cause_key": attrs.get("cause_key"),
                 "fix": (attrs.get("detail") or {}).get("fix_summary")}
+
+    def same_lesson(self, learned: Mapping[str, Any], cause: Mapping[str, Any]) -> bool:
+        """Is today's incident the precedent's lesson again? The lead judges (the one agent
+        path: a model with the precedent and today's evidence in context; BOSS's evidence rule
+        only when no model answers). Same → the lesson is strengthened; different → a new one."""
+        ctx = self.ctx
+        top = ctx.signatures[0] if ctx.signatures else {}
+        verdict = self.mind.choose(
+            self.c, project_id=self.p, item_id=self.item_id, seat=self.squad.lead,
+            kind="same_lesson",
+            question=f"Is this the lesson from {learned.get('incident') or 'the past incident'} "
+                     "again?",
+            options=[{"key": "same", "means": "Same cause: strengthen that lesson"},
+                     {"key": "different", "means": "Another cause: keep a new lesson"}],
+            context={"precedent": {"title": learned.get("title"), "fix": learned.get("fix"),
+                                   "incident": learned.get("incident"),
+                                   "cause_key": learned.get("cause_key")},
+                     "similarity": learned.get("similarity"),
+                     "today": {"cause": cause.get("means") or cause.get("summary"),
+                               "route": ctx.failing_route, "exception": top.get("exc_type"),
+                               "cause_key": getattr(self, "cause_key", "")}})
+        return verdict.get("key") == "same"
 
     def _write_precedent(self, cause: dict[str, Any], mitigated: bool,
                          changed: list[dict[str, Any]]) -> Optional[str]:
+        """The lesson this incident leaves. A lesson comes only from a real resolved incident.
+        The same lesson again (the squad applied a precedent and judges the cause the same) is
+        STRENGTHENED, never duplicated or replaced: its count and history stay."""
         from .knowledge import learning_writeback as lw
 
         ctx = self.ctx
         top = ctx.signatures[0] if ctx.signatures else {}
         commit = str(ctx.deploy.get("commit_sha") or "")
-        symptom = " ".join(x for x in (
-            f"{ctx.failing_route or ctx.app} 5xx",
-            f"{top.get('exc_type')}" if top.get("exc_type") else "",
-            "after a release" if commit else "") if x)
-        evidence = [{"type": "metric", "ref": ctx.incident_id or self.item_id,
+        inc = ctx.incident_id or self.item_id
+        ref = incident_ref(self.c, self.p, ctx.incident_id)
+        evidence = [{"type": "metric", "ref": inc,
                      "excerpt": f"{ctx.error_pct}% 5xx on {ctx.app}"}]
         if commit:
             evidence.append({"type": "diff", "ref": commit[:12],
                              "excerpt": ", ".join(n["name"] for n in changed[:3]) or None})
+        learned = getattr(self, "learning", None)
+        if learned and learned.get("node_id"):
+            try:
+                if self.same_lesson(learned, cause):
+                    with self.c.begin_nested():
+                        lw.reinforce(self.c, project_id=self.p, node_id=learned["node_id"],
+                                     incident_id=inc, incident_ref=ref, evidence=evidence,
+                                     actor_role=party_id(self.squad.lead))
+                    self._same_cause_as(learned)
+                    return learned["node_id"]
+            except Exception:  # noqa: BLE001 — fall through to a new lesson
+                LOG.warning("incident squad: lesson %s not reinforced", learned.get("node_id"),
+                            exc_info=True)
+        symptom = " ".join(x for x in (
+            f"{ctx.failing_route or ctx.app} 5xx",
+            f"{top.get('exc_type')}" if top.get("exc_type") else "",
+            "after a release" if commit else "") if x)
         try:
             with self.c.begin_nested():
                 item = lw.record(
@@ -1323,9 +1401,26 @@ class _Pass:
         if node_id:
             self.c.execute(text(
                 "UPDATE kg_nodes SET attrs = attrs || CAST(:a AS JSONB) WHERE id = :n"),
-                {"a": json.dumps({"incident_id": ctx.incident_id or self.item_id}),
+                {"a": json.dumps({"incident_id": inc, "incident_ref": ref,
+                                  "incidents": [{"id": inc, "ref": ref}],
+                                  **({"cause_key": self.cause_key}
+                                     if getattr(self, "cause_key", "") else {})}),
                  "n": node_id})
         return node_id
+
+    def _same_cause_as(self, learned: Mapping[str, Any]) -> None:
+        """The squad judged this incident the precedent's lesson again: say so on the incident's
+        RCA (the precedent's cause key), so the Incident hotspot detector counts one cause."""
+        key = learned.get("cause_key")
+        if not key or key == getattr(self, "cause_key", "") or not self.ctx.incident_id:
+            return
+        from .incident_response import _evidence as add_evidence
+
+        add_evidence(self.c, self.ctx.incident_id, "rca_hypothesis", ref="memory",
+                     payload={"root_cause": f"Same cause as {learned.get('incident')}",
+                              "basis": "memory", "cause_key": key,
+                              "precedent": learned.get("node_id"), "by": self.squad.lead,
+                              "work_item_id": self.item_id})
 
     def hardening(self, cause: dict[str, Any], node: str) -> list[dict[str, Any]]:
         """Follow-up items (§12.6) as `kg` signals the Recommended roadmap (911) picks up, each
@@ -1360,6 +1455,29 @@ class _Pass:
 
 
 PERSON_OPTIONS = ["Roll back + fix", "Fix only", "Hold"]
+
+
+def incident_ref(connection: Connection, project_id: str, incident_id: Optional[str]
+                 ) -> Optional[str]:
+    """An incident's short name in its project, "INC-<n>" (its place by first_seen): what a
+    person reads on a lesson ("from INC-1") instead of an id."""
+    if not incident_id:
+        return None
+    n = connection.execute(text(
+        "SELECT count(*) FROM incidents i, incidents me WHERE me.id = :i AND i.project_id = "
+        "me.project_id AND (i.first_seen, i.id) <= (me.first_seen, me.id)"),
+        {"i": incident_id}).scalar()
+    return f"INC-{int(n)}" if n else None
+
+
+def signature_key(app: Any, route: Any, exception: Any, symbols: Iterable[Any] = ()) -> str:
+    """A root cause's stable identity across incidents: where it fails (route), how (the
+    exception's type) and in what code (the first changed symbol on the failing path). Two
+    releases with the same bug on the same function give the same key; ids and numbers never
+    enter it. '' when there is nothing structural to key on."""
+    parts = [str(x).strip().lower() for x in (app, route, exception, next(iter(symbols), None))
+             if x and str(x).strip()]
+    return " | ".join(parts) if len(parts) >= 2 else ""
 
 
 def _short_ref(ref: Any, index: int) -> str:

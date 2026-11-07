@@ -4,7 +4,7 @@ used (BOSSAPP-910; design §12.4 "Applying learnings").
 * A past incident with the same signature (a precedent learning in the KG) becomes a hypothesis
   with its old evidence, and its known fix is tried first: the incident node gets `consulted`
   edges to every candidate and a `reused` edge to the one applied, the precedent's reuse count
-  goes up, and the ledger says "Reuse INC-31 fix" citing it.
+  goes up, and the ledger says "Reuse INC-1 fix" citing it.
 * With no precedent the squad says so and works from today's evidence.
 * An unrelated precedent is not a match.
 """
@@ -45,7 +45,7 @@ def test_a_past_incident_with_the_same_signature_is_reused_and_recorded(eng, pro
     assert [(e["src"], e["dst_id"]) for e in reused] == [(key, prepared["precedent_id"])]
     assert reused[0]["attrs"]["how"] == "applied_fix"
     assert reuse == "1"
-    assert learn[0]["chosen"] == "Reuse INC-31 fix"
+    assert learn[0]["chosen"] == "Reuse INC-1 fix"
     assert {"kind": "kg_node", "ref": prepared["precedent_id"], "checked": "exists"} in \
         learn[0]["evidence"]
     assert any(h["body"]["summary"].startswith("Seen before") for h in hyps)

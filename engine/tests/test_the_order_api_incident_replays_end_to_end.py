@@ -38,7 +38,7 @@ def test_the_production_replay_draws_the_squad_up_to_the_persons_decision(eng, p
     seats = {n["seat"]: n["role"] for n in g["nodes"] if n.get("seat")}
     assert seats == {"SRE lead": "SRE", "Investigator": "Operations Engineer",
                      "Engineer": "Backend Engineer", "Reviewer": "Adversarial Reviewer"}
-    assert {"Release 6bf2672", "Reuse INC-31 fix", "Recommend rollback"} <= labels
+    assert {"Release 6bf2672", "Reuse INC-1 fix", "Recommend rollback"} <= labels
     assert _types(g)[0] == "signal" and "needs_you" in _types(g)
     dissent = [e for e in g["edges"] if e["dissent"]]
     assert [(e["from"], e["kind"], e["label"]) for e in dissent] == [

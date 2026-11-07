@@ -438,6 +438,17 @@ function DetailBody({ d, w, orgId, onFocusNode, viewEdges, viewNote = null }: {
           {d.usage.reused_runs ? `reused by ${d.usage.reused_runs.toLocaleString("en-US")}` : ""}
         </p>
       ) : null}
+      {d.usage.incidents?.length ? (
+        <p className="kg-usage" data-testid="kg-panel-incidents">
+          {d.usage.incidents.map((i, k) => (
+            <React.Fragment key={`${i.id}-${i.how}`}>
+              {k ? " · " : ""}
+              <button type="button" className="kg-link" data-testid="kg-panel-incident" data-how={i.how}
+                      onClick={() => onFocusNode(i.id)}>{i.how === "taught" ? `Learned in ${i.label}` : `applied in ${i.label}`}</button>
+            </React.Fragment>
+          ))}
+        </p>
+      ) : null}
       <Provenance p={d.provenance} layer={d.node.layer} orgId={orgId} />
       {d.node.layer === "code" ? <WhyAndBlast w={w} nodeId={d.node.id} detail={d} onFocusNode={onFocusNode} /> : null}
     </>

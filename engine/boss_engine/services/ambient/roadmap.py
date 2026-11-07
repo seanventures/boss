@@ -420,6 +420,10 @@ def run(connection: Connection, project_id: str, *, settings: Any = None,
 
     report["closed"] = _close_vanished(connection, project_id, found, seen_fps)
     _wake_snoozed(connection, project_id)
+    if only is not None:
+        # A partial pass (an event re-evaluating its own detectors) is not the project's
+        # scheduled run: the 6-hourly cursor stays where it is, so nothing else is delayed.
+        return report
     connection.execute(text(
         "INSERT INTO signal_adapter_cursors (adapter, cursor_at, last_run_at, last_recorded, "
         "last_error) VALUES (:a, :c, now(), :n, :e) ON CONFLICT (adapter) DO UPDATE SET "
@@ -1019,6 +1023,50 @@ def metrics(connection: Connection, project_id: str, *, days: int = 30) -> dict[
 
 TICK_SECONDS = 600
 MAX_PROJECTS_PER_TICK = 10
+
+
+# ── event-driven re-evaluation ──────────────────────────────────────────────────────────────
+#
+# The scheduled run is every RUN_EVERY per project. An event that changes what a detector reads
+# re-evaluates THAT detector's family at once: a resolved incident re-runs the detectors whose
+# evidence is incidents (the Incident hotspot), so a second incident with the same cause shows
+# on the Roadmap within the ingest's half minute, not up to six hours later.
+
+def detectors_for(evidence_source: str) -> list[str]:
+    from . import detectors  # noqa: F401 — registers the built-in detectors
+
+    return sorted(k for k, d in learning.DETECTORS.items()
+                  if d.evidence_source == evidence_source)
+
+
+def on_event(engine: Any, *, project_id: str, evidence_source: str,
+             settings: Any = None) -> dict[str, Any]:
+    """Re-evaluate the detectors that read `evidence_source` for one project, now, under the same
+    gates as the tick: the learning switch (always-on mode or BOSS_AMBIENT_LEARNING), the kill
+    switches and the stops. Its own transaction; never raises."""
+    from ...config import get_settings
+
+    settings = settings or get_settings()
+    out: dict[str, Any] = {"project_id": project_id, "evidence_source": evidence_source,
+                           "skipped": None, "report": None}
+    try:
+        if disabled():
+            out["skipped"] = "disabled"
+            return out
+        with engine.begin() as c:
+            if not policy.learning_on(settings, policy.effective_mode(c, settings)):
+                out["skipped"] = "learning is off"
+                return out
+            only = detectors_for(evidence_source)
+            if not only:
+                out["skipped"] = "no detector reads it"
+                return out
+            report = run(c, project_id, settings=settings, only=only)
+            out["report"] = {"opened": report["opened"], "joined": report["joined"],
+                             "skipped": report["skipped"]}
+    except Exception as exc:  # noqa: BLE001 — an event is a nudge; the tick still runs later
+        out["skipped"] = f"{type(exc).__name__}: {exc}"[:300]
+    return out
 
 
 def tick(engine: Any, *, settings: Any = None, max_projects: int = MAX_PROJECTS_PER_TICK,

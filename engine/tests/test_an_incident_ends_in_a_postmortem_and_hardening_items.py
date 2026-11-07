@@ -4,8 +4,9 @@ for the Recommended roadmap (BOSSAPP-910; design §12.6).
 * The incident is resolved on its own row, its evidence-only postmortem (sre_postmortem) holds
   the squad's verdict, and the KG incident node carries the squad's narrative: cause, the
   learning applied, the resolution, who worked it — linked to the code it was about.
-* The squad writes a NEW precedent learning from it (the next incident's "seen before"), produced
-  by the incident node.
+* The squad leaves a precedent learning from it (the next incident's "seen before"), produced by
+  the incident node. When it applied an earlier lesson and judges the cause the same, that lesson
+  is STRENGTHENED (seen again, the incident added) rather than duplicated or replaced.
 * Hardening items become `kg` signals (`recommendation.hardening`), at most three, each citing the
   incident, linked to the item as recommendations, and recorded once however often it closes.
 """
@@ -63,7 +64,10 @@ def test_the_postmortem_is_an_incident_node_with_a_new_precedent(eng, project):
     assert prepared["code"]["endpoint"] in about
     learned = produced[0]["attrs"]
     assert learned["learning_kind"] == "precedent"
-    assert learned["incident_id"] == prepared["incident_id"]
+    # The demo's earlier occurrence taught it; this incident strengthened the same lesson.
+    assert produced[0]["id"] == prepared["precedent_id"]
+    assert [i["id"] for i in learned["incidents"]][-1] == prepared["incident_id"]
+    assert learned["seen_count"] == 2 and learned["incident_ref"] == "INC-1"
     assert "POST /orders" in learned["detail"]["applies_to"]
     assert {"kind": "kg_node", "ref": node["id"], "checked": "exists"} in close["evidence"]
 

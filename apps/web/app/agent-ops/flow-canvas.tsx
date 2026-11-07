@@ -20,8 +20,9 @@ import { activeNodeId, layoutFlow, type PlacedNode } from "../../lib/ambient-lay
 export const TYPE_WORDS: Record<string, string> = {
   signal: "Signal", agent: "Agent", person: "Person", policy: "Policy", squad: "Squad", boss: "BOSS",
   action: "Proposed action", decision: "Decision", needs_you: "Needs you", run: "Work started", outcome: "Outcome",
+  learning: "Applied learning",
 };
-const ICON: Record<string, string> = { signal: "↯", policy: "§", squad: "⚑", boss: "◆", action: "▶", run: "⚙" };
+const ICON: Record<string, string> = { signal: "↯", policy: "§", squad: "⚑", boss: "◆", action: "▶", run: "⚙", learning: "✦" };
 
 function outcomeTone(n: FlowNode): "ok" | "bad" | "quiet" {
   if (n.badges.includes("failed")) return "bad";
@@ -123,7 +124,7 @@ export function FlowCanvas({ nodes, edges, lifecycle, selected, onSelect, onAnsw
                   data-selected={selected === n.id || undefined} data-active={active === n.id || undefined}
                   data-tone={n.type === "outcome" ? outcomeTone(n) : undefined}
                   style={{ left: n.x, top: n.y, width: n.w, height: n.h }}
-                  aria-label={`${TYPE_WORDS[n.type] ?? n.type}: ${n.label}`} title={`${TYPE_WORDS[n.type] ?? n.type} · open details`}
+                  aria-label={`${TYPE_WORDS[n.type] ?? n.type}: ${n.label}`} title={n.detail ?? `${TYPE_WORDS[n.type] ?? n.type} · open details`}
                   onClick={() => onSelect({ node: n })}>
             <NodeBody node={n} active={active === n.id} />
           </button>

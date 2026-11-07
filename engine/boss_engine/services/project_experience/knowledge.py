@@ -440,6 +440,14 @@ def learned(connection: Connection, project_id: str, limit: int = 6) -> list[dic
             "JOIN kg_nodes n ON n.id = e.src_id WHERE e.kind = 'produced' AND e.dst_id = ANY(:ids) "
             "AND n.kind = 'run' ORDER BY n.first_seen"), {"ids": ids}).mappings():
         producers.setdefault(str(r["fact"]), {"run_id": r["run_id"], "name": r["name"]})
+    # A lesson an incident taught (the incident squad's precedent): the incident is its "run".
+    for r in connection.execute(text(
+            "SELECT id, attrs->>'incident_id' AS incident_id, attrs->>'incident_ref' AS ref "
+            "FROM kg_nodes WHERE id = ANY(:ids) AND attrs ? 'incident_id'"),
+            {"ids": ids}).mappings():
+        producers.setdefault(str(r["id"]), {"run_id": r["incident_id"],
+                                            "name": r["ref"] or "an incident",
+                                            "incident": True})
     proposers = {str(r["fact"]): str(r["name"]) for r in connection.execute(text(
         "SELECT e.src_id AS fact, n.name FROM kg_edges e JOIN kg_nodes n ON n.id = e.dst_id "
         "WHERE e.kind = 'proposed_by' AND e.src_id = ANY(:ids) AND n.kind = 'agent'"),
@@ -469,8 +477,8 @@ def learned(connection: Connection, project_id: str, limit: int = 6) -> list[dic
         prod = producers.get(str(r["id"])) or {}
         build = builds.get(str(prod.get("run_id") or "")) or {}
         n = build.get("pull_request_number") or pr_number(build.get("pull_request_url"))
-        taught = (f"PR #{n} build" if n else short_title(build.get("title") or prod.get("name"),
-                                                          limit=4)) or "a run"
+        taught = (f"PR #{n} build" if n else f"from {prod['name']}" if prod.get("incident")
+                  else short_title(build.get("title") or prod.get("name"), limit=4)) or "a run"
         again = {x for x in reuse.get(str(r["id"]), set()) if x != prod.get("run_id")}
         role = by_name.get(proposers.get(str(r["id"]), "").lower()) or r["created_by"]
         who = face(roster, role) if role else None

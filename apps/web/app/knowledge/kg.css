@@ -746,3 +746,5 @@
   .kg-cmp-cols { grid-template-columns: 1fr; }
   .kg-up-lines li { grid-template-columns: 1fr; }
 }
+/* A lesson's incidents ("Learned in INC-1 · applied in INC-2"): each opens its incident node. */
+.kg-link { font: inherit; padding: 0; border: 0; background: none; color: var(--accent); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }

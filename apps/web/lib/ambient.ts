@@ -19,12 +19,12 @@ import { demoAnswer, demoWrite } from "./ambient-demo";
 // ── the wire ────────────────────────────────────────────────────────────────────────────────
 
 export type NodeType = "signal" | "agent" | "person" | "policy" | "squad" | "boss" | "action"
-  | "decision" | "needs_you" | "run" | "outcome";
+  | "decision" | "needs_you" | "run" | "outcome" | "learning";
 export type EdgeKind = "raised" | "claimed" | "proposed" | "critique" | "vote" | "handoff" | "escalate"
-  | "decided" | "settles" | "overrides" | "acted" | "asks" | "resulted";
+  | "decided" | "settles" | "overrides" | "acted" | "asks" | "resulted" | "applied";
 
 export type Ref = { kind: string; id?: string | null; work_item_id?: string };
-export type FlowNode = { id: string; type: NodeType; label: string; stage: number; badges: string[]; ref?: Ref };
+export type FlowNode = { id: string; type: NodeType; label: string; stage: number; badges: string[]; ref?: Ref; detail?: string };
 export type FlowEdge = { from: string; to: string; kind: EdgeKind; label: string; dissent: boolean; ref?: Ref };
 
 export type Outcome = "needs_you" | "running" | "resolved_by_agents" | "resolved_by_person" | "overridden"
@@ -171,7 +171,7 @@ const a = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
 const o = (v: unknown): Record<string, unknown> => (v && typeof v === "object" && !Array.isArray(v) ? v as Record<string, unknown> : {});
 const sn = (v: unknown): string | null => (typeof v === "string" && v ? v : null);
 
-const NODE_TYPES = new Set<NodeType>(["signal", "agent", "person", "policy", "squad", "boss", "action", "decision", "needs_you", "run", "outcome"]);
+const NODE_TYPES = new Set<NodeType>(["signal", "agent", "person", "policy", "squad", "boss", "action", "decision", "needs_you", "run", "outcome", "learning"]);
 
 export function parseNode(w: unknown): FlowNode {
   const x = o(w);
@@ -179,7 +179,8 @@ export function parseNode(w: unknown): FlowNode {
   const ref = o(x.ref);
   return { id: s(x.id), type, label: clampWords(s(x.label), NODE_WORDS), stage: Math.max(0, Math.min(5, n(x.stage))),
            badges: a(x.badges).map((b) => s(b)).filter(Boolean),
-           ref: Object.keys(ref).length ? (ref as Ref) : undefined };
+           ref: Object.keys(ref).length ? (ref as Ref) : undefined,
+           ...(sn(x.detail) ? { detail: s(x.detail) } : {}) };
 }
 
 export function parseEdge(w: unknown): FlowEdge {

@@ -328,7 +328,12 @@ class PostgresKnowledgeStore:
         actor_ref: Optional[str] = None,
     ) -> str:
         """``actor_ref`` is who wrote it — a person id or an agent role key — and becomes
-        ``created_by``; without it ``created_by`` is the actor kind, as before."""
+        ``created_by``; without it ``created_by`` is the actor kind, as before.
+
+        TWO WRITERS OF ONE NODE NEVER ERASE EACH OTHER'S FACTS: ``attrs`` MERGE into what the
+        node holds (this writer's keys win, every other key stays). An incident node is written
+        by the incident squad (cause, learning used, signature) and again by the resolve-time
+        ingest (source_id, capture_id); the ingest used to replace the squad's attrs whole."""
         self.ensure_schema(connection)
         if kind not in NODE_KINDS:
             from .ontology_packs import effective_node_kinds
@@ -359,10 +364,16 @@ class PostgresKnowledgeStore:
             # INC-2088) was refused "agent cannot overwrite a non-inferred fact" and deadlettered
             # the run, though it changed nothing. Identical content only refreshes last_seen;
             # changing a fact still needs the right to.
+            may_change = not (
+                (actor_kind == "agent" and existing["trust_tier"] != "inferred")
+                or (actor_kind == "system" and existing["trust_tier"] in {"governed", "approved"}))
             if existing["content_hash"] == digest:
+                # Same words: refresh last_seen, and keep any attrs this writer adds (merged).
                 connection.execute(
-                    text("UPDATE kg_nodes SET last_seen = :now WHERE id = :id"),
-                    {"now": now, "id": existing["id"]},
+                    text("UPDATE kg_nodes SET last_seen = :now, attrs = CASE WHEN :merge "
+                         "THEN attrs || CAST(:attrs AS JSONB) ELSE attrs END WHERE id = :id"),
+                    {"now": now, "id": existing["id"], "attrs": attrs_json,
+                     "merge": bool(may_change and attrs)},
                 )
                 return existing["id"]
             if actor_kind == "agent" and existing["trust_tier"] != "inferred":
@@ -375,7 +386,7 @@ class PostgresKnowledgeStore:
                     UPDATE kg_nodes SET
                       name = :name,
                       body = :body,
-                      attrs = CAST(:attrs AS JSONB),
+                      attrs = attrs || CAST(:attrs AS JSONB),
                       source = :source,
                       trust_tier = :trust_tier,
                       layer = :layer,

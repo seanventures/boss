@@ -337,6 +337,18 @@ def _flows(connection: Connection, project_id: str, items: list[dict[str, Any]]
                                                else f"p95 {int(v)}ms")
             continue
         signals[str(r["work_item_id"])] = alert_name(ann.get("summary"), r["alertname"])
+    # WHAT IT LEARNED FROM BEFORE: the lesson the squad applied (its `reused` edge in the KG),
+    # drawn as its own node ("INC-1 lesson") between the cause and the fix.
+    lessons: dict[str, dict[str, str]] = {}
+    for r in connection.execute(text(
+            "SELECT s.attrs->>'work_item_id' AS wid, n.id, n.name, "
+            "COALESCE(n.attrs->>'incident_ref', 'a past incident') AS ref FROM kg_edges e "
+            "JOIN kg_nodes s ON s.id = e.src_id JOIN kg_nodes n ON n.id = e.dst_id "
+            "WHERE e.project_id = :p AND e.kind = 'reused' AND s.kind = 'incident' "
+            "AND s.attrs->>'work_item_id' = ANY(:ids) ORDER BY e.recorded_at"),
+            {"p": project_id, "ids": ids}).mappings():
+        lessons[str(r["wid"])] = {"id": str(r["id"]), "name": str(r["name"] or ""),
+                                  "ref": str(r["ref"])}
     out: dict[str, list[dict[str, str]]] = {}
     for it in items:
         wid = str(it["id"])
@@ -352,6 +364,12 @@ def _flows(connection: Connection, project_id: str, items: list[dict[str, Any]]
                  {"label": "SRE squad", "state": "done", "type": "agent"}]
         if got.get("cause"):
             nodes.append({"label": _node_words(got["cause"]), "state": "done", "type": "cause"})
+        lesson = lessons.get(wid)
+        if lesson:
+            label = f"{lesson['ref']} lesson" if lesson["ref"].startswith("INC-") else "Lesson"
+            nodes.append({"label": label, "state": "done", "type": "learning",
+                          "detail": f"Applied learning: {lesson['name']} from {lesson['ref']}",
+                          "node_id": lesson["id"]})
         if life == "needs_you":
             nodes.append({"label": "Approve fix", "state": "waiting", "type": "decision"})
             nodes.append({"label": "Recovered", "state": "todo"})
