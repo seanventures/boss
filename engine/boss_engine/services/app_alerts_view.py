@@ -245,8 +245,8 @@ def _alert_wire(connection, a: dict, *, target: dict, grafana: dict,
     explore, explore_why = _explore(grafana, a)
     inc = incidents.get(a.get("incident_id") or "")
     kind = a["rule_kind"]
-    label = aa.BUILTIN.get(kind, {}).get("label") or (
-        "Reported" if a["source_kind"] == "signal" else a["alertname"])
+    label = ("Reported" if a["source_kind"] == "signal" and kind not in aa.BUILTIN else
+             aa.rule_label(kind, a["alertname"], ann.get("summary")))
     unit = a.get("unit") or ""
     acked_now = bool(a.get("acked_at") and (a.get("ack_expires_at") is None
                                            or a["ack_expires_at"] > datetime.now(timezone.utc)))
@@ -365,7 +365,8 @@ def drivers(connection, project_id: str, incident_ids: list[str],
         return {}
     now = now or datetime.now(timezone.utc)
     rows = [dict(r) for r in connection.execute(sql(
-        "SELECT a.incident_id, a.id, a.alertname, a.rule_kind, a.source_kind, a.labels, a.state, "
+        "SELECT a.incident_id, a.id, a.alertname, a.rule_kind, a.source_kind, a.labels, "
+        " a.annotations, a.state, "
         " a.value, a.unit, a.active_at, a.fired_at, a.cleared_at, "
         " COALESCE(a.subject_id, a.target_id) AS subject_id FROM app_alerts a "
         "WHERE a.incident_id = ANY(:i) ORDER BY COALESCE(a.fired_at, a.active_at) DESC"),
@@ -385,8 +386,10 @@ def drivers(connection, project_id: str, incident_ids: list[str],
                                          -(r.get("fired_at") or r["active_at"]).timestamp()))
         kind = best["rule_kind"]
         d = {"alert_id": best["id"], "alertname": best["alertname"], "kind": kind,
-             "label": aa.BUILTIN.get(kind, {}).get("label") or (
-                 "Reported" if best["source_kind"] == "signal" else best["alertname"]),
+             "label": ("Reported" if best["source_kind"] == "signal" and kind not in aa.BUILTIN
+                       else aa.rule_label(kind, best["alertname"],
+                                          (_json(best.get("annotations"), {}) or {})
+                                          .get("summary"))),
              "sev": sev.level(_json(best["labels"], {}) or {}), "state": best["state"],
              "value_word": value_word(best.get("value"), best.get("unit") or "")
              if best.get("value") is not None else None}
@@ -504,7 +507,10 @@ def alerts(connection, project_id: str, *, target_id: Optional[str] = None,
     where = ["a.project_id = :p"]
     params: dict[str, Any] = {"p": project_id, "n": max(1, min(int(limit), 500))}
     if target_id:
-        where.append("a.subject_id = :t")
+        # ONE APP'S history: BOSS's own platform alerts (layer boss, the self-checks) are never
+        # the app's; they live in Observability's BOSS view.
+        where.append("a.subject_id = :t AND COALESCE(a.labels->>'layer', '') <> 'boss' "
+                     "AND COALESCE(a.labels->>'boss_meta', '') <> 'true'")
         params["t"] = target_id
     if source in ("rule", "external", "synthetic", "heartbeat", "signal"):
         where.append("a.source_kind = :src")
@@ -671,7 +677,8 @@ def _rule_wire(connection, r: dict, target: dict, silences: dict[str, dict],
         tip = r.get("last_word")
     link = r.get("respond_link") or {}
     return {
-        "id": r["id"], "kind": kind, "label": b.get("label") or r["alert"], "alert": r["alert"],
+        "id": r["id"], "kind": kind, "alert": r["alert"],
+        "label": aa.rule_label(kind, r["alert"], (r.get("annotations") or {}).get("summary")),
         "expr": r["expr"], "for_seconds": int(r.get("for_seconds") or 0),
         "condition": aa.condition_words(kind, r["params"], int(r.get("for_seconds") or 0)),
         "params": r["params"] if kind != "custom" else {},

@@ -137,7 +137,9 @@ export type NextItem = {
 };
 export type DemoLogin = { user: string; label: string; reveal: { href: string; requires: string } | null };
 export type Overview = {
-  project: { id: string; name: string; initials: string; stage: Stage; repos: Repo[]; live_url: string; status_label: string; health: Health };
+  project: { id: string; name: string; initials: string; stage: Stage; repos: Repo[]; live_url: string; status_label: string; health: Health;
+    /** Why it is not healthy, in words (health.state_of): "SLO breached: 98.13% up, target 99.5%". */
+    health_reason?: string };
   journey: Node[]; needs_you: NeedsYou[];
   /** Cards that could not load this time ({card: words}): each shows "Couldn't load · Retry". */
   errors?: Record<string, string>;
@@ -146,7 +148,8 @@ export type Overview = {
   tiles: {
     open_work: { count: number; by_state: Record<string, number>; href: string } | null;
     running: { count: number; current: { label: string; progress: [number, number]; agent: Agent | null; sub?: string; id?: string } | null; href: string } | null;
-    staging: { health: Health; uptime_pct: number | null; p95_ms: number | null; series: number[]; href: string; p95_source?: string; label?: string } | null;
+    staging: { health: Health; uptime_pct: number | null; p95_ms: number | null; series: number[]; href: string; p95_source?: string; label?: string;
+               health_reason?: string; window?: string } | null;
     cost_week: { usd: number; delta_pct: number | null; cap_usd: number | null; series: number[]; href: string;
       /** No money this week because the work runs on a subscription: the list price instead. */
       on_subscription?: boolean; list_usd?: number | null; list_series?: number[] } | null;
@@ -192,6 +195,8 @@ export type Environment = {
   host_projects: number | null;
   /** Where p95 comes from: the app's own metrics, or BOSS's probe. */
   p95_source?: string;
+  /** The window uptime and p95 are measured over ("24 h"), said beside them. */
+  window?: string; health_reason?: string;
   uptime_pct: number | null; p95_ms: number | null;
   error_rate: number | null; series: number[];
   /** 24 hourly bars, oldest first (08-08): each hour's probes and its state. */
@@ -248,10 +253,11 @@ export type SettingsSection = {
 };
 export type Settings = { sections: SettingsSection[] };
 export type HealthView = {
-  environments: { key: string; label: string; target_id: string; url: string; health: Health; uptime_pct: number | null; error_rate: number | null; p95_ms: number | null;
+  environments: { key: string; label: string; target_id: string; url: string; health: Health; health_reason?: string; window?: string; p95_source?: string;
+                  uptime_pct: number | null; error_rate: number | null; p95_ms: number | null;
                   series: { errors: number[]; latency: number[] }; slo: { target: number | null; burn: "ok" | "warning" | "breach"; budget_used_pct: number | null }; href: string }[];
   /** One row per alert rule (screen 12): firing since …, resolved at …, or ok · quiet 3d. */
-  alerts: { id: string; label: string; condition: string; severity: "page" | "ticket" | "info"; state: "firing" | "resolved" | "ok"; since: string; quiet: string; href: string }[];
+  alerts: { id: string; label: string; condition: string; severity: "page" | "ticket" | "info"; state: "firing" | "resolved" | "ok" | "off"; since: string; quiet: string; href: string }[];
   incidents: { id: string; label: string; state: "running" | "needs_you" | "resolved"; since: string; duration_s: number | null; outcome: string; graph_href: string;
                mini: { label: string; state: StepState; type: string }[] }[];
   monitoring_pack: { rules: number; off: number; managed_in: string; href: string; kinds: string[]; file: { path: string; external_url: string } | null } | null;
@@ -450,7 +456,7 @@ export const parseOverview = (v: unknown): Overview => {
   return {
     project: { id: s(p.id), name, initials: s(p.initials) || initialsOf(name), stage: oneOf(p.stage, STAGES, "onboarding"),
                repos: a(p.repos).map(parseRepo), live_url: s(p.live_url), status_label: s(p.status_label),
-               health: oneOf(p.health ?? st.health, HEALTHS, "unknown") },
+               health: oneOf(p.health ?? st.health, HEALTHS, "unknown"), health_reason: s(p.health_reason) },
     journey: a(x.journey).map(parseNode),
     roadmap_count: nn(x.roadmap_count),
     needs_you: a(x.needs_you).map((it) => {
@@ -465,6 +471,7 @@ export const parseOverview = (v: unknown): Overview => {
       running: Object.keys(rn).length ? { count: n(rn.count), href: s(rn.href),
         current: Object.keys(cur).length ? { label: s(cur.label), progress: [prog[0] ?? 0, prog[1] ?? 0], agent: parseAgent(cur.agent), sub: s(cur.sub), id: s(cur.id) } : null } : null,
       staging: Object.keys(st).length ? { health: oneOf(st.health, HEALTHS, "unknown"), uptime_pct: nn(st.uptime_pct), p95_ms: nn(st.p95_ms), p95_source: s(st.p95_source), label: s(st.label),
+                                          health_reason: s(st.health_reason), window: s(st.window),
                                           series: nums(st.series), href: s(st.href) } : null,
       cost_week: Object.keys(cw).length ? { usd: n(cw.usd), delta_pct: nn(cw.delta_pct), cap_usd: nn(cw.cap_usd), series: nums(cw.series), href: s(cw.href),
                                             on_subscription: cw.on_subscription === true, list_usd: nn(cw.list_usd), list_series: nums(cw.list_series) } : null,
@@ -550,6 +557,7 @@ export const parseDeployments = (v: unknown): Deployments => {
       return { key: s(y.key), label: s(y.label, s(y.key)), url: s(y.url), health: oneOf(y.health, HEALTHS, "unknown"), host: s(y.host),
                host_href: s(y.host_href), target_id: s(y.target_id), app: s(y.app), manage_href: s(y.manage_href),
                host_name: s(y.host_name) || s(y.host), host_projects: nn(y.host_projects), p95_source: s(y.p95_source),
+               window: s(y.window), health_reason: s(y.health_reason),
                uptime_pct: nn(y.uptime_pct), p95_ms: nn(y.p95_ms), error_rate: nn(y.error_rate), series: nums(y.series),
                hours: a(y.hours).map((h) => { const z = o(h); return { at: s(z.at), n: n(z.n), ok: n(z.ok),
                  state: oneOf(z.state, ["healthy", "degraded", "down", "none"] as const, "none") }; }),
@@ -668,13 +676,14 @@ export const parseHealth = (v: unknown): HealthView => {
     environments: a(x.environments).map((e) => {
       const y = o(e); const ser = o(y.series); const slo = o(y.slo);
       return { key: s(y.key), label: s(y.label, s(y.key)), target_id: s(y.target_id), url: s(y.url), health: oneOf(y.health, HEALTHS, "unknown"), uptime_pct: nn(y.uptime_pct),
+               health_reason: s(y.health_reason), window: s(y.window), p95_source: s(y.p95_source),
                error_rate: nn(y.error_rate), p95_ms: nn(y.p95_ms), series: { errors: nums(ser.errors), latency: nums(ser.latency) },
                slo: { target: nn(slo.target), burn: oneOf(slo.burn, ["ok", "warning", "breach"] as const, "ok"), budget_used_pct: nn(slo.budget_used_pct) }, href: s(y.href) };
     }),
     alerts: a(x.alerts).map((z) => {
       const y = o(z);
       return { id: s(y.id), label: label4(y.label), condition: s(y.condition), severity: oneOf(y.severity, ["page", "ticket", "info"] as const, "info"),
-               state: oneOf(y.state, ["firing", "resolved", "ok"] as const, "firing"), since: s(y.since), quiet: s(y.quiet), href: s(y.href) };
+               state: oneOf(y.state, ["firing", "resolved", "ok", "off"] as const, "firing"), since: s(y.since), quiet: s(y.quiet), href: s(y.href) };
     }),
     incidents: a(x.incidents).map((z) => {
       const y = o(z);

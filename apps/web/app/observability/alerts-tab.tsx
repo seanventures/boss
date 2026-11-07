@@ -75,11 +75,15 @@ function RuleRow({ r, busy, onEdit, onSilence, onRespond, onEndSilence, severiti
                 title={open ? "Hide the PromQL and settings" : "The PromQL and every setting that decides when it fires"}
                 onClick={() => setOpen((v) => !v)}>{open ? "▾" : "▸"}</button>
         <Dot tone={tone} />
-        <span className="obs-strong" title={r.description ?? r.summary ?? undefined}>{r.label}</span>
+        {/* The name and its chips wrap as one block, so a second line starts under the name,
+            never back under the expander (a misaligned row). */}
+        <span className="obs-arule-label">
+        <span className="obs-strong" title={[r.description ?? r.summary, r.alert && r.alert !== r.label ? `Rule ${r.alert}` : ""].filter(Boolean).join(" · ") || undefined}>{r.label}</span>
         <SevFlag sev={r.severity} catalog={severities} />
         {r.sample ? <span className="obs-chip" data-testid="obs-rule-sample" title="A labelled sample rule: Remove samples deletes it">Sample</span> : null}
         {r.managedBy === "code" ? <span className="obs-chip" data-testid="obs-rule-repo" title={`Declared in ${r.where ? `${whereWord(r.where)}` : "the app's boss.deploy.yaml"}: Tune proposes a pull request`}>Repo-managed</span> : null}
         {r.droppedWord ? <span className="obs-chip" data-tone="amber" data-testid="obs-rule-dropped" title={`${r.droppedWord}. Put it back in the manifest, or remove it here`}>Dropped from yaml</span> : null}
+        </span>
       </span>
       <span className="inf-muted obs-arule-cond" title={r.expr} data-copy="data">{r.condition}</span>
       <span className="obs-arule-state">
@@ -266,8 +270,11 @@ export function AlertStatus({ a }: { a: Alert }) {
   return <StatusChip status={a.status} extraTip={ackTip} />;
 }
 
-export function AlertRow({ a, targetId, projectId, actor, onDone, showApp, onApp, onIncident, selected, onSelect, onAck, severities }: {
+export function AlertRow({ a, targetId, projectId, actor, onDone, showApp, onApp, onIncident, selected, onSelect, onAck, severities, plainNames }: {
   a: Alert; targetId: string; projectId: string; actor: string; onDone: () => void; severities?: SevInfo[];
+  /** A project page (Health's parity component): the rule's identifier stays in the tooltip,
+   *  never printed beside its name (X-73: no raw ids on project pages). */
+  plainNames?: boolean;
   showApp?: boolean; onApp?: () => void; onIncident?: () => void;
   /** Observability › Alerts: select-many for Ack selected, and a per-row Ack. */
   selected?: boolean; onSelect?: (on: boolean) => void; onAck?: () => void;
@@ -308,7 +315,7 @@ export function AlertRow({ a, targetId, projectId, actor, onDone, showApp, onApp
                   title={`${a.alertname}: its rule (Respond automatically, Triage, Silence, Edit)`} onClick={() => setRuleOpen("switches")}>
             {a.label}</button>
         ) : <span className="obs-strong obs-alert-what" title={a.description ?? a.summary} data-user-text>{a.label}</span>}
-        {a.alertname && a.alertname !== a.label ? <span className="inf-mono inf-faint" data-testid="obs-alert-rulename" data-copy="data">{a.alertname}</span> : null}
+        {!plainNames && a.alertname && a.alertname !== a.label ? <span className="inf-mono inf-faint" data-testid="obs-alert-rulename" data-copy="data">{a.alertname}</span> : null}
         <span className="inf-num" data-copy="data">{a.valueWord}</span>
         {a.thresholdWord ? <span className="inf-faint">(rule {a.thresholdWord})</span> : null}
         {a.release?.sha7 ? <span className="inf-mono inf-faint" title={`Release ${a.release.ref ?? ""} was serving`} data-copy="data">{a.release.sha7}</span> : null}
@@ -348,8 +355,10 @@ export function AlertRow({ a, targetId, projectId, actor, onDone, showApp, onApp
   );
 }
 
-export function AppAlertsTab({ projectId, actor, targetId, onIncident }: {
+export function AppAlertsTab({ projectId, actor, targetId, onIncident, plainNames }: {
   projectId: string; actor: string; targetId: string; onIncident: (incidentId: string | null) => void;
+  /** Mounted on a project page: rule identifiers only in tooltips (see AlertRow). */
+  plainNames?: boolean;
 }) {
   const lt = useLocalTime();
   const rules = useRules(projectId, targetId);
@@ -444,7 +453,7 @@ export function AppAlertsTab({ projectId, actor, targetId, onIncident }: {
           ) : (
             <ul className="obs-list obs-alerts">
               {history.data.alerts.map((a) => <AlertRow key={a.id} a={a} targetId={targetId} projectId={projectId} actor={actor}
-                                                        severities={history.data?.severities}
+                                                        severities={history.data?.severities} plainNames={plainNames}
                                                         onDone={refresh} onIncident={() => onIncident(a.incident?.id ?? null)} />)}
             </ul>
           )}

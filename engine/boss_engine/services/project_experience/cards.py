@@ -43,13 +43,17 @@ def extras(connection: Connection, project_ids: Iterable[str]) -> dict[str, dict
         "WHERE t.project_id = ANY(:ids) AND t.status = 'active' AND s.checked_at > now() - "
         "interval '7 days' GROUP BY t.project_id"), p).mappings()}
     deployed = {str(r["project_id"]): r for r in connection.execute(text(
-        "SELECT DISTINCT ON (t.project_id) t.project_id, t.environment, "
+        "SELECT DISTINCT ON (t.project_id) t.project_id, t.id, t.environment, "
         "(SELECT ok FROM deployment_health_samples h WHERE h.deployment_target_id = t.id "
         " ORDER BY checked_at DESC LIMIT 1) AS ok FROM deployment_targets t "
         "WHERE t.project_id = ANY(:ids) AND t.status = 'active' AND EXISTS (SELECT 1 FROM "
         "stack_deployments s WHERE s.target_id = t.id AND s.status = 'healthy') "
         "ORDER BY t.project_id, (lower(t.environment) IN ('staging', 'stage')) DESC"),
         p).mappings()}
+    # THE SAME HEALTH WORD as the card's dot, the header and the Health tab (health.state_of).
+    from .health import target_states
+
+    states = target_states(connection, [str(r["id"]) for r in deployed.values()])
     onboarding = {str(r["project_id"]): r for r in connection.execute(text(
         "SELECT DISTINCT ON (project_id) project_id, state, checklist FROM project_onboarding_runs "
         "WHERE project_id = ANY(:ids) ORDER BY project_id, started_at DESC"), p).mappings()}
@@ -104,10 +108,10 @@ def extras(connection: Connection, project_ids: Iterable[str]) -> dict[str, dict
             lines = ["mapping code", f"{nodes:,} nodes so far" if nodes else "reading the repo"]
             tone = "now"
         elif dep:
-            ok = dep["ok"]
-            word = "healthy" if ok else ("down" if ok is False else "no signal yet")
+            state = (states.get(str(dep["id"])) or {}).get("health", "unknown")
+            word = {"unknown": "no signal yet"}.get(state, state)
             lines = [f"{env_label(dep['environment']).lower()} {word}", work]
-            tone = "done" if ok else ("bad" if ok is False else None)
+            tone = {"healthy": "done", "down": "bad", "degraded": "you"}.get(state)
         else:
             lines = ["not deployed yet", work]
             tone = None

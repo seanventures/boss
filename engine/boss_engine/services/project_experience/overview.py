@@ -23,7 +23,7 @@ from .common import (LIVE_RUN, web_url, STAGE_LABELS, STAGES, STATUS_LABELS, age
                      initials, iso, pr_number, project_href, repos, require_project, short_day,
                      words)
 from .health import environments as health_environments
-from .health import rollup
+from .health import worst
 
 PRODUCTION = ("production", "prod")
 
@@ -258,7 +258,8 @@ def tiles(project_id: str, items: list[dict[str, Any]], envs: list[dict[str, Any
                       "href": project_href(project_id, tab="work")},
         "running": {"count": len(running), "current": current,
                     "href": project_href(project_id, tab="work") + "&state=running"},
-        "staging": ({"health": staging["health"], "uptime_pct": staging["uptime_pct"],
+        "staging": ({"health": staging["health"], "health_reason": staging.get("health_reason"),
+                     "uptime_pct": staging["uptime_pct"], "window": staging.get("window"),
                      "p95_ms": staging["p95_ms"], "p95_source": staging.get("p95_source"),
                      "series": staging["series"]["latency"],
                      "label": staging["label"], "url": staging.get("url"),
@@ -486,7 +487,8 @@ def view(connection: Connection, project_id: str, *, now: Optional[datetime] = N
         "project": {"id": project["id"], "name": project["name"], "initials":
                     initials(project["name"]), "description": project["description"],
                     "stage": stage, "repos": the_repos, "live_url": url,
-                    "health": rollup(envs), "status_label": STATUS_LABELS[stage],
+                    "health": worst(envs)[0], "health_reason": worst(envs)[1],
+                    "status_label": STATUS_LABELS[stage],
                     "archived": project["archived_at"] is not None},
         "journey": journey(project_id, facts["got"], stage,
                            needs_you=len(waiting), subs=subs, details=details,
@@ -574,6 +576,10 @@ def summary(connection: Connection, project_ids: Iterable[str], *,
             "FROM deployment_targets t WHERE t.project_id = ANY(:ids) AND t.status = 'active'"),
             {"ids": ids}).mappings():
         targets.setdefault(str(r["project_id"]), []).append(dict(r))
+    from .health import target_states
+
+    states = target_states(connection, [str(t["id"]) for tl in targets.values() for t in tl
+                                        if t["deployed"]], now=now)
     onboarding = {str(r["project_id"]): dict(r) for r in connection.execute(text(
         "SELECT DISTINCT ON (project_id) project_id, state, jsonb_array_length(backlog) AS backlog "
         "FROM project_onboarding_runs WHERE project_id = ANY(:ids) "
@@ -628,11 +634,10 @@ def summary(connection: Connection, project_ids: Iterable[str], *,
         # decision. A setup card ("Pick a prod host") is Needs you, not work in progress.
         moving = bool(live or decided) and worked
         stage = stage_of(got, active=moving)
-        health_words = ["healthy" if t["ok"] else "down" for t in tgs
-                        if t["deployed"] and t["ok"] is not None]
-        health = ("down" if "down" in health_words and "healthy" not in health_words else
-                  "degraded" if "down" in health_words else
-                  "healthy" if health_words else "unknown")
+        # THE SAME HEALTH as the project's header, tiles and Health tab (health.state_of): the
+        # probe, the 24 h SLO and what fires — never "healthy" beside a breached SLO.
+        health, health_reason = worst([{**states[str(t["id"])], "key": t["environment"]}
+                                       for t in tgs if t["deployed"] and str(t["id"]) in states])
         ordered = sorted(tgs, key=lambda t: (str(t["environment"]).lower() not in ("staging",
                                                                                   "stage"),
                                              str(t["environment"]).lower() in PRODUCTION))
@@ -663,7 +668,8 @@ def summary(connection: Connection, project_ids: Iterable[str], *,
                     "journey": [{"key": j["key"], "label": j["label"], "state": j["state"]}
                                 for j in journey(pid, got, stage, needs_you=waiting,
                                                  active=moving or onboarding_active)],
-                    "needs_you": waiting, "running": live, "health": health, "live_url": url,
+                    "needs_you": waiting, "running": live, "health": health,
+                    "health_reason": health_reason, "live_url": url,
                     "captain": ({"name": f["name"], "role_key": f["role_key"],
                                  "avatar": f["avatar"], "agent_id": f.get("agent_id")}
                                 if f else None),

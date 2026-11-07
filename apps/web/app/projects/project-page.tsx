@@ -31,7 +31,7 @@ import { OverviewTab } from "./tab-overview";
 import { WorkTab } from "./tab-work";
 import { RoadmapTab } from "./tab-roadmap";
 import { KnowledgeTab } from "./tab-knowledge";
-import { DeploymentsTab } from "./tab-deployments";
+import { DeploymentsTab, p95Words } from "./tab-deployments";
 import { HealthTab } from "./tab-health";
 import { SettingsTab } from "./tab-settings";
 import { DrawerHost } from "./drawers";
@@ -172,7 +172,10 @@ function Header({ ctx, onboarding }: { ctx: PxCtx; onboarding: boolean }) {
   const p = ctx.overview.project;
   const repo = p.repos[0];
   const staging = ctx.overview.tiles.staging;
-  const health = staging?.health ?? p.health;
+  // THE PROJECT'S HEALTH (health.state_of, worst environment): the same word as the tiles, the
+  // cards and the Health tab — never "Healthy" beside a breached SLO or a firing alert (12-05).
+  const health = p.health !== "unknown" ? p.health : staging?.health ?? p.health;
+  const healthWhy = p.health_reason || staging?.health_reason || "";
   const captain = ctx.overview.captain;
   const url = usePxUrl();
   return (
@@ -202,7 +205,9 @@ function Header({ ctx, onboarding }: { ctx: PxCtx; onboarding: boolean }) {
              href={pxHref(`?project_id=${encodeURIComponent(ctx.projectId)}&area=project&tab=health`)}
              data-testid="px-head-health" aria-current={url.tab === "health" ? "page" : undefined}
              onClick={(e) => { if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return; e.preventDefault(); ctx.tab("health"); }}
-             title={[p.live_url || health !== "unknown" ? HEALTH_WORD[health] : "Nothing deployed yet", staging?.uptime_pct != null ? `${staging.uptime_pct}%` : "", staging?.p95_ms != null ? `p95 ${staging.p95_ms}ms` : ""].filter(Boolean).join(" · ") + " — opens Health"}>
+             title={[p.live_url || health !== "unknown" ? HEALTH_WORD[health] : "Nothing deployed yet", healthWhy,
+                     staging?.uptime_pct != null ? `${staging.label || "Staging"} ${staging.uptime_pct}% up` : "",
+                     p95Words(staging?.p95_ms, staging?.window)].filter(Boolean).join(" · ") + " — opens Health"}>
             <span className="px-dot" data-s={health} data-round aria-hidden />{p.live_url || health !== "unknown" ? HEALTH_WORD[health] : "No health yet"}</a>
           <span className="px-tag" data-tone={onboarding ? "blue" : "green"} data-testid="px-head-status" title="Project stage on the journey">{onboarding ? <><Compass size={11} aria-hidden /> Onboarding</>
             : <>{(() => { const I = STAGE_ICON[p.stage] ?? Compass; return <I size={11} aria-hidden />; })()} {p.status_label || "Ready"}</>}</span>

@@ -16,12 +16,13 @@
 import React, { useEffect, useState } from "react";
 
 import type { ProjectMenuItem } from "./project-menu";
-import { TAB_WORDS, projectHref, toTab } from "../lib/project-experience";
+import { TAB_WORDS, projectHref, pxHref, toTab } from "../lib/project-experience";
+import { crumbTrail, onCrumbTrail, type CrumbTrail } from "./shell-crumb-here";
 
 /** A template's lab project (template-sheet's naming): insecure by design, never deployed. */
 export const LAB_NAME = /lab \(insecure by design\)$/;
 
-export type Crumb = { key: string; label: string; kind: "link" | "project" | "here" | "text" };
+export type Crumb = { key: string; label: string; kind: "link" | "project" | "here" | "text" | "href"; href?: string };
 
 /** Observability is org-wide (screen 15): "Observability / Apps", its view in words. */
 const OBS_VIEW_WORDS: Record<string, string> = {
@@ -30,9 +31,17 @@ const OBS_VIEW_WORDS: Record<string, string> = {
 };
 
 /** The crumbs for an area, as data (the component draws them; tests read them). */
-export function crumbsFor({ active, areaLabel, routeMode, hasProject, tab, view = null }: {
+export function crumbsFor({ active, areaLabel, routeMode, hasProject, tab, view = null, trail = null }: {
   active: string; areaLabel: string; routeMode: boolean; hasProject: boolean; tab: string | null; view?: string | null;
+  /** An open org-wide thing (a server's drawer in Infra): "Infra / Servers / 203.0.113.20" (14-01). */
+  trail?: CrumbTrail;
 }): Crumb[] {
+  if (trail && trail.area === active && !routeMode && trail.trail.length) {
+    const last = trail.trail.length - 1;
+    return [{ key: "area", label: areaLabel, kind: "href", href: `?area=${encodeURIComponent(active)}` },
+            ...trail.trail.map((t, i): Crumb => (i === last ? { key: `t${i}`, label: t.label, kind: "here" }
+              : { key: `t${i}`, label: t.label, kind: t.href ? "href" : "text", href: t.href }))];
+  }
   if (active === "observability" && !routeMode) {
     return [{ key: "area", label: areaLabel, kind: "text" },
             { key: "view", label: OBS_VIEW_WORDS[view || tab || "apps"] ?? "Apps", kind: "here" }];
@@ -75,7 +84,9 @@ export function ShellCrumbs({ active, areaLabel, routeMode, projects, projectId,
   const tab = useUrlTab();
   const view = useUrlTab("view");
   const hasProject = Boolean(projects && projectId);
-  const crumbs = crumbsFor({ active, areaLabel, routeMode, hasProject, tab, view });
+  const [trail, setTrail] = useState<CrumbTrail>(null);
+  useEffect(() => { setTrail(crumbTrail()); return onCrumbTrail(() => setTrail(crumbTrail())); }, []);
+  const crumbs = crumbsFor({ active, areaLabel, routeMode, hasProject, tab, view, trail });
   const name = projects?.items.find((p) => p.id === projectId)?.name ?? projectId ?? "";
   const lab = LAB_NAME.test(name);
   return (
@@ -95,6 +106,8 @@ export function ShellCrumbs({ active, areaLabel, routeMode, projects, projectId,
                         title="Lab project · insecure by design, never deployed to a host">Lab</span>
                 ) : null}
               </span>
+            ) : c.kind === "href" ? (
+              <a className="bx-crumb-link" href={pxHref(c.href ?? "")} data-console-load data-testid={`crumb-${c.key}`}>{c.label}</a>
             ) : c.kind === "text" ? (
               <span className="bx-crumb-link" data-testid={`crumb-${c.key}`}>{c.label}</span>
             ) : c.kind === "link" ? (
