@@ -16,6 +16,7 @@ import { ArrowsClockwise, CaretDown, CaretUp, Check, MagicWand, PencilSimple, Wa
 
 import type { Agent } from "../../lib/project-experience";
 import { Face } from "./kit";
+import "./brief-card.css";
 
 export type BriefRow = {
   key: string; label: string;
@@ -31,6 +32,8 @@ export type BriefRow = {
   question?: boolean;
   /** Skeleton widths while reading (%, one bar each). */
   skeleton?: number[];
+  /** The column it sits in when the card has two (Add a project's brief). */
+  col?: 1 | 2;
 };
 
 export type BriefState = "reading" | "ready" | "confirmed" | "fallback";
@@ -56,8 +59,19 @@ export function Marked({ text, added }: { text: string; added: string[] }) {
   return <>{out}</>;
 }
 
+function Grid({ rows, columns, children }: { rows: BriefRow[]; columns: 1 | 2; children: (r: BriefRow) => React.ReactNode }) {
+  if (columns === 1) return <div className="px-ub-grid">{rows.map(children)}</div>;
+  return (
+    <div className="px-ub-grid" data-cols="2">
+      <div className="px-ub-col">{rows.filter((r) => (r.col ?? 1) === 1).map(children)}</div>
+      <div className="px-ub-col">{rows.filter((r) => r.col === 2).map(children)}</div>
+    </div>
+  );
+}
+
 export function BriefCard({
   state, agent, title, sub, rows, chips, editing, onConfirm, onFix, onRewrite, onOpen, onRetry, confirmed, reading, foot, testid = "px-ub",
+  columns = 1, live, actions, hintPlaceholder,
 }: {
   state: BriefState; agent: Agent | null;
   /** The card's heading: "Here's what I understood", or the brief's own title once confirmed. */
@@ -75,6 +89,13 @@ export function BriefCard({
   /** A line under the actions ("This becomes the work item's spec…"). */
   foot?: React.ReactNode;
   testid?: string;
+  /** Two columns on a wide card (rows say which with `col`); one on a phone. */
+  columns?: 1 | 2;
+  /** A live tag in the head ("reading" while Helm still fills it). */
+  live?: React.ReactNode;
+  /** Presses of the surface's own beside the card's (Change, …). */
+  actions?: React.ReactNode;
+  hintPlaceholder?: string;
 }) {
   const [hint, setHint] = useState("");
   const [open, setOpen] = useState(false);
@@ -99,15 +120,13 @@ export function BriefCard({
           <div><b>Here&apos;s what I understood</b><small>{reading ?? "Reading your words and the code graph…"}</small></div>
           <span className="px-tag" data-tone="blue"><span className="px-dot" data-s="now" aria-hidden /> reading</span>
         </div>
-        <div className="px-ub-grid">
-          {rows.map((r) => (
+        <Grid rows={rows} columns={columns}>{(r) => (
             <div key={r.key} className="px-ub-f">
               <span className="px-lbl">{r.label}</span>
               <span className="px-ub-sks">{(r.skeleton ?? [70]).map((w, i) => <span key={i} className="px-ub-sk" style={{ width: `${w}%` }} />)}</span>
               <i />
             </div>
-          ))}
-        </div>
+          )}</Grid>
       </section>
     );
   }
@@ -134,20 +153,19 @@ export function BriefCard({
         <Face agent={face} size={30} />
         <div><b>Here&apos;s what I understood</b>
           {confirmed ? <small className="px-ub-ok"><Check size={11} weight="bold" aria-hidden /> {sub ?? "Confirmed"}</small> : <small>{sub}</small>}</div>
+        {live}
         <span className="px-ub-key px-hide-phone" aria-hidden><i>your words</i><i><mark className="px-ub-mark">Helm added</mark></i></span>
         {confirmed && open ? <button type="button" className="px-icon-btn" aria-label="Fold the brief" title="Fold" onClick={() => setOpen(false)}><CaretUp size={13} aria-hidden /></button> : null}
       </div>
-      <div className="px-ub-grid">
-        {rows.map((r) => (
-          <div key={r.key} className="px-ub-f" data-new={r.fresh ? "" : undefined} data-q={r.question ? "" : undefined} data-testid={`${testid}-row-${r.key}`}>
+      <Grid rows={rows} columns={columns}>{(r) => (
+          <div key={r.key} className="px-ub-f" data-new={r.fresh ? "" : undefined} data-q={r.question ? "" : undefined} data-on={editing && r.edit ? "" : undefined} data-testid={`${testid}-row-${r.key}`}>
             <span className="px-lbl">{r.label}{r.sub ? <small>{r.sub}</small> : null}</span>
             <div className="px-ub-v">{editing && r.edit ? r.edit : r.value}</div>
             {r.edit && onFix && !editing ? (
               <button type="button" className="px-ub-ed" aria-label={`Edit ${r.label}`} title={`Edit ${r.label}`} onClick={onFix}><PencilSimple size={12} aria-hidden /></button>
             ) : <i />}
           </div>
-        ))}
-      </div>
+        )}</Grid>
       <div className="px-ub-act">
         {!confirmed && onConfirm ? (
           <button type="button" className="px-btn" data-kind="ok" onClick={onConfirm} title="Confirms it (Start also confirms it)" data-testid={`${testid}-ok`}>
@@ -161,13 +179,14 @@ export function BriefCard({
           <>
             <label className="px-ub-hint" data-filled={hint ? "" : undefined} htmlFor={hintId}>
               <MagicWand size={12} aria-hidden />
-              <input id={hintId} value={hint} onChange={(e) => setHint(e.target.value)} placeholder="Hint for a rewrite, e.g. “smaller first step”" maxLength={300}
+              <input id={hintId} value={hint} onChange={(e) => setHint(e.target.value)} placeholder={hintPlaceholder ?? "Hint for a rewrite, e.g. “smaller first step”"} maxLength={300}
                      onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); onRewrite(hint); setHint(""); } }} data-testid={`${testid}-hint`} />
             </label>
             <button type="button" className="px-btn" data-size="s" onClick={() => { onRewrite(hint); setHint(""); }} data-testid={`${testid}-rewrite`}>
               <ArrowsClockwise size={12} aria-hidden /> Rewrite</button>
           </>
         ) : null}
+        {actions}
         {foot ? <span className="px-faint px-ub-foot">{foot}</span> : null}
       </div>
     </section>

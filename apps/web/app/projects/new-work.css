@@ -48,51 +48,7 @@
 .px-nw-chip[data-tone="blue"] { border-color: var(--accent-line); color: var(--accent-text); background: var(--accent-soft); }
 
 /* ── "Here's what I understood" (the shared card) ───────────────────────────────────────── */
-.px-ub { border: 1.5px solid color-mix(in srgb, var(--teal) 45%, transparent); border-radius: 14px; background: color-mix(in srgb, var(--teal) 5%, var(--surface));
-  padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; min-width: 0; animation: px-rise .15s ease-out; }
-.px-ub[data-ok] { border-color: color-mix(in srgb, var(--green) 55%, transparent); background: color-mix(in srgb, var(--green) 5%, var(--surface)); }
-.px-ub[data-edit] { border-color: var(--accent-line); }
-.px-ub[data-state="fallback"] { border-color: color-mix(in srgb, var(--amber) 55%, transparent); background: color-mix(in srgb, var(--amber) 5%, var(--surface)); }
-.px-ub-h { display: flex; align-items: center; gap: 10px; }
-.px-ub-h > div { flex: 1 1 0; min-width: 0; }
-.px-ub-h b { font-family: var(--display); font-size: .74rem; }
-.px-ub-h small { display: block; color: var(--faint); font-size: .54rem; margin-top: 1px; }
-.px-ub-h small.px-ub-ok { color: var(--green); display: flex; align-items: center; gap: 4px; }
-.px-ub-key { display: inline-flex; gap: 10px; font-size: .52rem; color: var(--faint); flex: none; }
-.px-ub-key i { font-style: normal; }
-.px-ub-grid { display: grid; grid-template-columns: minmax(0, 1fr); }
-.px-ub-f { display: grid; grid-template-columns: 96px minmax(0, 1fr) 18px; gap: 8px; align-items: start; padding: 6px 0; border-top: 1px solid var(--border);
-  font-size: .62rem; color: var(--ink-soft); min-width: 0; }
-.px-ub-f > .px-lbl { padding-top: 2px; font-size: .5rem; display: flex; flex-direction: column; gap: 1px; }
-.px-ub-f > .px-lbl small { letter-spacing: 0; text-transform: none; font-size: .48rem; }
-.px-ub-f[data-new] { box-shadow: inset 3px 0 0 var(--green); padding-left: 6px; }
-.px-ub-f[data-new] > .px-lbl { color: var(--green); }
-.px-ub-f[data-q] > .px-lbl { color: var(--amber); }
-.px-ub-v { min-width: 0; line-height: 1.5; }
-.px-ub-v ul { margin: 0; padding-left: 14px; display: flex; flex-direction: column; gap: 2px; }
-.px-ub-v .px-input { font-size: .62rem; }
-.px-ub-ttl { font-family: var(--display); font-weight: 700; color: var(--ink); font-size: .7rem; }
-.px-ub-ed { opacity: 0; border: 0; background: none; color: var(--faint); cursor: pointer; padding: 0; transition: opacity .12s; }
-.px-ub-f:hover > .px-ub-ed, .px-ub-ed:focus-visible { opacity: 1; }
-.px-ub-mark { background: none; color: inherit; border-bottom: 1.5px dotted var(--accent-text); padding: 0; }
-.px-ub-files { display: flex; flex-direction: column; gap: 3px; font-size: .56rem; }
-.px-ub-files > span { display: flex; gap: 6px; align-items: center; min-width: 0; flex-wrap: wrap; }
-.px-ub-files > span[data-new] { color: var(--faint); }
-.px-ub-files em { font-style: normal; color: var(--faint); }
-.px-ub-files em::before { content: "· "; }
-.px-ub-act { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding-top: 8px; border-top: 1px solid var(--border); }
 .px-btn[data-kind="ok"] { background: var(--green-soft); border-color: color-mix(in srgb, var(--green) 55%, transparent); color: var(--green); }
-.px-ub-hint { flex: 1 1 200px; display: flex; align-items: center; gap: 6px; padding: 4px 9px; border: 1px dashed var(--border-strong); border-radius: 8px;
-  font-size: .58rem; color: var(--faint); min-width: 0; }
-.px-ub-hint[data-filled] { border-style: solid; border-color: var(--accent-line); color: var(--ink); }
-.px-ub-hint input { flex: 1; min-width: 0; border: 0; background: transparent; font: inherit; color: var(--ink); outline: none; padding: 2px 0; }
-.px-ub-foot { font-size: .54rem; }
-.px-ub-chips { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.px-ub-open { margin-left: auto; }
-.px-ub-sks { display: flex; flex-direction: column; gap: 5px; padding-top: 4px; }
-.px-ub-sk { height: 9px; border-radius: 5px; background: linear-gradient(90deg, var(--border) 0%, var(--border-strong) 50%, var(--border) 100%);
-  background-size: 200% 100%; animation: px-ub-sh 1.4s infinite linear; }
-@keyframes px-ub-sh { from { background-position: 200% 0; } to { background-position: -200% 0; } }
 
 /* ── Talk it through ────────────────────────────────────────────────────────────────────── */
 .px-nw-side { grid-area: side; padding: 14px 16px; border-left: 1px solid var(--border); background: color-mix(in srgb, var(--accent) 2%, var(--surface-2));
@@ -207,10 +163,6 @@
   .px-nw-defs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .px-nw-def[data-wide] { grid-column: 1 / -1; }
   .px-nw-def .px-nw-pop, .px-nw-def:nth-child(n) .px-nw-pop { position: fixed; left: 16px; right: 16px; top: auto; bottom: 88px; width: auto; max-width: none; max-height: 60vh; overflow: auto; }
-  .px-ub { padding: 10px 12px; }
-  .px-ub-f { grid-template-columns: minmax(0, 1fr) 16px; }
-  .px-ub-f > .px-lbl { grid-column: 1 / -1; flex-direction: row; gap: 6px; }
-  .px-ub-ed { opacity: 1; }
   .px-nw-foot { padding: 10px 16px calc(12px + env(safe-area-inset-bottom)); gap: 10px; }
   .px-nw-foot .px-nw-start { flex: 1 1 100%; justify-content: center; padding: 12px 18px; }
   .px-nw-foot .px-nw-kbd { display: none; }
@@ -218,5 +170,4 @@
   .px-nw-plan .px-fl { flex-wrap: wrap; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .px-ub, .px-nw-pop, .px-nw-typing i, .px-ub-sk { animation: none !important; }
 }

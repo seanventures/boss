@@ -324,3 +324,7 @@
   .npx-primary { flex: 1 1 100%; justify-content: center; order: 5; }
   .npx-cn-grid { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* A "Try a sample" door: the chip that starts it, lit. */
+.npx-pchip[data-lit] { border-color: var(--accent-line); color: var(--ink); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); animation: npx-pulse-ring 1.8s ease-in-out 3; }
+@keyframes npx-pulse-ring { 50% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 10%, transparent); } }

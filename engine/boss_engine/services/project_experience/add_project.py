@@ -215,11 +215,11 @@ def understand(connection: Optional[Connection], settings: Any, project_id: str,
                pinned: Optional[Mapping[str, Any]] = None,
                catalogue: Sequence[Mapping[str, Any]] = (), stacks: Sequence[Mapping[str, Any]] = (),
                workflows: Sequence[Mapping[str, Any]] = (), actor: str = "operator",
-               adapter: Any = None, decider: Any = None) -> dict[str, Any]:
+               adapter: Any = None, decider: Any = None, seconds: float = WAIT_S
+               ) -> dict[str, Any]:
     """Helm's understanding of the words, as {status, brief, picks, by, cost_usd_micros}.
-    status: ok | no_model (with `message`). Never raises."""
-    from ..agent_service import AgentService, Choice
-
+    status: ok | no_model | timeout (with `message`). Never raises. The turn is the one
+    understanding service's (understanding.turn) — New work's, with a new app as the subject."""
     words = str(words or "").strip()[:MAX_TEXT]
     if not words:
         return {"status": "empty", "brief": raw_brief(""), "picks": _picks({}, catalogue=(),
@@ -248,21 +248,27 @@ def understand(connection: Optional[Connection], settings: Any, project_id: str,
             return "list at least one must-have"
         return ""
 
+    from . import understanding
+
     try:
-        got = AgentService(settings).decide(
-            connection, project_id=project_id, actor=actor, role="engineering_captain",
-            agent="Helm", external_ref="", ref=f"add_project:{project_id}",
+        # THE ONE UNDERSTANDING SERVICE (understanding.turn), with a new app as its subject.
+        got = understanding.turn(
+            connection, settings, project_id, subject="new_app", actor=actor, agent="Helm",
+            external_ref="", message="Rewrite these words as a brief and pick what BOSS would "
+                                     "use to build it.",
             situation="A person is adding a project to BOSS and typed what they want.",
-            message="Rewrite these words as a brief and pick what BOSS would use to build it.",
-            choices=[Choice(BRIEF_ACTION, "the structured brief, with the picks", acts=False,
-                            label="Here's what I understood", arguments=BRIEF_ARGUMENTS)],
-            context=context, brief=SYSTEM, check=check, adapter=adapter, decider=decider,
-            min_confidence=0.0, context_limit=14000)
+            schema=BRIEF_ARGUMENTS, context=context, rules=SYSTEM, check=check,
+            adapter=adapter, decider=decider, seconds=seconds)
     except Exception as exc:  # noqa: BLE001 — Helm's reading is a help, never a failed screen
         return {"status": "no_model", "brief": raw_brief(words),
                 "picks": _picks({}, catalogue=(), stacks=(), workflows=()),
                 "message": f"Helm could not read it now ({type(exc).__name__}). Your words are "
                            "kept as they are; you can continue."}
+    if understanding.timed_out(got):
+        return {"status": "timeout", "brief": raw_brief(words),
+                "picks": _picks({}, catalogue=(), stacks=(), workflows=()),
+                "message": f"Helm took longer than {int(seconds)} s. Your words are kept as they "
+                           "are; you can continue, or Rewrite to ask again."}
     by = {k: str((got.by or {}).get(k) or "") for k in ("engine", "model", "backend")}
     if not got.decided:
         why = got.refused or got.error or got.reason or "no answer"

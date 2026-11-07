@@ -131,6 +131,21 @@ def test_no_model_keeps_the_words_and_lets_the_person_continue(engine, world):
     assert "continue" in out["message"]
 
 
+def test_a_turn_past_its_deadline_is_a_timeout_through_the_one_understanding_service(engine, world):
+    from boss_engine.services.call_deadline import TurnDeadlineExceeded
+
+    class Slow(StubModel):
+        def create_text_response(self, prompt, system_prompt=""):
+            raise TurnDeadlineExceeded("the turn's deadline passed")
+
+    with engine.begin() as db:
+        out = add_project.understand(db, get_settings(), world.project_a, words=WORDS,
+                                     catalogue=CATALOGUE, stacks=STACKS, workflows=FLOWS,
+                                     adapter=Slow())
+    assert out["status"] == "timeout" and out["brief"]["raw"] is True
+    assert "continue" in out["message"]
+
+
 def test_an_answer_without_must_haves_is_refused_not_shown(engine, world):
     with engine.begin() as db:
         out = add_project.understand(db, get_settings(), world.project_a, words=WORDS,
@@ -165,6 +180,7 @@ def test_the_understand_route_answers_and_a_slow_model_is_a_timeout_not_an_error
     assert r.json()["status"] == "ok" and r.json()["brief"]["title"].startswith("HelpDesk")
 
     monkeypatch.setattr(add_project, "WAIT_S", 0.2)
+    monkeypatch.setattr(route, "_SLACK_S", 0.0)
     monkeypatch.setattr(add_project, "understand", lambda *a, **k: time.sleep(1) or {})
     with _owner(world):
         r = client.post(f"/v1/projects/{world.project_a}/add-project/understand",

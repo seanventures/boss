@@ -19,7 +19,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AddProjectSheet } from "../app/start-project/add-project";
 import { MovedNewBuild } from "../app/projects/moved";
 import { resetCatalogue } from "../components/v2/templates/catalogue";
-import { detect, estimateWords, marks, nameFromTitle, type Preview, type Understanding, type Workflow } from "../lib/add-project";
+import { detect, estimateWords, nameFromTitle, type Preview, type Understanding, type Workflow } from "../lib/add-project";
 import { $$, click, mountAs, registryFixture, settle, stubFetch, tid, type, unmount, type Call } from "./_helpers/multirepo-fixtures";
 
 afterEach(() => { unmount(); window.history.replaceState(null, "", "/"); });
@@ -105,9 +105,7 @@ describe("the one input tells what it is", () => {
     expect(detect("A shift board")).toMatchObject({ kind: "idea" });
   });
 
-  it("marks only Helm's additions, longest first, and names the project from the title", () => {
-    expect(marks("Staff approve; nothing sends without approval", ["nothing sends without approval", "approve"]))
-      .toEqual([{ t: "Staff ", added: false }, { t: "approve", added: true }, { t: "; ", added: false }, { t: "nothing sends without approval", added: true }]);
+  it("names the project from the title and says the estimate from history only", () => {
     expect(nameFromTitle("HelpDesk AI: email support with approved AI replies")).toBe("HelpDesk AI");
     expect(estimateWords(STANDARD, "idea")).toBe("≈ $5 · ≈ 35 min to PR");
     expect(estimateWords(SMALL, "idea")).toBeNull();
@@ -125,7 +123,9 @@ describe("an idea: Helm's understanding, then Create and start", () => {
     expect(calls.find((c) => c.path === "/v1/projects/p1/add-project/understand")!.body).toMatchObject({ words: WORDS });
     const card = tid("ap-understood")!;
     expect(card.textContent).toContain("HelpDesk AI: email support with approved AI replies");
-    expect([...card.querySelectorAll(".npx-ub-grid mark")].map((m) => m.textContent)).toEqual(["a customer portal", "nothing sends without approval"]);
+    // The ONE brief card (app/projects/brief-card.tsx), the same New work draws.
+    expect(tid("ap-ub")).not.toBeNull();
+    expect([...card.querySelectorAll(".px-ub-grid mark")].map((m) => m.textContent).sort()).toEqual(["a customer portal", "nothing sends without approval"]);
     // The name follows the title; Helm's connector pick is on the box, with its words.
     expect(tid("ap-chip-name")!.textContent).toContain("HelpDesk AI");
     expect(tid("ap-box-connectors")!.textContent).toContain("Google");
@@ -135,20 +135,21 @@ describe("an idea: Helm's understanding, then Create and start", () => {
     // A quick answer to an open question.
     await click(tid("ap-q0-google-workspace"));
     expect(tid("ap-q0-google-workspace")!.getAttribute("aria-pressed")).toBe("true");
-    await click(tid("ap-looks-right"));
-    expect(tid("ap-confirmed")).not.toBeNull();
-    // Fix it: every line in place; Save keeps the edit and asks for the picks again.
-    await click(tid("ap-fix"));
+    // Fix it: every line in place; Done keeps the edit and asks for the picks again.
+    await click(tid("ap-ub-fix"));
     await type(tid("ap-fix-title"), "HelpDesk: approved replies");
     await click(tid("ap-fix-add"));
-    await click(tid("ap-save-brief"));
+    await click(tid("ap-ub-fix"));
     expect(tid("ap-understood")!.textContent).toContain("HelpDesk: approved replies");
     expect(calls.some((c) => c.path === "/v1/projects/p1/add-project/connectors")).toBe(true);
-    // Rewrite with a hint.
-    await type(tid("ap-hint"), "shorter");
-    await click(tid("ap-rewrite"));
+    // Rewrite with a hint keeps the edited line.
+    await type(tid("ap-ub-hint"), "shorter");
+    await click(tid("ap-ub-rewrite"));
     const again = calls.filter((c) => c.path === "/v1/projects/p1/add-project/understand").pop()!;
     expect(again.body).toMatchObject({ hint: "shorter", pinned: { title: "HelpDesk: approved replies" } });
+    // Looks right: confirmed, folded to its chips.
+    await click(tid("ap-ub-ok"));
+    expect(tid("ap-ub")!.dataset.state).toBe("confirmed");
   });
 
   it("no model keeps the words and lets the person continue", async () => {

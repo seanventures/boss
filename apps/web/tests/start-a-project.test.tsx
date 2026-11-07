@@ -106,9 +106,9 @@ describe("the URL opens the flow at a choice", () => {
     expect(tid("add-project")).toBeNull();
     window.history.pushState(null, "", "/?org=org_1&new_project=sample");
     await act(async () => { window.dispatchEvent(new PopStateEvent("popstate")); });
-    // The sample starts in one press: the door opens the sheet and starts it.
+    // The door opens the sheet with Try a sample lit: one press starts it (a link creates nothing).
     expect(tid("add-project")).not.toBeNull();
-    expect(tid("ap-sample")).not.toBeNull();
+    expect(tid("ap-sample")!.hasAttribute("data-lit")).toBe(true);
   });
 
   it("/?new_project=idea opens the one input; the full form is More ways › Blank, with Back", async () => {

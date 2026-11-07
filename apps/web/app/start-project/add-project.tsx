@@ -25,8 +25,8 @@
 import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
-  ArrowsClockwise, ArrowsIn, ArrowsOut, ArrowsVertical, ChatsCircle, Check, DotsThree, Flask, FolderOpen, FolderPlus,
-  GitBranch, GithubLogo, HardDrives, Lightbulb, MagicWand, PencilSimple, Play, Plus, RocketLaunch, ShieldCheck,
+  ArrowsIn, ArrowsOut, ArrowsVertical, ChatsCircle, DotsThree, Flask, FolderOpen, FolderPlus,
+  GitBranch, GithubLogo, HardDrives, Lightbulb, Play, Plus, RocketLaunch, ShieldCheck,
   Sparkle, Trash, User, X, DotsSixVertical,
 } from "@phosphor-icons/react";
 
@@ -43,13 +43,14 @@ import { templatesApi } from "../../lib/templates";
 import { ageShort, hostFolders, type FolderFacts, type FolderHost } from "../../lib/host-folder";
 import { accountsOf, allPresets, createFresh, installWideRefusal, nameFromIdea, projectPageHref, type Preset } from "../../lib/start-project";
 import {
-  addProjectApi, detect, estimateTip, estimateWords, lineCount, marks, nameFromTitle,
+  addProjectApi, detect, estimateTip, estimateWords, lineCount, nameFromTitle,
   type Brief, type BriefField, type Kind, type Preview, type RepoRead, type Understanding,
 } from "../../lib/add-project";
 import { normalizeChannel } from "../workflows/compose-plan";
 import { ReadinessPanel, asReadiness, unaccepted, type Readiness } from "../workflow-readiness-ui";
 import { useRegistry } from "./import-repo";
 import { PlanBoxes, ownFields, type PlanState } from "./add-project-plan";
+import { BriefCard, Marked, type BriefRow } from "../projects/brief-card";
 import { SAMPLE, knowledgePresetHref } from "./start-sheet";
 import "./start-project.css";
 import "./add-project.css";
@@ -71,11 +72,6 @@ function refusalText(e: unknown): string {
     return typeof e.body.message === "string" && e.body.message ? e.body.message : e.message;
   }
   return e instanceof Error ? e.message : String(e);
-}
-
-/** One brief line, with Helm's additions dotted-underlined. */
-function Marked({ text, added }: { text: string; added: string[] }) {
-  return <>{marks(text, added).map((s, i) => s.added ? <mark key={i} title="Helm added this">{s.t}</mark> : <React.Fragment key={i}>{s.t}</React.Fragment>)}</>;
 }
 
 export function AddProjectSheet({ projectId, homeId, startKind = "idea", initialText = "", onClose, onForm, go = (href) => window.location.assign(href) }: {
@@ -257,7 +253,7 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
     }
     setPinned(edited);
     setU((cur) => cur ? { ...cur, brief: { ...fix, pinned: Object.keys(edited) } } : cur);
-    setFix(null); setOk(true);
+    setFix(null);
     if (fix.title) auto({ name: nameFromTitle(fix.title) });
     // The picks follow the brief as edited (the same turn, every line kept as written).
     try {
@@ -354,8 +350,8 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
       setBusy(null);
     }
   };
-  useEffect(() => { if (startKind === "sample") void runSample(); /* one press from a door */ // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // A "Try a sample" door opens the sheet with the sample chip lit: one press starts it. A link
+  // never creates anything by being opened.
   const pickPreset = async (p: Preset) => {
     if (!canCreate.allowed) { setError(canCreate.reason); return; }
     setBusy(p.key); setError(null);
@@ -414,7 +410,7 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
           <span className="npx-hico" aria-hidden><FolderPlus size={17} weight="duotone" /></span>
           <h2 id={titleId}>Add a project</h2>
           <span className="npx-spacer" />
-          <GatedButton permission="project:create" className="npx-pchip" data-testid="ap-sample" disabled={!!busy}
+          <GatedButton permission="project:create" className="npx-pchip" data-testid="ap-sample" disabled={!!busy} data-lit={startKind === "sample" || undefined}
                        title={`Starts now: ${SAMPLE.name} · ${SAMPLE.stack === "node" ? "Node" : SAMPLE.stack} · Small workflow · ≈ 8 min`}
                        onClick={() => void runSample()}>
             <Flask size={13} aria-hidden />{busy === "sample" ? "Starting…" : "Try a sample"} <Play size={11} weight="fill" aria-hidden />
@@ -526,10 +522,11 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
 
           {/* 2 HERE'S WHAT I UNDERSTOOD */}
           {kind === "idea" ? (
-            <IdeaCard text={text} u={u} reading={reading} ok={ok} fix={fix} hint={hint} onHint={setHint}
+            <IdeaCard text={text} u={u} reading={reading} ok={ok} fix={fix}
                       onOk={() => setOk(true)} onFix={() => brief && setFix({ ...brief })} onFixChange={setFix}
-                      onSave={() => void saveFix()} onCancel={() => setFix(null)} onAnswer={answer}
-                      onRewrite={() => void understand({ hint, force: true })} />
+                      onSave={() => void saveFix()} onAnswer={answer}
+                      onRewrite={(h) => { setHint(h); void understand({ hint: h, force: true }); }}
+                      onRetry={() => void understand({ force: true })} />
           ) : (
             <RepoCard kind={kind} repo={repo?.full_name ?? pickedFolder?.path ?? ""} read={read} readError={readError} folder={folder} folderError={folderError}
                       note={det.note} live={helmLive} staging={plan.staging ? preview?.staging.find((h) => h.host_id === plan.staging?.host_id) ?? null : null}
@@ -620,124 +617,87 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
   return typeof document === "undefined" ? sheet : createPortal(sheet, document.body);
 }
 
-// ── the cards ───────────────────────────────────────────────────────────────────────────
+// ── the cards: the ONE "Here's what I understood" card (app/projects/brief-card.tsx), the
+//    same one New work draws, with Add a project's own rows ──────────────────────────────────
 
-function IdeaCard({ text, u, reading, ok, fix, hint, onHint, onOk, onFix, onFixChange, onSave, onCancel, onAnswer, onRewrite }: {
-  text: string; u: Understanding | null; reading: boolean; ok: boolean; fix: Brief | null; hint: string;
-  onHint: (h: string) => void; onOk: () => void; onFix: () => void; onFixChange: (b: Brief) => void; onSave: () => void;
-  onCancel: () => void; onAnswer: (i: number, a: string) => void; onRewrite: () => void;
+const HELM = { name: "Helm", role_key: "engineering_captain", avatar: "" };
+
+function IdeaCard({ text, u, reading, ok, fix, onOk, onFix, onFixChange, onSave, onAnswer, onRewrite, onRetry }: {
+  text: string; u: Understanding | null; reading: boolean; ok: boolean; fix: Brief | null;
+  onOk: () => void; onFix: () => void; onFixChange: (b: Brief) => void; onSave: () => void;
+  onAnswer: (i: number, a: string) => void; onRewrite: (hint: string) => void; onRetry: () => void;
 }) {
   const b = u?.brief ?? null;
   const words = text.trim().split(/\s+/).filter(Boolean).length;
   const n = lineCount(text);
   if (!b && !reading) {
     return (
-      <div className="npx-ub" data-empty data-testid="ap-understood">
-        <div className="npx-ub-h"><AgentAvatar agent="engineering_captain" size={30} aiBadge={false} />
+      <section className="px-ub" data-state="empty" data-testid="ap-understood" style={{ borderStyle: "dashed" }}>
+        <div className="px-ub-h"><AgentAvatar agent="engineering_captain" size={30} aiBadge={false} />
           <div><b>Here’s what I understood</b><small>{words < MIN_WORDS ? "Type a few lines: Helm rewrites them as a brief you confirm." : "Helm reads it when you pause, or press ↵."}</small></div></div>
-      </div>
+      </section>
     );
   }
   const added = b?.added ?? [];
   const f = fix;
   const edit = (patch: Partial<Brief>) => f && onFixChange({ ...f, ...patch });
+  const open = (b?.open_questions ?? []).filter((q) => !q.answer).length;
+  const rows: BriefRow[] = [
+    { key: "title", label: "Title", col: 1, skeleton: [80],
+      value: <span className="px-ub-ttl"><Marked text={b?.title ?? ""} added={added} /></span>,
+      edit: f ? <input className="npx-input" data-testid="ap-fix-title" value={f.title} onChange={(e) => edit({ title: e.target.value })} /> : undefined },
+    { key: "problem", label: "Problem", col: 1, skeleton: [90, 60],
+      value: <Marked text={b?.problem ?? ""} added={added} />,
+      edit: f ? <textarea className="npx-input" rows={2} value={f.problem} onChange={(e) => edit({ problem: e.target.value })} /> : undefined },
+    { key: "who", label: "Who uses it", col: 1, skeleton: [70],
+      value: <Marked text={b?.who_uses ?? ""} added={added} />,
+      edit: f ? <input className="npx-input" value={f.who_uses} onChange={(e) => edit({ who_uses: e.target.value })} /> : undefined },
+    { key: "scope", label: "Out of scope", col: 1, skeleton: [55],
+      value: <>{(b?.out_of_scope ?? []).map((x, i) => <React.Fragment key={i}>{i ? " · " : ""}<Marked text={x} added={added} /></React.Fragment>)}</>,
+      edit: f ? <input className="npx-input" value={f.out_of_scope.join(" · ")} onChange={(e) => edit({ out_of_scope: e.target.value.split(/\s*·\s*|;\s*/).filter(Boolean) })} /> : undefined },
+    { key: "musts", label: "Must-haves", col: 2, skeleton: [85, 75, 80, 60],
+      value: <ul>{(b?.must_haves ?? []).map((m, i) => <li key={i}><Marked text={m} added={added} /></li>)}</ul>,
+      edit: f ? (
+        <ul className="npx-fix-list" data-testid="ap-fix-musts">
+          {f.must_haves.map((m, i) => (
+            <li key={i}><DotsSixVertical size={12} className="npx-faint" aria-hidden />
+              <input className="npx-input" value={m} onChange={(e) => edit({ must_haves: f.must_haves.map((x, j) => j === i ? e.target.value : x) })} />
+              <button type="button" aria-label="Move up" disabled={!i} onClick={() => { const a = [...f.must_haves]; [a[i - 1], a[i]] = [a[i], a[i - 1]]; edit({ must_haves: a }); }}>↑</button>
+              <button type="button" aria-label="Delete" onClick={() => edit({ must_haves: f.must_haves.filter((_, j) => j !== i) })}><Trash size={11} aria-hidden /></button></li>
+          ))}
+          <li><button type="button" className="npx-link" data-testid="ap-fix-add" onClick={() => edit({ must_haves: [...f.must_haves, ""] })}><Plus size={11} aria-hidden /> add a must-have</button></li>
+        </ul>) : undefined },
+    { key: "done", label: "Done when", col: 2, skeleton: [90, 70],
+      value: <Marked text={b?.done_when ?? ""} added={added} />,
+      edit: f ? <textarea className="npx-input" rows={2} value={f.done_when} onChange={(e) => edit({ done_when: e.target.value })} /> : undefined },
+  ].filter((r) => reading && !b ? true : f || r.key === "title" || r.key === "musts" || (r.key === "problem" && b?.problem) || (r.key === "who" && b?.who_uses)
+    || (r.key === "scope" && b?.out_of_scope.length) || (r.key === "done" && b?.done_when)) as BriefRow[];
+  if (b?.open_questions.length) {
+    rows.push({ key: "open", label: `Open · ${open}`, col: 2, question: true, value: (
+      <div className="px-ub-q">
+        {b.open_questions.map((q, i) => (
+          <React.Fragment key={i}><span>{q.question}</span>
+            <div className="px-ub-sugs">{[...q.options, "Leave to PRD"].map((o) => (
+              <button key={o} type="button" className="px-ub-sug" aria-pressed={q.answer === o} data-testid={`ap-q${i}-${o.replace(/\W+/g, "-").toLowerCase()}`}
+                      title={o === "Leave to PRD" ? "Helm decides during the PRD" : undefined} onClick={() => onAnswer(i, o)}>{o}</button>))}</div>
+          </React.Fragment>
+        ))}
+      </div>) });
+  }
+  const state = reading && !b ? "reading" : u && u.status !== "ok" ? "fallback" : ok && !f ? "confirmed" : "ready";
   return (
-    <div className="npx-ub" data-testid="ap-understood" data-ok={ok || undefined} data-edit={f ? true : undefined} data-state={u?.status ?? "reading"}
-         title="Helm's rewrite of your words as a brief. Check it before anything starts.">
-      <div className="npx-ub-h">
-        <AgentAvatar agent="engineering_captain" size={30} aiBadge={false} state={reading ? "working" : "idle"} />
-        <div><b>Here’s what I understood</b>
-          <small>{reading ? "Helm is reading your words…" : f ? "Editing · change any line, or tell Helm how to rewrite it"
-            : u?.status === "ok" ? `Helm rewrote your ${n} line${n === 1 ? "" : "s"} as a brief · ${ok ? "confirmed" : "Fix it to edit any line"}` : u?.message ?? ""}</small></div>
-        <span className="npx-spacer" />
-        {u?.status === "ok" ? <span className="npx-ub-key npx-hide-s" title="So you can see what Helm added to your words"><i>your words</i><i><mark>Helm added</mark></i></span> : null}
-        {ok ? <span className="npx-tag" data-tone="green" data-testid="ap-confirmed"><Check size={11} weight="bold" aria-hidden />Looks right</span> : null}
-      </div>
-      {reading && !b ? (
-        <div className="npx-ub-grid" aria-busy>{[0, 1].map((c) => <div key={c}>{[70, 90, 55, 80].map((w, i) => <div key={i} className="npx-sk" style={{ width: `${w}%` }} />)}</div>)}</div>
-      ) : b ? (
-        <div className="npx-ub-grid" data-dim={reading || undefined}>
-          <div>
-            <Field label="Title" edit={!!f} testid="title">
-              {f ? <input className="npx-input" data-testid="ap-fix-title" value={f.title} onChange={(e) => edit({ title: e.target.value })} />
-                : <span className="npx-ttl"><Marked text={b.title} added={added} /></span>}
-            </Field>
-            {(b.problem || f) ? <Field label="Problem" edit={!!f} testid="problem">
-              {f ? <textarea className="npx-input" rows={2} value={f.problem} onChange={(e) => edit({ problem: e.target.value })} /> : <span><Marked text={b.problem} added={added} /></span>}
-            </Field> : null}
-            {(b.who_uses || f) ? <Field label="Who uses it" edit={!!f} testid="who">
-              {f ? <input className="npx-input" value={f.who_uses} onChange={(e) => edit({ who_uses: e.target.value })} /> : <span><Marked text={b.who_uses} added={added} /></span>}
-            </Field> : null}
-            {(b.out_of_scope.length || f) ? <Field label="Out of scope" edit={!!f} testid="scope">
-              {f ? <input className="npx-input" value={f.out_of_scope.join(" · ")} onChange={(e) => edit({ out_of_scope: e.target.value.split(/\s*·\s*|;\s*/).filter(Boolean) })} />
-                : <span>{b.out_of_scope.map((x, i) => <React.Fragment key={i}>{i ? " · " : ""}<Marked text={x} added={added} /></React.Fragment>)}</span>}
-            </Field> : null}
-          </div>
-          <div>
-            <Field label="Must-haves" edit={!!f} on={!!f} testid="musts">
-              {f ? (
-                <ul className="npx-fix-list" data-testid="ap-fix-musts">
-                  {f.must_haves.map((m, i) => (
-                    <li key={i}><DotsSixVertical size={12} className="npx-faint" aria-hidden />
-                      <input className="npx-input" value={m} onChange={(e) => edit({ must_haves: f.must_haves.map((x, j) => j === i ? e.target.value : x) })} />
-                      <button type="button" aria-label="Move up" disabled={!i} onClick={() => { const a = [...f.must_haves]; [a[i - 1], a[i]] = [a[i], a[i - 1]]; edit({ must_haves: a }); }}>↑</button>
-                      <button type="button" aria-label="Delete" onClick={() => edit({ must_haves: f.must_haves.filter((_, j) => j !== i) })}><Trash size={11} aria-hidden /></button></li>
-                  ))}
-                  <li><button type="button" className="npx-link" data-testid="ap-fix-add" onClick={() => edit({ must_haves: [...f.must_haves, ""] })}><Plus size={11} aria-hidden /> add a must-have</button></li>
-                </ul>
-              ) : <ul>{b.must_haves.map((m, i) => <li key={i}><Marked text={m} added={added} /></li>)}</ul>}
-            </Field>
-            {(b.done_when || f) ? <Field label="Done when" edit={!!f} testid="done">
-              {f ? <textarea className="npx-input" rows={2} value={f.done_when} onChange={(e) => edit({ done_when: e.target.value })} /> : <span><Marked text={b.done_when} added={added} /></span>}
-            </Field> : null}
-            {b.open_questions.length ? (
-              <Field label={`Open · ${b.open_questions.filter((q) => !q.answer).length}`} q testid="open">
-                <div className="npx-ub-q">
-                  {b.open_questions.map((q, i) => (
-                    <React.Fragment key={i}><span>{q.question}</span>
-                      <div className="npx-sugs">{[...q.options, "Leave to PRD"].map((o) => (
-                        <button key={o} type="button" className="npx-sug" aria-pressed={q.answer === o} data-testid={`ap-q${i}-${o.replace(/\W+/g, "-").toLowerCase()}`}
-                                title={o === "Leave to PRD" ? "Helm decides during the PRD" : undefined} onClick={() => onAnswer(i, o)}>{o}</button>))}</div>
-                    </React.Fragment>
-                  ))}
-                </div>
-              </Field>
-            ) : null}
-          </div>
-        </div>
-      ) : null}
-      {b ? (
-        <div className="npx-ub-act">
-          {f ? (
-            <>
-              <button type="button" className="npx-btn" data-kind="ok" data-testid="ap-save-brief" onClick={onSave}><Check size={13} weight="bold" aria-hidden />Save brief</button>
-              <button type="button" className="npx-btn" data-kind="ghost" onClick={onCancel}>Cancel</button>
-            </>
-          ) : (
-            <>
-              <button type="button" className="npx-btn" data-kind="ok" data-testid="ap-looks-right" disabled={reading} title="Confirms the brief (Create and start also confirms it)" onClick={onOk}><Check size={13} weight="bold" aria-hidden />Looks right</button>
-              <button type="button" className="npx-btn" data-testid="ap-fix" disabled={reading} title="Every line becomes editable in place" onClick={onFix}><PencilSimple size={13} aria-hidden />Fix it</button>
-            </>
-          )}
-          <label className="npx-hint" data-filled={hint ? true : undefined} title="Tell Helm how to rewrite it, then ↻">
-            <MagicWand size={13} aria-hidden />
-            <input data-testid="ap-hint" placeholder="Hint for a rewrite, e.g. “shorter”, “split into phases”" value={hint} maxLength={300}
-                   onChange={(e) => onHint(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); onRewrite(); } }} />
-          </label>
-          <button type="button" className="npx-btn" data-size="s" data-testid="ap-rewrite" disabled={reading} title="Helm rewrites the whole brief from your words + the hint" onClick={onRewrite}>
-            <ArrowsClockwise size={13} aria-hidden className={reading ? "npx-spin" : undefined} />Rewrite</button>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function Field({ label, children, edit, on, q, testid }: { label: string; children: React.ReactNode; edit?: boolean; on?: boolean; q?: boolean; testid: string }) {
-  return (
-    <div className="npx-ub-f" data-on={on || undefined} data-q={q || undefined} data-testid={`ap-f-${testid}`}>
-      <span className="npx-lbl">{label}</span>
-      <div className="npx-ub-v">{children}</div>
-      <span className="npx-ed" aria-hidden>{edit ? null : <PencilSimple size={11} />}</span>
+    <div data-testid="ap-understood" data-state={u?.status ?? "reading"} data-ok={ok || undefined}>
+      <BriefCard state={state} agent={HELM} rows={rows} columns={2} editing={!!f} confirmed={ok}
+                 title={b?.title ?? ""} testid="ap-ub"
+                 chips={<>{b?.must_haves.length ? <span className="px-tag">{b.must_haves.length} must-haves</span> : null}
+                   {b?.done_when ? <span className="px-tag" data-tone="green">done when set</span> : null}
+                   {open ? <span className="px-tag" data-tone="amber">{open} open · to the PRD</span> : null}</>}
+                 reading={<>Helm is reading your {n} line{n === 1 ? "" : "s"}…</>}
+                 sub={state === "fallback" ? `${u?.message ?? "No model answered."}` : ok ? "Brief confirmed · it becomes the PRD’s first draft"
+                   : f ? "Editing · change any line, or tell Helm how to rewrite it" : `Helm rewrote your ${n} line${n === 1 ? "" : "s"} as a brief · Fix it to edit any line`}
+                 live={reading && b ? <span className="px-tag" data-tone="blue"><span className="px-dot" data-s="now" aria-hidden /> rewriting</span> : undefined}
+                 onConfirm={onOk} onFix={() => (f ? onSave() : onFix())} onRewrite={onRewrite} onRetry={onRetry} onOpen={() => undefined}
+                 hintPlaceholder="Hint for a rewrite, e.g. “shorter”, “split into phases”" />
     </div>
   );
 }
@@ -749,57 +709,41 @@ function RepoCard({ kind, repo, read, readError, folder, folderError, note, live
 }) {
   if (!picked) {
     return (
-      <div className="npx-ub" data-empty data-testid="ap-found">
-        <div className="npx-ub-h"><AgentAvatar agent="engineering_captain" size={30} aiBadge={false} />
+      <section className="px-ub" data-state="empty" data-testid="ap-found" style={{ borderStyle: "dashed" }}>
+        <div className="px-ub-h"><AgentAvatar agent="engineering_captain" size={30} aiBadge={false} />
           <div><b>Here’s what I understood</b><small>{kind === "folder" ? "Pick the folder above: Helm reads it over one read-only session." : "Pick a repo above: Helm reads it live."}</small></div></div>
-      </div>
+      </section>
     );
   }
   const will = (read?.onboarding_will ?? ["Map the code into the knowledge graph", "Run its build and tests; explain any failures", "List the business rules it finds", "Propose a first backlog for you to accept", "Set up staging"])
     .map((w) => (w === "Set up staging" && staging ? `Set up staging on ${staging.host}${staging.port ? ` · :${staging.port}` : ""}` : w));
+  const health = read?.health ?? (folder ? [{ label: folder.git ? `git · ${folder.branch ?? "branch"}` : "no git", tone: "grey" }, { label: "no staging yet", tone: "grey" }] : []);
+  const rows: BriefRow[] = [
+    { key: "what", label: "What it is", col: 1, skeleton: [80],
+      value: <span className="px-ub-ttl">{kind === "folder" ? ([folder?.stack?.join(" · "), folder?.build].filter(Boolean).join(" · ") || "A folder of code") : (read?.what_it_is || read?.facts.full_name)}</span> },
+    { key: "parts", label: "Main parts", col: 1, skeleton: [60, 70, 50],
+      value: <div className="px-ub-files">{kind === "folder" ? (folder?.top ?? []).slice(0, 5).map((t) => <span key={t}><FolderOpen size={12} aria-hidden />{t}</span>)
+        : (read?.parts ?? []).map((p) => <span key={p.path}><FolderOpen size={12} aria-hidden /><span className="npx-mono">{p.path}</span><em>{p.files} files</em></span>)}
+        {read && !read.parts.length ? <span className="npx-faint">read at onboarding</span> : null}</div> },
+    { key: "health", label: "Health", col: 1, skeleton: [40],
+      value: <span className="npx-tags">{health.map((h) => <span key={h.label} className="px-tag" data-tone={h.tone === "grey" ? undefined : h.tone}>{h.label}</span>)}</span> },
+    { key: "will", label: "Onboarding will", col: 2, skeleton: [80, 75, 70, 85, 60],
+      value: <ol className="npx-steps" data-testid="ap-onboarding-will">{will.map((w) => <li key={w}><span>{w}</span></li>)}</ol> },
+    { key: "note", label: "Your note", col: 2,
+      value: note ? <span data-testid="ap-note">{note}</span> : <span className="npx-faint">Optional: add lines under the {kind === "folder" ? "folder" : "repo"}, e.g. “start with the SLA bugs”</span> },
+  ];
+  const loaded = kind === "folder" ? !!folder : !!read;
   return (
-    <div className="npx-ub" data-testid="ap-found" title="Helm's summary of the code, and what onboarding will do with it">
-      <div className="npx-ub-h">
-        <AgentAvatar agent="engineering_captain" size={30} aiBadge={false} state={live ? "working" : "idle"} />
-        <div><b>Here’s what I understood</b>
-          <small>From <span className="npx-mono">{repo.split("/").pop()}</span>{read?.files_total ? ` · ${read.files_total} files` : folder?.files ? ` · ${folder.files} files` : ""} · {live ? "fills as Helm reads" : "read"}</small></div>
-        <span className="npx-spacer" />
-        {live ? <span className="npx-tag" data-tone="blue"><i className="npx-pulse" aria-hidden />reading</span> : null}
-        <button type="button" className="npx-link" data-testid="ap-change-repo" onClick={onUnpick}>Change</button>
-      </div>
+    <div data-testid="ap-found" data-ok={ok || undefined}>
       {readError || folderError ? <p className="npx-faint" role="status">Couldn’t read it now: {readError ?? folderError}</p> : null}
-      <div className="npx-ub-grid">
-        <div>
-          <Field label="What it is" testid="what">
-            {kind === "folder" ? <span className="npx-ttl">{folder ? [folder.stack?.join(" · "), folder.build].filter(Boolean).join(" · ") || "A folder of code" : <span className="npx-sk" />}</span>
-              : <span className="npx-ttl">{read ? read.what_it_is || read.facts.full_name : <span className="npx-sk" />}</span>}
-          </Field>
-          <Field label="Main parts" testid="parts">
-            <div className="npx-files">
-              {kind === "folder" ? (folder?.top ?? []).slice(0, 5).map((t) => <span key={t}><FolderOpen size={12} aria-hidden />{t}</span>)
-                : read ? read.parts.map((p) => <span key={p.path}><FolderOpen size={12} aria-hidden />{p.path}<em>{p.files} files</em></span>) : [0, 1, 2].map((i) => <span key={i} className="npx-sk" />)}
-              {read && !read.parts.length ? <span className="npx-faint">read at onboarding</span> : null}
-            </div>
-          </Field>
-          <Field label="Health" testid="health">
-            <span className="npx-tags">{(read?.health ?? (folder ? [{ label: folder.git ? `git · ${folder.branch ?? "branch"}` : "no git", tone: "grey" }, { label: "no staging yet", tone: "grey" }] : [])).map((h) => (
-              <span key={h.label} className="npx-tag" data-tone={h.tone}>{h.label}</span>))}</span>
-          </Field>
-        </div>
-        <div>
-          <Field label="Onboarding will" testid="will">
-            <ol className="npx-steps" data-testid="ap-onboarding-will">{will.map((w) => <li key={w}><span>{w}</span></li>)}</ol>
-          </Field>
-          <Field label="Your note" testid="note">
-            {note ? <span data-testid="ap-note">{note}</span> : <span className="npx-faint">Optional: add lines under the {kind === "folder" ? "folder" : "repo"}, e.g. “start with the SLA bugs”</span>}
-          </Field>
-        </div>
-      </div>
-      <div className="npx-ub-act">
-        <button type="button" className="npx-btn" data-kind="ok" data-testid="ap-repo-ok" aria-pressed={ok} onClick={onOk}><Check size={13} weight="bold" aria-hidden />{ok ? "Confirmed" : "Looks right"}</button>
-        <button type="button" className="npx-btn" data-testid="ap-repo-fix" title="Add a note to Helm under the repo, or change the name below" onClick={onFix}><PencilSimple size={13} aria-hidden />Fix it</button>
-        <span className="npx-faint">Nothing is changed in the repo until you approve a PR.</span>
-      </div>
+      <BriefCard state={!loaded && live ? "reading" : "ready"} agent={HELM} rows={rows} columns={2} editing={false} confirmed={ok}
+                 title={repo} testid="ap-repo-ub"
+                 reading={<>Reading <span className="npx-mono">{repo.split("/").pop()}</span>…</>}
+                 sub={<>From <span className="npx-mono">{repo.split("/").pop()}</span>{read?.files_total ? ` · ${read.files_total} files` : folder?.files ? ` · ${folder.files} files` : ""} · {live ? "fills as Helm reads" : ok ? "confirmed" : "read"}</>}
+                 live={live ? <span className="px-tag" data-tone="blue"><span className="px-dot" data-s="now" aria-hidden /> reading</span> : undefined}
+                 onConfirm={onOk} onFix={onFix}
+                 actions={<button type="button" className="px-btn" data-kind="ghost" data-size="s" data-testid="ap-change-repo" onClick={onUnpick}>Change</button>}
+                 foot="Nothing is changed in the repo until you approve a PR." />
     </div>
   );
 }

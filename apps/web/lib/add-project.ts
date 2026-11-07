@@ -50,26 +50,6 @@ export type Understanding = {
 export const BRIEF_FIELDS = ["title", "problem", "who_uses", "must_haves", "out_of_scope", "done_when", "open_questions"] as const;
 export type BriefField = (typeof BRIEF_FIELDS)[number];
 
-/** A brief's text split where Helm added words, for the dotted underline. Longest phrase first,
- *  each matched once per string; the person's own words are never marked. */
-export function marks(text: string, added: readonly string[]): { t: string; added: boolean }[] {
-  const phrases = [...new Set(added.filter((a) => a && text.includes(a)))].sort((a, b) => b.length - a.length);
-  let out: { t: string; added: boolean }[] = [{ t: text, added: false }];
-  for (const p of phrases) {
-    const next: typeof out = [];
-    for (const seg of out) {
-      if (seg.added) { next.push(seg); continue; }
-      const i = seg.t.indexOf(p);
-      if (i < 0) { next.push(seg); continue; }
-      if (i > 0) next.push({ t: seg.t.slice(0, i), added: false });
-      next.push({ t: p, added: true });
-      if (i + p.length < seg.t.length) next.push({ t: seg.t.slice(i + p.length), added: false });
-    }
-    out = next;
-  }
-  return out.filter((s) => s.t);
-}
-
 /** A project name from the brief's title ("HelpDesk AI: email support…" → "HelpDesk AI"). */
 export function nameFromTitle(title: string): string {
   const head = title.split(/[:—––—|]/)[0].trim();

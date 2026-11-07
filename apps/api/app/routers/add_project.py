@@ -41,6 +41,8 @@ router = APIRouter(tags=["projects"])
 _settings = get_settings()
 _engine = get_engine(_settings)
 _POOL = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="add-project")
+#: The wait past the turn's own deadline before the person is told to continue.
+_SLACK_S = 10.0
 
 
 def _require_project(connection, project_id: str) -> None:
@@ -110,13 +112,14 @@ def _understand(project_id: str, payload: UnderstandBody, actor: str) -> dict[st
 
 
 def _within(fn, wait_s: float, words: str) -> dict[str, Any]:
-    """Helm's turn, bounded: past `wait_s` the person keeps their words and can continue (the
-    turn finishes in the background and is still governed and costed)."""
+    """Helm's turn, bounded twice: the turn's own deadline (understanding.turn, call_deadline)
+    and, should a backend ignore it, this wait — past it the person keeps their words and can
+    continue."""
     from boss_engine.services.project_experience import add_project
 
     job = _POOL.submit(fn)
     try:
-        return job.result(timeout=wait_s)
+        return job.result(timeout=wait_s + _SLACK_S)
     except concurrent.futures.TimeoutError:
         return {"status": "timeout", "brief": add_project.raw_brief(words),
                 "picks": {"stack": None, "connectors": [], "workflow": None},

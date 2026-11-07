@@ -304,6 +304,41 @@ def _brief_of(args: Mapping[str, Any], files: Mapping[str, Mapping[str, Any]]) -
             "open_questions": _strings(args.get("open_questions"), 6)}
 
 
+#: What the brief is about. One turn shape for each (THE ONE UNDERSTANDING SERVICE): new work on
+#: a project (`understand`, this module) and a new app on Add a project (`understand_new_app`).
+SUBJECTS = ("work", "new_app")
+
+
+def turn(connection: Optional[Connection], settings: Any, project_id: str, *, subject: str,
+         actor: str, agent: str, message: str, situation: str, external_ref: str,
+         schema: Mapping[str, Any], context: Mapping[str, Any], rules: str, check: Any = None,
+         adapter: Any = None, decider: Any = None, seconds: float = TURN_SECONDS) -> Any:
+    """ONE TURN OF HELM'S UNDERSTANDING, whatever the brief is about (`subject`): a structured
+    decision through the one agent pipeline (AgentService.decide, BOSSAPP-759) whose single
+    choice is "brief", with the brief as its validated arguments and the caller's check, inside
+    a turn deadline (call_deadline: no model call outlives it). Returns the AgentDecision; a
+    missing or slow model is its `no_model` status, never a raise."""
+    from ..agent_service import AgentService, Choice
+    from .. import call_deadline
+
+    if subject not in SUBJECTS:
+        raise ValueError(f"unknown subject {subject!r}")
+    with call_deadline.until(time.monotonic() + max(5.0, float(seconds))):
+        return AgentService(settings).decide(
+            connection, project_id=project_id, actor=actor, role="engineering_captain",
+            agent=agent, message=message, situation=situation, external_ref=external_ref,
+            ref=external_ref or f"understanding:{subject}:{project_id}",
+            choices=[Choice("brief", "write or update the brief, as arguments", acts=False,
+                            label="Write the brief", arguments=dict(schema))],
+            context=dict(context), brief=rules, check=check, adapter=adapter, decider=decider,
+            min_confidence=0.0, context_limit=14000)
+
+
+def timed_out(decision: Any) -> bool:
+    why = str(getattr(decision, "refused", "") or getattr(decision, "error", "") or "")
+    return "turn has" in why or "deadline" in why.lower()
+
+
 def _kind_words(kind: str) -> str:
     return {"bug": "a bug to fix", "ticket": "work from an issue or ticket"}.get(kind,
                                                                                  "a feature")
@@ -320,8 +355,7 @@ def understand(connection: Connection, settings: Any, project_id: str, *, actor:
     `chat` is the conversation so far, oldest first: [{from: "you"|"helm", text, ask?}]; its
     last "you" entry, if newer than Helm's last word, is what this turn answers. `brief` is the
     card as the person sees it (their own edits included). `hint` is a Rewrite's direction."""
-    from ..agent_service import NO_MODEL, AgentService, Choice
-    from .. import call_deadline
+    from ..agent_service import NO_MODEL
     from .common import project_row
 
     words = (words or "").strip()[:MAX_WORDS]
@@ -369,26 +403,21 @@ def understand(connection: Connection, settings: Any, project_id: str, *, actor:
                                kind_words=_kind_words(kind),
                                ask_rule=_ASK_OPEN if can_ask else _ASK_SPENT)
     started = time.monotonic()
-    with call_deadline.until(started + max(5.0, float(seconds))):
-        decision = AgentService(settings).decide(
-            connection, project_id=project_id, actor=actor, role="engineering_captain",
-            agent=f"{helm['name']}, the project's captain", message=message,
-            situation=("A person is describing new work in the New work box; you write the "
-                       "brief Start will run."),
-            external_ref=f"new_work:{draft}" if draft else "",
-            choices=[Choice("brief", "write or update the brief for this work, as arguments",
-                            acts=False, label="Write the brief", arguments=BRIEF_SCHEMA)],
-            context=context, brief=rules, check=_check(set(files), {
-                str(w.get("key")) for w in workflows if w.get("key")}),
-            adapter=adapter, min_confidence=0.0, context_limit=14000)
+    decision = turn(connection, settings, project_id, subject="work", actor=actor,
+                    agent=f"{helm['name']}, the project's captain", message=message,
+                    situation=("A person is describing new work in the New work box; you write "
+                               "the brief Start will run."),
+                    external_ref=f"new_work:{draft}" if draft else "",
+                    schema=BRIEF_SCHEMA, context=context, rules=rules,
+                    check=_check(set(files), {str(w.get("key")) for w in workflows
+                                              if w.get("key")}),
+                    adapter=adapter, seconds=seconds)
     base = {"issue": issue, "graph": {"indexed": graph["indexed"], "files": len(graph["files"])},
             "agent": helm, "asked": asked, "by": dict(decision.by or {}),
             "seconds": round(time.monotonic() - started, 1)}
     if decision.status == NO_MODEL or decision.action != "brief":
-        why = decision.refused or decision.error or "no answer"
-        timed_out = "turn has" in why or "deadline" in why.lower()
         return {**base, "status": "no_model", "brief": None, "ask": None, "applied": [],
-                "settings": {}, "why": ("Helm took too long" if timed_out else
+                "settings": {}, "why": ("Helm took too long" if timed_out(decision) else
                                         "no model answered" if not decision.refused else
                                         "Helm's answer was refused"),
                 "reply": ("I couldn't read it just now. Start uses your words as written; "
