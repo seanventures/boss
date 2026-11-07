@@ -133,6 +133,8 @@ export type Recommendation = {
    *  evidence ("2 incidents", "sla.py hot") → the detector ("Incident hotspot") → what the agent
    *  does, and the ≈ cost with what it is based on. Absent on an older engine. */
   card?: RecCard | null;
+  /** The work it became (the run or build its artifact names), once started. */
+  work_id?: string;
 };
 export type RecCard = {
   evidence: { label: string; icon: string }[]; detector: { label: string; icon: string } | null;
@@ -472,6 +474,7 @@ export const parseRec = (w: unknown): Recommendation => {
     snoozed_until: sn(y.snoozed_until), strip: parseStrip(y.strip),
     cost_usd: typeof b.cost_usd === "number" ? b.cost_usd : null, squad: a(y.squad).map((q) => s(q)).filter(Boolean), why: s(y.why), subject: s(y.subject),
     card: parseCard(y.card),
+    work_id: s(o(y.artifact).workflow_run_id || o(y.artifact).code_task_run_id) || undefined,
   };
 };
 

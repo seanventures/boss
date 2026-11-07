@@ -89,7 +89,10 @@ def projects_summary(request: Request, include_archived: bool = False) -> dict[s
 
     rows = visible_project_rows(request, include_archived=include_archived)
     with begin(_engine) as connection:
-        items = overview.summary(connection, [str(r["id"]) for r in rows])
+        # The install's untouched bootstrap project is not "a project" (00a-02/13/34): the
+        # rail, Projects and first run never list it.
+        items = [i for i in overview.summary(connection, [str(r["id"]) for r in rows])
+                 if not i.get("placeholder")]
         # Screen 02's card facts (ring, status lines, crew, caps): cards.extras, batched.
         from boss_engine.services.project_experience import cards
 

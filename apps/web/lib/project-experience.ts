@@ -68,7 +68,10 @@ export type Agent = { name: string; role_key: string; avatar: string; role?: str
   state?: "working" | "idle" };
 export type Node = { key: string; label: string; state: StepState; sub: string; href: string;
   /** The node's tooltip in words ("Ready for work: 6 of 6 checks"). */
-  detail?: string };
+  detail?: string;
+  /** When a done node happened (ISO): its sub is that day in the VIEWER's zone, and "{day}" in
+   *  its detail is replaced by it (04-02 — the server never writes a day). */
+  at?: string };
 export type ProjectCard = {
   id: string; name: string; initials: string; repo: string; stage: Stage; journey: Node[];
   needs_you: number; running: number; health: Health; live_url: string; captain: Agent | null;
@@ -175,6 +178,8 @@ export type Overview = {
       list_delta_pct?: number | null; first_week?: boolean; cap_pct?: number | null } | null;
   };
   captain: Captain | null; recent_work: WorkItem[]; next: NextItem[];
+  /** The Backlog stage's list: the items its count is made of (open + accepted on the Roadmap). */
+  backlog?: NextItem[];
   try_it: { url: string; demo_logins: DemoLogin[] } | null;
   week: { at: string; label: string; kind: string; href: string; detail?: string }[];
 };
@@ -307,7 +312,7 @@ export const parseAgent = (v: unknown): Agent | null => {
 const agents = (v: unknown): Agent[] => a(v).map(parseAgent).filter((x): x is Agent => x !== null);
 export const parseNode = (v: unknown): Node => {
   const x = o(v);
-  return { key: s(x.key), label: label4(x.label), state: oneOf(x.state, STEP_STATES, "todo"), sub: s(x.sub), href: s(x.href), detail: s(x.detail) };
+  return { key: s(x.key), label: label4(x.label), state: oneOf(x.state, STEP_STATES, "todo"), sub: s(x.sub), href: s(x.href), detail: s(x.detail), at: s(x.at) || undefined };
 };
 const mini = (v: unknown) => a(v).map((m) => ({ label: label4(o(m).label), state: oneOf(o(m).state, STEP_STATES, "todo") }));
 export const parseRepo = (v: unknown): Repo => {
@@ -509,6 +514,7 @@ export const parseOverview = (v: unknown): Overview => {
     captain: parseCaptain(x.captain),
     recent_work: a(x.recent_work).map(parseWorkItem).slice(0, 5),
     next: a(x.next).map(parseNext),
+    backlog: a(x.backlog).map(parseNext),
     errors: Object.fromEntries(Object.entries(o(x.errors)).map(([k, v]) => [k, s(v, "Couldn't load")])),
     try_it: Object.keys(ti).length ? { url: s(ti.url), demo_logins: a(ti.demo_logins).map(parseLogin) } : null,
     // A week's event opens its record in the console (a PR's build, a deploy), else where it lives.
@@ -1164,3 +1170,27 @@ export function costWords(usd: number | null | undefined, list?: number | null):
   if (listed > 0) return { text: `≈ $${listed.toFixed(2)}`, plan: true, title: `On subscription · ≈ $${listed.toFixed(2)} at list price (no money spent)` };
   return null;
 }
+
+/** A journey node as the viewer reads it (04-02): a node with `at` says its day in the viewer's
+ *  own zone ("Nov 2"), as its sub and in its tooltip. `day` is lib/local-time's formatter, "" until
+ *  the page has mounted (then the sub is the server's own, empty for a dated node). */
+export function nodeWords(n: Node, day: (ms: number) => string): { sub: string; detail: string } {
+  const ms = n.at ? Date.parse(n.at) : NaN;
+  const said = Number.isFinite(ms) ? day(ms) : "";
+  return { sub: n.at ? said || n.sub : n.sub, detail: (n.detail ?? "").replace("{day}", said).replace(/\s{2,}/g, " ").trim() };
+}
+
+/** WHAT WAITS ON YOU ACROSS EVERY PROJECT (X-14): the Projects page's "Need you" tile — each
+ *  project's own count (its Needs-you bar: decisions + what only a person can set up), summed over
+ *  the projects the viewer can open. The bell, the rail's Approvals badge and the tab title read
+ *  this one number; null until the summary has answered (they fall back to the project's own). */
+export function orgNeedsOf(summary: ProjectsSummary | null): number | null {
+  if (!summary) return null;
+  return summary.items.filter((c) => !c.archived).reduce((t, c) => t + (c.needs_you || 0), 0);
+}
+
+export function useOrgNeeds(): number | null {
+  const read = usePxRead<ProjectsSummary>(PX_PATHS.summary(), parseSummary, { everyMs: 30_000 });
+  return read.state === "ready" ? orgNeedsOf(read.data) : null;
+}
+

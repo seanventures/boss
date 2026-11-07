@@ -134,7 +134,7 @@ export function ServerOverview({ projectId, hostId, canExec }: { projectId: stri
         <section className="inf-so-card" data-testid="inf-server-changes" aria-label="Recent changes">
           <h4><span className="inf-so-ico inf-so-ico-s" data-c="violet" aria-hidden><ClockCounterClockwise size={15} /></span>Recent changes</h4>
           {data.changes.length ? data.changes.map((c) => (
-            <a key={c.id} className="inf-so-change" href={consoleHref({ project_id: c.href.match(/project_id=([^&]+)/)?.[1], area: "project", tab: "deployments", host: undefined, view: undefined })} data-console-load>
+            <a key={c.id} className="inf-so-change" title={c.title || undefined} href={consoleHref({ project_id: c.href.match(/project_id=([^&]+)/)?.[1], area: "project", tab: "deployments", host: undefined, view: undefined })} data-console-load>
               <span className="inf-so-ck" data-s={c.state} aria-hidden>{c.state === "done" ? <CheckCircle size={14} weight="fill" /> : c.state === "failed" ? <XCircle size={14} weight="fill" /> : <WarningCircle size={14} />}</span>
               <span><b>{c.label}</b><small>{c.at && now !== null ? `${ago(c.at, now)} · ` : ""}{c.by}</small></span>
             </a>

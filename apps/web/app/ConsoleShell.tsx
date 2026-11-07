@@ -28,6 +28,7 @@ import { NEW_BUILD_TIP, openNewProject } from "../lib/compose-links";
 import { setConsoleLive } from "../lib/console-live";
 import { PAINTED_EVENT } from "../lib/area-painted";
 import { useAttention } from "../lib/agents-live";
+import { useOrgNeeds } from "../lib/project-experience";
 import { useTitleCount } from "../lib/tab-title";
 import { ConverseHost } from "./agents/converse-host";
 import { useLoadIdentities } from "../lib/use-agent-identities";
@@ -477,7 +478,10 @@ function ConsoleShellInner({
   // THE TAB TITLE'S `(n)` HAS ONE OWNER: the shell, from the decisions that need you (the
   // pill's own count), re-applied whenever a navigation rewrites the title (lib/tab-title.ts).
   const titleAttention = useAttention(scope.projectId ?? scope.project);
-  useTitleCount(titleAttention?.count ?? 0);
+  // X-14 ONE NUMBER: what waits on you across every project (the Projects page's Need-you tile),
+  // for the bell, the rail's Approvals badge and the tab title alike.
+  const orgNeeds = useOrgNeeds();
+  useTitleCount(orgNeeds ?? titleAttention?.count ?? 0);
   const switchOrg = () => {
     try {
       window.localStorage.removeItem("boss.area");
@@ -1348,7 +1352,7 @@ function ConsoleShellInner({
     // (decisions + what only a person can set up), from the same poll; the server's count is the
     // first paint only.
     if (id === "decisions") {
-      const n = titleAttention ? titleAttention.count : status.pendingDecisions;
+      const n = orgNeeds ?? (titleAttention ? titleAttention.count : status.pendingDecisions);
       return n > 0 ? n : undefined;
     }
     if (id === "ops" && status.deadletters > 0) return status.deadletters;
@@ -1681,7 +1685,7 @@ function ConsoleShellInner({
 
           {/* THE BELL: what needs you (the count) and who is working (the teal dot), with the crew
               and the way to Approvals behind it — the old "1 working · 2 need you" pill, folded in. */}
-          <PresencePill projectId={scope.projectId ?? scope.project} variant="bell" />
+          <PresencePill projectId={scope.projectId ?? scope.project} variant="bell" total={orgNeeds} />
 
           {/* THE AVATAR MENU: you, your account, the organization (switch), New build, and the old
               System menu (edition, budget, console version, sign out). */}

@@ -41,6 +41,7 @@ def _repo(connection: Connection, project_id: str) -> Optional[str]:
 def _planned(connection: Connection, project_id: str) -> list[dict[str, Any]]:
     """Accepted, not-yet-started roadmap items in Marshal's order: Next by rank, then Later."""
     from .new_work import issue_of
+    from .onboarding import readable
     from .titles import short_title
 
     repo = _repo(connection, project_id)
@@ -61,6 +62,8 @@ def _planned(connection: Connection, project_id: str) -> list[dict[str, Any]]:
         if kind not in ("feature", "bug", "ticket"):
             kind = "ticket"
         item_id = str(r["work_item_id"])
+        r = {**r, "title": readable(r["title"], r["why"])[0],
+             "why": readable(r["title"], r["why"])[1]}
         issue = issue_of(facts.get("ref"), facts.get("external_url"), repo)
         out.append({
             "id": item_id, "label": short_title(r["title"], limit=5), "title": r["title"],

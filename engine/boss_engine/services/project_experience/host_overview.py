@@ -139,6 +139,30 @@ def plugins(facts: Mapping[str, Any]) -> list[dict[str, str]]:
     return out
 
 
+def usage(connection: Connection, host_ids: list[str], visible_project_ids: list[str]
+          ) -> dict[str, dict[str, Any]]:
+    """WHAT A SERVER HOLDS, ONE COUNT (14-05): per host, the active targets of every project the
+    viewer may read (not archived) — {apps, ports: set of ports their URLs hold, projects} — the
+    numbers the server drawer's tiles show and the Infra rack's "apps · ports" meta repeats."""
+    out: dict[str, dict[str, Any]] = {h: {"apps": 0, "ports": set(), "projects": set()}
+                                      for h in host_ids}
+    if not host_ids:
+        return out
+    for t in connection.execute(text(
+            "SELECT t.host_id, t.project_id, t.domains, t.public_url FROM deployment_targets t "
+            "JOIN projects p ON p.id = t.project_id WHERE t.host_id = ANY(:h) AND "
+            "t.status = 'active' AND t.project_id = ANY(:ids) AND p.archived_at IS NULL"),
+            {"h": host_ids, "ids": visible_project_ids}).mappings():
+        slot = out.setdefault(str(t["host_id"]), {"apps": 0, "ports": set(), "projects": set()})
+        domains = t["domains"] if isinstance(t["domains"], list) else json.loads(t["domains"] or "[]")
+        port = next((p for p in (_port_of(d) for d in [t["public_url"], *domains]) if p), None)
+        slot["apps"] += 1
+        slot["projects"].add(str(t["project_id"]))
+        if port:
+            slot["ports"].add(port)
+    return out
+
+
 #: A resident's health in the console's words (screen 14: Healthy / Degraded).
 _HEALTH_WORD = {"up": "Healthy", "healthy": "Healthy", "degraded": "Degraded", "down": "Down",
                 "not_deployed": "Not deployed", "unknown": "No signal"}
@@ -197,26 +221,41 @@ def overview(connection: Connection, project_id: str, host_id: str,
         })
     shared_by = len({p["id"] for p in projects})
 
+    # RECENT CHANGES SAY WHO SHIPPED WHAT (14-10), as Project › Deployments does: the pull
+    # request whose merge was deployed (deployments._pr_by_commit) and the person who approved
+    # or asked for the deploy (people_names.who) — Beacon only when no person did.
+    from .deployments import _pr_by_commit
+
     changes = []
+    prs_of: dict[str, dict[str, dict[str, Any]]] = {}
     for r in connection.execute(text(
             "SELECT s.id, s.status, s.created_by, s.created_at, s.finished_at, t.environment, "
-            "s.workflow_run_id, "
+            "s.workflow_run_id, s.commit_sha, d.approved_by, "
             "p.name AS project_name, p.id AS project_id FROM stack_deployments s "
             "JOIN deployment_targets t ON t.id = s.target_id JOIN projects p ON p.id = s.project_id "
+            "LEFT JOIN decisions d ON d.id = s.decision_id "
             "WHERE s.host_id = :h AND s.project_id = ANY(:ids) "
             "AND s.status IN ('healthy', 'failed', 'running') "
             "ORDER BY COALESCE(s.finished_at, s.created_at) DESC LIMIT 4"),
             {"h": host_id, "ids": visible_project_ids}).mappings():
+        pid = str(r["project_id"])
+        if pid not in prs_of:
+            prs_of[pid] = _pr_by_commit(connection, pid)
+        pr = prs_of[pid].get(str(r["commit_sha"] or ""))
         short = str(r["project_name"]).split()[0]
+        env = str(r["environment"] or "").lower()
+        what = f"PR #{pr['number']}" if pr else ((r["commit_sha"] or "")[:7] or "deploy")
+        actor = str(r["approved_by"] or r["created_by"] or "")
+        person = actor and actor not in ("boss", "auto_approval", "monitor") and \
+            not actor.startswith(("agt_", "policy:"))
         changes.append({
-            "id": r["id"], "label": f"{short} {str(r['environment'] or '').lower()} deploy".strip(),
+            "id": r["id"], "label": f"{short} {env} · {what}".strip(),
+            "title": (f"{r['project_name']} {env}: PR #{pr['number']} {pr['title']}" if pr
+                      else f"{r['project_name']} {env} deploy"),
             "state": {"healthy": "done", "failed": "failed"}.get(r["status"], "now"),
             "at": iso(r["finished_at"] or r["created_at"]),
-            # A workflow's deploy step is shipped by its deploy agent (Beacon); a person's own
-            # deploy says who.
-            "by": "Beacon" if r["workflow_run_id"] or str(r["created_by"] or "") in ("boss", "")
-            else who(r["created_by"], connection),
-            "href": project_href(str(r["project_id"]), tab="deployments"),
+            "by": who(actor, connection) if person else "Beacon",
+            "href": project_href(pid, tab="deployments"),
         })
 
     reachable = pre.get("reachable")
@@ -239,7 +278,8 @@ def overview(connection: Connection, project_id: str, host_id: str,
                     else None},
             "memory": {"pct": cap.get("mem_pct"), "label": _gb(cap.get("mem_kb"))},
             "disk": {"pct": cap.get("disk_pct"), "label": _gb(cap.get("disk_kb"))},
-            "ports": {"used": len(ports), "range": port_range},
+            "ports": {"used": len(usage(connection, [host["id"]], visible_project_ids)
+                                  .get(host["id"], {}).get("ports") or ports), "range": port_range},
             "at": cap.get("at"),
         },
         "projects": projects, "shared_by": shared_by, "plugins": plugins(facts),
@@ -248,4 +288,4 @@ def overview(connection: Connection, project_id: str, host_id: str,
 
 
 __all__ = ["CAPACITY_PROBE", "capacity_from", "overview", "plugins", "read_capacity",
-           "store_capacity"]
+           "store_capacity", "usage"]

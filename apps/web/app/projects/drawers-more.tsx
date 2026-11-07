@@ -156,7 +156,8 @@ export function StageBody({ ctx, n }: { ctx: PxCtx; n: Node }) {
       );
     }
     if (n.key === "ready") {
-      const list = ob?.checklist ?? [];
+      // THE READY CARD'S ROWS (04-03): the node's "6/6" counts these, so the drawer does too.
+      const list = ob?.ready?.length ? ob.ready : ob?.checklist ?? [];
       const done = list.filter((c) => c.state === "done" || c.state === "skipped").length;
       return list.length ? (
         <>
@@ -170,7 +171,9 @@ export function StageBody({ ctx, n }: { ctx: PxCtx; n: Node }) {
       ) : <Empty icon={ListChecks} tone="teal" title="No readiness checks yet" line="Onboarding runs them: repo access, tests, the baseline build, a deploy target." />;
     }
     if (n.key === "backlog") {
-      const items = [...ctx.overview.next, ...(ob?.backlog ?? []).filter((b) => !ctx.overview.next.some((x) => x.id === b.id))].slice(0, 8);
+      // THE ITEMS THE COUNT IS MADE OF (04-04): the Roadmap's open + accepted recommendations,
+      // each once (an onboarding candidate IS its recommendation, never a second row).
+      const items = ctx.overview.backlog ?? [];
       return items.length ? (
         <div className="px-steps" data-testid="px-stage-backlog">{items.map((it, i) => (
           <div key={it.id || i} className="px-li"><span className="px-rank">{i + 1}</span>
@@ -179,20 +182,22 @@ export function StageBody({ ctx, n }: { ctx: PxCtx; n: Node }) {
       ) : <Empty icon={MapTrifold} tone="violet" title="Nothing ranked yet" line="Marshal ranks issues, failing checks and ideas once the repo is read." />;
     }
     if (n.key === "working") {
-      const items = (ctx.work?.items ?? []).filter((w) => w.state !== "done").slice(0, 6);
-      const merged = (ctx.work?.items ?? []).filter((w) => w.state === "done").length;
+      // Every state the tags count is listed (04-05): what moves first, then what finished —
+      // a "4 done" tag above a list of failed rows only said nothing about the 4.
+      const all = (ctx.work?.items ?? []).filter((w) => w.source !== "onboarding");
+      const order = ["needs_you", "running", "stalled", "planned", "done", "failed"] as const;
+      const items = order.flatMap((k) => all.filter((w) => w.state === k)).slice(0, 8);
       return (
         <>
-          <div className="px-row px-wrap" style={{ gap: 6 }}>
-            {(["needs_you", "running", "stalled", "planned"] as const).map((k) => {
-              const c = (ctx.work?.items ?? []).filter((w) => w.state === k).length;
-              return c ? <Tag key={k} tone={k === "needs_you" || k === "stalled" ? "amber" : k === "running" ? "blue" : undefined}>{c} {k === "needs_you" ? "need you" : k}</Tag> : null;
+          <div className="px-row px-wrap" style={{ gap: 6 }} data-testid="px-stage-work-tags">
+            {order.map((k) => {
+              const c = all.filter((w) => w.state === k).length;
+              return c ? <Tag key={k} tone={k === "needs_you" || k === "stalled" ? "amber" : k === "running" ? "blue" : k === "done" ? "green" : k === "failed" ? "red" : undefined}>{c} {k === "needs_you" ? "need you" : k}</Tag> : null;
             })}
-            {merged ? <Tag tone="green">{merged} done</Tag> : null}
           </div>
           {items.length ? <div data-testid="px-stage-work">{items.map((w) => (
             <button key={w.id} type="button" className="px-li px-li-btn" onClick={() => ctx.open("work", w.id)}>
-              <span className="px-dot" data-s={w.state === "running" ? "now" : w.state === "needs_you" ? "you" : w.state === "stalled" ? "stalled" : undefined} aria-hidden />
+              <span className="px-dot" data-s={w.state === "running" ? "now" : w.state === "needs_you" ? "you" : w.state === "stalled" ? "stalled" : w.state === "done" ? "done" : w.state === "failed" ? "bad" : undefined} aria-hidden />
               <span style={{ minWidth: 0 }}><b className="px-ell" style={{ display: "block" }}>{w.label}</b><small>{w.links.pr ? `PR #${w.links.pr.number}` : workWhen(w)}</small></span>
               <Stations stages={w.stages} /></button>))}</div>
             : <Empty icon={Kanban} title="Nothing in flight" line="New work starts from New work, the Roadmap or What's next." />}

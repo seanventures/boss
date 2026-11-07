@@ -318,7 +318,7 @@ textarea.px-input { resize: vertical; min-height: 64px; }
 .px-ob-s { display: flex; flex-direction: column; align-items: center; gap: 6px; position: relative; text-align: center; padding: 0 4px; }
 .px-ob-s::before { content: ""; position: absolute; top: 19px; left: -50%; right: 50%; height: 2px; background: var(--border-strong); z-index: 0; }
 .px-ob-s:first-child::before { display: none; }
-.px-ob-s[data-s="done"]::before, .px-ob-s[data-s="now"]::before { background: var(--green); }
+.px-ob-s[data-w="on"]::before { background: var(--green); }
 .px-ob-s .px-jr-shape { width: 40px; height: 40px; font-size: .9rem; z-index: 1; background: var(--surface); }
 .px-ob-s[data-s="done"] .px-jr-shape { border-color: var(--green); background: var(--green-soft); color: var(--green); }
 .px-ob-s[data-s="now"] .px-jr-shape { border-color: var(--teal); background: color-mix(in srgb, var(--teal) 16%, var(--surface)); color: var(--teal); }
@@ -803,6 +803,18 @@ button.px-h-num:focus-visible { outline: 2px solid var(--accent-text); outline-o
 @media (max-width: 760px) {
   .px-ov-wk { grid-template-columns: 14px minmax(0, 1fr) auto; row-gap: 6px; }
   .px-ov-wk > .px-ov-wk-st { grid-column: 3; grid-row: 1; }
+  /* 04 at 390: a mini FLOW (the Onboarding row's Discover → Ready → Backlog) is wider than the
+     station strip; it takes its own line under the title instead of covering it. */
+  .px-ov-wk > .px-ov-wk-st[data-flow] { grid-column: 2 / -1; grid-row: 2; min-width: 0; }
+  .px-ov-wk > .px-ov-wk-st[data-flow] > * { flex-wrap: wrap; }
+  /* NOTHING PAST THE VIEWPORT AT 390 (04, 12): a card's header and a tile's value row wrap
+     ("last 24h", the URL chip, the "first week" tag go to the next line, never off the card). */
+  .px-card-h { flex-wrap: wrap; row-gap: 6px; }
+  .px-card-h .px-spacer { flex: 1 1 0; min-width: 0; }
+  .px-card[data-link] .px-row { flex-wrap: wrap; row-gap: 4px; }
+  .px-card[data-link] > .px-row:first-child { flex-wrap: nowrap; }
+  [data-testid^="px-h-env-"] .px-card-h small { white-space: normal; }
+  .px-card-h .px-chip, .px-card-h .px-h-why { max-width: 100%; overflow-wrap: anywhere; }
 }
 
 /* THE confirm sheet (confirm-sheet.tsx): what, where, which commit, who approves; refusal in red. */
@@ -819,3 +831,9 @@ button.px-h-num:focus-visible { outline: 2px solid var(--accent-text); outline-o
 
 /* Why an environment is not healthy, beside its tag (health.state_of, 12-05). */
 .px-h-why { font-size: var(--fs-meta); color: var(--amber); } .px-h-why[data-s="down"] { color: var(--red); }
+
+/* 05b-16 "What it learned": the run's lessons are sentences — in the drawer they wrap, whole
+   (X-74), instead of the build strip's one-line ellipsis. */
+[data-testid="px-drawer-learned"] .kg-strip-list { display: flex; flex-direction: column; gap: 6px; }
+[data-testid="px-drawer-learned"] .kg-strip-item { flex-wrap: wrap; height: auto; border-radius: 10px; align-items: baseline; }
+[data-testid="px-drawer-learned"] .kg-strip-title { white-space: normal; overflow: visible; text-overflow: clip; max-width: none; flex: 1 1 100%; min-width: 0; }

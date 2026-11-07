@@ -888,6 +888,16 @@ def diagram(rec: Mapping[str, Any]) -> dict[str, Any]:
     return {"nodes": nodes, "edges": edges}
 
 
+def _readable(rec: dict[str, Any]) -> dict[str, Any]:
+    """An onboarding proposal's title and why as the composer says them NOW (rows written with
+    a cut brief in brackets are re-derived on read: onboarding.readable)."""
+    if rec.get("detector") == "onboarding":
+        from ..project_experience.onboarding import readable
+
+        rec["title"], rec["why"] = readable(rec.get("title"), rec.get("why"))
+    return rec
+
+
 def _summary(rec: Mapping[str, Any], rank: Optional[int] = None, *,
              kinds: Optional[Mapping[str, str]] = None,
              build_usd: Optional[float] = None) -> dict[str, Any]:
@@ -936,7 +946,7 @@ def list_roadmap(connection: Connection, project_id: str, *, status: str = "open
          "n": max(1, min(int(limit), 100))}).mappings().all()
     from .roadmap_card import signal_kinds
 
-    recs = [serialize_row(r) for r in rows]
+    recs = [_readable(serialize_row(r)) for r in rows]
     kinds = signal_kinds(connection, recs)
     # Onboarding proposes without an estimate: its cards say what a ticket costs HERE.
     build_usd = ticket_usd(connection, project_id) if any(
@@ -959,7 +969,7 @@ def list_roadmap(connection: Connection, project_id: str, *, status: str = "open
 def get(connection: Connection, item_id: str, *, project_id: str) -> dict[str, Any]:
     """One recommendation: its summary, its diagram, and the drawer's detail (why, evidence,
     the score's parts, the detector's numbers, the ledger rows)."""
-    rec = _rec(connection, item_id, project_id=project_id)
+    rec = _readable(_rec(connection, item_id, project_id=project_id))
     detail = {k: rec.get(k) for k in ("why", "evidence", "facts", "value", "evidence_strength",
                                        "freshness", "effort_units", "risk", "detector_weight",
                                        "priority_score", "estimated_cost_usd_micros", "squad",

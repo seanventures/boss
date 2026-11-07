@@ -204,8 +204,32 @@ def _short(label: str, limit: int = 18) -> str:
     return label[: limit - 1].rstrip() + "…"
 
 
+_SUBJECT_LEAD = re.compile(r"^(?:the\s+)?(?:app|application|repo|repository|project|code|build|"
+                           r"suite|server|service)\s+(?:has|had|have)\s+|^there\s+(?:is|are|was|"
+                           r"were)\s+", re.I)
+
+
+def four_words(label: Any) -> str:
+    """X-76: a diagram label is AT MOST FOUR WORDS. A sentence-shaped lesson drops its subject
+    lead first ("The app has no test script" → "No test script"), then whole words from its end
+    (never ending on a joining word); the full text stays the node's tooltip."""
+    from .titles import _trim  # noqa: PLC2701 — the shared rule for where a cut may end
+
+    text_ = " ".join(str(label or "").split())
+    if len(text_.split()) <= 4:
+        return text_
+    lead = _SUBJECT_LEAD.sub("", text_).strip()
+    text_ = lead[:1].upper() + lead[1:] if lead else text_
+    return " ".join(_trim(text_.split(), 4)).rstrip(",.;:")
+
+
 def node_label(kind: str, name: Any, path: Any, attrs: Any = None) -> str:
-    """A node's few words on the diagram: a file's name, a table, an endpoint, a rule's title."""
+    """A node's few words on the diagram (≤ 4 words, X-76): a file's name, a table, an endpoint,
+    a rule's title, a lesson."""
+    return four_words(_node_label(kind, name, path, attrs))
+
+
+def _node_label(kind: str, name: Any, path: Any, attrs: Any = None) -> str:
     from .titles import shorten
 
     name_ = str(name or "")
@@ -217,7 +241,7 @@ def node_label(kind: str, name: Any, path: Any, attrs: Any = None) -> str:
     if kind == "symbol" and "." in name_:
         return _short(name_.rsplit(".", 1)[-1])  # PgUserStore.signIn → signIn
     if kind in LEARNED_KINDS:
-        return _short(learned_label(kind, name_, as_json(attrs, {}) or {}), 28)
+        return _short(four_words(learned_label(kind, name_, as_json(attrs, {}) or {})), 28)
     if kind == "rule":
         return _short(shorten(name_, 3) or name_)
     return _short(name_)

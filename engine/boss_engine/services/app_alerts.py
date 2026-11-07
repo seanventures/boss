@@ -2387,7 +2387,7 @@ def _respond(connection, alert: dict, incident_id: Optional[str],
                     "repository": deploy.get("repository"), "title": title,
                     "directive": f"Respond to the incident: {title}."},
         dedupe_key=f"alert:{alert['id']}:respond", door="alert_rule", door_id=rule["id"],
-        door_name=f"Respond automatically on {rule['alert']}")
+        door_name=f"Respond automatically on {rule_label(rule.get('kind'), rule['alert'])}")
     if got.get("run_id"):
         return {"run_id": got["run_id"], "word": "Responding"}
     return {"run_id": None, "word": got.get("word") or "Could not start the response"}
@@ -2685,7 +2685,11 @@ def update_rule(connection, target: dict, rule_id: Optional[str], change: dict[s
         raise RuleRefused("Respond automatically needs the agent's triage on")
     link = rule.get("respond_link")
     if new.get("auto_respond") and not rule.get("auto_respond"):
-        link = respond_link(connection, target["project_id"], new["alert"]) or None
+        # The consent sheet names the rule as people read it ("Error rate"), never its id
+        # (`AppErrorRate`, X-73): rule_label, the one name every surface shows.
+        ann = new.get("annotations") if isinstance(new.get("annotations"), dict) else {}
+        link = respond_link(connection, target["project_id"],
+                            rule_label(new.get("kind"), new["alert"], ann.get("summary"))) or None
     if not new.get("auto_respond"):
         link = None
     after = _snapshot(new)

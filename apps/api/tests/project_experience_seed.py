@@ -22,7 +22,7 @@ from __future__ import annotations
 import json
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Optional
 
 from sqlalchemy import text
 
@@ -63,7 +63,8 @@ def _caps(spec: dict[str, Any]) -> list[tuple[str, str, str]]:
 
 def _run(db, project_id: str, did: str, vid: str, spec: dict[str, Any], *, title: str,
          status: str, upto: str, at: datetime, pr: int = 0, gate: str = "",
-         gate_kind: str = "", env: str = "staging", merge_waits: bool = False) -> dict[str, Any]:
+         gate_kind: str = "", env: str = "staging", merge_waits: bool = False,
+         prd_by: Optional[str] = "ceo") -> dict[str, Any]:
     """One Minor Feature run: steps before `upto` succeeded, `upto` in `status`-dependent state,
     the rest pending. `gate` makes `upto` a waiting step with an open decision."""
     rid = _id("wfr")
@@ -88,6 +89,19 @@ def _run(db, project_id: str, did: str, vid: str, spec: dict[str, Any], *, title
         output: dict[str, Any] = {}
         if pr_url and cap in ("build", "review", "test", "preview") and st == "succeeded":
             output["pull_request_url"] = pr_url
+        if cap == "meeting" and st == "succeeded" and prd_by:
+            # THE PRD A PERSON APPROVED, as the runner records it after holding for the spec
+            # (workflow_capability_runner: spec_decision_id while it waits, spec_approved_by once
+            # approved) — the work row's D station and the drawer's "You approved" read it.
+            spec_dec = _id("dec")
+            db.execute(text(
+                "INSERT INTO decisions (id, project_id, question, recommendation, status, "
+                "approved_by, approved_at, created_at) VALUES (:i, :p, :q, CAST(:r AS JSONB), "
+                "'approved', :by, :at, :t)"),
+                {"i": spec_dec, "p": project_id, "q": f"Approve the PRD: {title}?", "by": prd_by,
+                 "at": at + timedelta(minutes=4), "t": at + timedelta(minutes=3),
+                 "r": json.dumps({"action": "approve_spec", "workflow_run_id": rid})})
+            output.update(spec_decision_id=spec_dec, spec_approved_by=prd_by)
         did_dec = None
         if sid == upto and gate:
             did_dec = decision_id = _id("dec")
@@ -342,6 +356,22 @@ def seed(db, project_id: str, *, now: datetime | None = None, connection_id: str
             "'acme', 'helpdesk-ai-demo', :r, 'primary', 'main', CAST(:k AS JSONB), now(), 'seed')"),
             {"i": binding, "p": project_id, "c": connection_id, "r": REPO,
              "k": json.dumps({"read": ok, "write": ok, "pull_requests": ok, "state": "working"})})
+    # THE MODEL the onboarding agent found connected ("Claude connected"), as Repo and models
+    # stores a working subscription: the project's Ready card reads it LIVE (round 3, 10-20).
+    db.execute(text(
+        "INSERT INTO entitlement_sources (id, project_id, provider, source_id, source_kind, "
+        "entitlement_kind, owner_type, owner_id, cost_mode, status, auth_method, "
+        "connection_status, connection_metadata, observed_capacity, runtime_supported) VALUES "
+        "(:i, :p, 'anthropic', 'anthropic_claude_code', 'official_cli', 'subscription', "
+        "'workspace_operator', 'workspace_operator', 'subscription', 'declared', "
+        "'official_cli_oauth', 'connected', CAST(:m AS JSONB), CAST(:c AS JSONB), true) "
+        "ON CONFLICT (project_id, source_id) DO UPDATE SET connection_status = 'connected', "
+        "connection_metadata = EXCLUDED.connection_metadata, "
+        "observed_capacity = EXCLUDED.observed_capacity"),
+        {"i": _id("es"), "p": project_id,
+         "m": json.dumps({"last_check": {"ok": True, "state": "working",
+                                         "at": now.isoformat()}}),
+         "c": json.dumps({"credential_present": True, "credential_state": "ok"})})
     did, vid, spec = _minor_feature(db, project_id)
     caps = _caps(spec)
     by_cap = {cap: sid for sid, _k, cap in caps}
@@ -354,12 +384,17 @@ def seed(db, project_id: str, *, now: datetime | None = None, connection_id: str
         number = n if n < 3 else 4
         got = _run(db, project_id, did, vid, spec, title=title, status="completed", upto="",
                    at=now - timedelta(days=days), pr=number)
+        merge_dec = _id("dec")
         db.execute(text(
             "INSERT INTO decisions (id, project_id, question, recommendation, status, approved_by, "
             "approved_at, created_at) VALUES (:i, :p, :q, CAST(:r AS JSONB), 'approved', 'ceo', :t, :t)"),
-            {"i": _id("dec"), "p": project_id, "q": f"Merge PR #{number}: {title}?",
+            {"i": merge_dec, "p": project_id, "q": f"Merge PR #{number}: {title}?",
              "t": now - timedelta(days=days) + timedelta(hours=2),
              "r": json.dumps({"action": "review_pull_request", "pull_request_url": got["pr_url"]})})
+        # The build's own pull-request decision, as the build path links it (the drawer's
+        # "<who> approved · merged").
+        db.execute(text("UPDATE code_task_runs SET decision_id = :d WHERE id = :b"),
+                   {"d": merge_dec, "b": got["build_id"]})
         merged.append(got)
     running = _run(db, project_id, did, vid, spec, title="Ticket search filters", status="running",
                    upto=build_step, at=now - timedelta(minutes=12))
@@ -623,6 +658,8 @@ def seed_plan(db, project_id: str, *, now: datetime | None = None, actor: str = 
          "f": json.dumps({"demo_users": [{"user": d["user"], "label": d["label"]}
                                          for d in DEMO_USERS], "demo_users_rule": 2,
                           "stack": {"framework": "Express", "language": "Node"},
+                          # What only a person can give, as onboarding._secrets records it.
+                          "secrets": {"yours": ["OPENAI_API_KEY"]},
                           "tests": {"passed": 142, "total": 148, "failing": 6}}),
          "b": json.dumps(cands), "w": json.dumps({"label": cands[0]["label"],
                                                    "detail": cands[0]["detail"],

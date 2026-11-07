@@ -198,6 +198,18 @@ def card(rec: Mapping[str, Any], *, kinds: Optional[Mapping[str, str]] = None,
         n = _n(rec.get("evidence_count")) or len(rec.get("evidence") or [])
         if not evidence and n:
             evidence = [_chip(_plural(n, "signal"), "chart-line-up")]
+    if not evidence and str(rec.get("why") or "").strip():
+        # NO CARD WITHOUT ITS EVIDENCE NODE (07-20): an item with no recorded evidence still has
+        # the reason it was proposed — its why's lead, in ≤ 4 words ("Customers email support
+        # today", "sla.mjs changed 9 times") — so the card reads evidence → detector → agent.
+        from ..project_experience.titles import shorten
+
+        import re
+
+        # A path leads with its file's name only ("sla.mjs changed 9 times").
+        lead = re.sub(r"^\S*/(\S+)", r"\1", shorten(str(rec["why"]), 4))
+        if lead:
+            evidence = [_chip(lead, "chart-line-up")]
     return {"evidence": evidence, "detector": detector, "does": does,
             "cost_usd": cost, "cost_basis": basis}
 

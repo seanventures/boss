@@ -1244,11 +1244,29 @@ def _fleet_parts(connection: Any, settings: Any, project_id: str, partial: list[
             "unplaced": unplaced, "retired": retired}
 
 
-def fleet(connection: Any, settings: Any, project_id: str, *, viewer: Optional[str] = None) -> Fleet:
+def fleet(connection: Any, settings: Any, project_id: str, *, viewer: Optional[str] = None,
+          visible_project_ids: Optional[list[str]] = None) -> Fleet:
     partial: list[str] = []
     can_write = viewer_can_write(connection, settings, project_id, viewer,
                                  catalogue_permission="host:manage")
     parts = _fleet_parts(connection, settings, project_id, partial, can_write=can_write)
+    if visible_project_ids is not None:
+        # ONE COUNT WITH THE SERVER DRAWER (14-05): a rack's apps and ports are everything the
+        # viewer's projects hold on that machine (host_overview.usage), the drawer's tiles; the
+        # other projects' apps are a chip that opens the drawer.
+        from .project_experience.host_overview import usage as host_usage
+
+        used = _guard(connection, partial, "deploys", lambda: host_usage(
+            connection, [str(r["id"]) for r in parts["racks"] if r["id"] != "this"
+                         and not r.get("retired")], list(visible_project_ids)), {})
+        for rack in parts["racks"]:
+            u = used.get(str(rack["id"]))
+            if not u:
+                continue
+            own = rack["apps"]
+            rack["apps"] = max(own, int(u["apps"]))
+            rack["others"] = max(0, rack["apps"] - own)
+            rack["ports_used"] = max(int(rack["ports_used"] or 0), len(u["ports"]))
     items = _guard(connection, partial, "attention",
                    lambda: attention(connection, settings, project_id), [])
     mine = [i for i in items if i.get("area") == "infra"]

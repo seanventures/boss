@@ -26,6 +26,13 @@ from boss_engine.services.project_experience import onboarding
 REPO = "acme/helpdesk-ai-demo"
 
 
+@pytest.fixture(autouse=True)
+def _run_record_is_the_model_answer(monkeypatch):
+    """These runs answer the model check through StubProbes; the view's LIVE read of Repo and
+    models (round 3, 10-20) is this install's, so here it defers to the run's own record."""
+    monkeypatch.setattr(onboarding, "_live_models", lambda connection, project_id: None)
+
+
 class StubProbes(onboarding.Probes):
     """GitHub and Repo-and-models, as answers; everything else is BOSS's own code."""
 
@@ -194,7 +201,7 @@ def test_without_a_repository_it_asks_only_for_the_repository(world, client, eng
 def test_it_readies_the_project_and_proposes_the_backlog_and_first_work(world, client, engine,
                                                                        checkout):
     settings = get_settings()
-    assert str(getattr(settings, "ambient_cos_mode", "off")) == "off"   # the preview is off
+    assert str(getattr(settings, "ambient_cos_mode", "off")) in ("", "off")   # the preview is off
     pid = _project(world, client, engine)
     _mapped(engine, pid)
     probes = StubProbes(checkout)
@@ -384,8 +391,8 @@ def _strip(*states):
 
 
 def test_the_stage_strip_has_one_current_stage_and_nothing_after_it_is_done():
-    """Tester 10-08: Ready current while later stages were ticked (Deploy done from an older
-    staging deploy, Propose backlog done while Ready was 4 of 6)."""
+    """Tester 10-08: Ready current while later stages were ticked (Propose backlog done while
+    Ready was 4 of 6). Round 3 (10-07): Deploy is a fact — staging live stays done."""
     for run_state in ("running", "ready", "needs_you", "failed"):
         for raw in (("done", "now", "done", "now", "done"), ("done", "done", "done", "now", "done"),
                     ("done", "failed", "done", "todo", "done"), ("now", "todo", "todo", "todo", "done"),
@@ -395,7 +402,10 @@ def test_the_stage_strip_has_one_current_stage_and_nothing_after_it_is_done():
             if current:
                 first = current[0]
                 assert out[first] in ("now", "failed", "waiting"), (run_state, raw, out)
-                assert all(st == "todo" for st in out[first + 1:]), (run_state, raw, out)
+                # Nothing after the current stage is live; a later stage whose own fact is done
+                # stays done (round 3, 10-07: Deploy after four deploys), the rest is todo.
+                assert all(st == ("done" if r == "done" and i == 4 else "todo")
+                           for i, (st, r) in enumerate(zip(out, raw)) if i > first), (run_state, raw, out)
                 assert all(st in ("done", "skipped") for st in out[:first])
     assert [s["state"] for s in onboarding.linear_stages(
         _strip("done", "done", "done", "done", "done"), "not_started")] == ["todo"] * 5

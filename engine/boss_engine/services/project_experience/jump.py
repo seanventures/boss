@@ -23,7 +23,7 @@ from typing import Any, Optional
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
-from .common import href, pr_number, project_href, short_day, words
+from .common import href, iso, pr_number, project_href, words
 
 LIMIT = 20
 _DEPLOY_WORDS = frozenset({"deploy", "deploys", "deployed", "deployment", "deployments", "release",
@@ -188,6 +188,18 @@ def search(connection: Connection, *, q: str, project_ids: list[str],
     seen_env: set[tuple[str, str]] = set()
     seen_dep: set[tuple[str, str, str]] = set()
     newest_env: set[tuple[str, str]] = set()
+    # WHAT IS LIVE WHERE (11-08): each environment's newest HEALTHY deploy — the app the header
+    # opens — so "Staging · 203.0.113.20:8004 ↗" is offered even when a newer deploy is still
+    # running or failed (that one is its own dated row).
+    live_at = {(str(r["project_id"]), str(r["environment"] or "")): r["url"] for r in
+               connection.execute(text(
+                   "SELECT DISTINCT ON (s.project_id, t.environment) s.project_id, t.environment, "
+                   "COALESCE(NULLIF(s.open_url, ''), NULLIF(t.public_url, ''), t.domains->>0) AS url "
+                   "FROM stack_deployments s "
+                   "JOIN deployment_targets t ON t.id = s.target_id WHERE s.project_id = ANY(:ids) "
+                   "AND s.status = 'healthy' AND t.status = 'active' "
+                   "ORDER BY s.project_id, t.environment, s.created_at DESC"),
+                   {"ids": scope}).mappings() if r["url"]}
     for r in connection.execute(text(
             "SELECT s.id, s.project_id, s.commit_sha, s.status, s.open_url, s.created_at, "
             "t.environment, t.public_url FROM stack_deployments s "
@@ -208,14 +220,22 @@ def search(connection: Connection, *, q: str, project_ids: list[str],
         seen_dep.add(dep_key)
         first_of_env = env_key not in newest_env
         newest_env.add(env_key)
-        live_url = (r["open_url"] or r["public_url"]) if (r["status"] == "healthy"
-                                                         and first_of_env) else None
+        live_url = live_at.get(env_key) if first_of_env else None
+        if live_url and r["status"] != "healthy":
+            # The newest deploy is not the live one: the live app first, then this deploy dated.
+            out.append({"label": f"{_env_word(r['environment'])} · {_bare_url(live_url)}",
+                        "kind": "deploy", "sub": "live", "hint": "open ↗",
+                        "href": project_href(str(r["project_id"]), tab="deployments"),
+                        "external_url": live_url if re.match(r"^https?://", live_url)
+                        else f"http://{live_url}", "project_id": r["project_id"]})
+            live_url = None
         if live_url:
             where = _bare_url(live_url)
         else:
-            where = " · ".join(x for x in ((r["commit_sha"] or "")[:7],
-                                           short_day(r["created_at"]) or "") if x)
+            # The day is the VIEWER's (`at`, worded by the console), never a UTC "Nov 6" here.
+            where = (r["commit_sha"] or "")[:7]
         item = {"label": f"{_env_word(r['environment'])} · {where}".rstrip(" ·"),
+                "at": None if live_url else iso(r["created_at"]),
                 "kind": "deploy", "sub": str(r["status"] or "").replace("_", " "),
                 "hint": "open ↗" if live_url else "Infra",
                 "href": href(str(r["project_id"]), area="infra", view="deploys", deploy=r["id"]),

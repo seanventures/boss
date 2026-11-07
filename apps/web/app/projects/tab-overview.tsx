@@ -261,7 +261,7 @@ function MiniRow({ w, ctx }: { w: WorkItem; ctx: PxCtx }) {
           <Cost usd={w.cost_usd} list={w.list_usd} /></span>
       </span>
       {/* 04 at 390: the station strip stays (wireframe .wk-row > .st); faces and the chevron go. */}
-      <span className="px-ov-wk-st">{w.flow.length ? <Flow nodes={w.flow.map((f) => ({ label: f.label, state: f.state, type: f.state }))} /> : <Stations stages={w.stages} />}</span>
+      <span className="px-ov-wk-st" data-flow={w.flow.length ? "" : undefined}>{w.flow.length ? <Flow nodes={w.flow.map((f) => ({ label: f.label, state: f.state, type: f.state }))} /> : <Stations stages={w.stages} />}</span>
       <span className="px-hide-phone"><FacesInline w={w} /></span>
       <CaretRight size={12} className="px-faint px-hide-phone" aria-hidden />
     </div>

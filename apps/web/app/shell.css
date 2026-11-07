@@ -109,7 +109,9 @@
 
 /* ── the top bar ──────────────────────────────────────────────────────────────────────────── */
 
-.bx-shell .bx-topbar { height: 56px; gap: 10px; padding: 0 20px; }
+/* X-11 THE BAR IS SOLID: a translucent bar let the page scroll visibly under it (the sticky
+   Needs-you chip and card titles read faded through the crumbs). */
+.bx-shell .bx-topbar { height: 56px; gap: 10px; padding: 0 20px; background: var(--base, #0c1424); backdrop-filter: none; }
 /* Source order is the bar's order (earlier rounds re-ordered the old controls with `order`). */
 .bx-shell .bx-topbar > * { order: 0; }
 /* The visible location is the breadcrumb; the title stays for screen readers only. */

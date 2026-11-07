@@ -86,8 +86,11 @@ export function bellLabel(working: number, needs: number): string {
  * the same crew behind it, drawn as a bell with the needs-you count on it (a teal dot while agents
  * work), and always present — an empty bell is an answer, a missing pill is not.
  */
-export function PresencePill({ projectId, live: given, attention: givenAttention, variant = "pill" }: {
+export function PresencePill({ projectId, live: given, attention: givenAttention, variant = "pill", total = null }: {
   projectId: string; live?: LiveMap; attention?: AttentionSummary | null; variant?: "pill" | "bell";
+  /** The bell's number across every project (X-14, lib/project-experience orgNeedsOf); the list
+   *  stays this project's, with the rest as "N in other projects". */
+  total?: number | null;
 }) {
   const polled = useLivePresence(given ? "" : projectId);
   const polledAttention = useAttention(given ? "" : projectId);
@@ -103,7 +106,9 @@ export function PresencePill({ projectId, live: given, attention: givenAttention
   // running. Only the working and in-panel zones are work.
   const atWork = (r: CrewRow) => r.zone === "working" || r.zone === "in_panel";
   const working = rows.filter(atWork);
-  const needs = attention ? attention.count : rows.filter((r) => r.zone === "needs_you").length;
+  const here = attention ? attention.count : rows.filter((r) => r.zone === "needs_you").length;
+  const needs = variant === "bell" && total !== null ? Math.max(total, 0) : here;
+  const elsewhere = variant === "bell" && total !== null ? Math.max(0, total - here) : 0;
   const workingCount = working.length;
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLDivElement>(null);
@@ -198,6 +203,13 @@ export function PresencePill({ projectId, live: given, attention: givenAttention
                 </button>
               ) : null}
             </>
+          ) : null}
+          {elsewhere ? (
+            <button type="button" className="ag-link ag-crew-more" data-testid="ag-crew-needs-elsewhere"
+                    title="Every project's Needs you, on Projects"
+                    onClick={() => { setOpen(false); navigate({ area: "projects", filter: "needs", project_id: null, view: null, role: null, run: null, focus: null }); }}>
+              {elsewhere} waiting on you in other projects ›
+            </button>
           ) : null}
           {bell && !needs && !crewRows.length ? (
             <p className="ag-crew-empty" data-testid="topbar-bell-empty">Nothing needs you, and no agent is working right now.</p>

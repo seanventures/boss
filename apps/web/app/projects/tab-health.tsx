@@ -25,7 +25,7 @@ type Env = HealthView["environments"][number];
 type Incident = HealthView["incidents"][number];
 type AlertLine = HealthView["alerts"][number];
 
-/** "Today 09:12", "Wed 09:12", "Nov 2": when something happened, in the viewer's zone. */
+/** "Today 09:12", "Wed 09:12", "Nov 2 09:12": when something happened, in the viewer's zone. */
 export function dayTime(iso: string, now: Date = new Date()): string {
   if (!/^\d{4}-\d{2}-\d{2}T/.test(iso)) return iso;
   const d = new Date(iso);
@@ -34,8 +34,10 @@ export function dayTime(iso: string, now: Date = new Date()): string {
   const same = (x: Date, y: Date) => x.toDateString() === y.toDateString();
   if (same(d, now)) return `Today ${hm}`;
   const days = (now.getTime() - d.getTime()) / 86_400_000;
-  if (days < 6) return d.toLocaleDateString([], { weekday: "short" });
-  return d.toLocaleDateString([], { month: "short", day: "numeric" });
+  // Always with its clock time (12-09 "Today 09:12 · 14 min"): an incident on Wednesday is
+  // "Wed 09:12", never a bare "Wed".
+  if (days < 6) return `${d.toLocaleDateString([], { weekday: "short" })} ${hm}`;
+  return `${d.toLocaleDateString([], { month: "short", day: "numeric" })} ${hm}`;
 }
 /** "09:52" when it is today, else as dayTime ("Wed", "Nov 2"): THE ONE CLOCK of this tab, the same
  *  24-hour local text as the incidents ("Today 09:38") and the parity component's history

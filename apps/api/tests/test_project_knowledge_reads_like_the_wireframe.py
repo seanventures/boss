@@ -174,7 +174,8 @@ def test_graph_labels_never_cut_a_sentence_mid_word():
 
     lesson = node_label("test_failure", "npm install && npm test fails: the app has no test "
                         "script: add a `test` script to package.json", None, {})
-    assert lesson == "The app has no test script" and "…" not in lesson
+    # ≤ 4 words on a diagram (round 3, X-76): the subject lead goes, the lesson stays whole.
+    assert lesson == "No test script" and "…" not in lesson
     assert _short("Make the weekend timers pause on holidays", 24) == "Make the weekend timers"
     assert _short("Pause the timers on the weekend", 20) == "Pause the timers"  # never ends on "on"
     # Only a single long NAME is shortened with an ellipsis (its full path is the tooltip).

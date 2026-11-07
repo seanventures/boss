@@ -127,8 +127,9 @@ def test_the_overview_draws_the_journey_needs_you_tiles_captain_and_try_it(world
     assert o["captain"]["role_key"] == "engineering_captain"
     assert o["captain"]["ask"]["subject"] == {"kind": "project", "id": helpdesk["id"]}
     assert len(o["recent_work"]) == 5
-    assert any(n["source"] == "roadmap" and n["accept"]["href"].endswith("/accept")
-               for n in o["next"])
+    # What's next: the plan's Next lane (accepted, no Accept) first, then proposals with theirs.
+    assert o["next"] and all((n["accepted"] and n["accept"] is None)
+                             or n["accept"]["href"].endswith("/accept") for n in o["next"])
     assert o["try_it"]["url"] == STAGING_URL
     assert [d["user"] for d in o["try_it"]["demo_logins"]] == [u["user"] for u in DEMO_USERS]
     assert all(d["reveal"]["requires"] == "step_up" for d in o["try_it"]["demo_logins"])

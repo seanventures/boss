@@ -125,7 +125,7 @@ export function FirstRun({ projectId, cards }: { projectId: string; actor: strin
   const url = usePxUrl();
   const withRepo = cards.filter((c) => c.repo);
   const askedId = usePageSearch().get("project_id");
-  const guided = url.firstRun && withRepo.length > 0 ? (withRepo.find((c) => c.id === askedId) ?? withRepo[0]) : null;
+  const guided = url.firstRun ? pickGuided(withRepo, askedId) : null;
   const known = status === "ready" && state !== null;
   // Unknown (loading, or it can't be read): nothing is ticked that we don't know, nothing is blocked.
   const s: WelcomeState = state ?? { github: { done: false, login: null, repos: 0 }, model: { done: false, label: null, kind: null }, sample: { done: false } };
@@ -195,9 +195,10 @@ function LastRun({ run }: { run: NonNullable<SetupView["try"]["last_run"]> }) {
 /** The illustrated hero: a folder with the crew in orbit around it. */
 function Orbit() {
   const crew = [
-    { name: "Helm", role_key: "engineering_captain", x: 20, y: 52 }, { name: "Juno", role_key: "pm", x: 78, y: 10 },
-    { name: "Forge", role_key: "software_engineer", x: 186, y: 4 }, { name: "Vera", role_key: "qa", x: 246, y: 52 },
-    { name: "Beacon", role_key: "sre", x: 200, y: 108 },
+    // Helm, the captain, on the left and the largest (00a-06); the crew smaller around the orbit.
+    { name: "Helm", role_key: "engineering_captain", x: 8, y: 50, size: 48 }, { name: "Juno", role_key: "pm", x: 78, y: 8, size: 34 },
+    { name: "Forge", role_key: "software_engineer", x: 186, y: 4, size: 34 }, { name: "Vera", role_key: "qa", x: 248, y: 54, size: 38 },
+    { name: "Beacon", role_key: "sre", x: 200, y: 112, size: 30 },
   ];
   return (
     <div style={{ position: "relative", width: 300, height: 150, maxWidth: "100%" }} aria-hidden>
@@ -210,18 +211,43 @@ function Orbit() {
         <circle cx="150" cy="18" r="3" fill="var(--teal)" /><circle cx="276" cy="40" r="3" fill="#8b7cf6" /><circle cx="96" cy="128" r="3" fill="var(--teal)" />
       </svg>
       {crew.map((c) => (
-        <span key={c.name} style={{ position: "absolute", left: c.x, top: c.y }}><Face agent={c} size={34} /></span>
+        <span key={c.name} style={{ position: "absolute", left: c.x, top: c.y }} data-testid={`px-orbit-${c.name.toLowerCase()}`} data-size={c.size}><Face agent={c} size={c.size} /></span>
       ))}
     </div>
   );
 }
 
+/** WHICH PROJECT THE GUIDE FOLLOWS (00b-13, PX-15): the one being onboarded — the asked-for
+ *  project only while it is still in onboarding, else the one Helm is reading now, else the
+ *  newest project not yet past Ready. A project already working, on staging or in production is
+ *  never the "first project" (it read "Helm hasn't started" over a deployed app); only when every
+ *  project is past onboarding does the guide fall back to the newest one, its steps then read
+ *  from its journey. */
+export function pickGuided(withRepo: ProjectCard[], askedId: string | null): ProjectCard | null {
+  if (!withRepo.length) return null;
+  const early = (c: ProjectCard) => c.onboarding_active || c.stage === "onboarding" || c.stage === "ready";
+  const newest = (list: ProjectCard[]) => [...list].sort((a, b) => Date.parse(b.updated_at || "") - Date.parse(a.updated_at || "") || 0)[0] ?? null;
+  const asked = withRepo.find((c) => c.id === askedId && early(c));
+  return asked ?? newest(withRepo.filter((c) => c.onboarding_active)) ?? newest(withRepo.filter(early)) ?? newest(withRepo);
+}
+
 /** The guide's four steps (00b-07..11), read from the onboarding run's ONE state machine (the
  *  engine's linear stage strip): at most one step is current, nothing after it is done, and
  *  every sub is in words ("Discover · 214 / 214 files", never a raw state). */
-export function guideSteps(card: { repo?: string | null; name: string }, o: Onboarding | null): { label: string; sub: string; state: StepState; icon: React.ReactNode }[] {
+export function guideSteps(card: { repo?: string | null; name: string; journey?: { key: string; state: string }[] }, o: Onboarding | null): { label: string; sub: string; state: StepState; icon: React.ReactNode }[] {
   const st = (key: string) => o?.stages.find((x) => x.key === key);
   const discover = st("discover"), ready = st("ready"), first = st("first_work");
+  // A project that already has work is past onboarding on its journey (the engine's one
+  // "Onboarded" rule, overview.reached): the guide says so, never "not started yet".
+  const past = (key: string) => (card.journey ?? []).some((j) => j.key === key && j.state === "done");
+  if (o?.state === "not_started" && past("working")) {
+    return [
+      { label: "Add project", sub: card.repo || card.name, state: "done", icon: <FolderPlus size={13} /> },
+      { label: "Helm onboards", sub: "worked before onboarding", state: "done", icon: <Compass size={13} /> },
+      { label: "Ready for work", sub: "already building", state: "done", icon: <Signpost size={13} /> },
+      { label: "First work", sub: "work started", state: "done", icon: <GitPullRequest size={13} /> },
+    ];
+  }
   const notStarted = !o || o.state === "not_started";
   const as = (s: StepState | undefined): StepState => (notStarted || !s ? "todo" : s === "skipped" ? "done" : s);
   const onboardState = notStarted ? "todo" : as(discover?.state);

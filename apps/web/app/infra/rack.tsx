@@ -190,6 +190,12 @@ export function RackView({ rack, now, windowEnd, canAct, busy, onHost, onResiden
           {rack.residents.map((r) => (
             <ResidentTile key={`${r.kind}-${r.id}`} r={r} now={now} windowEnd={windowEnd} onOpen={onResident} />
           ))}
+          {rack.others > 0 ? (
+            <button type="button" className="inf-slot inf-slot-others" data-testid="inf-rack-others" onClick={() => onHost(rack.id)}
+                    title="Apps of your other projects on this machine — the server's page lists every one">
+              +{rack.others} from other projects
+            </button>
+          ) : null}
           {onPlace && rack.maxApps === null ? (
             <button type="button" className="inf-slot" data-testid="inf-place-app" onClick={() => onPlace(rack.id)}>+ Place app</button>
           ) : null}

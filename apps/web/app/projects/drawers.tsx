@@ -14,7 +14,7 @@ import {
   RocketLaunch, Terminal, User, Warning, Wrench,
 } from "@phosphor-icons/react";
 
-import { ATTEMPT_WORDS, KIND_WORDS, PX_PATHS, findWork, parseDeployments, pxHref, toTab, usePxRead, writePxUrl, type Deployments, type WorkItem } from "../../lib/project-experience";
+import { ATTEMPT_WORDS, KIND_WORDS, PX_PATHS, findWork, nodeWords, parseDeployments, pxHref, toTab, usePxRead, writePxUrl, type Deployments, type WorkItem } from "../../lib/project-experience";
 import { FX_DEPLOYMENTS } from "../../lib/project-experience-fixtures";
 import { Drawer, Empty, Face, Flow, HEALTH_WORD, Ico, PxLink, STATE_WORD, Spark, Tag, Cost } from "./kit";
 import { ActionButton } from "./tab-overview";
@@ -27,8 +27,9 @@ const NEED_ICON: Record<string, typeof GitMerge> = { merge: GitMerge, deploy: Ro
 import { DemoLoginRow } from "./tab-settings";
 import { KnowledgeDrawer } from "./tab-knowledge";
 import { RecDrawer } from "./tab-roadmap";
-import { whenLocal } from "../../lib/local-time";
+import { LOCAL, whenLocal } from "../../lib/local-time";
 import type { PxCtx } from "./project-page";
+import { LearnedStrip } from "../knowledge/learned-strip";
 
 const STEP_WORDS: Record<string, string> = { plan: "Plan", design: "You approved", decide: "You approved", build: "Build", review: "Review & test", pr: "Merge", ship: "Staging" };
 
@@ -53,6 +54,18 @@ export function DrawerHost({ ctx, drawer, onClose }: { ctx: PxCtx; drawer: { kin
   // The full dossier, a doc and Add doc (screen 06): Repo & knowledge's own drawers.
   if (drawer.kind === "dossier" || drawer.kind === "doc") return <KnowledgeDrawer ctx={ctx} drawer={drawer} onClose={onClose} />;
   if (drawer.kind === "captain") return <CaptainDrawer ctx={ctx} onClose={onClose} />;
+  if (drawer.kind === "learned") {
+    const w = findWork(ctx.work?.items ?? [], drawer.id) ?? ctx.overview.recent_work.find((x) => x.id === drawer.id);
+    return (
+      <Drawer title="What it learned" icon={<Ico icon={Graph} c="violet" />} onClose={onClose} testid="px-drawer-learned"
+              sub={w ? <span className="px-faint">{w.label}</span> : undefined}
+              footer={<PxLink href={`?area=knowledge&project_id=${encodeURIComponent(ctx.projectId)}&kg_tab=graph`} testid="px-drawer-learned-graph"><Graph size={11} aria-hidden /> Whole knowledge graph</PxLink>}>
+        <p className="px-faint" style={{ margin: 0, fontSize: ".6rem" }}>What this run&apos;s agents learned, and the rules and lessons they consulted. Each opens the graph on it.</p>
+        <LearnedStrip always projectId={ctx.projectId} actor={ctx.actor} orgId={ctx.orgId} runId={drawer.id}
+                      live={w ? w.state === "running" || w.state === "needs_you" : false} />
+      </Drawer>
+    );
+  }
   // `run:<id>` and `build:<id>` (the engine's WorkItem hrefs and ⌘K) are the work drawer.
   if (drawer.kind === "work" || drawer.kind === "run" || drawer.kind === "build") {
     // An attempt of a grouped piece of work (a follow-up, a retry) opens as itself.
@@ -82,8 +95,10 @@ export function DrawerHost({ ctx, drawer, onClose }: { ctx: PxCtx; drawer: { kin
         </Drawer>
       );
     }
-    const n = ctx.overview.journey.find((x) => x.key === drawer.id);
-    if (!n) return <Missing what="This stage" onClose={onClose} />;
+    const found = ctx.overview.journey.find((x) => x.key === drawer.id);
+    if (!found) return <Missing what="This stage" onClose={onClose} />;
+    // The stage's day in the viewer's zone (04-02), as on the strip.
+    const n = found.at ? { ...found, ...nodeWords(found, LOCAL.day) } : found;
     return (
       <Drawer title={n.label} sub={<><Tag tone={n.state === "done" ? "green" : n.state === "waiting" ? "amber" : n.state === "todo" ? undefined : "blue"}>{STATE_WORD[n.state]}</Tag>{n.sub ? <span className="px-mono">{n.sub}</span> : null}</>}
               icon={<Ico icon={stageIcon(n.key)} c={n.state === "waiting" ? "amber" : n.state === "done" ? "green" : "teal"} />} onClose={onClose} testid="px-drawer-stage"
@@ -172,7 +187,9 @@ function WorkDrawer({ ctx, w, onClose }: { ctx: PxCtx; w: WorkItem; onClose: () 
           {l.pr ? <PxLink href={l.pr.external_url} testid="px-drawer-link-pr"><GitPullRequest size={11} aria-hidden /> PR #{l.pr.number}</PxLink> : null}
           {l.deploy ? <PxLink href={l.deploy}><RocketLaunch size={11} aria-hidden /> Deploy</PxLink> : null}
           {l.build ? <PxLink href={`${l.build}&view=logs`}><Terminal size={11} aria-hidden /> Logs</PxLink> : null}
-          <PxLink href={`?area=knowledge&project_id=${encodeURIComponent(ctx.projectId)}`}><Graph size={11} aria-hidden /> What it learned</PxLink>
+          {/* THIS RUN'S OWN LESSONS (05b-16): what its agents learned, consulted and reused —
+              the run's learned feed, not the whole graph. */}
+          <button type="button" className="px-chip" data-testid="px-drawer-link-learned" onClick={() => ctx.open("learned", w.id)}><Graph size={11} aria-hidden /> What it learned</button>
           {w.href && !w.href.includes("drawer=") ? <PxLink href={w.href}><FileText size={11} aria-hidden /> Open</PxLink> : null}
         </div>
       </div>

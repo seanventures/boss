@@ -45,7 +45,7 @@ export type HostOverview = {
               href: string }[];
   shared_by: number;
   plugins: { key: string; label: string; icon: string }[];
-  changes: { id: string; label: string; state: "done" | "failed" | "now"; at: string | null; by: string; href: string }[];
+  changes: { id: string; label: string; state: "done" | "failed" | "now"; at: string | null; by: string; href: string; title?: string }[];
 };
 
 export const hostOverview = {

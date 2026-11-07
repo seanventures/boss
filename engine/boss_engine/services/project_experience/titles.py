@@ -29,7 +29,9 @@ from typing import Any, Optional
 
 #: words a title never ends on.
 _JOINERS = frozenset("a an the to of and or for with in on at by from as into via but so that "
-                     "which who is are be it its this these those our your their my".split())
+                     "which who is are be it its this these those our your their my "
+                     "when if after before while until because than outside inside over under "
+                     "within without about through during across between against behind".split())
 _ARTICLES = frozenset({"the", "a", "an"})
 _HEADS = re.compile(r"\s*(?::\s|\s[—–-]\s|;|\(|\s\d\)\s)")
 _SENTENCE = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9])|\n+")
@@ -83,6 +85,9 @@ def _trim(words: list[str], limit: int) -> list[str]:
 
 def _tidy(text: str) -> str:
     text = text.strip().strip(",.;:!?-—–\"' ")
+    first = text.split(" ", 1)[0]
+    if "/" in first or "." in first or "_" in first:
+        return text   # a path or a name ("server/sla.mjs", "sla.mjs") keeps its own case
     return text[:1].upper() + text[1:] if text else text
 
 
@@ -150,4 +155,14 @@ def title_fields(title: Any, brief: Any = None, *, stored: Any = None) -> dict[s
     return {"label": short_title(title, brief, stored=stored) or full, "title": full}
 
 
-__all__ = ["shorten", "short_title", "strip_label", "title_fields"]
+def run_name(title: Any, brief: Any = None) -> str:
+    """Another run's name INSIDE a sentence ("… deferred from PR #3 on “Finish the visual
+    refresh” …"): the short title, with no bracketed asides of its own (a name in brackets inside
+    a bracket reads as noise), and no quotes to clash with the ones around it."""
+    name = short_title(title, brief)
+    name = re.sub(r"\s*[(\[][^()\[\]]*[)\]]", "", name)
+    name = name.replace("“", "").replace("”", "").replace('"', "").strip(" ,;:-—–")
+    return name or "an earlier build"
+
+
+__all__ = ["run_name", "shorten", "short_title", "strip_label", "title_fields"]

@@ -266,8 +266,11 @@ export function OnboardingView({ projectId, ob, onRefresh }: { projectId: string
     <div className="px-stack px-ob-view" data-testid="px-onboarding" data-state={ob.state}>
       <section className="px-card" aria-label="Onboarding stages">
         <div className="px-ob" role="list" aria-label="Onboarding stages" data-testid="px-ob-stages">
-          {ob.stages.map((st) => (
-            <div key={st.key} className="px-ob-s" data-s={st.state} role="listitem" aria-label={`${st.label}: ${STATE_WORD[st.state]}`} data-testid={`px-ob-stage-${st.key}`}>
+          {ob.stages.map((st, i) => (
+            // The wire INTO a stage is green only through done and now (10-08): the stage
+            // before it done, and this one done or current.
+            <div key={st.key} className="px-ob-s" data-s={st.state} role="listitem"
+                 data-w={i > 0 && ob.stages[i - 1].state === "done" && (st.state === "done" || st.state === "now") ? "on" : undefined} aria-label={`${st.label}: ${STATE_WORD[st.state]}`} data-testid={`px-ob-stage-${st.key}`}>
               <span className="px-jr-shape" aria-hidden>{st.state === "done" ? <Check size={16} weight="bold" /> : st.state === "failed" ? <XCircle size={16} weight="bold" /> : STAGE_ICON[st.key] ?? <Sparkle size={16} />}</span>
               <span className="px-ob-cap">{st.label}</span>
               <span className="px-ob-meta">{st.sub}</span>

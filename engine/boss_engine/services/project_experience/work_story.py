@@ -50,7 +50,7 @@ def _builds(connection: Connection, project_id: str, item: Mapping[str, Any]) ->
         ids.append(str(item["id"]))
     rows = connection.execute(text(
         "SELECT id, status, title, state, finalize_ctx, pull_request_url, pull_request_number, "
-        "created_at, updated_at FROM code_task_runs WHERE project_id = :p AND (id = ANY(:ids) OR "
+        "decision_id, created_at, updated_at FROM code_task_runs WHERE project_id = :p AND (id = ANY(:ids) OR "
         "finalize_ctx->>'workflow_run_id' = :r) ORDER BY created_at"),
         {"p": project_id, "ids": ids, "r": str(item.get("id"))}).mappings().all()
     return [dict(r) for r in rows]
@@ -162,12 +162,27 @@ def story(connection: Connection, project_id: str, work_id: str) -> dict[str, An
                       "link": ({"label": "Findings", "href": (item.get("links") or {}).get("build")}
                                if (item.get("links") or {}).get("build") and (rounds or deferred)
                                else None)}
-    rows["pr"] = {"sub": "Merged" if merge.get("sha") else "Only a person merges",
-                  "at": iso(merge.get("at") or merge.get("merged_at")), "person": True,
+    # WHO APPROVED, WHEREVER A PERSON DID (05b-09): the merge (the build's own pull-request
+    # decision) and a deploy a person approved read "<who> approved", with the moment, beside
+    # the person's face — as the plan's approval does.
+    merge_dec = _decision(connection, latest.get("decision_id"))
+    merger = _who(connection, (merge_dec or {}).get("approved_by")) if merge.get("sha") else None
+    rows["pr"] = {"sub": (f"{merger} approved · merged" if merger else "Merged")
+                  if merge.get("sha") else "Only a person merges",
+                  "at": iso(merge.get("at") or merge.get("merged_at")
+                            or (merge_dec or {}).get("approved_at")), "person": True,
                   "link": ({"label": f"PR #{number}", "external_url": pr_url} if pr_url else None)}
-    env = str((deploy or {}).get("stack_target_name") or "Staging")
-    rows["ship"] = {"sub": ("Live" if (deploy or {}).get("deployment_status") == "healthy" else
-                            "Waiting to deploy" if deploy else "Auto after merge"),
+    deploy_dec = next((d for d in (_decision(connection, st.get("decision_id"))
+                                   for st in steps.values() if st.get("decision_id")
+                                   and (st["output"].get("stack_deployment_id")
+                                        or "deploy" in str(st.get("step_id") or "")))
+                       if d and d.get("approved_by")), None)
+    deployer = _who(connection, (deploy_dec or {}).get("approved_by"))
+    live = ("Live" if (deploy or {}).get("deployment_status") == "healthy" else
+            "Waiting to deploy" if deploy else "Auto after merge")
+    rows["ship"] = {"sub": f"{deployer} approved · {live.lower()}" if deployer else live,
+                    "at": iso((deploy_dec or {}).get("approved_at")) if deployer else None,
+                    "person": bool(deployer),
                     "link": ({"label": "Deploy", "href": href(
                         project_id, area="infra", view="deploys",
                         deploy=deploy["stack_deployment_id"])} if deploy else None)}

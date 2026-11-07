@@ -9,12 +9,12 @@
  * Reads GET /v1/projects/summary (§1). On an engine without it, the cards come from the project
  * list the console already has (names only) and say so; nothing is hidden.
  */
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Folders, Plus } from "@phosphor-icons/react";
 
 import { GatedButton } from "../../components/gated";
 import {
-  PX_PATHS, costWords, navigateTo, parseSummary, projectHref, startOnboarding, usePxRead, type Node, type ProjectCard, type ProjectsSummary,
+  PX_PATHS, costWords, navigateTo, parseSummary, projectHref, startOnboarding, usePageSearch, usePxRead, type Node, type ProjectCard, type ProjectsSummary,
 } from "../../lib/project-experience";
 import { FX_SUMMARY } from "../../lib/project-experience-fixtures";
 import { DemoBanner, Empty, Face, openAddProject, usePxUrl, HEALTH_WORD, Ico, Journey, Ring, Said, Spark, Tag, Cost } from "./kit";
@@ -89,7 +89,10 @@ const isOnboarding = (c: ProjectCard) => !c.archived && (c.onboarding_active || 
 function ProjectsList({ cards, note, cap, onRetry, onChanged }: {
   cards: ProjectCard[]; note?: string | null; cap: number | null; onRetry?: () => void; onChanged?: () => void;
 }) {
-  const [filter, setFilter] = useState<Filter>("all");
+  // `&filter=needs` (the bell's "N waiting on you in other projects") opens on that filter.
+  const asked = usePageSearch().get("filter");
+  const [filter, setFilter] = useState<Filter>(() => (FILTERS.some((f) => f.key === asked) ? asked as Filter : "all"));
+  useEffect(() => { if (asked && FILTERS.some((f) => f.key === asked)) setFilter(asked as Filter); }, [asked]);
   const live = cards.filter((c) => !c.archived);
   const shown = (filter === "archived" ? cards.filter((c) => c.archived) : live)
     .filter((c) => filter === "all" || filter === "archived" || (filter === "needs" ? c.needs_you > 0 : filter === "working" ? isWorking(c) : isOnboarding(c)))
@@ -245,7 +248,7 @@ export function ProjectCardView({ card, onChanged }: { card: ProjectCard; onChan
           <Ring pct={progress[1] ? (100 * progress[0]) / progress[1] : 0} tone="teal" size="s" label={`Onboarding ${progress[0]} of ${progress[1]}`}>{progress[0]}/{progress[1]}</Ring>
         ) : card.uptime_pct !== null ? (
           <Ring pct={card.uptime_pct} tone={card.health === "down" ? "red" : card.health === "degraded" ? "amber" : "green"} size="s"
-                label={`Uptime ${card.uptime_pct}% this week, ${HEALTH_WORD[card.health]}`}>{card.uptime_pct >= 99.95 ? "100" : card.uptime_pct.toFixed(1).replace(/\.0$/, "")}</Ring>
+                label={`Uptime ${card.uptime_pct}% in the last 24 h, ${HEALTH_WORD[card.health]}`}>{card.uptime_pct >= 99.95 ? "100" : card.uptime_pct.toFixed(1).replace(/\.0$/, "")}</Ring>
         ) : <Ring pct={0} tone="teal" size="s" label="No health signal yet">—</Ring>}
         <div style={{ minWidth: 0, flex: 1, fontSize: ".6rem" }} data-testid={`px-card-lines-${card.id}`}>
           <span className="px-pc-line1" data-tone={card.line_tone || undefined}>

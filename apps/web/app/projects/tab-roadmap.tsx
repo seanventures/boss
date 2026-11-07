@@ -251,6 +251,22 @@ export function recFlow(r: Recommendation, squad: { name: string; role_key?: str
   ];
 }
 
+/** OPEN WORK OPENS THAT ITEM (07-18): the run it became, else its planned row on Work (the
+ *  rec's own id), else the Work row of the same name — in the Work tab's drawer; the Work tab
+ *  alone only when none is on the page yet. */
+export function acceptedWorkId(items: { id: string; label: string; title?: string }[], r: { id: string; title: string; work_id?: string }): string | null {
+  const key = (v: string | undefined) => (v ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+  const ids = [r.work_id, r.id].filter(Boolean) as string[];
+  const hit = items.find((w) => ids.includes(w.id))
+    ?? items.find((w) => key(w.title) === key(r.title) || key(w.label) === key(r.title));
+  return hit ? hit.id : r.work_id ?? null;
+}
+
+function openAccepted(ctx: PxCtx, r: Recommendation) {
+  const id = acceptedWorkId(ctx.work?.items ?? [], r);
+  ctx.tab("work", id ? { drawer: `work:${id}` } : {});
+}
+
 function RecCard({ ctx, r, i, state, onDone }: { ctx: PxCtx; r: Recommendation; i: number; state?: "accepted" | "rejected" | "snoozed"; onDone: (s: "accepted" | "rejected" | "snoozed") => void }) {
   const [rejecting, setRejecting] = useState(false);
   // No reason is preselected (tester 07-14): a person picks one, or says one, before Reject.
@@ -274,7 +290,7 @@ function RecCard({ ctx, r, i, state, onDone }: { ctx: PxCtx; r: Recommendation; 
         <span className="px-rank" data-s="accepted"><Check size={14} weight="bold" /></span>
         <div style={{ minWidth: 0 }}><div className="px-rc-t">{r.title}</div>
           <Flow nodes={[{ label: "Accepted", state: "done" }, { label: "On Work · Next", type: "todo", icon: <Kanban size={11} aria-hidden /> }]} /><Said text={said} /></div>
-        <a className="px-chip" href="#" data-testid={`px-rec-open-${r.id}`} onClick={(e) => { e.preventDefault(); ctx.tab("work"); }}>Open work <ArrowRight size={11} /></a>
+        <a className="px-chip" href="#" data-testid={`px-rec-open-${r.id}`} onClick={(e) => { e.preventDefault(); openAccepted(ctx, r); }}>Open work <ArrowRight size={11} /></a>
       </div>
     );
   }

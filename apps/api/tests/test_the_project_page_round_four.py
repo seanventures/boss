@@ -73,10 +73,17 @@ def test_cards_draw_the_real_crew_and_who_is_acting_now(world, client, engine, h
                         "status = 'complete' WHERE project_id = :p"), {"p": helpdesk["id"]})
     card = next(c for c in _get(world, client, "/v1/projects/summary")["items"]
                 if c["id"] == helpdesk["id"])
-    expected = [next(k for k in slot if k in roster) for slot in CREW_SLOTS
+    live_now = {g["role_key"] for g in card["live_agents"]}
+    # Each job's face: the one acting now (the agent on a live run's step), else the roster's first.
+    expected = [next((k for k in slot if k in roster and k in live_now), None)
+                or next(k for k in slot if k in roster) for slot in CREW_SLOTS
                 if any(k in roster for k in slot)]
     assert [g["role_key"] for g in card["crew"]] == expected and expected
-    assert all(g["state"] == "idle" for g in card["crew"]) and card["live_agents"] == []
+    # With no open act, a live run's face is the agent of the step it is on (round 3, 02-05:
+    # a Running count is never drawn without its faces); the crew says the same.
+    live = {g["role_key"] for g in card["live_agents"]}
+    assert card["running"] and live
+    assert all((g["state"] == "working") == (g["role_key"] in live) for g in card["crew"])
     tester = next(k for k in CREW_SLOTS[2] if k in roster)
     with engine.begin() as db:
         db.execute(text(
@@ -88,7 +95,7 @@ def test_cards_draw_the_real_crew_and_who_is_acting_now(world, client, engine, h
              "w": helpdesk["running"]["run_id"]})
     card = next(c for c in _get(world, client, "/v1/projects/summary")["items"]
                 if c["id"] == helpdesk["id"])
-    assert [g["role_key"] for g in card["live_agents"]] == [tester]
+    assert tester in [g["role_key"] for g in card["live_agents"]]
     assert {g["role_key"]: g["state"] for g in card["crew"]}[tester] == "working"
 
 

@@ -116,6 +116,9 @@ export type Rack = {
   checkedAt: string | null;
   maxApps: number | null;
   apps: number;
+  /** Apps of the viewer's OTHER projects on this machine (counted in `apps`, drawn as a chip
+   *  that opens the server's drawer, where every project on it is listed). */
+  others: number;
   portsUsed: number;
   portsTotal: number | null;
   residents: Resident[];
@@ -126,7 +129,7 @@ export function parseRack(w: unknown): Rack {
   return {
     id: str(o.id), thisComputer: o.this_computer === true, name: str(o.name), address: optStr(o.address),
     arch: optStr(o.arch), state: parseWord(o.state), stage: parseStage(o.stage), checkedAt: optStr(o.checked_at),
-    maxApps: optNum(o.max_apps), apps: num(o.apps), portsUsed: num(o.ports_used), portsTotal: optNum(o.ports_total),
+    maxApps: optNum(o.max_apps), apps: num(o.apps), others: num(o.others), portsUsed: num(o.ports_used), portsTotal: optNum(o.ports_total),
     residents: arr(o.residents).map(parseResident), stageAction: (optStr(o.stage_action) as StageAction) ?? null,
   };
 }

@@ -52,7 +52,8 @@ def stage_of(got: Mapping[str, bool], *, active: bool) -> str:
 
 def journey(project_id: str, got: Mapping[str, bool], stage: str, *, needs_you: int = 0,
             subs: Optional[Mapping[str, str]] = None, details: Optional[Mapping[str, str]] = None,
-            prod_waits: bool = False, active: bool = True) -> list[dict[str, Any]]:
+            prod_waits: bool = False, active: bool = True,
+            ats: Optional[Mapping[str, str]] = None) -> list[dict[str, Any]]:
     """The six stages. The current one is `now` (teal, pulsing) — work waiting on a person is
     said in its sub and the Needs-you card, not by locking the Working node; Production is
     `waiting` (amber, "needs you") whenever it waits on a person (staging is live, no prod
@@ -70,13 +71,21 @@ def journey(project_id: str, got: Mapping[str, bool], stage: str, *, needs_you: 
             state = "done"
         elif key == "production" and prod_waits:
             state = "waiting"
+        elif key == "ready" and got.get("onboarding"):
+            # Onboarded, but a Ready row is still open (one only a person can do): amber, never
+            # a tick and never "not started".
+            state = "waiting"
         else:
             state = "todo"
         not_started = key == "onboarding" and state == "todo"
-        out.append({"key": key, "label": STAGE_LABELS[key], "state": state,
+        # `at`: the moment a done node happened, for the console to say in the viewer's zone
+        # (its sub is that day; "{day}" in its detail is replaced by it).
+        at = (ats or {}).get(key) if state == "done" else None
+        out.append({"key": key, "label": STAGE_LABELS[key], "state": state, "at": at or None,
                     "sub": "Not started" if not_started else (subs or {}).get(key) or "",
                     "detail": ("Onboarding hasn't run yet: start it and Helm reads the repo"
-                               if not_started else (details or {}).get(key) or ""),
+                               if not_started else ((details or {}).get(key) or "").replace(
+                                   "{day}" if at else " {day}", "{day}" if at else "")),
                     "href": project_href(project_id, tab=_TAB_OF.get(key, "overview"),
                                          drawer=f"stage:{key}")})
     return out
@@ -108,7 +117,9 @@ def journey_subs(connection: Connection, project: Mapping[str, Any], items: list
         "WHERE project_id = :p AND COALESCE(finalize_ctx->'merge'->>'sha', '') <> ''"),
         {"p": project_id}).scalar() or 0)
     running = sum(1 for w in items if w["state"] == "running" and w["source"] != "onboarding")
-    people = [n for n in waiting if not str(n.get("id", "")).startswith("onb:")]
+    # WORK waiting on a person (04-05): a decision on a piece of work (its card names the work);
+    # a setup card ("Pick a prod host") and onboarding's "only you" rows are not work.
+    people = [n for n in waiting if n.get("work_id") and not str(n.get("id", "")).startswith("onb:")]
 
     def newest(prod: bool) -> Optional[datetime]:
         at = [e.get("deployed_at") for e in envs if (str(e["key"]).lower() in PRODUCTION) == prod
@@ -127,9 +138,11 @@ def journey_subs(connection: Connection, project: Mapping[str, Any], items: list
                 return None
         return v
 
-    created = short_day(_when(onboarding.get("finished_at") or onboarding.get("started_at"))
-                        or project["created_at"]) or ""
-    subs = {"onboarding": created,
+    # THE VIEWER'S DAY (04-02): the moment is sent (`at`) and the console writes it in the
+    # viewer's zone; the server never writes a day ("Nov 7" in UTC read a day late in Sydney).
+    onboarded_at = iso(_when(onboarding.get("finished_at") or onboarding.get("started_at"))
+                       or project["created_at"]) or ""
+    subs = {"onboarding": "",
             "ready": f"{done}/{len(checklist)}" if checklist else "",
             "backlog": onboarding_service.backlog_words(counts),
             "working": (f"{merged} merged" if merged else f"{running} running" if running
@@ -143,7 +156,8 @@ def journey_subs(connection: Connection, project: Mapping[str, Any], items: list
                                     f"{running} building" if running else "",
                                     f"{len(people)} waiting on you" if people else "") if x)
     details = {
-        "onboarding": f"Onboarded {created}" + (f" — {found}" if found else ""),
+        "onboarding": ("Onboarded {day}" if onboarded_at else "Onboarded")
+                      + (f" — {found}" if found else ""),
         "ready": (f"Ready for work: {done} of {len(checklist)} checks" if checklist
                   else "Ready for work"),
         "backlog": (f"Backlog: {proposed} items proposed, you accepted {accepted}" if proposed
@@ -155,7 +169,7 @@ def journey_subs(connection: Connection, project: Mapping[str, Any], items: list
                        else f"Production last deployed {age(shipped)} ago" if shipped
                        else "Production is set up once staging is live"),
     }
-    return subs, details, prod_waits
+    return subs, details, prod_waits, {"onboarding": onboarded_at}
 
 
 # ── needs you ───────────────────────────────────────────────────────────────────────────────
@@ -303,28 +317,30 @@ def next_items(connection: Connection, project_id: str, onboarding: Mapping[str,
     """WHAT'S NEXT: the top `limit` of the ranked backlog — open roadmap recommendations by
     score, then the onboarding agent's ranked candidates — each with its Accept (the roadmap's
     accept route, or THE start door with its body)."""
+    from .onboarding import readable
     from .titles import short_title
 
     # Accepted first (the Roadmap's Next lane, "Feature · accepted" with a Next tag), then the
     # open ones by score, each with its Accept.
     out: list[dict[str, Any]] = []
-    for r in connection.execute(text(
-            "SELECT r.work_item_id, r.title, r.why, r.kind FROM ambient_recommendations r "
-            "LEFT JOIN work_items w ON w.id = r.work_item_id WHERE r.project_id = :p "
-            "AND r.status = 'accepted' AND COALESCE(w.lifecycle, '') NOT IN "
-            "('done', 'resolved', 'dismissed', 'in_progress', 'running') "
-            "ORDER BY r.score DESC LIMIT :n"), {"p": project_id, "n": limit}).mappings():
-        out.append({"id": r["work_item_id"], "label": short_title(r["title"], limit=5),
-                    "detail": r["why"] or r["title"], "why": r["why"], "kind": r["kind"],
-                    "source": "roadmap", "state": "next", "accepted": True,
-                    "href": project_href(project_id, tab="roadmap",
-                                         drawer=f"rec:{r['work_item_id']}"), "accept": None})
+    # THE PLAN'S NEXT LANE, ONE SOURCE (04-36/07-03): what a person accepted and nothing has
+    # started yet, in Marshal's rank (plan._planned — the Roadmap's Next and the Work tab's
+    # Planned read the same rows). An accepted item never shows here again with an Accept.
+    from .plan import _planned
+
+    for p in [p for p in _planned(connection, project_id) if p["lane"] == "next"][:limit]:
+        out.append({"id": p["id"], "label": p["label"], "detail": p["why"] or p["title"],
+                    "why": p["why"], "kind": p["rec_kind"], "source": "roadmap", "state": "next",
+                    "accepted": True, "href": p["href"], "accept": None,
+                    "external_url": p.get("external_url")})
     recs = connection.execute(text(
         "SELECT work_item_id, title, why, kind, detector, facts->>'why_short' AS short, "
         "facts->>'external_url' AS url FROM ambient_recommendations "
         "WHERE project_id = :p AND status = 'open' ORDER BY score DESC LIMIT :n"),
         {"p": project_id, "n": limit}).mappings().all()
 
+    recs = [{**r, "title": readable(r["title"], r["why"])[0],
+             "why": readable(r["title"], r["why"])[1]} for r in recs]
     out += [{"id": r["work_item_id"], "label": short_title(r["title"], limit=5),
             "detail": r["why"] or r["title"], "why": r["short"] or r["why"], "kind": r["kind"],
             "source": "onboarding" if r["detector"] == "onboarding" else "roadmap",
@@ -448,6 +464,11 @@ def _facts(connection: Connection, project_id: str, items: list[dict[str, Any]],
                   worked=any(w["source"] != "roadmap" for w in work),
                   staging=healthy_non_prod, production=healthy_prod,
                   onboarding_running=onboarding.get("state") == "running")
+    # READY IS THE READY CARD'S OWN VERDICT (04-03): once onboarding ran, the node is done only
+    # when its stage is (onboarding.linear_stages: every Ready row done) — never ✓ at 5/6.
+    ready = next((st for st in onboarding.get("stages") or [] if st.get("key") == "ready"), None)
+    if ready is not None and onboarding.get("state") not in (None, "not_started"):
+        got = {**got, "ready": got["ready"] and ready.get("state") == "done"}
     active = any(w["state"] in ("running", "needs_you") for w in work)
     return {"got": got, "active": active}
 
@@ -500,9 +521,9 @@ def view(connection: Connection, project_id: str, *, now: Optional[datetime] = N
                   {"environments": [], "source": "none"})
     try_env = next((e for e in logins["environments"] if str(e["key"]).lower() in
                     ("staging", "stage")), None) or next(iter(logins["environments"]), None)
-    subs, details, prod_waits = part(
+    subs, details, prod_waits, ats = part(
         ("journey",), lambda: journey_subs(connection, project, items, envs, onboarding, waiting),
-        ({}, {}, False))
+        ({}, {}, False, {}))
     # Production waits on a person exactly when Needs you holds "Pick a prod host" (one rule,
     # needs.prod_waits), so the journey node and the card never disagree.
     prod_waits = any(n.get("id") == "prod:host" for n in waiting)
@@ -517,12 +538,15 @@ def view(connection: Connection, project_id: str, *, now: Optional[datetime] = N
                     "archived": project["archived_at"] is not None},
         "journey": journey(project_id, facts["got"], stage,
                            needs_you=len(waiting), subs=subs, details=details,
-                           prod_waits=prod_waits,
+                           prod_waits=prod_waits, ats=ats,
                            active=facts["active"] or bool(facts["got"].get("_onboarding_running"))),
         "needs_you": waiting,
         # The Roadmap tab's count: what is proposed or accepted and not done yet.
         "roadmap_count": part(("next",), lambda: onboarding_service.backlog_counts(
             connection, project_id)["total"], None),
+        # The Backlog stage's list: the very items that count is made of (04-04).
+        "backlog": part(("journey",), lambda: onboarding_service.backlog_items(
+            connection, project_id), []),
         "tiles": the_tiles,
         "captain": part(("captain",), lambda: captain_service.view(
             connection, project_id, roster=roster, with_last_said=False), None),
@@ -558,6 +582,18 @@ def _card_cost(connection: Connection, project_id: str, now: datetime) -> dict[s
     return {"cost_week": cost["usd"], "series": cost["series"],
             "on_subscription": cost.get("on_subscription", False),
             "list_week": cost.get("list_usd"), "list_series": cost.get("list_series") or []}
+
+
+def is_placeholder(project_id: str, *, repo: Any, worked: bool, targets: bool,
+                   onboarded: bool) -> bool:
+    """True for the project an install makes for itself at bootstrap (settings
+    `default_project_id`, "Default project") while nobody has used it: no repo bound, no run or
+    build, no deploy target, no onboarding. Once any of those exists it is a real project."""
+    from ...config import get_settings
+
+    default = str(getattr(get_settings(), "default_project_id", "") or "")
+    return bool(default) and project_id == default and not (repo or worked or targets
+                                                            or onboarded)
 
 
 def summary(connection: Connection, project_ids: Iterable[str], *,
@@ -626,6 +662,9 @@ def summary(connection: Connection, project_ids: Iterable[str], *,
             "agent_id": r["agent_id"] or r["role_key"], "role_key": r["role_key"],
             "name": persona.get("callsign") or r["display_name"], "role": r["display_name"],
             "avatar": avatar_of(spec, str(r["role_key"])), "lifecycle": r["lifecycle"] or "active"}
+    from .cards import live_work
+
+    moving_now = live_work(connection, ids)
     out = []
     for pid in ids:
         p = projects.get(pid)
@@ -645,7 +684,9 @@ def summary(connection: Connection, project_ids: Iterable[str], *,
             setup_n = 0
         decided = count_waiting_on_operator(connection, pid, now=now)
         waiting = decided + setup_n
-        live = int(run.get("live") or 0) + int(build.get("live") or 0)
+        # THE ONE COUNT of what moves now (cards.live_work): the Running tile, this card's
+        # Working pill and its "N building" line read the same pieces of work.
+        live = int((moving_now.get(pid) or {}).get("count") or 0)
         worked = int(run.get("total") or 0) + int(build.get("total") or 0) > 0
         non_prod = any(t["deployed"] and str(t["environment"]).lower() not in PRODUCTION
                        for t in tgs)
@@ -698,10 +739,15 @@ def summary(connection: Connection, project_ids: Iterable[str], *,
                                  "avatar": f["avatar"], "agent_id": f.get("agent_id")}
                                 if f else None),
                     "onboarding": onb.get("state"), "archived": p["archived_at"] is not None,
+                    # THE BOOTSTRAP PLACEHOLDER (00a-02/13/34): the install's own "Default
+                    # project" with no repo, no work, no target and no onboarding is not a
+                    # project anyone added — first run, the rail and Command Center skip it.
+                    "placeholder": is_placeholder(pid, repo=primary.get(pid), worked=worked,
+                                                  targets=bool(tgs), onboarded=bool(onb)),
                     **_card_cost(connection, pid, now),
                     "updated_at": iso(updated), "href": project_href(pid)})
     return out
 
 
-__all__ = ["journey", "needs_you", "next_items", "reached", "stage_of", "summary", "tiles",
+__all__ = ["is_placeholder", "journey", "needs_you", "next_items", "reached", "stage_of", "summary", "tiles",
            "view", "week"]

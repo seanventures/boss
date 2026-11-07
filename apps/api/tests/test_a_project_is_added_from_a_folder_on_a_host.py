@@ -10,6 +10,8 @@
 """
 from __future__ import annotations
 
+import re
+
 import json
 import uuid
 
@@ -181,7 +183,7 @@ def test_jump_finds_pr_3_once_with_its_short_title_and_what_it_waits_for(world, 
     assert any(i["kind"] == "build" and i["label"] == "Build · Finish the visual refresh"
                and i["hint"] == "Code Tasks" for i in items)
     assert any(i["kind"] == "run" and "visual refresh" in i["label"].lower()
-               and i["label"].startswith("Run · ") and i["hint"] == "Workflows" for i in items)
+               and re.match(r"Run #\d+ · ", i["label"]) and i["hint"] == "Workflows" for i in items)
     for spelled in ("PR #3", "#3", "3", "pr3"):
         with _as(world, world.owner):
             again = client.get("/v1/jump", params={"q": spelled, "project_id": pid}).json()["items"]
@@ -229,7 +231,9 @@ def test_the_server_page_reads_capacity_projects_plugins_and_changes(world, clie
     assert row["port"] == 8004 and row["health"]["word"]
     assert row["href"] == f"?project_id={pid}&area=project&tab=deployments"
     assert {p["label"] for p in o["plugins"]} >= {"Caddy TLS", "node-exporter"}
-    assert o["changes"] and o["changes"][0]["label"] == "HelpDesk staging deploy"
+    # Who shipped which pull request, as Deployments says it (round 3, 14-10).
+    assert o["changes"] and o["changes"][0]["label"].startswith("HelpDesk staging · PR #")
+    assert o["changes"][0]["by"] and "PR #" in o["changes"][0]["title"]
 
 
 def test_capacity_rides_on_every_deploy_preflight():

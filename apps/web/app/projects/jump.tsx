@@ -14,6 +14,7 @@
  * a PR on GitHub, Esc closes (the shell). With no query the project's newest things show.
  * On an engine without §9, projects and the actions still answer.
  */
+import { LOCAL } from "../../lib/local-time";
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -29,6 +30,8 @@ import "./jump.css";
 export type JumpRow = {
   label: string; kind: string; href: string; sub: string; hint: string; needs_you: boolean;
   external_url: string; role_key: string; project_id: string;
+  /** When it happened (a dated deploy row): said as the viewer's own day after the label. */
+  at?: string;
 };
 const s = (v: unknown) => (typeof v === "string" ? v : v == null ? "" : String(v));
 
@@ -38,7 +41,7 @@ export function parseJumpRows(v: unknown): JumpRow[] {
   return items.map((z) => {
     const y = (z && typeof z === "object" ? z : {}) as Record<string, unknown>;
     return { label: s(y.label), kind: s(y.kind), href: s(y.href), sub: s(y.sub), hint: s(y.hint), needs_you: y.needs_you === true,
-             external_url: s(y.external_url), role_key: s(y.role_key), project_id: s(y.project_id) };
+             external_url: s(y.external_url), role_key: s(y.role_key), project_id: s(y.project_id), at: s(y.at) || undefined };
   }).filter((j) => j.label && (j.href || j.external_url));
 }
 
@@ -182,7 +185,7 @@ export function JumpResults({ query, projectId, projects, onDone }: {
                         data-external={it.kind === "pr" ? it.external_url || undefined : undefined}
                         onClick={(e) => go(it, e.metaKey || e.ctrlKey)} title={it.sub && it.sub !== it.hint ? it.sub : undefined}>
                   <span className="pxj-ico" data-c={it.needs_you ? "amber" : k.tone} aria-hidden><I size={14} /></span>
-                  <span className="pxj-t">{it.label}</span>
+                  <span className="pxj-t">{it.at && Number.isFinite(Date.parse(it.at)) ? `${it.label} · ${LOCAL.day(Date.parse(it.at))}` : it.label}</span>
                   {it.needs_you ? <span className="pxj-tag" data-testid="palette-jump-needs">needs you</span> : null}
                   <span className="pxj-k">{it.hint || it.sub}</span>
                 </button>

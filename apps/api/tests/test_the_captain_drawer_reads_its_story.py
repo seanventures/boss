@@ -133,7 +133,8 @@ def test_a_merged_build_reads_merged_and_reviewed(world, client, helpdesk):
     rows = {s["key"]: s for s in st["stages"]}
     if "review" in rows:
         assert "review round" in rows["review"]["sub"]
-    assert rows["pr"]["sub"] == "Merged"
+    # Who approved the merge, when a person did (round 3, 05b-09).
+    assert rows["pr"]["sub"] == "the owner approved · merged"
 
 
 def test_unknown_work_is_not_found_and_a_stranger_reads_nothing(world, client, helpdesk):

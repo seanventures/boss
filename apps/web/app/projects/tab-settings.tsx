@@ -254,10 +254,14 @@ function DemoLogins({ ctx, sec, picked }: { ctx: PxCtx; sec: SettingsSection; pi
   const raw = o(sec.raw);
   const from = s(raw.users_from);
   const fromWords = s(raw.users_from_words) || (from === "manifest" ? "boss.deploy.yaml" : from === "repository" ? "the app's seed" : "");
-  const rotate = async () => {
-    if (!cur?.rotate) return;
+  // Rotate asks first in the shared confirm sheet (13-06), as Redeploy and Remove do.
+  const [confirming, setConfirming] = useState(false);
+  /** Resolves to null when rotated (the sheet closes), else the refusal in words (red in the sheet). */
+  const rotate = async (): Promise<string | null> => {
+    if (!cur?.rotate) return null;
     const r = await write("Rotate the demo login password.", () => idPost<unknown>(cur.rotate!.href, {}));
     setSaid(lineOf(r, s(o(r.body).note) || "Rotated."));
+    return r.ok ? null : lineOf(r, "").text || "It was not rotated.";
   };
   if (!cur) return <p className="px-faint" data-testid="px-demo-logins-none">{sec.hint || "No demo users found · add demo_logins: to boss.deploy.yaml"}</p>;
   return (
@@ -273,11 +277,21 @@ function DemoLogins({ ctx, sec, picked }: { ctx: PxCtx; sec: SettingsSection; pi
         <span className="px-spacer" />
         {cur.rotate ? (
           <GatedButton permission="secret:manage" projectId={ctx.projectId} className="px-linkbtn" data-testid="px-set-demo-rotate"
-                       title={`A new ${cur.label} password (asks you to confirm it's you; the app picks it up on its next deploy)`} onClick={() => void rotate()}>
+                       title={`A new ${cur.label} password (asks you to confirm it's you; the app picks it up on its next deploy)`} onClick={() => setConfirming(true)}>
             <ArrowsClockwise size={11} aria-hidden /> Rotate</GatedButton>
         ) : null}
       </div>
       <SaidLine line={said} />
+      {confirming && cur.rotate ? (
+        <ConfirmSheet title={`Rotate the ${cur.label} password?`} press="Rotate" testid="px-set-demo-rotate-sheet"
+                      icon={<ArrowsClockwise size={16} aria-hidden />}
+                      lede={`Every ${cur.label} demo login gets a new password. The old one stops working once the app is next deployed.`}
+                      rows={[{ label: "Environment", value: cur.label },
+                             { label: "Value", value: "DEMO_PASSWORD", mono: true },
+                             { label: "Logins", value: cur.logins.length ? cur.logins.map((l) => l.label).join(", ") : "none yet" },
+                             { label: "Takes effect", value: "on the next deploy" }]}
+                      onConfirm={rotate} onClose={() => setConfirming(false)} />
+      ) : null}
     </div>
   );
 }

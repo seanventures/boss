@@ -172,7 +172,9 @@ def test_journey_onboarding_and_roadmap_count_the_backlog_once(world, client, en
     # Onboarded on the day the run says (tester 04-02), not the day the project was made.
     from datetime import datetime
     at = datetime.fromisoformat((ob.get("finished_at") or ob["started_at"]).replace("Z", "+00:00"))
-    assert {j["key"]: j for j in ov["journey"]}["onboarding"]["sub"] == f"{at:%b} {at.day}"
+    # The MOMENT is sent and the console says its day in the viewer's zone (round 3, 04-02).
+    node = {j["key"]: j for j in ov["journey"]}["onboarding"]
+    assert datetime.fromisoformat(node["at"].replace("Z", "+00:00")) == at and node["sub"] == ""
     assert ov["roadmap_count"] == counts["total"]
     assert rm["counts"]["open"] == counts["open"]
     # A candidate and its recommendation are one item: the old sum (candidates + open + accepted)

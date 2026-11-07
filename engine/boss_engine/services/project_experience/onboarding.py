@@ -807,7 +807,10 @@ def _candidate(label: str, *, source: str, task_class: str, severity: str, kind:
                where: Optional[str] = None, why: str = "", occurrences: int = 1
                ) -> dict[str, Any]:
     digest = hashlib.sha1(f"{source}|{ref or label}".encode()).hexdigest()[:12]
-    return {"id": f"cand_{digest}", "label": words(label, 5),
+    from .titles import shorten
+
+    # A name, never a cut sentence: the shared short-title rule (titles.shorten), ≤ 5 words.
+    return {"id": f"cand_{digest}", "label": shorten(label, 5) or words(label, 5),
             "detail": detail or label, "source": source, "kind": kind,
             "task_class": task_class, "severity": severity, "ref": ref,
             "external_url": external_url, "text": text_for_work or detail or label,
@@ -828,6 +831,60 @@ def _days(value: Any) -> Optional[int]:
     return max(0, int((datetime.now(timezone.utc) - at).total_seconds() // 86400))
 
 
+# ── the words for BOSS's own unfinished work (one composer: written AND re-read) ────────────
+#
+# A proposal about another run names that run by its SHORT title (titles.run_name), in quotes,
+# never a cut of its brief in brackets: "Review findings deferred from PR #3 (Finish the visual
+# refresh the last change promised but did not deliver. The tick) were never fixed" read as a
+# broken sentence (tester X-74). Rows written before this are re-derived on read (`readable`).
+
+def deferred_words(n: int, pr: Optional[int], name: str) -> dict[str, str]:
+    """{label, detail, text} for review findings deferred from a build that were never fixed."""
+    where = f"PR #{pr}" if pr else "a build"
+    return {"label": f"Fix {n} deferred review finding{'s' if n != 1 else ''}",
+            "detail": f"Review findings deferred from {where} on “{name}” were never fixed.",
+            "text": f"Fix the review findings deferred from {where} on “{name}”."}
+
+
+def unfinished_words(name: str, status: str) -> dict[str, str]:
+    """{label, detail, text} for a build that ended blocked or failed and never finished."""
+    lead = name.split(" ", 1)[0]
+    if lead.lower() == "finish":
+        label = name
+    else:   # "Finish add SLA timers", never "Finish: Add SLA timers" (a label lead)
+        label = f"Finish {lead.lower() if lead[1:].islower() else lead}{name[len(lead):]}"
+    return {"label": label,
+            "detail": f"The build “{name}” ended {status} and no later attempt completed.",
+            "text": f"Finish the change that ended {status}: {name}."}
+
+
+_OLD_DEFERRED = re.compile(r"^Review findings deferred from (PR #\d+|a build) \((.*)\) were never "
+                           r"fixed\.?$", re.S)
+_OLD_BUILD = re.compile(r"^The build “(.*?)” ended (\w+) and no later attempt completed\.?$", re.S)
+
+
+def readable(title: Any, why: Any) -> tuple[Any, Any]:
+    """(title, why) of a stored proposal, re-derived through the composers above when it was
+    written the old way (a cut brief in brackets, "Finish: <brief>"), so rows already on a
+    Roadmap read right without a re-run. Anything else is returned as stored."""
+    from .titles import run_name
+
+    t, w = title, why
+    m = _OLD_DEFERRED.match(str(why or ""))
+    if m:
+        pr = int(m.group(1)[4:]) if m.group(1).startswith("PR #") else None
+        n = re.match(r"Fix (\d+) deferred", str(title or ""))
+        words_ = deferred_words(int(n.group(1)) if n else 1, pr, run_name(m.group(2)))
+        return (words_["label"] if n else t), words_["detail"]
+    m = _OLD_BUILD.match(str(why or ""))
+    if m:
+        words_ = unfinished_words(run_name(m.group(1)), m.group(2))
+        return words_["label"], words_["detail"]
+    if str(title or "").startswith("Finish: "):
+        t = unfinished_words(run_name(str(title)[8:]), "blocked")["label"]
+    return t, w
+
+
 def _unfinished_work(connection: Connection, project_id: str) -> list[dict[str, Any]]:
     """BOSS's own unfinished work on this project: review findings deferred to a follow-up that
     never completed, and builds that ended blocked or failed with no later attempt of the same
@@ -835,7 +892,8 @@ def _unfinished_work(connection: Connection, project_id: str) -> list[dict[str, 
     finished and proposes nothing.)"""
     out: list[dict[str, Any]] = []
     for r in connection.execute(text(
-            "SELECT b.id, b.title, b.pull_request_number, b.pull_request_url, "
+            "SELECT b.id, b.title, b.spec->>'instructions' AS brief, b.pull_request_number, "
+            "b.pull_request_url, "
             "jsonb_array_length(COALESCE(b.state->'deferred_findings', '[]'::jsonb)) AS n "
             "FROM code_task_runs b WHERE b.project_id = :p AND b.status = 'completed' "
             "AND jsonb_array_length(COALESCE(b.state->'deferred_findings', '[]'::jsonb)) > 0 "
@@ -844,18 +902,21 @@ def _unfinished_work(connection: Connection, project_id: str) -> list[dict[str, 
             "ORDER BY b.updated_at DESC LIMIT 5"), {"p": project_id}).mappings():
         from .common import pr_number
 
+        from .titles import run_name
+
         pr = r["pull_request_number"] or pr_number(r["pull_request_url"])
         n = int(r["n"])
+        said = deferred_words(n, pr, run_name(r["title"], r["brief"]))
         out.append(_candidate(
-            f"Fix {n} deferred review finding{'s' if n != 1 else ''}", source="boss",
+            said["label"], source="boss",
             task_class="workflow_failure", severity="medium", kind="bug", ref=f"deferred:{r['id']}",
-            detail=f"Review findings deferred from {('PR #' + str(pr)) if pr else 'a build'} "
-                   f"({str(r['title'])[:80]}) were never fixed.",
+            detail=said["detail"],
             why=f"deferred on {'PR #' + str(pr) if pr else 'a build'}", occurrences=n,
             score_source="pr", external_url=r["pull_request_url"],
-            text_for_work=f"Fix the review findings deferred from {str(r['title'])[:120]}."))
+            text_for_work=said["text"]))
     rows = connection.execute(text(
-        "SELECT id, status, title, updated_at, regexp_replace(title, ' · retry \\d+$', '') AS "
+        "SELECT id, status, title, spec->>'instructions' AS brief, updated_at, "
+        "regexp_replace(title, ' · retry \\d+$', '') AS "
         "change FROM code_task_runs WHERE project_id = :p ORDER BY updated_at DESC LIMIT 40"),
         {"p": project_id}).mappings().all()
     done = {str(r["change"]) for r in rows if r["status"] == "completed"}
@@ -865,12 +926,14 @@ def _unfinished_work(connection: Connection, project_id: str) -> list[dict[str, 
         if r["status"] not in ("blocked", "failed") or change in done or change in seen:
             continue
         seen.add(change)
+        from .titles import run_name
+
+        said = unfinished_words(run_name(change, r["brief"]), str(r["status"]))
         out.append(_candidate(
-            f"Finish: {change}", source="boss", task_class="workflow_failure",
+            said["label"], source="boss", task_class="workflow_failure",
             severity="medium", kind="bug", ref=f"build:{r['id']}",
-            detail=f"The build “{change[:100]}” ended {r['status']} and no later attempt "
-                   "completed.", why=f"build {r['status']}, never finished", score_source="pr",
-            text_for_work=f"Finish the change that ended {r['status']}: {change}."))
+            detail=said["detail"], why=f"build {r['status']}, never finished", score_source="pr",
+            text_for_work=said["text"]))
     return out[:6]
 
 
@@ -1094,6 +1157,32 @@ def backlog_counts(connection: Connection, project_id: str) -> dict[str, int]:
         "FROM ambient_recommendations WHERE project_id = :p"), {"p": project_id}).mappings().first()
     open_, accepted = int((row or {}).get("open") or 0), int((row or {}).get("accepted") or 0)
     return {"open": open_, "accepted": accepted, "total": open_ + accepted}
+
+
+def backlog_items(connection: Connection, project_id: str, limit: int = 60
+                  ) -> list[dict[str, Any]]:
+    """THE ITEMS backlog_counts counts (04-04): the Roadmap's open and accepted recommendations,
+    accepted first (their rank), then open by score — each once, in its own words. The Backlog
+    stage's drawer lists these, so its list and the node's "5 proposed" are one source."""
+    from .titles import short_title
+
+    out = []
+    for r in connection.execute(text(
+            "SELECT work_item_id, title, why, status, detector, facts FROM ambient_recommendations "
+            "WHERE project_id = :p AND status IN ('open', 'accepted') ORDER BY "
+            "(status = 'accepted') DESC, COALESCE((facts->>'rank')::int, 1000000), score DESC, "
+            "created_at DESC LIMIT :n"), {"p": project_id, "n": max(1, int(limit))}).mappings():
+        facts = as_json(r["facts"], {}) or {}
+        title, why = readable(r["title"], r["why"])
+        source = str(facts.get("source") or "roadmap")
+        out.append({"id": str(r["work_item_id"]), "label": short_title(title, limit=5),
+                    "detail": why or title, "state": "next" if r["status"] == "accepted"
+                    else "proposed",
+                    "source": source if source in ("ci", "bug", "ticket", "roadmap") else "roadmap",
+                    "external_url": facts.get("external_url"),
+                    "href": project_href(project_id, tab="roadmap",
+                                         drawer=f"rec:{r['work_item_id']}")})
+    return out
 
 
 def backlog_words(counts: Mapping[str, int]) -> str:
@@ -1388,12 +1477,17 @@ def now_of(items: list[dict[str, Any]], *, running: bool, run_state: str = "runn
             "live": False}
 
 
+#: Stages whose "done" is a fact outside onboarding (the app is live), kept after the current one.
+FACT_STAGES = frozenset({"deploy"})
+
+
 def linear_stages(stages: list[dict[str, Any]], run_state: str) -> list[dict[str, Any]]:
-    """THE ONE STATE MACHINE of the stage strip (10-03..08, 00b-08..11): the stages are a line,
-    so exactly one is current — the first that is not done — and nothing after it is done or
-    live, whatever its own facts say (staging can be live from before onboarding; Marshal can
-    draft a backlog while Ready is 4 of 6: both stay ahead, with their words). The current one is
-    `now` (or `failed`, or the stage's own `waiting`); before onboarding starts nothing is current.
+    """THE ONE STATE MACHINE of the stage strip (10-03..08, 00b-08..11): exactly one stage is
+    current — the first that is not done — `now` (or `failed`, or the stage's own `waiting`);
+    after it nothing is live and the onboarding's own steps are todo (a backlog drafted while
+    Ready is 4 of 6 is not ticked). DEPLOY is not onboarding's to gate: the app being live on
+    staging is a fact, so a done Deploy stays done (10-07: four deploys never read "todo"
+    because a Ready row still waits on you). Before onboarding starts nothing is current.
     The header, the strip, the first-run guide and the journey's first nodes all read this."""
     out: list[dict[str, Any]] = []
     current_seen = run_state == "not_started"
@@ -1401,7 +1495,8 @@ def linear_stages(stages: list[dict[str, Any]], run_state: str) -> list[dict[str
         st = dict(st)
         raw = st.get("state") or "todo"
         if current_seen:
-            st["state"] = "todo"
+            st["state"] = ("done" if raw == "done" and st.get("key") in FACT_STAGES
+                           and run_state != "not_started" else "todo")
         elif raw in ("done", "skipped"):
             pass
         else:
@@ -1462,6 +1557,17 @@ def _tests_truth(connection: Connection, project_id: str,
     return suite_words(_safe(lambda: last_full_run(connection, project_id), None), files)
 
 
+def _live_models(connection: Connection, project_id: str) -> Optional[tuple[bool, str]]:
+    """Repo and models' own answer now (Probes.models_ready), or None when it can't be read."""
+    from ...config import get_settings
+
+    try:
+        with connection.begin_nested():
+            return Probes().models_ready(connection, get_settings(), project_id)
+    except Exception:  # noqa: BLE001 — unreadable: the run's own record stands
+        return None
+
+
 def view(connection: Connection, project_id: str) -> dict[str, Any]:
     row = latest(connection, project_id)
     if row is None:
@@ -1489,6 +1595,26 @@ def view(connection: Connection, project_id: str) -> dict[str, Any]:
             item["state"] = "done"
         items.append(item)
     by_key = {i["key"]: i for i in items}
+    # THE MODEL IS READ LIVE (10-20): a workspace setting, so the Ready card and the workspace
+    # row say what Repo and models says NOW — never the ✓ the run stored when it last looked.
+    live_model = _live_models(connection, project_id)
+    if live_model is not None and "models" in by_key:
+        ok, said = live_model
+        by_key["models"].update(state="done" if ok else "todo", owner="agent" if ok else "you",
+                                detail=said, sub=said,
+                                action=None if ok else {"label": "Add a model", "href": href(
+                                    project_id, area="setup", focus="models")})
+    # THE APP'S SECRETS ARE READ LIVE TOO: a value only you could give that is now set (Settings
+    # › Deploy values) is done here at once — Ready reaches 6/6 without a re-read.
+    yours = list(((as_json(row["facts"], {}) or {}).get("secrets") or {}).get("yours") or [])
+    sec = by_key.get("secrets")
+    if sec and yours and sec.get("state") != "done":
+        have = {str(n) for n in connection.execute(text(
+            "SELECT DISTINCT name FROM app_secret_bindings WHERE project_id = :p AND "
+            "env <> 'build' AND name = ANY(:n)"), {"p": project_id, "n": yours}).scalars()}
+        if set(yours) <= have:
+            said = f"{_names(yours)} set by you"
+            sec.update(state="done", owner="agent", detail=said + ".", sub=said, action=None)
     truth = _tests_truth(connection, project_id, by_key.get("tests") or {})
     if truth:
         by_key["tests"]["sub"] = truth["line"]
@@ -1511,9 +1637,11 @@ def view(connection: Connection, project_id: str) -> dict[str, Any]:
     ).mappings()} if any(b.get("rec_id") for b in backlog) else {}
     accepted = {str(r) for r in connection.execute(text(
         "SELECT facts->>'candidate_id' FROM ambient_recommendations WHERE project_id = :p "
-        "AND detector = 'onboarding' AND status = 'accepted' AND facts ? 'candidate_id'"),
+        "AND status = 'accepted' AND facts ? 'candidate_id'"),
         {"p": project_id}).scalars()}
     for b in backlog:
+        # Written the old way (a cut brief in brackets): re-derived through the one composer.
+        b["label"], b["detail"] = readable(b.get("label"), b.get("detail"))
         status = recs.get(str(b.get("rec_id") or ""))
         if b.get("id") in accepted or status == "accepted":
             b["state"] = "accepted"
@@ -1655,10 +1783,23 @@ def accept_backlog(connection: Connection, project_id: str, ids: list[str], *, a
         "WHERE project_id = :p AND status = 'accepted' AND facts->>'lane' = :l"),
         {"p": project_id, "l": lane}).scalar() or 0)
     added, kept = [], []
+    # THE SAME WORK IS ONE ITEM (04-36/07-03): a candidate whose name is already a
+    # recommendation on the Roadmap (another detector's open card, an item already accepted) is
+    # accepted THERE — never a second, accepted copy beside an open twin with its own Accept.
+    from .plan import _norm
+
+    twins = {}
+    for r in connection.execute(text(
+            "SELECT work_item_id, title FROM ambient_recommendations WHERE project_id = :p AND "
+            "status IN ('open', 'snoozed', 'accepted') ORDER BY (status = 'accepted') DESC, "
+            "created_at"), {"p": project_id}).mappings():
+        twins.setdefault(_norm(r["title"]), str(r["work_item_id"]))
     for n, cid in enumerate(dict.fromkeys(ids), start=1):
         c = backlog[cid]
         # A candidate onboarding already proposed on the Roadmap is accepted where it is.
-        ref = f"rec:{c['rec_id']}" if c.get("rec_id") else str(c.get("ref") or cid)
+        twin = twins.get(_norm(titles.get(cid) or c.get("label")))
+        ref = f"rec:{c['rec_id']}" if c.get("rec_id") else (
+            f"rec:{twin}" if twin else str(c.get("ref") or cid))
         if ref.startswith("rec:"):
             # An open roadmap recommendation: accepted where it is (the ledger and its ticket).
             item_id = ref.split(":", 1)[1]

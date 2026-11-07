@@ -129,6 +129,36 @@ def stages(spec: Mapping[str, Any], steps: Mapping[str, Mapping[str, Any]], *,
     return out
 
 
+def _decided(strip: list[dict[str, str]], steps: Mapping[str, Mapping[str, Any]]
+             ) -> list[dict[str, str]]:
+    """THE D STATION IS THE PERSON'S DECISION ON THE PLAN (05-12/25, 05b-09). A workflow with no
+    spec-review step still holds for its PRD when the panel's spec needs a person (the meeting
+    step records `spec_decision_id` while it waits, `spec_approved_by` once approved): then D is
+    that decision — waiting while it is open, done once a person approved it — and Plan is done
+    (the panel finished). Where BOSS never waited on a person (an auto-approved PRD) D stays
+    skipped: "You approve" only where BOSS really waits."""
+    design = next((st for st in strip if st["key"] == "design"), None)
+    if design is None or design["state"] != "skipped":
+        return strip
+    held = next((st for st in steps.values()
+                 if isinstance(st.get("output"), dict) and st["output"].get("spec_decision_id")),
+                None)
+    if held is None:
+        return strip
+    status = str(held.get("status") or "")
+    if held.get("gate_open") or status == "waiting":
+        state, plan = "waiting", "done"
+    elif status in _DONE_STEP or held["output"].get("spec_approved_by"):
+        state, plan = "done", None
+    elif status in _FAILED_STEP:
+        state, plan = "failed", None
+    else:
+        return strip
+    return [{**st, "state": state} if st["key"] == "design" else
+            {**st, "state": plan} if st["key"] == "plan" and plan and st["state"] in ("waiting", "now")
+            else st for st in strip]
+
+
 def _with_merge(strip: list[dict[str, str]], merge_open: bool) -> list[dict[str, str]]:
     """A pull request waiting on a person's merge: the PR station waits on them."""
     if not merge_open:
@@ -635,8 +665,9 @@ def _run_items(connection: Connection, project_id: str, limit: int,
             "last_attempt_at": iso((latest or {}).get("created_at")) or iso(r["created_at"]),
             "stalled_since": iso(since),
             "stages": _reviewed_in_build(
-                _with_merge(stages(spec, run_steps, has_pr=bool(pr_url) and merge is None,
-                                   finished=finished), merge is not None), members),
+                _with_merge(_decided(stages(spec, run_steps, has_pr=bool(pr_url) and merge is None,
+                                            finished=finished), run_steps), merge is not None),
+                members),
             # The one action a person takes here, named for what it does (never "Merge" on a
             # deploy approval): Merge · Approve deploy · Approve plan · Decide.
             "action_label": ("Merge" if merge is not None and gate is None

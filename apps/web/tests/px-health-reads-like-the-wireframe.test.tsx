@@ -149,7 +149,7 @@ describe("Health's words", () => {
   it("reads times and spans the way the wireframe writes them", () => {
     const now = new Date(2026, 10, 6, 15, 0);
     expect(dayTime(new Date(2026, 10, 6, 9, 12).toISOString(), now)).toBe("Today 09:12");
-    expect(dayTime(new Date(2026, 10, 4, 9, 12).toISOString(), now)).toBe("Wed");
+    expect(dayTime(new Date(2026, 10, 4, 9, 12).toISOString(), now)).toBe("Wed 09:12");
     expect(spanWords(840)).toBe("14 min");
     expect(spanWords(null)).toBe("");
   });

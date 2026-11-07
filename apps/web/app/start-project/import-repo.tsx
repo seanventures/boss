@@ -42,12 +42,15 @@ type CaptainRead = { role_key: string | null; name: string | null; role?: string
 export function repoChecks(repo: RegistryRepo, f: RepoFacts | null): { label: string; sub: string; state: CheckState }[] {
   const c = repo.checks ?? {};
   const asked = [c.read?.ok, c.write?.ok, c.pull_requests?.ok];
-  const access: CheckState = asked.every((x) => x === true) ? "done" : asked.some((x) => x === false) ? "failed" : f ? "done" : "now";
+  // ONE TRUTH (03-16): a repository a new project cannot reach (no GitHub App for its org — the
+  // "Connect GitHub first" note under Start) is never ticked here; the check says the same.
+  const unreachable = repo.new_project?.ok === false;
+  const access: CheckState = unreachable ? "failed" : asked.every((x) => x === true) ? "done" : asked.some((x) => x === false) ? "failed" : f ? "done" : "now";
   const missing = [c.read?.ok === false ? "read" : "", c.write?.ok === false ? "branch" : "", c.pull_requests?.ok === false ? "PR" : ""].filter(Boolean);
   const stack = f ? [f.facts.language, f.facts.framework].filter(Boolean).join(" · ") : "";
   const build = f?.facts.build ? `${f.facts.build}${f.facts.tests ? " · tests" : ""}` : "";
   return [
-    { label: "Access", sub: access === "failed" ? `no ${missing.join(" · ")} access` : "read · branch · PR", state: access },
+    { label: "Access", sub: unreachable ? "connect GitHub first" : access === "failed" ? `no ${missing.join(" · ")} access` : "read · branch · PR", state: access },
     { label: "Stack", sub: f ? stack || "at first build" : "reading…", state: f ? (stack ? "done" : "todo") : "now" },
     { label: "Build & test", sub: f ? build || "the first build runs them" : "reading…", state: f ? (build ? "done" : "todo") : "now" },
   ];

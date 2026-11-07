@@ -15,7 +15,8 @@ import {
 
 import { AgentAvatar } from "../agent-avatar";
 import { useWrapMarks } from "../../lib/wrap-flow";
-import { costWords, isExternal, pxHref, readPxUrl, writePxUrl, type Agent, type Health, type Node, type PxUrl, type ReadState, type StepState } from "../../lib/project-experience";
+import { costWords, isExternal, nodeWords, pxHref, readPxUrl, writePxUrl, type Agent, type Health, type Node, type PxUrl, type ReadState, type StepState } from "../../lib/project-experience";
+import { useLocalTime } from "../../lib/local-time";
 
 export type Tone = "teal" | "green" | "amber" | "red" | "violet" | "blue";
 
@@ -79,7 +80,10 @@ function nodeGlyph(n: Node, i: number, small: boolean): React.ReactNode {
 }
 
 /** THE JOURNEY STRIP: the project's life as one diagram. Each node opens what happened there. */
-export function Journey({ nodes, size, onOpen, testid = "px-journey" }: { nodes: Node[]; size?: "s"; onOpen?: (n: Node) => void; testid?: string }) {
+export function Journey({ nodes: given, size, onOpen, testid = "px-journey" }: { nodes: Node[]; size?: "s"; onOpen?: (n: Node) => void; testid?: string }) {
+  // Days in the viewer's zone (04-02): a dated node's sub and tooltip, written after mount.
+  const local = useLocalTime();
+  const nodes = given.map((n) => (n.at ? { ...n, ...nodeWords(n, local.day) } : n));
   if (!nodes.length) return null;
   return (
     <div className="px-jr" data-size={size} data-testid={testid} role="list" aria-label="Journey">

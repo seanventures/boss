@@ -126,6 +126,15 @@ describe("Settings (screen 13) on the engine's answer", () => {
     expect(tid("px-set-demo-rotate")).toBeNull();
     await press(tid("px-set-demo-env-staging"));
     await press(tid("px-set-demo-rotate"));
+    // 13-06: Rotate asks first in the shared confirm sheet; nothing is posted until confirmed.
+    expect(tid("px-set-demo-rotate-sheet")!.getAttribute("role")).toBe("dialog");
+    expect(tid("px-set-demo-rotate-sheet-environment")!.textContent).toBe("Staging");
+    expect(calls.some((c) => c.method === "POST")).toBe(false);
+    await press(tid("px-set-demo-rotate-sheet-cancel"));
+    expect(tid("px-set-demo-rotate-sheet")).toBeNull();
+    expect(calls.some((c) => c.method === "POST")).toBe(false);
+    await press(tid("px-set-demo-rotate"));
+    await press(tid("px-set-demo-rotate-sheet-go"));
     expect(calls.find((c) => c.method === "POST")?.path).toBe(`/v1/projects/${P}/demo-logins/rotate`);
     expect(calls.find((c) => c.method === "POST")?.search).toBe("?env=staging");
   });
@@ -242,6 +251,9 @@ describe("Settings round 2 (13-03 / X-73, 13-18, 13-20)", () => {
       error: "vault_not_set_up", detail: "BOSS's secrets vault isn't set up on this install (no master key), so saved values can't be read or changed.", fix: { label: "Run boss doctor", command: "boss doctor" } } } : undefined));
     await open();
     await press(tid("px-set-demo-rotate"));
+    await press(tid("px-set-demo-rotate-sheet-go"));
+    // The refusal is red inside the sheet (it stays open) and on the section's line.
+    expect(tid("px-set-demo-rotate-sheet-error")!.textContent).toContain("vault");
     const line = $$("[data-testid='px-said-line']").find((x) => x.textContent!.includes("vault"))!;
     expect(line.hasAttribute("data-ok")).toBe(false);
   });
