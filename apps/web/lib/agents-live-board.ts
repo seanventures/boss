@@ -120,8 +120,12 @@ export type AttentionBuild = {
 
 /** The pill's slice of attention, on `/v1/agents/live` (§6.3). */
 export type AttentionSummary = {
+  /** Decisions + what only a person can set up: the bell's number, and Approvals' Needs action (X-14). */
   count: number;
-  items: { id: string; roleKey: string | null; title: string; at?: string; decideInline: boolean }[];
+  /** The two parts of `count` (an older API sends neither). */
+  decisions?: number;
+  setup?: number;
+  items: { id: string; roleKey: string | null; title: string; at?: string; decideInline: boolean; kind?: string; href?: string }[];
 };
 
 // ── Missions (Live work rows) ───────────────────────────────────────────────────────────────
@@ -282,10 +286,13 @@ export function parseAttentionSummary(w: unknown): AttentionSummary {
   const o = obj(w);
   return {
     count: num(o.count),
+    ...(typeof o.decisions === "number" ? { decisions: o.decisions } : {}),
+    ...(typeof o.setup === "number" ? { setup: o.setup } : {}),
     items: arr(o.items).map((i) => {
       const x = obj(i);
       return { id: str(x.id), roleKey: roleOf(x.role_key), title: str(x.title), at: opt(x.at),
-               decideInline: x.decide_inline === true };
+               decideInline: x.decide_inline === true,
+               ...(str(x.kind) ? { kind: str(x.kind) } : {}), ...(str(x.href) ? { href: str(x.href) } : {}) };
     }),
   };
 }

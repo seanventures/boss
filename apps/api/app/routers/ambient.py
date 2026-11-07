@@ -210,7 +210,7 @@ def build_ambient_router(*, engine, settings: Callable[[], Any],
         with begin(engine) as c:
             require_reader(c, project_id)
             return {"classes": policy.matrix(c, project_id),
-                    "levels": [{"level": k, "name": v}
+                    "levels": [{"level": k, "name": v, "meaning": task_classes.LEVEL_MEANINGS[k]}
                                for k, v in task_classes.LEVEL_NAMES.items()],
                     "actions": [{"key": a.key, "title": a.title, "min_level": a.min_level,
                                  "risk": a.risk, "reversibility": a.reversibility,

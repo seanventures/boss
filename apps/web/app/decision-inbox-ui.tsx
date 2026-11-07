@@ -14,7 +14,9 @@ import { ArchitectureDoc } from "./architecture-doc";
 import { ChecksFailing, checksFailingOf } from "./checks-failing";
 import { architectureDocOf } from "../lib/architecture";
 import { AreaLink } from "./area-link";
-import { linkTo } from "./agents/live-util";
+import { linkTo, navigate } from "./agents/live-util";
+import { reviewPatch } from "./agents/presence-pill";
+import { useAttention } from "../lib/agents-live";
 import { isAreaId } from "../lib/area-ids";
 import { displayTitle } from "../lib/directive-subject";
 import { SubmitButton } from "./submit-button";
@@ -563,10 +565,17 @@ export function DecisionInbox({
     () => filterDecisionInbox(feed.items, filter),
     [feed.items, filter],
   );
+  // ONE COUNT WITH THE BELL (X-14): the bell counts decisions AND what only a person can set up
+  // on this project (a prod host, a value nothing else sets — the project's Needs you), from the
+  // one poll (/v1/agents/live `attention`). Needs action counts and lists the same things, so the
+  // bell never says 1 over a queue that says 0.
+  const attention = useAttention(projectId);
+  const setupItems = useMemo(() => (attention?.items ?? []).filter((i) => i.kind === "setup"), [attention]);
+  const setupCount = attention?.setup ?? setupItems.length;
   const actionableCount = useMemo(
     () => filterDecisionInbox(feed.items, "needs_action").length,
     [feed.items],
-  );
+  ) + setupCount;
   const resolvedCount = useMemo(
     () => filterDecisionInbox(feed.items, "resolved").length,
     [feed.items],
@@ -670,8 +679,22 @@ export function DecisionInbox({
               "The executive console could not reach the decision inbox."}
           </p>
         </article>
-      ) : visible.length === 0 ? (
-        <DecisionInboxEmpty filter={filter} orgId={orgId} />
+      ) : null}
+      {feed.apiReachable && filter === "needs_action" && setupCount > 0 ? (
+        <div className="dq dq-setup" data-testid="decision-inbox-setup" aria-label="Only you can set these up">
+          <span className="eyebrow">Only you can set these up</span>
+          {setupItems.map((i) => (
+            <article key={i.id} className="decision-card" data-testid={`decision-setup-${i.id}`}>
+              <h3 style={{ margin: 0 }}>{i.title}</h3>
+              <p className="detail">BOSS can&apos;t do this one for you. It waits here and on the bell until it&apos;s set.</p>
+              <button type="button" className="button secondary" onClick={() => navigate(reviewPatch(i))}>Set it up ›</button>
+            </article>
+          ))}
+          {setupCount > setupItems.length ? <p className="detail">+{setupCount - setupItems.length} more in the project&apos;s Needs you.</p> : null}
+        </div>
+      ) : null}
+      {!feed.apiReachable ? null : visible.length === 0 ? (
+        filter === "needs_action" && setupCount > 0 ? null : <DecisionInboxEmpty filter={filter} orgId={orgId} />
       ) : (
         <div className="dq" data-testid="decision-inbox-list">
           {/* THE ONE SOMEBODY WAS SENT HERE TO DECIDE. A workflow gate links here with the

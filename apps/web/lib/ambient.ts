@@ -224,7 +224,7 @@ export const OUTCOME_WORDS: Record<string, { label: string; tone: "amber" | "blu
 };
 export const outcomeWords = (o_: string) => OUTCOME_WORDS[o_] ?? { label: o_ || "Open", tone: "grey" as const };
 
-export const LEVEL_WORDS: Record<string, string> = { A0: "Observe", A1: "Propose", A2: "Act to draft", A3: "Act and report" };
+export { LEVEL_MEANINGS, LEVEL_WORDS } from "./autonomy-levels";
 
 export function money(usd: number | null | undefined): string {
   if (usd == null || !Number.isFinite(usd)) return "—";

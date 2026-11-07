@@ -134,6 +134,50 @@ class VaultNotFound(VaultError):
     status = 404
 
 
+# ---- what a person reads ------------------------------------------------------------------------------
+
+#: THE ONE MAPPER from a vault refusal to words a person can act on (BOSSAPP-913 13-03 / X-73). A
+#: route that lets a VaultError through answered "VaultNotFound (see the API log, request …)" — a
+#: class name, not a sentence. Every surface reads this: {error, detail, fix?}; `fix` is the next
+#: step ({label, href} for a console place, or {label, command} for the BOSS host).
+_DOCTOR = {"label": "Run boss doctor on the BOSS host", "command": "boss doctor"}
+
+
+def refusal(exc: "VaultError") -> tuple[int, dict]:
+    """(HTTP status, body) for a vault refusal: a stable `error`, a sentence and the fix."""
+    if isinstance(exc, (MasterKeyMissing, MasterKeyMismatch, BootRefused)):
+        return 503, {"error": "vault_not_set_up", "fix": _DOCTOR,
+                     "detail": "BOSS's secrets vault isn't set up on this install (no master key), "
+                               "so saved values can't be read or changed. Run boss doctor on the "
+                               "BOSS host to set it up."}
+    if isinstance(exc, VaultDecryptError):
+        return 503, {"error": "vault_unreadable", "fix": _DOCTOR,
+                     "detail": "BOSS couldn't read this saved value with the install's current "
+                               "master key. Run boss doctor on the BOSS host, or set the value "
+                               "again."}
+    if isinstance(exc, VaultNotFound):
+        if exc.code == "no_connection":
+            return 404, {"error": "vault_no_connection",
+                         "fix": {"label": "Connect GitHub", "href": "?area=setup&focus=repository"},
+                         "detail": "That GitHub connection isn't saved in BOSS any more. "
+                                   "Connect it again."}
+        return 404, {"error": "vault_value_missing",
+                     "detail": "BOSS has no saved value for this yet. Set it (or Rotate) and "
+                               "BOSS stores a new one."}
+    if isinstance(exc, VaultNeedsReauth):
+        return 409, {"error": "vault_needs_reconnect",
+                     "fix": {"label": "Reconnect", "href": "?area=setup&focus=repository"},
+                     "detail": "That connection has expired or was revoked. Reconnect it, then "
+                               "try again."}
+    if isinstance(exc, VaultForbidden):
+        return 403, {"error": "vault_forbidden",
+                     "detail": "You can't read that saved value from here. An owner or admin "
+                               "can, from the project's Settings."}
+    return 500, {"error": "vault_error",
+                 "detail": "BOSS's secrets vault refused that. Try again; if it keeps failing, "
+                           "run boss doctor on the BOSS host.", "fix": _DOCTOR}
+
+
 # ---- the master key ----------------------------------------------------------------------------------
 
 _KCV_LABEL = b"BOSS-VAULT-KCV-v1"

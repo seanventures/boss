@@ -33,7 +33,14 @@ from dataclasses import dataclass
 from typing import Optional
 
 LEVELS = ("A0", "A1", "A2", "A3")
-LEVEL_NAMES = {"A0": "Observe", "A1": "Propose", "A2": "Act to draft", "A3": "Act and report"}
+#: THE ONE NAMING of the autonomy levels (BOSSAPP-913 13-20): Settings, Govern, every tooltip and
+#: badge read these words (the wireframe's A0 Ask · A1 Propose · A2 Act · A3 Ship); what a level
+#: lets an agent do is LEVEL_MEANINGS, said beside the name, never a second name.
+LEVEL_NAMES = {"A0": "Ask", "A1": "Propose", "A2": "Act", "A3": "Ship"}
+LEVEL_MEANINGS = {"A0": "Watches and asks; changes nothing",
+                  "A1": "Proposes the change; a person decides",
+                  "A2": "Acts up to a draft (a branch or draft PR); a person approves",
+                  "A3": "Acts and ships on its own, then reports"}
 RISKS = ("low", "medium", "high")
 REVERSIBILITY = ("reversible", "compensable", "irreversible")
 
