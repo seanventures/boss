@@ -86,9 +86,9 @@ function PulseRowView({ row, pulse, onOpen, changed, now }: {
                 onClick={() => onOpen(row.targetId)}>↗</button>
         {/* ONE PROJECT'S HEALTH LIVES ON ITS PROJECT PAGE (BOSSAPP-914 screen 15); this view keeps
             the cross-app comparison and links each app there (Project › Health links back). */}
-        <a className="inf-link obs-project-health" href={projectHealthHref()} data-testid="obs-app-project-health"
+        <a className="obs-chip obs-project-health" href={projectHealthHref()} data-testid="obs-app-project-health"
            title={`Project › Health — ${row.app}'s alerts, incidents and monitoring`} aria-label={`Project health for ${name}`}>
-          <Heartbeat size={14} aria-hidden /></a>
+          <Heartbeat size={12} aria-hidden /><span className="obs-project-health-word">Project › Health</span></a>
       </span>
       {table ? (
         <div className="obs-prow-table">

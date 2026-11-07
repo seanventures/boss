@@ -9566,6 +9566,8 @@ CREATE TABLE IF NOT EXISTS github_repos (
   checked_at       TIMESTAMPTZ,
   -- false: the installation no longer lists it (removed from the App, or deleted on GitHub).
   reachable        BOOLEAN NOT NULL DEFAULT true,
+  -- GitHub's last push (Add a project lists repos with how long ago: "3h", "12d").
+  pushed_at        TIMESTAMPTZ,
   last_seen_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
   created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -11270,3 +11272,19 @@ CREATE INDEX IF NOT EXISTS idx_code_task_runs_workflow_run
   ON code_task_runs ((finalize_ctx->>'workflow_run_id'));
 CREATE INDEX IF NOT EXISTS idx_code_task_runs_project_created
   ON code_task_runs (project_id, created_at DESC);
+
+-- FOLDER ON HOST (Add a project, screen 03): a project's source can be a folder on one of the
+-- organisation's verified servers. BOSS only READS it (project_experience/host_folder.py: one
+-- ssh session of read-only commands); the row records which server, which path and what the
+-- read found (git remote without credentials, branch, file count, stack).
+CREATE TABLE IF NOT EXISTS project_host_folders (
+  id BIGSERIAL PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  host_id TEXT NOT NULL,
+  path TEXT NOT NULL,
+  facts JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_by TEXT NOT NULL DEFAULT 'boss',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, host_id, path)
+);

@@ -1124,7 +1124,20 @@ def pill(connection: Any, settings: Any, project_id: str, *,
     # setup gap have their own places (Live's cards, the Setup rail).
     decisions = [n for n in cc["needs_you"] if n.get("kind") == "approval"]
     items = attention_items(connection, project_id, decisions[:5], read["decisions"])
-    return {"count": int(cc["counts"]["needs_you"]),
-            "items": [{"id": a["id"], "role_key": a.get("role_key"), "title": a.get("title"),
-                       "at": a.get("at"), "decide_inline": bool(a.get("decide_inline"))}
-                      for a in items]}
+    # WHAT ONLY A PERSON CAN SET UP on this project (project_experience.needs.setup_cards:
+    # "Pick a prod host", onboarding's only-you items) counts too: the Project page's Needs you
+    # bar lists them, and the bell said 2 beside a bar that said 3.
+    try:
+        from .project_experience.needs import setup_cards
+
+        with connection.begin_nested():
+            setup = setup_cards(connection, project_id)
+    except Exception:  # noqa: BLE001 — the pill never fails over its setup line
+        setup = []
+    out = [{"id": a["id"], "role_key": a.get("role_key"), "title": a.get("title"),
+            "at": a.get("at"), "decide_inline": bool(a.get("decide_inline"))} for a in items]
+    out += [{"id": c["id"], "role_key": None, "title": c["label"], "at": None,
+             "decide_inline": False, "kind": "setup", "href": c["action"]["href"]}
+            for c in setup][: max(0, 5 - len(out))]
+    return {"count": int(cc["counts"]["needs_you"]) + len(setup), "decisions":
+            int(cc["counts"]["needs_you"]), "setup": len(setup), "items": out}

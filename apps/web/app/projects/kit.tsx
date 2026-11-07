@@ -28,7 +28,7 @@ export function Tag({ tone, children, title }: { tone?: "green" | "amber" | "red
 }
 
 export const HEALTH_TONE: Record<Health, "green" | "amber" | "red" | "idle"> = { healthy: "green", degraded: "amber", down: "red", unknown: "idle" };
-export const HEALTH_WORD: Record<Health, string> = { healthy: "Healthy", degraded: "Degraded", down: "Down", unknown: "No signal" };
+export const HEALTH_WORD: Record<Health, string> = { healthy: "Healthy", degraded: "Degraded", down: "Down", unknown: "Unknown" };
 
 /** A ring chart: `pct` 0-100, the text inside, colour by meaning. */
 export function Ring({ pct, children, tone = "green", size, label }: { pct: number; children?: React.ReactNode; tone?: "green" | "teal" | "amber" | "red"; size?: "s" | "l"; label: string }) {
@@ -101,7 +101,7 @@ export function Journey({ nodes, size, onOpen, testid = "px-journey" }: { nodes:
 /** A TIMELINE: up to six points, oldest first, a day label over each ("Mon", "Today"), the dot
  *  coloured by kind and a few words under it. Fits any width: points share the row. */
 export function Timeline({ points, testid, onOpen }: {
-  points: { at: string | null; label: string; kind: string; href?: string }[]; testid?: string; onOpen?: (i: number) => void;
+  points: { at: string | null; label: string; kind: string; href?: string; detail?: string }[]; testid?: string; onOpen?: (i: number) => void;
 }) {
   if (!points.length) return null;
   const day = (at: string | null) => {
@@ -118,7 +118,7 @@ export function Timeline({ points, testid, onOpen }: {
   return (
     <ol className="px-tl" data-testid={testid} aria-label="Timeline">
       {points.map((p, i) => (
-        <li key={`${p.label}-${i}`} className="px-tl-p" data-k={p.kind} data-testid={testid ? `${testid}-${i}` : undefined}>
+        <li key={`${p.label}-${i}`} className="px-tl-p" data-k={p.kind} data-testid={testid ? `${testid}-${i}` : undefined} title={p.detail || undefined}>
           <span className="px-tl-day">{day(p.at)}</span>
           <span className="px-tl-dot" aria-hidden />
           {p.href ? (
@@ -195,13 +195,28 @@ export function PxLink({ href, children, className, testid, title, onOpen }: {
 }
 
 /** Open a drawer in place (deep-linkable `&drawer=kind:id`; Back closes it). */
-export const openDrawer = (kind: string, id: string) => writePxUrl({ drawer: `${kind}:${id}` });
-export const closeDrawer = () => writePxUrl({ drawer: null });
+export const openDrawer = (kind: string, id: string) => {
+  writePxUrl({ drawer: `${kind}:${id}` });
+  // Mark the entry this drawer pushed, so closing it can step back over it (PX-33).
+  try { window.history.replaceState({ ...(window.history.state ?? {}), pxDrawer: true }, "", window.location.href); } catch { /* non-browser */ }
+};
+/** Closing never adds a history entry (PX-33: Esc pushed one, so Back re-opened the drawer).
+ *  A drawer this page opened is stepped back over; one that came in on a link is replaced away. */
+export const closeDrawer = () => {
+  try {
+    if ((window.history.state as { pxDrawer?: boolean } | null)?.pxDrawer) { window.history.back(); return; }
+  } catch { /* non-browser */ }
+  writePxUrl({ drawer: null, cap_ask: null }, "replace");
+};
 
 /** A side drawer: focus moves in, Esc and the scrim close it, focus returns to where it was. */
-export function Drawer({ title, sub, icon, onClose, children, footer, testid = "px-drawer", wide }: {
+export function Drawer({ title, sub, icon, onClose, children, footer, testid = "px-drawer", wide, actions, bodyClass }: {
   title: React.ReactNode; sub?: React.ReactNode; icon?: React.ReactNode; onClose: () => void; children: React.ReactNode;
   footer?: React.ReactNode; testid?: string; wide?: boolean;
+  /** Icon buttons beside ✕ in the header (expand to the full page, past conversations). */
+  actions?: React.ReactNode;
+  /** A class on the body, for a drawer whose body is a component of its own (the captain's chat). */
+  bodyClass?: string;
 }) {
   const id = useId();
   const panel = useRef<HTMLDivElement>(null);
@@ -223,11 +238,12 @@ export function Drawer({ title, sub, icon, onClose, children, footer, testid = "
             <h2 id={id} className="px-ell">{title}</h2>
             {sub ? <div className="px-row px-wrap px-faint" style={{ fontSize: ".58rem", marginTop: 3 }}>{sub}</div> : null}
           </div>
+          {actions}
           <button type="button" className="px-icon-btn" onClick={onClose} aria-label="Close" title="Close (Esc)" data-testid={`${testid}-close`}>
             <X size={16} weight="bold" />
           </button>
         </div>
-        <div className="px-drawer-b">{children}</div>
+        <div className={bodyClass ? `px-drawer-b ${bodyClass}` : "px-drawer-b"}>{children}</div>
         {footer ? <div className="px-drawer-f">{footer}</div> : null}
       </div>
     </div>

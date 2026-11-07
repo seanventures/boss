@@ -101,7 +101,8 @@ def test_the_overview_draws_the_journey_needs_you_tiles_captain_and_try_it(world
     assert o["project"]["repos"][0]["access"] == {"read": True, "write": True, "pr": True}
     assert o["project"]["live_url"] == STAGING_URL
     states = {j["key"]: j["state"] for j in o["journey"]}
-    assert states["staging"] == "done" and states["production"] == "todo"
+    # Staging is live and production has no host: production waits on a person (screen 04).
+    assert states["staging"] == "done" and states["production"] == "waiting"
     decisions = [n for n in o["needs_you"] if n["action"]["decision_id"]]
     assert {n["kind"] for n in decisions} == {"merge", "deploy"}
     merge = next(n for n in decisions if n["kind"] == "merge")
@@ -151,8 +152,10 @@ def test_every_piece_of_work_is_a_row_with_its_stations_agents_cost_and_links(wo
     waiting = rows[helpdesk["merge"]["run_id"]]
     assert waiting["state"] == "needs_you" and waiting["links"]["decision"]
     assert "waiting" in {s["state"] for s in waiting["stages"]}
-    assert body["counts"] == {"running": 1, "stalled": 1, "needs_you": 2, "planned": 0, "done": 3,
-                              "failed": 0}
+    # Planned holds the roadmap's accepted items (seed_plan's Now / Next lanes), counted apart.
+    assert {**body["counts"], "planned": 0} == {"running": 1, "stalled": 1, "needs_you": 2,
+                                                "planned": 0, "done": 3, "failed": 0}
+    assert body["counts"]["planned"] == sum(1 for w in body["items"] if w["state"] == "planned")
 
 
 def test_the_work_tab_filters_by_state_and_finds_by_words_or_pr_number(world, client, helpdesk):
@@ -233,14 +236,19 @@ def test_a_server_in_infra_names_the_project_of_each_app_on_it(world, client, he
 # ── §12 Health ──────────────────────────────────────────────────────────────────────────────
 
 def test_health_shows_each_environment_its_slo_and_how_monitoring_gets_set_up(world, client,
-                                                                              helpdesk):
+                                                                              helpdesk, engine):
     r = _get(world, client, world.owner, f"/v1/projects/{helpdesk['id']}/health")
     assert r.status_code == 200, r.text
     h = r.json()
     env = h["environments"][0]
     assert env["health"] == "healthy" and env["uptime_pct"] == 100.0
-    assert env["slo"] == {"target": 99.5, "burn": "ok"}
+    assert env["slo"] == {"target": 99.5, "burn": "ok", "budget_used_pct": 0}
     assert len(env["series"]["latency"]) == 30
+    assert h["monitoring_pack"]["rules"] == 7 and h["monitoring_pack"]["managed_in"] == "repo"
+    with engine.begin() as db:      # before Beacon's pack: no rules, and the empty state says how
+        db.execute(text("DELETE FROM app_alerts WHERE project_id = :p"), {"p": helpdesk["id"]})
+        db.execute(text("DELETE FROM app_alert_rules WHERE project_id = :p"), {"p": helpdesk["id"]})
+    h = _get(world, client, world.owner, f"/v1/projects/{helpdesk['id']}/health").json()
     assert h["monitoring_pack"]["rules"] == 0 and h["monitoring_pack"]["managed_in"] == "none"
     assert "Beacon" in h["empty"]["detail"]
     assert h["links"]["observability"].startswith(f"?project_id={helpdesk['id']}&area=observability")
@@ -250,7 +258,7 @@ def test_health_shows_each_environment_its_slo_and_how_monitoring_gets_set_up(wo
     # Every console link names a view the console has (Observability has no rules/logs view).
     assert h["monitoring_pack"]["href"].endswith("area=observability&view=alerts")
     assert "view=logs" not in str(h) and "view=rules" not in str(h)
-    assert h["alerts"] == [] and h["incidents"] == []
+    assert h["alerts"] == []          # no rules, nothing fired; the seeded incidents stay
 
 
 def test_a_firing_alert_and_the_squad_on_it_show_on_health(world, client, helpdesk, engine):
@@ -317,7 +325,7 @@ def test_jump_finds_a_pr_by_number_a_run_by_words_and_the_captain_by_name(world,
     pr = _get(world, client, world.owner, "/v1/jump", q="#3", project_id=pid).json()["items"]
     assert any(i["kind"] == "pr" and i["label"].startswith("PR #3") for i in pr)
     run = _get(world, client, world.owner, "/v1/jump", q="search", project_id=pid).json()["items"]
-    assert any(i["kind"] == "run" and i["label"] == "Ticket search filters" for i in run)
+    assert any(i["kind"] == "run" and i["label"] == "Run · Ticket search filters" for i in run)
     proj = _get(world, client, world.owner, "/v1/jump", q="HelpDesk").json()["items"]
     assert any(i["kind"] == "project" and i["project_id"] == pid for i in proj)
     hidden = _get(world, client, world.stranger, "/v1/jump", q="x", project_id=pid)
@@ -334,9 +342,10 @@ def test_settings_hold_every_project_setting_with_the_existing_write_as_its_acti
     assert list(sections) == ["demo_logins", "deploy_values", "targets", "captain", "autonomy",
                               "repos", "notifications"]
     demo = sections["demo_logins"]
-    assert [i["user"] for i in demo["items"]] == [u["user"] for u in DEMO_USERS]
+    # One row per user per environment (Staging / Preview / Prod switch, screen 13).
+    assert sorted({i["user"] for i in demo["items"]}) == sorted(u["user"] for u in DEMO_USERS)
     assert demo["actions"][0]["requires"] == "step_up"
-    assert demo["actions"][0]["href"].endswith("/demo-logins/reveal?env=staging")
+    assert any(a["href"].endswith("/demo-logins/reveal?env=staging") for a in demo["actions"])
     assert sections["captain"]["actions"][0]["href"] == f"/v1/projects/{helpdesk['id']}/captain"
     assert any(i["kind"] == "target" and i["env"] == "staging" for i in sections["targets"]["items"])
     assert sections["repos"]["items"][0]["full_name"] == REPO

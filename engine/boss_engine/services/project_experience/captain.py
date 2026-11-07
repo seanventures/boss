@@ -31,6 +31,13 @@ _DOES = {"product_manager": "Plans", "product_owner": "Plans", "planner": "Plans
          "technical_writer": "Documents"}
 
 
+#: One line on what a captain-capable role does with a project (the captain picker).
+_LINES = {"engineering_captain": "Owns the project end to end: onboards, plans, builds, ships",
+          "chief_of_staff": "Ranks work across every project; not a project captain",
+          "product_captain": "Leads from the product side: plans and priorities",
+          "delivery_captain": "Leads delivery: keeps work moving to production"}
+
+
 def default_role(roster: Mapping[str, Any]) -> Optional[str]:
     if DEFAULT_ROLE in roster:
         return DEFAULT_ROLE
@@ -104,6 +111,79 @@ def last_said(connection: Connection, project_id: str, role_key: Optional[str]
             "href": href(project_id, area="agent_ops", act=row["act_id"])}
 
 
+def _short(text_: Any) -> str:
+    """An act's label in words: "Build · <long brief>" → "Build · Finish the visual refresh"."""
+    raw = str(text_ or "").strip()
+    head, _sep, rest = raw.partition(" · ")
+    try:
+        from .titles import short_title
+    except ImportError:  # pragma: no cover
+        return raw[:60]
+    if rest:
+        return f"{head} · {short_title(rest, limit=5)}"
+    return short_title(raw, limit=6) or raw[:60]
+
+
+def recent(connection: Connection, project_id: str, role_keys: list[str], limit: int = 5
+           ) -> list[dict[str, Any]]:
+    """What the captain and its crew did last here (agent_acts), newest first: the drawer's
+    "Lately" list before a conversation starts."""
+    if not role_keys:
+        return []
+    rows = connection.execute(text(
+        "SELECT act_id, role_key, label, kind, status, started_at, ended_at, code_task_run_id, "
+        "workflow_run_id FROM agent_acts WHERE project_id = :p AND role_key = ANY(:keys) "
+        "AND COALESCE(label, '') <> '' ORDER BY started_at DESC NULLS LAST LIMIT :n"),
+        {"p": project_id, "keys": role_keys, "n": limit * 3}).mappings().all()
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for r in rows:
+        label = _short(r["label"])
+        if label in seen:
+            continue
+        seen.add(label)
+        out.append({"act_id": r["act_id"], "role_key": r["role_key"], "label": label,
+                    "state": "now" if r["status"] == "active" else
+                    "failed" if r["status"] in ("failed", "error") else "done",
+                    "at": iso(r["ended_at"] or r["started_at"]),
+                    "href": href(project_id, area="agent_ops", act=r["act_id"])})
+        if len(out) >= limit:
+            break
+    return out
+
+
+def facts(connection: Connection, project_id: str) -> int:
+    """How much the captain knows about this project: its knowledge-graph nodes."""
+    try:
+        with connection.begin_nested():
+            return int(connection.execute(text(
+                "SELECT count(*) FROM kg_nodes WHERE project_id = :p AND valid_to IS NULL"),
+                {"p": project_id}).scalar() or 0)
+    except Exception:  # noqa: BLE001 — a count is a nicety; the drawer opens without it
+        return 0
+
+
+def starters(connection: Connection, project_id: str) -> list[dict[str, str]]:
+    """The drawer's suggestion chips (screen 09): grounded in what is on record — a merge
+    waiting on the person names its PR; cost is always answerable; planning is always offered."""
+    out = [{"label": "Plan next week", "message": "Plan next week for this project.",
+            "icon": "map"}]
+    pr = connection.execute(text(
+        "SELECT pull_request_number FROM code_task_runs c JOIN decisions d ON d.id = c.decision_id "
+        "WHERE c.project_id = :p AND d.status = 'pending' AND c.pull_request_number IS NOT NULL "
+        "ORDER BY c.created_at DESC LIMIT 1"), {"p": project_id}).scalar()
+    if pr:
+        out.append({"label": f"Why is PR #{pr} waiting?",
+                    "message": f"Why is PR #{pr} waiting, and what do I need to do?",
+                    "icon": "question"})
+    else:
+        out.append({"label": "What's left to demo?",
+                    "message": "What's left before I can demo this project?", "icon": "question"})
+    out.append({"label": "What did this cost?",
+                "message": "What did this project cost this week, and on what?", "icon": "coins"})
+    return out
+
+
 def view(connection: Connection, project_id: str, *, roster: Optional[Mapping[str, Any]] = None,
          with_last_said: bool = True) -> dict[str, Any]:
     """§2 / §7 captain: {agent_id, name, role_key, avatar, status, squad, chosen, ask, last_said}."""
@@ -123,7 +203,15 @@ def view(connection: Connection, project_id: str, *, roster: Optional[Mapping[st
                    "href": href(project_id, area="project", drawer="captain")},
            "candidates": _candidates(roster)}
     if with_last_said:
+        # THE CAPTAIN DRAWER (screen 09): scope, what it knows, what it did lately, starters.
         out["last_said"] = last_said(connection, project_id, key)
+        name = connection.execute(text("SELECT name FROM projects WHERE id = :p"),
+                                  {"p": project_id}).scalar()
+        out["scope"] = {"label": f"{name or project_id} only", "project_id": project_id}
+        out["facts"] = facts(connection, project_id)
+        out["recent"] = recent(connection, project_id,
+                               [key] + [m["role_key"] for m in out["squad"]])
+        out["starters"] = starters(connection, project_id)
     return out
 
 
@@ -132,8 +220,14 @@ def _candidates(roster: Mapping[str, Mapping[str, Any]]) -> list[dict[str, Any]]
     def rank(k: str) -> tuple:
         return (k != DEFAULT_ROLE, "captain" not in k, k)
     return [{"agent_id": roster[k]["agent_id"], "role_key": k, "name": roster[k]["name"],
-             "role": roster[k]["role"], "avatar": roster[k]["avatar"]}
-            for k in sorted(roster, key=rank) if roster[k].get("lifecycle") != "retired"][:30]
+             "role": roster[k]["role"], "avatar": roster[k]["avatar"],
+             # THE PICKER (PX-13): captain roles first, the default one recommended, each with
+             # one line on what it does here.
+             "captain_capable": "captain" in k and k != CROSS_PROJECT,
+             "recommended": k == DEFAULT_ROLE,
+             "line": _LINES.get(k) or (f"{_DOES[k]} on this project" if k in _DOES else
+                                       "Can lead this project")}
+            for k in sorted(roster, key=rank) if roster[k].get("lifecycle") != "retired"][:60]
 
 
 class CaptainRefused(ValueError):
@@ -177,4 +271,5 @@ def ensure_default(connection: Connection, project_id: str, *, actor: str = "bos
 
 
 __all__ = ["CROSS_PROJECT", "CaptainRefused", "DEFAULT_ROLE", "assign", "chosen_role",
-           "default_role", "ensure_default", "last_said", "squad", "view"]
+           "default_role", "ensure_default", "facts", "last_said", "recent", "squad", "starters",
+           "view"]

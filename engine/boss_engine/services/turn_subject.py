@@ -1101,6 +1101,13 @@ def _resolve_project(connection, project_id: str, ref: SubjectRef) -> SubjectEvi
 
     for fn in (work_part, repos_part, env_part, onboarding_part):
         part(fn)
+    # THE CAPTAIN DRAWER DRAWS A PATH (screen 09, apps/web/lib/answer-flow.ts): a status answer
+    # may open with ONE line of 2-6 steps joined by " → ", each ≤ 4 words, marked ✓ done,
+    # ● running, ! needs the person (unmarked: not started). The console draws it as chips.
+    ev.facts["how to answer a status question"] = (
+        "start with one line like '! Merge PR #3 → ● Search filters → ✓ Staging → Demo ready' "
+        "(✓ done, ● running, ! needs the person), then the answer in a few sentences; "
+        "cite each piece of work by its href")
     ev.open_points = [("what waits on a person", "list_decisions"),
                       ("a piece of work in detail", "describe_workflow_run")]
     return ev

@@ -54,7 +54,8 @@ export type PxCtx = {
   ask: (question?: string) => void;
 };
 
-/** The captain drawer IS the Ask BOSS dock, scoped to this project and talking as its captain (§7). */
+/** The Ask BOSS dock, scoped to this project and talking as its captain (§7): ⌘K's "Ask Helm…"
+ *  off the project page. On the project page `ctx.ask` opens the captain drawer (screen 09). */
 export function askCaptain(projectId: string, captain: { name: string; role_key: string } | null, question = ""): void {
   openDockAbout({ subject: { kind: "project", id: projectId }, question, role: captain?.name ?? null, roleKey: captain?.role_key || null, history: "push" });
 }
@@ -88,7 +89,6 @@ export function ProjectPage({ projectId, actor, orgId }: { projectId: string; ac
     const gone = ov.state === "missing" && start.state === "missing";
     return (
       <div className="px" data-testid="px-project">
-        <Crumbs name="Project" tab={url.tab} />
         {failed ? <Failed what="This project" error={ov.error ?? start.error} onRetry={() => { ov.refresh(); start.refresh(); }} />
           : gone ? <Empty title="Project not found" line="It may have been archived, or you may not have access to it." testid="px-project-gone">
               <a className="px-btn" href={pxHref("?area=projects")}>All projects</a></Empty>
@@ -102,7 +102,9 @@ export function ProjectPage({ projectId, actor, orgId }: { projectId: string; ac
     work: work.data ?? workFallback, workState: work.data ? "ready" : workFallback ? "ready" : work.state === "missing" ? (start.state === "missing" ? "missing" : start.state) : work.state,
     refreshWork: () => { work.refresh(); start.refresh(); },
     onboarding: onboarding.data,
-    tab, open: openDrawer, ask: (q) => askCaptain(projectId, captain, q),
+    // ASK THE CAPTAIN opens its drawer (screen 09) on this page; a question rides as `cap_ask`
+    // and is sent once when the drawer opens (the dock's own conversation, one agent path).
+    tab, open: openDrawer, ask: (q) => writePxUrl({ drawer: "captain", cap_ask: q?.trim() ? q.trim() : null }),
   };
   const ob = onboarding.data;
   const onboardingNow = overview.project.stage === "onboarding" && ob !== null;
@@ -115,7 +117,7 @@ export function ProjectPage({ projectId, actor, orgId }: { projectId: string; ac
       {ov.demo ? <DemoBanner /> : null}
       {ov.state === "missing" ? <div className="px-note" role="note" data-testid="px-project-note">BOSS didn&apos;t answer with this project&apos;s overview, so journey, health and cost are missing here; work and repo are live.</div> : null}
       <div className="px-sticky">
-        <Crumbs name={overview.project.name} tab={url.tab} onboarding={onboardingNow && url.tab === "overview"} />
+        {/* The top bar carries the breadcrumb (Projects / <project> / <tab>); the page draws none (04). */}
         <Header ctx={ctx} onboarding={onboardingNow} />
         <NeedsBar ctx={ctx} onboarding={onboardingNow ? ob : null} />
         <div className="px-tabs" role="tablist" aria-label="Project" data-testid="px-tabs"
@@ -151,18 +153,6 @@ export function ProjectPage({ projectId, actor, orgId }: { projectId: string; ac
       </div>
       {url.drawer ? <DrawerHost ctx={ctx} drawer={url.drawer} onClose={closeDrawer} /> : null}
     </div>
-  );
-}
-
-function Crumbs({ name, tab, onboarding }: { name: string; tab: Tab; onboarding?: boolean }) {
-  return (
-    <nav className="px-crumbs" aria-label="Breadcrumb" data-testid="px-crumbs">
-      <a href={pxHref("?area=projects")}>Projects</a><span aria-hidden>/</span>
-      {tab === "overview" && !onboarding ? <span aria-current="page">{name}</span> : (
-        <><a href="#" onClick={(e) => { e.preventDefault(); writePxUrl({ tab: null, drawer: null }); }}>{name}</a><span aria-hidden>/</span>
-          <span aria-current="page">{onboarding ? "Onboarding" : TAB_WORDS[tab]}</span></>
-      )}
-    </nav>
   );
 }
 

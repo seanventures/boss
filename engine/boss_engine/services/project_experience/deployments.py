@@ -57,7 +57,7 @@ def _pr_by_commit(connection: Connection, project_id: str) -> dict[str, dict[str
         n = r["n"] or pr_number(r["u"])
         if n and str(r["sha"]) not in out:
             out[str(r["sha"])] = {"number": int(n), "url": r["u"],
-                                  "title": short_title(r["title"], r["brief"], limit=4)}
+                                  "title": short_title(r["title"], r["brief"])}
     return out
 
 

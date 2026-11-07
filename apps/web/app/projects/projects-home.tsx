@@ -19,6 +19,7 @@ import {
 import { FX_SUMMARY } from "../../lib/project-experience-fixtures";
 import { DemoBanner, Empty, Face, openAddProject, usePxUrl, HEALTH_WORD, Ico, Journey, Ring, Said, Spark, Tag } from "./kit";
 import { FirstRun } from "./first-run";
+import { StartProjectHost } from "../start-project/start-host";
 import "./px.css";
 
 export type ProjectsHomeProps = {
@@ -67,6 +68,7 @@ export function ProjectsHome({ projectId, actor, orgId, projects = [], homeId, s
       )}
       <span hidden>{homeId}{orgId}</span>
       {/* + Add project opens THE sheet here even when the top bar draws no project menu (PX-20). */}
+      <StartProjectHost projectId={projectId} homeId={homeId ?? projectId} />
     </div>
   );
 }

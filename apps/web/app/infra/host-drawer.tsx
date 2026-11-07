@@ -31,6 +31,7 @@ import {
 import { ago, copyText, CopyButton, ErrorLine, localTime, Menu, useNow } from "./infra-util";
 import { confirmed, Drawer, DrawerSection, Empty, Skeleton, Sheet, StateWord, TypedConfirm } from "./kit";
 import { StageLine } from "./rack";
+import { ServerOverview } from "./server-overview";
 
 const STORES: { key: string; label: string; tip: string }[] = [
   { key: "database", label: "Database", tip: "database (survives restarts)" },
@@ -365,11 +366,13 @@ export function HostDrawer({ projectId, actor, hostId, canWrite, onClose, onResi
   ) : <span className="inf-drawer-title">Machine</span>;
 
   return (
-    <Drawer label={h ? `Machine ${h.name}` : "Machine"} testId="inf-host-drawer" onClose={onClose} head={head}>
+    <Drawer label={h ? `Machine ${h.name}` : "Machine"} testId="inf-host-drawer" onClose={onClose} head={head} width={880} expandable>
       {!h && detail.loading ? <Skeleton testId="inf-host-loading" /> : null}
       {!h && detail.error ? <Empty testId="inf-host-missing"><span title={detail.error}>Can&apos;t read this machine</span></Empty> : null}
       {h ? (
         <>
+          {/* THE SERVER AT A GLANCE (screen 14): capacity, the projects on it, plugins, changes. */}
+          {!h.thisComputer ? <ServerOverview projectId={projectId} hostId={h.id} canExec={canWrite} /> : null}
           {canWrite && !h.thisComputer && h.stage.stage !== "ready" && h.state.tone !== "none"
             ? <Setup host={h} actor={actor} refresh={detail.refresh} /> : null}
           <DrawerSection label="FACTS" testId="inf-host-facts">
@@ -434,7 +437,7 @@ export function HostDrawer({ projectId, actor, hostId, canWrite, onClose, onResi
               <ErrorLine error={error} />
             </DrawerSection>
           ) : null}
-          <ProjectsOnServer residents={h.residents} />
+          {h.thisComputer ? <ProjectsOnServer residents={h.residents} /> : null}
           <DrawerSection label="ON THIS MACHINE" testId="inf-host-residents">
             {h.residents.length ? (
               <ul className="inf-resident-rows">

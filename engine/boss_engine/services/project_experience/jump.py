@@ -1,9 +1,16 @@
-"""⌘K jump (contract §9): one keystroke to any run, PR, build, deploy, agent, doc or project.
+"""⌘K jump (contract §9, screen 11): one keystroke to any run, PR, build, deploy, agent, doc or
+project.
 
 Searches only the projects the caller may read (the route passes them). Within a project:
-workflow runs and builds by title, pull requests by title or number, deploys by environment or
-commit, agents by name or callsign, PRDs by title. With no query it returns the project's
-newest things, so the palette opens on something useful.
+workflow runs and builds by title, pull requests by title or number ("pr 3", "#3", "3"),
+deploys by environment or commit, agents by name or callsign, PRDs by title. With no query it
+returns the project's newest things, so the palette opens on something useful.
+
+Every item reads like screen 11: a short human label ("PR #3 · Visual refresh finish", the one
+title helper, titles.short_title), `needs_you` when a person's answer is what it waits for, and
+`hint` — where Enter takes it ("Workflows", "Code Tasks", "open ↗"). A pull request carries its
+`external_url` (⌘↵ opens GitHub); a live deploy's `external_url` is the app itself. With a
+project in scope, its captain comes back as one `captain` item ("Ask Helm about …").
 """
 from __future__ import annotations
 
@@ -16,93 +23,182 @@ from sqlalchemy.engine import Connection
 from .common import href, pr_number, project_href, words
 
 LIMIT = 20
+_DEPLOY_WORDS = frozenset({"deploy", "deploys", "deployed", "deployment", "deployments", "release",
+                           "releases", "ship", "shipped", "live", "environment", "environments"})
+_NUMBER = re.compile(r"^(?:pr|pull)?\s*#?\s*(\d{1,7})$", re.IGNORECASE)
 
 
 def _like(q: str) -> str:
     return "%" + re.sub(r"([%_\\])", r"\\\1", q) + "%"
 
 
+def _short(title: Any, fallback: str, brief: Any = None) -> str:
+    from .titles import short_title
+
+    return short_title(title, brief, limit=5) or fallback
+
+
+def _env_word(env: Any) -> str:
+    from .health import env_label
+
+    return env_label(env)
+
+
+def _bare_url(url: Any) -> str:
+    return re.sub(r"^https?://", "", str(url or "")).rstrip("/")
+
+
 def search(connection: Connection, *, q: str, project_ids: list[str],
            project_id: Optional[str] = None, limit: int = LIMIT) -> list[dict[str, Any]]:
     q = str(q or "").strip()[:100]
-    number = int(q.lstrip("#")) if re.fullmatch(r"#?\d{1,7}", q) else None
-    like = _like(q.lstrip("#")) if q else "%"
+    found_number = _NUMBER.match(q)
+    number = int(found_number.group(1)) if found_number else None
+    term = re.sub(r"^(?:pr|pull)\s+", "", q, flags=re.IGNORECASE).lstrip("#").strip()
+    like = _like(term) if term else "%"
     scope = [project_id] if project_id else project_ids
     out: list[dict[str, Any]] = []
     names = {str(r["id"]): r["name"] for r in connection.execute(text(
         "SELECT id, name FROM projects WHERE id = ANY(:ids)"), {"ids": project_ids}).mappings()}
 
-    # Projects (always across every readable project: ⌘K "go to project").
+    # Projects (always across every readable project: ⌘K "go to project"), listed last so a
+    # project's own records are never cut by the limit.
+    projects: list[dict[str, Any]] = []
     for pid, name in names.items():
         if not q or q.lower() in name.lower() or q.lower() in pid.lower():
-            out.append({"label": words(name), "kind": "project", "sub": pid,
+            projects.append({"label": words(name), "kind": "project", "sub": pid, "hint": "Project",
                         "href": project_href(pid), "project_id": pid})
     if not scope:
-        return out[:limit]
+        return projects[:limit]
 
+    pr_sql = ("SELECT c.id, c.project_id, c.title, c.pull_request_url, c.pull_request_number, "
+              "c.status, d.status AS decision_status FROM code_task_runs c "
+              "LEFT JOIN decisions d ON d.id = c.decision_id "
+              "WHERE c.project_id = ANY(:ids) AND COALESCE(c.pull_request_url, '') <> '' AND ")
     if number is not None:
         prs = connection.execute(text(
-            "SELECT id, project_id, title, pull_request_url, pull_request_number FROM code_task_runs "
-            "WHERE project_id = ANY(:ids) AND COALESCE(pull_request_url, '') <> '' AND "
-            "(pull_request_number = :n OR pull_request_url LIKE :tail) "
-            "ORDER BY created_at DESC LIMIT 5"),
+            pr_sql + "(c.pull_request_number = :n OR c.pull_request_url LIKE :tail) "
+            "ORDER BY c.created_at LIMIT 12"),
             {"ids": scope, "n": number, "tail": f"%/pull/{number}"}).mappings().all()
     else:
         prs = connection.execute(text(
-            "SELECT id, project_id, title, pull_request_url, pull_request_number FROM code_task_runs "
-            "WHERE project_id = ANY(:ids) AND COALESCE(pull_request_url, '') <> '' AND "
-            "COALESCE(title, '') ILIKE :q ORDER BY created_at DESC LIMIT 5"),
+            pr_sql + "COALESCE(c.title, '') ILIKE :q ORDER BY c.created_at DESC LIMIT 12"),
             {"ids": scope, "q": like}).mappings().all()
+    # ONE row per pull request: every retry and follow-up of a build carries the same PR.
+    by_pr: dict[tuple[str, Any], dict[str, Any]] = {}
     for r in prs:
         n = r["pull_request_number"] or pr_number(r["pull_request_url"])
-        out.append({"label": words(f"PR #{n} {r['title'] or ''}", 5), "kind": "pr",
-                    "sub": names.get(str(r["project_id"]), r["project_id"]),
-                    "external_url": r["pull_request_url"],
-                    "href": project_href(str(r["project_id"]), tab="work",
-                                         drawer=f"build:{r['id']}"),
-                    "project_id": r["project_id"]})
+        key = (str(r["project_id"]), n or r["pull_request_url"])
+        first = by_pr.get(key)
+        waiting = r["decision_status"] == "pending"
+        if first is None:
+            by_pr[key] = {"label": (f"PR #{n} · {_short(r['title'], 'pull request')}" if n
+                                    else _short(r["title"], "Pull request")),
+                          "kind": "pr", "sub": names.get(str(r["project_id"]), r["project_id"]),
+                          "needs_you": waiting, "hint": "↵ drawer · ⌘↵ GitHub",
+                          "external_url": r["pull_request_url"],
+                          "href": project_href(str(r["project_id"]), tab="work",
+                                               drawer=f"build:{r['id']}"),
+                          "project_id": r["project_id"]}
+        elif waiting:
+            first["needs_you"] = True
+    out.extend(list(by_pr.values())[:5])
 
+    seen_runs: set[str] = set()
     for r in connection.execute(text(
-            "SELECT r.id, r.project_id, r.status, COALESCE(r.input->>'title', d.name) AS title "
+            "SELECT r.id, r.project_id, r.status, COALESCE(r.input->>'title', d.name) AS title, "
+            "r.input->>'directive' AS brief, "
+            "EXISTS (SELECT 1 FROM decisions x WHERE x.status = 'pending' AND "
+            " x.recommendation->>'workflow_run_id' = r.id) AS waiting "
             "FROM workflow_runs r JOIN workflow_definitions d ON d.id = r.workflow_definition_id "
             "WHERE r.project_id = ANY(:ids) AND d.namespace = 'product' AND "
             "COALESCE(r.mode, 'normal') <> 'test' AND (COALESCE(r.input->>'title', '') ILIKE :q "
-            "OR d.name ILIKE :q OR r.id = :exact) ORDER BY r.created_at DESC LIMIT 6"),
-            {"ids": scope, "q": like, "exact": q}).mappings():
-        out.append({"label": words(r["title"], 5), "kind": "run", "sub": r["status"],
+            "OR d.name ILIKE :q OR r.id = :exact OR (CAST(:n AS INT) IS NOT NULL AND EXISTS ("
+            " SELECT 1 FROM code_task_runs c WHERE c.finalize_ctx->>'workflow_run_id' = r.id "
+            " AND (c.pull_request_number = :n OR c.pull_request_url LIKE :tail)))) "
+            "ORDER BY r.created_at DESC LIMIT 12"),
+            {"ids": scope, "q": like if number is None else "%__none__%", "exact": q, "n": number,
+             "tail": f"%/pull/{number}" if number is not None else ""}).mappings():
+        run_label = f"Run · {_short(r['title'], 'workflow run', r['brief'])}"
+        if run_label in seen_runs:   # a retry of the same work is the same row
+            continue
+        seen_runs.add(run_label)
+        out.append({"label": run_label,
+                    "kind": "run", "sub": str(r["status"] or "").replace("_", " "),
+                    "needs_you": bool(r["waiting"]), "hint": "Workflows",
                     "href": project_href(str(r["project_id"]), tab="work", drawer=f"run:{r['id']}"),
                     "full_href": href(str(r["project_id"]), area="delivery_workflows", wfr=r["id"]),
                     "project_id": r["project_id"]})
 
+    seen_builds: set[str] = set()
     for r in connection.execute(text(
             "SELECT id, project_id, status, title FROM code_task_runs WHERE project_id = ANY(:ids) "
-            "AND COALESCE(finalize_ctx->>'workflow_run_id', '') = '' AND "
-            "(COALESCE(title, '') ILIKE :q OR id = :exact) ORDER BY created_at DESC LIMIT 4"),
-            {"ids": scope, "q": like, "exact": q}).mappings():
-        out.append({"label": words(r["title"] or "Build", 5), "kind": "build", "sub": r["status"],
+            "AND (COALESCE(title, '') ILIKE :q OR id = :exact) "
+            "AND (CAST(:n AS INT) IS NULL OR pull_request_number = :n "
+            "     OR pull_request_url LIKE :tail) "
+            "ORDER BY created_at DESC LIMIT 8"),
+            {"ids": scope, "q": like if number is None else "%", "exact": q, "n": number,
+             "tail": f"%/pull/{number}" if number is not None else ""}).mappings():
+        label = f"Build · {_short(r['title'], 'build')}"
+        if label in seen_builds:
+            continue
+        seen_builds.add(label)
+        out.append({"label": label, "kind": "build",
+                    "sub": str(r["status"] or "").replace("_", " "), "hint": "Code Tasks",
                     "href": href(str(r["project_id"]), area="code_tasks", view="apps",
                                  build=r["id"]), "project_id": r["project_id"]})
+        if len(seen_builds) >= 4:
+            break
 
+    seen_env: set[tuple[str, str]] = set()
     for r in connection.execute(text(
-            "SELECT s.id, s.project_id, s.commit_sha, s.status, t.environment FROM stack_deployments s "
-            "JOIN deployment_targets t ON t.id = s.target_id WHERE s.project_id = ANY(:ids) AND "
-            "(t.environment ILIKE :q OR COALESCE(s.commit_sha, '') ILIKE :prefix OR :blank) "
-            "ORDER BY s.created_at DESC LIMIT 4"),
-            {"ids": scope, "q": like, "prefix": (q + "%") if q else "%", "blank": not q}).mappings():
-        out.append({"label": words(f"Deploy {r['environment']} {(r['commit_sha'] or '')[:7]}"),
-                    "kind": "deploy", "sub": r["status"],
-                    "href": href(str(r["project_id"]), area="infra", view="deploys",
-                                 deploy=r["id"]), "project_id": r["project_id"]})
+            "SELECT s.id, s.project_id, s.commit_sha, s.status, s.open_url, t.environment, "
+            "t.public_url FROM stack_deployments s JOIN deployment_targets t ON t.id = s.target_id "
+            "WHERE s.project_id = ANY(:ids) AND (t.environment ILIKE :q OR t.app_name ILIKE :q OR "
+            "COALESCE(s.commit_sha, '') ILIKE :prefix OR :blank OR :numbered OR :deploys) "
+            "ORDER BY s.created_at DESC LIMIT 8"),
+            {"ids": scope, "q": like, "prefix": (term + "%") if term else "%",
+             "blank": not q, "numbered": number is not None,
+             # "deploy", "deploys", "release", "live": every environment's newest deploy.
+             "deploys": term.lower() in _DEPLOY_WORDS}).mappings():
+        env_key = (str(r["project_id"]), str(r["environment"] or ""))
+        if env_key in seen_env:
+            continue
+        seen_env.add(env_key)
+        live_url = (r["open_url"] or r["public_url"]) if r["status"] == "healthy" else None
+        where = _bare_url(live_url) if live_url else (r["commit_sha"] or "")[:7]
+        item = {"label": f"{_env_word(r['environment'])} · {where}".rstrip(" ·"),
+                "kind": "deploy", "sub": str(r["status"] or "").replace("_", " "),
+                "hint": "open ↗" if live_url else "Infra",
+                "href": href(str(r["project_id"]), area="infra", view="deploys", deploy=r["id"]),
+                "project_id": r["project_id"]}
+        if live_url:
+            item["external_url"] = live_url if re.match(r"^https?://", live_url) \
+                else f"http://{live_url}"
+        out.append(item)
+
+    if project_id:
+        from .captain import chosen_role
+        from .common import agents, face
+
+        roster = agents(connection, project_id)
+        key, _how = chosen_role(connection, project_id, roster)
+        cap = face(roster, key) if key else None
+        if cap:
+            out.append({"label": cap["name"], "kind": "captain", "sub": "captain",
+                        "hint": "captain", "role_key": cap["role_key"],
+                        "agent_id": cap.get("agent_id"),
+                        "href": project_href(project_id, drawer="captain"),
+                        "project_id": project_id})
 
     for r in connection.execute(text(
             "SELECT project_id, role_key, display_name, spec->'persona'->>'callsign' AS callsign "
             "FROM roles WHERE project_id = ANY(:ids) AND (display_name ILIKE :q OR "
             "COALESCE(spec->'persona'->>'callsign', '') ILIKE :q OR role_key ILIKE :q) "
             "AND :searching ORDER BY (spec->'persona'->>'callsign') IS NULL, display_name LIMIT 5"),
-            {"ids": scope, "q": like, "searching": bool(q)}).mappings():
+            {"ids": scope, "q": like, "searching": bool(q) and number is None}).mappings():
         name = r["callsign"] or r["display_name"]
         out.append({"label": words(f"Ask {name}" if r["callsign"] else name), "kind": "agent",
-                    "sub": r["display_name"],
+                    "sub": r["display_name"], "hint": "Agent Studio",
                     "href": href(str(r["project_id"]), area="workforce", role=r["role_key"]),
                     "project_id": r["project_id"], "role_key": r["role_key"]})
 
@@ -111,10 +207,12 @@ def search(connection: Connection, *, q: str, project_ids: list[str],
             "WHERE project_id = ANY(:ids) AND status = 'completed' AND state ? 'prd_markdown' AND "
             "COALESCE(title, directive) ILIKE :q ORDER BY updated_at DESC LIMIT 3"),
             {"ids": scope, "q": like}).mappings():
-        out.append({"label": words(f"PRD {r['title']}", 5), "kind": "doc", "sub": "PRD",
+        out.append({"label": f"PRD · {_short(r['title'], 'PRD')}", "kind": "doc", "sub": "PRD",
+                    "hint": "Meetings",
                     "href": href(str(r["project_id"]), area="meetings", meeting=r["id"]),
                     "project_id": r["project_id"]})
-    return out[:limit]
+    room = max(5, limit - len(out))
+    return (out + projects[:room])[:max(limit, len(out))]
 
 
 __all__ = ["search"]

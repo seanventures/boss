@@ -109,7 +109,10 @@ def test_the_plan_has_now_next_later_and_cards_move_between_lanes(world, client,
     with _as(world, world.owner):
         lanes = client.get(f"/v1/projects/{pid}/plan").json()
     assert [c["title"] for c in lanes["later"]] == ["Reply suggestions", "Status index"]
-    assert len(lanes["next"]) == 3
+    # ONE LANE PER ITEM (PX-38): "Email-to-ticket intake" was accepted, but its run is already
+    # moving, so it shows once, in Now — never in Now and Next at once.
+    assert [c["title"] for c in lanes["next"]] == ["Weekend SLA pause", "Fix 6 failing tests"]
+    assert "Email-to-ticket intake" in [c["label"] for c in lanes["now"]]
     assert {c["state"] for c in lanes["now"]} <= {"running", "needs_you", "stalled"} and lanes["now"]
     first = lanes["next"][0]
     with _as(world, world.owner):

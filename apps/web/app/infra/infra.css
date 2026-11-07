@@ -304,3 +304,59 @@ button.inf-slot:hover { border-color: var(--accent-line); color: var(--accent-te
 /* Projects on this server (BOSSAPP-914): one row per project, linking to its Project › Deployments. */
 .inf-host-project { display: flex; align-items: center; gap: 8px; }
 .inf-host-project-name { flex: 1; min-width: 0; }
+
+/* ── Infra › server at a glance (BOSSAPP-914 screen 14; server-overview.tsx) ─────────────── */
+.inf-so { display: flex; flex-direction: column; gap: 12px; margin-bottom: 14px; }
+.inf-so-skel { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+.inf-so-skel span { height: 80px; border-radius: 12px; background: var(--surface-2); }
+.inf-so-head { display: flex; align-items: center; gap: 12px; }
+.inf-so-ico { width: 40px; height: 40px; border-radius: 11px; display: grid; place-items: center; flex: none; color: var(--teal);
+  background: color-mix(in srgb, var(--teal) 13%, transparent); }
+.inf-so-ico-s { width: 28px; height: 28px; border-radius: 8px; }
+.inf-so-ico[data-c="blue"] { color: var(--accent-text); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.inf-so-ico[data-c="violet"] { color: #8b7cf6; background: color-mix(in srgb, #8b7cf6 15%, transparent); }
+.inf-so-title { min-width: 0; }
+.inf-so-title h3 { margin: 0; font-family: var(--display); font-size: 1.25rem; font-weight: 700; color: var(--ink); }
+.inf-so-title p { margin: 2px 0 0; font-size: .76rem; color: var(--muted); }
+.inf-so-row { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.inf-so-tag { display: inline-flex; align-items: center; gap: 5px; padding: 1px 8px; border-radius: 6px; font-size: .7rem; font-weight: 600;
+  color: var(--muted); background: var(--surface-2); white-space: nowrap; }
+.inf-so-tag[data-tone="green"] { color: var(--green); background: color-mix(in srgb, var(--green) 13%, transparent); }
+.inf-so-tag[data-tone="amber"] { color: var(--amber); background: color-mix(in srgb, var(--amber) 14%, transparent); }
+.inf-so-tag[data-tone="red"] { color: var(--red); background: color-mix(in srgb, var(--red) 14%, transparent); }
+.inf-so-dot { width: 6px; height: 6px; border-radius: 2px; background: currentColor; }
+.inf-so-tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.inf-so-tile { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2); min-width: 0; }
+.inf-so-lbl { font-family: var(--mono); font-size: .6rem; letter-spacing: .16em; text-transform: uppercase; color: var(--faint); }
+.inf-so-cap { font-size: .74rem; color: var(--ink-soft); }
+.inf-so-num { font-family: var(--display); font-size: 1.4rem; color: var(--ink); line-height: 1; }
+.inf-ring { width: 46px; height: 46px; flex: none; }
+.inf-ring text { font-size: 10px; font-weight: 700; fill: var(--ink); font-family: var(--mono); }
+.inf-so-read { display: flex; align-items: center; gap: 10px; font-size: .72rem; margin-top: -4px; }
+.inf-so-card { padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2); display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.inf-so-card h4 { display: flex; align-items: center; gap: 10px; margin: 0 0 4px; font-size: .9rem; font-weight: 700; color: var(--ink); }
+.inf-so-badge { display: inline-grid; place-items: center; min-width: 18px; height: 18px; border-radius: 9px; padding: 0 5px; font-size: .64rem; font-weight: 700;
+  color: #fff; background: #c13cbd; }
+.inf-so-proj { display: flex; align-items: center; gap: 10px; padding: 8px 4px; border-top: 1px solid var(--border); min-width: 0; }
+.inf-so-proj:first-of-type { border-top: 0; }
+.inf-so-mark { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; color: #fff; font-size: .7rem; font-weight: 800; flex: none; }
+.inf-so-pname { display: flex; flex-direction: column; min-width: 0; }
+.inf-so-pname b { font-size: .82rem; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.inf-so-pname small { font-size: .7rem; color: var(--faint); }
+.inf-so-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 6px; font-size: .7rem; text-decoration: none; white-space: nowrap;
+  color: var(--accent-text); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.inf-so-chip:hover { background: color-mix(in srgb, var(--accent) 18%, transparent); }
+.inf-so-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.inf-so-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.inf-so-pchip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 6px; border: 1px solid var(--border-strong); font-size: .7rem; font-weight: 600; color: var(--ink-soft); }
+.inf-so-change { display: flex; align-items: center; gap: 10px; text-decoration: none; padding: 4px 0; }
+.inf-so-change b { display: block; font-size: .8rem; color: var(--ink); }
+.inf-so-change small { font-size: .7rem; color: var(--faint); }
+.inf-so-ck { color: var(--green); display: inline-grid; }
+.inf-so-ck[data-s="failed"] { color: var(--red); } .inf-so-ck[data-s="now"] { color: var(--teal); }
+@media (max-width: 760px) {
+  .inf-so-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .inf-so-pair { grid-template-columns: minmax(0, 1fr); }
+  .inf-so-proj { flex-wrap: wrap; }
+  .inf-so-proj > .inf-so-chip { margin-left: 40px; }
+}

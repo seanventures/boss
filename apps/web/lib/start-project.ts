@@ -122,9 +122,11 @@ export type RepoFacts = {
            runs_as: string | null };
   read_from: "graph" | "github" | "given" | null;
   mapping: Mapping; in_project: boolean; suggested_name: string;
+  /** How many files the repository has (Map code "0 / 214 files"). */
+  files_total?: number | null;
 };
 export type Mapping = { state: "not_started" | "queued" | "running" | "done" | "failed"; percent: number; done: boolean;
-                        error?: string | null };
+                        error?: string | null; files?: number | null; parsed?: number | null };
 
 /** The rows of "BOSS reads it", each said or left as "At first build". */
 export function factRows(f: RepoFacts): { label: string; value: string; known: boolean }[] {

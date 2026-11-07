@@ -32,7 +32,11 @@ PRODUCTION = ("production", "prod")
 
 def reached(*, onboarded: bool, backlog: bool, worked: bool, staging: bool, production: bool,
             onboarding_running: bool) -> dict[str, bool]:
-    return {"onboarding": True, "ready": onboarded and not onboarding_running,
+    # ONE SOURCE OF TRUTH for "Onboarded" (PX-15): done only when onboarding finished or the
+    # project has had work; while a run moves it is the current stage; otherwise not started.
+    return {"onboarding": onboarded and not onboarding_running,
+            "_onboarding_running": onboarding_running,
+            "ready": onboarded and not onboarding_running,
             "backlog": backlog, "working": worked, "staging": staging, "production": production}
 
 
@@ -55,7 +59,10 @@ def journey(project_id: str, got: Mapping[str, bool], stage: str, *, needs_you: 
     host yet). `detail` is the node's tooltip in words."""
     out = []
     for key in STAGES:
-        if key == stage:
+        if key == stage == "onboarding" and not got.get("_onboarding_running", True) \
+                and not got.get("onboarding"):
+            state = "todo"
+        elif key == stage:
             state = "now"
         elif got.get(key):
             state = "done"
@@ -63,9 +70,11 @@ def journey(project_id: str, got: Mapping[str, bool], stage: str, *, needs_you: 
             state = "waiting"
         else:
             state = "todo"
+        not_started = key == "onboarding" and state == "todo"
         out.append({"key": key, "label": STAGE_LABELS[key], "state": state,
-                    "sub": (subs or {}).get(key) or "",
-                    "detail": (details or {}).get(key) or "",
+                    "sub": "Not started" if not_started else (subs or {}).get(key) or "",
+                    "detail": ("Onboarding hasn't run yet: start it and Helm reads the repo"
+                               if not_started else (details or {}).get(key) or ""),
                     "href": project_href(project_id, tab=_TAB_OF.get(key, "overview"),
                                          drawer=f"stage:{key}")})
     return out
@@ -212,7 +221,7 @@ def _cost_week(connection: Connection, project_id: str, now: datetime) -> dict[s
         at = r["d"] if r["d"].tzinfo else r["d"].replace(tzinfo=timezone.utc)
         i = (at.date() - days[0].date()).days
         if 0 <= i < 7:
-            included[i] += round((r["m"] or 0) / 1_000_000, 2)
+            included[i] += round(float(r["m"] or 0) / 1_000_000, 2)
     on_plan = week == 0 and sum(included) > 0
     return {"usd": week, "delta_pct": delta, "cap_usd": cap, "series": series,
             "on_subscription": on_plan,
@@ -368,8 +377,10 @@ def week(connection: Connection, project_id: str, now: datetime, limit: int = 6
             "SELECT id, COALESCE(title, directive) AS title, updated_at FROM meeting_runs "
             "WHERE project_id = :p AND status = 'completed' AND updated_at >= :s "
             "ORDER BY updated_at DESC LIMIT 4"), {"p": project_id, "s": since}).mappings():
-        out.append({"at": iso(r["updated_at"]), "kind": "idea",
-                    "label": shorten(r["title"], 3) or "Plan agreed",
+        # A panel's plan reads "Plan agreed" on the dot (≤ 4 words, never a cut sentence);
+        # its short title is the tooltip.
+        out.append({"at": iso(r["updated_at"]), "kind": "idea", "label": "Plan agreed",
+                    "detail": shorten(r["title"], 6),
                     "href": href(project_id, area="meetings", meeting=r["id"])})
     # Identical words on the same day are one point.
     seen: set[tuple[str, str]] = set()
@@ -393,14 +404,14 @@ def _facts(connection: Connection, project_id: str, items: list[dict[str, Any]],
     has_recs = bool(connection.execute(text(
         "SELECT 1 FROM ambient_recommendations WHERE project_id = :p LIMIT 1"),
         {"p": project_id}).first())
-    got = reached(onboarded=onboarding.get("state") in ("ready", "needs_you") or bool(items),
-                  backlog=bool(onboarding.get("backlog")) or has_recs or bool(items),
-                  worked=any(w["source"] not in ("roadmap", "onboarding") for w in items),
+    # The Work tab's Onboarding row is setup, not work: the journey's onboarding stage speaks for it.
+    work = [w for w in items if w["source"] != "onboarding"]
+    got = reached(onboarded=onboarding.get("state") in ("ready", "needs_you") or bool(work),
+                  backlog=bool(onboarding.get("backlog")) or has_recs or bool(work),
+                  worked=any(w["source"] != "roadmap" for w in work),
                   staging=healthy_non_prod, production=healthy_prod,
                   onboarding_running=onboarding.get("state") == "running")
-    # The onboarding row is setup, not work: the journey's onboarding stage speaks for it.
-    active = any(w["state"] in ("running", "needs_you") for w in items
-                 if w["source"] != "onboarding")
+    active = any(w["state"] in ("running", "needs_you") for w in work)
     return {"got": got, "active": active}
 
 
@@ -423,10 +434,9 @@ def view(connection: Connection, project_id: str, *, now: Optional[datetime] = N
     try_env = next((e for e in logins["environments"] if str(e["key"]).lower() in
                     ("staging", "stage")), None) or next(iter(logins["environments"]), None)
     subs, details, prod_waits = journey_subs(connection, project, items, envs, onboarding, waiting)
-    if prod_waits and not any(n.get("id") == "prod:host" for n in waiting):
-        from .needs import prod_host_card
-
-        waiting.append(prod_host_card(project_id))
+    # Production waits on a person exactly when Needs you holds "Pick a prod host" (one rule,
+    # needs.prod_waits), so the journey node and the card never disagree.
+    prod_waits = any(n.get("id") == "prod:host" for n in waiting)
     return {
         "project": {"id": project["id"], "name": project["name"], "initials":
                     initials(project["name"]), "description": project["description"],

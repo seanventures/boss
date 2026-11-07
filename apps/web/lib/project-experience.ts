@@ -83,6 +83,8 @@ export type NeedsYou = {
   /** The Work row this card belongs to (a merge's build, the onboarding row for its "only you" items). */
   work_id?: string;
   mini: { label: string; state: StepState }[]; action: { label: string; href: string; decision_id: string } | null;
+  /** The piece of work it belongs to, the PR on GitHub, and when it was asked (the drawer). */
+  work_id?: string; work_label?: string; external_url?: string; created_at?: string;
 };
 export type WorkItem = {
   id: string; label: string; kind: string; state: WorkState; age: string;
@@ -144,19 +146,30 @@ export type Overview = {
   };
   captain: Captain | null; recent_work: WorkItem[]; next: NextItem[];
   try_it: { url: string; demo_logins: DemoLogin[] } | null;
-  week: { at: string; label: string; kind: string; href: string }[];
+  week: { at: string; label: string; kind: string; href: string; detail?: string }[];
 };
 export type Captain = { agent_id: string; name: string; role_key: string; avatar: string; status: string; squad: Agent[]; last_said: string };
 export type WorkList = { items: WorkItem[] };
+/** A repository on Repo & knowledge (screen 06): access is tri-state — true / false as the last
+ *  check found, null when it was never checked. */
+export type KnowledgeRepo = Repo & {
+  binding_id: string; checked: { read: boolean | null; write: boolean | null; pr: boolean | null };
+  last_push: string; via: string; deploys_to: string;
+};
+export type GraphNode = { id: string; label: string; kind: string; group: string; detail: string };
 export type Knowledge = {
-  repos: Repo[];
+  repos: KnowledgeRepo[];
   dossier: { stack: string[]; commands: Record<string, string>; hotspots: { path: string; label: string; why: string; heat: number | null; has_tests: boolean | null }[];
-             tests: { passed: number; total: number } | null; test_files: number | null; built_at: string; href: string } | null;
-  graph: { nodes: { id: string; label: string; kind: string }[]; edges: { from: string; to: string; label: string }[]; href: string;
+             tests: { passed: number; total: number; failing: number; from: string; href: string } | null; test_files: number | null;
+             code_map: { parts: { dir: string; files: number }[]; files: number };
+             by: string; built_ago: string; built_at: string; href: string } | null;
+  graph: { nodes: GraphNode[]; edges: { from: string; to: string; label: string; kind: string }[]; href: string; hub: string;
            counts: { nodes: number; rules: number | null; learned: number | null } };
-  docs: { label: string; kind: string; href: string; sub: string }[];
-  decisions: { label: string; at: string; href: string }[];
-  learned: { label: string; sub: string; state: string; href: string }[];
+  docs: { label: string; kind: string; href: string; sub: string; path: string; external_url: string }[];
+  decisions: { label: string; at: string; href: string; sub: string }[];
+  learned: { id: string; label: string; sub: string; state: string; href: string; detail: string; reused: number; agent: Agent | null }[];
+  build: { label: string; href: string; state: string; progress: string; nodes: { label: string; state: StepState; sub: string }[] } | null;
+  empty: { label: string; detail: string; href: string } | null;
 };
 export type Environment = {
   key: string; label: string; url: string; health: Health; host: string; host_href: string; target_id: string; app: string; manage_href: string;
@@ -215,10 +228,12 @@ export type SettingsSection = {
 export type Settings = { sections: SettingsSection[] };
 export type HealthView = {
   environments: { key: string; label: string; target_id: string; url: string; health: Health; uptime_pct: number | null; error_rate: number | null; p95_ms: number | null;
-                  series: { errors: number[]; latency: number[] }; slo: { target: number | null; burn: "ok" | "warning" | "breach" }; href: string }[];
-  alerts: { id: string; label: string; severity: "page" | "ticket" | "info"; state: "firing" | "resolved"; since: string; href: string }[];
-  incidents: { id: string; label: string; state: "running" | "needs_you" | "resolved"; graph_href: string; mini: { label: string; state: StepState }[] }[];
-  monitoring_pack: { rules: number; managed_in: string; href: string } | null;
+                  series: { errors: number[]; latency: number[] }; slo: { target: number | null; burn: "ok" | "warning" | "breach"; budget_used_pct: number | null }; href: string }[];
+  /** One row per alert rule (screen 12): firing since …, resolved at …, or ok · quiet 3d. */
+  alerts: { id: string; label: string; condition: string; severity: "page" | "ticket" | "info"; state: "firing" | "resolved" | "ok"; since: string; quiet: string; href: string }[];
+  incidents: { id: string; label: string; state: "running" | "needs_you" | "resolved"; since: string; duration_s: number | null; outcome: string; graph_href: string;
+               mini: { label: string; state: StepState; type: string }[] }[];
+  monitoring_pack: { rules: number; off: number; managed_in: string; href: string; kinds: string[]; file: { path: string; external_url: string } | null } | null;
   links: { grafana: string; grafana_reason: string; logs: string; observability: string };
 };
 
@@ -362,6 +377,45 @@ export const parseCaptain = (v: unknown): Captain | null => {
            squad: agents(x.squad), last_said: s(x.last_said) };
 };
 
+/** The captain drawer's read (§7 GET …/captain, screen 09): scope, facts known, what it and
+ *  its crew did lately, and the suggestion chips grounded in the project's record. */
+export type CaptainDetail = Captain & {
+  scope: string; facts: number;
+  recent: { act_id: string; role_key: string; label: string; state: StepState; at: string; href: string }[];
+  starters: { label: string; message: string; icon: string }[];
+};
+export const parseCaptainDetail = (v: unknown): CaptainDetail | null => {
+  const base = parseCaptain(v);
+  if (!base) return null;
+  const x = o(v);
+  return { ...base, scope: s(o(x.scope).label), facts: n(x.facts),
+           recent: a(x.recent).map((r) => { const y = o(r); return { act_id: s(y.act_id), role_key: s(y.role_key), label: s(y.label),
+             state: oneOf(y.state, STEP_STATES, "todo"), at: s(y.at), href: s(y.href) }; }),
+           starters: a(x.starters).map((r) => { const y = o(r); return { label: s(y.label), message: s(y.message), icon: s(y.icon) }; })
+             .filter((st) => st.label && st.message) };
+};
+
+/** One piece of work, step by step (GET …/work/{id}/story, drawer 05b). */
+export type WorkStory = {
+  id: string; number: number | null; minutes: number | null; cost_usd: number | null;
+  cost_parts: { label: string; usd: number }[]; preview: string; pr: { number: number; external_url: string } | null;
+  stages: { key: string; name: string; state: StepState; sub: string; at: string; person: boolean;
+            link: { label: string; href: string; external_url: string } | null }[];
+};
+export const parseWorkStory = (v: unknown): WorkStory => {
+  const x = o(v); const pr = o(x.pr);
+  return {
+    id: s(x.id), number: nn(x.number), minutes: nn(x.minutes), cost_usd: nn(x.cost_usd),
+    cost_parts: a(x.cost_parts).map((c) => ({ label: s(o(c).label), usd: n(o(c).usd) })).filter((c) => c.label),
+    preview: s(x.preview), pr: s(pr.external_url) ? { number: n(pr.number), external_url: s(pr.external_url) } : null,
+    stages: a(x.stages).map((r) => {
+      const y = o(r); const l = o(y.link);
+      return { key: s(y.key), name: s(y.name), state: oneOf(y.state, STEP_STATES, "todo"), sub: s(y.sub), at: s(y.at), person: y.person === true,
+               link: s(l.label) ? { label: s(l.label), href: s(l.href), external_url: s(l.external_url) } : null };
+    }),
+  };
+};
+
 export const parseOverview = (v: unknown): Overview => {
   const x = o(v); const p = o(x.project); const t = o(x.tiles);
   const ow = o(t.open_work); const rn = o(t.running); const st = o(t.staging); const cw = o(t.cost_week);
@@ -398,34 +452,56 @@ export const parseOverview = (v: unknown): Overview => {
     next: a(x.next).map(parseNext),
     try_it: Object.keys(ti).length ? { url: s(ti.url), demo_logins: a(ti.demo_logins).map(parseLogin) } : null,
     // A week's event opens its record in the console (a PR's build, a deploy), else where it lives.
-    week: a(x.week).map((w) => ({ at: s(o(w).at), label: label4(o(w).label), kind: s(o(w).kind), href: s(o(w).href) || s(o(w).external_url) })),
+    week: a(x.week).map((w) => ({ at: s(o(w).at), label: label4(o(w).label), kind: s(o(w).kind), href: s(o(w).href) || s(o(w).external_url), detail: s(o(w).detail) })),
   };
 };
 export const parseWork = (v: unknown): WorkList => ({ items: a(o(v).items).map(parseWorkItem).filter((w) => w.id) });
 
+const tri = (v: unknown): boolean | null => (v === true ? true : v === false ? false : null);
 export const parseKnowledge = (v: unknown): Knowledge => {
   const x = o(v); const d = o(x.dossier); const g = o(x.graph); const c = o(g.counts);
   const cmds: Record<string, string> = {};
-  for (const [k, val] of Object.entries(o(d.commands))) if (typeof val === "string" && val) cmds[k] = val;
+  // Install · Test · Build · Run, in the wireframe's order, then anything else the repo declares.
+  const raw = o(d.commands);
+  for (const k of ["install", "test", "build", "run", ...Object.keys(raw)]) {
+    const val = raw[k];
+    if (typeof val === "string" && val && !(k in cmds)) cmds[k] = val;
+  }
   const tests = o(d.tests);
   const hasRun = typeof tests.total === "number" && tests.total > 0;
+  const cm = o(d.code_map);
+  const b = o(x.build); const em = o(x.empty);
   return {
-    repos: a(x.repos).map(parseRepo),
+    repos: a(x.repos).map((r) => {
+      const y = o(r); const acc = o(y.access);
+      return { ...parseRepo(r), binding_id: s(y.binding_id), checked: { read: tri(acc.read), write: tri(acc.write), pr: tri(acc.pr) },
+               last_push: s(y.last_push), via: s(y.via), deploys_to: s(y.deploys_to) };
+    }),
     dossier: Object.keys(d).length ? {
       stack: a(d.stack).map((z) => s(z)).filter(Boolean), commands: cmds,
       hotspots: a(d.hotspots).map((h) => ({ path: s(o(h).path), label: s(o(h).label), why: s(o(h).why), heat: nn(o(h).heat),
                                              has_tests: typeof o(h).has_tests === "boolean" ? (o(h).has_tests as boolean) : null })),
-      // A pass count only when a run was read (CI); the dossier itself knows how many test files exist.
-      tests: hasRun ? { passed: n(tests.passed), total: n(tests.total) } : null,
+      // A pass count only when a run was read (the newest build's tests); else the test files the dossier found.
+      tests: hasRun ? { passed: n(tests.passed), total: n(tests.total), failing: n(tests.failing, n(tests.total) - n(tests.passed)),
+                        from: s(tests.from), href: s(tests.href) } : null,
       test_files: nn(tests.files),
-      built_at: s(d.built_at), href: s(d.href) } : null,
-    graph: { nodes: a(g.nodes).map((z) => ({ id: s(o(z).id), label: label4(o(z).label), kind: s(o(z).kind) })),
-             edges: a(g.edges).map((z) => ({ from: s(o(z).from), to: s(o(z).to), label: s(o(z).label) })), href: s(g.href),
+      code_map: { parts: a(cm.parts).map((z) => ({ dir: s(o(z).dir), files: n(o(z).files) })).filter((z) => z.files > 0), files: n(cm.files) },
+      by: s(d.by, "Helm"), built_ago: s(d.built_ago), built_at: s(d.built_at), href: s(d.href) } : null,
+    graph: { nodes: a(g.nodes).map((z) => ({ id: s(o(z).id), label: s(o(z).label), kind: s(o(z).kind), group: s(o(z).group), detail: s(o(z).detail) })),
+             edges: a(g.edges).map((z) => ({ from: s(o(z).from), to: s(o(z).to), label: s(o(z).label), kind: s(o(z).kind) })), href: s(g.href), hub: s(g.hub),
              counts: { nodes: n(c.nodes, n(g.total_nodes, a(g.nodes).length)), rules: nn(c.rules), learned: nn(c.learned) } },
-    // A doc opens where it lives (GitHub for a README or runbook), else its console page.
-    docs: a(x.docs).map((z) => ({ label: s(o(z).label), kind: s(o(z).kind), href: s(o(z).external_url) || s(o(z).href), sub: s(o(z).sub) || s(o(z).detail) })),
-    decisions: a(x.decisions).map((z) => ({ label: s(o(z).label), at: s(o(z).at), href: s(o(z).href) })),
-    learned: a(x.learned).map((z) => ({ label: s(o(z).label), sub: s(o(z).sub), state: s(o(z).state), href: s(o(z).href) })),
+    // A doc opens in its drawer (`doc:<path>`); the drawer links to where it lives.
+    docs: a(x.docs).map((z) => ({ label: s(o(z).label), kind: s(o(z).kind), href: s(o(z).href), external_url: s(o(z).external_url),
+                                  sub: s(o(z).sub) || s(o(z).detail), path: s(o(z).detail) })),
+    decisions: a(x.decisions).map((z) => ({ label: s(o(z).label), at: s(o(z).at), href: s(o(z).href), sub: s(o(z).sub) })),
+    learned: a(x.learned).map((z) => {
+      const y = o(z); const ag = o(y.agent);
+      return { id: s(y.id), label: s(y.label), sub: s(y.sub), state: s(y.state), href: s(y.href), detail: s(y.detail), reused: n(y.reused),
+               agent: s(ag.name) ? { name: s(ag.name), role_key: s(ag.role_key), avatar: "" } as Agent : null };
+    }),
+    build: Object.keys(b).length ? { label: s(b.label, "Build dossier now"), href: s(b.href), state: s(b.state), progress: s(b.progress),
+                                     nodes: a(b.nodes).map((z) => ({ label: s(o(z).label), state: (s(o(z).state) || "todo") as StepState, sub: s(o(z).sub) })) } : null,
+    empty: s(em.label) ? { label: s(em.label), detail: s(em.detail), href: s(em.href) } : null,
   };
 };
 
@@ -554,19 +630,22 @@ export const parseHealth = (v: unknown): HealthView => {
       const y = o(e); const ser = o(y.series); const slo = o(y.slo);
       return { key: s(y.key), label: s(y.label, s(y.key)), target_id: s(y.target_id), url: s(y.url), health: oneOf(y.health, HEALTHS, "unknown"), uptime_pct: nn(y.uptime_pct),
                error_rate: nn(y.error_rate), p95_ms: nn(y.p95_ms), series: { errors: nums(ser.errors), latency: nums(ser.latency) },
-               slo: { target: nn(slo.target), burn: oneOf(slo.burn, ["ok", "warning", "breach"] as const, "ok") }, href: s(y.href) };
+               slo: { target: nn(slo.target), burn: oneOf(slo.burn, ["ok", "warning", "breach"] as const, "ok"), budget_used_pct: nn(slo.budget_used_pct) }, href: s(y.href) };
     }),
     alerts: a(x.alerts).map((z) => {
       const y = o(z);
-      return { id: s(y.id), label: label4(y.label), severity: oneOf(y.severity, ["page", "ticket", "info"] as const, "info"),
-               state: y.state === "resolved" ? "resolved" : "firing", since: s(y.since), href: s(y.href) };
+      return { id: s(y.id), label: label4(y.label), condition: s(y.condition), severity: oneOf(y.severity, ["page", "ticket", "info"] as const, "info"),
+               state: oneOf(y.state, ["firing", "resolved", "ok"] as const, "firing"), since: s(y.since), quiet: s(y.quiet), href: s(y.href) };
     }),
     incidents: a(x.incidents).map((z) => {
       const y = o(z);
       return { id: s(y.id), label: label4(y.label), state: oneOf(y.state, ["running", "needs_you", "resolved"] as const, "running"),
-               graph_href: s(y.graph_href), mini: mini(y.mini) };
+               since: s(y.since), duration_s: nn(y.duration_s), outcome: s(y.outcome_word), graph_href: s(y.graph_href),
+               mini: a(y.mini).map((m) => ({ label: label4(o(m).label), state: oneOf(o(m).state, STEP_STATES, "todo"), type: s(o(m).type) })) };
     }),
-    monitoring_pack: Object.keys(mp).length ? { rules: n(mp.rules), managed_in: s(mp.managed_in), href: s(mp.href) } : null,
+    monitoring_pack: Object.keys(mp).length ? { rules: n(mp.rules), off: n(mp.off), managed_in: s(mp.managed_in), href: s(mp.href),
+      kinds: a(mp.kinds).map((k) => s(k)).filter(Boolean),
+      file: s(o(mp.file).path) ? { path: s(o(mp.file).path), external_url: s(o(mp.file).external_url) } : null } : null,
     links: { grafana: s(l.grafana), grafana_reason: s(l.grafana_reason), logs: s(l.logs), observability: s(l.observability) },
   };
 };
