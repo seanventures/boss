@@ -191,7 +191,7 @@ export function OverviewTab({ ctx }: { ctx: PxCtx }) {
               <a className="px-more" href="#" onClick={(e) => { e.preventDefault(); ctx.tab("work"); }} data-testid="px-ov-all-work">All work <ArrowRight size={11} /></a></div>
             {failed("recent_work") ?? (ov.recent_work.length ? <div>{ov.recent_work.map((w) => <MiniRow key={w.id} w={w} ctx={ctx} />)}</div>
               : <Empty icon={Kanban} title="No work yet" line="Describe a feature or a bug and the crew takes it from there.">
-                  <button type="button" className="px-btn" data-kind="primary" onClick={() => ctx.tab("work", { compose: "1" })}>New work</button></Empty>)}
+                  <button type="button" className="px-btn" data-kind="primary" onClick={() => ctx.newWork ? ctx.newWork() : ctx.tab("work", { compose: "1" })}>New work</button></Empty>)}
           </section>
 
           {ov.week.length || ov.errors?.week ? (

@@ -34,8 +34,9 @@ const settle = async (n = 8) => { for (let i = 0; i < n; i++) await act(async ()
 const press = async (el: Element | null) => { if (!el) throw new Error("nothing to press"); await act(async () => { (el as HTMLElement).click(); }); await settle(); };
 const type = async (el: Element | null, value: string) => {
   const input = el as HTMLInputElement;
+  const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
   await act(async () => {
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+    Object.getOwnPropertyDescriptor(proto, "value")!.set!.call(input, value);
     input.dispatchEvent(new Event("input", { bubbles: true }));
   });
 };
@@ -109,6 +110,11 @@ async function openWork(role: "owner" | "viewer" = "owner") {
   await mountAs(<ProjectPage projectId={P} actor="ceo" orgId="org_1" />, role);
   await settle(10);
 }
+/** The Work tab's bar opens the New work modal (it replaced the one-line composer). */
+async function openNewWork() {
+  await press(tid("px-nw-bar-input"));
+  await settle(6);
+}
 const strip = () => $$("[data-testid='px-compose-strip'] .px-fl-n").map((n) => n.textContent);
 const planned = () => $$("[data-testid='px-work-planned'] [data-testid^='px-rank-wi_']").map((n) => n.getAttribute("data-testid")!.slice(8));
 
@@ -119,6 +125,8 @@ describe("New work (05-01..07, 05-31)", () => {
   it("draws Helm's plan from the workflow's real steps with history estimates, and re-reads it for the kind before Start", async () => {
     const calls = engine();
     await openWork();
+    expect(tid("px-composer")).toBeNull(); // the modal opens from the bar
+    await openNewWork();
     expect(tid("px-composer")).not.toBeNull();
     expect(tid("px-compose-feature")!.getAttribute("aria-pressed")).toBe("true");
     expect(strip()).toEqual(["Plan", "You approve", "Build", "Review", "PR", "Staging"]);
@@ -126,7 +134,7 @@ describe("New work (05-01..07, 05-31)", () => {
     expect(tid("px-compose-est-min")!.textContent).toBe("≈ 25 min");
     expect(tid("px-compose-est-min")!.getAttribute("title")).toMatch(/last 3 runs/);
     expect(tid("px-compose-est-usd")!.textContent).toBe("≈ $3");
-    expect(tid("px-compose-workflow")!.textContent).toContain("Minor Feature workflow");
+    expect(tid("px-compose-workflow")!.textContent).toContain("Minor Feature");
     // Bug: its own workflow, its own strip and a typical time — the plan updates before Start.
     await press(tid("px-compose-bug"));
     await settle(6);
@@ -135,7 +143,7 @@ describe("New work (05-01..07, 05-31)", () => {
     expect(tid("px-compose-est-min")!.getAttribute("title")).toMatch(/typical/);
     expect(tid("px-compose-est-usd")).toBeNull();
     expect(tid("px-compose-est-usd-none")!.textContent).toBe("cost after its first run");
-    expect(tid("px-compose-workflow")!.textContent).toContain("Fast Fix / Hotfix workflow");
+    expect(tid("px-compose-workflow")!.textContent).toContain("Fast Fix / Hotfix");
     // Ticket: the box asks for a link.
     await press(tid("px-compose-ticket"));
     expect((tid("px-compose-text") as HTMLInputElement).placeholder).toBe("Paste a GitHub or Plane issue link");
@@ -144,6 +152,7 @@ describe("New work (05-01..07, 05-31)", () => {
   it("'change' picks another workflow, the plan redraws, and Start sends kind, words and the workflow", async () => {
     const calls = engine();
     await openWork();
+    await openNewWork();
     await press(tid("px-compose-change"));
     expect(tid("px-compose-workflows")).not.toBeNull();
     expect(tid("px-compose-wf-minor_feature")!.getAttribute("aria-selected")).toBe("true");
@@ -158,7 +167,9 @@ describe("New work (05-01..07, 05-31)", () => {
     const sent = calls.find((c) => c.method === "POST" && c.path === `/v1/projects/${P}/work`);
     expect(sent?.body).toEqual({ kind: "feature", text: "Let agents tag tickets by product", workflow_key: "major_feature" });
     expect(tid("px-said")!.textContent).toMatch(/Started — Juno is planning it/);
+    expect(tid("px-composer")).toBeNull(); // the modal closes on Start
     // A kind change goes back to that kind's own workflow.
+    await openNewWork();
     await press(tid("px-compose-bug"));
     await settle(6);
     expect(tid("px-compose-workflow")!.textContent).toContain("Fast Fix");
@@ -167,6 +178,7 @@ describe("New work (05-01..07, 05-31)", () => {
   it("a Ticket pasted as a link is sent as it is (BOSS keeps the issue link)", async () => {
     const calls = engine();
     await openWork();
+    await openNewWork();
     await press(tid("px-compose-ticket"));
     await type(tid("px-compose-text"), "https://github.com/paramg/helpdesk-ai-demo/issues/31");
     await press(tid("px-compose-start"));
