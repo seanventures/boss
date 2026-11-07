@@ -225,7 +225,22 @@ def _cost_week(connection: Connection, project_id: str, now: datetime) -> dict[s
         if 0 <= i < 7:
             included[i] += round(float(r["m"] or 0) / 1_000_000, 2)
     on_plan = week == 0 and sum(included) > 0
+    # 04-15 the delta on a subscription week is the LIST price against last week's list price
+    # (the money is $0 both weeks, so the money delta says nothing).
+    list_delta = None
+    if on_plan:
+        row = connection.execute(text(
+            "SELECT COALESCE(sum(cost_usd_micros), 0) AS m FROM llm_calls WHERE project_id = :p "
+            "AND included_in_subscription AND created_at >= :a AND created_at < :b"),
+            {"p": project_id, "a": days[0] - timedelta(days=7), "b": days[0]}).mappings().first()
+        list_before = float((row or {}).get("m") or 0) / 1_000_000
+        list_delta = (round((sum(included) - list_before) * 100.0 / list_before)
+                      if list_before > 0 else None)
     return {"usd": week, "delta_pct": delta, "cap_usd": cap, "series": series,
+            # "first week": nothing was spent last week, so there is no % to compare with.
+            "first_week": (before <= 0 and week > 0) if not on_plan else list_delta is None,
+            "list_delta_pct": list_delta,
+            "cap_pct": (round(week * 100.0 / cap) if cap else None),
             "on_subscription": on_plan,
             "list_usd": round(sum(included), 2) if sum(included) else None,
             "list_series": [round(v, 2) for v in included],

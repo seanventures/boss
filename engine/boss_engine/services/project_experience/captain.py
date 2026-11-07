@@ -19,13 +19,17 @@ from .common import agents, face, href, iso
 DEFAULT_ROLE = "engineering_captain"
 CROSS_PROJECT = "chief_of_staff"
 
-#: What each crew member does, in one word (the squad chips).
-_DOES = {"product_manager": "Plans", "product_owner": "Plans", "planner": "Plans",
+#: What each crew member does, in one word (the squad chips): THE source for the label AND its
+#: tooltip on every surface (screen 04 crew row: Juno Plans, Forge Builds, Vera Tests, Beacon
+#: Deploys, Marshal Ranks).
+_DOES = {"pm": "Plans", "product_manager": "Plans", "product_owner": "Plans", "planner": "Plans",
          "architect": "Designs", "software_engineer": "Builds", "engineer": "Builds",
          "developer": "Builds", "frontend_engineer": "Builds", "backend_engineer": "Builds",
          "qa_engineer": "Tests", "qa": "Tests", "tester": "Tests", "reviewer": "Reviews",
-         "code_reviewer": "Reviews", "security_engineer": "Secures", "sre": "Watches",
-         "site_reliability_engineer": "Watches", "observability_engineer": "Watches",
+         "code_reviewer": "Reviews", "security_engineer": "Secures", "sre": "Deploys",
+         "site_reliability_engineer": "Deploys", "observability_engineer": "Watches",
+         "adversarial_reviewer": "Reviews", "security_reviewer": "Secures",
+         "chief_architect": "Designs", "software_engineer_backend": "Builds",
          "devops_engineer": "Ships", "release_manager": "Ships", "chief_of_staff": "Ranks",
          "engineering_captain": "Leads", "designer": "Designs", "ux_designer": "Designs",
          "technical_writer": "Documents"}
@@ -83,17 +87,32 @@ def squad(connection: Connection, project_id: str, roster: Mapping[str, Mapping[
     if not keys:
         keys = [k for k in ("product_manager", "software_engineer", "qa_engineer", "sre",
                             "chief_of_staff") if k in roster]
+    # Marshal (the Chief of Staff) is not in a project's squad: it ranks across projects and is
+    # drawn apart (`ranker`), so "4 in squad" counts this project's own crew.
+    room = limit
     out = []
     for key in keys:
-        if key == captain_key or key not in roster:
+        if key == captain_key or key not in roster or key == CROSS_PROJECT:
             continue
+        if len(out) >= room:
+            break
         f = face(roster, key)
         out.append({"name": f["name"], "role_key": key,
                     "role": _DOES.get(key) or roster[key]["role"], "avatar": f["avatar"],
                     "agent_id": f.get("agent_id")})
-        if len(out) >= limit:
-            break
     return out
+
+
+def ranker(roster: Mapping[str, Mapping[str, Any]], captain_key: Optional[str]
+           ) -> Optional[dict[str, Any]]:
+    """04-34 Marshal (the Chief of Staff), who closes the crew row: it ranks this project's
+    backlog against the others. None when the org has no Chief of Staff."""
+    if CROSS_PROJECT not in roster or captain_key == CROSS_PROJECT:
+        return None
+    f = face(roster, CROSS_PROJECT)
+    return {"name": f["name"], "role_key": CROSS_PROJECT, "role": _DOES[CROSS_PROJECT],
+            "avatar": f["avatar"], "agent_id": f.get("agent_id"),
+            "title": "Chief of Staff ranks this project's backlog against the others"}
 
 
 def last_said(connection: Connection, project_id: str, role_key: Optional[str]
@@ -197,7 +216,8 @@ def view(connection: Connection, project_id: str, *, roster: Optional[Mapping[st
     out = {"agent_id": f.get("agent_id") or key, "name": f["name"], "role_key": key,
            "role": roster[key]["role"], "avatar": f["avatar"],
            "status": _status(connection, project_id),
-           "squad": squad(connection, project_id, roster, key), "chosen": how,
+           "squad": squad(connection, project_id, roster, key), "ranker": ranker(roster, key),
+           "chosen": how,
            # The dock, scoped to the project, talking as its captain (one agent path).
            "ask": {"subject": {"kind": "project", "id": project_id}, "role_key": key,
                    "href": href(project_id, area="project", drawer="captain")},

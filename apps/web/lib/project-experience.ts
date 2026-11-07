@@ -20,7 +20,7 @@ import { onChanged } from "../app/changed";
 import { obsWrite } from "../app/observability/obs-write";
 import { useAreaShown } from "./area-shown";
 import { isConsoleLive, subscribeConsoleLive } from "./console-live";
-import { isHydrated, markHydrated } from "./local-time";
+import { isHydrated, localWith, markHydrated } from "./local-time";
 
 // ── shared enums (§ Shared enums) ────────────────────────────────────────────────────────────
 
@@ -63,7 +63,9 @@ export function label4(v: unknown): string {
 
 // ── types ────────────────────────────────────────────────────────────────────────────────────
 
-export type Agent = { name: string; role_key: string; avatar: string; role?: string; agent_id?: string };
+export type Agent = { name: string; role_key: string; avatar: string; role?: string; agent_id?: string;
+  /** "working" when the agent is acting right now (the working-face avatar). */
+  state?: "working" | "idle" };
 export type Node = { key: string; label: string; state: StepState; sub: string; href: string;
   /** The node's tooltip in words ("Ready for work: 6 of 6 checks"). */
   detail?: string };
@@ -77,6 +79,8 @@ export type ProjectCard = {
   status_label: string; onboarding_active: boolean; start_onboarding: Accept | null; archived: boolean;
   uptime_pct: number | null; onboarding_progress: [number, number] | null; lines: string[]; line_tone: string;
   crew: Agent[]; merged: number; building: number; week_cap_usd: number | null;
+  /** 02-05 the agents acting right now (the Running tile's working faces). */
+  live_agents: Agent[];
 };
 export type ProjectsSummary = { items: ProjectCard[]; week_cap_usd: number | null };
 export type Repo = { full_name: string; branch: string; access: { read: boolean; write: boolean; pr: boolean }; external_url: string };
@@ -87,6 +91,20 @@ export type NeedsYou = {
    *  items), the PR on GitHub, and when it was asked (the drawer). */
   work_id?: string; work_label?: string; external_url?: string; created_at?: string;
 };
+/** X-75 ONE TIME BASIS for a piece of work, on every surface (Work rows, Overview's Recent work,
+ *  drawers): a finished item (done / failed) is placed by WHEN IT FINISHED (`updated_at`):
+ *  "12h" within a day, "Sat" this week, else "Nov 2", in the viewer's zone; anything still
+ *  open by how long since it started (`age`). Never "Sat" on one screen and "12h" on another. */
+export function workWhen(w: { state: string; age?: string; updated_at?: string | null; created_at?: string | null }, nowMs: number = Date.now()): string {
+  if (w.state !== "done" && w.state !== "failed") return w.age || "";
+  const at = Date.parse(w.updated_at || w.created_at || "");
+  if (!Number.isFinite(at)) return w.age || "";
+  const ago = Math.max(0, nowMs - at);
+  if (ago < 3_600_000) return `${Math.max(1, Math.floor(ago / 60_000))}m`;
+  if (ago < 86_400_000) return `${Math.floor(ago / 3_600_000)}h`;
+  return ago < 6 * 86_400_000 ? localWith(at, { weekday: "short" }) : localWith(at, { month: "short", day: "numeric" });
+}
+
 export type WorkItem = {
   id: string; label: string; kind: string; state: WorkState; age: string;
   stages: { key: string; label: string; state: StepState }[]; agents: Agent[]; cost_usd: number | null;
@@ -149,13 +167,17 @@ export type Overview = {
     staging: { health: Health; uptime_pct: number | null; p95_ms: number | null; series: number[]; href: string; p95_source?: string; label?: string } | null;
     cost_week: { usd: number; delta_pct: number | null; cap_usd: number | null; series: number[]; href: string;
       /** No money this week because the work runs on a subscription: the list price instead. */
-      on_subscription?: boolean; list_usd?: number | null; list_series?: number[] } | null;
+      on_subscription?: boolean; list_usd?: number | null; list_series?: number[];
+      /** The list-price delta on a subscription week; first_week: nothing last week to compare. */
+      list_delta_pct?: number | null; first_week?: boolean; cap_pct?: number | null } | null;
   };
   captain: Captain | null; recent_work: WorkItem[]; next: NextItem[];
   try_it: { url: string; demo_logins: DemoLogin[] } | null;
   week: { at: string; label: string; kind: string; href: string; detail?: string }[];
 };
-export type Captain = { agent_id: string; name: string; role_key: string; avatar: string; status: string; squad: Agent[]; last_said: string };
+export type Captain = { agent_id: string; name: string; role_key: string; avatar: string; status: string; squad: Agent[]; last_said: string;
+  /** 04-34 Marshal (Chief of Staff), who ranks this project's backlog against the others: closes the crew row. */
+  ranker?: Agent | null };
 export type WorkList = { items: WorkItem[] };
 /** A repository on Repo & knowledge (screen 06): access is tri-state — true / false as the last
  *  check found, null when it was never checked. */
@@ -268,7 +290,8 @@ export const parseAgent = (v: unknown): Agent | null => {
   const x = o(v);
   const name = s(x.name);
   if (!name && !s(x.role_key)) return null;
-  return { name: name || s(x.role_key), role_key: s(x.role_key), avatar: s(x.avatar), role: s(x.role) || undefined, agent_id: s(x.agent_id) || undefined };
+  return { name: name || s(x.role_key), role_key: s(x.role_key), avatar: s(x.avatar), role: s(x.role) || undefined, agent_id: s(x.agent_id) || undefined,
+           ...(x.state === "working" || x.state === "idle" ? { state: x.state } : {}) };
 };
 const agents = (v: unknown): Agent[] => a(v).map(parseAgent).filter((x): x is Agent => x !== null);
 export const parseNode = (v: unknown): Node => {
@@ -298,6 +321,7 @@ export const parseCard = (v: unknown): ProjectCard => {
       ? [n(x.onboarding_progress[0]), n(x.onboarding_progress[1])] : null,
     lines: a(x.lines).map((l) => s(l)).filter(Boolean), line_tone: s(x.line_tone),
     crew: a(x.crew).map(parseAgent).filter((g): g is Agent => g !== null),
+    live_agents: a(x.live_agents).map(parseAgent).filter((g): g is Agent => g !== null),
     merged: n(x.merged), building: n(x.building), week_cap_usd: nn(x.week_cap_usd),
   };
 };
@@ -396,7 +420,7 @@ export const parseCaptain = (v: unknown): Captain | null => {
   const x = o(v);
   if (!s(x.name) && !s(x.role_key)) return null;
   return { agent_id: s(x.agent_id), name: s(x.name) || s(x.role_key), role_key: s(x.role_key), avatar: s(x.avatar), status: s(x.status),
-           squad: agents(x.squad), last_said: s(x.last_said) };
+           squad: agents(x.squad), last_said: s(x.last_said), ranker: parseAgent(x.ranker) };
 };
 
 /** The captain drawer's read (§7 GET …/captain, screen 09): scope, facts known, what it and
@@ -467,7 +491,8 @@ export const parseOverview = (v: unknown): Overview => {
       staging: Object.keys(st).length ? { health: oneOf(st.health, HEALTHS, "unknown"), uptime_pct: nn(st.uptime_pct), p95_ms: nn(st.p95_ms), p95_source: s(st.p95_source), label: s(st.label),
                                           series: nums(st.series), href: s(st.href) } : null,
       cost_week: Object.keys(cw).length ? { usd: n(cw.usd), delta_pct: nn(cw.delta_pct), cap_usd: nn(cw.cap_usd), series: nums(cw.series), href: s(cw.href),
-                                            on_subscription: cw.on_subscription === true, list_usd: nn(cw.list_usd), list_series: nums(cw.list_series) } : null,
+                                            on_subscription: cw.on_subscription === true, list_usd: nn(cw.list_usd), list_series: nums(cw.list_series),
+                                            list_delta_pct: nn(cw.list_delta_pct), first_week: cw.first_week === true, cap_pct: nn(cw.cap_pct) } : null,
     },
     captain: parseCaptain(x.captain),
     recent_work: a(x.recent_work).map(parseWorkItem).slice(0, 5),

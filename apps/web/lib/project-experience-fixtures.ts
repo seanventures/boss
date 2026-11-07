@@ -154,7 +154,7 @@ export const FX_OVERVIEW = {
     cost_week: { usd: 14.2, delta_pct: -18, cap_usd: 50, series: [2, 1.5, 3, 2.2, 1.8, 2.4, 1.3], href: "?area=budget" },
   },
   captain: { agent_id: "ag_helm", name: "Helm", role_key: "engineering_captain", avatar: "", status: "Watching 1 build",
-             squad: [juno, forge, vera, beacon, marshal] },
+             squad: [juno, forge, vera, beacon], ranker: marshal },
   recent_work: WORK.slice(0, 2).concat(WORK.slice(5, 6)),
   next: [
     { id: "wi_email", label: "Email-to-ticket intake", source: "roadmap", state: "next", href: href({ tab: "work", drawer: "work:wi_email" }) },

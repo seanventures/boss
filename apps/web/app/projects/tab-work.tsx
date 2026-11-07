@@ -22,7 +22,7 @@ import { ReadinessPanel, unaccepted, type Readiness } from "../workflow-readines
 import { startBody, type StartView } from "../../lib/start-project";
 import {
   ATTEMPT_WORDS, KIND_WORDS, PX_PATHS, WORK_ORDER, WORK_WORDS, attemptsPill, dollarsAbout, isMissingStatus, movePlanItem, needsYouCards,
-  parseWorkPlan, pxHref, reRank, runAccept, startWork, usePxRead, writePxUrl,
+  parseWorkPlan, pxHref, reRank, runAccept, startWork, usePxRead, workWhen, writePxUrl,
   type Attempt, type NeedsYou, type PlanNode, type WorkItem, type WorkPlan, type WorkState,
 } from "../../lib/project-experience";
 import { FX_WORK_PLAN } from "../../lib/project-experience-fixtures";
@@ -73,12 +73,8 @@ const whereNow = (w: WorkItem) => {
   const now = w.flow.length ? w.flow.find((f) => f.state === "now") : w.stages.find((st) => st.state === "now") ?? w.stages.find((st) => st.state === "todo");
   return [now ? STATION_NAME[now.key] ?? now.label : "", w.age].filter(Boolean).join(" · ");
 };
-/** A finished item's day, in the viewer's own zone: "Wed" this week, else "Nov 2". */
-const doneDay = (w: WorkItem) => {
-  const at = Date.parse(w.updated_at || w.created_at || "");
-  if (!Number.isFinite(at)) return w.age;
-  return Date.now() - at < 6 * 86_400_000 ? localWith(at, { weekday: "short" }) : localWith(at, { month: "short", day: "numeric" });
-};
+/** A finished item's time: the one basis every surface uses (workWhen). */
+const doneDay = (w: WorkItem) => workWhen(w);
 
 const DOT: Record<WorkState, string | undefined> = { needs_you: "you", stalled: "stalled", running: "now", done: "done", failed: "bad", planned: undefined };
 

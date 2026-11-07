@@ -780,3 +780,10 @@ button.px-h-num:focus-visible { outline: 2px solid var(--accent-text); outline-o
 .px-ck-i[data-s="skipped"] .px-ck-b { border-style: dashed; color: var(--faint); background: var(--surface-3); }
 .px-ck-i[data-s="skipped"] .px-ck-t { color: var(--muted); }
 .px-ck-when { font-weight: 600; color: var(--muted); }
+
+/* 04 Recent work rows: desktop 5 columns; at 390 the wireframe keeps dot · title · station strip. */
+.px-ov-wk { grid-template-columns: 14px minmax(0, 1fr) auto auto 14px; }
+@media (max-width: 760px) {
+  .px-ov-wk { grid-template-columns: 14px minmax(0, 1fr) auto; row-gap: 6px; }
+  .px-ov-wk > .px-ov-wk-st { grid-column: 3; grid-row: 1; }
+}
