@@ -135,7 +135,7 @@ export function redeployRows(e: Environment): { label: string; value: string; mo
   return [
     { label: "What", value: `${e.app || "This app"} on ${e.label}` },
     { label: "Where", value: where || "This environment's server" },
-    { label: "Commit", value: ld ? [ld.commit, ld.label].filter(Boolean).join(" · ") : "The last deployed commit", mono: !!ld?.commit },
+    { label: "Commit", value: ld ? [...new Set([ld.commit, ld.label].filter(Boolean))].join(" · ") : "The last deployed commit", mono: !!ld?.commit },
     { label: "Approval", value: e.policy === "auto"
       ? "None needed: this environment deploys on its own (Govern policy)"
       : "A person approves it in Needs you (Govern policy)" },

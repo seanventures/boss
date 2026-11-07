@@ -212,6 +212,15 @@ describe("one state machine: the strip, the cards, the live card and the guide n
     expect(params().get("area")).toBe("project");          // Watch stays on the page
   });
 
+  it("the header's elapsed and the live card's clock are one clock (same words, same second)", async () => {
+    const started = new Date(Date.now() - (8 * 3600 + 12 * 60 + 40) * 1000).toISOString();
+    engine({ ...RUNNING, started_at: started, elapsed_s: 8 * 3600 + 12 * 60 });
+    await open();
+    const head = tid("px-head-elapsed")!.textContent;
+    expect(head).toBe(tid("px-ob-clock")!.textContent);
+    expect(head).toMatch(/^8h 1[23]m$/);
+  });
+
   it("the stage strip shows exactly one current stage and nothing after it is ticked", async () => {
     engine(READY);
     await open();

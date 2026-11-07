@@ -35,7 +35,7 @@ import { DeploymentsTab, p95Words } from "./tab-deployments";
 import { HealthTab } from "./tab-health";
 import { SettingsTab } from "./tab-settings";
 import { DrawerHost } from "./drawers";
-import { OnboardingView, elapsedWords } from "./onboarding";
+import { OnboardingView, clockWords, useElapsed } from "./onboarding";
 import "./px.css";
 
 export const TAB_ICONS: Record<Tab, Icon> = {
@@ -219,6 +219,8 @@ function Header({ ctx, onboarding }: { ctx: PxCtx; onboarding: boolean }) {
   const p = ctx.overview.project;
   const repo = p.repos[0];
   const staging = ctx.overview.tiles.staging;
+  // 10-08 one clock: the header's elapsed is the live card's (same source, same words).
+  const elapsed = useElapsed(ctx.onboarding ?? null);
   // THE PROJECT'S HEALTH (health.state_of, worst environment): the same word as the tiles, the
   // cards and the Health tab — never "Healthy" beside a breached SLO or a firing alert (12-05).
   const health = p.health !== "unknown" ? p.health : staging?.health ?? p.health;
@@ -258,7 +260,7 @@ function Header({ ctx, onboarding }: { ctx: PxCtx; onboarding: boolean }) {
             <span className="px-dot" data-s={health} data-round aria-hidden />{p.live_url || health !== "unknown" ? HEALTH_WORD[health] : "No health yet"}</a>
           <span className="px-tag" data-tone={onboarding ? "blue" : "green"} data-testid="px-head-status" title="Project stage on the journey">{onboarding ? <><Compass size={11} aria-hidden /> Onboarding</>
             : <>{(() => { const I = STAGE_ICON[p.stage] ?? Compass; return <I size={11} aria-hidden />; })()} {p.status_label || "Ready"}</>}</span>
-          {onboarding && ctx.onboarding?.elapsed_s ? <span className="px-mono px-faint" style={{ fontSize: ".6rem" }} data-testid="px-head-elapsed">{elapsedWords(ctx.onboarding.elapsed_s)}</span> : null}
+          {onboarding && elapsed ? <span className="px-mono px-faint" style={{ fontSize: "var(--fs-meta)" }} data-testid="px-head-elapsed">{clockWords(elapsed)}</span> : null}
         </div>
       </div>
       <span className="px-spacer" />
