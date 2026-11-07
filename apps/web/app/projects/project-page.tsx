@@ -14,8 +14,8 @@
  */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  ArrowSquareOut, ChatCircleDots, Check, ClipboardText, GearSix, GitBranch, Globe, HandWaving, Heartbeat, House, Kanban, MapTrifold,
-  Plus, RocketLaunch, TreeStructure, type Icon,
+  ArrowSquareOut, ChatCircleDots, Check, ClipboardText, Compass, GearSix, GitBranch, Globe, HandWaving, Heartbeat, House, Kanban, MapTrifold,
+  Plus, RocketLaunch, TreeStructure, GitMerge, CloudCheck, ListChecks, type Icon,
 } from "@phosphor-icons/react";
 
 import { GatedButton } from "../../components/gated";
@@ -126,9 +126,10 @@ export function ProjectPage({ projectId, actor, orgId }: { projectId: string; ac
              }}>
           {(Object.keys(TAB_WORDS) as Tab[]).map((t) => {
             const I = TAB_ICONS[t];
-            const count = t === "work" ? openCount : undefined;
+            const count = t === "work" ? openCount : t === "roadmap" ? (ctx.overview.roadmap_count ?? undefined) : undefined;
             return (
               <button key={t} type="button" role="tab" className="px-tab" aria-selected={url.tab === t} tabIndex={url.tab === t ? 0 : -1}
+                      ref={url.tab === t ? (el) => { el?.scrollIntoView?.({ block: "nearest", inline: "nearest" }); } : undefined}
                       aria-controls="px-tabpanel" data-testid={`px-tab-${t}`} onClick={() => tab(t)}>
                 <I size={14} weight={url.tab === t ? "fill" : "regular"} aria-hidden />{TAB_WORDS[t]}
                 {count ? <span className="px-nbadge">{count}</span> : null}
@@ -235,7 +236,8 @@ function NeedsBar({ ctx, onboarding }: { ctx: PxCtx; onboarding: Onboarding | nu
       <b>{n} need{n === 1 ? "s" : ""} you</b>
       {items.map((it) => (
         <button key={it.id} type="button" className="px-needs-item" data-testid={`px-needs-${it.id}`} onClick={() => ctx.open("needs", it.id)}>
-          {it.kind === "merge" ? <GitBranch size={12} aria-hidden /> : it.kind === "deploy" ? <RocketLaunch size={12} aria-hidden /> : <HandWaving size={12} aria-hidden />}{it.label}
+          {it.kind === "merge" ? <GitMerge size={12} aria-hidden /> : it.kind === "deploy" ? <RocketLaunch size={12} aria-hidden />
+            : it.icon === "cloud" ? <CloudCheck size={12} aria-hidden /> : it.kind === "plan" ? <ListChecks size={12} aria-hidden /> : <HandWaving size={12} aria-hidden />}{it.label}
         </button>
       ))}
       {yours.map((it) => (
@@ -243,6 +245,9 @@ function NeedsBar({ ctx, onboarding }: { ctx: PxCtx; onboarding: Onboarding | nu
            onClick={it.action ? undefined : (e) => { e.preventDefault(); ctx.tab("overview"); }}>
           <ClipboardText size={12} aria-hidden />{it.label}</a>
       ))}
+      <span className="px-spacer" />
+      {/* About a minute of the person's time per item (X-39 "≈ 2 min"); hidden on a phone. */}
+      <span className="px-faint px-hide-phone" title="About how long these take you" data-testid="px-needs-time">≈ {n} min</span>
     </div>
   );
 }

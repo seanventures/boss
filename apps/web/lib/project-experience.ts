@@ -64,7 +64,9 @@ export function label4(v: unknown): string {
 // ── types ────────────────────────────────────────────────────────────────────────────────────
 
 export type Agent = { name: string; role_key: string; avatar: string; role?: string; agent_id?: string };
-export type Node = { key: string; label: string; state: StepState; sub: string; href: string };
+export type Node = { key: string; label: string; state: StepState; sub: string; href: string;
+  /** The node's tooltip in words ("Ready for work: 6 of 6 checks"). */
+  detail?: string };
 export type ProjectCard = {
   id: string; name: string; initials: string; repo: string; stage: Stage; journey: Node[];
   needs_you: number; running: number; health: Health; live_url: string; captain: Agent | null;
@@ -73,7 +75,7 @@ export type ProjectCard = {
 export type ProjectsSummary = { items: ProjectCard[] };
 export type Repo = { full_name: string; branch: string; access: { read: boolean; write: boolean; pr: boolean }; external_url: string };
 export type NeedsYou = {
-  id: string; kind: "merge" | "deploy" | "plan" | "question" | "setup"; label: string; detail: string;
+  id: string; kind: "merge" | "deploy" | "plan" | "question" | "setup"; label: string; detail: string; icon?: string;
   mini: { label: string; state: StepState }[]; action: { label: string; href: string; decision_id: string } | null;
 };
 export type WorkItem = {
@@ -87,6 +89,10 @@ export type WorkItem = {
   stalled_since: string;
   /** Every attempt of this piece of work, newest first (empty when it had only one). */
   attempts: Attempt[]; attempt_count: number; followups: number; retries: number;
+  /** "Run #43": the workflow run's number in its project (null for a build on its own). */
+  run_number: number | null; created_at: string; updated_at: string;
+  /** The person's one action, named for what it does: "Merge" | "Approve deploy" | "Decide"… */
+  action_label: string;
 };
 /** One attempt of a piece of work: the build, a retry, or a follow-up (§3 `attempts[]`). */
 export type Attempt = {
@@ -95,12 +101,12 @@ export type Attempt = {
   cost_usd: number | null; pr: { number: number; external_url: string } | null; build: string; href: string;
 };
 export type AttemptState = (typeof ATTEMPT_STATES)[number];
-  /** "Run #43": the workflow run's number in its project (null for a build on its own). */
-  run_number: number | null; created_at: string; updated_at: string;
 /** How an item is accepted (§2/§14): the roadmap's accept, or THE start door with its body. */
 export type Accept = { href: string; method: string; body: R };
 export type NextItem = {
   id: string; label: string; detail: string; source: string; kind: string; state: "next" | "proposed"; href: string; external_url: string;
+  /** Already accepted onto the Roadmap's Next lane ("Feature · accepted", a Next tag). */
+  accepted?: boolean;
   accept: Accept | null;
   /** A backlog candidate's words for the work and where it came from (§8 `text`, `ref`). */
   text: string; ref: string;
@@ -109,11 +115,15 @@ export type DemoLogin = { user: string; label: string; reveal: { href: string; r
 export type Overview = {
   project: { id: string; name: string; initials: string; stage: Stage; repos: Repo[]; live_url: string; status_label: string; health: Health };
   journey: Node[]; needs_you: NeedsYou[];
+  /** The Roadmap tab's count (open + accepted). */
+  roadmap_count?: number | null;
   tiles: {
     open_work: { count: number; by_state: Record<string, number>; href: string } | null;
-    running: { count: number; current: { label: string; progress: [number, number]; agent: Agent | null } | null; href: string } | null;
-    staging: { health: Health; uptime_pct: number | null; p95_ms: number | null; series: number[]; href: string } | null;
-    cost_week: { usd: number; delta_pct: number | null; cap_usd: number | null; series: number[]; href: string } | null;
+    running: { count: number; current: { label: string; progress: [number, number]; agent: Agent | null; sub?: string; id?: string } | null; href: string } | null;
+    staging: { health: Health; uptime_pct: number | null; p95_ms: number | null; series: number[]; href: string; p95_source?: string } | null;
+    cost_week: { usd: number; delta_pct: number | null; cap_usd: number | null; series: number[]; href: string;
+      /** No money this week because the work runs on a subscription: the list price instead. */
+      on_subscription?: boolean; list_usd?: number | null; list_series?: number[] } | null;
   };
   captain: Captain | null; recent_work: WorkItem[]; next: NextItem[];
   try_it: { url: string; demo_logins: DemoLogin[] } | null;
@@ -133,16 +143,24 @@ export type Knowledge = {
 };
 export type Environment = {
   key: string; label: string; url: string; health: Health; host: string; host_href: string; target_id: string; app: string; manage_href: string;
+  /** The server's name for a title ("Staging server" when its name is only its address). */
+  host_name: string;
+  /** How many projects share this server (the "runs on" tooltip). */
+  host_projects: number | null;
+  /** Where p95 comes from: the app's own metrics, or BOSS's probe. */
+  p95_source?: string;
   uptime_pct: number | null; p95_ms: number | null;
   error_rate: number | null; series: number[];
-  last_deploy: { commit: string; at: string; by: string; label: string; href: string } | null;
+  last_deploy: { commit: string; at: string; by: string; label: string; href: string; pr: number | null; pr_url: string } | null;
   demo_logins: DemoLogin[]; policy: "auto" | "person"; href: string;
 };
 export type Deployments = {
   environments: Environment[];
   production: { state: "none" | "needs_host" | "ready"; action: { label: string; href: string } | null };
   ship_path: { label: string; state: StepState }[];
-  history: { id: string; label: string; sub: string; at: string; state: StepState; href: string }[];
+  history: { id: string; label: string; sub: string; at: string; state: StepState; href: string; word: string; by: string; by_agent: boolean;
+    /** A deploy that failed and an agent recovered (a later deploy went live): amber ↺. */
+    recovered: boolean }[];
 };
 export type Recommendation = {
   id: string; title: string; kind: string; strip: { label: string; type: string }[]; value: number; effort: string; cost_usd: number | null;
@@ -196,7 +214,7 @@ export const parseAgent = (v: unknown): Agent | null => {
 const agents = (v: unknown): Agent[] => a(v).map(parseAgent).filter((x): x is Agent => x !== null);
 export const parseNode = (v: unknown): Node => {
   const x = o(v);
-  return { key: s(x.key), label: label4(x.label), state: oneOf(x.state, STEP_STATES, "todo"), sub: s(x.sub), href: s(x.href) };
+  return { key: s(x.key), label: label4(x.label), state: oneOf(x.state, STEP_STATES, "todo"), sub: s(x.sub), href: s(x.href), detail: s(x.detail) };
 };
 const mini = (v: unknown) => a(v).map((m) => ({ label: label4(o(m).label), state: oneOf(o(m).state, STEP_STATES, "todo") }));
 export const parseRepo = (v: unknown): Repo => {
@@ -230,6 +248,8 @@ export const parseWorkItem = (v: unknown): WorkItem => {
     stalled_since: s(x.stalled_since),
     attempts: a(x.attempts).map(parseAttempt).filter((t) => t.id),
     attempt_count: n(x.attempt_count), followups: n(x.followups), retries: n(x.retries),
+    run_number: nn(x.run_number), created_at: s(x.created_at), updated_at: s(x.updated_at),
+    action_label: s(x.action_label),
   };
 };
 /** Never a raw internal string on a row: `code_task` is a Build. */
@@ -273,13 +293,13 @@ export const ATTEMPT_WORDS: Record<AttemptState, string> = {
   planned: "Queued", running: "Running", stalled: "Stalled", handed_on: "Handed on", needs_you: "Needs you", done: "Done", failed: "Failed",
 };
 export const parseAccept = (v: unknown): Accept | null => {
-    run_number: nn(x.run_number), created_at: s(x.created_at), updated_at: s(x.updated_at),
   const x = o(v);
   return s(x.href) ? { href: s(x.href), method: s(x.method, "POST"), body: o(x.body) } : null;
 };
 const parseNext = (v: unknown): NextItem => {
   const x = o(v);
-  return { id: s(x.id), label: label4(s(x.label) || s(x.title) || s(x.text)), detail: s(x.detail), source: s(x.source), kind: s(x.kind),
+  return { id: s(x.id), label: s(x.label) || label4(s(x.title) || s(x.text)), detail: s(x.detail), source: s(x.source), kind: s(x.kind),
+           accepted: x.accepted === true,
            state: x.state === "proposed" ? "proposed" : "next", href: s(x.href), external_url: s(x.external_url), accept: parseAccept(x.accept),
            text: s(x.text), ref: s(x.ref) };
 };
@@ -308,19 +328,22 @@ export const parseOverview = (v: unknown): Overview => {
                repos: a(p.repos).map(parseRepo), live_url: s(p.live_url), status_label: s(p.status_label),
                health: oneOf(p.health ?? st.health, HEALTHS, "unknown") },
     journey: a(x.journey).map(parseNode),
+    roadmap_count: nn(x.roadmap_count),
     needs_you: a(x.needs_you).map((it) => {
       const y = o(it); const act = o(y.action);
-      return { id: s(y.id), kind: oneOf(y.kind, ["merge", "deploy", "plan", "question", "setup"] as const, "question"), label: label4(y.label),
+      return { id: s(y.id), kind: oneOf(y.kind, ["merge", "deploy", "plan", "question", "setup"] as const, "question"), label: s(y.label),
+               icon: s(y.icon), work_id: s(y.work_id), work_label: s(y.work_label), external_url: s(y.external_url), created_at: s(y.created_at),
                detail: s(y.detail), mini: mini(y.mini),
                action: act.label || act.href ? { label: s(act.label, "Open"), href: s(act.href), decision_id: s(act.decision_id) } : null };
     }),
     tiles: {
       open_work: Object.keys(ow).length ? { count: n(ow.count), by_state: byState, href: s(ow.href) } : null,
       running: Object.keys(rn).length ? { count: n(rn.count), href: s(rn.href),
-        current: Object.keys(cur).length ? { label: s(cur.label), progress: [prog[0] ?? 0, prog[1] ?? 0], agent: parseAgent(cur.agent) } : null } : null,
-      staging: Object.keys(st).length ? { health: oneOf(st.health, HEALTHS, "unknown"), uptime_pct: nn(st.uptime_pct), p95_ms: nn(st.p95_ms),
+        current: Object.keys(cur).length ? { label: s(cur.label), progress: [prog[0] ?? 0, prog[1] ?? 0], agent: parseAgent(cur.agent), sub: s(cur.sub), id: s(cur.id) } : null } : null,
+      staging: Object.keys(st).length ? { health: oneOf(st.health, HEALTHS, "unknown"), uptime_pct: nn(st.uptime_pct), p95_ms: nn(st.p95_ms), p95_source: s(st.p95_source),
                                           series: nums(st.series), href: s(st.href) } : null,
-      cost_week: Object.keys(cw).length ? { usd: n(cw.usd), delta_pct: nn(cw.delta_pct), cap_usd: nn(cw.cap_usd), series: nums(cw.series), href: s(cw.href) } : null,
+      cost_week: Object.keys(cw).length ? { usd: n(cw.usd), delta_pct: nn(cw.delta_pct), cap_usd: nn(cw.cap_usd), series: nums(cw.series), href: s(cw.href),
+                                            on_subscription: cw.on_subscription === true, list_usd: nn(cw.list_usd), list_series: nums(cw.list_series) } : null,
     },
     captain: parseCaptain(x.captain),
     recent_work: a(x.recent_work).map(parseWorkItem).slice(0, 5),
@@ -373,9 +396,10 @@ export const parseDeployments = (v: unknown): Deployments => {
       const y = o(e); const ld = o(y.last_deploy);
       return { key: s(y.key), label: s(y.label, s(y.key)), url: s(y.url), health: oneOf(y.health, HEALTHS, "unknown"), host: s(y.host),
                host_href: s(y.host_href), target_id: s(y.target_id), app: s(y.app), manage_href: s(y.manage_href),
+               host_name: s(y.host_name) || s(y.host), host_projects: nn(y.host_projects), p95_source: s(y.p95_source),
                uptime_pct: nn(y.uptime_pct), p95_ms: nn(y.p95_ms), error_rate: nn(y.error_rate), series: nums(y.series),
-               last_deploy: Object.keys(ld).length ? { commit: s(ld.commit), at: s(ld.at), by: s(ld.by),
-                                                       label: s(ld.label) || s(ld.commit) || s(ld.status), href: s(ld.href) } : null,
+               last_deploy: Object.keys(ld).length ? { commit: s(ld.commit), at: s(ld.at), by: s(ld.by), pr: nn(ld.pr), pr_url: s(ld.pr_url),
+                                                       label: s(ld.label) || (nn(ld.pr) ? `PR #${nn(ld.pr)}` : s(ld.commit)), href: s(ld.href) } : null,
                demo_logins: a(y.demo_logins).map(parseLogin), policy: y.policy === "person" ? "person" : "auto", href: s(y.href) };
     }),
     production: { state: oneOf(pr.state, ["none", "needs_host", "ready"] as const, "none"),
@@ -383,8 +407,11 @@ export const parseDeployments = (v: unknown): Deployments => {
     ship_path: mini(x.ship_path),
     history: a(x.history).map((h) => {
       const y = o(h);
-      const sub = s(y.sub) || [s(y.status), s(y.by) ? `by ${s(y.by)}` : ""].filter(Boolean).join(" · ");
-      return { id: s(y.id), label: s(y.label), sub, at: s(y.at), state: deployState(y.status, y.state), href: s(y.href) };
+      // In words only: duration, smoke result or the reason it stopped — never a raw status or id.
+      const sub = s(y.sub) || [s(y.duration), s(y.smoke), s(y.reason)].filter(Boolean).join(" · ");
+      const recovered = y.recovered === true || y.state === "recovered";
+      return { id: s(y.id), label: s(y.label), sub, at: s(y.at), state: recovered ? "failed" : deployState(y.status, y.state), href: s(y.href),
+               word: s(y.state_word), by: s(y.by), by_agent: y.by_agent === true, recovered };
     }),
   };
 };
@@ -758,7 +785,7 @@ export function workFromStartRow(raw: unknown, projectId: string): WorkItem {
     links: { workflow_run: `?${new URLSearchParams({ project_id: projectId, area: "delivery_workflows", wfr: run })}`, build: "", deploy: "",
              preview: "", decision: "", pr: pr ? { number: prNo, external_url: pr } : null },
     detail: s(r.status), href: "", source: s(r.workflow), source_label: "Workflow",
-    stalled_since: "", attempts: [], attempt_count: 1, followups: 0, retries: 0, run_number: null, created_at: "", updated_at: "",
+    stalled_since: "", attempts: [], attempt_count: 1, followups: 0, retries: 0, run_number: null, created_at: "", updated_at: "", action_label: "",
   };
 }
 /** The open-work bar's segments, in the order and colours of the mock (running · needs you · planned · done). */

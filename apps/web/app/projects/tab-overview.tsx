@@ -5,18 +5,39 @@
  * health, cost), the captain card, recent work, what's next, try it, this week. Every tile, row
  * and node is a link: in place (a drawer) or to the tab that holds it.
  */
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   ArrowRight, CaretRight, ChatCircleDots, ClockCounterClockwise, Coins, Globe, HandWaving, Heartbeat, Key, Kanban, Lightbulb,
-  Lightning, MapTrifold, Path, SteeringWheel, Info,
+  Lightning, MapTrifold, Path, SteeringWheel, Info, Cloud, GearSix, GitMerge, RocketLaunch, ListChecks, Wrench, Question, Lock, Bug, Ticket, Sparkle, Warning,
+  type Icon,
 } from "@phosphor-icons/react";
 
 import { GatedButton } from "../../components/gated";
-import { WORK_ORDER, WORK_WORDS, navigateTo, pxHref, runAccept, type NextItem, type WorkItem } from "../../lib/project-experience";
-import { Empty, Face, Flow, HEALTH_WORD, Ico, Journey, PxLink, Ring, Said, Spark, Stations, Tag } from "./kit";
+import { KIND_WORDS, WORK_ORDER, WORK_WORDS, navigateTo, pxHref, runAccept, startOnboarding, type NextItem, type WorkItem } from "../../lib/project-experience";
+import { Empty, Face, Flow, HEALTH_WORD, Ico, Journey, PxLink, Ring, Said, Spark, Stations, Tag, Timeline } from "./kit";
 import { DemoLoginRow } from "./tab-settings";
+import { P95_SOURCE } from "./tab-deployments";
 import { whenLocal } from "../../lib/local-time";
 import type { PxCtx } from "./project-page";
+
+/** Each Needs-you card's icon, by what it asks. */
+const NEED_ICON: Record<string, Icon> = { merge: GitMerge, deploy: RocketLaunch, plan: ListChecks, setup: Wrench, question: Question };
+/** Where a What's-next item came from, in words and an icon. */
+const SOURCE_WORDS: Record<string, { word: string; icon: Icon }> = {
+  roadmap: { word: "Roadmap", icon: MapTrifold }, ticket: { word: "Open issue", icon: Ticket }, bug: { word: "Bug", icon: Bug },
+  ci: { word: "Failing CI", icon: Warning },
+};
+const NEXT_KIND_WORDS: Record<string, string> = {
+  feature: "Feature", test_gap: "Test gap", incident_hotspot: "Incident hotspot", alert_gap: "Alert gap", bug: "Bug", ticket: "Ticket", chore: "Chore",
+  security: "Security", dependency: "Dependency", performance: "Performance", docs: "Docs",
+};
+
+/** What each crew member does, in one word (screen 04's crew row). */
+const CREW_VERB: Record<string, string> = {
+  product_manager: "Plans", planner: "Plans", engineer: "Builds", software_engineer: "Builds", builder: "Builds", qa: "Tests", qa_engineer: "Tests",
+  sre: "Deploys", devops: "Deploys", chief_of_staff: "Ranks", architect: "Designs", chief_architect: "Designs", security: "Secures",
+  security_reviewer: "Secures", adversarial_reviewer: "Reviews", reviewer: "Reviews", designer: "Designs", engineering_captain: "Captains",
+};
 
 const WORK_TONE: Record<string, string> = { running: "var(--teal)", stalled: "color-mix(in srgb, var(--amber) 55%, var(--surface-3))", needs_you: "var(--amber)", planned: "var(--quiet)", done: "var(--green)", failed: "var(--red)" };
 
@@ -38,9 +59,28 @@ function goHref(ctx: PxCtx, href: string, fallback: () => void) {
   fallback();
 }
 
+/** A Needs-you item that arrived after the page first drew glows once (aa-glow), then stays still. */
+function useFresh(ids: string[]): (id: string) => boolean {
+  const seen = useRef<Set<string> | null>(null);
+  const [fresh, setFresh] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    if (seen.current === null) { seen.current = new Set(ids); return; }
+    const arrived = ids.filter((i) => !seen.current!.has(i));
+    arrived.forEach((i) => seen.current!.add(i));
+    if (arrived.length) {
+      setFresh(new Set(arrived));
+      const t = window.setTimeout(() => setFresh(new Set()), 2400);
+      return () => window.clearTimeout(t);
+    }
+    return undefined;
+  }, [ids.join("|")]); // eslint-disable-line react-hooks/exhaustive-deps
+  return (id) => fresh.has(id);
+}
+
 export function OverviewTab({ ctx }: { ctx: PxCtx }) {
   const ov = ctx.overview;
   const t = ov.tiles;
+  const fresh = useFresh(ov.needs_you.map((n) => n.id));
   return (
     <div className="px-stack" data-testid="px-overview">
       {ov.journey.length ? (
@@ -56,7 +96,8 @@ export function OverviewTab({ ctx }: { ctx: PxCtx }) {
           <span className="px-num">{t.open_work?.count ?? ctx.work?.items.filter((w) => w.state !== "done").length ?? 0}</span>
           {t.open_work ? <WorkBar by={t.open_work.by_state} /> : null}
         </Tile>
-        <Tile label="Running" icon={Lightning} c="teal" testid="px-tile-running" onClick={() => goHref(ctx, t.running?.href ?? "", () => ctx.tab("work"))}>
+        <Tile label="Running" icon={Lightning} c="teal" testid="px-tile-running"
+              onClick={() => (t.running?.current?.id ? ctx.open("work", t.running.current.id) : goHref(ctx, t.running?.href ?? "", () => ctx.tab("work")))}>
           {t.running?.current ? (
             <div className="px-row">
               <Ring pct={t.running.current.progress[1] ? (100 * t.running.current.progress[0]) / t.running.current.progress[1] : 30} tone="teal"
@@ -64,7 +105,9 @@ export function OverviewTab({ ctx }: { ctx: PxCtx }) {
                 {t.running.current.progress[1] ? `${t.running.current.progress[0]}/${t.running.current.progress[1]}` : "…"}</Ring>
               <div style={{ minWidth: 0 }}>
                 <div className="px-ell" style={{ color: "var(--teal)", fontWeight: 600 }}>{t.running.current.label}</div>
-                {t.running.current.agent ? <div className="px-row px-faint" style={{ fontSize: ".58rem" }}><Face agent={t.running.current.agent} size={18} state="working" /> {t.running.current.agent.name}</div> : null}
+                <div className="px-row px-faint" style={{ fontSize: ".58rem" }}>
+                  {t.running.current.agent ? <Face agent={t.running.current.agent} size={18} state="working" /> : null}
+                  <span>{t.running.current.sub || t.running.current.agent?.name}</span></div>
               </div>
             </div>
           ) : <span className="px-faint">Nothing running</span>}
@@ -76,7 +119,7 @@ export function OverviewTab({ ctx }: { ctx: PxCtx }) {
                 <Ring pct={t.staging.uptime_pct ?? 0} tone={t.staging.health === "healthy" ? "green" : t.staging.health === "down" ? "red" : "amber"} label={`Uptime ${t.staging.uptime_pct ?? "unknown"}%`}>
                   {t.staging.uptime_pct ?? "—"}</Ring>
                 <div><div style={{ color: "var(--green)", fontWeight: 600 }}>{HEALTH_WORD[t.staging.health]}</div>
-                  {t.staging.p95_ms !== null ? <span className="px-mono px-faint" style={{ fontSize: ".58rem" }}>p95 {t.staging.p95_ms}ms</span> : null}</div>
+                  {t.staging.p95_ms !== null ? <span className="px-mono px-faint" style={{ fontSize: ".58rem" }} title={P95_SOURCE[t.staging.p95_source ?? ""] ?? undefined}>p95 {t.staging.p95_ms}ms</span> : null}</div>
               </div>
               <Spark series={t.staging.series} tone="green" label="Staging latency, last 24 hours" />
             </>
@@ -85,10 +128,20 @@ export function OverviewTab({ ctx }: { ctx: PxCtx }) {
         <Tile label="Cost · week" icon={Coins} c="violet" testid="px-tile-cost" onClick={() => goHref(ctx, t.cost_week?.href ?? "?area=budget", () => ctx.tab("settings", { section: "autonomy" }))}>
           {t.cost_week ? (
             <>
+              {t.cost_week.on_subscription ? (
+                <>
+                  <div className="px-row"><span className="px-num" style={{ color: "var(--teal)" }}>$0</span><Tag tone="green" title="Runs on your model subscription: no money spent this week">On subscription</Tag></div>
+                  <Spark series={t.cost_week.list_series ?? []} fill label="List price per day this week" />
+                  <small className="px-faint">≈ ${(t.cost_week.list_usd ?? 0).toFixed(2)} at list price</small>
+                </>
+              ) : (
+                <>
               <div className="px-row"><span className="px-num" style={{ color: "var(--teal)" }}>${t.cost_week.usd.toFixed(2)}</span>
-                {t.cost_week.delta_pct !== null ? <Tag tone={t.cost_week.delta_pct <= 0 ? "green" : "amber"}>{t.cost_week.delta_pct > 0 ? "+" : ""}{t.cost_week.delta_pct}%</Tag> : null}</div>
+                {t.cost_week.delta_pct !== null ? <Tag tone={t.cost_week.delta_pct <= 0 ? "green" : "red"} title="Against last week">{t.cost_week.delta_pct > 0 ? "+" : "−"}{Math.abs(t.cost_week.delta_pct)}%</Tag> : null}</div>
               <Spark series={t.cost_week.series} fill label="Cost per day this week" />
               {t.cost_week.cap_usd ? <small className="px-faint">{Math.round((100 * t.cost_week.usd) / t.cost_week.cap_usd)}% of ${t.cost_week.cap_usd} cap</small> : null}
+                </>
+              )}
             </>
           ) : <span className="px-faint">No spend yet</span>}
         </Tile>
@@ -98,16 +151,22 @@ export function OverviewTab({ ctx }: { ctx: PxCtx }) {
         <div className="px-stack">
           <section className="px-card" aria-labelledby="px-ov-ny" data-testid="px-ov-needs">
             <div className="px-card-h"><Ico icon={HandWaving} c="amber" /><h2 id="px-ov-ny">Needs you</h2><span className="px-nbadge" data-tone={ov.needs_you.length ? "amber" : undefined}>{ov.needs_you.length}</span></div>
-            {ov.needs_you.length ? ov.needs_you.map((it) => (
-              <div key={it.id} className="px-ny" data-testid={`px-ov-ny-${it.id}`}>
-                <span className="px-ny-ico" aria-hidden>!</span>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <button type="button" className="px-wk-t" onClick={() => ctx.open("needs", it.id)}>{it.label}</button>
-                  {it.mini.length ? <Flow nodes={it.mini} /> : <small className="px-faint" style={{ display: "block" }}>{it.detail}</small>}
+            {ov.needs_you.length ? ov.needs_you.map((it) => {
+              const KindIcon = (it.icon === "cloud" ? Cloud : NEED_ICON[it.kind]) ?? Question;
+              return (
+                <div key={it.id} className="px-ny" data-testid={`px-ov-ny-${it.id}`} data-new={fresh(it.id) ? "1" : undefined}
+                     role="button" tabIndex={-1} onClick={(e) => { if ((e.target as HTMLElement).closest("button,a")) return; ctx.open("needs", it.id); }}>
+                  <span className="px-ny-ico" aria-hidden><KindIcon size={12} weight="bold" /></span>
+                  <div className="px-ny-b">
+                    <button type="button" className="px-wk-t" onClick={() => ctx.open("needs", it.id)}>{it.label}</button>
+                    {it.mini.length ? <Flow nodes={it.mini.map((m) => ({ ...m, icon: m.state === "waiting" ? <Lock size={10} weight="fill" aria-hidden /> : undefined }))} testid={`px-ov-ny-flow-${it.id}`} />
+                      : it.detail ? <small className="px-faint" style={{ display: "block" }}>{it.detail}</small> : null}
+                    {it.mini.length && it.kind === "setup" && it.detail ? <small className="px-faint">{it.detail}</small> : null}
+                  </div>
+                  {it.action ? <ActionButton ctx={ctx} label={it.action.label} href={it.action.href} amber testid={`px-ov-ny-act-${it.id}`} /> : null}
                 </div>
-                {it.action ? <ActionButton ctx={ctx} label={it.action.label} href={it.action.href} amber testid={`px-ov-ny-act-${it.id}`} /> : null}
-              </div>
-            )) : <Empty icon={HandWaving} tone="green" title="All clear" line="Nothing is waiting on you. Helm asks here when it needs a person." />}
+              );
+                        }) : <Empty icon={HandWaving} tone="green" title="All clear" line="Nothing is waiting on you. Helm asks here when it needs a person." />}
           </section>
 
           <section className="px-card" aria-labelledby="px-ov-rw">
@@ -119,23 +178,9 @@ export function OverviewTab({ ctx }: { ctx: PxCtx }) {
           </section>
 
           {ov.week.length ? (
-            <section className="px-card" aria-labelledby="px-ov-wk">
+            <section className="px-card px-hide-phone" aria-labelledby="px-ov-wk">
               <div className="px-card-h"><Ico icon={ClockCounterClockwise} c="blue" /><h2 id="px-ov-wk">This week</h2></div>
-              <div className="px-jr" role="list" aria-label="This week" data-testid="px-ov-week">
-                {ov.week.map((w, i) => (
-                  <React.Fragment key={`${w.label}-${i}`}>
-                    {i ? <span className="px-jr-wire" data-s="done" aria-hidden style={{ marginTop: 20 }} /> : null}
-                    <div className="px-jr-node" role="listitem" style={{ cursor: w.href ? "pointer" : "default", width: 110 }} data-testid={`px-ov-week-${i}`}
-                         onClick={w.href ? () => goHref(ctx, w.href, () => undefined) : undefined}>
-                      <span className="px-jr-meta">{whenLocal(w.at)}</span>
-                      <span className="px-dot" data-round style={{ width: 12, height: 12, background: w.kind === "idea" ? "#8b7cf6" : w.kind === "pr" ? "var(--amber)" : "var(--green)" }} aria-hidden />
-                      {w.href ? <a className="px-jr-cap" style={{ fontWeight: 500 }} href={pxHref(w.href)} {...(/^https?:/.test(w.href) ? { target: "_blank", rel: "noreferrer noopener" } : {})}
-                                   onClick={(e) => { e.stopPropagation(); if (/^https?:/.test(w.href) || e.metaKey || e.ctrlKey) return; e.preventDefault(); goHref(ctx, w.href, () => undefined); }}>{w.label}</a>
-                        : <span className="px-jr-cap" style={{ fontWeight: 500 }}>{w.label}</span>}
-                    </div>
-                  </React.Fragment>
-                ))}
-              </div>
+              <Timeline points={ov.week} testid="px-ov-week" onOpen={(i) => goHref(ctx, ov.week[i].href, () => undefined)} />
             </section>
           ) : null}
         </div>
@@ -145,7 +190,8 @@ export function OverviewTab({ ctx }: { ctx: PxCtx }) {
           <NextCard ctx={ctx} />
           {ov.try_it && (ov.try_it.url || ov.try_it.demo_logins.length) ? (
             <section className="px-card" aria-labelledby="px-ov-try" data-testid="px-ov-try">
-              <div className="px-card-h"><Ico icon={Key} c="green" /><h2 id="px-ov-try">Try it</h2></div>
+              <div className="px-card-h"><Ico icon={Key} c="green" /><h2 id="px-ov-try">Try it</h2>
+                <a className="px-more" href="#" data-testid="px-ov-try-settings" onClick={(e) => { e.preventDefault(); ctx.tab("settings", { section: "demo_logins" }); }}><GearSix size={11} aria-hidden /> Settings</a></div>
               {ov.try_it.url ? (
                 <div className="px-row" style={{ fontSize: ".64rem" }}><Globe size={13} aria-hidden /><span className="px-faint" style={{ width: 54 }}>URL</span>
                   <a className="px-mono" href={ov.try_it.url} target="_blank" rel="noreferrer noopener" data-testid="px-ov-try-url">{ov.try_it.url.replace(/^https?:\/\//, "")} ↗</a></div>
@@ -190,7 +236,7 @@ function MiniRow({ w, ctx }: { w: WorkItem; ctx: PxCtx }) {
       <span className="px-dot" data-s={w.state === "running" ? "now" : w.state === "needs_you" || w.state === "stalled" ? "you" : w.state === "failed" ? "bad" : w.state === "done" ? "done" : undefined} aria-hidden />
       <span style={{ minWidth: 0 }}>
         <button type="button" className="px-wk-t px-ell" style={{ display: "block", maxWidth: "100%" }} onClick={(e) => { e.stopPropagation(); ctx.open("work", w.id); }}>{w.label}</button>
-        <span className="px-wk-sub"><span>{w.state === "stalled" ? "Stalled" : w.links.pr ? `PR #${w.links.pr.number}` : w.kind[0].toUpperCase() + w.kind.slice(1)}</span>{w.age ? <span className="px-mono">{w.age}</span> : null}
+        <span className="px-wk-sub"><span>{w.state === "stalled" ? "Stalled" : w.links.pr ? `PR #${w.links.pr.number}` : KIND_WORDS[w.kind] ?? w.kind}</span>{w.age ? <span className="px-mono">{w.age}</span> : null}
           {w.cost_usd !== null ? <span className="px-mono">${w.cost_usd.toFixed(2)}</span> : null}</span>
       </span>
       <span className="px-hide-phone"><Stations stages={w.stages} /></span>
@@ -243,7 +289,10 @@ function CaptainCard({ ctx }: { ctx: PxCtx }) {
       {c.squad.length ? (
         <div className="px-crew" data-testid="px-ov-crew">
           {c.squad.map((m) => (
-            <span key={m.name} className="px-crew-m"><Face agent={m} size={22} /><span>{m.name}<small>{m.role}</small></span></span>
+            <a key={m.name} className="px-crew-m" href={pxHref(`?area=workforce&role=${encodeURIComponent(m.role_key || m.name)}`)}
+               title={m.role_key === "chief_of_staff" ? "Chief of Staff ranks this project's backlog against the others" : `${m.name} · ${m.role} — opens Agent Studio`}
+               data-testid={`px-ov-crew-${m.role_key || m.name}`}>
+              <Face agent={m} size={22} /><span>{m.name}<small>{CREW_VERB[m.role_key || ""] ?? m.role}</small></span></a>
           ))}
         </div>
       ) : null}
@@ -270,20 +319,33 @@ function NextCard({ ctx }: { ctx: PxCtx }) {
     <section className="px-card" aria-labelledby="px-ov-next" data-testid="px-ov-next">
       <div className="px-card-h"><Ico icon={Lightbulb} c="violet" /><h2 id="px-ov-next">What&apos;s next</h2>
         <a className="px-more" href="#" onClick={(e) => { e.preventDefault(); ctx.tab("roadmap"); }} data-testid="px-ov-roadmap">Roadmap <ArrowRight size={11} /></a></div>
-      {next.length ? next.slice(0, 3).map((n, i) => (
-        <div key={n.id || i} className="px-li">
-          <span className="px-rank">{i + 1}</span>
-          <span style={{ minWidth: 0 }}>
-            {n.href ? <PxLink href={n.href} className="px-wk-t" onOpen={() => goHref(ctx, n.href, () => undefined)}><b>{n.label}</b></PxLink> : <b>{n.label}</b>}
-            <small>{n.source}</small>
-          </span>
-          {n.accept ? (
-            <GatedButton permission={acceptPermission(n)} projectId={ctx.projectId} className="px-btn" data-size="s" data-testid={`px-ov-accept-${n.id}`}
-                         title={n.accept.href.startsWith("/v1/ambient/") ? "Plan it: it joins Work as planned" : "Start it now through the project's normal path"}
-                         onClick={() => void accept(n)}>{n.accept.href.startsWith("/v1/ambient/") ? "Accept" : "Start"}</GatedButton>
-          ) : <Tag tone="green">Next</Tag>}
+      {next.length ? next.slice(0, 3).map((n, i) => {
+        const src = SOURCE_WORDS[n.source] ?? SOURCE_WORDS.roadmap;
+        const Src = src.icon;
+        const kind = n.kind ? (NEXT_KIND_WORDS[n.kind] ?? n.kind.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase())) : "";
+        return (
+          <div key={n.id || i} className="px-li" data-testid={`px-ov-next-${i}`}>
+            <span className="px-rank">{i + 1}</span>
+            <span style={{ minWidth: 0 }}>
+              {n.href ? <PxLink href={n.href} className="px-wk-t" onOpen={() => goHref(ctx, n.href, () => undefined)}><b>{n.label}</b></PxLink> : <b>{n.label}</b>}
+              <small className="px-row" style={{ gap: 4 }}><Src size={10} aria-hidden />{[kind, n.accepted ? "accepted" : src.word].filter(Boolean).join(" · ")}</small>
+            </span>
+            {n.accepted || !n.accept ? <Tag tone="green">Next</Tag> : (
+              <GatedButton permission={acceptPermission(n)} projectId={ctx.projectId} className="px-btn" data-size="s" data-testid={`px-ov-accept-${n.id}`}
+                           title={n.accept.href.startsWith("/v1/ambient/") ? "Accept it: it joins Work as planned" : "Accept it: it starts through the project's normal path"}
+                           onClick={() => void accept(n!)}>Accept</GatedButton>
+            )}
+          </div>
+        );
+      }) : (
+        <div className="px-empty" style={{ padding: "10px 6px" }} data-testid="px-ov-next-empty">
+          <Sparkle size={22} weight="duotone" style={{ color: "var(--px-violet, #8b7cf6)" }} aria-hidden />
+          <p style={{ margin: "6px 0 10px" }}>Nothing ranked yet. Helm ranks issues, failing checks and ideas into a backlog.</p>
+          <GatedButton permission="workflow_run:start" projectId={ctx.projectId} className="px-btn" data-size="s" data-testid="px-ov-next-rank"
+                       onClick={() => void startOnboarding(ctx.projectId).then((r) => { setSaid(r.ok ? (r.demo ? "Sample mode — nothing was sent." : "Helm is ranking the backlog.") : (r.error ?? "Not started.")); if (r.ok && !r.demo) ctx.refreshWork(); })}>
+            Rank the backlog</GatedButton>
         </div>
-      )) : <p className="px-faint" style={{ margin: 0 }}>Helm proposes what&apos;s next once the backlog is ranked.</p>}
+      )}
       <Said text={said} />
     </section>
   );

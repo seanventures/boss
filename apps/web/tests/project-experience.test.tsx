@@ -102,7 +102,8 @@ describe("the contract client", () => {
 
   it("keeps diagram labels to four words", () => {
     expect(label4("Merge the visual refresh pull request")).toBe("Merge the visual refresh…");
-    expect(parseOverview({ needs_you: [{ id: "x", label: "one two three four five six" }] }).needs_you[0].label.split(" ").length).toBeLessThanOrEqual(5);
+    // Needs-you labels are the engine's short names ("Deploy PR #5 to Staging"): kept whole, never cut with "…".
+    expect(parseOverview({ needs_you: [{ id: "x", label: "Deploy PR #5 to Staging" }] }).needs_you[0].label).toBe("Deploy PR #5 to Staging");
   });
 
   it("reads tabs and drawers from the URL (§10)", () => {
@@ -556,8 +557,9 @@ describe("Deployments (screen 8) and the Infra cross-links (screen 14)", () => {
     expect(new URLSearchParams(host.split("?")[1]).get("area")).toBe("infra");
     expect(new URLSearchParams(host.split("?")[1]).get("host")).toBe("h_202");
     expect(tid("px-dep-prod-act")!.getAttribute("href")).toContain("area=infra");
-    await press(tid("px-dep-h-dep_2"));
-    expect(tid("px-drawer-deploy")).not.toBeNull();
+    // A history row opens that deploy (its href; Infra's deploy view on real data).
+    expect(tid("px-dep-h-dep_2")!.tagName).toBe("A");
+    expect(tid("px-dep-h-dep_2")!.getAttribute("href")).toContain("deploy");
   });
 
   it("a server in Infra lists the projects on it, each linking to that Project › Deployments", async () => {
@@ -834,9 +836,9 @@ describe("the engine's own answers (what the API serves, not the sample)", () =>
     realEngine();
     await openProject("&tab=deployments");
     expect(tid("px-dep-ship")!.textContent).toContain("Prod · you approve");
-    expect(tid("px-dep-h-sdep_0")!.textContent).toContain("failed");
+    expect(tid("px-dep-h-sdep_0")!.textContent).toContain("Failed");
     expect(new URLSearchParams(tid("px-env-host-staging")!.getAttribute("href")!.split("?")[1]).get("host")).toBe("dhost_1");
-    expect(tid("px-dep-prod")!.textContent).toContain("Set up production");
+    expect(tid("px-dep-prod")!.textContent).toContain("Pick a host for production");
     await press(tid("px-env-open-staging"));
     expect(params().get("drawer")).toBe("env:dept_1");
     expect(tid("px-drawer-env")).not.toBeNull();

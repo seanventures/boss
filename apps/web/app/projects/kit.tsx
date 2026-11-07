@@ -9,7 +9,8 @@ import React, { useEffect, useId, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { createPortal } from "react-dom";
 import {
-  ArrowSquareOut, ArrowsClockwise, Check, CloudSlash, Folders, Lock, Pause, Warning, X, type Icon,
+  ArrowSquareOut, ArrowsClockwise, Binoculars, Brain, Compass, FolderPlus, GithubLogo, GitPullRequest, Check, CloudSlash, Flag, Flask, Folders, Hammer, ListChecks, Lock, Pause, RocketLaunch, Warning, X,
+  type Icon,
 } from "@phosphor-icons/react";
 
 import { AgentAvatar } from "../agent-avatar";
@@ -62,6 +63,20 @@ const STATE_GLYPH: Partial<Record<StepState, React.ReactNode>> = {
 };
 export const STATE_WORD: Record<StepState, string> = { done: "done", now: "in progress", waiting: "needs you", todo: "not started", failed: "failed", skipped: "skipped" };
 
+/** Each journey stage's own icon: a node not done yet shows what it is, never a bare number. */
+export const STAGE_ICON: Record<string, Icon> = {
+  onboarding: Binoculars, ready: Flag, backlog: ListChecks, working: Hammer, staging: Flask, production: RocketLaunch,
+  // The first-run strip (screen 00a): Connect GitHub · Add a model · Add project · Helm onboards · First PR.
+  github: GithubLogo, model: Brain, project: FolderPlus, onboard: Compass, pr: GitPullRequest,
+};
+function nodeGlyph(n: Node, i: number, small: boolean): React.ReactNode {
+  const glyph = STATE_GLYPH[n.state];
+  if (glyph) return glyph;
+  const I = STAGE_ICON[n.key];
+  if (I) return <I size={small ? 10 : 14} weight={n.state === "now" ? "bold" : "regular"} />;
+  return n.state === "now" ? <ArrowsClockwise size={13} weight="bold" /> : i + 1;
+}
+
 /** THE JOURNEY STRIP: the project's life as one diagram. Each node opens what happened there. */
 export function Journey({ nodes, size, onOpen, testid = "px-journey" }: { nodes: Node[]; size?: "s"; onOpen?: (n: Node) => void; testid?: string }) {
   if (!nodes.length) return null;
@@ -71,15 +86,48 @@ export function Journey({ nodes, size, onOpen, testid = "px-journey" }: { nodes:
         <React.Fragment key={`${n.key}-${i}`}>
           {i ? <span className="px-jr-wire" aria-hidden data-s={nodes[i - 1].state === "done" ? (n.state === "now" ? "now" : n.state === "done" ? "done" : undefined) : undefined} /> : null}
           <button type="button" role="listitem" className="px-jr-node" data-s={n.state} disabled={!onOpen || !(n.href || n.key)}
-                  data-testid={`${testid}-${n.key || i}`} aria-label={`${n.label}: ${STATE_WORD[n.state]}${n.sub ? `, ${n.sub}` : ""}`}
+                  data-testid={`${testid}-${n.key || i}`} aria-label={`${n.label}: ${STATE_WORD[n.state]}${n.sub ? `, ${n.sub}` : ""}`} title={n.detail || undefined}
                   onClick={onOpen ? () => onOpen(n) : undefined}>
-            <span className="px-jr-shape" aria-hidden>{STATE_GLYPH[n.state] ?? (n.state === "now" ? <ArrowsClockwise size={13} weight="bold" /> : i + 1)}</span>
+            <span className="px-jr-shape" aria-hidden>{nodeGlyph(n, i, size === "s")}</span>
             <span className="px-jr-cap">{n.label}</span>
             {n.sub && size !== "s" ? <span className="px-jr-meta">{n.sub}</span> : null}
           </button>
         </React.Fragment>
       ))}
     </div>
+  );
+}
+
+/** A TIMELINE: up to six points, oldest first, a day label over each ("Mon", "Today"), the dot
+ *  coloured by kind and a few words under it. Fits any width: points share the row. */
+export function Timeline({ points, testid, onOpen }: {
+  points: { at: string | null; label: string; kind: string; href?: string }[]; testid?: string; onOpen?: (i: number) => void;
+}) {
+  if (!points.length) return null;
+  const day = (at: string | null) => {
+    if (!at) return "";
+    const d = new Date(at);
+    if (Number.isNaN(d.getTime())) return "";
+    const now = new Date();
+    const same = (x: Date, y: Date) => x.getFullYear() === y.getFullYear() && x.getMonth() === y.getMonth() && x.getDate() === y.getDate();
+    if (same(d, now)) return "Today";
+    const y = new Date(now); y.setDate(now.getDate() - 1);
+    if (same(d, y)) return "Yesterday";
+    return d.toLocaleDateString(undefined, { weekday: "short" });
+  };
+  return (
+    <ol className="px-tl" data-testid={testid} aria-label="Timeline">
+      {points.map((p, i) => (
+        <li key={`${p.label}-${i}`} className="px-tl-p" data-k={p.kind} data-testid={testid ? `${testid}-${i}` : undefined}>
+          <span className="px-tl-day">{day(p.at)}</span>
+          <span className="px-tl-dot" aria-hidden />
+          {p.href ? (
+            <a className="px-tl-cap" href={/^https?:/.test(p.href) ? p.href : pxHref(p.href)} {...(/^https?:/.test(p.href) ? { target: "_blank", rel: "noreferrer noopener" } : {})}
+               onClick={(e) => { if (!onOpen || /^https?:/.test(p.href!) || e.metaKey || e.ctrlKey) return; e.preventDefault(); onOpen(i); }}>{p.label}</a>
+          ) : <span className="px-tl-cap">{p.label}</span>}
+        </li>
+      ))}
+    </ol>
   );
 }
 
