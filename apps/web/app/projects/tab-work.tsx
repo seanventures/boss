@@ -117,7 +117,9 @@ function Composer({ ctx }: { ctx: PxCtx }) {
     if (!t || busy) return;
     setBusy(true); setSaid({ text: "" });
     try {
-      let r = await startWork(ctx.projectId, kind, t);
+      let r = await startWork(ctx.projectId, kind, t, startAnyway.length ? { start_anyway: startAnyway } : {});
+      // NOT READY (409 from THE start door, §3): the project's checklist, and Start anyway with the ticks.
+      if (!r.ok && r.readiness) { setRefusal(r.readiness as Readiness); return; }
       // AN ENGINE WITHOUT §3's POST: the project's normal start door (the old "What should we add?").
       if (!r.ok && isMissingStatus(r.status)) {
         const view = await fetch(`/v1/projects/${encodeURIComponent(ctx.projectId)}/start`, { cache: "no-store" }).then((x) => (x.ok ? x.json() : null)).catch(() => null);
@@ -171,7 +173,9 @@ function Composer({ ctx }: { ctx: PxCtx }) {
 export function WorkRow({ w, ctx }: { w: WorkItem; ctx: PxCtx }) {
   const [said, setSaid] = useState("");
   const startNow = async () => {
-    const r = await startWork(ctx.projectId, w.kind === "bug" ? "bug" : "feature", w.detail && w.detail !== w.label ? `${w.label}\n\n${w.detail}` : w.label);
+    // A planned roadmap item starts as itself: its title, and the item it came from.
+    const r = await startWork(ctx.projectId, w.kind === "bug" ? "bug" : "feature", w.detail && w.detail !== w.label ? `${w.label}\n\n${w.detail}` : w.label,
+                              { title: w.label, ...(w.source === "roadmap" ? { source_ref: `rec:${w.id}` } : {}) });
     setSaid(r.ok ? (r.demo ? "Sample mode — nothing was sent." : "Started.") : (r.error ?? "It didn't start."));
     if (r.ok && !r.demo) ctx.refreshWork();
   };

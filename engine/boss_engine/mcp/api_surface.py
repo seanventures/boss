@@ -103,6 +103,8 @@ _EXCLUDED_EXACT = {
     # The demo users' passwords: a secret's value, revealed to a stepped-up owner in the console
     # (project_experience/demo_logins.reveal), never to an agent's tool call.
     "/v1/projects/{project_id}/demo-logins/reveal": "secret_reveal_returns_raw_material",
+    # The same passwords through the app's own door (the build Settings sheet): the same bar.
+    "/v1/apps/{app_key}/demo-logins": "secret_reveal_returns_raw_material",
     # The worker hands its leased change_set.merge job (queued by the set's one approval) to the
     # API, which re-verifies the lease, the job, the decision and the pinned SHAs before merging
     # (multirepo/merge.py execute_job). A person's POST /v1/change-sets/{cs_id}/merge stays held.

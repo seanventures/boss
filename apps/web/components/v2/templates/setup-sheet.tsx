@@ -721,7 +721,8 @@ function SettingsView({ ctx, cards }: { ctx: Ctx; cards: ConnectorCard[] }) {
 
 /** DEMO LOGINS: the password the app's demo users sign in with, which BOSS generated for its
  *  previews and its deploy (its seed refuses to run without one). Hidden until asked for, behind
- *  the same check as setting a secret; a value a person set is never shown here. */
+ *  the same bar as Project › Settings' reveal — owner/admin with a fresh step-up (secret:manage),
+ *  audited; a value a person set is never shown here. */
 export function DemoLogins({ projectId, appKey, compact = false }: { projectId: string; appKey: string; compact?: boolean }) {
   const [shown, setShown] = useState<DemoLogin[] | null>(null);
   const [why, setWhy] = useState("");
@@ -743,7 +744,7 @@ export function DemoLogins({ projectId, appKey, compact = false }: { projectId: 
       {/* Demo logins live on Project › Settings now, with their user names (contract §11). */}
       <MovedToProjectSettings section="demo_logins" testid={compact ? "tpl-demo-logins-moved-row" : "tpl-demo-logins-moved"} />
       {shown === null ? (
-        <GatedButton permission="app_secret:write" projectId={projectId} type="button" className="cap-btn"
+        <GatedButton permission="secret:manage" projectId={projectId} type="button" className="cap-btn"
                      data-testid={compact ? "tpl-demo-logins-row-show" : "tpl-demo-logins-show"} onClick={() => void show()}
                      title="Show the demo login passwords BOSS generated (asks you to confirm it is you)">
           {compact ? "Show password" : "Show demo login passwords"}

@@ -16,8 +16,11 @@ import {
 } from "@phosphor-icons/react";
 
 import { GatedButton } from "../../components/gated";
-import { projectHref, pxHref, startOnboarding, startWork, type Node, type Onboarding } from "../../lib/project-experience";
+import { notifyChanged } from "../changed";
+import { firstWorkAccept, projectHref, pxHref, runAccept, startOnboarding, type Node, type Onboarding } from "../../lib/project-experience";
 import { Face, Ico, Said, STATE_WORD } from "./kit";
+
+const SOURCE_WORD: Record<string, string> = { ci: "CI", bug: "Bug", ticket: "Issue", roadmap: "Roadmap" };
 
 const STAGE_ICON: Record<string, React.ReactNode> = {
   discover: <MagnifyingGlass size={16} weight="bold" />, ready: <ListChecks size={16} weight="bold" />, backlog: <ListNumbers size={16} weight="bold" />,
@@ -61,13 +64,17 @@ export function OnboardingView({ projectId, ob }: { projectId: string; ob: Onboa
   const [said, setSaid] = useState("");
   const ready = ob.checklist.filter((c) => c.state === "done").length;
   const start = async () => {
-    if (!ob.first_work) return;
-    const r = await startWork(projectId, ob.first_work.source === "bug" ? "bug" : "ticket", ob.first_work.label);
+    const fw = ob.first_work;
+    if (!fw) return;
+    // The engine's own start (§14: THE start door with kind, text, title and source_ref).
+    const r = await runAccept(projectId, firstWorkAccept(projectId, fw), "Start");
     setSaid(r.ok ? (r.demo ? "Sample mode — nothing was sent." : "Started — it's on Work.") : (r.error ?? "It didn't start."));
+    if (r.ok && !r.demo) notifyChanged("project.first_work");
   };
   const restart = async () => {
     const r = await startOnboarding(projectId);
-    setSaid(r.ok ? (r.demo ? "Sample mode — nothing was sent." : "Onboarding restarted.") : (r.error ?? "It didn't restart."));
+    setSaid(r.ok ? (r.demo ? "Sample mode — nothing was sent." : ob.state === "not_started" ? "Onboarding started." : "Onboarding restarted.") : (r.error ?? "It didn't start."));
+    if (r.ok && !r.demo) notifyChanged("project.onboarding");
   };
   return (
     <div className="px-stack" data-testid="px-onboarding">
@@ -89,18 +96,20 @@ export function OnboardingView({ projectId, ob }: { projectId: string; ob: Onboa
             <a href={pxHref("?area=agent_ops")} data-testid="px-ob-watch"><Eye size={12} /> Watch</a>
           </div>
         ) : null}
-        {ob.state === "failed" ? (
-          <div className="px-row" style={{ marginTop: 10 }}>
-            <span className="px-tag" data-tone="red">Onboarding stopped</span>
-            <GatedButton permission="project:update" projectId={projectId} className="px-btn" data-size="s" data-testid="px-ob-restart" onClick={() => void restart()}>
-              <ArrowsClockwise size={12} /> Try again</GatedButton>
+        {ob.state === "failed" || ob.state === "not_started" ? (
+          <div className="px-row px-wrap" style={{ marginTop: 10 }}>
+            {ob.state === "failed" ? <span className="px-tag" data-tone="red">Onboarding stopped</span> : <span className="px-tag" data-tone="blue">Not started</span>}
+            {ob.error ? <small className="px-faint">{ob.error}</small> : null}
+            <GatedButton permission="workflow_run:start" projectId={projectId} className="px-btn" data-size="s" data-testid="px-ob-restart" onClick={() => void restart()}>
+              <ArrowsClockwise size={12} /> {ob.state === "failed" ? "Try again" : "Start onboarding"}</GatedButton>
           </div>
         ) : null}
       </section>
       <div className="px-grid px-g3">
         <section className="px-card" aria-labelledby="px-ob-d">
           <div className="px-card-h"><Ico icon={MagnifyingGlass} c="teal" /><h2 id="px-ob-d">Discovered</h2>
-            {ob.stages.find((x) => x.key === "discover")?.state === "done" ? <span className="px-tag" data-tone="green">done</span> : <span className="px-tag" data-tone="blue">live</span>}</div>
+            {ob.stages.find((x) => x.key === "discover")?.state === "done" ? <span className="px-tag" data-tone="green">done</span>
+              : ob.state === "not_started" ? <span className="px-tag">not started</span> : <span className="px-tag" data-tone="blue">live</span>}</div>
           <DiscoverDiagram nodes={ob.discover.nodes} />
           <a href={projectHref(projectId, { tab: "knowledge" })} data-testid="px-ob-dossier">Open dossier →</a>
         </section>
@@ -108,6 +117,7 @@ export function OnboardingView({ projectId, ob }: { projectId: string; ob: Onboa
           <div className="px-card-h"><Ico icon={ListChecks} c="teal" /><h2 id="px-ob-r">Ready for work</h2>
             <span className="px-tag" data-tone="blue">{ready}/{ob.checklist.length}</span></div>
           <div data-testid="px-ob-checklist">
+            {!ob.checklist.length ? <p className="px-faint" style={{ margin: 0 }}>Helm checks repo access, models, the tests, a baseline build, where it deploys and the secrets it needs — and asks only for what it can&apos;t do.</p> : null}
             {ob.checklist.map((c) => {
               const you = c.owner === "you" && c.state !== "done";
               return (
@@ -124,13 +134,19 @@ export function OnboardingView({ projectId, ob }: { projectId: string; ob: Onboa
         <section className="px-card" aria-labelledby="px-ob-b">
           <div className="px-card-h"><Ico icon={ListNumbers} c="violet" /><h2 id="px-ob-b">Backlog proposed</h2>
             <Face agent={{ name: "Marshal", role_key: "chief_of_staff" }} size={20} /><small className="px-faint">by Marshal</small></div>
-          {ob.backlog.length ? ob.backlog.slice(0, 4).map((b, i) => (
-            <div key={b.id || i} className="px-li">
-              <span className="px-rank">{i + 1}</span>
-              <span><b>{b.label}</b><small>{b.source}</small></span>
-              <span className="px-tag">{/bug|ci|issue/i.test(b.source) ? "bug" : "feature"}</span>
-            </div>
-          )) : <p className="px-faint">Marshal ranks open issues, failing CI and TODOs once Helm has read the repo.</p>}
+          {ob.backlog.length ? ob.backlog.slice(0, 4).map((b, i) => {
+            const kind = b.kind || (/bug|ci/i.test(b.source) ? "bug" : "feature");
+            const open = b.external_url || b.href;
+            return (
+              <div key={b.id || i} className="px-li" data-testid={`px-ob-backlog-${i}`}>
+                <span className="px-rank">{i + 1}</span>
+                <span style={{ minWidth: 0 }}><b>{open ? <a href={pxHref(open)} {...(/^https?:/.test(open) ? { target: "_blank", rel: "noreferrer noopener" } : {})}>{b.label}</a> : b.label}</b>
+                  <small>{[SOURCE_WORD[b.source] ?? b.source, b.detail && b.detail !== b.label ? b.detail : ""].filter(Boolean).join(" · ")}</small></span>
+                <span className="px-tag" data-tone={kind === "bug" ? "red" : undefined}>{kind}</span>
+              </div>
+            );
+          }) : <p className="px-faint">Marshal ranks open issues, failing CI and TODOs once Helm has read the repo.</p>}
+          {ob.backlog.length > 4 ? <small className="px-faint" style={{ display: "block", marginTop: 4 }}>+{ob.backlog.length - 4} more on the Roadmap</small> : null}
           {ob.first_work ? (
             <div className="px-ny" style={{ marginTop: 10, background: "color-mix(in srgb, var(--px-violet) 8%, var(--surface))", borderColor: "color-mix(in srgb, var(--px-violet) 40%, transparent)" }}
                  data-testid="px-ob-first">
@@ -143,8 +159,14 @@ export function OnboardingView({ projectId, ob }: { projectId: string; ob: Onboa
                            onClick={() => void start()}><Play size={11} weight="fill" /> Start</GatedButton>
             </div>
           ) : null}
+          {/* THE MOCK'S "Accept backlog / Edit": the proposed backlog is GitHub issues, open PRs, failing CI
+              and scan findings ranked for this project — candidates, not stored roadmap items, so
+              /v1/ambient/roadmap's accept has nothing to accept, and starting all of them at once would
+              start a build each. Each one starts from its row's place (Work's New work, Start here);
+              the ranked roadmap is where items are accepted, rejected or snoozed one by one. */}
           <div className="px-row" style={{ marginTop: 10 }}>
-            <a className="px-btn" data-size="s" href={projectHref(projectId, { tab: "roadmap" })} data-testid="px-ob-roadmap"><Compass size={12} /> See the roadmap</a>
+            <a className="px-btn" data-size="s" href={projectHref(projectId, { tab: "roadmap" })} data-testid="px-ob-roadmap"
+               title="Accept, reject or snooze each item on the Roadmap"><Compass size={12} /> See the roadmap</a>
           </div>
           <Said text={said} />
         </section>

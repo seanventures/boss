@@ -335,6 +335,9 @@ class Resident(TypedDict, total=False):
     url: Optional[str]                  # preview open url | Grafana url
     open_url: Optional[str]             # target: the app, once its newest deploy is live healthy
     port: Optional[int]
+    # The project it belongs to (BOSSAPP-914 §5): the host drawer's "Projects on this server",
+    # each linking to that Project › Deployments. {id, name, href}; None for monitoring.
+    project: Optional[dict[str, str]]
 
 
 class Rack(TypedDict, total=False):
@@ -1113,6 +1116,18 @@ def _place_rack(this: ThisComputer, place: Optional[dict[str, Any]]) -> Rack:
             "ports_total": None, "residents": [], "stage_action": None}
 
 
+def _project_ref(connection: Any, project_id: str) -> Optional[dict[str, str]]:
+    """{id, name, href} of the project whose apps these are: a resident names its project."""
+    from .project_experience.common import project_href
+
+    row = connection.execute(text("SELECT id, name FROM projects WHERE id = :p"),
+                             {"p": project_id}).mappings().first()
+    if row is None:
+        return None
+    return {"id": str(row["id"]), "name": str(row["name"] or row["id"]),
+            "href": project_href(str(row["id"]), tab="deployments")}
+
+
 def _fleet_parts(connection: Any, settings: Any, project_id: str, partial: list[str], *,
                  can_write: bool = True) -> dict[str, Any]:
     """Everything the racks are drawn from, read once (shared by fleet and host_detail)."""
@@ -1141,6 +1156,8 @@ def _fleet_parts(connection: Any, settings: Any, project_id: str, partial: list[
     monitoring = _guard(connection, partial, "monitoring",
                         lambda: monitoring_stored(connection, project_id), None)
     host_writes = preconditions(settings)["host_writes_allowed"]
+    owner = _guard(connection, partial, "project", lambda: _project_ref(connection, project_id),
+                   None)
 
     racks: dict[str, Rack] = {}
     retired = 0
@@ -1188,6 +1205,7 @@ def _fleet_parts(connection: Any, settings: Any, project_id: str, partial: list[
     unplaced: list[Resident] = []
     for t in targets:
         res = _target_resident(t, health, strip_, last)
+        res["project"] = owner
         rack = racks.get(str(t.get("host_id") or ""))
         if rack is not None and rack.get("retired"):
             rack = None  # an app still pointed at a retired machine is not placed anywhere
@@ -1199,7 +1217,7 @@ def _fleet_parts(connection: Any, settings: Any, project_id: str, partial: list[
         ports[rack["id"]] |= _ports_of(t.get("domains"))
     for p in previews:
         if this_rack_id and this_rack_id in racks:
-            racks[this_rack_id]["residents"].append(_preview_resident(p))
+            racks[this_rack_id]["residents"].append({**_preview_resident(p), "project": owner})
             if p.get("port"):
                 ports[this_rack_id].add(int(p["port"]))
     if monitoring:

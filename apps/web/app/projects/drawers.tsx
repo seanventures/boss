@@ -8,12 +8,12 @@
  *   env:<key>     an environment's full picture;  deploy:<id>  one deploy
  * Prose lives here, never on the page.
  */
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   ChatCircleDots, Check, Code, FileText, FlowArrow, GitPullRequest, Globe, Graph, PaperPlaneRight, Path, RocketLaunch, Terminal, User, Warning,
 } from "@phosphor-icons/react";
 
-import { PX_PATHS, parseDeployments, pxHref, usePxRead, type Deployments, type WorkItem } from "../../lib/project-experience";
+import { PX_PATHS, parseDeployments, pxHref, toTab, usePxRead, writePxUrl, type Deployments, type Onboarding, type WorkItem } from "../../lib/project-experience";
 import { FX_DEPLOYMENTS } from "../../lib/project-experience-fixtures";
 import { Drawer, Empty, Face, Flow, HEALTH_WORD, Ico, PxLink, STATE_WORD, Tag } from "./kit";
 import { ActionButton } from "./tab-overview";
@@ -23,8 +23,27 @@ import type { PxCtx } from "./project-page";
 
 const STEP_WORDS: Record<string, string> = { plan: "Plan", design: "You approved", decide: "You approved", build: "Build", review: "Review & test", pr: "Merge", ship: "Staging" };
 
+/** Drawer links that name a PLACE on this page rather than a drawer (the engine's hrefs, §10):
+ *  `section:<key>` is Settings at that section; `dossier` and `doc:<path>` are Repo & knowledge;
+ *  `captain` is the captain's Ask dock; `onboarding` on a project still onboarding is Overview. */
+function placeOf(drawer: { kind: string; id: string }, onboarding: boolean): Record<string, string | null> | "captain" | null {
+  if (drawer.kind === "section") return { tab: "settings", section: drawer.id || null, drawer: null };
+  if (drawer.kind === "dossier" || drawer.kind === "doc") return { tab: "knowledge", drawer: null };
+  if (drawer.kind === "captain") return "captain";
+  if (drawer.kind === "onboarding" && onboarding) return { tab: null, drawer: null };
+  return null;
+}
+
 export function DrawerHost({ ctx, drawer, onClose }: { ctx: PxCtx; drawer: { kind: string; id: string }; onClose: () => void }) {
-  if (drawer.kind === "work") {
+  const place = placeOf(drawer, ctx.overview.project.stage === "onboarding");
+  useEffect(() => {
+    if (!place) return;
+    if (place === "captain") { writePxUrl({ drawer: null }, "replace"); ctx.ask(); return; }
+    writePxUrl({ ...place, ...(place.tab ? { tab: toTab(place.tab) === "overview" ? null : place.tab } : {}) }, "replace");
+  }, [place === null ? "" : JSON.stringify(place)]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (place) return null;
+  // `run:<id>` and `build:<id>` (the engine's WorkItem hrefs and ⌘K) are the work drawer.
+  if (drawer.kind === "work" || drawer.kind === "run" || drawer.kind === "build") {
     const w = ctx.work?.items.find((x) => x.id === drawer.id) ?? ctx.overview.recent_work.find((x) => x.id === drawer.id);
     return w ? <WorkDrawer ctx={ctx} w={w} onClose={onClose} /> : <Missing what="This work item" onClose={onClose} loading={!ctx.work} />;
   }
@@ -36,7 +55,7 @@ export function DrawerHost({ ctx, drawer, onClose }: { ctx: PxCtx; drawer: { kin
               footer={n.action ? <ActionButton ctx={ctx} label={n.action.label} href={n.action.href} amber testid="px-drawer-needs-act" /> : null}>
         {n.mini.length ? <Flow nodes={n.mini} /> : null}
         {n.detail ? <p style={{ margin: 0, lineHeight: 1.5 }}>{n.detail}</p> : null}
-        {n.action?.decision_id ? <PxLink href={`?area=decisions&decision_id=${encodeURIComponent(n.action.decision_id)}`}>Open in Approvals</PxLink> : null}
+        {n.action?.decision_id ? <PxLink href={`?area=decisions&decision=${encodeURIComponent(n.action.decision_id)}`} testid="px-drawer-needs-approvals">Open in Approvals</PxLink> : null}
         <AskBox ctx={ctx} about={n.label} />
       </Drawer>
     );
@@ -69,6 +88,7 @@ export function DrawerHost({ ctx, drawer, onClose }: { ctx: PxCtx; drawer: { kin
     );
   }
   if (drawer.kind === "env" || drawer.kind === "deploy") return <DeployDrawer ctx={ctx} drawer={drawer} onClose={onClose} />;
+  if (drawer.kind === "onboarding") return <OnboardingDrawer ctx={ctx} onClose={onClose} />;
   if (drawer.kind === "rec") {
     return (
       <Drawer title="Recommendation" icon={<Ico icon={Path} c="violet" />} onClose={onClose} testid="px-drawer-rec">
@@ -78,6 +98,33 @@ export function DrawerHost({ ctx, drawer, onClose }: { ctx: PxCtx; drawer: { kin
     );
   }
   return <Missing what="This" onClose={onClose} />;
+}
+
+/** How onboarding went (the journey's Onboarded node, Repo & knowledge's "Reading the repository"):
+ *  its stages, the checklist with who did each, and what is left for you. */
+function OnboardingDrawer({ ctx, onClose }: { ctx: PxCtx; onClose: () => void }) {
+  const ob: Onboarding | null = ctx.onboarding;
+  if (!ob) return <Missing what="Onboarding" onClose={onClose} loading />;
+  return (
+    <Drawer title="Onboarding" icon={<Ico icon={Path} c="teal" />} onClose={onClose} testid="px-drawer-onboarding"
+            sub={<Tag tone={ob.state === "failed" ? "red" : ob.state === "ready" ? "green" : ob.state === "needs_you" ? "amber" : "blue"}>{
+              ob.state === "not_started" ? "not started" : ob.state === "needs_you" ? "needs you" : ob.state}</Tag>}>
+      {ob.stages.length ? <Flow nodes={ob.stages.map((st) => ({ label: st.label, state: st.state }))} /> : null}
+      {ob.error ? <p style={{ margin: 0, color: "var(--red)" }}>{ob.error}</p> : null}
+      <div data-testid="px-drawer-onboarding-checklist">
+        {ob.checklist.map((c) => (
+          <div key={c.key} className="px-li">
+            <span className="px-ck-b" aria-hidden style={c.state === "done" ? { background: "var(--green)", borderColor: "var(--green)", color: "#032015" } : undefined}>
+              {c.state === "done" ? <Check size={11} weight="bold" /> : c.owner === "you" ? "!" : ""}</span>
+            <span><b>{c.label}</b><small>{[STATE_WORD[c.state], c.owner === "you" ? "you" : "Helm", c.sub || c.detail].filter(Boolean).join(" · ")}</small></span>
+            {c.owner === "you" && c.state !== "done" && c.action ? <PxLink href={c.action.href} className="px-btn">{c.action.label}</PxLink> : <span />}
+          </div>
+        ))}
+      </div>
+      <button type="button" className="px-chip" onClick={() => ctx.tab("knowledge")}>Dossier</button>
+      <AskBox ctx={ctx} about="onboarding" />
+    </Drawer>
+  );
 }
 
 function Missing({ what, onClose, loading }: { what: string; onClose: () => void; loading?: boolean }) {
@@ -113,8 +160,10 @@ function WorkDrawer({ ctx, w, onClose }: { ctx: PxCtx; w: WorkItem; onClose: () 
         <div className="px-ny" data-testid="px-drawer-work-needs">
           <span className="px-ny-ico" aria-hidden>!</span>
           <b style={{ flex: 1 }}>{l.pr ? "Ready to merge" : "Waiting on you"}</b>
-          {l.pr ? <a className="px-btn" data-kind="amber" data-size="s" href={l.pr.external_url} target="_blank" rel="noreferrer noopener" data-testid="px-drawer-work-merge">Merge PR #{l.pr.number} ↗</a>
-            : l.workflow_run ? <PxLink href={l.workflow_run} className="px-btn">Decide</PxLink> : null}
+          {/* The person's gate is an approval in BOSS (merging is approving it); the PR opens on GitHub. */}
+          {l.decision ? <PxLink href={l.decision} className="px-btn" testid="px-drawer-work-decide">{l.pr ? `Review PR #${l.pr.number}` : "Decide"}</PxLink> : null}
+          {l.pr ? <a className="px-btn" data-kind="amber" data-size="s" href={l.pr.external_url} target="_blank" rel="noreferrer noopener" data-testid="px-drawer-work-merge">{l.decision ? `PR #${l.pr.number}` : `Merge PR #${l.pr.number}`} ↗</a>
+            : !l.decision && l.workflow_run ? <PxLink href={l.workflow_run} className="px-btn">Decide</PxLink> : null}
         </div>
       ) : null}
       {w.stages.length ? (
@@ -165,7 +214,8 @@ function DeployDrawer({ ctx, drawer, onClose }: { ctx: PxCtx; drawer: { kind: st
   const read = usePxRead<Deployments>(PX_PATHS.deployments(ctx.projectId), parseDeployments, { everyMs: 15_000, demo: () => parseDeployments(FX_DEPLOYMENTS) });
   const d = read.data;
   if (!d) return <Missing what="This deploy" onClose={onClose} loading={read.state === "loading"} />;
-  const env = d.environments.find((e) => e.key === drawer.id);
+  // `env:<target id>` (the engine's hrefs) or `env:<key>` (older links): the same card.
+  const env = d.environments.find((e) => e.target_id === drawer.id) ?? d.environments.find((e) => e.key === drawer.id);
   const hist = d.history.find((h) => h.id === drawer.id);
   if (env) {
     return (
@@ -175,19 +225,22 @@ function DeployDrawer({ ctx, drawer, onClose }: { ctx: PxCtx; drawer: { kind: st
           {env.uptime_pct !== null ? <><dt>Uptime</dt><dd>{env.uptime_pct}%</dd></> : null}
           {env.p95_ms !== null ? <><dt>p95</dt><dd>{env.p95_ms}ms</dd></> : null}
           <dt>Deploys</dt><dd>{env.policy === "auto" ? "automatically after merge" : "when a person approves"}</dd>
-          {env.host ? <><dt>Server</dt><dd><PxLink href={env.host_href || "?area=infra&view=fleet"}>runs on {env.host}</PxLink></dd></> : null}
+          {env.host ? <><dt>Server</dt><dd><PxLink href={env.host_href || "?area=infra&view=fleet"} testid="px-drawer-env-host">runs on {env.host}</PxLink></dd></> : null}
           {env.last_deploy ? <><dt>Last deploy</dt><dd>{env.last_deploy.label} · {whenLocal(env.last_deploy.at)} · {env.last_deploy.by}</dd></> : null}
         </dl>
         {env.demo_logins.map((l) => <DemoLoginRow key={l.user} projectId={ctx.projectId} login={{ label: l.label, value: l.user, sub: env.label, reveal: l.reveal, href: "" }} />)}
-        <button type="button" className="px-chip" onClick={() => ctx.tab("health")}>Health</button>
+        <div className="px-row px-wrap">
+          <button type="button" className="px-chip" onClick={() => ctx.tab("health")}>Health</button>
+          {env.manage_href ? <PxLink href={env.manage_href} testid="px-drawer-env-manage">Manage in Infra</PxLink> : null}
+        </div>
       </Drawer>
     );
   }
   if (hist) {
     return (
       <Drawer title={hist.label} icon={<Ico icon={RocketLaunch} c={hist.state === "done" ? "green" : "amber"} />} onClose={onClose} testid="px-drawer-deploy">
-        <p style={{ margin: 0 }}>{hist.sub}</p>
-        <PxLink href={`?area=infra&view=deploys&project_id=${encodeURIComponent(ctx.projectId)}`}>The full deploy log in Infra</PxLink>
+        <p style={{ margin: 0 }}>{[hist.sub, hist.at ? whenLocal(hist.at) : ""].filter(Boolean).join(" · ")}</p>
+        <PxLink href={hist.href || `?area=infra&view=deploys&project_id=${encodeURIComponent(ctx.projectId)}`} testid="px-drawer-deploy-infra">The full deploy log in Infra</PxLink>
         <AskBox ctx={ctx} about={hist.label} />
       </Drawer>
     );

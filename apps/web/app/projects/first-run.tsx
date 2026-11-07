@@ -27,7 +27,8 @@ import { GatedButton } from "../../components/gated";
 import { fetchSetup } from "../../lib/setup-client";
 import type { SetupView } from "../../lib/setup-types";
 import {
-  PX_PATHS, navigateTo, usePageSearch, parseOnboarding, projectHref, pxHref, readPxUrl, startWork, usePxRead, type Onboarding, type ProjectCard, type StepState,
+  PX_PATHS, firstWorkAccept, navigateTo, usePageSearch, parseOnboarding, projectHref, pxHref, readPxUrl, runAccept, startOnboarding, usePxRead,
+  type Onboarding, type ProjectCard, type StepState,
 } from "../../lib/project-experience";
 import { FX_ONBOARDING } from "../../lib/project-experience-fixtures";
 import { useSignin } from "../setup/github-signin-row";
@@ -227,7 +228,7 @@ function Guided({ card, s, known }: { card: ProjectCard; s: WelcomeState; known:
   const [said, setSaid] = useState("");
   const startFirst = async () => {
     if (!o?.first_work) return;
-    const r = await startWork(card.id, o.first_work.source === "bug" ? "bug" : "ticket", o.first_work.label);
+    const r = await runAccept(card.id, firstWorkAccept(card.id, o.first_work), "Start");
     if (r.ok) { setSaid(r.demo ? "Sample mode — nothing was sent." : "Started."); if (!r.demo) navigateTo(projectHref(card.id, { tab: "work" })); }
     else setSaid(r.error ?? "It didn't start.");
   };
@@ -264,8 +265,15 @@ function Guided({ card, s, known }: { card: ProjectCard; s: WelcomeState; known:
           <section className="px-card" aria-labelledby="px-g-live">
             <div className="px-card-h"><Ico icon={Compass} c="teal" /><h2 id="px-g-live">Helm is reading your repo</h2><span className="px-tag" data-tone="blue"><span className="px-dot" data-s="now" aria-hidden /> live</span>
               {o ? <span className="px-more px-mono px-faint">{Math.floor(o.elapsed_s / 60)}m {o.elapsed_s % 60}s</span> : null}</div>
-            {o ? <DiscoverDiagram nodes={o.discover.nodes} /> : (
-              <p className="px-faint" data-testid="px-guide-waiting">{ob.state === "missing" ? "Helm's live view arrives with the next BOSS update — the project page shows its progress meanwhile." : "Starting…"}</p>
+            {o && o.state === "not_started" ? (
+              <div className="px-row px-wrap" data-testid="px-guide-not-started">
+                <p className="px-faint" style={{ margin: 0 }}>Helm hasn&apos;t started reading this repo yet.</p>
+                <GatedButton permission="workflow_run:start" projectId={card.id} className="px-btn" data-kind="primary" data-size="s" data-testid="px-guide-start-onboarding"
+                             onClick={() => void startOnboarding(card.id).then((r) => { setSaid(r.ok ? (r.demo ? "Sample mode — nothing was sent." : "Onboarding started.") : (r.error ?? "It didn't start.")); if (r.ok) ob.refresh(); })}>
+                  <Compass size={12} /> Start onboarding</GatedButton>
+              </div>
+            ) : o ? <DiscoverDiagram nodes={o.discover.nodes} /> : (
+              <p className="px-faint" data-testid="px-guide-waiting">{ob.state === "missing" ? "Helm's live view didn't load — the project page shows its progress." : ob.state === "error" ? (ob.error ?? "Helm's live view didn't load.") : "Starting…"}</p>
             )}
             <a className="px-btn" data-kind="ghost" href={projectHref(card.id)} data-testid="px-guide-open-project">Open {card.name} →</a>
           </section>

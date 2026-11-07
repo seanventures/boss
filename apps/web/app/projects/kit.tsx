@@ -237,12 +237,13 @@ export function ReadGate<T>({ read, what, children, loadingRows, missing }: {
   return <>{missing ?? <EngineNotReady what={what} />}</>;
 }
 
-/** The engine on this install has no such read yet (an older API): say so, and where to go instead. */
+/** BOSS answered "not found" for this read (the project is gone or out of reach, or an engine
+ *  older than this console): say so, and where to go instead. */
 export function EngineNotReady({ what, children }: { what: string; children?: React.ReactNode }) {
   return (
     <div className="px-card" data-testid="px-missing">
-      <Empty icon={Warning} tone="amber" title={`${what} arrives with the next BOSS update`}
-             line="This install's engine doesn't serve it yet. Everything it covers is still where it was.">
+      <Empty icon={Warning} tone="amber" title={`${what} didn't load`}
+             line="BOSS didn't find it for this project. Everything it covers is still in its own area.">
         {children}
       </Empty>
     </div>

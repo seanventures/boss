@@ -24,8 +24,8 @@ export function KnowledgeTab({ ctx }: { ctx: PxCtx }) {
       <ReadGate read={read} what="Repo & knowledge" missing={
         <>
           <Repos ctx={ctx} repos={ctx.overview.project.repos} />
-          <div className="px-card"><Empty icon={Graph} tone="violet" title="The dossier arrives with the next BOSS update"
-                 line="Helm's read of the code (stack, commands, hotspots) shows here. The Knowledge Graph already holds what's mapped.">
+          <div className="px-card"><Empty icon={Graph} tone="violet" title="The dossier didn't load"
+                 line="Helm's read of the code (stack, commands, hotspots) shows here once BOSS answers. The Knowledge Graph holds what's mapped.">
             <a className="px-btn" href={pxHref(graphHref)} data-testid="px-kn-open-graph">Open Knowledge Graph</a></Empty></div>
         </>
       }>
@@ -101,7 +101,7 @@ function Repos({ ctx, repos }: { ctx: PxCtx; repos: Repo[] }) {
 function Dossier({ k }: { k: Knowledge }) {
   const d = k.dossier;
   if (!d) return <section className="px-card"><Empty icon={Notebook} title="No dossier yet" line="Helm writes one when it onboards the project." /></section>;
-  const maxHeat = Math.max(1, ...d.hotspots.map((h) => h.heat));
+  const maxHeat = Math.max(1, ...d.hotspots.map((h) => h.heat ?? 0));
   return (
     <section className="px-card" aria-labelledby="px-kn-dossier" data-testid="px-kn-dossier">
       <div className="px-card-h"><Ico icon={Notebook} c="blue" /><h2 id="px-kn-dossier">Dossier</h2>
@@ -131,6 +131,13 @@ function Dossier({ k }: { k: Knowledge }) {
                   : <div className="px-faint" style={{ fontSize: ".58rem" }}><Check size={10} /> all pass</div>}</div>
             </div>
           </div>
+        ) : d.test_files !== null ? (
+          <div data-testid="px-kn-test-files">
+            <span className="px-lbl">Tests</span>
+            <div className="px-row" style={{ marginTop: 6 }}>
+              <b className="px-mono">{d.test_files}</b><span className="px-faint" style={{ fontSize: ".6rem" }}>test file{d.test_files === 1 ? "" : "s"} found · the first build runs them in its sandbox</span>
+            </div>
+          </div>
         ) : null}
       </div>
       {d.hotspots.length ? (
@@ -139,8 +146,13 @@ function Dossier({ k }: { k: Knowledge }) {
           {d.hotspots.map((h) => (
             <div key={h.path} className="px-hb" title={h.why}>
               <code className="px-mono px-ell" style={{ fontSize: ".6rem" }}>{h.path}</code>
-              <span className="px-hb-bar" aria-hidden><span style={{ width: `${(100 * h.heat) / maxHeat}%` }} /></span>
-              <span className="px-mono px-faint">{h.heat}×</span>
+              {h.heat !== null ? (
+                <><span className="px-hb-bar" aria-hidden><span style={{ width: `${(100 * h.heat) / maxHeat}%` }} /></span>
+                  <span className="px-mono px-faint">{h.heat}×</span></>
+              ) : (
+                <><span className="px-faint px-ell" style={{ fontSize: ".56rem" }}>{h.why}</span>
+                  {h.has_tests === false ? <Tag tone="amber">no tests</Tag> : <span />}</>
+              )}
             </div>
           ))}
         </div>
@@ -180,7 +192,9 @@ function GraphCard({ k, fallbackHref }: { k: Knowledge; fallbackHref: string }) 
         </svg>
       ) : <Empty icon={Graph} tone="violet" title="Nothing mapped yet" line="The graph fills in as Helm maps the code and the crew learns." />}
       <div className="px-row px-wrap" style={{ marginTop: 10 }}>
-        <span className="px-tag">{g.counts.nodes} nodes</span><Tag tone="violet">{g.counts.rules} rules</Tag><Tag tone="blue">{g.counts.learned} learned</Tag>
+        <span className="px-tag">{g.counts.nodes} nodes</span>
+        {g.counts.rules !== null ? <Tag tone="violet">{g.counts.rules} rules</Tag> : null}
+        {g.counts.learned !== null ? <Tag tone="blue">{g.counts.learned} learned</Tag> : null}
       </div>
     </section>
   );

@@ -61,7 +61,7 @@ export function ProjectsHome({ projectId, actor, orgId, projects = [], homeId, s
           : <Loading rows={2} label="Loading projects" />
       ) : (
         <ProjectsList cards={cards} homeId={homeId} orgId={orgId}
-                      note={read.state === "missing" ? "Stages, health and cost per project arrive with the next BOSS update." : null} />
+                      note={read.state === "missing" ? "BOSS didn't answer with the project summary, so stages, health and cost are missing; names and links are live." : null} />
       )}
     </div>
   );

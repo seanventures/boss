@@ -555,13 +555,12 @@ def _deploy_item(engine: Any, project_id: str) -> dict[str, Any]:
                             "staging. Adding a deploy target needs your confirmation.",
                      sub=f"Use {where}",
                      action={"label": "Use for staging", "href": href(
-                         project_id, area="infra", view="targets", new="staging",
-                         host=host["id"])})
+                         project_id, area="infra", add="target", host=host["id"])})
     return _item("deploy_target", "todo", owner="you",
                  detail="No verified server yet: add one and BOSS deploys staging there.",
                  sub="Needs a server", action={"label": "Add a server",
                                                "href": href(project_id, area="infra",
-                                                            view="hosts")})
+                                                            add="host")})
 
 
 def _secrets(project_id: str, root: Optional[Path]

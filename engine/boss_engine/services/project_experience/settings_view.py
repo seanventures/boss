@@ -18,8 +18,13 @@ STEP_UP = "step_up"
 
 
 def _action(label: str, method: str, path: str, *, requires: str = "", body: Any = None,
-            permission: str = "") -> dict[str, Any]:
+            permission: str = "", open_href: str = "") -> dict[str, Any]:
+    """An existing write route (`href`, `method`, `body`) and, as `open`, the console screen where
+    a person makes that change with its own form today (a console link; the page never sends the
+    write itself from here)."""
     out: dict[str, Any] = {"label": label, "method": method, "href": path}
+    if open_href:
+        out["open"] = open_href
     if requires:
         out["requires"] = requires
     if permission:
@@ -69,10 +74,15 @@ def _deploy_values(connection: Connection, project_id: str) -> dict[str, Any]:
             items.append({"app_key": None, "name": name, "env": "deploy", "mode": None,
                           "set": False, "needed": True, "actions": []})
     apps = sorted({r["app_key"] for r in rows})
+    # The app's setup sheet (Code Tasks › Apps) is where a value is set or rotated.
+    where = href(project_id, area="code_tasks", view="apps")
+    for item in items:
+        item["href"] = where
     return {"key": "deploy_values", "label": "Deploy values", "icon": "lock", "items": items,
             "apps": apps,
             "actions": [_action("Open app secrets", "GET", f"/v1/apps/{a}/secrets?project_id="
-                                f"{project_id}", permission="app_secret:read_metadata")
+                                f"{project_id}", permission="app_secret:read_metadata",
+                                open_href=where)
                         for a in apps]}
 
 
@@ -92,21 +102,26 @@ def _targets(connection: Connection, project_id: str) -> dict[str, Any]:
     items = [{"kind": "target", "id": r["id"], "app": r["app_name"], "env": r["environment"],
               "env_label": env_label(r["environment"]), "host": r["host_address"] or r["host_name"],
               "policy": "auto" if r["auto_deploy"] else "person", "paused": bool(r["paused"]),
+              "href": href(project_id, area="infra", target=r["id"]),
               "actions": [_action("Edit", "PATCH", f"/v1/deployment-targets/{r['id']}",
-                                  permission="deployment_target:manage"),
+                                  permission="deployment_target:manage",
+                                  open_href=href(project_id, area="infra", target=r["id"])),
                           _action("Auto-deploy", "POST",
                                   f"/v1/deployment-targets/{r['id']}/auto-deploy",
-                                  permission="deployment_target:manage")]}
+                                  permission="deployment_target:manage",
+                                  open_href=href(project_id, area="infra", target=r["id"]))]}
              for r in rows]
     items += [{"kind": "host", "id": h["id"], "name": h["name"], "address": h["address"],
                "status": h["status"], "shared": h["project_id"] != project_id,
-               "href": href(project_id, area="infra", view="hosts", host=h["id"])} for h in hosts]
+               "href": href(project_id, area="infra", host=h["id"])} for h in hosts]
     return {"key": "targets", "label": "Deploy targets", "icon": "server", "items": items,
             "actions": [_action("Add a target", "POST", "/v1/deployment-targets", requires=STEP_UP,
                                 permission="deployment_target:manage",
-                                body={"project_id": project_id}),
+                                body={"project_id": project_id},
+                                open_href=href(project_id, area="infra", add="target")),
                         _action("Add a server", "POST", "/v1/deployment-hosts",
-                                permission="host:manage", body={"project_id": project_id})]}
+                                permission="host:manage", body={"project_id": project_id},
+                                open_href=href(project_id, area="infra", add="host"))]}
 
 
 def _captain(connection: Connection, project_id: str) -> dict[str, Any]:
@@ -130,11 +145,13 @@ def _autonomy(connection: Connection, project_id: str) -> dict[str, Any]:
         "SELECT daily_cap_usd_micros, monthly_cap_usd_micros, operational_intensity "
         "FROM budget_policies WHERE scope_type = 'project' AND scope_id = :p "
         "ORDER BY created_at DESC LIMIT 1"), {"p": project_id}).mappings().first()
+    autonomy = href(project_id, area="budget", tab="autonomy")
     items = [{"task_class": r["task_class"], "level": r["level"], "ceiling": r["ceiling"],
-              "set_by": r["set_by"], "at": iso(r["updated_at"]),
+              "set_by": r["set_by"], "at": iso(r["updated_at"]), "href": autonomy,
               "actions": [_action("Set level", "PUT", f"/v1/ambient/autonomy/{r['task_class']}",
                                   requires=STEP_UP, permission="autonomy:manage",
-                                  body={"project_id": project_id})]} for r in levels]
+                                  body={"project_id": project_id}, open_href=autonomy)]}
+             for r in levels]
     return {"key": "autonomy", "label": "Autonomy & budget", "icon": "gauge", "items": items,
             "ambient": ({"daily_cap_usd": round(int(amb["daily_cap_usd_micros"]) / 1_000_000, 2),
                          "max_concurrent": amb["max_concurrent"]} if amb else None),
@@ -142,39 +159,46 @@ def _autonomy(connection: Connection, project_id: str) -> dict[str, Any]:
                         "monthly_cap_usd": round(int(policy["monthly_cap_usd_micros"] or 0) / 1e6, 2),
                         "intensity": policy["operational_intensity"]} if policy else None),
             "actions": [_action("Ambient budget", "PUT", "/v1/ambient/settings",
-                                permission="autonomy:manage", body={"project_id": project_id}),
+                                permission="autonomy:manage", body={"project_id": project_id},
+                                open_href=autonomy),
                         _action("Spending cap", "POST", "/v1/budget/set_intensity",
-                                permission="budget:manage", body={"project_id": project_id})]}
+                                permission="budget:manage", body={"project_id": project_id},
+                                open_href=href(project_id, area="budget", tab="limits"))]}
 
 
 def _repos(connection: Connection, project_id: str) -> dict[str, Any]:
     items = []
+    setup = href(project_id, area="setup", focus="repository")
     for r in repos(connection, project_id):
-        items.append({**r, "actions": [_action(
+        items.append({**r, "href": r.get("external_url") or setup, "actions": [_action(
             "Remove", "DELETE", f"/v1/projects/{project_id}/repos/{r['binding_id']}",
-            requires=STEP_UP, permission="repository:manage")]})
+            requires=STEP_UP, permission="repository:manage", open_href=setup)]})
     return {"key": "repos", "label": "Repositories", "icon": "git-branch", "items": items,
             "actions": [_action("Add a repository", "PUT",
                                 f"/v1/projects/{project_id}/repos/{{repo_id}}", requires=STEP_UP,
-                                permission="repository:manage"),
+                                permission="repository:manage",
+                                open_href=href(project_id, area="setup", focus="repository",
+                                               open="add")),
                         _action("Repository mode", "PUT", f"/v1/projects/{project_id}/repo-mode",
-                                permission="repository:manage")]}
+                                permission="repository:manage", open_href=setup)]}
 
 
 def _notifications(connection: Connection, project_id: str) -> dict[str, Any]:
     rows = connection.execute(text(
         "SELECT id, name, contact_point_ids, quiet_hours FROM notification_policies "
         "WHERE project_id = :p ORDER BY position, name"), {"p": project_id}).mappings().all()
+    notify = href(project_id, area="observability", view="notify")
     items = [{"id": r["id"], "name": r["name"] or "Default",
               "contact_points": len(as_json(r["contact_point_ids"], []) or []),
-              "quiet_hours": as_json(r["quiet_hours"], None),
+              "quiet_hours": as_json(r["quiet_hours"], None), "href": notify,
               "actions": [_action("Edit", "PUT", f"/v1/notification-policies/{r['id']}",
-                                  permission="observability:manage")]} for r in rows]
+                                  permission="observability:manage", open_href=notify)]}
+             for r in rows]
     return {"key": "notifications", "label": "Notifications", "icon": "bell", "items": items,
             "actions": [_action("Add a policy", "POST", "/v1/notification-policies",
                                 permission="observability:manage",
-                                body={"project_id": project_id})],
-            "href": href(project_id, area="monitoring", view="notifications")}
+                                body={"project_id": project_id}, open_href=notify)],
+            "href": notify}
 
 
 def view(connection: Connection, project_id: str) -> dict[str, Any]:

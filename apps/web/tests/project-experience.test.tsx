@@ -146,7 +146,7 @@ describe("Projects (screen 2)", () => {
     at("area=projects");
     await mountAs(<ProjectsHome projectId={P} actor="ceo" projects={[{ id: "a", name: "Alpha" }, { id: "b", name: "Beta" }]} />);
     await settle();
-    expect(tid("px-projects-note")!.textContent).toMatch(/next BOSS update/);
+    expect(tid("px-projects-note")!.textContent).toMatch(/didn't answer with the project summary/);
     expect(tid("px-card-a")!.textContent).toContain("Alpha");
   });
 
@@ -251,7 +251,9 @@ describe("the first run (screens 0a, 0b) keeps every Get started item", () => {
     expect(tid("px-discover")).not.toBeNull();
     expect(tid("px-guide-you-secrets")!.textContent).toContain("App secret");
     await press(tid("px-guide-start"));
-    expect(calls.find((c) => c.method === "POST" && c.path === "/v1/projects/northpeak-retail/work")?.body).toEqual({ kind: "ticket", text: "Fix 6 failing tests" });
+    // The engine's own start for its first work (§14): the door's kind, text, title and source_ref.
+    expect(calls.find((c) => c.method === "POST" && c.path === "/v1/projects/northpeak-retail/work")?.body).toEqual({
+      kind: "bug", text: "Make the default branch's CI pass again. Failing: 6 tests.", title: "Fix 6 failing tests", source_ref: "ci:main" });
   });
 
   it("0b: a missing model or GitHub account is an Only-you card that links to Setup, never a picker", async () => {
@@ -638,5 +640,188 @@ describe("sample mode (?px_demo=1)", () => {
     await press(tid("px-compose-start"));
     expect(tid("px-said")!.textContent).toMatch(/Sample mode/);
     expect(calls.filter((c) => c.method !== "GET")).toEqual([]);
+  });
+});
+
+// ── the engine's own answers ───────────────────────────────────────────────────────────────────
+// The shapes apps/api/app/routers/project_experience.py serves (captured from a seeded database,
+// trimmed): every screen must run on THESE, not only on the contract's sample.
+
+const Q = (o: Record<string, string>) => `?${new URLSearchParams({ project_id: P, ...o })}`;
+const API = {
+  overview: {
+    ...FX_OVERVIEW,
+    needs_you: [{ id: "onb:secrets", kind: "setup", label: "App secret", detail: "OPENAI_API_KEY", mini: [], action: { label: "Add", href: Q({ area: "project", tab: "settings", drawer: "section:deploy_values" }), decision_id: null } }],
+    next: [
+      { id: "wi_rec1", label: "Email-to-ticket intake", detail: "Customers email support today.", source: "roadmap", state: "next", href: Q({ area: "project", tab: "roadmap", drawer: "rec:wi_rec1" }),
+        accept: { href: "/v1/ambient/roadmap/wi_rec1/accept", method: "POST", body: { as: "ticket", project_id: P } } },
+      { id: "cand_1", label: "Fix 2 failing checks", source: "ci", state: "proposed", href: Q({ area: "project", tab: "roadmap" }),
+        accept: { href: `/v1/projects/${P}/work`, method: "POST", body: { kind: "bug", text: "Make CI pass again.", title: "Fix 2 failing checks", source_ref: "ci:main" } } },
+    ],
+    week: [{ at: "2026-11-06T10:00:00Z", kind: "pr", label: "PR #5 opened", external_url: "https://github.com/acme/helpdesk-ai-demo/pull/5", href: Q({ area: "code_tasks", view: "apps", build: "crun_5" }) }],
+  },
+  work: { items: [{ ...FX_WORK.items[0], id: "wfr_run1", href: Q({ area: "project", tab: "work", drawer: "run:wfr_run1" }),
+                    links: { ...FX_WORK.items[0].links, decision: Q({ area: "decisions", decision: "dec_1" }) } }], counts: {} },
+  knowledge: {
+    repos: [{ full_name: "acme/helpdesk-ai-demo", branch: "main", access: { read: true, write: true, pr: true }, external_url: "https://github.com/acme/helpdesk-ai-demo" }],
+    dossier: { stack: ["JavaScript"], commands: { build: null, test: null, run: "pnpm start" }, tests: { files: 2 },
+               hotspots: [{ path: "server/sla.mjs", label: "Sla", why: "40 lines changed in 180 days, 120 lines, no tests", has_tests: false }],
+               built_at: "2026-11-06T10:00:00Z", href: Q({ area: "project", tab: "knowledge", drawer: "dossier" }) },
+    graph: { nodes: [], edges: [], total_nodes: 412, href: Q({ area: "knowledge" }) },
+    docs: [{ label: "README", kind: "readme", detail: "README.md", external_url: "https://github.com/acme/helpdesk-ai-demo/blob/HEAD/README.md", href: Q({ area: "project", tab: "knowledge", drawer: "doc:readme" }) }],
+    decisions: [],
+  },
+  deployments: {
+    environments: [{ key: "staging", label: "Staging", app: "helpdesk-ai-demo", target_id: "dept_1", url: "http://203.0.113.10:8004", health: "healthy", status: "up",
+                     uptime_pct: 100, p95_ms: 204, host: "203.0.113.10", host_id: "dhost_1", host_href: Q({ area: "infra", host: "dhost_1" }),
+                     last_deploy: { commit: "f3f130c", status: "healthy", at: "2026-11-04T10:00:00Z", by: "ceo", href: Q({ area: "infra", view: "deploys", deploy: "sdep_1" }) },
+                     demo_logins: [], policy: "person", href: Q({ area: "project", tab: "deployments", drawer: "env:dept_1" }), manage_href: Q({ area: "infra", target: "dept_1" }) }],
+    production: { state: "none", action: { label: "Set up production", href: Q({ area: "infra", add: "target" }) } },
+    ship_path: [{ label: "PR merged", state: "done" }, { label: "Image built", state: "done" }, { label: "Staging · you approve", state: "done" },
+                { label: "Smoke test", state: "done" }, { label: "Prod · you approve", state: "waiting" }],
+    history: [{ id: "sdep_1", label: "Staging f3f130c", env: "staging", status: "healthy", commit: "f3f130c", by: "ceo", at: "2026-11-04T10:00:00Z", href: Q({ area: "infra", view: "deploys", deploy: "sdep_1" }) },
+              { id: "sdep_0", label: "Staging a1b2c3d", env: "staging", status: "failed", commit: "a1b2c3d", by: "ceo", at: "2026-11-03T10:00:00Z", href: Q({ area: "infra", view: "deploys", deploy: "sdep_0" }) }],
+  },
+  settings: { sections: [
+    { key: "targets", label: "Deploy targets", icon: "server",
+      items: [{ kind: "target", id: "dept_1", app: "helpdesk-ai-demo", env: "staging", env_label: "Staging", host: "203.0.113.10", policy: "person", paused: false, href: Q({ area: "infra", target: "dept_1" }),
+                actions: [{ label: "Edit", method: "PATCH", href: "/v1/deployment-targets/dept_1", open: Q({ area: "infra", target: "dept_1" }) }] },
+              { kind: "host", id: "dhost_1", name: "demo-host", address: "203.0.113.10", status: "verified", shared: false, href: Q({ area: "infra", host: "dhost_1" }) }],
+      actions: [{ label: "Add a target", method: "POST", href: "/v1/deployment-targets", requires: "step_up", open: Q({ area: "infra", add: "target" }) },
+                { label: "Add a server", method: "POST", href: "/v1/deployment-hosts", open: Q({ area: "infra", add: "host" }) }] },
+    { key: "repos", label: "Repositories", icon: "git-branch",
+      items: [{ full_name: "acme/helpdesk-ai-demo", branch: "main", primary: true, external_url: "https://github.com/acme/helpdesk-ai-demo", href: "https://github.com/acme/helpdesk-ai-demo",
+                actions: [{ label: "Remove", method: "DELETE", href: `/v1/projects/${P}/repos/ghb_1`, open: Q({ area: "setup", focus: "repository" }) }] }],
+      actions: [{ label: "Add a repository", method: "PUT", href: `/v1/projects/${P}/repos/{repo_id}`, open: Q({ area: "setup", focus: "repository", open: "add" }) },
+                { label: "Repository mode", method: "PUT", href: `/v1/projects/${P}/repo-mode`, open: Q({ area: "setup", focus: "repository" }) }] },
+    { key: "autonomy", label: "Autonomy & budget", icon: "gauge", items: [], ambient: { daily_cap_usd: 5, max_concurrent: 2 }, budget: null,
+      actions: [{ label: "Ambient budget", method: "PUT", href: "/v1/ambient/settings", open: Q({ area: "budget", tab: "autonomy" }) }] },
+  ] },
+  onboarding: { state: "not_started", run_id: null, stages: [{ key: "discover", label: "Discover", state: "todo", sub: "" }], discover: { nodes: [] },
+                checklist: [], only_you: [], first_work: null, backlog: [], elapsed_s: 0, start: { href: `/v1/projects/${P}/onboarding/start`, method: "POST" } },
+};
+function realEngine(over: (c: Call) => { status?: number; body: unknown } | undefined = () => undefined) {
+  return engine((c) => {
+    const o = over(c);
+    if (o) return o;
+    const m = c.method === "GET" ? c.path.match(/^\/v1\/projects\/[^/]+\/(overview|work|knowledge|deployments|settings)$/) : null;
+    if (m) return { body: (API as Record<string, unknown>)[m[1]] };
+    if (c.method === "GET" && c.path === `/v1/projects/${P}/onboarding`) return { body: { ...API.onboarding, state: "ready" } };
+    return undefined;
+  });
+}
+
+describe("the engine's own answers (what the API serves, not the sample)", () => {
+  it("Settings never links to an API route: each action opens its console home; rows open theirs", async () => {
+    realEngine();
+    await openProject("&tab=settings");
+    const hrefs = $$("[data-testid='px-settings'] a").map((a) => a.getAttribute("href") ?? "");
+    expect(hrefs.filter((h) => h.startsWith("/v1/"))).toEqual([]);
+    const targets = $$("[data-testid='px-set-act-targets']").map((a) => new URLSearchParams(a.getAttribute("href")!.split("?")[1]).get("add"));
+    expect(targets).toEqual(["target", "host"]);
+    expect(tid("px-set-targets")!.textContent).toContain("helpdesk-ai-demo · Staging");
+    expect(tid("px-set-targets")!.textContent).toContain("a person approves");
+    expect(tid("px-set-repos")!.textContent).toContain("acme/helpdesk-ai-demo");
+    expect(tid("px-set-autonomy")!.textContent).toContain("$5/day");
+  });
+
+  it("the engine's drawer links open: run:<id> is the work drawer, env:<target> the environment, section:<key> is Settings", async () => {
+    realEngine();
+    await openProject("&tab=work&drawer=run:wfr_run1");
+    expect(tid("px-drawer-work")).not.toBeNull();
+    expect(new URLSearchParams(tid("px-drawer-work-decide")!.getAttribute("href")!.split("?")[1]).get("decision")).toBe("dec_1");
+    unmount(); realEngine();
+    await openProject("&tab=deployments&drawer=env:dept_1");
+    expect(tid("px-drawer-env")).not.toBeNull();
+    expect(new URLSearchParams(tid("px-drawer-env-host")!.getAttribute("href")!.split("?")[1]).get("host")).toBe("dhost_1");
+    unmount(); realEngine();
+    await openProject("&tab=knowledge&drawer=section:repos");
+    expect(params().get("tab")).toBe("settings");
+    expect(params().get("section")).toBe("repos");
+    expect(params().get("drawer")).toBeNull();
+    unmount(); realEngine();
+    await openProject("&drawer=onboarding");
+    expect(tid("px-drawer-onboarding")).not.toBeNull();
+  });
+
+  it("What's next accepts each item its own way: a roadmap item is planned, a proposed one starts through the door", async () => {
+    const calls = realEngine();
+    await openProject();
+    await press(tid("px-ov-accept-wi_rec1"));
+    expect(calls.find((c) => c.method === "POST" && c.path === "/v1/ambient/roadmap/wi_rec1/accept")?.body).toMatchObject({ as: "ticket", project_id: P });
+    await press(tid("px-ov-accept-cand_1"));
+    expect(calls.find((c) => c.method === "POST" && c.path === `/v1/projects/${P}/work`)?.body).toEqual({
+      kind: "bug", text: "Make CI pass again.", title: "Fix 2 failing checks", source_ref: "ci:main" });
+    // This week's events open their record.
+    expect(tid("px-ov-week-0")!.querySelector("a")!.getAttribute("href")).toContain("build=crun_5");
+  });
+
+  it("Repo & knowledge reads the engine's counts: graph size, test files, hotspots, docs on GitHub", async () => {
+    realEngine();
+    await openProject("&tab=knowledge");
+    expect(tid("px-kn-graph")!.textContent).toContain("412 nodes");
+    expect(tid("px-kn-graph")!.textContent).not.toContain("rules");
+    expect(tid("px-kn-test-files")!.textContent).toContain("2");
+    expect(tid("px-kn-dossier")!.textContent).toContain("no tests");
+    expect(tid("px-kn-dossier")!.textContent).not.toContain("Build");
+    expect($$("[data-testid='px-kn-docs'] a").map((a) => a.getAttribute("href"))).toContain("https://github.com/acme/helpdesk-ai-demo/blob/HEAD/README.md");
+  });
+
+  it("Deployments: the ship path, a failed deploy in the history, the server's own Infra drawer", async () => {
+    realEngine();
+    await openProject("&tab=deployments");
+    expect(tid("px-dep-ship")!.textContent).toContain("Prod · you approve");
+    expect(tid("px-dep-h-sdep_0")!.textContent).toContain("failed");
+    expect(new URLSearchParams(tid("px-env-host-staging")!.getAttribute("href")!.split("?")[1]).get("host")).toBe("dhost_1");
+    expect(tid("px-dep-prod")!.textContent).toContain("Set up production");
+    await press(tid("px-env-open-staging"));
+    expect(params().get("drawer")).toBe("env:dept_1");
+    expect(tid("px-drawer-env")).not.toBeNull();
+  });
+
+  it("an onboarding item waiting on you is listed once in Needs you, never twice", async () => {
+    realEngine((c) => (c.method === "GET" && c.path === `/v1/projects/${P}/onboarding`
+      ? { body: { ...FX_ONBOARDING, state: "needs_you" } } : undefined));
+    await openProject("", "owner");
+    expect($$("[data-testid='px-needs-bar'] .px-needs-item").filter((x) => /App secret/.test(x.textContent ?? ""))).toHaveLength(1);
+  });
+
+  it("an onboarding that never started offers Start onboarding, which posts §8's start", async () => {
+    const calls = realEngine((c) => {
+      if (c.method === "GET" && c.path === `/v1/projects/${P}/onboarding`) return { body: API.onboarding };
+      if (c.method === "GET" && c.path === `/v1/projects/${P}/overview`) return { body: { ...API.overview, project: { ...FX_OVERVIEW.project, stage: "onboarding" } } };
+      return undefined;
+    });
+    await openProject();
+    expect(tid("px-onboarding")).not.toBeNull();
+    await press(tid("px-ob-restart"));
+    expect(calls.some((c) => c.method === "POST" && c.path === `/v1/projects/${P}/onboarding/start`)).toBe(true);
+  });
+
+  it("New work the project isn't ready for shows its checklist; Start anyway re-sends with the ticks", async () => {
+    const need = { key: "deploy_target", label: "Somewhere to deploy", fix: "Add a target", area: "infra", ok: false, detail: "", needed_by: [], first_step_label: "Deploy" };
+    const readiness = { ready: false, checked: [need], missing: [need] };
+    let refused = false;
+    const calls = realEngine((c) => {
+      if (c.method === "POST" && c.path === `/v1/projects/${P}/work` && !refused) {
+        refused = true;
+        return { status: 409, body: { detail: { message: "This project isn't ready for that workflow.", readiness } } };
+      }
+      return undefined;
+    });
+    await openProject("&tab=work");
+    const input = tid("px-compose-text") as HTMLInputElement;
+    await act(async () => {
+      const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+      set.call(input, "Add CSV export");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await press(tid("px-compose-start"));
+    expect(tid("px-compose-readiness")).not.toBeNull();
+    await press(tid("dw-readiness-start-anyway"));
+    await press(tid("px-compose-start"));
+    const posts = calls.filter((c) => c.method === "POST" && c.path === `/v1/projects/${P}/work`);
+    expect(posts).toHaveLength(2);
+    expect((posts[1].body as { start_anyway?: string[] }).start_anyway).toEqual(["deploy_target"]);
   });
 });

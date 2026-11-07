@@ -34,13 +34,16 @@ def main() -> int:
         return 2
 
     from apps.api.tests.project_experience_seed import seed
+    from boss_engine.bootstrap import seed as bootstrap
     from boss_engine.config import get_settings
-    from boss_engine.db import ensure_schema, get_engine
+    from boss_engine.db import get_engine
     from boss_engine.services import projects
 
     settings = get_settings()
     engine = get_engine(settings)
-    ensure_schema(engine)
+    # The schema AND the default org/workspace, as the API's own start does: on a fresh
+    # disposable database projects.create had no org to put the project in.
+    bootstrap()
     with engine.begin() as db:
         made = projects.create(db, settings, auth=None, name="HelpDesk AI Demo", slug=args.slug,
                                actor="seed")

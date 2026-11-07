@@ -97,7 +97,8 @@ Demo-login reveal: owner/admin with step-up (existing secrets reveal path), retu
 `{"demo_logins": [{"user"|"name": "…", "password"|"value": "…"}]}`; a stale second factor answers
 `401 step_up_required` and the console opens "Confirm it's you" (console, 2026-11-06).
 `environments[].target_id` is the deploy target (Observability's app id): Health shows its alert rules with it.
-**Infra cross-link:** `GET /v1/infra/hosts/{id}` residents carry `"project": {"id": "…", "name": "…"}` so a
+**Infra cross-link:** `GET /v1/infra/hosts/{id}` (and `/v1/infra/fleet` racks) residents carry
+`"project": {"id": "…", "name": "…", "href": "?project_id=…&area=project&tab=deployments"}` so a
 shared server lists "Projects on this server", each linking to that Project › Deployments.
 
 ## 6. Roadmap — existing `GET /v1/ambient/roadmap?project_id=…&status=open`
@@ -260,6 +261,25 @@ Every shape above is served as written; these are the extra fields and the decis
   deployed or no rule exists yet.
 - **Jump.** Items add `project_id` (and `external_url` for PRs, `full_href` for runs); with no `q`
   the palette gets the newest items; a `project_id` the caller cannot read answers 404.
+- **Integration (2026-11-06, feat/project-experience).** Fields the console reads beyond the above:
+  Deployments environments add `host_id` and `host_href` (`?area=infra&host=<host id>`, the server's
+  Infra drawer) and the response adds `ship_path` (5 nodes: PR merged → Image built → `<env> · auto|you
+  approve` → Smoke test → Prod · you approve, states from the environments). Health environments add
+  `host` and `host_href`. Projects list items add `cost_week` (the week's dollars, the Overview tile's
+  number) and `series` (7 daily values). Settings actions add `open`: the console screen where a
+  person makes that change today; the console links only `open`, never an API `href`. Console links
+  name views that exist: Infra opens its + Add sheet from `add=host|target` (`add=target&host=<id>`
+  preselects the machine), Observability's are `view=alerts|notify` and `inc=`, Govern's
+  `?area=budget&tab=autonomy|limits`. Drawer links the engine writes and the console opens:
+  `run:<id>` / `build:<id>` (the work drawer), `env:<target id>`, `rec:<id>`, `stage:<key>`,
+  `onboarding`; `section:<key>` is Settings at that section, `dossier` / `doc:<path>` is Repo &
+  knowledge, `captain` is the captain's Ask dock. The app's own demo-login door
+  (`GET /v1/apps/{app}/demo-logins`) now has the reveal's bar: `secret:manage` (owner/admin, step-up),
+  audited as `project.demo_logins_revealed`, not an MCP tool. Onboarding's "Accept backlog / Edit"
+  (screen 10) stays "See the roadmap": the proposed backlog is candidates (GitHub issues, open PRs,
+  failing CI, scan findings), not stored roadmap items, so `/v1/ambient/roadmap/{id}/accept` has
+  nothing to accept, and accepting all would start a build each; items are accepted one by one on
+  the Roadmap and What's next (`accept` names the roadmap route or THE start door with its body).
 - **Area ids.** The console's ids are used as they exist: `knowledge` (not `knowledge_graph`),
   `workforce&role=` for an agent, `delivery_workflows&wfr=`, `code_tasks&view=apps&build=`,
   `decisions&decision=`, `infra&view=deploys&deploy=`, `agent_ops&item=`, `meetings&meeting=`.

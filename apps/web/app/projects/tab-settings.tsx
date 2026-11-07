@@ -19,8 +19,10 @@ import { GatedButton } from "../../components/gated";
 import { useGuardedCall } from "../../components/identity/identity-provider";
 import { IdentityError, idGet, refusalSentence } from "../../lib/identity/api";
 import {
-  PX_PATHS, a, isPxDemo, usePageSearch, o, parseSettings, pxHref, s, setCaptain, usePxRead, writePxUrl, type Settings, type SettingsSection,
+  PX_PATHS, a, isPxDemo, usePageSearch, o, parseSettings, pxHref, s, setCaptain, usePxRead, writePxUrl,
+  type Agent, type Settings, type SettingsAction, type SettingsSection,
 } from "../../lib/project-experience";
+import { notifyChanged } from "../changed";
 import { FX_SETTINGS } from "../../lib/project-experience-fixtures";
 import { Face, Ico, PxLink, ReadGate, Said, Tag, type Tone } from "./kit";
 import type { PxCtx } from "./project-page";
@@ -31,27 +33,40 @@ const SECTION_ICON: Record<string, { icon: Icon; c: Tone }> = {
 };
 const ROLE_ICON: Record<string, Icon> = { admin: Crown, agent: Headset, customer: User };
 
-/** Sections from what the console already knows, for an engine without §11's read. */
+/** A link to where a setting lives today (a console href is its own `open`). */
+const go = (label: string, href: string): SettingsAction => ({ label, href, method: "GET", requires: "", open: href });
+const section = (key: string, label: string, icon: string, items: SettingsSection["items"], actions: SettingsAction[]): SettingsSection =>
+  ({ key, label, icon, moved_from: "", hint: "", items, actions, candidates: [] });
+
+/** Sections from what the console already knows, when §11's read does not answer (the project is
+ *  out of reach, or an older engine): each links to where the setting lives. */
 function fallbackSettings(ctx: PxCtx): Settings {
   const p = ctx.overview.project;
   const c = ctx.overview.captain;
   return { sections: [
-    { key: "demo_logins", label: "Demo logins", icon: "key", moved_from: "", items: [],
-      actions: [{ label: "Open the app's setup", href: "?area=code_tasks&tab=apps", requires: "" }] },
-    { key: "deploy_values", label: "Deploy values", icon: "lock", moved_from: "", items: [],
-      actions: [{ label: "Deploy values in Infra", href: "?area=infra&view=deploys", requires: "" }] },
-    { key: "targets", label: "Targets & hosts", icon: "server", moved_from: "", items: [],
-      actions: [{ label: "Targets in Infra", href: "?area=infra&view=fleet", requires: "" }] },
-    { key: "captain", label: "Captain & crew", icon: "robot", moved_from: "",
-      items: c ? [{ label: "Captain", value: c.name, sub: "", reveal: null, href: "" }] : [], actions: [{ label: "Agent Studio", href: "?area=workforce", requires: "" }] },
-    { key: "autonomy", label: "Autonomy & budget", icon: "gauge", moved_from: "", items: [],
-      actions: [{ label: "Autonomy", href: "?area=agent_ops", requires: "" }, { label: "Budget in Govern", href: "?area=budget", requires: "" }] },
-    { key: "repos", label: "Repositories", icon: "git", moved_from: "",
-      items: p.repos.map((r) => ({ label: r.full_name, value: r.branch, sub: "", reveal: null, href: r.external_url || `https://github.com/${r.full_name}` })),
-      actions: [{ label: "Add repo", href: "?area=setup&focus=repository&open=add", requires: "" }] },
-    { key: "notifications", label: "Notifications", icon: "bell", moved_from: "", items: [],
-      actions: [{ label: "Channels in Skills & MCP", href: "?area=skills", requires: "" }] },
+    section("demo_logins", "Demo logins", "key", [], [go("Open the app's setup", "?area=code_tasks&view=apps")]),
+    section("deploy_values", "Deploy values", "lock", [], [go("Open the app's setup", "?area=code_tasks&view=apps")]),
+    section("targets", "Targets & hosts", "server", [], [go("Targets in Infra", "?area=infra&view=fleet")]),
+    section("captain", "Captain & crew", "robot", c ? [{ label: "Captain", value: c.name, sub: "", reveal: null, href: "" }] : [], [go("Agent Studio", "?area=workforce")]),
+    section("autonomy", "Autonomy & budget", "gauge", [], [go("Autonomy", "?area=budget&tab=autonomy"), go("Budget in Govern", "?area=budget&tab=limits")]),
+    section("repos", "Repositories", "git",
+            p.repos.map((r) => ({ label: r.full_name, value: r.branch, sub: "", reveal: null, href: r.external_url || `https://github.com/${r.full_name}` })),
+            [go("Add repo", "?area=setup&focus=repository&open=add")]),
+    section("notifications", "Notifications", "bell", [], [go("Notifications", "?area=observability&view=notify")]),
   ] };
+}
+
+/** The header's links: each action's console home (`open`), once. An API route is never a link,
+ *  and the two writes this tab makes itself (Reveal on each row, Change captain) are not repeated. */
+function headerActions(sec: SettingsSection): SettingsAction[] {
+  const seen = new Set<string>();
+  return sec.actions.filter((ac) => {
+    if (!ac.open || sec.key === "demo_logins" || sec.key === "captain") return false;
+    const k = `${ac.label}|${ac.open}`;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
 }
 
 export function SettingsTab({ ctx }: { ctx: PxCtx }) {
@@ -70,7 +85,7 @@ export function SettingsTab({ ctx }: { ctx: PxCtx }) {
   };
   return (
     <div data-testid="px-settings">
-      {read.state === "missing" && !read.data ? <div className="px-note" role="note" style={{ marginBottom: 12 }}>These settings gather here with the next BOSS update; meanwhile each links to where it lives today.</div> : null}
+      {read.state === "missing" && !read.data ? <div className="px-note" role="note" style={{ marginBottom: 12 }} data-testid="px-settings-note">BOSS didn&apos;t answer for this project&apos;s settings; each one links to where it lives.</div> : null}
       <ReadGate read={{ ...read, data }} what="Settings">
         {(st) => (
           <div className="px-set">
@@ -90,7 +105,7 @@ export function SettingsTab({ ctx }: { ctx: PxCtx }) {
                     {sec.key === "deploy_values" ? <small className="px-faint">names only · values write-only</small> : null}
                     {sec.moved_from ? <small className="px-faint px-hide-phone">moved from {sec.moved_from}</small> : null}
                     <span className="px-spacer" />
-                    {sec.actions.map((ac) => <PxLink key={ac.label} href={ac.href} className="px-more" testid={`px-set-act-${sec.key}`}>{/^add/i.test(ac.label) ? <Plus size={11} /> : null}{ac.label}</PxLink>)}
+                    {headerActions(sec).map((ac) => <PxLink key={`${ac.label}-${ac.open}`} href={ac.open} className="px-more" testid={`px-set-act-${sec.key}`}>{/^add/i.test(ac.label) ? <Plus size={11} /> : null}{ac.label}</PxLink>)}
                   </div>
                   <SectionBody ctx={ctx} sec={sec} />
                 </section>
@@ -110,7 +125,7 @@ function SectionBody({ ctx, sec }: { ctx: PxCtx; sec: SettingsSection }) {
         {sec.items.map((it) => <DemoLoginRow key={`${it.label}-${it.value}`} projectId={ctx.projectId} login={it} />)}
         <small className="px-faint" style={{ display: "block", marginTop: 8 }}>Users from the app (boss.deploy.yaml or its seed) · one password per environment (DEMO_PASSWORD)</small>
       </div>
-    ) : <p className="px-faint" data-testid="px-demo-logins-none">No demo users found for this project yet. They appear once the app declares them (boss.deploy.yaml or its seed) and deploys.</p>;
+    ) : <p className="px-faint" data-testid="px-demo-logins-none">{sec.hint || "No demo users found for this project yet. They appear once the app declares them (boss.deploy.yaml or its seed) and deploys."}</p>;
   }
   if (sec.key === "captain") return <CaptainSection ctx={ctx} sec={sec} />;
   if (!sec.items.length) return <p className="px-faint" style={{ margin: 0 }}>Nothing set here yet.</p>;
@@ -139,7 +154,11 @@ function CaptainSection({ ctx, sec }: { ctx: PxCtx; sec: SettingsSection }) {
     const r = await setCaptain(ctx.projectId, agentId);
     setSaid(r.ok ? (r.demo ? "Sample mode — nothing was sent." : `${name} is the captain now.`) : (r.error ?? "Not changed."));
     setPicking(false);
+    if (r.ok && !r.demo) notifyChanged("project.captain");
   };
+  // Who may captain (§14 `candidates`, the engine's list), else the captain and its squad.
+  const choices = c ? (sec.candidates.length ? sec.candidates : [c as Agent, ...c.squad])
+    .map((m) => ({ name: m.name, role_key: m.role_key, agent_id: m.agent_id || m.role_key })) : [];
   return (
     <div data-testid="px-set-captain-body">
       {c ? (
@@ -159,7 +178,7 @@ function CaptainSection({ ctx, sec }: { ctx: PxCtx; sec: SettingsSection }) {
       ) : null}
       {picking && c ? (
         <div role="listbox" aria-label="Choose a captain" className="px-col" style={{ marginTop: 10 }} data-testid="px-set-captain-pick">
-          {[{ name: c.name, role_key: c.role_key, agent_id: c.agent_id }, ...c.squad.map((m) => ({ name: m.name, role_key: m.role_key, agent_id: m.role_key }))].map((m) => (
+          {choices.map((m) => (
             <button key={m.name} type="button" role="option" aria-selected={m.name === c.name} className="px-li"
                     style={{ width: "100%", background: "none", border: 0, borderTop: "1px solid var(--border)", color: "inherit", font: "inherit", textAlign: "left", cursor: "pointer" }}
                     onClick={() => void choose(m.agent_id || m.role_key, m.name)}>
@@ -169,7 +188,7 @@ function CaptainSection({ ctx, sec }: { ctx: PxCtx; sec: SettingsSection }) {
         </div>
       ) : null}
       {sec.items.filter((it) => it.label !== "Captain").map((it) => (
-        <div key={it.label} className="px-li"><span /><span><b>{it.label}</b><small>{it.value}{it.sub ? ` · ${it.sub}` : ""}</small></span>
+        <div key={it.label} className="px-li"><span /><span><b>{it.label}</b><small>{[it.value, it.sub].filter(Boolean).join(" · ")}</small></span>
           {it.href ? <PxLink href={it.href}>Open</PxLink> : <span />}</div>
       ))}
       <Said text={said} />
@@ -227,12 +246,12 @@ export function DemoLoginRow({ projectId, login, compact }: {
       <span className="px-row">
         {login.reveal ? (
           <>
-            <GatedButton permission="app_secret:write" projectId={projectId} className="px-btn" data-size="s" data-testid={`px-login-reveal-${login.value}`}
+            <GatedButton permission="secret:manage" projectId={projectId} className="px-btn" data-size="s" data-testid={`px-login-reveal-${login.value}`}
                          title="Show the password (asks you to confirm it's you; hides after 30s)"
                          onClick={() => { if (shown) { setShown(null); return; } void fetchIt().then((pw) => { if (pw) setShown(pw); }); }}>
               {shown ? <EyeSlash size={12} aria-hidden /> : <Eye size={12} aria-hidden />}{compact ? null : (shown ? " Hide" : " Reveal")}
               {compact ? <span className="px-sr">{shown ? "Hide" : "Reveal"} password</span> : null}</GatedButton>
-            <GatedButton permission="app_secret:write" projectId={projectId} className="px-icon-btn" data-testid={`px-login-copy-${login.value}`}
+            <GatedButton permission="secret:manage" projectId={projectId} className="px-icon-btn" data-testid={`px-login-copy-${login.value}`}
                          aria-label={`Copy the password for ${login.value}`} title="Copy the password (never shown)"
                          onClick={() => void (async () => { const pw = shown ?? (await fetchIt()); if (pw) { await navigator.clipboard?.writeText(pw); setWhy("Copied."); } })()}>
               <Copy size={13} /></GatedButton>

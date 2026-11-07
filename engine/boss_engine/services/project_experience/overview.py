@@ -356,6 +356,17 @@ def view(connection: Connection, project_id: str, *, now: Optional[datetime] = N
 
 # ── the projects list (§1), batched across projects ─────────────────────────────────────────
 
+def _card_cost(connection: Connection, project_id: str, now: datetime) -> dict[str, Any]:
+    """A card's week of spend (the Overview's cost tile, the same numbers): `cost_week` dollars
+    and its 7-day `series`. Past days come from the day cache; a card never fails on money."""
+    try:
+        with connection.begin_nested():
+            cost = _cost_week(connection, project_id, now)
+    except Exception:  # noqa: BLE001 — the ledger unreadable: the card shows no cost, not an error
+        return {"cost_week": None, "series": []}
+    return {"cost_week": cost["usd"], "series": cost["series"]}
+
+
 def summary(connection: Connection, project_ids: Iterable[str], *,
             now: Optional[datetime] = None) -> list[dict[str, Any]]:
     from ..decision_actions import count_waiting_on_operator
@@ -463,6 +474,7 @@ def summary(connection: Connection, project_ids: Iterable[str], *,
                                  "avatar": f["avatar"], "agent_id": f.get("agent_id")}
                                 if f else None),
                     "onboarding": onb.get("state"), "archived": p["archived_at"] is not None,
+                    **_card_cost(connection, pid, now),
                     "updated_at": iso(updated), "href": project_href(pid)})
     return out
 

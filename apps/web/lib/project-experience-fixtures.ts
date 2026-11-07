@@ -193,9 +193,15 @@ export const FX_ONBOARDING = {
     { key: "deploy_target", label: "Staging host", state: "now", owner: "agent", detail: "checking :8004" },
     { key: "secrets", label: "App secret", state: "todo", owner: "you", detail: "OPENAI_API_KEY — only you", action: { label: "Add", href: "?area=infra&view=deploys" } },
   ],
-  backlog: [{ id: "b1", label: "Fix 6 failing tests", source: "ci", state: "proposed" }, { id: "b2", label: "SLA ignores weekends", source: "issue #12", state: "proposed" },
-            { id: "b3", label: "SLA timers", source: "issue #9", state: "proposed" }, { id: "b4", label: "UI refresh", source: "TODO ×7", state: "proposed" }],
-  first_work: { label: "Fix 6 failing tests", source: "ci", estimate_min: 15, estimate_usd: 1.5, start: { href: "/v1/projects/helpdesk-ai-demo/work" }, others_href: href({ tab: "roadmap" }) },
+  // §14's shapes: ranked candidates (kind, text for the work, ref) and first work's own start.
+  backlog: [{ id: "cand_b1", label: "Fix 6 failing checks", detail: "CI fails on the default branch: 6 tests.", source: "ci", kind: "bug", ref: "ci:main", state: "proposed" },
+            { id: "cand_b2", label: "SLA ignores weekends", detail: "#12 SLA ignores weekends", source: "bug", kind: "bug", ref: "issue:12", state: "proposed" },
+            { id: "cand_b3", label: "SLA timers", detail: "#9 SLA timers", source: "ticket", kind: "ticket", ref: "issue:9", state: "proposed" },
+            { id: "cand_b4", label: "Clear a TODO cluster", detail: "7 TODOs in web/", source: "roadmap", kind: "chore", ref: "signal:todo", state: "proposed" }],
+  first_work: { label: "Fix 6 failing tests", kind: "bug", source: "ci", estimate_min: 15, estimate_usd: 1.5,
+                start: { href: "/v1/projects/northpeak-retail/work", method: "POST",
+                         body: { kind: "bug", text: "Make the default branch's CI pass again. Failing: 6 tests.", title: "Fix 6 failing tests", source_ref: "ci:main" } },
+                others_href: href({ tab: "roadmap" }) },
 };
 
 export const FX_JUMP = {

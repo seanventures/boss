@@ -6,8 +6,10 @@
  * go through obsWrite → apiWrite, so a stale second factor opens the step-up sheet and a consent
  * refusal opens the consent sheet (no write path of its own).
  *
- * THE ENGINE MAY NOT ANSWER YET. A route that answers 404/405/501 is `missing`, not an error: the
- * screens then build what they can from the reads that already exist (adapters below) and say so.
+ * Every read here is served by the engine (apps/api/app/routers/project_experience.py). A route
+ * that answers 404/405/501 is `missing` — the project is gone or out of reach, or an engine older
+ * than this console — never an error to print: the screens build what they can from the reads
+ * that exist (adapters below) and say so in plain words.
  * `?px_demo=1` renders the contract's sample project (lib/project-experience-fixtures.ts) with a
  * "Sample data" banner; writes in that mode send nothing.
  */
@@ -60,7 +62,7 @@ export function label4(v: unknown): string {
 
 // ── types ────────────────────────────────────────────────────────────────────────────────────
 
-export type Agent = { name: string; role_key: string; avatar: string; role?: string };
+export type Agent = { name: string; role_key: string; avatar: string; role?: string; agent_id?: string };
 export type Node = { key: string; label: string; state: StepState; sub: string; href: string };
 export type ProjectCard = {
   id: string; name: string; initials: string; repo: string; stage: Stage; journey: Node[];
@@ -76,10 +78,17 @@ export type NeedsYou = {
 export type WorkItem = {
   id: string; label: string; kind: string; state: WorkState; age: string;
   stages: { key: string; label: string; state: StepState }[]; agents: Agent[]; cost_usd: number | null;
-  links: { workflow_run: string; build: string; pr: { number: number; external_url: string } | null; deploy: string; preview: string };
+  links: { workflow_run: string; build: string; pr: { number: number; external_url: string } | null; deploy: string; preview: string; decision: string };
   detail: string; href: string; source: string;
 };
-export type NextItem = { id: string; label: string; source: string; state: "next" | "proposed"; href: string; accept: { href: string } | null };
+/** How an item is accepted (§2/§14): the roadmap's accept, or THE start door with its body. */
+export type Accept = { href: string; method: string; body: R };
+export type NextItem = {
+  id: string; label: string; detail: string; source: string; kind: string; state: "next" | "proposed"; href: string; external_url: string;
+  accept: Accept | null;
+  /** A backlog candidate's words for the work and where it came from (§8 `text`, `ref`). */
+  text: string; ref: string;
+};
 export type DemoLogin = { user: string; label: string; reveal: { href: string; requires: string } | null };
 export type Overview = {
   project: { id: string; name: string; initials: string; stage: Stage; repos: Repo[]; live_url: string; status_label: string; health: Health };
@@ -92,21 +101,23 @@ export type Overview = {
   };
   captain: Captain | null; recent_work: WorkItem[]; next: NextItem[];
   try_it: { url: string; demo_logins: DemoLogin[] } | null;
-  week: { at: string; label: string; kind: string }[];
+  week: { at: string; label: string; kind: string; href: string }[];
 };
 export type Captain = { agent_id: string; name: string; role_key: string; avatar: string; status: string; squad: Agent[]; last_said: string };
 export type WorkList = { items: WorkItem[] };
 export type Knowledge = {
   repos: Repo[];
-  dossier: { stack: string[]; commands: Record<string, string>; hotspots: { path: string; label: string; why: string; heat: number }[];
-             tests: { passed: number; total: number } | null; built_at: string; href: string } | null;
-  graph: { nodes: { id: string; label: string; kind: string }[]; edges: { from: string; to: string; label: string }[]; href: string; counts: { nodes: number; rules: number; learned: number } };
+  dossier: { stack: string[]; commands: Record<string, string>; hotspots: { path: string; label: string; why: string; heat: number | null; has_tests: boolean | null }[];
+             tests: { passed: number; total: number } | null; test_files: number | null; built_at: string; href: string } | null;
+  graph: { nodes: { id: string; label: string; kind: string }[]; edges: { from: string; to: string; label: string }[]; href: string;
+           counts: { nodes: number; rules: number | null; learned: number | null } };
   docs: { label: string; kind: string; href: string; sub: string }[];
   decisions: { label: string; at: string; href: string }[];
   learned: { label: string; sub: string; state: string; href: string }[];
 };
 export type Environment = {
-  key: string; label: string; url: string; health: Health; host: string; host_href: string; uptime_pct: number | null; p95_ms: number | null;
+  key: string; label: string; url: string; health: Health; host: string; host_href: string; target_id: string; app: string; manage_href: string;
+  uptime_pct: number | null; p95_ms: number | null;
   error_rate: number | null; series: number[];
   last_deploy: { commit: string; at: string; by: string; label: string; href: string } | null;
   demo_logins: DemoLogin[]; policy: "auto" | "person"; href: string;
@@ -115,35 +126,43 @@ export type Deployments = {
   environments: Environment[];
   production: { state: "none" | "needs_host" | "ready"; action: { label: string; href: string } | null };
   ship_path: { label: string; state: StepState }[];
-  history: { id: string; label: string; sub: string; state: StepState; href: string }[];
+  history: { id: string; label: string; sub: string; at: string; state: StepState; href: string }[];
 };
 export type Recommendation = {
   id: string; title: string; kind: string; strip: { label: string; type: string }[]; value: number; effort: string; cost_usd: number | null;
   status: string; rank: number | null; href: string;
 };
 export type Roadmap = { now: NextItem[]; next: NextItem[]; later: NextItem[]; recommendations: Recommendation[]; counts: Record<string, number> };
-export type OnboardingItem = { key: string; label: string; state: StepState; owner: "agent" | "you"; action: { label: string; href: string } | null; detail: string };
+export type OnboardingItem = { key: string; label: string; state: StepState; owner: "agent" | "you"; action: { label: string; href: string } | null; detail: string; sub: string };
 export type Onboarding = {
-  state: "running" | "ready" | "needs_you" | "failed";
+  state: "not_started" | "running" | "ready" | "needs_you" | "failed";
   stages: Node[]; discover: { nodes: Node[] }; checklist: OnboardingItem[]; only_you: OnboardingItem[];
-  first_work: { label: string; source: string; estimate_min: number | null; estimate_usd: number | null; start: { href: string } | null; others_href: string } | null;
-  backlog: NextItem[]; now: string; elapsed_s: number;
+  first_work: { label: string; kind: string; source: string; estimate_min: number | null; estimate_usd: number | null; start: Accept | null; others_href: string } | null;
+  backlog: NextItem[];
+  /** What the agent is doing now, in words: the engine's `now`, else the checklist item in progress. */
+  now: string; elapsed_s: number; error: string;
 };
 export type JumpItem = { label: string; kind: string; href: string; sub: string; external: boolean };
+export type SettingsItem = { label: string; value: string; sub: string; reveal: { href: string; requires: string } | null; href: string };
+/** A section's action: the existing write route (`href`, `method`) and, as `open`, the console
+ *  screen where a person makes that change with its own form. Only `open` is ever a link. */
+export type SettingsAction = { label: string; href: string; method: string; requires: string; open: string };
 export type SettingsSection = {
   key: string; label: string; icon: string;
-  items: { label: string; value: string; sub: string; reveal: { href: string; requires: string } | null; href: string }[];
-  actions: { label: string; href: string; requires: string }[];
-  moved_from: string;
+  items: SettingsItem[];
+  actions: SettingsAction[];
+  moved_from: string; hint: string;
+  /** The captain section's choosable agents (§14 `candidates`). */
+  candidates: Agent[];
 };
 export type Settings = { sections: SettingsSection[] };
 export type HealthView = {
-  environments: { key: string; label: string; target_id: string; health: Health; uptime_pct: number | null; error_rate: number | null; p95_ms: number | null;
+  environments: { key: string; label: string; target_id: string; url: string; health: Health; uptime_pct: number | null; error_rate: number | null; p95_ms: number | null;
                   series: { errors: number[]; latency: number[] }; slo: { target: number | null; burn: "ok" | "warning" | "breach" }; href: string }[];
   alerts: { id: string; label: string; severity: "page" | "ticket" | "info"; state: "firing" | "resolved"; since: string; href: string }[];
   incidents: { id: string; label: string; state: "running" | "needs_you" | "resolved"; graph_href: string; mini: { label: string; state: StepState }[] }[];
   monitoring_pack: { rules: number; managed_in: string; href: string } | null;
-  links: { grafana: string; logs: string; observability: string };
+  links: { grafana: string; grafana_reason: string; logs: string; observability: string };
 };
 
 // ── parsers ──────────────────────────────────────────────────────────────────────────────────
@@ -156,7 +175,7 @@ export const parseAgent = (v: unknown): Agent | null => {
   const x = o(v);
   const name = s(x.name);
   if (!name && !s(x.role_key)) return null;
-  return { name: name || s(x.role_key), role_key: s(x.role_key), avatar: s(x.avatar), role: s(x.role) || undefined };
+  return { name: name || s(x.role_key), role_key: s(x.role_key), avatar: s(x.avatar), role: s(x.role) || undefined, agent_id: s(x.agent_id) || undefined };
 };
 const agents = (v: unknown): Agent[] => a(v).map(parseAgent).filter((x): x is Agent => x !== null);
 export const parseNode = (v: unknown): Node => {
@@ -176,7 +195,8 @@ export const parseCard = (v: unknown): ProjectCard => {
     id: s(x.id), name, initials: s(x.initials) || initialsOf(name), repo: s(x.repo), stage: oneOf(x.stage, STAGES, "onboarding"),
     journey: a(x.journey).map(parseNode), needs_you: n(x.needs_you), running: n(x.running), health: oneOf(x.health, HEALTHS, "unknown"),
     live_url: s(x.live_url), captain: parseAgent(x.captain), updated_at: s(x.updated_at), href: s(x.href),
-    cost_week: nn(x.cost_week), series: nums(x.series),
+    // `cost_week` is the week's dollars (a number); an object {usd} is read the same way.
+    cost_week: nn(x.cost_week) ?? nn(o(x.cost_week).usd), series: nums(x.series).length ? nums(x.series) : nums(o(x.cost_week).series),
   };
 };
 export const parseSummary = (v: unknown): ProjectsSummary => ({ items: a(o(v).items).map(parseCard).filter((c) => c.id) });
@@ -187,15 +207,20 @@ export const parseWorkItem = (v: unknown): WorkItem => {
     id: s(x.id), label: s(x.label), kind: s(x.kind, "feature"), state: oneOf(x.state, WORK_STATES, "planned"), age: s(x.age),
     stages: a(x.stages).map((st) => ({ key: s(o(st).key), label: s(o(st).label), state: oneOf(o(st).state, STEP_STATES, "todo") })),
     agents: agents(x.agents), cost_usd: nn(x.cost_usd),
-    links: { workflow_run: s(l.workflow_run), build: s(l.build), deploy: s(l.deploy), preview: s(l.preview),
+    links: { workflow_run: s(l.workflow_run), build: s(l.build), deploy: s(l.deploy), preview: s(l.preview), decision: s(l.decision),
              pr: pr.number || pr.external_url ? { number: n(pr.number), external_url: s(pr.external_url) } : null },
     detail: s(x.detail), href: s(x.href), source: s(x.source),
   };
 };
+export const parseAccept = (v: unknown): Accept | null => {
+  const x = o(v);
+  return s(x.href) ? { href: s(x.href), method: s(x.method, "POST"), body: o(x.body) } : null;
+};
 const parseNext = (v: unknown): NextItem => {
   const x = o(v);
-  return { id: s(x.id), label: s(x.label), source: s(x.source), state: x.state === "proposed" ? "proposed" : "next", href: s(x.href),
-           accept: o(x.accept).href ? { href: s(o(x.accept).href) } : null };
+  return { id: s(x.id), label: label4(s(x.label) || s(x.title) || s(x.text)), detail: s(x.detail), source: s(x.source), kind: s(x.kind),
+           state: x.state === "proposed" ? "proposed" : "next", href: s(x.href), external_url: s(x.external_url), accept: parseAccept(x.accept),
+           text: s(x.text), ref: s(x.ref) };
 };
 const parseLogin = (v: unknown): DemoLogin => {
   const x = o(v); const r = o(x.reveal);
@@ -240,7 +265,8 @@ export const parseOverview = (v: unknown): Overview => {
     recent_work: a(x.recent_work).map(parseWorkItem).slice(0, 5),
     next: a(x.next).map(parseNext),
     try_it: Object.keys(ti).length ? { url: s(ti.url), demo_logins: a(ti.demo_logins).map(parseLogin) } : null,
-    week: a(x.week).map((w) => ({ at: s(o(w).at), label: label4(o(w).label), kind: s(o(w).kind) })),
+    // A week's event opens its record in the console (a PR's build, a deploy), else where it lives.
+    week: a(x.week).map((w) => ({ at: s(o(w).at), label: label4(o(w).label), kind: s(o(w).kind), href: s(o(w).href) || s(o(w).external_url) })),
   };
 };
 export const parseWork = (v: unknown): WorkList => ({ items: a(o(v).items).map(parseWorkItem).filter((w) => w.id) });
@@ -250,36 +276,55 @@ export const parseKnowledge = (v: unknown): Knowledge => {
   const cmds: Record<string, string> = {};
   for (const [k, val] of Object.entries(o(d.commands))) if (typeof val === "string" && val) cmds[k] = val;
   const tests = o(d.tests);
+  const hasRun = typeof tests.total === "number" && tests.total > 0;
   return {
     repos: a(x.repos).map(parseRepo),
     dossier: Object.keys(d).length ? {
       stack: a(d.stack).map((z) => s(z)).filter(Boolean), commands: cmds,
-      hotspots: a(d.hotspots).map((h) => ({ path: s(o(h).path), label: s(o(h).label), why: s(o(h).why), heat: n(o(h).heat, 1) })),
-      tests: Object.keys(tests).length ? { passed: n(tests.passed), total: n(tests.total) } : null,
+      hotspots: a(d.hotspots).map((h) => ({ path: s(o(h).path), label: s(o(h).label), why: s(o(h).why), heat: nn(o(h).heat),
+                                             has_tests: typeof o(h).has_tests === "boolean" ? (o(h).has_tests as boolean) : null })),
+      // A pass count only when a run was read (CI); the dossier itself knows how many test files exist.
+      tests: hasRun ? { passed: n(tests.passed), total: n(tests.total) } : null,
+      test_files: nn(tests.files),
       built_at: s(d.built_at), href: s(d.href) } : null,
     graph: { nodes: a(g.nodes).map((z) => ({ id: s(o(z).id), label: label4(o(z).label), kind: s(o(z).kind) })),
              edges: a(g.edges).map((z) => ({ from: s(o(z).from), to: s(o(z).to), label: s(o(z).label) })), href: s(g.href),
-             counts: { nodes: n(c.nodes, a(g.nodes).length), rules: n(c.rules), learned: n(c.learned) } },
-    docs: a(x.docs).map((z) => ({ label: s(o(z).label), kind: s(o(z).kind), href: s(o(z).href), sub: s(o(z).sub) })),
+             counts: { nodes: n(c.nodes, n(g.total_nodes, a(g.nodes).length)), rules: nn(c.rules), learned: nn(c.learned) } },
+    // A doc opens where it lives (GitHub for a README or runbook), else its console page.
+    docs: a(x.docs).map((z) => ({ label: s(o(z).label), kind: s(o(z).kind), href: s(o(z).external_url) || s(o(z).href), sub: s(o(z).sub) || s(o(z).detail) })),
     decisions: a(x.decisions).map((z) => ({ label: s(o(z).label), at: s(o(z).at), href: s(o(z).href) })),
     learned: a(x.learned).map((z) => ({ label: s(o(z).label), sub: s(o(z).sub), state: s(o(z).state), href: s(o(z).href) })),
   };
 };
 
+/** A deploy's status (stack_deployments) as the shared step state. */
+const DEPLOY_STATE: Record<string, StepState> = {
+  healthy: "done", succeeded: "done", success: "done", deployed: "done", live: "done",
+  failed: "failed", unhealthy: "failed", error: "failed", rolled_back: "failed",
+  running: "now", deploying: "now", applying: "now", pending: "waiting", queued: "waiting", awaiting_approval: "waiting",
+};
+const deployState = (status: unknown, state: unknown): StepState =>
+  (STEP_STATES as readonly string[]).includes(String(state)) ? (state as StepState) : DEPLOY_STATE[s(status)] ?? "done";
 export const parseDeployments = (v: unknown): Deployments => {
   const x = o(v); const pr = o(x.production); const act = o(pr.action);
   return {
     environments: a(x.environments).map((e) => {
       const y = o(e); const ld = o(y.last_deploy);
       return { key: s(y.key), label: s(y.label, s(y.key)), url: s(y.url), health: oneOf(y.health, HEALTHS, "unknown"), host: s(y.host),
-               host_href: s(y.host_href), uptime_pct: nn(y.uptime_pct), p95_ms: nn(y.p95_ms), error_rate: nn(y.error_rate), series: nums(y.series),
-               last_deploy: Object.keys(ld).length ? { commit: s(ld.commit), at: s(ld.at), by: s(ld.by), label: s(ld.label), href: s(ld.href) } : null,
+               host_href: s(y.host_href), target_id: s(y.target_id), app: s(y.app), manage_href: s(y.manage_href),
+               uptime_pct: nn(y.uptime_pct), p95_ms: nn(y.p95_ms), error_rate: nn(y.error_rate), series: nums(y.series),
+               last_deploy: Object.keys(ld).length ? { commit: s(ld.commit), at: s(ld.at), by: s(ld.by),
+                                                       label: s(ld.label) || s(ld.commit) || s(ld.status), href: s(ld.href) } : null,
                demo_logins: a(y.demo_logins).map(parseLogin), policy: y.policy === "person" ? "person" : "auto", href: s(y.href) };
     }),
     production: { state: oneOf(pr.state, ["none", "needs_host", "ready"] as const, "none"),
                   action: act.label || act.href ? { label: s(act.label, "Set up"), href: s(act.href) } : null },
     ship_path: mini(x.ship_path),
-    history: a(x.history).map((h) => ({ id: s(o(h).id), label: s(o(h).label), sub: s(o(h).sub), state: oneOf(o(h).state, STEP_STATES, "done"), href: s(o(h).href) })),
+    history: a(x.history).map((h) => {
+      const y = o(h);
+      const sub = s(y.sub) || [s(y.status), s(y.by) ? `by ${s(y.by)}` : ""].filter(Boolean).join(" · ");
+      return { id: s(y.id), label: s(y.label), sub, at: s(y.at), state: deployState(y.status, y.state), href: s(y.href) };
+    }),
   };
 };
 
@@ -288,16 +333,19 @@ export const parseOnboarding = (v: unknown): Onboarding => {
   const item = (z: unknown): OnboardingItem => {
     const y = o(z); const act = o(y.action);
     return { key: s(y.key), label: label4(y.label), state: oneOf(y.state, STEP_STATES, "todo"), owner: y.owner === "you" ? "you" : "agent",
-             action: act.label || act.href ? { label: s(act.label, "Do it"), href: s(act.href) } : null, detail: s(y.detail) };
+             action: act.label || act.href ? { label: s(act.label, "Do it"), href: s(act.href) } : null, detail: s(y.detail), sub: s(y.sub) };
   };
   const checklist = a(x.checklist).map(item);
   const onlyYou = a(x.only_you).length ? a(x.only_you).map(item) : checklist.filter((c) => c.owner === "you" && c.state !== "done");
+  const state = oneOf(x.state, ["not_started", "running", "ready", "needs_you", "failed"] as const, "running");
+  // WHAT IT IS DOING NOW: the engine has no sentence of its own; the item in progress says it.
+  const doing = checklist.find((c) => c.state === "now" && c.owner === "agent");
+  const now = s(x.now) || (state === "running" && doing ? [doing.label, doing.sub || doing.detail].filter(Boolean).join(" · ") : "");
   return {
-    state: oneOf(x.state, ["running", "ready", "needs_you", "failed"] as const, "running"),
-    stages: a(x.stages).map(parseNode), discover: { nodes: a(o(x.discover).nodes).map(parseNode) }, checklist, only_you: onlyYou,
-    first_work: Object.keys(fw).length ? { label: s(fw.label), source: s(fw.source), estimate_min: nn(fw.estimate_min), estimate_usd: nn(fw.estimate_usd),
-                                           start: o(fw.start).href ? { href: s(o(fw.start).href) } : null, others_href: s(fw.others_href) } : null,
-    backlog: a(x.backlog).map(parseNext), now: s(x.now), elapsed_s: n(x.elapsed_s),
+    state, stages: a(x.stages).map(parseNode), discover: { nodes: a(o(x.discover).nodes).map(parseNode) }, checklist, only_you: onlyYou,
+    first_work: Object.keys(fw).length ? { label: s(fw.label), kind: s(fw.kind), source: s(fw.source), estimate_min: nn(fw.estimate_min),
+                                           estimate_usd: nn(fw.estimate_usd), start: parseAccept(fw.start), others_href: s(fw.others_href) } : null,
+    backlog: a(x.backlog).map(parseNext), now, elapsed_s: n(x.elapsed_s), error: s(x.error),
   };
 };
 
@@ -306,17 +354,55 @@ export const parseJump = (v: unknown): JumpItem[] => a(o(v).items).map((z) => {
   return { label: s(y.label), kind: s(y.kind), href, sub: s(y.sub), external: /^https?:\/\//.test(href) };
 }).filter((j) => j.label && j.href);
 
+const POLICY_WORD: Record<string, string> = { auto: "deploys on merge", person: "a person approves" };
+/** One settings row, from whatever the section's items are (§11/§14: demo users, deploy values,
+ *  targets and hosts, the squad, autonomy levels, repositories, notification policies). */
+function settingsItem(key: string, q: R): SettingsItem {
+  const r = o(q.reveal);
+  const reveal = r.href ? { href: s(r.href), requires: s(r.requires, "step_up") } : null;
+  if (key === "demo_logins") return { label: s(q.label) || s(q.user), value: s(q.user) || s(q.value), sub: s(q.env_label) || s(q.sub) || s(q.env), href: s(q.href), reveal };
+  if (key === "deploy_values" && s(q.name)) {
+    return { label: s(q.name), value: q.set === false ? "not set" : s(q.mode, "set"), sub: [s(q.app_key), s(q.env)].filter(Boolean).join(" · "), href: s(q.href), reveal: null };
+  }
+  if (key === "targets" && q.kind === "target") {
+    return { label: [s(q.app), s(q.env_label) || s(q.env)].filter(Boolean).join(" · "), value: q.paused ? "paused" : POLICY_WORD[s(q.policy)] ?? s(q.policy),
+             sub: s(q.host) ? `on ${s(q.host)}` : "", href: s(q.href), reveal: null };
+  }
+  if (key === "targets" && q.kind === "host") {
+    return { label: s(q.name), value: s(q.status), sub: [s(q.address), q.shared ? "shared server" : ""].filter(Boolean).join(" · "), href: s(q.href), reveal: null };
+  }
+  if (key === "autonomy" && s(q.task_class)) {
+    return { label: s(q.task_class).replace(/_/g, " "), value: s(q.level), sub: s(q.ceiling) ? `ceiling ${s(q.ceiling)}` : "", href: s(q.href), reveal: null };
+  }
+  if (key === "repos" && s(q.full_name)) {
+    return { label: s(q.full_name), value: s(q.branch, "main"), sub: q.primary ? "primary" : "", href: s(q.href) || s(q.external_url), reveal: null };
+  }
+  if (key === "notifications" && (s(q.name) || s(q.id))) {
+    const n2 = n(q.contact_points);
+    return { label: s(q.name, "Default"), value: `${n2} contact point${n2 === 1 ? "" : "s"}`, sub: "", href: s(q.href), reveal: null };
+  }
+  return { label: s(q.label) || s(q.user) || s(q.name), value: s(q.value) || s(q.user), sub: s(q.sub) || s(q.role) || s(q.env), href: s(q.href), reveal };
+}
 export const parseSettings = (v: unknown): Settings => ({
   sections: a(o(v).sections).map((z) => {
     const y = o(z);
+    const key = s(y.key);
+    const items = a(y.items).map((it) => settingsItem(key, o(it))).filter((it) => it.label);
+    // A section's own facts (autonomy's ambient budget and spending cap) are rows too.
+    if (key === "autonomy") {
+      const amb = o(y.ambient); const bud = o(y.budget);
+      if (nn(amb.daily_cap_usd) !== null) items.push({ label: "Ambient budget", value: `$${n(amb.daily_cap_usd)}/day`, sub: nn(amb.max_concurrent) !== null ? `${n(amb.max_concurrent)} at once` : "", href: "", reveal: null });
+      if (Object.keys(bud).length) {
+        items.push({ label: "Spending cap", value: n(bud.monthly_cap_usd) ? `$${n(bud.monthly_cap_usd)}/month` : n(bud.daily_cap_usd) ? `$${n(bud.daily_cap_usd)}/day` : "not set",
+                     sub: s(bud.intensity), href: "", reveal: null });
+      }
+    }
     return {
-      key: s(y.key), label: s(y.label), icon: s(y.icon), moved_from: s(y.moved_from),
-      items: a(y.items).map((it) => {
-        const q = o(it); const r = o(q.reveal);
-        return { label: s(q.label ?? q.user ?? q.name), value: s(q.value ?? q.user), sub: s(q.sub ?? q.env), href: s(q.href),
-                 reveal: r.href ? { href: s(r.href), requires: s(r.requires, "step_up") } : null };
-      }),
-      actions: a(y.actions).map((q) => ({ label: s(o(q).label), href: s(o(q).href), requires: s(o(q).requires) })).filter((q) => q.label),
+      key, label: s(y.label), icon: s(y.icon), moved_from: s(y.moved_from), hint: s(y.hint),
+      items, candidates: agents(y.candidates),
+      actions: a(y.actions).map((q) => ({ label: s(o(q).label), href: s(o(q).href), method: s(o(q).method, "GET"), requires: s(o(q).requires),
+                                          // An in-console href is its own place to go; an API route is not a link.
+                                          open: s(o(q).open) || (s(o(q).href).startsWith("?") ? s(o(q).href) : "") })).filter((q) => q.label),
     };
   }).filter((sec) => sec.key),
 });
@@ -326,7 +412,7 @@ export const parseHealth = (v: unknown): HealthView => {
   return {
     environments: a(x.environments).map((e) => {
       const y = o(e); const ser = o(y.series); const slo = o(y.slo);
-      return { key: s(y.key), label: s(y.label, s(y.key)), target_id: s(y.target_id), health: oneOf(y.health, HEALTHS, "unknown"), uptime_pct: nn(y.uptime_pct),
+      return { key: s(y.key), label: s(y.label, s(y.key)), target_id: s(y.target_id), url: s(y.url), health: oneOf(y.health, HEALTHS, "unknown"), uptime_pct: nn(y.uptime_pct),
                error_rate: nn(y.error_rate), p95_ms: nn(y.p95_ms), series: { errors: nums(ser.errors), latency: nums(ser.latency) },
                slo: { target: nn(slo.target), burn: oneOf(slo.burn, ["ok", "warning", "breach"] as const, "ok") }, href: s(y.href) };
     }),
@@ -341,7 +427,7 @@ export const parseHealth = (v: unknown): HealthView => {
                graph_href: s(y.graph_href), mini: mini(y.mini) };
     }),
     monitoring_pack: Object.keys(mp).length ? { rules: n(mp.rules), managed_in: s(mp.managed_in), href: s(mp.href) } : null,
-    links: { grafana: s(l.grafana), logs: s(l.logs), observability: s(l.observability) },
+    links: { grafana: s(l.grafana), grafana_reason: s(l.grafana_reason), logs: s(l.logs), observability: s(l.observability) },
   };
 };
 
@@ -521,16 +607,50 @@ export function usePxRead<T>(url: string | null, parse: (raw: unknown) => T, opt
 
 // ── writes ───────────────────────────────────────────────────────────────────────────────────
 
-export type PxWrite = { ok: boolean; status: number; body: R | null; error: string | null; demo?: boolean };
+export type PxWrite = { ok: boolean; status: number; body: R | null; error: string | null; demo?: boolean;
+  /** A start the project isn't ready for (409 from THE start door): its checklist, for "Start anyway". */
+  readiness?: unknown };
 
 /** One write. Sample mode sends nothing and says so. */
 export async function pxWrite(path: string, body: R, label: string): Promise<PxWrite> {
   if (isPxDemo()) return { ok: true, status: 200, body: {}, error: null, demo: true };
   const r = await obsWrite<R>(path, body, { scope: `px:${path}`, label });
-  return { ok: r.ok, status: r.status, body: r.body, error: r.error };
+  const refused = o(o(r.refusal).detail);
+  // A refusal's own sentence (`message` beside an `error` code) reads better than the code.
+  const sentence = r.status === 401 || r.status === 403 ? "" : s(o(r.refusal).message) || s(refused.message);
+  return { ok: r.ok, status: r.status, body: r.body, error: !r.ok && sentence ? sentence : r.error,
+           ...(!r.ok && refused.readiness ? { readiness: refused.readiness } : {}) };
 }
-export const startWork = (projectId: string, kind: "feature" | "bug" | "ticket", text: string) =>
-  pxWrite(`/v1/projects/${enc(projectId)}/work`, { kind, text }, "Start");
+export type WorkKind = "feature" | "bug" | "ticket";
+export const toWorkKind = (v: unknown): WorkKind => (v === "bug" || v === "ticket" ? v : "feature");
+/** §3 New work through THE start door. `extra` carries the door's own fields (title, source_ref,
+ *  start_anyway) so a refused start can be re-sent with the person's ticks. */
+export const startWork = (projectId: string, kind: WorkKind, text: string, extra: R = {}) =>
+  pxWrite(`/v1/projects/${enc(projectId)}/work`, { kind, text, ...extra }, "Start");
+/** An item's own accept (§2 next, §8 first work / backlog): the roadmap's accept route, or THE
+ *  start door with the body the engine wrote for it. Nothing else is ever posted. */
+export async function runAccept(projectId: string, accept: Accept, label = "Accept"): Promise<PxWrite> {
+  const roadmap = /^\/v1\/ambient\/roadmap\/([^/]+)\/accept$/.exec(accept.href);
+  if (roadmap) {
+    const as = s(accept.body.as, "ticket") as AcceptAs;
+    return acceptRecommendation(projectId, decodeURIComponent(roadmap[1]), as);
+  }
+  if (accept.href === `/v1/projects/${enc(projectId)}/work`) {
+    const b = accept.body;
+    return startWork(projectId, toWorkKind(b.kind), s(b.text) || s(b.title), {
+      ...(s(b.title) ? { title: s(b.title) } : {}), ...(s(b.source_ref) ? { source_ref: s(b.source_ref) } : {}) });
+  }
+  return { ok: false, status: 0, body: null, error: `${label}: BOSS named a route this page doesn't send (${accept.href}).` };
+}
+/** Onboarding's first work (§8 `first_work`): the engine's own `start`, else the door with its words. */
+export const firstWorkAccept = (projectId: string, fw: NonNullable<Onboarding["first_work"]>): Accept => fw.start ?? ({
+  href: `/v1/projects/${enc(projectId)}/work`, method: "POST", body: { kind: toWorkKind(fw.kind || (fw.source === "bug" ? "bug" : "ticket")), text: fw.label, title: fw.label },
+});
+/** A backlog candidate the onboarding agent proposed (§8 backlog[]): started through the door. */
+export const backlogAccept = (projectId: string, b: NextItem): Accept => b.accept ?? ({
+  href: `/v1/projects/${enc(projectId)}/work`, method: "POST",
+  body: { kind: toWorkKind(b.kind), text: b.text || b.detail || b.label, title: b.label, ...(b.ref ? { source_ref: b.ref } : {}) },
+});
 export const setCaptain = (projectId: string, agentId: string) =>
   pxWrite(PX_PATHS.captain(projectId), { agent_id: agentId }, "Change captain");
 export const startOnboarding = (projectId: string) =>
@@ -560,7 +680,8 @@ export function overviewFromStart(raw: unknown, projectId: string): Overview {
       staging: null, cost_week: null,
     },
     captain: null, recent_work: work.slice(0, 5),
-    next: a(v.next).map((x) => ({ id: s(o(x).key), label: s(o(x).label), source: s(o(x).who), state: "next" as const, href: "", accept: null })),
+    next: a(v.next).map((x) => ({ id: s(o(x).key), label: s(o(x).label), detail: "", source: s(o(x).who), kind: "", state: "next" as const, href: "",
+                                  external_url: "", accept: null, text: "", ref: "" })),
     try_it: null, week: [],
   };
 }
@@ -574,7 +695,7 @@ export function workFromStartRow(raw: unknown, projectId: string): WorkItem {
     id: run, label: s(r.title, s(r.workflow)), kind: "feature", state: STATE_FROM_TONE[s(r.tone)] ?? "planned", age: "",
     stages: [], agents: [], cost_usd: null,
     links: { workflow_run: `?${new URLSearchParams({ project_id: projectId, area: "delivery_workflows", wfr: run })}`, build: "", deploy: "",
-             preview: "", pr: pr ? { number: prNo, external_url: pr } : null },
+             preview: "", decision: "", pr: pr ? { number: prNo, external_url: pr } : null },
     detail: s(r.status), href: "", source: s(r.workflow),
   };
 }

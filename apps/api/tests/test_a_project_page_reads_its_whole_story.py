@@ -32,6 +32,8 @@ def world(engine) -> IdentityWorld:
     w.bind(w.owner, "owner")
     w.viewer = w.person("px-viewer")
     w.bind(w.viewer, "viewer")
+    w.operator = w.person("px-operator")
+    w.bind(w.operator, "operator")
     w.stranger = w.person("px-stranger")
     return w
 
@@ -193,9 +195,37 @@ def test_deployments_show_staging_with_health_last_deploy_and_who_to_sign_in_as(
     assert [x["user"] for x in env["demo_logins"]] == [u["user"] for u in DEMO_USERS]
     assert env["demo_logins"][0]["reveal"]["href"] == (
         f"/v1/projects/{helpdesk['id']}/demo-logins/reveal?env=staging")
+    # The server, in Infra (BOSSAPP-914 §5): its id and the host drawer's console link, and the
+    # deploy target the Health tab's alert rules are read with.
+    assert env["target_id"] == helpdesk["target_id"]
+    assert env["host_id"] and env["host_href"] == (
+        f"?project_id={helpdesk['id']}&area=infra&host={env['host_id']}")
     assert d["production"]["state"] == "none"
     assert d["production"]["action"]["label"] == "Set up production"
+    # Infra opens its own + Add sheet from `add=` (it has no `targets` or `hosts` view).
+    assert d["production"]["action"]["href"] == f"?project_id={helpdesk['id']}&area=infra&add=target"
+    # How code ships: merge → build → staging (a person approves) → smoke → prod, a person.
+    assert [n["label"] for n in d["ship_path"]] == ["PR merged", "Image built",
+                                                    "Staging · you approve", "Smoke test",
+                                                    "Prod · you approve"]
+    assert [n["state"] for n in d["ship_path"]] == ["done", "done", "done", "done", "waiting"]
+    assert all(len(n["label"].split()) <= 4 for n in d["ship_path"])
     assert "value" not in str(d) or "DEMO_PASSWORD" not in str(d).replace("password_key", "")
+
+
+def test_a_server_in_infra_names_the_project_of_each_app_on_it(world, client, helpdesk):
+    """§5's Infra cross-link: the host drawer's residents carry their project, so a shared
+    server lists "Projects on this server", each linking to that Project › Deployments."""
+    pid = helpdesk["id"]
+    host = _get(world, client, world.owner, f"/v1/infra/hosts/{helpdesk['host_id']}",
+                project_id=pid)
+    assert host.status_code == 200, host.text
+    app = next(r for r in host.json()["residents"] if r["kind"] == "target")
+    assert app["project"] == {"id": pid, "name": "HelpDesk AI Demo",
+                              "href": f"?project_id={pid}&area=project&tab=deployments"}
+    fleet = _get(world, client, world.owner, "/v1/infra/fleet", project_id=pid).json()
+    placed = [r for rack in fleet["racks"] for r in rack["residents"] if r["kind"] == "target"]
+    assert placed and all(r["project"]["id"] == pid for r in placed)
 
 
 # ── §12 Health ──────────────────────────────────────────────────────────────────────────────
@@ -212,6 +242,12 @@ def test_health_shows_each_environment_its_slo_and_how_monitoring_gets_set_up(wo
     assert h["monitoring_pack"]["rules"] == 0 and h["monitoring_pack"]["managed_in"] == "none"
     assert "Beacon" in h["empty"]["detail"]
     assert h["links"]["observability"].startswith(f"?project_id={helpdesk['id']}&area=observability")
+    assert env["target_id"] == helpdesk["target_id"]
+    assert env["host"] == "203.0.113.10" and env["host_href"].startswith(
+        f"?project_id={helpdesk['id']}&area=infra&host=")
+    # Every console link names a view the console has (Observability has no rules/logs view).
+    assert h["monitoring_pack"]["href"].endswith("area=observability&view=alerts")
+    assert "view=logs" not in str(h) and "view=rules" not in str(h)
     assert h["alerts"] == [] and h["incidents"] == []
 
 
@@ -302,6 +338,23 @@ def test_settings_hold_every_project_setting_with_the_existing_write_as_its_acti
     assert sections["captain"]["actions"][0]["href"] == f"/v1/projects/{helpdesk['id']}/captain"
     assert any(i["kind"] == "target" and i["env"] == "staging" for i in sections["targets"]["items"])
     assert sections["repos"]["items"][0]["full_name"] == REPO
+    # Every action names its write route AND the console screen where a person makes it (`open`),
+    # never an API route as a link; items that live elsewhere link there.
+    for sec in sections.values():
+        for act in sec["actions"]:
+            if "open" in act:
+                assert act["open"].startswith("?"), (sec["key"], act)
+    targets = sections["targets"]
+    assert {a["label"]: a["open"] for a in targets["actions"]} == {
+        "Add a target": f"?project_id={helpdesk['id']}&area=infra&add=target",
+        "Add a server": f"?project_id={helpdesk['id']}&area=infra&add=host"}
+    target = next(i for i in targets["items"] if i["kind"] == "target")
+    assert target["href"] == f"?project_id={helpdesk['id']}&area=infra&target={target['id']}"
+    assert all("view=hosts" not in i.get("href", "") for i in targets["items"])
+    assert sections["repos"]["items"][0]["href"].startswith("https://github.com/")
+    assert sections["notifications"]["href"].endswith("area=observability&view=notify")
+    assert {a["label"] for a in sections["autonomy"]["actions"] if a["open"].endswith(
+        "area=budget&tab=autonomy")} == {"Ambient budget"}
 
 
 def test_a_demo_password_is_revealed_only_to_an_owner_with_a_fresh_step_up(world, client,
@@ -363,6 +416,38 @@ def test_each_tab_answers_in_one_fast_round_trip(world, client, helpdesk):
         if took > 1.0:
             slow[tab] = round(took, 2)
     assert not slow, slow
+
+
+def test_the_old_demo_logins_door_has_the_same_bar_as_project_settings(world, client, helpdesk,
+                                                                       engine):
+    """Two doors to the same passwords (the build's Settings sheet, Project › Settings): both are
+    owner/admin with a fresh step-up, and both are audited. The old one let an operator in."""
+    path, params = "/v1/apps/helpdesk-ai-demo/demo-logins", {"project_id": helpdesk["id"],
+                                                             "env": "deploy"}
+    with world.acting_as(world.ctx(world.operator)):
+        assert client.get(path, params=params).status_code == 403
+    with world.acting_as(world.ctx(world.viewer)):
+        assert client.get(path, params=params).status_code == 403
+    with world.acting_as(world.ctx(world.owner, mfa=False)):
+        stale = client.get(path, params=params)
+    assert stale.status_code == 401 and stale.json().get("error") == "step_up_required"
+    with world.acting_as(world.ctx(world.owner)):
+        shown = client.get(path, params=params)
+    assert shown.status_code == 200, shown.text
+    assert shown.headers["cache-control"] == "no-store"
+    with engine.connect() as db:
+        audited = db.execute(text(
+            "SELECT count(*) FROM events WHERE project_id = :p AND event_type = "
+            "'project.demo_logins_revealed'"), {"p": helpdesk["id"]}).scalar()
+    assert audited == 1
+
+
+def test_the_projects_list_shows_each_projects_week_of_spend(world, client, helpdesk):
+    r = _get(world, client, world.owner, "/v1/projects/summary")
+    card = next(i for i in r.json()["items"] if i["id"] == helpdesk["id"])
+    assert isinstance(card["cost_week"], (int, float)) and len(card["series"]) == 7
+    overview = _get(world, client, world.owner, f"/v1/projects/{helpdesk['id']}/overview").json()
+    assert card["cost_week"] == overview["tiles"]["cost_week"]["usd"]
 
 
 def test_the_old_demo_logins_sheet_now_names_who_signs_in(world, client, helpdesk):

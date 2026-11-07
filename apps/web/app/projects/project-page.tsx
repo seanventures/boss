@@ -46,6 +46,8 @@ export const TAB_ICONS: Record<Tab, Icon> = {
 export type PxCtx = {
   projectId: string; actor: string; orgId: string | null; overview: Overview; demo: boolean;
   work: WorkList | null; workState: "loading" | "ready" | "missing" | "error"; refreshWork: () => void;
+  /** The onboarding agent's record (§8), for its drawer and the Needs-you bar. */
+  onboarding: Onboarding | null;
   /** Switch tab (push: Back returns). */
   tab: (t: Tab, extra?: Record<string, string | null>) => void;
   open: (kind: string, id: string) => void;
@@ -99,6 +101,7 @@ export function ProjectPage({ projectId, actor, orgId }: { projectId: string; ac
     ...ctxBase, overview, demo: ov.demo,
     work: work.data ?? workFallback, workState: work.data ? "ready" : workFallback ? "ready" : work.state === "missing" ? (start.state === "missing" ? "missing" : start.state) : work.state,
     refreshWork: () => { work.refresh(); start.refresh(); },
+    onboarding: onboarding.data,
     tab, open: openDrawer, ask: (q) => askCaptain(projectId, captain, q),
   };
   const ob = onboarding.data;
@@ -108,7 +111,7 @@ export function ProjectPage({ projectId, actor, orgId }: { projectId: string; ac
   return (
     <div className="px" data-testid="px-project" data-tab={url.tab}>
       {ov.demo ? <DemoBanner /> : null}
-      {ov.state === "missing" ? <div className="px-note" role="note" data-testid="px-project-note">Journey, health and cost for this page arrive with the next BOSS update; work and repo are live.</div> : null}
+      {ov.state === "missing" ? <div className="px-note" role="note" data-testid="px-project-note">BOSS didn&apos;t answer with this project&apos;s overview, so journey, health and cost are missing here; work and repo are live.</div> : null}
       <div className="px-sticky">
         <Crumbs name={overview.project.name} tab={url.tab} onboarding={onboardingNow && url.tab === "overview"} />
         <Header ctx={ctx} onboarding={onboardingNow} />
@@ -214,8 +217,10 @@ function Header({ ctx, onboarding }: { ctx: PxCtx; onboarding: boolean }) {
 
 /** NEEDS YOU, on every tab: what waits on a person, each one press from its action. */
 function NeedsBar({ ctx, onboarding }: { ctx: PxCtx; onboarding: Onboarding | null }) {
-  const items = ctx.overview.needs_you;
+  // The overview already carries the onboarding agent's "only you" items (§14: `onb:<key>`);
+  // the live onboarding record replaces them while the project onboards, never doubles them.
   const yours = onboarding?.only_you ?? [];
+  const items = yours.length ? ctx.overview.needs_you.filter((it) => !it.id.startsWith("onb:")) : ctx.overview.needs_you;
   const n = items.length + yours.length;
   if (!n) {
     return (

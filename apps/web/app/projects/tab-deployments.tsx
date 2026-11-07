@@ -57,9 +57,10 @@ export function DeploymentsTab({ ctx }: { ctx: PxCtx }) {
                 <button key={h.id} type="button" className="px-li" data-testid={`px-dep-h-${h.id}`}
                         style={{ width: "100%", background: "none", border: 0, borderTop: "1px solid var(--border)", color: "inherit", font: "inherit", textAlign: "left", cursor: "pointer" }}
                         onClick={() => ctx.open("deploy", h.id)}>
-                  <span className="px-ck-b" aria-hidden style={h.state === "done" ? { background: "var(--green)", borderColor: "var(--green)", color: "#032015" } : { borderColor: "var(--amber)", color: "var(--amber)" }}>
-                    {h.state === "done" ? <Check size={11} weight="bold" /> : <ArrowsClockwise size={11} />}</span>
-                  <span><b>{h.label}</b><small>{h.sub}</small></span>
+                  <span className="px-ck-b" aria-hidden style={h.state === "done" ? { background: "var(--green)", borderColor: "var(--green)", color: "#032015" }
+                    : h.state === "failed" ? { borderColor: "var(--red)", color: "var(--red)" } : { borderColor: "var(--amber)", color: "var(--amber)" }}>
+                    {h.state === "done" ? <Check size={11} weight="bold" /> : h.state === "failed" ? "✕" : <ArrowsClockwise size={11} />}</span>
+                  <span><b>{h.label}</b><small>{[h.sub, h.at ? whenLocal(h.at) : ""].filter(Boolean).join(" · ")}</small></span>
                   <Face agent={{ name: "Beacon", role_key: "sre" }} size={20} />
                 </button>
               )) : <p className="px-faint">No deploys yet. The first one runs after the first merge.</p>}
@@ -78,7 +79,7 @@ function EnvCard({ e, ctx }: { e: Environment; ctx: PxCtx }) {
       <div className="px-card-h"><Ico icon={Flask} c="green" /><h2 id={`px-env-${e.key}`}>{e.label}</h2>
         <Tag tone={HEALTH_TONE[e.health]}><span className="px-dot" data-s={e.health} data-round aria-hidden />{HEALTH_WORD[e.health]}</Tag>
         <span className="px-spacer" />
-        <button type="button" className="px-btn" data-size="s" data-testid={`px-env-open-${e.key}`} onClick={() => ctx.open("env", e.key)}>Details</button>
+        <button type="button" className="px-btn" data-size="s" data-testid={`px-env-open-${e.key}`} onClick={() => ctx.open("env", e.target_id || e.key)}>Details</button>
       </div>
       {e.url ? <a className="px-env-url" href={e.url} target="_blank" rel="noreferrer noopener" data-testid={`px-env-url-${e.key}`}><Globe size={12} aria-hidden />{e.url}<ArrowSquareOut size={10} aria-label="opens in a new tab" /></a> : null}
       <div className="px-row" style={{ margin: "12px 0", gap: 14 }}>
@@ -100,7 +101,7 @@ function EnvCard({ e, ctx }: { e: Environment; ctx: PxCtx }) {
         <Face agent={{ name: "Beacon", role_key: "sre" }} size={20} />
         {e.last_deploy ? <span>Last deploy <b>{e.last_deploy.label}</b> · {whenLocal(e.last_deploy.at)} <span className="px-mono px-faint">{e.last_deploy.commit}</span></span> : <span className="px-faint">Not deployed yet</span>}
         <span className="px-spacer" />
-        {e.last_deploy?.href ? <PxLink href={e.last_deploy.href} onOpen={() => ctx.open("deploy", e.key)}><Terminal size={11} aria-hidden /> Logs</PxLink> : null}
+        {e.last_deploy?.href ? <PxLink href={e.last_deploy.href} testid={`px-env-logs-${e.key}`} title="This deploy and its log, in Infra"><Terminal size={11} aria-hidden /> Logs</PxLink> : null}
         {e.host ? (
           <PxLink href={e.host_href || `?area=infra&view=fleet&q=${encodeURIComponent(e.host)}`} testid={`px-env-host-${e.key}`} title="The server, in Infra (shared across projects)">
             <HardDrives size={11} aria-hidden /> runs on {e.host}</PxLink>
@@ -112,6 +113,7 @@ function EnvCard({ e, ctx }: { e: Environment; ctx: PxCtx }) {
 
 function Production({ d }: { d: Deployments }) {
   if (d.production.state === "ready") return null;
+  const needsHost = d.production.state === "needs_host";
   return (
     <section className="px-card px-locked" aria-labelledby="px-dep-prod" data-testid="px-dep-prod">
       <div className="px-card-h"><Ico icon={Buildings} c="amber" /><h2 id="px-dep-prod">Production</h2><Tag tone="amber">Not set up</Tag></div>
@@ -122,8 +124,8 @@ function Production({ d }: { d: Deployments }) {
           <rect x="62" y="12" width="44" height="30" rx="5" fill="color-mix(in srgb, var(--amber) 18%, transparent)" stroke="var(--amber)" strokeWidth="2" />
           <circle cx="98" cy="10" r="7" fill="var(--amber)" /><text x="98" y="14" textAnchor="middle" fontSize="10" fontWeight="800" fill="#1b1300">!</text>
         </svg>
-        <h3>Pick a host for production</h3>
-        <p>Beacon sets it up; you approve each prod deploy.</p>
+        <h3>{needsHost ? "Add a server for production" : "Set up production"}</h3>
+        <p>{needsHost ? "No verified server yet. Add one in Infra; " : "Pick a verified server in Infra; "}Beacon sets it up and you approve each prod deploy.</p>
         {d.production.action ? <PxLink href={d.production.action.href} className="px-btn" testid="px-dep-prod-act">{d.production.action.label}</PxLink> : null}
       </div>
     </section>

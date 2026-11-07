@@ -74,6 +74,9 @@ def view(connection: Connection, project_id: str) -> dict[str, Any]:
             "url": url, "health": health_word(h.get("status")), "status": h.get("status"),
             "uptime_pct": h.get("uptime_7d"), "p95_ms": h.get("p95_ms"),
             "host": t["host_address"] or t["host_name"], "host_status": t["host_status"],
+            # The server, in Infra (shared across projects): its drawer, which links back here.
+            "host_id": t["host_id"],
+            "host_href": href(project_id, area="infra", host=t["host_id"]) if t["host_id"] else None,
             "last_deploy": ({"commit": (d["commit_sha"] or "")[:7] or None, "status": d["status"],
                              "at": iso(d["finished_at"] or d["created_at"]),
                              "by": d["created_by"],
@@ -94,24 +97,48 @@ def view(connection: Connection, project_id: str) -> dict[str, Any]:
         hosts = int(connection.execute(text(
             f"SELECT count(*) FROM deployment_hosts WHERE status = 'verified' AND "
             f"{usable_hosts_sql()}"), {"p": project_id}).scalar() or 0)
+        # Infra opens its own + Add sheet from `add=` (host, or an app target; with no machine
+        # yet it asks for the host first).
         production = ({"state": "needs_host",
                        "action": {"label": "Add a host", "href": href(project_id, area="infra",
-                                                                       view="hosts")}}
+                                                                       add="host")}}
                       if not hosts else
                       {"state": "none",
                        "action": {"label": "Set up production",
-                                  "href": href(project_id, area="infra", view="targets",
-                                               new="production")}})
+                                  "href": href(project_id, area="infra", add="target")}})
     preview = next((e for e in logins["environments"] if e["key"] == "preview"), None)
-    out = {"environments": envs, "production": production,
+    out = {"environments": envs, "production": production, "ship_path": ship_path(envs),
            "preview": ({"demo_logins": preview["logins"]} if preview else None),
            "demo_logins": logins, "history": _history(connection, project_id)}
     if not envs:
         out["empty"] = {"label": "Not deployed yet",
                         "detail": "The first merged work deploys to staging by the project's "
                                   "policy; production always waits for a person.",
-                        "href": href(project_id, area="infra", view="targets")}
+                        "href": href(project_id, area="infra", add="target")}
     return out
+
+
+def ship_path(envs: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """How code ships, as a strip (screen 8): merge → build → the first non-production
+    environment (auto or a person, from its target's policy) → its health check → production,
+    always a person's approval. States come from what the environments show today."""
+    pre = next((e for e in envs if str(e["key"] or "").lower() not in PRODUCTION), None)
+    prod = next((e for e in envs if str(e["key"] or "").lower() in PRODUCTION), None)
+    shipped = bool(pre and pre.get("last_deploy"))
+    nodes = [{"label": "PR merged", "state": "done" if shipped else "todo"},
+             {"label": "Image built", "state": "done" if shipped else "todo"}]
+    if pre is None:
+        nodes.append({"label": "Staging · not set", "state": "todo"})
+        nodes.append({"label": "Smoke test", "state": "todo"})
+    else:
+        who = "auto" if pre["policy"] == "auto" else "you approve"
+        nodes.append({"label": f"{env_label(pre['key'])} · {who}",
+                      "state": "done" if shipped else ("waiting" if who != "auto" else "todo")})
+        nodes.append({"label": "Smoke test", "state": {"healthy": "done", "down": "failed"}.get(
+            pre["health"], "todo") if shipped else "todo"})
+    nodes.append({"label": "Prod · you approve",
+                  "state": "done" if prod and prod.get("last_deploy") else "waiting"})
+    return nodes
 
 
 def live_url(envs: list[dict[str, Any]]) -> Optional[str]:
@@ -121,4 +148,4 @@ def live_url(envs: list[dict[str, Any]]) -> Optional[str]:
     return next((e["url"] for e in ordered if e.get("url")), None)
 
 
-__all__ = ["PRODUCTION", "live_url", "view"]
+__all__ = ["PRODUCTION", "live_url", "ship_path", "view"]

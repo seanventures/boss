@@ -37,7 +37,7 @@ export function HealthTab({ ctx }: { ctx: PxCtx }) {
               <section key={e.key} className="px-card" aria-labelledby={`px-h-${e.key}`} data-testid={`px-h-env-${e.key}`}>
                 <div className="px-card-h"><Ico icon={Heartbeat} c="green" /><h2 id={`px-h-${e.key}`}>{e.label}</h2>
                   <Tag tone={HEALTH_TONE[e.health]}><span className="px-dot" data-s={e.health} data-round aria-hidden />{HEALTH_WORD[e.health]}</Tag>
-                  {ctx.overview.project.live_url ? <a className="px-chip" href={ctx.overview.project.live_url} target="_blank" rel="noreferrer noopener">{ctx.overview.project.live_url.replace(/^https?:\/\//, "")} ↗</a> : null}
+                  {e.url || ctx.overview.project.live_url ? <a className="px-chip" href={e.url || ctx.overview.project.live_url} target="_blank" rel="noreferrer noopener" data-testid={`px-h-env-url-${e.key}`}>{(e.url || ctx.overview.project.live_url).replace(/^https?:\/\//, "")} ↗</a> : null}
                   <span className="px-spacer" /><small className="px-faint">last 24h</small></div>
                 <div className="px-grid px-g4">
                   <div><span className="px-lbl">Uptime</span>
@@ -59,7 +59,7 @@ export function HealthTab({ ctx }: { ctx: PxCtx }) {
             )) : (
               <div className="px-card"><Empty icon={Heartbeat} tone="green" title="No environment to watch yet" line="Health starts once the app is deployed: Beacon installs a monitoring pack on the first deploy." testid="px-health-empty" /></div>
             )}
-            {!ctx.overview.project.live_url || h.environments.length < 2 ? (
+            {!h.environments.some((e) => /^prod(uction)?$/i.test(e.key)) ? (
               <section className="px-card px-locked" aria-label="Production" style={{ padding: "10px 14px" }}>
                 <div className="px-row px-wrap"><Ico icon={Buildings} c="amber" /><b>Production</b><Tag tone="amber">Not set up</Tag><small className="px-faint">Health appears once prod has a host</small>
                   <span className="px-spacer" /><button type="button" className="px-chip" onClick={() => ctx.tab("deployments")} data-testid="px-health-to-deploy">Deployments <ArrowRight size={10} /></button></div>
@@ -97,19 +97,26 @@ export function HealthTab({ ctx }: { ctx: PxCtx }) {
               <div className="px-stack">
                 <section className="px-card" aria-labelledby="px-h-mon" data-testid="px-h-monitoring">
                   <div className="px-card-h"><Ico icon={ShieldCheck} c="teal" /><h2 id="px-h-mon">Monitoring</h2></div>
-                  {h.monitoring_pack ? (
+                  {h.monitoring_pack && h.monitoring_pack.rules > 0 ? (
                     <div className="px-cap">
                       <Face agent={{ name: "Beacon", role_key: "sre" }} size={40} standalone />
                       <div><div className="px-cap-name">Beacon&apos;s pack</div>
-                        <div className="px-cap-now"><span className="px-dot" data-s="done" aria-hidden />{h.monitoring_pack.rules} rules · in {h.monitoring_pack.managed_in} · on deploy</div>
+                        <div className="px-cap-now"><span className="px-dot" data-s="done" aria-hidden />{h.monitoring_pack.rules} rule{h.monitoring_pack.rules === 1 ? "" : "s"} · {h.monitoring_pack.managed_in === "repo" ? "in the repo (boss.deploy.yaml)" : "set in BOSS"} · on deploy</div>
                         {h.monitoring_pack.href ? <PxLink href={h.monitoring_pack.href} testid="px-h-pack"><FileText size={11} aria-hidden /> The rules</PxLink> : null}</div>
                     </div>
-                  ) : <p className="px-faint">Beacon installs a monitoring pack (uptime, 5xx, latency, disk, TLS) on the first deploy.</p>}
+                  ) : (
+                    <>
+                      <p className="px-faint" style={{ margin: 0 }}>{h.environments.length ? "No alert rules yet: Beacon writes the monitoring pack on the next deploy; until then BOSS only checks that the app answers."
+                        : "Beacon installs a monitoring pack (uptime, 5xx, latency, disk, TLS) on the first deploy."}</p>
+                      {h.monitoring_pack?.href ? <PxLink href={h.monitoring_pack.href} testid="px-h-pack">Alerts in Observability</PxLink> : null}
+                    </>
+                  )}
                 </section>
                 <section className="px-card" aria-labelledby="px-h-deeper" data-testid="px-h-deeper">
                   <div className="px-card-h"><Ico icon={LinkSimple} c="blue" /><h2 id="px-h-deeper">Go deeper</h2></div>
-                  {h.links.grafana ? <a className="px-li" href={h.links.grafana} target="_blank" rel="noreferrer noopener" data-testid="px-h-grafana"><ChartLine size={14} aria-hidden /><b>Grafana dashboard</b><ArrowSquareOut size={12} aria-label="opens in a new tab" /></a> : null}
-                  {h.links.logs ? <a className="px-li" href={pxHref(h.links.logs)} data-testid="px-h-logs"><Terminal size={14} aria-hidden /><b>Logs</b><ArrowRight size={12} aria-hidden /></a> : null}
+                  {h.links.grafana ? <a className="px-li" href={h.links.grafana} target="_blank" rel="noreferrer noopener" data-testid="px-h-grafana"><ChartLine size={14} aria-hidden /><b>Grafana dashboard</b><ArrowSquareOut size={12} aria-label="opens in a new tab" /></a>
+                    : h.links.grafana_reason ? <div className="px-li" data-testid="px-h-grafana-why"><ChartLine size={14} aria-hidden /><span><b>Grafana</b><small>{h.links.grafana_reason}</small></span><span /></div> : null}
+                  {h.links.logs ? <a className="px-li" href={pxHref(h.links.logs)} data-testid="px-h-logs"><Terminal size={14} aria-hidden /><b>Deploy logs</b><ArrowRight size={12} aria-hidden /></a> : null}
                   <a className="px-li" href={pxHref(h.links.observability || obs)} data-testid="px-h-observability"><Pulse size={14} aria-hidden /><b>Observability › this app</b><ArrowRight size={12} aria-hidden /></a>
                 </section>
               </div>

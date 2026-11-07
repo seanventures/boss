@@ -189,12 +189,16 @@ export function InfraAddMenu({ projectId, actor, go, fleet, url }: InfraTabProps
   // A LINK THAT SAYS WHAT TO ADD opens it (the workflow editor's "Set up where it deploys"),
   // once, then drops `add` from the address so Back does not reopen it.
   const wanted = url?.add ?? null;
+  // `add=target&host=<id>` (Project › onboarding's "Use for staging") places the app on that
+  // machine: the sheet opens with it chosen, and the host's own drawer does not open under it.
+  const onHost = url?.host ?? null;
   useEffect(() => {
     if (!wanted || !fleet.data) return;
     const item = addFromUrl(wanted, fleet.data.racks.length);
-    if (item && pre?.canWrite) setOpen({ item, hostId: null });
-    go({ add: null }, "replace");
-  }, [wanted, fleet.data, pre?.canWrite, go]);
+    const placed = item === "target" && onHost && fleet.data.racks.some((r) => r.id === onHost) ? onHost : null;
+    if (item && pre?.canWrite) setOpen({ item, hostId: placed });
+    go(placed ? { add: null, host: null } : { add: null }, "replace");
+  }, [wanted, onHost, fleet.data, pre?.canWrite, go]);
   useEffect(() => {
     const on = (e: Event) => {
       const d = (e as CustomEvent<{ item: AddItem; hostId: string | null }>).detail;

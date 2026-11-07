@@ -14,11 +14,20 @@ import type { ProjectType } from "@boss/api-client";
 export type ProjectMenuItem = { id: string; name: string; type?: ProjectType };
 
 /** Where a project opens: the org's own project is the console with no ?project_id=. */
-export function projectHref(id: string, homeId: string): string {
+export function projectHref(id: string, homeId: string, search?: string): string {
   // The AREA STAYS (tester round 2: switching project on the Knowledge Graph landed on the Command
   // Center); what names one project's records (a node, a scan, a build) does not.
   return consoleHref({ project_id: id === homeId ? undefined : id, task: undefined, run: undefined,
-                       kg_node: undefined, kg_scan: undefined, kg_tab: undefined, kg_sub: undefined, build: undefined, role: undefined });
+                       kg_node: undefined, kg_scan: undefined, kg_tab: undefined, kg_sub: undefined, build: undefined, role: undefined }, search);
+}
+
+/** The query string a rendered href may use: none until mounted, so the browser's first render
+ *  matches the server's (which has no window) — React does not patch a mismatched href, and
+ *  warned on every page. After mount, the page's own query (the area stays). */
+export function useMountedSearch(): string | undefined {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => { setMounted(true); }, []);
+  return mounted ? undefined : "";
 }
 
 /** Where a new knowledge-graph project opens: its Knowledge Graph setup (kg-setup.tsx). */
@@ -84,6 +93,7 @@ export function ProjectMenu({ projects, activeId, homeId, orgId }: {
   // Not in the list: it may be archived. Asked once per project; never for a listed one.
   const archived = useArchived(active ? undefined : activeId);
   const isHome = activeId === homeId;
+  const search = useMountedSearch();
   const goHome = () => window.location.assign(projectHref(homeId, homeId));
   const openProject = (id: string) => window.location.assign(projectHref(id, homeId));
   // A menu closes when it has done its job or the person looks away (KG tester round 2: it stayed
@@ -106,7 +116,7 @@ export function ProjectMenu({ projects, activeId, homeId, orgId }: {
             <li key={p.id}>
               {/* A real load (data-console-load): the home project's link names no project, so the
                   shell could not tell it from an in-console reveal of the project on screen. */}
-              <a href={projectHref(p.id, homeId)} aria-current={p.id === activeId ? "page" : undefined}
+              <a href={projectHref(p.id, homeId, search)} aria-current={p.id === activeId ? "page" : undefined}
                  data-testid={`project-menu-${p.id}`} data-console-load=""
                  onClick={(e) => {
                    // Read the URL at the press, not at render: a server-rendered href has no query

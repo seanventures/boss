@@ -221,7 +221,7 @@
 "GET /v1/apps/{app_key}/components": ["permit repository:read @ project(query=project_id)", "OAPVU"]
 "PUT /v1/apps/{app_key}/components": ["permit repository:manage @ project(body=project_id)", "OA"]
 "GET /v1/apps/{app_key}/consent": ["permit repository:read @ project(query=project_id)", "OAPVU"]
-"GET /v1/apps/{app_key}/demo-logins": ["permit app_secret:write @ project(query=project_id)", "OAP"]
+"GET /v1/apps/{app_key}/demo-logins": ["permit secret:manage @ project(query=project_id)", "OA"]
 "GET /v1/apps/{app_key}/links": ["permit project:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/apps/{app_key}/links": ["permit app_link:manage @ project(body=project_id)", "OAP"]
 "DELETE /v1/apps/{app_key}/links/{link_id}": ["permit app_link:manage @ app_link(path=link_id)", "OAP"]

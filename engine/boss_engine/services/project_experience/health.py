@@ -89,6 +89,10 @@ def environments(connection: Connection, project_id: str, *,
     view = health_view(connection, project_id, now=now, points=POINTS)
     targets = view.get("targets") or []
     metrics = _metrics(connection, [t["target_id"] for t in targets], now - timedelta(hours=24))
+    hosts = {str(r["id"]): dict(r) for r in connection.execute(text(
+        "SELECT t.id, t.host_id, h.address, h.name FROM deployment_targets t "
+        "LEFT JOIN deployment_hosts h ON h.id = t.host_id WHERE t.id = ANY(:ids)"),
+        {"ids": [t["target_id"] for t in targets]}).mappings()} if targets else {}
     apps = {t["app_name"] for t in targets}
     out = []
     for t in targets:
@@ -112,6 +116,11 @@ def environments(connection: Connection, project_id: str, *,
             "last_checked": t.get("last_checked"), "last_error": t.get("last_error"),
             "deployed_commit": (t.get("deployed_commit") or "")[:7] or None,
             "deployed_at": t.get("deployed_at"),
+            "host": (hosts.get(str(t["target_id"])) or {}).get("address")
+            or (hosts.get(str(t["target_id"])) or {}).get("name"),
+            "host_href": (href(project_id, area="infra",
+                               host=hosts[str(t["target_id"])]["host_id"])
+                          if (hosts.get(str(t["target_id"])) or {}).get("host_id") else None),
             "href": project_href(project_id, tab="health", drawer=f"env:{t['target_id']}"),
         })
     return out
@@ -198,7 +207,7 @@ def incidents(connection: Connection, project_id: str, *, limit: int = 10
         out.append({"id": r["id"], "label": words(r["title"], 6), "detail": r["title"],
                     "state": "needs_you", "app": None, "since": iso(r["first_seen"]),
                     "incident_id": r["id"],
-                    "graph_href": href(project_id, area="observability", incident=r["id"]),
+                    "graph_href": href(project_id, area="observability", inc=r["id"]),
                     "mini": _mini("needs_you", None)})
     return out[:limit]
 
@@ -213,7 +222,8 @@ def monitoring_pack(connection: Connection, project_id: str) -> dict[str, Any]:
     repo = int(row["repo"] or 0) if row else 0
     managed = "none" if not rules else "repo" if repo else "boss"
     return {"rules": rules, "managed_in": managed,
-            "href": href(project_id, area="observability", view="rules")}
+            # Observability › Alerts: every app's rules and what fired (no `rules` view exists).
+            "href": href(project_id, area="observability", view="alerts")}
 
 
 def links(connection: Connection, project_id: str, apps: list[str]) -> dict[str, Any]:
@@ -226,7 +236,8 @@ def links(connection: Connection, project_id: str, apps: list[str]) -> dict[str,
         grafana = {"state": "unknown", "url": None, "reason": None}
     return {"grafana": grafana.get("url") if grafana.get("state") == "answering" else None,
             "grafana_state": grafana.get("state"), "grafana_reason": grafana.get("reason") or None,
-            "logs": href(project_id, area="observability", view="logs"),
+            # The deploy log (Infra › Deploys); Observability has no logs view of its own.
+            "logs": href(project_id, area="infra", view="deploys"),
             "observability": href(project_id, area="observability",
                                   app=apps[0] if len(apps) == 1 else None)}
 

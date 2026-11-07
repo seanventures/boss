@@ -12,7 +12,7 @@ import {
 } from "@phosphor-icons/react";
 
 import { GatedButton } from "../../components/gated";
-import { WORK_ORDER, WORK_WORDS, acceptRecommendation, navigateTo, pxHref, type WorkItem } from "../../lib/project-experience";
+import { WORK_ORDER, WORK_WORDS, navigateTo, pxHref, runAccept, type NextItem, type WorkItem } from "../../lib/project-experience";
 import { Empty, Face, Flow, HEALTH_WORD, Ico, Journey, PxLink, Ring, Said, Spark, Stations, Tag } from "./kit";
 import { DemoLoginRow } from "./tab-settings";
 import { whenLocal } from "../../lib/local-time";
@@ -23,6 +23,7 @@ const WORK_TONE: Record<string, string> = { running: "var(--teal)", needs_you: "
 function goHref(ctx: PxCtx, href: string, fallback: () => void) {
   // A contract href that names this page's own tab switches in place; anything else navigates.
   try {
+    if (href && /^https?:\/\//.test(href)) { window.open(href, "_blank", "noopener,noreferrer"); return; }
     if (href) {
       const p = new URLSearchParams(href.slice(href.indexOf("?") + 1));
       if (p.get("area") === "project" && (!p.get("project_id") || p.get("project_id") === ctx.projectId)) {
@@ -124,10 +125,13 @@ export function OverviewTab({ ctx }: { ctx: PxCtx }) {
                 {ov.week.map((w, i) => (
                   <React.Fragment key={`${w.label}-${i}`}>
                     {i ? <span className="px-jr-wire" data-s="done" aria-hidden style={{ marginTop: 20 }} /> : null}
-                    <div className="px-jr-node" role="listitem" style={{ cursor: "default", width: 110 }}>
+                    <div className="px-jr-node" role="listitem" style={{ cursor: w.href ? "pointer" : "default", width: 110 }} data-testid={`px-ov-week-${i}`}
+                         onClick={w.href ? () => goHref(ctx, w.href, () => undefined) : undefined}>
                       <span className="px-jr-meta">{whenLocal(w.at)}</span>
                       <span className="px-dot" data-round style={{ width: 12, height: 12, background: w.kind === "idea" ? "#8b7cf6" : w.kind === "pr" ? "var(--amber)" : "var(--green)" }} aria-hidden />
-                      <span className="px-jr-cap" style={{ fontWeight: 500 }}>{w.label}</span>
+                      {w.href ? <a className="px-jr-cap" style={{ fontWeight: 500 }} href={pxHref(w.href)} {...(/^https?:/.test(w.href) ? { target: "_blank", rel: "noreferrer noopener" } : {})}
+                                   onClick={(e) => { e.stopPropagation(); if (/^https?:/.test(w.href) || e.metaKey || e.ctrlKey) return; e.preventDefault(); goHref(ctx, w.href, () => undefined); }}>{w.label}</a>
+                        : <span className="px-jr-cap" style={{ fontWeight: 500 }}>{w.label}</span>}
                     </div>
                   </React.Fragment>
                 ))}
@@ -247,11 +251,19 @@ function CaptainCard({ ctx }: { ctx: PxCtx }) {
   );
 }
 
+/** Accepting a roadmap item plans it (work_item:manage); accepting a proposed one starts it
+ *  through THE start door (workflow_run:start) — each item says which (§2 `accept`). */
+const acceptPermission = (n: NextItem) => (n.accept && n.accept.href.startsWith("/v1/ambient/") ? "work_item:manage" : "workflow_run:start");
+
 function NextCard({ ctx }: { ctx: PxCtx }) {
   const [said, setSaid] = useState("");
-  const accept = async (id: string, label: string) => {
-    const r = await acceptRecommendation(ctx.projectId, id, "ticket");
-    setSaid(r.ok ? (r.demo ? "Sample mode — nothing was sent." : `${label} is planned work now.`) : (r.error ?? "Not accepted."));
+  const accept = async (n: NextItem) => {
+    if (!n.accept) return;
+    const r = await runAccept(ctx.projectId, n.accept);
+    const planned = n.accept.href.startsWith("/v1/ambient/");
+    setSaid(r.ok ? (r.demo ? "Sample mode — nothing was sent." : planned ? `${n.label} is planned work now.` : `${n.label} started — it's on Work.`)
+      : (r.error ?? "Not accepted."));
+    if (r.ok && !r.demo) ctx.refreshWork();
   };
   const next = ctx.overview.next;
   return (
@@ -265,9 +277,10 @@ function NextCard({ ctx }: { ctx: PxCtx }) {
             {n.href ? <PxLink href={n.href} className="px-wk-t" onOpen={() => goHref(ctx, n.href, () => undefined)}><b>{n.label}</b></PxLink> : <b>{n.label}</b>}
             <small>{n.source}</small>
           </span>
-          {n.state === "proposed" && n.accept ? (
-            <GatedButton permission="work_item:manage" projectId={ctx.projectId} className="px-btn" data-size="s" data-testid={`px-ov-accept-${n.id}`}
-                         onClick={() => void accept(n.id, n.label)}>Accept</GatedButton>
+          {n.accept ? (
+            <GatedButton permission={acceptPermission(n)} projectId={ctx.projectId} className="px-btn" data-size="s" data-testid={`px-ov-accept-${n.id}`}
+                         title={n.accept.href.startsWith("/v1/ambient/") ? "Plan it: it joins Work as planned" : "Start it now through the project's normal path"}
+                         onClick={() => void accept(n)}>{n.accept.href.startsWith("/v1/ambient/") ? "Accept" : "Start"}</GatedButton>
           ) : <Tag tone="green">Next</Tag>}
         </div>
       )) : <p className="px-faint" style={{ margin: 0 }}>Helm proposes what&apos;s next once the backlog is ranked.</p>}
