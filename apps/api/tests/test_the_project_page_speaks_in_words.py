@@ -114,6 +114,7 @@ def test_needs_you_names_the_action_not_the_question(world, client, engine, help
     assert [m["label"] for m in by_label["Merge PR #3"]["mini"]][-1] == "Merge"
     deploy = by_label["Deploy PR #5 to Staging"]
     assert deploy["action"]["label"] == "Approve deploy" and deploy["kind"] == "deploy"
+    assert "drawer=needs" in deploy["action"]["href"]   # approves in its drawer, in place
     assert [m["state"] for m in deploy["mini"]] == ["done", "waiting", "todo"]
     host = by_label["Pick a prod host"]
     assert host["action"]["label"] == "Pick host" and "add=target" in host["action"]["href"]

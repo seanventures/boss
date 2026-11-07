@@ -15,7 +15,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ArrowSquareOut, ChatCircleDots, Check, ClipboardText, Compass, GearSix, GitBranch, Globe, HandWaving, Heartbeat, House, Kanban, MapTrifold,
-  Plus, RocketLaunch, TreeStructure, GitMerge, CloudCheck, ListChecks, type Icon,
+  Plus, RocketLaunch, TreeStructure, GitMerge, CloudCheck, ListChecks, GithubLogo, type Icon,
 } from "@phosphor-icons/react";
 
 import { GatedButton } from "../../components/gated";
@@ -25,7 +25,7 @@ import {
   workFromStartRow, writePxUrl, type Overview, type Onboarding, type PxUrl, type Tab, type WorkList, a, o,
 } from "../../lib/project-experience";
 import { FX_ONBOARDING, FX_ONBOARDING_PROJECT, FX_OVERVIEW, FX_WORK } from "../../lib/project-experience-fixtures";
-import { DemoBanner, Face, HEALTH_TONE, HEALTH_WORD, Loading, Failed, Empty, closeDrawer, openDrawer, usePxUrl } from "./kit";
+import { DemoBanner, Face, HEALTH_TONE, HEALTH_WORD, Loading, Failed, Empty, STAGE_ICON, closeDrawer, openDrawer, usePxUrl } from "./kit";
 export { usePxUrl };
 import { OverviewTab } from "./tab-overview";
 import { WorkTab } from "./tab-work";
@@ -164,33 +164,40 @@ function Header({ ctx, onboarding }: { ctx: PxCtx; onboarding: boolean }) {
   const captain = ctx.overview.captain;
   return (
     <div className="px-head" data-testid="px-head">
-      <span className="px-mark" aria-hidden>{p.initials}</span>
+      <span className="px-mark" aria-hidden title={p.name}>{p.initials}</span>
       <div className="px-title">
         <h1>{p.name}</h1>
         <div className="px-row">
           {repo ? (
-            <a className="px-hchip" href={repo.external_url || `https://github.com/${repo.full_name}`} target="_blank" rel="noreferrer noopener" data-testid="px-head-repo"
-               title="Open the repository on GitHub"><GitBranch size={11} aria-hidden />{repo.full_name}<ArrowSquareOut size={10} aria-label="opens in a new tab" /></a>
+            <a className="px-hchip" href={pxHref(`?project_id=${encodeURIComponent(ctx.projectId)}&area=project&tab=knowledge`)} data-testid="px-head-repo"
+               title="Repository — opens Repo & knowledge"
+               onClick={(e) => { if (e.metaKey || e.ctrlKey || e.shiftKey) return; e.preventDefault(); ctx.tab("knowledge"); }}>
+              <GithubLogo size={11} aria-hidden />{repo.full_name}</a>
           ) : (
             <a className="px-hchip" href="#" data-testid="px-head-norepo" onClick={(e) => { e.preventDefault(); ctx.tab("settings", { section: "repos" }); }}>
               <Plus size={11} aria-hidden /> Add a repo</a>
           )}
           {p.live_url ? (
-            <a className="px-hchip" href={p.live_url} target="_blank" rel="noreferrer noopener" data-testid="px-head-live" title="Open the running app">
-              <Globe size={11} aria-hidden />{p.live_url.replace(/^https?:\/\//, "")}<ArrowSquareOut size={10} aria-label="opens in a new tab" /></a>
+            <a className="px-hchip" href={p.live_url} target="_blank" rel="noreferrer noopener" data-testid="px-head-live"
+               title={`${staging?.label ?? "Staging"} — opens the live app`}>
+              <Globe size={11} aria-hidden />{(staging?.label ?? "staging").toLowerCase()} · {p.live_url.replace(/^https?:\/\//, "")}<ArrowSquareOut size={10} aria-label="opens in a new tab" /></a>
           ) : null}
           {p.live_url || health !== "unknown" ? (
             <button type="button" className="px-hchip" style={{ border: 0, cursor: "pointer", color: health === "healthy" ? "var(--green)" : health === "unknown" ? "var(--faint)" : `var(--${HEALTH_TONE[health]})` }}
-                    data-testid="px-head-health" title="Open Health" onClick={() => ctx.tab("health")}>
+                    data-testid="px-head-health" onClick={() => ctx.tab("health")}
+                    title={[HEALTH_WORD[health], staging?.uptime_pct != null ? `${staging.uptime_pct}%` : "", staging?.p95_ms != null ? `p95 ${staging.p95_ms}ms` : ""].filter(Boolean).join(" · ") + " — opens Health"}>
               <span className="px-dot" data-s={health} data-round aria-hidden />{HEALTH_WORD[health]}</button>
           ) : null}
-          <span className="px-tag" data-tone={onboarding ? "blue" : "green"} data-testid="px-head-status">{onboarding ? <><Compass size={11} aria-hidden /> Onboarding</> : p.status_label || "Ready"}</span>
+          <span className="px-tag" data-tone={onboarding ? "blue" : "green"} data-testid="px-head-status" title="Project stage on the journey">{onboarding ? <><Compass size={11} aria-hidden /> Onboarding</>
+            : <>{(() => { const I = STAGE_ICON[p.stage] ?? Compass; return <I size={11} aria-hidden />; })()} {p.status_label || "Ready"}</>}</span>
           {onboarding && ctx.onboarding?.elapsed_s ? <span className="px-mono px-faint" style={{ fontSize: ".6rem" }} data-testid="px-head-elapsed">{elapsedWords(ctx.onboarding.elapsed_s)}</span> : null}
         </div>
       </div>
       <span className="px-spacer" />
       {captain ? (
-        <span className="px-captain" data-testid="px-head-captain">
+        <span className="px-captain" data-testid="px-head-captain" role="button" tabIndex={-1} style={{ cursor: "pointer" }}
+              title={`${captain.name} captains this project. Click to talk to ${captain.name}.`}
+              onClick={(e) => { if ((e.target as HTMLElement).closest("button")) return; ctx.ask(); }}>
           <Face agent={captain} size={30} state={onboarding ? "working" : "idle"} />
           <span><b>{captain.name}</b><small>{onboarding ? "Onboarding" : "Captain"}</small></span>
           <button type="button" className="px-btn" data-size="s" data-testid="px-head-ask" onClick={() => ctx.ask()} title={`Ask ${captain.name} about this project`}>

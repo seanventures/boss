@@ -107,7 +107,10 @@ def test_the_overview_draws_the_journey_needs_you_tiles_captain_and_try_it(world
     assert {n["kind"] for n in decisions} == {"merge", "deploy"}
     merge = next(n for n in decisions if n["kind"] == "merge")
     assert merge["label"] == "Merge PR #3" and merge["action"]["label"] == "Review PR"
-    assert merge["action"]["href"].startswith(f"?project_id={helpdesk['id']}&area=decisions")
+    # Review PR acts in place: the work's drawer; Approvals stays one link away.
+    assert merge["action"]["href"].startswith(f"?project_id={helpdesk['id']}&area=project")
+    assert "drawer=run" in merge["action"]["href"]
+    assert merge["action"]["approvals_href"].startswith(f"?project_id={helpdesk['id']}&area=decisions")
     # Short human labels (needs.py): "Deploy PR #5 to Staging" is the longest.
     assert all(len(n["label"].split()) <= 5 for n in o["needs_you"])
     tiles = o["tiles"]

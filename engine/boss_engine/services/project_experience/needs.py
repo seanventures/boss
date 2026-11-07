@@ -146,8 +146,15 @@ def card(connection: Connection, project_id: str, decision: Mapping[str, Any],
             "mini": mini, "risk_tier": decision.get("risk_tier"),
             "created_at": iso(decision.get("created_at")),
             "external_url": pr_url or None,
+            # The button acts IN PLACE (04-19/21): Review PR opens the work's drawer (its PR,
+            # checks and Merge); everything else opens this card's drawer, which approves or
+            # rejects there with step-up. Approvals stays one link away inside it.
             "action": {"label": ACTION_WORDS[kind], "decision_id": decision["id"],
-                       "href": href(project_id, area="decisions", decision=decision["id"])}}
+                       "href": (project_href(project_id, drawer=f"run:{run['id']}")
+                                if kind == "merge" and run and run.get("source") == "workflow_run"
+                                else project_href(project_id, drawer=f"needs:{decision['id']}")),
+                       "approvals_href": href(project_id, area="decisions",
+                                              decision=decision["id"])}}
 
 
 def prod_host_card(project_id: str) -> dict[str, Any]:
