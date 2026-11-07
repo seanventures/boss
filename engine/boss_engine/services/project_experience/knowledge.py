@@ -49,6 +49,9 @@ def commands(facts: dict[str, Any], stack: Optional[dict[str, Any]] = None) -> d
     elif tool == "Gradle":
         run = "./gradlew bootRun" if (facts.get("stack") or {}).get("framework") == "Spring" else None
     install = _install(tool, facts)
+    # What the repository itself says (its manifests, its README) wins over the tool's usual.
+    install = (cmds.get("install") or [None])[0] or install
+    run = (cmds.get("run") or [None])[0] or run
     return {"install": install, "test": test, "build": build, "run": run,
             "lint": (cmds.get("lint") or [None])[0]}
 
@@ -100,48 +103,11 @@ def _code_map(facts: dict[str, Any]) -> dict[str, Any]:
     return {"parts": top, "files": total}
 
 
-#: node:test / TAP, pytest, jest / vitest summaries in a build's verify output.
-_TAP = (re.compile(r"^# tests (\d+)", re.M), re.compile(r"^# pass (\d+)", re.M))
-_PYTEST = (re.compile(r"(\d+) passed"), re.compile(r"(\d+) failed"))
-_JEST = re.compile(r"Tests:\s+(?:(\d+) failed, )?(?:\d+ skipped, )?(\d+) passed, (\d+) total")
-
-
 def parse_test_counts(output: Any) -> Optional[dict[str, int]]:
-    """{passed, total} from a test run's output, or None when it names no counts."""
-    out = str(output or "")
-    if not out:
-        return None
-    jest = list(_JEST.finditer(out))
-    if jest:
-        m = jest[-1]
-        return {"passed": int(m.group(2)), "total": int(m.group(3))}
-    tests = _TAP[0].findall(out)
-    passed = _TAP[1].findall(out)
-    if tests and passed:
-        return {"passed": int(passed[-1]), "total": int(tests[-1])}
-    ok = _PYTEST[0].findall(out)
-    if ok:
-        bad = _PYTEST[1].findall(out)
-        p_, f_ = int(ok[-1]), int(bad[-1]) if bad else 0
-        return {"passed": p_, "total": p_ + f_}
-    return None
+    """{passed, total} from a test run's output (test_runs.parse_counts)."""
+    from .test_runs import parse_counts
 
-
-def _tests(connection: Connection, project_id: str) -> Optional[dict[str, Any]]:
-    """The newest build's test run on this project: passed / total, and the build it came from."""
-    rows = connection.execute(text(
-        "SELECT id, pull_request_number, pull_request_url, updated_at, "
-        "right(state->>'last_verify_output', 20000) AS output FROM code_task_runs "
-        "WHERE project_id = :p AND state ? 'last_verify_output' "
-        "ORDER BY updated_at DESC LIMIT 3"), {"p": project_id}).mappings().all()
-    for r in rows:
-        got = parse_test_counts(r["output"])
-        if got and got["total"]:
-            n = r["pull_request_number"] or pr_number(r["pull_request_url"])
-            return {**got, "failing": got["total"] - got["passed"], "at": iso(r["updated_at"]),
-                    "from": f"PR #{n}" if n else "the last build",
-                    "href": href(project_id, area="code_tasks", view="apps", build=r["id"])}
-    return None
+    return parse_counts(output)
 
 
 def dossier(connection: Connection, project_id: str) -> Optional[dict[str, Any]]:
@@ -162,11 +128,17 @@ def dossier(connection: Connection, project_id: str) -> Optional[dict[str, Any]]
         built_dt = _dt.fromisoformat(str(built)) if isinstance(built, str) else built
     except ValueError:
         built_dt = None
-    run = _tests(connection, project_id)
+    from .test_runs import last_full_run
+
+    run = last_full_run(connection, project_id)
     return {"repo": row.get("repo"), "stack": _stack(facts), "commands": commands(facts),
+            # THE TEST BASELINE says where its numbers came from ("the last full run, a blocked
+            # build, 9h ago") and, when one setup error explains the failures, which one.
             "tests": {"files": int((facts.get("tests") or {}).get("files") or 0),
                       **({"passed": run["passed"], "total": run["total"],
                           "failing": run["failing"], "from": run["from"],
+                          "source": run["label"], "ago": run["ago"],
+                          "cause": run.get("cause"),
                           "href": run["href"]} if run else {})},
             "files": facts.get("files"), "ci": facts.get("ci") or [],
             "code_map": _code_map(facts),
@@ -654,7 +626,7 @@ def view(connection: Connection, project_id: str) -> dict[str, Any]:
                                    "appears here when it's done." if running else
                                    "Helm reads the repository once: stack, commands, tests, "
                                    "hotspots. It takes about two minutes."),
-                        "href": project_href(project_id, tab="overview", drawer="onboarding")}
+                        "href": project_href(project_id, tab="onboarding")}
     return out
 
 

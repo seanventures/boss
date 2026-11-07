@@ -10,11 +10,11 @@
  */
 import React, { useEffect, useState } from "react";
 import {
-  ArrowsOut, ChatCircleDots, Check, Code, FileText, FlowArrow, GitMerge, GitPullRequest, Globe, Graph, ListChecks, PaperPlaneRight, Path, PauseCircle, Question,
+  ArrowsOut, ChatCircleDots, Code, FileText, FlowArrow, GitMerge, GitPullRequest, Globe, Graph, ListChecks, PaperPlaneRight, Path, PauseCircle, Question,
   RocketLaunch, Terminal, User, Warning, Wrench,
 } from "@phosphor-icons/react";
 
-import { ATTEMPT_WORDS, KIND_WORDS, PX_PATHS, findWork, parseDeployments, pxHref, toTab, usePxRead, writePxUrl, type Deployments, type Onboarding, type WorkItem } from "../../lib/project-experience";
+import { ATTEMPT_WORDS, KIND_WORDS, PX_PATHS, findWork, parseDeployments, pxHref, toTab, usePxRead, writePxUrl, type Deployments, type WorkItem } from "../../lib/project-experience";
 import { FX_DEPLOYMENTS } from "../../lib/project-experience-fixtures";
 import { Drawer, Empty, Face, Flow, HEALTH_WORD, Ico, PxLink, STATE_WORD, Spark, Tag, Cost } from "./kit";
 import { ActionButton } from "./tab-overview";
@@ -33,10 +33,12 @@ const STEP_WORDS: Record<string, string> = { plan: "Plan", design: "You approved
 
 /** Drawer links that name a PLACE on this page rather than a drawer (the engine's hrefs, §10):
  *  `section:<key>` is Settings at that section; `dossier` and `doc:<path>` are Repo & knowledge;
- *  `onboarding` on a project still onboarding is Overview. (`captain` is its own drawer, screen 09.) */
+ *  `onboarding` is screen 10's own page (the Overview while the project still onboards): the
+ *  wireframes draw no onboarding drawer, so the old quick-view drawer opens the full view.
+ *  (`captain` is its own drawer, screen 09.) */
 function placeOf(drawer: { kind: string; id: string }, onboarding: boolean): Record<string, string | null> | null {
   if (drawer.kind === "section") return { tab: "settings", section: drawer.id || null, drawer: null };
-  if (drawer.kind === "onboarding" && onboarding) return { tab: null, drawer: null };
+  if (drawer.kind === "onboarding") return { tab: onboarding ? null : "onboarding", drawer: null };
   return null;
 }
 
@@ -44,7 +46,7 @@ export function DrawerHost({ ctx, drawer, onClose }: { ctx: PxCtx; drawer: { kin
   const place = placeOf(drawer, ctx.overview.project.stage === "onboarding");
   useEffect(() => {
     if (!place) return;
-    writePxUrl({ ...place, ...(place.tab ? { tab: toTab(place.tab) === "overview" ? null : place.tab } : {}) }, "replace");
+    writePxUrl({ ...place, ...(place.tab ? { tab: place.tab === "onboarding" ? "onboarding" : toTab(place.tab) === "overview" ? null : place.tab } : {}) }, "replace");
   }, [place === null ? "" : JSON.stringify(place)]); // eslint-disable-line react-hooks/exhaustive-deps
   if (place) return null;
   // The full dossier, a doc and Add doc (screen 06): Repo & knowledge's own drawers.
@@ -87,7 +89,9 @@ export function DrawerHost({ ctx, drawer, onClose }: { ctx: PxCtx; drawer: { kin
               footer={<AskBox ctx={ctx} about={n.label} />}>
         <StageBody ctx={ctx} n={n} />
         <div className="px-row px-wrap">
-          {n.key === "onboarding" || n.key === "ready" ? <button type="button" className="px-chip" onClick={() => ctx.tab("knowledge")}>Dossier</button> : null}
+          {n.key === "onboarding" || n.key === "ready" ? <>
+            <button type="button" className="px-chip" data-testid="px-stage-onboarding" onClick={() => writePxUrl({ tab: "onboarding", drawer: null })}>Onboarding</button>
+            <button type="button" className="px-chip" onClick={() => ctx.tab("knowledge")}>Dossier</button></> : null}
           {n.key === "backlog" ? <button type="button" className="px-chip" onClick={() => ctx.tab("roadmap")}>Roadmap</button> : null}
           {n.key === "working" ? <button type="button" className="px-chip" onClick={() => ctx.tab("work")}>Work</button> : null}
           {n.key === "staging" || n.key === "production" ? <button type="button" className="px-chip" onClick={() => ctx.tab("deployments")}>Deployments</button> : null}
@@ -96,7 +100,6 @@ export function DrawerHost({ ctx, drawer, onClose }: { ctx: PxCtx; drawer: { kin
     );
   }
   if (drawer.kind === "env" || drawer.kind === "deploy") return <DeployDrawer ctx={ctx} drawer={drawer} onClose={onClose} />;
-  if (drawer.kind === "onboarding") return <OnboardingDrawer ctx={ctx} onClose={onClose} />;
   if (drawer.kind === "rec") {
     return (
       <Drawer title="Recommendation" icon={<Ico icon={Path} c="violet" />} onClose={onClose} testid="px-drawer-rec">
@@ -106,33 +109,6 @@ export function DrawerHost({ ctx, drawer, onClose }: { ctx: PxCtx; drawer: { kin
     );
   }
   return <Missing what="This" onClose={onClose} />;
-}
-
-/** How onboarding went (the journey's Onboarded node, Repo & knowledge's "Reading the repository"):
- *  its stages, the checklist with who did each, and what is left for you. */
-function OnboardingDrawer({ ctx, onClose }: { ctx: PxCtx; onClose: () => void }) {
-  const ob: Onboarding | null = ctx.onboarding;
-  if (!ob) return <Missing what="Onboarding" onClose={onClose} loading />;
-  return (
-    <Drawer title="Onboarding" icon={<Ico icon={Path} c="teal" />} onClose={onClose} testid="px-drawer-onboarding"
-            sub={<Tag tone={ob.state === "failed" ? "red" : ob.state === "ready" ? "green" : ob.state === "needs_you" ? "amber" : "blue"}>{
-              ob.state === "not_started" ? "not started" : ob.state === "needs_you" ? "needs you" : ob.state}</Tag>}>
-      {ob.stages.length ? <Flow nodes={ob.stages.map((st) => ({ label: st.label, state: st.state }))} /> : null}
-      {ob.error ? <p style={{ margin: 0, color: "var(--red)" }}>{ob.error}</p> : null}
-      <div data-testid="px-drawer-onboarding-checklist">
-        {ob.checklist.map((c) => (
-          <div key={c.key} className="px-li">
-            <span className="px-ck-b" aria-hidden style={c.state === "done" ? { background: "var(--green)", borderColor: "var(--green)", color: "#032015" } : undefined}>
-              {c.state === "done" ? <Check size={11} weight="bold" /> : c.owner === "you" ? "!" : ""}</span>
-            <span><b>{c.label}</b><small>{[STATE_WORD[c.state], c.owner === "you" ? "you" : "Helm", c.sub || c.detail].filter(Boolean).join(" · ")}</small></span>
-            {c.owner === "you" && c.state !== "done" && c.action ? <PxLink href={c.action.href} className="px-btn">{c.action.label}</PxLink> : <span />}
-          </div>
-        ))}
-      </div>
-      <button type="button" className="px-chip" onClick={() => ctx.tab("knowledge")}>Dossier</button>
-      <AskBox ctx={ctx} about="onboarding" />
-    </Drawer>
-  );
 }
 
 function Missing({ what, onClose, loading }: { what: string; onClose: () => void; loading?: boolean }) {

@@ -85,7 +85,7 @@ export function StartProjectHost({ projectId, homeId, step: forced, onStep: forc
                        onCreated={(id, type) => {
                          setDraft(EMPTY_DRAFT);
                          clearStepParam();
-                         window.location.assign(type === "knowledge_graph" ? knowledgeSetup(id, homeId) : projectPageHref(id, homeId));
+                         window.location.assign(type === "knowledge_graph" ? knowledgeSetup(id, homeId) : projectPageHref(id, homeId, "project", "onboarding"));
                        }} />
     );
   }

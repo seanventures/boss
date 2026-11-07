@@ -75,10 +75,13 @@ export function ProjectPage({ projectId, actor, orgId }: { projectId: string; ac
   // AN ENGINE WITHOUT §2: the overview is built from the project page's existing start view.
   const start = usePxRead<unknown>(ov.state === "missing" ? PX_PATHS.start(projectId) : null, (raw) => raw, { everyMs: 20_000 });
   const overview: Overview | null = ov.data ?? (ov.state === "missing" && start.data ? overviewFromStart(start.data, projectId) : null);
+  // LIVE while the agent works: every 3 s on its view or while it runs; a minute otherwise.
+  const [obLive, setObLive] = useState(false);
   const onboarding = usePxRead<Onboarding>(PX_PATHS.onboarding(projectId), parseOnboarding, {
-    everyMs: overview?.project.stage === "onboarding" ? 5_000 : 60_000,
+    everyMs: obLive || overview?.project.stage === "onboarding" ? 3_000 : url.view === "onboarding" ? 10_000 : 60_000,
     demo: demoOnboarding ? () => parseOnboarding(FX_ONBOARDING) : () => null,
   });
+  useEffect(() => { setObLive(onboarding.data?.state === "running"); }, [onboarding.data?.state]);
   const work = usePxRead<WorkList>(PX_PATHS.work(projectId), parseWork, { everyMs: 15_000, demo: () => parseWork(FX_WORK) });
   const workFallback = useMemo<WorkList | null>(() => (work.state === "missing" && start.data
     ? { items: a(o(start.data).work).map((r) => workFromStartRow(r, projectId)) } : null), [work.state, start.data, projectId]);
@@ -111,6 +114,8 @@ export function ProjectPage({ projectId, actor, orgId }: { projectId: string; ac
   };
   const ob = onboarding.data;
   const onboardingNow = overview.project.stage === "onboarding" && ob !== null;
+  // SCREEN 10 is its own page (`tab=onboarding`), and the Overview while the project onboards.
+  const obView = url.view === "onboarding" || (url.tab === "overview" && onboardingNow);
   // The tab's badge is the Work list's "All" count (wireframe: Work 9 = All 9), never a second number.
   const openCount = ctx.work ? ctx.work.items.length
     : Object.values(overview.tiles.open_work?.by_state ?? {}).reduce((x, y) => x + y, 0) || undefined;
@@ -121,9 +126,10 @@ export function ProjectPage({ projectId, actor, orgId }: { projectId: string; ac
       {ov.state === "missing" ? <div className="px-note" role="note" data-testid="px-project-note">BOSS didn&apos;t answer with this project&apos;s overview, so journey, health and cost are missing here; work and repo are live.</div> : null}
       <div className="px-sticky">
         {/* The top bar carries the breadcrumb (Projects / <project> / <tab>); the page draws none (04). */}
-        <Header ctx={ctx} onboarding={onboardingNow} />
-        <NeedsBar ctx={ctx} onboarding={onboardingNow ? ob : null} />
-        <div className="px-tabs" role="tablist" aria-label="Project" data-testid="px-tabs"
+        <Header ctx={ctx} onboarding={onboardingNow || (obView && ob?.state === "running")} />
+        {/* Screen 10 draws no Needs-you bar or tabs: its "Only you can" card is that list. */}
+        {!obView ? <NeedsBar ctx={ctx} onboarding={onboardingNow ? ob : null} /> : null}
+        {!obView ? <div className="px-tabs" role="tablist" aria-label="Project" data-testid="px-tabs"
              onKeyDown={(e) => {
                if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
                const order = Object.keys(TAB_WORDS) as Tab[];
@@ -143,10 +149,13 @@ export function ProjectPage({ projectId, actor, orgId }: { projectId: string; ac
               </button>
             );
           })}
-        </div>
+        </div> : null}
       </div>
-      <div id="px-tabpanel" role="tabpanel" aria-label={TAB_WORDS[url.tab]} data-testid={`px-panel-${url.tab}`}>
-        {url.tab === "overview" ? (onboardingNow && ob ? <OnboardingView projectId={projectId} ob={ob} /> : <OverviewTab ctx={ctx} />)
+      <div id="px-tabpanel" role="tabpanel" aria-label={obView ? "Onboarding" : TAB_WORDS[url.tab]} data-testid={`px-panel-${obView ? "onboarding" : url.tab}`}>
+        {obView ? (ob ? <OnboardingView projectId={projectId} ob={ob} onRefresh={() => { setObLive(true); onboarding.refresh(); }} />
+                     : onboarding.state === "error" ? <Failed what="Onboarding" error={onboarding.error} onRetry={onboarding.refresh} />
+                     : <Loading rows={3} label="Loading onboarding" />)
+          : url.tab === "overview" ? <OverviewTab ctx={ctx} />
           : url.tab === "work" ? <WorkTab ctx={ctx} />
           : url.tab === "roadmap" ? <RoadmapTab ctx={ctx} />
           : url.tab === "knowledge" ? <KnowledgeTab ctx={ctx} />

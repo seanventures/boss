@@ -182,7 +182,7 @@ def test_onboarding_is_a_row_with_its_flow_faces_cost_and_what_waits_on_you(worl
     assert row["cost_usd"] == 1.2
     # The seeded run waits on the person for the app's secret: it needs you.
     assert row["state"] == "needs_you" and [i["key"] for i in row["waiting"]] == ["secrets"]
-    assert row["links"]["onboarding"] == f"?project_id={pid}&area=project&tab=work&drawer=onboarding"
+    assert row["links"]["onboarding"] == f"?project_id={pid}&area=project&tab=onboarding"
     with _as(world, world.owner):
         overview = client.get(f"/v1/projects/{pid}/overview").json()
     secrets = next(n for n in overview["needs_you"] if n["id"] == "onb:secrets")

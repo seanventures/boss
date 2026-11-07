@@ -108,7 +108,7 @@ describe("the contract client", () => {
 
   it("reads tabs and drawers from the URL (§10)", () => {
     expect(TABS).toEqual(["overview", "work", "roadmap", "knowledge", "deployments", "health", "settings"]);
-    expect(readPxUrl("?area=project&tab=work&drawer=work:wi_1")).toEqual({ tab: "work", firstRun: false, drawer: { kind: "work", id: "wi_1" } });
+    expect(readPxUrl("?area=project&tab=work&drawer=work:wi_1")).toEqual({ tab: "work", firstRun: false, view: null, drawer: { kind: "work", id: "wi_1" } });
     expect(readPxUrl("?tab=nonsense").tab).toBe("overview");
   });
 
@@ -249,7 +249,9 @@ describe("the first run (screens 0a, 0b) keeps every Get started item", () => {
     expect(tid("px-guide-account")).toBeNull();
     expect(tid("px-guide-model")).toBeNull();
     expect($$("[data-testid='px-first-run-guided'] select, [data-testid='px-first-run-guided'] [role=listbox]")).toEqual([]);
-    expect(tid("px-discover")).not.toBeNull();
+    // 00b-13..19: the live diagram — Helm → Stack found · Mapping code · Tests run → Ready check.
+    expect(tid("px-ob-live")).not.toBeNull();
+    expect(tid("px-ob-live-ready")).not.toBeNull();
     expect(tid("px-guide-you-secrets")!.textContent).toContain("App secret");
     // Configured workspace chips MANAGE in Repo and models; they never open an add sheet (PX-30).
     expect(setupGo("px-guide-ws-github").get("open")).toBeNull();
@@ -700,7 +702,13 @@ describe("Onboarding in progress (screen 10, §8)", () => {
     expect(tid("px-ob-now")!.textContent).toContain("Beacon is checking staging port 8004");
     expect(tid("px-ob-item-secrets")!.dataset.s).toBe("you");
     expect(tid("px-ob-act-secrets")!.getAttribute("href")).toContain("area=infra");
-    expect(tid("px-needs-ob-secrets")).not.toBeNull(); // the only-you item is also in Needs you
+    // Screen 10 draws no Needs-you bar: its "Only you can" card is that list (the same items the
+    // project's Needs you and the bell carry).
+    expect(tid("px-needs-bar")).toBeNull();
+    expect(tid("px-ob-you-secrets")).not.toBeNull();
+    expect(tid("px-ob-live")).not.toBeNull();
+    expect(tid("px-ob-first")).not.toBeNull();
+    expect(tid("px-ob-workspace")).not.toBeNull();
     // Accept backlog / Edit unlock only when Ready is complete (4 of 6 here); nothing starts.
     expect((tid("px-ob-accept") as HTMLButtonElement).disabled).toBe(true);
     expect(tid("px-ob-accept")!.getAttribute("title")).toContain("Unlocks when Ready is 6/6");
@@ -857,8 +865,12 @@ describe("the engine's own answers (what the API serves, not the sample)", () =>
     expect(params().get("section")).toBe("repos");
     expect(params().get("drawer")).toBeNull();
     unmount(); realEngine();
+    // The wireframes draw no onboarding drawer: the old link opens screen 10's own page.
     await openProject("&drawer=onboarding");
-    expect(tid("px-drawer-onboarding")).not.toBeNull();
+    expect(params().get("tab")).toBe("onboarding");
+    expect(params().get("drawer")).toBeNull();
+    expect(tid("px-onboarding")).not.toBeNull();
+    expect(tid("px-tabs")).toBeNull();
   });
 
   it("What's next accepts each item its own way: a roadmap item is planned, a proposed one starts through the door", async () => {

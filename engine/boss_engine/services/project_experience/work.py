@@ -837,7 +837,7 @@ def _onboarding_item(connection: Connection, project_id: str,
                 for f in flow]
     started, finished = ob.get("started_at"), ob.get("finished_at")
     faces = [f for f in (face(roster, "engineering_captain"), face(roster, "chief_of_staff")) if f]
-    opened = project_href(project_id, tab="work", drawer="onboarding")
+    opened = project_href(project_id, tab="onboarding")
     return {
         "id": str(ob["run_id"]), "source": "onboarding", "source_label": "Setup",
         "label": "Onboarding", "title": "Onboarding", "kind": "setup", "state": state,

@@ -1,0 +1,13 @@
+version: 1
+name: helpdesk-ai
+kind: compose
+compose:
+  file: docker-compose.yml
+health: [{url: "{target.public_url}/auth/providers", expect: 200}]
+open: {url: "{target.public_url}"}
+metrics: {path: /metrics}
+signals: {path: /boss/signals, callback: /boss/incidents}
+env:
+  ALLOW_DEMO_SEED: "true"
+  DEMO_PASSWORD: {generate: password}
+  APP_ENV: staging

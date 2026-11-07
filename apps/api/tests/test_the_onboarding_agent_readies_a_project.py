@@ -30,9 +30,12 @@ class StubProbes(onboarding.Probes):
     """GitHub and Repo-and-models, as answers; everything else is BOSS's own code."""
 
     def __init__(self, root: Path, *, access=(True, True, True), ci="failed", models=True,
-                 boom: bool = False):
+                 boom: bool = False, kept: bool = True, fetched: bool = False,
+                 pick: str | None = None):
         self.root, self.access, self.ci_state, self.models, self.boom = root, access, ci, models, boom
+        self.kept, self.fetched, self.pick = kept, fetched, pick
         self.index_requested = 0
+        self.asked: list[dict] = []
 
     def check_repository(self, connection, settings, project_id, binding_id):
         if self.boom:
@@ -74,8 +77,23 @@ class StubProbes(onboarding.Probes):
         self.index_requested += 1
 
     def checkout(self, connection, settings, project_id, repo):
+        if not self.kept:          # the index's checkout is gone (an API restart empties /tmp)
+            return None, ["server/index.mjs"]
         files = sorted(str(p.relative_to(self.root)) for p in self.root.rglob("*") if p.is_file())
         return self.root, files
+
+    def fetch(self, engine, settings, project_id, repo, branch, binding_id):
+        if not self.fetched:
+            raise RuntimeError("could not fetch main: network is unreachable")
+        return self.root
+
+    def marshal(self, engine, settings, project_id, run_id, *, message, choices, context, hints):
+        self.asked.append({"choices": choices, "context": context, "hints": hints})
+        if self.pick is None:
+            return {"decided": False, "action": None, "reason": "no model is connected"}
+        chosen = next((c["key"] for c in choices if self.pick in c["label"]), None)
+        return {"decided": chosen is not None, "action": chosen,
+                "reason": "A red suite blocks every later change. Then the rest."}
 
 
 @pytest.fixture(scope="module")
@@ -187,7 +205,9 @@ def test_it_readies_the_project_and_proposes_the_backlog_and_first_work(world, c
     assert items["repo_access"]["state"] == "done" and items["repo_access"]["sub"] == "Read · Write · PR"
     assert items["models"]["state"] == "done"
     assert items["knowledge"]["state"] == "done" and "7 files" in items["knowledge"]["detail"]
-    assert items["tests"]["state"] == "failed" and items["tests"]["sub"] == "5 / 6 pass"
+    # Tests RAN (in CI): the check is done and its failures go to the backlog (screen 10
+    # "6 failing → backlog"); the red default branch is the Baseline build's failure.
+    assert items["tests"]["state"] == "done" and items["tests"]["sub"] == "1 failing → backlog"
     assert items["baseline_build"]["state"] == "failed"
     assert items["deploy_target"]["owner"] == "you"
     assert items["secrets"]["owner"] == "you" and "STRIPE_KEY" in items["secrets"]["detail"]
@@ -204,10 +224,20 @@ def test_it_readies_the_project_and_proposes_the_backlog_and_first_work(world, c
     assert first["start"]["href"] == f"/v1/projects/{pid}/work"
     assert first["start"]["body"]["kind"] == "bug"
     stages = {s["key"]: s["state"] for s in run["stages"]}
-    assert stages["discover"] == "failed" and stages["backlog"] == "done"
+    # Discover is done (it read everything); the red default branch fails READY, not Discover.
+    assert stages["discover"] == "done" and stages["ready"] == "failed"
+    assert stages["backlog"] == "done"
+    assert all(b["why"] for b in backlog), "every item says why in a few words"
+    assert first["first_by"] == "score" and first["why_first"] == "highest Chief-of-Staff score"
     assert stages["first_work"] == "now"
-    labels = [n["label"] for n in run["discover"]["nodes"]]
-    assert labels == ["Repo access", "Stack found", "Mapping code", "Tests run"]
+    # Screen 10's Discovered map: each node's label IS the finding; screen 00b's live diagram
+    # names the steps (Stack found · Mapping code · Tests run · Ready check).
+    nodes = run["discover"]["nodes"]
+    assert [n["key"] for n in nodes] == ["files", "stack", "tests", "hotspots", "docs"]
+    assert nodes[0]["label"].endswith(" files") and nodes[2]["label"] == "5/6 tests"
+    assert all(len(n["label"].split()) <= 4 for n in nodes)
+    assert [n["label"] for n in run["discover"]["live"]] == ["Stack found", "Mapping code",
+                                                             "Tests run", "Ready check"]
     with engine.connect() as db:
         facts = db.execute(text("SELECT facts FROM project_onboarding_runs WHERE project_id = :p"),
                            {"p": pid}).scalar()
@@ -246,7 +276,7 @@ def test_it_waits_for_the_code_graph_then_carries_on_from_githubs_file_list(worl
                                                                           monkeypatch):
     pid = _project(world, client, engine)
     run_id = _run_id(engine, pid)
-    probes = StubProbes(checkout, ci="none")
+    probes = StubProbes(checkout, ci="none", kept=False)
     first = onboarding.advance(engine, get_settings(), run_id, probes=probes, requeue=False)
     assert first["again"] is True and first["state"] == "running"
     knowledge = {i["key"]: i for i in _view(engine, pid)["checklist"]}["knowledge"]
@@ -256,7 +286,11 @@ def test_it_waits_for_the_code_graph_then_carries_on_from_githubs_file_list(worl
     second = onboarding.advance(engine, get_settings(), run_id, probes=probes, requeue=False)
     assert second["again"] is False
     items = {i["key"]: i for i in _view(engine, pid)["checklist"]}
-    assert "GitHub's file list" in items["knowledge"]["detail"]
+    assert "GitHub's list of 3 files only" in items["knowledge"]["detail"]
+    assert "network is unreachable" in items["knowledge"]["detail"]
+    # The secrets item gives the SAME reason, never a contradicting one.
+    assert items["secrets"]["state"] == "skipped"
+    assert "network is unreachable" in items["secrets"]["detail"]
     assert items["baseline_build"]["state"] == "skipped"
     assert "own sandbox" in items["baseline_build"]["detail"]
 

@@ -107,6 +107,7 @@ DETECTOR_ICONS: dict[str, str] = {
     "missing_tests": "test-tube", "review_repeat": "magnifying-glass", "design_drift": "compass",
     "cost_spike": "coins", "flaky_test": "shuffle", "slow_stage": "gauge",
     "user_friction": "hand-pointing", "feature_demand": "trend-up", "slow_query": "gauge",
+    "onboarding": "compass",
 }
 
 

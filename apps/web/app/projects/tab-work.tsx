@@ -213,9 +213,9 @@ export function WorkTab({ ctx }: { ctx: PxCtx }) {
   );
 }
 
-/** Opening a row: the work drawer (05b) in place; the onboarding row opens the onboarding agent's. */
+/** Opening a row: the work drawer (05b) in place; the onboarding row opens the onboarding page (screen 10). */
 function openItem(ctx: PxCtx, w: WorkItem) {
-  if (w.kind === "setup" && w.source === "onboarding") writePxUrl({ drawer: "onboarding" });
+  if (w.kind === "setup" && w.source === "onboarding") writePxUrl({ tab: "onboarding", drawer: null });
   else ctx.open("work", w.id);
 }
 
@@ -506,7 +506,7 @@ export function WorkRow({ w, ctx, fresh = false, rank = null }: { w: WorkItem; c
           {w.links.workflow_run ? <PxLink href={w.links.workflow_run} title="Workflow run" testid={`px-work-run-${w.id}`}><FlowArrow size={11} aria-hidden /> {w.run_number ? `Run #${w.run_number}` : "Run"}</PxLink> : null}
           {setup ? (
             <button type="button" className="px-chip" title="What the onboarding agent did, step by step" data-testid={`px-work-onb-${w.id}`}
-                    onClick={() => writePxUrl({ drawer: "onboarding" })}><FlowArrow size={11} aria-hidden /> Onboarding run</button>
+                    onClick={() => writePxUrl({ tab: "onboarding", drawer: null })}><FlowArrow size={11} aria-hidden /> Onboarding run</button>
           ) : null}
           {w.links.build && w.state !== "done" ? <PxLink href={w.links.build} title="Build page in Code Tasks" testid={`px-work-build-${w.id}`}><Code size={11} aria-hidden /> Build</PxLink> : null}
           {w.links.build && (w.state === "running" || w.state === "stalled") ? <PxLink href={`${w.links.build}&view=logs`} title="The build's live log" testid={`px-work-log-${w.id}`}><TerminalWindow size={11} aria-hidden /> Live log</PxLink> : null}

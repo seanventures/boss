@@ -203,7 +203,7 @@ def setup_cards(connection: Connection, project_id: str,
                     "detail": item.get("detail") or "", "mini": [], "work_id": onboarding_row,
                     "action": {"label": action.get("label") or "Open",
                                "href": action.get("href") or project_href(project_id,
-                                                                          drawer="onboarding"),
+                                                                          tab="onboarding"),
                                "decision_id": None}})
     waits = prod_waits(connection, project_id) if production_waits is None else production_waits
     if waits:

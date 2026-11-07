@@ -293,7 +293,7 @@ describe("Planned, in Marshal's rank (05-18..23, 05-33)", () => {
 });
 
 describe("Onboarding is a row (05-27)", () => {
-  it("Setup, its mini flow, Helm and Marshal, its cost, and it opens the onboarding drawer", async () => {
+  it("Setup, its mini flow, Helm and Marshal, its cost, and it opens the onboarding page", async () => {
     engine();
     await openWork();
     const row = tid("px-work-onb_36")!;
@@ -303,7 +303,7 @@ describe("Onboarding is a row (05-27)", () => {
     expect(row.querySelectorAll(".px-faces > *").length).toBe(2);
     expect(row.querySelector(".px-wk-ico")!.getAttribute("data-c")).toBe("green");
     await press(tid("px-work-onb-onb_36"));
-    expect(new URLSearchParams(window.location.search).get("drawer")).toBe("onboarding");
+    expect(new URLSearchParams(window.location.search).get("tab")).toBe("onboarding");
   });
 });
 
