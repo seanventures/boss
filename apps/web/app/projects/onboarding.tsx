@@ -22,6 +22,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import {
   ArrowDown, ArrowUp, ArrowsClockwise, Brain, Check, CheckCircle, Compass, GithubLogo, GitPullRequest, HandWaving, ListChecks, ListNumbers,
   MagnifyingGlass, Note, PencilSimple, Play, Rocket, Sparkle, Terminal, Warning, XCircle,
+  Clock,
 } from "@phosphor-icons/react";
 
 import { GatedButton } from "../../components/gated";
@@ -193,6 +194,21 @@ function WorkspaceRow({ ob }: { ob: Onboarding }) {
   );
 }
 
+/** When a skipped readiness check happens instead (it is not undone, it is later). */
+export function skipWord(key: string): string {
+  if (key === "baseline_build" || key === "tests" || key === "build") return "on first build";
+  if (key === "secrets") return "when the app needs one";
+  if (key === "deploy_target") return "on first deploy";
+  return "later";
+}
+/** " · 1 on first build" / " · 2 later" for the counter; "" when nothing was skipped. */
+export function skippedWords(rows: { key: string; state: string }[]): string {
+  const skipped = rows.filter((r) => r.state === "skipped");
+  if (!skipped.length) return "";
+  const words = [...new Set(skipped.map((r) => skipWord(r.key)))];
+  return ` · ${skipped.length} ${words.length === 1 ? words[0] : "later"}`;
+}
+
 export function OnboardingView({ projectId, ob, onRefresh }: { projectId: string; ob: Onboarding; onRefresh?: () => void }) {
   const [said, setSaid] = useState<SaidT>(null);
   const elapsed = useElapsed(ob);
@@ -270,7 +286,9 @@ export function OnboardingView({ projectId, ob, onRefresh }: { projectId: string
         </section>
         <section className="px-card px-ob-ready" aria-labelledby="px-ob-r">
           <div className="px-card-h"><Ico icon={ListChecks} c="teal" /><h2 id="px-ob-r">Ready for work</h2>
-            <span className="px-tag" data-tone="blue" data-testid="px-ob-ready-count">{ready}/{rows.length}</span>
+            {/* THE COUNTER SAYS WHAT IT COUNTS: "6/6 ready · 1 on first build" — a skipped
+                check counts as ready and is named, never hidden inside the total. */}
+            <span className="px-tag" data-tone="blue" data-testid="px-ob-ready-count">{ready}/{rows.length} ready{skippedWords(rows)}</span>
 </div>
           <div data-testid="px-ob-checklist">
             {!rows.length ? <p className="px-faint" style={{ margin: 0 }}>Helm checks repo access, the build, the tests, the workflow, where it deploys and the secrets it needs — and asks only for what it can&apos;t do.</p> : null}
@@ -278,8 +296,10 @@ export function OnboardingView({ projectId, ob, onRefresh }: { projectId: string
               const you = c.owner === "you" && c.state !== "done";
               return (
                 <div key={c.key} className="px-ck-i" data-s={you ? "you" : c.state} data-testid={`px-ob-item-${c.key}`} title={c.detail}>
-                  <span className="px-ck-b" aria-hidden>{c.state === "done" || c.state === "skipped" ? <Check size={11} weight="bold" /> : you ? "!" : c.state === "failed" ? "✕" : ""}</span>
-                  <span className="px-ck-t">{c.label}<small>{c.sub || c.detail}</small><span className="px-sr">{you ? "needs you" : STATE_WORD[c.state]}. {c.detail}</span></span>
+                  {/* SKIPPED IS NOT UNDONE: a muted clock and when it happens ("on first build"),
+                      never an empty box beside the ticks. */}
+                  <span className="px-ck-b" aria-hidden>{c.state === "done" ? <Check size={11} weight="bold" /> : c.state === "skipped" ? <Clock size={11} weight="bold" /> : you ? "!" : c.state === "failed" ? "✕" : ""}</span>
+                  <span className="px-ck-t">{c.label}<small>{c.state === "skipped" ? <><b className="px-ck-when">{skipWord(c.key)}</b>{c.sub || c.detail ? ` · ${c.sub || c.detail}` : ""}</> : c.sub || c.detail}</small><span className="px-sr">{you ? "needs you" : c.state === "skipped" ? skipWord(c.key) : STATE_WORD[c.state]}. {c.detail}</span></span>
                   {you && c.action ? <a className="px-btn" data-kind="amber" data-size="s" href={pxHref(c.action.href)} data-testid={`px-ob-act-${c.key}`}>{c.action.label}</a>
                     : <span title={`${crewOf(c.agent).name} ${c.state === "now" ? "is on it" : "did this"}`}><Face agent={crewOf(c.agent)} size={20} state={c.state === "now" ? "working" : "idle"} /></span>}
                 </div>

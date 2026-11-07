@@ -110,7 +110,13 @@ describe("Onboarding is its own page (screen 10)", () => {
     expect(tid("px-discover-files")!.textContent).toBe("109 files");
     expect(tid("px-discover-tests")!.textContent).toBe("71/190 tests");
     // Ready for work: six rows, the agent on each, the tests row sends its failures to the backlog.
-    expect(tid("px-ob-ready-count")!.textContent).toBe("6/6");
+    // The counter says what it counts; the skipped build is a muted clock "on first build", never
+    // an empty box beside the ticks.
+    expect(tid("px-ob-ready-count")!.textContent).toBe("6/6 ready · 1 on first build");
+    const skipped = $$("[data-testid^='px-ob-item-'][data-s='skipped']");
+    expect(skipped.length).toBe(1);
+    expect(skipped[0].textContent).toContain("on first build");
+    expect(skipped[0].querySelector(".px-ck-b svg")).not.toBeNull();
     expect(tid("px-ob-item-tests")!.textContent).toContain("119 failing → backlog");
     expect(tid("px-ob-item-secrets")!.textContent).toContain("22 read · 2 generated");
     // Backlog: Marshal's order with each item's why.

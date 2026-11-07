@@ -775,3 +775,8 @@ button.px-h-num:focus-visible { outline: 2px solid var(--accent-text); outline-o
 .px-hchip-health[data-s="down"] { color: var(--red); }
 .px-hchip-health[data-s="unknown"] { color: var(--faint); }
 .px-hchip-health[aria-current="page"] { box-shadow: inset 0 0 0 1px currentColor; }
+
+/* A readiness check that happens later (skipped): muted, dashed, a clock — never an empty box. */
+.px-ck-i[data-s="skipped"] .px-ck-b { border-style: dashed; color: var(--faint); background: var(--surface-3); }
+.px-ck-i[data-s="skipped"] .px-ck-t { color: var(--muted); }
+.px-ck-when { font-weight: 600; color: var(--muted); }

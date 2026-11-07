@@ -127,3 +127,14 @@ describe("every old home of a project setting shows the Moved bar (13-29, 13-30,
     }
   });
 });
+
+describe("a skipped readiness check is later, not undone (screen 10)", () => {
+  it("names when it happens and the counter counts it in words", async () => {
+    const { skipWord, skippedWords } = await import("../app/projects/onboarding");
+    expect(skipWord("baseline_build")).toBe("on first build");
+    expect(skipWord("secrets")).toBe("when the app needs one");
+    expect(skippedWords([{ key: "baseline_build", state: "skipped" }, { key: "repo", state: "done" }])).toBe(" · 1 on first build");
+    expect(skippedWords([{ key: "baseline_build", state: "skipped" }, { key: "secrets", state: "skipped" }])).toBe(" · 2 later");
+    expect(skippedWords([{ key: "repo", state: "done" }])).toBe("");
+  });
+});
