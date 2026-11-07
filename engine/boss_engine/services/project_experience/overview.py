@@ -191,7 +191,7 @@ def _cost_week(connection: Connection, project_id: str, now: datetime) -> dict[s
 def tiles(project_id: str, items: list[dict[str, Any]], envs: list[dict[str, Any]],
           cost: dict[str, Any]) -> dict[str, Any]:
     by_state = work_service.counts(items)
-    open_count = sum(by_state[k] for k in ("running", "needs_you", "planned"))
+    open_count = sum(by_state[k] for k in ("running", "stalled", "needs_you", "planned"))
     running = [w for w in items if w["state"] == "running"]
     current = None
     if running:

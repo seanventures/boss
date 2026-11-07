@@ -27,7 +27,7 @@ import {
   FX_DEPLOYMENTS, FX_HEALTH, FX_JUMP, FX_KNOWLEDGE, FX_ONBOARDING, FX_OVERVIEW, FX_ROADMAP, FX_SETTINGS, FX_SUMMARY, FX_WORK,
 } from "../lib/project-experience-fixtures";
 import {
-  label4, parseOverview, parseSummary, parseWork, pxHref, readPxUrl, TABS,
+  attemptsPill, label4, parseOverview, parseSummary, parseWork, pxHref, readPxUrl, TABS,
 } from "../lib/project-experience";
 import { parseResident } from "../lib/infra-view";
 import { rulesWire, historyWire } from "./_helpers/alerts-fixtures";
@@ -439,6 +439,69 @@ describe("Work (screens 5, 5b)", () => {
     expect(tid("px-compose-start")!.getAttribute("aria-disabled")).toBe("true");
     expect(tid("px-work-start-wi_email")!.getAttribute("aria-disabled")).toBe("true");
     expect(tid("px-head-new-work")!.getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("a build, its retries and follow-ups are ONE row: clean title, attempt pill, Stalled since, never Running", async () => {
+    engine();
+    await openProject("&tab=work");
+    // One row for the whole chain; no attempt is a row of its own.
+    expect(tid("px-work-crun_aml")).not.toBeNull();
+    for (const id of ["crun_aml_f3", "crun_aml_f2", "crun_aml_r1"]) expect(tid(`px-work-${id}`)).toBeNull();
+    const row = tid("px-work-crun_aml")!;
+    expect(tid("px-work-open-crun_aml")!.textContent).toBe("AML flagged line by kind");
+    expect(row.textContent).not.toContain("Follow-up: checks failing");
+    // Human words, never the raw source.
+    expect(row.textContent).toContain("Build");
+    expect(row.textContent).not.toContain("code_task");
+    expect(tid("px-work-stalled-crun_aml")!.textContent).toMatch(/^Stalled · since /);
+    expect(row.getAttribute("data-s")).toBe("stalled");
+    // Counted as Stalled, not Running; the chips match the rows.
+    expect(tid("px-work-f-stalled")!.textContent).toContain("1");
+    expect(tid("px-work-f-running")!.textContent).toContain("1");
+    await press(tid("px-work-f-running"));
+    expect(tid("px-work-crun_aml")).toBeNull();
+    await press(tid("px-work-f-stalled"));
+    expect($$("[data-testid='px-work-rows'] .px-wk").length).toBe(1);
+    await press(tid("px-work-f-all"));
+    // The pill expands the attempts, newest first, each labelled and openable.
+    const pill = tid("px-work-attempts-crun_aml")!;
+    expect(pill.textContent).toContain("7 attempts");
+    expect(pill.getAttribute("aria-expanded")).toBe("false");
+    expect((tid("px-work-attempts-list-crun_aml") as HTMLElement).hidden).toBe(true);
+    await press(pill);
+    expect(pill.getAttribute("aria-expanded")).toBe("true");
+    expect((tid("px-work-attempts-list-crun_aml") as HTMLElement).hidden).toBe(false);
+    const labels = $$("[data-testid='px-work-attempts-list-crun_aml'] .px-att b").map((b) => b.textContent);
+    expect(labels).toEqual(["Follow-up 3 · checks failing", "Follow-up 2 · retry 1", "Follow-up 2 · checks failing",
+                            "Follow-up 1 · retry 1", "Follow-up 1 · checks failing", "Retry 1", "Build"]);
+    expect(tid("px-attempt-crun_aml_f3")!.textContent).toContain("Stalled");
+    expect(tid("px-attempt-crun_aml_f2")!.textContent).toContain("Handed on");
+    expect(tid("px-attempt-pr-crun_aml_r1")!.getAttribute("href")).toContain("/pull/6");
+    // An attempt opens as itself in the drawer.
+    await press(tid("px-attempt-open-crun_aml_r1"));
+    expect(params().get("drawer")).toBe("work:crun_aml_r1");
+    expect(tid("px-drawer-work")!.textContent).toContain("Retry 1");
+    expect(tid("px-drawer-link-build")!.getAttribute("href")).toContain("build=crun_aml_r1");
+  });
+
+  it("the group's drawer says it is stalled and lists every attempt; the board shows the pill", async () => {
+    engine();
+    await openProject("&tab=work&drawer=build:crun_aml");
+    expect(tid("px-drawer-work-stalled")!.textContent).toMatch(/Stalled since/);
+    expect($$("[data-testid='px-drawer-work-attempts'] .px-li").length).toBe(7);
+    unmount();
+    engine();
+    await openProject("&tab=work");
+    await press(tid("px-work-board"));
+    expect(tid("px-work-columns")!.className).toContain("px-g5");
+    expect(tid("px-board-attempts-crun_aml")!.textContent).toContain("7 attempts");
+  });
+
+  it("the attempt pill says follow-ups when there are only follow-ups", () => {
+    expect(attemptsPill({ attempt_count: 3, followups: 2, retries: 0 })).toBe("↻ 2 follow-ups");
+    expect(attemptsPill({ attempt_count: 2, followups: 1, retries: 0 })).toBe("↻ 1 follow-up");
+    expect(attemptsPill({ attempt_count: 4, followups: 2, retries: 1 })).toBe("4 attempts");
+    expect(attemptsPill({ attempt_count: 1, followups: 0, retries: 0 })).toBe("");
   });
 
   it("a drawer opened from a link lands open (deep link) and a stale one says so", async () => {

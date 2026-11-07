@@ -16,7 +16,7 @@ STAGE_LABELS = {"onboarding": "Onboarded", "ready": "Ready", "backlog": "Backlog
                 "working": "Working", "staging": "Staging", "production": "Production"}
 STATUS_LABELS = {"onboarding": "Onboarding", "ready": "Ready for work", "backlog": "Backlog ready",
                  "working": "Working", "staging": "On staging", "production": "In production"}
-WORK_STATES = ("planned", "running", "needs_you", "done", "failed")
+WORK_STATES = ("planned", "running", "stalled", "needs_you", "done", "failed")
 HEALTH = ("healthy", "degraded", "down", "unknown")
 
 LIVE_RUN = ("queued", "validating", "running", "waiting", "paused", "blocked")

@@ -7,7 +7,8 @@
  */
 import React, { useEffect, useRef, useState } from "react";
 import {
-  Bug, CheckCircle, Code, FlowArrow, GitPullRequest, Kanban, Lightning, ListBullets, Play, Plus, Sparkle, Terminal, Ticket, XCircle, Globe,
+  ArrowBendDownRight, Bug, CaretDown, CheckCircle, Code, FlowArrow, GitPullRequest, Kanban, Lightning, ListBullets, PauseCircle, Play, Plus, Sparkle,
+  Terminal, Ticket, XCircle, Globe,
 } from "@phosphor-icons/react";
 
 import { GatedButton } from "../../components/gated";
@@ -15,8 +16,10 @@ import { post } from "../workflows/delivery-api";
 import { ReadinessPanel, unaccepted, type Readiness } from "../workflow-readiness-ui";
 import { startBody, type StartView } from "../../lib/start-project";
 import {
-  WORK_ORDER, WORK_WORDS, isMissingStatus, pxHref, startWork, writePxUrl, type WorkItem, type WorkState,
+  ATTEMPT_WORDS, KIND_WORDS, WORK_ORDER, WORK_WORDS, attemptsPill, isMissingStatus, pxHref, startWork, writePxUrl,
+  type Attempt, type WorkItem, type WorkState,
 } from "../../lib/project-experience";
+import { localWith, stampLocal, whenLocal } from "../../lib/local-time";
 import { Empty, Face, Flow, Ico, Loading, Failed, EngineNotReady, PxLink, Said, Stations } from "./kit";
 import type { PxCtx } from "./project-page";
 
@@ -28,9 +31,12 @@ const KINDS: { key: Kind; label: string; icon: typeof Sparkle; ph: string }[] = 
 ];
 const STATE_ICON: Record<WorkState, React.ReactNode> = {
   needs_you: <GitPullRequest size={14} style={{ color: "var(--amber)" }} aria-hidden />, running: <Lightning size={14} weight="fill" style={{ color: "var(--teal)" }} aria-hidden />,
+  stalled: <PauseCircle size={15} weight="fill" style={{ color: "var(--amber)" }} aria-hidden />,
   planned: <ListBullets size={14} className="px-faint" aria-hidden />, done: <CheckCircle size={14} weight="fill" style={{ color: "var(--green)" }} aria-hidden />,
   failed: <XCircle size={14} weight="fill" style={{ color: "var(--red)" }} aria-hidden />,
 };
+
+const DOT: Record<WorkState, string | undefined> = { needs_you: "you", stalled: "stalled", running: "now", done: "done", failed: "bad", planned: undefined };
 
 export function WorkTab({ ctx }: { ctx: PxCtx }) {
   const [filter, setFilter] = useState<WorkState | "all">("all");
@@ -46,7 +52,7 @@ export function WorkTab({ ctx }: { ctx: PxCtx }) {
           <button type="button" className="px-filter" aria-pressed={filter === "all"} onClick={() => setFilter("all")} data-testid="px-work-f-all">All <span className="px-mono">{items.length}</span></button>
           {WORK_ORDER.filter((k) => counts[k]).map((k) => (
             <button key={k} type="button" className="px-filter" aria-pressed={filter === k} onClick={() => setFilter(k)} data-testid={`px-work-f-${k}`}>
-              <span className="px-dot" data-s={k === "needs_you" ? "you" : k === "running" ? "now" : k === "done" ? "done" : k === "failed" ? "bad" : undefined} aria-hidden />
+              <span className="px-dot" data-s={DOT[k]} aria-hidden />
               {WORK_WORDS[k]} <span className="px-mono">{counts[k]}</span></button>
           ))}
         </div>
@@ -69,21 +75,28 @@ export function WorkTab({ ctx }: { ctx: PxCtx }) {
         <div className="px-list" data-testid="px-work-rows">
           {WORK_ORDER.filter((k) => shown.some((w) => w.state === k)).map((k) => (
             <React.Fragment key={k}>
-              <div className="px-list-g"><span className="px-dot" data-s={k === "needs_you" ? "you" : k === "running" ? "now" : k === "done" ? "done" : k === "failed" ? "bad" : undefined} aria-hidden />
-                {WORK_WORDS[k]}{k === "planned" ? <span className="px-faint" style={{ fontWeight: 400 }}> · ranked by Marshal</span> : null}</div>
+              <div className="px-list-g"><span className="px-dot" data-s={DOT[k]} aria-hidden />
+                {WORK_WORDS[k]}{k === "planned" ? <span className="px-faint" style={{ fontWeight: 400 }}> · ranked by Marshal</span>
+                  : k === "stalled" ? <span className="px-faint" style={{ fontWeight: 400 }}> · nothing has moved; open one to retry or stop it</span> : null}</div>
               {shown.filter((w) => w.state === k).map((w) => <WorkRow key={w.id} w={w} ctx={ctx} />)}
             </React.Fragment>
           ))}
         </div>
       ) : (
-        <div className="px-grid px-g4" data-testid="px-work-columns">
-          {(["needs_you", "running", "planned", "done"] as WorkState[]).map((k) => (
+        <div className={`px-grid ${counts.stalled ? "px-g5" : "px-g4"}`} data-testid="px-work-columns">
+          {(["needs_you", "stalled", "running", "planned", "done"] as WorkState[]).filter((k) => k !== "stalled" || counts.stalled).map((k) => (
             <section key={k} className="px-col" aria-label={WORK_WORDS[k]}>
               <div className="px-row" style={{ marginBottom: 8 }}><span className="px-lbl">{WORK_WORDS[k]}</span><span className="px-nbadge">{counts[k] ?? 0}</span></div>
               {shown.filter((w) => w.state === k).map((w) => (
                 <button key={w.id} type="button" className="px-card" data-link onClick={() => ctx.open("work", w.id)} data-testid={`px-board-${w.id}`}
                         style={{ width: "100%", textAlign: "left", font: "inherit", color: "inherit", marginBottom: 8, display: "flex", flexDirection: "column", gap: 6, padding: 10 }}>
                   <b style={{ fontSize: ".66rem" }}>{w.label}</b><Stations stages={w.stages} />
+                  {attemptsPill(w) || w.state === "stalled" ? (
+                    <span className="px-row" style={{ gap: 6 }}>
+                      {w.state === "stalled" ? <StalledTag w={w} /> : null}
+                      {attemptsPill(w) ? <span className="px-attempts-pill" data-testid={`px-board-attempts-${w.id}`}>{attemptsPill(w)}</span> : null}
+                    </span>
+                  ) : null}
                 </button>
               ))}
             </section>
@@ -170,8 +183,19 @@ function Composer({ ctx }: { ctx: PxCtx }) {
   );
 }
 
+/** "Stalled · since Tue 14:05": amber, in the viewer's own time. */
+export function StalledTag({ w }: { w: Pick<WorkItem, "stalled_since" | "id"> }) {
+  const since = whenLocal(w.stalled_since);
+  return (
+    <span className="px-tag" data-tone="amber" data-testid={`px-work-stalled-${w.id}`}
+          title={w.stalled_since ? `No progress since ${stampLocal(w.stalled_since)}` : "No progress"}>
+      Stalled{since ? ` · since ${since}` : ""}</span>
+  );
+}
+
 export function WorkRow({ w, ctx }: { w: WorkItem; ctx: PxCtx }) {
   const [said, setSaid] = useState("");
+  const [open, setOpen] = useState(false);
   const startNow = async () => {
     // A planned roadmap item starts as itself: its title, and the item it came from.
     const r = await startWork(ctx.projectId, w.kind === "bug" ? "bug" : "feature", w.detail && w.detail !== w.label ? `${w.label}\n\n${w.detail}` : w.label,
@@ -179,36 +203,87 @@ export function WorkRow({ w, ctx }: { w: WorkItem; ctx: PxCtx }) {
     setSaid(r.ok ? (r.demo ? "Sample mode — nothing was sent." : "Started.") : (r.error ?? "It didn't start."));
     if (r.ok && !r.demo) ctx.refreshWork();
   };
+  const pill = attemptsPill(w);
+  const grouped = w.attempts.length > 1;
+  const regionId = `px-attempts-${w.id}`;
+  // Never a raw internal string ("code_task"): the source's human word, or the source as given.
+  const source = w.source === "roadmap" ? "" : w.source_label || (/^[a-z]+_[a-z_]+$/.test(w.source) ? "" : w.source);
   return (
-    <div className="px-wk" data-s={w.state} data-testid={`px-work-${w.id}`} onClick={(e) => { if (!(e.target as HTMLElement).closest("a,button")) ctx.open("work", w.id); }}>
-      {STATE_ICON[w.state]}
-      <span style={{ minWidth: 0 }}>
-        <button type="button" className="px-wk-t px-ell" style={{ display: "block", maxWidth: "100%" }} onClick={() => ctx.open("work", w.id)} data-testid={`px-work-open-${w.id}`}>{w.label}</button>
-        <span className="px-wk-sub">
-          <span className="px-tag" data-tone={w.kind === "bug" ? "red" : w.source === "roadmap" ? "violet" : undefined}>{w.source === "roadmap" ? "from Roadmap" : w.kind[0].toUpperCase() + w.kind.slice(1)}</span>
-          {w.source && w.source !== "roadmap" ? <span>{w.source}</span> : null}
-          {w.age ? <span>{w.state === "needs_you" ? `Waiting ${w.age}` : w.age}</span> : null}
-          {w.cost_usd !== null ? <span className="px-mono">${w.cost_usd.toFixed(2)}</span> : null}
+    <>
+      <div className="px-wk" data-s={w.state} data-open={open || undefined} data-testid={`px-work-${w.id}`}
+           onClick={(e) => { if (!(e.target as HTMLElement).closest("a,button")) ctx.open("work", w.id); }}>
+        {STATE_ICON[w.state]}
+        <span style={{ minWidth: 0 }}>
+          <span className="px-row" style={{ gap: 6, flexWrap: "nowrap", minWidth: 0 }}>
+            <button type="button" className="px-wk-t px-ell" style={{ display: "block", minWidth: 0 }} onClick={() => ctx.open("work", w.id)} data-testid={`px-work-open-${w.id}`}>{w.label}</button>
+            {grouped ? (
+              <button type="button" className="px-attempts-pill" aria-expanded={open} aria-controls={regionId} data-testid={`px-work-attempts-${w.id}`}
+                      title={`${w.attempt_count} attempts: ${w.followups} follow-up${w.followups === 1 ? "" : "s"}, ${w.retries} retr${w.retries === 1 ? "y" : "ies"}`}
+                      onClick={() => setOpen((v) => !v)}>
+                {pill}<CaretDown size={10} weight="bold" className="px-chev" aria-hidden /></button>
+            ) : null}
+          </span>
+          <span className="px-wk-sub">
+            <span className="px-tag" data-tone={w.kind === "bug" || w.kind === "fix" ? "red" : w.source === "roadmap" ? "violet" : undefined}>{w.source === "roadmap" ? "from Roadmap" : KIND_WORDS[w.kind] ?? w.kind}</span>
+            {source ? <span>{source}</span> : null}
+            {w.state === "stalled" ? <StalledTag w={w} /> : null}
+            {w.age ? <span>{w.state === "needs_you" ? `Waiting ${w.age}` : w.age}</span> : null}
+            {w.cost_usd !== null ? <span className="px-mono">${w.cost_usd.toFixed(2)}</span> : null}
+          </span>
         </span>
+        <Stations stages={w.stages} />
+        <span className="px-faces">{w.agents.slice(0, 3).map((a, i) => <Face key={`${a.name}-${i}`} agent={a} size={20} state={w.state === "running" && i === w.agents.length - 1 ? "working" : "idle"} />)}</span>
+        <span className="px-wk-links">
+          {w.links.workflow_run ? <PxLink href={w.links.workflow_run} testid={`px-work-run-${w.id}`}><FlowArrow size={11} aria-hidden /> Run</PxLink> : null}
+          {w.links.build ? <PxLink href={w.links.build} testid={`px-work-build-${w.id}`}><Code size={11} aria-hidden /> Build</PxLink> : null}
+          {w.links.pr ? <PxLink href={w.links.pr.external_url} testid={`px-work-pr-${w.id}`}><GitPullRequest size={11} aria-hidden /> PR #{w.links.pr.number}</PxLink> : null}
+          {w.links.preview ? <PxLink href={w.links.preview}><Globe size={11} aria-hidden /> Preview</PxLink> : null}
+          {w.links.deploy ? <PxLink href={w.links.deploy}><Terminal size={11} aria-hidden /> Staging</PxLink> : null}
+        </span>
+        <span className="px-row">
+          {w.state === "needs_you" ? (
+            <button type="button" className="px-btn" data-kind="amber" data-size="s" data-testid={`px-work-act-${w.id}`} onClick={() => ctx.open("work", w.id)}>
+              {w.links.pr ? "Merge" : "Decide"}</button>
+          ) : w.state === "planned" ? (
+            <GatedButton permission="workflow_run:start" projectId={ctx.projectId} className="px-btn" data-size="s" data-testid={`px-work-start-${w.id}`}
+                         onClick={() => void startNow()}><Play size={11} weight="fill" aria-hidden /> Start now</GatedButton>
+          ) : null}
+          <Said text={said} />
+        </span>
+      </div>
+      {grouped ? (
+        <div className="px-attempts" id={regionId} data-open={open || undefined} role="region" aria-label={`Attempts of ${w.label}`} hidden={!open} data-testid={`px-work-attempts-list-${w.id}`}>
+          <div className="px-attempts-in">
+            {w.attempts.map((t) => <AttemptRow key={t.id} t={t} ctx={ctx} />)}
+          </div>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+const ATTEMPT_DOT: Record<Attempt["state"], string | undefined> = {
+  running: "now", stalled: "stalled", needs_you: "you", done: "done", failed: "bad", handed_on: undefined, planned: undefined,
+};
+
+/** One attempt in a group's expander: what it was, when (local), how it ended, its PR, open it. */
+function AttemptRow({ t, ctx }: { t: Attempt; ctx: PxCtx }) {
+  const when = localWith(t.created_at, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  return (
+    <div className="px-att" data-s={t.state} data-testid={`px-attempt-${t.id}`}>
+      <ArrowBendDownRight size={12} className="px-faint" aria-hidden />
+      <span className="px-dot" data-s={ATTEMPT_DOT[t.state]} aria-hidden />
+      <span style={{ minWidth: 0 }}>
+        <b className="px-ell" style={{ display: "block" }}>{t.label}</b>
+        <small className="px-faint">{when}</small>
       </span>
-      <Stations stages={w.stages} />
-      <span className="px-faces">{w.agents.slice(0, 3).map((a, i) => <Face key={`${a.name}-${i}`} agent={a} size={20} state={w.state === "running" && i === w.agents.length - 1 ? "working" : "idle"} />)}</span>
-      <span className="px-wk-links">
-        {w.links.workflow_run ? <PxLink href={w.links.workflow_run} testid={`px-work-run-${w.id}`}><FlowArrow size={11} aria-hidden /> Run</PxLink> : null}
-        {w.links.build ? <PxLink href={w.links.build} testid={`px-work-build-${w.id}`}><Code size={11} aria-hidden /> Build</PxLink> : null}
-        {w.links.pr ? <PxLink href={w.links.pr.external_url} testid={`px-work-pr-${w.id}`}><GitPullRequest size={11} aria-hidden /> PR #{w.links.pr.number}</PxLink> : null}
-        {w.links.preview ? <PxLink href={w.links.preview}><Globe size={11} aria-hidden /> Preview</PxLink> : null}
-        {w.links.deploy ? <PxLink href={w.links.deploy}><Terminal size={11} aria-hidden /> Staging</PxLink> : null}
-      </span>
-      <span className="px-row">
-        {w.state === "needs_you" ? (
-          <button type="button" className="px-btn" data-kind="amber" data-size="s" data-testid={`px-work-act-${w.id}`} onClick={() => ctx.open("work", w.id)}>
-            {w.links.pr ? "Merge" : "Decide"}</button>
-        ) : w.state === "planned" ? (
-          <GatedButton permission="workflow_run:start" projectId={ctx.projectId} className="px-btn" data-size="s" data-testid={`px-work-start-${w.id}`}
-                       onClick={() => void startNow()}><Play size={11} weight="fill" aria-hidden /> Start now</GatedButton>
-        ) : null}
-        <Said text={said} />
+      <span className="px-tag" data-tone={t.state === "stalled" || t.state === "needs_you" ? "amber" : t.state === "failed" ? "red" : t.state === "done" ? "green" : t.state === "running" ? "blue" : "idle"}
+            title={t.state === "handed_on" ? "Its checks failed; the repair continued in the next attempt." : t.stalled_since ? `No progress since ${stampLocal(t.stalled_since)}` : undefined}>
+        {ATTEMPT_WORDS[t.state]}</span>
+      <span className="px-mono px-faint px-hide-phone">{t.cost_usd !== null ? `$${t.cost_usd.toFixed(2)}` : ""}</span>
+      <span className="px-row" style={{ gap: 4, justifyContent: "flex-end" }}>
+        {t.pr ? <PxLink href={t.pr.external_url} testid={`px-attempt-pr-${t.id}`}><GitPullRequest size={11} aria-hidden /> #{t.pr.number}</PxLink> : null}
+        <button type="button" className="px-btn" data-size="s" onClick={() => ctx.open("work", t.id)} data-testid={`px-attempt-open-${t.id}`}>Open</button>
       </span>
     </div>
   );

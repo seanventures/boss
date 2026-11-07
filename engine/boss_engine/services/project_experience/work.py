@@ -5,17 +5,28 @@ code task with no workflow run) or a roadmap item someone accepted that has not 
 Its stations — Plan · Decide · Build · Review · PR · Ship — are read from the run's steps in the
 order its workflow version lists them; who did each step is command_center.step_agent, the
 answer every other surface gives.
+
+ONE ROW PER PIECE OF WORK. A follow-up ("Follow-up: checks failing — …") and a retry ("· retry 1")
+are attempts of the build they came from, linked by finalize_ctx `root_run_id` (and, for a build
+a workflow run started, its `workflow_run_id`). They are listed inside their root's row as
+`attempts`, never as rows of their own: the Work tab once showed nineteen identical "Follow-up:
+checks failing — Follow-up: checks…" rows, every one "Running" (2026-11-06).
+
+RUNNING MEANS ACTIVE. A build left `repairing` at phase 'done' handed its work on; one silent past
+the stall horizon is not working. Both read `stalled` (run_liveness.stalled_since), with the
+time it stopped, and are counted apart from Running.
 """
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from typing import Any, Iterable, Mapping, Optional
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
-from .common import (LIVE_RUN, age, agents, as_json, face, href, iso, pr_number, project_href,
-                     words)
+from .common import (LIVE_RUN, age, agents, as_json, aware, face, href, iso, pr_number,
+                     project_href, words)
 
 #: The station strip (contract §3 `stages`), with the capabilities that belong to each.
 STATIONS: tuple[tuple[str, str, frozenset], ...] = (
@@ -49,7 +60,7 @@ def _station_of(capability: str, step_kind: str) -> Optional[str]:
 
 
 def kind_of(workflow_key: Optional[str], given: Any = None) -> str:
-    if str(given or "") in ("feature", "bug", "ticket", "chore", "incident"):
+    if str(given or "") in ("feature", "bug", "fix", "ticket", "chore", "incident"):
         return str(given)
     key = str(workflow_key or "").lower()
     if "incident" in key:
@@ -157,26 +168,232 @@ def _steps(connection: Connection, run_ids: list[str]) -> dict[str, dict[str, di
     return out
 
 
-def _builds(connection: Connection, project_id: str, run_ids: list[str]
-            ) -> dict[str, list[dict[str, Any]]]:
-    if not run_ids:
-        return {}
+#: One build attempt's facts (alias `c`), shared by the workflow-run and the standalone read so
+#: both call a build Running, Stalled or Done by the same rule (run_liveness.stalled_since).
+def _attempt_sql() -> str:
+    from ..run_liveness import LAST_ACTIVITY_SQL, live_job_sql
+
+    return (
+        "SELECT c.id, c.status, c.phase, c.title, c.pull_request_url, c.pull_request_number, "
+        "c.decision_id, dd.status AS decision_status, c.error, c.created_at, c.updated_at, "
+        "c.finalize_ctx->>'workflow_run_id' AS wfr, c.finalize_ctx->>'root_run_id' AS root, "
+        "c.finalize_ctx->>'parent_run_id' AS parent, "
+        "c.finalize_ctx->>'deferred_from_run' AS deferred, "
+        "c.finalize_ctx->>'attempt' AS attempt, "
+        f"{LAST_ACTIVITY_SQL} AS last_activity, {live_job_sql('c')} AS live_job "
+        "FROM code_task_runs c LEFT JOIN decisions dd ON dd.id = c.decision_id ")
+
+
+def _attempt_rows(rows: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
     from ..decision_actions import OPEN_STATUSES
 
-    rows = connection.execute(text(
-        "SELECT c.id, c.status, c.pull_request_url, c.pull_request_number, c.created_at, "
-        "c.decision_id, dd.status AS decision_status, "
-        "c.finalize_ctx->>'workflow_run_id' AS wfr FROM code_task_runs c "
-        "LEFT JOIN decisions dd ON dd.id = c.decision_id WHERE c.project_id = :p "
-        "AND c.finalize_ctx->>'workflow_run_id' = ANY(:ids) ORDER BY c.created_at"),
-        {"p": project_id, "ids": run_ids}).mappings().all()
-    out: dict[str, list[dict[str, Any]]] = {}
+    out = []
     for r in rows:
         row = dict(r)
         # The pull request waiting on a person's merge (the build's own decision).
         row["merge_open"] = bool(r["decision_id"] and r["decision_status"] in OPEN_STATUSES)
-        out.setdefault(str(r["wfr"]), []).append(row)
+        out.append(row)
     return out
+
+
+def _builds(connection: Connection, project_id: str, run_ids: list[str]
+            ) -> dict[str, list[dict[str, Any]]]:
+    if not run_ids:
+        return {}
+    rows = _attempt_rows(connection.execute(text(
+        _attempt_sql() + "WHERE c.project_id = :p AND c.finalize_ctx->>'workflow_run_id' = ANY(:ids) "
+        "ORDER BY c.created_at"), {"p": project_id, "ids": run_ids}).mappings().all())
+    out: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        out.setdefault(str(row["wfr"]), []).append(row)
+    return out
+
+
+# ── attempts: a follow-up or a retry belongs to its root build ─────────────────────────────
+
+#: "Follow-up: checks failing — " as a title lead (an em or en dash; a hyphen is ordinary text).
+_FOLLOWUP_LEAD = re.compile(r"^\s*Follow-up:\s*([^—–]+?)\s*[—–]\s*", re.I)
+_RETRY_TAIL = re.compile(r"\s*·\s*retry\s*\d+\s*$", re.I)
+
+
+def clean_title(title: Any) -> str:
+    """The work's own name: every stacked "Follow-up: … —" lead and "· retry N" tail off."""
+    raw = str(title or "").strip()
+    t = raw
+    for _ in range(20):
+        m = _FOLLOWUP_LEAD.match(t)
+        if not m:
+            break
+        t = t[m.end():]
+    for _ in range(5):
+        t2 = _RETRY_TAIL.sub("", t)
+        if t2 == t:
+            break
+        t = t2
+    return t.strip() or raw
+
+
+def _leads(title: Any) -> int:
+    t, n = str(title or ""), 0
+    while n < 20:
+        m = _FOLLOWUP_LEAD.match(t)
+        if not m:
+            break
+        t, n = t[m.end():], n + 1
+    return n
+
+
+def _reason(title: Any) -> str:
+    m = _FOLLOWUP_LEAD.match(str(title or ""))
+    said = (m.group(1).strip().lower() if m else "")
+    if "review" in said:
+        return "review findings"
+    return said or "checks failing"
+
+
+def _attempt_no(value: Any) -> int:
+    try:
+        return int(str(value or "1"))
+    except ValueError:
+        return 1
+
+
+def label_attempts(members: list[dict[str, Any]], root_id: str) -> None:
+    """Name each attempt of one piece of work, oldest first: "Build", "Retry 1",
+    "Follow-up 2 · checks failing", "Follow-up 2 · retry 1". Sets `attempt_kind` and
+    `attempt_label` on every member.
+
+    The links are structural (finalize_ctx): a follow-up carries `deferred_from_run` (the run it
+    fixes) and no `attempt`; a retry carries `parent_run_id` and `attempt` ≥ 2. Older follow-ups
+    whose retries lost the follow-up mark are recognised by one more "Follow-up:" lead than the
+    run they came from."""
+    by_id = {str(m["id"]): m for m in members}
+    base_of: dict[str, int] = {}
+    retries: dict[int, int] = {}
+    followups = 0
+    for m in sorted(members, key=lambda x: str(iso(x.get("created_at")) or "")):
+        mid = str(m["id"])
+        parent = str(m.get("parent") or "")
+        tried = _attempt_no(m.get("attempt")) >= 2
+        up = by_id.get(parent)
+        followup = not tried and (bool(m.get("deferred")) or (
+            up is not None and _leads(m.get("title")) > _leads(up.get("title"))) or (
+            up is None and mid != root_id and _leads(m.get("title")) > 0))
+        if followup:
+            followups += 1
+            base = followups
+            m["attempt_kind"] = "followup"
+            m["attempt_label"] = f"Follow-up {base} · {_reason(m.get('title'))}"
+        elif mid == root_id or not parent:
+            base = 0
+            m["attempt_kind"] = "build"
+            m["attempt_label"] = "Build"
+        else:
+            base = base_of.get(parent, 0)
+            retries[base] = retries.get(base, 0) + 1
+            m["attempt_kind"] = "retry"
+            m["attempt_label"] = (f"Retry {retries[base]}" if base == 0
+                                  else f"Follow-up {base} · retry {retries[base]}")
+        base_of[mid] = base
+
+
+def attempt_state(r: Mapping[str, Any], now: datetime, horizon: float
+                  ) -> tuple[str, Optional[datetime]]:
+    """A build attempt's work_state, and since when it stalled (run_liveness.stalled_since)."""
+    from ..run_liveness import stalled_since
+
+    status = str(r.get("status") or "")
+    if status in ("failed", "blocked"):
+        state = "failed"
+    elif status in ("completed", "cancelled"):
+        state = "done"
+    elif status == "queued":
+        state = "planned"
+    else:
+        state = "running"
+    if r.get("merge_open") and state != "failed":
+        return "needs_you", None
+    if state != "running":
+        return state, None
+    since = stalled_since(status=status, phase=r.get("phase"),
+                          last_activity=aware(r.get("last_activity")) or aware(r.get("updated_at")),
+                          live_job=bool(r.get("live_job")), now=now, horizon_seconds=horizon)
+    return ("stalled", since) if since else ("running", None)
+
+
+def _horizon() -> float:
+    from ...config import get_settings
+    from ..run_liveness import stall_horizon_seconds
+
+    try:
+        return float(stall_horizon_seconds(get_settings()))
+    except Exception:  # noqa: BLE001 — the default horizon, never a failed tab
+        return float(stall_horizon_seconds(None))
+
+
+def _build_strip(r: Mapping[str, Any], state: str) -> list[dict[str, str]]:
+    """The six stations of a build on its own (no workflow run): Plan and Decide skipped."""
+    phases = ("queued", "provisioning", "coding", "validating", "opening_pr", "done")
+    phase = str(r.get("phase") or "queued")
+    at = phases.index(phase) if phase in phases else 0
+    pr_url = r.get("pull_request_url")
+    merge_open = bool(r.get("merge_open"))
+    # A repair round: its checks failed at review and the work moved to the next attempt.
+    repairing = str(r.get("status") or "") == "repairing" and phase == "done" and not pr_url
+
+    def st(first: int, last: int) -> str:
+        if state == "failed" and first <= at <= last:
+            return "failed"
+        if at > last or state == "done":
+            return "done"
+        if first <= at <= last:
+            return "now"
+        return "todo"
+
+    review = "failed" if repairing else st(3, 3)
+    pr = "waiting" if merge_open else "done" if pr_url else "todo" if repairing else st(4, 4)
+    return [{"key": "plan", "label": "P", "name": "Plan", "state": "skipped"},
+            {"key": "design", "label": "D", "name": "Decide", "state": "skipped"},
+            {"key": "build", "label": "B", "name": "Build", "state": st(0, 2)},
+            {"key": "review", "label": "R", "name": "Review", "state": review},
+            {"key": "pr", "label": "PR", "name": "PR", "state": pr},
+            {"key": "ship", "label": "S", "name": "Ship", "state": "skipped"}]
+
+
+def _attempt_item(project_id: str, r: Mapping[str, Any], costs: Mapping[str, int],
+                  latest_id: str) -> dict[str, Any]:
+    pr_url = r.get("pull_request_url")
+    state = str(r["_state"])
+    # An older attempt left `repairing` handed its work to the next one: history, not stuck.
+    if state == "stalled" and str(r["id"]) != latest_id:
+        state = "handed_on"
+    return {
+        "id": str(r["id"]), "label": r.get("attempt_label") or "Build",
+        "kind": r.get("attempt_kind") or "build", "title": r.get("title") or "",
+        "state": state, "status": str(r.get("status") or ""),
+        "created_at": iso(r.get("created_at")), "updated_at": iso(r.get("updated_at")),
+        "stalled_since": iso(r.get("_since")) if state == "stalled" else None,
+        "cost_usd": round(costs.get(str(r["id"]), 0) / 1_000_000, 2),
+        "pr": ({"number": r.get("pull_request_number") or pr_number(pr_url),
+                "external_url": pr_url} if pr_url else None),
+        "build": href(project_id, area="code_tasks", view="apps", build=r["id"]),
+        "href": project_href(project_id, tab="work", drawer=f"build:{r['id']}"),
+    }
+
+
+def _group_fields(project_id: str, members: list[dict[str, Any]], root_id: str,
+                  costs: Mapping[str, int]) -> dict[str, Any]:
+    """`attempts` (newest first), the counts and the latest attempt, for one piece of work."""
+    label_attempts(members, root_id)
+    ordered = sorted(members, key=lambda x: str(iso(x.get("created_at")) or ""), reverse=True)
+    latest = ordered[0] if ordered else None
+    attempts = [_attempt_item(project_id, m, costs, str(latest["id"]) if latest else "")
+                for m in ordered]
+    return {"attempts": attempts if len(attempts) > 1 else [],
+            "attempt_count": len(attempts),
+            "followups": sum(1 for a in attempts if a["kind"] == "followup"),
+            "retries": sum(1 for a in attempts if a["kind"] == "retry"),
+            "latest": latest}
 
 
 def _cost(connection: Connection, build_ids: list[str]) -> dict[str, int]:
@@ -227,9 +444,54 @@ def _preview_url(preview_id: str) -> str:
         return ""
 
 
+def _standalone_groups(connection: Connection, project_id: str, limit: int
+                       ) -> dict[str, dict[str, Any]]:
+    """Builds started on their own (no workflow run of their own), grouped by their root build:
+    root id → {"root": the root's row, "members": every attempt in the window, root included}.
+
+    A follow-up or a retry carries its lineage's `root_run_id`, so the follow-up of a follow-up
+    of a retry still names the build that started it all."""
+    from ..code_task_service import _internal_run_prefixes  # noqa: SLF001 — the one definition
+
+    params: dict[str, Any] = {"p": project_id, "n": max(limit * 5, 200)}
+    clauses = []
+    for i, prefix in enumerate(_internal_run_prefixes()):
+        clauses.append(f"lower(coalesce(c.title, '')) NOT LIKE :pre{i}")
+        params[f"pre{i}"] = f"{prefix}%"
+    rows = _attempt_rows(connection.execute(text(
+        _attempt_sql() + "WHERE c.project_id = :p "
+        "AND COALESCE(c.finalize_ctx->>'workflow_run_id', '') = '' "
+        + ("AND " + " AND ".join(clauses) + " " if clauses else "")
+        + "ORDER BY c.created_at DESC LIMIT :n"), params).mappings().all())
+    groups: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        groups.setdefault(str(r["root"] or r["id"]), {"root": None, "members": []})["members"].append(r)
+    seen = {str(r["id"]) for r in rows}
+    missing = [k for k in groups if k not in seen]
+    found = {str(r["id"]): r for r in _attempt_rows(connection.execute(text(
+        _attempt_sql() + "WHERE c.project_id = :p AND c.id = ANY(:ids)"),
+        {"p": project_id, "ids": missing}).mappings().all())} if missing else {}
+    for key, g in groups.items():
+        root = next((m for m in g["members"] if str(m["id"]) == key), None) or found.get(key)
+        g["root"] = root
+        # A root outside the window is still the work's first attempt (unless a workflow run
+        # owns it: then the run's own read lists it).
+        if root is not None and str(root["id"]) not in {str(m["id"]) for m in g["members"]} \
+                and not root.get("wfr"):
+            g["members"].append(root)
+    return groups
+
+
+def _states(members: list[dict[str, Any]], now: datetime, horizon: float) -> None:
+    for m in members:
+        m["_state"], m["_since"] = attempt_state(m, now, horizon)
+
+
 def _run_items(connection: Connection, project_id: str, limit: int,
-               roster: Mapping[str, Mapping[str, Any]], now: datetime) -> list[dict[str, Any]]:
+               roster: Mapping[str, Mapping[str, Any]], now: datetime,
+               standalone: dict[str, dict[str, Any]], horizon: float) -> list[dict[str, Any]]:
     from ..command_center import step_agent
+    from ..run_liveness import HANDED_OFF_GRACE_SECONDS
 
     runs = [dict(r) for r in connection.execute(text(
         "SELECT r.id, r.status, r.created_at, r.updated_at, r.completed_at, r.workflow_version_id, "
@@ -245,7 +507,15 @@ def _run_items(connection: Connection, project_id: str, limit: int,
     specs = _versions(connection, (r["workflow_version_id"] for r in runs))
     steps = _steps(connection, ids)
     builds = _builds(connection, project_id, ids)
-    all_builds = [str(b["id"]) for bs in builds.values() for b in bs]
+    # A follow-up started before follow-ups carried their workflow run: its ROOT build names the
+    # run, so the follow-up joins that run's row instead of standing alone.
+    attached: dict[str, list[dict[str, Any]]] = {}
+    for key in [k for k, g in standalone.items() if (g["root"] or {}).get("wfr") in set(ids)]:
+        g = standalone.pop(key)
+        attached.setdefault(str(g["root"]["wfr"]), []).extend(
+            m for m in g["members"] if str(m["id"]) != key)
+    all_builds = [str(b["id"]) for bs in builds.values() for b in bs] + [
+        str(m["id"]) for ms in attached.values() for m in ms]
     costs = _cost(connection, all_builds)
     deploys = _deploys(connection, project_id, ids)
     previews = _previews(connection, all_builds)
@@ -254,14 +524,33 @@ def _run_items(connection: Connection, project_id: str, limit: int,
         rid = str(r["id"])
         spec = specs.get(str(r["workflow_version_id"]), {})
         run_steps = steps.get(rid, {})
-        run_builds = builds.get(rid, [])
+        own = builds.get(rid, [])
+        members = own + [m for m in attached.get(rid, []) if str(m["id"]) not in
+                         {str(b["id"]) for b in own}]
+        members.sort(key=lambda m: str(iso(m.get("created_at")) or ""))
+        _states(members, now, horizon)
+        group = _group_fields(project_id, members, str(members[0]["id"]) if members else "", costs)
+        latest = group.pop("latest")
         pr_url = next((s["output"].get("pull_request_url") for s in run_steps.values()
                        if s["output"].get("pull_request_url")), None) or next(
-            (b["pull_request_url"] for b in reversed(run_builds) if b["pull_request_url"]), None)
+            (b["pull_request_url"] for b in reversed(members) if b["pull_request_url"]), None)
         gate = next((s for s in run_steps.values() if s["gate_open"]), None)
-        merge = next((b for b in reversed(run_builds) if b.get("merge_open")), None)
+        merge = next((b for b in reversed(members) if b.get("merge_open")), None)
         status = str(r["status"])
         state = run_state(status, gate is not None or merge is not None)
+        since = None
+        if latest is not None and latest["_state"] == "stalled" and state == "running":
+            # The run waits on a build that stopped moving, and nothing else in the run moved.
+            moved = [t for t in [aware(r["updated_at"])] + [
+                aware(st.get("completed_at")) or aware(st.get("started_at"))
+                for st in run_steps.values()] if t]
+            last = max(moved) if moved else None
+            if last is None or (now - last).total_seconds() >= HANDED_OFF_GRACE_SECONDS:
+                state, since = "stalled", latest["_since"]
+        elif latest is not None and state in ("done", "failed") and latest not in own \
+                and latest["_state"] in ("running", "stalled", "planned"):
+            # A follow-up after the run ended is where this work is now.
+            state, since = latest["_state"], latest["_since"]
         finished = state in ("done", "failed")
         faces: list[dict[str, Any]] = []
         seen: set[str] = set()
@@ -272,16 +561,19 @@ def _run_items(connection: Connection, project_id: str, limit: int,
             if f and f["role_key"] not in seen:
                 seen.add(f["role_key"])
                 faces.append(f)
-        build = run_builds[-1] if run_builds else None
+        build = latest
         deploy = deploys.get(rid)
-        cost = sum(costs.get(str(b["id"]), 0) for b in run_builds)
+        cost = sum(costs.get(str(b["id"]), 0) for b in members)
         number = pr_number(pr_url) if pr_url else None
         title = r["title"] or r["workflow"]
         out.append({
-            "id": rid, "source": "workflow_run", "label": words(title, 6), "title": title,
+            "id": rid, "source": "workflow_run", "source_label": "Workflow",
+            "label": words(title, 6), "title": title,
             "kind": kind_of(r["workflow_key"], r["work_kind"]), "state": state, "status": status,
             "age": age(r["created_at"], now), "created_at": iso(r["created_at"]),
             "updated_at": iso(r["updated_at"]),
+            "last_attempt_at": iso((latest or {}).get("created_at")) or iso(r["created_at"]),
+            "stalled_since": iso(since),
             "stages": _with_merge(stages(spec, run_steps, has_pr=bool(pr_url) and merge is None,
                                          finished=finished), merge is not None),
             "agents": faces[:4], "cost_usd": round(cost / 1_000_000, 2),
@@ -292,7 +584,7 @@ def _run_items(connection: Connection, project_id: str, limit: int,
                 "pr": {"number": number, "external_url": pr_url} if pr_url else None,
                 "deploy": href(project_id, area="infra", view="deploys", deploy=deploy["id"])
                 if deploy else None,
-                "preview": next((previews[str(b["id"])] for b in reversed(run_builds)
+                "preview": next((previews[str(b["id"])] for b in reversed(members)
                                  if str(b["id"]) in previews), None),
                 "decision": href(project_id, area="decisions",
                                  decision=(gate or {}).get("decision_id") or merge["decision_id"])
@@ -303,86 +595,64 @@ def _run_items(connection: Connection, project_id: str, limit: int,
             "detail": (r["directive"] or r["error"] or r["blocked_reason"] or r["workflow"]),
             "workflow": r["workflow"],
             "href": project_href(project_id, tab="work", drawer=f"run:{rid}"),
+            **group,
         })
     return out
 
 
-def _build_items(connection: Connection, project_id: str, limit: int,
-                 roster: Mapping[str, Mapping[str, Any]], now: datetime) -> list[dict[str, Any]]:
-    """Builds started on their own (no workflow run): a code task is work too."""
-    from ..code_task_service import _internal_run_prefixes  # noqa: SLF001 — the one definition
-
-    params: dict[str, Any] = {"p": project_id, "n": limit}
-    clauses = []
-    for i, prefix in enumerate(_internal_run_prefixes()):
-        clauses.append(f"lower(coalesce(title, '')) NOT LIKE :pre{i}")
-        params[f"pre{i}"] = f"{prefix}%"
-    from ..decision_actions import OPEN_STATUSES
-
-    rows = [dict(r) for r in connection.execute(text(
-        "SELECT c.id, c.status, c.phase, c.title, c.pull_request_url, c.pull_request_number, "
-        "c.decision_id, dd.status AS decision_status, c.error, c.created_at, c.updated_at "
-        "FROM code_task_runs c LEFT JOIN decisions dd ON dd.id = c.decision_id "
-        "WHERE c.project_id = :p AND COALESCE(c.finalize_ctx->>'workflow_run_id', '') = '' "
-        + ("AND " + " AND ".join(clauses).replace("coalesce(title", "coalesce(c.title") + " "
-           if clauses else "")
-        + "ORDER BY c.created_at DESC LIMIT :n"), params).mappings().all()]
-    ids = [str(r["id"]) for r in rows]
+def _build_items(connection: Connection, project_id: str,
+                 groups: dict[str, dict[str, Any]], roster: Mapping[str, Mapping[str, Any]],
+                 now: datetime, horizon: float) -> list[dict[str, Any]]:
+    """Builds started on their own: ONE row per root build, its follow-ups and retries inside."""
+    ids = [str(m["id"]) for g in groups.values() for m in g["members"]]
     costs = _cost(connection, ids)
     previews = _previews(connection, ids)
     builder = face(roster, "engineering_captain")
     out = []
-    phases = ("queued", "provisioning", "coding", "validating", "opening_pr", "done")
-    for r in rows:
-        status, phase = str(r["status"] or ""), str(r["phase"] or "queued")
-        if status in ("failed", "blocked"):
-            state = "failed"
-        elif status in ("completed", "cancelled"):
-            state = "done"
-        elif status == "queued":
-            state = "planned"
-        else:
-            state = "running"
-        pr_url = r["pull_request_url"]
-        merge_open = bool(r["decision_id"] and r["decision_status"] in OPEN_STATUSES)
-        if merge_open and state not in ("failed",):
+    for key, g in groups.items():
+        members = g["members"]
+        if not members:
+            continue
+        _states(members, now, horizon)
+        group = _group_fields(project_id, members, key, costs)
+        latest = group.pop("latest")
+        root = g["root"] or min(members, key=lambda m: str(iso(m.get("created_at")) or ""))
+        merge = next((m for m in sorted(members, key=lambda m: str(iso(m["created_at"])),
+                                        reverse=True) if m.get("merge_open")), None)
+        state = latest["_state"]
+        if merge is not None and state != "failed":
             state = "needs_you"
-        at = phases.index(phase) if phase in phases else 0
-
-        def st(key: str, first: int, last: int) -> str:
-            if state == "failed" and first <= at <= last:
-                return "failed"
-            if at > last or state == "done":
-                return "done"
-            if first <= at <= last:
-                return "now"
-            return "todo"
-
-        strip = [{"key": "plan", "label": "P", "name": "Plan", "state": "skipped"},
-                 {"key": "design", "label": "D", "name": "Decide", "state": "skipped"},
-                 {"key": "build", "label": "B", "name": "Build", "state": st("build", 0, 2)},
-                 {"key": "review", "label": "R", "name": "Review", "state": st("review", 3, 3)},
-                 {"key": "pr", "label": "PR", "name": "PR",
-                  "state": "waiting" if merge_open else "done" if pr_url else st("pr", 4, 4)},
-                 {"key": "ship", "label": "S", "name": "Ship", "state": "skipped"}]
-        title = r["title"] or "Build"
+        with_pr = next((m for m in sorted(members, key=lambda m: str(iso(m["created_at"])),
+                                          reverse=True) if m.get("pull_request_url")), None)
+        pr_url = with_pr["pull_request_url"] if with_pr else None
+        strip = _build_strip({**latest, "merge_open": bool(merge)}, latest["_state"])
+        raw_title = root.get("title") or "Build"
+        title = clean_title(raw_title)
         out.append({
-            "id": str(r["id"]), "source": "code_task", "label": words(title, 6), "title": title,
-            "kind": kind_of(None), "state": state, "status": status,
-            "age": age(r["created_at"], now), "created_at": iso(r["created_at"]),
-            "updated_at": iso(r["updated_at"]), "stages": strip,
+            "id": key, "source": "code_task", "source_label": "Build",
+            "label": words(title, 6), "title": title,
+            # A build that is itself a fix of another's failing checks is a Fix, not a Feature.
+            "kind": "fix" if _leads(raw_title) else kind_of(None), "state": state,
+            "status": str(latest.get("status") or ""),
+            "age": age(latest["created_at"], now), "created_at": iso(root["created_at"]),
+            "updated_at": iso(latest["updated_at"]),
+            "last_attempt_at": iso(latest["created_at"]),
+            "stalled_since": iso(latest["_since"]) if state == "stalled" else None,
+            "stages": strip,
             "agents": [builder] if builder else [],
-            "cost_usd": round(costs.get(str(r["id"]), 0) / 1_000_000, 2),
-            "links": {"workflow_run": None,
-                      "build": href(project_id, area="code_tasks", view="apps", build=r["id"]),
-                      "pr": ({"number": r["pull_request_number"] or pr_number(pr_url),
+            "cost_usd": round(sum(costs.get(str(m["id"]), 0) for m in members) / 1_000_000, 2),
+            "links": {"workflow_run": href(project_id, area="delivery_workflows", wfr=root["wfr"])
+                      if root.get("wfr") else None,
+                      "build": href(project_id, area="code_tasks", view="apps", build=latest["id"]),
+                      "pr": ({"number": with_pr["pull_request_number"] or pr_number(pr_url),
                               "external_url": pr_url} if pr_url else None),
-                      "deploy": None, "preview": previews.get(str(r["id"])),
-                      "decision": href(project_id, area="decisions", decision=r["decision_id"])
-                      if merge_open else None},
-            "decision_ids": [r["decision_id"]] if merge_open else [],
-            "detail": r["error"] or title,
-            "href": project_href(project_id, tab="work", drawer=f"build:{r['id']}"),
+                      "deploy": None, "preview": previews.get(str(latest["id"])),
+                      "decision": href(project_id, area="decisions", decision=merge["decision_id"])
+                      if merge is not None else None},
+            "decision_ids": [merge["decision_id"]] if merge is not None else [],
+            "detail": latest.get("error") or title,
+            "href": project_href(project_id, tab="work", drawer=f"build:{key}"),
+            **group,
         })
     return out
 
@@ -399,7 +669,8 @@ def _planned_items(connection: Connection, project_id: str, now: datetime
         kind = "bug" if r["kind"] in ("hardening", "design_fix") else (
             "chore" if r["kind"] in ("refactor", "cost", "process", "test_gap") else "feature")
         out.append({
-            "id": str(r["work_item_id"]), "source": "roadmap", "label": words(r["title"], 6),
+            "id": str(r["work_item_id"]), "source": "roadmap", "source_label": "Roadmap",
+            "label": words(r["title"], 6),
             "title": r["title"], "kind": kind, "state": "planned", "status": "accepted",
             "age": age(r["decided_at"], now), "created_at": iso(r["decided_at"]),
             "updated_at": iso(r["decided_at"]),
@@ -408,7 +679,8 @@ def _planned_items(connection: Connection, project_id: str, now: datetime
             "agents": [], "cost_usd": 0.0,
             "links": {"workflow_run": None, "build": None, "pr": None, "deploy": None,
                       "preview": None, "decision": None},
-            "decision_ids": [],
+            "decision_ids": [], "attempts": [], "attempt_count": 0, "followups": 0, "retries": 0,
+            "stalled_since": None, "last_attempt_at": iso(r["decided_at"]),
             "detail": r["why"] or r["title"],
             "href": project_href(project_id, tab="roadmap", drawer=f"rec:{r['work_item_id']}"),
         })
@@ -417,13 +689,15 @@ def _planned_items(connection: Connection, project_id: str, now: datetime
 
 def everything(connection: Connection, project_id: str, *, limit: int = 60,
                now: Optional[datetime] = None) -> list[dict[str, Any]]:
-    """Every WorkItem, newest first."""
+    """Every WorkItem — one per piece of work, its attempts inside — newest activity first."""
     now = now or datetime.now(timezone.utc)
     roster = agents(connection, project_id)
-    found = (_run_items(connection, project_id, limit, roster, now)
-             + _build_items(connection, project_id, limit, roster, now)
+    horizon = _horizon()
+    standalone = _standalone_groups(connection, project_id, limit)
+    found = (_run_items(connection, project_id, limit, roster, now, standalone, horizon)
+             + _build_items(connection, project_id, standalone, roster, now, horizon)
              + _planned_items(connection, project_id, now))
-    found.sort(key=lambda w: w.get("created_at") or "", reverse=True)
+    found.sort(key=lambda w: w.get("last_attempt_at") or w.get("created_at") or "", reverse=True)
     return found[:limit]
 
 
@@ -437,6 +711,7 @@ def matching(found: list[dict[str, Any]], *, state: Optional[str] = None,
     if q:
         needle = str(q).strip().lower().lstrip("#")
         found = [w for w in found if needle in (w["title"] or "").lower()
+                 or any(needle in str(a.get("title") or "").lower() for a in w.get("attempts") or [])
                  or needle in str(w.get("detail") or "").lower()
                  or needle == str((w["links"].get("pr") or {}).get("number") or "")]
     return found
@@ -449,7 +724,7 @@ def items(connection: Connection, project_id: str, *, state: Optional[str] = Non
 
 
 def counts(found: list[dict[str, Any]]) -> dict[str, int]:
-    out = {s: 0 for s in ("running", "needs_you", "planned", "done", "failed")}
+    out = {s: 0 for s in ("running", "stalled", "needs_you", "planned", "done", "failed")}
     for w in found:
         out[w["state"]] = out.get(w["state"], 0) + 1
     return out
@@ -463,4 +738,5 @@ def view(connection: Connection, project_id: str, *, state: Optional[str] = None
                          "kinds": ["feature", "bug", "ticket"]}}
 
 
-__all__ = ["STATIONS", "counts", "everything", "items", "matching", "kind_of", "run_state", "stages", "view"]
+__all__ = ["STATIONS", "attempt_state", "clean_title", "counts", "everything", "items",
+           "kind_of", "label_attempts", "matching", "run_state", "stages", "view"]

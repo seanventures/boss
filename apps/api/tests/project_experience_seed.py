@@ -11,7 +11,9 @@ console and the tester see exactly what a live project shows:
   * 2 things that need a person: Merge PR #3 (a pull-request decision) and a deploy approval,
   * a healthy staging deploy on a verified host, with probe samples and a demo login password,
     whose boss.deploy.yaml names the demo users customer@ / agent@ / admin@demo.test,
-  * 2 open roadmap recommendations, and the repository's dossier.
+  * 2 open roadmap recommendations, and the repository's dossier,
+  * one build with its retries and three stacked checks-failing follow-ups, the newest stuck
+    `repairing` at phase 'done' (seed_followup_chain): one row, Stalled, attempts inside.
 
 Addresses are documentation ranges (203.0.113.0/24): the public tree names no private host.
 """
@@ -130,6 +132,69 @@ def _run(db, project_id: str, did: str, vid: str, spec: dict[str, Any], *, title
     return {"run_id": rid, "build_id": build_id, "decision_id": decision_id, "pr_url": pr_url}
 
 
+CHAIN_TITLE = "AML flagged line by kind"
+
+
+def seed_followup_chain(db, project_id: str, *, now: datetime | None = None) -> dict[str, Any]:
+    """One build and everything that came after it, as the build path writes them: the build's
+    repair round handed to a retry, whose PR opened with checks failing; a checks-failing
+    follow-up, its retry, a follow-up of THAT (title leads stacked), its retry, and a third
+    follow-up left `repairing` at phase 'done' two days ago with no job — the stuck row the Work
+    tab once showed as Running, nineteen times over.
+
+    root ─retry→ r1 (PR #6) ─follow-up→ f1 ─retry→ f1r ─follow-up→ f2 ─retry→ f2r ─follow-up→ f3
+    """
+    now = now or datetime.now(timezone.utc)
+    lead = "Follow-up: checks failing — "
+    t0 = now - timedelta(days=3)
+    ids: dict[str, str] = {}
+
+    def build(key: str, title: str, *, status: str, at: datetime, parent: str = "",
+              attempt: int = 0, deferred: str = "", pr: int = 0, cost: int = 0,
+              updated: datetime | None = None) -> str:
+        rid = ids[key] = _id("crun")
+        root = ids.get("root", rid)
+        fctx: dict[str, Any] = {}
+        if parent:
+            fctx.update({"parent_run_id": ids[parent], "root_run_id": root})
+        if attempt:
+            fctx["attempt"] = attempt
+        if deferred:
+            fctx.update({"deferred_from_run": ids[deferred], "is_followup": True})
+        if status == "repairing":
+            fctx.update({"failing_gates": ["tests_pass"], "review_repair_round": 1})
+        pr_url = f"https://github.com/{REPO}/pull/{pr}" if pr else None
+        db.execute(text(
+            "INSERT INTO code_task_runs (id, project_id, status, phase, title, pull_request_url, "
+            "pull_request_number, finalize_ctx, created_at, updated_at) VALUES (:i, :p, :s, "
+            "'done', :t, :u, :n, CAST(:f AS JSONB), :at, :up)"),
+            {"i": rid, "p": project_id, "s": status, "t": title, "u": pr_url, "n": pr or None,
+             "f": json.dumps(fctx), "at": at, "up": updated or at + timedelta(minutes=40)})
+        if cost:
+            db.execute(text(
+                "INSERT INTO llm_calls (id, project_id, code_task_run_id, stage, model, "
+                "cost_usd_micros, created_at) VALUES (:i, :p, :b, 'build', 'claude-sonnet', :c, :t)"),
+                {"i": _id("llm"), "p": project_id, "b": rid, "c": cost, "t": at})
+        return rid
+
+    build("root", CHAIN_TITLE, status="repairing", at=t0, cost=1_400_000)
+    build("r1", f"{CHAIN_TITLE} · retry 1", status="completed", at=t0 + timedelta(hours=1),
+          parent="root", attempt=2, pr=6, cost=900_000)
+    build("f1", f"{lead}{CHAIN_TITLE}", status="repairing", at=t0 + timedelta(hours=2),
+          parent="r1", deferred="r1", cost=700_000)
+    # A retry of a follow-up, as retries were written before they carried the follow-up mark.
+    build("f1r", f"{lead}{CHAIN_TITLE} · retry 1", status="completed",
+          at=t0 + timedelta(hours=3), parent="f1", attempt=2, cost=500_000)
+    build("f2", f"{lead}{lead}{CHAIN_TITLE}", status="repairing", at=t0 + timedelta(hours=4),
+          parent="f1r", deferred="f1r", cost=600_000)
+    build("f2r", f"{lead}{lead}{CHAIN_TITLE} · retry 1", status="completed",
+          at=t0 + timedelta(hours=5), parent="f2", attempt=2, cost=400_000)
+    build("f3", f"{lead}{lead}{lead}{CHAIN_TITLE}", status="repairing",
+          at=now - timedelta(days=2), parent="f2r", deferred="f2r", cost=300_000,
+          updated=now - timedelta(days=2) + timedelta(minutes=30))
+    return dict(ids)
+
+
 def seed(db, project_id: str, *, now: datetime | None = None, connection_id: str | None = None
          ) -> dict[str, Any]:
     """Seed `project_id` (an app project created like any other) with the HelpDesk story."""
@@ -233,11 +298,13 @@ def seed(db, project_id: str, *, now: datetime | None = None, connection_id: str
              "s": 80 if kind == "feature" else 60})
         recs.append(wid)
 
+    chain = seed_followup_chain(db, project_id, now=now)
     built = dossier.build(db, project_id=project_id, repo=REPO, paths=list(TREE), actor="seed",
                           seed_signals=False)
     return {"project_id": project_id, "binding_id": binding, "merged": merged, "running": running,
             "merge": merge, "deploy": deploy, "target_id": target_id, "host_id": host_id,
-            "stack_deployment_id": sdep, "recommendations": recs, "dossier_id": built["id"]}
+            "stack_deployment_id": sdep, "recommendations": recs, "dossier_id": built["id"],
+            "chain": chain}
 
 
 __all__ = ["DEMO_USERS", "HOST_ADDRESS", "REPO", "STAGING_URL", "TREE", "seed"]

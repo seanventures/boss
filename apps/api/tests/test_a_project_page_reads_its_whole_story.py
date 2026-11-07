@@ -150,7 +150,8 @@ def test_every_piece_of_work_is_a_row_with_its_stations_agents_cost_and_links(wo
     waiting = rows[helpdesk["merge"]["run_id"]]
     assert waiting["state"] == "needs_you" and waiting["links"]["decision"]
     assert "waiting" in {s["state"] for s in waiting["stages"]}
-    assert body["counts"] == {"running": 1, "needs_you": 2, "planned": 0, "done": 3, "failed": 0}
+    assert body["counts"] == {"running": 1, "stalled": 1, "needs_you": 2, "planned": 0, "done": 3,
+                              "failed": 0}
 
 
 def test_the_work_tab_filters_by_state_and_finds_by_words_or_pr_number(world, client, helpdesk):

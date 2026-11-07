@@ -26,7 +26,7 @@ import { isHydrated, markHydrated } from "./local-time";
 
 export type Stage = "onboarding" | "ready" | "backlog" | "working" | "staging" | "production";
 export type StepState = "done" | "now" | "waiting" | "todo" | "failed" | "skipped";
-export type WorkState = "planned" | "running" | "needs_you" | "done" | "failed";
+export type WorkState = "planned" | "running" | "stalled" | "needs_you" | "done" | "failed";
 export type Health = "healthy" | "degraded" | "down" | "unknown";
 
 export const TABS = ["overview", "work", "roadmap", "knowledge", "deployments", "health", "settings"] as const;
@@ -51,7 +51,8 @@ const oneOf = <T extends string>(v: unknown, all: readonly T[], d: T): T => ((al
 
 const STAGES = ["onboarding", "ready", "backlog", "working", "staging", "production"] as const;
 const STEP_STATES = ["done", "now", "waiting", "todo", "failed", "skipped"] as const;
-const WORK_STATES = ["planned", "running", "needs_you", "done", "failed"] as const;
+const WORK_STATES = ["planned", "running", "stalled", "needs_you", "done", "failed"] as const;
+const ATTEMPT_STATES = ["planned", "running", "stalled", "handed_on", "needs_you", "done", "failed"] as const;
 const HEALTHS = ["healthy", "degraded", "down", "unknown"] as const;
 
 /** Diagram labels are ≤ 4 words (contract rule): a longer one is cut, never wrapped into prose. */
@@ -80,7 +81,20 @@ export type WorkItem = {
   stages: { key: string; label: string; state: StepState }[]; agents: Agent[]; cost_usd: number | null;
   links: { workflow_run: string; build: string; pr: { number: number; external_url: string } | null; deploy: string; preview: string; decision: string };
   detail: string; href: string; source: string;
+  /** "Build" | "Workflow" | "Roadmap": the human word for `source` (never the raw string). */
+  source_label: string;
+  /** When it stopped moving (ISO), for a `stalled` item. */
+  stalled_since: string;
+  /** Every attempt of this piece of work, newest first (empty when it had only one). */
+  attempts: Attempt[]; attempt_count: number; followups: number; retries: number;
 };
+/** One attempt of a piece of work: the build, a retry, or a follow-up (§3 `attempts[]`). */
+export type Attempt = {
+  id: string; label: string; kind: "build" | "retry" | "followup"; title: string;
+  state: AttemptState; status: string; created_at: string; stalled_since: string;
+  cost_usd: number | null; pr: { number: number; external_url: string } | null; build: string; href: string;
+};
+export type AttemptState = (typeof ATTEMPT_STATES)[number];
 /** How an item is accepted (§2/§14): the roadmap's accept, or THE start door with its body. */
 export type Accept = { href: string; method: string; body: R };
 export type NextItem = {
@@ -210,7 +224,51 @@ export const parseWorkItem = (v: unknown): WorkItem => {
     links: { workflow_run: s(l.workflow_run), build: s(l.build), deploy: s(l.deploy), preview: s(l.preview), decision: s(l.decision),
              pr: pr.number || pr.external_url ? { number: n(pr.number), external_url: s(pr.external_url) } : null },
     detail: s(x.detail), href: s(x.href), source: s(x.source),
+    source_label: s(x.source_label) || SOURCE_WORDS[s(x.source)] || "",
+    stalled_since: s(x.stalled_since),
+    attempts: a(x.attempts).map(parseAttempt).filter((t) => t.id),
+    attempt_count: n(x.attempt_count), followups: n(x.followups), retries: n(x.retries),
   };
+};
+/** Never a raw internal string on a row: `code_task` is a Build. */
+const SOURCE_WORDS: Record<string, string> = { code_task: "Build", workflow_run: "Workflow", roadmap: "Roadmap" };
+const parseAttempt = (v: unknown): Attempt => {
+  const x = o(v); const pr = o(x.pr);
+  return {
+    id: s(x.id), label: s(x.label, "Build"), kind: oneOf(x.kind, ["build", "retry", "followup"] as const, "build"), title: s(x.title),
+    state: oneOf(x.state, ATTEMPT_STATES, "done"), status: s(x.status), created_at: s(x.created_at), stalled_since: s(x.stalled_since),
+    cost_usd: nn(x.cost_usd), pr: pr.number || pr.external_url ? { number: n(pr.number), external_url: s(pr.external_url) } : null,
+    build: s(x.build), href: s(x.href),
+  };
+};
+/** The work item an attempt opens in the drawer: the group's row, seen as that one attempt. */
+export function attemptAsItem(w: WorkItem, t: Attempt): WorkItem {
+  return {
+    ...w, id: t.id, label: t.label, state: t.state === "handed_on" ? "failed" : t.state, cost_usd: t.cost_usd,
+    stalled_since: t.stalled_since, detail: t.title || w.detail, attempts: [], attempt_count: 1, followups: 0, retries: 0,
+    links: { ...w.links, build: t.build, pr: t.pr, preview: "", decision: t.state === "needs_you" ? w.links.decision : "" },
+    href: t.href,
+  };
+}
+/** The item (or one attempt of one) a drawer id names. */
+export function findWork(items: WorkItem[], id: string): WorkItem | undefined {
+  const direct = items.find((x) => x.id === id);
+  if (direct) return direct;
+  for (const w of items) {
+    const t = w.attempts.find((x) => x.id === id);
+    if (t) return attemptAsItem(w, t);
+  }
+  return undefined;
+}
+/** "↻ 3 follow-ups" / "4 attempts": the group's pill (empty for a single attempt). */
+export function attemptsPill(w: Pick<WorkItem, "attempt_count" | "followups" | "retries">): string {
+  if (w.attempt_count <= 1) return "";
+  if (w.followups && !w.retries) return `↻ ${w.followups} follow-up${w.followups === 1 ? "" : "s"}`;
+  return `${w.attempt_count} attempts`;
+}
+export const KIND_WORDS: Record<string, string> = { feature: "Feature", bug: "Bug", fix: "Fix", ticket: "Ticket", chore: "Chore", incident: "Incident" };
+export const ATTEMPT_WORDS: Record<AttemptState, string> = {
+  planned: "Queued", running: "Running", stalled: "Stalled", handed_on: "Handed on", needs_you: "Needs you", done: "Done", failed: "Failed",
 };
 export const parseAccept = (v: unknown): Accept | null => {
   const x = o(v);
@@ -696,12 +754,13 @@ export function workFromStartRow(raw: unknown, projectId: string): WorkItem {
     stages: [], agents: [], cost_usd: null,
     links: { workflow_run: `?${new URLSearchParams({ project_id: projectId, area: "delivery_workflows", wfr: run })}`, build: "", deploy: "",
              preview: "", decision: "", pr: pr ? { number: prNo, external_url: pr } : null },
-    detail: s(r.status), href: "", source: s(r.workflow),
+    detail: s(r.status), href: "", source: s(r.workflow), source_label: "Workflow",
+    stalled_since: "", attempts: [], attempt_count: 1, followups: 0, retries: 0,
   };
 }
 /** The open-work bar's segments, in the order and colours of the mock (running · needs you · planned · done). */
-export const WORK_ORDER: WorkState[] = ["needs_you", "running", "planned", "done", "failed"];
-export const WORK_WORDS: Record<WorkState, string> = { needs_you: "Needs you", running: "Running", planned: "Planned", done: "Done", failed: "Failed" };
+export const WORK_ORDER: WorkState[] = ["needs_you", "stalled", "running", "planned", "done", "failed"];
+export const WORK_WORDS: Record<WorkState, string> = { needs_you: "Needs you", stalled: "Stalled", running: "Running", planned: "Planned", done: "Done", failed: "Failed" };
 
 // ── the roadmap's writes (§6: the existing ambient routes), sample-mode safe ─────────────────
 

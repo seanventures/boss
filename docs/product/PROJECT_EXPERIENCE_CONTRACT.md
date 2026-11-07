@@ -21,7 +21,7 @@ Times: every ISO time the console shows on these screens is formatted in the VIE
 ## Shared enums
 - `stage`: `onboarding | ready | backlog | working | staging | production`
 - `state` (step/node): `done | now | waiting | todo | failed | skipped`
-- `work_state`: `planned | running | needs_you | done | failed`
+- `work_state`: `planned | running | stalled | needs_you | done | failed` (`stalled`: claims to work, nothing has moved — never counted as running)
 - `health`: `healthy | degraded | down | unknown`
 
 ## 1. Projects list — `GET /v1/projects/summary`
@@ -74,6 +74,18 @@ Times: every ISO time the console shows on these screens is formatted in the VIE
 project's normal path (the same entry the existing "What should we add?" box uses: workflow/start or
 code task) and returns `{ "work": <WorkItem>, "href": "…" }`. Step-up/consent errors pass through
 unchanged so the console's existing sheets handle them.
+
+**One row per piece of work (2026-11-06).** A follow-up ("Follow-up: checks failing — …") and a
+retry ("· retry N") are attempts of their root build (finalize_ctx `root_run_id`; a build a
+workflow run started joins that run's row), never rows of their own. Each WorkItem also carries
+`source_label` (`Build|Workflow|Roadmap`, never the raw `source`), `stalled_since` (ISO, when
+`state` is `stalled`), `attempt_count`, `followups`, `retries` and `attempts[]` (newest first, empty
+for a single attempt): `{id, label: "Build|Retry 1|Follow-up 2 · checks failing|Follow-up 2 · retry 1",
+kind: build|retry|followup, state: work_state|handed_on, status, created_at, stalled_since,
+cost_usd, pr, build, href}`. `title` is the root's clean title (no stacked prefixes); `kind` is
+`fix` for a build that is itself a checks-failing follow-up. `counts` has `stalled`. The stall
+rule is run_liveness.stalled_since (phase done + no live job + 20 min quiet, or silent past the
+stall horizon), the same one the Factory floor reads.
 
 ## 4. Repo & knowledge — `GET /v1/projects/{project_id}/knowledge`
 ```json

@@ -13,7 +13,7 @@ import {
   ChatCircleDots, Check, Code, FileText, FlowArrow, GitPullRequest, Globe, Graph, PaperPlaneRight, Path, RocketLaunch, Terminal, User, Warning,
 } from "@phosphor-icons/react";
 
-import { PX_PATHS, parseDeployments, pxHref, toTab, usePxRead, writePxUrl, type Deployments, type Onboarding, type WorkItem } from "../../lib/project-experience";
+import { ATTEMPT_WORDS, KIND_WORDS, PX_PATHS, findWork, parseDeployments, pxHref, toTab, usePxRead, writePxUrl, type Deployments, type Onboarding, type WorkItem } from "../../lib/project-experience";
 import { FX_DEPLOYMENTS } from "../../lib/project-experience-fixtures";
 import { Drawer, Empty, Face, Flow, HEALTH_WORD, Ico, PxLink, STATE_WORD, Tag } from "./kit";
 import { ActionButton } from "./tab-overview";
@@ -44,7 +44,8 @@ export function DrawerHost({ ctx, drawer, onClose }: { ctx: PxCtx; drawer: { kin
   if (place) return null;
   // `run:<id>` and `build:<id>` (the engine's WorkItem hrefs and ⌘K) are the work drawer.
   if (drawer.kind === "work" || drawer.kind === "run" || drawer.kind === "build") {
-    const w = ctx.work?.items.find((x) => x.id === drawer.id) ?? ctx.overview.recent_work.find((x) => x.id === drawer.id);
+    // An attempt of a grouped piece of work (a follow-up, a retry) opens as itself.
+    const w = findWork(ctx.work?.items ?? [], drawer.id) ?? findWork(ctx.overview.recent_work, drawer.id);
     return w ? <WorkDrawer ctx={ctx} w={w} onClose={onClose} /> : <Missing what="This work item" onClose={onClose} loading={!ctx.work} />;
   }
   if (drawer.kind === "needs") {
@@ -154,7 +155,7 @@ function WorkDrawer({ ctx, w, onClose }: { ctx: PxCtx; w: WorkItem; onClose: () 
   const l = w.links;
   return (
     <Drawer title={w.label} icon={<Ico icon={w.state === "needs_you" ? GitPullRequest : FlowArrow} c={w.state === "needs_you" ? "amber" : "teal"} />} onClose={onClose} testid="px-drawer-work"
-            sub={<><Tag>{w.kind[0].toUpperCase() + w.kind.slice(1)}</Tag>{w.cost_usd !== null ? <span className="px-mono">${w.cost_usd.toFixed(2)}</span> : null}{w.age ? <span className="px-mono">{w.age}</span> : null}</>}
+            sub={<><Tag>{KIND_WORDS[w.kind] ?? w.kind}</Tag>{w.state === "stalled" ? <Tag tone="amber">Stalled</Tag> : null}{w.cost_usd !== null ? <span className="px-mono">${w.cost_usd.toFixed(2)}</span> : null}{w.age ? <span className="px-mono">{w.age}</span> : null}</>}
             footer={<AskBox ctx={ctx} about={w.label} />}>
       {w.state === "needs_you" ? (
         <div className="px-ny" data-testid="px-drawer-work-needs">
@@ -164,6 +165,29 @@ function WorkDrawer({ ctx, w, onClose }: { ctx: PxCtx; w: WorkItem; onClose: () 
           {l.decision ? <PxLink href={l.decision} className="px-btn" testid="px-drawer-work-decide">{l.pr ? `Review PR #${l.pr.number}` : "Decide"}</PxLink> : null}
           {l.pr ? <a className="px-btn" data-kind="amber" data-size="s" href={l.pr.external_url} target="_blank" rel="noreferrer noopener" data-testid="px-drawer-work-merge">{l.decision ? `PR #${l.pr.number}` : `Merge PR #${l.pr.number}`} ↗</a>
             : !l.decision && l.workflow_run ? <PxLink href={l.workflow_run} className="px-btn">Decide</PxLink> : null}
+        </div>
+      ) : null}
+      {w.state === "stalled" ? (
+        <div className="px-ny" data-testid="px-drawer-work-stalled">
+          <span className="px-ny-ico" aria-hidden>‖</span>
+          <span style={{ flex: 1 }}><b>Stalled{w.stalled_since ? ` since ${whenLocal(w.stalled_since)}` : ""}</b>
+            <small className="px-faint" style={{ display: "block" }}>Nothing is working on it. Open the build to retry or stop it.</small></span>
+          {l.build ? <PxLink href={l.build} className="px-btn" testid="px-drawer-work-stalled-open">Open build</PxLink> : null}
+        </div>
+      ) : null}
+      {w.attempts.length > 1 ? (
+        <div data-testid="px-drawer-work-attempts">
+          <span className="px-lbl">{w.attempt_count} attempts</span>
+          <div className="px-steps" style={{ marginTop: 6 }}>
+            {w.attempts.map((t) => (
+              <button key={t.id} type="button" className="px-li" style={{ width: "100%", background: "none", border: 0, font: "inherit", color: "inherit", textAlign: "left", cursor: "pointer" }}
+                      onClick={() => ctx.open("work", t.id)} data-testid={`px-drawer-attempt-${t.id}`}>
+                <span className="px-dot" data-s={t.state === "stalled" ? "stalled" : t.state === "done" ? "done" : t.state === "failed" ? "bad" : t.state === "running" ? "now" : undefined} aria-hidden />
+                <span style={{ minWidth: 0 }}><b>{t.label}</b><small>{whenLocal(t.created_at)}{t.pr ? ` · PR #${t.pr.number}` : ""}</small></span>
+                <Tag tone={t.state === "stalled" ? "amber" : t.state === "failed" ? "red" : t.state === "done" ? "green" : undefined}>{ATTEMPT_WORDS[t.state]}</Tag>
+              </button>
+            ))}
+          </div>
         </div>
       ) : null}
       {w.stages.length ? (

@@ -949,6 +949,20 @@ def build_state(run: Mapping[str, Any], *, acts: Optional[list[Mapping[str, Any]
             return out("queued", "Starting", "Cloning the repo", "Working", "plan")
         moved = max([t for t in (_aware(run.get("updated_at")), _last_act_at(acts)) if t],
                     default=None)
+        # HANDED ON, NOT WORKING: a repair round left `repairing` at phase 'done' (the work went
+        # to the next attempt, or its round never started). The same rule as Project › Work
+        # (run_liveness.stalled_since), so the two never disagree about whether it runs.
+        from .run_liveness import stalled_since
+
+        live_job = bool(job) and str((job or {}).get("status") or "") in (
+            "queued", "running", "leased")
+        if phase == "done" and stalled_since(status=status, phase=phase, last_activity=moved,
+                                             live_job=live_job, now=now,
+                                             horizon_seconds=float("inf")):
+            gap = _minutes(now - moved)
+            return out("quiet", f"Stalled · {gap}",
+                       f"Nothing has moved since {moved.strftime('%d %b %H:%M')} UTC; its repair "
+                       "round handed on or never started.", "Stopped")
         if moved and now - moved > timedelta(minutes=QUIET_AFTER_MINUTES):
             gap = _minutes(now - moved)
             verb = agent_acts.work_verb(dict(open_act)) if open_act else \

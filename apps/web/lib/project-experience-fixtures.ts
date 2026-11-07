@@ -46,6 +46,29 @@ const WORK = [
     links: { workflow_run: `?${new URLSearchParams({ project_id: P, area: "delivery_workflows", wfr: "wfr_44" })}`,
              build: `?${new URLSearchParams({ project_id: P, area: "code_tasks", build: "crun_44" })}`, pr: null, deploy: "", preview: "" },
     detail: "Forge is building the filter bar; 3 of 6 steps done.", href: href({ tab: "work", drawer: "work:wi_search" }) },
+  // One build, its retries and three stacked checks-failing follow-ups: ONE row, the newest
+  // attempt stuck `repairing` at phase done with nothing moving — Stalled, never Running.
+  { id: "crun_aml", label: "AML flagged line by kind", title: "AML flagged line by kind", kind: "feature", state: "stalled", age: "2d",
+    source: "code_task", source_label: "Build", stalled_since: "2026-11-04T09:30:00Z",
+    stages: STAGES6(["skipped", "skipped", "done", "failed", "todo", "skipped"]), agents: [forge], cost_usd: 4.8,
+    links: { workflow_run: "", build: `?${new URLSearchParams({ project_id: P, area: "code_tasks", view: "apps", build: "crun_aml_f3" })}`,
+             pr: { number: 6, external_url: "https://github.com/paramg/helpdesk-ai-demo/pull/6" }, deploy: "", preview: "" },
+    detail: "Auto review-repair round 1 (gates: tests_pass); the repair never started.", href: href({ tab: "work", drawer: "build:crun_aml" }),
+    attempt_count: 7, followups: 3, retries: 3,
+    attempts: [
+      ["crun_aml_f3", "Follow-up 3 · checks failing", "followup", "stalled", "2026-11-04T09:00:00Z", 0.3, 0],
+      ["crun_aml_f2r", "Follow-up 2 · retry 1", "retry", "done", "2026-11-03T16:00:00Z", 0.4, 0],
+      ["crun_aml_f2", "Follow-up 2 · checks failing", "followup", "handed_on", "2026-11-03T15:00:00Z", 0.6, 0],
+      ["crun_aml_f1r", "Follow-up 1 · retry 1", "retry", "done", "2026-11-03T14:00:00Z", 0.5, 0],
+      ["crun_aml_f1", "Follow-up 1 · checks failing", "followup", "handed_on", "2026-11-03T13:00:00Z", 0.7, 0],
+      ["crun_aml_r1", "Retry 1", "retry", "done", "2026-11-03T12:00:00Z", 0.9, 6],
+      ["crun_aml", "Build", "build", "handed_on", "2026-11-03T11:00:00Z", 1.4, 0],
+    ].map(([id, label, kind, state, at, cost, pr]) => ({
+      id, label, kind, state, created_at: at, cost_usd: cost, stalled_since: state === "stalled" ? "2026-11-04T09:30:00Z" : "",
+      pr: pr ? { number: pr, external_url: `https://github.com/paramg/helpdesk-ai-demo/pull/${pr}` } : null,
+      build: `?${new URLSearchParams({ project_id: P, area: "code_tasks", view: "apps", build: String(id) })}`,
+      href: href({ tab: "work", drawer: `build:${id}` }),
+    })) },
   { id: "wi_email", label: "Email-to-ticket intake", kind: "feature", state: "planned", age: "", source: "roadmap", stages: STAGES6([]),
     agents: [juno], cost_usd: null, links: { workflow_run: "", build: "", pr: null, deploy: "", preview: "" }, detail: "Next up, ranked by Marshal.",
     href: href({ tab: "work", drawer: "work:wi_email" }) },
@@ -90,7 +113,7 @@ export const FX_OVERVIEW = {
       mini: [], action: { label: "Pick host", href: href({ tab: "deployments" }), decision_id: "" } },
   ],
   tiles: {
-    open_work: { count: 9, by_state: { running: 1, needs_you: 1, planned: 4, done: 3 }, href: href({ tab: "work" }) },
+    open_work: { count: 10, by_state: { running: 1, stalled: 1, needs_you: 1, planned: 4, done: 3 }, href: href({ tab: "work" }) },
     running: { count: 1, current: { label: "Search filters", progress: [3, 6], agent: forge }, href: href({ tab: "work", drawer: "work:wi_search" }) },
     staging: { health: "healthy", uptime_pct: 99.9, p95_ms: 180, series: [180, 175, 190, 182, 170, 185, 178, 180, 176, 181], href: href({ tab: "health" }) },
     cost_week: { usd: 14.2, delta_pct: -18, cap_usd: 50, series: [2, 1.5, 3, 2.2, 1.8, 2.4, 1.3], href: "?area=budget" },

@@ -2105,6 +2105,12 @@ def retry_code_task(
                           # Carried across every attempt: a retry is the same outcome, and a
                           # console that loses that shows one app as several.
                           **({"origin": fctx_prev["origin"]} if fctx_prev.get("origin") else {}),
+                          # A RETRY OF A FOLLOW-UP IS STILL A FOLLOW-UP. Without the mark the
+                          # recursion guard ("a follow-up never spawns its own follow-up") saw a
+                          # fresh build: every repair round of a checks-failing follow-up spawned
+                          # another, and boss-platform grew chains titled "Follow-up: checks
+                          # failing — Follow-up: checks failing — Follow-up: …" (2026-10-28..11-03).
+                          **({"is_followup": True} if fctx_prev.get("is_followup") else {}),
                           # The same BUILDER across every attempt (runs.code_task_builder): the
                           # agent the parent ran as, which the carried grant names.
                           **({"agent": fctx_prev["agent"]} if fctx_prev.get("agent") else {}),
@@ -2450,7 +2456,10 @@ def open_parked_with_checks_failing(engine, settings: Settings, jobs, run_id: st
                 spec=dict(run.get("spec") or {}), base_branch=branch,
                 findings=cf.followup_findings(record), parent_run_id=run_id,
                 parent_title=run["title"], parent_root=root_run,
-                parent_origin=fctx.get("origin"), checks_failing=record)
+                parent_origin=fctx.get("origin"), checks_failing=record,
+                # The workflow run it belongs to, as the gate path passes it: the follow-up is
+                # listed (and its merge approval shown) on that run, not as work of its own.
+                parent_workflow_run_id=fctx.get("workflow_run_id"))
             with _transaction(engine) as c:
                 emit_event(c, project_id, "code_task.deferred_findings_task", "boss",
                            "code_task_run", run_id,

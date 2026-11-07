@@ -18,7 +18,7 @@ import { DemoLoginRow } from "./tab-settings";
 import { whenLocal } from "../../lib/local-time";
 import type { PxCtx } from "./project-page";
 
-const WORK_TONE: Record<string, string> = { running: "var(--teal)", needs_you: "var(--amber)", planned: "var(--quiet)", done: "var(--green)", failed: "var(--red)" };
+const WORK_TONE: Record<string, string> = { running: "var(--teal)", stalled: "color-mix(in srgb, var(--amber) 55%, var(--surface-3))", needs_you: "var(--amber)", planned: "var(--quiet)", done: "var(--green)", failed: "var(--red)" };
 
 function goHref(ctx: PxCtx, href: string, fallback: () => void) {
   // A contract href that names this page's own tab switches in place; anything else navigates.
@@ -187,10 +187,10 @@ function MiniRow({ w, ctx }: { w: WorkItem; ctx: PxCtx }) {
   return (
     <div className="px-wk" data-s={w.state} style={{ gridTemplateColumns: "14px minmax(0,1fr) auto auto 14px" }} data-testid={`px-ov-work-${w.id}`}
          onClick={() => ctx.open("work", w.id)}>
-      <span className="px-dot" data-s={w.state === "running" ? "now" : w.state === "needs_you" ? "you" : w.state === "failed" ? "bad" : w.state === "done" ? "done" : undefined} aria-hidden />
+      <span className="px-dot" data-s={w.state === "running" ? "now" : w.state === "needs_you" || w.state === "stalled" ? "you" : w.state === "failed" ? "bad" : w.state === "done" ? "done" : undefined} aria-hidden />
       <span style={{ minWidth: 0 }}>
         <button type="button" className="px-wk-t px-ell" style={{ display: "block", maxWidth: "100%" }} onClick={(e) => { e.stopPropagation(); ctx.open("work", w.id); }}>{w.label}</button>
-        <span className="px-wk-sub"><span>{w.links.pr ? `PR #${w.links.pr.number}` : w.kind[0].toUpperCase() + w.kind.slice(1)}</span>{w.age ? <span className="px-mono">{w.age}</span> : null}
+        <span className="px-wk-sub"><span>{w.state === "stalled" ? "Stalled" : w.links.pr ? `PR #${w.links.pr.number}` : w.kind[0].toUpperCase() + w.kind.slice(1)}</span>{w.age ? <span className="px-mono">{w.age}</span> : null}
           {w.cost_usd !== null ? <span className="px-mono">${w.cost_usd.toFixed(2)}</span> : null}</span>
       </span>
       <span className="px-hide-phone"><Stations stages={w.stages} /></span>
