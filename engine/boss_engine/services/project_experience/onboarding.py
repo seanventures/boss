@@ -1430,7 +1430,7 @@ def view(connection: Connection, project_id: str) -> dict[str, Any]:
             "start": {"href": f"/v1/projects/{project_id}/onboarding/start", "method": "POST"},
             "accept_backlog": {"href": f"/v1/projects/{project_id}/onboarding/backlog/accept",
                                "method": "POST"},
-            "href": project_href(project_id, tab="overview", drawer="onboarding")}
+            "href": project_href(project_id, tab="onboarding")}
 
 
 # ── accepting the proposed backlog (screen 10 "Accept backlog / Edit") ─────────────────────

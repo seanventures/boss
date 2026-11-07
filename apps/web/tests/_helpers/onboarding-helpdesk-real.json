@@ -391,5 +391,5 @@
   "href": "/v1/projects/helpdesk-ai-demo/onboarding/backlog/accept",
   "method": "POST"
  },
- "href": "?project_id=helpdesk-ai-demo&area=project&tab=overview&drawer=onboarding"
+ "href": "?project_id=helpdesk-ai-demo&area=project&tab=onboarding"
 }

@@ -626,7 +626,7 @@ def view(connection: Connection, project_id: str) -> dict[str, Any]:
                                    "appears here when it's done." if running else
                                    "Helm reads the repository once: stack, commands, tests, "
                                    "hotspots. It takes about two minutes."),
-                        "href": project_href(project_id, tab="overview", drawer="onboarding")}
+                        "href": project_href(project_id, tab="onboarding")}
     return out
 
 

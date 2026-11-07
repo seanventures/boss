@@ -473,7 +473,7 @@ def view(connection: Connection, project_id: str, *, now: Optional[datetime] = N
                    "users_from": logins["source"]},
         "onboarding": {"state": onboarding["state"], "stages": onboarding["stages"],
                        "href": onboarding.get("href") or project_href(project_id,
-                                                                      drawer="onboarding")},
+                                                                      tab="onboarding")},
         "week": week(connection, project_id, now),
     }
 
