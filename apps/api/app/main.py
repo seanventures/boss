@@ -1685,6 +1685,14 @@ async def lifespan(_: FastAPI):
                 if _owners:
                     _identity_passports.upgrade_from_roles(org_id=_org, db=_connection,
                                                            default_sponsor=_owners[0])
+                    # Every project's Captain authority (always-on builds start without a
+                    # person's grant; identity/captain_authority.py): existing projects backfilled.
+                    from boss_engine.identity import captain_authority as _captain_authority
+
+                    with _connection.begin_nested():
+                        _made = _captain_authority.backfill(_connection)
+                    if _made:
+                        print(f"[identity] {_made} project(s) got their Captain authority")
         print(f"[identity] vault ready (key {_kek or 'none configured, empty vault'}); signing keys provisioned")
         from boss_engine.identity import github_setup as _identity_github
 

@@ -422,7 +422,7 @@ class AssuranceService:
                     connection,
                     project_id,
                     None,
-                    f"Ground-truth evaluator for '{metric['metric_key']}' is overdue",
+                    f"Ground-truth evaluator for '{_key_words(metric['metric_key'])}' is overdue",
                     {
                         "action": "restore_metric_evaluator",
                         "metric_definition_id": metric["id"],
@@ -735,7 +735,7 @@ class AssuranceService:
                 connection,
                 project_id,
                 None,
-                f"Ground-truth metric '{metric['metric_key']}' breached its threshold",
+                f"Ground-truth metric '{_key_words(metric['metric_key'])}' breached its threshold",
                 {
                     "action": "investigate_regression",
                     "metric_definition_id": metric["id"],
@@ -2013,7 +2013,7 @@ class AssuranceService:
                     connection,
                     project_id,
                     None,
-                    f"Production surface '{surface_key}' is already owned",
+                    f"Production surface '{_key_words(surface_key)}' is already owned",
                     {
                         "action": "coordinate_with_surface_owner",
                         "owner_ref": current["owner_ref"],
@@ -3004,3 +3004,9 @@ class AssuranceService:
         if not row:
             raise AssuranceNotFoundError("Assurance claim not found.")
         return _row(row)
+
+
+def _key_words(value):
+    from .decision_words import key_words
+
+    return key_words(value)

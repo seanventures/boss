@@ -47,13 +47,20 @@ MAX_FIXES_PER_ITEM = 3
 #: Why BOSS does not fix it itself, per cause: the one line a person reads under "what to do".
 WHY_NOT: dict[str, str] = {
     "no_grant": "Only a person can let an agent act for them.",
+    "review": "You asked to review always-on builds before they start.",
     "crash_loop": "It is BOSS's own bug: another attempt runs the same code.",
     "budget": "Raising a budget is a person's call.",
     "no_worker": "BOSS cannot start its own worker from inside it (infrastructure).",
     "failed": "The failure is in the work itself; trying again needs a person's go-ahead.",
-    "quiet": "BOSS found nothing it can safely change.",
+    "quiet": "BOSS restarted the step and it still does not reach its agent.",
     "capped": "BOSS already tried its fixes and the work still does not move.",
 }
+#: An event a build writes every time a step starts over. The same one seen this many times in
+#: its recent events, with no agent turn between, is a step that keeps restarting.
+REPEAT_CYCLE = 3
+#: A live worker (fresh heartbeat) inside a step with no new agent turn may be running something
+#: long (a test suite, a build): it is left alone this long before the step is restarted.
+LONG_STEP_MINUTES = 90
 #: Who investigates. The Shepherd: BOSS's agent for work that stopped moving.
 AGENT = "Shepherd"
 ACTOR = "agent:shepherd"
@@ -417,6 +424,10 @@ MOVES: dict[str, dict[str, Any]] = {
                         "means": "Every attempt crashed the same way before it could report: "
                                  "stop re-running it (another attempt changes nothing), mark it "
                                  "failed with the crash, and tell a person what to do."},
+    "restart_step": {"acts": True, "label": "Restart the step",
+                     "means": "Nothing recorded says why it stopped: end its current job and start "
+                              "the step again on a fresh one (bounded: at most "
+                              f"{MAX_FIXES_PER_ITEM} fixes per build, then a person is asked)."},
     "retry_on_this_version": {"acts": True, "label": "Try once on this version",
                               "means": "Every attempt was lost while an older BOSS ran, so none "
                                        "of them says anything about this version: run it once "
@@ -428,6 +439,37 @@ MOVES: dict[str, dict[str, Any]] = {
                    "means": "Only a person can unblock it: raise ONE plain card that says what "
                             "they must do and why."},
 }
+
+
+def progress_clock(run: Mapping[str, Any], last_turn: Any = None) -> datetime:
+    """When this build last showed progress: its start, its last agent turn, or the moment the
+    Shepherd last restarted it (a fresh start is a fresh clock — it re-diagnosed a build 30
+    seconds after restarting it on the laptop, 2026-11-07, and called it stuck for 268 min)."""
+    ctx = _as_dict(run.get("finalize_ctx"))
+    marks = (_aware(run.get("created_at")), _aware(last_turn), _aware(ctx.get("shepherd_fixed_at")),
+             _aware(ctx.get("retried_after_upgrade")))
+    return max([d for d in marks if d is not None] or [_now()])
+
+
+def last_turn_at(connection: Any, run_id: str) -> Optional[datetime]:
+    return _aware(connection.execute(text(
+        "SELECT max(created_at) FROM agent_turns WHERE code_task_run_id = :r"), {"r": run_id}).scalar())
+
+
+def moved_since(connection: Any, run: Mapping[str, Any], at: Any) -> bool:
+    """The build is moving again after `at`: still live (or finished well) and an agent took a
+    turn after it. THE one test every surface uses to drop a stale "stuck" (the diagnosis on the
+    page, the Shepherd's card, an always-on squad's "stuck" ask)."""
+    since = _aware(at)
+    status = str(run.get("status") or "")
+    if since is None:
+        return False
+    if status == "completed":
+        return True
+    if status not in LIVE_STATUSES:
+        return False
+    turn = last_turn_at(connection, str(run.get("id") or ""))
+    return bool(turn and turn > since)
 
 
 def evidence(connection: Any, run_id: str, *, now: Optional[datetime] = None) -> dict[str, Any]:
@@ -452,8 +494,11 @@ def evidence(connection: Any, run_id: str, *, now: Optional[datetime] = None) ->
             "ORDER BY created_at DESC LIMIT 1"), {"j": job["id"]}).mappings().first()
     created = _aware(run.get("created_at")) or now
     last_turn = _aware(turns.get("last"))
-    progress_at = max([d for d in (created, last_turn) if d is not None])
+    progress_at = progress_clock(run, last_turn)
     reason = wait_reason(connection, run, job=job, now=now)
+    jobs = connection.execute(text(
+        "SELECT status, count(*) AS n FROM jobs WHERE kind = 'code.task' AND payload->>'run_id' = :r "
+        "GROUP BY status ORDER BY status"), {"r": run_id}).mappings().all()
     return {
         "run": {"id": run_id, "project_id": run.get("project_id"), "title": _short_title(run.get("title")),
                 "status": run.get("status"), "phase": run.get("phase"),
@@ -469,6 +514,8 @@ def evidence(connection: Any, run_id: str, *, now: Optional[datetime] = None) ->
                                           and _aware(job["lease_expires_at"]) < now else None),
             "last_error": _clip(_as_dict(job.get("last_error")).get("message"), 300),
             "carries_grant": bool(job.get("grant_id")),
+            "heartbeat_minutes_ago": (_mins((now - _aware(job["heartbeat_at"])).total_seconds())
+                                      if _aware(job.get("heartbeat_at")) else None),
             "lost_on_older_boss": bool(_as_dict(job.get("last_error")).get("lost_on_older_boss"))
             or _older_boss(job, ctx)},
         "retried_after_upgrade": bool(ctx.get("retried_after_upgrade")),
@@ -481,6 +528,10 @@ def evidence(connection: Any, run_id: str, *, now: Optional[datetime] = None) ->
         "wait_reason": reason,
         "recent_events": [{"type": e["event_type"],
                            "at": (_aware(e["created_at"]) or now).isoformat()} for e in events],
+        "job_history": {str(j["status"]): int(j["n"]) for j in jobs},
+        "last_event": ({"type": events[0]["event_type"],
+                        "minutes_ago": _mins((now - (_aware(events[0]["created_at"]) or now))
+                                             .total_seconds())} if events else None),
         "previous_diagnosis": {k: _as_dict(ctx.get("diagnosis")).get(k)
                                for k in ("signature", "chosen", "at")}
         if ctx.get("diagnosis") else None,
@@ -514,6 +565,13 @@ def triage(ev: Mapping[str, Any]) -> dict[str, Any]:
         return {"cause_code": cause_code, "cause": cause, "proof": proof, "moves": moves,
                 "pick": pick, "next": nxt, "who": who, "why_not": WHY_NOT.get(cause_code, "")}
 
+    if pw.get("blocker_type") == "always_on_review":
+        return t("review", f"Waiting for your review before {pw.get('builder') or 'its builder'} starts",
+                 "An always-on squad decided it; this project reviews always-on builds before they "
+                 "start (Project ▸ Settings ▸ Autonomy & budget).",
+                 ["ask_person"], "ask_person",
+                 "Approve the card to let it start on the project's Captain authority, or reject it.",
+                 "you")
     if code == "person_grant" or pw.get("blocker_type") == "authority_no_grant":
         return t("no_grant", f"No person's grant lets {pw.get('builder') or 'its builder'} act",
                  "Started by an always-on agent, not a person; the build refused to run without "
@@ -574,10 +632,87 @@ def triage(ev: Mapping[str, Any]) -> dict[str, Any]:
         return t("failed", "It failed: " + _clip(run.get("error") or "no reason recorded", 120),
                  _clip(run.get("error") or "", 300), ["ask_person"], "ask_person",
                  "Read the failure and press Retry, or change the request.", "you")
-    return t("quiet", "It has not moved and BOSS found no recorded cause",
-             f"{run.get('minutes_without_progress')} min without an agent turn",
-             ["requeue_lost", "ask_person"], "ask_person",
-             "Restart the step, or cancel the build.", "you")
+    # NO RULE MATCHED. Never "no recorded cause": investigate what the run, its job, its job
+    # history and its events show, say the likely cause with that evidence (or exactly what was
+    # checked and what is still unknown), and take the safe fix -- restart the step -- first.
+    found = investigate_quiet(ev)
+    if found["pick"] == "wait":
+        return t("quiet", found["cause"], found["proof"], ["wait", "restart_step", "ask_person"],
+                 "wait", f"BOSS leaves it running and restarts the step if it is still quiet "
+                         f"after {span_words(LONG_STEP_MINUTES)}.", "boss")
+    return t("quiet", found["cause"], found["proof"], ["restart_step", "ask_person"],
+             "restart_step",
+             "BOSS restarted the step; it resumes from the stage it reached. If it still does not "
+             f"move after {MAX_FIXES_PER_ITEM} fixes, BOSS asks you with what it found.", "boss")
+
+
+def investigate_quiet(ev: Mapping[str, Any]) -> dict[str, str]:
+    """The likely cause of a build that is not moving when no rule names one, from the facts
+    alone: its job (holder, heartbeat, attempts), its job history, its recent events (a step
+    that keeps starting over), its crash record and its agent turns. Pure.
+    Returns {cause, proof, checked, unknown, pick}: pick is `restart_step`, or `wait` while a
+    live worker may still be inside a long step."""
+    run = ev.get("run") or {}
+    job = ev.get("job") or {}
+    events = ev.get("recent_events") or []
+    span = span_words(int(run.get("minutes_without_progress") or 0))
+    turns = int(run.get("agent_turns") or 0)
+    checked = []
+    if job:
+        hb = job.get("heartbeat_minutes_ago")
+        checked.append(f"job {job.get('status')}, attempt {job.get('attempt')} of "
+                       f"{job.get('max_attempts')}"
+                       + (f", held by {job.get('holder')}" if job.get("holder") else "")
+                       + (f", heartbeat {span_words(int(hb))} ago" if hb is not None else ""))
+    else:
+        checked.append("no job")
+    history = ev.get("job_history") or {}
+    if sum(history.values()) > 1:
+        checked.append("job history: " + ", ".join(f"{n} {k}" for k, n in sorted(history.items())))
+    last = ev.get("last_event") or {}
+    checked.append(f"{len(events)} recent events"
+                   + (f" (last: {str(last.get('type')).split('.')[-1].replace('_', ' ')}, "
+                      f"{span_words(int(last.get('minutes_ago') or 0))} ago)" if last else ""))
+    checked.append("crash record: " + ("yes" if ev.get("last_crash") else "none"))
+    checked.append(f"{turns} agent turns")
+    counts: dict[str, int] = {}
+    for e in events:
+        counts[str(e.get("type"))] = counts.get(str(e.get("type")), 0) + 1
+    repeating = sorted((k for k, n in counts.items() if n >= REPEAT_CYCLE and
+                        not k.startswith("code_task.diagnos")), key=lambda k: -counts[k])
+    stage = (repeating[0].split(".")[-1].replace("_", " ") if repeating else "")
+    attempt, cap = int(job.get("attempt") or 0), int(job.get("max_attempts") or 0)
+    quiet_for = int(run.get("minutes_without_progress") or 0)
+    hb = job.get("heartbeat_minutes_ago") if job else None
+    alive = hb is not None and int(hb) <= 5
+    pick = "restart_step"
+    if cap and attempt > cap:
+        cause = f"Its job was handed out {attempt} times (limit {cap}) and never reached an agent"
+        proof = (f"Each attempt started over without an agent turn for {span}; the queue kept "
+                 "redelivering it instead of failing it.")
+    elif repeating:
+        cause = f"It keeps starting over at '{stage}' and never reaches its agent"
+        proof = (f"'{stage}' appears {counts[repeating[0]]} times in its last {len(events)} events "
+                 f"with {turns} agent turns in {span}: each attempt dies after setup.")
+    elif alive and turns > 0 and quiet_for < LONG_STEP_MINUTES:
+        cause = "A worker is still inside a long step (no new agent turn yet)"
+        proof = (f"{job.get('holder') or 'A worker'} renewed the lease {span_words(int(hb))} ago "
+                 f"and the step is not cycling; its last agent turn was {span} ago.")
+        pick = "wait"
+    elif alive and turns == 0:
+        cause = "A worker holds it and is alive, but its step never started an agent"
+        proof = (f"{job.get('holder') or 'A worker'} renewed the lease "
+                 f"{span_words(int(hb))} ago; no agent turn in {span}.")
+    elif last and int(last.get("minutes_ago") or 0) >= STUCK_MINUTES:
+        cause = f"It went silent after '{str(last.get('type')).split('.')[-1].replace('_', ' ')}'"
+        proof = (f"Nothing recorded for {span_words(int(last.get('minutes_ago') or 0))}: no event, "
+                 "no agent turn, no crash.")
+    else:
+        cause = f"No agent turn for {span}, and nothing recorded says why"
+        proof = "Checked: " + "; ".join(checked) + "."
+    return {"cause": cause, "proof": proof, "checked": "; ".join(checked), "pick": pick,
+            "unknown": "why the step does not reach its agent (the worker log on the host has "
+                       "the rest)"}
 
 
 def signature(ev: Mapping[str, Any], tri: Mapping[str, Any]) -> str:
@@ -677,6 +812,22 @@ def _act(connection: Any, settings: Any, run_id: str, move: str,
         emit_event(connection, project, "code_task.job_restarted", ACTOR, "code_task_run", run_id,
                    {"reason": "no live job carried it"})
         return True, "Restarted its job; it resumes from the stage it reached."
+    if move == "restart_step":
+        if run.get("status") not in LIVE_STATUSES:
+            return False, "It is no longer running, so the step was not restarted."
+        ended = connection.execute(text(
+            "UPDATE jobs SET status = 'cancelled', lease_owner = NULL, lease_token_hash = NULL, "
+            "lease_expires_at = NULL, updated_at = now(), last_error = CAST(:e AS jsonb) "
+            "WHERE kind = 'code.task' AND payload->>'run_id' = :r AND status IN "
+            "('queued', 'leased', 'running', 'failed_retryable')"),
+            {"r": run_id, "e": json.dumps({"message": "replaced: the Shepherd restarted the step"})}
+        ).rowcount
+        enqueue_job(connection, project, "code.task", {"run_id": run_id},
+                    task_id=run.get("task_id"), priority=JOB_PRIORITY_INTERACTIVE)
+        emit_event(connection, project, "code_task.step_restarted", ACTOR, "code_task_run",
+                   run_id, {"reason": "not moving and no recorded cause", "replaced_jobs": ended})
+        return True, ("Restarted the step on a fresh job; it resumes from the stage it reached."
+                      + (" Its old job was ended." if ended else ""))
     if move == "retry_on_this_version" and run.get("status") in LIVE_STATUSES:
         if _as_dict(run.get("finalize_ctx")).get("retried_after_upgrade"):
             return False, "Already tried once on this version."
@@ -780,14 +931,24 @@ def _raise_card(connection: Any, run_id: str, ev: Mapping[str, Any], tri: Mappin
             "updated_at = now() WHERE id = :id AND NOT (COALESCE(recommendation->'run_ids', "
             "'[]'::jsonb) @> CAST(:r AS jsonb))"), {"r": json.dumps([run_id]), "id": row})
         return str(row)
-    # ONE line: what the person must do. The cause, the diagram and the details ride with it.
-    question = nxt
+    # ONE line that names the work, what happened and the recommended answer; the diagnosis
+    # (stuck → checked → cause → tried → next) and why only a person can answer ride with it.
+    question = card_question(run.get("title"), tri.get("cause"), nxt)
     return create_blocking_decision(
-        connection, project, None, _clip(question, 280),
+        connection, project, None, question,
         {"action": CARD_ACTION, "run_id": run_id, "run_ids": [run_id], "cause_code": cause_code,
-         "cause": tri.get("cause"), "why": headline, "next": nxt, "why_not": tri.get("why_not"),
+         "cause": tri.get("cause"), "why": headline, "next": nxt, "recommended": nxt,
+         "why_not": tri.get("why_not"), "why_a_person": tri.get("why_not"),
          "title": run.get("title")},
         {}, cause_code, default_action="hold")
+
+
+def card_question(title: Any, cause: Any, nxt: Any) -> str:
+    """"<work>: <what happened>. <recommended answer>" in one line of at most 280 characters."""
+    work = _short_title(title) or "A build"
+    said = _clip(str(cause or "").rstrip("."), 120)
+    return _clip(f"{work}: {said}. {str(nxt or '').strip()}" if said else
+                 f"{work}: {str(nxt or '').strip()}", 280)
 
 
 def diagnose(connection: Any, settings: Any, run_id: str, *, adapter: Any = None,
@@ -815,8 +976,8 @@ def diagnose(connection: Any, settings: Any, run_id: str, *, adapter: Any = None
             and chosen != "stop_crash_loop":
         # BOUNDED: never a fourth fix on the same build. Stop and say why it is not fixed.
         tri = {**tri, "cause_code": "capped", "why_not": WHY_NOT["capped"],
-               "next": f"BOSS tried {fixes} fixes ({tri.get('cause')}). Look at its log, then "
-                       "retry it or cancel it.", "who": "you"}
+               "next": f"BOSS tried {fixes} fixes and it still does not move. Recommended: open "
+                       "its log, then retry it or cancel it.", "who": "you"}
         chosen = "ask_person"
         tried = f"Stopped after {fixes} fixes; none got it moving."
     if MOVES.get(str(chosen), {}).get("acts"):
@@ -829,10 +990,13 @@ def diagnose(connection: Any, settings: Any, run_id: str, *, adapter: Any = None
         tried = "Nothing to do: it frees up by itself."
     if done:
         fixes += 1
+        # The fix restarts the progress clock (progress_clock): the build is judged again only
+        # once it has had STUCK_MINUTES to show it moves.
         connection.execute(text(
             "UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx, '{}'::jsonb) || "
-            "jsonb_build_object('shepherd_fixes', CAST(:n AS int)) WHERE id = :id"),
-            {"n": fixes, "id": run_id})
+            "jsonb_build_object('shepherd_fixes', CAST(:n AS int), 'shepherd_fixed_at', "
+            "CAST(:at AS text)) WHERE id = :id"),
+            {"n": fixes, "id": run_id, "at": now.isoformat()})
         try:
             from .run_terminal import on_status_written
 
@@ -849,7 +1013,7 @@ def diagnose(connection: Any, settings: Any, run_id: str, *, adapter: Any = None
     # A card only when work is HALTED on a person: an ended build is over (its page and this
     # diagnosis say why); a card for each of 150 old failures would bury the ones that matter.
     ended = (ev.get("run") or {}).get("status") in ENDED_STATUSES
-    halted = needs_person and (not ended or tri.get("cause_code") in ("crash_loop", "no_grant"))
+    halted = needs_person and (not ended or tri.get("cause_code") in ("crash_loop", "no_grant", "review"))
     card = _raise_card(connection, run_id, ev, tri, nxt, headline) if halted else None
     project = (ev.get("run") or {}).get("project_id")
     from .project_experience.common import href as _href
@@ -888,7 +1052,8 @@ def due(connection: Any, *, now: Optional[datetime] = None, limit: int = 20) -> 
     horizon = now - timedelta(minutes=STUCK_MINUTES)
     rows = connection.execute(text(
         "SELECT c.id, c.status, c.phase, c.finalize_ctx->'diagnosis' AS diag, c.updated_at, "
-        "c.created_at, (SELECT max(t.created_at) FROM agent_turns t WHERE t.code_task_run_id = c.id) "
+        "c.created_at, c.finalize_ctx->>'shepherd_fixed_at' AS fixed_at, "
+        "c.finalize_ctx->>'retried_after_upgrade' AS retried_at, (SELECT max(t.created_at) FROM agent_turns t WHERE t.code_task_run_id = c.id) "
         "AS last_turn FROM code_task_runs c WHERE ("
         "  (c.status IN ('running', 'queued', 'repairing') AND c.created_at < :h)"
         "  OR (c.status IN ('failed', 'blocked') AND c.updated_at > :day)"
@@ -899,7 +1064,10 @@ def due(connection: Any, *, now: Optional[datetime] = None, limit: int = 20) -> 
     for r in rows:
         diag = _as_dict(r["diag"])
         if r["status"] in LIVE_STATUSES:
-            last = max(d for d in (_aware(r["created_at"]), _aware(r["last_turn"])) if d is not None)
+            last = progress_clock({"created_at": r["created_at"],
+                                   "finalize_ctx": {"shepherd_fixed_at": r["fixed_at"],
+                                                    "retried_after_upgrade": r["retried_at"]}},
+                                  r["last_turn"])
             if r["phase"] not in ("queued", "provisioning") and (now - last) < timedelta(minutes=STUCK_MINUTES):
                 continue  # an agent took a turn recently: working
             if r["phase"] in ("queued", "provisioning") and (now - last) < timedelta(minutes=STUCK_MINUTES):
@@ -928,9 +1096,35 @@ def sweep(engine: Any, settings: Any, *, now: Optional[datetime] = None, adapter
     from ..db import begin
 
     now = now or _now()
+    report = {"diagnosed": 0, "acted": 0, "cards": 0, "errors": 0, "recovered": 0,
+              "withdrawn": 0}
+    # FIRST, WHAT MOVED AGAIN: a diagnosis or a "stuck" card about work that is moving now is
+    # stale the moment it moves; it never waits beside a build that is visibly progressing.
+    # Then the same rule for incidents: nothing stays acknowledged and idle (acked_idle).
+    def recovery() -> int:
+        with begin(engine) as c:
+            return len(clear_recovered(c, now=now))
+
+    def withdrawn() -> int:
+        from .cleared_causes import withdraw_cleared
+
+        with begin(engine) as c:
+            return len(withdraw_cleared(c, actor=ACTOR))
+
+    def acked() -> int:
+        from . import acked_idle
+
+        with begin(engine) as c:
+            return len(acked_idle.sweep(c, now=now))
+
+    for key, step in (("recovered", recovery), ("withdrawn", withdrawn), ("acked_idle", acked)):
+        try:
+            report[key] = step()
+        except Exception:  # noqa: BLE001 — one pass's failure never stops the others
+            log.exception("stuck-work %s pass failed", key)
+            report["errors"] += 1
     with begin(engine) as c:
         ids = due(c, now=now)
-    report = {"diagnosed": 0, "acted": 0, "cards": 0, "errors": 0}
     for i, rid in enumerate(ids):
         try:
             with begin(engine) as c:
@@ -945,11 +1139,50 @@ def sweep(engine: Any, settings: Any, *, now: Optional[datetime] = None, adapter
     return report
 
 
-def public_diagnosis(finalize_ctx: Any) -> Optional[dict[str, Any]]:
-    """The diagnosis a surface shows: the five steps and the headline, nothing internal."""
+def clear_recovered(connection: Any, *, now: Optional[datetime] = None) -> list[str]:
+    """Builds whose diagnosis is stale because they moved again (moved_since): the diagnosis is
+    kept as `last_diagnosis` (with when and why it cleared) and leaves every surface; an event
+    says so. Returns the run ids cleared."""
+    from .core import emit_event
+
+    now = now or _now()
+    rows = connection.execute(text(
+        "SELECT id, project_id, status, phase, created_at, finalize_ctx FROM code_task_runs "
+        "WHERE finalize_ctx ? 'diagnosis' AND status IN ('running', 'queued', 'repairing', "
+        "'completed') ORDER BY updated_at DESC LIMIT 200")).mappings().all()
+    out: list[str] = []
+    for r in rows:
+        diag = _as_dict(_as_dict(r["finalize_ctx"]).get("diagnosis"))
+        if not moved_since(connection, r, diag.get("at")):
+            continue
+        why = ("it finished" if r["status"] == "completed" else
+               f"an agent took a turn after it (now {str(r['phase'] or r['status']).replace('_', ' ')})")
+        kept = {**diag, "cleared_at": now.isoformat(), "cleared_because": f"It moved again: {why}."}
+        connection.execute(text(
+            "UPDATE code_task_runs SET finalize_ctx = (finalize_ctx - 'diagnosis') || "
+            "jsonb_build_object('last_diagnosis', CAST(:d AS jsonb)) WHERE id = :id"),
+            {"d": json.dumps(kept, default=str), "id": r["id"]})
+        emit_event(connection, r["project_id"], "code_task.recovered", ACTOR, "code_task_run",
+                   r["id"], {"was": diag.get("cause_code"), "because": why})
+        out.append(str(r["id"]))
+    return out
+
+
+def public_diagnosis(finalize_ctx: Any, *, connection: Any = None,
+                     run: Optional[Mapping[str, Any]] = None) -> Optional[dict[str, Any]]:
+    """The diagnosis a surface shows: the five steps and the headline, nothing internal. Given
+    the connection and the run, a diagnosis the build has since moved past is not shown (the
+    sweep clears it within a minute; the page never waits for that)."""
     d = _as_dict(_as_dict(finalize_ctx).get("diagnosis"))
     if not d:
         return None
+    if connection is not None and run is not None:
+        try:
+            with connection.begin_nested():
+                if moved_since(connection, run, d.get("at")):
+                    return None
+        except Exception:  # noqa: BLE001 — the page still renders
+            log.warning("moved_since failed", exc_info=True)
     return {k: d.get(k) for k in ("at", "headline", "cause", "chosen", "acted", "tried", "next",
                                   "who", "needs_person", "card_id", "by", "steps",
                                   "why_not_fixed", "links", "fixes", "max_fixes")}
@@ -963,7 +1196,7 @@ def runs_of_item(connection: Any, work_item_id: str) -> list[dict[str, Any]]:
     launched), newest first."""
     rows = connection.execute(text(
         "SELECT c.* FROM code_task_runs c WHERE c.id IN (SELECT ref FROM work_item_links "
-        "WHERE work_item_id = :w AND kind IN ('code_task_run', 'build')) "
+        "WHERE work_item_id = :w AND kind IN ('code_task', 'code_task_run', 'build')) "
         "OR c.finalize_ctx->>'workflow_run_id' IN (SELECT ref FROM work_item_links "
         "WHERE work_item_id = :w AND kind = 'workflow_run') ORDER BY c.created_at DESC LIMIT 10"),
         {"w": work_item_id}).mappings().all()
@@ -980,7 +1213,8 @@ def item_status(connection: Any, work_item_id: str) -> dict[str, Any]:
                 if str(run.get("status")) in ("completed", "cancelled", "simulated"):
                     continue
                 why = wait_reason(connection, run)
-                return {"why": why, "diagnosis": public_diagnosis(run.get("finalize_ctx")),
+                return {"why": why, "diagnosis": public_diagnosis(run.get("finalize_ctx"),
+                                                                  connection=connection, run=run),
                         "run_id": run["id"], "run_title": _short_title(run.get("title"))}
     except Exception:  # noqa: BLE001 — an item without a reason still renders
         log.warning("item_status failed work_item_id=%s", work_item_id, exc_info=True)
@@ -997,7 +1231,8 @@ def card_diagnosis(connection: Any, decision: Mapping[str, Any]) -> Optional[dic
                 if rid:
                     run = _load(connection, str(rid))
                     if run:
-                        d = public_diagnosis(run.get("finalize_ctx"))
+                        d = public_diagnosis(run.get("finalize_ctx"), connection=connection,
+                                             run=run)
                         if d:
                             return d
             items = [rec.get("work_item_id")] + [e.get("work_item_id")
@@ -1034,17 +1269,23 @@ def board(connection: Any, project_id: Optional[str] = None, *,
     or every project when `project_id` is None (the Shepherd scans them all)."""
     now = now or _now()
     rows = connection.execute(text(
-        "SELECT * FROM code_task_runs WHERE finalize_ctx->'diagnosis' IS NOT NULL "
-        "AND (CAST(:p AS TEXT) IS NULL OR project_id = :p) AND updated_at > :since "
+        "SELECT * FROM code_task_runs WHERE (finalize_ctx->'diagnosis' IS NOT NULL "
+        "OR finalize_ctx->'last_diagnosis' IS NOT NULL) AND (CAST(:p AS TEXT) IS NULL OR project_id = :p) AND updated_at > :since "
         "ORDER BY updated_at DESC LIMIT 200"),
         {"p": project_id, "since": now - timedelta(days=BOARD_DAYS)}).mappings().all()
     out: dict[str, list[dict[str, Any]]] = {"fixed": [], "trying": [], "needs_person": []}
     for r in rows:
         run = dict(r)
-        diag = _as_dict(_as_dict(run.get("finalize_ctx")).get("diagnosis"))
-        if not diag:
-            continue
+        ctx = _as_dict(run.get("finalize_ctx"))
+        diag = _as_dict(ctx.get("diagnosis"))
         status = str(run.get("status") or "")
+        if not diag:
+            # Cleared because it moved again (clear_recovered): the Shepherd's fix worked when
+            # it acted; otherwise it recovered by itself. Either way, it is not stalled.
+            last = _as_dict(ctx.get("last_diagnosis"))
+            if last and status != "cancelled" and (last.get("acted") or ctx.get("shepherd_fixes")):
+                out["fixed"].append({**_entry(run, last), "cleared": last.get("cleared_because")})
+            continue
         e = _entry(run, diag)
         if status == "cancelled":
             continue

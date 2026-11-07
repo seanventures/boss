@@ -8179,6 +8179,14 @@ CREATE TABLE IF NOT EXISTS identity_delegation_grants (
 CREATE INDEX IF NOT EXISTS identity_delegation_grants_user ON identity_delegation_grants (user_principal_id, status);
 -- §7.3: "BOSS reminds the user 3 days before expiry" — once per grant (extending clears it).
 ALTER TABLE identity_delegation_grants ADD COLUMN IF NOT EXISTS reminded_at TIMESTAMPTZ;
+-- THE PROJECT'S CAPTAIN AUTHORITY (identity/captain_authority.py): a standing authority BOSS
+-- creates for every project, sponsored by the project's Owner, so always-on squads' builds run as
+-- the project's Captain without a person's grant. 'captain' marks it (NULL: a person's own grant);
+-- build and pull-request permissions only, never merge, production deploy, secrets or admin.
+-- One per project, whatever its status: one a person revoked stays revoked.
+ALTER TABLE identity_delegation_grants ADD COLUMN IF NOT EXISTS authority_kind TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS identity_delegation_grants_one_captain
+  ON identity_delegation_grants ((project_ids[1])) WHERE authority_kind = 'captain';
 -- §7.3 2, ASKED WHERE NO SHEET CAN OPEN: a consent request raised in an agent turn, an MCP call or
 -- a key-authenticated start, kept for an hour so the console can open the same sheet from a link
 -- (/account/agents?consent=<id>). The link carries only this id; only the person it names reads it.
@@ -11106,6 +11114,8 @@ CREATE TABLE IF NOT EXISTS ambient_autonomy (
   PRIMARY KEY (project_id, task_class),
   CHECK (level <= ceiling)
 );
+-- A class's own answer to "review always-on builds before they start" (NULL: the project's).
+ALTER TABLE ambient_autonomy ADD COLUMN IF NOT EXISTS review_builds BOOLEAN;
 -- Every change of level and every promotion BOSS suggests, with the track record behind it.
 CREATE TABLE IF NOT EXISTS ambient_autonomy_changes (
   id TEXT PRIMARY KEY,
@@ -11143,6 +11153,9 @@ CREATE TABLE IF NOT EXISTS ambient_settings (
   updated_by TEXT NOT NULL DEFAULT 'boss',
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- "Review always-on builds before they start" (Project › Settings › Autonomy & budget): NULL
+-- follows the install's default (system_state['ambient_review_builds']), which is off.
+ALTER TABLE ambient_settings ADD COLUMN IF NOT EXISTS review_squad_builds BOOLEAN;
 -- DISCOVERY DOSSIER (BOSSAPP-909; design §4 L1 "give it a directory and it starts working").
 -- When a repository is registered (its first code-graph index) or on request, BOSS reads it with
 -- no instructions and keeps ONE current dossier per project repository: stack, structure,

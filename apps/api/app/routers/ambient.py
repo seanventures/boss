@@ -62,6 +62,19 @@ class SettingsBody(Body):
     breaker_min_runs: Optional[int] = None
 
 
+class ReviewBuildsBody(Body):
+    """Project › Settings › Autonomy & budget: "Review always-on builds before they start".
+    `review` null clears it (follow the install's default, or the project's for a class)."""
+    review: Optional[bool] = None
+    task_class: Optional[str] = Field(default=None, min_length=1, max_length=60)
+
+
+class InstallReviewBuildsBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    review: bool
+    actor: Optional[str] = None
+
+
 class InstallBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     actor: Optional[str] = None
@@ -254,7 +267,8 @@ def build_ambient_router(*, engine, settings: Callable[[], Any],
             return {"settings": policy.settings_for(c, project_id),
                     "envelope": policy.envelope(c, project_id),
                     "stop": policy.stop_state(c, project_id),
-                    "mode": policy.mode_state(c, settings())}
+                    "mode": policy.mode_state(c, settings()),
+                    "review_builds": policy.review_builds_state(c, project_id)}
 
     @router.put("/v1/ambient/settings")
     @permit(P.AUTONOMY_MANAGE, scope=Scope.project(body="project_id"))
@@ -264,6 +278,26 @@ def build_ambient_router(*, engine, settings: Callable[[], Any],
             actor = require_write_actor(c, payload.project_id, payload.actor, "role_review")
             return {"settings": _errors(lambda: policy.update_settings(
                 c, payload.project_id, actor=actor, **changes))}
+
+    @router.put("/v1/ambient/review-builds")
+    @permit(P.AUTONOMY_MANAGE, scope=Scope.project(body="project_id"))
+    def put_review_builds(payload: ReviewBuildsBody) -> dict:
+        """Review always-on builds before they start (off by default: they start on the project's
+        Captain authority). For the project, or one task class (`task_class`)."""
+        with begin(engine) as c:
+            actor = require_write_actor(c, payload.project_id, payload.actor, "role_review")
+            return {"review_builds": _errors(lambda: policy.set_review_builds(
+                c, payload.project_id, actor=actor, review=payload.review,
+                task_class=payload.task_class))}
+
+    @router.put("/v1/ambient/review-builds/install")
+    @permit(P.AUTONOMY_MANAGE, scope=Scope.org())
+    def put_review_builds_install(payload: InstallReviewBuildsBody) -> dict:
+        """The install-wide default every project follows until it sets its own (Govern › Autonomy)."""
+        with begin(engine) as c:
+            actor = org_actor(c, payload.actor)
+            return {"review_builds": policy.set_review_builds_install(c, review=payload.review,
+                                                                      actor=actor)}
 
     @router.post("/v1/ambient/stop")
     @permit(P.WORK_ITEM_MANAGE, scope=Scope.project(body="project_id"))

@@ -1042,6 +1042,8 @@ _WITHDRAW_WHY = {
     "off": "the always-on agents are off, so nothing waits on this answer",
     "roadmap": "the Recommended roadmap ranks this; it is not a hand-off",
     "moot": "the item it asked about has moved on",
+    "moving": "the work it was stuck on is moving again (an agent took a turn on its build "
+              "after it asked, or the build finished), so nobody needs to take it",
     # The one-card rules (asks.py): a squad's or the SRE squad's ask re-judged.
     "backlog": "it is already on the onboarding backlog, which is yours to decide there",
     "policy": "BOSS refused that action twice; the outcome is recorded, nobody needs to answer",

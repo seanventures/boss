@@ -401,18 +401,19 @@ def resume(connection: Connection, *, project_id: Optional[str], actor: str,
 def level_for(connection: Connection, project_id: str, task_class: str) -> dict[str, Any]:
     klass = tc.task_class(task_class)
     row = connection.execute(text(
-        "SELECT level, ceiling, set_by, reason, updated_at FROM ambient_autonomy "
-        "WHERE project_id = :p AND task_class = :c"),
+        "SELECT * FROM ambient_autonomy WHERE project_id = :p AND task_class = :c"),
         {"p": project_id, "c": klass.key}).mappings().first()
     if row is None:
         return {"task_class": klass.key, "level": klass.default_level, "ceiling": klass.ceiling,
                 "default_level": klass.default_level, "max_ceiling": klass.ceiling,
-                "source": "default", "set_by": None, "reason": "", "updated_at": None}
+                "source": "default", "set_by": None, "reason": "", "updated_at": None,
+                "review_builds": None}
     ceiling = tc.clamp_level(row["ceiling"], klass.ceiling)
     return {"task_class": klass.key, "level": tc.clamp_level(row["level"], ceiling),
             "ceiling": ceiling, "default_level": klass.default_level,
             "max_ceiling": klass.ceiling, "source": "project", "set_by": row["set_by"],
-            "reason": row["reason"], "updated_at": iso(row["updated_at"])}
+            "reason": row["reason"], "updated_at": iso(row["updated_at"]),
+            "review_builds": row.get("review_builds")}
 
 
 def matrix(connection: Connection, project_id: str) -> list[dict[str, Any]]:
@@ -490,6 +491,82 @@ def changes(connection: Connection, project_id: str, *, task_class: Optional[str
         "AND (CAST(:c AS TEXT) IS NULL OR task_class = :c) ORDER BY created_at DESC LIMIT :n"),
         {"p": project_id, "c": task_class, "n": max(1, min(int(limit), 500))}).mappings()
     return [serialize_row(r) for r in rows]
+
+
+# ── review always-on builds before they start (identity/captain_authority.py) ─────────────────
+#
+# Always-on builds start on the project's Captain authority with no person needed (the operator's
+# default, 2026-11-07). A person who wants to look first turns this on: install-wide in Govern ›
+# Autonomy (the default every project follows), per project in Project › Settings › Autonomy &
+# budget, and per class in the autonomy table. The most specific answer wins; unset follows the
+# next one up; nothing set anywhere is OFF. With it on, the build waits on one card per builder.
+
+REVIEW_STATE_KEY = "ambient_review_builds"
+
+
+def review_builds_install(connection: Connection) -> bool:
+    value = connection.execute(text("SELECT value FROM system_state WHERE key = :k"),
+                               {"k": REVIEW_STATE_KEY}).scalar()
+    if isinstance(value, str):
+        value = json.loads(value)
+    return bool(isinstance(value, dict) and value.get("review") is True)
+
+
+def set_review_builds_install(connection: Connection, *, review: bool, actor: str) -> dict[str, Any]:
+    connection.execute(text(
+        "INSERT INTO system_state (key, value) VALUES (:k, CAST(:v AS JSONB)) "
+        "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()"),
+        {"k": REVIEW_STATE_KEY, "v": json.dumps({"review": bool(review), "by": actor,
+                                                  "at": iso(now())})})
+    return {"install": review_builds_install(connection)}
+
+
+def review_builds_state(connection: Connection, project_id: str) -> dict[str, Any]:
+    """{install, project (None: follows the install), classes {class: bool}, effective, source}."""
+    install = review_builds_install(connection)
+    project = connection.execute(text(
+        "SELECT review_squad_builds FROM ambient_settings WHERE project_id = :p"),
+        {"p": project_id}).scalar()
+    classes = {r[0]: bool(r[1]) for r in connection.execute(text(
+        "SELECT task_class, review_builds FROM ambient_autonomy WHERE project_id = :p "
+        "AND review_builds IS NOT NULL"), {"p": project_id})}
+    effective = install if project is None else bool(project)
+    return {"install": install, "project": project, "classes": classes, "effective": effective,
+            "source": "install" if project is None else "project"}
+
+
+def review_builds_for(connection: Connection, project_id: str,
+                      task_class: Optional[str]) -> tuple[bool, str]:
+    """Must a person review this class's always-on builds before they start? -> (answer, where
+    it was set: class | project | install)."""
+    state = review_builds_state(connection, project_id)
+    if task_class and task_class in state["classes"]:
+        return state["classes"][task_class], "class"
+    return state["effective"], state["source"]
+
+
+def set_review_builds(connection: Connection, project_id: str, *, actor: str,
+                      review: Optional[bool], task_class: Optional[str] = None) -> dict[str, Any]:
+    """Set (True/False) or clear (None: follow the next level up) the project's answer, or one
+    class's. Turning it OFF lets always-on builds start on the Captain authority; ON makes them
+    wait on the card."""
+    if task_class:
+        klass = tc.task_class(task_class)
+        current = level_for(connection, project_id, klass.key)
+        connection.execute(text(
+            "INSERT INTO ambient_autonomy (project_id, task_class, level, ceiling, set_by, reason, "
+            "review_builds) VALUES (:p, :c, :l, :ce, :a, '', :r) ON CONFLICT (project_id, task_class) "
+            "DO UPDATE SET review_builds = EXCLUDED.review_builds, updated_at = now()"),
+            {"p": project_id, "c": klass.key, "l": current["level"], "ce": current["ceiling"],
+             "a": actor, "r": review})
+    else:
+        _ensure_settings_row(connection, project_id, actor)
+        connection.execute(text(
+            "UPDATE ambient_settings SET review_squad_builds = :r, updated_by = :a, updated_at = now() "
+            "WHERE project_id = :p"), {"r": review, "a": actor, "p": project_id})
+    emit(connection, project_id, "ambient.review_builds_changed", actor, "project", project_id,
+         {"task_class": task_class, "review": review})
+    return review_builds_state(connection, project_id)
 
 
 # ── the gate ─────────────────────────────────────────────────────────────────────────────────

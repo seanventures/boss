@@ -82,6 +82,8 @@ export type Signal = { id: string; kind: string; title: string; severity: string
 export type ClassRow = {
   task_class: string; title: string; level: string; ceiling: string; max_ceiling: string; default_level: string;
   risk: string; owner_role: string | null; level_name: string; suggested_level: string | null; source: string;
+  /** This class's own "review always-on builds before they start"; null follows the project. */
+  review_builds: boolean | null;
 };
 export type AutonomyView = { classes: ClassRow[]; levels: Array<{ level: string; name: string }> };
 export type Envelope = { cap_usd_micros: number; spent_usd_micros: number; held_usd_micros: number; available_usd_micros: number; resets: string };
@@ -94,7 +96,10 @@ export const MODE_WORDS: Record<AlwaysOnMode, { label: string; tip: string }> = 
   propose: { label: "Ask first", tip: "Agents triage and suggest; a person approves handovers on one card per project" },
   route: { label: "Act within levels", tip: "Hand-offs go straight to the owning agent from A1; each kind of work then runs at its own level below" },
 };
-export type SettingsView = { settings: Record<string, unknown>; envelope: Envelope; stop: StopState; mode: ModeState };
+/** "Review always-on builds before they start": off by default, so always-on builds start on the
+ *  project's Captain authority. Class → project → install; null follows the next level up. */
+export type ReviewBuilds = { install: boolean; project: boolean | null; classes: Record<string, boolean>; effective: boolean; source: "install" | "project" };
+export type SettingsView = { settings: Record<string, unknown>; envelope: Envelope; stop: StopState; mode: ModeState; review_builds: ReviewBuilds };
 
 export type Summary = { n: number; median: number | null; p90: number | null };
 export type DayRow = { day: string; a0: number; a1: number; a2: number; a3: number; agent: number; policy: number; squad: number; person: number; total: number };
@@ -373,7 +378,8 @@ export const parseAutonomy = (w: unknown): AutonomyView => {
       const y = o(c);
       return { task_class: s(y.task_class), title: s(y.title || y.task_class), level: s(y.level, "A0"), ceiling: s(y.ceiling, "A0"),
                max_ceiling: s(y.max_ceiling || y.ceiling, "A0"), default_level: s(y.default_level, "A0"), risk: s(y.risk, "low"),
-               owner_role: sn(y.owner_role), level_name: s(y.level_name), suggested_level: sn(y.suggested_level), source: s(y.source) };
+               owner_role: sn(y.owner_role), level_name: s(y.level_name), suggested_level: sn(y.suggested_level), source: s(y.source),
+               review_builds: typeof y.review_builds === "boolean" ? y.review_builds : null };
     }),
     levels: a(x.levels).map((l) => ({ level: s(o(l).level), name: s(o(l).name) })),
   };
@@ -397,9 +403,18 @@ export const parseMode = (w: unknown): ModeState => {
     pinned: x.pinned === true, by: sn(x.by), at: sn(x.at),
   };
 };
+export const parseReviewBuilds = (w: unknown): ReviewBuilds => {
+  const x = o(w);
+  const classes: Record<string, boolean> = {};
+  for (const [k, v] of Object.entries(o(x.classes))) if (typeof v === "boolean") classes[k] = v;
+  const project = typeof x.project === "boolean" ? x.project : null;
+  const install = x.install === true;
+  return { install, project, classes, effective: project ?? install, source: project === null ? "install" : "project" };
+};
 export const parseSettings = (w: unknown): SettingsView => {
   const x = o(w);
-  return { settings: o(x.settings), envelope: parseEnvelope(x.envelope), stop: parseStop(x.stop), mode: parseMode(x.mode) };
+  return { settings: o(x.settings), envelope: parseEnvelope(x.envelope), stop: parseStop(x.stop), mode: parseMode(x.mode),
+           review_builds: parseReviewBuilds(x.review_builds) };
 };
 const parseSum = (w: unknown): Summary => {
   const x = o(w);
@@ -535,6 +550,11 @@ export const stopAgents = (projectId: string, reason: string, everywhere = false
 export const resumeAgents = (projectId: string, reason = "", everywhere = false) =>
   everywhere ? aaWrite("/v1/ambient/resume-all", { reason }, "Resume all")
              : aaWrite("/v1/ambient/resume", { project_id: projectId, reason }, "Resume");
+/** "Review always-on builds before they start" for a project, or one class (`taskClass`); null clears it. */
+export const setReviewBuilds = (projectId: string, review: boolean | null, taskClass?: string) =>
+  aaWrite("/v1/ambient/review-builds", { project_id: projectId, review, ...(taskClass ? { task_class: taskClass } : {}) }, "Review builds", "PUT");
+/** The install-wide default every project follows until it sets its own (Govern › Autonomy). */
+export const setReviewBuildsInstall = (review: boolean) => aaWrite("/v1/ambient/review-builds/install", { review }, "Review builds", "PUT");
 /** Turn the always-on agents on or off for the install (autonomy:manage; 409 while .env pins it). */
 export const setAlwaysOn = (mode: AlwaysOnMode, reason = "") => aaWrite("/v1/ambient/mode", { mode, reason }, "Always-on", "PUT");
 export type AcceptAs = "ticket" | "epic" | "prd";

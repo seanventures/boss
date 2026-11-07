@@ -800,6 +800,34 @@ def _workflow_build_authority(engine: Any, acting: Any) -> Any:
     return recorded
 
 
+def _captain_authority(engine: Any, acting: Any, *, task_run_id: str, project_id: str) -> tuple[Any, Any]:
+    """THE PROJECT'S CAPTAIN AUTHORITY (identity/captain_authority.py), checked live at every start.
+
+    A build with no person's grant behind it (an always-on squad's): when the project's Captain
+    authority covers it — the squad's decision stands within its class's autonomy level, and
+    nobody asked to review always-on builds first (or a person approved this one) — it runs OBO
+    the authority's sponsor on that authority. A build already stamped with that authority (a
+    resume, a retry, a reclaim) is re-checked the same way: a class demoted, ambient work stopped,
+    the item ended or the review switched on since, and it is refused (the card asks a person).
+    Returns (acting, verdict-or-None)."""
+    from . import captain_authority
+
+    grantless = acting is None or getattr(acting, "system", False) or not getattr(acting, "grant_id", None)
+    try:
+        with engine.begin() as db:
+            if not grantless and not captain_authority.is_captain_grant(db, acting.grant_id):
+                return acting, None                       # a person's own grant: nothing to do here
+            verdict = captain_authority.evaluate(db, run_id=task_run_id, project_id=project_id)
+    except Exception:  # noqa: BLE001 — unreadable: never widened; a person's card asks instead
+        import logging
+
+        logging.getLogger("boss.identity.runs").exception("captain authority unreadable for %s", task_run_id)
+        return (acting if grantless else None), None
+    if verdict.covered and not verdict.review_pending:
+        return captain_authority.acting_for(verdict, task_run_id), verdict
+    return (acting if grantless else None), verdict
+
+
 def start_code_task_run(engine: Any, *, task_run_id: str, project_id: str, owner: str, repo: str,
                         role_key: Optional[str], acting: Any = None,
                         job_id: Optional[str] = None) -> Optional[tuple[Shim, CloneAccess]]:
@@ -828,8 +856,15 @@ def start_code_task_run(engine: Any, *, task_run_id: str, project_id: str, owner
     if not egress_enabled():
         _no_authority("egress_not_configured", task_run_id=task_run_id)
         return None
+    acting, captain = _captain_authority(engine, acting, task_run_id=task_run_id, project_id=project_id)
     if acting is None or getattr(acting, "system", False) or not acting.grant_id:
-        _no_authority("no_grant" if acting is not None else "no_principal", task_run_id=task_run_id)
+        if captain is not None and captain.covered and captain.review_pending:
+            # "Review always-on builds before they start" is on: the build waits on the card.
+            _no_authority("captain_review_required", task_run_id=task_run_id)
+        elif captain is not None and captain.ambient:
+            _no_authority(f"no_grant (captain authority: {captain.reason})", task_run_id=task_run_id)
+        else:
+            _no_authority("no_grant" if acting is not None else "no_principal", task_run_id=task_run_id)
         return None
     acting = _workflow_build_authority(engine, acting)
     with engine.begin() as db:
@@ -865,6 +900,11 @@ def start_code_task_run(engine: Any, *, task_run_id: str, project_id: str, owner
                                       repos=(f"{owner}/{repo}",), scope=BUILD_SCOPE,
                                       github_needs=_build_needs(db, project_id, owner, repo)),
                              grant_id=acting.grant_id, db=db, audiences=(AUD_API,))
+    if captain is not None and captain.covered and not captain.review_pending:
+        from . import captain_authority
+
+        with engine.begin() as db:
+            captain_authority.record_use(db, captain, run_id=task_run_id)
     remember_engine(engine)
     # The worker's own GitHub writes for this build (opening its PR) use tokens bound to this run:
     # revoked with the run's other tokens at run end (identity/github_setup.py).

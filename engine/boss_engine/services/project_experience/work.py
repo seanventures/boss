@@ -927,7 +927,8 @@ def _with_why(connection: Connection, found: list[dict[str, Any]]) -> None:
             continue
         why = reasons.get(str(w["build_id"]))
         w["why"] = why
-        w["diagnosis"] = stuck_work.public_diagnosis(run.get("finalize_ctx"))
+        w["diagnosis"] = stuck_work.public_diagnosis(run.get("finalize_ctx"),
+                                                     connection=connection, run=run)
         if why and w.get("state") in ("running", "planned"):
             if why["who"] == "you":
                 w["state"] = "needs_you"

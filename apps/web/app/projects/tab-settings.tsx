@@ -445,6 +445,11 @@ function Autonomy({ ctx, sec, onChanged }: { ctx: PxCtx; sec: SettingsSection; o
   const [said, setSaid] = useState<Line>(NO_LINE);
   const [editing, setEditing] = useState(false);
   const amb = o(raw.ambient);
+  const rb = o(raw.review_builds);
+  const reviewNow = typeof rb.project === "boolean" ? rb.project : rb.install === true;
+  const [review, setReview] = useState<boolean>(reviewNow);
+  useEffect(() => { setReview(reviewNow); }, [reviewNow]);
+  const captain = o(rb.captain_authority);
   const cap = n(amb.week_cap_usd), spent = n(amb.week_spent_usd);
   const [capIn, setCapIn] = useState(String(Math.round(cap)));
   useEffect(() => { setLevel(s(raw.level)); }, [raw.level]);
@@ -455,6 +460,14 @@ function Autonomy({ ctx, sec, onChanged }: { ctx: PxCtx; sec: SettingsSection; o
     const r = await write(`Set this project's autonomy to ${key}.`, () => idPut<unknown>(PX_PATHS.settings(ctx.projectId).replace(/\/settings$/, "/autonomy"), { level: key }));
     if (!r.ok) setLevel(before);
     setSaid(lineOf(r, `Autonomy is ${levelLabel(key)} for this project.`));
+    if (r.ok) onChanged();
+  };
+  const flipReview = async () => {
+    const next = !review;
+    setReview(next);
+    const r = await write("Review always-on builds before they start.", () => idPut<unknown>("/v1/ambient/review-builds", { project_id: ctx.projectId, review: next }));
+    if (!r.ok) setReview(!next);
+    setSaid(lineOf(r, next ? "Always-on builds wait for your review before they start." : "Always-on builds start on the Captain's authority."));
     if (r.ok) onChanged();
   };
   const saveCap = async () => {
@@ -478,6 +491,22 @@ function Autonomy({ ctx, sec, onChanged }: { ctx: PxCtx; sec: SettingsSection; o
             {s(l.label)}</GatedButton>
         ))}
       </div>
+      {Object.keys(rb).length ? (
+        <div className="px-row" style={{ gap: 8, alignItems: "flex-start", margin: "0 0 12px" }} data-testid="px-set-review-builds">
+          <GatedButton permission="autonomy:manage" projectId={ctx.projectId} type="button" role="switch" aria-checked={review}
+                       className="px-btn" data-size="s" data-on={review || undefined} data-testid="px-set-review-builds-toggle"
+                       aria-label="Review always-on builds before they start" onClick={() => void flipReview()}>
+            <span aria-hidden>{review ? "On" : "Off"}</span></GatedButton>
+          <span>
+            <b style={{ display: "block" }}>Review always-on builds before they start</b>
+            <small className="px-faint" data-testid="px-set-review-builds-why">
+              {review
+                ? "Each always-on build waits on one card until you approve it."
+                : `Off: always-on squads' builds start on this project's Captain authority${s(captain.sponsor) ? ` (sponsored by ${s(captain.sponsor)})` : ""}. They only open PRs; merging and production deploys still need you.`}
+            </small>
+          </span>
+        </div>
+      ) : null}
       <span className="px-lbl" style={{ display: "block" }}>Ambient budget · week</span>
       <div className="px-row" style={{ marginTop: 6 }}>
         <span className="px-bar" style={{ flex: 1, height: 8 }} role="img" aria-label={`$${Math.round(spent)} of $${Math.round(cap)} this week`}>

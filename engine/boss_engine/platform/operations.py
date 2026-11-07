@@ -103,7 +103,7 @@ def request_operation(connection: Any, settings: Any, *, project_id: str, resour
                "action_preview": action_preview.build(f"infra.{h.value}", inputs, step_label=h.value.title())}
         words = "Destroy" if h == Hook.DESTROY else "Restore"
         decision_id = create_blocking_decision(
-            connection, project_id, None, f"{words} {row['name']} ({resource_id}) with {reg.id}?", rec,
+            connection, project_id, None, f"{words} {row['name']}?", rec,
             {"expected_cost_usd_micros": 0, "cost_confidence": "no_provider_spend"},
             f"infra_{h.value}_requires_approval", risk_tier=2, default_action="hold")
         return {"status": "awaiting_approval", "decision_id": decision_id, "hook": h.value}

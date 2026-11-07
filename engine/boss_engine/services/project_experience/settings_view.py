@@ -362,6 +362,23 @@ def _week_ambient_spend(connection: Connection, project_id: str) -> float:
     return round(int(micros) / 1_000_000, 2)
 
 
+def _captain_authority_words(connection: Connection, project_id: str) -> dict[str, Any]:
+    """The project's Captain authority, in words: on (and who sponsors it) or off."""
+    try:
+        from ...identity import captain_authority
+
+        with connection.begin_nested():
+            grant = captain_authority.get(connection, project_id)
+            if grant is None:
+                return {"state": "none", "sponsor": None}
+            name = connection.execute(text("SELECT display_name FROM identity_principals WHERE id = :i"),
+                                      {"i": grant.user_principal_id}).scalar()
+            return {"state": "on" if grant.status.value == "active" else grant.status.value,
+                    "sponsor": name or grant.user_principal_id}
+    except Exception:  # noqa: BLE001 — identity not set up on this install
+        return {"state": "none", "sponsor": None}
+
+
 def _autonomy(connection: Connection, project_id: str) -> dict[str, Any]:
     """This project's autonomy level (A0 Ask … A3 Ship) and its ambient budget for the week
     (13-19…13-22). Govern keeps the org-wide caps."""
@@ -393,6 +410,11 @@ def _autonomy(connection: Connection, project_id: str) -> dict[str, Any]:
                         "monthly_cap_usd": round(int(policy_row["monthly_cap_usd_micros"] or 0) / 1e6, 2),
                         "intensity": policy_row["operational_intensity"]} if policy_row else None),
             "govern_href": href(project_id, area="budget", tab="limits"),
+            "review_builds": {**policy.review_builds_state(connection, project_id),
+                              "captain_authority": _captain_authority_words(connection, project_id),
+                              "set": {"label": "Review always-on builds", "method": "PUT",
+                                      "href": "/v1/ambient/review-builds",
+                                      "permission": "autonomy:manage"}},
             "set_level": {"label": "Set level", "method": "PUT",
                           "href": f"/v1/projects/{project_id}/autonomy",
                           "permission": "autonomy:manage"},

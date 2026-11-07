@@ -309,7 +309,7 @@ def mint_run_token(*, subject: AuthContext, agent: AgentInstance, grant_id: Opti
                 allowed_repos = set(grants.github_resources(grant).get("repos") or ())
                 if not set(task.resources["github"]) <= allowed_repos:
                     raise _refused("repo_outside_grant")
-                grants.check_user_repo_access(org_id, sub, grants.github_resources(grant), db=db)
+                grants.check_grant_repo_access(grant, org_id, sub, grants.github_resources(grant), db=db)
         elif subject.principal.kind == PrincipalKind.AGENT and subject.principal.id == agent.agent_id:
             mode, sub, chain, grant = RunMode.AUTONOMOUS, agent.agent_id, ActorChain(), None
         else:

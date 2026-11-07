@@ -2596,7 +2596,7 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
                         connection,
                         project_id,
                         task_id,
-                        (f"Approve MCP tool: {server['name']} / {tool_name}"
+                        (f"Approve MCP tool: {server['name']} / {_key_words(tool_name)}"
                          + (" (server not reviewed yet)" if unreviewed else "")),
                         {
                             "action": "resume_agent_run",
@@ -2779,7 +2779,7 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
                         connection,
                         project_id,
                         task_id,
-                        f"Approve agent skill: {skill_id}"
+                        f"Approve agent skill: {skill.get('label') or skill.get('name') or _key_words(skill_id)}"
                         + (" (its MCP server is not reviewed yet)" if unreviewed_server else ""),
                         {
                             "action": "resume_agent_run",
@@ -3009,3 +3009,9 @@ def _agent_purpose(connection, run_id: str, project_id: str, messages: Any,
                         role=role, text=str(brief)[:6000],
                         agent_policy=agent_model_policy(connection, project_id, role),
                         sticky=True)
+
+
+def _key_words(value):
+    from .decision_words import key_words
+
+    return key_words(value)

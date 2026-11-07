@@ -20,7 +20,8 @@ import { useConsoleLive } from "../../lib/console-live";
 import { usePolledRead } from "../../lib/log-stream";
 import {
   LEVEL_MEANINGS, LEVEL_WORDS, MISSING, MODE_WORDS, autonomyPath, money, microsUsd, parseAutonomy, parseScorecard, parseSettings, polled, resumeAgents,
-  scorecardPath, setAlwaysOn, setLevel, settingsPath, stopAgents, type AlwaysOnMode, type ClassRow, type Envelope, type ModeState, type StopState,
+  scorecardPath, setAlwaysOn, setLevel, setReviewBuilds, setReviewBuildsInstall, settingsPath, stopAgents,
+  type AlwaysOnMode, type ClassRow, type Envelope, type ModeState, type ReviewBuilds, type StopState,
 } from "../../lib/ambient";
 import { showToast } from "../client-forms";
 import "./agent-ops.css";
@@ -49,6 +50,49 @@ export function AlwaysOnSwitch({ mode, onChanged }: { mode: ModeState; onChanged
       </span>
       {mode.pinned ? <span className="aa-sub" data-testid="aa-mode-pinned">Pinned in .env</span> : null}
     </div>
+  );
+}
+
+/** Install-wide default: review always-on builds before they start. Off: they start on each project's
+ *  Captain authority (build and PR only; merging and production deploys still need a person). */
+export function ReviewBuildsDefault({ review, onChanged }: { review: ReviewBuilds; onChanged: () => void }) {
+  const gate = useGate("autonomy:manage");
+  const flip = () => {
+    if (!gate.allowed) return;
+    const next = !review.install;
+    void setReviewBuildsInstall(next).then((r) => {
+      showToast(r.ok ? "success" : "error", r.ok ? (next ? "Always-on builds wait for a review" : "Always-on builds start on the Captain's authority") : `Not changed: ${r.error}`);
+      onChanged();
+    });
+  };
+  return (
+    <label className="aa-mode" data-testid="aa-review-builds" data-on={review.install || undefined}
+           title={gate.allowed ? "Every project follows this until it sets its own in Project › Settings" : gate.reason}>
+      <input type="checkbox" role="switch" checked={review.install} disabled={!gate.allowed} onChange={flip} data-testid="aa-review-builds-toggle" />
+      <b>Review always-on builds before they start</b>
+      <span className="aa-sub">{review.install ? "Each waits on a card for a person." : "Off: they start on the project's Captain authority. Merges still need a person."}</span>
+    </label>
+  );
+}
+
+const REVIEW_CHOICES: Array<{ key: string; label: string; value: boolean | null }> = [
+  { key: "inherit", label: "Project's", value: null }, { key: "on", label: "Review", value: true }, { key: "off", label: "Start", value: false },
+];
+
+/** One class's own answer to "review always-on builds before they start" (null: the project's). */
+function ReviewCell({ projectId, cls, onChanged }: { projectId: string; cls: ClassRow; onChanged: () => void }) {
+  const gate = useGate("autonomy:manage", projectId);
+  const now = cls.review_builds === null ? "inherit" : cls.review_builds ? "on" : "off";
+  return (
+    <select className="aa-review" aria-label={`${cls.title}: review always-on builds`} value={now} disabled={!gate.allowed}
+            title={gate.allowed ? "Review always-on builds of this kind before they start" : gate.reason} data-testid="aa-review-class"
+            onChange={(e) => {
+              const pick = REVIEW_CHOICES.find((c) => c.key === e.target.value);
+              if (!pick) return;
+              void setReviewBuilds(projectId, pick.value, cls.task_class).then((r) => { showToast(r.ok ? "success" : "error", r.ok ? `${cls.title}: ${pick.label}` : `Not changed: ${r.error}`); onChanged(); });
+            }}>
+      {REVIEW_CHOICES.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
+    </select>
   );
 }
 
@@ -153,7 +197,7 @@ export function AutonomyMatrix({ projectId, classes, track, onChanged }: {
           <tr>
             <th>Task class</th>
             {LEVELS.map((l) => <th key={l} title={`${l} ${LEVEL_WORDS[l]} — ${LEVEL_MEANINGS[l]}`}>{l}<br /><span className="aa-sub">{LEVEL_WORDS[l]}</span></th>)}
-            <th>Track record</th><th />
+            <th title="Review always-on builds of this kind before they start">Builds</th><th>Track record</th><th />
           </tr>
         </thead>
         <tbody>
@@ -175,6 +219,7 @@ export function AutonomyMatrix({ projectId, classes, track, onChanged }: {
                     </td>
                   );
                 })}
+                <td><ReviewCell projectId={projectId} cls={c} onChanged={onChanged} /></td>
                 <td><Track rec={track[c.task_class]} /></td>
                 <td>
                   {c.suggested_level && rank(c.suggested_level) > rank(c.level) ? (
@@ -187,7 +232,7 @@ export function AutonomyMatrix({ projectId, classes, track, onChanged }: {
               </tr>
               {pending && pending.cls.task_class === c.task_class ? (
                 <tr className="aa-level-confirm" data-testid="aa-level-confirm">
-                  <td colSpan={7}>
+                  <td colSpan={8}>
                     {rank(pending.level) > rank(c.level) ? "Raise" : "Lower"} {c.title} to <b>{pending.level} · {LEVEL_WORDS[pending.level]}</b>?{" "}
                     <GatedButton permission="autonomy:manage" projectId={projectId} className="ag-btn primary" data-testid="aa-level-apply" onClick={() => void apply()}>
                       Set {pending.level}
@@ -220,6 +265,7 @@ export function AutonomyPanel({ projectId }: { projectId: string }) {
       <MovedToProjectSettings section="autonomy" projectId={projectId} testid="aa-autonomy-moved" />
       <div className="aa-safety-top">
         {settings.data ? <AlwaysOnSwitch mode={settings.data.mode} onChanged={reload} /> : null}
+        {settings.data ? <ReviewBuildsDefault review={settings.data.review_builds} onChanged={reload} /> : null}
         {settings.data ? <KillSwitch projectId={projectId} stop={settings.data.stop} mode={settings.data.mode} onChanged={reload} /> : <div className="aa-kill" />}
         {settings.data ? <EnvelopeMeter env={settings.data.envelope} /> : <div className="aa-env" />}
       </div>

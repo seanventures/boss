@@ -93,6 +93,9 @@ class DelegationGrant:
     task_run_id: Optional[str] = None
     parent_grant_id: Optional[str] = None
     purpose: str = ""
+    #: None for a person's own grant; "captain" for the project's Captain authority, the standing
+    #: authority BOSS keeps per project for always-on builds (identity/captain_authority.py).
+    authority_kind: Optional[str] = None
 
 
 @dataclass(frozen=True)

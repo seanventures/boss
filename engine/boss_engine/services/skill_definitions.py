@@ -610,7 +610,8 @@ def draft_for_approval(
         before = None
         preview = save_skill(connection, **fields, trusted=False, enabled=False, mode=intent)
     diff = _skill_diff(before, preview)
-    question = f"{'Change' if before else 'Create'} skill {preview['skill_key']}?\n\n{diff}"
+    question = (f"{'Change' if before else 'Create'} skill "
+                f"{preview.get('label') or _key_words(preview['skill_key'])}?\n\n{diff}")
     decision_id = create_blocking_decision(
         connection,
         project_id,
@@ -1111,3 +1112,9 @@ def role_skill_detail(connection: Connection, project_id: str, role_key: str) ->
         "holds": holds,
         "available": [s for s in catalogue if s["skill_id"] not in held],
     }
+
+
+def _key_words(value):
+    from .decision_words import key_words
+
+    return key_words(value)

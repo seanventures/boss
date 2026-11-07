@@ -63,6 +63,12 @@ DEPLOY_QUESTIONS: frozenset[str] = frozenset({"deploy_stack"})
 #: decision actions that ask about one pull request, and are moot once it is merged or closed.
 PULL_REQUEST_QUESTIONS: frozenset[str] = frozenset({"review_pull_request"})
 
+#: decision actions that say a build is STUCK, and are moot once every build they name moves
+#: again (an agent turn after the card was raised — stuck_work.moved_since), finishes, or is
+#: cancelled. Laptop, 2026-11-07: "Restart the step, or cancel the build." sat in Needs you while
+#: the same build was planning, reviewing its plan and calling tools.
+STUCK_QUESTIONS: frozenset[str] = frozenset({"stuck_work_needs_person"})
+
 _REPO = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
 
@@ -198,6 +204,10 @@ def _judge(connection: Any, decision: Mapping[str, Any]) -> Optional[tuple[str, 
                     f"a later deploy ({short}) went live on this target after it was asked; "
                     "approving this one would roll the app back.")
             return (f"superseded — {note}", overtaken)
+    if action in STUCK_QUESTIONS:
+        moving = _stuck_builds_moving(connection, rec, decision.get("created_at"))
+        if moving:
+            return moving
     if action in PULL_REQUEST_QUESTIONS:
         merged = _merged_on_record(
             connection, project_id, url=str(rec.get("pull_request_url") or "") or None,
@@ -208,6 +218,43 @@ def _judge(connection: Any, decision: Mapping[str, Any]) -> Optional[tuple[str, 
                     {"kind": "pull_request_merged", "action": action,
                      "code_task_run_id": merged["id"], "sha": merged["sha"]})
     return None
+
+
+def _stuck_builds_moving(connection: Any, rec: Mapping[str, Any],
+                         asked_at: Any) -> Optional[tuple[str, dict[str, Any]]]:
+    """(note, cause) when every build a "stuck" card names has moved since it was asked."""
+    from . import stuck_work
+
+    ids = [str(i) for i in dict.fromkeys([rec.get("run_id"), *(rec.get("run_ids") or [])]) if i]
+    if not ids:
+        return None
+    titles, states, phase = [], [], ""
+    for run_id in ids:
+        run = connection.execute(
+            text("SELECT id, title, status, phase FROM code_task_runs WHERE id = :i"),
+            {"i": run_id}).mappings().first()
+        if run is None:
+            states.append("gone")
+            continue
+        titles.append(stuck_work._short_title(run["title"]))  # noqa: SLF001 — one short title
+        if run["status"] == "cancelled":
+            states.append("cancelled")
+        elif run["status"] in stuck_work.ENDED_STATUSES and asked_at is not None and (
+                (stuck_work.last_turn_at(connection, run_id) or asked_at) > asked_at):
+            # It moved again after the ask, then ended: its own diagnosis (and card, when one
+            # is needed) says why it ended; this question about being stuck is moot.
+            states.append(f"ended ({run['status']}) after it moved again")
+        elif stuck_work.moved_since(connection, run, asked_at):
+            states.append("finished" if run["status"] == "completed" else "moving")
+            phase = str(run["phase"] or run["status"]).replace("_", " ")
+        else:
+            return None
+    work = titles[0] if len(titles) == 1 else f"{len(titles)} builds"
+    said = states[0] if len(set(states)) == 1 else "moving or finished"
+    return (f"{work} is moving again (now {phase}) — an agent is working it, so nothing waits "
+            "on this answer." if said == "moving" and len(ids) == 1 else
+            f"{work} {'are' if len(ids) > 1 else 'is'} {said}, so nothing waits on this answer.",
+            {"kind": "stuck_work_moving", "run_ids": ids, "states": states})
 
 
 def _overtaken(connection: Any, rec: Mapping[str, Any]) -> Optional[dict[str, Any]]:
@@ -288,7 +335,8 @@ def _candidates(connection: Any, project_id: Optional[str], *,
              "(recommendation->>'reason_code' IN :reasons OR recommendation->>'action' IN :actions)"]
     params: dict[str, Any] = {"open": _open_statuses(),
                               "reasons": sorted(EFFECT_FAILURE_CAUSES),
-                              "actions": sorted(PULL_REQUEST_QUESTIONS | DEPLOY_QUESTIONS)}
+                              "actions": sorted(PULL_REQUEST_QUESTIONS | DEPLOY_QUESTIONS
+                                                | STUCK_QUESTIONS)}
     binds = [bindparam("open", expanding=True), bindparam("reasons", expanding=True),
              bindparam("actions", expanding=True)]
     if project_id:
@@ -399,6 +447,6 @@ def on_deploy_healthy(connection: Any, project_id: str, *, actor: str = "boss") 
     return _guarded(withdraw_cleared, connection, project_id, actor=actor)
 
 
-__all__ = ["DEPLOY_QUESTIONS", "EFFECT_FAILURE_CAUSES", "PULL_REQUEST_QUESTIONS",
+__all__ = ["DEPLOY_QUESTIONS", "EFFECT_FAILURE_CAUSES", "PULL_REQUEST_QUESTIONS", "STUCK_QUESTIONS",
            "failed_effect_cause", "on_deploy_healthy", "on_effect_succeeded",
            "on_pull_request_settled", "withdraw_cleared"]

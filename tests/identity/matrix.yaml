@@ -3,7 +3,7 @@
 # One line per operation: its declaration, then the built-in roles allowed
 # (O owner, A admin, P operator, V viewer, U auditor; '-' none). Every other role is denied
 # 403, or 404 when the operation names an object the role cannot even read.
-# 1787 operations.
+# 1789 operations.
 "GET /.well-known/boss-jwks.json": ["public:jwks", "OAPVU"]
 "GET /docs": ["public:api_description", "OAPVU"]
 "GET /docs/oauth2-redirect": ["public:api_description", "OAPVU"]
@@ -198,6 +198,8 @@
 "POST /v1/ambient/outcomes/sweep": ["permit work_item:manage @ project(body=project_id)", "OAP"]
 "POST /v1/ambient/resume": ["permit autonomy:manage @ project(body=project_id)", "OA"]
 "POST /v1/ambient/resume-all": ["permit autonomy:manage @ org", "OA"]
+"PUT /v1/ambient/review-builds": ["permit autonomy:manage @ project(body=project_id)", "OA"]
+"PUT /v1/ambient/review-builds/install": ["permit autonomy:manage @ org", "OA"]
 "GET /v1/ambient/roadmap": ["permit work_item:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/ambient/roadmap/demo-seed": ["permit autonomy:manage @ project(body=project_id)", "OA"]
 "GET /v1/ambient/roadmap/detectors": ["permit autonomy:read @ project(query=project_id)", "OAPVU"]

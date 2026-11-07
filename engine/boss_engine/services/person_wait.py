@@ -35,6 +35,17 @@ PHASE_AWAITING_GRANT: str = "awaiting_grant"
 ACTION_GRANT_BUILDER: str = "grant_builder_authority"
 #: Where a person gives an agent a standing grant (apps/web/app/account/agents).
 GRANT_PAGE: str = "/account/agents"
+#: "Review always-on builds before they start" is on: the card a person approves to let the
+#: build start on the project's Captain authority (identity/captain_authority.py).
+ACTION_REVIEW_BUILD: str = "review_always_on_build"
+BLOCKER_ALWAYS_ON_REVIEW: str = "always_on_review"
+
+
+def review_setting_link(project_id: str) -> str:
+    """Where the switch lives: Project › Settings › Autonomy & budget."""
+    from .project_experience.common import href
+
+    return href(project_id, area="project", tab="settings", section="autonomy")
 
 # PAT-shaped / token-shaped strings: never persisted or echoed verbatim.
 _SECRET_PATTERN = re.compile(
@@ -172,13 +183,15 @@ def _builder_name(connection: Any, scope: Mapping[str, Any]) -> str:
     return keys[0].replace("_", " ").capitalize() if keys else "the builder"
 
 
-def _open_card(connection: Any, *, project_id: str, agent_key: str) -> Optional[dict[str, Any]]:
-    """The one open card already asking for this builder's grant in this project, if any."""
+def _open_card(connection: Any, *, project_id: str, agent_key: str,
+               action: str = ACTION_GRANT_BUILDER) -> Optional[dict[str, Any]]:
+    """The one open card already asking for this builder's grant (or, with the review switch on,
+    asking to review its always-on builds) in this project, if any."""
     row = connection.execute(text(
         "SELECT id, recommendation FROM decisions WHERE project_id = :p AND status = "
         "ANY(:open_statuses) AND recommendation->>'action' = :a "
         "AND recommendation->>'agent_key' = :k ORDER BY created_at LIMIT 1"),
-        {"p": project_id, "a": ACTION_GRANT_BUILDER, "k": agent_key,
+        {"p": project_id, "a": action, "k": agent_key,
          "open_statuses": sorted(OPEN_STATUSES)}).mappings().first()
     return dict(row) if row else None
 
@@ -221,6 +234,58 @@ def open_thread_and_ask(
     return thread_id
 
 
+def _captain_verdict(connection: Any, run_id: str, project_id: Optional[str]) -> Any:
+    """The project's Captain authority's answer for this build (identity/captain_authority), or
+    None when it cannot be read (never widened: the person's card asks instead)."""
+    from ..identity import captain_authority
+
+    try:
+        with connection.begin_nested():
+            return captain_authority.evaluate(connection, run_id=run_id, project_id=project_id)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _enqueue_under_captain(connection: Any, *, run: Mapping[str, Any], verdict: Any) -> dict[str, Any]:
+    """Back in the queue on the project's Captain authority: the job carries it (OBO its sponsor),
+    and the run's lineage says so."""
+    from ..identity import captain_authority
+
+    out = _enqueue_under_grant(connection, run=run, person=str(verdict.sponsor), grant_id=verdict.grant_id,
+                               org_id=verdict.org_id)
+    captain_authority.record_use(connection, verdict, run_id=run["id"])
+    return out
+
+
+#: The note a grant card closes with when the Captain authority started its builds.
+CAPTAIN_NOTE = ("Not needed any more: always-on builds in this project start on the project's Captain "
+                "authority (no person's grant needed), so BOSS started them. Merges and production "
+                "deploys still come to you.")
+
+
+def _withdraw_if_done(connection: Any, decision_id: Optional[str], *, note: str) -> bool:
+    """Close a grant card nobody needs to answer: none of its builds still waits on it."""
+    if not decision_id:
+        return False
+    waiting = connection.execute(text(
+        "SELECT count(*) FROM code_task_runs WHERE status = :w AND (decision_id = :d OR "
+        "finalize_ctx->'person_wait'->>'decision_id' = :d)"),
+        {"w": STATUS_WAITING_ON_PERSON, "d": decision_id}).scalar()
+    if waiting:
+        return False
+    changed = connection.execute(text(
+        "UPDATE decisions SET status = 'withdrawn', resolution_note = :n, updated_at = now() "
+        "WHERE id = :d AND status = ANY(:open) AND recommendation->>'action' = :a"),
+        {"n": note[:1000], "d": decision_id, "open": sorted(OPEN_STATUSES),
+         "a": ACTION_GRANT_BUILDER}).rowcount
+    if changed:
+        project_id = connection.execute(text("SELECT project_id FROM decisions WHERE id = :d"),
+                                        {"d": decision_id}).scalar()
+        emit_event(connection, project_id, "decision.withdrawn", "boss", "decision", decision_id,
+                   {"why": note})
+    return bool(changed)
+
+
 def enter_waiting_on_person(
     connection: Any,
     budget: Any,
@@ -242,9 +307,26 @@ def enter_waiting_on_person(
     run = _load_run(connection, run_id) or {"id": run_id, "project_id": project_id,
                                             "task_id": task_id}
 
+    captain = _captain_verdict(connection, run_id, project_id)
+    if captain is not None and captain.covered and not captain.review_pending \
+            and captain.grant_id != refused_grant_id:
+        # THE PROJECT'S CAPTAIN AUTHORITY covers it (an always-on build within its class's level):
+        # back in the queue on it, nothing to ask.
+        _enqueue_under_captain(connection, run=run, verdict=captain)
+        emit_event(connection, project_id, "code_task.authority_found", "boss", "code_task_run",
+                   run_id, {"grant_id": captain.grant_id, "for": captain.sponsor,
+                            "basis": "captain_authority",
+                            "reason": "the project's Captain authority covers this always-on build"})
+        return {"status": "running", "resumed": True, "grant_id": captain.grant_id,
+                "basis": "captain_authority", "blocker_type": blocker_type, "scope": scope}
+    review = captain is not None and captain.covered and captain.review_pending \
+        and captain.grant_id != refused_grant_id
+    if review:
+        blocker_type = BLOCKER_ALWAYS_ON_REVIEW
+
     grant = _covering_grant(connection, person=recipient, scope=scope, project_id=project_id,
                             run_id=run_id)
-    if grant is not None and grant.id != refused_grant_id:
+    if grant is not None and grant.id != refused_grant_id and not review:
         _enqueue_under_grant(connection, run=run, person=str(recipient), grant_id=grant.id,
                              org_id=_org_of_project(connection, project_id))
         emit_event(connection, project_id, "code_task.authority_found", "boss", "code_task_run",
@@ -257,13 +339,21 @@ def enter_waiting_on_person(
 
     agent_key = (scope.get("agents") or scope.get("role_keys") or ["builder"])[0]
     builder = _builder_name(connection, scope)
-    if blocker_type == BLOCKER_AUTHORITY_NO_GRANT:
+    action = ACTION_GRANT_BUILDER
+    if review:
+        action = ACTION_REVIEW_BUILD
+        title = str((run or {}).get("title") or "an always-on build")
+        ask = (f"Review before it starts: {builder} wants to build \"{title[:120]}\" for an "
+               "always-on squad. Approve to let it start on the project's Captain authority (it "
+               "opens a PR; merging still needs you), or reject to drop it. You asked for this "
+               "review in Project ▸ Settings ▸ Autonomy & budget.")
+    elif blocker_type == BLOCKER_AUTHORITY_NO_GRANT:
         ask = (f"Let {builder} build for you in this project: give it a standing grant under "
                "My account ▸ Agents acting for me. Its builds are paused until then and resume "
                "by themselves once the grant exists.")
     else:
         ask = question
-    card = _open_card(connection, project_id=project_id, agent_key=agent_key)
+    card = _open_card(connection, project_id=project_id, agent_key=agent_key, action=action)
     if card:
         decision_id = card["id"]
         connection.execute(text(
@@ -275,9 +365,11 @@ def enter_waiting_on_person(
     else:
         decision_id = create_blocking_decision(
             connection, project_id, task_id, ask,
-            {"action": ACTION_GRANT_BUILDER, "run_id": run_id, "run_ids": [run_id],
+            {"action": action, "run_id": run_id, "run_ids": [run_id],
              "blocker_type": blocker_type, "agent_key": agent_key, "builder": builder,
-             "link": GRANT_PAGE, "why": question},
+             "link": review_setting_link(project_id) if review else GRANT_PAGE, "why": question,
+             **({"basis": "captain_authority", "work_item_id": captain.work_item_id,
+                 "decision": captain.act_id} if review else {})},
             {}, reason, default_action="hold",
         )
 
@@ -291,6 +383,7 @@ def enter_waiting_on_person(
         "scope": scope, "decision_id": decision_id, "thread_id": thread_id,
         "blocker_type": blocker_type, "reason": reason, "opened_at": opened_at,
         "recipient_principal_id": recipient, "ask": ask, "builder": builder,
+        "refused_grant_id": refused_grant_id,
     }
     connection.execute(text(
         "UPDATE code_task_runs SET status = :status, phase = :phase, decision_id = :decision_id, "
@@ -339,6 +432,10 @@ def verify_and_resume(connection: Any, settings: Any, jobs: Any = None, *,
     if not run or run.get("status") != STATUS_WAITING_ON_PERSON:
         return {"resumed": False}
     person_wait_ctx = _as_dict(run.get("finalize_ctx")).get("person_wait") or {}
+    captain = _resume_on_captain(connection, settings, {**run, "id": run.get("id") or run_id},
+                                 person_wait_ctx)
+    if captain is not None:
+        return captain
     scope = person_wait_ctx.get("scope") or {}
     if not scope.get("agents"):
         # Recorded before the builder had a Passport: read the scope again now.
@@ -376,6 +473,60 @@ def verify_and_resume(connection: Any, settings: Any, jobs: Any = None, *,
         resolution="person", opened_at=person_wait_ctx.get("opened_at"),
     )
     return {"resumed": True, "grant_id": grant.id}
+
+
+def _resume_on_captain(connection: Any, settings: Any, run: Mapping[str, Any],
+                       person_wait_ctx: Mapping[str, Any]) -> Optional[dict[str, Any]]:
+    """The waiting build is an always-on squad's, and the project's Captain authority now covers it
+    (the default; or the review card a person approved): resume it on that authority, exactly once,
+    and close a grant card nobody needs to answer any more with a plain note. A review a person
+    rejected drops the build. None: the Captain authority does not apply here."""
+    from ..identity import captain_authority
+
+    run_id = run["id"]
+    declined = None
+    try:
+        with connection.begin_nested():
+            declined = captain_authority.review_declined(connection, run_id)
+    except Exception:  # noqa: BLE001
+        declined = None
+    if declined is not None:
+        stopped = connection.execute(text(
+            "UPDATE code_task_runs SET status = 'cancelled', phase = 'done', error = :e, updated_at = now() "
+            "WHERE id = :id AND status = :waiting"),
+            {"id": run_id, "waiting": STATUS_WAITING_ON_PERSON,
+             "e": f"{declined['approved_by'] or 'A person'} declined this always-on build on review."}).rowcount
+        if stopped:
+            emit_event(connection, run["project_id"], "code_task.review_declined", "boss", "code_task_run",
+                       run_id, {"decision_id": declined["id"]})
+            record_resolution(connection, run_id=run_id, project_id=run.get("project_id"),
+                              blocker_type=BLOCKER_ALWAYS_ON_REVIEW, resolution="declined",
+                              opened_at=person_wait_ctx.get("opened_at"))
+        return {"resumed": False, "declined": bool(stopped)}
+    verdict = _captain_verdict(connection, run_id, run.get("project_id"))
+    if verdict is None or not verdict.covered or verdict.review_pending \
+            or verdict.grant_id == person_wait_ctx.get("refused_grant_id"):
+        return None
+    claimed = connection.execute(text(
+        "UPDATE code_task_runs SET status = 'running', phase = 'queued', updated_at = now() "
+        "WHERE id = :id AND status = :waiting"),
+        {"id": run_id, "waiting": STATUS_WAITING_ON_PERSON}).rowcount
+    if not claimed:
+        return {"resumed": False}
+    _enqueue_under_captain(connection, run=run, verdict=verdict)
+    decision_id = run.get("decision_id") or person_wait_ctx.get("decision_id")
+    _withdraw_if_done(connection, decision_id, note=CAPTAIN_NOTE)
+    emit_event(connection, run["project_id"], "code_task.resumed_after_person", "boss",
+               "code_task_run", run_id, {"grant_id": verdict.grant_id, "for": verdict.sponsor,
+                                         "basis": "captain_authority",
+                                         "reviewed_by": verdict.reviewed_by})
+    record_resolution(
+        connection, run_id=run_id, project_id=run.get("project_id"),
+        blocker_type=person_wait_ctx.get("blocker_type", BLOCKER_AUTHORITY_NO_GRANT),
+        resolution="person_review" if verdict.reviewed_by else "captain_authority",
+        opened_at=person_wait_ctx.get("opened_at"),
+    )
+    return {"resumed": True, "grant_id": verdict.grant_id, "basis": "captain_authority"}
 
 
 def record_resolution(
