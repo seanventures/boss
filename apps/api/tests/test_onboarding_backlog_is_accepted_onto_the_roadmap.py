@@ -184,7 +184,9 @@ def test_the_projects_list_says_not_onboarded_unless_an_onboarding_job_is_moving
     assert live["onboarding_progress"][0] == 1 and live["lines"][0] == "mapping code"
     assert never["onboarding_active"] is False and never["status_label"] == "Not onboarded"
     assert never["start_onboarding"]["href"].endswith("/onboarding/start")
-    assert never["lines"] == ["not deployed yet", "idle"] and never["crew"] == []
+    # 02-16 the crew is always drawn; nobody on it is working on a project that never started.
+    assert never["lines"] == ["not deployed yet", "idle"] and never["live_agents"] == []
+    assert all(c["state"] == "idle" for c in never["crew"])
 
 
 def test_a_project_card_carries_its_ring_lines_and_live_crew(world, client, project):
@@ -194,4 +196,8 @@ def test_a_project_card_carries_its_ring_lines_and_live_crew(world, client, proj
     assert card["uptime_pct"] == 100.0                  # 30 probe samples, all answered
     assert card["lines"][0] == "staging healthy"
     assert card["lines"][1].startswith("1 building") or "merged" in card["lines"][1]
-    assert card["crew"] and all(c["state"] == "working" for c in card["crew"])
+    # 02-16 one face per job from the real roster; `working` only on who acts right now
+    # (live_agents, the Running tile's faces), never painted on the whole crew.
+    assert card["crew"] and {c["state"] for c in card["crew"]} <= {"working", "idle"}
+    live = {g["role_key"] for g in card["live_agents"]}
+    assert all((c["state"] == "working") == (c["role_key"] in live) for c in card["crew"])
