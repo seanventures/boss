@@ -600,11 +600,15 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
   // conversation about it came first. An API older than `agent_role` on the list matches by
   // subject, as before.
   const roleKey = (roleName ?? "").trim().toLowerCase();
+  // THE AGENT'S OWN KEY AS WELL AS ITS NAME. The server stores a turn under the role it
+  // resolved ("Helm" → engineering_captain), so a door that addressed the captain by name never
+  // found its own conversation again (the captain drawer reopened empty, 09-02).
   const threadFor = useCallback(
     (id: string, list: Thread[]): Thread | undefined =>
       list.find((t) => (t.external_ref ?? null) === (id === GENERAL ? null : id)
-        && (t.agent_role ?? roleKey) === roleKey),
-    [roleKey],
+        && ((t.agent_role ?? roleKey) === roleKey
+            || (Boolean(roleKeyProp?.trim()) && (t.agent_role ?? "") === roleKeyProp!.trim().toLowerCase()))),
+    [roleKey, roleKeyProp],
   );
 
   /**

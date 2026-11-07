@@ -231,7 +231,9 @@ def _issue_title(connection: Connection, project_id: str, number: int) -> str:
             if url.rstrip("/").endswith(f"/issues/{number}"):
                 from .project_experience.titles import shorten
 
-                return shorten(str(item.get("text") or item.get("label") or ""), 3)
+                said = re.sub(r"^\s*(?:issue\s*)?#\d+\s*[:·—-]?\s*", "",
+                              str(item.get("label") or item.get("text") or ""), flags=re.I)
+                return shorten(said, 4)
     except Exception:  # noqa: BLE001
         log.exception("turn_cards: backlog read failed")
     return ""

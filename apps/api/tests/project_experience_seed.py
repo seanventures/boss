@@ -984,3 +984,126 @@ def seed_settings_story(db, project_id: str, *, live_sdep: str, now: datetime | 
             {"i": _id("cr"), "p": project_id, "u": int(usd * 1_000_000),
              "at": now - timedelta(days=1 + i * 2)})
     return {"contact_points": cps}
+
+
+def seed_round_two(db, project_id: str, *, now: datetime | None = None,
+                   other_project: str | None = None) -> dict[str, Any]:
+    """Round two's elements (BOSSAPP-913/914), on a project `seed()` made:
+
+    * 24 hours of hourly health probes on staging, one hour degraded (08-08's strip);
+    * one merged run that ran on a subscription (its list price, never a bare $0.00);
+    * the "Alert rule for /api/tickets 5xx" card read by the Alert gap detector, its evidence the
+      live staging target (07-12);
+    * another project's app with an alert firing, for Observability's rows across projects (15).
+    """
+    now = now or datetime.now(timezone.utc)
+    target = db.execute(text(
+        "SELECT id, host_id FROM deployment_targets WHERE project_id = :p AND status = 'active' "
+        "ORDER BY created_at LIMIT 1"), {"p": project_id}).mappings().first()
+    out: dict[str, Any] = {}
+    if target:
+        hour0 = now.replace(minute=0, second=0, microsecond=0)
+        for h in range(1, 24):
+            for k in range(4):
+                bad = h == 7 and k < 2
+                db.execute(text(
+                    "INSERT INTO deployment_health_samples (id, project_id, deployment_target_id, "
+                    "checked_at, ok, status_code, latency_ms) VALUES (:i, :p, :t, :at, :ok, :c, :ms)"),
+                    {"i": _id("dhs"), "p": project_id, "t": target["id"],
+                     "at": hour0 - timedelta(hours=h) + timedelta(minutes=5 + 12 * k), "ok": not bad,
+                     "c": 502 if bad else 200, "ms": 140 + (h * 13 + k * 7) % 110})
+        out["target_id"] = target["id"]
+        db.execute(text(
+            "UPDATE ambient_recommendations SET detector = 'alert_gap', detectors = '[\"alert_gap\"]', "
+            "kind = 'hardening', squad = '[\"sre\"]', evidence = CAST(:e AS JSONB), evidence_count = 1, "
+            "source_kinds = '[\"alerts\"]' WHERE project_id = :p AND title LIKE 'Alert rule for%'"),
+            {"p": project_id, "e": json.dumps([{"kind": "deployment_target", "ref": target["id"],
+                                                "note": "live, no alert rule"}])})
+    first = db.execute(text(
+        "SELECT c.id FROM code_task_runs c WHERE c.project_id = :p AND c.pull_request_number IS NOT NULL "
+        "ORDER BY c.created_at LIMIT 1"), {"p": project_id}).scalar()
+    if first:
+        db.execute(text("UPDATE llm_calls SET included_in_subscription = true WHERE code_task_run_id = :b"),
+                   {"b": first})
+        out["subscription_build"] = first
+    if other_project:
+        host = _id("dhost")
+        db.execute(text(
+            "INSERT INTO deployment_hosts (id, project_id, name, address, ssh_user, status, created_by) "
+            "VALUES (:i, :p, :i, '203.0.113.40', 'deploy', 'verified', 'seed')"), {"i": host, "p": other_project})
+        tgt = _id("dept")
+        db.execute(text(
+            "INSERT INTO deployment_targets (id, project_id, app_name, repo, environment, target_kind, "
+            "target_ref, domains, status, created_by, host_id, public_url) VALUES (:i, :p, 'northpeak', "
+            "'acme/northpeak', 'preview', 'host', :h, '[]'::jsonb, 'active', 'seed', :h, "
+            "'http://203.0.113.40:8110')"), {"i": tgt, "p": other_project, "h": host})
+        db.execute(text(
+            "INSERT INTO stack_deployments (id, project_id, target_id, host_id, repository, ref, commit_sha, "
+            "manifest, status, open_url, created_by, created_at, finished_at) VALUES (:i, :p, :t, :h, "
+            "'acme/northpeak', 'main', 'b7e1c0d', '{}'::jsonb, 'healthy', 'http://203.0.113.40:8110', 'seed', "
+            ":at, :at)"), {"i": _id("sdep"), "p": other_project, "t": tgt, "h": host, "at": now - timedelta(days=1)})
+        for i in range(48):
+            slow = i % 6 == 0
+            db.execute(text(
+                "INSERT INTO deployment_health_samples (id, project_id, deployment_target_id, checked_at, "
+                "ok, status_code, latency_ms) VALUES (:i, :p, :t, :at, :ok, :c, :ms)"),
+                {"i": _id("dhs"), "p": other_project, "t": tgt, "at": now - timedelta(minutes=30 * i),
+                 "ok": not slow, "c": 500 if slow else 200, "ms": 650 + (i * 37) % 600})
+        db.execute(text(
+            "INSERT INTO app_alerts (id, project_id, target_id, rule_kind, fingerprint, alertname, state, "
+            "active_at) VALUES (:i, :p, :t, 'threshold', :f, 'p95 latency', 'firing', :at)"),
+            {"i": _id("aal"), "p": other_project, "t": tgt, "f": uuid.uuid4().hex, "at": now - timedelta(minutes=40)})
+        out["other_target_id"] = tgt
+    return out
+
+
+def seed_captain_conversation(engine, settings, project_id: str, *, actor: str = "executive_console",
+                              role: str | None = None) -> str:
+    """Screen 09's conversation, through THE ONE AGENT TURN (AgentService.chat) with the model's
+    side stood in for at the router — so the stored messages carry the real `proposal` and
+    `citations` turn_cards derives: a status answer that names PR #3, the running Run, Staging
+    and the demo logins; then "add a VIP customer flag" answered with an offer to build it, naming
+    issue #12 and sla.mjs. Returns the thread id."""
+    from types import SimpleNamespace
+
+    from boss_engine.services.agent_service import AgentService
+    from boss_engine.services.project_experience import work
+
+    from boss_engine.services.project_experience import captain as captain_service
+
+    with engine.connect() as db:
+        items = work.everything(db, project_id)
+        # The dock addresses the captain by its name (AgentChat's `role`), as the console does.
+        role = role or str((captain_service.view(db, project_id, with_last_said=False) or {})
+                           .get("name") or "Helm")
+    run_no = next((w["run_number"] for w in items if w.get("run_number") and w["state"] == "running"),
+                  None) or next((w["run_number"] for w in items if w.get("run_number")), 1)
+    service = AgentService(settings)
+    replies = [
+        (f"! Merge PR #3 → ● Search filters → ✓ Staging → Demo ready\n"
+         f"Two things. **Merge PR #3** (tests pass, review clean) — then Beacon redeploys staging in "
+         f"about 3 minutes. **Search filters** (Run #{run_no}) finishes building soon; I'd demo it too. "
+         f"Prod isn't needed for a demo, and the demo logins are ready.", [], {"action": "answer"}),
+        ("I'll plan it as a minor feature. It touches the same SLA code as the open weekend bug "
+         "(issue #12, in `sla.mjs`), so I'd run them together.",
+         [{"id": "act_seed_vip", "tool": "create_code_task", "label": "Build the VIP customer flag",
+           "args": {"title": "VIP customer flag",
+                    "instructions": "Add a VIP customer flag on customers; tickets from VIP "
+                                    "customers jump the queue and their SLA clock is halved."}}],
+         {"action": "new_code_change"}),
+    ]
+    asks = ["What's left before I can demo this to the support team on Monday?",
+            "Also add a \"VIP customer\" flag that jumps the queue."]
+    thread_id = None
+    for ask, (reply, offers, decision) in zip(asks, replies):
+        service.router.route_turn = (lambda *_a, _r=reply, _o=offers, _d=decision, **_k: SimpleNamespace(
+            reply=_r, tool_calls=[], actions=[], proposed_actions=list(_o), pending_confirmation=None,
+            next_steps=[], decision=_d))
+        # One transaction per turn, as the API does: the question and its answer share a
+        # timestamp, the next turn comes after them.
+        with engine.begin() as db:
+            got = service.chat(db, project_id=project_id, actor=actor, message=ask,
+                               thread_id=thread_id, surface="chat",
+                               external_ref=f"project:{project_id}", role=role)
+        thread_id = got["thread_id"]
+    return str(thread_id)
