@@ -103,6 +103,19 @@ describe("Repo & knowledge (screen 06)", () => {
     expect(params().get("tab")).toBe("work");
   });
 
+  it("a suite BOSS could not run says so — never a pass rate or \"N failing\" (crun_de96bf12)", async () => {
+    const k = FX_KNOWLEDGE as unknown as { dossier: { tests: Record<string, unknown> } };
+    const env = { sentence: "BOSS couldn't run the full suite: the test database refused the login BOSS gave it.",
+                  reason: "the test database refused the login BOSS gave it", owner: "boss" };
+    await openKnowledge({ ...k, dossier: { ...k.dossier, tests: { ...k.dossier.tests, passed: 71, total: 190, failing: 0, not_run: 119, env } } });
+    const t = tid("px-kn-tests-env")!;
+    expect(t.textContent).toContain("Couldn't run the full suite");
+    expect(t.textContent).toContain("the test database refused the login BOSS gave it");
+    expect(t.textContent).toContain("re-runs it on the next build");
+    expect(tid("px-kn-tests")).toBeNull();
+    expect(tid("px-kn-dossier")!.textContent).not.toMatch(/failing|all pass/);
+  });
+
   it("the code map is four real parts with tooltips and the file count", async () => {
     await openKnowledge();
     const parts = $$("[data-testid='px-kn-codemap'] .px-kn-map span");

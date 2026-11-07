@@ -5838,9 +5838,30 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             """Authoritative test command, scoped to the official app directory. BOSS's own
             install (NPM_INSTALL_CMD, the one every gate runs) is its first step."""
             result = _run_verify_once(record=record)
+            env = None
+            if record and not result.ok:
+                # COULD THE SUITE RUN AT ALL? (suite_environment) When its failures share one
+                # environmental cause — the run's test database refused the login because the
+                # build-services server restarted empty (crun_de96bf12) — they are not the app's:
+                # BOSS makes the database usable again and runs the suite once more; if it still
+                # cannot, the build says "BOSS couldn't run the full suite", never "N failing".
+                from . import suite_environment
+
+                env = suite_environment.after_verify(
+                    engine, settings, project_id=project_id, run_id=run_id,
+                    output=last_verify_output, lease=_services_lease)
+                if env and env.get("restored") == "restored":
+                    result = _run_verify_once(record=record)
+                    env = (suite_environment.classify(last_verify_output,
+                                                      boss_service=_services_lease is not None)
+                           if not result.ok else None)
             if record:
                 _install_fail[0] = verification_target.install_failure(result)
                 _failed_check[0] = verification_target.failed_check(result)
+                if env:
+                    from .suite_environment import failed_check as _env_check
+
+                    _failed_check[0] = _env_check(env, str(getattr(result, "command", "") or ""))
             return result
 
         def _run_verify_once(*, record: bool = True):

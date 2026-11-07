@@ -139,6 +139,10 @@ def dossier(connection: Connection, project_id: str) -> Optional[dict[str, Any]]
                           "failing": run["failing"], "from": run["from"],
                           "source": run["label"], "ago": run["ago"],
                           "cause": run.get("cause"),
+                          # The suite could not run (BOSS's environment, suite_environment):
+                          # `env.sentence` is what the ring says instead of "N failing".
+                          **({"env": run["env"], "not_run": run.get("not_run", 0)}
+                             if run.get("env") else {}),
                           "href": run["href"]} if run else {})},
             "files": facts.get("files"), "ci": facts.get("ci") or [],
             "code_map": _code_map(facts),

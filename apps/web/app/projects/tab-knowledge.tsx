@@ -217,7 +217,12 @@ function Dossier({ ctx, k, onStarted }: { ctx: PxCtx; k: Knowledge; onStarted: (
         </div>
         <div>
           <span className="px-lbl">Tests</span>
-          {d.tests ? (
+          {d.tests?.env ? (
+            <div style={{ marginTop: 6 }} data-testid="px-kn-tests-env">
+              <b>Couldn&apos;t run the full suite</b>
+              <div className="px-faint" style={{ fontSize: ".58rem" }}>{d.tests.env.reason} · BOSS re-runs it on the next build</div>
+            </div>
+          ) : d.tests ? (
             <div className="px-row" style={{ marginTop: 6 }} data-testid="px-kn-tests">
               <Ring pct={pct} tone={d.tests.failing ? "teal" : "green"} size="l" label={`${d.tests.passed} of ${d.tests.total} tests pass`}>{pct}%</Ring>
               <div><b className="px-mono">{d.tests.passed} / {d.tests.total}</b>

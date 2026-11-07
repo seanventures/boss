@@ -170,7 +170,10 @@ export type GraphNode = { id: string; label: string; kind: string; group: string
 export type Knowledge = {
   repos: KnowledgeRepo[];
   dossier: { stack: string[]; commands: Record<string, string>; hotspots: { path: string; label: string; why: string; heat: number | null; has_tests: boolean | null }[];
-             tests: { passed: number; total: number; failing: number; from: string; href: string } | null; test_files: number | null;
+             /** `env`: BOSS could not run the suite (its environment, not the app's tests): the
+              *  ring says so instead of a pass rate; `not_run` tests never ran. */
+             tests: { passed: number; total: number; failing: number; from: string; href: string;
+                      env?: { sentence: string; reason: string; owner: string } | null; not_run?: number } | null; test_files: number | null;
              code_map: { parts: { dir: string; files: number }[]; files: number };
              by: string; built_ago: string; built_at: string; href: string } | null;
   graph: { nodes: GraphNode[]; edges: { from: string; to: string; label: string; kind: string }[]; href: string; hub: string;
@@ -506,7 +509,10 @@ export const parseKnowledge = (v: unknown): Knowledge => {
                                              has_tests: typeof o(h).has_tests === "boolean" ? (o(h).has_tests as boolean) : null })),
       // A pass count only when a run was read (the newest build's tests); else the test files the dossier found.
       tests: hasRun ? { passed: n(tests.passed), total: n(tests.total), failing: n(tests.failing, n(tests.total) - n(tests.passed)),
-                        from: s(tests.from), href: s(tests.href) } : null,
+                        from: s(tests.from), href: s(tests.href),
+                        // BOSS could not run the suite (its environment): no pass rate to show.
+                        env: tests.env ? { sentence: s(o(tests.env).sentence), reason: s(o(tests.env).reason), owner: s(o(tests.env).owner) } : null,
+                        not_run: n(tests.not_run) } : null,
       test_files: nn(tests.files),
       code_map: { parts: a(cm.parts).map((z) => ({ dir: s(o(z).dir), files: n(o(z).files) })).filter((z) => z.files > 0), files: n(cm.files) },
       by: s(d.by, "Helm"), built_ago: s(d.built_ago), built_at: s(d.built_at), href: s(d.href) } : null,
