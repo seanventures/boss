@@ -1660,6 +1660,69 @@ def refuse_finished_retry(prev: dict, fix_note: str = "") -> None:
     )
 
 
+def extend_title(engine, run_id: str, what: Any) -> Optional[str]:
+    """"Follow-up: More tests — <the work's own name>" for an extend that says what it is, or
+    None (retry_code_task's own naming) when it says nothing. The "Follow-up: … —" lead is the
+    one every surface already strips to group the pass under its build (project_experience.work
+    .clean_title, naming.LABELS)."""
+    what = " ".join(str(what or "").split())[:60]
+    if not what:
+        return None
+    try:
+        with _transaction(engine) as c:
+            prev = load_code_task_run(c, run_id) or {}
+    except Exception:  # noqa: BLE001 — a missing name is not worth failing the pass for
+        prev = {}
+    from .project_experience.work import clean_title
+
+    base = clean_title(prev.get("title") or "")
+    return (f"Follow-up: {what} — {base}" if base else what)[:160]
+
+
+class BranchOwned(RetryRefused):
+    """Another run of the same lineage is already working on its branch and pull request."""
+
+
+def lineage_branch_owner(connection, project_id: str, root: str,
+                         exclude: tuple[str, ...] = ()) -> Optional[dict]:
+    """The run of lineage `root` that is working on its branch right now, or None.
+
+    ONE OWNER PER PULL REQUEST. Every continuation of a lineage (a retry, an extend, More
+    tests, a deferred-findings follow-up) works on the one branch `boss/code/<root>` and opens
+    or updates the one pull request on it. helpdesk-ai-v3 (2026-11-07): the build's
+    deferred-findings follow-up (crun_c45a6960) and the workflow's More tests pass
+    (crun_d2316785, then titled "· retry 1") started 25 seconds apart on that branch, both
+    pushed to it, and both claimed PR #2 — two merge questions for one PR in Needs you, and a
+    deploy of a head neither run's review had seen. `exclude`: the runs that hand the branch
+    on (the attempt being continued, a parent finishing)."""
+    if not root or connection is None or not hasattr(connection, "execute") \
+            or hasattr(connection, "get_run"):
+        return None
+    try:
+        rows = connection.execute(sql(
+            "SELECT id, title, pull_request_number FROM code_task_runs WHERE project_id = :p "
+            "AND status = 'running' AND (id = :r OR finalize_ctx->>'root_run_id' = :r) "
+            "ORDER BY created_at DESC"), {"p": project_id, "r": root}).mappings().all()
+    except Exception:  # noqa: BLE001 — an unreadable lineage never blocks the work
+        logger.debug("lineage_branch_owner_failed", exc_info=True)
+        return None
+    for r in rows:
+        if str(r["id"]) not in exclude:
+            return dict(r)
+    return None
+
+
+def refuse_second_owner(owner: Optional[dict]) -> None:
+    """Raise BranchOwned when `owner` (lineage_branch_owner) is already on the branch."""
+    if not owner:
+        return
+    pr = f" (PR #{owner['pull_request_number']})" if owner.get("pull_request_number") else ""
+    raise BranchOwned(
+        f"{owner['id']} “{str(owner.get('title') or '')[:80]}” is already working on this "
+        f"branch{pr}. One run owns a pull request at a time: wait for it to finish, then "
+        "continue from it.")
+
+
 #: How many lines of the previous attempt's verify output a retry is shown.
 PREVIOUS_FAILURE_LINES = 60
 
@@ -1895,6 +1958,10 @@ def retry_code_task(
     attempt = int(fctx_prev.get("attempt", 1)) + 1
     root = fctx_prev.get("root_run_id") or run_id
     refuse_finished_retry(prev, fix_note)
+    # ONE OWNER PER PULL REQUEST (lineage_branch_owner): never a second run on the branch.
+    with _transaction(engine) as c:
+        refuse_second_owner(lineage_branch_owner(c, prev["project_id"], root,
+                                                 exclude=(run_id,)))
 
     # ---- Failure-loop guardrails (release blocker fix) -----------------------------------
     # An `infra` failure is NOT the task's fault, so re-running the same task on the same

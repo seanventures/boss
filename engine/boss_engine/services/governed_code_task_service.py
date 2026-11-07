@@ -3200,6 +3200,31 @@ def _already_spawned_followup(engine, parent_run_id: str) -> bool:
         return False
 
 
+def _findings_to_pass_two(engine, project_id: str, run_id: str, workflow_run_id: str,
+                          findings: list[dict]) -> tuple[bool, str]:
+    """(follow-up still wanted, why not). When this run's workflow will run its More tests pass
+    on this branch next (workflow_capability_runner.pass_two_pending), the findings are put on
+    this run (`pass_two_findings`, which that pass's brief carries) and no follow-up starts."""
+    from .workflow_capability_runner import PASS_TWO_FINDINGS, pass_two_pending
+
+    try:
+        with _transaction(engine) as c:
+            if not pass_two_pending(c, workflow_run_id):
+                return True, ""
+            c.execute(sql(
+                "UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx, '{}'::jsonb) "
+                "|| jsonb_build_object(CAST(:k AS text), CAST(:f AS jsonb)) WHERE id = :id"),
+                {"k": PASS_TWO_FINDINGS, "f": json.dumps(list(findings or [])[:20]),
+                 "id": run_id})
+            emit_event(c, project_id, "code_task.deferred_findings_to_pass_two", "boss",
+                       "code_task_run", run_id,
+                       {"workflow_run_id": workflow_run_id, "findings": list(findings)[:20]})
+    except Exception:  # noqa: BLE001 — unknown: the ordinary follow-up (still one owner)
+        _log_caught(logger)
+        return True, ""
+    return False, "handed to the workflow's More tests pass, which works on this branch next"
+
+
 def _spawn_deferred_findings_task(
     engine, settings, jobs, *, project_id, task_id, spec, base_branch,
     findings: list[dict], parent_run_id: str, parent_title: str,
@@ -9450,6 +9475,31 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             with _transaction(engine) as c:
                 emit_event(c, project_id, "code_task.followup_skipped", "boss",
                            "code_task_run", run_id, {"reason": _followup_skip_reason})
+        # ONE OWNER PER PULL REQUEST (code_task_service.lineage_branch_owner). A workflow whose
+        # More tests pass has not started yet hands the deferred findings to THAT pass — it
+        # extends this same branch and PR next — instead of starting a second run on the branch
+        # beside it; and a follow-up never starts while another run of the lineage works there.
+        if (deferred_findings and _followup_ok and not _checks
+                and not fctx.get("is_followup") and fctx.get("workflow_run_id")):
+            _followup_ok, _followup_skip_reason = _findings_to_pass_two(
+                engine, project_id, run_id, str(fctx.get("workflow_run_id")),
+                deferred_findings)
+        if deferred_findings and _followup_ok and not fctx.get("is_followup"):
+            from .code_task_service import lineage_branch_owner
+
+            with _transaction(engine) as c:
+                _owner = lineage_branch_owner(c, project_id, str(fctx.get("root_run_id")
+                                                                 or run_id),
+                                              exclude=(run_id,))
+            if _owner:
+                _followup_ok = False
+                _followup_skip_reason = (f"{_owner['id']} is already working on this branch; "
+                                         "one run owns a pull request at a time")
+                with _transaction(engine) as c:
+                    emit_event(c, project_id, "code_task.followup_skipped", "boss",
+                               "code_task_run", run_id,
+                               {"reason": _followup_skip_reason, "branch_owner": _owner["id"],
+                                "findings": deferred_findings[:20]})
         # A PR that opened with its checks failing always gets its follow-up: it is the fix.
         if (deferred_findings
                 and (getattr(settings, "code_review_followup_tasks", True) or _checks)

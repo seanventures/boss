@@ -1811,7 +1811,9 @@ def _more_tests_step(ctx, connection: Connection, project_id: str, actor: str,
     started = _start_on_the_branch(ctx, connection, project_id=project_id, actor=actor,
                                    context=context, step=step, capability_key="more_tests",
                                    base_run=build_run, args={
-        "run_id": build_run, "instructions": _more_tests_brief(light),
+        "run_id": build_run,
+        "instructions": _more_tests_brief(light) + handed_findings_brief(connection,
+                                                                         build_run),
         "title": "More tests (light)" if light else "More tests",
     })
     return {"capability": "more_tests", "tool": "extend_code_task", "base_run_id": build_run,
@@ -1853,6 +1855,54 @@ def _more_tests_started(ctx, connection: Connection, *, project_id: str, actor: 
 
 
 PASS_ONE_HEAD = "pass_one_head_sha"
+
+#: finalize_ctx key: the review findings a build deferred to its workflow's More tests pass.
+PASS_TWO_FINDINGS = "pass_two_findings"
+
+
+def pass_two_pending(connection: Connection, workflow_run_id: str) -> bool:
+    """This workflow run has a More tests pass that has not started yet — the next run on the
+    build's branch and pull request (two_pass). Every step's row is written when the run
+    starts (workflows._run_spec), so "not started" is a row still pending."""
+    if not workflow_run_id:
+        return False
+    try:
+        steps = workflows._run_spec(connection, workflow_run_id).get("steps") or []
+    except Exception:  # noqa: BLE001 — unknown: no pass to hand anything to
+        return False
+    ids = [str(s.get("id")) for s in steps
+           if ((s.get("binding") or {}).get("capability") == "more_tests")]
+    if not ids:
+        return False
+    return bool(connection.execute(
+        text("SELECT 1 FROM workflow_step_runs WHERE workflow_run_id = :r "
+             "AND step_id = ANY(:ids) AND status IN ('pending', 'ready') "
+             "AND started_at IS NULL LIMIT 1"),
+        {"r": workflow_run_id, "ids": ids}).first())
+
+
+def handed_findings_brief(connection: Connection, build_run: str) -> str:
+    """The findings `build_run` handed to this More tests pass (PASS_TWO_FINDINGS), as a part
+    of its brief — "" when it handed none. One run on the branch fixes them, not two."""
+    try:
+        got = connection.execute(
+            text("SELECT finalize_ctx->:k FROM code_task_runs WHERE id = :i"),
+            {"k": PASS_TWO_FINDINGS, "i": build_run}).scalar()
+    except Exception:  # noqa: BLE001 — the pass runs with its own brief
+        return ""
+    if isinstance(got, str):
+        try:
+            got = json.loads(got)
+        except ValueError:
+            got = None
+    lines = [f"- [{str(f.get('severity') or 'nit').upper()}] {f.get('text')}"
+             for f in (got if isinstance(got, list) else []) if isinstance(f, dict)
+             and f.get("text")]
+    if not lines:
+        return ""
+    return ("\n\nDEFERRED REVIEW FINDINGS (from the first pass's review, graded below the "
+            "blocking threshold): fix these too, on this branch, in this pass.\n"
+            + "\n".join(lines[:20]))
 
 
 def pass_one_head(connection: Connection, settings: Any, project_id: str, base_run: str, *,
@@ -3600,7 +3650,11 @@ def _perform_capability(
     # container, so requiring a preview would make such apps undeployable from a workflow.
     # EVERY DEPLOY WAITS FOR ITS MERGE FIRST (`_merge_wait`) — the stack path below included:
     # it plans from the pull request's head, and shipped PR #3 unmerged (helpdesk-ai, 2026-11-06).
-    if key == "deploy" and not pass_2_of:
+    # "Deploy again" too: it ships the More tests run, whose commits reach the default branch
+    # only through ITS pull request. Planned from that PR's head, it asked to ship 99b569f —
+    # PR #2, open, unreviewed by a person — on a card titled "Deploy PR #1" (helpdesk-ai-v3,
+    # wfr_3ceaad94, 2026-11-07). It waits for that merge like every deploy.
+    if key == "deploy":
         waiting = _merge_wait(connection, project_id, str(inputs.get("run_id") or ""))
         if waiting:
             return waiting
@@ -6669,11 +6723,12 @@ def _gate_subject(
                 point.commit()
             if undeclared:
                 return None
-            # A DEPLOY OF A PULL REQUEST NOBODY HAS MERGED ASKS NOBODY YET: the step runs and
-            # waits for the merge (`_merge_wait`); once merged it is run again and asks then.
-            # Asking first had a person approve a release of unmerged code.
-            if _unmerged_on_record(connection, str(ready["run_id"])):
-                return None
+        # A DEPLOY OF A PULL REQUEST NOBODY HAS MERGED ASKS NOBODY YET: the step runs and
+        # waits for the merge (`_merge_wait`); once merged it is run again and asks then.
+        # Asking first had a person approve a release of unmerged code. "Deploy again" too:
+        # its More tests run ships through its own pull request.
+        if ready.get("run_id") and _unmerged_on_record(connection, str(ready["run_id"])):
+            return None
         # "DEPLOY AGAIN" THAT WILL SHIP NOTHING ASKS NOBODY: it runs, and says why (two_pass).
         pass_2_of = str(((binding.get("inputs") or {}).get("pass_2_of")) or "")
         if pass_2_of and pass_two_redeploy_refusal(

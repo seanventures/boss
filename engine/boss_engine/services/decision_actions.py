@@ -743,7 +743,31 @@ def waiting_on_operator(connection, project_id: str, *, now: Optional[datetime] 
     ).bindparams(*binds)
     wanted = {"needs_action", "expired"} if include_expired else {"needs_action"}
     rows = [dict(r) for r in connection.execute(statement, params).mappings().all()]
-    return sorted((r for r in rows if attention(r, now) in wanted), key=_sort_key)
+    return sorted(one_question_per_pull_request(r for r in rows if attention(r, now) in wanted),
+                  key=_sort_key)
+
+
+def one_question_per_pull_request(rows) -> list[dict[str, Any]]:
+    """ONE MERGE QUESTION PER PULL REQUEST, on every surface: of two open "approve this code
+    change" questions about the same pull request, only the newest is waiting on a person.
+    run_decisions.withdraw_superseded_pr_questions closes the older one when a build settles;
+    until then (minutes, for two runs that both claimed PR #2 — helpdesk-ai-v3, 2026-11-07)
+    every badge, the bell and Needs you showed "Merge PR #2" twice."""
+    rows = list(rows)
+    newest: dict[str, Any] = {}
+    for r in rows:
+        rec = _rec(r)
+        url = str(rec.get("pull_request_url") or "")
+        if rec.get("action") != "review_pull_request" or not url:
+            continue
+        if url not in newest or str(r.get("created_at") or "") > str(
+                newest[url].get("created_at") or ""):
+            newest[url] = r
+    keep = {id(r) for r in newest.values()}
+    return [r for r in rows
+            if not (_rec(r).get("action") == "review_pull_request"
+                    and str(_rec(r).get("pull_request_url") or "")
+                    and id(r) not in keep)]
 
 
 def count_waiting_on_operator(connection, project_id: str, *, now: Optional[datetime] = None,

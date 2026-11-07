@@ -93,7 +93,20 @@ export type NeedsYou = {
   /** The piece of work it belongs to (a merge's build; the Onboarding row for its "only you"
    *  items), the PR on GitHub, and when it was asked (the drawer). */
   work_id?: string; work_label?: string; external_url?: string; created_at?: string;
+  /** A deploy's release card (engine release_scope, needs.release_of): the commits it ships as
+   *  Approvals draws them (`preview`, an action preview), the hash an approval must carry, and
+   *  whether approving needs the person's reason. Null when the deploy has no card. */
+  release?: NeedsRelease | null;
 };
+export type NeedsRelease = { preview: unknown; content_hash: string; needs_reason: boolean; sentence: string };
+function parseRelease(v: unknown): NeedsRelease | null {
+  if (!v || typeof v !== "object") return null;
+  const r = v as Record<string, unknown>;
+  const hash = typeof r.content_hash === "string" ? r.content_hash : "";
+  if (!hash || !r.preview || typeof r.preview !== "object") return null;
+  return { preview: r.preview, content_hash: hash, needs_reason: r.needs_reason === true,
+           sentence: typeof r.sentence === "string" ? r.sentence : "" };
+}
 /** X-75 ONE TIME BASIS for a piece of work, on every surface (Work rows, Overview's Recent work,
  *  drawers): a finished item (done / failed) is placed by WHEN IT FINISHED (`updated_at`):
  *  "12h" within a day, "Sat" this week, else "Nov 2", in the viewer's zone; anything still
@@ -503,7 +516,7 @@ export const parseOverview = (v: unknown): Overview => {
       const y = o(it); const act = o(y.action);
       return { id: s(y.id), kind: oneOf(y.kind, ["merge", "deploy", "plan", "question", "setup"] as const, "question"), label: s(y.label),
                icon: s(y.icon), work_id: s(y.work_id), work_label: s(y.work_label), external_url: s(y.external_url), created_at: s(y.created_at),
-               detail: s(y.detail), mini: mini(y.mini),
+               detail: s(y.detail), mini: mini(y.mini), release: parseRelease(y.release),
                action: act.label || act.href ? { label: s(act.label, "Open"), href: s(act.href), decision_id: s(act.decision_id) } : null };
     }),
     tiles: {

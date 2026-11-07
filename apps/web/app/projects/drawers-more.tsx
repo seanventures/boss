@@ -24,6 +24,7 @@ import {
 } from "../../lib/project-experience";
 import { FX_DEPLOYMENTS } from "../../lib/project-experience-fixtures";
 import { whenLocal } from "../../lib/local-time";
+import { ActionPreview, actionPreviewOf } from "../action-preview";
 import { Empty, Face, Flow, HEALTH_TONE, HEALTH_WORD, PxLink, Ring, Said, Spark, STAGE_ICON, STATE_WORD, Stations, Tag, Cost } from "./kit";
 import type { PxCtx } from "./project-page";
 
@@ -251,6 +252,7 @@ export function NeedsBody({ ctx, n }: { ctx: PxCtx; n: NeedsYou }) {
     <>
       {n.mini.length ? <Flow nodes={n.mini} testid="px-drawer-needs-flow" /> : null}
       {n.detail ? <p style={{ margin: 0, lineHeight: 1.5 }}>{n.detail}</p> : null}
+      <ReleaseList n={n} />
       <dl className="px-kv">
         {n.created_at ? <><dt>Asked</dt><dd>{whenLocal(n.created_at)}</dd></> : null}
         {n.kind === "merge" ? <><dt>Who</dt><dd>Only a person merges</dd></> : n.kind === "deploy" ? <><dt>Who</dt><dd>A person approves this deploy</dd></> : null}
@@ -264,6 +266,20 @@ export function NeedsBody({ ctx, n }: { ctx: PxCtx; n: NeedsYou }) {
   );
 }
 
+
+/** WHAT A DEPLOY SHIPS, read before it is approved: the release card's commits, drawn as
+ *  Approvals draws them (one row per commit: who made it, approved or not, reviewed or not).
+ *  The engine refuses an approval of a card that was not shown (release_scope), so the drawer
+ *  shows it and sends its hash — helpdesk-ai-v3 dec_8eaeba2f was refused on every press. */
+export function ReleaseList({ n }: { n: NeedsYou }) {
+  const preview = n.release ? actionPreviewOf(n.release.preview) : null;
+  if (!preview) return null;
+  return (
+    <div data-testid="px-drawer-needs-release">
+      <ActionPreview preview={preview} />
+    </div>
+  );
+}
 
 // ── acting on a Needs-you item in place (PX-05) ─────────────────────────────────────────────
 
@@ -285,13 +301,23 @@ export function DecisionActs({ ctx, n, onDone }: { ctx: PxCtx; n: NeedsYou; onDo
   const [said, setSaid] = React.useState<{ text: string; tone?: "red" | "green" }>({ text: "" });
   const id = n.action?.decision_id;
   const review = n.external_url || (/^https?:\/\//.test(n.action?.href ?? "") ? n.action!.href : "");
+  // A RELEASE CARD IS APPROVED AS SHOWN (engine release_scope): with the hash of the commit list
+  // drawn above, and — when it ships commits from rejected or unreviewed runs — with the
+  // person's reason, sent as Approvals sends it (force + note).
+  const release = n.release ?? null;
+  const [why, setWhy] = React.useState("");
+  const approval: Record<string, unknown> = release
+    ? { note: release.needs_reason ? why.trim() : "", content_hash: release.content_hash,
+        ...(release.needs_reason ? { force: true } : {}) }
+    : { note: "" };
+  const blocked = Boolean(release?.needs_reason && !why.trim());
   if (!id) return null;
   const answer = async (verb: "approve" | "reject") => {
     setBusy(true); setSaid({ text: "" });
     try {
       if (isPxDemo()) { setSaid({ text: "Sample mode — nothing was sent." }); return; }
       await guarded(verb === "approve" ? `${actWord(n)}.` : "Reject this.", () =>
-        idPost(`/v1/decisions/${encodeURIComponent(id)}/${verb}`, verb === "reject" ? { note: reason.trim() || "Rejected from the project page." } : { note: "" }));
+        idPost(`/v1/decisions/${encodeURIComponent(id)}/${verb}`, verb === "reject" ? { note: reason.trim() || "Rejected from the project page." } : approval));
       setSaid({ text: verb === "approve" ? (n.kind === "merge" ? "Approved — BOSS merges it now." : n.kind === "deploy" ? "Approved — the deploy starts now." : "Approved.") : "Rejected.", tone: "green" });
       notifyChanged("decision", { id });
       ctx.refreshWork();
@@ -311,8 +337,14 @@ export function DecisionActs({ ctx, n, onDone }: { ctx: PxCtx; n: NeedsYou; onDo
           <button type="button" className="px-btn" data-size="s" onClick={() => setRejecting(false)}>Cancel</button>
         </form>
       ) : (
-        <div className="px-row">
-          <GatedButton permission="decision:approve" projectId={ctx.projectId} className="px-btn" data-kind="amber" data-size="s" disabled={busy}
+        <div className="px-row px-wrap">
+          {release?.needs_reason ? (
+            <input className="px-input" placeholder="Why ship commits nobody reviewed? (recorded with the release)" value={why}
+                   onChange={(e) => setWhy(e.target.value)} aria-label="Why ship it anyway" data-testid="px-drawer-needs-why"
+                   style={{ flex: "1 1 100%" }} />
+          ) : null}
+          <GatedButton permission="decision:approve" projectId={ctx.projectId} className="px-btn" data-kind="amber" data-size="s" disabled={busy || blocked}
+                       title={blocked ? "Say why it should ship anyway first" : undefined}
                        data-testid="px-drawer-needs-approve" onClick={() => void answer("approve")}>
             {n.kind === "merge" ? <GitMerge size={12} aria-hidden /> : n.kind === "deploy" ? <RocketLaunch size={12} aria-hidden /> : <Check size={12} aria-hidden />} {actWord(n)}</GatedButton>
           <GatedButton permission="decision:approve" projectId={ctx.projectId} className="px-btn" data-size="s" disabled={busy}

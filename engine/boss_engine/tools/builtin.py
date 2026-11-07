@@ -1457,6 +1457,9 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                 "instructions": {"type": "string",
                                  "description": "what to add or change, in plain language"},
                 "profile": {"type": "string", "enum": ["lean", "balanced", "strict", "vag"]},
+                "title": {"type": "string",
+                          "description": "what this pass is, in two or three words (e.g. "
+                                         "'More tests'); the work's own name follows it"},
             },
             ["run_id", "instructions"],
         ),
@@ -1469,6 +1472,11 @@ def _register_write_tools(reg: ToolRegistry) -> None:
             fix_note=(args.get("instructions") or ""),
             profile=(args.get("profile") or None),
             allow_test_retirement=bool(args.get("allow_test_retirement")),
+            # A PASS IS NAMED FOR WHAT IT IS. The title the caller gave (More tests, launch
+            # readiness) was dropped, so retry_code_task named the pass "<build> · retry 1" —
+            # and a successful, merged build read as one being run again (helpdesk-ai-v3,
+            # crun_d2316785, 2026-11-07).
+            title=cts.extend_title(ctx.engine, args["run_id"], args.get("title")),
         )
         return {"status": "extending", "result": _json_safe(result),
                 "note": ("continues the existing lineage: same branch, same PR, "

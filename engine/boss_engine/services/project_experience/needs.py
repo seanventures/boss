@@ -102,6 +102,74 @@ def _target_env(connection: Connection, target_id: str) -> Optional[str]:
                               {"t": target_id}).scalar()
 
 
+_PULL_REF = re.compile(r"^(?:refs/)?pull/(\d+)(?:/head|/merge)?$")
+
+
+def shipped_words(connection: Connection, project_id: str, rec: Mapping[str, Any],
+                  number: Optional[int]) -> tuple[str, dict[str, str]]:
+    """(what the deploy ships, its first mini-flow node) FROM WHAT IT SHIPS: the commit it
+    plans. A recorded merge names its PR ("PR #1", merged); a pull request's head names that
+    PR, not merged ("PR #2 (not merged)"); any other commit is its short sha. Never the PR of
+    the work the deploy hangs on: 99b569f, PR #2's open head, read "Deploy PR #1 to Staging"
+    because the workflow's first PR was #1 (helpdesk-ai-v3, dec_8eaeba2f, 2026-11-07)."""
+    commit = str(rec.get("commit") or "")
+    merged = _pr_of_commit(connection, project_id, commit)
+    if merged:
+        return f"PR #{merged}", {"label": f"PR #{merged} merged", "state": "done"}
+    pulled = _PULL_REF.match(str(rec.get("ref") or "").strip())
+    if pulled:
+        n = int(pulled.group(1))
+        return (f"PR #{n} (not merged)",
+                {"label": f"PR #{n} not merged", "state": "failed"})
+    if commit:
+        return commit[:7], {"label": f"{commit[:7]} · not a merge", "state": "waiting"}
+    if number:
+        return f"PR #{number}", {"label": f"PR #{number}", "state": "done"}
+    return "", {"label": "Merged", "state": "done"}
+
+
+def release_of(rec: Mapping[str, Any]) -> Optional[dict[str, Any]]:
+    """The deploy's release card for the drawer: the preview Approvals draws (its rows are the
+    commits), the hash an approval must carry, and whether approving needs a reason."""
+    from ..release_scope import of_decision
+
+    card_ = of_decision(dict(rec))
+    preview = rec.get("action_preview") if isinstance(rec.get("action_preview"), dict) else None
+    if card_ is None or not preview or not preview.get("content_hash"):
+        return None
+    return {"preview": preview, "content_hash": preview["content_hash"],
+            "needs_reason": bool(card_.get("needs_reason")),
+            "sentence": str(card_.get("sentence") or "")}
+
+
+def subject_of(c: Mapping[str, Any]) -> str:
+    """What a Needs-you card asks about, so one subject is one card: a pull request (by its
+    URL), else the card's own words."""
+    url = str(c.get("external_url") or "")
+    m = re.search(r"/pull/(\d+)", url)
+    if m and c.get("kind") == "merge":
+        return f"pr:{url.split('/pull/')[0]}#{m.group(1)}"
+    return f"{c.get('kind')}:{' '.join(str(c.get('label') or '').lower().split())}"
+
+
+def one_per_subject(cards_: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """ONE CARD PER PULL REQUEST AND PER SUBJECT, the newest asked kept, in the first one's
+    place. Two runs that both claimed PR #2 raised two merge questions, and Needs you showed
+    "Merge PR #2" twice (helpdesk-ai-v3, dec_df7edb70 + dec_924dfab2, 2026-11-07)."""
+    keep: dict[str, int] = {}
+    out: list[dict[str, Any]] = []
+    for c in cards_:
+        key = subject_of(c)
+        if key in keep:
+            i = keep[key]
+            if str(c.get("created_at") or "") > str(out[i].get("created_at") or ""):
+                out[i] = c
+            continue
+        keep[key] = len(out)
+        out.append(c)
+    return out
+
+
 def card(connection: Connection, project_id: str, decision: Mapping[str, Any],
          run: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
     """One Needs-you card from one waiting decision."""
@@ -112,16 +180,15 @@ def card(connection: Connection, project_id: str, decision: Mapping[str, Any],
     number = pr_number(pr_url) if pr_url else None
     stages = [s for s in (run or {}).get("stages") or [] if s.get("state") != "skipped"]
     state_of = {s.get("key"): s.get("state") for s in stages}
+    release: Optional[dict[str, Any]] = None
     if kind == "deploy":
-        commit = str(rec.get("commit") or "")
-        shipped = _pr_of_commit(connection, project_id, commit) or number
         env = env_label(rec.get("environment") or _target_env(connection, str(rec.get("target_id")
                                                                                or "")) or "")
-        what = f"PR #{shipped}" if shipped else (f"{commit[:7]}" if commit else "")
+        what, first = shipped_words(connection, project_id, rec, number)
         label = f"Deploy {what} to {env}".replace("  ", " ") if what else f"Deploy to {env}"
-        mini = [{"label": f"PR #{shipped} merged" if shipped else "Merged", "state": "done"},
-                {"label": f"{env} · you", "state": "waiting"},
+        mini = [first, {"label": f"{env} · you", "state": "waiting"},
                 {"label": "Smoke test", "state": "todo"}]
+        release = release_of(rec)
     elif kind == "merge":
         label = f"Merge PR #{number}" if number else "Merge the pull request"
         tests = tests_of(connection, project_id, pr_url)
@@ -146,6 +213,9 @@ def card(connection: Connection, project_id: str, decision: Mapping[str, Any],
             "mini": mini, "risk_tier": decision.get("risk_tier"),
             "created_at": iso(decision.get("created_at")),
             "external_url": pr_url or None,
+            # WHAT THIS DEPLOY SHIPS, as its release card lists it (release_scope): the drawer
+            # shows these commits and approves with their hash, as Approvals does.
+            **({"release": release} if release else {}),
             # The button acts IN PLACE (04-19/21): Review PR opens the work's drawer (its PR,
             # checks and Merge); everything else opens this card's drawer, which approves or
             # rejects there with step-up. Approvals stays one link away inside it.
@@ -224,12 +294,17 @@ def cards(connection: Connection, project_id: str, work_items: list[dict[str, An
         rec = d.get("recommendation") if isinstance(d.get("recommendation"), dict) else {}
         run = runs.get(str(rec.get("workflow_run_id") or "")) or by_decision.get(str(d["id"]))
         out.append(card(connection, project_id, d, run))
+    out = one_per_subject(out)
     # ONE SOURCE FOR NEEDS YOU: every piece of work the Work tab groups under Needs you has its
     # card here (a gate or merge whose decision the reader above did not return still waits).
     carded = {c.get("work_id") for c in out if c.get("work_id")}
+    asked = {subject_of(c) for c in out}
     for w in work_items:
         if w.get("state") != "needs_you" or w.get("source") == "onboarding" or w["id"] in carded:
             continue
+        pr = ((w.get("links") or {}).get("pr") or {}).get("external_url")
+        if pr and subject_of({"kind": "merge", "external_url": pr}) in asked:
+            continue        # its pull request already has its card
         kind = ("merge" if w.get("action_label") == "Merge" else
                 "deploy" if w.get("action_label") == "Approve deploy" else
                 "plan" if w.get("action_label") == "Approve plan" else "question")
@@ -247,5 +322,5 @@ def cards(connection: Connection, project_id: str, work_items: list[dict[str, An
                              onboarding_row=onboarding_row)
 
 
-__all__ = ["ACTION_WORDS", "card", "cards", "decision_kind", "prod_host_card", "prod_waits",
-           "setup_cards"]
+__all__ = ["ACTION_WORDS", "card", "cards", "decision_kind", "one_per_subject", "prod_host_card",
+           "prod_waits", "release_of", "setup_cards", "shipped_words", "subject_of"]
