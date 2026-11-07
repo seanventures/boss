@@ -239,7 +239,7 @@
 
 /* ── phone (≤720px): crumb, search icon, bell and avatar; nothing clipped ──────────────────── */
 @media (max-width: 720px) {
-  .bx-shell .bx-topbar { padding: 0 12px; gap: 6px; }
+  .bx-shell .bx-topbar { padding: 0 16px; gap: 6px; }
   .bx-shell .bx-topbar > .bx-topbar-spacer { min-width: 0; }
   .bx-jump { width: 34px; height: 34px; padding: 0; justify-content: center; border-radius: 8px; }
   .bx-jump kbd { display: none; }
@@ -287,7 +287,7 @@
   /* A phone shows only the last crumb (wireframe: earlier parts hide). */
   .bx-crumbs .bx-crumb:not(:last-child) { display: none; }
   .bx-crumbs .bx-crumb:last-child > .bx-crumb-sep { display: none; }
-  .bx-crumb-here { max-width: 44vw; }
+  .bx-crumb-here { max-width: 40vw; }
   /* New build is in the avatar menu and ⌘K on a phone; the bar keeps search, bell and avatar. */
   .bx-shell .bx-topbar > .bx-new-project { display: none; }
 }
