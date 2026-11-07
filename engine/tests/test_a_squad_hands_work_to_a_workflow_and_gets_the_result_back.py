@@ -122,29 +122,44 @@ def test_a_launch_that_fails_is_said_on_the_board_and_remembered(eng, project):
 
 
 def test_production_launchers_are_the_tools_agents_call(eng, project, monkeypatch):
-    called = []
+    """The tools any agent calls, decided AS THE SQUAD'S AGENT: an explicit, verified identity
+    built from the item and the decision (identity/ambient_launch), never whoever is on the
+    thread (the ambient tick's sys_worker refused every launch as `forbidden`)."""
+    called, built, audited = [], [], []
+    acting = object()
 
     class Registry:
-        def invoke(self, tool, ctx, *, project_id, actor, args, operator_confirmed=False):
-            called.append((tool, actor, sorted(args), operator_confirmed))
+        def invoke(self, tool, ctx, *, project_id, actor, args, operator_confirmed=False,
+                   auth=None):
+            called.append((tool, actor, sorted(args), operator_confirmed, auth))
             return ({"status": "running", "run_id": "wfr_x"} if tool == "start_workflow"
                     else {"status": "running", "meeting": {"run_id": "mrun_x"}})
 
+    import boss_engine.identity.ambient_launch as ambient_launch
     import boss_engine.tools.builtin as builtin
 
     monkeypatch.setattr(builtin, "build_default_registry", lambda: Registry())
+    monkeypatch.setattr(ambient_launch, "launch_context",
+                        lambda db, **kw: built.append(kw) or acting)
+    monkeypatch.setattr(ambient_launch, "record_launch",
+                        lambda ctx, **kw: audited.append((ctx, kw["tool"], kw["ref"])))
     launchers = squad_plugins.ToolLaunchers(settings())
+    authority = {"work_item_id": "w", "act_id": "act_1"}
     with eng.begin() as c:
         started = launchers.start(c, project_id=project, actor="security_reviewer",
                                   workflow_key="fast_fix", directive="d", title="t",
-                                  inputs={"ambient_work_item_id": "w"})
+                                  inputs={"ambient_work_item_id": "w"}, authority=authority)
         convened = launchers.convene(c, project_id=project, actor="security_reviewer",
-                                     directive="d", seats=["qa"], objective="o")
+                                     directive="d", seats=["qa"], objective="o",
+                                     authority=authority)
     assert started == {"run_id": "wfr_x"} and convened == {"meeting_run_id": "mrun_x"}
     assert called == [("start_workflow", "security_reviewer",
-                       ["directive", "inputs", "title", "workflow_key"], True),
+                       ["directive", "inputs", "title", "workflow_key"], True, acting),
                       ("request_meeting", "security_reviewer",
-                       ["directive", "objective", "seats"], True)]
+                       ["directive", "objective", "seats"], True, acting)]
+    assert built == [{"project_id": project, "work_item_id": "w", "act_id": "act_1",
+                      "role_key": "security_reviewer"}] * 2
+    assert audited == [(acting, "start_workflow", "wfr_x"), (acting, "request_meeting", "mrun_x")]
 
 
 def test_squad_memory_is_read_first_and_becomes_one_learning_at_close(eng, project):

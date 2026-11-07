@@ -212,12 +212,18 @@ class AuthContext:
     ip: Optional[str] = None
     user_agent: Optional[str] = None
     request_id: Optional[str] = None
+    #: An always-on squad's launch (identity/ambient_launch.AmbientAuthority): the agent acting
+    #: on a ledger decision — a person's approval or the project's class level. Never from a request.
+    ambient: Optional[Any] = None
 
     @property
     def on_behalf_of(self) -> Optional[str]:
-        """The person an agent acts for (run token sub in obo mode)."""
+        """The person an agent acts for (run token sub in obo mode; the approving person of an
+        ambient launch)."""
         if self.run_token and self.run_token.mode == RunMode.OBO:
             return self.run_token.sub
+        if self.ambient is not None:
+            return getattr(self.ambient, "on_behalf_of", None)
         return None
 
     @property

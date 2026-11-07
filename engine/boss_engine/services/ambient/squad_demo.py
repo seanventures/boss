@@ -89,7 +89,8 @@ class DemoLaunchers:
         self.convened: list[str] = []
         self.started: list[str] = []
 
-    def convene(self, connection, *, project_id, actor, directive, seats, objective):
+    def convene(self, connection, *, project_id, actor, directive, seats, objective,
+                authority=None):
         meeting_id = new_id("mrun")
         connection.execute(text(
             "INSERT INTO meeting_runs (id, project_id, status, phase, directive, role_keys, "
@@ -101,7 +102,8 @@ class DemoLaunchers:
         self.convened.append(meeting_id)
         return {"meeting_run_id": meeting_id}
 
-    def start(self, connection, *, project_id, actor, workflow_key, directive, title, inputs):
+    def start(self, connection, *, project_id, actor, workflow_key, directive, title, inputs,
+              authority=None):
         # A demo record, not a run: a completed row on the demo's own step-less definition.
         # It still writes what a run can reach, so it holds the reach lock like every writer.
         from ..workflows import hold_workflow_reach

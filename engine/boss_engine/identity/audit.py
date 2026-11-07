@@ -126,6 +126,9 @@ EVENT_TYPES: frozenset[str] = frozenset({
     "project.archived", "project.restored",
     # KG P6a: a bank's external agent's per-execution Knowledge-Graph token, minted and revoked
     "external_agent.token_minted", "external_agent.token_revoked",
+    # an always-on squad's launch: the agent, for whom (a person's approval or the class level),
+    # and the decision it stood on (identity/ambient_launch.py)
+    "agent.ambient_launch",
 })
 
 #: hash of "no previous event" for the first row of an org's chain.

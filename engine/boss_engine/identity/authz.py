@@ -606,6 +606,22 @@ def check(ctx: AuthContext, permission: str, scope: ResolvedScope, *, db: Any = 
     if ctx.run_token is not None and not meta.delegable:               # agents: human-only keys
         return _finish(ctx, deny(meta.key, scope, DenyReason.NOT_DELEGABLE))
 
+    if ctx.ambient is not None:                                         # 1b. a squad's launch
+        # An always-on squad's agent acting on a ledger decision (identity/ambient_launch),
+        # decided from the item, the decision, the Passport and the person / class level, live —
+        # in the launch's own transaction, which holds the decision it stands on.
+        if p.kind != PrincipalKind.AGENT or ctx.run_token is not None or cred is not None:
+            return _finish(ctx, deny(meta.key, scope, DenyReason.PRINCIPAL_INACTIVE))
+        if not meta.delegable or meta.system_only:
+            return _finish(ctx, deny(meta.key, scope, DenyReason.NOT_DELEGABLE))
+        from . import ambient_launch
+
+        raw = db if db is not None else getattr(ctx.ambient, "connection", None)
+        if raw is None:
+            with _epoch.connection(None) as own:
+                return _finish(ctx, ambient_launch.decide(ctx, meta.key, scope, own))
+        return _finish(ctx, ambient_launch.decide(ctx, meta.key, scope, raw))
+
     with _LazyConnection(db) as conn:
         epoch, status = _epoch_and_status(conn, p.org_id, p.id)
         if p.kind == PrincipalKind.SYSTEM:                              # 2. system fixed sets

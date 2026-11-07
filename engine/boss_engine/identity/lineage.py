@@ -95,6 +95,7 @@ _LABELS = {
     "delegation.extended": "Delegation extended", "token.issued": "Started a run",
     "token.exchanged": "Handed work to a sub-agent", "token.denied": "Refused a token",
     "credential.handed_out": "Used a credential", "egress.denied": "Outbound call refused",
+    "agent.ambient_launch": "Launched a squad's decided work",
 }
 
 

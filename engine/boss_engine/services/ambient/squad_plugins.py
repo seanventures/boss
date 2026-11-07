@@ -38,48 +38,80 @@ _PR_KEYS = ("pull_request_url", "pr_url", "pull_request", "pr")
 
 
 class Launchers(Protocol):
+    """`authority` is what the launch stands on — {"work_item_id", "act_id"}: the item and the
+    ledger decision (a person's approval, or the squad's own under the class level). The
+    production launchers act on it as the lead's Passport, verified (identity/ambient_launch)."""
+
     def convene(self, connection: Connection, *, project_id: str, actor: str, directive: str,
-                seats: list[str], objective: str) -> dict[str, Any]:
+                seats: list[str], objective: str,
+                authority: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
         """-> {"meeting_run_id"} or {"error"}"""
 
     def start(self, connection: Connection, *, project_id: str, actor: str, workflow_key: str,
-              directive: str, title: str, inputs: dict[str, Any]) -> dict[str, Any]:
+              directive: str, title: str, inputs: dict[str, Any],
+              authority: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
         """-> {"run_id"} or {"error"}"""
 
 
 class ToolLaunchers:
     """The doors every BOSS agent uses: `request_meeting` and `start_workflow` on the default
-    tool registry, as the agent (its role key), confirmed — the squad's decision already passed
-    the gate, the consensus and the ledger."""
+    tool registry, confirmed — the squad's decision already passed the gate, the consensus and
+    the ledger — and decided AS THE AGENT: the lead's Passport, on behalf of the person who
+    approved the card (or under the project's class level), the decision as lineage
+    (identity/ambient_launch). Never as whoever happens to be on the thread: on the ambient tick
+    that was the worker's sys_worker, and every launch came back `forbidden`."""
 
     def __init__(self, settings: Any):
         self.settings = settings
 
     def _invoke(self, connection: Connection, tool: str, *, project_id: str, actor: str,
-                args: dict[str, Any]) -> dict[str, Any]:
+                args: dict[str, Any], authority: Optional[Mapping[str, Any]],
+                ref_of: Any) -> dict[str, Any]:
         from ...context import EngineContext
+        from ...identity.ambient_launch import LaunchRefused, launch_context, record_launch
         from ...tools.builtin import build_default_registry
 
+        authority = authority or {}
+        try:
+            auth = launch_context(connection, project_id=project_id,
+                                  work_item_id=str(authority.get("work_item_id") or ""),
+                                  act_id=authority.get("act_id"), role_key=actor)
+        except LaunchRefused as refused:
+            return {"ok": False, "error": f"no verified identity to act as: {refused.reason}"}
         ctx = EngineContext(settings=self.settings, engine=connection.engine)
-        return build_default_registry().invoke(tool, ctx, project_id=project_id, actor=actor,
-                                               args=args, operator_confirmed=True)
+        got = build_default_registry().invoke(tool, ctx, project_id=project_id, actor=actor,
+                                              args=args, operator_confirmed=True, auth=auth)
+        ref = ref_of(got)
+        record_launch(auth, tool=tool, outcome_ok=bool(ref), ref=ref,
+                      error=None if ref else str(got.get("error") or "not started"),
+                      db=connection)
+        return got
 
-    def convene(self, connection, *, project_id, actor, directive, seats, objective):
+    def convene(self, connection, *, project_id, actor, directive, seats, objective,
+                authority=None):
         got = self._invoke(connection, "request_meeting", project_id=project_id, actor=actor,
-                           args={"directive": directive, "seats": seats, "objective": objective})
+                           args={"directive": directive, "seats": seats, "objective": objective},
+                           authority=authority,
+                           ref_of=lambda g: (g.get("meeting") or {}).get("run_id"))
         meeting = got.get("meeting") or {}
         if not meeting.get("run_id"):
             return {"error": str(got.get("error") or "the panel did not start")[:300]}
         return {"meeting_run_id": meeting["run_id"]}
 
-    def start(self, connection, *, project_id, actor, workflow_key, directive, title, inputs):
+    def start(self, connection, *, project_id, actor, workflow_key, directive, title, inputs,
+              authority=None):
         got = self._invoke(connection, "start_workflow", project_id=project_id, actor=actor,
                            args={"workflow_key": workflow_key, "directive": directive,
-                                 "title": title, "inputs": inputs})
+                                 "title": title, "inputs": inputs},
+                           authority=authority, ref_of=lambda g: g.get("run_id"))
         if not got.get("run_id"):
             return {"error": str(got.get("error") or "the run did not start")[:300],
                     **({"missing": got["missing"]} if got.get("missing") else {})}
         return {"run_id": got["run_id"]}
+
+
+def _authority(item: Mapping[str, Any], decision: Optional[Mapping[str, Any]]) -> dict[str, Any]:
+    return {"work_item_id": item["id"], "act_id": (decision or {}).get("act_id")}
 
 
 # ── the handoff packet ───────────────────────────────────────────────────────────────────────
@@ -131,7 +163,8 @@ def launch_workflow(connection: Connection, item: Mapping[str, Any], *, squad: M
     got = launchers.start(connection, project_id=item["project_id"], actor=party_id(lead),
                           workflow_key=key, directive=_directive(p),
                           title=clean_text(p.get("do") or item["title"], 120),
-                          inputs={"ambient_work_item_id": item["id"], "handoff": p})
+                          inputs={"ambient_work_item_id": item["id"], "handoff": p},
+                          authority=_authority(item, decision))
     if not got.get("run_id"):
         why = got.get("error") or "the run did not start"
         squad_memory.note(connection, item["id"], actor=lead,
@@ -161,7 +194,8 @@ def convene_panel(connection: Connection, item: Mapping[str, Any], *,
     got = launchers.convene(connection, project_id=item["project_id"], actor=party_id(lead),
                             directive=_directive({**p, "do": question}), seats=seats,
                             objective=f"A decision the {squad['title']} can act on for: "
-                                      f"{item['title']}")
+                                      f"{item['title']}",
+                            authority=_authority(item, decision))
     if not got.get("meeting_run_id"):
         why = got.get("error") or "the panel did not start"
         squad_memory.note(connection, item["id"], actor=lead,
