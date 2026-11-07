@@ -1881,6 +1881,9 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
                     connection, project_id, f"{owner}/{repo}",
                     lambda p: github.read_file(owner, repo,
                                                f"{workdir_}/{p}" if workdir_ else p, commit))
+            from .project_experience.demo_logins import DISCOVERY_RULE
+
+            summary["demo_logins_rule"] = DISCOVERY_RULE
             if found:
                 summary["demo_logins"] = found
                 summary["demo_logins_from"] = "repository"

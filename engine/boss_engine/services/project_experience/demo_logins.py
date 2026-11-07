@@ -44,17 +44,101 @@ def _label_for(user: str) -> str:
     return re.sub(r"[._-]+", " ", head).strip().title() or user
 
 
-def users_from_text(blobs: Iterable[str]) -> list[dict[str, str]]:
-    """Demo users named in seed files / login hints, in first-seen order (at most 8)."""
+#: WHICH READ NAMED THEM. 2 = only user/login records and a README's sign-in section (an
+#: e-mail inside a ticket fixture or sample data is not a user). Deploys and onboarding runs
+#: recorded by an older read are read again (backfill_deployed_users) or not trusted.
+DISCOVERY_RULE = 2
+#: A credential beside the e-mail, in the same record: what makes it a sign-in, not sample text.
+_CREDENTIAL = re.compile(r"(pass(?:word|wd|phrase)?|pwd|DEMO_PASSWORD|credentials?|log ?in|sign.?in|role)"
+                         r"\s*[\"']?\s*[:=|]", re.I)
+#: A file that holds users by its name (seedDemoUsers.mjs, users.json, login.html, auth.ts): each
+#: e-mail in it is a user. Any other seed / fixture file (seedDemoTickets.mjs) names a user only
+#: where a credential sits in the same record.
+_USER_FILE = re.compile(r"(users?|login|signin|sign-in|auth|accounts?|credentials?|people|members?)"
+                        r"[^/]*$", re.I)
+#: A README section that lists who signs in ("## Demo logins", "### Credentials", "Test users").
+_SIGN_IN_HEADING = re.compile(r"^\s{0,3}(#{1,6}\s+|\*\*)(.*?(log ?ins?|credentials?|sign.?in|"
+                              r"(demo|test|seed(ed)?|sample)\s+(users?|accounts?)|accounts?|users?))\b",
+                              re.I)
+_HEADING = re.compile(r"^\s{0,3}(#{1,6}\s+|\*\*[^*]+\*\*\s*$)")
+#: How far around an e-mail its own record reaches (a JS object, a YAML item, a table row).
+_RECORD_REACH = 160
+
+
+def _record_around(blob: str, start: int, end: int) -> str:
+    """The text of the record an e-mail sits in: out to a blank line or `_RECORD_REACH` chars."""
+    lo = max(0, start - _RECORD_REACH)
+    hi = min(len(blob), end + _RECORD_REACH)
+    before = blob[lo:start]
+    after = blob[end:hi]
+    cut = before.rfind("\n\n")
+    before = before[cut + 2:] if cut >= 0 else before
+    cut = after.find("\n\n")
+    after = after[:cut] if cut >= 0 else after
+    # Another record's e-mail bounds this one (a list of users side by side).
+    other = DEMO_EMAIL.search(after)
+    if other:
+        after = after[:other.start()]
+    prior = list(DEMO_EMAIL.finditer(before))
+    if prior:
+        before = before[prior[-1].end():]
+    return before + after
+
+
+def _readme_sections(blob: str) -> list[str]:
+    """The parts of a README under a sign-in heading, each to the next heading."""
+    out: list[str] = []
+    take: list[str] | None = None
+    for line in (blob or "").splitlines():
+        if _HEADING.match(line):
+            if take is not None:
+                out.append("\n".join(take))
+            take = [] if _SIGN_IN_HEADING.match(line) else None
+            continue
+        if take is not None:
+            take.append(line)
+    if take is not None:
+        out.append("\n".join(take))
+    return out
+
+
+def users_from_files(files: Iterable[tuple[str, str]]) -> list[dict[str, str]]:
+    """Demo users, in first-seen order (at most 8), from `(path, text)` pairs.
+
+    A USER IS A SIGN-IN, NOT AN E-MAIL. Only two shapes name one:
+      * a README's sign-in section ("## Demo logins", "Credentials", "Test users"): its e-mails;
+      * a seed / login / fixture file: an e-mail whose own record carries a credential
+        (`password:`, `DEMO_PASSWORD`, `role:`…) — a user row, never a ticket's body text; in a file
+        named for its users (seedDemoUsers.mjs, users.json, login.html) every e-mail is one.
+    `seedDemoTickets.mjs`'s "Seed fixture — safe to ignore. demo@example.test" names nobody.
+    """
     seen: dict[str, dict[str, str]] = {}
-    for blob in blobs:
-        for found in DEMO_EMAIL.findall(blob or ""):
-            user = found.lower()
-            if user not in seen:
-                seen[user] = {"user": user, "label": _label_for(user), "password_key": DEFAULT_KEY}
-            if len(seen) >= 8:
-                return list(seen.values())
+
+    def add(user: str) -> bool:
+        user = user.lower()
+        if user not in seen:
+            seen[user] = {"user": user, "label": _label_for(user), "password_key": DEFAULT_KEY}
+        return len(seen) >= 8
+
+    for path, blob in files:
+        blob = blob or ""
+        if path.lower().endswith((".md", ".markdown", ".txt", ".rst")):
+            for section in _readme_sections(blob):
+                for found in DEMO_EMAIL.findall(section):
+                    if add(found):
+                        return list(seen.values())
+            continue
+        named_for_users = bool(_USER_FILE.search(path.rsplit("/", 1)[-1])) if path else False
+        for m in DEMO_EMAIL.finditer(blob):
+            if named_for_users or _CREDENTIAL.search(_record_around(blob, m.start(), m.end())):
+                if add(m.group(1)):
+                    return list(seen.values())
     return list(seen.values())
+
+
+def users_from_text(blobs: Iterable[str]) -> list[dict[str, str]]:
+    """Kept for callers holding text without a path: read as code (credential beside it)."""
+    return users_from_files(("", b) for b in blobs)
 
 
 def scan_checkout(root: Any, paths: list[str]) -> list[dict[str, str]]:
@@ -64,14 +148,14 @@ def scan_checkout(root: Any, paths: list[str]) -> list[dict[str, str]]:
     base = Path(root)
     wanted = [p for p in paths if SEED_PATH.search(p) and "node_modules" not in p][:MAX_SCAN_FILES]
     wanted += [p for p in ("README.md", "readme.md") if p in paths]
-    blobs = []
+    files = []
     for rel in wanted:
         try:
             with open(base / rel, "rb") as fh:
-                blobs.append(fh.read(MAX_SCAN_BYTES).decode("utf-8", "replace"))
+                files.append((rel, fh.read(MAX_SCAN_BYTES).decode("utf-8", "replace")))
         except OSError:
             continue
-    return users_from_text(blobs)
+    return users_from_files(files)
 
 
 def seed_paths(connection: Connection, project_id: str, repository: str) -> list[str]:
@@ -90,15 +174,15 @@ def discover_in_repository(connection: Connection, project_id: str, repository: 
                            read: Any) -> list[dict[str, str]]:
     """The demo users an app names in its own files at the commit being deployed: `read(path)`
     returns a file's text or None (the deploy's GitHub reader). Names only; never raises."""
-    blobs = []
+    files = []
     for path in seed_paths(connection, project_id, repository):
         try:
             got = read(path)
         except Exception:  # noqa: BLE001 — a missing or unreadable file names nobody
             got = None
         if got:
-            blobs.append(str(got)[:MAX_SCAN_BYTES])
-    return users_from_text(blobs)
+            files.append((path, str(got)[:MAX_SCAN_BYTES]))
+    return users_from_files(files)
 
 
 def backfill_deployed_users(engine: Any, settings: Any, *, read_for: Any = None,
@@ -119,9 +203,17 @@ def backfill_deployed_users(engine: Any, settings: Any, *, read_for: Any = None,
             "s.manifest FROM stack_deployments s WHERE s.status = 'healthy' "
             "AND (CAST(:p AS TEXT) IS NULL OR s.project_id = :p) "
             "ORDER BY s.target_id, s.created_at DESC"), {"p": project_id}).mappings().all()
-    todo = [dict(r) for r in rows
-            if not (as_json(r["manifest"], {}) or {}).get("demo_logins")
-            and (as_json(r["manifest"], {}) or {}).get("generated_env_keys")
+    def _due(m: dict) -> bool:
+        # Never named, or named from the repository by an older read (which took any e-mail in
+        # a fixture): read again with today's rule.
+        if not m.get("generated_env_keys"):
+            return False
+        if not m.get("demo_logins"):
+            return int(m.get("demo_logins_rule") or 0) < DISCOVERY_RULE
+        return (m.get("demo_logins_from") == "repository"
+                and int(m.get("demo_logins_rule") or 0) < DISCOVERY_RULE)
+
+    todo = [dict(r) for r in rows if _due(as_json(r["manifest"], {}) or {})
             and "/" in str(r["repository"] or "")][:limit]
     named: list[str] = []
     for r in todo:
@@ -138,14 +230,22 @@ def backfill_deployed_users(engine: Any, settings: Any, *, read_for: Any = None,
                 found = discover_in_repository(c, r["project_id"], str(r["repository"]), read)
         except Exception:  # noqa: BLE001 — a repo we cannot read names nobody
             continue
-        if not found:
+        had = bool((as_json(r["manifest"], {}) or {}).get("demo_logins"))
+        if not found and not had:
+            # Nobody to name; remember the read so it is not repeated at every boot.
+            with engine.begin() as c:
+                c.execute(_text(
+                    "UPDATE stack_deployments SET manifest = COALESCE(manifest, '{}'::jsonb) || "
+                    "CAST(:m AS JSONB) WHERE id = :i"),
+                    {"i": r["id"], "m": json.dumps({"demo_logins_rule": DISCOVERY_RULE})})
             continue
         with engine.begin() as c:
             c.execute(_text(
                 "UPDATE stack_deployments SET manifest = COALESCE(manifest, '{}'::jsonb) || "
                 "CAST(:m AS JSONB) WHERE id = :i"),
                 {"i": r["id"], "m": json.dumps({"demo_logins": found,
-                                                "demo_logins_from": "repository"})})
+                                                "demo_logins_from": "repository",
+                                                "demo_logins_rule": DISCOVERY_RULE})})
         named.append(str(r["id"]))
     return named
 
@@ -186,7 +286,10 @@ def _discovered_users(connection: Connection, project_id: str) -> list[dict[str,
         "SELECT facts FROM project_onboarding_runs WHERE project_id = :p "
         "AND facts ? 'demo_users' ORDER BY started_at DESC LIMIT 1"),
         {"p": project_id}).mappings().first()
-    users = (as_json(row["facts"], {}) or {}).get("demo_users") if row else None
+    facts = (as_json(row["facts"], {}) or {}) if row else {}
+    if int(facts.get("demo_users_rule") or 0) < DISCOVERY_RULE:
+        return []   # read by an older rule; the next onboarding pass reads it again
+    users = facts.get("demo_users")
     return [_person(u) for u in users or [] if isinstance(u, dict) and u.get("user")]
 
 
@@ -198,7 +301,10 @@ def _deployed_users(connection: Connection, project_id: str) -> list[dict[str, s
         "WHERE t.project_id = :p AND s.manifest->>'demo_logins_from' = 'repository' "
         "ORDER BY s.created_at DESC LIMIT 1"), {"p": project_id}).scalars().all()
     for manifest in rows:
-        listed = (as_json(manifest, {}) or {}).get("demo_logins") or []
+        summary = as_json(manifest, {}) or {}
+        if int(summary.get("demo_logins_rule") or 0) < DISCOVERY_RULE:
+            return []   # an older read took e-mails out of fixtures: the backfill reads it again
+        listed = summary.get("demo_logins") or []
         return [_person(d) for d in listed if isinstance(d, dict) and d.get("user")]
     return []
 
@@ -342,5 +448,5 @@ def record_reveal(connection: Connection, project_id: str, actor: str, env: str,
          {"env": env, "logins": count})
 
 
-__all__ = ["DEFAULT_KEY", "backfill_deployed_users", "discover_in_repository", "environments", "listing", "record_reveal", "reveal", "reveal_href",
+__all__ = ["DEFAULT_KEY", "DISCOVERY_RULE", "users_from_files", "backfill_deployed_users", "discover_in_repository", "environments", "listing", "record_reveal", "reveal", "reveal_href",
            "rows_for", "scan_checkout", "seed_paths", "users", "users_from_text"]

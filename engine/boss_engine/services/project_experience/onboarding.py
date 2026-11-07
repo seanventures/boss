@@ -147,6 +147,12 @@ class Probes:
         return root, files
 
 
+def _demo_rule() -> int:
+    from .demo_logins import DISCOVERY_RULE
+
+    return DISCOVERY_RULE
+
+
 def _safe(fn: Callable[[], Any], default: Any) -> Any:
     try:
         return fn()
@@ -386,6 +392,7 @@ def _pass(engine: Any, settings: Any, row: Mapping[str, Any], probes: Probes) ->
         demo_users = _safe(lambda: scan_checkout(root, paths), [])
     _record(engine, run_id, items=[_deploy_item(engine, project_id), secrets_item],
             facts={"secrets": secret_names, "demo_users": demo_users,
+                   "demo_users_rule": _demo_rule(),
                    "stack": stack, "ci": ci})
 
     # BACKLOG AND FIRST WORK.

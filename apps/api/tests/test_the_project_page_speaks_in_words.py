@@ -339,7 +339,7 @@ def test_a_deploy_that_found_users_names_them_everywhere(world, client, engine, 
             "UPDATE stack_deployments SET manifest = CAST(:m AS JSONB) WHERE project_id = :t"),
             {"t": helpdesk["id"], "m": json.dumps({
                 "name": "helpdesk", "kind": "compose", "generated_env_keys": ["DEMO_PASSWORD"],
-                "demo_logins_from": "repository",
+                "demo_logins_from": "repository", "demo_logins_rule": 2,
                 "demo_logins": [{"user": "admin@demo.test", "label": "Admin",
                                  "password_key": "DEMO_PASSWORD"}]})})
         c.execute(text(
@@ -350,6 +350,66 @@ def test_a_deploy_that_found_users_names_them_everywhere(world, client, engine, 
     o = _get(world, client, f"/v1/projects/{helpdesk['id']}/overview")
     assert o["try_it"]["users_from"] == "repository"
     assert [d_["user"] for d_ in o["try_it"]["demo_logins"]] == ["admin@demo.test"]
+
+
+TICKETS_FIXTURE = (
+    'export const DEMO_TICKETS = [\n'
+    '  { subject: "Printer on floor 3 jams", body: "Seed fixture — safe to ignore. demo@example.test",\n'
+    '    status: "open", priority: "high" },\n'
+    '  { subject: "VPN drops", requester: "demo@example.test", status: "pending" },\n'
+    '];\n')
+
+
+def test_an_email_inside_ticket_fixtures_is_never_a_demo_user():
+    """helpdesk-ai-demo's server/seedDemoTickets.mjs names "demo@example.test" in a ticket's body
+    ("Seed fixture — safe to ignore."): sample data, not a sign-in. Users come only from files
+    named for users, records that carry a credential, or a README's sign-in section."""
+    from boss_engine.services.project_experience.demo_logins import users_from_files
+
+    assert users_from_files([("server/seedDemoTickets.mjs", TICKETS_FIXTURE)]) == []
+    readme = ("# HelpDesk\nWrite to help@example.com.\n\n## Demo logins\n\n"
+              "| Role | User |\n|---|---|\n| Admin | admin@demo.test |\n\n## Support\nops@example.test\n")
+    users_file = 'export const USERS = [{ email: "agent@demo.test" }];'
+    seed = 'await db.users.insert({ email: "customer@demo.test", password: process.env.DEMO_PASSWORD });'
+    found = users_from_files([("server/seedDemoTickets.mjs", TICKETS_FIXTURE), ("README.md", readme),
+                              ("server/seedDemoUsers.mjs", users_file), ("server/seed.mjs", seed)])
+    assert [u["user"] for u in found] == ["admin@demo.test", "agent@demo.test", "customer@demo.test"]
+
+
+def test_a_deploy_named_by_the_old_read_is_read_again_and_the_fixture_email_goes(world, client,
+                                                                                engine, helpdesk):
+    """The laptop's case: a deploy recorded "Demo · demo@example.test" from the tickets fixture.
+    Until it is read again it names nobody; the repair reads it with today's rule."""
+    from boss_engine.services.project_experience import demo_logins
+
+    with engine.begin() as c:
+        c.execute(text("UPDATE stack_deployments SET manifest = CAST(:m AS JSONB) WHERE project_id = :p"),
+                  {"p": helpdesk["id"], "m": json.dumps({
+                      "name": "helpdesk", "kind": "compose", "generated_env_keys": ["DEMO_PASSWORD"],
+                      "demo_logins_from": "repository",
+                      "demo_logins": [{"user": "demo@example.test", "label": "Demo",
+                                       "password_key": "DEMO_PASSWORD"}]})})
+        c.execute(text("UPDATE project_onboarding_runs SET facts = facts - 'demo_users_rule' "
+                       "|| CAST(:f AS JSONB) WHERE project_id = :p"),
+                  {"p": helpdesk["id"], "f": json.dumps({"demo_users": [{"user": "demo@example.test"}]})})
+        c.execute(text(
+            "INSERT INTO kg_nodes (id, project_id, kind, node_key, name, path, repo) VALUES "
+            "(:i, :p, 'file', :k, 'seedDemoTickets.mjs', 'server/seedDemoTickets.mjs', :r)"),
+            {"i": f"kgn_{uuid.uuid4().hex[:10]}", "p": helpdesk["id"], "k": f"file:{uuid.uuid4().hex}",
+             "r": REPO})
+        people, _ = demo_logins.users(c, helpdesk["id"])
+    assert "demo@example.test" not in [p["user"] for p in people]
+
+    def read_for(_c, _p, _owner, _repo):
+        return lambda path: TICKETS_FIXTURE if path.endswith("seedDemoTickets.mjs") else None
+
+    demo_logins.backfill_deployed_users(engine, None, read_for=read_for, project_id=helpdesk["id"])
+    with engine.begin() as c:
+        manifest = c.execute(text("SELECT manifest FROM stack_deployments WHERE id = :i"),
+                             {"i": helpdesk["stack_deployment_id"]}).scalar()
+    assert manifest["demo_logins_rule"] == demo_logins.DISCOVERY_RULE
+    o = _get(world, client, f"/v1/projects/{helpdesk['id']}/overview")
+    assert "demo@example.test" not in [d_["user"] for d_ in o["try_it"]["demo_logins"]]
 
 
 # ── Projects list: no false "Onboarding" claim ──────────────────────────────────────────────

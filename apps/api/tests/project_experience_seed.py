@@ -618,7 +618,7 @@ def seed_plan(db, project_id: str, *, now: datetime | None = None, actor: str = 
         "CAST(:f AS JSONB), CAST(:b AS JSONB), CAST(:w AS JSONB), :s, :e, :e)"),
         {"i": run_id, "p": project_id, "c": json.dumps(checklist), "d": json.dumps(discover),
          "f": json.dumps({"demo_users": [{"user": d["user"], "label": d["label"]}
-                                         for d in DEMO_USERS]}),
+                                         for d in DEMO_USERS], "demo_users_rule": 2}),
          "b": json.dumps(cands), "w": json.dumps({"label": cands[0]["label"],
                                                    "detail": cands[0]["detail"],
                                                    "source": cands[0]["source"],
