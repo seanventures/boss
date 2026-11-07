@@ -31,7 +31,7 @@ from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, Field
 
 from boss_engine.db import begin
-from boss_engine.identity import P, Scope, permit
+from boss_engine.identity import P, Scope, authenticated, permit
 
 
 class RulesBody(BaseModel):
@@ -230,12 +230,38 @@ def build_app_alerts_router(
                    app: Optional[str] = None, state: str = "firing", since: str = "7d",
                    severity: Optional[str] = None, source: Optional[str] = None,
                    flapping: Optional[bool] = None, acked: Optional[bool] = None,
-                   attention: bool = False):
+                   attention: bool = False, scope: str = ""):
         """Every app's and service's alerts (filters: app or service, state, severity, source
-        kind, flapping, acked), with the open incidents in the same words every card uses."""
+        kind, flapping, acked), with the open incidents in the same words every card uses.
+        `scope=project` is the project's own slice (its Health tab): its apps, never BOSS's
+        platform alerts — the same rows Observability › Alerts lists for this project."""
         return _read(project_id, request, response, lambda c, pid: view.alerts(
             c, pid, target_id=app or None, state=state, since=since, severity=severity,
-            source=source or None, flapping=flapping, acked=acked, attention=attention))
+            source=source or None, flapping=flapping, acked=acked, attention=attention,
+            apps_only=scope == "project"))
+
+    @router.get("/v1/alerts/all")
+    @authenticated(note="Every app of every project the caller may read: visible_project_rows "
+                        "(project:read) narrowed to observability:read per project.")
+    def all_alerts_across(request: Request, response: Response,
+                          app: Optional[str] = None, state: str = "firing", since: str = "7d",
+                          severity: Optional[str] = None, source: Optional[str] = None,
+                          flapping: Optional[bool] = None, acked: Optional[bool] = None,
+                          attention: bool = False):
+        """Observability › Alerts: each readable project's Health slice (the same rows), tagged
+        with its project, plus BOSS's own platform alerts once."""
+        from apps.api.app.main import visible_project_rows
+        from boss_engine.identity import viewer as _viewer
+
+        projects = [{"id": str(r["id"]), "name": str(r["name"] or r["id"])}
+                    for r in visible_project_rows(request)
+                    if _viewer.may(str(r["id"]), P.OBSERVABILITY_READ.value) is not False]
+        with begin(engine) as connection:
+            body = view.alerts_across(
+                connection, projects, target_id=app or None, state=state, since=since,
+                severity=severity, source=source or None, flapping=flapping, acked=acked,
+                attention=attention)
+        return etagged(request, response, jsonable_encoder(body))
 
     @router.get("/v1/apps/{target_id}/metric-names")
     @permit(P.OBSERVABILITY_READ, scope=Scope.project(query="project_id"))

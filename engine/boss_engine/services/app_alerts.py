@@ -1583,11 +1583,78 @@ def _incident_title(target: dict, a: dict, window: Optional[dict] = None,
             f"{ann.get('summary') or a['alertname']}{val}")[:200]
 
 
+#: A rule state that says nothing either way: too few requests to judge, or no data at all.
+QUIET_STATES = ("too_little", "no_data")
+#: QUIET HOLD (HelpDesk AI 2026-11-07, "Recovered at 07:37; the incident is still open" for
+#: hours): a rule that went quiet after its alerts cleared holds the incident, because quiet is
+#: not recovery — but only for this long. A staging app nobody calls can read quiet forever, and
+#: an incident nobody works must not stay open on that. After the hold, with no breach since,
+#: no response running and no squad on it, the monitor closes it and says why; a new breach
+#: opens it again.
+QUIET_HOLD = timedelta(minutes=30)
+
+
+def _rules_behind(connection, incident_id: str) -> list[dict[str, Any]]:
+    return [dict(r) for r in connection.execute(sql(
+        "SELECT DISTINCT r.id, r.subject_id, r.last_state, r.last_eval_at, r.enabled "
+        "FROM app_alerts a JOIN app_alert_rules r ON r.id = a.rule_id OR (a.rule_id IS NULL "
+        " AND r.subject_id = a.subject_id AND r.kind = a.rule_kind) "
+        "WHERE a.incident_id = :i AND a.source_kind = 'rule'"), {"i": incident_id}).mappings().all()]
+
+
+def _last_cleared(connection, incident_id: str) -> Optional[datetime]:
+    return connection.execute(sql(
+        "SELECT max(cleared_at) FROM app_alerts WHERE incident_id = :i"), {"i": incident_id}).scalar()
+
+
+def why_open(connection, project_id: str, incident_id: str, *,
+             now: Optional[datetime] = None) -> Optional[dict[str, Any]]:
+    """WHY AN INCIDENT WITH NOTHING FIRING IS STILL OPEN, and who must act — the one answer the
+    monitor closes by and every card says (app_alerts_view.incident_states). None while an alert
+    in it fires or is pending. {key, word, who, closes_at}:
+
+    * response — a response run still has it; it closes by its own verification
+    * squad    — the incident squad works it; its recovery check closes it
+    * reported — reported, not raised by BOSS's monitor: a person closes it
+    * quiet    — a rule reads quiet (too little traffic, no data): BOSS closes it on its own at
+                 `closes_at` (QUIET_HOLD after the last alert cleared) unless it fires again
+    * next     — every rule reads OK: the next evaluation closes it"""
+    from . import incident_response
+
+    now = now or _now()
+    if connection.execute(sql(
+            "SELECT 1 FROM app_alerts WHERE incident_id = :i AND state IN ('pending', 'firing') "
+            "AND inhibited_by IS NULL LIMIT 1"), {"i": incident_id}).first():
+        return None
+    run = incident_response._response_in_flight(connection, project_id, incident_id)
+    if run:
+        return {"key": "response", "who": "boss", "closes_at": None,
+                "word": "a response is still running; it closes the incident once its fix "
+                        "is verified"}
+    if incident_response.squad_working(connection, incident_id):
+        return {"key": "squad", "who": "squad", "closes_at": None,
+                "word": "the SRE squad still has it; it closes when its recovery check passes"}
+    ctx = _json(connection.execute(sql("SELECT finalize_ctx FROM incidents WHERE id = :i"),
+                                   {"i": incident_id}).scalar(), {}) or {}
+    behind = _rules_behind(connection, incident_id)
+    if ctx.get("alert") in (None, {}) or not behind:
+        return {"key": "reported", "who": "person", "closes_at": None,
+                "word": "BOSS's monitor did not raise it, so a person closes it"}
+    if any(r["enabled"] and r["last_state"] in QUIET_STATES for r in behind):
+        until = (_last_cleared(connection, incident_id) or now) + QUIET_HOLD
+        return {"key": "quiet", "who": "boss", "closes_at": _iso(until),
+                "word": "too little traffic to confirm it; it closes on its own unless it "
+                        "fires again"}
+    return {"key": "next", "who": "boss", "closes_at": None,
+            "word": "its rules read OK; the next check closes it"}
+
+
 def _maybe_resolve_incidents(connection, target: dict, now: datetime) -> list[dict[str, Any]]:
     """An incident the monitor raised resolves when none of its alerts is open any more and
     every rule behind them now reads OK on enough traffic. Quiet is not recovery: a rule that
-    went silent (too little traffic, no data) HOLDS the incident until it reads OK. And a
-    running response closes its incident by its own verification, never the monitor."""
+    went silent (too little traffic, no data) HOLDS the incident until it reads OK — for
+    QUIET_HOLD at most, then it closes saying why. And a running response or a working squad
+    closes its incident by its own verification, never the monitor."""
     from . import incident_response
 
     out = []
@@ -1603,21 +1670,26 @@ def _maybe_resolve_incidents(connection, target: dict, now: datetime) -> list[di
             "AND state IN ('pending', 'firing') AND inhibited_by IS NULL"), {"i": inc_id}).scalar()
         if still:
             continue
-        behind = connection.execute(sql(
-            "SELECT DISTINCT r.id, r.subject_id, r.last_state, r.last_eval_at, r.enabled "
-            "FROM app_alerts a JOIN app_alert_rules r ON r.id = a.rule_id OR (a.rule_id IS NULL "
-            " AND r.subject_id = a.subject_id AND r.kind = a.rule_kind) "
-            "WHERE a.incident_id = :i AND a.source_kind = 'rule'"), {"i": inc_id}).mappings().all()
+        behind = _rules_behind(connection, inc_id)
         mirrored = connection.execute(sql(
             "SELECT count(*) FROM app_alerts WHERE incident_id = :i AND source_kind = 'external'"),
             {"i": inc_id}).scalar()
         if not behind and not mirrored:
             continue
-        if behind and not all(
-                (not r["enabled"]) or (r["last_state"] == "ok" and (
-                    r["subject_id"] != target["id"] or r["last_eval_at"] == now))
-                for r in behind):
-            continue
+
+        def reads(r: dict, states: tuple[str, ...]) -> bool:
+            return (not r["enabled"]) or (r["last_state"] in states and (
+                r["subject_id"] != target["id"] or r["last_eval_at"] == now))
+
+        quiet = False
+        if behind and not all(reads(r, ("ok",)) for r in behind):
+            # QUIET HOLD over: every rule reads OK or quiet, and QUIET_HOLD has passed since
+            # the last alert cleared with no breach. Closed below, unless someone works it.
+            cleared = _last_cleared(connection, inc_id)
+            if not (all(reads(r, ("ok",) + QUIET_STATES) for r in behind)
+                    and cleared is not None and now - cleared >= QUIET_HOLD):
+                continue
+            quiet = True
         inc = connection.execute(sql("SELECT id, finalize_ctx FROM incidents WHERE id = :i"),
                                  {"i": inc_id}).mappings().first()
         ctx = _json(inc["finalize_ctx"], {}) or {}
@@ -1641,6 +1713,13 @@ def _maybe_resolve_incidents(connection, target: dict, now: datetime) -> list[di
                                                  "word": "Every alert in it resolved"}, at=now)
             out.append({"incident_id": inc_id, "action": "resolved", "event_id": None})
             continue
+        if quiet:
+            minutes = int(QUIET_HOLD.total_seconds() // 60)
+            incident_response._evidence(connection, inc_id, "note", ref="quiet_hold", payload={
+                "text": f"Closed by BOSS's monitor: no breach for {minutes} min after every "
+                        "alert in it cleared, too little traffic to read OK, and no squad or "
+                        "response working it. A new breach opens it again.",
+                "quiet_hold_min": minutes}, at=now)
         rule = connection.execute(sql(
             "SELECT r.* FROM app_alerts a JOIN app_alert_rules r ON r.id = a.rule_id "
             "WHERE a.incident_id = :i ORDER BY a.cleared_at DESC NULLS LAST LIMIT 1"),

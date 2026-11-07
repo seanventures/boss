@@ -358,7 +358,7 @@ def alerts(connection: Connection, project_id: str, *, now: Optional[datetime] =
 #: The squad's lifecycle as a 4-station strip: Alert → Triage → Fix → Verify.
 def _mini(lifecycle: str, outcome: Optional[str]) -> list[dict[str, str]]:
     done_to = {"proposed": 1, "claimed": 1, "in_progress": 2, "needs_you": 2,
-               "resolved": 4, "dismissed": 4}.get(lifecycle, 1)
+               "verifying": 3, "resolved": 4, "dismissed": 4}.get(lifecycle, 1)
     names = ("Alert", "Triage", "Fix", "Verify")
     out = []
     for i, name in enumerate(names):
@@ -508,7 +508,10 @@ def incidents(connection: Connection, project_id: str, *, limit: int = 10
         life = str(r["lifecycle"] or "proposed")
         state = ("resolved" if life in ("resolved", "dismissed") else
                  "needs_you" if life == "needs_you" else "running")
-        if r["incident_id"]:
+        if r["incident_id"] and state != "resolved":
+            # A RESOLVED squad item does not cover an incident that is still open (HelpDesk AI
+            # 2026-11-07: "resolved by the squad" here, "the incident is still open" in
+            # Observability): that incident is listed below with why it is open.
             covered.add(str(r["incident_id"]))
         ended = r["updated_at"] if state == "resolved" else None
         out.append({"id": r["id"], "label": _short(r["title"]), "detail": r["title"],
@@ -524,16 +527,24 @@ def incidents(connection: Connection, project_id: str, *, limit: int = 10
         "SELECT id, title, first_seen FROM incidents WHERE project_id = :p "
         "AND status NOT IN ('resolved', 'dismissed') ORDER BY last_seen DESC LIMIT :n"),
         {"p": project_id, "n": limit}).mappings().all()
+    from ..app_alerts import why_open
+
     for r in open_rows:
         if str(r["id"]) in covered:
             continue
+        # THE SAME WORDS AS OBSERVABILITY (app_alerts.why_open): why it is still open and who
+        # acts; "nobody has picked it up" only while an alert in it still fires.
+        why = why_open(connection, project_id, str(r["id"]))
+        state = "needs_you" if not why or why["who"] == "person" else "running"
         out.append({"id": r["id"], "label": _short(r["title"]), "detail": r["title"],
-                    "state": "needs_you", "app": None, "since": iso(r["first_seen"]),
+                    "state": state, "app": None, "since": iso(r["first_seen"]),
                     "ended_at": None, "duration_s": None,
-                    "outcome_word": "nobody has picked it up",
+                    "outcome_word": f"recovered; {why['word']}" if why else
+                    "nobody has picked it up",
+                    "closes_at": why.get("closes_at") if why else None,
                     "incident_id": r["id"],
                     "graph_href": href(project_id, area="observability", inc=r["id"]),
-                    "mini": _mini("needs_you", None)})
+                    "mini": _mini("verifying" if state == "running" else state, None)})
     # Newest first (screen 12: this morning's 5xx above Wednesday's slow list).
     out.sort(key=lambda i: str(i.get("since") or ""), reverse=True)
     return out[:limit]

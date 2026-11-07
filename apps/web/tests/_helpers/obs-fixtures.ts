@@ -438,7 +438,7 @@ export function mockObsFetch(bodies: ObsBodies = {}) {
       return json(bodies.rules ? bodies.rules(id) : rulesWire(id));
     }
     if (/^\/v1\/apps\/[^/]+\/alerts$/.test(path)) return json(bodies.history ? bodies.history(u) : historyWire());
-    if (path === "/v1/alerts") return json(bodies.alerts ? bodies.alerts(u) : allAlertsWire());
+    if (path === "/v1/alerts" || path === "/v1/alerts/all") return json(bodies.alerts ? bodies.alerts(u) : allAlertsWire());
     if (path === "/v1/observability/apps") return json(bodies.pulse ?? pulseWire());
     if (path === "/v1/observability/apps/all") return json(bodies.appsAll ?? appsAllWire());
     if (path.startsWith("/v1/observability/apps/")) {

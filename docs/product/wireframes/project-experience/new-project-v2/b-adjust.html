@@ -1,0 +1,186 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Adjust in place</title>
+<link rel="stylesheet" href="../console.css"><link rel="stylesheet" href="../project.css"><link rel="stylesheet" href="np2.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/fill/style.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/bold/style.css">
+</head>
+<body data-active="projects" data-crumb="Projects|Add project|Adjust">
+<div id="content">
+
+<div class="page-h"><h1>Adjust in place</h1><span class="faint" style="font-size:.62rem">Every box on <i>Add a project</i> opens one of these, anchored under it. Optional: the picks are already made.</span></div>
+
+<!-- the summary, as on screen a, with Connectors open -->
+<div class="np2-sum">
+  <div class="np2-flow">
+    <div class="np2-node"><span class="lbl">Captain<i class="ph ph-caret-down"></i></span><div class="row"><span class="face" data-a="helm" data-size="s"></span><span class="v">Helm</span></div></div>
+    <div class="np2-node"><span class="lbl">Stack<span class="auto">AUTO</span><i class="ph ph-caret-down"></i></span><span class="v">FastAPI + React</span></div>
+    <div class="np2-node" data-open><span class="lbl">Connectors<i class="ph ph-caret-up"></i></span><div class="np2-cx"><span data-on><i class="ph ph-google-logo"></i>Google</span><span data-on><i class="ph ph-envelope-simple"></i>Email</span></div></div>
+    <div class="np2-node" data-t="you"><span class="lbl">Workflow<i class="ph ph-caret-down"></i></span><span class="v">Standard</span><span class="s">15 · <b style="color:var(--amber)">4 ✋</b></span></div>
+    <div class="np2-node"><span class="lbl">Code<i class="ph ph-caret-down"></i></span><span class="v mono" style="font-size:.58rem">paramg/helpdesk-ai</span></div>
+    <div class="np2-node"><span class="lbl">Staging<i class="ph ph-caret-down"></i></span><span class="v">boss-1 · :8005</span></div>
+  </div>
+</div>
+
+<div class="pops">
+  <!-- 1 CONNECTORS -->
+  <section class="pop">
+    <div class="pop-h"><span class="ico" data-c="teal"><i class="ph ph-plugs-connected"></i></span><b>Connectors</b><span class="anchor"><i class="ph ph-arrow-up"></i>Connectors</span></div>
+    <span class="faint" style="font-size:.54rem">Fit FastAPI + React · up to 6 · <span style="color:var(--green)">✓ suggested from your sentence</span></span>
+    <div class="cn-grid">
+      <div class="cn" data-on title="Suggested: “sign in with Google”"><i class="ph ph-google-logo"></i><span>Login · Google<small>“sign in with Google”</small></span></div>
+      <div class="cn"><i class="ph ph-github-logo"></i><span>Login · GitHub<small>OAuth</small></span></div>
+      <div class="cn"><i class="ph ph-identification-badge"></i><span>Login · BOSS<small>your org’s users</small></span></div>
+      <div class="cn" data-on title="Suggested: “customers email in”"><i class="ph ph-envelope-simple"></i><span>Email · Resend<small>“email in”</small></span></div>
+      <div class="cn"><i class="ph ph-envelope"></i><span>Email · SMTP<small>your server</small></span></div>
+      <div class="cn"><i class="ph ph-credit-card"></i><span>Stripe Checkout<small>payments</small></span></div>
+      <div class="cn"><i class="ph ph-paypal-logo"></i><span>PayPal Checkout<small>payments</small></span></div>
+    </div>
+    <div class="pop-f"><a class="link-chip" title="Build from the starter's tested reference, its tests as a gate">Build from its reference ↗</a><span class="wf-spacer"></span><span class="btn" data-size="s">Done</span></div>
+  </section>
+
+  <!-- 2 WORKFLOW -->
+  <section class="pop">
+    <div class="pop-h"><span class="ico" data-c="amber"><i class="ph ph-flow-arrow"></i></span><b>Workflow</b><span class="anchor"><i class="ph ph-arrow-up"></i>Workflow</span></div>
+    <div class="wfp" role="radiogroup" aria-label="Path">
+      <div class="wfp-c"><b>Fast fix</b><span class="mini"><i></i><i></i><i></i></span><small>3 steps · no panel</small></div>
+      <div class="wfp-c"><b>Small</b><span class="mini"><i></i><i></i><i data-y></i><i></i><i></i><i></i></span><small>6 steps · 1 you approve</small></div>
+      <div class="wfp-c" aria-checked="true"><b>Standard <span class="tag" data-tone="blue" style="font-size:.46rem">picked</span></b><span class="mini"><i></i><i></i><i data-y></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i data-y></i><i></i><i></i><i data-y></i><i data-y></i></span><small>15 steps · research, panel, PRD you approve</small></div>
+      <div class="wfp-c"><b>Major</b><span class="mini"><i></i><i></i><i data-y></i><i></i><i></i><i></i><i></i><i data-y></i><i></i><i></i><i></i><i data-y></i><i data-y></i><i data-y></i></span><small>19 steps · more review</small></div>
+      <div class="wfp-c"><b>Discovery</b><span class="mini"><i></i><i></i><i></i><i data-y></i></span><small>ends in a decision, not code</small></div>
+    </div>
+    <details open><summary style="font-size:.56rem;color:var(--muted)">Steps &amp; who does each</summary>
+      <div class="steps-l">
+        <div><span class="st-n" data-s="done" style="width:16px;height:16px">1</span><span>Research</span><span class="face" data-a="juno"></span></div>
+        <div><span class="st-n" style="width:16px;height:16px">2</span><span>Panel</span><span class="faces"><span class="face" data-a="helm"></span><span class="face" data-a="vera"></span></span></div>
+        <div><span class="st-n" data-s="you" style="width:16px;height:16px">!</span><span>PRD</span><span class="you-pill">You approve</span></div>
+        <div><span class="st-n" style="width:16px;height:16px">6</span><span>Build</span><span class="face" data-a="forge"></span></div>
+        <div><span class="st-n" data-s="you" style="width:16px;height:16px">!</span><span>Pull request</span><span class="you-pill">You merge</span></div>
+        <div><span></span><span class="faint">+ 10 more</span><span></span></div>
+      </div></details>
+    <div class="pop-f"><a class="link-chip">All installed workflows ▾</a><span class="wf-spacer"></span><span class="btn" data-size="s">Done</span></div>
+  </section>
+
+  <!-- 3 STACK -->
+  <section class="pop">
+    <div class="pop-h"><span class="ico" data-c="blue"><i class="ph ph-stack"></i></span><b>Stack</b><span class="anchor"><i class="ph ph-arrow-up"></i>Stack</span></div>
+    <div class="pick" aria-selected="true"><i class="ph ph-magic-wand"></i><b>Auto</b><span class="faint" style="font-size:.54rem">BOSS picks from the brief → FastAPI + React</span></div>
+    <div class="pick"><i class="ph ph-file-py"></i>FastAPI + React<span class="wf-spacer"></span><span class="tag" data-tone="green">ready</span></div>
+    <div class="pick"><i class="ph ph-file-js"></i>Node + React<span class="wf-spacer"></span><span class="tag" data-tone="green">ready</span></div>
+    <div class="pick"><i class="ph ph-file-ts"></i>Next.js<span class="wf-spacer"></span><span class="tag" data-tone="green">ready</span></div>
+    <div class="pick"><i class="ph ph-coffee"></i>Spring Boot · Java 17<span class="wf-spacer"></span><span class="tag" data-tone="amber" title="No Java toolchain on boss-1 yet — Infra">no toolchain</span></div>
+    <div class="pop-f"><span class="faint" style="font-size:.52rem">Warnings come from the stack check</span><span class="wf-spacer"></span><span class="btn" data-size="s">Done</span></div>
+  </section>
+
+  <!-- 4 WHO TO TELL -->
+  <section class="pop">
+    <div class="pop-h"><span class="ico" data-c="violet"><i class="ph ph-bell-ringing"></i></span><b>Who to tell</b><span class="anchor"><i class="ph ph-arrow-up"></i>Tell</span></div>
+    <div class="pick" aria-selected="true"><img class="face" data-size="s" src="../faces/you.svg" alt=""><b>You</b><span class="faint" style="font-size:.54rem">email · in-app</span><span class="wf-spacer"></span>✓</div>
+    <div class="input" data-ph><i class="ph ph-plus"></i>team@example.com or #slack-channel</div>
+    <span class="lbl">When</span>
+    <div class="np2-cx"><span data-on>Needs you</span><span data-on>PR ready</span><span data-on>Deployed</span><span>Each step</span></div>
+    <div class="pop-f"><span class="wf-spacer"></span><span class="btn" data-size="s">Done</span></div>
+  </section>
+
+  <!-- 5 MORE DETAIL -->
+  <section class="pop">
+    <div class="pop-h"><span class="ico" data-c="green"><i class="ph ph-list-plus"></i></span><b>More detail</b><span class="anchor"><i class="ph ph-arrow-up"></i>More detail</span><span class="tag">optional</span></div>
+    <span class="lbl">Who is it for</span><div class="input" data-ph>A support agent on a laptop, mid-queue</div>
+    <span class="lbl">Done when</span>
+    <div class="ck">
+      <div class="ck-i" data-s="done"><span class="ck-b">✓</span><span class="ck-t" style="font-weight:400">A draft reply appears in under 10 s</span><i class="ph ph-x faint"></i></div>
+      <div class="ck-i"><span class="ck-b">+</span><span class="ck-t faint" style="font-weight:400">Add a check</span><span></span></div>
+    </div>
+    <span class="lbl">Read first</span><div class="np2-cx"><span><i class="ph ph-link"></i>resend.com/docs</span><span data-add>+ link</span></div>
+    <span class="lbl">Talks to</span><div class="np2-cx"><span><i class="ph ph-plugs"></i>NorthPeak Orders API</span><span data-add>+ app</span></div>
+  </section>
+
+  <!-- 6 CAPTAIN & CREW -->
+  <section class="pop">
+    <div class="pop-h"><span class="ico" data-c="blue"><i class="ph ph-users-three"></i></span><b>Captain &amp; crew</b><span class="anchor"><i class="ph ph-arrow-up"></i>Captain</span></div>
+    <div class="pick" aria-selected="true"><span class="face" data-a="helm" data-size="s"></span><b>Helm</b><span class="faint" style="font-size:.54rem">Engineering Captain · default</span></div>
+    <div class="pick"><span class="face" data-a="marshal" data-size="s"></span>Marshal<span class="faint" style="font-size:.54rem">Chief of Staff</span></div>
+    <span class="lbl">Crew</span>
+    <div class="row wrap" style="gap:6px"><span class="np2-chip"><span class="face" data-a="juno"></span>Juno</span><span class="np2-chip"><span class="face" data-a="forge"></span>Forge</span><span class="np2-chip"><span class="face" data-a="vera"></span>Vera</span><span class="np2-chip"><span class="face" data-a="beacon"></span>Beacon</span><span class="np2-chip" data-dashed>+ agent</span></div>
+    <div class="pop-f"><a class="link-chip">Put it back</a><span class="wf-spacer"></span><span class="btn" data-size="s">Done</span></div>
+  </section>
+
+  <!-- 7 CODE -->
+  <section class="pop">
+    <div class="pop-h"><span class="ico" data-c="teal"><i class="ph ph-git-branch"></i></span><b>Where the code lives</b><span class="anchor"><i class="ph ph-arrow-up"></i>Code</span></div>
+    <div class="seg" style="align-self:flex-start"><span aria-selected="true">One repo</span><span>Several repos</span></div>
+    <div class="pick" aria-selected="true"><i class="ph ph-plus-circle"></i><span class="mono">paramg/helpdesk-ai</span><span class="faint" style="font-size:.52rem">new</span></div>
+    <div class="pick"><i class="ph ph-git-branch"></i><span class="faint">Use an existing repo…</span></div>
+    <span class="faint" style="font-size:.52rem"><i class="ph ph-lock-key"></i> Account <b>paramg</b> is global — <a>Repo and models</a></span>
+    <div class="fl" style="padding:0"><span class="fl-n" style="font-size:.52rem">web → helpdesk-web</span><span class="fl-w"></span><span class="fl-n" style="font-size:.52rem">api → helpdesk-api</span></div>
+    <span class="faint" style="font-size:.5rem">Several repos: linked PRs, approved as a set</span>
+  </section>
+
+  <!-- 8 STAGING -->
+  <section class="pop">
+    <div class="pop-h"><span class="ico" data-c="green"><i class="ph ph-rocket-launch"></i></span><b>Staging</b><span class="anchor"><i class="ph ph-arrow-up"></i>Staging</span></div>
+    <div class="pick" aria-selected="true"><i class="ph ph-hard-drives"></i><b>boss-1</b><span class="mono faint" style="font-size:.54rem">:8005 free</span><span class="wf-spacer"></span><span class="tag" data-tone="blue">suggested</span></div>
+    <div class="pick"><i class="ph ph-hard-drives"></i>goldeneye<span class="mono faint" style="font-size:.54rem">:8012</span></div>
+    <div class="pick"><i class="ph ph-monitor"></i>Preview only<span class="faint" style="font-size:.54rem">no staging yet</span></div>
+    <span class="faint" style="font-size:.52rem"><i class="ph ph-shield-check"></i> Prod: a person picks it later (Deployments)</span>
+    <div class="pop-f"><a class="link-chip">+ host in Infra</a><span class="wf-spacer"></span><span class="btn" data-size="s">Done</span></div>
+  </section>
+</div>
+
+<div class="notes"><b>Design notes</b><ol class="np2-n">
+  <li><b>1</b> One popover per box, anchored under it; Esc or Done closes it and the box shows the new value. No popover is required to start.</li>
+  <li><b>2</b> Suggestions are reasoned by the captain from the sentence (or found in the repo) and marked with the words that triggered them — never a keyword list.</li>
+  <li><b>3</b> A workflow with its own start form (e.g. Trend to content) shows that form inside the Workflow popover; Who to tell is the same <span class="mono">notify_channel</span> input the old page asked.</li>
+  <li><b>4</b> Models and GitHub accounts stay global (Repo and models). Code shows the account read-only.</li>
+</ol></div>
+
+<!-- PARITY -->
+<section class="card">
+  <div class="card-h"><span class="ico" data-c="green"><i class="ph ph-check-circle"></i></span><h3>Parity: nothing lost</h3><span class="tag" data-tone="green">38 of 38 kept</span></div>
+  <div class="np2-tablewrap"><table class="parity">
+    <thead><tr><th>Capability</th><th>Was</th><th>Now</th></tr></thead>
+    <tbody>
+      <tr><td>New from an idea / Existing repo tabs</td><td>Sheet tabs</td><td>Auto-detected from the one input; kind pill to force</td></tr>
+      <tr><td>Sentence / brief + full screen</td><td>Sheet · New build “What should it do?”</td><td>The one input · ⤢ full screen</td></tr>
+      <tr><td>Start from an idea (examples), Undo</td><td>New build</td><td>Ideas chip in the input</td></tr>
+      <tr><td>Build from its reference ↗</td><td>New build</td><td>Connectors popover footer</td></tr>
+      <tr><td>Name (from the sentence or repo)</td><td>Both</td><td>Name chip, prefilled</td></tr>
+      <tr><td>Stack + stack warning</td><td>New build</td><td>Stack box (AUTO) · popover</td></tr>
+      <tr><td>Connectors (up to 6, by stack, “in app”)</td><td>New build</td><td>Connectors box, suggested · popover</td></tr>
+      <tr><td>Several connectors at once (compose)</td><td>New build</td><td>Connectors popover, multi-select</td></tr>
+      <tr><td>Who it’s for · Done when · Read first · Talks to</td><td>New build › More detail</td><td>More detail popover</td></tr>
+      <tr><td>Who to tell (notify channel)</td><td>New build (workflow input)</td><td>Tell chip · popover</td></tr>
+      <tr><td>A workflow’s own start form</td><td>New build</td><td>Workflow popover</td></tr>
+      <tr><td>Workflow name · steps · approvals</td><td>How it’s built</td><td>Workflow box + step strip</td></tr>
+      <tr><td>Step list with owners</td><td>How it’s built</td><td>Workflow popover › Steps</td></tr>
+      <tr><td>Change workflow (paths + all installed)</td><td>How it’s built</td><td>Workflow popover</td></tr>
+      <tr><td>Team: edit, add agent, put it back</td><td>How it’s built › Team</td><td>Captain &amp; crew popover</td></tr>
+      <tr><td>Captain (never Marshal by default)</td><td>Sheet · Existing</td><td>Captain box · popover</td></tr>
+      <tr><td>Where the code lives · one / several repos · mapping</td><td>How it’s built</td><td>Code box · popover</td></tr>
+      <tr><td>Repository change · result (lands as)</td><td>How it’s built</td><td>Code popover · box sub-line</td></tr>
+      <tr><td>Readiness dots · checklist · Start anyway</td><td>Both</td><td>Readiness dots; a refusal expands the same panel inline, primary becomes Start anyway</td></tr>
+      <tr><td>Cost history · steps · you approve N</td><td>How it’s built footer</td><td>Cost tag · Workflow box</td></tr>
+      <tr><td>Deploy note</td><td>How it’s built footer</td><td>Footer “Nothing reaches prod without you”</td></tr>
+      <tr><td>Plan it with an agent (PRD first)</td><td>New build footer</td><td>Footer link</td></tr>
+      <tr><td>Plan it → / Start the project / Start onboarding</td><td>Three buttons</td><td>One: Create and start (⌘↵)</td></tr>
+      <tr><td>Cancel · ✕ · Esc · ⌘↵</td><td>Both</td><td>✕ · Esc · ⌘↵</td></tr>
+      <tr><td>Try a sample</td><td>Sheet (2 presses)</td><td>Header chip, starts in 1 press</td></tr>
+      <tr><td>More samples &amp; presets (banking KG)</td><td>Sheet › choose</td><td>Footer › More ways › Presets</td></tr>
+      <tr><td>Blank project · KG project (type, description)</td><td>Sheet › form</td><td>Footer › More ways</td></tr>
+      <tr><td>GitHub / Folder on host switch</td><td>Sheet · Existing col 1</td><td>Detected; one result list for both</td></tr>
+      <tr><td>Account chip · + account (global)</td><td>Sheet · Existing</td><td>In the input, read-only · + account → Repo and models</td></tr>
+      <tr><td>Search repos · ages · in use</td><td>Sheet · Existing col 1</td><td>Inline search results</td></tr>
+      <tr><td>Folder: host + path + Read</td><td>Sheet · Existing col 1</td><td>Typed <span class="mono">/path</span>; host on the result row</td></tr>
+      <tr><td>Helm reads it: access · stack · build &amp; test · map code</td><td>Sheet · Existing col 2</td><td>Summary fills live (FOUND, live tag, file count)</td></tr>
+      <tr><td>Crew faces</td><td>Sheet · Existing col 3</td><td>Captain box</td></tr>
+      <tr><td>Map business rules (KG)</td><td>Sheet · Existing col 3</td><td>Chip toggle (repo mode)</td></tr>
+      <tr><td>Estimate footnote</td><td>Sheet · Existing col 3</td><td>Cost tag</td></tr>
+      <tr><td>Staging target</td><td>Later, in onboarding</td><td>Staging box (suggested) · popover — <span class="tag" data-tone="blue">new</span></td></tr>
+      <tr><td>Add a feature mode (app, change, kinds, Quick/Small/Spec/Major, proposal)</td><td>New build</td><td>Project › New work (exists) — screen c</td></tr>
+      <tr><td>Doors that open New build (Command Center, Factory, Workflows)</td><td>Workflows › New build</td><td>New app → Add a project; add → Project › New work; old tab shows “Moved”</td></tr>
+    </tbody></table></div>
+</section>
+</div>
+<script src="../shell.js"></script>
+<script src="np2-nav.js"></script>
+</body></html>

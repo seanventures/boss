@@ -78,8 +78,20 @@
 .aa-stage { position: relative; display: flex; gap: 12px; align-items: flex-start; min-width: 0; }
 .aa-canvas-frame { flex: 1; min-width: 0; overflow-x: auto; overflow-y: hidden; border-radius: var(--r-xl); border: 1px solid var(--border);
   background: radial-gradient(circle at 1px 1px, var(--hair-2) 1px, transparent 0) 0 0 / 18px 18px, var(--graph); }
-.aa-canvas-fit { margin: 0 auto; }
-.aa-canvas { position: relative; transform-origin: 0 0; }
+.aa-canvas-fit { margin: 0 auto; flex: none; }
+/* Filling the viewport's height: the chart sits centred in the frame (zoom to fit). */
+.aa-canvas-frame[data-fill] { display: flex; align-items: center; overflow-y: auto; }
+.aa-canvas-frame[data-fill] > .aa-canvas-fit { margin: auto; }
+/* ONE SIZE INSIDE THE CHART: the nodes are laid out in px (lib/ambient-layout.ts), so their words
+   are sized in em against the chart's own base — FlowCanvas sets it to the laptop root (1rem at
+   19px) — not against the root that grows +30% on a wide screen and overflowed the boxes ("Hand to
+   Security..", "1 findina"). The chart as a whole grows with the screen by zoom-to-fit instead. */
+.aa-canvas { position: relative; transform-origin: 0 0; font-size: 1rem; }
+.aa-canvas .aa-node-label { font-size: 0.658em; }
+.aa-canvas .aa-node-icon { font-size: 0.684em; }
+.aa-canvas .aa-chip-xs { font-size: 0.526em; }
+.aa-canvas .aa-edge-label { font-size: 0.553em; }
+.aa-canvas .aa-node-answer { font-size: 0.632em; }
 .aa-edges { position: absolute; inset: 0; overflow: visible; }
 .aa-edge-line { fill: none; stroke: var(--border-strong); stroke-width: 2; }
 .aa-edge[data-kind="handoff"] .aa-edge-line, .aa-edge[data-kind="claimed"] .aa-edge-line { stroke: color-mix(in srgb, var(--aa-agent) 70%, var(--border-strong)); }
@@ -100,7 +112,9 @@ button.aa-edge-label { cursor: pointer; }
 .aa-node:hover, .aa-node:focus-visible { transform: translateY(-1px); border-color: var(--accent-line); }
 .aa-node[data-selected] { outline: 2px solid var(--accent); outline-offset: 2px; }
 .aa-node-main { display: flex; align-items: center; gap: 8px; min-width: 0; position: relative; }
-.aa-node-label { font-size: 0.658rem; font-weight: 650; line-height: 1.2; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+/* Never clipped mid-word: up to three lines, a long token breaks, the full words are the tooltip. */
+.aa-node-label { font-size: 0.658rem; font-weight: 650; line-height: 1.18; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+  overflow-wrap: anywhere; min-width: 0; }
 .aa-node-face { flex: none; display: inline-flex; }
 .aa-node-icon { flex: none; width: 26px; height: 26px; font-weight: 800; color: var(--ink); display: grid; place-items: center; border-radius: 8px; font-size: 0.684rem; background: var(--surface-3); }
 .aa-node-chips { display: flex; gap: 3px; flex-wrap: nowrap; overflow: hidden; position: relative; }

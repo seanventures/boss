@@ -168,7 +168,13 @@ export type Alert = {
   acked: { by: string; at: string; until: string | null } | null; noDataSince: string | null; keepFiringSince: string | null;
   suppressed: { kind: string; id: string; until: string | null; word: string; reason: string | null }[];
   links: { href: string; text: string }[]; notifiedAt: string | null;
+  /** Observability lists every project's slice: the project a row belongs to (null on a
+   *  project's own Health), and whether it is BOSS's own platform rather than an app. */
+  project: AlertProject | null; platform: boolean;
 };
+export type AlertProject = { id: string; name: string; href: string };
+const parseProject = (o: Record<string, unknown>): AlertProject | null =>
+  str(o.project_id) ? { id: str(o.project_id), name: str(o.project_name, str(o.project_id)), href: str(o.project_href) } : null;
 const STATES = new Set(["firing", "pending", "resolved"]);
 function fallbackStatus(state: Alert["state"], acked: boolean, held: boolean): StatusKey {
   if (state === "resolved") return "resolved";
@@ -222,6 +228,7 @@ export function parseAlert(w: unknown): Alert {
     links: arr(o.links).map((x) => { const y = obj(x); return { href: str(y.href), text: str(y.text, str(y.href)) }; })
       .filter((l) => /^https?:\/\//.test(l.href)),
     notifiedAt: optStr(o.notified_at),
+    project: parseProject(o), platform: o.platform === true,
   };
 }
 
@@ -250,13 +257,26 @@ export type OpenIncident = {
   word: string; sev: Sev; chip: Status; ackedBy: string | null;
   /** When it recovered (nothing firing), for the viewer's own clock. */
   recoveredAt: string | null;
+  /** Why it is still open with nothing firing, who acts, and when BOSS closes it on its own. */
+  openReason: { key: string; who: "boss" | "squad" | "person"; closesAt: string | null } | null;
+  project: AlertProject | null; platform: boolean;
 };
+/** WHAT A LIST COVERS (one alerts concept, two scopes): every app and BOSS itself
+ *  (Observability), or one project's apps (its Health). */
+export type AlertsScope = { kind: "all"; apps: number; projects: number } | { kind: "project"; projectId: string; projectName: string; apps: number };
 export type AlertsView = {
   alerts: Alert[]; counts: { firing: number; pending: number; needsAttention: number }; severities: SevInfo[];
-  apps: { targetId: string; app: string; env: string; service: boolean }[];
+  apps: { targetId: string; app: string; env: string; service: boolean; project: AlertProject | null }[];
   grafana: { state: string; reason: string | null };
   incidents: OpenIncident[];
+  scope: AlertsScope | null;
 };
+function parseScope(v: unknown): AlertsScope | null {
+  const o = obj(v);
+  if (o.kind === "all") return { kind: "all", apps: num(o.apps), projects: num(o.projects) };
+  if (o.kind === "project") return { kind: "project", projectId: str(o.project_id), projectName: str(o.project_name, str(o.project_id)), apps: num(o.apps) };
+  return null;
+}
 export function parseAlertsView(w: unknown): AlertsView {
   const o = obj(w);
   const c = obj(o.counts);
@@ -266,7 +286,8 @@ export function parseAlertsView(w: unknown): AlertsView {
     alerts, counts: { firing: num(c.firing), pending: num(c.pending),
                       needsAttention: typeof c.needs_attention === "number" ? c.needs_attention : alerts.filter((a) => a.needsAttention).length },
     severities: parseSeverities(o.severities),
-    apps: arr(o.apps).map((a) => { const x = obj(a); return { targetId: str(x.target_id), app: str(x.app), env: str(x.env), service: x.service === true }; }),
+    apps: arr(o.apps).map((a) => { const x = obj(a); return { targetId: str(x.target_id), app: str(x.app), env: str(x.env), service: x.service === true, project: parseProject(x) }; }),
+    scope: parseScope(o.scope),
     grafana: { state: str(g.state, "unchecked"), reason: optStr(g.reason) },
     incidents: arr(o.incidents).map((w) => {
       const x = obj(w);
@@ -276,7 +297,11 @@ export function parseAlertsView(w: unknown): AlertsView {
                responseStatus: optStr(x.response_status), word: str(x.word), sev: sevOf(x.sev, x.severity),
                chip: parseStatus(x.status_chip, x.happening === true ? (x.acked ? "acknowledged" : "firing") : "recovered"),
                ackedBy: optStr(x.acked_by) ?? (typeof x.acked === "string" ? x.acked : null),
-               recoveredAt: optStr(x.recovered_at) } as OpenIncident;
+               recoveredAt: optStr(x.recovered_at),
+               openReason: x.open_reason && typeof x.open_reason === "object"
+                 ? { key: str(obj(x.open_reason).key), who: (["boss", "squad", "person"].includes(str(obj(x.open_reason).who)) ? str(obj(x.open_reason).who) : "boss") as "boss" | "squad" | "person",
+                     closesAt: optStr(obj(x.open_reason).closes_at) } : null,
+               project: parseProject(x), platform: x.platform === true } as OpenIncident;
     }),
   };
 }
@@ -320,10 +345,20 @@ export const ALERT_SOURCES: { key: AlertSource; label: string; tip: string }[] =
 export type AlertsFilter = { app: string | null; state: "firing" | "resolved" | "all"; severity: Sev | null;
   source?: AlertSource | null; flapping?: boolean | null; acked?: boolean | null; attention?: boolean | null };
 const tri = (v: boolean | null | undefined) => (v === true ? "true" : v === false ? "false" : null);
-export const allAlertsUrl = (projectId: string, f: AlertsFilter) =>
-  `/v1/alerts?${q(projectId, { app: f.app, state: f.state, severity: f.severity, since: f.state === "firing" ? null : "7d",
-                               source: f.source ?? null, flapping: tri(f.flapping), acked: tri(f.acked),
-                               attention: f.attention ? "true" : null })}`;
+const filterParams = (f: AlertsFilter) => ({ app: f.app, state: f.state, severity: f.severity, since: f.state === "firing" ? null : "7d",
+                                             source: f.source ?? null, flapping: tri(f.flapping), acked: tri(f.acked),
+                                             attention: f.attention ? "true" : null });
+/** ONE ALERTS LIST, two scopes: every app of every project you may read plus BOSS itself
+ *  (Observability: /v1/alerts/all), or one project's apps (its Health: scope=project). */
+export type AlertsWhere = { kind: "all" } | { kind: "project"; projectId: string };
+export const allAlertsUrl = (projectId: string, f: AlertsFilter) => `/v1/alerts?${q(projectId, filterParams(f))}`;
+export function alertsUrl(where: AlertsWhere, f: AlertsFilter): string {
+  if (where.kind === "project") return `/v1/alerts?${q(where.projectId, { scope: "project", ...filterParams(f) })}`;
+  const p = new URLSearchParams();
+  for (const [k, v] of Object.entries(filterParams(f))) if (v) p.set(k, v);
+  const qs = p.toString();
+  return `/v1/alerts/all${qs ? `?${qs}` : ""}`;
+}
 export const ACK_PATH = "/v1/alerts/ack";
 export const rulesPutPath = (targetId: string) => `${appPath(targetId)}/alert-rules`;
 export const tunePreviewPath = (targetId: string, ruleId: string) => `${appPath(targetId)}/alert-rules/${encodeURIComponent(ruleId)}/tune-preview`;
@@ -369,6 +404,8 @@ export const useHistory = (projectId: string, targetId: string | null, win: Hist
   usePolled(projectId && targetId ? historyUrl(projectId, targetId, win) : null, parseAlertsView, () => ALERTS_POLL_MS);
 export const useAllAlerts = (projectId: string, f: AlertsFilter): Polled<AlertsView> =>
   usePolled(projectId ? allAlertsUrl(projectId, f) : null, parseAlertsView, () => ALERTS_POLL_MS);
+export const useAlerts = (where: AlertsWhere | null, f: AlertsFilter): Polled<AlertsView> =>
+  usePolled(where && (where.kind === "all" || where.projectId) ? alertsUrl(where, f) : null, parseAlertsView, () => ALERTS_POLL_MS);
 
 /** `5m`-style durations the edit sheet writes for a rule's `for`. */
 export function forWord(seconds: number): string {
