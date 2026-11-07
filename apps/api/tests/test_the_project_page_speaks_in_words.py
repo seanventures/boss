@@ -98,6 +98,10 @@ def test_recent_work_and_the_running_tile_show_short_titles(world, client, helpd
     labels = [w["label"] for w in _get(world, client, f"/v1/projects/{helpdesk['id']}/work")["items"]]
     assert "Finish the visual refresh" in labels, labels
     labels += [w["label"] for w in o["recent_work"]]
+    # Recent work is what moved (running, waiting, done) before roadmap items only planned.
+    states = [w["state"] for w in o["recent_work"]]
+    assert "planned" not in states or states.index("planned") >= len(
+        [w for w in o["recent_work"] if w["state"] != "planned"])
     assert all(len(lbl.split()) <= 6 and not lbl.endswith("…") for lbl in labels)
     assert not any(lbl.startswith("Finish the visual refresh the last") for lbl in labels)
     cur = o["tiles"]["running"]["current"]

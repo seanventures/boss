@@ -450,7 +450,10 @@ def view(connection: Connection, project_id: str, *, now: Optional[datetime] = N
         "tiles": tiles(project_id, items, envs, _cost_week(connection, project_id, now)),
         "captain": captain_service.view(connection, project_id, roster=roster,
                                         with_last_said=False),
-        "recent_work": items[:5],
+        # Recent WORK (screen 04): what moved — running, waiting on you, done — before roadmap
+        # items that are only planned; at most five, newest first within that order.
+        "recent_work": ([w for w in items if w["state"] != "planned"]
+                        + [w for w in items if w["state"] == "planned"])[:5],
         "next": next_items(connection, project_id, onboarding),
         "try_it": {"url": url, "env": try_env["key"] if try_env else None,
                    "demo_logins": try_env["logins"] if try_env else [],
