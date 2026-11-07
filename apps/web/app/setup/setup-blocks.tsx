@@ -11,6 +11,7 @@
  * Remove); Models is the full list (setup-board.tsx renders ModelsRow as a block after these);
  * Advanced settings holds only what is not shown here.
  */
+import { MovedToProjectSettings } from "../projects/moved";
 import React, { useMemo, useState } from "react";
 import { Plus } from "@phosphor-icons/react";
 
@@ -221,6 +222,9 @@ export function SetupBlocks({ onAdvanced, initialOpen = null }: {
 
       {/* ── Repositories ── */}
       <section className="su-block" data-testid="su-repos" aria-label="Repositories BOSS can work on">
+        {/* A project's repo bindings live on Project › Settings › Repos now; adding and checking
+            repositories keeps working here (README parity: Repo bindings, 13-30). */}
+        <MovedToProjectSettings section="repos" projectId={projectId} testid="su-repos-moved" />
         <BlockHead title="Repositories BOSS can work on" tip="BOSS writes branches and opens pull requests here."
                    action={(
                      <GatedButton permission="repository:register" type="button" className="su-btn"

@@ -107,3 +107,23 @@ describe("Overview cards load or fail on their own (04 states)", () => {
     expect(refreshed).toEqual(["overview"]);
   });
 });
+
+describe("every old home of a project setting shows the Moved bar (13-29, 13-30, 13-31)", () => {
+  it("names the right Settings section in each old home of the README parity table", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { resolve } = await import("node:path");
+    const src = (f: string) => readFileSync(resolve(__dirname, "..", f), "utf8");
+    const homes: [string, string][] = [
+      ["components/v2/templates/setup-sheet.tsx", "demo_logins"],     // Demo logins (password, user names)
+      ["components/v2/templates/setup-sheet.tsx", "deploy_values"],   // Deploy values / app secrets
+      ["app/infra/deploy-sheet.tsx", "targets"],                      // Deploy targets & hosts
+      ["app/agent-ops/autonomy-panel.tsx", "autonomy"],               // Autonomy level
+      ["app/govern/limits-screen.tsx", "autonomy"],                   // Ambient budget
+      ["app/setup/setup-blocks.tsx", "repos"],                        // Repo bindings
+      ["app/observability/notify.tsx", "notifications"],              // Notifications
+    ];
+    for (const [file, section] of homes) {
+      expect(src(file), `${file} → ${section}`).toMatch(new RegExp(`<MovedToProjectSettings[^>]*section="${section}"`));
+    }
+  });
+});
