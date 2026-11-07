@@ -8919,7 +8919,7 @@ details[open] > .skill-form-summary::before { transform: rotate(90deg); }
 /* An answer's cards (app/answer-cards.tsx, screen 09): flow steps that never leave an arrow at
    a wrap, record chips, and the "New work" card. */
 .agent-flow-step { display: inline-flex; align-items: center; flex: none; }
-.agent-flow-step[data-wrap] > .agent-flow-w { display: none; }
+.agent-flow-step[data-wrap] > .agent-flow-w { visibility: hidden; }
 .agent-flow-n { gap: 5px; }
 .agent-flow-n[data-s="agent"] { border-radius: 999px; border-color: color-mix(in srgb, var(--accent) 65%, transparent);
   background: color-mix(in srgb, var(--accent) 9%, transparent); }

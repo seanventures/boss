@@ -226,3 +226,23 @@ def test_the_access_strip_is_the_real_result_with_its_reasons(world, client, eng
     repo = _get(world, client, world.owner, f"/v1/projects/{helpdesk['id']}/knowledge")["repos"][0]
     assert repo["deploy_check"] == {"label": "Staging", "state": "failed",
                                     "reason": "Port 8004 is taken on the host"}
+
+
+def test_roadmap_cards_name_their_detector_as_the_wireframe_does_with_its_icon(world, client,
+                                                                              engine, helpdesk):
+    """07-09 / 07-12: "Incident hotspot" (detective) and "Alert gap" (bell-slash), read by the
+    alert-gap detector from the live staging target."""
+    from apps.api.tests.project_experience_seed import seed_round_two
+
+    with engine.begin() as db:
+        seed_round_two(db, helpdesk["id"])
+    got = _get(world, client, world.owner,
+               f"/v1/ambient/roadmap?project_id={helpdesk['id']}&status=open&limit=30")
+    nodes = {r["title"]: next(n for n in r["strip"] if n["type"] == "agent") for r in got["items"]
+             if any(n["type"] == "agent" for n in r["strip"])}
+    assert nodes["Regression test for SLA weekend pause"] == {
+        "type": "agent", "label": "Incident hotspot", "badges": [], "icon": "detective"}
+    alert = nodes["Alert rule for /api/tickets 5xx"]
+    assert (alert["label"], alert["icon"]) == ("Alert gap", "bell-slash")
+    card = next(r for r in got["items"] if r["title"] == "Alert rule for /api/tickets 5xx")
+    assert card["strip"][0]["label"] == "Live app" and card["squad"] == ["sre"]

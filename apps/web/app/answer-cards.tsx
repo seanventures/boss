@@ -90,7 +90,7 @@ export function AnswerFlow({ nodes, testId, label = "Path" }: {
 }
 
 const minutes = (m: number) => (m >= 90 ? `${Math.round(m / 60)}h` : `${m}m`);
-const dollars = (v: number) => (v >= 10 ? `$${Math.round(v)}` : `$${v < 1 ? v.toFixed(2) : Math.round(v * 10) / 10}`);
+const dollars = (v: number) => (v >= 1 ? `$${Math.round(v)}` : `$${v.toFixed(2)}`);
 
 /** "New work · VIP customer flag": ≈ cost, ≈ time, the plan strip and Start / Edit / Not now. */
 export function ProposalCard({ projectId, threadId, messageId, proposal, onOutcome }: {

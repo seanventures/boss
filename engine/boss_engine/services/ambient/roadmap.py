@@ -883,7 +883,8 @@ def _summary(rec: Mapping[str, Any], rank: Optional[int] = None) -> dict[str, An
                                              if rec["detector"] in learning.DETECTORS else []))
     out["why"] = rec.get("why")
     out["badges"] = _badges(rec)
-    out["strip"] = [{"type": n["type"], "label": n["label"], "badges": n["badges"][:2]}
+    out["strip"] = [{"type": n["type"], "label": n["label"], "badges": n["badges"][:2],
+                     **({"icon": n["icon"]} if n.get("icon") else {})}
                     for n in diagram(rec)["nodes"]][:6]
     return out
 

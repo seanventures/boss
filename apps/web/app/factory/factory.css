@@ -91,7 +91,9 @@
 .fx-edge { width: 10px; margin: 0 1px; }
 /* The storm at a glance (walk D22): the line wrapper, and BOSS's hourglass while it waits. */
 .fx-row-line { display: inline-flex; align-items: center; gap: 4px; min-width: 0; overflow: hidden; }
-.fx-row-line > .px-st { margin-right: 8px; }
+.fx-row-line > .px-st { margin-right: 10px; }
+.fx-row-line > .px-st .px-st-n { min-width: 22px; height: 22px; font-size: .62rem; }
+.fx-row-line > .px-st .px-st-w { width: 12px; }
 .fx-wait {
   display: inline-flex; align-items: center; justify-content: center; flex: none; border-radius: 50%;
   border: 1.5px dashed var(--amber); color: var(--amber);

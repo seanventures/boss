@@ -171,7 +171,7 @@
 .px-fl-n[data-t="signal"] { border-color: var(--amber); background: color-mix(in srgb, var(--amber) 10%, var(--surface)); }
 .px-fl-n[data-t="boss"], .px-fl-n[data-t="decision"] { border-color: var(--px-violet); background: color-mix(in srgb, var(--px-violet) 12%, var(--surface)); }
 .px-fl-step { display: inline-flex; align-items: center; flex: none; }
-.px-fl-step[data-wrap] > .px-fl-w { display: none; }
+.px-fl-step[data-wrap] > .px-fl-w { visibility: hidden; }
 .px-fl-w { width: 20px; height: 2px; background: var(--border-strong); flex: none; position: relative; }
 .px-fl-w::after { content: ""; position: absolute; right: -1px; top: -3px; border: 4px solid transparent; border-left-color: var(--border-strong); border-right: 0; }
 .px-fl-w[data-s="done"] { background: var(--green); } .px-fl-w[data-s="done"]::after { border-left-color: var(--green); }
