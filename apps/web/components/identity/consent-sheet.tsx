@@ -79,6 +79,10 @@ function PlainConsentSheet({ request, onClose }: { request: ConsentRequest; onCl
 
   return (
     <Sheet
+      // ABOVE WHATEVER ASKED FOR IT: a start from a sheet (Add a project, a template's sheet)
+      // waits on this answer; drawn inside the shell's stacking context it sat under that sheet,
+      // unseen, and the press hung on "Creating…".
+      layer="step-up"
       title={`Let ${names(request.agents)} act for you?`}
       icon={<span className="idn-stack" aria-hidden>{request.agents.slice(0, 3).map((a) => <AgentAvatar key={a.id} agent={a.role_key ?? a.name} size={26} />)}</span>}
       onClose={() => { request.onDecided?.(null); onClose(); }}

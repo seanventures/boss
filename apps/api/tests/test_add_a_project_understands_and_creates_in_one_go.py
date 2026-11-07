@@ -377,3 +377,14 @@ def test_what_helm_found_in_a_repository(client, world, engine, monkeypatch):
     assert found["files_total"] == len(paths) and len(found["onboarding_will"]) == 5
     with world.acting_as(world.ctx(world.viewer)):
         assert client.get(f"/v1/projects/{world.project_a}/add-project/repo/ghr_nope").status_code == 404
+
+
+def test_connectors_without_a_stack_refuse_before_anything_is_kept(client, world, engine):
+    name = f"Cx {uuid.uuid4().hex[:6]}"
+    with _owner(world):
+        r = client.post("/v1/add-project", json={
+            "context_project_id": world.project_a, "kind": "idea", "name": name, "words": WORDS,
+            "connectors": ["login-oauth"], "accept_egress": ["accounts.google.com"]})
+    assert r.status_code == 422, r.text
+    assert r.json()["step"] == "connectors" and r.json()["message"] == "Pick a stack for the connectors."
+    assert not _exists(engine, name)

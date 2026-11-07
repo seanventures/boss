@@ -49,7 +49,7 @@ import {
 import { normalizeChannel } from "../workflows/compose-plan";
 import { ReadinessPanel, asReadiness, unaccepted, type Readiness } from "../workflow-readiness-ui";
 import { useRegistry } from "./import-repo";
-import { PlanBoxes, ownFields, type PlanState } from "./add-project-plan";
+import { PlanBoxes, egressOf, ownFields, type PlanState } from "./add-project-plan";
 import { BriefCard, Marked, type BriefRow } from "../projects/brief-card";
 import { SAMPLE, knowledgePresetHref } from "./start-sheet";
 import "./start-project.css";
@@ -63,7 +63,7 @@ const PAUSE_MS = 1600;
 function initialPlan(): PlanState {
   return { captain: "engineering_captain", crew: null, stack: "", connectors: [], secrets: {}, workflow: "", inputs: {},
            layout: "one", repoIds: [], staging: null, stagingTouched: false, name: "", named: false, tell: "",
-           when: ["needs_you", "pr_ready"], audience: "", doneWhen: [], readFirst: [], talksTo: [], mapRules: false };
+           when: ["needs_you", "pr_ready"], audience: "", doneWhen: [], readFirst: [], talksTo: [], mapRules: false, egressOk: false };
 }
 
 function refusalText(e: unknown): string {
@@ -95,6 +95,8 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
   const [full, setFull] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** Where a refusal is fixed ("Connect GitHub ›" for a repository the org cannot reach yet). */
+  const [fixHref, setFixHref] = useState<string | null>(null);
   const [refusal, setRefusal] = useState<Readiness | null>(null);
   const [startAnyway, setStartAnyway] = useState<string[]>([]);
   const kept = useRef<string | null>(null);
@@ -283,8 +285,14 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
   const ready = kind === "idea" ? text.trim().split(/\s+/).length >= MIN_WORDS && !!name
     : kind === "repo" ? !!repo && !!plan.name.trim() : !!folder?.exists && !!plan.name.trim();
   const open = unaccepted(refusal, startAnyway);
+  const pickedCards = kind === "idea" ? plan.connectors.map((k) => (cards ?? []).find((c) => c.key === k)).filter((c): c is NonNullable<typeof c> => !!c) : [];
+  const egress = egressOf(pickedCards);
+  const [askEgress, setAskEgress] = useState(false);
   const create = async () => {
     if (!ready || busy || (refusal && open.length)) return;
+    // THE HOSTS THE APP TALKS TO are allowed out loud (the templates' own consent): asked here,
+    // inline, the first time; the tick is the answer.
+    if (egress.length && !plan.egressOk) { setAskEgress(true); return; }
     if (!canCreate.allowed) { setError(canCreate.reason); return; }
     setBusy("create"); setError(null);
     const repoIds = kind === "repo" ? [pickedRepo] : kind === "idea" ? plan.repoIds : [];
@@ -300,6 +308,7 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
       captain: plan.captain, crew: plan.crew, stack: stackFor?.label ?? null,
       stack_language: stackFor ? adapterLanguage(stackFor) : null,
       connectors: kind === "idea" ? plan.connectors : [], connector_secrets: plan.secrets,
+      accept_egress: plan.egressOk ? egress : [],
       workflow_key: kind === "idea" ? (workflow?.key ?? null) : null, inputs, notify_when: plan.when,
       audience: plan.audience || null, done_when: plan.doneWhen, read_first: plan.readFirst,
       talks_to: plan.talksTo.map((t) => ({ name: t })),
@@ -313,6 +322,7 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
         const ready2 = asReadiness(r.refusal.readiness);
         if (ready2) { setRefusal(ready2); setBusy(null); return; }
         setError(r.refusal.message || "It did not start.");
+        setFixHref(r.refusal.fix_href ?? null);
         setBusy(null);
         return;
       }
@@ -494,7 +504,7 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
                 const used = (r.used_by ?? [])[0];
                 return (
                   <button key={r.id} type="button" role="option" aria-selected={cursor === i} className="npx-pick" data-testid={`ap-repo-${r.id}`}
-                          onMouseEnter={() => setCursor(i)} onClick={() => void pickRow(i)} title={used ? `Already used by ${used.name}` : r.description ?? r.full_name}>
+                          onMouseMove={() => { if (cursor !== i) setCursor(i); }} onClick={() => void pickRow(i)} title={used ? `Already used by ${used.name}` : r.description ?? r.full_name}>
                     <GitBranch size={13} aria-hidden /><span className="npx-mono"><span className="npx-faint">{r.full_name.split("/")[0]}/</span><b>{r.full_name.split("/")[1]}</b></span>
                     {r.language ? <span className="npx-faint npx-small">{r.language}</span> : null}
                     <span className="npx-spacer" />
@@ -510,7 +520,7 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
                 const i = repoRows.length + j;
                 return (
                   <button key={`${f.hostId}:${f.path}`} type="button" role="option" aria-selected={cursor === i} className="npx-pick" data-testid={`ap-folder-${f.hostId}`}
-                          onMouseEnter={() => setCursor(i)} onClick={() => void pickRow(i)}>
+                          onMouseMove={() => { if (cursor !== i) setCursor(i); }} onClick={() => void pickRow(i)}>
                     <FolderOpen size={13} aria-hidden /><span className="npx-mono">{f.path}</span><span className="npx-faint npx-small">on {f.host} · read-only</span>
                     <span className="npx-spacer" />{cursor === i ? <span className="npx-kbd">↵</span> : null}
                   </button>
@@ -551,17 +561,26 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
               </span>
             </div>
             <PlanBoxes kind={kind} preview={preview} plan={plan} set={set} cards={cards} adapters={adapters}
-                       helmPicks={u?.picks ?? EMPTY_PICKS} workflow={workflow} registry={allRepos} repoLabel={repoLabel}
+                       helmPicks={u?.picks ?? EMPTY_PICKS} workflow={workflow} registry={allRepos} repoLabel={repoLabel} codeName={repo?.full_name ?? pickedFolder?.path ?? ""}
                        live={helmLive} readFiles={read?.files_total ? `${read.files_total} files` : null}
                        accountLogin={account} homeHref={homeHref} />
           </section>
 
+          {askEgress && egress.length ? (
+            <div className="npx-refusal" data-testid="ap-egress" role="alert">
+              <p style={{ margin: "8px 0 4px" }}><b>The connectors’ app talks to {egress.length} outside host{egress.length === 1 ? "" : "s"}</b></p>
+              <span className="npx-chips">{egress.map((h) => <span key={h} className="npx-chip npx-mono">{h}</span>)}</span>
+              <label style={{ display: "flex", gap: 6, alignItems: "center", margin: "8px 0" }}>
+                <input type="checkbox" data-testid="ap-egress-allow" checked={plan.egressOk} onChange={(e) => set({ egressOk: e.target.checked })} /> Allow these hosts, then Create and start</label>
+            </div>
+          ) : null}
           {refusal ? (
             <div className="npx-refusal" data-testid="ap-readiness">
               <ReadinessPanel readiness={refusal} accepted={startAnyway} onAccept={setStartAnyway} />
             </div>
           ) : null}
-          {error ? <p className="bx-np-error" role="alert" data-testid="ap-error">{error}</p> : null}
+          {error ? <p className="bx-np-error" role="alert" data-testid="ap-error">{error}
+            {fixHref ? <> <a className="npx-link" href={homeHref(Object.fromEntries(new URLSearchParams(fixHref.replace(/^\/?\?/, ""))))} data-testid="ap-error-fix">Connect GitHub ›</a></> : null}</p> : null}
         </div>
 
         <div className="npx-foot">

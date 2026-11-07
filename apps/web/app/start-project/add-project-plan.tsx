@@ -46,6 +46,8 @@ export type PlanState = {
   readFirst: string[];
   talksTo: string[];
   mapRules: boolean;
+  /** The hosts the connectors' app talks to, allowed out loud (the templates' consent). */
+  egressOk: boolean;
 };
 
 export const WHEN = [
@@ -66,6 +68,11 @@ function cxIcon(key: string) {
 /** A connector's chip label: "Login (Google, GitHub or BOSS)" → "Login", "Email (SMTP or Resend)" → "Email". */
 export function shortName(name: string): string {
   return name.replace(/^Login with /, "").split(/[,(]/)[0].trim() || name;
+}
+
+/** Every host the picked connectors' app talks to, once each. */
+export function egressOf(cards: TemplateCard[]): string[] {
+  return [...new Set(cards.flatMap((c) => c.egress))];
 }
 
 /** The workflow's own start form (b-adjust note 3): its declared fields, less what this screen
@@ -124,10 +131,12 @@ export function StepStrip({ w, testid = "ap-strip" }: { w: Workflow | null; test
   );
 }
 
-export function PlanBoxes({ kind, preview, plan, set, cards, adapters, helmPicks, workflow, registry, repoLabel, live, readFiles, accountLogin, homeHref }: {
+export function PlanBoxes({ kind, preview, plan, set, cards, adapters, helmPicks, workflow, registry, repoLabel, codeName = "", live, readFiles, accountLogin, homeHref }: {
   kind: Kind; preview: Preview | null; plan: PlanState; set: (patch: Partial<PlanState>) => void;
   cards: TemplateCard[] | null; adapters: StackAdapter[]; helmPicks: { stack: Pick | null; connectors: Pick[]; workflow: Pick | null };
   workflow: Workflow | null; registry: RegistryRepo[]; repoLabel: { v: string; s: string };
+  /** The picked repository's name or the folder's path (the Code box). */
+  codeName?: string;
   live: boolean; readFiles: string | null; accountLogin: string; homeHref: (p: Record<string, string>) => string;
 }) {
   const [open, setOpen] = usePopover();
@@ -260,6 +269,15 @@ export function PlanBoxes({ kind, preview, plan, set, cards, adapters, helmPicks
                 })}
                 {!offered.length ? <p className="npx-faint">No connector fits this stack yet.</p> : null}
               </div>
+              {egressOf(pickedCards).length ? (
+                <div className="npx-secrets" data-testid="ap-cx-egress">
+                  <span className="npx-sub">Talks to</span>
+                  <span className="npx-chips">{egressOf(pickedCards).map((h) => <span key={h} className="npx-chip npx-mono">{h}</span>)}</span>
+                  <label className="npx-field" style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                    <input type="checkbox" checked={plan.egressOk} data-testid="ap-egress-ok" onChange={(e) => set({ egressOk: e.target.checked })} />
+                    Allow the app to talk to these hosts</label>
+                </div>
+              ) : null}
               {secretsNeeded.length ? (
                 <div className="npx-secrets" data-testid="ap-cx-secrets">
                   <span className="npx-sub">Test keys</span>
@@ -344,7 +362,7 @@ export function PlanBoxes({ kind, preview, plan, set, cards, adapters, helmPicks
           <button type="button" className="npx-node" data-testid="ap-box-code" aria-expanded={open === "code"} data-open={open === "code" || undefined}
                   title="Where the code lives · one repo or several" onClick={() => toggle("code")}>
             <span className="npx-lbl">Code<CaretDown size={11} aria-hidden /></span>
-            <CodeLabel kind={kind} plan={plan} registry={registry} preview={preview} label={repoLabel} />
+            <CodeLabel kind={kind} plan={plan} registry={registry} preview={preview} name={codeName} />
           </button>
           {open === "code" ? (
             <Pop title="Where the code lives" icon={<GitBranch size={14} />} anchor="Code" testid="code" onDone={() => setOpen(null)}>
@@ -376,7 +394,7 @@ export function PlanBoxes({ kind, preview, plan, set, cards, adapters, helmPicks
                   {plan.layout === "several" ? <p className="npx-faint">Several repos: BOSS maps the app&apos;s parts to them; linked PRs, approved as a set.</p> : null}
                 </>
               ) : (
-                <p className="npx-faint">{repoLabel.v ? <>The repo you picked, <span className="npx-mono">{repoLabel.v}</span>: builds land on its branch as pull requests.</> : "Pick a repo above."}</p>
+                <p className="npx-faint">{codeName ? <>The {kind === "folder" ? "folder" : "repo"} you picked, <span className="npx-mono">{codeName}</span>: builds land on its branch as pull requests.</> : "Pick a repo above."}</p>
               )}
               <p className="npx-faint">Account <b>{accountLogin || "—"}</b> is global — <a className="npx-link" href={homeHref({ area: "setup", focus: "repository" })}>Repo and models</a></p>
             </Pop>
@@ -474,9 +492,9 @@ export function PlanBoxes({ kind, preview, plan, set, cards, adapters, helmPicks
   );
 }
 
-function CodeLabel({ kind, plan, registry, preview, label }: { kind: Kind; plan: PlanState; registry: RegistryRepo[]; preview: Preview | null; label: { v: string; s: string } }) {
+function CodeLabel({ kind, plan, registry, preview, name }: { kind: Kind; plan: PlanState; registry: RegistryRepo[]; preview: Preview | null; name: string }) {
   if (kind !== "idea") {
-    return <><span className="npx-v npx-mono">{label.v ? label.v.split("/").pop() : "—"}</span><span className="npx-s">{kind === "folder" ? "a folder · read-only" : "its branch · PRs"}</span></>;
+    return <><span className="npx-v npx-mono">{name ? name.split("/").pop() : "—"}</span><span className="npx-s">{kind === "folder" ? "a folder · read-only" : "its branch · PRs"}</span></>;
   }
   const picked = plan.repoIds.map((id) => registry.find((r) => r.id === id)?.full_name).filter(Boolean) as string[];
   if (picked.length > 1) return <><span className="npx-v npx-mono">{picked.length} repos</span><span className="npx-s">linked PRs</span></>;

@@ -559,6 +559,12 @@ def started(connection: Connection, project_id: str) -> dict[str, Any]:
         "JOIN workflow_definitions d ON d.id = r.workflow_definition_id WHERE r.project_id = :p "
         "AND COALESCE(r.mode, 'normal') <> 'test' ORDER BY r.created_at LIMIT 1"),
         {"p": project_id}).mappings().first()
+    staging = (seed.get("picks") or {}).get("staging") or {}
+    if staging.get("host_id"):
+        host = connection.execute(text("SELECT name, address FROM deployment_hosts WHERE id = :h"),
+                                  {"h": staging["host_id"]}).mappings().first()
+        if host:
+            seed["picks"]["staging"] = {**staging, "host": host["name"], "address": host["address"]}
     out: dict[str, Any] = {"seed": seed, "run": None, "nodes": [], "now": None, "workflow": None}
     if not run:
         return out

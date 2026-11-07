@@ -60,7 +60,7 @@ const BRIEF: Understanding = {
   picks: { stack: { key: "react-vite+fastapi+postgres", because: "AI drafts" }, connectors: [{ key: "login-oauth", because: "sign in with Google" }], workflow: { key: "standard_product_delivery", because: "a new app" } },
 };
 const TEMPLATES = { templates: [
-  { template_key: "login-oauth", name: "Login with Google", kind: "connector", status: "active", summary: "Sign in", stacks: ["python", "node"], secrets: [] },
+  { template_key: "login-oauth", name: "Login with Google", kind: "connector", status: "active", summary: "Sign in", stacks: ["python", "node"], secrets: [], egress: ["accounts.google.com"] },
   { template_key: "stripe-checkout", name: "Stripe Checkout", kind: "connector", status: "active", summary: "Payments", stacks: ["python", "node"],
     secrets: [{ name: "STRIPE_SECRET_KEY", purpose: "test key", test_default: "none" }] },
 ] };
@@ -205,6 +205,11 @@ describe("an idea: Helm's understanding, then Create and start", () => {
     await mountAs(<AddProjectSheet projectId="p1" homeId="p1" onClose={() => {}} onForm={() => {}} go={go} />);
     await type(tid("ap-input"), WORDS);
     await enter(tid("ap-input"));
+    // The hosts the connectors' app talks to are allowed out loud before anything is sent.
+    await click(tid("ap-create"));
+    expect(tid("ap-egress")!.textContent).toContain("accounts.google.com");
+    expect(calls.filter((c) => c.path === "/v1/add-project")).toHaveLength(0);
+    await click(tid("ap-egress-allow"));
     await click(tid("ap-create"));
     expect(tid("ap-readiness")!.textContent).toContain("A GitHub repository");
     expect(tid("ap-create")!.textContent).toContain("Start anyway");
@@ -214,7 +219,7 @@ describe("an idea: Helm's understanding, then Create and start", () => {
     expect(sent).toHaveLength(2);
     expect(sent[0].body).toMatchObject({ context_project_id: "p1", kind: "idea", name: "HelpDesk AI", words: WORDS,
       connectors: ["login-oauth"], workflow_key: "standard_product_delivery", captain: "engineering_captain",
-      staging: { host_id: "dh_1", port: 8005 }, stack_language: "python" });
+      staging: { host_id: "dh_1", port: 8005 }, stack_language: "python", accept_egress: ["accounts.google.com"] });
     expect((sent[0].body as { brief: { title: string } }).brief.title).toBe(BRIEF.brief.title);
     expect(sent[1].body).toMatchObject({ start_anyway: ["repository"] });
     expect(new URLSearchParams(String(go.mock.calls[0][0]).split("?")[1]).get("project_id")).toBe("helpdesk-ai");

@@ -113,7 +113,7 @@ export function stackLanguage(adapterId: string | null | undefined, languages: R
 export type CreateBody = {
   context_project_id: string; kind: Kind; name: string; words: string; brief?: Brief | null; note?: string | null;
   repo_ids?: string[]; folder?: { host_id: string; path: string } | null; captain?: string | null; crew?: string[] | null;
-  stack?: string | null; stack_language?: string | null; connectors?: string[]; connector_secrets?: Record<string, string>;
+  stack?: string | null; stack_language?: string | null; connectors?: string[]; connector_secrets?: Record<string, string>; accept_egress?: string[];
   workflow_key?: string | null; inputs?: Record<string, unknown>; notify_when?: string[]; audience?: string | null;
   done_when?: string[]; read_first?: string[]; talks_to?: Record<string, unknown>[];
   staging?: { host_id: string; port: number | null } | null; map_rules?: boolean; start_anyway?: string[];

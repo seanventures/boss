@@ -311,7 +311,13 @@
   .npx-node .npx-lbl svg:last-child, .npx-node .npx-auto, .npx-node .npx-s, .npx-node .npx-faces { display: none; }
   .npx-flow > .npx-node-wrap + .npx-node-wrap::before { left: 22px; top: -8px; width: 2px; height: 8px; }
   .npx-flow > .npx-node-wrap + .npx-node-wrap::after { display: none; }
-  .npx-flow > .npx-node-wrap .npx-pop, .npx-pop, .npx-pop[data-wide] { position: fixed; left: 8px !important; right: 8px !important; top: auto; bottom: 8px; width: auto; max-width: none; max-height: 80vh; }
+  /* On a phone a popover opens in place, under its box, in the flow (a fixed sheet would sit in
+     the scrolled backdrop, out of sight). */
+  .npx-node-wrap { flex-direction: column; }
+  .npx-chips-row > .npx-node-wrap { display: flex; width: 100%; }
+  .npx-flow > .npx-node-wrap .npx-pop, .npx-chips-row .npx-pop, .npx-pop, .npx-pop[data-wide] { position: static; margin-top: 8px; width: auto; max-width: none; left: auto; right: auto; top: auto; bottom: auto; }
+  .npx-ways, .npx-ideas { position: absolute !important; bottom: calc(100% + 8px) !important; right: 0 !important; width: min(300px, 86vw) !important; }
+  .npx-ideas { top: calc(100% + 8px) !important; bottom: auto !important; }
   .npx-ub { padding: 10px 12px; }
   .npx-ub-grid { grid-template-columns: minmax(0, 1fr); }
   .npx-ub-f { grid-template-columns: minmax(0, 1fr) 14px; }

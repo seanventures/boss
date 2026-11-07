@@ -125,6 +125,14 @@ def _within(fn, wait_s: float, words: str) -> dict[str, Any]:
                 "picks": {"stack": None, "connectors": [], "workflow": None},
                 "message": f"Helm took longer than {int(wait_s)} s. Your words are kept as they "
                            "are; you can continue, or Rewrite to ask again."}
+    except Exception as error:  # noqa: BLE001 — Helm's reading is a help, never a failed screen
+        import logging
+
+        logging.getLogger(__name__).warning("add-project understanding failed", exc_info=True)
+        return {"status": "no_model", "brief": add_project.raw_brief(words),
+                "picks": {"stack": None, "connectors": [], "workflow": None},
+                "message": f"Helm could not read it now ({type(error).__name__}). Your words are "
+                           "kept as they are; you can continue."}
 
 
 @router.post("/v1/projects/{project_id}/add-project/understand")
@@ -249,6 +257,9 @@ class CreateAndStartBody(BaseModel):
     connectors: list[str] = Field(default_factory=list, max_length=6)
     #: Test keys a connector needs (write-only; never echoed): {SECRET_NAME: value}.
     connector_secrets: dict[str, str] = Field(default_factory=dict, repr=False)
+    #: The hosts the connectors' app talks to, as the person allowed them (the templates' own
+    #: consent: apply / compose refuse `egress_not_accepted` without it).
+    accept_egress: list[str] = Field(default_factory=list, max_length=40)
     workflow_key: Optional[str] = Field(default=None, max_length=120)
     #: The workflow's own start form, Who to tell (notify_channel) and anything it declared.
     inputs: dict[str, Any] = Field(default_factory=dict)
@@ -271,9 +282,12 @@ class Refused(Exception):
         self.step, self.status, self.body = step, status, body
 
 
-def _need(request: Request, connection, permission: str, project_id: str, step: str) -> None:
-    """A step's own permission, at the NEW project, read in this transaction (the project is not
-    committed yet). The same PDP and the same mode rule as identity_access.require_permission."""
+def _need(request: Request, permission: str, step: str, project_id: Optional[str] = None) -> None:
+    """A step's own permission, checked BEFORE anything is written and outside any transaction
+    (a check audits its denials on its own connection; inside the create's transaction, which
+    holds the audit chain's lock after `project.created`, that wait would never end). A project
+    that does not exist yet is the caller's org: what they hold org-wide is what they hold on
+    it. The same PDP and mode rule as identity_access.require_permission."""
     from boss_engine.identity import authz
     from boss_engine.identity.scope import ResolvedScope
 
@@ -287,12 +301,34 @@ def _need(request: Request, connection, permission: str, project_id: str, step: 
         if mode == "enforce":
             raise Refused(step, 401, {"error": "unauthenticated", "message": "Sign in first."})
         return
-    decision = authz.check(ctx, permission, ResolvedScope.in_project(ctx.principal.org_id,
-                                                                     project_id), db=connection)
+    org = ctx.principal.org_id
+    scope = ResolvedScope.in_project(org, project_id) if project_id else ResolvedScope.org_level(org)
+    decision = authz.check(ctx, permission, scope)
     if not decision.allowed and mode == "enforce":
         body = dict(decision.error_body())
-        body.setdefault("message", f"You may not {step.replace('_', ' ')} here ({permission}).")
+        body["message"] = body.get("message") or f"You may not {step.replace('_', ' ')} ({permission})."
         raise Refused(step, decision.status, body)
+
+
+def _needs(body: "CreateAndStartBody", kind: str) -> list[tuple[str, str]]:
+    """Every permission this Create and start will use, in the order its steps run."""
+    out = []
+    if body.repo_ids:
+        out.append((P.REPOSITORY_MANAGE.value, "add_the_repository"))
+    if body.folder is not None:
+        out.append((P.PROJECT_UPDATE.value, "add_the_folder"))
+    if body.captain and body.captain != "engineering_captain":
+        out.append((P.PROJECT_UPDATE.value, "set_the_captain"))
+    if body.crew:
+        out.append((P.WORK_ITEM_MANAGE.value, "set_the_crew"))
+    if body.staging is not None and body.repo_ids:
+        out.append((P.DEPLOYMENT_TARGET_MANAGE.value, "make_the_staging_target"))
+    if kind == "idea" and body.connectors:
+        out.append((P.TEMPLATE_READ.value, "apply_connectors"))
+        if body.connector_secrets:
+            out.append((P.APP_SECRET_WRITE.value, "set_test_keys"))
+    out.append((P.WORKFLOW_RUN_START.value, "start_the_plan" if kind == "idea" else "start_onboarding"))
+    return out
 
 
 def _words_of(exc: HTTPException) -> dict[str, Any]:
@@ -396,6 +432,8 @@ def _create_and_start(request: Request, body: CreateAndStartBody) -> dict[str, A
         raise Refused("input", 422, {"error": "folder_required", "message": "Give a folder on a host."})
     actor = _actor(request)
     ctx = identity_guard.request_auth(request)
+    for permission, step in _needs(body, kind):
+        _need(request, permission, step, body.project_id or None)
     brief = _confirmed_brief(body)
     steps: list[dict[str, Any]] = []
     run_input: dict[str, Any] = {}
@@ -440,7 +478,6 @@ def _create_and_start(request: Request, body: CreateAndStartBody) -> dict[str, A
             # where the code lives: repositories, or a folder on a host
             repos: list[dict[str, Any]] = []
             for repo_id in body.repo_ids:
-                _need(request, db, P.REPOSITORY_MANAGE.value, pid, "add_the_repository")
                 try:
                     row = registry.get_row(db, org_id, repo_id)
                     if row.get("allowed") is False:
@@ -461,7 +498,6 @@ def _create_and_start(request: Request, body: CreateAndStartBody) -> dict[str, A
             if body.folder is not None:
                 from boss_engine.services.project_experience import host_folder
 
-                _need(request, db, P.PROJECT_UPDATE.value, pid, "add_the_folder")
                 try:
                     facts = host_folder.probe(db, _settings, pid, body.folder.host_id,
                                               body.folder.path)
@@ -474,7 +510,6 @@ def _create_and_start(request: Request, body: CreateAndStartBody) -> dict[str, A
 
             # captain and crew
             if body.captain and body.captain != "engineering_captain":
-                _need(request, db, P.PROJECT_UPDATE.value, pid, "set_the_captain")
                 try:
                     captain.assign(db, pid, body.captain, actor=actor)
                 except captain.CaptainRefused as error:
@@ -482,7 +517,6 @@ def _create_and_start(request: Request, body: CreateAndStartBody) -> dict[str, A
                                                    "message": str(error)}) from None
                 steps.append({"key": "captain", "ok": True, "label": "Captain set"})
             if body.crew:
-                _need(request, db, P.WORK_ITEM_MANAGE.value, pid, "set_the_crew")
                 done = agent_assignment.set_team(db, project_id=pid, role_keys=body.crew,
                                                  actor=actor)
                 if not done.get("ok"):
@@ -512,7 +546,6 @@ def _create_and_start(request: Request, body: CreateAndStartBody) -> dict[str, A
                 from boss_engine.services.deployment_fleet import HostNotUsable
                 from boss_engine.services.stack_deploy import StackDeployError
 
-                _need(request, db, P.DEPLOYMENT_TARGET_MANAGE.value, pid, "make_the_staging_target")
                 try:
                     staged = onboarding.use_for_staging(db, pid, host_id=body.staging.host_id,
                                                         port=body.staging.port, actor=actor)
@@ -544,7 +577,6 @@ def _create_and_start(request: Request, body: CreateAndStartBody) -> dict[str, A
             if kind == "idea":
                 # EVERY CHECK THE START MAKES, before anything commits: its readiness gate on the
                 # new project (with Start anyway), and the connectors' dry run.
-                _need(request, db, P.WORKFLOW_RUN_START.value, pid, "start_the_plan")
                 run_input = _run_input(body, brief, repos[0]["full_name"] if len(repos) == 1 else None)
                 if layout:
                     run_input["repo_layout"] = layout
@@ -561,8 +593,6 @@ def _create_and_start(request: Request, body: CreateAndStartBody) -> dict[str, A
                             raise Refused("start", 409, {
                                 "error": "not_ready", "message": str(error),
                                 "readiness": error.readiness}) from None
-            else:
-                _need(request, db, P.WORKFLOW_RUN_START.value, pid, "start_onboarding")
 
     # ── PHASE 2: start it ───────────────────────────────────────────────────────────────────
     started: dict[str, Any] = {}
@@ -600,6 +630,7 @@ def _connector_plan_body(body: CreateAndStartBody, pid: str, run_input: dict[str
     return {"project_id": pid, "new_app": {"name": body.name.strip()}, "stack": stack,
             "note": run_input.get("directive") or body.words,
             "workflow_key": body.workflow_key or None,
+            **({"accept_egress": list(body.accept_egress)} if body.accept_egress else {}),
             "start_anyway": body.start_anyway or None, "dedupe_key": body.dedupe_key or None}
 
 
@@ -618,10 +649,8 @@ def _connectors_checked(request: Request, db, body: CreateAndStartBody, pid: str
     ctx = identity_guard.request_auth(request)
     actor_id = ctx.principal.id if ctx is not None else actor
     data = _connector_plan_body(body, pid, run_input)
-    _need(request, db, P.TEMPLATE_READ.value, pid, "apply_connectors")
     try:
         if body.connector_secrets:
-            _need(request, db, P.APP_SECRET_WRITE.value, pid, "set_test_keys")
             manifests = [service.manifest_of(service.get_row(db, org_id, ref))
                          for ref in body.connectors]
             app_key = components.app_key_of(body.name.strip())

@@ -49,7 +49,7 @@ export function StartedCards({ ctx }: { ctx: PxCtx }) {
   const b = v.seed.brief ?? {};
   const picks = v.seed.picks ?? {};
   const connectors = (picks.connectors as string[] | undefined) ?? [];
-  const staging = picks.staging as { host_id: string; port: number | null } | null | undefined;
+  const staging = picks.staging as { host_id: string; host?: string; port: number | null; made?: boolean } | null | undefined;
   const notify = (picks.notify as { channel: string | null } | undefined)?.channel;
   const nodes = v.nodes ?? [];
   const prdNow = nodes.some((n) => n.key === "approve" && n.state === "you");
@@ -101,7 +101,7 @@ export function StartedCards({ ctx }: { ctx: PxCtx }) {
             <dt>Stack</dt><dd>{String(picks.stack || "BOSS picks at the plan")}</dd>
             <dt>Workflow</dt><dd>{v.workflow ? <>{v.workflow.name} · {v.workflow.steps} · {v.workflow.approvals} <Hand size={11} weight="fill" aria-label="you approve" /></> : String(picks.workflow_key || "the default")}</dd>
             <dt>Connectors</dt><dd>{connectors.join(" · ") || "none"}</dd>
-            <dt>Staging</dt><dd>{staging ? `${staging.host_id}${staging.port ? ` · :${staging.port}` : ""}` : "preview only"}</dd>
+            <dt>Staging</dt><dd>{staging ? `${staging.host ?? staging.host_id}${staging.port ? ` · :${staging.port}` : ""}${staging.made ? "" : " · once it has a repo"}` : "preview only"}</dd>
             <dt>Tell</dt><dd>{notify ? notify.replace(/^email:/, "") : "you · email"}</dd>
           </dl>
           <button type="button" className="px-btn" data-kind="ghost" onClick={() => ctx.tab("settings")}>Change in Settings →</button>

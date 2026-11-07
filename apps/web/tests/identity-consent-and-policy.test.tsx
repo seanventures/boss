@@ -150,9 +150,10 @@ describe("consent, from the API's 409", () => {
     const decided: (string | null)[] = [];
     const req: ConsentRequest = { ...consentFromBody(SCHEDULE_409)!, onDecided: (g) => decided.push(g) };
     expect(req.durations.map((d) => d.kind)).toEqual(["standing"]);
-    const el = await mount(<ConsentSheet request={req} onClose={() => undefined} />, "operator");
-    expect(el.querySelector("[data-testid='consent-task']")).toBeNull();
-    const standing = el.querySelector("[data-testid='consent-standing']")!;
+    await mount(<ConsentSheet request={req} onClose={() => undefined} />, "operator");
+    // The sheet is drawn above whatever asked for it (portalled to <body>, the step-up layer).
+    expect(document.querySelector("[data-testid='consent-task']")).toBeNull();
+    const standing = document.querySelector("[data-testid='consent-standing']") as HTMLElement;
     expect(standing.textContent).toBe("For 14 days");
     await click(standing);
     const post = calls.find((c) => c.method === "POST" && c.path === "/v1/identity/me/delegations")!;
