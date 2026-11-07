@@ -128,6 +128,8 @@ export type NextItem = {
   accept: Accept | null;
   /** A backlog candidate's words for the work and where it came from (§8 `text`, `ref`). */
   text: string; ref: string;
+  /** Why, in a few words ("71/190 pass · a blocked build"); the Roadmap item it is (`rec_id`). */
+  why?: string; rec_id?: string;
 };
 export type DemoLogin = { user: string; label: string; reveal: { href: string; requires: string } | null };
 export type Overview = {
@@ -200,13 +202,19 @@ export type OnboardingItem = { key: string; label: string; state: StepState; own
 export type Onboarding = {
   state: "not_started" | "running" | "ready" | "needs_you" | "failed";
   stages: Node[]; discover: { nodes: Node[]; live?: Node[] }; checklist: OnboardingItem[]; only_you: OnboardingItem[];
-  first_work: { label: string; kind: string; source: string; estimate_min: number | null; estimate_usd: number | null; start: Accept | null; others_href: string } | null;
+  first_work: { label: string; kind: string; source: string; estimate_min: number | null; estimate_usd: number | null; start: Accept | null; others_href: string;
+                /** Why it comes first (Marshal's reason, or the score), and what the estimate is based on. */
+                why?: string; why_first?: string; first_by?: string; estimate_runs?: number; estimate_basis?: string; workflow?: string; external_url?: string } | null;
   backlog: NextItem[];
   /** What the agent is doing now, in words: the engine's `now`, else the checklist item in progress. */
   now: string; elapsed_s: number; error: string;
   /** Screen 10: the Ready card's rows (its words, the agent on each), the whole backlog's size,
    *  which candidates are already on the Roadmap, and the accept route ("Accept backlog"). */
   ready: (OnboardingItem & { agent: string })[]; backlog_total: number; accepted: string[]; accept_backlog: Accept | null;
+  /** A finished run: seconds since it read the repo ("re-read 38s ago"); how many runs so far; the
+   *  run's trigger (created · manual · repo_added); the test baseline and where it came from. */
+  read_ago_s?: number | null; runs?: number; trigger?: string; started_at?: string;
+  tests?: { passed: number; total: number; failing: number; source: string; cause: string } | null;
 };
 export type JumpItem = { label: string; kind: string; href: string; sub: string; external: boolean };
 export type SettingsItem = { label: string; value: string; sub: string; reveal: { href: string; requires: string } | null; href: string };
@@ -363,7 +371,7 @@ const parseNext = (v: unknown): NextItem => {
   return { id: s(x.id), label: s(x.label) || label4(s(x.title) || s(x.text)), detail: s(x.detail), source: s(x.source), kind: s(x.kind),
            accepted: x.accepted === true,
            state: x.state === "proposed" ? "proposed" : "next", href: s(x.href), external_url: s(x.external_url), accept: parseAccept(x.accept),
-           text: s(x.text), ref: s(x.ref) };
+           text: s(x.text), ref: s(x.ref), why: s(x.why), rec_id: s(x.rec_id) };
 };
 const parseLogin = (v: unknown): DemoLogin => {
   const x = o(v); const r = o(x.reveal);
@@ -556,11 +564,19 @@ export const parseOnboarding = (v: unknown): Onboarding => {
     state, stages: a(x.stages).map(parseNode),
     discover: { nodes: a(o(x.discover).nodes).map(parseNode), live: a(o(x.discover).live).map(parseNode) }, checklist, only_you: onlyYou,
     first_work: Object.keys(fw).length ? { label: s(fw.label), kind: s(fw.kind), source: s(fw.source), estimate_min: nn(fw.estimate_min),
-                                           estimate_usd: nn(fw.estimate_usd), start: parseAccept(fw.start), others_href: s(fw.others_href) } : null,
+                                           estimate_usd: nn(fw.estimate_usd), start: parseAccept(fw.start), others_href: s(fw.others_href),
+                                           why: s(fw.why), why_first: s(fw.why_first), first_by: s(fw.first_by), workflow: s(fw.workflow),
+                                           estimate_runs: n(o(fw.estimate_basis).minutes_runs), estimate_basis: s(o(fw.estimate_basis).minutes),
+                                           external_url: s(fw.external_url) } : null,
     backlog: a(x.backlog).map((b) => ({ ...parseNext(b), accepted: s(o(b).state) === "accepted" })), now, elapsed_s: n(x.elapsed_s), error: s(x.error),
     ready: (a(x.ready).length ? a(x.ready) : a(x.checklist)).map((z) => ({ ...item(z), agent: s(o(z).agent) })),
     backlog_total: n(x.backlog_total, a(x.backlog).length), accepted: a(x.accepted).map((i) => s(i)),
     accept_backlog: parseAccept(x.accept_backlog),
+    read_ago_s: nn(x.read_ago_s), runs: n(x.runs), trigger: s(x.trigger), started_at: s(x.started_at),
+    tests: (() => {
+      const t = o(o(x.facts).tests);
+      return typeof t.total === "number" && t.total > 0 ? { passed: n(t.passed), total: n(t.total), failing: n(t.failing), source: s(t.label), cause: s(t.cause) } : null;
+    })(),
   };
 };
 
@@ -679,12 +695,13 @@ export const PX_PATHS = {
 } as const;
 
 /** Console URL state for the project page (§10). */
-export type PxUrl = { tab: Tab; drawer: { kind: string; id: string } | null; firstRun: boolean };
+/** `view`: a full-page view on the project page that is not a tab (`tab=onboarding`, screen 10). */
+export type PxUrl = { tab: Tab; drawer: { kind: string; id: string } | null; firstRun: boolean; view: "onboarding" | null };
 export function readPxUrl(search = typeof window === "undefined" ? "" : window.location.search): PxUrl {
   const p = new URLSearchParams(search);
   const raw = p.get("drawer") ?? "";
   const i = raw.indexOf(":");
-  return { tab: toTab(p.get("tab")), firstRun: p.get("first_run") === "1",
+  return { tab: toTab(p.get("tab")), firstRun: p.get("first_run") === "1", view: p.get("tab") === "onboarding" ? "onboarding" : null,
            drawer: raw ? { kind: i < 0 ? raw : raw.slice(0, i), id: i < 0 ? "" : raw.slice(i + 1) } : null };
 }
 
@@ -860,6 +877,10 @@ export async function runAccept(projectId: string, accept: Accept, label = "Acce
   if (roadmap) {
     const as = s(accept.body.as, "ticket") as AcceptAs;
     return acceptRecommendation(projectId, decodeURIComponent(roadmap[1]), as);
+  }
+  if (accept.href === `/v1/projects/${enc(projectId)}/onboarding/backlog/accept`) {
+    // A proposed candidate goes on Roadmap › Next (nothing starts).
+    return acceptBacklog(projectId, a(accept.body.ids).map((i) => s(i)).filter(Boolean));
   }
   if (accept.href === `/v1/projects/${enc(projectId)}/work`) {
     const b = accept.body;

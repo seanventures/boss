@@ -30,6 +30,11 @@ export function crumbsFor({ active, areaLabel, routeMode, hasProject, tab }: {
   if (routeMode || !hasProject) return [{ key: "area", label: areaLabel, kind: "here" }];
   if (active === "projects") return [{ key: "area", label: "Projects", kind: "here" }];
   if (active === "project") {
+    // Screen 10's own page: Projects / HelpDesk AI Demo / Onboarding.
+    if (tab === "onboarding") {
+      return [{ key: "projects", label: "Projects", kind: "link" }, { key: "project", label: "", kind: "project" },
+              { key: "tab", label: "Onboarding", kind: "here" }];
+    }
     const t = toTab(tab);
     return [
       { key: "projects", label: "Projects", kind: "link" },

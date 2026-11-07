@@ -1371,6 +1371,7 @@ def view(connection: Connection, project_id: str) -> dict[str, Any]:
     # THE LIVE DIAGRAM (screen 00b): what Helm is doing while it reads — the stack it found, the
     # code being mapped (118 / 214 files), the tests (142 / 148 pass), then the Ready check.
     stack = ((as_json(row["facts"], {}) or {}).get("stack") or {})
+    base = ((as_json(row["facts"], {}) or {}).get("tests") or {})
     stack_words = " · ".join(w for w in (stack.get("framework"), stack.get("language")) if w)
     know, tests = by_key["knowledge"], by_key["tests"]
     live = [{"key": "stack", "label": "Stack found", "state": "done" if stack_words else (
@@ -1378,7 +1379,9 @@ def view(connection: Connection, project_id: str) -> dict[str, Any]:
             {"key": "mapping", "label": "Mapping code", "state": know.get("state") or "todo",
              "sub": know.get("sub") or ""},
             {"key": "tests", "label": "Tests run", "state": tests.get("state") or "todo",
-             "sub": tests.get("sub") or ""},
+             # 00b-17 "142 / 148 pass": the real counts when a run was read, else the item's sub.
+             "sub": (f"{base['passed']} / {base['total']} pass" if base.get("total")
+                     else tests.get("sub") or "")},
             {"key": "ready", "label": "Ready check", "state": ready_state if ready_state == "done"
              else "todo", "sub": ""}]
     return {"run_id": row["id"], "state": row["state"], "trigger": row["trigger"],

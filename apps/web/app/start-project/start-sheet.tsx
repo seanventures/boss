@@ -287,7 +287,7 @@ export function StartProjectSheet({ step, onStep, onClose, projectId, homeId, go
 
         {step === "import" ? (
           <ImportRepo projectId={projectId} onCreated={(id, type) => go(type === "knowledge_graph"
-            ? knowledgePresetHref(id, homeId, "setup") : projectPageHref(id, homeId))} />
+            ? knowledgePresetHref(id, homeId, "setup") : projectPageHref(id, homeId, "project", "onboarding"))} />
         ) : null}
 
         {error ? <p className="bx-np-error" role="alert" data-testid="start-error">{error}</p> : null}

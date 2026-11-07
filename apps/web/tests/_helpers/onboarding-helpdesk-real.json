@@ -1,0 +1,395 @@
+{
+ "run_id": "onb_c0275b26013e46e2",
+ "state": "needs_you",
+ "trigger": "created",
+ "stages": [
+  {
+   "key": "discover",
+   "label": "Discover",
+   "state": "done",
+   "sub": "done \u00b7 5s"
+  },
+  {
+   "key": "ready",
+   "label": "Ready for work",
+   "state": "now",
+   "sub": "5 of 6"
+  },
+  {
+   "key": "backlog",
+   "label": "Propose backlog",
+   "state": "done",
+   "sub": "2 proposed"
+  },
+  {
+   "key": "first_work",
+   "label": "Work it",
+   "state": "now",
+   "sub": "verified loop"
+  },
+  {
+   "key": "deploy",
+   "label": "Deploy",
+   "state": "todo",
+   "sub": "not set up"
+  }
+ ],
+ "discover": {
+  "nodes": [
+   {
+    "key": "files",
+    "sub": "",
+    "label": "109 files",
+    "state": "done"
+   },
+   {
+    "key": "stack",
+    "sub": "",
+    "label": "Vite+JavaScript",
+    "state": "done"
+   },
+   {
+    "key": "tests",
+    "sub": "",
+    "label": "71/190 tests",
+    "state": "done"
+   },
+   {
+    "key": "hotspots",
+    "sub": "",
+    "label": "0 hotspots",
+    "state": "done"
+   },
+   {
+    "key": "docs",
+    "sub": "",
+    "label": "1 doc",
+    "state": "done"
+   }
+  ],
+  "live": [
+   {
+    "key": "stack",
+    "label": "Stack found",
+    "state": "done",
+    "sub": "Vite \u00b7 JavaScript"
+   },
+   {
+    "key": "mapping",
+    "label": "Mapping code",
+    "state": "done",
+    "sub": "96 files mapped"
+   },
+   {
+    "key": "tests",
+    "label": "Tests run",
+    "state": "done",
+    "sub": "71 / 190 pass"
+   },
+   {
+    "key": "ready",
+    "label": "Ready check",
+    "state": "todo",
+    "sub": ""
+   }
+  ]
+ },
+ "checklist": [
+  {
+   "at": "2026-11-07T04:05:34.810956+00:00",
+   "key": "repo_access",
+   "sub": "Read \u00b7 Write \u00b7 PR",
+   "label": "Repo access",
+   "owner": "agent",
+   "state": "done",
+   "action": null,
+   "detail": "BOSS can read, branch and open pull requests on acme/helpdesk-ai-demo.",
+   "agent": "engineering_captain"
+  },
+  {
+   "at": "2026-11-07T04:05:34.807660+00:00",
+   "key": "models",
+   "sub": "Claude connected",
+   "label": "Models",
+   "owner": "agent",
+   "state": "done",
+   "action": null,
+   "detail": "Claude connected",
+   "agent": "engineering_captain"
+  },
+  {
+   "at": "2026-11-07T04:05:34.830724+00:00",
+   "key": "knowledge",
+   "sub": "96 files mapped",
+   "label": "Code mapped",
+   "owner": "agent",
+   "state": "done",
+   "action": null,
+   "detail": "Code mapped (96 files, 419 graph nodes); the dossier read the repository's 109 files.",
+   "agent": "engineering_captain"
+  },
+  {
+   "at": "2026-11-07T04:05:34.834212+00:00",
+   "key": "tests",
+   "sub": "119 failing \u2192 backlog",
+   "label": "Tests",
+   "owner": "agent",
+   "state": "done",
+   "action": null,
+   "detail": "71 of 190 tests pass in the last full run, a blocked build, 9h ago; 119 fail in setup (password authentication failed for user) \u2014 fixing them is in the backlog. 40 test files, run with npm test.",
+   "agent": "qa"
+  },
+  {
+   "at": "2026-11-07T04:05:34.834218+00:00",
+   "key": "baseline_build",
+   "sub": "First build",
+   "label": "Baseline build",
+   "owner": "agent",
+   "state": "skipped",
+   "action": null,
+   "detail": "No CI runs on the default branch: the first build runs the build and tests in its own sandbox and reports them on its pull request.",
+   "agent": "builder"
+  },
+  {
+   "at": "2026-11-07T04:05:34.843478+00:00",
+   "key": "deploy_target",
+   "sub": "Needs a server",
+   "label": "Deploy target",
+   "owner": "you",
+   "state": "todo",
+   "action": {
+    "href": "?project_id=helpdesk-ai-demo&area=infra&add=host",
+    "label": "Add a server"
+   },
+   "detail": "No verified server yet: add one and BOSS deploys staging there.",
+   "agent": "sre"
+  },
+  {
+   "at": "2026-11-07T04:05:34.841472+00:00",
+   "key": "secrets",
+   "sub": "22 read \u00b7 2 generated",
+   "label": "Secrets",
+   "owner": "agent",
+   "state": "done",
+   "action": null,
+   "detail": "The app reads 22 settings (boss.deploy.yaml, compose, code); BOSS generates SESSION_SECRET, DEMO_PASSWORD; the deploy manifest sets ALLOW_DEMO_SEED, APP_ENV; 18 have defaults or are optional. None needs you.",
+   "agent": "sre"
+  }
+ ],
+ "ready": [
+  {
+   "at": "2026-11-07T04:05:34.810956+00:00",
+   "key": "repo_access",
+   "sub": "Read \u00b7 Write \u00b7 PR",
+   "label": "Repo access",
+   "owner": "agent",
+   "state": "done",
+   "action": null,
+   "detail": "BOSS can read, branch and open pull requests on acme/helpdesk-ai-demo.",
+   "agent": "engineering_captain"
+  },
+  {
+   "at": "2026-11-07T04:05:34.834218+00:00",
+   "key": "baseline_build",
+   "sub": "First build",
+   "label": "Builds clean",
+   "owner": "agent",
+   "state": "skipped",
+   "action": null,
+   "detail": "No CI runs on the default branch: the first build runs the build and tests in its own sandbox and reports them on its pull request.",
+   "agent": "builder"
+  },
+  {
+   "at": "2026-11-07T04:05:34.834212+00:00",
+   "key": "tests",
+   "sub": "119 failing \u2192 backlog",
+   "label": "Tests run",
+   "owner": "agent",
+   "state": "done",
+   "action": null,
+   "detail": "71 of 190 tests pass in the last full run, a blocked build, 9h ago; 119 fail in setup (password authentication failed for user) \u2014 fixing them is in the backlog. 40 test files, run with npm test.",
+   "agent": "qa"
+  },
+  {
+   "key": "workflow",
+   "label": "Workflow picked",
+   "state": "done",
+   "owner": "agent",
+   "detail": "New work runs through Minor Feature.",
+   "sub": "Minor Feature",
+   "action": null,
+   "agent": "engineering_captain"
+  },
+  {
+   "at": "2026-11-07T04:05:34.843478+00:00",
+   "key": "deploy_target",
+   "sub": "Needs a server",
+   "label": "Staging host",
+   "owner": "you",
+   "state": "todo",
+   "action": {
+    "href": "?project_id=helpdesk-ai-demo&area=infra&add=host",
+    "label": "Add a server"
+   },
+   "detail": "No verified server yet: add one and BOSS deploys staging there.",
+   "agent": "sre"
+  },
+  {
+   "at": "2026-11-07T04:05:34.841472+00:00",
+   "key": "secrets",
+   "sub": "22 read \u00b7 2 generated",
+   "label": "App secrets",
+   "owner": "agent",
+   "state": "done",
+   "action": null,
+   "detail": "The app reads 22 settings (boss.deploy.yaml, compose, code); BOSS generates SESSION_SECRET, DEMO_PASSWORD; the deploy manifest sets ALLOW_DEMO_SEED, APP_ENV; 18 have defaults or are optional. None needs you.",
+   "agent": "sre"
+  }
+ ],
+ "only_you": [
+  {
+   "at": "2026-11-07T04:05:34.843478+00:00",
+   "key": "deploy_target",
+   "sub": "Needs a server",
+   "label": "Deploy target",
+   "owner": "you",
+   "state": "todo",
+   "action": {
+    "href": "?project_id=helpdesk-ai-demo&area=infra&add=host",
+    "label": "Add a server"
+   },
+   "detail": "No verified server yet: add one and BOSS deploys staging there.",
+   "agent": "sre"
+  }
+ ],
+ "first_work": {
+  "id": "cand_7dddae711c2b",
+  "why": "71/190 pass \u00b7 a blocked build",
+  "kind": "bug",
+  "label": "Fix the 119 failing tests",
+  "start": {
+   "body": {
+    "kind": "bug",
+    "text": "Make the test suite pass: 71 of 190 tests pass in the last full run, a blocked build, 9h ago, and most of the 119 failures happen in setup (password authentication failed for user). Run it with `npm test`.",
+    "title": "Fix the 119 failing tests",
+    "source_ref": "rec:wi_9f560c6f9cd9484d"
+   },
+   "href": "/v1/projects/helpdesk-ai-demo/work",
+   "method": "POST"
+  },
+  "detail": "71 of 190 tests pass in the last full run, a blocked build, 9h ago; most fail in setup: password authentication failed for user.",
+  "rec_id": "wi_9f560c6f9cd9484d",
+  "source": "tests",
+  "first_by": "marshal",
+  "workflow": "Minor Feature",
+  "why_first": "A red suite blocks every later change",
+  "others_href": "?project_id=helpdesk-ai-demo&area=project&tab=roadmap",
+  "estimate_min": 85,
+  "estimate_usd": null,
+  "external_url": null,
+  "estimate_basis": {
+   "usd": null,
+   "minutes": "typical",
+   "usd_runs": 0,
+   "minutes_runs": 0
+  },
+  "accepted": false
+ },
+ "backlog": [
+  {
+   "id": "cand_7dddae711c2b",
+   "ref": "tests:suite",
+   "why": "71/190 pass \u00b7 a blocked build",
+   "href": "?project_id=helpdesk-ai-demo&area=project&tab=roadmap",
+   "kind": "bug",
+   "text": "Make the test suite pass: 71 of 190 tests pass in the last full run, a blocked build, 9h ago, and most of the 119 failures happen in setup (password authentication failed for user). Run it with `npm test`.",
+   "label": "Fix the 119 failing tests",
+   "score": 65.1,
+   "state": "proposed",
+   "where": null,
+   "detail": "71 of 190 tests pass in the last full run, a blocked build, 9h ago; most fail in setup: password authentication failed for user.",
+   "rec_id": "wi_9f560c6f9cd9484d",
+   "source": "tests",
+   "first_by": "marshal",
+   "severity": "high",
+   "why_first": "A red suite blocks every later change",
+   "task_class": "red_main",
+   "occurrences": 119,
+   "external_url": null
+  },
+  {
+   "id": "cand_0621af6c9a56",
+   "ref": "signal:sig_01M6T2XSFA1W2KCN0WC92V3BQZ",
+   "why": "no CI on the default branch",
+   "href": "?project_id=helpdesk-ai-demo&area=project&tab=roadmap",
+   "kind": "chore",
+   "text": "acme/helpdesk-ai-demo has no CI",
+   "label": "Add CI",
+   "score": 43.43,
+   "state": "proposed",
+   "where": null,
+   "detail": "acme/helpdesk-ai-demo has no CI",
+   "rec_id": "wi_0f78782835a04d9b",
+   "source": "roadmap",
+   "severity": "medium",
+   "task_class": "ci_setup",
+   "occurrences": 1,
+   "external_url": null
+  }
+ ],
+ "backlog_total": 2,
+ "accepted": [],
+ "now": "",
+ "error": null,
+ "started_at": "2026-11-07T04:05:29.730505+00:00",
+ "finished_at": "2026-11-07T04:05:34.885936+00:00",
+ "elapsed_s": 5,
+ "read_ago_s": 0,
+ "runs": 1,
+ "facts": {
+  "stack": {
+   "build": "npm",
+   "tests": true,
+   "runs_as": "Web app",
+   "language": "JavaScript",
+   "framework": "Vite"
+  },
+  "tests": {
+   "at": "2026-11-06T19:05:34.798964+00:00",
+   "ago": "9h ago",
+   "from": "a blocked build",
+   "href": "?project_id=helpdesk-ai-demo&area=code_tasks&view=apps&build=crun_de96bf12772a4fde88b7_7bc4cca2",
+   "cause": "password authentication failed for user",
+   "label": "the last full run, a blocked build, 9h ago",
+   "total": 190,
+   "passed": 71,
+   "failing": 119,
+   "build_id": "crun_de96bf12772a4fde88b7_7bc4cca2"
+  },
+  "commands": {
+   "run": [
+    "npm start"
+   ],
+   "lint": [],
+   "test": [
+    "npm test"
+   ],
+   "build": [
+    "npm run build"
+   ],
+   "install": [
+    "npm ci"
+   ]
+  },
+  "read_from": "fetched"
+ },
+ "start": {
+  "href": "/v1/projects/helpdesk-ai-demo/onboarding/start",
+  "method": "POST"
+ },
+ "accept_backlog": {
+  "href": "/v1/projects/helpdesk-ai-demo/onboarding/backlog/accept",
+  "method": "POST"
+ },
+ "href": "?project_id=helpdesk-ai-demo&area=project&tab=overview&drawer=onboarding"
+}

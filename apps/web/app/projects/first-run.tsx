@@ -35,7 +35,7 @@ import { FX_ONBOARDING } from "../../lib/project-experience-fixtures";
 import { useSignin } from "../setup/github-signin-row";
 import { welcomeState, type WelcomeState } from "../setup/welcome";
 import { Face, Flow, Ico, Journey, Said, openAddProject, usePxUrl } from "./kit";
-import { DiscoverDiagram } from "./onboarding";
+import { LiveDiagram, clockWords, useElapsed } from "./onboarding";
 
 /** Repo and models, at GitHub or Models: `add` opens its add sheet (a step still to do); a
  *  configured one is MANAGED there (PX-30: "Manage ›" never opens an add sheet). */
@@ -220,6 +220,7 @@ function Orbit() {
 function Guided({ card, s, known }: { card: ProjectCard; s: WelcomeState; known: boolean }) {
   const ob = usePxRead<Onboarding>(PX_PATHS.onboarding(card.id), parseOnboarding, { everyMs: 5_000, demo: () => parseOnboarding(FX_ONBOARDING) });
   const o = ob.data;
+  const elapsed = useElapsed(o);
   const discover = o?.stages.find((x) => x.key === "discover");
   const ready = o?.stages.find((x) => x.key === "ready");
   const steps: { label: string; sub: string; state: StepState; icon: React.ReactNode }[] = [
@@ -268,7 +269,7 @@ function Guided({ card, s, known }: { card: ProjectCard; s: WelcomeState; known:
         <div className="px-stack">
           <section className="px-card" aria-labelledby="px-g-live">
             <div className="px-card-h"><Ico icon={Compass} c="teal" /><h2 id="px-g-live">Helm is reading your repo</h2><span className="px-tag" data-tone="blue"><span className="px-dot" data-s="now" aria-hidden /> live</span>
-              {o ? <span className="px-more px-mono px-faint">{Math.floor(o.elapsed_s / 60)}m {o.elapsed_s % 60}s</span> : null}</div>
+              {o ? <span className="px-more px-mono px-faint" data-testid="px-guide-clock">{clockWords(elapsed)}</span> : null}</div>
             {o && o.state === "not_started" ? (
               <div className="px-row px-wrap" data-testid="px-guide-not-started">
                 <p className="px-faint" style={{ margin: 0 }}>Helm hasn&apos;t started reading this repo yet.</p>
@@ -276,7 +277,7 @@ function Guided({ card, s, known }: { card: ProjectCard; s: WelcomeState; known:
                              onClick={() => void startOnboarding(card.id).then((r) => { setSaid(r.ok ? (r.demo ? "Sample mode — nothing was sent." : "Onboarding started.") : (r.error ?? "It didn't start.")); if (r.ok) ob.refresh(); })}>
                   <Compass size={12} /> Start onboarding</GatedButton>
               </div>
-            ) : o ? <DiscoverDiagram nodes={o.discover.live?.length ? o.discover.live : o.discover.nodes} /> : (
+            ) : o ? <LiveDiagram nodes={o.discover.live ?? []} /> : (
               <p className="px-faint" data-testid="px-guide-waiting">{ob.state === "missing" ? "Helm's live view didn't load — the project page shows its progress." : ob.state === "error" ? (ob.error ?? "Helm's live view didn't load.") : "Starting…"}</p>
             )}
             <a className="px-btn" data-kind="ghost" href={projectHref(card.id)} data-testid="px-guide-open-project">Open {card.name} →</a>

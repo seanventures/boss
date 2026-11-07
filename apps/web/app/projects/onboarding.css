@@ -1,0 +1,63 @@
+/* Onboarding (screens 10 and 00b): what px.css does not already draw — the live diagram
+   ("Helm is reading your repo"), the read-only workspace row, the re-read line, the Ready card's
+   amber pin, and the stage strip that scrolls sideways on a phone instead of wrapping. */
+
+.px-ob-view .px-card-h h2 { white-space: nowrap; }
+
+/* The stage strip: five stages, never wrapped, never a trailing arrow (10-03..08). */
+.px-ob { overflow-x: auto; scrollbar-width: none; }
+.px-ob::-webkit-scrollbar { display: none; }
+
+.px-ob-foot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+.px-ob-ws { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: .6rem; }
+.px-ob-ws .px-chip { color: var(--amber); }
+.px-ob-ws .px-chip[data-ok] { color: var(--green); }
+.px-ob-ws .px-chip .px-faint { color: var(--faint); font-weight: 400; }
+.px-ob-error { display: flex; align-items: center; gap: 6px; margin: 10px 0 0; color: var(--red); font-size: .62rem; }
+
+/* 10-13: the Ready card's teal border and its amber "only you" pin. */
+.px-ob-ready { border-color: color-mix(in srgb, var(--teal) 45%, transparent); }
+.px-pin { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; display: inline-grid; place-items: center;
+  background: #e879f9; color: #2a0631; font-size: .52rem; font-weight: 800; }
+
+/* The backlog rows read like the wireframe's checklist rows (rank, title + source · why, tag). */
+.px-ob-bl .px-rank { width: 22px; height: 22px; font-size: .58rem; }
+.px-ob-bl small a { color: var(--accent-text); text-decoration: none; }
+button.px-ob-more { width: 100%; background: none; border-left: 0; border-right: 0; border-bottom: 0; text-align: left; cursor: pointer; color: inherit; font: inherit; }
+
+/* 00b-24: First work, suggested — the violet border; its title and Marshal's reason. */
+.px-ob-first { border-color: color-mix(in srgb, #8b7cf6 55%, transparent); }
+.px-ob-first-t { display: block; font-size: .74rem; }
+.px-ob-why { margin: 4px 0 0; font-size: .58rem; line-height: 1.45; }
+
+/* 00b-13..19: the live diagram. */
+.px-ob-livecard { background: radial-gradient(120% 140% at 0% 0%, color-mix(in srgb, var(--teal) 9%, var(--surface)) 0%, var(--surface) 60%); }
+.px-live { position: relative; width: 100%; max-width: 760px; margin: 0 auto; }
+.px-live svg { display: block; width: 100%; height: auto; }
+.px-live-helm { fill: color-mix(in srgb, var(--accent) 22%, var(--surface)); stroke: var(--accent); stroke-width: 2.5; }
+.px-live-face { position: absolute; left: calc(78 / 640 * 100%); top: calc(126 / 250 * 100%); transform: translate(-50%, -50%); }
+.px-live-face > * { width: clamp(30px, 8.6vw, 56px) !important; height: clamp(30px, 8.6vw, 56px) !important; }
+.px-live-cap { font-family: var(--sans); font-size: 13px; font-weight: 600; fill: var(--ink); }
+.px-live-node { fill: var(--surface); stroke-width: 1.6; }
+.px-live-node[data-s="done"] { fill: color-mix(in srgb, var(--green) 10%, var(--surface)); }
+.px-live-node[data-s="now"] { fill: color-mix(in srgb, var(--teal) 12%, var(--surface)); animation: px-live-pulse 1.8s ease-in-out infinite; }
+.px-live-node[data-s="todo"], .px-live-node[data-s="skipped"] { stroke-dasharray: 5 4; }
+.px-live-label { font-family: var(--sans); font-size: 13px; font-weight: 600; fill: var(--ink); }
+.px-live-label[data-faint] { fill: var(--faint); font-weight: 500; }
+.px-live-sub { font-family: var(--mono); font-size: 11.5px; fill: var(--faint); }
+.px-live-ready { fill: none; stroke: var(--border-strong); stroke-width: 1.4; stroke-dasharray: 5 4; }
+.px-live-ready[data-s="done"] { stroke: var(--green); stroke-dasharray: none; fill: color-mix(in srgb, var(--green) 10%, var(--surface)); }
+.px-live-ready[data-s="now"] { stroke: var(--teal); }
+/* 00b-19 / X-82: a done edge turns green in 200 ms. */
+.px-live-edge { transition: stroke .2s ease, stroke-dasharray .2s ease; }
+@keyframes px-live-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .55; } }
+
+@media (max-width: 760px) {
+  /* 390: the stage strip scrolls sideways, 56 px a stage at least; cards stack (px.css). */
+  .px-ob { grid-template-columns: repeat(5, minmax(56px, 1fr)); }
+  .px-ob-foot { align-items: flex-start; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .px-live-node[data-s="now"] { animation: none; }
+  .px-live-edge { transition: none; }
+}
