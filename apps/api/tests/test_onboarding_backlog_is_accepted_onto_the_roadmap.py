@@ -104,14 +104,19 @@ def test_accepting_the_backlog_puts_items_on_next_in_order_and_starts_nothing(wo
         assert len(client.get(f"/v1/projects/{pid}/plan").json()["next"]) == len(lanes["next"])
 
 
-def test_the_plan_has_now_next_later_and_cards_move_between_lanes(world, client, project):
+def test_the_plan_has_now_next_later_and_cards_move_between_lanes(world, client, engine, project):
     pid = project["id"]
+    # The deploy-waiting run is the accepted "Email-to-ticket intake" already moving.
+    with engine.begin() as db:
+        db.execute(text(
+            "UPDATE workflow_runs SET input = jsonb_set(input, '{title}', "
+            "'\"Email-to-ticket intake\"') WHERE id = :r"), {"r": project["deploy"]["run_id"]})
     with _as(world, world.owner):
         lanes = client.get(f"/v1/projects/{pid}/plan").json()
     assert [c["title"] for c in lanes["later"]] == ["Reply suggestions", "Status index"]
     # ONE LANE PER ITEM (PX-38): "Email-to-ticket intake" was accepted, but its run is already
     # moving, so it shows once, in Now — never in Now and Next at once.
-    assert [c["title"] for c in lanes["next"]] == ["Weekend SLA pause", "Fix 6 failing tests"]
+    assert [c["title"] for c in lanes["next"]] == ["SLA timer ignores weekends", "Fix 6 failing tests"]
     assert "Email-to-ticket intake" in [c["label"] for c in lanes["now"]]
     assert {c["state"] for c in lanes["now"]} <= {"running", "needs_you", "stalled"} and lanes["now"]
     first = lanes["next"][0]

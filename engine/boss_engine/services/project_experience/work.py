@@ -862,6 +862,12 @@ def matching(found: list[dict[str, Any]], *, state: Optional[str] = None,
     if state:
         wanted = {s.strip() for s in str(state).split(",") if s.strip()}
         found = [w for w in found if w["state"] in wanted]
+    if q and re.fullmatch(r"\s*#\d+\s*", str(q)):
+        # "#3" is a number: the pull request's, or the issue's it came from — never "12" in words.
+        number = str(q).strip().lstrip("#")
+        return [w for w in found
+                if number == str((w["links"].get("pr") or {}).get("number") or "")
+                or number == str((w["links"].get("issue") or {}).get("number") or "")]
     if q:
         needle = str(q).strip().lower().lstrip("#")
         found = [w for w in found if needle in (w["title"] or "").lower()

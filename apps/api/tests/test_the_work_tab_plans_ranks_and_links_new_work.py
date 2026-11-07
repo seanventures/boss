@@ -396,3 +396,11 @@ def test_the_plan_rounds_time_like_a_person_says_it():
     from boss_engine.services.project_experience.new_work import round_minutes
 
     assert [round_minutes(m) for m in (None, 0, 4, 9, 12, 23, 35)] == [None, None, 4, 9, 10, 25, 35]
+
+
+def test_a_number_finds_the_pr_or_the_issue_never_a_digit_in_words(world, client, project):
+    with _as(world, world.owner):
+        by_issue = client.get(f"/v1/projects/{project['id']}/work", params={"q": "#12"}).json()
+        by_pr = client.get(f"/v1/projects/{project['id']}/work", params={"q": "#2"}).json()
+    assert [w["title"] for w in by_issue["items"]] == ["SLA timer ignores weekends"]
+    assert [w["title"] for w in by_pr["items"]] == ["UI refresh"]
