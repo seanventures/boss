@@ -54,9 +54,14 @@ def test_a_reclaim_past_its_last_attempt_ends_the_job_and_says_why_on_the_build(
         rid = _run(c, project)
         jid = _job(c, project, run_id=rid, attempt=30, max_attempts=3)
     try:
-        with eng.begin() as c:
-            got = JobLeaseService(get_settings()).claim_job(c, "worker-test", ["code.task"], 300)
-        assert got is None or got["id"] != jid, "a spent job is never leased again"
+        # Other leftovers in a shared test database may be claimed first: poll as a worker
+        # would, until the queue has nothing left for it.
+        for _ in range(15):
+            with eng.begin() as c:
+                got = JobLeaseService(get_settings()).claim_job(c, "worker-test", ["code.task"], 300)
+            assert got is None or got["id"] != jid, "a spent job is never leased again"
+            if got is None:
+                break
         with eng.begin() as c:
             job = c.execute(text("SELECT status, last_error FROM jobs WHERE id = :j"),
                             {"j": jid}).mappings().one()
