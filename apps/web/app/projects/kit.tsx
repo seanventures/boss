@@ -163,7 +163,7 @@ export function Flow({ nodes, testid }: { nodes: { label: string; state?: StepSt
         <span key={`${n.label}-${i}`} className="px-fl-step" data-flow-step>
           {i ? <span className="px-fl-w" aria-hidden data-s={(nodes[i - 1].state ?? "") === "done" ? "done" : undefined} /> : null}
           <span className="px-fl-n" role="listitem" data-t={n.type ?? n.state ?? "todo"} title={n.title}>
-            {n.icon}{n.state === "done" && !n.icon ? <Check size={11} weight="bold" aria-hidden /> : null}{n.label}
+            {n.icon}{n.state === "done" && !n.icon ? <Check size={11} weight="bold" aria-hidden /> : null}<span className="px-fl-l">{n.label}</span>
           </span>
         </span>
       ))}

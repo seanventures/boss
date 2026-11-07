@@ -8,6 +8,7 @@
  *                   from the reads the page has (onboarding, work, roadmap, deployments);
  *   NeedsBody       a Needs-you item: why it waits, its path, the work and the PR.
  */
+import { DiagnosisFlow } from "../../components/stuck-work";
 import React from "react";
 import {
   ArrowSquareOut, Check, Flask, Globe, GitMerge, Kanban, ListChecks, MapTrifold, RocketLaunch, Warning,
@@ -252,6 +253,8 @@ export function NeedsBody({ ctx, n }: { ctx: PxCtx; n: NeedsYou }) {
     <>
       {n.mini.length ? <Flow nodes={n.mini} testid="px-drawer-needs-flow" /> : null}
       {n.detail ? <p style={{ margin: 0, lineHeight: 1.5 }}>{n.detail}</p> : null}
+      {/* What the Shepherd found about the stuck or refused work this asks about (stuck_work). */}
+      <DiagnosisFlow d={n.diagnosis} testId="px-drawer-needs-diagnosis" />
       <ReleaseList n={n} />
       <dl className="px-kv">
         {n.created_at ? <><dt>Asked</dt><dd>{whenLocal(n.created_at)}</dd></> : null}

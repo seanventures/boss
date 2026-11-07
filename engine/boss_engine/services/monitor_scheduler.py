@@ -517,6 +517,15 @@ def tick(engine, settings: Any, *, now: Optional[datetime] = None,
         with begin(engine) as c:
             return person_wait.poll_due(c, settings, now=now)
     out["person_wait_resumed"] = guard("person_wait", person_wait_sweep) or 0
+
+    # ALWAYS-ON DIAGNOSIS: every build that stopped moving, failed or waits on a person is
+    # investigated by the Shepherd without anyone asking (stuck_work): cause with evidence, the
+    # safe move taken, ONE card only when a person must act.
+    def stuck_sweep():
+        from . import stuck_work
+
+        return stuck_work.sweep(engine, settings, now=now, adapter=adapter)
+    out["stuck_work"] = guard("stuck_work", stuck_sweep)
     return out
 
 

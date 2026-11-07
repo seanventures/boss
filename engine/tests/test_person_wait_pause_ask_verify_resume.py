@@ -58,39 +58,9 @@ class TestVerifyAndResumeWaitsWithoutACoveringGrant(unittest.TestCase):
         jobs.enqueue.assert_not_called()
 
 
-class TestVerifyAndResumeResumesOnceCoverageAppears(unittest.TestCase):
-    """P1 -- a grant that exactly covers the stored scope resumes the same job, exactly once."""
-
-    def test_resumes_exactly_once_under_duplicate_calls(self):
-        from boss_engine.services import person_wait
-        from boss_engine.services.decisions import InvalidDecisionTransitionError
-
-        engine = MagicMock()
-        settings = MagicMock()
-        jobs = MagicMock()
-        covering_grant = {"grant_id": "grant_1", "scope": {"permissions": ["code.write"]}}
-
-        run_row = {
-            "run_id": "run_1", "status": person_wait.STATUS_WAITING_ON_PERSON,
-            "decision_id": "dec_1",
-            "finalize_ctx": {"person_wait": {"scope": {"permissions": ["code.write"]},
-                                              "opened_at": "2026-10-29T00:00:00Z"}},
-        }
-
-        with patch.object(person_wait, "_load_run", return_value=run_row), \
-             patch("boss_engine.identity.grants.find_covering", return_value=covering_grant), \
-             patch.object(person_wait.DecisionService, "transition") as transition, \
-             patch.object(person_wait, "record_resolution") as record:
-            first = person_wait.verify_and_resume(engine, settings, jobs, run_id="run_1")
-            # Second call (duplicate webhook / concurrent poll tick): the decision is no longer
-            # pending, so the resume must not fire a second time.
-            transition.side_effect = InvalidDecisionTransitionError("already resolved")
-            second = person_wait.verify_and_resume(engine, settings, jobs, run_id="run_1")
-
-        self.assertTrue(first.get("resumed", False))
-        self.assertFalse(second.get("resumed", False))
-        self.assertEqual(transition.call_count, 2)
-        record.assert_called_once()
+# Resuming once a grant covers the run (exactly once, under that grant) is pinned on a real
+# database in test_person_wait_on_a_real_database.py: the mocked version passed while every
+# statement of the real one raised.
 
 
 class TestSecretLikeRepliesAreNeverPersistedOrEchoed(unittest.TestCase):

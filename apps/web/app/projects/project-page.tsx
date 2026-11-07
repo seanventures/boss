@@ -18,7 +18,7 @@ import {
   Plus, RocketLaunch, TreeStructure, GitMerge, CloudCheck, ListChecks, GithubLogo, type Icon,
 } from "@phosphor-icons/react";
 
-import { GatedButton } from "../../components/gated";
+import { GatedButton, useGate } from "../../components/gated";
 import { openDockAbout } from "../../lib/dock-subject";
 import {
   PX_PATHS, TAB_WORDS, isMissingStatus, navigateTo, needsYouCards, overviewFromStart, parseOnboarding, parseOverview, parseWork, projectHref, pxHref, readPxUrl, usePxRead,
@@ -36,6 +36,7 @@ import { HealthTab } from "./tab-health";
 import { SettingsTab } from "./tab-settings";
 import { DrawerHost } from "./drawers";
 import { OnboardingView, clockWords, useElapsed } from "./onboarding";
+import { NewWorkModal, type Prefill } from "./new-work";
 import "./px.css";
 
 export const TAB_ICONS: Record<Tab, Icon> = {
@@ -54,6 +55,12 @@ export type PxCtx = {
   tab: (t: Tab, extra?: Record<string, string | null>) => void;
   open: (kind: string, id: string) => void;
   ask: (question?: string) => void;
+  /** NEW WORK, the modal, on any tab (header, the Work tab's bar, N, an answer's Edit). */
+  newWork?: (prefill?: Prefill) => void;
+  /** The row a Start just made: it slides in on the Work tab. */
+  freshWork?: string;
+  /** What the last New work did ("Started — Juno is planning it."), said on the Work tab. */
+  workSaid?: { text: string; tone?: "red" | "green" };
 };
 
 /** ASK THE CAPTAIN, from any door (09-01: header Ask, Overview Ask Helm, ⌘K "Ask Helm…"): the
@@ -131,6 +138,39 @@ export function ProjectPage({ projectId, actor, orgId }: { projectId: string; ac
   const tab = useCallback((t: Tab, extra: Record<string, string | null> = {}) => writePxUrl({ tab: t === "overview" ? null : t, drawer: null, ...extra }), []);
   const ctxBase = { projectId, actor, orgId: orgId ?? null };
   const stickyRef = useStickyHead();
+  // NEW WORK: one modal for the whole page. `compose=1` (the header's old door, ⌘K, an Ask-Helm
+  // answer's "New work · Edit" with `compose_text`/`compose_kind`) opens it prefilled — never sent —
+  // and the flag is dropped so a reload does not reopen it.
+  const [nw, setNw] = useState<{ open: boolean; prefill: Prefill }>({ open: false, prefill: null });
+  const [fresh, setFresh] = useState("");
+  const [workSaid, setWorkSaid] = useState<{ text: string; tone?: "red" | "green" }>({ text: "" });
+  const startGate = useGate("workflow_run:start", projectId);
+  const canStart = useRef(startGate.allowed);
+  canStart.current = startGate.allowed;
+  const newWork = useCallback((prefill?: Prefill) => { if (canStart.current) setNw({ open: true, prefill: prefill ?? null }); }, []);
+  useEffect(() => {
+    const p = new URLSearchParams(window.location.search);
+    // Only once the person may start work (the gate reads the identity after mount).
+    if (p.get("compose") !== "1" || !startGate.allowed) return;
+    const k = p.get("compose_kind");
+    const words = p.get("compose_text") ?? "";
+    newWork(words || k ? { text: words, kind: k === "feature" || k === "bug" || k === "ticket" ? k : undefined } : null);
+    writePxUrl({ compose: null, compose_text: null, compose_kind: null }, "replace");
+  }, [url, newWork, startGate.allowed]);
+  // N opens it, anywhere on the page but in a box or behind another dialog.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "n" && e.key !== "N") return;
+      if (e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented) return;
+      const el = e.target as HTMLElement | null;
+      if (el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName))) return;
+      if (document.querySelector("[role='dialog'][aria-modal='true']")) return;
+      e.preventDefault();
+      newWork();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [newWork]);
 
   if (!overview) {
     const failed = ov.state === "error" || (ov.state === "missing" && start.state === "error");
@@ -154,6 +194,7 @@ export function ProjectPage({ projectId, actor, orgId }: { projectId: string; ac
     // ASK THE CAPTAIN opens its drawer (screen 09) on this page; a question rides as `cap_ask`
     // and is sent once when the drawer opens (the dock's own conversation, one agent path).
     tab, open: openDrawer, ask: (q) => writePxUrl({ drawer: "captain", cap_ask: q?.trim() ? q.trim() : null }),
+    newWork, freshWork: fresh, workSaid,
   };
   const ob = onboarding.data;
   // PX-15: "Onboarding" (with the working face and the timer) only once a run has started —
@@ -211,6 +252,18 @@ export function ProjectPage({ projectId, actor, orgId }: { projectId: string; ac
           : <SettingsTab ctx={ctx} />}
       </div>
       {url.drawer ? <DrawerHost ctx={ctx} drawer={url.drawer} onClose={closeDrawer} /> : null}
+      {nw.open ? (
+        <NewWorkModal ctx={ctx} prefill={nw.prefill}
+                      onClose={() => setNw({ open: false, prefill: null })}
+                      onDone={(r) => {
+                        setNw({ open: false, prefill: null });
+                        setWorkSaid({ text: r.said, tone: "green" });
+                        try { window.dispatchEvent(new CustomEvent("boss:toast", { detail: { type: "success", message: r.said } })); } catch { /* non-browser */ }
+                        if (r.runId) setFresh(r.runId);
+                        if (r.tab && url.tab !== r.tab) tab(r.tab);
+                        work.refresh(); start.refresh();
+                      }} />
+      ) : null}
     </div>
   );
 }
@@ -278,7 +331,7 @@ function Header({ ctx, onboarding }: { ctx: PxCtx; onboarding: boolean }) {
       )}
       {!onboarding ? (
         <GatedButton permission="workflow_run:start" projectId={ctx.projectId} className="px-btn" data-kind="primary" data-size="l" data-testid="px-head-new-work"
-                     title="Describe a feature, a bug or paste a ticket" onClick={() => ctx.tab("work", { compose: "1" })}>
+                     title="Describe a feature, a bug or paste a ticket (N)" onClick={() => ctx.newWork?.()}>
           <Plus size={14} weight="bold" aria-hidden /> New work
         </GatedButton>
       ) : null}

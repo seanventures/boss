@@ -24,6 +24,10 @@ LANES = ("next", "later")
 NOW_STATES = ("running", "needs_you", "stalled")
 #: The work kind a roadmap item starts as through the start door.
 _START_KIND = {"hardening": "bug", "design_fix": "bug"}
+#: What New work's "Add to Next" keeps on the item and its later Start sends again.
+_CARRIED = ("workflow_key", "acceptance_criteria", "priority", "notify_channel")
+#: Where a priority puts new work on Next: urgent and high go before normal and low.
+_PRIORITY_RANK = {"urgent": 0, "high": 1, "normal": 2, "low": 3}
 
 
 def _norm(value: Any) -> str:
@@ -82,7 +86,9 @@ def _planned(connection: Connection, project_id: str) -> list[dict[str, Any]]:
                                                          f"{r['title']}. {r['why'] or ''}")[:4000],
                                "title": short_title(r["title"]),
                                "source_ref": f"rec:{item_id}",
-                               **({"source_url": issue["external_url"]} if issue else {})}}})
+                               **({"source_url": issue["external_url"]} if issue else {}),
+                               # Work planned from the New work modal keeps what it was given.
+                               **{k: facts[k] for k in _CARRIED if facts.get(k)}}}})
     return out
 
 
@@ -144,6 +150,71 @@ def move(connection: Connection, project_id: str, item_id: str, *, lane: str,
     return lanes(connection, project_id)
 
 
+def add(connection: Connection, project_id: str, *, kind: str, title: str, text_in: str,
+        actor: str, priority: str = "normal", workflow_key: Optional[str] = None,
+        acceptance_criteria: Optional[list[str]] = None, notify_channel: Optional[str] = None,
+        source_url: Optional[str] = None, why: str = "") -> dict[str, Any]:
+    """NEW WORK › ADD TO NEXT: the work goes on the Roadmap's Next lane as an accepted item —
+    planned work on the Work tab, a card in Roadmap › Next — and nothing starts. Its rank is by
+    priority (urgent and high before normal and low; Marshal re-ranks from there). Its Start
+    later sends what it was given here (kind, words, workflow, criteria, priority, who to tell).
+    Returns {item_id, lane, position, href, plan}."""
+    import hashlib
+    import uuid
+
+    from .titles import shorten
+
+    title = " ".join((title or "").split())[:200] or shorten(text_in, 6) or "New work"
+    priority = priority if priority in _PRIORITY_RANK else "normal"
+    item_id = f"wi_{uuid.uuid4().hex[:16]}"
+    fingerprint = f"new_work:{hashlib.sha1((item_id + title).encode()).hexdigest()[:16]}"
+    connection.execute(text(
+        "INSERT INTO work_items (id, project_id, subject_type, subject_id, title, description, "
+        "ambient, fingerprint, lifecycle, task_class, source, created_by, outcome, "
+        "resolved_by, resolved_at) VALUES (:i, :p, 'roadmap', :s, :t, :d, true, :f, "
+        "'resolved', 'roadmap_item', 'new_work', :a, 'planned from New work', :a, now())"),
+        {"i": item_id, "p": project_id, "s": fingerprint, "t": title, "d": text_in[:4000],
+         "f": fingerprint, "a": actor})
+    facts = {"lane": "next", "rank": 1_000_000, "source": "new_work", "work_kind": kind,
+             "text": text_in[:8000], "priority": priority,
+             **({"workflow_key": workflow_key} if workflow_key else {}),
+             **({"acceptance_criteria": list(acceptance_criteria)[:12]}
+                if acceptance_criteria else {}),
+             **({"notify_channel": notify_channel} if notify_channel else {}),
+             **({"external_url": source_url, "ref": source_url} if source_url else {})}
+    rec_kind = "hardening" if kind == "bug" else "feature"
+    connection.execute(text(
+        "INSERT INTO ambient_recommendations (work_item_id, project_id, detector, kind, "
+        "fingerprint, subject, title, why, proposed_shape, facts, score, priority_score, "
+        "status, accepted_as, decided_by, decided_at) VALUES (:w, :p, 'new_work', :k, :f, "
+        ":sub, :t, :y, 'ticket', CAST(:facts AS JSONB), :sc, :sc, 'accepted', 'ticket', :a, "
+        "now())"),
+        {"w": item_id, "p": project_id, "k": rec_kind, "f": fingerprint, "sub": f"new_work:{kind}",
+         "t": title, "y": (why or text_in)[:600], "facts": json.dumps(facts, default=str),
+         "sc": float(4 - _PRIORITY_RANK[priority]) / 4.0, "a": actor})
+    # Before the first item of a lower priority on Next, else at its end.
+    current = [p for p in _planned(connection, project_id) if p["lane"] == "next"
+               and p["id"] != item_id]
+    prio = {r["work_item_id"]: str((r["facts"] if isinstance(r["facts"], dict) else
+                                    json.loads(r["facts"] or "{}")).get("priority") or "normal")
+            for r in connection.execute(text(
+                "SELECT work_item_id, facts FROM ambient_recommendations WHERE project_id = :p "
+                "AND work_item_id = ANY(:ids)"),
+                {"p": project_id, "ids": [c["id"] for c in current] or [""]}).mappings()}
+    before = next((c["id"] for c in current
+                   if _PRIORITY_RANK.get(prio.get(c["id"], "normal"), 2)
+                   > _PRIORITY_RANK[priority]), None)
+    lanes_now = move(connection, project_id, item_id, lane="next", before=before, actor=actor)
+    from ..ambient._common import emit
+
+    emit(connection, project_id, "project.work_planned", actor, "work_item", item_id,
+         {"lane": "next", "priority": priority, "kind": kind})
+    position = next((i for i, c in enumerate(lanes_now.get("next") or [], start=1)
+                     if c["id"] == item_id), None)
+    return {"item_id": item_id, "lane": "next", "position": position,
+            "href": project_href(project_id, tab="roadmap"), "plan": lanes_now}
+
+
 def link_started(connection: Connection, project_id: str, source_ref: Optional[str],
                  run_id: Optional[str]) -> bool:
     """THE START DOOR started work from a roadmap item (`source_ref: rec:<id>`): record the run on
@@ -159,4 +230,4 @@ def link_started(connection: Connection, project_id: str, source_ref: Optional[s
     return bool(changed)
 
 
-__all__ = ["LANES", "lanes", "link_started", "move"]
+__all__ = ["LANES", "add", "lanes", "link_started", "move"]

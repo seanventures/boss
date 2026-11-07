@@ -120,6 +120,16 @@ def build_ambient_router(*, engine, settings: Callable[[], Any],
                                                         task_class=task_class, limit=limit,
                                                         before=before))
 
+    # ── stalled work: what the Shepherd fixed, is trying, and needs a person for ──────────────
+    @router.get("/v1/ambient/stalled-work")
+    @permit(P.WORK_ITEM_READ, scope=Scope.project(query="project_id"))
+    def stalled_work(project_id: str) -> dict:
+        from boss_engine.services import stuck_work
+
+        with begin(engine) as c:
+            require_reader(c, project_id)
+            return _errors(lambda: stuck_work.board(c, project_id))
+
     @router.get("/v1/ambient/work-items/{work_item_id}")
     @permit(P.WORK_ITEM_READ, scope=Scope.of("work_item", path="work_item_id"))
     def get_item(work_item_id: str, project_id: str) -> dict:

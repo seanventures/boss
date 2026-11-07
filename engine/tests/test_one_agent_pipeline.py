@@ -185,6 +185,9 @@ MIGRATED = {
                                                     "check with one re-ask)",
     "engine/boss_engine/services/agent_converse.py": "agent-to-agent talk, plan and room: the "
                                                      "plan's start card",
+    "engine/boss_engine/services/project_experience/understanding.py": (
+        "Helm's understanding in the New work modal: the brief as a structured decision's "
+        "arguments, checked against the code graph"),
 }
 
 #: Entry points whose agents SPEAK through the pipeline's streaming answer turn

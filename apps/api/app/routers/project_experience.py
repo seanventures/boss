@@ -5,7 +5,9 @@ GET  /v1/projects/{id}/overview                   §2  the Overview tab
 GET  /v1/projects/{id}/work?state=&q=             §3  the Work tab
 GET  /v1/projects/{id}/work/{work}/story          §3  one piece of work, step by step (drawer 05b)
 POST /v1/projects/{id}/work                       §3  new work, through THE start door
-GET  /v1/projects/{id}/work/plan?kind=&workflow_key=  §3  Helm's plan: strip, estimates, options
+GET  /v1/projects/{id}/work/plan?kind=&workflow_key=&detail=  §3  Helm's plan: strip, estimates, options
+POST /v1/projects/{id}/work/understand            §3  Helm's understanding: the brief, one turn
+POST /v1/projects/{id}/plan                       §6  New work › Add to Next (nothing starts)
 GET  /v1/projects/{id}/knowledge                  §4  Repo & knowledge
 GET  /v1/projects/{id}/deployments                §5  Deployments
 GET  /v1/projects/{id}/captain                    §7  the captain and squad
@@ -137,10 +139,11 @@ def project_work(project_id: str, state: Optional[str] = None, q: Optional[str] 
 @router.get("/v1/projects/{project_id}/work/plan")
 @permit(P.PROJECT_READ, scope=Scope.project(path="project_id"))
 def project_work_plan(project_id: str, kind: str = "feature",
-                      workflow_key: Optional[str] = None) -> dict[str, Any]:
+                      workflow_key: Optional[str] = None, detail: bool = False) -> dict[str, Any]:
     """Helm's plan for new work (screen 05): the workflow Start would run for this kind (or the
     one picked with "change"), its real steps as a strip, time and cost from this project's own
-    history, and the workflows "change" offers."""
+    history, and the workflows "change" offers. `detail` (the New work modal): the workflow's
+    steps, each option's steps and estimate, and the issue / target / tell defaults."""
     from boss_engine.services.project_experience import new_work
 
     kind = (kind or "feature").strip().lower()
@@ -150,7 +153,8 @@ def project_work_plan(project_id: str, kind: str = "feature",
     with begin(_engine) as connection:
         _require_project(connection, project_id)
         try:
-            return new_work.plan(connection, project_id, kind, workflow_key or None)
+            return new_work.plan(connection, project_id, kind, workflow_key or None,
+                                 detail=detail)
         except LookupError as error:
             raise HTTPException(status_code=422, detail={
                 "error": "unknown_workflow", "message": str(error)}) from None
@@ -171,6 +175,46 @@ def project_work_story(project_id: str, work_id: str) -> dict[str, Any]:
             raise _missing(error) from None
 
 
+class UnderstandBody(BaseModel):
+    kind: str = Field("feature", description="feature | bug | ticket")
+    text: str = Field("", description="The person's words, as typed (an issue link is read).")
+    #: The conversation so far, oldest first: [{from: "you"|"helm", text, ask?}].
+    chat: list[dict[str, Any]] = Field(default_factory=list)
+    #: The card as the person sees it now (their own edits included).
+    brief: Optional[dict[str, Any]] = None
+    #: A Rewrite's direction ("smaller first step").
+    hint: str = ""
+    #: The modal's draft id: the turn's transcript is kept on its own thread.
+    draft: str = ""
+    workflow_key: Optional[str] = None
+
+
+@router.post("/v1/projects/{project_id}/work/understand")
+@permit(P.ASSISTANT_CHAT, scope=Scope.project(path="project_id"))
+def project_work_understand(project_id: str, payload: UnderstandBody,
+                            request: Request) -> dict[str, Any]:
+    """HELM'S UNDERSTANDING (the New work modal): one turn through the one agent pipeline that
+    returns the brief — title, what changes, area from the code graph, done when, risk, Helm's
+    additions marked — updated from the whole conversation, plus what Helm says and the one
+    question it may ask. No model, or no time: `status: no_model`, and Start uses the words."""
+    import re as _re
+
+    from boss_engine.services.project_experience import new_work, understanding
+
+    kind = (payload.kind or "feature").strip().lower()
+    if kind not in new_work.KINDS:
+        raise HTTPException(status_code=422, detail={
+            "error": "bad_kind", "message": "kind is feature, bug or ticket."})
+    draft = _re.sub(r"[^A-Za-z0-9_-]", "", payload.draft or "")[:40]
+    with begin(_engine) as connection:
+        _require_project(connection, project_id)
+        workflows = new_work.options(connection, project_id, kind)
+        return understanding.understand(
+            connection, _settings, project_id, actor=_actor(request), kind=kind,
+            words=payload.text or "", chat=[m for m in payload.chat if isinstance(m, dict)][-24:],
+            brief=payload.brief, hint=payload.hint or "", draft=draft, workflows=workflows)
+
+
 class NewWorkBody(BaseModel):
     kind: str = Field("feature", description="feature | bug | ticket")
     text: str = Field(..., description="What to do, in the person's words.")
@@ -185,6 +229,37 @@ class NewWorkBody(BaseModel):
     start_anyway: Optional[list[str]] = None
     accept: Optional[list[str]] = None
     dedupe_key: Optional[str] = None
+    #: Helm's understanding as confirmed (the New work modal): it becomes the run's directive
+    #: (the work's spec), and its `done_when` the build's acceptance criteria (the PR checklist).
+    brief: Optional[dict[str, Any]] = None
+    #: The criteria on their own (a planned item started later carries them this way).
+    acceptance_criteria: Optional[list[str]] = None
+    priority: Optional[str] = None
+    #: Who else to tell (an email or a channel), for the workflow's notify step.
+    notify_channel: Optional[str] = None
+    #: The Issue chip: {"mode": "create"} files the work in the project's tracker first.
+    issue: Optional[dict[str, Any]] = None
+
+
+def _brief_fields(payload: "NewWorkBody", said: str) -> dict[str, Any]:
+    """The directive, title and criteria a confirmed brief gives the run (else the words)."""
+    from boss_engine.services.project_experience import understanding
+
+    brief = payload.brief if isinstance(payload.brief, dict) else None
+    criteria = [" ".join(str(c).split())[:300] for c in
+                ((brief or {}).get("done_when") or payload.acceptance_criteria or [])
+                if str(c or "").strip()][:12]
+    out: dict[str, Any] = {"directive": understanding.directive(said, brief)[:8000]}
+    if criteria:
+        out["acceptance_criteria"] = criteria
+    if brief and str(brief.get("title") or "").strip():
+        out["title"] = " ".join(str(brief["title"]).split())[:80]
+    prio = (payload.priority or "").strip().lower()
+    if prio in understanding.PRIORITIES:
+        out["priority"] = prio
+    if (payload.notify_channel or "").strip():
+        out["notify_channel"] = " ".join(payload.notify_channel.split())[:200]
+    return out
 
 
 def _title_of(text_in: str, fallback: str) -> str:
@@ -237,10 +312,24 @@ def project_new_work(project_id: str, payload: NewWorkBody) -> dict[str, Any]:
     issue = new_work.issue_of(payload.source_ref, link, repo)
     from boss_engine.services.project_experience.titles import strip_label
 
+    briefed = _brief_fields(payload, said)
     title = (strip_label(" ".join((payload.title or "").split()))[:80]
+             or briefed.pop("title", None)
              or (new_work.ticket_title(said, link) if kind == "ticket" else None)
              or _title_of(said, page["name"]))
-    run_input: dict[str, Any] = {"directive": said[:8000], "title": title, "work_kind": kind}
+    briefed.pop("title", None)
+    # THE ISSUE CHIP's "create": the work is filed in the project's tracker first, so the run,
+    # its row and its pull request carry the issue. A tracker that refuses never stops Start.
+    issue_error = None
+    if not issue and isinstance(payload.issue, dict) and payload.issue.get("mode") == "create":
+        with begin(_engine) as connection:
+            made = new_work.create_issue(connection, project_id, title=title,
+                                         body=briefed["directive"])
+        issue = made.get("issue")
+        issue_error = made.get("error")
+        if issue:
+            link = issue["external_url"]
+    run_input: dict[str, Any] = {"title": title, "work_kind": kind, **briefed}
     if repo:
         run_input["repository"] = repo
     if payload.source_ref or link:
@@ -275,6 +364,10 @@ def project_new_work(project_id: str, payload: NewWorkBody) -> dict[str, Any]:
     for key in ("readiness", "precheck", "ignored_input"):
         if (started or {}).get(key):
             out[key] = started[key]
+    if issue:
+        out["issue"] = issue
+    if issue_error:
+        out["issue_error"] = issue_error
     return out
 
 
@@ -481,6 +574,49 @@ def project_plan(project_id: str) -> dict[str, Any]:
     with begin(_engine) as connection:
         _require_project(connection, project_id)
         return plan.lanes(connection, project_id)
+
+
+@router.post("/v1/projects/{project_id}/plan")
+@permit(P.WORKFLOW_RUN_START, scope=Scope.project(path="project_id"))
+def project_plan_add(project_id: str, payload: NewWorkBody, request: Request) -> dict[str, Any]:
+    """NEW WORK › ADD TO NEXT: the work goes on Roadmap › Next (ranked by its priority, then by
+    Marshal) and nothing starts. The same body as Start; its later Start sends it again."""
+    from boss_engine.services.project_experience import new_work, plan
+
+    kind = (payload.kind or "feature").strip().lower()
+    if kind not in new_work.KINDS:
+        raise HTTPException(status_code=422, detail={
+            "error": "bad_kind", "message": "kind is feature, bug or ticket."})
+    said = (payload.text or "").strip()
+    if not said:
+        raise HTTPException(status_code=422, detail={
+            "error": "text_required", "message": "Say what to do."})
+    briefed = _brief_fields(payload, said)
+    link = (payload.source_url or "").strip() or new_work.ticket_link(said)
+    with begin(_engine) as connection:
+        _require_project(connection, project_id)
+        if payload.workflow_key:
+            try:
+                new_work.choose(connection, project_id, kind, payload.workflow_key)
+            except LookupError as error:
+                raise HTTPException(status_code=422, detail={
+                    "error": "unknown_workflow", "message": str(error)}) from None
+        issue_error = None
+        if not link and isinstance(payload.issue, dict) and payload.issue.get("mode") == "create":
+            made = new_work.create_issue(connection, project_id,
+                                         title=briefed.get("title") or _title_of(said, "New work"),
+                                         body=briefed["directive"])
+            link = (made.get("issue") or {}).get("external_url")
+            issue_error = made.get("error")
+        out = plan.add(connection, project_id, kind=kind, actor=_actor(request),
+                       title=(payload.title or briefed.get("title") or _title_of(said, "")),
+                       text_in=briefed["directive"], priority=briefed.get("priority", "normal"),
+                       workflow_key=payload.workflow_key or None,
+                       acceptance_criteria=briefed.get("acceptance_criteria"),
+                       notify_channel=briefed.get("notify_channel"), source_url=link)
+    if issue_error:
+        out["issue_error"] = issue_error
+    return out
 
 
 class PlanMoveBody(BaseModel):

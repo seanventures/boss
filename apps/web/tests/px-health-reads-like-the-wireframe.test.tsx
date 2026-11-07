@@ -4,8 +4,9 @@
  * one card per environment with its four numbers (uptime ring + SLO, error rate and p95 with
  * sparklines, SLO burn with "% of budget used"); the ring and sparks open the environment drawer;
  * each incident is its own story (signal → SRE squad → cause → fix → recovered) with Graph ↗;
- * the Alerts card lists each rule by NAME with its severity and where it stands (resolved 09:26,
- * quiet 3d) — never "1 rule group(s) are…"; Beacon's pack shows what it watches and its file;
+ * the Alerts card is OBSERVABILITY'S OWN ALERTS LIST scoped to this project ("This project ·
+ * HelpDesk", GET /v1/alerts?scope=project), linking to every app in Observability; Beacon's pack
+ * shows what it watches and its file;
  * Go deeper; and below, Observability's own alert-rules component, every rule ONE LINE until ▸.
  */
 import React, { act } from "react";
@@ -17,7 +18,7 @@ import {
   FX_DEPLOYMENTS, FX_HEALTH, FX_KNOWLEDGE, FX_ONBOARDING, FX_OVERVIEW, FX_SETTINGS, FX_SUMMARY, FX_WORK,
 } from "../lib/project-experience-fixtures";
 import { parseHealth } from "../lib/project-experience";
-import { historyWire, rulesWire } from "./_helpers/alerts-fixtures";
+import { FIRING_ALERT, NOISE_ALERT, historyWire, rulesWire } from "./_helpers/alerts-fixtures";
 import { $$, mountAs, stubFetch, tid, unmount, type Call } from "./_helpers/multirepo-fixtures";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -39,9 +40,14 @@ function engine(health: unknown = FX_HEALTH) {
     }
     if (/\/alert-rules$/.test(c.path)) return { body: rulesWire("tgt_staging") };
     if (/\/v1\/apps\/[^/]+\/alerts$/.test(c.path)) return { body: historyWire() };
+    if (c.path === "/v1/alerts") return { body: projectAlerts };
     return undefined;
   });
 }
+let projectAlerts: unknown = null;
+const sliceWire = (alerts: unknown[], firing: number) => historyWire(alerts, {
+  project_id: P, target_id: null, state: "firing", since: "7d", counts: { firing, pending: 0, needs_attention: firing },
+  scope: { kind: "project", project_id: P, project_name: "HelpDesk AI Demo", apps: 1, boss: false } });
 async function openHealth() {
   window.history.replaceState(null, "", `/?org=org_1&project_id=${P}&area=project&tab=health`);
   await mountAs(<ProjectPage projectId={P} actor="ceo" orgId="org_1" />, "owner");
@@ -90,22 +96,35 @@ describe("Health (screen 12)", () => {
     expect(tid("px-h-inc-all")!.getAttribute("href")).toContain(`project_id=${P}`);
   });
 
-  it("lists each alert rule by name, severity and where it stands; the firing count is real", async () => {
-    engine();
+  it("its Alerts are Observability's alerts list for this project's slice, saying so and linking to every app", async () => {
+    projectAlerts = sliceWire([NOISE_ALERT], 0);
+    const rec = engine();
     await openHealth();
-    expect(text("px-h-alerts")).toContain("0 firing");
-    expect(text("px-h-al-al_5xx")).toContain("5xx on /api/tickets");
-    expect(text("px-h-al-al_5xx")).toMatch(/page · resolved/);
-    expect(text("px-h-al-al_p95")).toContain("ticket · quiet 3d");
-    expect(tid("px-h-al-al_p95")!.getAttribute("data-s")).toBe("ok");
+    await settle();
+    expect(rec.some((c) => c.path === "/v1/alerts" && c.search.includes(`project_id=${P}`) && c.search.includes("scope=project"))).toBe(true);
+    const zone = tid("px-h-alerts")!;
+    expect(zone.querySelector("[data-testid='obs-alerts']")?.getAttribute("data-scope")).toBe("project");
+    expect(text("obs-alerts-scope")).toContain("This project · HelpDesk AI Demo");
+    const other = tid("obs-alerts-other")!;
+    expect(other.textContent).toContain("Every app in Observability");
+    expect(other.getAttribute("href")).toContain("area=observability");
+    expect(other.getAttribute("href")).toContain("view=alerts");
+    expect(text("obs-alerts-count")).toBe("0 firing");
     expect(text("px-h-alerts")).not.toMatch(/rule group/);
+    // The same row component as Observability, with the rule's identifier kept off the page.
+    expect(tid("obs-alert-alrt_lat")).not.toBeNull();
+    expect(zone.querySelector("[data-testid='obs-alert-rulename']")).toBeNull();
   });
 
-  it("a firing alert turns the tag red and says since when", async () => {
-    engine({ ...FX_HEALTH, alerts: [{ id: "al_x", label: "Error rate", severity: "page", state: "firing", since: "2026-11-06T09:00:00Z", href: "" }] });
+  it("a firing alert is counted and drawn exactly as Observability draws it", async () => {
+    projectAlerts = sliceWire([FIRING_ALERT], 1);
+    engine();
     await openHealth();
-    expect(text("px-h-alerts")).toContain("1 firing");
-    expect(text("px-h-al-al_x")).toMatch(/page · firing since/);
+    await settle();
+    expect(text("obs-alerts-count")).toBe("1 firing");
+    expect(text("obs-alerts-attention-n")).toBe("1");
+    expect(tid("obs-alert-alrt_err")?.getAttribute("data-state")).toBe("firing");
+    expect(tid("obs-alert-alrt_err")?.querySelector("[data-testid='obs-alert-project']")).toBeNull();
   });
 
   it("Beacon's pack says what it watches and links its file; Go deeper has Grafana, logs and Observability", async () => {
@@ -156,7 +175,6 @@ describe("Health's words", () => {
 
   it("parses the engine's rows: rule states ok/resolved/firing, typed incident nodes, the pack's kinds and file", () => {
     const h = parseHealth(FX_HEALTH);
-    expect(h.alerts.map((a) => a.state)).toEqual(["resolved", "ok", "ok"]);
     expect(h.incidents[0].mini[0].type).toBe("signal");
     expect(h.monitoring_pack?.kinds).toContain("TLS");
     expect(h.environments[0].slo.budget_used_pct).toBe(22);

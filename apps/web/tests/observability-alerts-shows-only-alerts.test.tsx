@@ -115,7 +115,7 @@ describe("SEV1–SEV4 and status at a glance", () => {
     await settle();
     expect(params().get("aatt")).toBe("1");
     expect($("[data-testid='obs-alerts-attention']")?.getAttribute("aria-pressed")).toBe("true");
-    expect(rec.calls.some((u) => u.startsWith("/v1/alerts?") && u.includes("attention=true"))).toBe(true);
+    expect(rec.calls.some((u) => u.startsWith("/v1/alerts/all?") && u.includes("attention=true"))).toBe(true);
     await click($("[data-testid='obs-alerts-attention']"));
     expect(params().get("aatt")).toBeNull();
   });

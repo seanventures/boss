@@ -198,6 +198,12 @@ RECORDED_ON_APPROVAL = frozenset({
     # A next action an agent-room summary named as a decision (agent_converse): approving records
     # the person's answer on the conversation; nothing is started.
     "decide",
+    # A build BOSS started on its own was refused for want of a person's grant (person_wait):
+    # the person gives the builder a standing grant; BOSS resumes every paused build by itself.
+    "grant_builder_authority",
+    # The stuck-work Shepherd found a build no safe move can unblock (stuck_work._raise_card):
+    # the card says what a person must do; the build's own page carries the diagnosis.
+    "stuck_work_needs_person",
 })
 #: Producers that build the action from a provider key (comms: configure_or_enable_slack_…).
 RECORDED_ON_APPROVAL_PREFIXES = ("configure_or_enable_",)

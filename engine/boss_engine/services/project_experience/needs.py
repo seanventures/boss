@@ -205,8 +205,23 @@ def card(connection: Connection, project_id: str, decision: Mapping[str, Any],
     else:
         label = shorten(decision.get("question") or "Answer a question", 5) or "Answer a question"
         mini = [{"label": s.get("name") or s.get("label"), "state": s.get("state")} for s in stages]
+    # WHAT THE AGENT FOUND (stuck_work): a card about stuck or refused work carries the
+    # Shepherd's diagnosis, and its detail is the reason -- never only "X is stuck on Y".
+    from .. import stuck_work
+
+    diagnosis = (run or {}).get("diagnosis") or stuck_work.card_diagnosis(connection, decision)
+    said = next((str(e.get("detail")) for e in rec.get("batch") or []
+                 if isinstance(e, dict) and e.get("detail")), "") or str(rec.get("why") or "")
+    detail = str(decision.get("question") or "")
+    if diagnosis and (diagnosis.get("cause") or diagnosis.get("headline")):
+        # Concise: what to do, then the cause in a few words; the diagram and Details carry more.
+        cause = str(diagnosis.get("cause") or diagnosis.get("headline"))
+        detail = f"{detail} — {cause}" if detail else cause
+    elif said:
+        detail = f"{detail} — {said}" if detail else said
     return {"id": decision["id"], "kind": kind, "label": label,
-            "detail": str(decision.get("question") or ""),
+            "detail": detail,
+            **({"diagnosis": diagnosis} if diagnosis else {}),
             "work_id": (run or {}).get("id"),
             "work_label": short_title((run or {}).get("label"), (run or {}).get("title"))
             if run else None,

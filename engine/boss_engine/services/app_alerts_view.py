@@ -310,6 +310,8 @@ def _alert_wire(connection, a: dict, *, target: dict, grafana: dict,
                        for x in (_json(a.get("suppressed_by"), []) or [])],
         "links": _json(a.get("links"), []) or [],
         "notified_at": _iso(a.get("notified_at")),
+        # BOSS's own platform (layer boss, the self-checks), not an app's.
+        "platform": labels.get("layer") == "boss" or str(labels.get("boss_meta")) == "true",
     }
 
 
@@ -435,6 +437,7 @@ def incident_states(connection, project_id: str, *, subject_id: Optional[str] = 
         if subject_id and r["subject_id"] != subject_id:
             continue
         firing = int(r["firing"] or 0)
+        why: Optional[dict[str, Any]] = None
         run = _response_in_flight(connection, project_id, r["id"])
         run_status = connection.execute(sql("SELECT status FROM workflow_runs WHERE id = :i"),
                                         {"i": run}).scalar() if run else None
@@ -443,11 +446,13 @@ def incident_states(connection, project_id: str, *, subject_id: Optional[str] = 
         elif int(r["pending"] or 0):
             word = "Pending: an alert is waiting out its `for`"
         elif int(r["alerts"] or 0):
-            # The clock is the viewer's: the time travels as `recovered_at`, never baked into
-            # the words in UTC beside a list that reads in local time (22:46 next to 15:46).
+            # The clock is the viewer's: the time travels as `recovered_at` (and `closes_at`),
+            # never baked into the words in UTC beside a list that reads in local time.
+            # WHY IT IS STILL OPEN AND WHO ACTS (aa.why_open), never a bare "still open".
+            why = aa.why_open(connection, project_id, r["id"])
             word = "Recovered" + (
                 "; a response is waiting on you" if run_status == "waiting" else
-                "; a response is still running" if run else "; the incident is still open")
+                f"; {why['word']}" if why else "; the incident is still open")
         else:
             word = "Reported; no alert of BOSS's is firing"
         # The SEV and the title are the DRIVING alert's (drivers): never the worst alert the
@@ -467,7 +472,8 @@ def incident_states(connection, project_id: str, *, subject_id: Optional[str] = 
                     "tip": "An alert is breached, waiting out its `for`"}
         else:
             chip = {"key": "recovered", "tone": "green", "word": "Recovered",
-                    "tip": "Nothing fires now; the incident is still open until it is closed"}
+                    "tip": "Nothing fires now" + (f"; {why['word']}" if why else
+                                                  "; the incident is still open")}
         out.append({"id": r["id"], "title": incident_title(r["title"], d), "status": r["status"],
                     "sev": level, "status_chip": chip, "acked_by": acked_by,
                     "driver": ({k: d[k] for k in ("alert_id", "alertname", "kind", "label",
@@ -477,6 +483,10 @@ def incident_states(connection, project_id: str, *, subject_id: Optional[str] = 
                     "subject_id": r["subject_id"], "urgency": r["urgency"],
                     "acked": bool(r["acked_by"]), "response_run_id": run,
                     "response_status": run_status, "word": word,
+                    # Why it is still open with nothing firing, who acts, and when BOSS
+                    # closes it on its own (quiet hold): {key, who, closes_at}.
+                    "open_reason": ({k: why.get(k) for k in ("key", "who", "closes_at")}
+                                    if why else None),
                     "recovered_at": (_iso(r["last_cleared"]) if not firing and not int(
                         r["pending"] or 0) and int(r["alerts"] or 0) else None)})
     return sorted(out, key=lambda x: (not x["happening"], x["since"] or ""))
@@ -499,18 +509,25 @@ def _subjects(connection, project_id: str, ids: list[str]) -> dict[str, dict]:
 def alerts(connection, project_id: str, *, target_id: Optional[str] = None,
            state: str = "all", since: str = "7d", severity: Optional[str] = None,
            limit: int = 100, source: Optional[str] = None, flapping: Optional[bool] = None,
-           acked: Optional[bool] = None, attention: bool = False) -> dict[str, Any]:
+           acked: Optional[bool] = None, attention: bool = False,
+           apps_only: bool = False, platform_only: bool = False) -> dict[str, Any]:
     """Alerts, newest first. state firing (open now: pending + firing) | resolved | all.
     Filters: an app or service (target_id: either id), severity, source kind (rule, external,
-    synthetic, heartbeat, signal), flapping, acked."""
+    synthetic, heartbeat, signal), flapping, acked.
+
+    `apps_only` is ONE PROJECT'S SLICE (its Health tab): this project's apps and services,
+    never BOSS's own platform alerts — those are Observability's (alerts_across)."""
     now = datetime.now(timezone.utc)
     where = ["a.project_id = :p"]
     params: dict[str, Any] = {"p": project_id, "n": max(1, min(int(limit), 500))}
-    if target_id:
+    if target_id or apps_only:
         # ONE APP'S history: BOSS's own platform alerts (layer boss, the self-checks) are never
         # the app's; they live in Observability's BOSS view.
-        where.append("a.subject_id = :t AND COALESCE(a.labels->>'layer', '') <> 'boss' "
-                     "AND COALESCE(a.labels->>'boss_meta', '') <> 'true'")
+        where.append(NOT_PLATFORM_SQL)
+    elif platform_only:
+        where.append("NOT (" + NOT_PLATFORM_SQL + ")")
+    if target_id:
+        where.append("a.subject_id = :t")
         params["t"] = target_id
     if source in ("rule", "external", "synthetic", "heartbeat", "signal"):
         where.append("a.source_kind = :src")
@@ -554,7 +571,9 @@ def alerts(connection, project_id: str, *, target_id: Optional[str] = None,
         "       count(*) FILTER (WHERE state = 'pending') AS pending, "
         "       count(*) FILTER (WHERE state = 'firing' AND " + NEEDS_ATTENTION_SQL.replace(
             "a.", "") + ") AS attention "
-        "FROM app_alerts WHERE project_id = :p" + (" AND subject_id = :t" if target_id else "")),
+        "FROM app_alerts a WHERE a.project_id = :p" + (" AND a.subject_id = :t" if target_id
+                                                       else "")
+        + (" AND " + NOT_PLATFORM_SQL if apps_only or target_id else "")),
         {"p": project_id, **({"t": target_id} if target_id else {})}).mappings().first()
     apps = [{"target_id": t["id"], "app": t["app_name"], "env": t["environment"]}
             for t in _targets(connection, project_id).values()
@@ -566,9 +585,24 @@ def alerts(connection, project_id: str, *, target_id: Optional[str] = None,
                  "s.project_id = :p AND s.deployment_target_id IS NULL AND EXISTS (SELECT 1 FROM "
                  "app_alerts a WHERE a.service_id = s.id UNION SELECT 1 FROM app_alert_rules r "
                  "WHERE r.service_id = s.id)"), {"p": project_id}).mappings().all()]
+    open_incidents = incident_states(connection, project_id, subject_id=target_id)
+    if apps_only:
+        platform = platform_subjects(connection, project_id)
+        theirs = platform_incidents(connection, project_id)
+        apps = [a for a in apps if a["target_id"] not in platform]
+        open_incidents = [i for i in open_incidents if i["id"] not in theirs]
     return {
         "project_id": project_id, "target_id": target_id, "state": state, "since": since,
         "severity": severity,
+        # WHAT THIS LIST COVERS, said on the page: one project's apps (Health) — Observability
+        # covers every app and BOSS itself (alerts_across).
+        "scope": {"kind": "project", "project_id": project_id,
+                  "project_name": _project_name(connection, project_id),
+                  # every app Observability › Apps counts for this project (active targets)
+                  "apps": int(connection.execute(sql(
+                      "SELECT count(*) FROM deployment_targets WHERE project_id = :p "
+                      "AND status = 'active'"), {"p": project_id}).scalar() or 0),
+                  "boss": not apps_only and not target_id},
         "counts": {"firing": int(counts["firing"] or 0), "pending": int(counts["pending"] or 0),
                    "needs_attention": int(counts["attention"] or 0)},
         "attention": bool(attention), "severities": sev.catalog(),
@@ -579,8 +613,130 @@ def alerts(connection, project_id: str, *, target_id: Optional[str] = None,
         "grafana": {"state": grafana["state"], "reason": grafana["reason"] or None},
         # Open incidents, in the same words every card uses (incident_states): the page can
         # never say "0 firing" above a card that says "requests failing".
-        "incidents": incident_states(connection, project_id, subject_id=target_id),
+        "incidents": open_incidents,
     }
+
+
+#: An alert that is not BOSS's own platform (layer boss, the self-checks).
+NOT_PLATFORM_SQL = ("COALESCE(a.labels->>'layer', '') <> 'boss' "
+                    "AND COALESCE(a.labels->>'boss_meta', '') <> 'true'")
+
+
+def platform_subjects(connection, project_id: str) -> set[str]:
+    """The subjects (BOSS's monitored service) that only ever carry BOSS's own platform alerts —
+    an app that also had a platform self-check fire on it stays the app's."""
+    return {str(x) for x in connection.execute(sql(
+        "SELECT COALESCE(a.subject_id, a.target_id) FROM app_alerts a WHERE a.project_id = :p "
+        "GROUP BY 1 HAVING bool_and(NOT (" + NOT_PLATFORM_SQL + "))"),
+        {"p": project_id}).scalars().all() if x}
+
+
+def platform_incidents(connection, project_id: str) -> set[str]:
+    """Open incidents every alert of which is BOSS's own platform's."""
+    return {str(x) for x in connection.execute(sql(
+        "SELECT a.incident_id FROM app_alerts a JOIN incidents i ON i.id = a.incident_id "
+        "WHERE a.project_id = :p AND i.status NOT IN ('resolved', 'dismissed') "
+        "GROUP BY 1 HAVING bool_and(NOT (" + NOT_PLATFORM_SQL + "))"),
+        {"p": project_id}).scalars().all() if x}
+
+
+def _project_name(connection, project_id: str) -> str:
+    return str(connection.execute(sql("SELECT name FROM projects WHERE id = :p"),
+                                  {"p": project_id}).scalar() or project_id)
+
+
+def alerts_across(connection, projects: list[dict[str, Any]], **filters: Any) -> dict[str, Any]:
+    """OBSERVABILITY › ALERTS: THE SAME LIST AS A PROJECT'S HEALTH, for every app of every
+    project the viewer may read, plus BOSS's own platform alerts once. Each project's slice is
+    `alerts(..., apps_only=True)` — exactly what that project's Health shows — tagged with its
+    project; BOSS's platform alerts (every project carries its own copy of the same self-check)
+    are added once. `projects` is [{id, name}], already narrowed to what the caller may read.
+    `app` filters to one app (its target id) wherever it lives."""
+    from .project_experience.common import href
+
+    app = filters.pop("target_id", None)
+    out_alerts: list[dict[str, Any]] = []
+    incidents: list[dict[str, Any]] = []
+    apps: list[dict[str, Any]] = []
+    counts = {"firing": 0, "pending": 0, "needs_attention": 0}
+    severities: list[Any] = []
+    grafana = {"state": "unchecked", "reason": None}
+    partial: list[str] = []
+    n_apps, with_apps = 0, 0
+    platform_seen: set[tuple[str, str]] = set()
+    platform_counted: set[tuple[str, str]] = set()
+    limit = int(filters.get("limit") or 100)
+    for p in projects:
+        pid, name = str(p["id"]), str(p.get("name") or p["id"])
+        tag = {"project_id": pid, "project_name": name,
+               "project_href": href(pid, area="project", tab="health")}
+        try:
+            with connection.begin_nested():
+                owns = bool(app) and bool(connection.execute(sql(
+                    "SELECT 1 FROM deployment_targets WHERE id = :t AND project_id = :p UNION "
+                    "SELECT 1 FROM monitored_services WHERE id = :t AND project_id = :p"),
+                    {"t": app, "p": pid}).first())
+                one = alerts(connection, pid, target_id=app if owns else None, apps_only=True,
+                             **filters)
+                mine = None if app else alerts(connection, pid, platform_only=True, **filters)
+        except Exception:  # noqa: BLE001 — one project's store never blanks the others
+            partial.append(pid)
+            continue
+        severities = one["severities"]
+        n_apps += int(one["scope"]["apps"])
+        with_apps += 1 if one["scope"]["apps"] else 0
+        if one["grafana"]["state"] == "answering" or grafana["state"] == "unchecked":
+            grafana = one["grafana"]
+        apps += [{**a, **tag} for a in one["apps"]]
+        if app and not owns:
+            continue
+        out_alerts += [{**a, **tag} for a in one["alerts"]]
+        incidents += [{**i, **tag} for i in one["incidents"]]
+        for k in counts:
+            counts[k] += int(one["counts"].get(k) or 0)
+        if mine is None:
+            continue
+        platform = platform_incidents(connection, pid)
+        for i in mine["incidents"]:
+            if i["id"] in platform and ("i", i["title"]) not in platform_seen:
+                platform_seen.add(("i", i["title"]))
+                incidents.append({**i, **tag, "platform": True})
+        # BOSS ITSELF, once: the same self-check fired in every project is one alert.
+        for a in mine["alerts"]:
+            if not a.get("platform"):
+                continue
+            key = (str(a.get("alertname")), str(a.get("fired_at") or a.get("active_at")))
+            if key in platform_seen:
+                continue
+            platform_seen.add(key)
+            out_alerts.append({**a, **tag, "app": "BOSS", "env": "platform"})
+            if a.get("state") in ("firing", "pending") and key not in platform_counted:
+                platform_counted.add(key)
+                counts["firing" if a["state"] == "firing" else "pending"] += 1
+                if a.get("needs_attention"):
+                    counts["needs_attention"] += 1
+    out_alerts.sort(key=lambda a: (a.get("state") == "resolved",
+                                   _neg_time(a.get("fired_at") or a.get("active_at"))))
+    return {
+        "project_id": None, "target_id": app, "state": filters.get("state", "all"),
+        "since": filters.get("since", "7d"), "severity": filters.get("severity"),
+        "scope": {"kind": "all", "apps": n_apps, "projects": with_apps, "boss": True},
+        "counts": counts, "attention": bool(filters.get("attention")),
+        "severities": severities or sev.catalog(),
+        "alerts": out_alerts[:limit],
+        "apps": sorted(apps, key=lambda x: (str(x["app"]).lower(), str(x["env"]),
+                                            x["project_name"].lower())),
+        "grafana": grafana,
+        "incidents": sorted(incidents, key=lambda x: (not x["happening"], x["since"] or "")),
+        "partial": partial,
+    }
+
+
+def _neg_time(iso: Any) -> float:
+    try:
+        return -datetime.fromisoformat(str(iso)).timestamp()
+    except (TypeError, ValueError):
+        return 0.0
 
 
 _CMP = (">", ">=", "<", "<=", "==", "!=")

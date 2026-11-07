@@ -31,6 +31,8 @@ _BY_ACTION: dict[str, tuple[str, str]] = {
     "publish_document": ("Publish a document", "Documents"),
     "start_code_task": ("Start a build", "Factory"),
     "resume_code_task": ("Approve the plan", "Factory"),
+    "grant_builder_authority": ("Let the builder work for you", "Identity"),
+    "stuck_work_needs_person": ("A build needs you to unblock it", "Shepherd"),
     "review_pull_request": ("Review a pull request", "Factory"),
 }
 

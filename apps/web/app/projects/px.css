@@ -512,6 +512,14 @@ button.px-h-num:focus-visible { outline: 2px solid var(--accent-text); outline-o
 .px-h-inc-b > b { font-size: .66rem; }
 .px-h-inc-b > small { font-size: .56rem; }
 .px-h-inc .px-fl { padding: 6px 2px 2px; }
+/* AN INCIDENT'S STORY SPANS ITS CARD (the same zoom-to-fit idea as the Agents-at-work chart): the
+   arrows stretch so the steps use the row's width; a step keeps a sensible size and never cuts a
+   word mid-way — a long label ends in … with its full words as the tooltip. */
+.px-h-inc .px-fl-step { flex: 1 1 auto; min-width: 0; }
+.px-h-inc .px-fl-step:first-child { flex: 0 1 auto; }
+.px-h-inc .px-fl-w { flex: 1 1 20px; width: auto; min-width: 14px; }
+.px-h-inc .px-fl-n { max-width: 15rem; min-width: 0; }
+.px-fl-l { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .px-h-graph { white-space: nowrap; }
 .px-h-al b { font-size: .66rem; }
 .px-h-kinds { gap: 6px; margin: 10px 0 8px; }
