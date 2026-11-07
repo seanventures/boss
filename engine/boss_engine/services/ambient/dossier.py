@@ -133,10 +133,63 @@ def ci_files(paths: Iterable[str]) -> list[str]:
     return sorted(found)[:20]
 
 
+#: A README section that says how to get going (a heading, not a keyword in prose).
+_GETTING_STARTED = re.compile(
+    r"^#{1,4}\s*(getting started|quick ?start|setup|set up|installation|install|usage|"
+    r"running( locally)?|run( it)?( locally)?|development|develop|local development|testing|"
+    r"tests|build(ing)?)\b", re.I | re.M)
+_FENCE = re.compile(r"```[^\n]*\n(.*?)```", re.S)
+#: What a shell line in a README does, by the tool's own verb (the line is kept as written).
+_VERB = (("install", re.compile(r"^(npm (ci|install|i)\b|pnpm (i|install)\b|yarn( install)?$|"
+                                r"pip3? install\b|poetry install\b|uv sync\b|bundle install\b|"
+                                r"make (install|setup|deps|bootstrap)\b|go mod download\b)")),
+         ("test", re.compile(r"^(npm (run )?test\b|pnpm (run )?test\b|yarn test\b|pytest\b|"
+                             r"python3? -m pytest\b|make test\b|go test\b|cargo test\b|"
+                             r"mvn test\b|\./gradlew test\b|bundle exec rspec\b|tox\b)")),
+         ("build", re.compile(r"^(npm run build\b|pnpm (run )?build\b|yarn build\b|make build\b|"
+                              r"go build\b|cargo build\b|mvn package\b|\./gradlew build\b|"
+                              r"docker build\b|docker compose build\b)")),
+         ("run", re.compile(r"^(npm (start|run (dev|start|serve))\b|pnpm (start|dev|run dev)\b|"
+                            r"yarn (start|dev)\b|python3? (-m \S+|\S+\.py)|flask run\b|"
+                            r"uvicorn\b|gunicorn\b|make (run|dev|start|serve)\b|go run\b|"
+                            r"cargo run\b|mvn spring-boot:run\b|\./gradlew bootRun\b|"
+                            r"docker compose up\b|docker-compose up\b|rails s(erver)?\b|"
+                            r"bundle exec rails s)")))
+
+
+def readme_commands(text: str) -> dict[str, list[str]]:
+    """The shell lines a README's getting-started sections show, by what each does. Only fenced
+    code under a getting-started heading (or the README's first fenced block when it has no such
+    heading) is read; prose is never parsed."""
+    out: dict[str, list[str]] = {"install": [], "test": [], "build": [], "run": []}
+    heads = list(_GETTING_STARTED.finditer(text))
+    if heads:
+        spans = []
+        for m in heads:
+            nxt = re.search(r"^#{1,4}\s", text[m.end():], re.M)
+            spans.append(text[m.end(): m.end() + nxt.start() if nxt else len(text)])
+    else:
+        first = _FENCE.search(text)
+        spans = [first.group(0)] if first else []
+    for span in spans:
+        for block in _FENCE.findall(span):
+            for raw in block.splitlines()[:40]:
+                line = raw.strip().lstrip("$> ").strip()
+                if not line or line.startswith("#") or len(line) > 160:
+                    continue
+                for kind, verb in _VERB:
+                    if verb.match(line) and line not in out[kind]:
+                        out[kind].append(line)
+                        break
+    return out
+
+
 def commands(root: Optional[Path], paths: list[str]) -> dict[str, list[str]]:
-    """How to test, lint and build it, from what the repository itself declares."""
+    """How to install, test, lint, build and run it, from what the repository itself declares:
+    its manifests (package.json scripts, Makefile targets, pyproject …), then its README's
+    getting-started section for anything the manifests leave unsaid."""
     have = set(paths)
-    out: dict[str, list[str]] = {"test": [], "lint": [], "build": []}
+    out: dict[str, list[str]] = {"install": [], "test": [], "lint": [], "build": [], "run": []}
 
     def add(kind: str, cmd: str) -> None:
         if cmd not in out[kind]:
@@ -147,21 +200,35 @@ def commands(root: Optional[Path], paths: list[str]) -> dict[str, list[str]]:
             scripts = (json.loads(_read(root, "package.json")) or {}).get("scripts") or {}
         except ValueError:
             scripts = {}
+        tool = "pnpm" if "pnpm-lock.yaml" in have else "yarn" if "yarn.lock" in have else "npm"
+        add("install", {"npm": "npm ci" if "package-lock.json" in have else "npm install",
+                        "pnpm": "pnpm install", "yarn": "yarn install"}[tool])
         for kind, keys in (("test", ("test", "test:unit")), ("lint", ("lint", "typecheck")),
-                           ("build", ("build",))):
+                           ("build", ("build",)), ("run", ("start", "dev", "serve"))):
             for key in keys:
                 if key in scripts:
-                    add(kind, f"npm run {key}" if key != "test" else "npm test")
+                    if key in ("test", "start"):
+                        add(kind, f"{tool} {key}")
+                    else:
+                        add(kind, f"{tool} run {key}")
     if root is not None and "Makefile" in have:
         targets = set(re.findall(r"^([A-Za-z][\w-]*):", _read(root, "Makefile"), re.M))
-        for kind in ("test", "lint", "build"):
-            if kind in targets:
-                add(kind, f"make {kind}")
+        for kind, names in (("install", ("install", "setup", "deps", "bootstrap")),
+                            ("test", ("test",)), ("lint", ("lint",)), ("build", ("build",)),
+                            ("run", ("run", "dev", "start", "serve"))):
+            for name in names:
+                if name in targets:
+                    add(kind, f"make {name}")
+                    break
     if have & {"pyproject.toml", "setup.py", "requirements.txt", "pytest.ini", "tox.ini"}:
         if any(re.search(r"(^|/)test_[^/]+\.py$|(^|/)tests?/", p) for p in paths):
             add("test", "pytest")
         if root is not None and "ruff" in _read(root, "pyproject.toml"):
             add("lint", "ruff check .")
+        if "requirements.txt" in have:
+            add("install", "pip install -r requirements.txt")
+        elif "pyproject.toml" in have:
+            add("install", "pip install -e .")
     if "pom.xml" in have:
         add("test", "mvn test")
         add("build", "mvn package")
@@ -174,6 +241,12 @@ def commands(root: Optional[Path], paths: list[str]) -> dict[str, list[str]]:
     if "Cargo.toml" in have:
         add("test", "cargo test")
         add("build", "cargo build")
+    readme = next((p for p in paths if "/" not in p and p.lower().startswith("readme")), None)
+    if root is not None and readme:
+        for kind, lines in readme_commands(_read(root, readme)).items():
+            if not out[kind]:
+                for line in lines[:2]:
+                    add(kind, line)
     return out
 
 

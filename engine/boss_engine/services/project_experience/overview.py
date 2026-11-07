@@ -292,29 +292,38 @@ def next_items(connection: Connection, project_id: str, onboarding: Mapping[str,
                     "href": project_href(project_id, tab="roadmap",
                                          drawer=f"rec:{r['work_item_id']}"), "accept": None})
     recs = connection.execute(text(
-        "SELECT work_item_id, title, why, kind, detector FROM ambient_recommendations "
+        "SELECT work_item_id, title, why, kind, detector, facts->>'why_short' AS short, "
+        "facts->>'external_url' AS url FROM ambient_recommendations "
         "WHERE project_id = :p AND status = 'open' ORDER BY score DESC LIMIT :n"),
         {"p": project_id, "n": limit}).mappings().all()
 
     out += [{"id": r["work_item_id"], "label": short_title(r["title"], limit=5),
-            "detail": r["why"] or r["title"], "why": r["why"], "kind": r["kind"],
-            "source": "roadmap", "state": "next",
+            "detail": r["why"] or r["title"], "why": r["short"] or r["why"], "kind": r["kind"],
+            "source": "onboarding" if r["detector"] == "onboarding" else "roadmap",
+            "state": "proposed" if r["detector"] == "onboarding" else "next",
+            "external_url": r["url"],
             "href": project_href(project_id, tab="roadmap", drawer=f"rec:{r['work_item_id']}"),
             "accept": {"href": f"/v1/ambient/roadmap/{r['work_item_id']}/accept", "method": "POST",
                        "body": {"as": "ticket", "project_id": project_id}}} for r in recs]
     out = out[:limit]
-    for c in (onboarding.get("backlog") or [])[: max(0, limit - len(out))]:
+    # ONE SOURCE: onboarding's proposals ARE open recommendations (onboarding._propose_on_roadmap)
+    # and came in above. A candidate of an older run that never became one is accepted the same
+    # way — onto Roadmap › Next — never started from here.
+    have = {o_["id"] for o_ in out}
+    for c in (onboarding.get("backlog") or []):
+        if len(out) >= limit:
+            break
+        if c.get("rec_id") or c.get("state") in ("accepted", "rejected", "gone") or \
+                c["id"] in have:
+            continue
         source = c.get("source") if c.get("source") in ("roadmap", "ticket", "bug", "ci") \
             else "roadmap"
         out.append({"id": c["id"], "label": short_title(c["label"], c.get("text"), limit=5),
-                    "detail": c.get("detail"), "kind": c.get("kind"),
+                    "detail": c.get("detail"), "why": c.get("why"), "kind": c.get("kind"),
                     "source": source, "state": "proposed", "external_url": c.get("external_url"),
                     "href": c.get("href") or project_href(project_id, tab="roadmap"),
-                    "accept": {"href": f"/v1/projects/{project_id}/work", "method": "POST",
-                               "body": {"kind": c["kind"] if c.get("kind") in
-                                        ("feature", "bug", "ticket") else "ticket",
-                                        "text": c.get("text") or c["label"],
-                                        "title": c["label"], "source_ref": c.get("ref")}}})
+                    "accept": {"href": f"/v1/projects/{project_id}/onboarding/backlog/accept",
+                               "method": "POST", "body": {"ids": [c["id"]]}}})
     return out[:limit]
 
 

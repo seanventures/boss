@@ -767,6 +767,11 @@ EVIDENCE_TO_SOURCE = {"incident": "incident", "kg_node": "code", "commit": "code
                       "query": "code"}
 
 
+#: Who else proposes on the roadmap, in words (never a raw key on a card): the onboarding agent's
+#: ranked backlog (project_experience.onboarding._propose_on_roadmap).
+OTHER_PROPOSERS = {"onboarding": "Onboarding"}
+
+
 def _badges(rec: Mapping[str, Any]) -> dict[str, Any]:
     return {"kind": KIND_LABEL.get(rec["kind"], rec["kind"]), "shape": rec["proposed_shape"],
             "evidence": int(rec["evidence_count"] or 0),
@@ -777,7 +782,8 @@ def _badges(rec: Mapping[str, Any]) -> dict[str, Any]:
             "value": float(rec["value"] or 0), "status": rec["status"],
             "resurfaced": bool(rec.get("resurfaced_from")),
             "detector": learning.DETECTORS[rec["detector"]].title
-            if rec["detector"] in learning.DETECTORS else rec["detector"],
+            if rec["detector"] in learning.DETECTORS
+            else OTHER_PROPOSERS.get(rec["detector"], rec["detector"]),
             # The card's "≈ $2" (the roadmap screen): the item's own estimate, in dollars.
             "cost_usd": round(int(rec.get("estimated_cost_usd_micros") or 0) / 1_000_000, 2)}
 
@@ -816,7 +822,8 @@ def diagram(rec: Mapping[str, Any]) -> dict[str, Any]:
     for key in rec.get("detectors") or [rec["detector"]]:
         det = learning.DETECTORS.get(key)
         did = f"detector:{key}"
-        nodes.append({"id": did, "type": "agent", "label": short_label(det.title if det else key),
+        nodes.append({"id": did, "type": "agent",
+                      "label": short_label(det.title if det else OTHER_PROPOSERS.get(key, key)),
                       "stage": 1, "badges": [], "ref": {"kind": "detector", "id": key}})
         for n in nodes:
             if n["type"] == "signal":
