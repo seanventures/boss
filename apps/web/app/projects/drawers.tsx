@@ -18,17 +18,17 @@ import { FX_DEPLOYMENTS } from "../../lib/project-experience-fixtures";
 import { Drawer, Empty, Face, Flow, HEALTH_WORD, Ico, PxLink, STATE_WORD, Tag } from "./kit";
 import { ActionButton } from "./tab-overview";
 import { DemoLoginRow } from "./tab-settings";
+import { KnowledgeDrawer } from "./tab-knowledge";
 import { whenLocal } from "../../lib/local-time";
 import type { PxCtx } from "./project-page";
 
 const STEP_WORDS: Record<string, string> = { plan: "Plan", design: "You approved", decide: "You approved", build: "Build", review: "Review & test", pr: "Merge", ship: "Staging" };
 
 /** Drawer links that name a PLACE on this page rather than a drawer (the engine's hrefs, §10):
- *  `section:<key>` is Settings at that section; `dossier` and `doc:<path>` are Repo & knowledge;
+ *  `section:<key>` is Settings at that section (`dossier` / `doc:<key>` are Repo & knowledge's drawers);
  *  `captain` is the captain's Ask dock; `onboarding` on a project still onboarding is Overview. */
 function placeOf(drawer: { kind: string; id: string }, onboarding: boolean): Record<string, string | null> | "captain" | null {
   if (drawer.kind === "section") return { tab: "settings", section: drawer.id || null, drawer: null };
-  if (drawer.kind === "dossier" || drawer.kind === "doc") return { tab: "knowledge", drawer: null };
   if (drawer.kind === "captain") return "captain";
   if (drawer.kind === "onboarding" && onboarding) return { tab: null, drawer: null };
   return null;
@@ -42,6 +42,8 @@ export function DrawerHost({ ctx, drawer, onClose }: { ctx: PxCtx; drawer: { kin
     writePxUrl({ ...place, ...(place.tab ? { tab: toTab(place.tab) === "overview" ? null : place.tab } : {}) }, "replace");
   }, [place === null ? "" : JSON.stringify(place)]); // eslint-disable-line react-hooks/exhaustive-deps
   if (place) return null;
+  // The full dossier, a doc and Add doc (screen 06): Repo & knowledge's own drawers.
+  if (drawer.kind === "dossier" || drawer.kind === "doc") return <KnowledgeDrawer ctx={ctx} drawer={drawer} onClose={onClose} />;
   // `run:<id>` and `build:<id>` (the engine's WorkItem hrefs and ⌘K) are the work drawer.
   if (drawer.kind === "work" || drawer.kind === "run" || drawer.kind === "build") {
     // An attempt of a grouped piece of work (a follow-up, a retry) opens as itself.

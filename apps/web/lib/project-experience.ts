@@ -135,15 +135,26 @@ export type Overview = {
 };
 export type Captain = { agent_id: string; name: string; role_key: string; avatar: string; status: string; squad: Agent[]; last_said: string };
 export type WorkList = { items: WorkItem[] };
+/** A repository on Repo & knowledge (screen 06): access is tri-state — true / false as the last
+ *  check found, null when it was never checked. */
+export type KnowledgeRepo = Repo & {
+  binding_id: string; checked: { read: boolean | null; write: boolean | null; pr: boolean | null };
+  last_push: string; via: string; deploys_to: string;
+};
+export type GraphNode = { id: string; label: string; kind: string; group: string; detail: string };
 export type Knowledge = {
-  repos: Repo[];
+  repos: KnowledgeRepo[];
   dossier: { stack: string[]; commands: Record<string, string>; hotspots: { path: string; label: string; why: string; heat: number | null; has_tests: boolean | null }[];
-             tests: { passed: number; total: number } | null; test_files: number | null; built_at: string; href: string } | null;
-  graph: { nodes: { id: string; label: string; kind: string }[]; edges: { from: string; to: string; label: string }[]; href: string;
+             tests: { passed: number; total: number; failing: number; from: string; href: string } | null; test_files: number | null;
+             code_map: { parts: { dir: string; files: number }[]; files: number };
+             by: string; built_ago: string; built_at: string; href: string } | null;
+  graph: { nodes: GraphNode[]; edges: { from: string; to: string; label: string; kind: string }[]; href: string; hub: string;
            counts: { nodes: number; rules: number | null; learned: number | null } };
-  docs: { label: string; kind: string; href: string; sub: string }[];
-  decisions: { label: string; at: string; href: string }[];
-  learned: { label: string; sub: string; state: string; href: string }[];
+  docs: { label: string; kind: string; href: string; sub: string; path: string; external_url: string }[];
+  decisions: { label: string; at: string; href: string; sub: string }[];
+  learned: { id: string; label: string; sub: string; state: string; href: string; detail: string; reused: number; agent: Agent | null }[];
+  build: { label: string; href: string; state: string; progress: string; nodes: { label: string; state: StepState; sub: string }[] } | null;
+  empty: { label: string; detail: string; href: string } | null;
 };
 export type Environment = {
   key: string; label: string; url: string; health: Health; host: string; host_href: string; target_id: string; app: string; manage_href: string;
@@ -375,29 +386,51 @@ export const parseOverview = (v: unknown): Overview => {
 };
 export const parseWork = (v: unknown): WorkList => ({ items: a(o(v).items).map(parseWorkItem).filter((w) => w.id) });
 
+const tri = (v: unknown): boolean | null => (v === true ? true : v === false ? false : null);
 export const parseKnowledge = (v: unknown): Knowledge => {
   const x = o(v); const d = o(x.dossier); const g = o(x.graph); const c = o(g.counts);
   const cmds: Record<string, string> = {};
-  for (const [k, val] of Object.entries(o(d.commands))) if (typeof val === "string" && val) cmds[k] = val;
+  // Install · Test · Build · Run, in the wireframe's order, then anything else the repo declares.
+  const raw = o(d.commands);
+  for (const k of ["install", "test", "build", "run", ...Object.keys(raw)]) {
+    const val = raw[k];
+    if (typeof val === "string" && val && !(k in cmds)) cmds[k] = val;
+  }
   const tests = o(d.tests);
   const hasRun = typeof tests.total === "number" && tests.total > 0;
+  const cm = o(d.code_map);
+  const b = o(x.build); const em = o(x.empty);
   return {
-    repos: a(x.repos).map(parseRepo),
+    repos: a(x.repos).map((r) => {
+      const y = o(r); const acc = o(y.access);
+      return { ...parseRepo(r), binding_id: s(y.binding_id), checked: { read: tri(acc.read), write: tri(acc.write), pr: tri(acc.pr) },
+               last_push: s(y.last_push), via: s(y.via), deploys_to: s(y.deploys_to) };
+    }),
     dossier: Object.keys(d).length ? {
       stack: a(d.stack).map((z) => s(z)).filter(Boolean), commands: cmds,
       hotspots: a(d.hotspots).map((h) => ({ path: s(o(h).path), label: s(o(h).label), why: s(o(h).why), heat: nn(o(h).heat),
                                              has_tests: typeof o(h).has_tests === "boolean" ? (o(h).has_tests as boolean) : null })),
-      // A pass count only when a run was read (CI); the dossier itself knows how many test files exist.
-      tests: hasRun ? { passed: n(tests.passed), total: n(tests.total) } : null,
+      // A pass count only when a run was read (the newest build's tests); else the test files the dossier found.
+      tests: hasRun ? { passed: n(tests.passed), total: n(tests.total), failing: n(tests.failing, n(tests.total) - n(tests.passed)),
+                        from: s(tests.from), href: s(tests.href) } : null,
       test_files: nn(tests.files),
-      built_at: s(d.built_at), href: s(d.href) } : null,
-    graph: { nodes: a(g.nodes).map((z) => ({ id: s(o(z).id), label: label4(o(z).label), kind: s(o(z).kind) })),
-             edges: a(g.edges).map((z) => ({ from: s(o(z).from), to: s(o(z).to), label: s(o(z).label) })), href: s(g.href),
+      code_map: { parts: a(cm.parts).map((z) => ({ dir: s(o(z).dir), files: n(o(z).files) })).filter((z) => z.files > 0), files: n(cm.files) },
+      by: s(d.by, "Helm"), built_ago: s(d.built_ago), built_at: s(d.built_at), href: s(d.href) } : null,
+    graph: { nodes: a(g.nodes).map((z) => ({ id: s(o(z).id), label: s(o(z).label), kind: s(o(z).kind), group: s(o(z).group), detail: s(o(z).detail) })),
+             edges: a(g.edges).map((z) => ({ from: s(o(z).from), to: s(o(z).to), label: s(o(z).label), kind: s(o(z).kind) })), href: s(g.href), hub: s(g.hub),
              counts: { nodes: n(c.nodes, n(g.total_nodes, a(g.nodes).length)), rules: nn(c.rules), learned: nn(c.learned) } },
-    // A doc opens where it lives (GitHub for a README or runbook), else its console page.
-    docs: a(x.docs).map((z) => ({ label: s(o(z).label), kind: s(o(z).kind), href: s(o(z).external_url) || s(o(z).href), sub: s(o(z).sub) || s(o(z).detail) })),
-    decisions: a(x.decisions).map((z) => ({ label: s(o(z).label), at: s(o(z).at), href: s(o(z).href) })),
-    learned: a(x.learned).map((z) => ({ label: s(o(z).label), sub: s(o(z).sub), state: s(o(z).state), href: s(o(z).href) })),
+    // A doc opens in its drawer (`doc:<path>`); the drawer links to where it lives.
+    docs: a(x.docs).map((z) => ({ label: s(o(z).label), kind: s(o(z).kind), href: s(o(z).href), external_url: s(o(z).external_url),
+                                  sub: s(o(z).sub) || s(o(z).detail), path: s(o(z).detail) })),
+    decisions: a(x.decisions).map((z) => ({ label: s(o(z).label), at: s(o(z).at), href: s(o(z).href), sub: s(o(z).sub) })),
+    learned: a(x.learned).map((z) => {
+      const y = o(z); const ag = o(y.agent);
+      return { id: s(y.id), label: s(y.label), sub: s(y.sub), state: s(y.state), href: s(y.href), detail: s(y.detail), reused: n(y.reused),
+               agent: s(ag.name) ? { name: s(ag.name), role_key: s(ag.role_key), avatar: "" } as Agent : null };
+    }),
+    build: Object.keys(b).length ? { label: s(b.label, "Build dossier now"), href: s(b.href), state: s(b.state), progress: s(b.progress),
+                                     nodes: a(b.nodes).map((z) => ({ label: s(o(z).label), state: (s(o(z).state) || "todo") as StepState, sub: s(o(z).sub) })) } : null,
+    empty: s(em.label) ? { label: s(em.label), detail: s(em.detail), href: s(em.href) } : null,
   };
 };
 

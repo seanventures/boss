@@ -555,7 +555,7 @@ describe("Repo & knowledge (screen 6)", () => {
   it("shows the repo's access as a strip, the dossier, the graph snippet and its links", async () => {
     engine();
     await openProject("&tab=knowledge");
-    expect($$("[data-testid='px-kn-repos'] .px-fl-n").map((n) => n.textContent)).toEqual(["Read", "Branch", "Open PR", "Merge: you"]);
+    expect($$("[data-testid='px-kn-repos'] .px-fl-n").map((n) => n.textContent)).toEqual(["Read", "Branch", "Open PR", "Merge: you", "Staging"]);
     expect(tid("px-kn-dossier")!.textContent).toContain("142 / 148");
     expect(tid("px-kn-open-graph")!.getAttribute("href")).toContain("area=knowledge");
     expect(tid("px-kn-add-repo")!.getAttribute("href")).toContain("focus=repository");
@@ -849,7 +849,10 @@ describe("the engine's own answers (what the API serves, not the sample)", () =>
     expect(tid("px-kn-test-files")!.textContent).toContain("2");
     expect(tid("px-kn-dossier")!.textContent).toContain("no tests");
     expect(tid("px-kn-dossier")!.textContent).not.toContain("Build");
-    expect($$("[data-testid='px-kn-docs'] a").map((a) => a.getAttribute("href"))).toContain("https://github.com/acme/helpdesk-ai-demo/blob/HEAD/README.md");
+    // A doc opens in its drawer (`doc:readme`), which links to where it lives on GitHub.
+    await press(tid("px-kn-doc-0"));
+    expect(params().get("drawer")).toBe("doc:readme");
+    expect(tid("px-drawer-doc-open")!.getAttribute("href")).toBe("https://github.com/acme/helpdesk-ai-demo/blob/HEAD/README.md");
   });
 
   it("Deployments: the ship path, a failed deploy in the history, the server's own Infra drawer", async () => {
