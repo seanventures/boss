@@ -106,7 +106,9 @@ export function ProjectPage({ projectId, actor, orgId }: { projectId: string; ac
   };
   const ob = onboarding.data;
   const onboardingNow = overview.project.stage === "onboarding" && ob !== null;
-  const openCount = overview.tiles.open_work?.count ?? ctx.work?.items.filter((w) => w.state !== "done").length;
+  // The tab's badge is the Work list's "All" count (wireframe: Work 9 = All 9), never a second number.
+  const openCount = ctx.work ? ctx.work.items.length
+    : Object.values(overview.tiles.open_work?.by_state ?? {}).reduce((x, y) => x + y, 0) || undefined;
 
   return (
     <div className="px" data-testid="px-project" data-tab={url.tab}>

@@ -67,6 +67,10 @@ export function WorkTab({ ctx }: { ctx: PxCtx }) {
   const items = ctx.work?.items ?? [];
   const counts = Object.fromEntries(WORK_ORDER.map((k) => [k, items.filter((w) => w.state === k).length])) as Record<WorkState, number>;
   const shown = items.filter((w) => filter === "all" || w.state === filter);
+  // The board's columns: the four of the wireframe, plus Stalled and Failed whenever any exist
+  // (an item never disappears because the board has no column for it).
+  const boardCols = (["needs_you", "stalled", "running", "planned", "done", "failed"] as WorkState[])
+    .filter((k) => (k !== "stalled" && k !== "failed") || counts[k]);
   return (
     <div className="px-stack" data-testid="px-work">
       <Composer ctx={ctx} />
@@ -106,10 +110,10 @@ export function WorkTab({ ctx }: { ctx: PxCtx }) {
           ))}
         </div>
       ) : (
-        <div className={`px-grid ${counts.stalled ? "px-g5" : "px-g4"}`} data-testid="px-work-columns">
-          {(["needs_you", "stalled", "running", "planned", "done"] as WorkState[]).filter((k) => k !== "stalled" || counts.stalled).map((k) => (
+        <div className={`px-grid px-g${boardCols.length}`} data-testid="px-work-columns">
+          {boardCols.map((k) => (
             <section key={k} className="px-col" aria-label={WORK_WORDS[k]}>
-              <div className="px-row" style={{ marginBottom: 8 }}><span className="px-lbl">{WORK_WORDS[k]}</span><span className="px-nbadge">{counts[k] ?? 0}</span></div>
+              <div className="px-row" style={{ marginBottom: 8 }}><span className="px-lbl">{WORK_WORDS[k]}</span><span className="px-nbadge">{shown.filter((w) => w.state === k).length}</span></div>
               {shown.filter((w) => w.state === k).map((w) => (
                 <button key={w.id} type="button" className="px-card" data-link onClick={() => ctx.open("work", w.id)} data-testid={`px-board-${w.id}`}
                         style={{ width: "100%", textAlign: "left", font: "inherit", color: "inherit", marginBottom: 8, display: "flex", flexDirection: "column", gap: 6, padding: 10 }}>
@@ -271,7 +275,7 @@ export function WorkRow({ w, ctx, first = false }: { w: WorkItem; ctx: PxCtx; fi
         <span className="px-row">
           {w.state === "needs_you" ? (
             <button type="button" className="px-btn" data-kind="amber" data-size="s" data-testid={`px-work-act-${w.id}`} onClick={() => ctx.open("work", w.id)}>
-              {w.links.pr ? "Merge" : "Decide"}</button>
+              {w.action_label || (w.links.pr ? "Merge" : "Decide")}</button>
           ) : w.state === "planned" ? (
             <GatedButton permission="workflow_run:start" projectId={ctx.projectId} className="px-btn" data-size="s" data-testid={`px-work-start-${w.id}`}
                          onClick={() => void startNow()}><Play size={11} weight="fill" aria-hidden /> Start now</GatedButton>

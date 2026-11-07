@@ -200,3 +200,16 @@ def test_the_shepherd_closes_handed_on_runs_in_every_project(world, client, proj
     row = next(w for w in _work(world, client, project["id"])["items"]
                if w["id"] == chain["root"])
     assert row["state"] == "failed" and row["stalled_since"] is None
+
+
+# ── tester findings PX-16 / PX-17 ───────────────────────────────────────────────────────────
+
+def test_the_action_is_named_for_what_it_does_and_a_reviewed_build_is_not_skipped(
+        world, client, project):
+    rows = {w["id"]: w for w in _work(world, client, project["id"])["items"]}
+    assert rows[project["merge"]["run_id"]]["action_label"] == "Merge"
+    assert rows[project["deploy"]["run_id"]]["action_label"] == "Approve deploy"
+    merged = rows[project["merged"][0]["run_id"]]
+    # The workflow has no review STEP; its build ran the review gates and opened PR #1.
+    assert {s["key"]: s["state"] for s in merged["stages"]}["review"] == "done"
+    assert merged["run_number"] >= 1

@@ -135,6 +135,37 @@ def _with_merge(strip: list[dict[str, str]], merge_open: bool) -> list[dict[str,
     return [{**s, "state": "waiting"} if s["key"] == "pr" else s for s in strip]
 
 
+def _gate_word(spec: Mapping[str, Any], step_id: Optional[str]) -> str:
+    for step in spec.get("steps") or []:
+        if isinstance(step, dict) and str(step.get("id")) == str(step_id):
+            binding = step.get("binding") if isinstance(step.get("binding"), dict) else {}
+            cap = str(binding.get("capability") or step.get("capability") or "")
+            if cap in ("deploy", "redeploy") or "deploy" in str(step_id):
+                return "Approve deploy"
+            if cap in ("release_approval",):
+                return "Approve release"
+            if cap in ("spec_review", "architecture", "ux_review") or step.get("kind") == "decision":
+                return "Approve plan"
+    return "Decide"
+
+
+def _reviewed_in_build(strip: list[dict[str, str]], builds: list[Mapping[str, Any]]
+                       ) -> list[dict[str, str]]:
+    """A workflow with no review STEP still reviews: its build runs the review gates. The Review
+    station is then the build's: done once a build passed them (it reached a pull request or
+    completed), failed while the latest build is in a repair round — never "skipped"."""
+    review = next((st for st in strip if st["key"] == "review"), None)
+    if review is None or review["state"] != "skipped" or not builds:
+        return strip
+    latest = builds[-1]
+    passed = any(b.get("pull_request_url") or str(b.get("status") or "") == "completed"
+                 for b in builds)
+    state = ("failed" if str(latest.get("status") or "") == "repairing" and not passed
+             else "done" if passed else "now" if str(latest.get("phase") or "") == "validating"
+             else "todo")
+    return [{**st, "state": state} if st["key"] == "review" else st for st in strip]
+
+
 def _versions(connection: Connection, ids: Iterable[str]) -> dict[str, dict[str, Any]]:
     wanted = sorted({str(i) for i in ids if i})
     if not wanted:
@@ -537,7 +568,8 @@ def _run_items(connection: Connection, project_id: str, limit: int,
         pr_url = next((s["output"].get("pull_request_url") for s in run_steps.values()
                        if s["output"].get("pull_request_url")), None) or next(
             (b["pull_request_url"] for b in reversed(members) if b["pull_request_url"]), None)
-        gate = next((s for s in run_steps.values() if s["gate_open"]), None)
+        gate_id = next((sid for sid, st in run_steps.items() if st["gate_open"]), None)
+        gate = run_steps.get(gate_id) if gate_id else None
         merge = next((b for b in reversed(members) if b.get("merge_open")), None)
         status = str(r["status"])
         state = run_state(status, gate is not None or merge is not None)
@@ -580,8 +612,13 @@ def _run_items(connection: Connection, project_id: str, limit: int,
             "updated_at": iso(r["updated_at"]),
             "last_attempt_at": iso((latest or {}).get("created_at")) or iso(r["created_at"]),
             "stalled_since": iso(since),
-            "stages": _with_merge(stages(spec, run_steps, has_pr=bool(pr_url) and merge is None,
-                                         finished=finished), merge is not None),
+            "stages": _reviewed_in_build(
+                _with_merge(stages(spec, run_steps, has_pr=bool(pr_url) and merge is None,
+                                   finished=finished), merge is not None), members),
+            # The one action a person takes here, named for what it does (never "Merge" on a
+            # deploy approval): Merge · Approve deploy · Approve plan · Decide.
+            "action_label": ("Merge" if merge is not None and gate is None
+                             else _gate_word(spec, gate_id) if gate is not None else None),
             "agents": faces[:4], "cost_usd": round(cost / 1_000_000, 2),
             "links": {
                 "workflow_run": href(project_id, area="delivery_workflows", wfr=rid),
@@ -656,6 +693,7 @@ def _build_items(connection: Connection, project_id: str,
                       "decision": href(project_id, area="decisions", decision=merge["decision_id"])
                       if merge is not None else None},
             "decision_ids": [merge["decision_id"]] if merge is not None else [],
+            "action_label": "Merge" if merge is not None else None,
             "detail": latest.get("error") or title,
             "href": project_href(project_id, tab="work", drawer=f"build:{key}"),
             **group,
@@ -685,7 +723,7 @@ def _planned_items(connection: Connection, project_id: str, now: datetime
             "agents": [], "cost_usd": 0.0,
             "links": {"workflow_run": None, "build": None, "pr": None, "deploy": None,
                       "preview": None, "decision": None},
-            "decision_ids": [], "attempts": [], "attempt_count": 0, "followups": 0, "retries": 0,
+            "decision_ids": [], "action_label": None, "attempts": [], "attempt_count": 0, "followups": 0, "retries": 0,
             "stalled_since": None, "last_attempt_at": iso(r["decided_at"]),
             "detail": r["why"] or r["title"],
             "href": project_href(project_id, tab="roadmap", drawer=f"rec:{r['work_item_id']}"),

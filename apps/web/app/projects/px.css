@@ -216,6 +216,7 @@ button.px-attempts-pill:hover, .px-attempts-pill[aria-expanded="true"] { border-
 .px-att b { font-size: .62rem; font-weight: 600; } .px-att small { font-size: .54rem; }
 .px-att[data-s="handed_on"] b, .px-att[data-s="handed_on"] small { color: var(--faint); }
 .px-g5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.px-g6 { grid-template-columns: repeat(6, minmax(0, 1fr)); }
 .px-li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 9px 4px; border-top: 1px solid var(--border); }
 .px-li:first-child { border-top: 0; }
 .px-li b { font-size: .66rem; display: block; } .px-li small { font-size: .56rem; color: var(--faint); }
@@ -379,7 +380,7 @@ textarea.px-input { resize: vertical; min-height: 64px; }
 .px-set-nav button[aria-current="true"] { color: var(--ink); background: var(--accent-soft); border-color: var(--accent-line); }
 
 @media (max-width: 1100px) {
-  .px-g4, .px-g5 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .px-g4, .px-g5, .px-g6 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .px-g3 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .px-split { grid-template-columns: minmax(0, 1fr); }
   .px-wk { grid-template-columns: 22px minmax(0, 1fr) auto auto; }
