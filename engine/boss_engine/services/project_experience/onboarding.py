@@ -532,11 +532,30 @@ def _knowledge(engine: Any, settings: Any, run_id: str, row: Mapping[str, Any], 
     waited = (datetime.now(timezone.utc) - started).total_seconds()
     files, parsed = int((item or {}).get("files") or 0), int((item or {}).get("parsed") or 0)
     if indexing and not m["done"] and m["state"] != "failed" and waited < MAX_WAIT_S:
+        # STACK FOUND while the code is still being mapped (00b-15): GitHub's file list says
+        # what it is built with in one read, long before the graph is done.
+        if not ((as_json(row.get("facts"), {}) or {}).get("stack")):
+            from ..start_project import detect
+
+            with engine.connect() as c:
+                tree = _safe(lambda: probes.tree_paths(c, project_id, full, repo["branch"]), [])
+            found = _safe(lambda: detect(tree), {}) if tree else {}
+            if found and (found.get("framework") or found.get("language")):
+                _record(engine, run_id, facts={"stack": found})
         sub = f"{parsed} / {files} files" if files else "Queued to map"
+        with engine.connect() as c:
+            known = (as_json((_get(c, run_id) or {}).get("facts"), {}) or {}).get("stack") or {}
+        stack_words = "+".join(w for w in (known.get("framework"), known.get("language")) if w)
+        # Screen 10's Discovered map while it reads: what is found is green, the rest waits.
         _record(engine, run_id, items=[_item("knowledge", "now", sub=sub,
                                              detail="Mapping the code into the knowledge graph.")],
-                discover=[{"label": "Repo access", "state": "done", "sub": full},
-                          {"label": "Mapping code", "state": "now", "sub": sub}])
+                discover=[{"key": "files", "label": f"{parsed}/{files} files" if files
+                           else "Mapping code", "state": "now", "sub": ""},
+                          {"key": "stack", "label": stack_words or "Stack", "state":
+                           "done" if stack_words else "now", "sub": ""},
+                          {"key": "tests", "label": "Tests", "state": "todo", "sub": ""},
+                          {"key": "hotspots", "label": "Hot spots", "state": "todo", "sub": ""},
+                          {"key": "docs", "label": "Docs", "state": "todo", "sub": ""}])
         return True, {}
 
     read = _read_repository(engine, settings, project_id, repo, probes)
@@ -934,7 +953,12 @@ def _backlog(engine: Any, settings: Any, project_id: str, full: str, ci: Mapping
     for s in signals:
         klass, sev, label, kind = _SCAN.get(str(s["kind"]), ("roadmap_item", "low",
                                                              str(s["title"]), "chore"))
-        out.append(_candidate(label, source="roadmap", task_class=klass,
+        where = None
+        if s["kind"] == "scan.untested_hotspot" and ":" in str(s["title"]):
+            # Each hot file is its own item, named by its file ("Test sla.mjs").
+            where = str(s["title"]).split(":", 1)[1].strip()
+            label = f"Test {where.rsplit('/', 1)[-1]}"
+        out.append(_candidate(label, source="roadmap", task_class=klass, where=where,
                               severity=str(s.get("severity") or sev), kind=kind,
                               detail=str(s["title"]), ref=f"signal:{s['id']}",
                               score_source="osv" if s["kind"].startswith("osv") else "scan",
@@ -1073,7 +1097,8 @@ def _propose_on_roadmap(engine: Any, project_id: str, run_id: str,
             if prior and prior["status"] in ("open", "snoozed"):
                 c.execute(text(
                     "UPDATE ambient_recommendations SET title = :t, why = :y, kind = :k, "
-                    "score = :s, priority_score = :s, facts = facts || CAST(:fa AS JSONB), "
+                    "score = :s, priority_score = :s, value = LEAST(:s, 100), "
+                    "facts = facts || CAST(:fa AS JSONB), "
                     "last_seen_at = now(), updated_at = now() WHERE work_item_id = :w"),
                     {"t": cand["label"], "y": why, "k": _rec_kind(cand), "s": cand["score"],
                      "fa": json.dumps(facts, default=str), "w": prior["work_item_id"]})
@@ -1097,10 +1122,11 @@ def _propose_on_roadmap(engine: Any, project_id: str, run_id: str,
             c.execute(text(
                 "INSERT INTO ambient_recommendations (work_item_id, project_id, detector, "
                 "detectors, kind, fingerprint, subject, title, why, proposed_shape, squad, "
-                "source_kinds, facts, evidence, evidence_count, score, priority_score, status, "
-                "last_seen_at) VALUES (:w, :p, 'onboarding', '[\"onboarding\"]'::jsonb, :k, :f, "
+                "source_kinds, facts, evidence, evidence_count, score, priority_score, value, "
+                "evidence_strength, status, last_seen_at) VALUES (:w, :p, 'onboarding', '[\"onboarding\"]'::jsonb, :k, :f, "
                 ":sub, :t, :y, 'ticket', CAST(:sq AS JSONB), CAST(:sk AS JSONB), "
-                "CAST(:fa AS JSONB), CAST(:ev AS JSONB), 1, :s, :s, 'open', now())"),
+                "CAST(:fa AS JSONB), CAST(:ev AS JSONB), 1, :s, :s, LEAST(:s, 100), 0.8, 'open', "
+                "now())"),
                 {"w": item_id, "p": project_id, "k": _rec_kind(cand), "f": fp, "sub": ref,
                  "t": cand["label"], "y": why,
                  "sq": json.dumps(_SQUAD.get(str(cand.get("task_class")), ["software_engineer"])),

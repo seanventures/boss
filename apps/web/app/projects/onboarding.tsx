@@ -105,6 +105,14 @@ export function LiveDiagram({ nodes }: { nodes: Node[] }) {
         </g>
       </svg>
       <span className="px-live-face" aria-hidden><Face agent={CREW.engineering_captain} size={56} state="working" /></span>
+      {/* A phone draws the same flow top to bottom, at a size that can be read (390 px). */}
+      <ol className="px-live-list" aria-hidden>
+        <li data-s="done"><Face agent={CREW.engineering_captain} size={28} state="working" /><b>Helm</b></li>
+        {[...steps, ready].map((st) => (
+          <li key={st.key} data-s={st.state}><span className="px-live-dot" aria-hidden>{mark(st.state).trim() || "·"}</span>
+            <b>{st.label}</b>{st.sub ? <small className="px-mono">{st.sub}</small> : null}</li>
+        ))}
+      </ol>
     </div>
   );
 }
@@ -114,11 +122,16 @@ export function LiveDiagram({ nodes }: { nodes: Node[] }) {
 /** Helm in the middle, what it found around it: each a node that turns green when found. */
 export function DiscoverDiagram({ nodes }: { nodes: Node[] }) {
   const n = Math.max(nodes.length, 1);
-  const W = 300, H = 200, cx = W / 2, cy = 92;
-  const pts = nodes.map((_, i) => {
+  const W = 300, H = 200, cx = 150, cy = 95;
+  // The wireframe's own five places (files · stack · tests · hot spots · docs); any other count
+  // goes round the circle.
+  const FIVE = [{ x: 60, y: 35 }, { x: 240, y: 35 }, { x: 45, y: 130 }, { x: 255, y: 130 }, { x: 150, y: 170 }];
+  const pts = nodes.length === 5 ? FIVE : nodes.map((_, i) => {
     const a = -Math.PI / 2 - Math.PI / 4 + (i * 2 * Math.PI) / n;
     return { x: cx + Math.cos(a) * 112, y: cy + Math.sin(a) * 68 };
   });
+  // A label sits under its node; the bottom node's sits to its right (as drawn).
+  const labelAt = (p: { x: number; y: number }) => (p.y > 160 ? { x: p.x + 20, y: p.y + 4, anchor: "start" as const } : { x: p.x, y: p.y + 29, anchor: "middle" as const });
   return (
     <div style={{ position: "relative" }} data-testid="px-discover">
       <svg className="px-radial" viewBox={`0 0 ${W} ${H}`} role="img"
@@ -133,9 +146,9 @@ export function DiscoverDiagram({ nodes }: { nodes: Node[] }) {
           const c = st === "done" ? "var(--green)" : st === "failed" ? "var(--red)" : st === "skipped" ? "var(--border-strong)" : "var(--teal)";
           return (
             <g key={`n${i}`} data-testid={`px-discover-${nodes[i].key || i}`}>
-              <circle cx={p.x} cy={p.y} r={13} fill={st === "done" ? "var(--green-soft)" : "var(--surface)"} stroke={c} strokeWidth={2} />
+              <circle cx={p.x} cy={p.y} r={p.y > 160 ? 12 : 15} fill={st === "done" ? "var(--green-soft)" : "var(--surface)"} stroke={c} strokeWidth={2} />
               {st === "done" ? <path d={`M${p.x - 4.5} ${p.y} l3 3.2 l6 -6.5`} stroke="var(--green)" strokeWidth={2} fill="none" /> : null}
-              <text x={p.x} y={p.y + 28} textAnchor="middle">{nodes[i].label}</text>
+              {(() => { const l = labelAt(p); return <text x={l.x} y={l.y} textAnchor={l.anchor}>{nodes[i].label}</text>; })()}
             </g>
           );
         })}
@@ -258,7 +271,7 @@ export function OnboardingView({ projectId, ob, onRefresh }: { projectId: string
         <section className="px-card px-ob-ready" aria-labelledby="px-ob-r">
           <div className="px-card-h"><Ico icon={ListChecks} c="teal" /><h2 id="px-ob-r">Ready for work</h2>
             <span className="px-tag" data-tone="blue" data-testid="px-ob-ready-count">{ready}/{rows.length}</span>
-            {ob.only_you.length ? <span className="px-pin" title={`${ob.only_you.length} only you can do`}>{ob.only_you.length}</span> : null}</div>
+</div>
           <div data-testid="px-ob-checklist">
             {!rows.length ? <p className="px-faint" style={{ margin: 0 }}>Helm checks repo access, the build, the tests, the workflow, where it deploys and the secrets it needs — and asks only for what it can&apos;t do.</p> : null}
             {rows.map((c) => {
