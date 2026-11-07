@@ -1344,7 +1344,13 @@ function ConsoleShellInner({
     return () => window.removeEventListener(GET_STARTED_EVENT, on);
   }, []);
   const badgeFor = (id: AreaId): number | undefined => {
-    if (id === "decisions" && status.pendingDecisions > 0) return status.pendingDecisions;
+    // X-14 ONE COUNT: the rail's Approvals badge is the bell's number and Approvals' Needs action
+    // (decisions + what only a person can set up), from the same poll; the server's count is the
+    // first paint only.
+    if (id === "decisions") {
+      const n = titleAttention ? titleAttention.count : status.pendingDecisions;
+      return n > 0 ? n : undefined;
+    }
     if (id === "ops" && status.deadletters > 0) return status.deadletters;
     if (id === "setup" && setupBadge && setupBadge.count > 0) return setupBadge.count;
     return undefined;
