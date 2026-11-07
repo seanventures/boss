@@ -50,7 +50,9 @@ class TestAuthorityRefusedPausesOrBlocks(unittest.TestCase):
                 patch.object(code_task_service, "_fail") as fail_mock, \
                 patch.object(code_task_service, "get_engine_ports",
                              return_value=MagicMock(budget=MagicMock())), \
-                patch.object(person_wait, "enter_waiting_on_person") as enter_mock:
+                patch.object(person_wait, "enter_waiting_on_person",
+                             return_value={"status": "waiting_on_person"}) as enter_mock, \
+                patch.object(code_task_service, "_refused_grant", return_value=None):
             result = code_task_service._run_code_task_once(engine, settings, jobs, run_id)
 
         return result, fail_mock, enter_mock

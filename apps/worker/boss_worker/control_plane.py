@@ -26,6 +26,26 @@ class LeasedJob:
     resource_units: int = 1
 
 
+class StepCrashed(RuntimeError):
+    """The control plane crashed running a step: carries its status and what it said."""
+
+    def __init__(self, status: int, detail: str):
+        super().__init__(f"The control plane crashed running this step (HTTP {status}): {detail}"
+                         if detail else f"The control plane crashed running this step (HTTP {status})")
+        self.status = status
+        self.detail = detail
+
+
+def _detail_of(response: Any) -> str:
+    try:
+        body = response.json()
+    except Exception:  # noqa: BLE001 — a plain-text error page
+        return (response.text or "").strip()[:300]
+    if isinstance(body, dict):
+        return str(body.get("detail") or body.get("error") or "")[:300]
+    return str(body)[:300]
+
+
 class ControlPlaneClient:
     def __init__(
         self, base_url: str, timeout: float = 30.0, api_key: Optional[str] = None
@@ -268,6 +288,10 @@ class ControlPlaneClient:
                 "failure_class": "needs_human",
                 "http_status": 422,
             }
+        if response.status_code >= 500:
+            # Say WHAT crashed, not "500 Internal Server Error": this text becomes the job's
+            # last error and the build's failure line, which is all the diagnosis has to go on.
+            raise StepCrashed(response.status_code, _detail_of(response))
         response.raise_for_status()
         return response.json()
 
@@ -641,17 +665,25 @@ class ControlPlaneClient:
         retryable: bool,
         retry_delay_seconds: int,
     ) -> dict[str, Any]:
-        response = self._client.post(
-            "/v1/worker/fail",
-            json={
-                "worker_id": worker_id,
-                "job_id": job_id,
-                "lease_token": lease_token,
-                "error": error,
-                "retryable": retryable,
-                "retry_delay_seconds": retry_delay_seconds,
-            },
-            timeout=self._lease_timeout,
-        )
+        body = {
+            "worker_id": worker_id,
+            "job_id": job_id,
+            "lease_token": lease_token,
+            "error": error,
+            "retryable": retryable,
+            "retry_delay_seconds": retry_delay_seconds,
+        }
+        # ONE RETRY ON A DROPPED CONNECTION. After the step endpoint 500s the server closes the
+        # pooled connection, and this report went out on it: "Connection reset by peer", the
+        # failure was never recorded, and the job sat until its lease expired and ran again --
+        # the same crash, every five minutes, for hours (laptop, 2026-11-07).
+        for attempt in (1, 2):
+            try:
+                response = self._client.post("/v1/worker/fail", json=body,
+                                             timeout=self._lease_timeout)
+                break
+            except httpx.TransportError:
+                if attempt == 2:
+                    raise
         response.raise_for_status()
         return response.json()

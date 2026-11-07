@@ -351,3 +351,6 @@ span.fx-row-face { cursor: default; }
   .fx-tl-out { order: 8; flex-basis: 100%; max-width: none; padding-left: calc(0.84211rem + 8px); }
   .fx-hit-line { min-height: 32px; }
 }
+
+/* Waiting for what (stuck_work): one line under the header. */
+.fx-why { margin: 6px 0 0; min-width: 0; }

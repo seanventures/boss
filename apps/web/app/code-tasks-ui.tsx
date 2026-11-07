@@ -45,7 +45,10 @@ export {
 import { useAreaKeydown } from "../lib/area-keys";
 
 type View = "floor" | "apps" | "lab" | "repositories" | "components";
-type UrlState = { view: View; build: string | null; app?: string | null; changeset?: string | null };
+type UrlState = { view: View; build: string | null; app?: string | null; changeset?: string | null;
+  /** `logs=build|preview|deploy`: the build opens with its Logs drawer on that tab. */
+  logs?: "build" | "preview" | "deploy" | null };
+const LOG_TABS = new Set(["build", "preview", "deploy"]);
 
 const VIEWS = new Set<View>(["apps", "lab", "repositories", "components"]);
 
@@ -67,6 +70,9 @@ export function readFactoryUrl(search: string): UrlState & { legacyRun: boolean;
     app: view === "components" ? app : null,
     // A multi-repo change, addressed directly (`changeset=<id>`, `&tab=prs` for its PRs).
     changeset: q.get("changeset") || null,
+    // A "Live log" link: `logs=build` (the old `view=logs` meant the same and opened nothing).
+    logs: LOG_TABS.has(q.get("logs") || "") ? (q.get("logs") as "build" | "preview" | "deploy")
+      : q.get("view") === "logs" && build ? "build" : null,
     legacyRun: !q.get("build") && !!legacy,
     wantsNew: q.get("new") === "1",
   };
@@ -277,7 +283,7 @@ export function CodeTasksHome({ projectId, orgId, codeTasks, codeTaskTotal, apiR
       const now = readFactoryUrl(window.location.search);
       if (now.legacyRun) writeUrl({ build: now.build, run: null }, "replace");
       if (now.wantsNew) { writeUrl({ new: null }, "replace"); setMenu(true); }
-      setUrl({ view: now.view, build: now.build, app: now.app, changeset: now.changeset });
+      setUrl({ view: now.view, build: now.build, app: now.app, changeset: now.changeset, logs: now.logs });
     };
     read();
     window.addEventListener("popstate", read);
@@ -286,13 +292,13 @@ export function CodeTasksHome({ projectId, orgId, codeTasks, codeTaskTotal, apiR
 
   const openBuild = useCallback((runId: string, from: HTMLElement | null) => {
     opener.current = { runId, el: from };
-    writeUrl({ build: runId, run: null }, "push");
-    setUrl((u) => ({ ...u, build: runId }));
+    writeUrl({ build: runId, run: null, logs: null }, "push");
+    setUrl((u) => ({ ...u, build: runId, logs: null }));
   }, []);
 
   const closeBuild = useCallback(() => {
-    writeUrl({ build: null, run: null, tab: null }, "push");
-    setUrl((u) => ({ ...u, build: null }));
+    writeUrl({ build: null, run: null, tab: null, logs: null }, "push");
+    setUrl((u) => ({ ...u, build: null, logs: null }));
     const back = opener.current ?? (url.build ? { runId: url.build, el: null } : null);
     // FOCUS GOES BACK TO WHAT OPENED IT (walk D17) — the same element if it survived, else the
     // row now drawing that build (a Building row, a Stopped row, its card), once the Floor has
@@ -403,7 +409,7 @@ export function CodeTasksHome({ projectId, orgId, codeTasks, codeTaskTotal, apiR
         <ChangeSetCockpit key={url.changeset} projectId={projectId} changeSetId={url.changeset} actor={actor}
                           onClose={() => { writeUrl({ changeset: null, tab: null }, "push"); setUrl((u) => ({ ...u, changeset: null })); }} />
       ) : url.build ? (
-        <Cockpit projectId={projectId} runId={url.build} actor={actor} orgId={orgId ?? null}
+        <Cockpit projectId={projectId} runId={url.build} actor={actor} orgId={orgId ?? null} initialLogs={url.logs ?? null}
                  onClose={closeBuild} onOpenBuild={(id) => openBuild(id, opener.current?.el ?? null)} />
       ) : url.view === "components" && url.app ? (
         <div role="tabpanel" aria-label="Components">

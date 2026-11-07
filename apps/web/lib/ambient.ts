@@ -13,6 +13,7 @@
  * a no-op that says so. It exists so the morning review (and a fresh install with no ambient
  * work yet) can see the screens on realistic data; it is always labelled "Sample data".
  */
+import { parseDiagnosis, parseWaitReason, type Diagnosis, type WaitReason } from "./stuck-work";
 import { obsWrite, type WriteResult } from "../app/observability/obs-write";
 import { demoAnswer, demoWrite } from "./ambient-demo";
 
@@ -43,7 +44,9 @@ export type ItemSummary = {
 };
 
 export type StripNode = { type: NodeType; label: string; badges: string[]; /** A detector's icon (Phosphor name). */ icon?: string };
-export type ListItem = ItemSummary & { badges: ItemBadges; strip: StripNode[] };
+export type ListItem = ItemSummary & { badges: ItemBadges; strip: StripNode[];
+  /** What the build it started waits for, and what the Shepherd found (stuck_work.item_status). */
+  why?: WaitReason | null; diagnosis?: Diagnosis | null; run_id?: string | null };
 
 export const TABS = ["needs_you", "running", "resolved_by_agents", "overridden", "failed"] as const;
 export type Tab = (typeof TABS)[number];
@@ -217,7 +220,9 @@ export function parseList(w: unknown): ListView {
                                     strip: a(o(i).strip).slice(0, 6).map((sn_) => {
                                       const p = parseNode({ ...o(sn_), id: "s" });
                                       return { type: p.type, label: p.label, badges: p.badges.slice(0, 2) };
-                                    }) })),
+                                    }),
+                                    why: parseWaitReason(o(i).why), diagnosis: parseDiagnosis(o(i).diagnosis),
+                                    run_id: sn(o(i).run_id) })),
   };
 }
 

@@ -679,6 +679,10 @@ def _run_items(connection: Connection, project_id: str, limit: int,
                 "workflow_run": href(project_id, area="delivery_workflows", wfr=rid),
                 "build": href(project_id, area="code_tasks", view="apps", build=build["id"])
                 if build else None,
+                # THE BUILD'S OWN LIVE LOG: its page with the Logs drawer open on the build tab,
+                # which reads that run's activity only (logs=build; code-tasks-ui readFactoryUrl).
+                "log": href(project_id, area="code_tasks", build=build["id"], logs="build")
+                if build else None,
                 "pr": {"number": number, "external_url": pr_url} if pr_url else None,
                 "deploy": href(project_id, area="infra", view="deploys", deploy=deploy["id"])
                 if deploy else None,
@@ -694,6 +698,7 @@ def _run_items(connection: Connection, project_id: str, limit: int,
                                          (merge or {}).get("decision_id")) if d],
             "detail": (r["directive"] or r["error"] or r["blocked_reason"] or r["workflow"]),
             "workflow": r["workflow"],
+            "build_id": str(build["id"]) if build else None,
             "href": project_href(project_id, tab="work", drawer=f"run:{rid}"),
             **group,
         })
@@ -745,6 +750,7 @@ def _build_items(connection: Connection, project_id: str,
             "links": {"workflow_run": href(project_id, area="delivery_workflows", wfr=root["wfr"])
                       if root.get("wfr") else None,
                       "build": href(project_id, area="code_tasks", view="apps", build=latest["id"]),
+                      "log": href(project_id, area="code_tasks", build=latest["id"], logs="build"),
                       "pr": ({"number": with_pr["pull_request_number"] or pr_number(pr_url),
                               "external_url": pr_url} if pr_url else None),
                       "deploy": None, "preview": previews.get(str(latest["id"])),
@@ -753,6 +759,7 @@ def _build_items(connection: Connection, project_id: str,
             "decision_ids": [merge["decision_id"]] if merge is not None else [],
             "action_label": "Merge" if merge is not None else None,
             "detail": latest.get("error") or title,
+            "build_id": str(latest["id"]),
             "href": project_href(project_id, tab="work", drawer=f"build:{key}"),
             **group,
         })
@@ -889,6 +896,46 @@ def _onboarding_item(connection: Connection, project_id: str,
     }
 
 
+def _with_why(connection: Connection, found: list[dict[str, Any]]) -> None:
+    """Each unfinished row's `why` (stuck_work.wait_reason: what its build waits for, in words)
+    and `diagnosis` (what the Shepherd found). A row whose build waits on a person is Needs you;
+    one whose build cannot move without a fix is Stalled -- never "Running" over a build that
+    says "Queued" (the laptop's CVE rows, 2026-11-07)."""
+    from .. import stuck_work
+
+    for w in found:
+        # A workflow run no build carries yet (a gate, a quiet step, a failure with its words).
+        if not w.get("build_id") and w.get("source") == "workflow_run" and w.get("state") != "done":
+            try:
+                with connection.begin_nested():
+                    why = stuck_work.workflow_wait_reason(connection, str(w["id"]))
+            except Exception:  # noqa: BLE001 — a row with no reason still renders
+                why = None
+            w["why"] = why
+            if why and w.get("state") == "running" and why["who"] == "stuck":
+                w["state"] = "stalled"
+    open_rows = [w for w in found if w.get("build_id") and w.get("state") not in ("done",)]
+    if not open_rows:
+        return
+    ids = [str(w["build_id"]) for w in open_rows]
+    rows = {str(r["id"]): dict(r) for r in connection.execute(text(
+        "SELECT * FROM code_task_runs WHERE id = ANY(:ids)"), {"ids": ids}).mappings().all()}
+    reasons = stuck_work.wait_reasons(connection, list(rows.values()))
+    for w in open_rows:
+        run = rows.get(str(w["build_id"]))
+        if run is None:
+            continue
+        why = reasons.get(str(w["build_id"]))
+        w["why"] = why
+        w["diagnosis"] = stuck_work.public_diagnosis(run.get("finalize_ctx"))
+        if why and w.get("state") in ("running", "planned"):
+            if why["who"] == "you":
+                w["state"] = "needs_you"
+            elif why["who"] == "stuck":
+                w["state"] = "stalled"
+                w["stalled_since"] = w.get("stalled_since") or why.get("since")
+
+
 def everything(connection: Connection, project_id: str, *, limit: int = 60,
                now: Optional[datetime] = None,
                onboarding: Optional[Mapping[str, Any]] = None) -> list[dict[str, Any]]:
@@ -899,6 +946,7 @@ def everything(connection: Connection, project_id: str, *, limit: int = 60,
     standalone = _standalone_groups(connection, project_id, limit)
     found = (_run_items(connection, project_id, limit, roster, now, standalone, horizon)
              + _build_items(connection, project_id, standalone, roster, now, horizon))
+    _with_why(connection, found)
     onboarding_row = _onboarding_item(connection, project_id, roster, now, onboarding)
     if onboarding_row is not None:
         found.append(onboarding_row)

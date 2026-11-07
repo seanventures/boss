@@ -417,8 +417,12 @@ def list_view(connection: Connection, project_id: str, *, filter_: str = "all",
     for item_id in rows:
         g = graph(connection, item_id, project_id=project_id)
         owner = owner_of(connection, g["item"])
+        from .. import stuck_work
+
+        # What its build waits for, and what the Shepherd found (stuck_work): "Running" alone
+        # hid four builds crash-looping behind a squad's item (2026-11-07).
         items.append({**g["item"], "badges": g["badges"], "owner": owner,
-                      "strip": _strip(g, owner)})
+                      "strip": _strip(g, owner), **stuck_work.item_status(connection, item_id)})
     counts = {f: int(connection.execute(text(
         f"SELECT count(*) FROM work_items w WHERE w.project_id = :p AND w.ambient AND "
         f"{_FILTER_SQL[f]} AND (CAST(:c AS TEXT) IS NULL OR w.task_class = :c)"),

@@ -706,7 +706,13 @@ def original_build_authority(db: Any, task_run_id: str) -> Any:
     """The authority a build was STARTED under: the principal + grant stamped on the FIRST code.task
     job of that run (written in the same transaction as the run). A retry, a resume after plan
     approval, a spend-cap failover or a lease reclaim re-enqueues the build from a system thread
-    or the worker; each carries this, never the re-enqueuer's identity (#6)."""
+    or the worker; each carries this, never the re-enqueuer's identity (#6).
+
+    The first job that CARRIES a grant wins over an earlier one with none: a build BOSS started on
+    its own (an always-on squad: no person, no grant) is refused `no_grant` and paused on a person
+    (services/person_wait); once that person's grant covers it, the resume job is stamped with it.
+    Reading only the first job sent every resumed build back to the grantless authority, refused
+    again, for ever."""
     from sqlalchemy import text
 
     from . import lineage
@@ -721,7 +727,8 @@ def original_build_authority(db: Any, task_run_id: str) -> Any:
             return None
         row = db.execute(text(
             "SELECT payload, on_behalf_of, grant_id, chain, on_behalf_system FROM jobs WHERE kind = 'code.task' "
-            "AND payload->>'run_id' = :r ORDER BY created_at, id LIMIT 1"), {"r": task_run_id}).mappings().first()
+            "AND payload->>'run_id' = :r ORDER BY (grant_id IS NULL), created_at, id LIMIT 1"),
+            {"r": task_run_id}).mappings().first()
     if row is None:
         return None
     try:

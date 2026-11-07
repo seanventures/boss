@@ -8284,8 +8284,20 @@ def run_code_task_step_endpoint(payload: open_bodies.CodeTaskStepBody):
                 connection, run["project_id"], actor, "workflow_execute"
             )
     from .services.code_task_service import run_code_task
-    return run_code_task(engine, settings, jobs, run_id,
-                         fencing_token=payload.get("fencing_token"))
+    try:
+        return run_code_task(engine, settings, jobs, run_id,
+                             fencing_token=payload.get("fencing_token"))
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        # A crash is recorded ON THE RUN (what, where) and answered in words, so the build's own
+        # page, the worker's error and the stuck-work diagnosis all say what broke -- not a bare
+        # 500 the worker could not even report (crun_de5396b5: 30 silent crashes, 2026-11-07).
+        from boss_engine.services import stuck_work
+
+        said = stuck_work.record_step_crash(engine, run_id, exc)
+        LOGGER.exception("code_task_step_crashed run_id=%s", run_id)
+        raise HTTPException(status_code=500, detail=said) from exc
 
 
 class InvestigationRunBody(BaseModel):
