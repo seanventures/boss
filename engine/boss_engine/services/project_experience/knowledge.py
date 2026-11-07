@@ -625,6 +625,14 @@ def decisions(connection: Connection, project_id: str, limit: int = 3) -> list[d
         " d.recommendation->>'action' = 'review_architecture') "
         "ORDER BY COALESCE(d.approved_at, d.updated_at) DESC LIMIT :n"),
         {"p": project_id, "n": limit}).mappings().all()
+    # 06-14 a plan reads like the wireframe's PRD row, "Juno · approved Nov 3": the AGENT who
+    # wrote it (the same convener rule as the PRD rows), then approved and the day; the person
+    # who approved it rides in `approved_by` (the row's tooltip).
+    from ..workflow_catalogue import default_agent_for
+
+    roster = agents(connection, project_id)
+    writer_key = default_agent_for("meeting")
+    writer = face(roster, writer_key) if writer_key in roster else None
     for r in rows:
         kind = "Plan" if r["cap"] in ("spec_review", "meeting") else "Design"
         name = short_title(r["title"], r["directive"], limit=4) if (r["title"] or r["directive"]) \
@@ -633,7 +641,9 @@ def decisions(connection: Connection, project_id: str, limit: int = 3) -> list[d
         when = r["approved_at"] or r["updated_at"]
         out.append({"label": f"{kind} · {name}" if name else f"{kind} approved",
                     "detail": r["question"], "kind": "decision", "at": iso(when),
-                    "sub": "Approved · " + ", ".join(x for x in (by, short_day(when)) if x),
+                    "sub": " · ".join(x for x in ((writer or {}).get("name") if kind == "Plan"
+                                                  else None, f"approved {short_day(when)}") if x),
+                    "approved_by": by, "agent": writer if kind == "Plan" else None,
                     "href": href(project_id, area="decisions", decision=r["id"])})
     return out[:limit]
 

@@ -115,3 +115,22 @@ def test_the_cost_tile_carries_its_cap_share_and_first_week(world, client, engin
     assert "first_week" in tile and "list_delta_pct" in tile
     if tile["delta_pct"] is None and tile["usd"] > 0 and not tile["on_subscription"]:
         assert tile["first_week"] is True
+
+
+def test_an_approved_plan_names_the_agent_who_wrote_it(world, client, engine, helpdesk):
+    """06-14 "Juno · approved Nov 3": the plan's writer agent, then approved and the day; the
+    person who approved it rides in approved_by, never in the row's words."""
+    with engine.begin() as db:
+        db.execute(text(
+            "INSERT INTO decisions (id, project_id, question, recommendation, status, approved_by, "
+            "approved_at, created_at) VALUES (:i, :p, 'Approve the plan for SLA timers?', "
+            "CAST(:r AS JSONB), 'approved', 'ceo', now(), now())"),
+            {"i": f"dec_{uuid.uuid4().hex[:10]}", "p": helpdesk["id"],
+             "r": '{"capability": "spec_review"}'})
+    kn = _get(world, client, f"/v1/projects/{helpdesk['id']}/knowledge")
+    plans = [d for d in kn["decisions"] if d["label"].startswith("Plan")]
+    assert plans, kn["decisions"]
+    sub = plans[0]["sub"]
+    assert " · approved " in sub and not sub.startswith("Approved")
+    assert plans[0]["agent"] and sub.startswith(plans[0]["agent"]["name"])
+    assert plans[0]["approved_by"]
