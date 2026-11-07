@@ -4,6 +4,7 @@ import { GatedButton, useGate } from "../components/gated";
 import type { Permission } from "../lib/identity/permissions.gen";
 import { routeForStep, useRunRoutes } from "./why-this-model";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { localWith } from "../lib/local-time";
 import { ArrowLeft, CornersIn, CornersOut } from "@phosphor-icons/react";
 import { ShareRunButton } from "./improve/share-run";
 import { OPEN_GATE, needsYou as gateNeedsYou, personWait, stepClock, waitsForMerge as mergeWait } from "../lib/step-timing";
@@ -504,17 +505,13 @@ function notApplicable(step: RunStep): boolean {
  *  blocked run from last week above the project that started a minute ago, purely because
  *  something touched it more recently — which is how the page came to show an expired run
  *  while a build was in flight. */
-/** "2 Sep 03:42Z" — cut straight from the ISO string rather than through `toLocaleString` or a
- *  "3 hours ago". Both of those read the clock or the timezone, which differ between the server
- *  render and the browser one, and React replaces the whole subtree when they disagree. This is
- *  the same characters everywhere, which is what a timestamp on a row needs to be. */
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+/** "Sep 2, 3:42 AM" in the viewer's zone, hydration-safe (lib/local-time localWith): the server
+ *  and the first browser render paint the same UTC text, the viewer's own zone after mount. */
 export function startedLabel(iso: string): string {
-  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(iso ?? "");
-  if (!m) return "";
-  const month = MONTHS[Number(m[2]) - 1] ?? m[2];
-  return `${Number(m[3])} ${month} ${m[4]}:${m[5]}Z`;
+  // THE VIEWER'S CLOCK (PX-46): "16:56Z" was UTC on every screen. localWith answers the same UTC
+  // text the server painted until the page has hydrated, then the viewer's own zone.
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(iso ?? "")) return "";
+  return localWith(iso, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
 function byLiveness(a: Run, b: Run): number {

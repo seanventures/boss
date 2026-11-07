@@ -54,7 +54,8 @@ export type PxCtx = {
   ask: (question?: string) => void;
 };
 
-/** The captain drawer IS the Ask BOSS dock, scoped to this project and talking as its captain (§7). */
+/** The Ask BOSS dock, scoped to this project and talking as its captain (§7): ⌘K's "Ask Helm…"
+ *  off the project page. On the project page `ctx.ask` opens the captain drawer (screen 09). */
 export function askCaptain(projectId: string, captain: { name: string; role_key: string } | null, question = ""): void {
   openDockAbout({ subject: { kind: "project", id: projectId }, question, role: captain?.name ?? null, roleKey: captain?.role_key || null, history: "push" });
 }
@@ -101,7 +102,9 @@ export function ProjectPage({ projectId, actor, orgId }: { projectId: string; ac
     work: work.data ?? workFallback, workState: work.data ? "ready" : workFallback ? "ready" : work.state === "missing" ? (start.state === "missing" ? "missing" : start.state) : work.state,
     refreshWork: () => { work.refresh(); start.refresh(); },
     onboarding: onboarding.data,
-    tab, open: openDrawer, ask: (q) => askCaptain(projectId, captain, q),
+    // ASK THE CAPTAIN opens its drawer (screen 09) on this page; a question rides as `cap_ask`
+    // and is sent once when the drawer opens (the dock's own conversation, one agent path).
+    tab, open: openDrawer, ask: (q) => writePxUrl({ drawer: "captain", cap_ask: q?.trim() ? q.trim() : null }),
   };
   const ob = onboarding.data;
   const onboardingNow = overview.project.stage === "onboarding" && ob !== null;

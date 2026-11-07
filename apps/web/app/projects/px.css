@@ -681,3 +681,51 @@ button.px-h-num:focus-visible { outline: 2px solid var(--accent-text); outline-o
 .px-h-al b a:hover { color: var(--accent-text); }
 [data-testid^="px-h-env-"] .px-card-h small { white-space: nowrap; }
 .px-kg { max-width: 560px; margin-left: auto; margin-right: auto; display: block; }
+
+/* ── Drawers (screens 05b, 09; drawers fork) ─────────────────────────────────────────────── */
+.px-drawer { animation: px-drawer-in 240ms cubic-bezier(.2, .8, .2, 1); }
+@keyframes px-drawer-in { from { transform: translateX(24px); opacity: .4; } to { transform: none; opacity: 1; } }
+.px-drawer[data-testid="px-drawer-captain"] { width: min(480px, 100vw); }
+.px-capd-scope { gap: 5px; font-size: .56rem; color: var(--faint); flex-wrap: wrap; }
+.px-capd-scope .px-dot { width: 6px; height: 6px; background: var(--green); }
+.px-drawer-b.px-capd-b { padding: 0; gap: 0; overflow: hidden; }
+.px-capd-hist { padding: 10px 16px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 2px; max-height: 40%; overflow-y: auto; }
+.px-capd-hist a.px-li { color: inherit; text-decoration: none; grid-template-columns: auto minmax(0, 1fr) auto; }
+.px-capd { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.px-capd .agent-chat-shell { grid-template-columns: 1fr; height: 100%; min-height: 0; padding: 0; border: 0; border-radius: 0; background: none; gap: 0; }
+.px-capd .agent-chat-rail { display: none; }
+.px-capd[data-history] .agent-chat-shell { grid-template-rows: auto minmax(0, 1fr); }
+.px-capd[data-history] .agent-chat-rail { display: block; border-right: 0; border-bottom: 1px solid var(--border); padding: 8px 16px; max-height: 180px; }
+.px-capd .agent-chat-main { min-height: 0; height: 100%; }
+.px-capd .agent-chat-log { border: 0; border-radius: 0; background: none; padding: 14px 16px; gap: 10px; }
+.px-capd .agent-message { margin: 0; max-width: 100%; width: auto; font-size: .66rem; line-height: 1.5; padding: 10px 12px; border-radius: 12px;
+  background: var(--surface-2); border: 1px solid var(--border); border-left-width: 1px; border-right-width: 1px; }
+.px-capd .agent-message.user { align-self: flex-end; max-width: 88%; background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent); border-radius: 12px 12px 4px 12px; }
+.px-capd .agent-message.user > span:first-child, .px-capd .agent-message.assistant > span:first-child:not(.ag-dock-gutter) { display: none; }
+.px-capd .agent-message.user p { margin: 0; }
+.px-capd .agent-message .agent-md p { margin: 0 0 6px; } .px-capd .agent-message .agent-md p:last-child { margin: 0; }
+/* Empty: the suggestions only (09 States). */
+.px-capd .agent-chat-empty { visibility: hidden; }
+.px-capd .agent-suggests-bar { border-top: 1px solid var(--border); padding: 10px 16px 4px; mask-image: none; flex-wrap: wrap; row-gap: 6px; }
+.px-capd .agent-suggests-bar .agent-suggest { display: inline-flex; align-items: center; gap: 5px; padding: 5px 10px; font-size: .58rem; color: var(--ink-soft);
+  border-color: var(--border-strong); max-width: 100%; }
+.px-capd .agent-composer { margin: 8px 16px 14px; border: 1px solid var(--border-strong); border-radius: 12px; background: var(--surface-2); padding: 4px 6px 4px 10px; }
+.px-capd .agent-composer textarea.agent-input { min-height: 34px !important; height: 34px; border: 0; background: transparent; box-shadow: none; padding: 8px 4px; font-size: .64rem; }
+.px-capd .agent-composer { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.px-capd .agent-composer textarea.agent-input { flex: 1 1 200px; order: 1; width: auto; }
+.px-capd .agent-composer-bar { display: contents; }
+.px-capd .agent-attach { order: 0; background: none; border: 0; color: var(--faint); cursor: pointer; font-size: .8rem; }
+.px-capd .agent-composer-hint { display: none; }
+.px-capd .agent-stop { order: 2; }
+.px-capd .agent-send { order: 3; }
+.px-capd .agent-attached, .px-capd .agent-attached-error { order: 4; flex-basis: 100%; }
+.px-capd .agent-send { width: 30px; height: 26px; border-radius: 8px; background: var(--accent); color: #fff; border: 0; }
+.px-capd .agent-flow-n { font-size: .58rem; }
+@media (max-width: 760px) {
+  .px-drawer[data-testid="px-drawer-captain"] { width: 100vw; }
+}
+
+/* The captain drawer's header already names Helm (screen 09): the dock's own head, its "Task"
+   card (a project is not a task) and its general prompts give way to the drawer's chips. */
+.px-capd .ag-dock-head, .px-capd .agent-chat-main > .ct-block:first-child, .px-capd [data-testid="agent-suggests"] { display: none; }

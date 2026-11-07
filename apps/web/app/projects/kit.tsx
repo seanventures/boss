@@ -195,13 +195,28 @@ export function PxLink({ href, children, className, testid, title, onOpen }: {
 }
 
 /** Open a drawer in place (deep-linkable `&drawer=kind:id`; Back closes it). */
-export const openDrawer = (kind: string, id: string) => writePxUrl({ drawer: `${kind}:${id}` });
-export const closeDrawer = () => writePxUrl({ drawer: null });
+export const openDrawer = (kind: string, id: string) => {
+  writePxUrl({ drawer: `${kind}:${id}` });
+  // Mark the entry this drawer pushed, so closing it can step back over it (PX-33).
+  try { window.history.replaceState({ ...(window.history.state ?? {}), pxDrawer: true }, "", window.location.href); } catch { /* non-browser */ }
+};
+/** Closing never adds a history entry (PX-33: Esc pushed one, so Back re-opened the drawer).
+ *  A drawer this page opened is stepped back over; one that came in on a link is replaced away. */
+export const closeDrawer = () => {
+  try {
+    if ((window.history.state as { pxDrawer?: boolean } | null)?.pxDrawer) { window.history.back(); return; }
+  } catch { /* non-browser */ }
+  writePxUrl({ drawer: null, cap_ask: null }, "replace");
+};
 
 /** A side drawer: focus moves in, Esc and the scrim close it, focus returns to where it was. */
-export function Drawer({ title, sub, icon, onClose, children, footer, testid = "px-drawer", wide }: {
+export function Drawer({ title, sub, icon, onClose, children, footer, testid = "px-drawer", wide, actions, bodyClass }: {
   title: React.ReactNode; sub?: React.ReactNode; icon?: React.ReactNode; onClose: () => void; children: React.ReactNode;
   footer?: React.ReactNode; testid?: string; wide?: boolean;
+  /** Icon buttons beside ✕ in the header (expand to the full page, past conversations). */
+  actions?: React.ReactNode;
+  /** A class on the body, for a drawer whose body is a component of its own (the captain's chat). */
+  bodyClass?: string;
 }) {
   const id = useId();
   const panel = useRef<HTMLDivElement>(null);
@@ -223,11 +238,12 @@ export function Drawer({ title, sub, icon, onClose, children, footer, testid = "
             <h2 id={id} className="px-ell">{title}</h2>
             {sub ? <div className="px-row px-wrap px-faint" style={{ fontSize: ".58rem", marginTop: 3 }}>{sub}</div> : null}
           </div>
+          {actions}
           <button type="button" className="px-icon-btn" onClick={onClose} aria-label="Close" title="Close (Esc)" data-testid={`${testid}-close`}>
             <X size={16} weight="bold" />
           </button>
         </div>
-        <div className="px-drawer-b">{children}</div>
+        <div className={bodyClass ? `px-drawer-b ${bodyClass}` : "px-drawer-b"}>{children}</div>
         {footer ? <div className="px-drawer-f">{footer}</div> : null}
       </div>
     </div>

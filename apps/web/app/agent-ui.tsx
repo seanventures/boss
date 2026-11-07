@@ -1,7 +1,7 @@
 "use client";
 
 import { HERO_BRIEF_PARAM } from "./url-intent";
-import { useCallback, useEffect, useState, useTransition, useRef} from "react";
+import React, { useCallback, useEffect, useState, useTransition, useRef} from "react";
 
 import { landingAnswerArrived } from "../lib/chat-landing";
 import { CitedAnswer } from "./agents/cited-answer";
@@ -22,6 +22,7 @@ import { GatedButton, useGate } from "../components/gated";
 import { CitedActs, citedIds, DockAgentHead, DockGutterFace, dockFaceKey, dockRoleKey, useDockSpeech } from "./agents/dock-agent";
 import { nameOf } from "./agents/run-face";
 import { useIdentityVersion } from "../lib/use-agent-identities";
+import { leadingFlow } from "../lib/answer-flow";
 /** An action as RECORDED, which is not one shape. The router writes `{kind, args, result}`;
  *  `AgentService` writes `{id, tool, ok}`. Typing it as only the first is what let a `.kind`
  *  that is sometimes absent reach the render. */
@@ -242,7 +243,7 @@ async function read<T>(params: Record<string, string>, ms = 12_000): Promise<T |
 
 
 export function AgentChat({ projectId, actor, initialTaskId, initialMessage, roleName,
-                           fresh, roleKey: roleKeyProp, actId }: {
+                           fresh, roleKey: roleKeyProp, actId, placeholder, starters, sendOnOpen }: {
   projectId: string; actor: string; initialTaskId?: string;
   /** Text to seed the composer with, handed in as a PROP rather than read from the URL.
    *
@@ -266,6 +267,13 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
   roleKey?: string;
   /** The work this conversation is about (`?dock_act=`): sent as `context.act_id`. */
   actId?: string;
+  /** The composer's words ("Ask Helm, or describe new work…" in the captain drawer). */
+  placeholder?: string;
+  /** Suggestion chips the opening screen grounded in its own record (the captain drawer's
+   *  "Plan next week" / "Why is PR #3 waiting?"): a tap SENDS the message. */
+  starters?: { label: string; message: string; icon?: React.ReactNode }[];
+  /** A question to send once the conversation has loaded (the Overview's "Plan next week"). */
+  sendOnOpen?: string;
 }) {
   useIdentityVersion(); // names and faces below are resolved at render: repaint when identities load
   // Pre-greyed for a viewer who may not chat (P1-18): Send, Enter and the proposals do nothing.
@@ -374,6 +382,9 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
     } catch { /* private mode: the general prompts still work */ }
   }, [initialTaskId]);
 
+  // A screen that brought its own chips (`starters`) shows those instead of the general set.
+  const hasStarters = Boolean(starters?.length);
+  useEffect(() => { if (hasStarters) setSuggestions([]); }, [hasStarters]);
   const [loadingThread, setLoadingThread] = useState(false);
   const [busy, startTransition] = useTransition();
   // WHO IS IN THE DOCK, BY KEY, and what they are doing right now. Thinking while a turn is in
@@ -959,6 +970,16 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
     runTurn(fd);
   }, [busy, runTurn]);
 
+  // SENT ONCE, AFTER THE THREAD LOADED: a door that asked a question ("Plan next week") gets its
+  // answer in the conversation it opened, not a prefilled box to press again.
+  const opened = useRef({ seen: false, sent: false });
+  useEffect(() => {
+    if (loadingThread) { opened.current.seen = true; return; }
+    if (!sendOnOpen || opened.current.sent || busy || (roleRef && !opened.current.seen)) return;
+    opened.current.sent = true;
+    takeNextStep({ id: "open", label: "", message: sendOnOpen });
+  }, [loadingThread, busy, sendOnOpen, roleRef, takeNextStep]);
+
   const send = useCallback(() => {
     const msg = input.trim();
     // A SCREENSHOT ON ITS OWN IS A MESSAGE. "Look at this" is the most natural way to report a
@@ -1332,8 +1353,27 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
                 <>
                   {/* Its citations ([R:…] / [D:…] / [L:…]) as links named by the cited rule,
                       clause or learning — never a raw id (rulebook source G6). */}
-                  <CitedAnswer className="agent-md" projectId={projectId} actor={actor}
-                               text={stripAppFacts(withoutBrief(m.content))} />
+                  {(() => {
+                    // A status answer may lead with its path as one line ("A → B → C"): drawn
+                    // as flow chips, the rest stays the answer (lib/answer-flow).
+                    const lead = leadingFlow(stripAppFacts(withoutBrief(m.content)));
+                    return (
+                      <>
+                        {lead.nodes.length ? (
+                          <div className="agent-flow" role="list" aria-label="Path" data-testid="agent-flow">
+                            {lead.nodes.map((n, k) => (
+                              <React.Fragment key={`${n.label}-${k}`}>
+                                {k ? <span className="agent-flow-w" aria-hidden data-s={lead.nodes[k - 1].state === "done" ? "done" : undefined} /> : null}
+                                <span className="agent-flow-n" role="listitem" data-s={n.state}>{n.state === "done" ? "✓ " : ""}{n.label}</span>
+                              </React.Fragment>
+                            ))}
+                          </div>
+                        ) : null}
+                        <CitedAnswer className="agent-md" projectId={projectId} actor={actor}
+                                     text={lead.nodes.length ? lead.rest : stripAppFacts(withoutBrief(m.content))} />
+                      </>
+                    );
+                  })()}
                   {m.technical ? (
                     <details className="agent-technical" data-testid="agent-message-technical">
                       <summary>Details</summary>
@@ -1572,6 +1612,18 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
             ))}
           </div>
         ) : null}
+        {/* THE OPENING SCREEN'S OWN CHIPS (the captain drawer): grounded in its record, a tap sends. */}
+        {starters?.length ? (
+          <div className="agent-suggests agent-suggests-bar agent-starters" data-testid="agent-starters">
+            {starters.map((st) => (
+              <button type="button" className="agent-suggest" key={st.label} title={st.message}
+                      disabled={busy || !chat.allowed} data-testid={`agent-starter-${st.label.slice(0, 14)}`}
+                      onClick={() => takeNextStep({ id: st.label, label: st.label, message: st.message })}>
+                {st.icon}{st.label}
+              </button>
+            ))}
+          </div>
+        ) : null}
 
         {/* A TEXTAREA, not a single-line input. The useful questions here are the long ones —
             "why did this run take 152 minutes and what went wrong" plus the context that makes
@@ -1586,7 +1638,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
               select what you wrote to copy it. Only SEND is held. */}
           <textarea className="agent-input" value={input}
             aria-label="Message BOSS"
-            placeholder="Ask BOSS…"
+            placeholder={placeholder ?? "Ask BOSS…"}
             // Three lines, not one. The useful questions here are the long ones — "why did
             // this run take 152 minutes and what went wrong", plus the context that makes it
             // answerable — and a field one line tall says "type something short".

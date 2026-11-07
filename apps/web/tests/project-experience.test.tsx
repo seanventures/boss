@@ -298,8 +298,11 @@ describe("the Project page header, Needs you and tabs (screen 4)", () => {
     await press(tid("px-head-health"));
     expect(params().get("tab")).toBe("health");
     await press(tid("px-head-ask"));
-    expect(params().get("agent")).toBe(`project:${P}`);
-    expect(params().get("dock_role_key")).toBe("engineering_captain");
+    expect(params().get("drawer")).toBe("captain"); // the captain drawer (screen 09), not the generic dock
+    expect(tid("px-drawer-captain")).not.toBeNull();
+    window.history.replaceState(null, "", `/?org=org_1&project_id=${P}&area=project`);
+    await act(async () => { window.dispatchEvent(new PopStateEvent("popstate")); });
+    await settle();
     await press(tid("px-head-new-work"));
     expect([params().get("tab"), params().get("compose")]).toEqual(["work", null]); // compose consumed by the composer
     expect(document.activeElement?.getAttribute("data-testid")).toBe("px-compose-text");
@@ -312,7 +315,9 @@ describe("the Project page header, Needs you and tabs (screen 4)", () => {
     await press(tid("px-needs-dec_merge3"));
     expect(params().get("drawer")).toBe("needs:dec_merge3");
     expect(tid("px-drawer-needs")).not.toBeNull();
-    expect(tid("px-drawer-needs-act")!.getAttribute("href")).toBe("https://github.com/paramg/helpdesk-ai-demo/pull/3");
+    // It acts in place (PX-05): the primary is named for the action; the PR is a link beside it.
+    expect(tid("px-drawer-needs-approve")!.textContent).toContain("Merge PR #3");
+    expect(tid("px-drawer-needs-review")!.getAttribute("href")).toBe("https://github.com/paramg/helpdesk-ai-demo/pull/3");
     await act(async () => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
     await settle();
     expect(params().get("drawer")).toBeNull();
@@ -366,8 +371,8 @@ describe("Overview (screen 4)", () => {
     await press(tid("px-ov-accept-rec_weekend"));
     expect(calls.some((c) => c.method === "POST" && c.path === "/v1/ambient/roadmap/rec_weekend/accept")).toBe(true);
     await press(tid("px-ov-plan-week"));
-    expect(params().get("dock_ask")).toBe("Plan next week for this project."); // the shell's dock reads it
-    expect(params().get("agent")).toBe(`project:${P}`);
+    expect(params().get("drawer")).toBe("captain"); // the captain drawer sends it once (screen 09)
+    expect(tid("px-drawer-captain")).not.toBeNull();
     expect(tid("px-ov-try-url")!.getAttribute("href")).toBe("http://203.0.113.20:8004");
   });
 
@@ -415,8 +420,9 @@ describe("Work (screens 5, 5b)", () => {
     expect(tid("px-work-run-wi_visual")!.getAttribute("href")).toContain("area=delivery_workflows");
     await press(tid("px-work-act-wi_visual"));
     expect(tid("px-drawer-work")).not.toBeNull();
+    // The real steps only (a skipped station is not a step), each with its face (screen 05b).
     expect($$("[data-testid='px-drawer-work-steps'] .px-step").length).toBe(6);
-    expect(tid("px-drawer-work-merge")!.getAttribute("href")).toContain("/pull/3");
+    expect(tid("px-drawer-work-merge")!.textContent).toContain("Merge PR #3");
     expect(tid("px-drawer-link-build")!.getAttribute("href")).toContain("area=code_tasks");
     await press(tid("px-work-board"));
     expect(tid("px-work-columns")).not.toBeNull();
@@ -547,7 +553,7 @@ describe("Roadmap (screen 7)", () => {
     await press(tid("px-rec-snooze-rec_index"));
     expect(calls.some((c) => c.path === "/v1/ambient/roadmap/rec_index/snooze")).toBe(true);
     await press(tid("px-rm-plan-ask"));
-    expect(params().get("agent")).toBe(`project:${P}`);
+    expect(params().get("drawer")).toBe("captain"); // asking the captain opens its drawer (screen 09)
   });
 });
 
@@ -645,6 +651,8 @@ describe("Settings (screen 13): demo logins with user names, reveal behind the s
     const calls = engine();
     await openProject("&tab=settings");
     await press(tid("px-set-captain-change"));
+    // Captain roles first (PX-13); every other agent is behind "Show all agents (N)".
+    if (tid("px-set-captain-all")) await press(tid("px-set-captain-all"));
     const juno = [...tid("px-set-captain-pick")!.querySelectorAll("button")].find((b) => b.textContent!.includes("Juno"))!;
     await press(juno);
     expect(calls.find((c) => c.method === "POST" && c.path === `/v1/projects/${P}/captain`)?.body).toEqual({ agent_id: "pm" });
@@ -814,7 +822,8 @@ describe("the engine's own answers (what the API serves, not the sample)", () =>
     realEngine();
     await openProject("&tab=work&drawer=run:wfr_run1");
     expect(tid("px-drawer-work")).not.toBeNull();
-    expect(new URLSearchParams(tid("px-drawer-work-decide")!.getAttribute("href")!.split("?")[1]).get("decision")).toBe("dec_1");
+    // One action (05b): with a PR it is "Merge PR #n", which approves the merge question in BOSS.
+    expect(new URLSearchParams((tid("px-drawer-work-decide") ?? tid("px-drawer-work-merge"))!.getAttribute("href")!.split("?")[1]).get("decision")).toBe("dec_1");
     unmount(); realEngine();
     await openProject("&tab=deployments&drawer=env:dept_1");
     expect(tid("px-drawer-env")).not.toBeNull();

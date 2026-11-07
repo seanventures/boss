@@ -8904,3 +8904,14 @@ details[open] > .skill-form-summary::before { transform: rotate(90deg); }
 .bx-np-next { margin: 0; padding: 8px 10px; border-radius: var(--r); background: var(--surface-2); color: var(--ink-soft); font-size: 0.82rem; }
 .bx-np-error { margin: 0; color: var(--red); }
 .bx-np-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+
+/* An answer's leading path as flow chips (lib/answer-flow; captain drawer, screen 09). */
+.agent-flow { display: flex; align-items: center; flex-wrap: wrap; row-gap: 6px; margin: 2px 0 8px; }
+.agent-flow-n { display: inline-flex; align-items: center; padding: 3px 9px; border-radius: 8px; border: 1.5px solid var(--border-strong);
+  font-size: .72rem; font-weight: 600; white-space: nowrap; }
+.agent-flow-n[data-s="done"] { border-color: var(--green); color: var(--green); }
+.agent-flow-n[data-s="now"] { border-color: var(--teal); color: var(--teal); box-shadow: 0 0 0 2px color-mix(in srgb, var(--teal) 25%, transparent); }
+.agent-flow-n[data-s="waiting"] { background: var(--amber); border-color: var(--amber); color: #1b1300; }
+.agent-flow-n[data-s="todo"] { border-style: dashed; color: var(--faint, var(--muted)); }
+.agent-flow-w { width: 14px; height: 2px; background: var(--border-strong); flex: none; }
+.agent-flow-w[data-s="done"] { background: var(--green); }

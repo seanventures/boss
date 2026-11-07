@@ -10,13 +10,20 @@
  */
 import React, { useEffect, useState } from "react";
 import {
-  ChatCircleDots, Check, Code, FileText, FlowArrow, GitPullRequest, Globe, Graph, PaperPlaneRight, Path, RocketLaunch, Terminal, User, Warning,
+  ArrowsOut, ChatCircleDots, Check, Code, FileText, FlowArrow, GitMerge, GitPullRequest, Globe, Graph, ListChecks, PaperPlaneRight, Path, PauseCircle, Question,
+  RocketLaunch, Terminal, User, Warning, Wrench,
 } from "@phosphor-icons/react";
 
 import { ATTEMPT_WORDS, KIND_WORDS, PX_PATHS, findWork, parseDeployments, pxHref, toTab, usePxRead, writePxUrl, type Deployments, type Onboarding, type WorkItem } from "../../lib/project-experience";
 import { FX_DEPLOYMENTS } from "../../lib/project-experience-fixtures";
-import { Drawer, Empty, Face, Flow, HEALTH_WORD, Ico, PxLink, STATE_WORD, Tag } from "./kit";
+import { Drawer, Empty, Face, Flow, HEALTH_WORD, Ico, PxLink, STATE_WORD, Spark, Tag } from "./kit";
 import { ActionButton } from "./tab-overview";
+import { DrawerAttempts } from "./tab-work";
+import { CaptainDrawer } from "./captain-drawer";
+import { DecisionActs, NeedsBody, StageBody, WorkStoryBody, stageIcon, useWorkStory } from "./drawers-more";
+
+/** Each Needs-you item's icon, by what it asks (as on Overview). */
+const NEED_ICON: Record<string, typeof GitMerge> = { merge: GitMerge, deploy: RocketLaunch, plan: ListChecks, setup: Wrench, question: Question };
 import { DemoLoginRow } from "./tab-settings";
 import { KnowledgeDrawer } from "./tab-knowledge";
 import { whenLocal } from "../../lib/local-time";
@@ -25,11 +32,10 @@ import type { PxCtx } from "./project-page";
 const STEP_WORDS: Record<string, string> = { plan: "Plan", design: "You approved", decide: "You approved", build: "Build", review: "Review & test", pr: "Merge", ship: "Staging" };
 
 /** Drawer links that name a PLACE on this page rather than a drawer (the engine's hrefs, §10):
- *  `section:<key>` is Settings at that section (`dossier` / `doc:<key>` are Repo & knowledge's drawers);
- *  `captain` is the captain's Ask dock; `onboarding` on a project still onboarding is Overview. */
-function placeOf(drawer: { kind: string; id: string }, onboarding: boolean): Record<string, string | null> | "captain" | null {
+ *  `section:<key>` is Settings at that section; `dossier` and `doc:<path>` are Repo & knowledge;
+ *  `onboarding` on a project still onboarding is Overview. (`captain` is its own drawer, screen 09.) */
+function placeOf(drawer: { kind: string; id: string }, onboarding: boolean): Record<string, string | null> | null {
   if (drawer.kind === "section") return { tab: "settings", section: drawer.id || null, drawer: null };
-  if (drawer.kind === "captain") return "captain";
   if (drawer.kind === "onboarding" && onboarding) return { tab: null, drawer: null };
   return null;
 }
@@ -38,12 +44,12 @@ export function DrawerHost({ ctx, drawer, onClose }: { ctx: PxCtx; drawer: { kin
   const place = placeOf(drawer, ctx.overview.project.stage === "onboarding");
   useEffect(() => {
     if (!place) return;
-    if (place === "captain") { writePxUrl({ drawer: null }, "replace"); ctx.ask(); return; }
     writePxUrl({ ...place, ...(place.tab ? { tab: toTab(place.tab) === "overview" ? null : place.tab } : {}) }, "replace");
   }, [place === null ? "" : JSON.stringify(place)]); // eslint-disable-line react-hooks/exhaustive-deps
   if (place) return null;
   // The full dossier, a doc and Add doc (screen 06): Repo & knowledge's own drawers.
   if (drawer.kind === "dossier" || drawer.kind === "doc") return <KnowledgeDrawer ctx={ctx} drawer={drawer} onClose={onClose} />;
+  if (drawer.kind === "captain") return <CaptainDrawer ctx={ctx} onClose={onClose} />;
   // `run:<id>` and `build:<id>` (the engine's WorkItem hrefs and ⌘K) are the work drawer.
   if (drawer.kind === "work" || drawer.kind === "run" || drawer.kind === "build") {
     // An attempt of a grouped piece of work (a follow-up, a retry) opens as itself.
@@ -54,12 +60,10 @@ export function DrawerHost({ ctx, drawer, onClose }: { ctx: PxCtx; drawer: { kin
     const n = ctx.overview.needs_you.find((x) => x.id === drawer.id);
     if (!n) return <Missing what="This item" onClose={onClose} />;
     return (
-      <Drawer title={n.label} icon={<span className="px-ny-ico" aria-hidden>!</span>} onClose={onClose} testid="px-drawer-needs" sub={<Tag tone="amber">needs you</Tag>}
-              footer={n.action ? <ActionButton ctx={ctx} label={n.action.label} href={n.action.href} amber testid="px-drawer-needs-act" /> : null}>
-        {n.mini.length ? <Flow nodes={n.mini} /> : null}
-        {n.detail ? <p style={{ margin: 0, lineHeight: 1.5 }}>{n.detail}</p> : null}
-        {n.action?.decision_id ? <PxLink href={`?area=decisions&decision=${encodeURIComponent(n.action.decision_id)}`} testid="px-drawer-needs-approvals">Open in Approvals</PxLink> : null}
-        <AskBox ctx={ctx} about={n.label} />
+      <Drawer title={n.label} icon={<Ico icon={NEED_ICON[n.kind] ?? Warning} c="amber" />} onClose={onClose} testid="px-drawer-needs" sub={<Tag tone="amber">needs you</Tag>}
+              footer={<>{n.action?.decision_id ? <DecisionActs ctx={ctx} n={n} />
+                : n.action ? <ActionButton ctx={ctx} label={n.action.label} href={n.action.href} amber testid="px-drawer-needs-act" /> : null}<AskBox ctx={ctx} about={n.label} /></>}>
+        <NeedsBody ctx={ctx} n={n} />
       </Drawer>
     );
   }
@@ -78,15 +82,16 @@ export function DrawerHost({ ctx, drawer, onClose }: { ctx: PxCtx; drawer: { kin
     const n = ctx.overview.journey.find((x) => x.key === drawer.id);
     if (!n) return <Missing what="This stage" onClose={onClose} />;
     return (
-      <Drawer title={n.label} sub={<Tag tone={n.state === "done" ? "green" : n.state === "waiting" ? "amber" : "blue"}>{STATE_WORD[n.state]}</Tag>} icon={<Ico icon={Path} c="teal" />} onClose={onClose} testid="px-drawer-stage">
-        {n.sub ? <p style={{ margin: 0 }}><b>{n.sub}</b></p> : null}
+      <Drawer title={n.label} sub={<><Tag tone={n.state === "done" ? "green" : n.state === "waiting" ? "amber" : n.state === "todo" ? undefined : "blue"}>{STATE_WORD[n.state]}</Tag>{n.sub ? <span className="px-mono">{n.sub}</span> : null}</>}
+              icon={<Ico icon={stageIcon(n.key)} c={n.state === "waiting" ? "amber" : n.state === "done" ? "green" : "teal"} />} onClose={onClose} testid="px-drawer-stage"
+              footer={<AskBox ctx={ctx} about={n.label} />}>
+        <StageBody ctx={ctx} n={n} />
         <div className="px-row px-wrap">
           {n.key === "onboarding" || n.key === "ready" ? <button type="button" className="px-chip" onClick={() => ctx.tab("knowledge")}>Dossier</button> : null}
           {n.key === "backlog" ? <button type="button" className="px-chip" onClick={() => ctx.tab("roadmap")}>Roadmap</button> : null}
           {n.key === "working" ? <button type="button" className="px-chip" onClick={() => ctx.tab("work")}>Work</button> : null}
           {n.key === "staging" || n.key === "production" ? <button type="button" className="px-chip" onClick={() => ctx.tab("deployments")}>Deployments</button> : null}
         </div>
-        <AskBox ctx={ctx} about={n.label} />
       </Drawer>
     );
   }
@@ -139,14 +144,14 @@ function Missing({ what, onClose, loading }: { what: string; onClose: () => void
 }
 
 /** "Ask Helm about this…": the project's captain dock, with the question already in it. */
-function AskBox({ ctx, about }: { ctx: PxCtx; about: string }) {
+function AskBox({ ctx, about, placeholder }: { ctx: PxCtx; about: string; placeholder?: string }) {
   const [q, setQ] = useState("");
   const name = ctx.overview.captain?.name ?? "BOSS";
   return (
     <form className="px-row" style={{ marginTop: "auto", border: "1px solid var(--border-strong)", borderRadius: 10, padding: "6px 8px", background: "var(--surface-2)" }}
           onSubmit={(e) => { e.preventDefault(); ctx.ask(q.trim() ? `${q.trim()}\n\n(About: ${about})` : `Tell me about "${about}".`); }} data-testid="px-drawer-ask">
       {ctx.overview.captain ? <Face agent={ctx.overview.captain} size={20} /> : <ChatCircleDots size={16} aria-hidden />}
-      <input className="px-input" style={{ border: 0, background: "transparent", padding: 4 }} placeholder={`Ask ${name} about this…`} value={q} onChange={(e) => setQ(e.target.value)}
+      <input className="px-input" style={{ border: 0, background: "transparent", padding: 4 }} placeholder={placeholder ?? `Ask ${name} about this…`} value={q} onChange={(e) => setQ(e.target.value)}
              aria-label={`Ask ${name} about ${about}`} />
       <button type="submit" className="px-icon-btn" aria-label="Ask"><PaperPlaneRight size={15} /></button>
     </form>
@@ -155,18 +160,27 @@ function AskBox({ ctx, about }: { ctx: PxCtx; about: string }) {
 
 function WorkDrawer({ ctx, w, onClose }: { ctx: PxCtx; w: WorkItem; onClose: () => void }) {
   const l = w.links;
+  const story = useWorkStory(ctx, w.id).data;
+  const full = l.build || l.workflow_run;
   return (
-    <Drawer title={w.label} icon={<Ico icon={w.state === "needs_you" ? GitPullRequest : FlowArrow} c={w.state === "needs_you" ? "amber" : "teal"} />} onClose={onClose} testid="px-drawer-work"
-            sub={<><Tag>{KIND_WORDS[w.kind] ?? w.kind}</Tag>{w.state === "stalled" ? <Tag tone="amber">Stalled</Tag> : null}{w.cost_usd !== null ? <span className="px-mono">${w.cost_usd.toFixed(2)}</span> : null}{w.age ? <span className="px-mono">{w.age}</span> : null}</>}
-            footer={<AskBox ctx={ctx} about={w.label} />}>
+    <Drawer title={w.label} icon={<Ico icon={w.state === "needs_you" ? GitPullRequest : w.state === "stalled" ? PauseCircle : FlowArrow} c={w.state === "needs_you" || w.state === "stalled" ? "amber" : "teal"} />} onClose={onClose} testid="px-drawer-work"
+            sub={<><Tag>{KIND_WORDS[w.kind] ?? w.kind}</Tag>{w.state === "stalled" ? <Tag tone="amber">Stalled</Tag> : null}
+              {story?.number ? <span className="px-mono" data-testid="px-drawer-work-number">Run #{story.number}</span> : null}
+              {w.cost_usd !== null ? <span className="px-mono">${w.cost_usd.toFixed(2)}</span> : null}
+              {story?.minutes !== null && story?.minutes !== undefined ? <span className="px-mono">{story.minutes} min</span> : w.age ? <span className="px-mono">{w.age}</span> : null}</>}
+            actions={full ? <a className="px-icon-btn" href={pxHref(full)} title={l.build ? "Open full page in Code Tasks" : "Open the workflow run"} aria-label="Open full page" data-testid="px-drawer-work-expand"><ArrowsOut size={15} /></a> : null}
+            footer={<AskBox ctx={ctx} about={w.label} placeholder={`Ask ${ctx.overview.captain?.name ?? "BOSS"} about this work…`} />}>
       {w.state === "needs_you" ? (
         <div className="px-ny" data-testid="px-drawer-work-needs">
           <span className="px-ny-ico" aria-hidden>!</span>
           <b style={{ flex: 1 }}>{l.pr ? "Ready to merge" : "Waiting on you"}</b>
-          {/* The person's gate is an approval in BOSS (merging is approving it); the PR opens on GitHub. */}
-          {l.decision ? <PxLink href={l.decision} className="px-btn" testid="px-drawer-work-decide">{l.pr ? `Review PR #${l.pr.number}` : "Decide"}</PxLink> : null}
-          {l.pr ? <a className="px-btn" data-kind="amber" data-size="s" href={l.pr.external_url} target="_blank" rel="noreferrer noopener" data-testid="px-drawer-work-merge">{l.decision ? `PR #${l.pr.number}` : `Merge PR #${l.pr.number}`} ↗</a>
-            : !l.decision && l.workflow_run ? <PxLink href={l.workflow_run} className="px-btn">Decide</PxLink> : null}
+          {/* ONE ACTION (screen 05b): merging is approving the build's merge question in BOSS;
+              with no question on record it opens the PR on GitHub. */}
+          {l.pr ? (l.decision
+            ? <a className="px-btn" data-kind="amber" data-size="s" href={pxHref(l.decision)} data-testid="px-drawer-work-merge"><GitMerge size={12} aria-hidden /> Merge PR #{l.pr.number}</a>
+            : <a className="px-btn" data-kind="amber" data-size="s" href={l.pr.external_url} target="_blank" rel="noreferrer noopener" data-testid="px-drawer-work-merge"><GitMerge size={12} aria-hidden /> Merge PR #{l.pr.number} ↗</a>)
+            : l.decision ? <PxLink href={l.decision} className="px-btn" testid="px-drawer-work-decide">Decide</PxLink>
+            : l.workflow_run ? <PxLink href={l.workflow_run} className="px-btn">Decide</PxLink> : null}
         </div>
       ) : null}
       {w.state === "stalled" ? (
@@ -177,49 +191,9 @@ function WorkDrawer({ ctx, w, onClose }: { ctx: PxCtx; w: WorkItem; onClose: () 
           {l.build ? <PxLink href={l.build} className="px-btn" testid="px-drawer-work-stalled-open">Open build</PxLink> : null}
         </div>
       ) : null}
-      {w.attempts.length > 1 ? (
-        <div data-testid="px-drawer-work-attempts">
-          <span className="px-lbl">{w.attempt_count} attempts</span>
-          <div className="px-steps" style={{ marginTop: 6 }}>
-            {w.attempts.map((t) => (
-              <button key={t.id} type="button" className="px-li" style={{ width: "100%", background: "none", border: 0, font: "inherit", color: "inherit", textAlign: "left", cursor: "pointer" }}
-                      onClick={() => ctx.open("work", t.id)} data-testid={`px-drawer-attempt-${t.id}`}>
-                <span className="px-dot" data-s={t.state === "stalled" ? "stalled" : t.state === "done" ? "done" : t.state === "failed" ? "bad" : t.state === "running" ? "now" : undefined} aria-hidden />
-                <span style={{ minWidth: 0 }}><b>{t.label}</b><small>{whenLocal(t.created_at)}{t.pr ? ` · PR #${t.pr.number}` : ""}</small></span>
-                <Tag tone={t.state === "stalled" ? "amber" : t.state === "failed" ? "red" : t.state === "done" ? "green" : undefined}>{ATTEMPT_WORDS[t.state]}</Tag>
-              </button>
-            ))}
-          </div>
-        </div>
-      ) : null}
-      {w.stages.length ? (
-        <div>
-          <span className="px-lbl">How it went</span>
-          <div className="px-steps" data-testid="px-drawer-work-steps">
-            {w.stages.map((st, i) => {
-              const person = st.key === "design" || st.key === "decide" || st.key === "pr";
-              const who = person ? null : w.agents[Math.min(i, w.agents.length - 1)];
-              return (
-                <div key={`${st.key}-${i}`} className="px-step">
-                  <span className="px-ck-b" aria-hidden style={st.state === "done" ? { background: "var(--green)", borderColor: "var(--green)", color: "#032015" }
-                    : st.state === "now" ? { borderColor: "var(--amber)", background: "var(--amber)", color: "#1b1300", borderRadius: "50%" } : undefined}>
-                    {st.state === "done" ? <Check size={11} weight="bold" /> : st.state === "now" ? "!" : ""}</span>
-                  {who ? <Face agent={who} size={22} state={st.state === "now" ? "working" : "idle"} /> : <User size={18} aria-hidden />}
-                  <span><b style={{ fontSize: ".66rem" }}>{STEP_WORDS[st.key] ?? st.label}</b><small className="px-faint" style={{ display: "block", fontSize: ".56rem" }}>{STATE_WORD[st.state]}{who ? ` · ${who.name}` : person ? " · you" : ""}</small></span>
-                  <span />
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      ) : null}
-      {w.detail ? <p style={{ margin: 0, lineHeight: 1.5 }} className="px-muted">{w.detail}</p> : null}
-      {l.preview ? (
-        <div className="px-card" style={{ padding: 10 }}>
-          <span className="px-lbl">Preview</span>
-          <div><a className="px-mono" href={l.preview} target="_blank" rel="noreferrer noopener"><Globe size={12} aria-hidden /> {l.preview.replace(/^https?:\/\//, "")} ↗</a> <Tag tone="green">Up</Tag></div>
-        </div>
-      ) : null}
+      <WorkStoryBody ctx={ctx} w={w} story={story} />
+      <DrawerAttempts w={w} ctx={ctx} />
+      {w.detail && !story ? <p style={{ margin: 0, lineHeight: 1.5 }} className="px-muted">{w.detail}</p> : null}
       <div>
         <span className="px-lbl">Links</span>
         <div className="px-row px-wrap" style={{ marginTop: 6 }} data-testid="px-drawer-work-links">
@@ -251,9 +225,14 @@ function DeployDrawer({ ctx, drawer, onClose }: { ctx: PxCtx; drawer: { kind: st
           {env.uptime_pct !== null ? <><dt>Uptime</dt><dd>{env.uptime_pct}%</dd></> : null}
           {env.p95_ms !== null ? <><dt>p95</dt><dd>{env.p95_ms}ms</dd></> : null}
           <dt>Deploys</dt><dd>{env.policy === "auto" ? "automatically after merge" : "when a person approves"}</dd>
-          {env.host ? <><dt>Server</dt><dd><PxLink href={env.host_href || "?area=infra&view=fleet"} testid="px-drawer-env-host">runs on {env.host}</PxLink></dd></> : null}
+          {env.host ? <><dt>Server</dt><dd><PxLink href={env.host_href || "?area=infra&view=fleet"} testid="px-drawer-env-host" title={env.host}>runs on {env.host_name || env.host}</PxLink></dd></> : null}
           {env.last_deploy ? <><dt>Last deploy</dt><dd>{env.last_deploy.label} · {whenLocal(env.last_deploy.at)} · {env.last_deploy.by}</dd></> : null}
         </dl>
+        {env.series.length > 1 ? <div><span className="px-lbl">24h</span><Spark series={env.series} tone="green" label="Health over the last 24 hours" /></div> : null}
+        {d.history.filter((h) => h.label.toLowerCase().startsWith(env.label.toLowerCase())).slice(0, 4).map((h) => (
+          <button key={h.id} type="button" className="px-li px-li-btn" onClick={() => ctx.open("deploy", h.id)} data-testid={`px-drawer-env-h-${h.id}`}>
+            <span className="px-dot" data-s={h.state === "done" ? "done" : h.state === "failed" ? "bad" : "you"} aria-hidden />
+            <span><b>{h.label}</b><small>{[h.word, h.by, h.at ? whenLocal(h.at) : ""].filter(Boolean).join(" · ")}</small></span><span /></button>))}
         {env.demo_logins.map((l) => <DemoLoginRow key={l.user} projectId={ctx.projectId} login={{ label: l.label, value: l.user, sub: env.label, reveal: l.reveal, href: "" }} />)}
         <div className="px-row px-wrap">
           <button type="button" className="px-chip" onClick={() => ctx.tab("health")}>Health</button>

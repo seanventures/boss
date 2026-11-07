@@ -81,6 +81,8 @@ export type Repo = { full_name: string; branch: string; access: { read: boolean;
 export type NeedsYou = {
   id: string; kind: "merge" | "deploy" | "plan" | "question" | "setup"; label: string; detail: string; icon?: string;
   mini: { label: string; state: StepState }[]; action: { label: string; href: string; decision_id: string } | null;
+  /** The piece of work it belongs to, the PR on GitHub, and when it was asked (the drawer). */
+  work_id?: string; work_label?: string; external_url?: string; created_at?: string;
 };
 export type WorkItem = {
   id: string; label: string; kind: string; state: WorkState; age: string;
@@ -343,6 +345,45 @@ export const parseCaptain = (v: unknown): Captain | null => {
   if (!s(x.name) && !s(x.role_key)) return null;
   return { agent_id: s(x.agent_id), name: s(x.name) || s(x.role_key), role_key: s(x.role_key), avatar: s(x.avatar), status: s(x.status),
            squad: agents(x.squad), last_said: s(x.last_said) };
+};
+
+/** The captain drawer's read (§7 GET …/captain, screen 09): scope, facts known, what it and
+ *  its crew did lately, and the suggestion chips grounded in the project's record. */
+export type CaptainDetail = Captain & {
+  scope: string; facts: number;
+  recent: { act_id: string; role_key: string; label: string; state: StepState; at: string; href: string }[];
+  starters: { label: string; message: string; icon: string }[];
+};
+export const parseCaptainDetail = (v: unknown): CaptainDetail | null => {
+  const base = parseCaptain(v);
+  if (!base) return null;
+  const x = o(v);
+  return { ...base, scope: s(o(x.scope).label), facts: n(x.facts),
+           recent: a(x.recent).map((r) => { const y = o(r); return { act_id: s(y.act_id), role_key: s(y.role_key), label: s(y.label),
+             state: oneOf(y.state, STEP_STATES, "todo"), at: s(y.at), href: s(y.href) }; }),
+           starters: a(x.starters).map((r) => { const y = o(r); return { label: s(y.label), message: s(y.message), icon: s(y.icon) }; })
+             .filter((st) => st.label && st.message) };
+};
+
+/** One piece of work, step by step (GET …/work/{id}/story, drawer 05b). */
+export type WorkStory = {
+  id: string; number: number | null; minutes: number | null; cost_usd: number | null;
+  cost_parts: { label: string; usd: number }[]; preview: string; pr: { number: number; external_url: string } | null;
+  stages: { key: string; name: string; state: StepState; sub: string; at: string; person: boolean;
+            link: { label: string; href: string; external_url: string } | null }[];
+};
+export const parseWorkStory = (v: unknown): WorkStory => {
+  const x = o(v); const pr = o(x.pr);
+  return {
+    id: s(x.id), number: nn(x.number), minutes: nn(x.minutes), cost_usd: nn(x.cost_usd),
+    cost_parts: a(x.cost_parts).map((c) => ({ label: s(o(c).label), usd: n(o(c).usd) })).filter((c) => c.label),
+    preview: s(x.preview), pr: s(pr.external_url) ? { number: n(pr.number), external_url: s(pr.external_url) } : null,
+    stages: a(x.stages).map((r) => {
+      const y = o(r); const l = o(y.link);
+      return { key: s(y.key), name: s(y.name), state: oneOf(y.state, STEP_STATES, "todo"), sub: s(y.sub), at: s(y.at), person: y.person === true,
+               link: s(l.label) ? { label: s(l.label), href: s(l.href), external_url: s(l.external_url) } : null };
+    }),
+  };
 };
 
 export const parseOverview = (v: unknown): Overview => {

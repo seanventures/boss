@@ -3,6 +3,7 @@
 GET  /v1/projects/summary                         §1  the Projects list (cards)
 GET  /v1/projects/{id}/overview                   §2  the Overview tab
 GET  /v1/projects/{id}/work?state=&q=             §3  the Work tab
+GET  /v1/projects/{id}/work/{work}/story          §3  one piece of work, step by step (drawer 05b)
 POST /v1/projects/{id}/work                       §3  new work, through THE start door
 GET  /v1/projects/{id}/knowledge                  §4  Repo & knowledge
 GET  /v1/projects/{id}/deployments                §5  Deployments
@@ -124,6 +125,21 @@ def project_work(project_id: str, state: Optional[str] = None, q: Optional[str] 
     with begin(_engine) as connection:
         _require_project(connection, project_id)
         return work.view(connection, project_id, state=state or None, q=q or None)
+
+
+@router.get("/v1/projects/{project_id}/work/{work_id}/story")
+@permit(P.PROJECT_READ, scope=Scope.project(path="project_id"))
+def project_work_story(project_id: str, work_id: str) -> dict[str, Any]:
+    """The work drawer (screen 05b): each station in words with its proof link, the run's
+    number, duration, preview and cost split."""
+    from boss_engine.services.project_experience import work_story
+
+    with begin(_engine) as connection:
+        _require_project(connection, project_id)
+        try:
+            return work_story.story(connection, project_id, work_id)
+        except LookupError as error:
+            raise _missing(error) from None
 
 
 class NewWorkBody(BaseModel):
