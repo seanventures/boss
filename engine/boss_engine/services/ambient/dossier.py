@@ -162,15 +162,18 @@ def readme_commands(text: str) -> dict[str, list[str]]:
     code under a getting-started heading (or the README's first fenced block when it has no such
     heading) is read; prose is never parsed."""
     out: dict[str, list[str]] = {"install": [], "test": [], "build": [], "run": []}
-    heads = list(_GETTING_STARTED.finditer(text))
-    if heads:
-        spans = []
-        for m in heads:
-            nxt = re.search(r"^#{1,4}\s", text[m.end():], re.M)
-            spans.append(text[m.end(): m.end() + nxt.start() if nxt else len(text)])
-    else:
-        first = _FENCE.search(text)
-        spans = [first.group(0)] if first else []
+    fences = list(_FENCE.finditer(text))
+    # Headings are read outside code blocks (a "# comment" in a shell block is not a heading).
+    masked = _FENCE.sub(lambda m: " " * len(m.group(0)), text)
+    heads = list(re.finditer(r"^#{1,4}\s.*$", masked, re.M))
+    sections = any(_GETTING_STARTED.match(h.group(0)) for h in heads)
+    blocks: list[str] = []
+    for i, fence in enumerate(fences):
+        above = [h for h in heads if h.start() < fence.start()]
+        under = bool(above) and bool(_GETTING_STARTED.match(above[-1].group(0)))
+        if under or (not sections and i == 0):
+            blocks.append(fence.group(1))
+    spans = [f"```\n{b}```" for b in blocks]
     for span in spans:
         for block in _FENCE.findall(span):
             for raw in block.splitlines()[:40]:
