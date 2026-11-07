@@ -18,9 +18,11 @@ describe("project pages ask in the console's own sheet", () => {
     expect(bad).toEqual([]);
   });
 
-  it("the shared sheet is the console's dialog", () => {
+  it("the shared sheet is a real modal dialog with Esc, Cancel and a red refusal", () => {
     const src = codeOnly(`${DIR}/confirm-sheet.tsx`);
-    expect(src).toContain('from "../../components/identity/kit"');
-    expect(src).toContain("<Sheet");
+    expect(src).toContain('role="dialog"');
+    expect(src).toContain('aria-modal="true"');
+    expect(src).toContain('"Escape"');
+    expect(src).toContain('role="alert"');
   });
 });
