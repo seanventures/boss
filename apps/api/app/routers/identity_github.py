@@ -33,7 +33,8 @@ from sqlalchemy import text
 
 from boss_engine.config import get_settings
 from boss_engine.db import begin
-from boss_engine.identity import P, PublicReason, Scope, github_app, github_device, github_setup, permit, public
+from boss_engine.identity import (P, PublicReason, Scope, authenticated, github_app, github_device,
+                                  github_setup, permit, public)
 from boss_engine.identity.authn import SESSION_COOKIE, AuthnError, authenticate
 from boss_engine.identity.authn_support import default_org_id, public_origin
 
@@ -344,8 +345,11 @@ def build_identity_github_router() -> APIRouter:
             raise github_app.GitHubRefused("people_only", 403)
         return ctx
 
+    # READING YOUR OWN STATUS is not a write: it needs a session, never a fresh second factor.
+    # Setup and Get started read it on every load, and the step-up refusal (401) was a console
+    # error on every page (PX-45). Connecting (device start / poll) still asks for both.
     @router.get("/v1/identity/github/signin")
-    @permit(P.CONNECTION_USE_OWN, scope=Scope.org())
+    @authenticated(self_only=True)
     def signin_status(request: Request):
         try:
             with begin() as db:
@@ -377,7 +381,7 @@ def build_identity_github_router() -> APIRouter:
             return _err(exc)
 
     @router.get("/v1/identity/github/reach")
-    @permit(P.CONNECTION_USE_OWN, scope=Scope.org())
+    @authenticated(self_only=True)
     def my_reach(request: Request):
         try:
             with begin() as db:

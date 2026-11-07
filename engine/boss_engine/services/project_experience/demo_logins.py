@@ -101,6 +101,54 @@ def discover_in_repository(connection: Connection, project_id: str, repository: 
     return users_from_text(blobs)
 
 
+def backfill_deployed_users(engine: Any, settings: Any, *, read_for: Any = None,
+                            limit: int = 20) -> list[str]:
+    """THE ONE-TIME REPAIR for apps deployed before deploys read their demo users: the newest
+    healthy deploy of each project whose manifest names none (and generated a demo password)
+    reads the app's seed/login files at the commit it shipped and records the names on that
+    deploy's manifest summary (demo_logins_from: repository). Idempotent (a deploy that has
+    names is skipped); `read_for(connection, project_id, owner, repo)` → read(path, commit)
+    defaults to the deploy's own GitHub reader. Returns the deploy ids it named."""
+    import json
+
+    from sqlalchemy import text as _text
+
+    with engine.connect() as c:
+        rows = c.execute(_text(
+            "SELECT DISTINCT ON (s.target_id) s.id, s.project_id, s.repository, s.commit_sha, "
+            "s.manifest FROM stack_deployments s WHERE s.status = 'healthy' "
+            "ORDER BY s.target_id, s.created_at DESC")).mappings().all()
+    todo = [dict(r) for r in rows
+            if not (as_json(r["manifest"], {}) or {}).get("demo_logins")
+            and (as_json(r["manifest"], {}) or {}).get("generated_env_keys")
+            and "/" in str(r["repository"] or "")][:limit]
+    named: list[str] = []
+    for r in todo:
+        owner, repo = str(r["repository"]).split("/", 1)
+        try:
+            with engine.connect() as c:
+                if read_for is None:
+                    from ..stack_deploy import github_source_for
+
+                    source = github_source_for(c, settings, r["project_id"], owner, repo)
+                    read = lambda path, _s=source: _s.read_file(owner, repo, path, r["commit_sha"])
+                else:
+                    read = read_for(c, r["project_id"], owner, repo)
+                found = discover_in_repository(c, r["project_id"], str(r["repository"]), read)
+        except Exception:  # noqa: BLE001 — a repo we cannot read names nobody
+            continue
+        if not found:
+            continue
+        with engine.begin() as c:
+            c.execute(_text(
+                "UPDATE stack_deployments SET manifest = COALESCE(manifest, '{}'::jsonb) || "
+                "CAST(:m AS JSONB) WHERE id = :i"),
+                {"i": r["id"], "m": json.dumps({"demo_logins": found,
+                                                "demo_logins_from": "repository"})})
+        named.append(str(r["id"]))
+    return named
+
+
 def _manifest_users(connection: Connection, project_id: str) -> list[dict[str, str]]:
     from ..app_deploy_manifest import ManifestError, load_manifest
 
@@ -292,5 +340,5 @@ def record_reveal(connection: Connection, project_id: str, actor: str, env: str,
          {"env": env, "logins": count})
 
 
-__all__ = ["DEFAULT_KEY", "discover_in_repository", "environments", "listing", "record_reveal", "reveal", "reveal_href",
+__all__ = ["DEFAULT_KEY", "backfill_deployed_users", "discover_in_repository", "environments", "listing", "record_reveal", "reveal", "reveal_href",
            "rows_for", "scan_checkout", "seed_paths", "users", "users_from_text"]

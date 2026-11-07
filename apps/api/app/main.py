@@ -1590,6 +1590,21 @@ async def lifespan(_: FastAPI):
             print(f"[lifespan] decisions whose cause cleared withdrawn: {len(cleared)}")
     except Exception as exc:  # noqa: BLE001 — never block boot on a repair
         print(f"[lifespan] cleared-cause sweep skipped: {exc}")
+    # DEMO USERS FOR APPS DEPLOYED BEFORE DEPLOYS READ THEM (project_experience.demo_logins):
+    # named once from each app's own seed files, off the boot path (it reads GitHub).
+    def _name_demo_users() -> None:
+        try:
+            from boss_engine.services.project_experience.demo_logins import backfill_deployed_users
+
+            named = backfill_deployed_users(engine, settings)
+            if named:
+                print(f"[lifespan] demo users named for {len(named)} deploy(s)")
+        except Exception as exc:  # noqa: BLE001 — names are a nicety
+            print(f"[lifespan] demo-user backfill skipped: {exc}")
+
+    import threading as _threading
+
+    _threading.Thread(target=_name_demo_users, name="demo-user-backfill", daemon=True).start()
     # Preview lifecycle is independent from the API. Reconcile the durable rows against
     # live processes/containers/rootfs services; never blanket-kill healthy previews.
     try:

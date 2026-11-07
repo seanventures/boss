@@ -333,7 +333,7 @@ describe("the Project page header, Needs you and tabs (screen 4)", () => {
       await press(tid(`px-tab-${t}`));
       expect(params().get("tab")).toBe(t);
       expect(tid(`px-panel-${t}`)).not.toBeNull();
-      expect(tid("px-crumbs")!.textContent).toContain("HelpDesk AI Demo");
+      expect(tid("px-crumbs")).toBeNull(); // the top bar carries the breadcrumb (wireframe 04)
     }
     await act(async () => { tid("px-tabs")!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })); });
     await settle();

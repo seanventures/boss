@@ -88,7 +88,6 @@ export function ProjectPage({ projectId, actor, orgId }: { projectId: string; ac
     const gone = ov.state === "missing" && start.state === "missing";
     return (
       <div className="px" data-testid="px-project">
-        <Crumbs name="Project" tab={url.tab} />
         {failed ? <Failed what="This project" error={ov.error ?? start.error} onRetry={() => { ov.refresh(); start.refresh(); }} />
           : gone ? <Empty title="Project not found" line="It may have been archived, or you may not have access to it." testid="px-project-gone">
               <a className="px-btn" href={pxHref("?area=projects")}>All projects</a></Empty>
@@ -115,7 +114,7 @@ export function ProjectPage({ projectId, actor, orgId }: { projectId: string; ac
       {ov.demo ? <DemoBanner /> : null}
       {ov.state === "missing" ? <div className="px-note" role="note" data-testid="px-project-note">BOSS didn&apos;t answer with this project&apos;s overview, so journey, health and cost are missing here; work and repo are live.</div> : null}
       <div className="px-sticky">
-        <Crumbs name={overview.project.name} tab={url.tab} onboarding={onboardingNow && url.tab === "overview"} />
+        {/* The top bar carries the breadcrumb (Projects / <project> / <tab>); the page draws none (04). */}
         <Header ctx={ctx} onboarding={onboardingNow} />
         <NeedsBar ctx={ctx} onboarding={onboardingNow ? ob : null} />
         <div className="px-tabs" role="tablist" aria-label="Project" data-testid="px-tabs"
@@ -151,18 +150,6 @@ export function ProjectPage({ projectId, actor, orgId }: { projectId: string; ac
       </div>
       {url.drawer ? <DrawerHost ctx={ctx} drawer={url.drawer} onClose={closeDrawer} /> : null}
     </div>
-  );
-}
-
-function Crumbs({ name, tab, onboarding }: { name: string; tab: Tab; onboarding?: boolean }) {
-  return (
-    <nav className="px-crumbs" aria-label="Breadcrumb" data-testid="px-crumbs">
-      <a href={pxHref("?area=projects")}>Projects</a><span aria-hidden>/</span>
-      {tab === "overview" && !onboarding ? <span aria-current="page">{name}</span> : (
-        <><a href="#" onClick={(e) => { e.preventDefault(); writePxUrl({ tab: null, drawer: null }); }}>{name}</a><span aria-hidden>/</span>
-          <span aria-current="page">{onboarding ? "Onboarding" : TAB_WORDS[tab]}</span></>
-      )}
-    </nav>
   );
 }
 

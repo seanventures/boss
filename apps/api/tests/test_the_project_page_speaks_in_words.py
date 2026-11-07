@@ -345,3 +345,37 @@ def test_a_project_never_onboarded_says_so_with_a_start(world, client):
     assert card["onboarding_active"] is False
     assert card["status_label"] == "Not onboarded"
     assert card["start_onboarding"]["href"] == f"/v1/projects/{slug}/onboarding/start"
+
+
+def test_an_app_deployed_before_deploys_read_users_is_named_once(world, client, engine, helpdesk):
+    """The one-time repair (helpdesk-ai-demo on the laptop: source none, users [])."""
+    from boss_engine.services.project_experience import demo_logins
+
+    with engine.begin() as c:
+        c.execute(text("UPDATE stack_deployments SET manifest = CAST(:m AS JSONB) WHERE id = :i"),
+                  {"i": helpdesk["stack_deployment_id"], "m": json.dumps({
+                      "name": "helpdesk", "kind": "compose", "generated_env_keys": ["DEMO_PASSWORD"]})})
+        c.execute(text(
+            "INSERT INTO kg_nodes (id, project_id, kind, node_key, name, path, repo) VALUES "
+            "(:i, :p, 'file', :k, 'seedDemoUsers.mjs', 'server/seedDemoUsers.mjs', :r)"),
+            {"i": f"kgn_{uuid.uuid4().hex[:10]}", "p": helpdesk["id"], "k": f"file:{uuid.uuid4().hex}",
+             "r": REPO})
+    seeds = '{ email: "admin@demo.test" }, { email: "agent@demo.test" }'
+    reads: list[str] = []
+
+    def read_for(_c, _p, _owner, _repo):
+        def read(path):
+            reads.append(path)
+            return seeds if path.endswith("seedDemoUsers.mjs") else None
+        return read
+
+    named = demo_logins.backfill_deployed_users(engine, None, read_for=read_for)
+    assert helpdesk["stack_deployment_id"] in named
+    with engine.begin() as c:
+        people, source = demo_logins.users(c, helpdesk["id"])
+    assert source == "repository" and [p["user"] for p in people] == ["admin@demo.test",
+                                                                       "agent@demo.test"]
+    # Idempotent: a deploy that has names is not read again.
+    reads.clear()
+    assert helpdesk["stack_deployment_id"] not in demo_logins.backfill_deployed_users(
+        engine, None, read_for=read_for)

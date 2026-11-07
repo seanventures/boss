@@ -160,19 +160,33 @@ def prod_host_card(project_id: str) -> dict[str, Any]:
                        "href": href(project_id, area="infra", add="target")}}
 
 
-def cards(connection: Connection, project_id: str, work_items: list[dict[str, Any]],
-          onboarding: Optional[Mapping[str, Any]] = None) -> list[dict[str, Any]]:
-    """Every card: the decisions waiting on a person (decision_actions.waiting_on_operator —
-    the one reader every surface uses), then the onboarding agent's "only you" items."""
-    from ..decision_actions import waiting_on_operator
+def prod_waits(connection: Connection, project_id: str) -> bool:
+    """Production waits on a person: a non-production environment is live (a healthy deploy on
+    an active target) and the project has no active production target."""
+    row = connection.execute(text(
+        "SELECT EXISTS (SELECT 1 FROM stack_deployments s JOIN deployment_targets t ON "
+        " t.id = s.target_id WHERE t.project_id = :p AND t.status = 'active' AND s.status = "
+        " 'healthy' AND lower(COALESCE(t.environment, '')) NOT IN ('production', 'prod')) AS staged, "
+        "EXISTS (SELECT 1 FROM deployment_targets WHERE project_id = :p AND status = 'active' "
+        " AND lower(COALESCE(environment, '')) IN ('production', 'prod')) AS prod"),
+        {"p": project_id}).mappings().first()
+    return bool(row and row["staged"] and not row["prod"])
 
-    runs = {w["id"]: w for w in work_items if w.get("source") == "workflow_run"}
-    by_decision = {d: w for w in work_items for d in w.get("decision_ids") or []}
+
+def setup_cards(connection: Connection, project_id: str,
+                onboarding: Optional[Mapping[str, Any]] = None,
+                production_waits: Optional[bool] = None) -> list[dict[str, Any]]:
+    """THE ONE LIST of what only a person can set up on this project (not decisions): the
+    onboarding agent's "only you" items and "Pick a prod host". The Project page's Needs you
+    and the top bar's bell both count it, so they never disagree."""
+    if onboarding is None:
+        from . import onboarding as onboarding_service
+
+        has_run = connection.execute(text(
+            "SELECT 1 FROM project_onboarding_runs WHERE project_id = :p LIMIT 1"),
+            {"p": project_id}).first()
+        onboarding = onboarding_service.view(connection, project_id) if has_run else {}
     out = []
-    for d in waiting_on_operator(connection, project_id):
-        rec = d.get("recommendation") if isinstance(d.get("recommendation"), dict) else {}
-        run = runs.get(str(rec.get("workflow_run_id") or "")) or by_decision.get(str(d["id"]))
-        out.append(card(connection, project_id, d, run))
     for item in (onboarding or {}).get("only_you") or []:
         action = item.get("action") or {}
         out.append({"id": f"onb:{item['key']}", "kind": "setup",
@@ -182,7 +196,27 @@ def cards(connection: Connection, project_id: str, work_items: list[dict[str, An
                                "href": action.get("href") or project_href(project_id,
                                                                           drawer="onboarding"),
                                "decision_id": None}})
+    waits = prod_waits(connection, project_id) if production_waits is None else production_waits
+    if waits:
+        out.append(prod_host_card(project_id))
     return out
 
 
-__all__ = ["ACTION_WORDS", "card", "cards", "decision_kind", "prod_host_card"]
+def cards(connection: Connection, project_id: str, work_items: list[dict[str, Any]],
+          onboarding: Optional[Mapping[str, Any]] = None) -> list[dict[str, Any]]:
+    """Every card: the decisions waiting on a person (decision_actions.waiting_on_operator —
+    the one reader every surface uses), then what only a person can set up (setup_cards)."""
+    from ..decision_actions import waiting_on_operator
+
+    runs = {w["id"]: w for w in work_items if w.get("source") == "workflow_run"}
+    by_decision = {d: w for w in work_items for d in w.get("decision_ids") or []}
+    out = []
+    for d in waiting_on_operator(connection, project_id):
+        rec = d.get("recommendation") if isinstance(d.get("recommendation"), dict) else {}
+        run = runs.get(str(rec.get("workflow_run_id") or "")) or by_decision.get(str(d["id"]))
+        out.append(card(connection, project_id, d, run))
+    return out + setup_cards(connection, project_id, onboarding or {})
+
+
+__all__ = ["ACTION_WORDS", "card", "cards", "decision_kind", "prod_host_card", "prod_waits",
+           "setup_cards"]
