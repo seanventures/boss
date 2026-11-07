@@ -160,6 +160,9 @@ export type WorkList = { items: WorkItem[] };
 export type KnowledgeRepo = Repo & {
   binding_id: string; checked: { read: boolean | null; write: boolean | null; pr: boolean | null };
   last_push: string; via: string; deploys_to: string;
+  /** A failed check's own reason; the Staging node's real result (06-04). */
+  access_reasons?: { read?: string | null; write?: string | null; pr?: string | null };
+  deploy_check?: { label: string; state: StepState; reason: string } | null;
 };
 export type GraphNode = { id: string; label: string; kind: string; group: string; detail: string };
 export type Knowledge = {
@@ -171,7 +174,7 @@ export type Knowledge = {
   graph: { nodes: GraphNode[]; edges: { from: string; to: string; label: string; kind: string }[]; href: string; hub: string;
            counts: { nodes: number; rules: number | null; learned: number | null } };
   docs: { label: string; kind: string; href: string; sub: string; path: string; external_url: string }[];
-  decisions: { label: string; at: string; href: string; sub: string }[];
+  decisions: { label: string; at: string; href: string; sub: string; detail?: string }[];
   learned: { id: string; label: string; sub: string; state: string; href: string; detail: string; reused: number; agent: Agent | null }[];
   build: { label: string; href: string; state: string; progress: string; nodes: { label: string; state: StepState; sub: string }[] } | null;
   empty: { label: string; detail: string; href: string } | null;
@@ -484,7 +487,10 @@ export const parseKnowledge = (v: unknown): Knowledge => {
     repos: a(x.repos).map((r) => {
       const y = o(r); const acc = o(y.access);
       return { ...parseRepo(r), binding_id: s(y.binding_id), checked: { read: tri(acc.read), write: tri(acc.write), pr: tri(acc.pr) },
-               last_push: s(y.last_push), via: s(y.via), deploys_to: s(y.deploys_to) };
+               last_push: s(y.last_push), via: s(y.via), deploys_to: s(y.deploys_to),
+               access_reasons: { read: s(o(y.access_reasons).read) || null, write: s(o(y.access_reasons).write) || null, pr: s(o(y.access_reasons).pr) || null },
+               deploy_check: Object.keys(o(y.deploy_check)).length ? { label: s(o(y.deploy_check).label, "Staging"),
+                 state: oneOf(o(y.deploy_check).state, STEP_STATES, "todo"), reason: s(o(y.deploy_check).reason) } : null };
     }),
     dossier: Object.keys(d).length ? {
       stack: a(d.stack).map((z) => s(z)).filter(Boolean), commands: cmds,
@@ -502,7 +508,7 @@ export const parseKnowledge = (v: unknown): Knowledge => {
     // A doc opens in its drawer (`doc:<path>`); the drawer links to where it lives.
     docs: a(x.docs).map((z) => ({ label: s(o(z).label), kind: s(o(z).kind), href: s(o(z).href), external_url: s(o(z).external_url),
                                   sub: s(o(z).sub) || s(o(z).detail), path: s(o(z).detail) })),
-    decisions: a(x.decisions).map((z) => ({ label: s(o(z).label), at: s(o(z).at), href: s(o(z).href), sub: s(o(z).sub) })),
+    decisions: a(x.decisions).map((z) => ({ label: s(o(z).label), at: s(o(z).at), href: s(o(z).href), sub: s(o(z).sub), detail: s(o(z).detail) })),
     learned: a(x.learned).map((z) => {
       const y = o(z); const ag = o(y.agent);
       return { id: s(y.id), label: s(y.label), sub: s(y.sub), state: s(y.state), href: s(y.href), detail: s(y.detail), reused: n(y.reused),

@@ -182,3 +182,47 @@ def test_each_overview_card_loads_or_fails_on_its_own(world, client, engine, hel
     assert ov["tiles"]["open_work"]["count"] > 0
     monkeypatch.undo()
     assert _get(world, client, world.owner, f"/v1/projects/{helpdesk['id']}/overview")["errors"] == {}
+
+
+def test_a_merge_makes_the_dossier_due_for_a_re_read(engine, helpdesk):
+    """06-22: the dossier is re-read on every merge — the merge marks the repository's code
+    graph due now (reason `merged`); the index job that follows re-reads the dossier."""
+    from boss_engine.services import pr_merge
+
+    with engine.begin() as db:
+        db.execute(text(
+            "INSERT INTO kg_repo_index (project_id, binding_id, repo, branch, status, due, reason, "
+            "indexed_sha) VALUES (:p, :b, :r, 'main', 'indexed', false, 'registered', 'old') "
+            "ON CONFLICT (project_id, binding_id) DO UPDATE SET due = false, status = 'indexed'"),
+            {"p": helpdesk["id"], "b": helpdesk["binding_id"], "r": REPO})
+        pr_merge.record(db, helpdesk["merge"]["build_id"], "9f9f9f9f9f9f", source="github")
+        row = db.execute(text("SELECT due, reason FROM kg_repo_index WHERE project_id = :p"),
+                         {"p": helpdesk["id"]}).mappings().one()
+    assert row["due"] is True and row["reason"] == "merged"
+
+
+def test_the_access_strip_is_the_real_result_with_its_reasons(world, client, engine, helpdesk):
+    """06-04: Read / Branch / Open PR are the registry's last checks (red with the reason when
+    one failed); Staging is the newest deploy to staging, never "a target exists"."""
+    with engine.begin() as db:
+        db.execute(text(
+            "UPDATE github_repository_bindings SET checks = CAST(:k AS JSONB) WHERE id = :b"),
+            {"b": helpdesk["binding_id"], "k": '{"read": {"ok": true}, "write": {"ok": false, '
+             '"error": "The token cannot push to main"}, "pull_requests": {"ok": true}}'})
+    k = _get(world, client, world.owner, f"/v1/projects/{helpdesk['id']}/knowledge")
+    repo = k["repos"][0]
+    assert repo["access"] == {"read": True, "write": False, "pr": True}
+    assert repo["access_reasons"]["write"] == "The token cannot push to main"
+    assert repo["access_reasons"]["read"] is None
+    assert repo["deploy_check"]["label"] == "Staging" and repo["deploy_check"]["state"] == "done"
+    with engine.begin() as db:
+        db.execute(text(
+            "INSERT INTO stack_deployments (id, project_id, target_id, host_id, repository, ref, "
+            "commit_sha, manifest, status, failure_reason, created_by, created_at, finished_at) "
+            "VALUES (:i, :p, :t, :h, :r, 'main', 'deadbee', '{}'::jsonb, 'failed', "
+            "'Port 8004 is taken on the host', 'boss', now(), now())"),
+            {"i": f"sdep_{uuid.uuid4().hex[:10]}", "p": helpdesk["id"], "t": helpdesk["target_id"],
+             "h": helpdesk["host_id"], "r": REPO})
+    repo = _get(world, client, world.owner, f"/v1/projects/{helpdesk['id']}/knowledge")["repos"][0]
+    assert repo["deploy_check"] == {"label": "Staging", "state": "failed",
+                                    "reason": "Port 8004 is taken on the host"}

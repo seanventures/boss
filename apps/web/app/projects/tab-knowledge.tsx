@@ -100,13 +100,21 @@ function Repos({ ctx, repos, onChecked }: { ctx: PxCtx; repos: KnowledgeRepo[]; 
           </div>
           <div className="px-kn-access" title="Access checks — BOSS re-checks before every run">
             <span className="px-lbl px-hide-phone">Access</span>
+            {/* EACH NODE IS THE REAL RESULT (06-04): the registry's last check of read, branch
+                and PR access (red with its reason when it failed), a person merges by design,
+                and the newest deploy to staging. */}
             <Flow testid={`px-kn-access-${r.full_name}`} nodes={[
-              { label: "Read", state: accessState(r.checked.read), icon: <Eye size={12} aria-label={accessWord(r.checked.read, "Read")} /> },
-              { label: "Branch", state: accessState(r.checked.write), icon: <GitBranch size={12} aria-label={accessWord(r.checked.write, "Branch")} /> },
-              { label: "Open PR", state: accessState(r.checked.pr), icon: <GitPullRequest size={12} aria-label={accessWord(r.checked.pr, "Open PR")} /> },
-              { label: "Merge: you", type: "you", icon: <Lock size={11} aria-label="By design a person merges" /> },
-              ...(r.deploys_to ? [{ label: r.deploys_to, state: "done", icon: <RocketLaunch size={12} aria-hidden /> }] : []),
+              { label: "Read", state: accessState(r.checked.read), title: r.access_reasons?.read || accessWord(r.checked.read, "Read"), icon: <Eye size={12} aria-label={accessWord(r.checked.read, "Read")} /> },
+              { label: "Branch", state: accessState(r.checked.write), title: r.access_reasons?.write || accessWord(r.checked.write, "Branch"), icon: <GitBranch size={12} aria-label={accessWord(r.checked.write, "Branch")} /> },
+              { label: "Open PR", state: accessState(r.checked.pr), title: r.access_reasons?.pr || accessWord(r.checked.pr, "Open PR"), icon: <GitPullRequest size={12} aria-label={accessWord(r.checked.pr, "Open PR")} /> },
+              { label: "Merge: you", type: "you", title: "By design a person merges", icon: <Lock size={11} aria-label="By design a person merges" /> },
+              ...(r.deploy_check ? [{ label: r.deploy_check.label, state: r.deploy_check.state, title: r.deploy_check.reason, icon: <RocketLaunch size={12} aria-hidden /> }]
+                : r.deploys_to ? [{ label: r.deploys_to, state: "todo", title: `Nothing deployed to ${r.deploys_to.toLowerCase()} yet`, icon: <RocketLaunch size={12} aria-hidden /> }] : []),
             ]} />
+            {[r.access_reasons?.read, r.access_reasons?.write, r.access_reasons?.pr, r.deploy_check?.state === "failed" ? r.deploy_check.reason : null].filter(Boolean).length ? (
+              <small className="px-kn-access-why" data-testid={`px-kn-access-why-${r.full_name}`}>
+                {[r.access_reasons?.read, r.access_reasons?.write, r.access_reasons?.pr, r.deploy_check?.state === "failed" ? r.deploy_check.reason : null].filter(Boolean)[0]}</small>
+            ) : null}
           </div>
           <GatedButton permission="setup:check" projectId={ctx.projectId} className="px-btn" data-size="s" data-testid={`px-kn-recheck-${r.full_name}`}
                        title="Run the access checks again now" disabled={busy === r.full_name} onClick={() => void recheck(r)}>
@@ -275,7 +283,7 @@ export function docKey(d: { kind: string; href: string; path?: string }): string
 }
 const allDocs = (k: Knowledge) => [
   ...k.docs.map((d) => ({ ...d, key: docKey(d) })),
-  ...k.decisions.map((d) => ({ label: d.label, kind: "decision", href: d.href, sub: d.sub || whenLocal(d.at), path: "", external_url: "", key: d.href.includes("decision=") ? docKey({ kind: "decision", href: d.href }) : `policy:${d.label}` })),
+  ...k.decisions.map((d) => ({ label: d.label, kind: "decision", href: d.href, sub: d.sub || whenLocal(d.at), path: d.detail ?? "", external_url: "", key: d.href.includes("decision=") ? docKey({ kind: "decision", href: d.href }) : `policy:${d.label}` })),
 ];
 
 function Docs({ k }: { k: Knowledge }) {
@@ -491,7 +499,11 @@ export function KnowledgeDrawer({ ctx, drawer, onClose }: { ctx: PxCtx; drawer: 
     <Drawer title={doc.label} icon={<Ico icon={ic.icon} c={ic.c} />} onClose={onClose} testid="px-drawer-doc" sub={<span>{doc.sub}</span>}
             footer={where ? <PxLink href={where} className="px-btn" testid="px-drawer-doc-open">{doc.key.startsWith("policy:") ? "Open the policy" : doc.kind === "decision" ? "Open in Approvals" : doc.kind === "prd" ? "Open the PRD" : "Open"}</PxLink> : null}>
       <Tag>{doc.kind === "prd" ? "PRD" : doc.kind === "adr" ? "ADR" : doc.kind === "decision" ? "Decision" : doc.kind === "readme" ? "README" : "Runbook"}</Tag>
-      {doc.path ? <p style={{ fontSize: ".64rem", whiteSpace: "pre-wrap", marginTop: 10 }} data-testid="px-drawer-doc-body">{doc.path}</p> : null}
+      {/* THE DOCUMENT ITSELF, in words: a PRD's opening, a decision's question or note, a repo
+          doc's path — with the full source one press away. */}
+      {doc.path ? <div className="px-doc-body" data-testid="px-drawer-doc-body">
+        {doc.path.split(/\n{1,}/).filter(Boolean).map((para, i) => <p key={i}>{para}</p>)}</div>
+        : <p className="px-faint" data-testid="px-drawer-doc-body">{doc.kind === "decision" ? "Decided without a note." : "No text recorded for it yet."}</p>}
     </Drawer>
   );
 }

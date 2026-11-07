@@ -672,6 +672,14 @@ def build_action(connection: Connection, project_id: str) -> dict[str, Any]:
             "nodes": (ob.get("discover") or {}).get("nodes") or []}
 
 
+def _check_reason(check: Any) -> Optional[str]:
+    """A failed access check's own reason (`error` / `message` / `reason`), in one line."""
+    if not isinstance(check, dict) or check.get("ok") is not False:
+        return None
+    said = check.get("error") or check.get("message") or check.get("reason") or ""
+    return " ".join(str(said).split())[:140] or "The last check failed"
+
+
 def repo_rows(connection: Connection, project_id: str) -> list[dict[str, Any]]:
     """The repositories (§2 shape) plus what screen 06 says under each: the last push BOSS
     recorded (its merges), how BOSS reaches it (the GitHub connection), and whether it ships to
@@ -691,7 +699,42 @@ def repo_rows(connection: Connection, project_id: str) -> list[dict[str, Any]]:
         "SELECT environment FROM deployment_targets WHERE project_id = :p AND status = 'active' "
         "ORDER BY (lower(environment) IN ('staging', 'stage')) DESC LIMIT 1"),
         {"p": project_id}).scalar()
+    # THE STAGING NODE IS A REAL CHECK (06-04): the newest deploy of that environment — live
+    # (done), failed (red, with its reason), still going, or none yet — never "a target exists".
+    last = connection.execute(text(
+        "SELECT s.status, s.failure_reason, s.repository FROM stack_deployments s "
+        "JOIN deployment_targets t ON t.id = s.target_id WHERE t.project_id = :p "
+        "AND t.status = 'active' AND lower(t.environment) = lower(:e) "
+        "AND s.status IN ('healthy', 'failed', 'running', 'deploying', 'applying') "
+        "ORDER BY COALESCE(s.finished_at, s.created_at) DESC LIMIT 1"),
+        {"p": project_id, "e": staging or ""}).mappings().first() if staging else None
+    checks_by = {str(r["full_name"]).lower(): as_json(r["checks"], {}) or {} for r in connection.execute(text(
+        "SELECT b.full_name, COALESCE(NULLIF(b.checks, '{}'::jsonb), g.checks) AS checks "
+        "FROM github_repository_bindings b LEFT JOIN LATERAL (SELECT checks FROM github_repos x "
+        "WHERE lower(x.full_name) = lower(b.full_name) ORDER BY x.checked_at DESC NULLS LAST "
+        "LIMIT 1) g ON true WHERE b.project_id = :p AND b.status = 'active'"),
+        {"p": project_id}).mappings()}
     for r in out:
+        checks = checks_by.get(r["full_name"].lower(), {})
+        # Why a check failed, in its own words (a red node's tooltip and its line).
+        r["access_reasons"] = {
+            k: _check_reason(checks.get(src) or (checks.get("pr") if k == "pr" else None))
+            for k, src in (("read", "read"), ("write", "write"), ("pr", "pull_requests"))}
+        if staging:
+            word = str(staging).title()
+            if last is None:
+                r["deploy_check"] = {"label": word, "state": "todo",
+                                     "reason": f"Nothing deployed to {word.lower()} yet"}
+            elif last["status"] == "healthy":
+                r["deploy_check"] = {"label": word, "state": "done",
+                                     "reason": f"The last deploy to {word.lower()} is live"}
+            elif last["status"] == "failed":
+                r["deploy_check"] = {"label": word, "state": "failed",
+                                     "reason": " ".join(str(last["failure_reason"] or
+                                                            "The last deploy failed").split())[:140]}
+            else:
+                r["deploy_check"] = {"label": word, "state": "now",
+                                     "reason": f"Deploying to {word.lower()} now"}
         c = via.get(r["full_name"].lower()) or {}
         method = str(c.get("auth_method") or "")
         how = "GitHub App" if method.startswith("github_app") or c.get("connection_label") == \

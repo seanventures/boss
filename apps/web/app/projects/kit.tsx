@@ -137,7 +137,7 @@ export function Timeline({ points, testid, onOpen }: {
 export { Stations } from "../stations";
 
 /** FLOW CHIPS: a path or a reason as nodes and arrows (≤ 4 words each). */
-export function Flow({ nodes, testid }: { nodes: { label: string; state?: StepState | string; type?: string; icon?: React.ReactNode }[]; testid?: string }) {
+export function Flow({ nodes, testid }: { nodes: { label: string; state?: StepState | string; type?: string; icon?: React.ReactNode; title?: string }[]; testid?: string }) {
   // Each step after the first is its wire + its node, unbreakable: a wrap never leaves an arrow
   // at a line's end, and the step that starts a new line hides its wire (lib/wrap-flow).
   const ref = useWrapMarks<HTMLDivElement>([nodes.map((n) => n.label).join("|")]);
@@ -147,7 +147,7 @@ export function Flow({ nodes, testid }: { nodes: { label: string; state?: StepSt
       {nodes.map((n, i) => (
         <span key={`${n.label}-${i}`} className="px-fl-step" data-flow-step>
           {i ? <span className="px-fl-w" aria-hidden data-s={(nodes[i - 1].state ?? "") === "done" ? "done" : undefined} /> : null}
-          <span className="px-fl-n" role="listitem" data-t={n.type ?? n.state ?? "todo"}>
+          <span className="px-fl-n" role="listitem" data-t={n.type ?? n.state ?? "todo"} title={n.title}>
             {n.icon}{n.state === "done" && !n.icon ? <Check size={11} weight="bold" aria-hidden /> : null}{n.label}
           </span>
         </span>

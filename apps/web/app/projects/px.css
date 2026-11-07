@@ -761,3 +761,9 @@ button.px-h-num:focus-visible { outline: 2px solid var(--accent-text); outline-o
 /* A card that couldn't load (04 states): one line inside the card, red, with Retry. */
 .px-card-failed { display: flex; align-items: center; gap: 6px; padding: 8px 4px; font-size: .62rem; color: var(--red); }
 .px-card-failed .px-linkbtn { all: unset; cursor: pointer; color: var(--accent-text); font-weight: 600; text-decoration: underline; }
+
+/* A document in its drawer (06-14): readable paragraphs, never one squeezed line. */
+.px-doc-body { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; font-size: .66rem; line-height: 1.5; color: var(--ink-soft, var(--ink)); }
+.px-doc-body p { margin: 0; overflow-wrap: anywhere; }
+
+.px-kn-access-why { display: block; color: var(--red); font-size: .56rem; margin-top: 2px; overflow-wrap: anywhere; }
