@@ -759,6 +759,12 @@ def triage_group(connection: Connection, settings: Any, project_id: str,
     key = _group_key(lead, klass.key)
     fp = (signals.fingerprint("item", klass.key, key[1], project_id=project_id)
           if not key[1].startswith("fp:") else str(lead["fingerprint"]))
+    from .. import incident_squad
+
+    if klass.key in incident_squad.INCIDENT_CLASSES:
+        # ONE ROUND PER INCIDENT: a signal of a new incident (or of a release that went live
+        # after the app's live item opened) never joins that item as "Seen again".
+        fp = incident_squad.item_fingerprint(connection, project_id, fp, group)
     drivers = scores(group, klass.key, reading.confidence)
     title = lead["title"] if len(group) == 1 else f"{lead['title']} (+{len(group) - 1})"
     opened = board.open_item(
@@ -1539,7 +1545,26 @@ def tick(engine: Any, settings: Any = None, *, project_id: Optional[str] = None,
     if project_id is None:
         with engine.begin() as c:
             report["adopted"] = adopt_install_wide(c, settings)
-    from .. import projects_archive
+    from .. import incident_squad, projects_archive
+
+    # ONE ROUND PER INCIDENT, before triage: a live incident item gives back the signals of a
+    # NEW incident it absorbed (they are triaged below into their own round), and one making no
+    # progress is closed with a plain note.
+    with engine.begin() as c:
+        live = [project_id] if project_id else [str(p) for p in c.execute(text(
+            "SELECT DISTINCT project_id FROM work_items WHERE ambient AND task_class = ANY(:c) "
+            "AND lifecycle = ANY(:live)"),
+            {"c": list(incident_squad.INCIDENT_CLASSES), "live": list(board.LIVE)}).scalars()]
+    for pid in live:
+        try:
+            with engine.begin() as c:
+                if policy.is_stopped(c, pid) or projects_archive.is_archived(c, pid):
+                    continue
+                moved = incident_squad.sweep_rounds(c, project_id=pid)
+            if moved:
+                report.setdefault("rounds", {})[pid] = moved
+        except Exception:  # noqa: BLE001 — one project's failure is reported, not raised
+            log.warning("incident rounds sweep failed for %s", pid, exc_info=True)
 
     with engine.begin() as c:
         # An archived project takes no new work: its signals wait, nothing is triaged.

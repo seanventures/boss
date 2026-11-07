@@ -805,12 +805,25 @@ class _Pass:
             board.link(self.c, self.item_id, "incident", ctx.incident_id, actor=lead)
         if ctx.alert:
             board.link(self.c, self.item_id, "alert", ctx.alert["id"], actor=lead)
-        other = self.c.execute(text(
-            "SELECT id FROM work_items WHERE project_id = :p AND ambient AND id <> :w "
-            "AND app = :app AND task_class = ANY(:cls) AND lifecycle = ANY(:live) "
-            "ORDER BY created_at LIMIT 1"),
-            {"p": self.p, "w": self.item_id, "app": ctx.app, "cls": list(INCIDENT_CLASSES),
-             "live": list(board.LIVE)}).scalar()
+        # One squad per INCIDENT, not per app: another live item on this app is joined only
+        # when this is the same incident again; one stalled on an older incident is closed.
+        other = None
+        facts = {"incident_id": ctx.incident_id, "commit": ctx.deploy.get("commit_sha"),
+                 "deployed_at": ctx.deploy.get("deployed_at")} if ctx.incident_id else {}
+        for oid in self.c.execute(text(
+                "SELECT id FROM work_items WHERE project_id = :p AND ambient AND id <> :w "
+                "AND app = :app AND task_class = ANY(:cls) AND lifecycle = ANY(:live) "
+                "ORDER BY created_at"),
+                {"p": self.p, "w": self.item_id, "app": ctx.app, "cls": list(INCIDENT_CLASSES),
+                 "live": list(board.LIVE)}).scalars().all():
+            older = board.get(self.c, oid) or {}
+            why_new = new_round_reason(self.c, older, facts)
+            if why_new is None:
+                other = oid
+                break
+            stuck = stalled(self.c, older)
+            if stuck:
+                retire(self.c, older, why=f"{stuck}; {why_new} has its own round")
         if other:
             for s in ctx.signals:
                 board.link(self.c, other, "signal", s["id"], actor=lead)
@@ -1867,6 +1880,230 @@ def _start_pass(connection: Connection, project_id: str, item_id: str, *, squad:
                  token=token)
 
 
+# ── one round per incident (HelpDesk AI 2026-11-07, INC-2) ───────────────────────────────────
+#
+# An incident item's board fingerprint is its task class + app. On 2026-11-07 the p95 blip item
+# that followed INC-1 sat in_progress ("Hold", fix forward, nothing running); release-1.3
+# (d3a0740) went live, AppErrorRate fired again and opened a NEW incident — and its signal was
+# merged into the stale item as "Seen again ×1": no triage, no cause, no rollback, errors for
+# 10+ minutes. A signal now joins an item only when it is a true repeat of the SAME incident:
+# a different incident, or a release that went live after the item opened (not the item's own
+# rollback), is a new round with its own item. An item that made no progress hands absorbed
+# new-incident signals back to triage and closes with a plain note.
+
+#: An incident item with no move for this long, and no fix or rollback in flight, is stalled.
+NO_PROGRESS_MINUTES = 20
+_RUN_DONE = ("completed", "failed", "cancelled", "canceled", "deadlettered", "succeeded",
+             "error", "rejected")
+
+
+def incident_facts(connection: Connection, sigs: Iterable[Mapping[str, Any]]
+                   ) -> dict[str, Any]:
+    """What the signals say about WHICH incident they are: its id and the release live when it
+    fired ({incident_id, commit, deployed_at}), from the incident or alert rows they cite."""
+    out: dict[str, Any] = {}
+    for s in sigs:
+        evidence = s.get("evidence") or []
+        if isinstance(evidence, str):
+            evidence = _json(evidence) or []
+        for e in evidence:
+            if not isinstance(e, Mapping) or not e.get("ref"):
+                continue
+            if e.get("kind") == "incident" and not out.get("incident_id"):
+                out["incident_id"] = str(e["ref"])
+            elif e.get("kind") == "alert":
+                row = connection.execute(text(
+                    "SELECT incident_id, release FROM app_alerts WHERE id = :a"),
+                    {"a": e["ref"]}).mappings().first()
+                if row is None:
+                    continue
+                release = _json(row["release"]) or {}
+                if row["incident_id"] and not out.get("incident_id"):
+                    out["incident_id"] = str(row["incident_id"])
+                if release.get("commit_sha") and not out.get("commit"):
+                    out["commit"] = str(release["commit_sha"])
+                    out["deployed_at"] = release.get("deployed_at")
+        if out.get("incident_id"):
+            break
+    return out
+
+
+def _own_incident(connection: Connection, item: Mapping[str, Any]) -> dict[str, Any]:
+    """The incident an item was opened for: its first `incident` link, else the incident its
+    first signal cites. With the release that incident blamed and the item's own rollbacks."""
+    inc = connection.execute(text(
+        "SELECT ref FROM work_item_links WHERE work_item_id = :w AND kind = 'incident' "
+        "ORDER BY created_at, ref LIMIT 1"), {"w": item["id"]}).scalar()
+    if not inc:
+        first = connection.execute(text(
+            "SELECT s.evidence FROM work_item_links l JOIN signals s ON s.id = l.ref "
+            "WHERE l.work_item_id = :w AND l.kind = 'signal' ORDER BY l.created_at, l.ref "
+            "LIMIT 1"), {"w": item["id"]}).mappings().first()
+        if first is not None:
+            inc = incident_facts(connection, [dict(first)]).get("incident_id")
+    own: dict[str, Any] = {"incident_id": inc, "rollbacks": []}
+    if inc:
+        fctx = _json(connection.execute(text(
+            "SELECT finalize_ctx FROM incidents WHERE id = :i"), {"i": inc}).scalar()) or {}
+        own["commit"] = (fctx.get("deploy") or {}).get("commit_sha")
+    for m in collab.messages(connection, item["id"], kinds=("proposal",)):
+        body = m.get("body") or {}
+        if str(body.get("action") or "").endswith("rollback") and body.get("to_commit"):
+            own["rollbacks"].append(str(body["to_commit"]))
+    return own
+
+
+def new_round_reason(connection: Connection, item: Mapping[str, Any],
+                     facts: Mapping[str, Any]) -> Optional[str]:
+    """Why a signal with these incident facts is NOT a repeat of `item`'s incident (plain words),
+    or None when it is the same incident again (then it joins)."""
+    if not facts or item.get("task_class") not in INCIDENT_CLASSES:
+        return None
+    from .incident_response import _dt
+
+    own = _own_incident(connection, item)
+    inc = facts.get("incident_id")
+    if inc and own.get("incident_id") and inc != own["incident_id"]:
+        return f"a new incident ({incident_ref(connection, item['project_id'], inc) or inc})"
+    commit = facts.get("commit")
+    live_at = _dt(facts.get("deployed_at"))
+    opened = _dt(item.get("created_at"))
+    if commit and live_at and opened and live_at > opened \
+            and not _same_commit(commit, own.get("commit")) \
+            and not any(_same_commit(commit, r) for r in own["rollbacks"]):
+        return f"release {str(commit)[:7]} went live after this item opened"
+    return None
+
+
+def item_fingerprint(connection: Connection, project_id: str, base: str,
+                     sigs: Iterable[Mapping[str, Any]]) -> str:
+    """The board fingerprint for an incident group: the live item it truly repeats; else the
+    app's (`base`) when nothing lives there; else its own incident's (and, for a new release
+    inside one incident, that release's) — never the app's live item whatever the incident."""
+    facts = incident_facts(connection, sigs)
+    inc = facts.get("incident_id")
+    if not inc:
+        return base
+    own = signals.fingerprint("item", base, "incident", inc, project_id=project_id)
+    lives = {fp: board.live_for_fingerprint(connection, project_id, fp) for fp in (own, base)}
+    for fp, live in lives.items():
+        if live is not None and new_round_reason(connection, live, facts) is None:
+            return fp
+    if lives[base] is None:
+        return base
+    if lives[own] is None:
+        return own
+    return signals.fingerprint("item", base, "incident", inc, "release",
+                               str(facts.get("commit") or ""), project_id=project_id)
+
+
+def stalled(connection: Connection, item: Mapping[str, Any], *,
+            minutes: Optional[int] = None) -> Optional[str]:
+    """Plain words for why an incident item is making no progress, or None while it is. Live,
+    not waiting on a person's card, not watching a recovery, no agent working it now, no fix
+    run going, no rollback in flight, and nothing but "Seen again" for `minutes`."""
+    from .incident_response import _dt
+
+    if item.get("task_class") not in INCIDENT_CLASSES or item.get("lifecycle") not in (
+            "proposed", "claimed", "in_progress"):
+        return None
+    if _watching(connection, item["id"]):
+        return None
+    if item.get("lease_kind") == "agent" and (_dt(item.get("lease_expires_at")) or
+                                              datetime.min.replace(tzinfo=timezone.utc)) \
+            > datetime.now(timezone.utc):
+        return None
+    decisions = ledger.list_decisions(connection, item["project_id"], work_item_id=item["id"])
+    if not any(d["question"] == Q_TRIAGE for d in decisions):
+        return None                       # not worked yet: the owners' turn picks it up
+    for l in board.links(connection, item["id"]):
+        if l["kind"] in ("code_task", "pull_request"):
+            return None
+        if l["kind"] == "workflow_run":
+            status = connection.execute(text("SELECT status FROM workflow_runs WHERE id = :r"),
+                                        {"r": l["ref"]}).scalar()
+            if status and str(status) not in _RUN_DONE:
+                return None
+    last = connection.execute(text(
+        "SELECT max(created_at) FROM work_item_messages WHERE work_item_id = :w AND NOT "
+        "(kind = 'finding' AND sender IN ('agent:chief_of_staff', 'boss'))"),
+        {"w": item["id"]}).scalar()
+    last = _dt(last) or _dt(item.get("created_at"))
+    minutes = NO_PROGRESS_MINUTES if minutes is None else minutes
+    if last is None or (datetime.now(timezone.utc) - last).total_seconds() < minutes * 60:
+        return None
+    mitigation = next((d for d in reversed(decisions) if d["question"] == Q_MITIGATE), None)
+    state = (f"\"{mitigation['chosen']}\"" if mitigation else "no mitigation")
+    held = " (held by a person)" if item.get("lease_kind") == "person" else ""
+    return f"{state}{held} since {last.strftime('%H:%M')} UTC with no fix running"
+
+
+def retire(connection: Connection, item: Mapping[str, Any], *, why: str,
+           handed: int = 0) -> dict[str, Any]:
+    """Close a stalled incident item with a plain note (BOSS may end any live item)."""
+    tail = (f" {handed} new alert{'s' if handed != 1 else ''} went to a new round."
+            if handed else " New evidence goes to a new round.")
+    note = clean_text(f"No progress: {why}. Closed.{tail}", 300)
+    cited = [{"kind": l["kind"], "ref": l["ref"], "note": note}
+             for l in board.links(connection, item["id"]) if l["kind"] in ("incident", "signal")]
+    collab.post(connection, item["id"], kind="finding", sender="boss", body={
+        "summary": "No progress: closed", "evidence": cited[:1]})
+    return board.finish(connection, item["id"], actor="boss", lifecycle="resolved",
+                        outcome=note)
+
+
+def hand_over_new_rounds(connection: Connection, item: Mapping[str, Any]) -> list[str]:
+    """Signals an item absorbed that belong to a NEW incident (merged before one round per
+    incident held): back to the Chief of Staff's triage, which opens their own round."""
+    rows = connection.execute(text(
+        "SELECT s.id, s.evidence FROM signals s JOIN work_item_links l ON l.ref = s.id "
+        "AND l.kind = 'signal' AND l.work_item_id = :w WHERE s.work_item_id = :w "
+        "ORDER BY s.first_seen_at"), {"w": item["id"]}).mappings().all()
+    moved = []
+    for r in rows:
+        why = new_round_reason(connection, item, incident_facts(connection, [dict(r)]))
+        if why is None:
+            continue
+        connection.execute(text(
+            "UPDATE signals SET work_item_id = NULL, status = 'new', updated_at = now() "
+            "WHERE id = :s"), {"s": r["id"]})
+        connection.execute(text(
+            "DELETE FROM work_item_links WHERE work_item_id = :w AND kind = 'signal' "
+            "AND ref = :s"), {"w": item["id"], "s": r["id"]})
+        moved.append(r["id"])
+        if item.get("lifecycle") in board.LIVE:
+            collab.post(connection, item["id"], kind="finding", sender="boss", body={
+                "summary": short_label(f"Not this incident: {why}", 10),
+                "evidence": [{"kind": "signal", "ref": r["id"]}]})
+    return moved
+
+
+def sweep_rounds(connection: Connection, *, project_id: str) -> list[dict[str, Any]]:
+    """The owners' tick: every live incident item gives back signals of a new incident, and one
+    that made no progress is closed with a plain note. Returns what moved."""
+    from . import projects_archive
+
+    if projects_archive.is_archived(connection, project_id):
+        return []
+    rows = connection.execute(text(
+        "SELECT id FROM work_items WHERE project_id = :p AND ambient AND task_class = ANY(:c) "
+        "AND lifecycle = ANY(:live) ORDER BY created_at"),
+        {"p": project_id, "c": list(INCIDENT_CLASSES), "live": list(board.LIVE)}).scalars().all()
+    out = []
+    for item_id in rows:
+        item = board.get(connection, item_id)
+        if item is None:
+            continue
+        with connection.begin_nested():
+            why = stalled(connection, item)
+            moved = hand_over_new_rounds(connection, item)
+            if why:
+                retire(connection, item, why=why, handed=len(moved))
+            if moved or why:
+                out.append({"item_id": item_id, "handed": moved, "closed": bool(why)})
+    return out
+
+
 # ── the entry points ─────────────────────────────────────────────────────────────────────────
 
 def route_incident(connection: Connection, *, project_id: str, item_id: str,
@@ -2135,4 +2372,6 @@ def on_needs_you_answered(connection: Connection, settings: Any, decision: Mappi
 __all__ = ["Squad", "assemble_squad", "RuleMind", "ScriptedMind", "AgentMind", "BossEffects",
            "Ctx", "load_context", "route_to_code", "similar_incidents", "runbooks_for",
            "incident_node", "incident_class", "intake", "route_incident", "HANDLERS", "resume", "tick", "continue_item",
+           "incident_facts", "new_round_reason", "item_fingerprint", "stalled", "retire",
+           "hand_over_new_rounds", "sweep_rounds",
            "on_needs_you_answered", "NEEDS_YOU_ACTION", "INCIDENT_CLASSES"]

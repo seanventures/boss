@@ -62,8 +62,9 @@ def test_each_class_opens_at_most_its_daily_cap(eng, project):
 def test_at_most_max_concurrent_items_run_at_once(eng, project):
     with eng.begin() as c:
         policy.update_settings(c, project, actor="ceo", max_concurrent=1)
-        a = open_item(c, project, fingerprint="fp:a")["item"]
-        b = open_item(c, project, fingerprint="fp:b")["item"]
+        # Backlog work waits for a slot; an incident never does (guards.URGENT_CLASSES).
+        a = open_item(c, project, fingerprint="fp:a", task_class="security_patch")["item"]
+        b = open_item(c, project, fingerprint="fp:b", task_class="security_patch")["item"]
         ta = board.claim(c, a["id"], owner="agent:sre")["lease_token"]
         tb = board.claim(c, b["id"], owner="agent:qa")["lease_token"]
         board.start(c, a["id"], owner="agent:sre", token=ta)

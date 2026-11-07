@@ -56,6 +56,7 @@ GUARDED: dict[str, str] = {
     "services/ambient/chief_of_staff.py::tick": "tick",
     "services/ambient/roadmap.py::tick": "tick",
     "services/incident_squad.py::tick": "tick",
+    "services/incident_squad.py::sweep_rounds": "sweep_rounds",
 }
 
 #: New work refused at its door (ProjectArchived -> 409), checked the same way.

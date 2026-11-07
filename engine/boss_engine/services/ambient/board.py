@@ -394,7 +394,8 @@ def start(connection: Connection, item_id: str, *, owner: str, token: str) -> di
         return item
     if item["lifecycle"] != "claimed":
         raise Conflict(f"the item is {item['lifecycle']}; claim it first")
-    verdict = guards.admit_start(connection, project_id=item["project_id"])
+    verdict = guards.admit_start(connection, project_id=item["project_id"],
+                                 task_class=item.get("task_class"))
     if not verdict["ok"]:
         raise Conflict(verdict["reason"])
     return _transition(connection, item, "in_progress", actor=owner)
