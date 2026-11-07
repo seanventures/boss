@@ -23,8 +23,13 @@ goes through `ask` here, never straight to `board.needs_you`. The rules, as a cl
   with a note in words, when the policy no longer asks it: the always-on agents are off; it
   duplicates an item on onboarding's backlog (the person decides that there); BOSS refused the
   action twice (a policy outcome, recorded on the ledger, not a question); the app is healthy
-  (the alert cleared, or it was BOSS's own monitor). Cards raised before this module existed are
-  re-judged the same way, and one that still asks is moved onto the project's one card.
+  (the alert cleared, or it was BOSS's own monitor); the squad that asked now holds reads it did
+  not hold when it asked (it looks for itself first). Cards raised before this module existed
+  are re-judged the same way, and one that still asks is moved onto the project's one card.
+* A QUESTION SAYS WHAT IS BLOCKED AND WHAT TO GIVE. "Infra Steward's squad can't read the
+  install's logs to explain the restarts — grant access, or take it?", from the squad's own
+  summary (`blocked`, `need`); its answers say what they do, and approving does it ("Grant
+  access" grants the skill: identity is on the compliance boundary, so a person approves it).
 """
 from __future__ import annotations
 
@@ -74,6 +79,8 @@ WITHDRAW_WHY = {
               "after it asked, or the build finished), so nobody needs to take it",
     "retry": "BOSS tried the squad's launch once more now that what stopped it is fixed, so "
              "nobody needs to answer",
+    "granted": "the squad now reads with the tools it holds (BOSS's logs, health and run "
+               "history), so it looks for itself first and asks again only if it is still stuck",
     "stale_rollback": "the rollback it proposed is not to a known-good release (that release "
                       "was rolled back from, or an incident blamed it), so the squad fixes "
                       "forward instead",
@@ -170,15 +177,74 @@ def squad_entry(connection: Connection, item: Mapping[str, Any], *, actor: str,
             "question": f"{what[:1].upper()}{what[1:]}? {subject}"}
 
 
+def squad_name(title: Any, lead: Any) -> str:
+    """The squad by a name a person knows: its template's ("CVE squad"), or its lead's
+    ("Infra Steward's squad") — never the bare "Squad" of the general template."""
+    title = clean_text(title, 60)
+    if title and title.lower() not in ("squad", "the squad"):
+        return title
+    from .read_model import _party_label
+
+    lead = str(lead or "")
+    return f"{_party_label(lead)}'s squad" if lead.startswith("agent:") else "The squad"
+
+
+def _phrase(value: Any, limit: int) -> str:
+    """An agent's few words for a card: ids scrubbed, no closing stop, lower-case start."""
+    body = scrub(value, limit).rstrip(" .;:")
+    return body[:1].lower() + body[1:] if body[:2] != body[:2].upper() else body
+
+
 def question_entry(connection: Connection, item: Mapping[str, Any], *, actor: str,
-                   reason: Any, squad_title: str = "") -> dict[str, Any]:
-    """A squad is stuck and asks a person what to do (its own words ride as detail)."""
+                   reason: Any, squad_title: str = "", blocked: Any = None, need: Any = None,
+                   grant: Optional[str] = None, reads: int = 0) -> dict[str, Any]:
+    """A squad is stuck and asks a person. The card says in a few words what is blocked and what
+    the person must give, from the squad's own summary of its reason (the escalate move's
+    `blocked` and `need`): "Infra Steward's squad can't read the install's logs to explain the
+    restarts — grant access, or take it?". The full reason rides behind it as `detail`.
+    `grant`: the skill an approval gives the asker (asks.grantable), when it asked for access;
+    `reads`: how many read tools it held when it asked (a later grant withdraws the ask)."""
     subject = subject_words(connection, item)
-    who = squad_title or "The squad"
+    who = squad_name(squad_title, actor)
+    blocked_words, need_words = _phrase(blocked, 90), _phrase(need, 40)
+    if grant:
+        need_words = "grant access"
+    if blocked_words:
+        question = (f"{who} can't {blocked_words} — {need_words or 'let it go on'}, "
+                    "or take it?")
+        words = f"{who.lower()} can't {blocked_words}"
+    else:
+        question = f"{who} is stuck on {subject} — let it go on, or take it?"
+        words = f"{who.lower()} is stuck: {subject}"
     return {"ask_kind": "question", "work_item_id": item["id"], "task_class": item["task_class"],
-            "asked_by": actor, "squad": squad_title, "subject": subject,
-            "detail": scrub(reason, 300), "words": f"{who.lower()} is stuck: {subject}",
-            "question": f"{who} is stuck on {subject} — let it go on, or take it?"}
+            "asked_by": actor, "squad": who, "subject": subject,
+            "detail": scrub(reason, 600), "words": words, "question": question,
+            "blocked": blocked_words or None, "need": need_words or None,
+            "grant": grant or None, "reads": int(reads or 0)}
+
+
+def grantable(connection: Connection, project_id: str, member: str,
+              wanted: Any) -> Optional[str]:
+    """The skill that would give `member` the access it asked for (`wanted`: a tool a bundle
+    offers, or a skill id), when it does not hold it yet — else None. Granting is identity and
+    permissions, on the compliance boundary: a person approves it, and approving grants it
+    (role_skills through skill_definitions.assign_skill_to_role; allowed_callers never widen)."""
+    wanted = clean_text(wanted, 120)
+    if not wanted:
+        return None
+    from ..agent_baseline import bundles
+    from ..skill_definitions import _skill_exists
+    from .squad_turns import held_skill_ids
+
+    held = held_skill_ids(connection, project_id, member)
+    skill = next((s for s, tools in bundles().items() if wanted in tools), None) or wanted
+    if skill in held:
+        return None
+    try:
+        with connection.begin_nested():
+            return skill if _skill_exists(connection, project_id, skill) else None
+    except Exception:  # noqa: BLE001 — an unknown skill is not grantable
+        return None
 
 
 def incident_entry(connection: Connection, item: Mapping[str, Any], *, actor: str,
@@ -237,10 +303,24 @@ def card_question(entries: Sequence[Mapping[str, Any]]) -> str:
 
 
 def card_options(entries: Sequence[Mapping[str, Any]]) -> list[dict[str, str]]:
+    """The card's answers, saying what each does (and approving does exactly that, `carry`).
+    One question: "Let it go on" / "I'll take it", or "Grant access" when the squad asked for a
+    skill it lacks. Never "Approve all" over a single question."""
+    from .chief_of_staff import OWN_ACTIONS, PARTY
+
     if len(entries) > 1:
         if all(entry_kind(e) == "handoff" for e in entries):
-            return [{"key": "approve", "label": "Hand all over"},
+            own = all(e.get("owner") == PARTY and str(e.get("next_action")) in OWN_ACTIONS
+                      for e in entries)
+            label = (tc.ACTIONS[str(entries[0].get("next_action"))].title + " all"
+                     if own and len({str(e.get("next_action")) for e in entries}) == 1
+                     else "Hand all over")
+            return [{"key": "approve", "label": label},
                     {"key": "reject", "label": "Dismiss all"}]
+        if all(entry_kind(e) == "question" for e in entries):
+            grants = any(e.get("grant") for e in entries)
+            return [{"key": "approve", "label": "Grant and let them go on" if grants
+                     else "Let them go on"}, {"key": "reject", "label": "I'll take them"}]
         return [{"key": "approve", "label": "Approve all"},
                 {"key": "reject", "label": "Dismiss all"}]
     e = entries[0]
@@ -249,13 +329,11 @@ def card_options(entries: Sequence[Mapping[str, Any]]) -> list[dict[str, str]]:
         return [{"key": "approve", "label": f"Approve: {action_words(e.get('action'))}"},
                 {"key": "hold", "label": "Hold"}]
     if kind == "question":
-        return [{"key": "approve", "label": "Let it go on"},
+        return [{"key": "approve", "label": "Grant access" if e.get("grant") else "Let it go on"},
                 {"key": "reject", "label": "I'll take it"}]
     if kind == "incident":
         return [{"key": "approve", "label": "I'll take it"},
                 {"key": "reject", "label": "Close it"}]
-    from .chief_of_staff import PARTY
-
     label = ("Answer" if e.get("asked") else
              tc.ACTIONS.get(str(e.get("next_action")), tc.ACTIONS["propose"]).title
              if e.get("owner") == PARTY else f"Hand to {e.get('owner_label')}")
@@ -504,11 +582,29 @@ def verdict(connection: Connection, card: Mapping[str, Any], entry: Mapping[str,
     if kind == "question" and item_moving(connection, item["id"], card.get("created_at")):
         # A squad that said it is stuck, whose work is moving again: a stale ask.
         return "moving", item
+    if kind == "question" and can_now_look(connection, item, entry):
+        # A squad that asked before it held (or could use) the reads it now has: it looks
+        # itself first (boss-dogfood 2026-11-07, "no tool access to host:install logs").
+        return "granted", item
     if mode == "off" and not (card.get("recommendation") or {}).get("manual"):
         return "off", item
     if kind == "question" and launch_to_retry(connection, item) is not None:
         return "retry", item
     return "ask", item
+
+
+def can_now_look(connection: Connection, item: Mapping[str, Any],
+                 entry: Mapping[str, Any]) -> bool:
+    """The squad that asked holds more read tools now than when it asked (`reads` on the entry;
+    an ask from before squads could read has none): a grant since, or the read phase its turns
+    gained, lets it look for itself before anyone is asked."""
+    asker = str(entry.get("asked_by") or "")
+    if not asker.startswith("agent:"):
+        return False
+    from .squad_turns import held_reads
+
+    return len(held_reads(connection, None, item["project_id"], asker)) > int(
+        entry.get("reads") or 0)
 
 
 def item_moving(connection: Connection, item_id: str, asked_at: Any) -> bool:
@@ -666,8 +762,11 @@ def rewords(connection: Connection, entry: Mapping[str, Any],
         name, env = _place(connection, item)
         return incident_entry(connection, item, actor=actor, question=recovery_question(
             name, env, rolled_back=False, unconfirmed=False))
-    return question_entry(connection, item, actor=actor, reason=entry.get("question"),
-                          squad_title=str(entry.get("squad") or ""))
+    return question_entry(connection, item, actor=actor,
+                          reason=entry.get("detail") or entry.get("question"),
+                          squad_title=str(entry.get("squad") or ""), blocked=entry.get("blocked"),
+                          need=entry.get("need"), grant=entry.get("grant"),
+                          reads=int(entry.get("reads") or 0))
 
 
 def _place(connection: Connection, item: Mapping[str, Any]) -> tuple[str, str]:
@@ -706,7 +805,7 @@ def settle(connection: Connection, project_id: str, card_id: Optional[str],
     left to proceed, with the reason on the ledger. Returns what happened."""
     item_id = item["id"]
     board.unask(connection, item_id, actor=COS, reason=WITHDRAW_WHY[why])
-    if why in ("off", "rebatch", "moot", "moving"):
+    if why in ("off", "rebatch", "moot", "moving", "granted"):
         return "back_on_board"
     if why == "retry":
         return retry_launch(connection, project_id, item)
@@ -839,10 +938,33 @@ def carry(connection: Connection, settings: Any, decision: Mapping[str, Any],
                                "mitigation": "escalate", "work_item_id": item["id"]}},
             actor, "approve", note)
         return "incident"
+    if approve and entry.get("grant"):
+        # "Grant access" DOES grant it: the skill goes to the asking agent's role (the one grant,
+        # role_skills), as the person who approved — then the squad goes on, now able to look.
+        grant_access(connection, item, entry, actor=actor)
     board.answered(connection, item["id"], actor=actor)
     if not approve:
         board.take_over(connection, item["id"], actor=actor, reason="took it from Needs you")
     return "question"
+
+
+def grant_access(connection: Connection, item: Mapping[str, Any], entry: Mapping[str, Any], *,
+                 actor: str) -> bool:
+    """Give the asking agent the skill its question asked for. A grant that cannot be made is
+    said on the board (the squad reads it), never silently dropped. True when granted."""
+    from ._common import party_id
+    from ..skill_definitions import assign_skill_to_role
+
+    skill, asker = str(entry.get("grant") or ""), str(entry.get("asked_by") or "")
+    try:
+        with connection.begin_nested():
+            assign_skill_to_role(connection, project_id=item["project_id"], actor=person(actor),
+                                 role_key=party_id(asker), skill_id=skill)
+        said, ok = f"{person(actor)} granted {skill} to {asker}", True
+    except Exception as exc:  # noqa: BLE001 — a refused grant is reported, not raised
+        said, ok = f"Could not grant {skill} to {asker}: {clean_text(str(exc), 200)}", False
+    collab.post(connection, item["id"], kind="finding", sender="boss", body={"summary": said})
+    return ok
 
 
 def carry_card(connection: Connection, settings: Any, decision: Mapping[str, Any], actor: str,

@@ -31,17 +31,17 @@ def test_the_morning_runs_every_branch_of_the_flow(eng, project, demo_ok):
         out = demo.load(c, None, project_id=project)
     # In route mode ("Act within levels") an incident goes straight to the SRE squad and every
     # routine hand-off at A1+ goes straight to its owner (the spend spike to FinOps): they wait,
-    # handed over, for the owners' turn on the tick (owners.work). Only the nudge — the Chief of
-    # Staff's own action, which needs A2 — asks a person, on the morning's one card.
-    assert out["triage"]["counts"] == {"routed": 4, "proposed": 1, "observed": 1}
-    assert out["triage"]["card"]["asked"] and len(out["triage"]["card"]["asked"]) == 1
+    # handed over, for the owners' turn on the tick (owners.work). The nudge on the stale PR is
+    # the Chief of Staff's own act inside BOSS: it does it and records it. Nobody is asked.
+    assert out["triage"]["counts"] == {"routed": 4, "acted": 1, "observed": 1}
+    assert not (out["triage"].get("card") or {}).get("asked")
     assert sorted(out["owners_played"]) == ["security_reviewer", "software_engineer"]
     with eng.begin() as c:
         items = _by_class(c, project)
         assert {k: i["lifecycle"] for k, i in items.items()} == {
             "incident_response": "proposed", "ci_fix_boss_pr": "resolved",
             "security_patch": "in_progress", "cost_anomaly": "proposed",
-            "stale_handoff": "needs_you", "todo_triage": "proposed"}
+            "stale_handoff": "resolved", "todo_triage": "proposed"}
         # Two alerts, one incident.
         incident = items["incident_response"]
         assert len([l for l in board.links(c, incident["id"]) if l["kind"] == "signal"]) == 2
@@ -57,11 +57,13 @@ def test_the_morning_runs_every_branch_of_the_flow(eng, project, demo_ok):
         deciders = [d["decided_by"] for d in ledger.list_decisions(
             c, project, work_item_id=items["ci_fix_boss_pr"]["id"])]
         assert deciders == ["agent:chief_of_staff", "agent:software_engineer"]
-        # The stale PR is the Chief of Staff's own to nudge: it asks "Nudge: …?", not "Hand to
-        # …", in words (the PR's title), never a raw key.
-        q = c.execute(text("SELECT question FROM decisions WHERE id = :d"),
-            {"d": items["stale_handoff"]["needs_you_decision_id"]}).scalar()
-        assert q.startswith("Nudge: “PR #37") and "pr:" not in q
+        # The stale PR is the Chief of Staff's own to nudge: done and recorded in words (the
+        # PR's title), never a raw key, and on no card.
+        assert items["stale_handoff"]["needs_you_decision_id"] is None
+        said = [d["question"] for d in ledger.list_decisions(
+            c, project, work_item_id=items["stale_handoff"]["id"])]
+        assert any(q.startswith("Nudge the stalled work on “PR #37") for q in said), said
+        assert not any("pr:" in q for q in said)
         handed = [m["body"]["to"] for m in collab.messages(
             c, items["cost_anomaly"]["id"], kinds=("handoff",))]
         assert handed == ["agent:finops_sentinel"]

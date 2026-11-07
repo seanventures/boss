@@ -222,7 +222,9 @@ def _stuck_cve_squad(c, pid):
         LEAD: [move("proposal", action="open_draft_pr", summary="Bump esbuild past 0.21.5",
                     verify="full build green", workflow="dependency_cve_patch"),
                move("escalate", reason="no workflow 'dependency_cve_patch': which one opens a "
-                                       "draft PR here?")],
+                                       "draft PR here?",
+                    blocked="open the draft PR without a patch workflow",
+                    need="name the workflow")],
         ENGINEER: [move("critique", position="agree", summary="Patch level")],
         CRITIC: [move("critique", position="agree", summary="Fine with a full build")]})
     refused = Launchers(refuse="no workflow 'dependency_cve_patch' in this project")

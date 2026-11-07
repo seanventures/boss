@@ -96,13 +96,12 @@ def test_switching_to_act_within_levels_hands_routine_work_over_and_asks_once(en
     with eng.begin() as c:
         _the_morning(c, project)
     report = _run(eng, project, "route")
-    # Tests ×3, docs, CI: A1 hand-offs proceed. The nudge is the Chief of Staff's own action and
-    # needs A2: it is the only thing a person is asked, on one card.
-    assert report["counts"] == {"routed": 5, "proposed": 1}, report["counts"]
+    # Tests ×3, docs, CI: A1 hand-offs proceed. The nudge is the Chief of Staff's own act inside
+    # BOSS (not on the compliance boundary): it does it and records it. Nobody is asked.
+    assert report["counts"] == {"routed": 5, "acted": 1}, report["counts"]
     with eng.begin() as c:
-        [card] = _open_cards(c, project)
-        assert card["question"].startswith("Nudge: “Finish the visual refresh")
-        assert not RAW.search(card["question"]), card["question"]
+        assert _open_cards(c, project) == []
+        _assert_nudged_itself(c, project)
         routed = [i for i in board.list_items(c, project, limit=50)
                   if collab.messages(c, i["id"], kinds=("handoff",))]
         owners_of = sorted(collab.messages(c, i["id"], kinds=("handoff",))[0]["body"]["to"]
@@ -120,24 +119,39 @@ def test_switching_to_act_within_levels_hands_routine_work_over_and_asks_once(en
                     if i["task_class"] == "roadmap_item"]
 
 
+def _assert_nudged_itself(c, pid):
+    """The stalled hand-off: the Chief of Staff's own nudge, done and recorded, on no card (its
+    build, crun_da60…, is not a live build here: the record says there was nothing to nudge)."""
+    [item] = [i for i in board.list_items(c, pid, limit=50) if i["task_class"] == "stale_handoff"]
+    assert item["lifecycle"] == "resolved" and item["needs_you_decision_id"] is None
+    assert not collab.messages(c, item["id"], kinds=("handoff",))
+    rows = ledger.list_decisions(c, pid, work_item_id=item["id"])
+    assert {r["decided_by"] for r in rows} == {cos.PARTY}
+    assert any(r["question"].startswith("Nudge the stalled work on") for r in rows)
+
+
 def test_ask_first_puts_every_hand_off_on_one_card_in_plain_words(eng, project):
     with eng.begin() as c:
         _the_morning(c, project)
     report = _run(eng, project, "propose")
-    assert report["counts"] == {"proposed": 6}
+    # "Ask first" is about handing work to another agent; the Chief of Staff's own nudge is not
+    # a hand-off, so it is done (and recorded) in this mode too.
+    assert report["counts"] == {"proposed": 5, "acted": 1}, report["counts"]
     with eng.begin() as c:
+        _assert_nudged_itself(c, project)
         [card] = _open_cards(c, project)
         q = card["question"]
-        assert q.startswith("Chief of Staff suggests 6 hand-offs: tests for 3 hot files")
-        assert "docs" in q and "a nudge" in q and "CI" in q
+        assert q.startswith("Chief of Staff suggests 5 hand-offs: tests for 3 hot files")
+        assert "docs" in q and "nudge" not in q and "CI" in q
         assert not RAW.search(q), q
         entries = card["recommendation"]["batch"]
-        assert len(entries) == 6 and card["recommendation"]["asked_by"] == cos.PARTY
+        assert len(entries) == 5 and card["recommendation"]["asked_by"] == cos.PARTY
         words = sorted(e["words"] for e in entries)
         assert "tests for TicketDetailPage.jsx" in words
         assert "docs for helpdesk-ai-demo" in words and "CI for helpdesk-ai-demo" in words
         assert not any(RAW.search(e["words"]) for e in entries)
-        waiting = board.list_items(c, project, limit=50)
+        waiting = [i for i in board.list_items(c, project, limit=50)
+                   if i["task_class"] != "stale_handoff"]
         assert {i["lifecycle"] for i in waiting} == {"needs_you"}
         assert {i["needs_you_decision_id"] for i in waiting} == {card["id"]}
     # One answer reaches every item on the card.
@@ -153,9 +167,9 @@ def test_ask_first_puts_every_hand_off_on_one_card_in_plain_words(eng, project):
         DecisionService(get_settings()).transition(c, card["id"], action="approve", actor="ceo",
                                                 note="Go ahead.")
     with eng.begin() as c:
-        items = board.list_items(c, project, limit=50)
-        handed = {i["id"]: collab.messages(c, i["id"], kinds=("handoff",)) for i in items
-                  if i["task_class"] != "stale_handoff"}   # the nudge is the CoS's own
+        items = [i for i in board.list_items(c, project, limit=50)
+                 if i["task_class"] != "stale_handoff"]   # the nudge was the CoS's own
+        handed = {i["id"]: collab.messages(c, i["id"], kinds=("handoff",)) for i in items}
         assert len(handed) == 5 and all(handed.values()), "every hand-off on the card"
         outcomes = {ledger.list_decisions(c, project, work_item_id=i["id"])[0]["outcome"]
                     for i in items}
@@ -185,17 +199,25 @@ def test_turning_to_route_withdraws_the_cards_it_no_longer_asks_and_hands_the_wo
     # The owner switches to "Act within levels": the next tick re-judges the card.
     report = _run(eng, project, "route")
     [changed] = report["reconsidered"]
-    assert changed["decision_id"] == card["id"] and changed.get("narrowed")
+    assert changed["decision_id"] == card["id"] and changed.get("withdrawn")
     assert sorted(s["verdict"] for s in changed["settled"]) == ["route"] * 5
     with eng.begin() as c:
-        [left] = _open_cards(c, project)
-        assert left["id"] == card["id"], "the card is narrowed to what still needs a person"
-        assert left["question"].startswith("Nudge: “Finish")
-        assert len(left["recommendation"]["batch"]) == 1
+        assert _open_cards(c, project) == [], "nothing on it still needs a person"
+        status, note = c.execute(text(
+            "SELECT status, resolution_note FROM decisions WHERE id = :d"),
+            {"d": card["id"]}).one()
+        assert status == "withdrawn" and "hands this over by itself" in note
         routed = [i for i in board.list_items(c, project, limit=50)
                   if collab.messages(c, i["id"], kinds=("handoff",))]
         assert len(routed) == 5 and all(i["lifecycle"] == "proposed" for i in routed)
-    # And turning the always-on agents off withdraws what is left, in words.
+
+
+def test_turning_the_agents_off_withdraws_what_they_asked_in_words(eng, project):
+    with eng.begin() as c:
+        _the_morning(c, project)
+    _run(eng, project, "propose")
+    with eng.begin() as c:
+        [card] = _open_cards(c, project)
     off = _run(eng, project, "off")
     assert [r["withdrawn"] for r in off["reconsidered"]] == [True]
     with eng.begin() as c:

@@ -563,7 +563,9 @@ def disposition(connection: Connection, project_id: str, task_class: str, *, ask
       roadmap   a Recommended-roadmap item: roadmap.py ranks it and a person reviews it there;
       route     `route` mode ("Act within levels") and the class allows a hand-off without a
                 person (A1+, the `route` action): handed to the owner, shown on the board and in
-                the digest. The owner still acts only within the class's level;
+                the digest. The owner still acts only within the class's level. Also, in
+                either mode, the Chief of Staff's OWN next action (a nudge) within its level:
+                it carries that out itself (act_itself) — it is no hand-off;
       ask       a person decides: `propose` mode ("Ask first"), the reading is not sure what
                 the problem is, or the Chief of Staff owns the class itself (a stalled handoff)
                 and its own next action (a nudge) needs a higher level than the class has.
@@ -580,6 +582,12 @@ def disposition(connection: Connection, project_id: str, task_class: str, *, ask
         return "observe"
     if asked:
         return "ask"
+    if (owner_role or klass.owner_role) == ROLE and NEXT_ACTION.get(klass.key) in OWN_ACTIONS:
+        # THE CHIEF OF STAFF'S OWN ACT (a nudge), in either mode: "Ask first" is about handing
+        # work to another agent, and this is no hand-off. Within its level it is done and
+        # recorded (act_itself); a person is asked only when the gate asks for one.
+        own = policy.gate(connection, project_id, klass.key, NEXT_ACTION[klass.key])
+        return "route" if own["allowed"] and not own["needs_person"] else "ask"
     if mode == "route":
         # Owned by the Chief of Staff itself, "handing it over" IS taking its next action: that
         # action's own gate decides. Anyone else's hand-off is the `route` action (A1+).
@@ -591,23 +599,231 @@ def disposition(connection: Connection, project_id: str, task_class: str, *, ask
     return "ask"
 
 
-def run_already_asks(connection: Connection, project_id: str,
-                     group: Sequence[Mapping[str, Any]]) -> Optional[str]:
-    """The open decision a failed run or build in this group already waits on, if any."""
-    runs = {str(s.get("subject_id")) for s in group
-            if s.get("subject_kind") in ("workflow_run", "code_task") and s.get("subject_id")}
+#: Subjects that ARE a run or a build: a signal about one of these is about that run. A
+#: Shepherd escalation names its build as a `task`.
+RUN_SUBJECTS = ("workflow_run", "code_task", "task")
+#: Classes whose item is about someone else's work that may be waiting (a stalled hand-off): the
+#: runs they CITE count as their subject too (a stale PR cites its build).
+STALL_CLASSES = frozenset({"stale_handoff"})
+
+
+def _group_runs(group: Sequence[Mapping[str, Any]], task_class: str = "") -> list[str]:
+    runs = [str(s["subject_id"]) for s in group
+            if s.get("subject_kind") in RUN_SUBJECTS and s.get("subject_id")]
+    if task_class in STALL_CLASSES:
+        for s in group:
+            ev = s.get("evidence")
+            for e in (ev if isinstance(ev, list) else []):
+                if (isinstance(e, Mapping) and e.get("kind") in ("code_task", "workflow_run")
+                        and e.get("ref")):
+                    runs.append(str(e["ref"]))
+    return list(dict.fromkeys(runs))
+
+
+def _run_asks(connection: Connection, project_id: str, runs: Sequence[str],
+              exclude: Optional[str] = None) -> Optional[str]:
+    """The open decision any of these runs waits on (its own gate, plan approval, a held step,
+    the merge card of its pull request) — never `exclude` (the card asking about it)."""
     if not runs:
         return None
     return connection.execute(text(
         "SELECT d.id FROM decisions d WHERE d.project_id = :p "
-        "AND d.status = ANY(:open) AND ("
+        "AND d.status = ANY(:open) AND d.id <> :x AND ("
         " d.recommendation->>'workflow_run_id' = ANY(:r) OR d.recommendation->>'run_id' = ANY(:r)"
         " OR d.id IN (SELECT decision_id FROM workflow_step_runs WHERE workflow_run_id = ANY(:r) "
         "   AND decision_id IS NOT NULL)"
         " OR d.id IN (SELECT decision_id FROM code_task_runs WHERE id = ANY(:r) "
         "   AND decision_id IS NOT NULL)) "
         "ORDER BY d.created_at DESC LIMIT 1"),
-        {"p": project_id, "r": sorted(runs), "open": sorted(OPEN_STATUSES)}).scalar()
+        {"p": project_id, "r": sorted(set(runs)), "open": sorted(OPEN_STATUSES),
+         "x": exclude or ""}).scalar()
+
+
+def run_already_asks(connection: Connection, project_id: str,
+                     group: Sequence[Mapping[str, Any]], task_class: str = "") -> Optional[str]:
+    """The open decision a failed run or build in this group already waits on, if any."""
+    return _run_asks(connection, project_id, _group_runs(group, task_class))
+
+
+# ── the Chief of Staff's own work: a stalled hand-off ────────────────────────────────────────
+#
+# A stalled hand-off (a Shepherd escalation on a build, a stale PR) is the Chief of Staff's own
+# class. One rule on each side of the compliance boundary:
+#
+# * WORK WAITING ON A PERSON IS NOT STALLED. When the run it is about already waits on a
+#   person's open decision (the "Approve code change" merge card, a held step), the person has
+#   that card: no nudge, no second card. The same test runs when the item is triaged, while it
+#   waits for a card (ask_batch), and every tick on a card already raised (reconsider), so a
+#   card raised before the run reached its decision withdraws itself — as does one whose build
+#   moved again or ended since (helpdesk 2026-11-07: "Chief of Staff suggests 2 hand-offs: 2
+#   nudges" on two CVE builds that had finished and waited on their merge cards).
+# * A NUDGE IS THE CHIEF OF STAFF'S OWN ACT, not a hand-off a person approves: it asks the agent
+#   holding the work (the Shepherd, for a build) to look again, and records it. It runs within
+#   the class's level in either mode; if one ever reaches a person, approving it runs it.
+
+def _signals_of(connection: Connection, item_id: str) -> list[dict[str, Any]]:
+    return [dict(r) for r in connection.execute(text(
+        "SELECT s.id, s.subject_kind, s.subject_id, s.evidence FROM work_item_links l "
+        "JOIN signals s ON s.id = l.ref WHERE l.work_item_id = :w AND l.kind = 'signal'"),
+        {"w": item_id}).mappings()]
+
+
+def stalled_runs(connection: Connection, item: Mapping[str, Any]) -> list[str]:
+    """The runs and builds a stalled hand-off is about: its subject (`task:crun_…`), its
+    signals' subjects and the runs they cite."""
+    kind, _, ref = str(item.get("subject_ref") or "").partition(":")
+    own = [ref] if kind in RUN_SUBJECTS and ref else []
+    return list(dict.fromkeys(own + _group_runs(_signals_of(connection, item["id"]),
+                                                 str(item.get("task_class") or ""))))
+
+
+def waits_on_person(connection: Connection, project_id: str, item: Mapping[str, Any], *,
+                    exclude: Optional[str] = None) -> Optional[str]:
+    """The person's open decision the stalled work already waits on, or None."""
+    if item.get("task_class") not in STALL_CLASSES:
+        return None
+    return _run_asks(connection, project_id, stalled_runs(connection, item), exclude)
+
+
+def stall_over(connection: Connection, item: Mapping[str, Any], since: Any) -> bool:
+    """A build the stalled hand-off is about ended, or moved since `since` (an agent took a
+    turn: stuck_work.moved_since, the test every "stuck" ask is withdrawn by)."""
+    from .. import stuck_work
+
+    if item.get("task_class") not in STALL_CLASSES or since is None:
+        return False
+    try:
+        with connection.begin_nested():
+            for rid in stalled_runs(connection, item):
+                run = stuck_work._load(connection, rid)  # noqa: SLF001 — the Shepherd's read
+                if run and (str(run.get("status")) in ("completed", "failed", "cancelled")
+                            or stuck_work.moved_since(connection, run, since)):
+                    return True
+    except Exception:  # noqa: BLE001 — a stall that cannot be judged stays a stall
+        log.info("stall_over could not judge %s", item.get("id"), exc_info=True)
+    return False
+
+
+def stall_verdict(connection: Connection, project_id: str, item: Mapping[str, Any],
+                  since: Any, *, exclude: Optional[str] = None) -> Optional[str]:
+    """'linked' (it waits on a person's decision), 'moving' (it moved or ended), or None."""
+    if waits_on_person(connection, project_id, item, exclude=exclude):
+        return "linked"
+    if stall_over(connection, item, since):
+        return "moving"
+    return None
+
+
+#: The Chief of Staff's own next actions, which it carries out itself (there is no owner to hand
+#: them to): `act_itself`.
+OWN_ACTIONS = frozenset({"nudge"})
+
+#: What a stalled build was doing, by the class of the item that started it ("esbuild,
+#: minimatch bumps"). Anything else is a build.
+_BUILD_NOUN = {"security_patch": "bump", "dependency_upgrade": "upgrade",
+               "missing_tests": "test build", "doc_drift": "docs build", "ci_setup": "CI build"}
+
+
+def stalled_name(connection: Connection, item: Mapping[str, Any]) -> tuple[str, str]:
+    """The stalled work in a word or two, and what it is: ("esbuild", "bump"), from the item
+    that started the build (its authority's work item, by plain subject), else the build's
+    short title."""
+    for rid in stalled_runs(connection, item):
+        row = connection.execute(text(
+            "SELECT title, finalize_ctx FROM code_task_runs WHERE id = :r"), {"r": rid}
+        ).mappings().first()
+        if row is None:
+            continue
+        ctx = row["finalize_ctx"] if isinstance(row["finalize_ctx"], Mapping) else {}
+        authority = ctx.get("authority") if isinstance(ctx.get("authority"), Mapping) else {}
+        origin = str(authority.get("work_item_id") or "")
+        started = board.get(connection, origin) if origin else None
+        name = board.plain_subject(started) if started is not None else None
+        if name:
+            return name, _BUILD_NOUN.get(str(started.get("task_class")), "build")
+        return _short_title(row["title"], 4), "build"
+    return _short_title(item.get("title"), 4), "build"
+
+
+def nudge(connection: Connection, settings: Any, project_id: str, item_id: str, *,
+          decided_by: str = PARTY, cites: Sequence[Mapping[str, Any]] = ()) -> str:
+    """CARRY OUT A NUDGE: ask the agent holding the stalled work to look again — for a live
+    build, the Shepherd's diagnosis now (stuck_work.diagnose: it investigates and takes the safe
+    move itself, or raises its own card when only a person can) — record it on the ledger
+    (`decided_by`: the Chief of Staff within its level, or the person who approved it) and end
+    the item. Work that waits on a person, or moved on, is not nudged and the record says so.
+    Returns nudged | waits_on_person | moved | nothing_to_nudge | kept (someone holds it)."""
+    from .. import stuck_work
+
+    if settings is None:
+        from ...config import get_settings
+
+        settings = get_settings()
+    item = board.get(connection, item_id)
+    if item is None or item["lifecycle"] in board.TERMINAL:
+        return "moot"
+    if item["lifecycle"] == "needs_you":
+        board.unask(connection, item_id, actor=PARTY, reason="the Chief of Staff nudges it itself")
+    try:
+        token = board.claim(connection, item_id, owner=PARTY,
+                            minutes=TURN_LEASE_MINUTES)["lease_token"]
+    except board.Conflict:
+        return "kept"
+    klass = tc.task_class(item["task_class"])
+    evidence = [{"kind": "signal", "ref": s["id"]} for s in _signals_of(connection, item_id)]
+    evidence += [dict(c) for c in cites]
+    waiting = waits_on_person(connection, project_id, item)
+    looked: list[str] = []
+    outcome = "nothing_to_nudge"
+    if waiting:
+        board.link(connection, item_id, "decision", waiting, actor=PARTY,
+                   note="the work waits on this")
+        evidence.append({"kind": "decision", "ref": waiting})
+        outcome = "waits_on_person"
+    else:
+        for rid in stalled_runs(connection, item):
+            run = stuck_work._load(connection, rid)  # noqa: SLF001 — the Shepherd's read
+            if not run:
+                continue
+            if str(run.get("status")) not in stuck_work.LIVE_STATUSES:
+                outcome = "moved" if outcome == "nothing_to_nudge" else outcome
+                continue
+            try:
+                with connection.begin_nested():
+                    diag = stuck_work.diagnose(connection, settings, rid, use_model=False) or {}
+            except Exception as exc:  # noqa: BLE001 — a nudge that fails is said, not raised
+                diag = {"headline": f"the Shepherd could not look ({type(exc).__name__})"}
+            board.link(connection, item_id, "code_task", rid, actor=PARTY, note="nudged")
+            looked.append(_clause(diag.get("headline") or diag.get("tried") or "looked", 160))
+            outcome = "nudged"
+    said = {
+        "nudged": "Nudged: the Shepherd looked at the build again — " + "; ".join(looked),
+        "waits_on_person": "Not stalled: it waits on your own decision, already in Needs you",
+        "moved": "Not stalled: the build moved on or ended",
+        "nothing_to_nudge": "Nothing to nudge: no live build is behind it",
+    }[outcome]
+    acted = outcome == "nudged"
+    ledger.record_decision(
+        connection, project_id=project_id, decided_by=decided_by, work_item_id=item_id,
+        task_class=klass.key,
+        question=f"Nudge the stalled work on “{_short_title(item['title'])}”?",
+        chosen="nudge" if acted else "observe", action="nudge" if acted else "observe",
+        options=["nudge", "observe"], reversibility="reversible",
+        undo={"action": "reopen", "work_item_id": item_id},
+        evidence=evidence or [{"kind": "work_item", "ref": item_id}],
+        rationale=(f"{clean_text(said, 400).rstrip('.')}. A nudge stays inside BOSS, so the Chief "
+                   "of Staff does it and records it."))
+    board.finish(connection, item_id, actor=PARTY, lifecycle="resolved", token=token,
+                 outcome=clean_text(said, 280))
+    return outcome
+
+
+def act_itself(connection: Connection, settings: Any, project_id: str, item_id: str,
+               next_action: str, **kw: Any) -> Optional[str]:
+    """The Chief of Staff carries out its own next action (None: it has no executor for it)."""
+    if next_action == "nudge":
+        return nudge(connection, settings, project_id, item_id, **kw)
+    return None
 
 
 # ── words a person reads ─────────────────────────────────────────────────────────────────────
@@ -657,6 +873,18 @@ def _short_title(value: Any, words: int = 7) -> str:
     return short + ("…" if len(body.split()) > words else "")
 
 
+def _stalled_words(entries: Sequence[Mapping[str, Any]]) -> Optional[str]:
+    """The stalled work the nudges are about, named: "esbuild, minimatch bumps" (None when an
+    entry does not name its work: an entry from before entries carried `stalled`)."""
+    names = [clean_text(e.get("stalled"), 40) for e in entries]
+    if not names or not all(names):
+        return None
+    nouns = {str(e.get("stalled_noun") or "build") for e in entries}
+    noun = nouns.pop() if len(nouns) == 1 else "build"
+    listed = ", ".join(dict.fromkeys(names))
+    return listed if noun == "build" else f"{listed} {noun}{'s' if len(entries) > 1 else ''}"
+
+
 def batch_question(entries: Sequence[Mapping[str, Any]]) -> str:
     """The card's one line. One suggestion: "Hand to QA: tests for TicketDetailPage.jsx?".
     Several: "Chief of Staff suggests 5 hand-offs: tests for 3 hot files, docs, a nudge"."""
@@ -669,6 +897,10 @@ def batch_question(entries: Sequence[Mapping[str, Any]]) -> str:
             action = tc.ACTIONS.get(str(e.get("next_action")), tc.ACTIONS["propose"]).title
             return f"{action}: “{_short_title(e.get('title'))}”?"
         return f"Hand to {e['owner_label']}: {e['words']}?"
+    named = _stalled_words(entries)
+    if named and all(e.get("owner") == PARTY and not e.get("asked") for e in entries):
+        # Only nudges: say which work, "Nudge 2 stalled builds: esbuild, minimatch bumps".
+        return f"Nudge {len(entries)} stalled builds: {named}"
     by_class: dict[str, list[Mapping[str, Any]]] = {}
     for e in entries:
         by_class.setdefault("?" if e.get("asked") else str(e["task_class"]), []).append(e)
@@ -677,6 +909,8 @@ def batch_question(entries: Sequence[Mapping[str, Any]]) -> str:
         n = len(group)
         if key == "?":
             parts.append("a question" if n == 1 else f"{n} questions")
+        elif key in STALL_CLASSES and _stalled_words(group):
+            parts.append(f"{'a nudge' if n == 1 else f'{n} nudges'} ({_stalled_words(group)})")
         elif n == 1:
             parts.append(_SHORT.get(key) or tc.task_class(key).title.lower())
         else:
@@ -847,7 +1081,7 @@ def triage_group(connection: Connection, settings: Any, project_id: str,
 
     # NOISE CONTROL 1: a failed step or build whose run ALREADY asks a person (its own gate,
     # plan approval, held step) gets no second card: the item links to that decision instead.
-    asks = run_already_asks(connection, project_id, group)
+    asks = run_already_asks(connection, project_id, group, klass.key)
     if asks is not None:
         board.link(connection, item_id, "decision", asks, actor=PARTY, note="the run asks this")
         act = ledger.record_decision(
@@ -862,6 +1096,18 @@ def triage_group(connection: Connection, settings: Any, project_id: str,
         board.release(connection, item_id, owner=PARTY, token=token, reason="linked to the run")
         return {"outcome": "linked", "work_item_id": item_id, "act_id": act["act_id"],
                 "decision_id": asks, "task_class": klass.key, "level": level}
+    if stall_over(connection, item, lead.get("observed_at") or lead.get("first_seen_at")):
+        # A stalled hand-off whose build moved again or ended after it was escalated: not
+        # stalled any more, so there is nothing to nudge and nobody to ask.
+        act = ledger.record_decision(
+            connection, **common, question=f"Who should own this {klass.title.lower()}?",
+            chosen="observe", action="observe", options=options,
+            rejected=[{"option": f"propose:{owner_role}", "why": "the build moved on"}],
+            rationale=f"{klass.title}: {reading.why}. The build it was about moved on or ended "
+                      "since, so nothing is stalled and BOSS records it for the digest.")
+        board.release(connection, item_id, owner=PARTY, token=token, reason="not stalled")
+        return {"outcome": "observed", "work_item_id": item_id, "act_id": act["act_id"],
+                "task_class": klass.key, "level": level}
 
     direct = disp == "route"
     cap = cards_per_class(settings)
@@ -888,6 +1134,10 @@ def triage_group(connection: Connection, settings: Any, project_id: str,
     if reading.asked:
         chosen = "ask"
         why_level = "the reading is not sure enough to act on"
+    elif direct and owner == PARTY and next_key in OWN_ACTIONS:
+        chosen = f"route:{owner_role}"
+        why_level = (f"a {tc.ACTIONS[next_key].title.lower()} is the Chief of Staff's own act "
+                     f"inside BOSS, within {level} here, so it does it and records it")
     elif direct:
         chosen = f"route:{owner_role}"
         why_level = (f"{klass.title} runs at {level} here, so the hand-off goes straight to "
@@ -906,6 +1156,12 @@ def triage_group(connection: Connection, settings: Any, project_id: str,
         rationale=(f"{klass.title}: {reading.why} ({reading.by}, "
                    f"{reading.confidence:.0%}). {who} {route_why}. {why_level[0].upper()}"
                    f"{why_level[1:]}."))
+    if direct and owner == PARTY and next_key in OWN_ACTIONS:
+        # Its own act (a nudge): carried out now and recorded, never a card.
+        board.release(connection, item_id, owner=PARTY, token=token, reason="acts itself")
+        done = act_itself(connection, settings, project_id, item_id, next_key)
+        return {"outcome": "acted", "work_item_id": item_id, "act_id": act["act_id"],
+                "owner": owner, "task_class": klass.key, "level": level, "did": done}
     if direct:
         collab.post(connection, item_id, kind="handoff", sender=PARTY, body={
             "to": owner, "from": PARTY, **_seat(klass.key),
@@ -973,7 +1229,9 @@ def _entry(connection: Connection, project_id: str, row: Mapping[str, Any]) -> d
             "words": what_words(klass.key, row), "asked": asked,
             "owner": f"agent:{owner_role}", "owner_label": _label(owner_role),
             "next_action": next_key, "owner_may_act": gate["allowed"] and not gate["needs_person"],
-            "severity": row["severity"]}
+            "severity": row["severity"],
+            **(dict(zip(("stalled", "stalled_noun"), stalled_name(connection, row)))
+               if klass.key in STALL_CLASSES else {})}
 
 
 def ask_batch(connection: Connection, settings: Any, project_id: str, *,
@@ -998,8 +1256,9 @@ def ask_batch(connection: Connection, settings: Any, project_id: str, *,
                     settled.append("left_to_backlog")
             continue
         owner = str(row["chosen"]).split(":", 1)[1] if ":" in str(row["chosen"]) else None
-        verdict = disposition(connection, project_id, row["task_class"],
-                              asked=row["chosen"] == "ask", mode=mode, owner_role=owner)
+        verdict = (stall_verdict(connection, project_id, row, row["created_at"])
+                   or disposition(connection, project_id, row["task_class"],
+                                  asked=row["chosen"] == "ask", mode=mode, owner_role=owner))
         if verdict == "ask":
             rows.append(row)
             continue
@@ -1044,12 +1303,16 @@ _WITHDRAW_WHY = {
     "moot": "the item it asked about has moved on",
     "moving": "the work it was stuck on is moving again (an agent took a turn on its build "
               "after it asked, or the build finished), so nobody needs to take it",
+    "linked": "the work it was about already waits on your own decision (its card is in Needs "
+              "you), so it is not a stalled hand-off and needs no nudge",
     # The one-card rules (asks.py): a squad's or the SRE squad's ask re-judged.
     "backlog": "it is already on the onboarding backlog, which is yours to decide there",
     "policy": "BOSS refused that action twice; the outcome is recorded, nobody needs to answer",
     "healthy": "the app is healthy: the alert cleared, nothing failing is left",
     "rebatch": "it moved onto the project's one card",
     "retry": "BOSS tried the squad's launch once more now that what stopped it is fixed",
+    "granted": "the squad now reads with the tools it holds (BOSS's logs, health and run "
+               "history), so it looks for itself first and asks again only if it is still stuck",
     "stale_rollback": "the rollback it proposed is not to a known-good release, so the squad "
                       "fixes forward instead",
 }
@@ -1078,6 +1341,10 @@ def _verdict(connection: Connection, project_id: str, card: Mapping[str, Any],
 
     if backlog_twin(connection, item):
         return "backlog", item
+    stalled = stall_verdict(connection, project_id, item, card.get("created_at"),
+                            exclude=card["id"])
+    if stalled:
+        return stalled, item
     if mode == "off":
         return ("ask" if (card.get("recommendation") or {}).get("manual") else "off"), item
     act = connection.execute(text(
@@ -1113,13 +1380,18 @@ def _settle_withdrawn(connection: Connection, project_id: str, card_id: Optional
                   task_class=klass.key, evidence=cited,
                   reversibility="reversible", undo={"action": "dismiss", "work_item_id": item_id},
                   options=["observe", f"route:{owner.split(':', 1)[-1]}", "ask"])
+    next_key = str(entry.get("next_action") or NEXT_ACTION.get(klass.key, "propose"))
+    if verdict == "route" and owner == PARTY and next_key in OWN_ACTIONS:
+        # Its own act (a nudge) needs no person now: carried out and recorded, citing the card.
+        board.release(connection, item_id, owner=PARTY, token=token, reason="acts itself")
+        return act_itself(connection, None, project_id, item_id, next_key,
+                          cites=cited if card_id else ()) or "observed"
     if verdict == "route":
         ledger.record_decision(
             connection, **common, question=f"Who should own this {klass.title.lower()}?",
             chosen=f"route:{owner.split(':', 1)[-1]}", action="route",
             rationale=(f"{lead_in}: {note}. {who} takes it and acts only within the "
                        "class's level."))
-        next_key = str(entry.get("next_action") or NEXT_ACTION.get(klass.key, "propose"))
         collab.post(connection, item_id, kind="handoff", sender=PARTY, body={
             "to": owner, "from": PARTY, **_seat(klass.key),
             "summary": tc.ACTIONS.get(next_key, tc.ACTIONS["propose"]).title})
@@ -1133,6 +1405,15 @@ def _settle_withdrawn(connection: Connection, project_id: str, card_id: Optional
         board.finish(connection, item_id, actor=PARTY, lifecycle="dismissed", token=token,
                      outcome="left to the Recommended roadmap")
         return "left_to_roadmap"
+    if verdict in ("linked", "moving"):
+        # Not a stalled hand-off: the person's own card already holds the work, or it moved on.
+        waiting = waits_on_person(connection, project_id, item, exclude=card_id)
+        if waiting:
+            board.link(connection, item_id, "decision", waiting, actor=PARTY,
+                       note="the work waits on this")
+        board.finish(connection, item_id, actor=PARTY, lifecycle="resolved", token=token,
+                     outcome=clean_text(f"{note[0].upper()}{note[1:]}", 280))
+        return "not_stalled"
     board.release(connection, item_id, owner=PARTY, token=token, reason="observed")
     return "observed"
 
@@ -1143,10 +1424,30 @@ def _settle_withdrawn(connection: Connection, project_id: str, card_id: Optional
 #: batched, never withdrawn for the mode — but it is re-judged for being VALID
 #: (asks.mitigation_verdict): a rollback to a release that is no longer known-good is withdrawn.
 _OPEN_CARDS = (
-    "SELECT id, project_id, question, recommendation, created_at FROM decisions "
+    "SELECT id, project_id, question, recommendation, options, created_at FROM decisions "
     "WHERE project_id = :p AND status = ANY(:open) "
     "AND recommendation->>'asked_by' IS NOT NULL AND recommendation->>'work_item_id' IS NOT NULL "
     "ORDER BY created_at")
+
+
+def _reword(connection: Connection, card: Mapping[str, Any],
+            entries: Sequence[Mapping[str, Any]]) -> bool:
+    """A card that still asks, said again by today's rules: its line and its answers rebuilt
+    from its entries (asks.card_question / card_options), so a card raised under older words
+    ("2 nudges", "Approve all" on one question) rewords itself on the next tick. True if it
+    changed."""
+    from . import asks
+
+    question = clean_text(asks.card_question(entries), 300) if all(
+        "words" in e for e in entries) else str(card.get("question") or "")
+    options = asks.card_options(entries)
+    stored = card.get("options")
+    if question == card.get("question") and options == stored:
+        return False
+    connection.execute(text(
+        "UPDATE decisions SET question = :q, options = CAST(:o AS JSONB), updated_at = now() "
+        "WHERE id = :d"), {"q": question, "o": json.dumps(options), "d": card["id"]})
+    return True
 
 
 def _open_cards(connection: Connection, project_id: str) -> list[dict[str, Any]]:
@@ -1209,6 +1510,8 @@ def reconsider(connection: Connection, project_id: str, *, mode: str) -> list[di
                     verdict = "rebatch"   # it still asks: onto the project's one card
             (keep if verdict == "ask" else gone).append((entry, item, verdict))
         if not gone:
+            if rec.get("card") == asks.CARD and _reword(connection, card, entries):
+                out.append({"decision_id": card["id"], "reworded": True})
             continue
         settled = []
         moved: list[dict[str, Any]] = []
@@ -1246,10 +1549,15 @@ def reconsider(connection: Connection, project_id: str, *, mode: str) -> list[di
                 new_rec = asks._recommendation(narrowed, base=rec)  # noqa: SLF001
             question = (asks.card_question(narrowed) if all("words" in e for e in narrowed)
                         else card["question"])
+            # The answers follow what is left: a card narrowed to one question says "Let it go
+            # on / I'll take it", never "Approve all / Dismiss all" (boss-dogfood 2026-11-07).
+            options = (asks.card_options(narrowed) if rec.get("card") == asks.CARD else None)
             connection.execute(text(
                 "UPDATE decisions SET recommendation = CAST(:r AS JSONB), question = :q, "
-                "updated_at = now() WHERE id = :d"),
-                {"r": json.dumps(new_rec, default=str), "q": question[:300], "d": card["id"]})
+                "options = COALESCE(CAST(:o AS JSONB), options), updated_at = now() "
+                "WHERE id = :d"),
+                {"r": json.dumps(new_rec, default=str), "q": question[:300], "d": card["id"],
+                 "o": json.dumps(options) if options is not None else None})
             emit(connection, project_id, "ambient.card_narrowed", PARTY, "decision", card["id"],
                  {"removed": [e.get("work_item_id") for e, _, _ in gone], "reasons": reasons})
             out.append({"decision_id": card["id"], "narrowed": True, "settled": settled})
@@ -1346,7 +1654,15 @@ def _carry(connection: Connection, row: Mapping[str, Any]) -> dict[str, Any]:
         collab.post(connection, item_id, kind="handoff", sender=PARTY, body={
             "to": owner, "from": PARTY, **_seat(str(row["task_class"])),
             "summary": tc.ACTIONS.get(str(rec.get("next_action")), tc.ACTIONS["propose"]).title})
-    return {"work_item_id": item_id, "answer": answer, "owner": owner or None}
+    did = None
+    if approved and owner == PARTY:
+        # The Chief of Staff's own act (a nudge) the person approved: approving RUNS it, under
+        # the person's decision. It used to be recorded as accepted and then never done.
+        did = act_itself(connection, None, row["project_id"], item_id,
+                         str(rec.get("next_action") or NEXT_ACTION.get(str(row["task_class"]), "")),
+                         decided_by=who, cites=[{"kind": "decision", "ref": row["decision_id"]}])
+    return {"work_item_id": item_id, "answer": answer, "owner": owner or None,
+            **({"did": did} if did else {})}
 
 
 def _answered_rows(connection: Connection, project_id: Optional[str],

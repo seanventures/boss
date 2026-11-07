@@ -138,9 +138,15 @@ ACTIONS: dict[str, Action] = {a.key: a for a in (
     # still acts only within the class's level (its own gate). A routine hand-off is what an
     # always-on agent does by itself from A1; it shows on the board and in the digest.
     Action("route", "Hand to its owner", "A1", "low", "reversible"),
+    # A nudge is the Chief of Staff asking the agent that holds stalled work (the Shepherd, for
+    # a build) to look at it again: a note inside BOSS, nothing outside it changes, and it is
+    # not on the compliance boundary (production deploy, merge, spend, secrets, external
+    # communication, deletion, identity). It is an agent's to do from A1, like a hand-off;
+    # whatever the woken agent then does passes its own gate (2026-11-07, helpdesk's "2 nudges"
+    # card asked a person for two nudges the Chief of Staff could have sent itself).
+    Action("nudge", "Nudge", "A1", "low", "reversible"),
     # A2: do the work up to a reviewable artifact or a reversible staging change.
     Action("label", "Label", "A2", "low", "reversible"),
-    Action("nudge", "Nudge", "A2", "low", "compensable"),
     Action("start_workflow", "Start a run", "A2", "medium", "reversible"),
     Action("open_draft_pr", "Open draft PR", "A2", "medium", "reversible"),
     Action("staging_rollback", "Roll back staging", "A2", "medium", "reversible"),

@@ -15,8 +15,8 @@ of the flow is on screen:
                                                                        resolved
   lodash advisory (GHSA)               routes it (A2) to security      security is working on it
   spend 18× the weekly mean            routes it (A1) to FinOps        FinOps picks it up
-  PR #37 waiting 4 days                asks you (A1) on the morning's  a nudge needs A2
-                                       one card: "Nudge: “PR #37…”?"
+  PR #37 waiting 4 days                nudges it itself (A1): its own  recorded; nobody asked
+                                       act inside BOSS, not a hand-off
   14 TODOs in billing/                 observes (A0): digest only
   CI fails on #41 once more (repeat)   folds into the fixed problem    no second card (×2)
 
