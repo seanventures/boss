@@ -1280,6 +1280,11 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
                  comes with it.</p>
             )}
           </div>
+        ) : sel.startsWith("project:") ? (
+          /* A PROJECT IS NOT A TASK. The captain's drawer is about the whole project (screen
+             09): its header already says "HelpDesk AI Demo only"; a "Task — No projects yet
+             for this task" box above the conversation said something false. */
+          null
         ) : (
           <div className="ct-block" style={{ marginBottom: 10 }}>
             <div className="ct-block-title">

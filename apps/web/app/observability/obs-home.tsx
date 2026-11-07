@@ -90,7 +90,9 @@ export function ObsHome({ projectId, actor, orgId }: { projectId: string; actor:
     read: polledImprove<SharingView>("sharing", { project_id: projectId }),
   });
   const collector = Boolean(sharing.data?.switches?.collector?.on) || url.view === "installs";
-  const c = pulse.data?.counts;
+  // The head's counts follow what Apps shows: every app across your projects on the rows view.
+  const rowsView = url.view === "apps" && typeof window !== "undefined" && new URLSearchParams(window.location.search).get("apps") !== "pulse";
+  const c = rowsView && all.data ? all.data.counts : pulse.data?.counts;
   const sys = system.data;
   const tabs = OBS_TABS.filter((t) => t.key !== "installs" || collector).map((t) => ({
     ...t,

@@ -21,12 +21,22 @@ import { TAB_WORDS, projectHref, toTab } from "../lib/project-experience";
 /** A template's lab project (template-sheet's naming): insecure by design, never deployed. */
 export const LAB_NAME = /lab \(insecure by design\)$/;
 
-export type Crumb = { key: string; label: string; kind: "link" | "project" | "here" };
+export type Crumb = { key: string; label: string; kind: "link" | "project" | "here" | "text" };
+
+/** Observability is org-wide (screen 15): "Observability / Apps", its view in words. */
+const OBS_VIEW_WORDS: Record<string, string> = {
+  apps: "Apps", system: "BOSS platform", sources: "Alert sources", notify: "Contact points", alerts: "Alerts",
+  models: "Models", scorecards: "Scorecards", installs: "Installs",
+};
 
 /** The crumbs for an area, as data (the component draws them; tests read them). */
-export function crumbsFor({ active, areaLabel, routeMode, hasProject, tab }: {
-  active: string; areaLabel: string; routeMode: boolean; hasProject: boolean; tab: string | null;
+export function crumbsFor({ active, areaLabel, routeMode, hasProject, tab, view = null }: {
+  active: string; areaLabel: string; routeMode: boolean; hasProject: boolean; tab: string | null; view?: string | null;
 }): Crumb[] {
+  if (active === "observability" && !routeMode) {
+    return [{ key: "area", label: areaLabel, kind: "text" },
+            { key: "view", label: OBS_VIEW_WORDS[view || tab || "apps"] ?? "Apps", kind: "here" }];
+  }
   if (routeMode || !hasProject) return [{ key: "area", label: areaLabel, kind: "here" }];
   if (active === "projects") return [{ key: "area", label: "Projects", kind: "here" }];
   if (active === "project") {
@@ -46,14 +56,14 @@ export function crumbsFor({ active, areaLabel, routeMode, hasProject, tab }: {
 }
 
 /** The project page's tab, from the URL, kept current as the page changes it (pushState + popstate). */
-function useUrlTab(): string | null {
+function useUrlTab(key = "tab"): string | null {
   const [tab, setTab] = useState<string | null>(null);
   useEffect(() => {
-    const read = () => { try { setTab(new URLSearchParams(window.location.search).get("tab")); } catch { /* non-browser */ } };
+    const read = () => { try { setTab(new URLSearchParams(window.location.search).get(key)); } catch { /* non-browser */ } };
     read();
     window.addEventListener("popstate", read);
     return () => window.removeEventListener("popstate", read);
-  }, []);
+  }, [key]);
   return tab;
 }
 
@@ -63,8 +73,9 @@ export function ShellCrumbs({ active, areaLabel, routeMode, projects, projectId,
   onProjects: () => void;
 }) {
   const tab = useUrlTab();
+  const view = useUrlTab("view");
   const hasProject = Boolean(projects && projectId);
-  const crumbs = crumbsFor({ active, areaLabel, routeMode, hasProject, tab });
+  const crumbs = crumbsFor({ active, areaLabel, routeMode, hasProject, tab, view });
   const name = projects?.items.find((p) => p.id === projectId)?.name ?? projectId ?? "";
   const lab = LAB_NAME.test(name);
   return (
@@ -84,6 +95,8 @@ export function ShellCrumbs({ active, areaLabel, routeMode, projects, projectId,
                         title="Lab project · insecure by design, never deployed to a host">Lab</span>
                 ) : null}
               </span>
+            ) : c.kind === "text" ? (
+              <span className="bx-crumb-link" data-testid={`crumb-${c.key}`}>{c.label}</span>
             ) : c.kind === "link" ? (
               <button type="button" className="bx-crumb-link" data-testid={`crumb-${c.key}`} onClick={onProjects}>{c.label}</button>
             ) : (

@@ -30,7 +30,8 @@ export type AppRow = {
   state: string; word: string; uptime: number | null; p95Ms: number | null; strip: PulseCell[]; firing: number;
   healthHref: string; drawerHref: string;
 };
-export type AppsAll = { rows: AppRow[]; projects: number; partial: string[] };
+export type AppsAll = { rows: AppRow[]; projects: number; partial: string[];
+  counts: { up: number; slow: number; down: number; noSignal: number; notDeployed: number } };
 
 const obj = (v: unknown): Record<string, unknown> => (v && typeof v === "object" && !Array.isArray(v) ? v as Record<string, unknown> : {});
 const str = (v: unknown, d = "") => (typeof v === "string" ? v : d);
@@ -47,7 +48,9 @@ export function parseAppsAll(w: unknown): AppsAll {
       strip: parsePulseStrip(x.strip), firing: nn(x.firing) ?? 0, healthHref: str(x.health_href), drawerHref: str(x.drawer_href),
     };
   }).filter((r) => r.targetId);
-  return { rows, projects: nn(o.projects) ?? 0, partial: (Array.isArray(o.partial) ? o.partial : []).map((x) => str(x)) };
+  const c = obj(o.counts);
+  return { rows, projects: nn(o.projects) ?? 0, partial: (Array.isArray(o.partial) ? o.partial : []).map((x) => str(x)),
+           counts: { up: nn(c.up) ?? 0, slow: nn(c.slow) ?? 0, down: nn(c.down) ?? 0, noSignal: nn(c.no_signal) ?? 0, notDeployed: nn(c.not_deployed) ?? 0 } };
 }
 
 /** Each project's mark keeps one of four gradients (the wireframe's HD / NP / HW marks; obs.css). */
