@@ -157,7 +157,11 @@ export function JumpResults({ query, projectId, projects, onDone }: {
             <span className="pxj-scope" data-testid="palette-jump-scope" title="Searching this project">
               <Folders size={12} aria-hidden />{projectName}
               <button type="button" aria-label="Search every project" title="Search every project" data-testid="palette-jump-unscope"
-                      onClick={() => setScoped(false)}><X size={10} weight="bold" /></button>
+                      onClick={() => {
+                        setScoped(false);
+                        // 11-02 the typing goes on: focus returns to the query, never to the page.
+                        palette?.querySelector<HTMLInputElement>("input")?.focus();
+                      }}><X size={10} weight="bold" /></button>
             </span>
           ) : null}
           <kbd className="pxj-kbd">esc</kbd>

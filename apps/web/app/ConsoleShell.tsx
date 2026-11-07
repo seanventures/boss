@@ -1279,6 +1279,9 @@ function ConsoleShellInner({
       const t = setTimeout(() => paletteInput.current?.focus(), 20);
       return () => clearTimeout(t);
     }
+    // 11-13 A CLOSED PALETTE FORGETS ITS QUERY (Esc, the scrim, a row taken): it reopens empty.
+    setQuery("");
+    return undefined;
   }, [paletteOpen]);
 
   const areasForEdition = useMemo(() => {
