@@ -23,12 +23,15 @@ import { CitedActs, citedIds, DockAgentHead, DockGutterFace, dockFaceKey, dockRo
 import { nameOf } from "./agents/run-face";
 import { useIdentityVersion } from "../lib/use-agent-identities";
 import { leadingFlow } from "../lib/answer-flow";
+import { AnswerFlow, CitationChips, ProposalCard, citationsOf, proposalOf } from "./answer-cards";
 /** An action as RECORDED, which is not one shape. The router writes `{kind, args, result}`;
  *  `AgentService` writes `{id, tool, ok}`. Typing it as only the first is what let a `.kind`
  *  that is sometimes absent reach the render. */
 type RecordedAction = { kind?: string; tool?: string; ok?: boolean };
 
-type Msg = { role: string; content: string; actions?: RecordedAction[]; created_at?: string;
+type Msg = { id?: string; role: string; content: string; actions?: RecordedAction[]; created_at?: string;
+             /** The answer's "New work" card and the records it named (engine turn_cards). */
+             proposal?: unknown; citations?: unknown;
              attachments?: Array<{ name: string; kind: string }>;
              /** A failed turn's technical line, shown only under a collapsed Details. */
              technical?: string };
@@ -404,6 +407,8 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
   const [citations, setCitations] = useState<{ thread: string | null; byIndex: Record<number, string[]> }>(
     { thread: null, byIndex: {} });
   const citedHere = citations.thread === threadId ? citations.byIndex : {};
+  // Offers already drawn as an answer's "New work" card (answer-cards): not a second button.
+  const carded = new Set(messages.map((m) => String(proposalOf(m.proposal)?.offer_id ?? "")).filter(Boolean));
   const clearAboutAct = useCallback(() => {
     setAboutAct(null);
     try {
@@ -1359,18 +1364,16 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
                     const lead = leadingFlow(stripAppFacts(withoutBrief(m.content)));
                     return (
                       <>
-                        {lead.nodes.length ? (
-                          <div className="agent-flow" role="list" aria-label="Path" data-testid="agent-flow">
-                            {lead.nodes.map((n, k) => (
-                              <React.Fragment key={`${n.label}-${k}`}>
-                                {k ? <span className="agent-flow-w" aria-hidden data-s={lead.nodes[k - 1].state === "done" ? "done" : undefined} /> : null}
-                                <span className="agent-flow-n" role="listitem" data-s={n.state}>{n.state === "done" ? "✓ " : ""}{n.label}</span>
-                              </React.Fragment>
-                            ))}
-                          </div>
-                        ) : null}
+                        <AnswerFlow nodes={lead.nodes} testId="agent-flow" />
                         <CitedAnswer className="agent-md" projectId={projectId} actor={actor}
                                      text={lead.nodes.length ? lead.rest : stripAppFacts(withoutBrief(m.content))} />
+                        {/* The records the answer named (PR · run · file · doc), each opening it. */}
+                        <CitationChips items={citationsOf(m.citations)} />
+                        {/* The turn's offer to start work, as the "New work" card (screen 09). */}
+                        {proposalOf(m.proposal) ? (
+                          <ProposalCard key={`${m.id ?? i}-proposal`} projectId={projectId} threadId={threadId}
+                                        messageId={m.id ?? null} proposal={proposalOf(m.proposal)!} />
+                        ) : null}
                       </>
                     );
                   })()}
@@ -1551,12 +1554,13 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
             </div>
           ) : null}
 
-          {proposed.length > 0 ? (
+          {/* An offer drawn as a "New work" card above is not a second button here. */}
+          {proposed.some((a) => !carded.has(a.id)) ? (
             <div className="agent-proposals" data-testid="agent-proposals">
               <p className="detail agent-proposals-head">
                 BOSS can do this for you — nothing runs until you choose:
               </p>
-              {proposed.map((a) => (
+              {proposed.map((a) => carded.has(a.id) ? null : (
                 <div className="agent-proposal" key={a.id}>
                   <GatedButton
                     permission="assistant:chat"

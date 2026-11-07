@@ -14,6 +14,7 @@ import {
 } from "@phosphor-icons/react";
 
 import { AgentAvatar } from "../agent-avatar";
+import { useWrapMarks } from "../../lib/wrap-flow";
 import { isExternal, pxHref, readPxUrl, writePxUrl, type Agent, type Health, type Node, type PxUrl, type ReadState, type StepState } from "../../lib/project-experience";
 
 export type Tone = "teal" | "green" | "amber" | "red" | "violet" | "blue";
@@ -149,16 +150,19 @@ export function Stations({ stages }: { stages: { key: string; label: string; sta
 
 /** FLOW CHIPS: a path or a reason as nodes and arrows (≤ 4 words each). */
 export function Flow({ nodes, testid }: { nodes: { label: string; state?: StepState | string; type?: string; icon?: React.ReactNode }[]; testid?: string }) {
+  // Each step after the first is its wire + its node, unbreakable: a wrap never leaves an arrow
+  // at a line's end, and the step that starts a new line hides its wire (lib/wrap-flow).
+  const ref = useWrapMarks<HTMLDivElement>([nodes.map((n) => n.label).join("|")]);
   if (!nodes.length) return null;
   return (
-    <div className="px-fl" data-testid={testid} role="list">
+    <div className="px-fl" data-testid={testid} role="list" ref={ref}>
       {nodes.map((n, i) => (
-        <React.Fragment key={`${n.label}-${i}`}>
+        <span key={`${n.label}-${i}`} className="px-fl-step" data-flow-step>
           {i ? <span className="px-fl-w" aria-hidden data-s={(nodes[i - 1].state ?? "") === "done" ? "done" : undefined} /> : null}
           <span className="px-fl-n" role="listitem" data-t={n.type ?? n.state ?? "todo"}>
             {n.icon}{n.state === "done" && !n.icon ? <Check size={11} weight="bold" aria-hidden /> : null}{n.label}
           </span>
-        </React.Fragment>
+        </span>
       ))}
     </div>
   );

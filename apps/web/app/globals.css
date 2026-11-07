@@ -8915,3 +8915,41 @@ details[open] > .skill-form-summary::before { transform: rotate(90deg); }
 .agent-flow-n[data-s="todo"] { border-style: dashed; color: var(--faint, var(--muted)); }
 .agent-flow-w { width: 14px; height: 2px; background: var(--border-strong); flex: none; }
 .agent-flow-w[data-s="done"] { background: var(--green); }
+
+/* An answer's cards (app/answer-cards.tsx, screen 09): flow steps that never leave an arrow at
+   a wrap, record chips, and the "New work" card. */
+.agent-flow-step { display: inline-flex; align-items: center; flex: none; }
+.agent-flow-step[data-wrap] > .agent-flow-w { display: none; }
+.agent-flow-n { gap: 5px; }
+.agent-flow-n[data-s="agent"] { border-radius: 999px; border-color: color-mix(in srgb, var(--accent) 65%, transparent);
+  background: color-mix(in srgb, var(--accent) 9%, transparent); }
+.agent-flow-n[data-s="you"] { border-style: dashed; border-color: var(--amber); color: var(--amber); }
+.ac-cites { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 2px; }
+.ac-cite { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--border-strong);
+  font-size: .7rem; font-weight: 600; color: var(--ink-soft, var(--muted)); text-decoration: none; max-width: 100%; }
+.ac-cite > span:first-of-type { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ac-cite:hover { border-color: var(--accent); color: var(--accent-text, var(--accent)); }
+.ac-cite[data-kind="pr"] svg { color: var(--green); } .ac-cite[data-kind="issue"] svg { color: var(--red); }
+.ac-cite[data-kind="run"] svg, .ac-cite[data-kind="env"] svg { color: var(--teal); }
+.ac-cite[data-kind="file"] svg, .ac-cite[data-kind="doc"] svg { color: var(--blue, var(--accent)); }
+.ac-cite[data-kind="place"] svg { color: var(--green); }
+.ac-act { margin-top: 10px; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border-strong);
+  background: color-mix(in srgb, var(--teal) 5%, var(--surface, transparent)); display: flex; flex-direction: column; gap: 6px; }
+.ac-act-h { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.ac-ico { width: 24px; height: 24px; border-radius: 7px; display: inline-grid; place-items: center; flex: none;
+  color: var(--teal); background: color-mix(in srgb, var(--teal) 16%, transparent); }
+.ac-act-t { font-size: .8rem; min-width: 0; overflow-wrap: anywhere; }
+.ac-spacer { flex: 1; }
+.ac-cost { font-family: var(--mono); font-size: .66rem; font-weight: 600; padding: 2px 8px; border-radius: 999px;
+  color: var(--px-violet, #8b7cf6); background: color-mix(in srgb, var(--px-violet, #8b7cf6) 14%, transparent); }
+.ac-act .agent-flow { margin: 2px 0 0; }
+.ac-act-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.ac-btn { display: inline-flex; align-items: center; gap: 5px; padding: 4px 11px; border-radius: 8px; border: 1px solid var(--border-strong);
+  background: var(--surface, transparent); color: var(--ink, inherit); font: inherit; font-size: .72rem; font-weight: 600; cursor: pointer; text-decoration: none; }
+.ac-btn[data-kind="primary"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+.ac-btn[data-kind="ghost"] { border-color: transparent; background: none; color: var(--muted); }
+.ac-btn:disabled { opacity: .6; cursor: default; }
+.ac-done { color: var(--green); font-weight: 700; font-size: .74rem; }
+.ac-link { display: inline-flex; align-items: center; gap: 4px; font-size: .72rem; font-weight: 600; color: var(--accent-text, var(--accent)); }
+.ac-said { margin: 0; font-size: .7rem; color: var(--amber); }
+@media (prefers-reduced-motion: reduce) { .ac-act, .ac-cite { transition: none; } }

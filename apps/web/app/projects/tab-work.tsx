@@ -147,9 +147,14 @@ function Composer({ ctx }: { ctx: PxCtx }) {
   useEffect(() => {
     const p = new URLSearchParams(window.location.search);
     if (p.get("compose") === "1") {
+      // An answer's "New work" card (Edit) brings its words and kind: prefilled, never sent.
+      const words = p.get("compose_text");
+      const k = p.get("compose_kind");
+      if (words) setText(words);
+      if (k === "feature" || k === "bug" || k === "ticket") setKind(k);
       input.current?.focus();
       input.current?.scrollIntoView?.({ block: "center" });
-      writePxUrl({ compose: null }, "replace");
+      writePxUrl({ compose: null, compose_text: null, compose_kind: null }, "replace");
     }
   });
   const start = async () => {
