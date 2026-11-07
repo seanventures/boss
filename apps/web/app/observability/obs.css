@@ -478,10 +478,10 @@ a.obs-who:hover .obs-who-name { text-decoration: underline; }
 @media (max-width: 639px) { .obs-project-health-word { display: none; } }
 
 /* ── Screen 15: the page head, the filters and every app as a row ─────────────────────────── */
-.obs-page-h { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 10px; }
+.obs-page-h { display: flex; align-items: center; gap: 10px; margin: 0 0 10px; }
 .obs-page-ico { width: 44px; height: 44px; border-radius: 12px; display: inline-grid; place-items: center; flex: none;
   color: var(--green); background: color-mix(in srgb, var(--green) 15%, transparent); }
-.obs-page-t { display: flex; flex-direction: column; min-width: 0; }
+.obs-page-t { display: flex; flex-direction: column; min-width: 0; flex: 1 1 auto; }
 .obs-page-t h1 { margin: 0; font-family: var(--display); font-size: 1.05rem; line-height: 1.2; }
 .obs-page-t span { font-size: .62rem; color: var(--muted); }
 .obs .inf-tabs { gap: 6px; flex-wrap: wrap; }

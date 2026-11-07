@@ -56,6 +56,10 @@ _CREDENTIAL = re.compile(r"(pass(?:word|wd|phrase)?|pwd|DEMO_PASSWORD|credential
 #: where a credential sits in the same record.
 _USER_FILE = re.compile(r"(users?|login|signin|sign-in|auth|accounts?|credentials?|people|members?)"
                         r"[^/]*$", re.I)
+#: A collection declared as users (`users = [`, `"demoUsers": [`, `accounts: [`): every e-mail in
+#: its brackets is a user, whatever file it sits in.
+_USER_LIST = re.compile(r"\b\w*(?:users?|accounts?|logins?|credentials?|people|members?)\w*['\"]?\s*[:=]\s*[\[{(]",
+                        re.I)
 #: A README section that lists who signs in ("## Demo logins", "### Credentials", "Test users").
 _SIGN_IN_HEADING = re.compile(r"^\s{0,3}(#{1,6}\s+|\*\*)(.*?(log ?ins?|credentials?|sign.?in|"
                               r"(demo|test|seed(ed)?|sample)\s+(users?|accounts?)|accounts?|users?))\b",
@@ -102,6 +106,27 @@ def _readme_sections(blob: str) -> list[str]:
     return out
 
 
+def _user_list_spans(blob: str) -> list[tuple[int, int]]:
+    """Where each collection declared as users begins and ends (bracket matched, bounded)."""
+    pairs = {"[": "]", "{": "}", "(": ")"}
+    out = []
+    for m in _USER_LIST.finditer(blob):
+        open_ = blob[m.end() - 1]
+        depth, i = 0, m.end() - 1
+        limit = min(len(blob), m.end() + 20_000)
+        while i < limit:
+            ch = blob[i]
+            if ch == open_:
+                depth += 1
+            elif ch == pairs[open_]:
+                depth -= 1
+                if depth == 0:
+                    break
+            i += 1
+        out.append((m.end(), i))
+    return out
+
+
 def users_from_files(files: Iterable[tuple[str, str]]) -> list[dict[str, str]]:
     """Demo users, in first-seen order (at most 8), from `(path, text)` pairs.
 
@@ -129,8 +154,10 @@ def users_from_files(files: Iterable[tuple[str, str]]) -> list[dict[str, str]]:
                         return list(seen.values())
             continue
         named_for_users = bool(_USER_FILE.search(path.rsplit("/", 1)[-1])) if path else False
+        lists = _user_list_spans(blob)
         for m in DEMO_EMAIL.finditer(blob):
-            if named_for_users or _CREDENTIAL.search(_record_around(blob, m.start(), m.end())):
+            if named_for_users or any(a <= m.start() < b for a, b in lists) \
+                    or _CREDENTIAL.search(_record_around(blob, m.start(), m.end())):
                 if add(m.group(1)):
                     return list(seen.values())
     return list(seen.values())
