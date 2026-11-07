@@ -275,22 +275,27 @@ class BossEffects:
                 return {"ok": True, "link": ("workflow_run", running), "joined": True,
                         "word": "Joined the running Incident Response"}
         from .app_alerts import RESPONSE_WORKFLOW
-        from .event_dispatch import start_workflow_on_grant
+        from .event_dispatch import SQUAD_DOOR, start_workflow_on_grant
 
+        # The squad's own door: event_dispatch re-derives its authority from this item (the
+        # class's level here, or a person's approval on its card) and refuses otherwise.
         got = start_workflow_on_grant(
             connection, project_id=project_id, workflow_key=RESPONSE_WORKFLOW,
-            link=(ctx.rule or {}).get("respond_link"), actor="monitor",
+            link=(ctx.rule or {}).get("respond_link"), actor=str(actor or "monitor"),
             input_data={"incident_id": ctx.incident_id, "target_id": ctx.target_id,
                         "extends_run_id": ctx.deploy.get("extends_run_id"),
                         "commit_sha": ctx.deploy.get("commit_sha"),
                         "previous_commit_sha": ctx.deploy.get("previous_commit_sha"),
                         "repository": ctx.deploy.get("repository"), "title": ctx.item["title"],
                         "directive": brief[:2000]},
-            dedupe_key=f"squad:{ctx.item['id']}:fix", door="ambient", door_id=ctx.item["id"],
+            dedupe_key=f"squad:{ctx.item['id']}:fix", door=SQUAD_DOOR, door_id=ctx.item["id"],
             door_name="Incident squad fix")
+        authority = got.get("authority") or {}
         if got.get("run_id"):
-            return {"ok": True, "link": ("workflow_run", got["run_id"]), "word": "Fix started"}
-        return {"ok": False, "word": got.get("word") or "Could not start the fix"}
+            return {"ok": True, "link": ("workflow_run", got["run_id"]), "word": "Fix started",
+                    "authority": authority}
+        return {"ok": False, "word": got.get("word") or "Could not start the fix",
+                "authority": authority}
 
     def check_recovery(self, connection, *, project_id, ctx) -> dict[str, Any]:
         from .incident_response import look_at_recovery, start_recovery_check
@@ -1119,14 +1124,22 @@ class _Pass:
             return None
         done = self.effects.start_fix(self.c, project_id=self.p, ctx=self.ctx, brief=brief,
                                       actor=decided_by)
+        if not done.get("ok", True):
+            # Never record "Start fix build" for a start that was refused or failed: say why
+            # where people look, and leave the fix for a person.
+            self.post("finding", eng, {"summary": short_label(
+                done.get("word") or "Fix not started", 8), "evidence": evidence})
+            return done
         links = {}
         if done.get("link"):
             board.link(self.c, self.item_id, *done["link"], actor=eng)
             if done["link"][0] == "workflow_run":
                 links["workflow_run_id"] = done["link"][1]
+        basis = (done.get("authority") or {}).get("why")
         self.decide(decided_by, Q_FIX, "Start fix build",
                     f"{done.get('word') or 'Fix started'}: regression test first, then the "
-                    "smallest fix. Merge and deploy still need a person.",
+                    "smallest fix. Merge and deploy still need a person."
+                    + (f" Allowed: {clean_text(basis, 140).replace('.', '')}." if basis else ""),
                     evidence=evidence, options=["Start fix build", "No fix"],
                     action="start_workflow", consensus=consensus, proposal_id=proposal["id"],
                     undo={"action": "cancel_run"}, **links)

@@ -593,7 +593,12 @@ def after_index(engine: Any, settings: Any, *, project_id: str, repo: str, root:
     from the same checkout. Its own transaction; a failure is logged, never fails the index."""
     from . import policy
 
-    if not policy.signals_on(settings):
+    try:
+        with engine.connect() as c:
+            mode = policy.effective_mode(c, settings)
+    except Exception:  # noqa: BLE001 — no answer is "follow BOSS_AMBIENT_COS alone"
+        mode = None
+    if not policy.signals_on(settings, mode):
         return None
     use_osv = bool(int(getattr(settings, "ambient_dossier_osv", 1) or 0))
     try:

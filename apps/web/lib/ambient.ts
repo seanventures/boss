@@ -83,7 +83,15 @@ export type ClassRow = {
 export type AutonomyView = { classes: ClassRow[]; levels: Array<{ level: string; name: string }> };
 export type Envelope = { cap_usd_micros: number; spent_usd_micros: number; held_usd_micros: number; available_usd_micros: number; resets: string };
 export type StopState = { stopped: boolean; scope: string | null; by: string | null; at: string | null; reason: string };
-export type SettingsView = { settings: Record<string, unknown>; envelope: Envelope; stop: StopState };
+/** The always-on mode (install-wide): env pins it (BOSS_AMBIENT_COS), else a person chose it in Govern, else off. */
+export type AlwaysOnMode = "off" | "propose" | "route";
+export type ModeState = { mode: AlwaysOnMode; source: "env" | "console" | "default"; pinned: boolean; by: string | null; at: string | null };
+export const MODE_WORDS: Record<AlwaysOnMode, { label: string; tip: string }> = {
+  off: { label: "Off", tip: "No agent picks up work by itself" },
+  propose: { label: "Ask first", tip: "Agents triage and propose; a person approves every handover" },
+  route: { label: "Act within levels", tip: "Each kind of work runs at its own level below (A2+ acts and reports)" },
+};
+export type SettingsView = { settings: Record<string, unknown>; envelope: Envelope; stop: StopState; mode: ModeState };
 
 export type Summary = { n: number; median: number | null; p90: number | null };
 export type DayRow = { day: string; a0: number; a1: number; a2: number; a3: number; agent: number; policy: number; squad: number; person: number; total: number };
@@ -371,9 +379,19 @@ const parseStop = (w: unknown): StopState => {
   const x = o(w);
   return { stopped: x.stopped === true, scope: sn(x.scope), by: sn(x.by), at: sn(x.at), reason: s(x.reason) };
 };
+export const parseMode = (w: unknown): ModeState => {
+  const x = o(w);
+  const m = s(x.mode);
+  const src = s(x.source);
+  return {
+    mode: (m === "propose" || m === "route" ? m : "off"),
+    source: (src === "env" || src === "console" ? src : "default"),
+    pinned: x.pinned === true, by: sn(x.by), at: sn(x.at),
+  };
+};
 export const parseSettings = (w: unknown): SettingsView => {
   const x = o(w);
-  return { settings: o(x.settings), envelope: parseEnvelope(x.envelope), stop: parseStop(x.stop) };
+  return { settings: o(x.settings), envelope: parseEnvelope(x.envelope), stop: parseStop(x.stop), mode: parseMode(x.mode) };
 };
 const parseSum = (w: unknown): Summary => {
   const x = o(w);
@@ -508,6 +526,8 @@ export const stopAgents = (projectId: string, reason: string, everywhere = false
 export const resumeAgents = (projectId: string, reason = "", everywhere = false) =>
   everywhere ? aaWrite("/v1/ambient/resume-all", { reason }, "Resume all")
              : aaWrite("/v1/ambient/resume", { project_id: projectId, reason }, "Resume");
+/** Turn the always-on agents on or off for the install (autonomy:manage; 409 while .env pins it). */
+export const setAlwaysOn = (mode: AlwaysOnMode, reason = "") => aaWrite("/v1/ambient/mode", { mode, reason }, "Always-on", "PUT");
 export type AcceptAs = "ticket" | "epic" | "prd";
 export type RejectCategory = (typeof REJECT_CATEGORIES)[number];
 const recWrite = (id: string, verb: string) => `/v1/ambient/roadmap/${encodeURIComponent(id)}/${verb}`;

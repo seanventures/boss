@@ -68,6 +68,13 @@ class InstallBody(BaseModel):
     reason: str = Field(default="", max_length=500)
 
 
+class ModeBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    mode: str = Field(pattern="^(off|propose|route)$")
+    actor: Optional[str] = None
+    reason: str = Field(default="", max_length=500)
+
+
 class SweepBody(Body):
     only: list[str] = Field(default_factory=list, max_length=20)
 
@@ -236,7 +243,8 @@ def build_ambient_router(*, engine, settings: Callable[[], Any],
             require_reader(c, project_id)
             return {"settings": policy.settings_for(c, project_id),
                     "envelope": policy.envelope(c, project_id),
-                    "stop": policy.stop_state(c, project_id)}
+                    "stop": policy.stop_state(c, project_id),
+                    "mode": policy.mode_state(c, settings())}
 
     @router.put("/v1/ambient/settings")
     @permit(P.AUTONOMY_MANAGE, scope=Scope.project(body="project_id"))
@@ -278,6 +286,27 @@ def build_ambient_router(*, engine, settings: Callable[[], Any],
             actor = org_actor(c, payload.actor)
             return {"stop": policy.resume(c, project_id=None, actor=actor,
                                           reason=payload.reason)}
+
+    # ── the always-on mode (install-wide; design §9 "UI plus API plus env var") ──────────────
+    @router.get("/v1/ambient/mode")
+    @permit(P.AUTONOMY_READ, scope=Scope.org())
+    def get_mode() -> dict:
+        with begin(engine) as c:
+            return {"mode": policy.mode_state(c, settings())}
+
+    @router.put("/v1/ambient/mode")
+    @permit(P.AUTONOMY_MANAGE, scope=Scope.org())
+    def put_mode(payload: ModeBody) -> dict:
+        """Turn the always-on agents on (propose: every handover asks a person; route: each class
+        acts within its own level) or off. Giving agents more room is the privileged direction:
+        autonomy:manage, like Resume. BOSS_AMBIENT_COS in .env pins it (409)."""
+        with begin(engine) as c:
+            actor = org_actor(c, payload.actor)
+            try:
+                return {"mode": policy.set_mode(c, settings(), mode=payload.mode, actor=actor,
+                                                reason=payload.reason)}
+            except ValueError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @router.get("/v1/ambient/scorecard")
     @permit(P.AUTONOMY_READ, scope=Scope.project(query="project_id"))

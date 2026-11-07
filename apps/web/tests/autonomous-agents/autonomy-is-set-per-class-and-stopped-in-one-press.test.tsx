@@ -113,3 +113,33 @@ describe("Autonomy & safety", () => {
     expect(writes(calls, "/v1/ambient/resume")).toHaveLength(1);
   });
 });
+
+describe("Always-on agents (install-wide mode)", () => {
+  it("an owner turns always-on on from Govern, as PUT /v1/ambient/mode", async () => {
+    const off = (c: Call) => (c.path === "/v1/ambient/settings" && c.method === "GET"
+      ? { body: { ...(demoAnswer("/v1/ambient/settings") as object), mode: { mode: "off", source: "default", pinned: false } } }
+      : undefined);
+    const calls = await open("owner", off);
+    expect(tid("aa-mode")?.dataset.mode).toBe("off");
+    expect(tid("aa-kill")?.textContent).toContain("Always-on is off");
+    await click(tid("aa-mode-route"));
+    const put = writes(calls, "/v1/ambient/mode");
+    expect(put).toHaveLength(1);
+    expect(put[0].method).toBe("PUT");
+    expect(put[0].body).toMatchObject({ mode: "route" });
+  });
+
+  it("an operator cannot give agents more room; a pinned mode cannot be changed here", async () => {
+    let calls = await open("operator");
+    await click(tid("aa-mode-off"));
+    expect(writes(calls, "/v1/ambient/mode")).toHaveLength(0);
+    unmount();
+    const pinned = (c: Call) => (c.path === "/v1/ambient/settings" && c.method === "GET"
+      ? { body: { ...(demoAnswer("/v1/ambient/settings") as object), mode: { mode: "propose", source: "env", pinned: true } } }
+      : undefined);
+    calls = await open("owner", pinned);
+    expect(tid("aa-mode-pinned")).toBeTruthy();
+    await click(tid("aa-mode-route"));
+    expect(writes(calls, "/v1/ambient/mode")).toHaveLength(0);
+  });
+});

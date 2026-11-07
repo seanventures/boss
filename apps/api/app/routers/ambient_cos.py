@@ -47,7 +47,7 @@ class DemoBody(_Body):
 def build_ambient_cos_router(*, engine, settings: Callable[[], Any],
                              require_reader: Callable[..., None],
                              require_write_actor: Callable[..., str]) -> APIRouter:
-    from boss_engine.services.ambient import chief_of_staff, demo, dossier
+    from boss_engine.services.ambient import chief_of_staff, demo, dossier, policy
 
     router = APIRouter(tags=["ambient"])
 
@@ -67,10 +67,10 @@ def build_ambient_cos_router(*, engine, settings: Callable[[], Any],
         """Triage now: this project's sweep and the Chief of Staff's turn, at once. A person
         pressing it while BOSS_AMBIENT_COS is off (the rc10.11 default) gets `propose`: every
         handover is a Needs-you card, nothing is handed to an agent without them."""
+        current = settings()
         with begin(engine) as c:
             require_write_actor(c, payload.project_id, payload.actor, "decision_resolve")
-        current = settings()
-        mode = chief_of_staff.mode_of(current)
+            mode = policy.effective_mode(c, current)
         return chief_of_staff.tick(engine, current, project_id=payload.project_id,
                                    sweep=payload.sweep,
                                    mode="propose" if mode == "off" else mode)

@@ -76,14 +76,81 @@ DEMOTING_OUTCOMES = frozenset({"reverted", "incident_caused"})
 
 # ── what runs by default (v1.0-rc10.11: the autonomous agents are a preview, off) ────────────
 
-#: BOSS_AMBIENT_COS when it is unset: the Chief of Staff triages nothing and no squad works.
+#: BOSS_AMBIENT_COS when it is unset and no person chose a mode in the console: the Chief of
+#: Staff triages nothing and no squad works.
 DEFAULT_COS_MODE = "off"
+MODES = ("off", "propose", "route")
+#: system_state key of the mode a person chose in the console (Govern › Autonomy › Always-on).
+#: Its own key: the install-wide stop rewrites system_state['ambient'] whole.
+MODE_STATE_KEY = "ambient_mode"
 
 
-def cos_mode(settings: Any) -> str:
-    """off | propose | route (BOSS_AMBIENT_COS). Unset → off; an unknown value → propose."""
-    value = str(getattr(settings, "ambient_cos_mode", None) or DEFAULT_COS_MODE).strip().lower()
-    return value if value in ("off", "propose", "route") else "propose"
+def _normal_mode(value: Any) -> str:
+    text_value = str(value or "").strip().lower()
+    if not text_value:
+        return DEFAULT_COS_MODE
+    return text_value if text_value in MODES else "propose"
+
+
+def cos_mode(settings: Any, mode: Optional[str] = None) -> str:
+    """off | propose | route. `mode` (the effective mode, see mode_state) wins when given; else
+    BOSS_AMBIENT_COS. Unset → off; an unknown value → propose, the safe one of the two that act."""
+    if mode is not None:
+        return _normal_mode(mode)
+    return _normal_mode(getattr(settings, "ambient_cos_mode", None))
+
+
+def env_pins_mode(settings: Any) -> bool:
+    """BOSS_AMBIENT_COS set (non-blank) in the environment pins the mode; the console shows it
+    and cannot change it (the operator's .env is the stronger statement)."""
+    return bool(str(getattr(settings, "ambient_cos_mode", None) or "").strip())
+
+
+def mode_state(connection: Connection, settings: Any) -> dict[str, Any]:
+    """The always-on mode in force and where it comes from: env (BOSS_AMBIENT_COS, pinned),
+    console (a person chose it in Govern), or default (off). One answer for the tick, the
+    learning tick, Discovery's dossier and the console."""
+    if env_pins_mode(settings):
+        return {"mode": cos_mode(settings), "source": "env", "pinned": True, "by": None,
+                "at": None}
+    value = connection.execute(text("SELECT value FROM system_state WHERE key = :k"),
+                               {"k": MODE_STATE_KEY}).scalar()
+    if isinstance(value, str):
+        value = json.loads(value)
+    if isinstance(value, dict) and value.get("mode"):
+        return {"mode": _normal_mode(value["mode"]), "source": "console", "pinned": False,
+                "by": value.get("by"), "at": value.get("at")}
+    return {"mode": DEFAULT_COS_MODE, "source": "default", "pinned": False, "by": None,
+            "at": None}
+
+
+def effective_mode(connection: Connection, settings: Any) -> str:
+    return mode_state(connection, settings)["mode"]
+
+
+def set_mode(connection: Connection, settings: Any, *, mode: str, actor: str,
+             reason: str = "") -> dict[str, Any]:
+    """A person turns the always-on agents on (propose | route) or off for the install. Refused
+    while BOSS_AMBIENT_COS pins it. Audited: who, when, why, from what. Turning it on gives no
+    class more room: each class still acts only within its own level (the matrix)."""
+    wanted = str(mode or "").strip().lower()
+    if wanted not in MODES:
+        raise ValueError(f"mode must be one of {', '.join(MODES)}")
+    if env_pins_mode(settings):
+        raise ValueError("BOSS_AMBIENT_COS is set on this install, so the mode is pinned there; "
+                         "clear it in .env to choose here")
+    before = mode_state(connection, settings)
+    connection.execute(text(
+        "INSERT INTO system_state (key, value) VALUES (:k, CAST(:v AS JSONB)) "
+        "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()"),
+        {"k": MODE_STATE_KEY, "v": json.dumps({"mode": wanted, "by": actor, "at": iso(now()),
+                                                "reason": (reason or "")[:500],
+                                                "from": before["mode"]})})
+    # Audit on every project's stream (an install-wide row has none of its own).
+    for pid in connection.execute(text("SELECT id FROM projects")).scalars():
+        emit(connection, str(pid), "ambient.mode_changed", actor, "install", MODE_STATE_KEY,
+             {"from": before["mode"], "to": wanted, "reason": (reason or "")[:500]})
+    return mode_state(connection, settings)
 
 
 def _explicit(value: Any) -> Optional[bool]:
@@ -103,18 +170,18 @@ def _explicit(value: Any) -> Optional[bool]:
         return None
 
 
-def signals_on(settings: Any) -> bool:
+def signals_on(settings: Any, mode: Optional[str] = None) -> bool:
     """The signal sweep and Discovery's automatic dossier (BOSS_AMBIENT_SIGNALS): an explicit
-    1/0 wins; unset, they run only while the Chief of Staff is on."""
+    1/0 wins; unset, they run only while the Chief of Staff is on (`mode`: the effective mode)."""
     explicit = _explicit(getattr(settings, "ambient_signals", None))
-    return explicit if explicit is not None else cos_mode(settings) != "off"
+    return explicit if explicit is not None else cos_mode(settings, mode) != "off"
 
 
-def learning_on(settings: Any) -> bool:
+def learning_on(settings: Any, mode: Optional[str] = None) -> bool:
     """The Recommended-roadmap tick (BOSS_AMBIENT_LEARNING): an explicit 1/0 wins; unset, it
-    runs only while the Chief of Staff is on."""
+    runs only while the Chief of Staff is on (`mode`: the effective mode)."""
     explicit = _explicit(getattr(settings, "ambient_learning", None))
-    return explicit if explicit is not None else cos_mode(settings) != "off"
+    return explicit if explicit is not None else cos_mode(settings, mode) != "off"
 
 
 # ── settings and the stop ────────────────────────────────────────────────────────────────────

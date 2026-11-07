@@ -265,6 +265,27 @@ services:
       # KG P6b: the external_agent step refuses to run without this — the Knowledge-Graph MCP
       # endpoint handed to a bank's connected agent, served by this install's own kg-mcp service.
       BOSS_KG_MCP_URL: http://kg-mcp:8790/mcp
+      # ALWAYS-ON AGENTS (docs/product/AUTONOMOUS_AGENTS_SPEC.md §0; config.py "AUTONOMOUS AGENTS'
+      # TICK"). Off unless .env says otherwise; every default equals config.py's, so an install
+      # that sets nothing behaves like a stock one. Console › Govern › Always-on agents sets the
+      # mode too; a value here pins it. BOSS_AMBIENT_DISABLED=1 wins over everything.
+      BOSS_AMBIENT_COS: ${BOSS_AMBIENT_COS:-}
+      BOSS_AMBIENT_SIGNALS: ${BOSS_AMBIENT_SIGNALS:-}
+      BOSS_AMBIENT_LEARNING: ${BOSS_AMBIENT_LEARNING:-}
+      BOSS_AMBIENT_DISABLED: ${BOSS_AMBIENT_DISABLED:-}
+      BOSS_ROADMAP_DISABLED: ${BOSS_ROADMAP_DISABLED:-}
+      BOSS_AMBIENT_COS_MODEL_CALLS: ${BOSS_AMBIENT_COS_MODEL_CALLS:-3}
+      BOSS_AMBIENT_COS_CARDS: ${BOSS_AMBIENT_COS_CARDS:-3}
+      BOSS_AMBIENT_SQUADS: ${BOSS_AMBIENT_SQUADS:-1}
+      BOSS_AMBIENT_SQUAD_ITEMS: ${BOSS_AMBIENT_SQUAD_ITEMS:-3}
+      BOSS_DOSSIER_OSV: ${BOSS_DOSSIER_OSV:-1}
+      # Demo switches (sample data and scripted scenarios; never on a real project by default).
+      BOSS_AMBIENT_DEMO: ${BOSS_AMBIENT_DEMO:-}
+      BOSS_DEMO_SCENARIOS: ${BOSS_DEMO_SCENARIOS:-}
+      BOSS_DEMO_DATA: ${BOSS_DEMO_DATA:-}
+      # Governance knobs the docs tell an operator to set in .env (IDENTITY_ADMIN.md).
+      BOSS_MEETING_PRD_AUTO_APPROVE: ${BOSS_MEETING_PRD_AUTO_APPROVE:-}
+      BOSS_ARGON2_PROFILE: ${BOSS_ARGON2_PROFILE:-default}
       # Improve BOSS / daily heartbeat (docs/product/RUN_SCORECARDS.md). BOSS_TELEMETRY=off or
       # DO_NOT_TRACK=1 in .env turns every send off, the heartbeat included.
       BOSS_TELEMETRY: ${BOSS_TELEMETRY:-}
@@ -293,6 +314,17 @@ services:
       # in (install.sh --with-mailpit); mail otherwise goes through the Email (SMTP) connector.
       BOSS_EMAIL_DEV_INBOX: ${BOSS_EMAIL_DEV_INBOX:-}
       BOSS_EMAIL_DEV_INBOX_URL: ${BOSS_EMAIL_DEV_INBOX_URL:-}
+      # Email through .env (docs/community/SIGN_IN_SETUP.md §2, EMAIL.md): the SMTP settings the
+      # docs tell an operator to set. The password is optional, never defaulted.
+      BOSS_EMAIL_SMTP_HOST: ${BOSS_EMAIL_SMTP_HOST:-}
+      BOSS_EMAIL_SMTP_PORT: ${BOSS_EMAIL_SMTP_PORT:-587}
+      BOSS_EMAIL_SMTP_USERNAME: ${BOSS_EMAIL_SMTP_USERNAME:-}
+      BOSS_EMAIL_SMTP_PASSWORD: ${BOSS_EMAIL_SMTP_PASSWORD:-}
+      BOSS_EMAIL_SMTP_USE_TLS: ${BOSS_EMAIL_SMTP_USE_TLS:-true}
+      BOSS_EMAIL_SMTP_USE_SSL: ${BOSS_EMAIL_SMTP_USE_SSL:-false}
+      BOSS_EMAIL_FROM_ADDRESS: ${BOSS_EMAIL_FROM_ADDRESS:-}
+      BOSS_EMAIL_FROM_NAME: ${BOSS_EMAIL_FROM_NAME:-}
+      BOSS_EMAIL_REAL_SEND_ALLOWED: ${BOSS_EMAIL_REAL_SEND_ALLOWED:-false}
       # The console's real port, for links printed before any public origin is bound (the claim
       # link of a laptop install): identity/authn_support.local_console_origin.
       BOSS_WEB_PORT: ${BOSS_WEB_PORT:-3000}
@@ -519,6 +551,27 @@ services:
       # KG P6b: same reasoning as the api service above — the external_agent step refuses to
       # run without a configured Knowledge-Graph MCP endpoint.
       BOSS_KG_MCP_URL: http://kg-mcp:8790/mcp
+      # ALWAYS-ON AGENTS (docs/product/AUTONOMOUS_AGENTS_SPEC.md §0; config.py "AUTONOMOUS AGENTS'
+      # TICK"). Off unless .env says otherwise; every default equals config.py's, so an install
+      # that sets nothing behaves like a stock one. Console › Govern › Always-on agents sets the
+      # mode too; a value here pins it. BOSS_AMBIENT_DISABLED=1 wins over everything.
+      BOSS_AMBIENT_COS: ${BOSS_AMBIENT_COS:-}
+      BOSS_AMBIENT_SIGNALS: ${BOSS_AMBIENT_SIGNALS:-}
+      BOSS_AMBIENT_LEARNING: ${BOSS_AMBIENT_LEARNING:-}
+      BOSS_AMBIENT_DISABLED: ${BOSS_AMBIENT_DISABLED:-}
+      BOSS_ROADMAP_DISABLED: ${BOSS_ROADMAP_DISABLED:-}
+      BOSS_AMBIENT_COS_MODEL_CALLS: ${BOSS_AMBIENT_COS_MODEL_CALLS:-3}
+      BOSS_AMBIENT_COS_CARDS: ${BOSS_AMBIENT_COS_CARDS:-3}
+      BOSS_AMBIENT_SQUADS: ${BOSS_AMBIENT_SQUADS:-1}
+      BOSS_AMBIENT_SQUAD_ITEMS: ${BOSS_AMBIENT_SQUAD_ITEMS:-3}
+      BOSS_DOSSIER_OSV: ${BOSS_DOSSIER_OSV:-1}
+      # Demo switches (sample data and scripted scenarios; never on a real project by default).
+      BOSS_AMBIENT_DEMO: ${BOSS_AMBIENT_DEMO:-}
+      BOSS_DEMO_SCENARIOS: ${BOSS_DEMO_SCENARIOS:-}
+      BOSS_DEMO_DATA: ${BOSS_DEMO_DATA:-}
+      # Governance knobs the docs tell an operator to set in .env (IDENTITY_ADMIN.md).
+      BOSS_MEETING_PRD_AUTO_APPROVE: ${BOSS_MEETING_PRD_AUTO_APPROVE:-}
+      BOSS_ARGON2_PROFILE: ${BOSS_ARGON2_PROFILE:-default}
       # The worker runs no builds (it leases jobs and asks the API to run them), but BOSS code in
       # it is never allowed to run one unisolated either: fail closed, like the api.
       BOSS_SANDBOX_ISOLATION: ${BOSS_SANDBOX_ISOLATION:-required}
@@ -585,6 +638,17 @@ services:
       BOSS_MONITORING_DASHBOARDS_DIR: /var/lib/boss/grafana-dashboards
       BOSS_EMAIL_DEV_INBOX: ${BOSS_EMAIL_DEV_INBOX:-}
       BOSS_EMAIL_DEV_INBOX_URL: ${BOSS_EMAIL_DEV_INBOX_URL:-}
+      # Email through .env (docs/community/SIGN_IN_SETUP.md §2, EMAIL.md): the SMTP settings the
+      # docs tell an operator to set. The password is optional, never defaulted.
+      BOSS_EMAIL_SMTP_HOST: ${BOSS_EMAIL_SMTP_HOST:-}
+      BOSS_EMAIL_SMTP_PORT: ${BOSS_EMAIL_SMTP_PORT:-587}
+      BOSS_EMAIL_SMTP_USERNAME: ${BOSS_EMAIL_SMTP_USERNAME:-}
+      BOSS_EMAIL_SMTP_PASSWORD: ${BOSS_EMAIL_SMTP_PASSWORD:-}
+      BOSS_EMAIL_SMTP_USE_TLS: ${BOSS_EMAIL_SMTP_USE_TLS:-true}
+      BOSS_EMAIL_SMTP_USE_SSL: ${BOSS_EMAIL_SMTP_USE_SSL:-false}
+      BOSS_EMAIL_FROM_ADDRESS: ${BOSS_EMAIL_FROM_ADDRESS:-}
+      BOSS_EMAIL_FROM_NAME: ${BOSS_EMAIL_FROM_NAME:-}
+      BOSS_EMAIL_REAL_SEND_ALLOWED: ${BOSS_EMAIL_REAL_SEND_ALLOWED:-false}
       # The console's real port, for links printed before any public origin is bound (the claim
       # link of a laptop install): identity/authn_support.local_console_origin.
       BOSS_WEB_PORT: ${BOSS_WEB_PORT:-3000}

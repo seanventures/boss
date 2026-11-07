@@ -12,7 +12,7 @@ BOSS notices problems on its own, decides who should work them, and its agents w
 
 The autonomous agents ship as a **preview, off by default**. With nothing set, the worker's minute tick only expires leases: no signal sweep, no Chief-of-Staff triage, no squad turn, no automatic Discovery dossier and no Recommended-roadmap tick. The **Agents at work** area still shows, **Load demo** still works on a demo project, and a person's **Triage now** runs once in `propose` mode (every handover is a Needs-you card).
 
-To turn it on, set in the install's `.env` and restart the API and worker:
+To turn it on, open **Govern › Autonomy › Always-on agents** (`PUT /v1/ambient/mode`, `autonomy:manage`, audited as `ambient.mode_changed`) and choose **Ask first** (`propose`) or **Act within levels** (`route`). The choice is install-wide (`system_state['ambient_mode']`) and takes effect on the next tick; no restart. To pin the mode on the server instead, set it in the install's `.env` and run `boss update` (or recreate the api and worker); the community compose forwards every `BOSS_AMBIENT_*` key (`engine/tests/test_compose_forwards_every_setting_an_operator_is_told_to_set.py` pins that), and a pinned mode shows as pinned in the console:
 
 ```sh
 BOSS_AMBIENT_COS=propose   # safe: every handover asks a person first (route = act on A2+ classes)
@@ -21,7 +21,7 @@ BOSS_AMBIENT_COS=propose   # safe: every handover asks a person first (route = a
 # BOSS_AMBIENT_LEARNING=1  # the Recommended-roadmap tick, even with the Chief of Staff off
 ```
 
-`BOSS_AMBIENT_DISABLED=1`, **Stop all** and a project's **Stop** still win over every setting. The gates live in `services/ambient/policy.py` (`cos_mode`, `signals_on`, `learning_on`); `engine/tests/test_the_autonomous_agents_ship_off_by_default.py` pins them.
+`BOSS_AMBIENT_DISABLED=1`, **Stop all** and a project's **Stop** still win over every setting. The gates live in `services/ambient/policy.py` (`mode_state`, `cos_mode`, `signals_on`, `learning_on`); `engine/tests/test_the_autonomous_agents_ship_off_by_default.py` pins them.
 
 ## 1. How to see it
 

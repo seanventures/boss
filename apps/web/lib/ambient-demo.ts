@@ -407,7 +407,7 @@ export function demoAnswer(path: string): unknown {
   }
   if (p === "/v1/ambient/signals") return { signals: SIGNALS };
   if (p === "/v1/ambient/autonomy") return autonomy();
-  if (p === "/v1/ambient/settings") return { settings: { daily_cap_usd_micros: 5_000_000, max_concurrent: 2 }, envelope: ENVELOPE, stop: NOT_STOPPED };
+  if (p === "/v1/ambient/settings") return { settings: { daily_cap_usd_micros: 5_000_000, max_concurrent: 2 }, envelope: ENVELOPE, stop: NOT_STOPPED, mode: { mode: "route", source: "console", pinned: false, by: "person:vee", at: null } };
   if (p === "/v1/ambient/scorecard") return scorecard();
   if (p === "/v1/ambient/roadmap") return roadmap();
   m = p.match(/^\/v1\/ambient\/roadmap\/([^/]+)$/);

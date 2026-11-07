@@ -264,3 +264,26 @@ def test_read_only_http_can_require_authentication():
     assert client.get(
         "/health", headers={"Authorization": "Bearer secret-token"}
     ).status_code == 200
+
+
+def test_health_admits_the_shared_token_under_enforce_but_tool_calls_do_not(monkeypatch):
+    """The compose healthcheck holds only BOSS_MCP_HTTP_TOKEN. Under enforce a tool call needs a
+    real identity, but the liveness probe must still pass, or a working kg-mcp is 'unhealthy'."""
+    from boss_engine.identity.enforcement import AuthzMode
+    from boss_engine.mcp import server as mcp_server
+
+    monkeypatch.setattr(mcp_server, "_mcp_mode", lambda: AuthzMode.ENFORCE)
+    reg = ToolRegistry()
+    reg.register(ToolSpec(
+        "read_x", "r", {"type": "object"}, lambda ctx, **k: {"n": 1}, kind="read",
+        permission="system:read"))
+    client = TestClient(MCPServer(
+        ctx=None, project_id="p", registry=reg, read_only=True, http_token="secret-token",
+    ).asgi_app())
+    shared = {"Authorization": "Bearer secret-token"}
+    assert client.get("/health").status_code == 401
+    assert client.get("/health", headers={"Authorization": "Bearer wrong"}).status_code == 401
+    assert client.get("/health", headers=shared).status_code == 200
+    rpc = {"jsonrpc": "2.0", "id": 9, "method": "tools/call",
+           "params": {"name": "read_x", "arguments": {}}}
+    assert client.post("/mcp", json=rpc, headers=shared).status_code == 401

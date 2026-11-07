@@ -19,8 +19,8 @@ import { GatedButton, useGate } from "../../components/gated";
 import { useConsoleLive } from "../../lib/console-live";
 import { usePolledRead } from "../../lib/log-stream";
 import {
-  LEVEL_WORDS, MISSING, autonomyPath, money, microsUsd, parseAutonomy, parseScorecard, parseSettings, polled, resumeAgents,
-  scorecardPath, setLevel, settingsPath, stopAgents, type ClassRow, type Envelope, type StopState,
+  LEVEL_WORDS, MISSING, MODE_WORDS, autonomyPath, money, microsUsd, parseAutonomy, parseScorecard, parseSettings, polled, resumeAgents,
+  scorecardPath, setAlwaysOn, setLevel, settingsPath, stopAgents, type AlwaysOnMode, type ClassRow, type Envelope, type ModeState, type StopState,
 } from "../../lib/ambient";
 import { showToast } from "../client-forms";
 import "./agent-ops.css";
@@ -29,7 +29,30 @@ import { MovedToProjectSettings } from "../projects/moved";
 const LEVELS = ["A0", "A1", "A2", "A3"];
 const rank = (l: string) => Math.max(0, LEVELS.indexOf(l));
 
-export function KillSwitch({ projectId, stop, onChanged }: { projectId: string; stop: StopState; onChanged: () => void }) {
+/** Always-on mode (install-wide): Off · Ask first · Act within levels. Pinned when .env sets BOSS_AMBIENT_COS. */
+export function AlwaysOnSwitch({ mode, onChanged }: { mode: ModeState; onChanged: () => void }) {
+  const gate = useGate("autonomy:manage");
+  const choose = (m: AlwaysOnMode) => {
+    if (m === mode.mode || mode.pinned || !gate.allowed) return;
+    void setAlwaysOn(m).then((r) => { showToast(r.ok ? "success" : "error", r.ok ? `Always-on: ${MODE_WORDS[m].label}` : `Not changed: ${r.error}`); onChanged(); });
+  };
+  const why = mode.pinned ? "Set on the server (BOSS_AMBIENT_COS in .env)" : gate.allowed ? "" : gate.reason;
+  return (
+    <div className="aa-mode" data-testid="aa-mode" data-mode={mode.mode} data-source={mode.source}>
+      <b>Always-on agents</b>
+      <span className="aa-mode-seg" role="radiogroup" aria-label="Always-on agents">
+        {(Object.keys(MODE_WORDS) as AlwaysOnMode[]).map((m) => (
+          <button key={m} type="button" role="radio" aria-checked={m === mode.mode} data-on={m === mode.mode || undefined}
+                  aria-disabled={mode.pinned || !gate.allowed || undefined} title={why || MODE_WORDS[m].tip}
+                  data-testid={`aa-mode-${m}`} onClick={() => choose(m)}>{MODE_WORDS[m].label}</button>
+        ))}
+      </span>
+      {mode.pinned ? <span className="aa-sub" data-testid="aa-mode-pinned">Pinned in .env</span> : null}
+    </div>
+  );
+}
+
+export function KillSwitch({ projectId, stop, onChanged, mode }: { projectId: string; stop: StopState; onChanged: () => void; mode?: ModeState }) {
   const [confirming, setConfirming] = useState(false);
   const [reason, setReason] = useState("");
   const [everywhere, setEverywhere] = useState(false);
@@ -70,7 +93,7 @@ export function KillSwitch({ projectId, stop, onChanged }: { projectId: string; 
         <>
           <GatedButton permission="work_item:manage" projectId={projectId} className="aa-kill-btn" data-testid="aa-kill-btn"
                        title="Stop every agent here at once" onClick={() => setConfirming(true)}>■ Stop all agent work</GatedButton>
-          <span className="aa-sub">Agents are on. They act only within the levels below.</span>
+          <span className="aa-sub">{mode && mode.mode === "off" ? "Always-on is off: agents start nothing by themselves." : "Agents are on. They act only within the levels below."}</span>
         </>
       )}
     </div>
@@ -196,7 +219,8 @@ export function AutonomyPanel({ projectId }: { projectId: string }) {
       {/* This project's level and ambient budget live on Project › Settings now (README parity). */}
       <MovedToProjectSettings section="autonomy" projectId={projectId} testid="aa-autonomy-moved" />
       <div className="aa-safety-top">
-        {settings.data ? <KillSwitch projectId={projectId} stop={settings.data.stop} onChanged={reload} /> : <div className="aa-kill" />}
+        {settings.data ? <AlwaysOnSwitch mode={settings.data.mode} onChanged={reload} /> : null}
+        {settings.data ? <KillSwitch projectId={projectId} stop={settings.data.stop} mode={settings.data.mode} onChanged={reload} /> : <div className="aa-kill" />}
         {settings.data ? <EnvelopeMeter env={settings.data.envelope} /> : <div className="aa-env" />}
       </div>
       {auto.data ? <AutonomyMatrix projectId={projectId} classes={auto.data.classes} track={track} onChanged={reload} /> : null}

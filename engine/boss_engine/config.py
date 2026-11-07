@@ -4,7 +4,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Optional
 
-from pydantic import AliasChoices, Field, model_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -12,6 +12,22 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", extra="ignore"
     )
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def _blank_is_unset_for_optional_values(cls, value, info):
+        """`${VAR:-}` in compose SETS a variable to "" when .env leaves it out. For an Optional
+        bool/int/float ("unset means: follow another setting", e.g. BOSS_MEETING_PRD_AUTO_APPROVE)
+        "" must mean unset, not a parse error that stops the API booting. Optional str fields
+        keep "" (their callers already read it as empty)."""
+        if not (isinstance(value, str) and not value.strip()):
+            return value
+        field = cls.model_fields.get(info.field_name or "")
+        annotation = str(getattr(field, "annotation", "") or "")
+        if annotation.startswith(("Optional[", "typing.Optional[")) or "None" in annotation:
+            if "str" not in annotation:
+                return None
+        return value
 
     database_url: str = Field(
         default="postgresql+psycopg://boss:boss@localhost:5432/boss",
@@ -1192,7 +1208,9 @@ class Settings(BaseSettings):
     # (the Recommended-roadmap tick) follow the mode when unset: on unless the mode is `off`.
     # Set either to 1 to run it while the Chief of Staff stays off, or 0 to stop it.
     ambient_signals: Optional[str] = Field(default=None, alias="BOSS_AMBIENT_SIGNALS")
-    ambient_cos_mode: str = Field(default="off", alias="BOSS_AMBIENT_COS")
+    # Blank (the default) = not pinned here: the mode a person chose in Govern › Autonomy ›
+    # Always-on (system_state 'ambient_mode'), else off. A value pins it (policy.mode_state).
+    ambient_cos_mode: str = Field(default="", alias="BOSS_AMBIENT_COS")
     ambient_learning: Optional[str] = Field(default=None, alias="BOSS_AMBIENT_LEARNING")
     # Model calls the Chief of Staff may make per project per tick for judgement (an ambiguous
     # classification, an unclear owner). Deterministic rules decide everything else; 0 = rules only.
