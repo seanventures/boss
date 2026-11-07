@@ -14,9 +14,12 @@ What went wrong, and what each test pins:
     was → the agent now FETCHES the repository and reads its files; when it cannot, every item
     gives the same reason;
   * "71 / 190 · 119 failing" had no source → the baseline names it (the last full run, a blocked
-    build) and the setup cause;
-  * the backlog proposed "Add CI" and "Write a README" while 119 tests fail → every real signal is
-    scored by the Chief of Staff and Marshal picks the first work, which says why;
+    build);
+  * those 119 were not the app's: one setup error, SQLSTATE 28P01, the test database BOSS gave
+    the run refused its login (crun_de96bf12) → "BOSS couldn't run the full suite", owned by BOSS
+    (Self-fixes), never "Fix the 119 failing tests" (suite_environment);
+  * every real signal is scored by the Chief of Staff and Marshal picks the first work, which
+    says why; an app's OWN red suite still comes first;
   * What's next showed 2 items and the Roadmap 0 → the proposals ARE the Roadmap's open
     recommendations, and accepting puts them in Next; a re-run never duplicates them.
 Real Postgres; GitHub and the model are stubs (the seam the agent calls them through).
@@ -197,48 +200,92 @@ def test_when_nothing_can_be_fetched_every_item_gives_the_same_reason(world, cli
     assert "not mapped" not in items["secrets"]["detail"]
 
 
-def test_the_test_numbers_name_their_source_and_their_setup_cause(world, client, engine, repo):
+def test_a_suite_boss_could_not_run_is_said_as_boss_s_not_as_119_failing(world, client, engine,
+                                                                         repo):
+    """crun_de96bf12: the full suite's 119 "failures" were one setup error — the test database
+    BOSS gave the run refused its login (SQLSTATE 28P01). That is BOSS's environment: the Tests
+    item says what happened and that BOSS re-runs the suite, the counts say "not run", and the
+    cause goes where BOSS's own faults go (Self-fixes)."""
     pid = _project(world, client, engine)
     _builds(engine, pid)
     run = _onboard(engine, pid, RealRepoProbes(repo))
     tests = {i["key"]: i for i in run["checklist"]}["tests"]
-    assert tests["state"] == "done" and tests["sub"] == "119 failing → backlog"
-    assert "71 of 190 tests pass in the last full run, a blocked build, 9h ago" in tests["detail"]
-    assert "fail in setup (password authentication failed for user)" in tests["detail"]
+    assert tests["state"] == "done" and tests["sub"] == "Re-runs on the next build"
+    assert tests["detail"].startswith(
+        "BOSS couldn't run the full suite in the last full run, a blocked build, 9h ago: the test "
+        "database refused the login BOSS gave it.")
+    assert "not your app" in tests["detail"] and "119 of 190 tests never ran" in tests["detail"]
+    assert "BOSS re-runs the full suite on the next build" in tests["detail"]
+    assert "failing" not in tests["detail"] and "backlog" not in tests["detail"]
     assert "boss_test_run" not in tests["detail"], "a generated name is not news"
-    # Not the 13 / 13 of the targeted repair run: the full suite is the baseline.
+    # Not the 13 / 13 of the targeted repair run: the full suite is the baseline, not run.
     with engine.connect() as db:
         from boss_engine.services.project_experience import knowledge
 
         d = knowledge.dossier(db, pid)["tests"]
-    assert (d["passed"], d["total"], d["failing"]) == (71, 190, 119)
+        recs = db.execute(text(
+            "SELECT signature, title, refs FROM boss_recommendations WHERE project_id = :p"),
+            {"p": pid}).mappings().all()
+    assert (d["passed"], d["total"], d["failing"], d["not_run"]) == (71, 190, 0, 119)
+    assert d["env"]["owner"] == "boss" and d["env"]["code"] == "28P01"
     assert d["source"] == "the last full run, a blocked build, 9h ago"
     assert d["files"] == 40
     node = next(n for n in run["discover"]["nodes"] if n["key"] == "tests")
-    assert node["label"] == "71/190 tests"
+    assert node["label"] == "40 test files", "no pass rate for a suite that did not run"
+    # Self-fixes sees it: one recommendation for the cause, naming the build.
+    assert [r["signature"] for r in recs] == ["suite_environment:login:28P01"]
+    assert recs[0]["title"].startswith("BOSS couldn't run the app's full suite")
+    assert [r["build_id"] for r in recs[0]["refs"]] == [f"crun_de96bf12772a4fde88b7_{pid[-8:]}"]
 
 
-def test_the_failing_suite_outranks_chores_and_marshal_says_why(world, client, engine, repo):
+def test_the_backlog_never_proposes_fixing_tests_boss_could_not_run(world, client, engine, repo):
     pid = _project(world, client, engine)
     _builds(engine, pid)
-    probes = RealRepoProbes(repo, pick="Fix the 119 failing tests")
+    probes = RealRepoProbes(repo)
     run = _onboard(engine, pid, probes)
     labels = [b["label"] for b in run["backlog"]]
-    assert labels[0] == "Fix the 119 failing tests"
+    assert not any("failing test" in label.lower() for label in labels), labels
+    assert all("password authentication" not in b["text"] for b in run["backlog"])
+    # The real top work comes first: here the only real signal left (no CI on the default
+    # branch), and nothing for Marshal to weigh it against.
+    assert labels == ["Add CI"]
+    assert probes.asked == []
+    first = run["first_work"]
+    assert first["label"] == "Add CI" and first["first_by"] == "score"
+    assert first["why_first"] == "the only candidate"
+    assert first["start"]["body"]["source_ref"] == f"rec:{run['backlog'][0]['rec_id']}"
+    assert "estimate_min" in first and "estimate_usd" in first and first["estimate_basis"]
+
+
+def test_a_real_red_suite_still_outranks_chores_and_marshal_says_why(world, client, engine,
+                                                                     repo):
+    """The app's OWN failures (assertions, not the environment) are still the first work."""
+    pid = _project(world, client, engine)
+    red = "".join(f"not ok {i} - case {i}\n  ---\n  failureType: 'testCodeFailure'\n"
+                  f"  error: 'expected 200, got 500'\n  code: 'ERR_ASSERTION'\n"
+                  f"  name: 'AssertionError'\n  ...\n" for i in range(1, 7))
+    red += "1..148\n# tests 148\n# pass 142\n# fail 6\n"
+    with engine.begin() as db:
+        db.execute(text(
+            "INSERT INTO code_task_runs (id, project_id, status, phase, title, state, "
+            "pull_request_number, created_at, updated_at) VALUES (:i, :p, 'completed', 'done', "
+            "'A change', CAST(:st AS JSONB), 7, now(), now())"),
+            {"i": f"crun_red_{pid[-8:]}", "p": pid,
+             "st": json.dumps({"last_verify_output": red})})
+    probes = RealRepoProbes(repo, pick="Fix the 6 failing tests")
+    run = _onboard(engine, pid, probes)
+    labels = [b["label"] for b in run["backlog"]]
+    assert labels[0] == "Fix the 6 failing tests"
     assert "Add CI" in labels and labels.index("Add CI") > 0
     top = run["backlog"][0]
-    assert top["why"] == "71/190 pass · a blocked build" and top["kind"] == "bug"
-    assert "password authentication failed" in top["text"] and "npm test" in top["text"]
-    assert all(b["why"] for b in run["backlog"])
-    # Marshal weighed the scored candidates (their facts and scores as hints) and picked.
+    assert top["why"] == "142/148 pass · PR #7" and top["kind"] == "bug"
+    assert "npm test" in top["text"]
     asked = probes.asked[0]
-    assert {c["label"] for c in asked["choices"]} >= {"Fix the 119 failing tests", "Add CI"}
+    assert {c["label"] for c in asked["choices"]} >= {"Fix the 6 failing tests", "Add CI"}
     assert any("Chief-of-Staff score" in h for h in asked["hints"])
     first = run["first_work"]
-    assert first["label"] == "Fix the 119 failing tests" and first["first_by"] == "marshal"
+    assert first["label"] == "Fix the 6 failing tests" and first["first_by"] == "marshal"
     assert first["why_first"] == "A red suite blocks every later change"
-    assert first["start"]["body"]["source_ref"] == f"rec:{top['rec_id']}"
-    assert "estimate_min" in first and "estimate_usd" in first and first["estimate_basis"]
 
 
 def test_marshal_spends_under_the_onboarding_stage(monkeypatch, engine):
@@ -273,7 +320,7 @@ def test_the_proposals_are_the_roadmaps_and_accepting_puts_them_in_next(world, c
 
     pid = _project(world, client, engine)
     _builds(engine, pid)
-    run = _onboard(engine, pid, RealRepoProbes(repo, pick="Fix the 119 failing tests"))
+    run = _onboard(engine, pid, RealRepoProbes(repo, pick="Add CI"))
     proposed = [b for b in run["backlog"] if b.get("rec_id")]
     assert proposed and len(proposed) == len(run["backlog"][:onboarding.PROPOSE_TOP])
     with engine.connect() as db:
@@ -295,7 +342,7 @@ def test_the_proposals_are_the_roadmaps_and_accepting_puts_them_in_next(world, c
         started = db.execute(text("SELECT count(*) FROM workflow_runs WHERE project_id = :p"),
                              {"p": pid}).scalar()
     assert [c["id"] for c in lanes["next"]] == [b["rec_id"] for b in proposed]
-    assert lanes["next"][0]["label"] == "Fix the 119 failing tests"
+    assert lanes["next"][0]["label"] == "Add CI"
     assert all(b["state"] == "accepted" for b in after["backlog"] if b.get("rec_id"))
     assert started == 0
 

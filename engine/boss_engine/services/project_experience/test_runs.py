@@ -7,10 +7,15 @@ red. The baseline is therefore the NEWEST run among those that ran the most test
 suite), and it always says where its numbers came from ("the last full run · PR #3 · 9h ago",
 or "a blocked build" when that build never opened a PR).
 
-When most failures share one setup error (the suite's `before` hook could not reach its
-database), the failures are not 119 broken features: the baseline says so in one line, so the
-backlog item reads "119 fail in setup: the test database refused the login" instead of claiming
-119 bugs. Read only from BOSS's own records; nothing here runs a test.
+When most failures share one setup error, the failures are not 119 broken features. When that
+error is ENVIRONMENTAL by its structured data (suite_environment: the SQLSTATE/errno/exception
+class says the suite could not reach its database or service), the suite did not run at all:
+the baseline carries `env` ("BOSS couldn't run the full suite: the test database refused the
+login BOSS gave it") and counts those tests as not run (`not_run`), never as failing — the
+Tests ring, the onboarding checklist and the backlog say what happened instead of proposing
+"Fix the 119 failing tests" (crun_de96bf12, helpdesk-ai-demo). Otherwise the shared error is
+the app's and is named in one line (`cause`). Read only from BOSS's own records; nothing here
+runs a test.
 """
 from __future__ import annotations
 
@@ -87,10 +92,13 @@ def _source(row: Any) -> str:
 
 
 def last_full_run(connection: Connection, project_id: str) -> Optional[dict[str, Any]]:
-    """{passed, total, failing, from, at, ago, label, cause?, build_id, href} or None."""
+    """{passed, total, failing, from, at, ago, label, cause?, env?, not_run?, build_id, href}
+    or None. With `env`, `failing` is 0 and `not_run` counts the tests the suite never ran."""
     rows = connection.execute(text(
         "SELECT id, status, title, pull_request_number, pull_request_url, updated_at, "
-        "right(state->>'last_verify_output', 20000) AS output FROM code_task_runs "
+        "right(state->>'last_verify_output', 20000) AS output, "
+        "COALESCE(state->'build_database'->>'postgres', '') = 'true' AS boss_db "
+        "FROM code_task_runs "
         "WHERE project_id = :p AND state ? 'last_verify_output' "
         "ORDER BY updated_at DESC LIMIT :n"), {"p": project_id, "n": LOOK_BACK}).mappings().all()
     runs = []
@@ -114,6 +122,14 @@ def last_full_run(connection: Connection, project_id: str) -> Optional[dict[str,
     out = {**got, "failing": failing, "from": source, "at": iso(row["updated_at"]),
            "ago": ago, "label": label, "build_id": row["id"],
            "href": href(project_id, area="code_tasks", view="apps", build=row["id"])}
+    if failing:
+        from ..suite_environment import classify
+
+        env = classify(row["output"], boss_service=bool(row.get("boss_db")))
+        if env:
+            # Not the app's failures: the suite could not run them (BOSS's environment).
+            out.update({"failing": 0, "not_run": failing, "env": env})
+            return out
     cause = setup_cause(row["output"]) if failing else None
     if cause:
         out["cause"] = cause

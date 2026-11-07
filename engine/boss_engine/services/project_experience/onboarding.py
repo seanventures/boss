@@ -635,7 +635,28 @@ def _ci(engine: Any, settings: Any, run_id: str, project_id: str, full: str, bra
     else:
         why = ("No CI runs on the default branch" if state in ("waiting", "no_ci")
                else f"CI could not be read ({result.get('words') or state})")
-        if baseline:
+        if baseline and baseline.get("env"):
+            # BOSS COULD NOT RUN THE SUITE (suite_environment): not the app's failures, so no
+            # "fix them" — what happened, whose it is, and what BOSS does next.
+            env = baseline["env"]
+            # BOSS's own fault goes where BOSS's faults are seen (Self-fixes), once per build.
+            from ..suite_environment import report as _report_env
+
+            def _seen() -> None:
+                with engine.begin() as c:
+                    _report_env(c, settings, project_id=project_id, env=env,
+                                build_id=str(baseline.get("build_id") or ""))
+
+            _safe(_seen, None)
+            tests = _item(
+                "tests", "done",
+                detail=(f"BOSS couldn't run the full suite in {baseline['label']}: "
+                        f"{env['reason']}. That is BOSS's environment, not your app — "
+                        f"{baseline.get('not_run', 0)} of {baseline['total']} tests never ran; "
+                        f"the {baseline['passed']} that ran passed. BOSS re-runs the full suite "
+                        "on the next build."),
+                sub="Re-runs on the next build")
+        elif baseline:
             failing = int(baseline["failing"])
             cause = baseline.get("cause")
             tests = _item(
@@ -1207,6 +1228,8 @@ def _discover_nodes(engine: Any, run_id: str, stack: Mapping[str, Any], ci: Mapp
     base = ci.get("baseline") or {}
     test_files = int((facts.get("tests") or {}).get("files") or 0)
     tests = (f"{passing}/{checks} tests" if checks else
+             # A suite BOSS could not run has no pass rate to show (suite_environment).
+             (f"{test_files} test files" if test_files else "Suite not run") if base.get("env") else
              f"{base['passed']}/{base['total']} tests" if base.get("total") else
              f"{test_files} test files" if test_files else "No tests yet")
     hotspots = len(facts.get("hotspots") or [])
