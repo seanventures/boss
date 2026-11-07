@@ -173,11 +173,30 @@ def cards(connection: Connection, project_id: str, work_items: list[dict[str, An
         rec = d.get("recommendation") if isinstance(d.get("recommendation"), dict) else {}
         run = runs.get(str(rec.get("workflow_run_id") or "")) or by_decision.get(str(d["id"]))
         out.append(card(connection, project_id, d, run))
+    # ONE SOURCE FOR NEEDS YOU: every piece of work the Work tab groups under Needs you has its
+    # card here (a gate or merge whose decision the reader above did not return still waits).
+    carded = {c.get("work_id") for c in out if c.get("work_id")}
+    for w in work_items:
+        if w.get("state") != "needs_you" or w.get("source") == "onboarding" or w["id"] in carded:
+            continue
+        kind = ("merge" if w.get("action_label") == "Merge" else
+                "deploy" if w.get("action_label") == "Approve deploy" else
+                "plan" if w.get("action_label") == "Approve plan" else "question")
+        decision = (w.get("decision_ids") or [None])[0]
+        out.append({"id": f"work:{w['id']}", "kind": kind,
+                    "label": shorten(f"{w.get('action_label') or 'Decide'}: {w['label']}", 5),
+                    "detail": str(w.get("detail") or ""), "work_id": w["id"],
+                    "work_label": w["label"], "mini": [], "created_at": w.get("updated_at"),
+                    "external_url": ((w.get("links") or {}).get("pr") or {}).get("external_url"),
+                    "action": {"label": ACTION_WORDS[kind], "decision_id": decision,
+                               "href": (w.get("links") or {}).get("decision") or w.get("href")}})
+    # The onboarding agent's "only you" items belong to the Onboarding row of the Work tab.
+    onboarding_row = next((w["id"] for w in work_items if w.get("source") == "onboarding"), None)
     for item in (onboarding or {}).get("only_you") or []:
         action = item.get("action") or {}
         out.append({"id": f"onb:{item['key']}", "kind": "setup",
                     "label": ONLY_YOU_WORDS.get(str(item["key"])) or item["label"],
-                    "detail": item.get("detail") or "", "mini": [], "work_id": None,
+                    "detail": item.get("detail") or "", "mini": [], "work_id": onboarding_row,
                     "action": {"label": action.get("label") or "Open",
                                "href": action.get("href") or project_href(project_id,
                                                                           drawer="onboarding"),

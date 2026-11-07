@@ -25,6 +25,7 @@ from typing import Any, Iterable, Mapping, Optional
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
+from .new_work import issue_of
 from .titles import short_title
 from .common import (LIVE_RUN, age, agents, as_json, aware, face, href, iso, pr_number,
                      project_href, words)
@@ -528,7 +529,9 @@ def _run_items(connection: Connection, project_id: str, limit: int,
     runs = [dict(r) for r in connection.execute(text(
         "SELECT r.id, r.status, r.created_at, r.updated_at, r.completed_at, r.workflow_version_id, "
         "r.input->>'title' AS title, r.input->>'directive' AS directive, "
-        "r.input->>'work_kind' AS work_kind, r.error, r.blocked_reason, d.name AS workflow, "
+        "r.input->>'work_kind' AS work_kind, r.input->>'source_ref' AS source_ref, "
+        "r.input->>'source_url' AS source_url, r.input->>'repository' AS repository, "
+        "r.error, r.blocked_reason, d.name AS workflow, "
         "d.workflow_key, (SELECT count(*) FROM workflow_runs n WHERE n.project_id = r.project_id "
         "AND n.created_at <= r.created_at) AS run_number "
         "FROM workflow_runs r JOIN workflow_definitions d ON "
@@ -632,6 +635,8 @@ def _run_items(connection: Connection, project_id: str, limit: int,
                 "decision": href(project_id, area="decisions",
                                  decision=(gate or {}).get("decision_id") or merge["decision_id"])
                 if (gate or merge) else None,
+                # The issue it was started from (a pasted Ticket link, `issue:12`): the #12 chip.
+                "issue": issue_of(r["source_ref"], r["source_url"], r["repository"]),
             },
             "decision_ids": [d for d in ((gate or {}).get("decision_id"),
                                          (merge or {}).get("decision_id")) if d],
@@ -701,48 +706,153 @@ def _build_items(connection: Connection, project_id: str,
     return out
 
 
-def _planned_items(connection: Connection, project_id: str, now: datetime
-                   ) -> list[dict[str, Any]]:
-    """Roadmap items a person accepted (§6) that no run has picked up yet: planned work."""
-    rows = connection.execute(text(
-        "SELECT work_item_id, title, why, kind, decided_at, accepted_as FROM ambient_recommendations "
-        "WHERE project_id = :p AND status = 'accepted' AND COALESCE(artifact->>'workflow_run_id', "
-        "'') = '' ORDER BY decided_at DESC NULLS LAST LIMIT 20"), {"p": project_id}).mappings().all()
+#: An accepted item's kind of work, from the roadmap recommendation's kind.
+_REC_WORK_KIND = {"hardening": "bug", "design_fix": "bug", "refactor": "chore", "cost": "chore",
+                  "process": "chore", "test_gap": "chore"}
+#: The tile and tag a planned row shows for where it came from (05-19..05-22).
+ORIGIN_TAGS = {"ci": "CI", "bug": "Bug", "ticket": "Ticket", "roadmap": "from Roadmap"}
+
+
+def _planned_items(connection: Connection, project_id: str, now: datetime,
+                   moving: Iterable[Mapping[str, Any]] = ()) -> list[dict[str, Any]]:
+    """Roadmap items a person accepted (§6) that no run has picked up yet: planned work, IN
+    MARSHAL'S RANK (plan._planned: Next by rank, then Later) — the order the Work tab's Planned
+    group, its drag-to-re-rank and the Roadmap's lanes share. The first is `next_up`, with the
+    face of the agent who will plan it. An item whose work is already moving shows once, as that
+    work (plan.lanes' rule)."""
+    from . import plan as plan_service
+    from .plan import _norm  # noqa: SLF001 — the one "same piece of work" rule
+
+    taken = {_norm(w.get("title") or w.get("label")) for w in moving
+             if w.get("state") in plan_service.NOW_STATES}
+    from ..workflow_catalogue import default_agent_for
+
+    # Who plans it once it starts: the panel's convener (Juno), as every stock workflow names.
+    planner = face(agents(connection, project_id), default_agent_for("meeting"))
     out = []
-    for r in rows:
-        kind = "bug" if r["kind"] in ("hardening", "design_fix") else (
-            "chore" if r["kind"] in ("refactor", "cost", "process", "test_gap") else "feature")
+    for p in plan_service._planned(connection, project_id):  # noqa: SLF001
+        if _norm(p["title"]) in taken or _norm(p["label"]) in taken:
+            continue
+        work_kind = str(p.get("work_kind") or "")
+        kind = ("bug" if work_kind == "bug" or p.get("origin") in ("bug", "ci") else
+                _REC_WORK_KIND.get(str(p.get("rec_kind") or ""), work_kind or "feature"))
+        if kind not in ("feature", "bug", "ticket", "chore", "fix", "incident"):
+            kind = "feature"
+        origin = str(p.get("origin") or "roadmap")
+        if origin not in ORIGIN_TAGS:
+            origin = "roadmap"
+        issue = p.get("issue")
         out.append({
-            "id": str(r["work_item_id"]), "source": "roadmap", "source_label": "Roadmap",
-            "label": words(r["title"], 6),
-            "title": r["title"], "kind": kind, "state": "planned", "status": "accepted",
-            "age": age(r["decided_at"], now), "created_at": iso(r["decided_at"]),
-            "updated_at": iso(r["decided_at"]),
+            "id": p["id"], "source": "roadmap", "source_label": "Roadmap",
+            "origin": origin, "origin_label": ORIGIN_TAGS[origin],
+            "label": p["label"], "title": p["title"], "kind": kind, "state": "planned",
+            "status": "accepted", "lane": p["lane"], "rank": p.get("rank"),
+            "next_up": False, "where": p.get("where"),
+            "age": age(p.get("decided_at"), now), "created_at": iso(p.get("decided_at")),
+            "updated_at": iso(p.get("decided_at")),
             "stages": [{"key": k, "label": letter, "name": STATION_LABELS[k], "state": "todo"}
                        for k, letter, _ in STATIONS],
             "agents": [], "cost_usd": 0.0,
             "links": {"workflow_run": None, "build": None, "pr": None, "deploy": None,
-                      "preview": None, "decision": None},
-            "decision_ids": [], "action_label": None, "attempts": [], "attempt_count": 0, "followups": 0, "retries": 0,
-            "stalled_since": None, "last_attempt_at": iso(r["decided_at"]),
-            "detail": r["why"] or r["title"],
-            "href": project_href(project_id, tab="roadmap", drawer=f"rec:{r['work_item_id']}"),
+                      "preview": None, "decision": None,
+                      "issue": issue},
+            "decision_ids": [], "action_label": None, "attempts": [], "attempt_count": 0,
+            "followups": 0, "retries": 0,
+            "stalled_since": None, "last_attempt_at": iso(p.get("decided_at")),
+            "detail": p.get("why") or p["title"],
+            "start": p["start"], "move": p["move"],
+            "href": p["href"],
         })
+    if out:
+        # NEXT UP: the top of Marshal's rank, and who plans it once it starts.
+        out[0]["next_up"] = True
+        out[0]["agents"] = [planner] if planner else []
     return out
 
 
+#: The onboarding agent's run as a piece of work (05-27): its state in the shared enum.
+_ONBOARDING_STATE = {"running": "running", "needs_you": "needs_you", "ready": "done",
+                     "failed": "failed"}
+_ONBOARDING_FLOW = (("discover", "Discover"), ("ready", "Ready"), ("backlog", "Backlog"))
+
+
+def onboarding_cost(connection: Connection, project_id: str, started: Any,
+                    finished: Any) -> float:
+    """What the onboarding agent's model calls cost (llm_calls recorded with stage
+    `onboarding` while it ran), in dollars."""
+    from ..included_spend import LLM_MONEY_SQL
+
+    micros = connection.execute(text(
+        f"SELECT COALESCE(sum({LLM_MONEY_SQL}), 0) FROM llm_calls WHERE project_id = :p "
+        "AND stage = 'onboarding' AND code_task_run_id IS NULL AND created_at >= :s "
+        "AND (CAST(:e AS timestamptz) IS NULL OR created_at <= CAST(:e AS timestamptz) "
+        "+ interval '5 minutes')"),
+        {"p": project_id, "s": started, "e": finished}).scalar()
+    return round(int(micros or 0) / 1_000_000, 2)
+
+
+def _onboarding_item(connection: Connection, project_id: str,
+                     roster: Mapping[str, Mapping[str, Any]], now: datetime,
+                     onboarding: Optional[Mapping[str, Any]] = None) -> Optional[dict[str, Any]]:
+    """ONBOARDING IS A PIECE OF WORK (screen 05 "Onboarding · Setup"): while it runs, while it
+    has items only a person can do, and once it is done — with its own mini flow Discover →
+    Ready → Backlog instead of the build stations, Helm (who onboards) and Marshal (who ranks
+    the backlog), its cost and a link to its record."""
+    from . import onboarding as onboarding_service
+
+    ob = onboarding if onboarding is not None else onboarding_service.view(connection, project_id)
+    if not ob or ob.get("state") in (None, "not_started") or not ob.get("run_id"):
+        return None
+    state = _ONBOARDING_STATE.get(str(ob["state"]), "running")
+    waiting = list(ob.get("only_you") or [])
+    if state == "needs_you" and not waiting:
+        state = "done"
+    stages = {s["key"]: s for s in ob.get("stages") or []}
+    flow = [{"key": k, "label": label, "state": (stages.get(k) or {}).get("state") or "todo"}
+            for k, label in _ONBOARDING_FLOW]
+    if state == "done":
+        flow = [{**f, "state": "done" if f["state"] in ("done", "now", "skipped") else f["state"]}
+                for f in flow]
+    started, finished = ob.get("started_at"), ob.get("finished_at")
+    faces = [f for f in (face(roster, "engineering_captain"), face(roster, "chief_of_staff")) if f]
+    opened = project_href(project_id, tab="work", drawer="onboarding")
+    return {
+        "id": str(ob["run_id"]), "source": "onboarding", "source_label": "Setup",
+        "label": "Onboarding", "title": "Onboarding", "kind": "setup", "state": state,
+        "status": str(ob["state"]), "age": age(started, now), "created_at": started,
+        "updated_at": finished or started, "last_attempt_at": finished or started,
+        "stalled_since": None, "flow": flow,
+        "stages": [{"key": k, "label": letter, "name": STATION_LABELS[k], "state": "skipped"}
+                   for k, letter, _ in STATIONS],
+        "agents": faces, "cost_usd": onboarding_cost(connection, project_id, started, finished),
+        "links": {"workflow_run": None, "build": None, "pr": None, "deploy": None,
+                  "preview": None, "decision": None, "onboarding": opened},
+        "decision_ids": [], "action_label": "Do it" if state == "needs_you" else None,
+        "waiting": [{"key": i.get("key"), "label": i.get("label"),
+                     "action": i.get("action")} for i in waiting],
+        "attempts": [], "attempt_count": 1, "followups": 0, "retries": 0,
+        "detail": ob.get("now") or ob.get("error") or "Helm onboarded the project.",
+        "href": opened,
+    }
+
+
 def everything(connection: Connection, project_id: str, *, limit: int = 60,
-               now: Optional[datetime] = None) -> list[dict[str, Any]]:
+               now: Optional[datetime] = None,
+               onboarding: Optional[Mapping[str, Any]] = None) -> list[dict[str, Any]]:
     """Every WorkItem — one per piece of work, its attempts inside — newest activity first."""
     now = now or datetime.now(timezone.utc)
     roster = agents(connection, project_id)
     horizon = _horizon()
     standalone = _standalone_groups(connection, project_id, limit)
     found = (_run_items(connection, project_id, limit, roster, now, standalone, horizon)
-             + _build_items(connection, project_id, standalone, roster, now, horizon)
-             + _planned_items(connection, project_id, now))
+             + _build_items(connection, project_id, standalone, roster, now, horizon))
+    onboarding_row = _onboarding_item(connection, project_id, roster, now, onboarding)
+    if onboarding_row is not None:
+        found.append(onboarding_row)
     found.sort(key=lambda w: w.get("last_attempt_at") or w.get("created_at") or "", reverse=True)
-    return found[:limit]
+    # Planned work keeps Marshal's rank (never re-sorted by date): the order a drag saves.
+    planned = _planned_items(connection, project_id, now, moving=found)
+    return found[:limit] + planned
 
 
 def matching(found: list[dict[str, Any]], *, state: Optional[str] = None,

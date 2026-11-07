@@ -4,6 +4,7 @@ GET  /v1/projects/summary                         §1  the Projects list (cards)
 GET  /v1/projects/{id}/overview                   §2  the Overview tab
 GET  /v1/projects/{id}/work?state=&q=             §3  the Work tab
 POST /v1/projects/{id}/work                       §3  new work, through THE start door
+GET  /v1/projects/{id}/work/plan?kind=&workflow_key=  §3  Helm's plan: strip, estimates, options
 GET  /v1/projects/{id}/knowledge                  §4  Repo & knowledge
 GET  /v1/projects/{id}/deployments                §5  Deployments
 GET  /v1/projects/{id}/captain                    §7  the captain and squad
@@ -126,12 +127,38 @@ def project_work(project_id: str, state: Optional[str] = None, q: Optional[str] 
         return work.view(connection, project_id, state=state or None, q=q or None)
 
 
+@router.get("/v1/projects/{project_id}/work/plan")
+@permit(P.PROJECT_READ, scope=Scope.project(path="project_id"))
+def project_work_plan(project_id: str, kind: str = "feature",
+                      workflow_key: Optional[str] = None) -> dict[str, Any]:
+    """Helm's plan for new work (screen 05): the workflow Start would run for this kind (or the
+    one picked with "change"), its real steps as a strip, time and cost from this project's own
+    history, and the workflows "change" offers."""
+    from boss_engine.services.project_experience import new_work
+
+    kind = (kind or "feature").strip().lower()
+    if kind not in new_work.KINDS:
+        raise HTTPException(status_code=422, detail={
+            "error": "bad_kind", "message": "kind is feature, bug or ticket."})
+    with begin(_engine) as connection:
+        _require_project(connection, project_id)
+        try:
+            return new_work.plan(connection, project_id, kind, workflow_key or None)
+        except LookupError as error:
+            raise HTTPException(status_code=422, detail={
+                "error": "unknown_workflow", "message": str(error)}) from None
+
+
 class NewWorkBody(BaseModel):
     kind: str = Field("feature", description="feature | bug | ticket")
     text: str = Field(..., description="What to do, in the person's words.")
     title: Optional[str] = None
     #: Where the suggestion came from (an onboarding candidate's ref, a roadmap item).
     source_ref: Optional[str] = None
+    #: The issue it came from (GitHub / Plane), kept on the run for the row's #12 chip.
+    source_url: Optional[str] = None
+    #: "change" on Helm's plan: another active product workflow of this project.
+    workflow_key: Optional[str] = None
     #: The console's readiness sheet: start although these are missing (the start door's own).
     start_anyway: Optional[list[str]] = None
     accept: Optional[list[str]] = None
@@ -158,7 +185,7 @@ def project_new_work(project_id: str, payload: NewWorkBody) -> dict[str, Any]:
     from apps.api.app.main import start_delivery_workflow
     from apps.api.app.request_bodies import WorkflowStartBody
     from boss_engine.services import start_project
-    from boss_engine.services.project_experience import work
+    from boss_engine.services.project_experience import new_work, work
     from boss_engine.services.project_experience.common import project_href
 
     kind = (payload.kind or "feature").strip().lower()
@@ -175,21 +202,33 @@ def project_new_work(project_id: str, payload: NewWorkBody) -> dict[str, Any]:
             page = start_project.view(connection, project_id)
         except LookupError as error:
             raise _missing(error) from None
-    start = page["start"]
-    run_input: dict[str, Any] = {"directive": said[:8000],
-                                 "title": (payload.title or "").strip()[:80]
-                                 or _title_of(said, page["name"]),
-                                 "work_kind": kind}
-    if page.get("repo"):
-        run_input["repository"] = page["repo"]["full_name"]
-    if payload.source_ref:
-        run_input["source_ref"] = str(payload.source_ref)[:200]
+        try:
+            chosen = new_work.choose(connection, project_id, kind, payload.workflow_key or None)
+        except LookupError as error:
+            raise HTTPException(status_code=422, detail={
+                "error": "unknown_workflow", "message": str(error)}) from None
+    repo = (page.get("repo") or {}).get("full_name")
+    # A TICKET pasted as a link keeps the link (the row's #12 chip); so does work started from an
+    # issue the onboarding agent found (`issue:12`) or a roadmap item that carries one.
+    link = (payload.source_url or "").strip() or (new_work.ticket_link(said) if kind == "ticket"
+                                                  else None)
+    issue = new_work.issue_of(payload.source_ref, link, repo)
+    title = ((payload.title or "").strip()[:80]
+             or (new_work.ticket_title(said, link) if kind == "ticket" else None)
+             or _title_of(said, page["name"]))
+    run_input: dict[str, Any] = {"directive": said[:8000], "title": title, "work_kind": kind}
+    if repo:
+        run_input["repository"] = repo
+    if payload.source_ref or link:
+        run_input["source_ref"] = str(payload.source_ref or link)[:200]
+    if issue:
+        run_input["source_url"] = str(issue["external_url"])[:500]
     body: dict[str, Any] = {"project_id": project_id, "input": run_input,
                             "actor": identity_guard.request_actor() or None}
-    if start.get("workflow_key"):
-        body["workflow_key"] = start["workflow_key"]
+    if chosen.get("workflow_key"):
+        body["workflow_key"] = chosen["workflow_key"]
     else:
-        body["work_class"] = start.get("work_class") or start_project.NEW_APP_CLASS
+        body["work_class"] = chosen.get("work_class") or start_project.NEW_APP_CLASS
     if payload.start_anyway:
         body["start_anyway"] = list(payload.start_anyway)
     if payload.accept:

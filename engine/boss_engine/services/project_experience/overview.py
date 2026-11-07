@@ -94,7 +94,7 @@ def journey_subs(connection: Connection, project: Mapping[str, Any], items: list
         "SELECT count(DISTINCT finalize_ctx->'merge'->>'sha') FROM code_task_runs "
         "WHERE project_id = :p AND COALESCE(finalize_ctx->'merge'->>'sha', '') <> ''"),
         {"p": project_id}).scalar() or 0)
-    running = sum(1 for w in items if w["state"] == "running")
+    running = sum(1 for w in items if w["state"] == "running" and w["source"] != "onboarding")
     people = [n for n in waiting if not str(n.get("id", "")).startswith("onb:")]
 
     def newest(prod: bool) -> Optional[datetime]:
@@ -226,6 +226,8 @@ def tiles(project_id: str, items: list[dict[str, Any]], envs: list[dict[str, Any
     by_state = work_service.counts(items)
     open_count = sum(by_state[k] for k in ("running", "stalled", "needs_you", "planned"))
     running = [w for w in items if w["state"] == "running"]
+    # The tile's "now" is the build moving, before the onboarding agent's own pass.
+    running.sort(key=lambda w: w["source"] == "onboarding")
     current = None
     if running:
         w = running[0]
@@ -393,10 +395,12 @@ def _facts(connection: Connection, project_id: str, items: list[dict[str, Any]],
         {"p": project_id}).first())
     got = reached(onboarded=onboarding.get("state") in ("ready", "needs_you") or bool(items),
                   backlog=bool(onboarding.get("backlog")) or has_recs or bool(items),
-                  worked=any(w["source"] != "roadmap" for w in items),
+                  worked=any(w["source"] not in ("roadmap", "onboarding") for w in items),
                   staging=healthy_non_prod, production=healthy_prod,
                   onboarding_running=onboarding.get("state") == "running")
-    active = any(w["state"] in ("running", "needs_you") for w in items)
+    # The onboarding row is setup, not work: the journey's onboarding stage speaks for it.
+    active = any(w["state"] in ("running", "needs_you") for w in items
+                 if w["source"] != "onboarding")
     return {"got": got, "active": active}
 
 
@@ -407,9 +411,9 @@ def view(connection: Connection, project_id: str, *, now: Optional[datetime] = N
     now = now or datetime.now(timezone.utc)
     project = require_project(connection, project_id)
     roster = agents(connection, project_id)
-    items = work_service.everything(connection, project_id, now=now)
-    envs = health_environments(connection, project_id, now=now)
     onboarding = onboarding_service.view(connection, project_id)
+    items = work_service.everything(connection, project_id, now=now, onboarding=onboarding)
+    envs = health_environments(connection, project_id, now=now)
     facts = _facts(connection, project_id, items, envs, onboarding)
     stage = stage_of(facts["got"], active=facts["active"])
     waiting = needs_you(connection, project_id, items, onboarding)

@@ -366,9 +366,10 @@ def seed(db, project_id: str, *, now: datetime | None = None, connection_id: str
     merge = _run(db, project_id, did, vid, spec, title="Visual refresh finish", status="running",
                  upto=by_cap.get("report") or build_step, at=now - timedelta(hours=3), pr=3,
                  merge_waits=True)
-    deploy = _run(db, project_id, did, vid, spec, title="Email-to-ticket intake", status="waiting",
+    # (Email-to-ticket intake is the PLANNED next-up item of screens 04/05/07, not this run.)
+    deploy = _run(db, project_id, did, vid, spec, title="Agent reply macros", status="waiting",
                   upto=deploy_step, at=now - timedelta(hours=1), pr=5,
-                  gate="Deploy Email-to-ticket intake to staging?", env="staging")
+                  gate="Deploy Agent reply macros to staging?", env="staging")
 
     host_id = _id("dhost")
     db.execute(text(
@@ -520,7 +521,7 @@ def seed_ship_story(db, project_id: str, *, target_id: str, host_id: str, merged
 #: The onboarding agent's ranked backlog (screen 10): issues, CI and scan findings, with scores.
 BACKLOG = [
     ("Fix 6 failing tests", "ci", "bug", "red_main", "high", "ci:main", "CI fails on main: 6 tests."),
-    ("SLA ignores weekends", "bug", "bug", "issue_triage", "medium", "issue:12",
+    ("SLA timer ignores weekends", "bug", "bug", "issue_triage", "medium", "issue:12",
      "#12 SLA timers keep counting through the weekend."),
     ("SLA timers per priority", "ticket", "feature", "issue_triage", "low", "issue:9",
      "#9 Each priority gets its own response deadline."),
@@ -566,7 +567,13 @@ def seed_plan(db, project_id: str, *, now: datetime | None = None, actor: str = 
 
     now = now or datetime.now(timezone.utc)
     cands = [onboarding._candidate(label, source=src, task_class=tc, severity=sev, kind=kind,
-                                   detail=detail, ref=ref, score_source=src)
+                                   detail=detail, ref=ref, score_source=src,
+                                   # the GitHub link the agent read it from; the failing file
+                                   external_url=(f"https://github.com/{REPO}/"
+                                                 f"{'issues' if ref.startswith('issue:') else 'pull'}"
+                                                 f"/{ref.split(':', 1)[1]}"
+                                                 if ref.startswith(("issue:", "pr:")) else None),
+                                   where="tests/test_notify.py" if src == "ci" else None)
              for label, src, kind, tc, sev, ref, detail in BACKLOG]
     cands.sort(key=lambda c: -c["score"])
     checklist = {
@@ -613,9 +620,14 @@ def seed_plan(db, project_id: str, *, now: datetime | None = None, actor: str = 
                                                    "kind": cands[0]["kind"],
                                                    "estimate_min": 15, "estimate_usd": 1.5}),
          "s": now - timedelta(days=5), "e": now - timedelta(days=5, minutes=-6)})
+    # What the onboarding agent's own model calls cost while it ran (the Onboarding row's $1.20).
+    db.execute(text(
+        "INSERT INTO llm_calls (id, project_id, stage, model, cost_usd_micros, created_at) "
+        "VALUES (:i, :p, 'onboarding', 'claude-sonnet', 1200000, :t)"),
+        {"i": _id("llm"), "p": project_id, "t": now - timedelta(days=5, minutes=-4)})
     by_label = {c["label"]: c["id"] for c in cands}
     took = onboarding.accept_backlog(
-        db, project_id, [by_label["Email-to-ticket intake"], by_label["Weekend SLA pause"],
+        db, project_id, [by_label["Email-to-ticket intake"], by_label["SLA timer ignores weekends"],
                          by_label["Fix 6 failing tests"], by_label["Reply suggestions"],
                          by_label["Status index"]], actor=actor)
     lanes = plan.lanes(db, project_id, work_items=[])
@@ -866,7 +878,12 @@ def seed_project_sources(db, project_id: str, *, host_id: str, now: datetime | N
     four repositories and their last pushes (the project's own repo is "in use"), and what the
     demo server said about itself at its last preflight (cpus, memory, disk, OS, running images)."""
     from boss_engine.multirepo.common import org_of_project
-    from boss_engine.services.project_experience.host_overview import capacity_from, store_capacity
+
+    try:  # screens 03/14's readers and their columns land together on their own branch
+        from boss_engine.services.project_experience.host_overview import (capacity_from,
+                                                                           store_capacity)
+    except ImportError:
+        return
 
     now = now or datetime.now(timezone.utc)
     org = org_of_project(db, project_id)

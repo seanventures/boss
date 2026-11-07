@@ -80,6 +80,8 @@ export type ProjectsSummary = { items: ProjectCard[]; week_cap_usd: number | nul
 export type Repo = { full_name: string; branch: string; access: { read: boolean; write: boolean; pr: boolean }; external_url: string };
 export type NeedsYou = {
   id: string; kind: "merge" | "deploy" | "plan" | "question" | "setup"; label: string; detail: string; icon?: string;
+  /** The Work row this card belongs to (a merge's build, the onboarding row for its "only you" items). */
+  work_id?: string;
   mini: { label: string; state: StepState }[]; action: { label: string; href: string; decision_id: string } | null;
 };
 export type WorkItem = {
@@ -97,7 +99,18 @@ export type WorkItem = {
   run_number: number | null; created_at: string; updated_at: string;
   /** The person's one action, named for what it does: "Merge" | "Approve deploy" | "Decide"… */
   action_label: string;
+  /** The issue it came from (GitHub #12, a Plane key): the row's link chip (05-20). */
+  issue: WorkIssue | null;
+  /** Planned work: where it came from (ci | bug | ticket | roadmap), its tag, Marshal's rank. */
+  origin: string; origin_label: string; next_up: boolean; lane: "next" | "later" | ""; rank: number | null;
+  /** The file a failing check names ("tests/test_notify.py"). */
+  where: string;
+  /** Planned work: THE start door with its body (Start now), and the re-rank route (drag). */
+  start: Accept | null; move: { href: string; method: string } | null;
+  /** The onboarding row: its mini flow (Discover → Ready → Backlog), what waits on you, its drawer. */
+  flow: { key: string; label: string; state: StepState }[]; waiting: { key: string; label: string }[]; onboarding: string;
 };
+export type WorkIssue = { provider: string; number: number | null; label: string; kind: string; external_url: string };
 /** One attempt of a piece of work: the build, a retry, or a follow-up (§3 `attempts[]`). */
 export type Attempt = {
   id: string; label: string; kind: "build" | "retry" | "followup"; title: string;
@@ -268,7 +281,24 @@ export const parseWorkItem = (v: unknown): WorkItem => {
     attempt_count: n(x.attempt_count), followups: n(x.followups), retries: n(x.retries),
     run_number: nn(x.run_number), created_at: s(x.created_at), updated_at: s(x.updated_at),
     action_label: s(x.action_label),
+    issue: parseIssue(l.issue),
+    origin: s(x.origin), origin_label: s(x.origin_label), next_up: x.next_up === true,
+    lane: x.lane === "next" || x.lane === "later" ? x.lane : "", rank: nn(x.rank), where: s(x.where),
+    start: parseAccept(x.start), move: o(x.move).href ? { href: s(o(x.move).href), method: s(o(x.move).method, "POST") } : null,
+    flow: a(x.flow).map((f) => ({ key: s(o(f).key), label: s(o(f).label), state: oneOf(o(f).state, STEP_STATES, "todo") })),
+    waiting: a(x.waiting).map((z) => ({ key: s(o(z).key), label: s(o(z).label) })).filter((z) => z.label),
+    onboarding: s(l.onboarding),
   };
+};
+/** The fields only some work carries (planned, from an issue, the onboarding row), empty. */
+export const WORK_EXTRA: Pick<WorkItem, "issue" | "origin" | "origin_label" | "next_up" | "lane" | "rank" | "where" | "start" | "move" | "flow" | "waiting" | "onboarding"> = {
+  issue: null, origin: "", origin_label: "", next_up: false, lane: "", rank: null, where: "", start: null, move: null, flow: [], waiting: [], onboarding: "",
+};
+const parseIssue = (v: unknown): WorkIssue | null => {
+  const x = o(v);
+  if (!s(x.external_url)) return null;
+  return { provider: s(x.provider, "github"), number: nn(x.number), label: s(x.label) || (nn(x.number) ? `#${n(x.number)}` : "Issue"),
+           kind: s(x.kind, "issue"), external_url: s(x.external_url) };
 };
 /** Never a raw internal string on a row: `code_task` is a Build. */
 const SOURCE_WORDS: Record<string, string> = { code_task: "Build", workflow_run: "Workflow", roadmap: "Roadmap" };
@@ -306,7 +336,7 @@ export function attemptsPill(w: Pick<WorkItem, "attempt_count" | "followups" | "
   if (w.followups && !w.retries) return `↻ ${w.followups} follow-up${w.followups === 1 ? "" : "s"}`;
   return `${w.attempt_count} attempts`;
 }
-export const KIND_WORDS: Record<string, string> = { feature: "Feature", bug: "Bug", fix: "Fix", ticket: "Ticket", chore: "Chore", incident: "Incident" };
+export const KIND_WORDS: Record<string, string> = { feature: "Feature", bug: "Bug", fix: "Fix", ticket: "Ticket", chore: "Chore", incident: "Incident", setup: "Setup" };
 export const ATTEMPT_WORDS: Record<AttemptState, string> = {
   planned: "Queued", running: "Running", stalled: "Stalled", handed_on: "Handed on", needs_you: "Needs you", done: "Done", failed: "Failed",
 };
@@ -553,6 +583,8 @@ export const PX_PATHS = {
   knowledge: (id: string) => `/v1/projects/${enc(id)}/knowledge`,
   deployments: (id: string) => `/v1/projects/${enc(id)}/deployments`,
   captain: (id: string) => `/v1/projects/${enc(id)}/captain`,
+  /** Helm's plan for new work (screen 05): strip, estimates, the workflows "change" offers. */
+  workPlan: (id: string, kind: string, workflowKey = "") => `/v1/projects/${enc(id)}/work/plan?${new URLSearchParams({ kind, ...(workflowKey ? { workflow_key: workflowKey } : {}) })}`,
   workStory: (id: string, work: string) => `/v1/projects/${enc(id)}/work/${enc(work)}/story`,
   onboarding: (id: string) => `/v1/projects/${enc(id)}/onboarding`,
   onboardingStart: (id: string) => `/v1/projects/${enc(id)}/onboarding/start`,
@@ -754,7 +786,8 @@ export async function runAccept(projectId: string, accept: Accept, label = "Acce
   if (accept.href === `/v1/projects/${enc(projectId)}/work`) {
     const b = accept.body;
     return startWork(projectId, toWorkKind(b.kind), s(b.text) || s(b.title), {
-      ...(s(b.title) ? { title: s(b.title) } : {}), ...(s(b.source_ref) ? { source_ref: s(b.source_ref) } : {}) });
+      ...(s(b.title) ? { title: s(b.title) } : {}), ...(s(b.source_ref) ? { source_ref: s(b.source_ref) } : {}),
+      ...(s(b.source_url) ? { source_url: s(b.source_url) } : {}) });
   }
   return { ok: false, status: 0, body: null, error: `${label}: BOSS named a route this page doesn't send (${accept.href}).` };
 }
@@ -841,6 +874,7 @@ export function workFromStartRow(raw: unknown, projectId: string): WorkItem {
              preview: "", decision: "", pr: pr ? { number: prNo, external_url: pr } : null },
     detail: s(r.status), href: "", source: s(r.workflow), source_label: "Workflow",
     stalled_since: "", attempts: [], attempt_count: 1, followups: 0, retries: 0, run_number: null, created_at: "", updated_at: "", action_label: "",
+    ...WORK_EXTRA,
   };
 }
 /** The open-work bar's segments, in the order and colours of the mock (running · needs you · planned · done). */
@@ -869,4 +903,79 @@ export function navigateTo(href: string): void {
   link.style.display = "none";
   document.body.appendChild(link);
   try { link.click(); } finally { link.remove(); }
+}
+
+// ── Helm's plan for new work (screen 05: GET /v1/projects/{id}/work/plan) ─────────────────────
+export type PlanNode = { key: string; label: string; type: "agent" | "you" | "todo"; agent: Agent | null };
+export type WorkflowOption = { key: string; name: string; detail: string; work_class: string; fits: boolean };
+export type WorkPlan = {
+  kind: WorkKind; planner: Agent | null;
+  workflow: { key: string; name: string; chosen: "mapped" | "default" | "picked"; why: string; href: string } | null;
+  nodes: PlanNode[];
+  estimate: { minutes: number | null; minutes_basis: "history" | "typical" | null; minutes_runs: number;
+              usd: number | null; usd_runs: number } | null;
+  options: WorkflowOption[];
+};
+export const parseWorkPlan = (v: unknown): WorkPlan => {
+  const x = o(v); const w = o(x.workflow); const e = o(x.estimate);
+  return {
+    kind: toWorkKind(x.kind), planner: parseAgent(x.planner),
+    workflow: s(w.key) ? { key: s(w.key), name: s(w.name, s(w.key)), chosen: oneOf(w.chosen, ["mapped", "default", "picked"] as const, "default"),
+                           why: s(w.why), href: s(w.href) } : null,
+    nodes: a(x.nodes).map((z) => ({ key: s(o(z).key), label: s(o(z).label), type: oneOf(o(z).type, ["agent", "you", "todo"] as const, "todo"),
+                                    agent: parseAgent(o(z).agent) })).filter((z) => z.label),
+    estimate: x.estimate ? { minutes: nn(e.minutes), minutes_basis: e.minutes_basis === "history" || e.minutes_basis === "typical" ? e.minutes_basis : null,
+                             minutes_runs: n(e.minutes_runs), usd: nn(e.usd), usd_runs: n(e.usd_runs) } : null,
+    options: a(x.options).map((z) => ({ key: s(o(z).key), name: s(o(z).name), detail: s(o(z).detail), work_class: s(o(z).work_class),
+                                        fits: o(z).fits === true })).filter((z) => z.key),
+  };
+};
+/** "≈ $3" for a run of a few dollars, "≈ $0.90" under one. */
+export const dollarsAbout = (usd: number): string => (usd < 1 ? `$${usd.toFixed(2)}` : `$${Math.round(usd)}`);
+
+// ── Needs you: ONE source for the header bar and the Work tab ─────────────────────────────────
+/** What waits on a person, exactly as the header bar lists it: the overview's cards, with the
+ *  live onboarding record's "only you" items in place of the overview's copies while the project
+ *  onboards (never both). The Work tab's Needs-you count is this list's length. */
+export function needsYouCards(needs: NeedsYou[], onboarding: Onboarding | null, work: WorkItem[] = []): NeedsYou[] {
+  const yours = onboarding?.only_you ?? [];
+  const cards = yours.length ? needs.filter((it) => !it.id.startsWith("onb:")) : needs;
+  const onbRow = needs.find((it) => it.id.startsWith("onb:"))?.work_id || work.find((w) => w.kind === "setup" && w.source === "onboarding")?.id;
+  const out: NeedsYou[] = [...cards, ...yours.map((it): NeedsYou => ({
+    id: `onb:${it.key}`, kind: "setup", label: it.label, detail: it.detail, mini: [], work_id: onbRow,
+    action: it.action ? { label: it.action.label, href: it.action.href, decision_id: "" } : null,
+  }))];
+  // A piece of work waiting on a person always has its card (the engine writes one; an older
+  // engine's list is completed here), so the bar and the Work tab never disagree.
+  const carded = new Set(out.map((c) => c.work_id).filter(Boolean));
+  const decided = new Set(out.map((c) => c.action?.decision_id).filter(Boolean));
+  for (const w of work) {
+    if (w.state !== "needs_you" || carded.has(w.id) || (w.kind === "setup" && w.source === "onboarding")) continue;
+    if (w.links.decision && [...decided].some((d) => w.links.decision.includes(String(d)))) continue;
+    if (!w.links.decision && !w.action_label) continue;
+    out.push({ id: `work:${w.id}`, kind: w.action_label === "Merge" ? "merge" : w.action_label === "Approve deploy" ? "deploy" : w.action_label === "Approve plan" ? "plan" : "question",
+               label: `${w.action_label || "Decide"}: ${w.label}`, detail: w.detail, mini: [], work_id: w.id,
+               action: { label: w.action_label || "Decide", href: w.links.decision || w.href, decision_id: "" } });
+  }
+  return out;
+}
+
+// ── drag to re-rank Planned (05-23 / 05-33) ─────────────────────────────────────────────────────
+/** Planned work moved to `to` (its index in the new order): the new order, and the move the engine
+ *  is sent (plan.move: the lane of the item it lands before, else the lane of the one it follows). */
+export function reRank(planned: WorkItem[], id: string, to: number): { order: WorkItem[]; lane: PlanLane; before?: string } | null {
+  const from = planned.findIndex((w) => w.id === id);
+  if (from < 0) return null;
+  const rest = planned.filter((w) => w.id !== id);
+  const at = Math.max(0, Math.min(to, rest.length));
+  if (at === from) return null;
+  const order = [...rest.slice(0, at), planned[from], ...rest.slice(at)];
+  const after: WorkItem | undefined = rest[at];
+  const prev: WorkItem | undefined = rest[at - 1];
+  // Between the last of Next and the first of Later it stays in Next, at its end (Next is what
+  // starts first); anywhere else it joins the lane of the item it lands before (or follows, last).
+  const boundary = Boolean(prev && after && prev.lane !== "later" && after.lane === "later");
+  const lane: PlanLane = boundary ? "next" : ((after ?? prev)?.lane || "next") as PlanLane;
+  const before = boundary ? undefined : after?.id;
+  return { order: order.map((w) => (w.id === id ? { ...w, lane } : w)), lane, ...(before ? { before } : {}) };
 }

@@ -1,0 +1,38 @@
+/* Work tab (screen 05): what px.css does not already draw — the new row's slide-in, drag to
+   re-rank Planned with its keyboard twin, Helm's plan "change" menu, and the loose Needs-you card. */
+
+/* 05-04: the row a Start just made slides in (150 ms). */
+.px-wk[data-fresh] { animation: px-slide .15s ease-out; }
+
+/* 05-23 / 05-33: drag to re-rank Planned. */
+[data-testid="px-work-planned"] > [draggable="true"] { cursor: grab; }
+[data-testid="px-work-planned"] > [draggable="true"]:active { cursor: grabbing; }
+[data-testid="px-work-planned"] > [data-dragging] { opacity: .45; }
+[data-testid="px-work-planned"] > [data-drag-over] > .px-wk { box-shadow: inset 0 2px 0 var(--accent); }
+.px-wk[tabindex]:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.px-rank { display: inline-flex; align-items: center; gap: 2px; margin-right: 4px; }
+.px-rank-handle { color: var(--faint); display: inline-flex; padding: 0 2px; }
+.px-rank button { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--surface); color: var(--muted); cursor: pointer; padding: 0; opacity: .55; transition: opacity .12s; }
+.px-wk:hover .px-rank button, .px-wk:focus-within .px-rank button { opacity: 1; }
+.px-rank button:disabled { opacity: .25; cursor: default; }
+.px-rank button:not(:disabled):hover { color: var(--ink); border-color: var(--border-strong); }
+@media (hover: none) { .px-rank button { opacity: 1; } }
+
+/* Helm's plan: the workflow it runs, and "change". */
+.px-plan { gap: 10px; font-size: .6rem; }
+.px-wf-pick { position: relative; display: inline-flex; align-items: center; gap: 2px; }
+.px-linkbtn { background: none; border: 0; padding: 0; font: inherit; color: var(--accent-text); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+.px-linkbtn:disabled { color: var(--faint); cursor: default; text-decoration: none; }
+.px-wf-menu { position: absolute; z-index: 30; top: calc(100% + 6px); right: 0; min-width: 240px; max-width: min(340px, calc(100vw - 32px));
+  display: flex; flex-direction: column; padding: 4px; border-radius: 10px; border: 1px solid var(--border-strong);
+  background: var(--surface); box-shadow: 0 10px 30px color-mix(in srgb, #000 22%, transparent); animation: px-rise .12s ease-out; }
+.px-wf-menu button { display: flex; align-items: center; gap: 8px; text-align: left; padding: 7px 8px; border: 0; border-radius: 7px;
+  background: none; color: var(--ink); font: inherit; font-size: .62rem; cursor: pointer; }
+.px-wf-menu button:hover, .px-wf-menu button:focus-visible { background: color-mix(in srgb, var(--accent) 10%, transparent); outline: none; }
+.px-wf-menu button[aria-selected="true"] { font-weight: 600; }
+.px-wf-menu .px-tag { margin-left: auto; }
+@media (max-width: 560px) { .px-wf-menu { left: 0; right: auto; } }
+
+/* A Needs-you card that is no piece of work's (Pick a prod host): a row in the same group. */
+.px-wk-card .px-wk-sub .px-ell { max-width: 46ch; }

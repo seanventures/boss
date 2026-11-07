@@ -32,14 +32,25 @@ def _norm(value: Any) -> str:
     return " ".join(short_title(value).lower().split()) if value else ""
 
 
+def _repo(connection: Connection, project_id: str) -> Optional[str]:
+    return connection.execute(text(
+        "SELECT full_name FROM github_repository_bindings WHERE project_id = :p AND status = "
+        "'active' ORDER BY (role = 'primary') DESC, created_at LIMIT 1"), {"p": project_id}).scalar()
+
+
 def _planned(connection: Connection, project_id: str) -> list[dict[str, Any]]:
+    """Accepted, not-yet-started roadmap items in Marshal's order: Next by rank, then Later."""
+    from .new_work import issue_of
     from .titles import short_title
+
+    repo = _repo(connection, project_id)
 
     rows = connection.execute(text(
         "SELECT work_item_id, title, why, kind, detector, facts, decided_at FROM "
         "ambient_recommendations WHERE project_id = :p AND status = 'accepted' AND "
         "COALESCE(artifact->>'workflow_run_id', '') = '' AND "
         "COALESCE(artifact->>'meeting_run_id', '') = '' ORDER BY "
+        "(COALESCE(facts->>'lane', 'next') = 'later'), "
         "COALESCE((facts->>'rank')::int, 1000000), decided_at NULLS LAST LIMIT 60"),
         {"p": project_id}).mappings().all()
     out = []
@@ -50,18 +61,25 @@ def _planned(connection: Connection, project_id: str) -> list[dict[str, Any]]:
         if kind not in ("feature", "bug", "ticket"):
             kind = "ticket"
         item_id = str(r["work_item_id"])
+        issue = issue_of(facts.get("ref"), facts.get("external_url"), repo)
         out.append({
             "id": item_id, "label": short_title(r["title"], limit=5), "title": r["title"],
             "lane": lane, "rank": facts.get("rank"), "state": "planned",
             "source": "onboarding" if r["detector"] == "onboarding" else "roadmap",
-            "external_url": facts.get("external_url"),
+            # Where the item came from (the onboarding agent's candidate source): ci | bug |
+            # ticket | roadmap; the issue it names; the file a failing check points at.
+            "origin": str(facts.get("source") or "roadmap"), "issue": issue,
+            "where": facts.get("where"), "why": r["why"], "rec_kind": r["kind"],
+            "decided_at": r["decided_at"], "work_kind": kind,
+            "external_url": facts.get("external_url") or (issue or {}).get("external_url"),
             "href": project_href(project_id, tab="roadmap", drawer=f"rec:{item_id}"),
             "move": {"href": f"/v1/projects/{project_id}/plan/{item_id}", "method": "POST"},
             "start": {"href": f"/v1/projects/{project_id}/work", "method": "POST",
                       "body": {"kind": kind, "text": str(facts.get("text") or
                                                          f"{r['title']}. {r['why'] or ''}")[:4000],
                                "title": short_title(r["title"]),
-                               "source_ref": f"rec:{item_id}"}}})
+                               "source_ref": f"rec:{item_id}",
+                               **({"source_url": issue["external_url"]} if issue else {})}}})
     return out
 
 
