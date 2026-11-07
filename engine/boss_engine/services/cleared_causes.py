@@ -18,6 +18,17 @@ the place that happened to notice:
   * A QUESTION ABOUT A PULL REQUEST (`PULL_REQUEST_QUESTIONS`, keyed by the decision's action):
     cleared when that pull request is merged (recorded by pr_merge) or closed (observed).
 
+  * A DEPLOY REQUEST THAT WAS OVERTAKEN (`DEPLOY_QUESTIONS`, a stack deploy's `deploy_stack`):
+    cleared when its target went live with a LATER deploy after it was asked (approving it
+    would roll the app back), or — for a workflow's deploy step — when the target already
+    serves exactly that commit, healthy (nothing left to ship). helpdesk-ai-demo, 2026-11-06:
+    "Deploy …@cfe343f1c6cd" sat in Needs you after 6ba6500 and f3f130c had both gone live on
+    the same target, and "Deploy …@f3f130cb7f74" was asked again seven minutes after that very
+    commit went live. A person's own redeploy (no workflow run) of the live commit stays.
+    When withdrawn, the deployment is closed (`rejected`, failure_reason "Superseded …", its
+    ChangeSet and reservation released) and a workflow step parked on it follows the deploy
+    that overtook it, so the run moves on instead of waiting forever.
+
 Three ways in, all through `withdraw_cleared`'s one withdrawal (run_decisions._withdraw_with_note:
 status `withdrawn`, a `resolution_note` in words and a `decision.withdrawn` event naming the
 cause), so none can drift from the others:
@@ -45,6 +56,9 @@ log = logging.getLogger(__name__)
 EFFECT_FAILURE_CAUSES: dict[str, tuple[str, ...]] = {
     "missing_github_credentials": ("github.",),
 }
+
+#: decision actions that ask to ship one deploy, and are moot once a later one went live.
+DEPLOY_QUESTIONS: frozenset[str] = frozenset({"deploy_stack"})
 
 #: decision actions that ask about one pull request, and are moot once it is merged or closed.
 PULL_REQUEST_QUESTIONS: frozenset[str] = frozenset({"review_pull_request"})
@@ -175,6 +189,15 @@ def _judge(connection: Any, decision: Mapping[str, Any]) -> Optional[tuple[str, 
                     "waiting on this answer.",
                     {"kind": "pull_request_merged", "reason_code": reason,
                      "code_task_run_id": merged["id"], "sha": merged["sha"]})
+    if action in DEPLOY_QUESTIONS:
+        overtaken = _overtaken(connection, rec)
+        if overtaken:
+            short = str(overtaken.get("commit") or "")[:7]
+            note = (f"{short} is already live on this target, so there is nothing left to ship."
+                    if overtaken["same_commit"] else
+                    f"a later deploy ({short}) went live on this target after it was asked; "
+                    "approving this one would roll the app back.")
+            return (f"superseded — {note}", overtaken)
     if action in PULL_REQUEST_QUESTIONS:
         merged = _merged_on_record(
             connection, project_id, url=str(rec.get("pull_request_url") or "") or None,
@@ -187,13 +210,85 @@ def _judge(connection: Any, decision: Mapping[str, Any]) -> Optional[tuple[str, 
     return None
 
 
+def _overtaken(connection: Any, rec: Mapping[str, Any]) -> Optional[dict[str, Any]]:
+    """The healthy deploy that overtook this deploy request, or None (facts on record only)."""
+    deployment_id = str(rec.get("deployment_id") or "")
+    if not deployment_id:
+        return None
+    asked = connection.execute(text(
+        "SELECT id, target_id, commit_sha, status, created_at, workflow_run_id, rollback_of "
+        "FROM stack_deployments WHERE id = :i"), {"i": deployment_id}).mappings().first()
+    if not asked or asked["status"] != "awaiting_approval":
+        return None
+    later = connection.execute(text(
+        "SELECT id, commit_sha, finished_at FROM stack_deployments WHERE target_id = :t "
+        "AND id <> :i AND status = 'healthy' AND created_at > :at "
+        "ORDER BY created_at DESC LIMIT 1"),
+        {"t": asked["target_id"], "i": asked["id"], "at": asked["created_at"]}).mappings().first()
+    if later:
+        return {"kind": "deploy_overtaken", "deployment_id": asked["id"], "by": later["id"],
+                "commit": later["commit_sha"], "same_commit": later["commit_sha"] == asked["commit_sha"]}
+    if not asked["workflow_run_id"] or asked["rollback_of"]:
+        return None
+    serving = connection.execute(text(
+        "SELECT id, commit_sha FROM stack_deployments WHERE target_id = :t AND id <> :i "
+        "AND status = 'healthy' ORDER BY created_at DESC LIMIT 1"),
+        {"t": asked["target_id"], "i": asked["id"]}).mappings().first()
+    if serving and serving["commit_sha"] == asked["commit_sha"]:
+        return {"kind": "deploy_already_live", "deployment_id": asked["id"], "by": serving["id"],
+                "commit": serving["commit_sha"], "same_commit": True}
+    return None
+
+
+def _close_overtaken_deploy(connection: Any, cause: Mapping[str, Any], note: str,
+                            actor: str) -> None:
+    """The withdrawn deploy request's own row: closed in words, its ChangeSet rejected and its
+    budget hold released, and a workflow step parked on it moved onto the deploy that is live."""
+    deployment_id = str(cause["deployment_id"])
+    row = connection.execute(text(
+        "UPDATE stack_deployments SET status = 'rejected', finished_at = now(), updated_at = now(), "
+        "failure_reason = :r WHERE id = :i AND status = 'awaiting_approval' "
+        "RETURNING project_id, changeset_id, reservation_id"),
+        {"i": deployment_id, "r": f"Superseded: {note}"[:500]}).mappings().first()
+    if not row:
+        return
+    connection.execute(text(
+        "UPDATE changesets SET status = 'rejected', failure_reason = :r, updated_at = now() "
+        "WHERE id = :c AND status IN ('pending_approval', 'policy_checked', 'budget_reserved')"),
+        {"c": row["changeset_id"], "r": "superseded by a later deploy"})
+    if row["reservation_id"]:
+        try:
+            from ..config import get_settings
+            from .budget import BudgetGovernor
+
+            with connection.begin_nested():
+                BudgetGovernor(get_settings()).release(
+                    connection, row["project_id"], row["reservation_id"],
+                    "Stack deployment superseded by a later deploy.")
+        except Exception:  # noqa: BLE001 — a held zero-dollar reservation expires on its own
+            log.debug("superseded_deploy_release_failed", exc_info=True)
+    note_for_step = (f"the deploy it waited for was superseded: {cause['by']} is live "
+                     f"({str(cause.get('commit') or '')[:7]})")
+    connection.execute(text(
+        "UPDATE workflow_step_runs SET output = COALESCE(output, '{}'::jsonb) || "
+        "jsonb_build_object('await', jsonb_build_object('kind', 'stack_deployment', 'id', "
+        "CAST(:by AS TEXT)), 'awaited_note', CAST(:note AS TEXT), 'superseded_deployment', "
+        "CAST(:was AS TEXT)), updated_at = now() WHERE status = 'waiting' "
+        "AND output->'await'->>'kind' = 'stack_deployment' AND output->'await'->>'id' = :was"),
+        {"by": cause["by"], "was": deployment_id, "note": note_for_step[:500]})
+    from .core import emit_event
+
+    emit_event(connection, row["project_id"], "deployment.stack_superseded", actor,
+               "stack_deployment", deployment_id, {"by": cause["by"]})
+
+
 def _candidates(connection: Any, project_id: Optional[str], *,
                 ids: Optional[list[str]] = None) -> list[dict[str, Any]]:
     where = ["status IN :open",
              "(recommendation->>'reason_code' IN :reasons OR recommendation->>'action' IN :actions)"]
     params: dict[str, Any] = {"open": _open_statuses(),
                               "reasons": sorted(EFFECT_FAILURE_CAUSES),
-                              "actions": sorted(PULL_REQUEST_QUESTIONS)}
+                              "actions": sorted(PULL_REQUEST_QUESTIONS | DEPLOY_QUESTIONS)}
     binds = [bindparam("open", expanding=True), bindparam("reasons", expanding=True),
              bindparam("actions", expanding=True)]
     if project_id:
@@ -221,6 +316,8 @@ def withdraw_cleared(connection: Any, project_id: Optional[str] = None, *,
         verdict = _judge(connection, decision)
         if verdict and _withdraw(connection, decision, verdict[0], verdict[1], actor):
             out.append(str(decision["id"]))
+            if str(verdict[1].get("kind") or "").startswith("deploy_"):
+                _close_overtaken_deploy(connection, verdict[1], verdict[0], actor)
     return out
 
 
@@ -295,5 +392,13 @@ def on_pull_request_settled(connection: Any, run_id: str, state: str, *,
     return _guarded(_on_pull_request_settled, connection, run_id, state, actor)
 
 
-__all__ = ["EFFECT_FAILURE_CAUSES", "PULL_REQUEST_QUESTIONS", "failed_effect_cause",
-           "on_effect_succeeded", "on_pull_request_settled", "withdraw_cleared"]
+def on_deploy_healthy(connection: Any, project_id: str, *, actor: str = "boss") -> list[str]:
+    """A stack deploy went live: withdraw the deploy requests it overtook."""
+    if not project_id or not hasattr(connection, "begin_nested"):
+        return []
+    return _guarded(withdraw_cleared, connection, project_id, actor=actor)
+
+
+__all__ = ["DEPLOY_QUESTIONS", "EFFECT_FAILURE_CAUSES", "PULL_REQUEST_QUESTIONS",
+           "failed_effect_cause", "on_deploy_healthy", "on_effect_succeeded",
+           "on_pull_request_settled", "withdraw_cleared"]

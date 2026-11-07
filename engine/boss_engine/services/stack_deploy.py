@@ -1856,6 +1856,22 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
                **({"shared_compose_project": shared_project} if shared_project else {}),
                **({"retire_projects": retire} if retire else {}),
                **({"retire_app_in": moved_from} if moved_from else {})}
+    if not summary.get("demo_logins") and summary.get("generated_env_keys"):
+        # WHO SIGNS IN: boss.deploy.yaml names no demo users, so read them from the app's own
+        # seed / login files at this commit (names only), for Try it, Deployments and Settings.
+        try:
+            from .project_experience.demo_logins import discover_in_repository
+
+            with engine.connect() as connection:
+                found = discover_in_repository(
+                    connection, project_id, f"{owner}/{repo}",
+                    lambda p: github.read_file(owner, repo,
+                                               f"{workdir_}/{p}" if workdir_ else p, commit))
+            if found:
+                summary["demo_logins"] = found
+                summary["demo_logins_from"] = "repository"
+        except Exception:  # noqa: BLE001 — names are a nicety; never refuse a deploy over them
+            pass
     rp = ResourcePlaneService(settings)
     with engine.begin() as connection:
         # Check-then-insert under ONE lock per target. Everything above took seconds (GitHub,
@@ -2393,6 +2409,11 @@ def _finalize(connection: Connection, settings: Settings, *, deployment_id: str,
                        "stack_deployment", deployment_id,
                        {"commit": row["commit_sha"], "mode": outcome["mode"],
                         "open_url": outcome["open_url"]})
+            # DEPLOY REQUESTS THIS ONE OVERTOOK (cleared_causes): an older commit still asking
+            # to ship to this target, or the same commit asked again, is withdrawn now.
+            from .cleared_causes import on_deploy_healthy
+
+            on_deploy_healthy(connection, row["project_id"], actor="boss")
             checks = target_health_checks(outcome.get("health") or [])
             if checks:
                 # ONE DEFINITION OF HEALTHY. The target's health_checks are what the monitor

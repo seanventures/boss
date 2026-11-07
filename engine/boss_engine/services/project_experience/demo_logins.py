@@ -6,6 +6,11 @@ User names come from the app itself, never invented:
      read from the newest stack deployment's manifest summary or text;
   2. else the users the onboarding agent found in the repository (its seed file or login-page
      hint: `customer@demo.test`), stored on the onboarding record;
+     and, failing that, the users the app's last deploy found in the repository at the commit
+     it shipped (`discover_in_repository`, recorded on the deploy's manifest summary as
+     `demo_logins` with `demo_logins_from: repository`): a project deployed before onboarding
+     existed (helpdesk-ai-demo) never had an onboarding record, so Try it, Deployments and
+     Settings showed a bare "Demo login" with no name;
   3. else one row with no user name, saying where to declare them.
 
 Passwords are only ever read through templates/secrets.py (`demo_login_values` for the app's
@@ -69,6 +74,33 @@ def scan_checkout(root: Any, paths: list[str]) -> list[dict[str, str]]:
     return users_from_text(blobs)
 
 
+def seed_paths(connection: Connection, project_id: str, repository: str) -> list[str]:
+    """Where this repository keeps its demo users: the code graph's files that look like a
+    seed / login / fixture file (SEED_PATH), plus the README. Paths only; bounded."""
+    rows = connection.execute(text(
+        "SELECT DISTINCT path FROM kg_nodes WHERE project_id = :p AND kind = 'file' "
+        "AND (repo IS NULL OR lower(repo) = lower(:r)) AND path IS NOT NULL LIMIT 5000"),
+        {"p": project_id, "r": repository}).scalars().all()
+    paths = sorted(str(p) for p in rows if SEED_PATH.search(str(p)) and "node_modules" not in str(p)
+                   and "/test" not in f"/{p}" and not str(p).startswith("tests/"))
+    return paths[:MAX_SCAN_FILES // 4] + ["README.md"]
+
+
+def discover_in_repository(connection: Connection, project_id: str, repository: str,
+                           read: Any) -> list[dict[str, str]]:
+    """The demo users an app names in its own files at the commit being deployed: `read(path)`
+    returns a file's text or None (the deploy's GitHub reader). Names only; never raises."""
+    blobs = []
+    for path in seed_paths(connection, project_id, repository):
+        try:
+            got = read(path)
+        except Exception:  # noqa: BLE001 — a missing or unreadable file names nobody
+            got = None
+        if got:
+            blobs.append(str(got)[:MAX_SCAN_BYTES])
+    return users_from_text(blobs)
+
+
 def _manifest_users(connection: Connection, project_id: str) -> list[dict[str, str]]:
     from ..app_deploy_manifest import ManifestError, load_manifest
 
@@ -79,6 +111,8 @@ def _manifest_users(connection: Connection, project_id: str) -> list[dict[str, s
     for r in rows:
         summary = as_json(r["manifest"], {}) or {}
         listed = summary.get("demo_logins")
+        if summary.get("demo_logins_from") == "repository":
+            listed = None
         if isinstance(listed, list) and listed:
             return [_person(d) for d in listed if isinstance(d, dict) and d.get("user")]
         if r["manifest_text"] and "demo_logins" in str(r["manifest_text"]):
@@ -107,12 +141,25 @@ def _discovered_users(connection: Connection, project_id: str) -> list[dict[str,
     return [_person(u) for u in users or [] if isinstance(u, dict) and u.get("user")]
 
 
+def _deployed_users(connection: Connection, project_id: str) -> list[dict[str, str]]:
+    """The users the app's newest deploy found in its repository (stack_deploy records them on
+    the manifest summary when boss.deploy.yaml names none)."""
+    rows = connection.execute(text(
+        "SELECT s.manifest FROM stack_deployments s JOIN deployment_targets t ON t.id = s.target_id "
+        "WHERE t.project_id = :p AND s.manifest->>'demo_logins_from' = 'repository' "
+        "ORDER BY s.created_at DESC LIMIT 1"), {"p": project_id}).scalars().all()
+    for manifest in rows:
+        listed = (as_json(manifest, {}) or {}).get("demo_logins") or []
+        return [_person(d) for d in listed if isinstance(d, dict) and d.get("user")]
+    return []
+
+
 def users(connection: Connection, project_id: str) -> tuple[list[dict[str, str]], str]:
     """(users, where they came from: manifest | repository | none)."""
     found = _manifest_users(connection, project_id)
     if found:
         return found, "manifest"
-    found = _discovered_users(connection, project_id)
+    found = _discovered_users(connection, project_id) or _deployed_users(connection, project_id)
     if found:
         return found, "repository"
     return [], "none"
@@ -245,5 +292,5 @@ def record_reveal(connection: Connection, project_id: str, actor: str, env: str,
          {"env": env, "logins": count})
 
 
-__all__ = ["DEFAULT_KEY", "environments", "listing", "record_reveal", "reveal", "reveal_href",
-           "rows_for", "scan_checkout", "users", "users_from_text"]
+__all__ = ["DEFAULT_KEY", "discover_in_repository", "environments", "listing", "record_reveal", "reveal", "reveal_href",
+           "rows_for", "scan_checkout", "seed_paths", "users", "users_from_text"]

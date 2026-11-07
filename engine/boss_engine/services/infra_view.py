@@ -177,6 +177,9 @@ def deploy_status(raw_status: Optional[str], *, decision_status: Optional[str] =
     # another run took the decision, or it was answered elsewhere. It is not waiting on you.
     if status == "awaiting_approval" and decision_status and decision_status != "pending":
         status = "superseded"
+    # Closed because a later deploy overtook it (cleared_causes): nobody said no.
+    if status == "rejected" and decision_status == "withdrawn":
+        status = "superseded"
     w = deploy_word(status, newest_for_target=newest_for_target)
     listed = steps if isinstance(steps, list) else (_json(steps) or [])
     now = next((_step_title(x) for x in listed
@@ -1783,7 +1786,12 @@ def split_deploy_ref(ref: Any) -> Optional[tuple[str, str]]:
     THE ONE READER of a deploy ref. The console hands refs to sibling screens (the Activity
     log's `subject=`), and every reader that compared the whole ref to a row id matched
     nothing: "Open full log" showed 0 lines for a deploy that had nine steps."""
-    kind, _, ident = str(ref or "").partition(":")
+    raw = str(ref or "").strip()
+    # A bare stack deployment id (`sdep_…`, what a workflow step and the Project page hold) is
+    # that stack deploy: "Open the deploy" from them landed on "Not a deploy" (PX-03).
+    if raw.startswith("sdep_") and ":" not in raw:
+        return "stack", raw
+    kind, _, ident = raw.partition(":")
     if kind not in DEPLOY_REF_TABLES or not ident.strip():
         return None
     return kind, ident.strip()
