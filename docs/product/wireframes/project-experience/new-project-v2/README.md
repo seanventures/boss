@@ -5,13 +5,20 @@ and **Workflows › New build** (`workflows/new-project-composer.tsx`) into one 
 These are wireframes only. No product code changes.
 
 Open `a-add-project.html` and walk the screens with → / ← (Esc returns to the wireframe index).
+The walk is a (idea · fix · repo) → b → c → d (typing · chat · ready · refused) → e.
 Each page also takes `?theme=light` and `?notes=0`.
 
 | Screen | What it shows |
 |---|---|
-| `a-add-project.html?mode=idea` | One input takes a sentence, a repo or a folder and detects which. Below it, a six-box diagram of what BOSS will do (captain → stack → connectors → workflow → code → staging) and the step strip with approvals in amber. One primary: **Create and start**. |
-| `a-add-project.html?mode=repo` | The same screen while you type a repo. Inline search lists GitHub repos and host folders together, and Helm reads the highlighted repo live. |
+| `a-add-project.html?mode=idea` | **v3:** the input is a multi-line box (5 lines, grows to 12, ⤢ full screen) and Helm rewrites it into **Here's what I understood** (title · problem · who uses it · 3–6 must-haves · out of scope · done when · open questions with quick answers), with Looks right / Fix it / Rewrite with a hint. Helm's additions are dotted-underlined. Below it, as approved: one input takes a sentence takes a sentence, a repo or a folder and detects which. Below it, a six-box diagram of what BOSS will do (captain → stack → connectors → workflow → code → staging) and the step strip with approvals in amber. One primary: **Create and start**. |
+| `a-add-project.html?mode=fix` | **v3:** Fix it pressed: every line of the brief is editable in place (must-haves reorder, add, delete), and a rewrite hint is typed. |
+| `a-add-project.html?mode=repo` | **v3:** for a repo the card summarises what Helm found (what it is, main parts, health) and what onboarding will do; lines typed under the repo become a note to Helm. As approved: the same screen while you type a repo. Inline search lists GitHub repos and host folders together, and Helm reads the highlighted repo live. |
 | `b-adjust.html` | The popover behind each box: Connectors, Workflow, Stack, Who to tell, More detail, Captain & crew, Where the code lives, Staging. Below them, the parity table (38 of 38 kept). |
+| `d-new-work.html?state=typing` | **New:** the New work modal (replaces the one-line composer on Project › Work). Kind tabs, multi-line box, Helm reading the words and the code graph, defaults already picked. |
+| `d-new-work.html?state=chat` | Helm's understanding (title · what changes · area from the code graph · done when · risk) and **Talk it through**: Helm asks one question with quick replies. |
+| `d-new-work.html?state=ready` | Ready to start: brief confirmed and folded, the chat's answers applied (+ criterion, priority, who to tell), defaults, plan preview, **Start** or **Add to Next**. |
+| `d-new-work.html?state=refused` | A readiness refusal inside the modal: the same checklist, and Start anyway locked until each missing item is ticked. |
+| `e-new-work-parity.html` | Work tab before/after, defaults per kind, the Workflow chip's popover, click counts, and the 20-row parity table. |
 | `c-after-create.html` | Where Create and start lands: the new project in Planning, with the PRD as the first gate. It also shows **Add a feature** moving to Project › New work, and the click comparison. |
 
 ## Click counts (from the Projects page; typing not counted; approve-PRD / merge-PR gates identical in both)
@@ -22,7 +29,44 @@ Each page also takes `?theme=light` and `?notes=0`.
 | Existing repo | 4 (Add · Existing tab · repo row · Start onboarding) | **2** (paste a URL or press ↵ on the top match) · 3 if you click a result |
 | A sample | 3 (Add · Try a sample · Start the sample) | **2** (Add · Try a sample ▶, which starts at once) |
 
-## Parity: where every capability lives now
+## New work: click counts (typing not counted; merge-PR gate identical)
+
+| Path | Old (one-line composer) | New (modal) |
+|---|---|---|
+| From the header | 2 (New work, which jumps to Work and focuses the box · Start) | **2** (New work · Start), with the brief and defaults shown first |
+| From the Work tab | 1 (type · Start) | **2** (bar · Start); **0** by keyboard (type in the bar, ⌘↵) |
+| Another workflow | 4 (New work · change · pick · Start) | **4** (New work · Workflow chip · pick · Start) |
+| Answer Helm's question | not possible | 3 (New work · quick reply · Start), optional |
+| Plan it for later | not possible here (Roadmap only) | 2 (New work · Add to Next) |
+
+## New work: parity with the one-line composer (`apps/web/app/projects/tab-work.tsx › Composer`), 20 of 20 kept
+
+| Capability | Was | Now |
+|---|---|---|
+| Kind: Feature · Bug · Ticket | Segmented control | Kind tabs (Feature · Bug · Ticket or link); a link is read on any tab |
+| Per-kind example text | Placeholder | Placeholder, plus Helm's suggestion chips |
+| Describe the work | One line (2000 chars) | Multi-line box (same limit), grows, full screen, attach |
+| Ticket = paste a GitHub / Plane issue | Ticket tab, URL keyboard | Ticket or link tab; Helm reads the issue into the brief |
+| Link to an issue | Only by pasting a ticket | Issue chip: link or create, on any kind |
+| Helm's plan strip | Strip under the box | Plan preview + the Workflow chip's step strip |
+| ≈ time (history median or typical) | Tag with basis tooltip | Estimate chip ("from 7 runs here"), same tooltip |
+| ≈ cost, or "cost after its first run" | Tag | Estimate chip and footer tag |
+| Workflow name + why | Text with tooltip | Workflow chip, why on the line |
+| "change" workflow · fits-a-kind · back to default | Menu | Workflow chip popover, same list and default link |
+| Readiness refusal (409) checklist | Panel under the composer | Same panel inside the modal |
+| Consent: Start anyway with ticks | Start → Start anyway, locked until ticked | Same |
+| Older engine fallback (project start door) | Behind Start | Unchanged |
+| Header New work (`compose=1`) | Jumps to Work, focuses the box | Opens the modal on any tab |
+| Ask-Helm answer "New work · Edit" prefill | Text + kind prefilled, never sent | Modal opens prefilled, never sent |
+| Permission gate `workflow_run:start` | Gated Start | Gated Start and Add to Next |
+| Busy / result message, sample mode | "Starting…", "Started — Helm is planning it" | Same, as a toast; the modal closes |
+| New row slides in | Yes | Yes |
+| Add-a-feature sizes (Quick · Small · Spec first · Major) | Old New build | Workflow chip options |
+| What changes (screen · API · data · access · + connector) | Old New build chips | "What changes" and Area in the brief; connector under More |
+
+New in the modal: Helm's understanding (confirm or edit), the short chat (at most 4 turns), priority, who to tell, target, create an issue, Add to Next, and a draft kept on Esc.
+
+## Add a project: parity (where every capability lives now)
 
 | Capability | Was | Now |
 |---|---|---|
@@ -60,6 +104,7 @@ Each page also takes `?theme=light` and `?notes=0`.
 The full 38-row table is on `b-adjust.html`.
 
 ## Rules kept
+- Helm's understanding is the same pattern in both places (Add a project and New work): your words stay, Helm's rewrite sits below them with its additions marked, and the one primary (Create and start / Start) confirms the brief as shown. Looks right is optional, so the click counts above do not grow.
 - One action per screen, with **Create and start** as the only primary. Labels are 4 words or fewer, and detail sits in popovers.
 - Models and GitHub accounts stay global and are never picked here. They are shown read-only and link to Repo and models.
 - Suggestions (stack, connectors, workflow, staging) are the captain's reasoning from the sentence or repo, never a keyword list. Each shows the words that triggered it.

@@ -1,0 +1,119 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>New work parity</title>
+<link rel="stylesheet" href="../console.css"><link rel="stylesheet" href="../project.css"><link rel="stylesheet" href="np2.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/fill/style.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/bold/style.css">
+</head>
+<body data-active="projects" data-project="1" data-tab="work" data-crumb="Projects|HelpDesk AI Demo|Work">
+<div id="content">
+
+<section class="grid g2">
+  <!-- before / after on the Work tab -->
+  <section class="card">
+    <div class="card-h"><span class="ico" data-c="teal"><i class="ph ph-swap"></i></span><h3>Project › Work: what changes</h3><span class="pin">1</span></div>
+    <span class="lbl">Before</span>
+    <div class="row wrap" style="gap:8px;margin:6px 0 12px;opacity:.7">
+      <div class="seg"><span aria-selected="true"><i class="ph ph-sparkle"></i>Feature</span><span><i class="ph ph-bug"></i>Bug</span><span><i class="ph ph-ticket"></i>Ticket</span></div>
+      <div class="input" data-ph style="flex:1;min-width:180px">Describe it — e.g. "let agents tag tickets by product"</div>
+      <span class="btn" data-kind="primary" data-size="s"><i class="ph-fill ph-play"></i>Start</span>
+    </div>
+    <span class="lbl">After</span>
+    <div class="nw-tab-bar" style="margin-top:6px"><i class="ph ph-plus-circle" style="color:var(--accent-text);font-size:1rem"></i>New work: describe a feature, a bug, or paste a ticket link…<span class="wf-spacer"></span><span class="wf-kbd">N</span></div>
+    <p class="faint" style="font-size:.56rem;margin:8px 0 0">Click, press N, or start typing: the modal opens with your words. The header’s New work opens the same modal on every tab.</p>
+  </section>
+
+  <!-- defaults per kind -->
+  <section class="card">
+    <div class="card-h"><span class="ico" data-c="violet"><i class="ph ph-sliders-horizontal"></i></span><h3>Defaults per kind</h3><span class="pin">2</span></div>
+    <div class="np2-tablewrap"><table class="parity">
+      <tr><th>Kind</th><th>Workflow</th><th>You approve</th><th>Priority</th><th>Helm asks about</th></tr>
+      <tr><td><i class="ph ph-sparkle"></i> Feature</td><td>Minor feature (7) · Major feature when the area spans &gt; 1 part</td><td>Merge PR (+ spec for Major)</td><td>Normal</td><td>scope, existing data</td></tr>
+      <tr><td><i class="ph ph-bug"></i> Bug</td><td>Bug fix: reproduce → fix → regression test → PR</td><td>Merge PR</td><td>High if prod is affected</td><td>steps to reproduce, where seen</td></tr>
+      <tr><td><i class="ph ph-link"></i> Ticket or link</td><td>From the issue’s labels (bug → Bug fix, else Minor feature)</td><td>Merge PR</td><td>From the issue</td><td>only what the issue lacks</td></tr>
+    </table></div>
+    <p class="faint" style="font-size:.56rem;margin:8px 0 0">Defaults come from the project’s own workflows and runs. Each one is a chip in the modal and can be changed.</p>
+  </section>
+</section>
+
+<section class="grid g2">
+  <!-- the workflow chip's popover: today's "change" -->
+  <section class="card">
+    <div class="card-h"><span class="ico" data-c="amber"><i class="ph ph-flow-arrow"></i></span><h3>Workflow chip › change</h3><span class="pin">3</span></div>
+    <div class="pop" style="max-width:420px">
+      <div class="pop-h"><b>Workflow for this work</b><span class="anchor"><i class="ph ph-arrow-up"></i>from the Workflow chip</span></div>
+      <div class="wfp">
+        <div class="wfp-c"><span>Quick fix</span><span class="mini"><i></i><i></i><i data-y></i></span><small>3 steps · ≈ 8 min · ≈ $0.40 · was “Quick”</small></div>
+        <div class="wfp-c" aria-checked="true"><span><i class="ph-bold ph-check"></i> Minor feature <span class="tag" data-tone="green">fits a feature</span></span><span class="mini"><i></i><i></i><i></i><i></i><i data-y></i><i></i><i></i></span><small>7 steps · ≈ 18 min · ≈ $1.20 · was “Small”</small></div>
+        <div class="wfp-c"><span>Spec first</span><span class="mini"><i></i><i data-y></i><i></i><i></i><i></i><i data-y></i></span><small>spec you approve, then build · was “Spec first”</small></div>
+        <div class="wfp-c"><span>Major feature</span><span class="mini"><i></i><i></i><i data-y></i><i></i><i></i><i></i><i data-y></i><i data-y></i></span><small>panel + PRD · ≈ 35 min · was “Major”</small></div>
+        <div class="wfp-c"><span>Bug fix</span><span class="mini"><i></i><i></i><i></i><i data-y></i></span><small>reproduce → fix → test → PR</small></div>
+      </div>
+      <div class="pop-f"><a class="faint" style="font-size:.56rem;margin-right:auto">Back to the project’s default</a><span class="btn" data-size="s">Steps</span></div>
+    </div>
+  </section>
+
+  <!-- click counts -->
+  <section class="card">
+    <div class="card-h"><span class="ico" data-c="green"><i class="ph ph-chart-bar-horizontal"></i></span><h3>Clicks to start new work</h3><span class="pin">4</span></div>
+    <p class="faint" style="font-size:.54rem;margin:0 0 8px">Typing not counted. Your gates (merge PR) are the same in both.</p>
+    <div class="cc">
+      <b>From the header</b>
+      <div class="cc-bars"><div class="cc-bar"><span class="b" style="width:calc(2 * 28px)"></span>2 <em>New work (jumps to Work, focuses the box) · Start</em></div>
+        <div class="cc-bar" data-new><span class="b" style="width:calc(2 * 28px)"></span><b>2</b> <em>New work · Start (brief and defaults shown before you press)</em></div></div>
+      <b>From the Work tab</b>
+      <div class="cc-bars"><div class="cc-bar"><span class="b" style="width:calc(1 * 28px)"></span>1 <em>type in the box · Start</em></div>
+        <div class="cc-bar" data-new><span class="b" style="width:calc(2 * 28px)"></span><b>2</b> <em>bar · Start; 0 by keyboard: type in the bar, ⌘↵</em></div></div>
+      <b>Another workflow</b>
+      <div class="cc-bars"><div class="cc-bar"><span class="b" style="width:calc(4 * 28px)"></span>4 <em>New work · change · pick · Start</em></div>
+        <div class="cc-bar" data-new><span class="b" style="width:calc(4 * 28px)"></span><b>4</b> <em>New work · Workflow chip · pick · Start</em></div></div>
+      <b>Answer Helm’s question</b>
+      <div class="cc-bars"><div class="cc-bar"><span class="b" style="width:0"></span>n/a <em>no way to talk before starting</em></div>
+        <div class="cc-bar" data-new><span class="b" style="width:calc(3 * 28px)"></span><b>3</b> <em>New work · quick reply · Start (optional)</em></div></div>
+      <b>Plan it for later</b>
+      <div class="cc-bars"><div class="cc-bar"><span class="b" style="width:0"></span>n/a <em>only via Roadmap</em></div>
+        <div class="cc-bar" data-new><span class="b" style="width:calc(2 * 28px)"></span><b>2</b> <em>New work · Add to Next</em></div></div>
+    </div>
+  </section>
+</section>
+
+<!-- parity -->
+<section class="card">
+  <div class="card-h"><span class="ico" data-c="teal"><i class="ph ph-list-checks"></i></span><h3>Parity: every capability of the one-line composer</h3><span class="tag" data-tone="green">20 of 20 kept</span><span class="pin">5</span></div>
+  <div class="np2-tablewrap"><table class="parity">
+    <tr><th>Capability</th><th>Was (Work › composer)</th><th>Now (New work modal)</th></tr>
+    <tr><td>Kind: Feature · Bug · Ticket</td><td>Segmented control</td><td>Kind tabs (Feature · Bug · Ticket or link); a link is read on any tab</td></tr>
+    <tr><td>Per-kind example text</td><td>Placeholder</td><td>Placeholder, plus Helm’s suggestion chips</td></tr>
+    <tr><td>Describe the work</td><td>One line (2000 chars)</td><td>Multi-line box (same limit), grows, full screen, attach</td></tr>
+    <tr><td>Ticket = paste a GitHub / Plane issue</td><td>Ticket tab, URL keyboard</td><td>Ticket or link tab; Helm reads the issue into the brief</td></tr>
+    <tr><td>Link to an issue</td><td>Only by pasting a ticket</td><td>Issue chip: link or create, on any kind</td></tr>
+    <tr><td>Helm’s plan strip (steps, agents, you)</td><td>Strip under the box</td><td>Plan preview + the Workflow chip’s step strip</td></tr>
+    <tr><td>≈ time (history median or typical)</td><td>Tag with basis tooltip</td><td>Estimate chip, “from 7 runs here”, same tooltip</td></tr>
+    <tr><td>≈ cost, or “cost after its first run”</td><td>Tag</td><td>Estimate chip and footer tag</td></tr>
+    <tr><td>Workflow name + why</td><td>Text with tooltip</td><td>Workflow chip with the why on the line</td></tr>
+    <tr><td>“change” workflow; fits-a-kind; back to default</td><td>Menu</td><td>Workflow chip popover, same list and default link</td></tr>
+    <tr><td>Readiness refusal (409) checklist</td><td>Panel under the composer</td><td>Same panel inside the modal</td></tr>
+    <tr><td>Consent: Start anyway with ticks</td><td>Start → Start anyway, locked until ticked</td><td>Same: primary becomes Start anyway, locked until ticked</td></tr>
+    <tr><td>Older engine fallback (project start door)</td><td>Behind Start</td><td>Unchanged, behind Start</td></tr>
+    <tr><td>Header New work (<span class="mono">compose=1</span>)</td><td>Jumps to Work, focuses the box</td><td>Opens the modal on any tab</td></tr>
+    <tr><td>Ask-Helm answer “New work · Edit” prefill</td><td>Text + kind prefilled, never sent</td><td>Modal opens prefilled, never sent</td></tr>
+    <tr><td>Permission gate <span class="mono">workflow_run:start</span></td><td>Gated Start</td><td>Gated Start and Add to Next</td></tr>
+    <tr><td>Busy / result message, sample mode</td><td>“Starting…”, “Started — Helm is planning it”</td><td>Same, as a toast; the modal closes</td></tr>
+    <tr><td>New row slides in</td><td>Yes</td><td>Yes</td></tr>
+    <tr><td>Add-a-feature sizes (Quick · Small · Spec first · Major)</td><td>Old New build</td><td>Workflow chip options (Quick fix · Minor · Spec first · Major)</td></tr>
+    <tr><td>What changes (screen · API · data · access · + connector)</td><td>Old New build chips</td><td>“What changes” and Area in the brief; connector under More</td></tr>
+  </table></div>
+  <p class="faint" style="font-size:.56rem;margin:8px 0 0">New: Helm’s understanding (confirm or edit), the short chat, priority, who to tell, target, create an issue, Add to Next, and a draft kept on Esc.</p>
+</section>
+
+<div class="notes"><b>Design notes</b><ol class="np2-n">
+  <li><b>1</b> The inline composer leaves the Work tab; one bar opens the modal. Keyboard users keep a zero-click path (type, ⌘↵).</li>
+  <li><b>2</b> The kind picks the workflow and what Helm asks. Nothing is asked up front: every value is pre-picked.</li>
+  <li><b>3</b> “change” is the Workflow chip’s popover. The Quick/Small/Spec/Major sizes from the old New build map onto these workflows.</li>
+  <li><b>4</b> From the Work tab, a mouse start costs one more click (2 instead of 1), so the brief is seen before work starts. From the header, the count is unchanged.</li>
+  <li><b>5</b> Every row of today’s composer is kept; the source is <span class="mono">apps/web/app/projects/tab-work.tsx › Composer</span>.</li>
+</ol></div>
+</div>
+<script src="../shell.js"></script>
+<script src="np2-nav.js"></script>
+</body></html>
