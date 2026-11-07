@@ -3809,6 +3809,21 @@ CREATE TABLE IF NOT EXISTS app_logs (
 CREATE INDEX IF NOT EXISTS idx_app_logs_project ON app_logs (project_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_app_logs_run ON app_logs (run_id, created_at DESC);
 
+-- Every start of a BOSS service, with the commit it runs (services/install_history.py): a start
+-- whose commit differs from the one before it is an upgrade. Install-wide, not secret.
+CREATE TABLE IF NOT EXISTS boss_starts (
+  id TEXT PRIMARY KEY,
+  service TEXT NOT NULL,        -- api | worker
+  source_commit TEXT,           -- BOSS_SOURCE_SHA (NULL when the image carries no stamp)
+  previous_commit TEXT,         -- the same service's commit at its previous start
+  built_at TEXT,                -- BOSS_BUILT_AT
+  host TEXT,                    -- container hostname: new on recreate, kept on restart
+  oom_kills INTEGER,            -- the cgroup's OOM-kill count at boot
+  install_method TEXT,          -- BOSS_INSTALL_METHOD
+  started_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_boss_starts_service ON boss_starts (service, started_at DESC);
+
 CREATE TABLE IF NOT EXISTS app_previews (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL,

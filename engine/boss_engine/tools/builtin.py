@@ -3254,6 +3254,24 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
         return self_snapshot()
 
     @reg.tool(
+        "install_restarts",
+        "Why BOSS's own services restarted, with timestamps: every start of the api and worker "
+        "in the window, each classified — `upgrade` (the running commit changed: from → to, "
+        "by which install method), `rebuild` (same commit, new image), `recreate` (same image, "
+        "new container), `restart` (the same container again: the process died — the "
+        "crash-loop signature) — plus the OOM-kill count and the builds those starts "
+        "interrupted. Use it to settle 'was that restart our upgrade, or a crash?' (the system "
+        "doctor's 'Updates restarted a build'). Read-only; no docker socket.",
+        _obj({"hours": {"type": "number", "minimum": 0.1, "maximum": 336, "default": 24,
+                        "description": "how far back to look"}}),
+        kind="read", permission="system:read")
+    def install_restarts(ctx, *, project_id, actor, args):
+        from ..services.install_history import restarts
+
+        with ctx.begin() as c:
+            return restarts(c, hours=float(args.get("hours") or 24))
+
+    @reg.tool(
         "set_job_priority",
         "Move a job between priority bands. LOWER runs sooner. Bands: 'urgent' (delay costs "
         "money or safety), 'interactive' (a person is watching), 'requested' (a person asked "

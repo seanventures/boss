@@ -59,7 +59,7 @@ FUNDAMENTALS_TOOLS: tuple[str, ...] = (
     # diagnose and explain a run
     "diagnose_run", "explain_run", "read_run_turns",
     # infra and health
-    "inspect_self", "system_health", "diagnose_setup", "list_running_work",
+    "inspect_self", "install_restarts", "system_health", "diagnose_setup", "list_running_work",
     "consistency_report", "project_status", "list_projects", "describe_project",
     # the code graph of the project's repositories: is it indexed, and index it now
     "code_graph_status", "index_repository_code",

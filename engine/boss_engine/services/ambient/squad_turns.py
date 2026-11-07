@@ -278,8 +278,11 @@ _SCHEMAS = {
                          summary=("string", "why they should lead now")),
     # An ask a person reads in one line: what the squad cannot do and what it needs from them
     # (the card says "<squad> can't <blocked> — <need>, or take it?"; `reason` rides behind it).
-    "escalate": _schema(("reason", "blocked", "need"),
+    "escalate": _schema(("reason", "blocked", "need", "need_kind"),
                         reason=("string", "what is stuck and what you need, in full"),
+                        need_kind=("string", "access (a tool or skill you lack: name it in "
+                                             "`grant`) | information (facts only a person "
+                                             "has) | decision (a person's call)"),
                         blocked=("string", "what the squad cannot do, a few words starting with "
                                            "a verb, e.g. \"read the install's logs to explain "
                                            "the restarts\""),
@@ -335,6 +338,36 @@ def _choices(*, me: str, seat: str, lead: str, prop: Optional[Mapping[str, Any]]
     return out
 
 
+NEED_KINDS = ("access", "information", "decision")
+
+
+def _check_escalation(connection: Connection, project_id: str, me: str,
+                      args: Mapping[str, Any]) -> str:
+    """A LEAD'S ASK IS CHECKED AGAINST THE TOOL CATALOGUE BEFORE IT REACHES A PERSON. An ask for
+    access names what it lacks (`grant`); one it already holds is refused (call it), and one that
+    exists nowhere in the catalogue is refused with the reads it does hold — so "no squad tool
+    reaches host:install logs" (boss-dogfood 2026-11-07, while install_restarts and read_logs
+    were offered) never becomes a card. "" when it may go to a person."""
+    kind = str(args.get("need_kind") or "")
+    if kind not in NEED_KINDS:
+        return f"need_kind is one of {', '.join(NEED_KINDS)}"
+    if kind != "access":
+        return ""
+    wanted = str(args.get("grant") or "").strip()
+    held = held_reads(connection, None, project_id, me)
+    if not wanted:
+        return ("an ask for access names the tool or skill you need in `grant`; the reads you "
+                f"hold are: {', '.join(held) or 'none'}")
+    if wanted in held or wanted in held_skill_ids(connection, project_id, me):
+        return (f"you already hold {wanted}: call it (it is offered to you) instead of asking a "
+                "person for access")
+    if asks.grantable(connection, project_id, me, wanted) is None:
+        return (f"no tool or skill named {wanted} exists in BOSS's catalogue, so a person cannot "
+                f"grant it. The reads you hold: {', '.join(held) or 'none'}. Call the one that "
+                "answers it; if none can, ask for information or a decision instead")
+    return ""
+
+
 def _check_answer(connection: Connection, item: Mapping[str, Any], *, me: str,
                   squad: Mapping[str, Any], prop: Optional[Mapping[str, Any]]):
     """The caller's check (agent_decision `check`): refuse an answer the board would refuse, so
@@ -368,12 +401,10 @@ def _check_answer(connection: Connection, item: Mapping[str, Any], *, me: str,
         if move == "hand_lead" and (squads.seat_of(squad, str(args.get("to"))) is None
                                     or args.get("to") == me):
             return "hand the lead to another member of this squad (agent:<role>)"
-        if move == "escalate" and args.get("grant"):
-            wanted = str(args["grant"]).strip()
-            if wanted in held_reads(connection, None, item["project_id"], me) or \
-                    wanted in held_skill_ids(connection, item["project_id"], me):
-                return (f"you already hold {wanted}: call it (it is offered to you) instead of "
-                        "asking a person for access")
+        if move == "escalate" and me == squad["lead"]:
+            refused = _check_escalation(connection, item["project_id"], me, args)
+            if refused:
+                return refused
         if move == "resolve" and args.get("outcome") not in ("resolved", "failed"):
             return "outcome is resolved or failed"
         if move == "hypothesis":
@@ -597,7 +628,8 @@ def _apply(connection: Connection, settings: Any, item: Mapping[str, Any],
             entry = asks.question_entry(
                 connection, item, actor=member, reason=args.get("reason"),
                 squad_title=squad["title"], blocked=args.get("blocked"), need=args.get("need"),
-                grant=asks.grantable(connection, item["project_id"], member, args.get("grant")),
+                grant=(asks.grantable(connection, item["project_id"], member, args.get("grant"))
+                       if args.get("need_kind") == "access" else None),
                 reads=len(held_reads(connection, settings, item["project_id"], member)))
             got = asks.ask(connection, settings, item_id, actor=member, token=token,
                            entry=entry)

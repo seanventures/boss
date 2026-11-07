@@ -1510,6 +1510,14 @@ async def lifespan(_: FastAPI):
         print("[lifespan] activity-log capture installed")
     except Exception as exc:  # noqa: BLE001 — never block boot on a log handler
         print(f"[lifespan] activity-log capture unavailable: {exc}")
+    # WHICH BOSS STARTED, AND WHY: this start's commit, image and container, so "was that
+    # restart our upgrade or a crash?" is a lookup (install_history; the install_restarts tool).
+    from boss_engine.services.install_history import record_start as _record_start
+
+    _started = _record_start(engine, "api")
+    if _started and _started.get("upgraded"):
+        print(f"[lifespan] upgraded {_started['previous_commit'][:8]} -> "
+              f"{_started['commit'][:8]}")
     # A FRESH INSTALL MUST BE ABLE TO PRESS BUILD.
     #
     # The delivery catalogue — the twelve workflows a directive is routed to — was installed

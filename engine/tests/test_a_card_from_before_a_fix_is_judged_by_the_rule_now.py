@@ -224,7 +224,7 @@ def _stuck_cve_squad(c, pid):
                move("escalate", reason="no workflow 'dependency_cve_patch': which one opens a "
                                        "draft PR here?",
                     blocked="open the draft PR without a patch workflow",
-                    need="name the workflow")],
+                    need="name the workflow", need_kind="information")],
         ENGINEER: [move("critique", position="agree", summary="Patch level")],
         CRITIC: [move("critique", position="agree", summary="Fine with a full build")]})
     refused = Launchers(refuse="no workflow 'dependency_cve_patch' in this project")

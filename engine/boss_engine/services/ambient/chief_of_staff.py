@@ -1431,22 +1431,32 @@ _OPEN_CARDS = (
 
 
 def _reword(connection: Connection, card: Mapping[str, Any],
-            entries: Sequence[Mapping[str, Any]]) -> bool:
-    """A card that still asks, said again by today's rules: its line and its answers rebuilt
-    from its entries (asks.card_question / card_options), so a card raised under older words
-    ("2 nudges", "Approve all" on one question) rewords itself on the next tick. True if it
-    changed."""
+            entries: Sequence[Mapping[str, Any]],
+            items: Optional[Mapping[str, Mapping[str, Any]]] = None) -> bool:
+    """A card that still asks, said again by today's rules: a squad's question rebuilt from its
+    own fields (asks.rewords), the card's line and answers from its entries (card_question /
+    card_options) — so a card raised under older words ("2 nudges", "Approve all" on one
+    question, "grant … access" with nothing to grant) rewords itself on the next tick. True if
+    it changed."""
     from . import asks
 
+    items = items or {}
+    entries = [asks.rewords(connection, e, items[str(e.get("work_item_id"))])
+               if asks.entry_kind(e) == "question" and str(e.get("work_item_id")) in items
+               else dict(e) for e in entries]
     question = clean_text(asks.card_question(entries), 300) if all(
         "words" in e for e in entries) else str(card.get("question") or "")
     options = asks.card_options(entries)
-    stored = card.get("options")
-    if question == card.get("question") and options == stored:
+    rec = dict(card.get("recommendation") or {})
+    batch_changed = list(rec.get("batch") or []) != entries
+    if question == card.get("question") and options == card.get("options") and not batch_changed:
         return False
+    new_rec = asks._recommendation(entries, base=rec)  # noqa: SLF001 — the card's own shape
     connection.execute(text(
-        "UPDATE decisions SET question = :q, options = CAST(:o AS JSONB), updated_at = now() "
-        "WHERE id = :d"), {"q": question, "o": json.dumps(options), "d": card["id"]})
+        "UPDATE decisions SET question = :q, options = CAST(:o AS JSONB), "
+        "recommendation = CAST(:r AS JSONB), updated_at = now() WHERE id = :d"),
+        {"q": question, "o": json.dumps(options), "d": card["id"],
+         "r": json.dumps(new_rec, default=str)})
     return True
 
 
@@ -1510,7 +1520,9 @@ def reconsider(connection: Connection, project_id: str, *, mode: str) -> list[di
                     verdict = "rebatch"   # it still asks: onto the project's one card
             (keep if verdict == "ask" else gone).append((entry, item, verdict))
         if not gone:
-            if rec.get("card") == asks.CARD and _reword(connection, card, entries):
+            if rec.get("card") == asks.CARD and _reword(
+                    connection, card, entries,
+                    {str(i["id"]): i for _, i, _ in keep if i is not None}):
                 out.append({"decision_id": card["id"], "reworded": True})
             continue
         settled = []

@@ -207,14 +207,21 @@ def question_entry(connection: Connection, item: Mapping[str, Any], *, actor: st
     subject = subject_words(connection, item)
     who = squad_name(squad_title, actor)
     blocked_words, need_words = _phrase(blocked, 90), _phrase(need, 40)
+    # The question offers only what its buttons do (card_options / carry): grant the skill it
+    # names, or close it as expected; either way "or take it". Never a do-nothing "let it go on".
+    shown = blocked_words
     if grant:
         need_words = "grant access"
+        tail = "grant access, or take it?"
+    else:
+        tail = "close it as expected, or take it?"
+        if need_words and blocked_words:
+            shown = f"{blocked_words} (needs: {need_words})"
     if blocked_words:
-        question = (f"{who} can't {blocked_words} — {need_words or 'let it go on'}, "
-                    "or take it?")
+        question = f"{who} can't {shown} — {tail}"
         words = f"{who.lower()} can't {blocked_words}"
     else:
-        question = f"{who} is stuck on {subject} — let it go on, or take it?"
+        question = f"{who} is stuck on {subject} — {tail}"
         words = f"{who.lower()} is stuck: {subject}"
     return {"ask_kind": "question", "work_item_id": item["id"], "task_class": item["task_class"],
             "asked_by": actor, "squad": who, "subject": subject,
@@ -318,9 +325,12 @@ def card_options(entries: Sequence[Mapping[str, Any]]) -> list[dict[str, str]]:
             return [{"key": "approve", "label": label},
                     {"key": "reject", "label": "Dismiss all"}]
         if all(entry_kind(e) == "question" for e in entries):
-            grants = any(e.get("grant") for e in entries)
-            return [{"key": "approve", "label": "Grant and let them go on" if grants
-                     else "Let them go on"}, {"key": "reject", "label": "I'll take them"}]
+            grants = [bool(e.get("grant")) for e in entries]
+            label = ("Grant access to all" if all(grants) else
+                     "Close all: expected" if not any(grants) else
+                     "Grant where asked, close the rest")
+            return [{"key": "approve", "label": label},
+                    {"key": "reject", "label": "I'll take them"}]
         return [{"key": "approve", "label": "Approve all"},
                 {"key": "reject", "label": "Dismiss all"}]
     e = entries[0]
@@ -329,7 +339,8 @@ def card_options(entries: Sequence[Mapping[str, Any]]) -> list[dict[str, str]]:
         return [{"key": "approve", "label": f"Approve: {action_words(e.get('action'))}"},
                 {"key": "hold", "label": "Hold"}]
     if kind == "question":
-        return [{"key": "approve", "label": "Grant access" if e.get("grant") else "Let it go on"},
+        return [{"key": "approve",
+                 "label": "Grant access" if e.get("grant") else "Close it: expected"},
                 {"key": "reject", "label": "I'll take it"}]
     if kind == "incident":
         return [{"key": "approve", "label": "I'll take it"},
@@ -956,9 +967,18 @@ def carry(connection: Connection, settings: Any, decision: Mapping[str, Any],
         # "Grant access" DOES grant it: the skill goes to the asking agent's role (the one grant,
         # role_skills), as the person who approved — then the squad goes on, now able to look.
         grant_access(connection, item, entry, actor=actor)
+        board.answered(connection, item["id"], actor=actor)
+        return "question:granted"
+    if approve:
+        # "Close it: expected": the person says what the squad was stuck on is expected — the
+        # item ends resolved, in their name, with that said on the board.
+        collab.post(connection, item["id"], kind="finding", sender="boss", body={
+            "summary": f"{person(actor)} closed it as expected" + (f": {clean_text(note, 200)}"
+                                                                    if note else "")})
+        board.answered(connection, item["id"], actor=actor, to="resolved")
+        return "question:closed"
     board.answered(connection, item["id"], actor=actor)
-    if not approve:
-        board.take_over(connection, item["id"], actor=actor, reason="took it from Needs you")
+    board.take_over(connection, item["id"], actor=actor, reason="took it from Needs you")
     return "question"
 
 

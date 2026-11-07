@@ -136,7 +136,7 @@ def test_asking_a_person_for_access_it_already_holds_is_refused(eng, project):  
         assert lead == INFRA
         model = ScriptedSquadModel({INFRA: [
             move("escalate", reason=REASON, blocked="read the install's logs",
-                 need="grant log access", grant="read_logs"),
+                 need="grant log access", need_kind="access", grant="read_logs"),
             move("pass")]})
         turn = squad_turns.take_turn(c, settings(), item["id"], INFRA, model=model)
         after = board.get(c, item["id"])
@@ -153,7 +153,7 @@ def test_a_stuck_squads_card_names_the_block_and_grant_access_grants_it(eng, pro
         model = ScriptedSquadModel({INFRA: [move(
             "escalate", reason=REASON,
             blocked="read the install's logs to explain the restarts",
-            need="grant log access", grant="read_logs")]})
+            need="grant log access", need_kind="access", grant="read_logs")]})
         turn = squad_turns.take_turn(c, settings(), item["id"], INFRA, model=model)
         assert turn["status"] == "needs_you", turn
         card_id = board.get(c, item["id"])["needs_you_decision_id"]
@@ -178,22 +178,30 @@ def test_a_stuck_squads_card_names_the_block_and_grant_access_grants_it(eng, pro
 
 def test_a_card_narrowed_to_one_question_answers_like_one(eng, project):  # noqa: F811
     with eng.begin() as c:
+        _ceo(c, project)
         a, b = _restarts_item(c, project), _restarts_item(c, project)
         entries = [asks.question_entry(c, i, actor=INFRA, reason=REASON, squad_title="Squad",
                                        blocked="read the logs", need="send the restart times")
                    for i in (a, b)]
         card_id = asks.raise_card(c, project, entries)
-        assert _card(c, card_id)["options"][0]["label"] == "Let them go on"
+        assert _card(c, card_id)["options"][0]["label"] == "Close all: expected"
         # b moves on (a person took it elsewhere): the card is narrowed to a's question.
         c.execute(text("UPDATE work_items SET needs_you_decision_id = NULL WHERE id = :w"),
                   {"w": b["id"]})
         cos.reconsider(c, project, mode="propose")
         card = _card(c, card_id)
     assert card["status"] == "pending" and len(card["recommendation"]["batch"]) == 1
-    assert card["question"] == ("Infra Steward's squad can't read the logs — send the restart "
-                                "times, or take it?")
-    assert card["options"] == [{"key": "approve", "label": "Let it go on"},
+    # Nothing to grant: the card offers only what a person can do, and never "Let it go on".
+    assert card["question"] == ("Infra Steward's squad can't read the logs (needs: send the "
+                                "restart times) — close it as expected, or take it?")
+    assert card["options"] == [{"key": "approve", "label": "Close it: expected"},
                                {"key": "reject", "label": "I'll take it"}]
+    _approve(eng, card_id)
+    with eng.begin() as c:
+        closed = board.get(c, a["id"])
+        said = [m["body"]["summary"] for m in collab.messages(c, a["id"], kinds=("finding",))]
+    assert closed["lifecycle"] == "resolved", "Close it: expected closes it"
+    assert any("closed it as expected" in s for s in said)
 
 
 def test_a_stuck_question_from_before_the_squad_could_read_goes_back_to_it(eng, project):  # noqa: F811
@@ -522,3 +530,71 @@ def test_two_cards_raised_with_the_same_words_become_one_card_asking_both(eng, p
         after = [board.get(c, i) for i in items]
     assert {i["lifecycle"] for i in after} == {"proposed"}
     assert {i["needs_you_decision_id"] for i in after} == {None}
+
+
+# ── BOSS reads its own upgrades and restarts; a claim of no tool is checked first ────────────
+#
+# Live, 23:05: the squad read with its tools, then asked again — "can't read host:install logs
+# … grant host:install log access" — with nothing grantable, so the card offered a do-nothing
+# "Let it go on". BOSS kept no record of which commit it ran when. Now every start is recorded,
+# `install_restarts` classifies them, the infra squad holds it, and an ask for a tool that does
+# not exist is refused with the reads it holds.
+
+def test_every_start_is_recorded_and_classified_upgrade_or_crash(eng, monkeypatch):  # noqa: F811
+    from boss_engine.services import install_history
+
+    service = f"t{uuid4().hex[:8]}"
+    host = {"name": "c1"}
+    monkeypatch.setattr(install_history.socket, "gethostname", lambda: host["name"])
+    try:
+        monkeypatch.setenv("BOSS_SOURCE_SHA", "a" * 40)
+        monkeypatch.setenv("BOSS_BUILT_AT", "2026-11-07T19:40:00Z")
+        monkeypatch.setenv("BOSS_INSTALL_METHOD", "upgrade.sh")
+        assert install_history.record_start(eng, service)["upgraded"] is False
+        monkeypatch.setenv("BOSS_SOURCE_SHA", "b" * 40)       # upgrade.sh: a new commit
+        monkeypatch.setenv("BOSS_BUILT_AT", "2026-11-07T19:43:00Z")
+        host["name"] = "c2"
+        up = install_history.record_start(eng, service)
+        assert up["upgraded"] and up["previous_commit"] == "a" * 40
+        install_history.record_start(eng, service)            # same container again: a crash
+        with eng.connect() as c:
+            got = install_history.restarts(c, hours=1)
+        mine = [s for s in got["starts"] if s.get("service") == service]
+        assert [s["kind"] for s in mine] == ["first", "upgrade", "restart"]
+        assert mine[1]["from_commit"] == "a" * 12 and mine[1]["commit"] == "b" * 12
+        assert mine[1]["by"] == "upgrade.sh" and "crash-loop" in mine[2]["says"]
+        assert {"at": mine[1]["at"], "service": service, "from": "a" * 12, "to": "b" * 12,
+                "by": "upgrade.sh"} in got["upgrades"]
+    finally:
+        with eng.begin() as c:
+            c.execute(text("DELETE FROM boss_starts WHERE service = :s"), {"s": service})
+
+
+def test_the_infra_squad_holds_install_restarts_through_its_granted_bundle(eng, project):  # noqa: F811
+    from boss_engine.services.agent_baseline import FUNDAMENTALS_TOOLS
+    from boss_engine.tools import build_discuss_read_registry
+
+    assert "install_restarts" in FUNDAMENTALS_TOOLS
+    assert build_discuss_read_registry().get("install_restarts").kind == "read"
+    with eng.begin() as c:
+        _restarts_item(c, project)
+        _grant(c, project, "infra_steward")
+        assert "install_restarts" in squad_turns.held_reads(c, None, project, INFRA)
+
+
+def test_an_ask_for_a_tool_that_does_not_exist_is_refused_with_the_reads_it_holds(
+        eng, project):  # noqa: F811
+    with eng.begin() as c:
+        item = _restarts_item(c, project)
+        _grant(c, project, "infra_steward")
+        model = ScriptedSquadModel({INFRA: [
+            move("escalate", reason=REASON, blocked="read host:install logs",
+                 need="grant host:install log access", need_kind="access",
+                 grant="host:install logs"),
+            move("pass")]})
+        turn = squad_turns.take_turn(c, settings(), item["id"], INFRA, model=model)
+        after = board.get(c, item["id"])
+    assert turn["status"] != "needs_you" and after["lifecycle"] != "needs_you"
+    refusal = model.prompts[-1][1]
+    assert "no tool or skill named host:install logs exists" in refusal
+    assert "install_restarts" in refusal, "the catalogue it holds is named"
