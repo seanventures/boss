@@ -54,7 +54,7 @@ from typing import Any, Callable, Mapping, Optional, Union
 from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine
 
-from . import board, collab, ledger, policy, squad_memory, squad_plugins, squads
+from . import asks, board, collab, ledger, policy, squad_memory, squad_plugins, squads
 from . import task_classes as tc
 from ._common import (EvidenceError, clean_text, emit, party, party_id, person,
                       verify_evidence)
@@ -479,13 +479,16 @@ def _apply(connection: Connection, settings: Any, item: Mapping[str, Any],
         return {"status": "handed", "lead": got["lead"]}
     if move == "escalate":
         if member == squad["lead"]:
-            moved = board.needs_you(connection, item_id, actor=member, token=token,
-                                    question=clean_text(args.get("reason"), 280),
-                                    recommendation={"action": "hold", "squad": squad["title"]},
-                                    options=[{"key": "continue", "label": "Let the squad go on"},
-                                             {"key": "take_over", "label": "I'll take it"}])
+            if asks.refused_launches(connection, item_id) >= asks.MAX_REFUSED_LAUNCHES:
+                # BOSS refused the squad's decided action twice: that is the policy's answer,
+                # recorded on the ledger and the board — never a question to a person.
+                return stop_by_policy(connection, item, squad, token)
+            entry = asks.question_entry(connection, item, actor=member,
+                                        reason=args.get("reason"), squad_title=squad["title"])
+            got = asks.ask(connection, settings, item_id, actor=member, token=token,
+                           entry=entry)
             squad_memory.note(connection, item_id, actor=member, phase="Asked a person")
-            return {"status": "needs_you", "decision_id": moved["needs_you_decision_id"]}
+            return {"status": "needs_you", "decision_id": got["needs_you_decision_id"]}
         m = collab.post(connection, item_id, kind="escalate", sender=member,
                         body={"to": squad["lead"], "reason": args.get("reason")})
         return {"status": "posted", "message_id": m["id"]}
@@ -581,7 +584,7 @@ def settle(connection: Connection, settings: Any, item_id: str, *, end_of_round:
                        {**record, "dissent": record["dissent"] + [
                            {"party": "boss", "position": "gate", "reason": verdict["reason"]}]},
                        replies)
-    return _to_person(connection, item, squad, token, prop, record, verdict)
+    return _to_person(connection, item, squad, token, prop, record, verdict, settings)
 
 
 def _approve(connection, item, squad, token, prop, record, replies, launchers):
@@ -611,7 +614,36 @@ def _approve(connection, item, squad, token, prop, record, replies, launchers):
     out: dict[str, Any] = {"state": "decided", "act_id": decision["act_id"],
                            "action": action.key, "dissent": record["dissent"]}
     out["executed"] = _execute(connection, item_id, squad, prop, decision, launchers)
+    if (out["executed"] or {}).get("error") and \
+            asks.refused_launches(connection, item_id) >= asks.MAX_REFUSED_LAUNCHES:
+        out["stopped"] = stop_by_policy(connection, board.get(connection, item_id), squad,
+                                        token, action=action.key)
     return out
+
+
+def stop_by_policy(connection: Connection, item: Mapping[str, Any], squad: Mapping[str, Any],
+                   token: str, *, action: Optional[str] = None) -> dict[str, Any]:
+    """BOSS refused what the squad decided, twice: a POLICY OUTCOME. It is recorded on the
+    ledger (decided by the policy, in plain words) and the item ends — nobody is asked
+    "which workflow is permitted?" (2026-11-07: "A2 gate has twice refused …" cards)."""
+    from .asks import action_words
+
+    what = action_words(action or connection.execute(text(
+        "SELECT action FROM agent_act_decisions WHERE work_item_id = :w AND action IS NOT NULL "
+        "ORDER BY created_at DESC LIMIT 1"), {"w": item["id"]}).scalar())
+    ledger.record_decision(
+        connection, project_id=item["project_id"], decided_by="policy:squad_launch",
+        question=f"BOSS refused to {what} twice: ask a person?", chosen="stop",
+        options=["stop", "ask"], work_item_id=item["id"], task_class=item["task_class"],
+        evidence=asks.item_evidence(connection, item["id"]),
+        rationale=(f"BOSS refused to {what} here twice. That is the policy's answer, so it is "
+                   "recorded as the outcome and nobody is asked."),
+        reversibility="reversible", undo={"action": "reopen", "work_item_id": item["id"]})
+    squad_memory.note(connection, item["id"], actor=squad["lead"],
+                      phase=f"Stopped: BOSS refused to {what} twice")
+    board.finish(connection, item["id"], actor=squad["lead"], lifecycle="failed", token=token,
+                 outcome=f"BOSS refused to {what} twice (policy)")
+    return {"status": "failed", "stopped": "policy"}
 
 
 def _execute(connection, item_id, squad, prop, decision, launchers) -> Optional[dict[str, Any]]:
@@ -646,34 +678,35 @@ def _revise(connection, item, squad, prop, record, replies):
     return {"state": "revise", "act_id": decision["act_id"], "dissent": record["dissent"]}
 
 
-def _to_person(connection, item, squad, token, prop, record, verdict):
+def _to_person(connection, item, squad, token, prop, record, verdict, settings=None):
+    """A person must decide the squad's proposal: through the ONE ambient path (asks.ask) —
+    it joins the project's one card, in plain words built from the item's rows (the package,
+    the app, the action); the squad's own summary and every dissent ride behind it."""
     body = prop["body"]
     action = tc.action(body["action"])
     recommended = "approve" if record["result"] == "approved" else "hold"
     why = record.get("tie_break") or verdict.get("reason") or record["quorum_rule"]
-    moved = board.needs_you(
-        connection, item["id"], actor=squad["lead"], token=token,
-        question=clean_text(f"{action.title}: {body.get('summary')}?", 280),
-        recommendation={"action": action.key, "recommended": recommended,
-                        "proposal_id": prop["id"], "why_a_person": clean_text(why, 300),
-                        "consensus": {k: record.get(k) for k in (
-                            "mode", "result", "votes", "critiques", "dissent", "quorum_rule",
-                            "tie_break")},
-                        "dissent": record["dissent"]},
-        options=[{"key": "approve", "label": f"Approve: {action.title}"},
-                 {"key": "hold", "label": "Hold"}],
-        risk_tier=RISK_TIER.get(action.risk, 2),
-        cost_of_waiting=f"the {squad['title'].lower()} waits")
+    entry = asks.squad_entry(
+        connection, item, actor=squad["lead"], action=action.key, proposal_id=prop["id"],
+        recommended=recommended, why=why, squad_title=squad["title"],
+        consensus={k: record.get(k) for k in ("mode", "result", "votes", "critiques", "dissent",
+                                              "quorum_rule", "tie_break")},
+        dissent=record["dissent"])
+    entry["detail"] = asks.scrub(body.get("summary"), 300)
+    got = asks.ask(connection, settings, item["id"], actor=squad["lead"], token=token,
+                   entry=entry)
     squad_memory.note(connection, item["id"], actor=squad["lead"],
                       phase=f"Needs you: {action.title}")
-    return {"state": "needs_you", "decision_id": moved["needs_you_decision_id"],
-            "recommended": recommended, "dissent": record["dissent"], "result": record["result"]}
+    return {"state": "needs_you", "decision_id": got["needs_you_decision_id"],
+            "asked": got["outcome"], "recommended": recommended, "dissent": record["dissent"],
+            "result": record["result"]}
 
 
 # ── a person answers ─────────────────────────────────────────────────────────────────────────
 
 def person_answered(connection: Connection, item_id: str, *, actor: str, approve: bool,
-                    rationale: str) -> dict[str, Any]:
+                    rationale: str, entry: Optional[Mapping[str, Any]] = None
+                    ) -> dict[str, Any]:
     """A person answered the squad's Needs-you card: record THEIR decision on the ledger (it
     settles the proposal), and move the item back to the squad. The approved action executes
     at the squad's next round (`execute_person_approvals`). The card itself is resolved by the
@@ -686,6 +719,8 @@ def person_answered(connection: Connection, item_id: str, *, actor: str, approve
         "SELECT recommendation FROM decisions WHERE id = :d"),
         {"d": item.get("needs_you_decision_id")}).first()
     rec = dict(row[0]) if row and isinstance(row[0], Mapping) else {}
+    if entry is not None:
+        rec = dict(entry)   # one entry on a card that asks several things
     prop_id = rec.get("proposal_id")
     board.answered(connection, item_id, actor=actor)
     if not prop_id:

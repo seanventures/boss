@@ -171,7 +171,11 @@ def _body(connection: Connection, project_id: str, kind: str, body: Mapping[str,
             out["packet"] = json.loads(json.dumps(dict(b["packet"]), default=str))
         return out
     if kind == "escalate":
-        return {"to": party(b.get("to")), "reason": need("reason", 300)}
+        out = {"to": party(b.get("to")), "reason": need("reason", 300)}
+        if isinstance(b.get("ask"), Mapping):
+            # A PARKED ASK (asks.park): the structured entry the next card carries.
+            out["ask"] = json.loads(json.dumps(dict(b["ask"]), default=str))
+        return out
     if kind == "resolve":
         return {"outcome": need("outcome", 60), "summary": clean_text(b.get("summary"), 300)}
     if kind == "squad":

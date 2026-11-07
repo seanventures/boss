@@ -76,7 +76,7 @@ def test_a_firing_alert_becomes_one_item_the_chief_of_staff_proposes_to_the_sre(
         assert ledger.sentences(row["rationale"]) <= 3
         card = c.execute(text("SELECT question, recommendation FROM decisions WHERE id = :d"),
                          {"d": item["needs_you_decision_id"]}).mappings().one()
-        assert card["question"].startswith("Hand to SRE?")
+        assert card["question"].startswith("Hand to SRE: the incident on order-api")
         assert card["recommendation"]["owner"] == "agent:sre"
         assert card["recommendation"]["asked_by"] == cos.PARTY
         assert signals.get(c, sig["id"])["status"] == "triaged"

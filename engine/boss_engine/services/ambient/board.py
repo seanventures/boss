@@ -34,6 +34,7 @@ with LeaseLost and it stops. That is the fix for Codex's "keeps firing after I t
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from typing import Any, Iterable, Mapping, Optional
 
@@ -439,6 +440,9 @@ def needs_you(connection: Connection, item_id: str, *, actor: str, question: str
     return {**moved, "needs_you_decision_id": decision_id}
 
 
+_RAW_NAME = re.compile(r"^[a-z]{2,6}_[0-9A-Za-z]{6,}$")
+
+
 def plain_subject(item: Mapping[str, Any]) -> Optional[str]:
     """What an item is about, in the words a person uses: a file's short name, a repository's
     name, an app, a pull request number. Never a raw key (`module:acme/web:src/a/b.jsx`,
@@ -447,7 +451,9 @@ def plain_subject(item: Mapping[str, Any]) -> Optional[str]:
     ref = str(item.get("subject_ref") or "")
     kind, _, rest = ref.partition(":")
     if kind == "app" or (not ref and item.get("app")):
-        return clean_text(item.get("app") or rest, 80) or None
+        name = clean_text(item.get("app") or rest, 80)
+        # A raw id ("svc_0d4d…", "deptgt_…") is not a name a person knows.
+        return None if not name or _RAW_NAME.match(name) else name
     if kind == "module":
         path = rest.split(":", 1)[-1]
         return clean_text(path.rstrip("/").rsplit("/", 1)[-1], 80) or None

@@ -198,7 +198,10 @@ def alert_facts(connection: Connection, signal: Mapping[str, Any]) -> dict[str, 
     apps = connection.execute(text(
         "SELECT count(DISTINCT COALESCE(a.target_id, a.subject_id)) FROM app_alerts a "
         "WHERE a.project_id = :p AND a.state = 'firing'"), {"p": row["project_id"]}).scalar()
+    from .asks import is_meta_alert
+
     return {"environment": env or None, "production": env not in _non_prod_envs(),
+            "meta": is_meta_alert(row),
             "metric": metric, "layer": layer, "alert": row["alertname"],
             "urgency": row["urgency"], "apps_firing": int(apps or 0),
             "blast": "wide" if int(apps or 0) >= WIDE_BLAST_APPS else "one app"}
@@ -210,6 +213,9 @@ def _alert_readings(severity: str, facts: Mapping[str, Any]) -> list[tuple[str, 
     decide who may mitigate: staging with one app affected is a staging mitigation (A2+ acts
     and reports); production, an unknown environment, or a wide blast radius is an incident
     where a person approves the mitigation."""
+    if facts.get("meta"):
+        # BOSS's own self-check, not the app: BOSS's health, never an app incident.
+        return [("system_health", 0.92, "BOSS's own monitor, not the app")]
     env = facts.get("environment") or "an unknown environment"
     what = str(facts.get("metric") or "an").replace("_", " ")
     if facts and not facts.get("production") and facts.get("blast") != "wide":
@@ -779,6 +785,14 @@ def triage_group(connection: Connection, settings: Any, project_id: str,
         return {"outcome": "joined", "work_item_id": item_id,
                 "signals": [s["id"] for s in group]}
 
+    # ONE OWNER FOR EACH PIECE OF WORK: onboarding's backlog already proposes this (same
+    # signal) and the person decides it there — the item is left to it, never worked twice.
+    from . import asks as one_card
+
+    if one_card.defer_to_backlog(connection, item_id):
+        return {"outcome": "left_to_backlog", "work_item_id": item_id, "task_class": klass.key,
+                "signals": [s["id"] for s in group]}
+
     # A NEW ITEM: the Chief of Staff's own turn, under its lease.
     held = board.claim(connection, item_id, owner=PARTY, minutes=TURN_LEASE_MINUTES)
     token = held["lease_token"]
@@ -894,19 +908,17 @@ def triage_group(connection: Connection, settings: Any, project_id: str,
         return {"outcome": "routed", "work_item_id": item_id, "act_id": act["act_id"],
                 "owner": owner, "task_class": klass.key, "level": level}
     if klass.key in ROUTE_AT_ANY_LEVEL and not reading.asked:
-        # An incident is asked on its OWN card, now: it is urgent and about one running app.
-        estimate = _estimate(connection, project_id, klass.key)
-        board.needs_you(
-            connection, item_id, actor=PARTY, token=token, question=f"Hand to {who}?",
-            recommendation={"action": "ambient_route", "owner": owner, "owner_label": who,
-                            "next_action": next_key, "owner_may_act": owner_free,
-                            "act_id": act["act_id"], "estimate_usd": estimate,
-                            "priority": round(priority(drivers), 1), "words": words},
-            options=[{"key": "approve", "label": f"Hand to {who}"},
-                     {"key": "reject", "label": "Dismiss"}],
-            risk_tier=1 if klass.risk == "low" else 2,
-            cost_of_waiting=f"{severity} · ×{sum(int(s.get('occurrences') or 1) for s in group)}")
+        # An incident is asked NOW (it is urgent): on the project's one card, joining it when
+        # one is open — exempt from the hourly cap, never a card of its own beside another.
         board.release(connection, item_id, owner=PARTY, token=token, reason="asked a person")
+        entry = {"ask_kind": "handoff", "work_item_id": item_id, "act_id": act["act_id"],
+                 "task_class": klass.key, "kind": klass.title,
+                 "title": _short_title(item["title"], 12), "words": words, "asked": False,
+                 "owner": owner, "owner_label": who, "next_action": next_key,
+                 "owner_may_act": owner_free, "severity": severity,
+                 "estimate_usd": _estimate(connection, project_id, klass.key),
+                 "priority": round(priority(drivers), 1)}
+        one_card.place(connection, settings, project_id, [entry], actor=PARTY, urgent=True)
         return {"outcome": "proposed", "work_item_id": item_id, "act_id": act["act_id"],
                 "owner": owner, "task_class": klass.key, "level": level}
     # Everything else waits for this tick's ONE card (ask_batch), under the hourly rate guard.
@@ -960,16 +972,25 @@ def _entry(connection: Connection, project_id: str, row: Mapping[str, Any]) -> d
 
 def ask_batch(connection: Connection, settings: Any, project_id: str, *,
               mode: str = "propose", manual: bool = False) -> dict[str, Any]:
-    """Put every waiting suggestion in front of a person on ONE card, if the hour has room.
+    """Put every waiting suggestion — and every ask a squad parked for lack of room — in front
+    of a person on the project's ONE card (asks.place: join the open card, else raise one if
+    the hour has room).
 
     Returns {"asked": [item ids], "decision_id"} or {"held": [item ids], "reason"}. Held ones wait
     for the next tick's card (the rate guard: policy.ask_room) — and are judged again then: one
     the policy no longer asks (the mode changed while it waited) proceeds without a card.
     `manual`: a person pressed "Triage now" while the always-on agents are off — the card stays
     when the tick next sweeps (reconsider withdraws only what the agents asked by themselves)."""
+    from . import asks
+
     rows = []
     settled = []
     for row in waiting_suggestions(connection, project_id):
+        if asks.backlog_twin(connection, {"id": row["id"], "project_id": project_id}):
+            with connection.begin_nested():
+                if asks.defer_to_backlog(connection, row["id"]):
+                    settled.append("left_to_backlog")
+            continue
         owner = str(row["chosen"]).split(":", 1)[1] if ":" in str(row["chosen"]) else None
         verdict = disposition(connection, project_id, row["task_class"],
                               asked=row["chosen"] == "ask", mode=mode, owner_role=owner)
@@ -981,46 +1002,29 @@ def ask_batch(connection: Connection, settings: Any, project_id: str, *,
             settled.append(_settle_withdrawn(
                 connection, project_id, None, item, {**_entry(connection, project_id, row)},
                 verdict))
-    if not rows:
-        return {"asked": [], **({"settled": settled} if settled else {})}
-    if policy.ask_room(connection, project_id, settings) <= 0:
-        return {"asked": [], "held": [r["id"] for r in rows],
-                "reason": f"{policy.asks_per_hour(settings)} cards already this hour"}
-    held: list[tuple[str, str]] = []
-    entries: list[dict[str, Any]] = []
-    for row in rows:
-        try:
+    entries = [_entry(connection, project_id, r) for r in rows]
+    for e in entries:
+        e["ask_kind"] = "handoff"
+        if len(entries) == 1:
+            e["estimate_usd"] = _estimate(connection, project_id, e["task_class"])
+    # Asks a squad parked while the hour had no room: re-judged, then on the same card.
+    for entry in asks.parked(connection, project_id):
+        # No card yet: the item waits on "no decision" (needs_you_decision_id IS NULL).
+        why, item = asks.verdict(connection, {"id": None, "recommendation": {"manual": manual}},
+                                 entry, mode)
+        if why == "ask":
+            entries.append(entry)
+        elif item is not None and why != "moot":
             with connection.begin_nested():
-                got = board.claim(connection, row["id"], owner=PARTY, minutes=TURN_LEASE_MINUTES)
-        except (board.Conflict, board.LeaseLost):
-            continue
-        held.append((row["id"], got["lease_token"]))
-        entries.append(_entry(connection, project_id, row))
-    if not held:
-        return {"asked": []}
-    rec: dict[str, Any] = {"action": "ambient_route", "batch": entries, "count": len(entries),
-                           "manual": bool(manual)}
-    if len(entries) == 1:
-        lead = entries[0]
-        rec.update({k: lead[k] for k in ("owner", "owner_label", "next_action",
-                                         "owner_may_act", "act_id", "words")})
-        rec["estimate_usd"] = _estimate(connection, project_id, lead["task_class"])
-        options = [{"key": "approve", "label": (
-                       "Answer" if lead["asked"] else
-                       tc.ACTIONS[lead["next_action"]].title if lead["owner"] == PARTY
-                       else f"Hand to {lead['owner_label']}")},
-                   {"key": "reject", "label": "Dismiss"}]
-    else:
-        options = [{"key": "approve", "label": "Hand all over"},
-                   {"key": "reject", "label": "Dismiss all"}]
-    risky = any(tc.task_class(e["task_class"]).risk != "low" for e in entries)
-    moved = board.needs_you_batch(
-        connection, held, actor=PARTY, question=batch_question(entries), recommendation=rec,
-        options=options, risk_tier=2 if risky else 1,
-        cost_of_waiting=f"{len(entries)} item{'s' if len(entries) > 1 else ''} wait")
-    for item_id, token in held:
-        board.release(connection, item_id, owner=PARTY, token=token, reason="asked a person")
-    return {"asked": [i for i, _ in held], "decision_id": moved["needs_you_decision_id"]}
+                settled.append(asks.settle(connection, project_id, None, item, entry, why))
+    if not entries:
+        return {"asked": [], **({"settled": settled} if settled else {})}
+    got = asks.place(connection, settings, project_id, entries, actor=PARTY, manual=manual)
+    if got.get("held"):
+        return {"asked": [], "held": got["held"], "reason": got["reason"],
+                **({"settled": settled} if settled else {})}
+    return {"asked": got["asked"], "decision_id": got["decision_id"],
+            **({"settled": settled} if settled else {})}
 
 
 # ── withdrawing what the policy no longer asks ───────────────────────────────────────────────
@@ -1032,6 +1036,11 @@ _WITHDRAW_WHY = {
     "off": "the always-on agents are off, so nothing waits on this answer",
     "roadmap": "the Recommended roadmap ranks this; it is not a hand-off",
     "moot": "the item it asked about has moved on",
+    # The one-card rules (asks.py): a squad's or the SRE squad's ask re-judged.
+    "backlog": "it is already on the onboarding backlog, which is yours to decide there",
+    "policy": "BOSS refused that action twice; the outcome is recorded, nobody needs to answer",
+    "healthy": "the app is healthy: the alert cleared, nothing failing is left",
+    "rebatch": "it moved onto the project's one card",
 }
 
 
@@ -1054,6 +1063,10 @@ def _verdict(connection: Connection, project_id: str, card: Mapping[str, Any],
         return "moot", item
     if _roadmap_only(connection, item["id"]) or item["task_class"] == "roadmap_item":
         return "roadmap", item
+    from .asks import backlog_twin
+
+    if backlog_twin(connection, item):
+        return "backlog", item
     if mode == "off":
         return ("ask" if (card.get("recommendation") or {}).get("manual") else "off"), item
     act = connection.execute(text(
@@ -1072,6 +1085,10 @@ def _settle_withdrawn(connection: Connection, project_id: str, card_id: Optional
     (observe / off), or left to the Recommended roadmap."""
     item_id = item["id"]
     note = _WITHDRAW_WHY[verdict]
+    if verdict == "backlog":
+        from . import asks
+
+        return asks.settle(connection, project_id, card_id, item, entry, "backlog")
     board.unask(connection, item_id, actor=PARTY, reason=note)
     cited = ([{"kind": "decision", "ref": card_id}] if card_id
              else [{"kind": "act", "ref": str(entry["act_id"])}])
@@ -1109,12 +1126,22 @@ def _settle_withdrawn(connection: Connection, project_id: str, card_id: Optional
     return "observed"
 
 
+#: Every open ambient card a tick re-judges: the Chief of Staff's, the project's one card, and
+#: the cards squads raised on their own before the one-card rule (asks.py) — all but the
+#: production-mitigation card (roll back prod? three answers, urgent: its own card).
+_OPEN_CARDS = (
+    "SELECT id, project_id, question, recommendation, created_at FROM decisions "
+    "WHERE project_id = :p AND status = ANY(:open) "
+    "AND recommendation->>'asked_by' IS NOT NULL AND recommendation->>'work_item_id' IS NOT NULL "
+    "AND (recommendation->>'asked_by' = :cos OR recommendation->>'card' = 'ambient' "
+    "  OR COALESCE(recommendation->>'action', '') <> 'incident_squad.mitigate' "
+    "  OR recommendation->>'mitigation' = 'escalate') "
+    "ORDER BY created_at")
+
+
 def _open_cards(connection: Connection, project_id: str) -> list[dict[str, Any]]:
-    return [dict(r) for r in connection.execute(text(
-        "SELECT id, project_id, question, recommendation, created_at FROM decisions "
-        "WHERE project_id = :p AND status = ANY(:open) AND recommendation->>'asked_by' = :cos "
-        "ORDER BY created_at"),
-        {"p": project_id, "open": sorted(OPEN_STATUSES), "cos": PARTY}).mappings()]
+    return [dict(r) for r in connection.execute(text(_OPEN_CARDS), {
+        "p": project_id, "open": sorted(OPEN_STATUSES), "cos": PARTY}).mappings()]
 
 
 def reconsider(connection: Connection, project_id: str, *, mode: str) -> list[dict[str, Any]]:
@@ -1127,28 +1154,47 @@ def reconsider(connection: Connection, project_id: str, *, mode: str) -> list[di
     is withdrawn with a note in words (status `withdrawn`, event `decision.withdrawn`); a card
     left with some is narrowed to them. Returns what changed."""
     from ..run_decisions import _withdraw_with_note
+    from . import asks
 
     out: list[dict[str, Any]] = []
     for card in _open_cards(connection, project_id):
         rec = dict(card.get("recommendation") or {})
-        entries = list(rec.get("batch") or [
-            {**rec, "work_item_id": rec.get("work_item_id")}])
+        mine = rec.get("asked_by") == PARTY or rec.get("card") == asks.CARD
+        if rec.get("batch"):
+            entries = list(rec["batch"])
+        elif mine:
+            entries = [{**rec, "work_item_id": rec.get("work_item_id")}]
+        else:
+            # A card a squad raised on its own (before the one-card rule): read as one entry.
+            entries = [asks.legacy_entry(card)]
         keep, gone = [], []
         for entry in entries:
-            verdict, item = _verdict(connection, project_id, card, entry, mode)
+            if mine and asks.entry_kind(entry) == "handoff":
+                verdict, item = _verdict(connection, project_id, card, entry, mode)
+            else:
+                verdict, item = asks.verdict(connection, card, entry, mode)
+                if verdict == "ask" and not mine:
+                    verdict = "rebatch"   # it still asks: onto the project's one card
             (keep if verdict == "ask" else gone).append((entry, item, verdict))
         if not gone:
             continue
         settled = []
+        moved: list[dict[str, Any]] = []
         for entry, item, verdict in list(gone):
             if verdict == "moot" or item is None:
                 continue
             try:
                 with connection.begin_nested():
+                    if mine and asks.entry_kind(entry) == "handoff":
+                        outcome = _settle_withdrawn(connection, project_id, card["id"], item,
+                                                    entry, verdict)
+                    else:
+                        outcome = asks.settle(connection, project_id, card["id"], item, entry,
+                                              verdict)
+                        if verdict == "rebatch":
+                            moved.append(asks.rewords(connection, entry, item))
                     settled.append({"work_item_id": item["id"], "verdict": verdict,
-                                    "outcome": _settle_withdrawn(connection, project_id,
-                                                                 card["id"], item, entry,
-                                                                 verdict)})
+                                    "outcome": outcome})
             except (board.Conflict, board.LeaseLost, ledger.GateRefused, LookupError):
                 # Someone holds it (a person took it over): it stays on the card for now.
                 log.info("ambient reconsider kept %s on %s", item["id"], card["id"],
@@ -1164,7 +1210,9 @@ def reconsider(connection: Connection, project_id: str, *, mode: str) -> list[di
             new_rec = {**rec, "batch": narrowed, "count": len(narrowed),
                        "work_item_id": lead["work_item_id"],
                        "work_item_ids": [e["work_item_id"] for e in narrowed]}
-            question = (batch_question(narrowed) if all("words" in e for e in narrowed)
+            if rec.get("card") == asks.CARD:
+                new_rec = asks._recommendation(narrowed, base=rec)  # noqa: SLF001
+            question = (asks.card_question(narrowed) if all("words" in e for e in narrowed)
                         else card["question"])
             connection.execute(text(
                 "UPDATE decisions SET recommendation = CAST(:r AS JSONB), question = :q, "
@@ -1175,11 +1223,21 @@ def reconsider(connection: Connection, project_id: str, *, mode: str) -> list[di
             out.append({"decision_id": card["id"], "narrowed": True, "settled": settled})
             continue
         note = "; ".join(_WITHDRAW_WHY[v] for v in reasons)
-        if _withdraw_with_note(connection, card["id"], project_id,
-                               f"Withdrawn: {note[0].upper()}{note[1:]}.", actor=PARTY,
-                               why={"why": note, "reasons": reasons, "mode": mode,
-                                    "items": [s["work_item_id"] for s in settled]}):
-            out.append({"decision_id": card["id"], "withdrawn": True, "settled": settled})
+        result: dict[str, Any] = {"decision_id": card["id"], "settled": settled}
+        result["withdrawn"] = bool(_withdraw_with_note(
+            connection, card["id"], project_id, f"Withdrawn: {note[0].upper()}{note[1:]}.",
+            actor=PARTY, why={"why": note, "reasons": reasons, "mode": mode,
+                              "items": [s["work_item_id"] for s in settled]}))
+        if moved:
+            # What still asks goes onto the project's one card (or waits for room, parked).
+            got = asks.place(connection, None, project_id, moved, actor=PARTY)
+            for item_id in got.get("held") or []:
+                asks.park(connection, item_id, next(e for e in moved
+                                                   if e["work_item_id"] == item_id),
+                          actor=PARTY)
+            result["moved_to"] = got.get("decision_id")
+        if result["withdrawn"] or moved:
+            out.append(result)
     return out
 
 
@@ -1189,7 +1247,8 @@ def reconsider_everywhere(engine: Any, *, mode: str) -> dict[str, Any]:
     with engine.begin() as c:
         pids = [str(p) for p in c.execute(text(
             "SELECT DISTINCT project_id FROM decisions WHERE status = ANY(:open) "
-            "AND recommendation->>'asked_by' = :cos AND project_id IS NOT NULL"),
+            "AND recommendation->>'asked_by' IS NOT NULL AND (recommendation->>'asked_by' = :cos "
+            "OR recommendation->>'work_item_id' IS NOT NULL) AND project_id IS NOT NULL"),
             {"open": sorted(OPEN_STATUSES), "cos": PARTY}).scalars()]
     out: dict[str, Any] = {}
     for pid in pids:
@@ -1324,11 +1383,19 @@ def triage_project(connection: Connection, settings: Any, project_id: str, *,
 
     report["answers"] = answers.sweep(connection, settings, project_id)
     report["reconsidered"] = reconsider(connection, project_id, mode=mode)
+    # A NEW PROJECT'S GRACE (policy.grace): onboarding owns its first scan — the repository
+    # findings it turns into the backlog the person reviews. Until they have, those signals wait
+    # here (still new); afterwards each is triaged, and one onboarding already proposed is left
+    # to the backlog (asks.defer_to_backlog). Advisories and alerts are triaged at once.
+    in_grace = policy.grace(connection, project_id, settings) is not None
+    report["grace"] = in_grace
     rows = connection.execute(text(
         "SELECT * FROM signals WHERE project_id = :p AND status = 'new' AND kind NOT LIKE :rk "
+        "AND NOT (CAST(:g AS BOOLEAN) AND kind LIKE 'scan.%') "
         "ORDER BY array_position(ARRAY['critical','high','medium','low','info'], severity), "
         "last_seen_at DESC LIMIT :n"),
-        {"p": project_id, "n": MAX_SIGNALS_PER_TICK, "rk": ROADMAP_KINDS}).mappings()
+        {"p": project_id, "n": MAX_SIGNALS_PER_TICK, "rk": ROADMAP_KINDS,
+         "g": in_grace}).mappings()
     pending = [signals._out(r) for r in rows]  # noqa: SLF001 — the inbox's own row shape
     if pending:
         _triage_pending(connection, settings, project_id, pending, report, mode=mode,
@@ -1397,7 +1464,10 @@ def projects_with_work(connection: Connection, limit: int = MAX_PROJECTS_PER_TIC
         "AND d.recommendation->>'asked_by' IS NOT NULL "
         "AND (d.recommendation->>'asked_by' = :cos OR w.lifecycle = 'needs_you') "
         "UNION SELECT project_id FROM decisions WHERE status = ANY(:open_statuses) "
-        "AND recommendation->>'asked_by' = :cos AND project_id IS NOT NULL "
+        "AND recommendation->>'asked_by' IS NOT NULL "
+        "AND recommendation->>'work_item_id' IS NOT NULL AND project_id IS NOT NULL "
+        "UNION SELECT project_id FROM work_items WHERE ambient AND lifecycle = 'needs_you' "
+        "AND needs_you_decision_id IS NULL "
         "UNION SELECT w.project_id FROM work_items w WHERE w.ambient "
         "AND w.lifecycle = 'proposed' AND w.lease_owner IS NULL "
         "AND w.needs_you_decision_id IS NULL AND w.task_class <> 'roadmap_item' "

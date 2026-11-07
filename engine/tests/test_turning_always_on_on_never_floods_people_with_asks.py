@@ -76,6 +76,12 @@ def _open_cards(c, pid):
         {"p": pid}).mappings()]
 
 
+def _answer_open_cards(c, pid):
+    """A person answered every open card (Dismiss): the next ask raises a new one."""
+    c.execute(text("UPDATE decisions SET status = 'rejected' WHERE project_id = :p "
+                   "AND status = 'pending'"), {"p": pid})
+
+
 def _run(eng, pid, mode, settings=None, **kw):
     with eng.begin() as c:
         return _run_in(c, pid, mode, settings, **kw)
@@ -279,16 +285,31 @@ def test_the_rate_guard_holds_suggestions_for_the_next_card_and_seats_no_new_squ
                                                                                     project):
     cap = policy.ASKS_PER_PROJECT_HOUR
     roomy = {"ambient_cos_cards_per_class": 100}
-    for n in range(cap + 1):
+
+    def note(n):
         with eng.begin() as c:
             signal(c, project, source="scan", kind="scan.no_docs", title=f"repo{n} has no README",
                    subject_kind="repo", subject_id=f"acme/repo{n}", app=None, severity="low")
+
+    # While a card is open, every new suggestion JOINS it: one card, however many ticks.
+    for n in range(2):
+        note(n)
         report = _run(eng, project, "propose", settings=roomy)
-        if n < cap:
-            assert report["card"]["asked"], n
+        assert report["card"]["asked"], n
+    with eng.begin() as c:
+        [card] = _open_cards(c, project)
+        assert len(card["recommendation"]["batch"]) == 2
+    # Each card answered, the next suggestion raises a new one — until the hour holds `cap`.
+    for n in range(2, cap + 2):
+        with eng.begin() as c:
+            _answer_open_cards(c, project)
+        note(n)
+        report = _run(eng, project, "propose", settings=roomy)
     assert report["card"]["asked"] == [] and len(report["card"]["held"]) == 1
     with eng.begin() as c:
-        assert len(_open_cards(c, project)) == cap
+        assert _open_cards(c, project) == []
+        assert policy.asks_last_hour(c, project) == cap
+    with eng.begin() as c:
         assert policy.ask_room(c, project) == 0
         # An item already handed over gets no NEW squad while the hour of cards is used up:
         # its proposals would ask again.
@@ -310,9 +331,12 @@ def test_a_suggestion_held_by_the_rate_guard_is_judged_again_when_the_mode_chang
                                                                                    project):
     with eng.begin() as c:
         for n in range(policy.ASKS_PER_PROJECT_HOUR):
+            # Each card answered before the next: the hour's cap counts the cards raised.
+            _answer_open_cards(c, project)
             signal(c, project, source="scan", kind="scan.no_ci", title=f"r{n} has no CI",
                    subject_kind="repo", subject_id=f"acme/r{n}", app=None, severity="low")
             _run_in(c, project, "propose")
+        _answer_open_cards(c, project)
         held = signal(c, project, source="scan", kind="scan.no_docs", title="z has no README",
                       subject_kind="repo", subject_id="acme/z", app=None, severity="low")
         assert _run_in(c, project, "propose")["card"]["held"]

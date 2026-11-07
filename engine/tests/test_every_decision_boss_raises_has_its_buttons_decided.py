@@ -60,6 +60,10 @@ NO_ACTION_BY_DESIGN = {
     # The same card asking about several items at once (the Chief of Staff's one card per
     # project per tick): carried by answers.on_answered → chief_of_staff.carry_card.
     ("engine/boss_engine/services/ambient/board.py", "needs_you_batch"),
+    # The project's ONE ambient card (ambient/asks.raise_card): every always-on agent's ask —
+    # the Chief of Staff's, a squad's, the SRE squad's — joins it; carried by
+    # answers.on_answered → asks.carry_card per entry + chief_of_staff.carry_card.
+    ("engine/boss_engine/services/ambient/asks.py", "raise_card"),
 }
 
 #: Functions that write a decision row themselves instead of through create_blocking_decision.

@@ -216,6 +216,58 @@ def ask_room(connection: Connection, project_id: str, settings: Any = None) -> i
     return max(0, asks_per_hour(settings) - asks_last_hour(connection, project_id))
 
 
+# ── a new project's grace ────────────────────────────────────────────────────────────────────
+
+#: A NEW PROJECT'S GRACE. Onboarding proposes a backlog (Add CI, tests for hot files ...) for the
+#: person to decide on. Until they have looked at it — accepted or rejected any one item — and
+#: for at most this many hours after onboarding started, always-on agents do not ACT here: every
+#: A2+ action (start a run, open a draft PR, a staging change) needs a person, on the project's
+#: one card; squads are not seated for the kinds of work onboarding proposes; and nothing that
+#: duplicates a backlog item is worked at all (asks.backlog_twin). Incidents are exempt: a
+#: failing app does not wait for a backlog review. After the window the grace lifts on its own,
+#: so a project nobody reviews never stalls.
+NEW_PROJECT_GRACE_HOURS = 24
+#: The work onboarding's backlog proposes: squads leave these to the person during the grace.
+ONBOARDING_CLASSES = frozenset({"ci_setup", "missing_tests", "doc_drift", "todo_triage"})
+_GRACE_EXEMPT = frozenset({"incident_response", "incident_staging_mitigation"})
+
+
+def grace_hours(settings: Any = None) -> int:
+    value = getattr(settings, "ambient_new_project_grace_hours", None) if settings is not None \
+        else None
+    try:
+        return max(0, int(NEW_PROJECT_GRACE_HOURS if value is None else value))
+    except (TypeError, ValueError):
+        return NEW_PROJECT_GRACE_HOURS
+
+
+def grace(connection: Connection, project_id: str, settings: Any = None
+          ) -> Optional[dict[str, Any]]:
+    """The project's grace, or None. In grace: onboarding ran here less than
+    NEW_PROJECT_GRACE_HOURS ago and no person has decided on any item of its backlog yet.
+    A project that was never onboarded has no backlog to review and no grace."""
+    hours = grace_hours(settings)
+    if hours <= 0:
+        return None
+    try:
+        with connection.begin_nested():
+            row = connection.execute(text(
+                "SELECT r.started_at, EXISTS (SELECT 1 FROM ambient_recommendations a "
+                "  WHERE a.project_id = r.project_id AND a.detector = 'onboarding' "
+                "  AND a.decided_at IS NOT NULL) AS reviewed, "
+                "(SELECT count(*) FROM ambient_recommendations a WHERE a.project_id = "
+                "  r.project_id AND a.detector = 'onboarding' AND a.status = 'open') AS open "
+                "FROM project_onboarding_runs r WHERE r.project_id = :p "
+                "AND r.started_at > now() - make_interval(hours => :h) "
+                "ORDER BY r.started_at LIMIT 1"), {"p": project_id, "h": hours}).mappings().first()
+    except Exception:  # noqa: BLE001 — an install without onboarding has no grace
+        return None
+    if row is None or row["reviewed"]:
+        return None
+    return {"since": iso(row["started_at"]), "hours": hours, "open": int(row["open"] or 0),
+            "reason": "New project: agents act after you have looked at the onboarding backlog"}
+
+
 # ── settings and the stop ────────────────────────────────────────────────────────────────────
 
 def settings_for(connection: Connection, project_id: str) -> dict[str, Any]:
@@ -476,6 +528,12 @@ def gate(connection: Connection, project_id: str, task_class: str, action: str) 
         return {**base, "allowed": False, "needs_person": can_ask,
                 "reason": (f"{klass.title} runs at {level} here; {act.title} needs "
                            f"{act.min_level}" + ("" if can_ask else " — observe only"))}
+    if tc.level_rank(act.min_level) >= 2 and klass.key not in _GRACE_EXEMPT:
+        held = grace(connection, project_id)
+        if held:
+            # A new project's grace: acting waits for a person, on the project's one card.
+            return {**base, "allowed": False, "needs_person": True, "grace": held,
+                    "reason": held["reason"]}
     return {**base, "allowed": True, "needs_person": mode in ("squad_vote_and_person",
                                                               "recommend_only"),
             "reason": f"{klass.title} runs at {level}; {act.title} needs {act.min_level}"}

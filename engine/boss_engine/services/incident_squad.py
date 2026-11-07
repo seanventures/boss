@@ -311,7 +311,7 @@ class BossEffects:
         from .incident_response import look_at_recovery, start_recovery_check
 
         if not ctx.incident_id or not ctx.target_id:
-            return {"status": "unknown", "word": "No app monitor to verify against"}
+            return alert_recovery(connection, ctx)
         squad_ctx = (ctx.fctx.get("squad") or {})
         check_id = squad_ctx.get("recovery_check_id")
         row = (look_at_recovery(connection, check_id) if check_id else
@@ -341,6 +341,9 @@ class Ctx:
     diff: dict[str, Any] = field(default_factory=dict)
     reports: int = 0
     rule: Optional[dict[str, Any]] = None
+    #: The app's name and environment as a person reads them (app_place), "" when unknown.
+    place_name: str = ""
+    place_env: str = ""
 
     @property
     def incident_id(self) -> Optional[str]:
@@ -365,10 +368,23 @@ class Ctx:
                    or (self.incident or {}).get("service") or "the app")
 
     @property
-    def environment(self) -> str:
+    def env_known(self) -> str:
+        """The environment the rows say, or "" — never a guess a person would read as fact."""
         env = (self.fctx.get("app") or {}).get("environment") or (
-            ((self.alert or {}).get("labels") or {}).get("env")) or "production"
-        return str(env).lower()
+            ((self.alert or {}).get("labels") or {}).get("env")) or self.place_env
+        return str(env or "").lower()
+
+    @property
+    def environment(self) -> str:
+        """For gating: an environment nothing names is treated as production (the safe side).
+        Words a person reads use `env_known`."""
+        return self.env_known or "production"
+
+    @property
+    def app_name(self) -> str:
+        """The app by the name a person knows it (a target's or a monitored service's name),
+        never a raw id."""
+        return self.place_name or plain_app(self.app)
 
     @property
     def is_prod(self) -> bool:
@@ -450,6 +466,7 @@ def load_context(connection: Connection, project_id: str, item_id: str) -> Ctx:
             {"ids": [i for i in incident_ids if i], "p": project_id}).mappings().first()
         incident = dict(row) if row else None
     ctx = Ctx(item=item, signals=sigs, alert=alert, incident=incident)
+    ctx.place_name, ctx.place_env = app_place(connection, project_id, item, alert=alert)
     if alert and alert.get("rule_id"):
         rule = connection.execute(text("SELECT * FROM app_alert_rules WHERE id = :r"),
                                   {"r": alert["rule_id"]}).mappings().first()
@@ -1105,14 +1122,21 @@ class _Pass:
         return self.fix_and_verify(mitigated=True)
 
     def escalate(self, why: str) -> dict[str, Any]:
+        """A person's call now. Asked through the one ambient path (asks.ask): it joins the
+        project's one card, in plain words — never a card of its own per incident."""
+        from .ambient import asks
+
         self.post("escalate", self.squad.lead, {"to": "person:on-call", "reason": why})
-        moved = board.needs_you(
-            self.c, self.item_id, actor=self.squad.lead, token=self.token,
-            question=clean_text(why, 200), recommendation={
-                "action": NEEDS_YOU_ACTION, "mitigation": "escalate",
-                "demo": bool(_is_demo(self.ctx))},
-            options=[{"key": "hold", "label": "I'll take it"}], risk_tier=1)
-        return {"stage": "escalated", "item": moved}
+        entry = asks.incident_entry(self.c, self.ctx.item, actor=self.squad.lead,
+                                    question=why)
+        entry["demo"] = bool(_is_demo(self.ctx))
+        got = asks.ask(self.c, self.effects_settings(), self.item_id, actor=self.squad.lead,
+                       token=self.token, entry=entry)
+        moved = board.get(self.c, self.item_id)
+        return {"stage": "escalated", "item": moved, "card": got}
+
+    def effects_settings(self) -> Any:
+        return getattr(self.effects, "settings", None)
 
     # 5. verify, then fix, then close ------------------------------------------------------
     def fix_and_verify(self, *, mitigated: bool, fix_authorised_by: Optional[str] = None
@@ -1217,8 +1241,9 @@ class _Pass:
                                       outcome_ref=self.ctx.incident_id)
             return self.close(mitigated=mitigated)
         # failing or not confirmed: a person's call now; say so on the board, in plain words
-        # that say what was done (a rollback, or nothing yet) and what was seen.
-        unconfirmed = status == "unconfirmed"
+        # that say what was done (a rollback, or nothing yet) and what was seen. Nothing to
+        # verify against ("unknown") is NOT failing: it is not confirmed either way.
+        unconfirmed = status != "failing"
         verdict = "Not confirmed" if unconfirmed else "Still failing"
         self.decide(lead, Q_VERIFY, verdict,
                     clean_text(seen.get("word") or "Not recovered.", 240).rstrip(".") + ".",
@@ -1226,7 +1251,7 @@ class _Pass:
                     confidence=0.6 if unconfirmed else 0.8)
         if mitigation and not mitigation.get("outcome") and not unconfirmed:
             ledger.record_outcome(self.c, mitigation["act_id"], outcome="failed")
-        return self.escalate(recovery_question(self.ctx.app, self.ctx.environment,
+        return self.escalate(recovery_question(self.ctx.app_name, self.ctx.env_known,
                                                rolled_back=bool(mitigation),
                                                unconfirmed=unconfirmed))
 
@@ -1492,6 +1517,76 @@ def _short_ref(ref: Any, index: int) -> str:
     """A past incident's short name for a label: 'INC-31 (D2, Oct 18)' -> 'INC-31'."""
     word = str(ref or "").split(" ")[0].strip()
     return word[:24] if word else f"#{index + 1}"
+
+
+_RAW_ID = re.compile(r"^[a-z]{2,6}_[0-9A-Za-z]{6,}$")
+
+
+def plain_app(value: Any) -> str:
+    """An app's name for a person: a raw id (svc_…, deptgt_…) is never one."""
+    name = str(value or "").strip()
+    return "The app" if not name or _RAW_ID.match(name) or name == "the app" else name
+
+
+def app_place(connection: Connection, project_id: Any, item: Mapping[str, Any], *,
+              alert: Optional[Mapping[str, Any]] = None) -> tuple[str, str]:
+    """(name, environment) of the app an item is about, from the rows that know it: the
+    deployment target of that name (or the alert's target), else the monitored service (by id or
+    name) and its target. The environment is "" when no row names one — a person never reads
+    "production" because nothing said otherwise."""
+    key = str(item.get("app") or "") or str(item.get("subject_ref") or "").partition(":")[2]
+    target_id = (alert or {}).get("target_id")
+    row = None
+    if target_id:
+        row = connection.execute(text(
+            "SELECT app_name AS name, environment FROM deployment_targets WHERE id = :t"),
+            {"t": target_id}).mappings().first()
+    if row is None and key:
+        row = connection.execute(text(
+            "SELECT app_name AS name, environment FROM deployment_targets WHERE project_id = :p "
+            "AND (app_name = :k OR id = :k) ORDER BY created_at DESC LIMIT 1"),
+            {"p": project_id, "k": key}).mappings().first()
+    if row is None and key:
+        try:
+            with connection.begin_nested():
+                row = connection.execute(text(
+                    "SELECT COALESCE(t.app_name, s.name) AS name, "
+                    "COALESCE(NULLIF(s.environment, ''), t.environment) AS environment "
+                    "FROM monitored_services s LEFT JOIN deployment_targets t "
+                    "ON t.id = s.deployment_target_id WHERE s.id = :k "
+                    "OR (s.project_id = :p AND s.name = :k) LIMIT 1"),
+                    {"p": project_id, "k": key}).mappings().first()
+        except Exception:  # noqa: BLE001 — an install without monitored services
+            row = None
+    name = plain_app((row or {}).get("name") or key)
+    env = str((row or {}).get("environment") or "").strip().lower()
+    return name, env
+
+
+def alert_recovery(connection: Connection, ctx: "Ctx") -> dict[str, Any]:
+    """No BOSS monitor to verify against: the item's own alerts are the evidence. All cleared
+    (or only BOSS's own self-check) → recovered; still firing → waiting (the tick looks again),
+    until RECOVERY_ALERT_MINUTES have passed → failing; no alert at all → unknown, which is
+    never "failing"."""
+    from .ambient import asks
+
+    state = asks.alerts_state(connection, ctx.item)
+    if state == "meta":
+        return {"status": "recovered",
+                "word": "The alert was BOSS's own monitor, not the app, and it cleared"}
+    if state == "cleared":
+        return {"status": "recovered", "word": "The alert cleared on BOSS's monitor"}
+    if state == "firing":
+        age = _minutes_since(ctx.item.get("created_at"))
+        if age is not None and age >= RECOVERY_ALERT_MINUTES:
+            return {"status": "failing",
+                    "word": f"The alert is still firing after {age} minutes"}
+        return {"status": "waiting", "word": "The alert is still firing"}
+    return {"status": "unknown", "word": "No monitor to verify against"}
+
+
+#: With no BOSS monitor, an alert still firing this long after the incident opened is failing.
+RECOVERY_ALERT_MINUTES = 30
 
 
 def recovery_question(app: Any, environment: Any, *, rolled_back: bool,

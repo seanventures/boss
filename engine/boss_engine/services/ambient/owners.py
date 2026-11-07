@@ -43,7 +43,7 @@ from typing import Any, Optional
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
-from . import board, collab, policy, squad_plugins, squad_turns, squads
+from . import asks, board, collab, policy, squad_plugins, squad_turns, squads
 from ._common import now
 
 log = logging.getLogger(__name__)
@@ -113,6 +113,7 @@ def due_items(connection: Connection, *, project_id: Optional[str] = None,
     incident = set(_incident_classes())
     out: list[dict[str, Any]] = []
     room: dict[str, int] = {}
+    graced: dict[str, bool] = {}
     from .. import projects_archive   # an archived project's items are never worked
 
     rows = connection.execute(text(_HANDED.format(live=projects_archive.live_sql("w.project_id"))),
@@ -135,6 +136,18 @@ def due_items(connection: Connection, *, project_id: Optional[str] = None,
             continue
         if r["no_squad"]:
             continue
+        # ONE OWNER FOR EACH PIECE OF WORK: what onboarding's backlog already proposes is the
+        # person's to decide there — left to it (its findings become the backlog item's
+        # evidence), never worked a second time by a squad.
+        if asks.defer_to_backlog(connection, r["id"]):
+            continue
+        # A NEW PROJECT'S GRACE: no squad takes up the kinds of work onboarding proposes until
+        # the person has looked at its backlog (policy.grace).
+        if r["task_class"] in policy.ONBOARDING_CLASSES:
+            if r["project_id"] not in graced:
+                graced[r["project_id"]] = policy.grace(connection, r["project_id"]) is not None
+            if graced[r["project_id"]]:
+                continue
         if not r["has_squad"]:
             # THE RATE GUARD reaches the owners too: a new squad's proposal asks a person, so
             # while this project's hour of cards is used up no new squad is seated (it is next

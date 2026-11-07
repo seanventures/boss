@@ -72,10 +72,20 @@ def app_alerts(connection: Connection, since: Any,
     rows = connection.execute(text(
         "SELECT a.id, a.project_id, a.fingerprint, a.alertname, a.labels, a.annotations, "
         "a.urgency, a.fire_count, a.value, a.threshold, a.unit, a.source_kind, a.subject_id, "
-        "COALESCE(a.fired_at, a.active_at) AS fired_at, t.app_name, "
+        "COALESCE(a.fired_at, a.active_at) AS fired_at, COALESCE(t.app_name, mt.app_name, "
+        "ms.name) AS app_name, "
         "COALESCE(a.last_eval_at, a.fired_at, a.active_at) AS seen_at "
         "FROM app_alerts a LEFT JOIN deployment_targets t ON t.id = a.target_id "
+        "LEFT JOIN monitored_services ms ON ms.id = a.service_id "
+        "LEFT JOIN deployment_targets mt ON mt.id = ms.deployment_target_id "
         "WHERE a.state = 'firing' AND COALESCE(a.last_eval_at, a.fired_at, a.active_at) > :s "
+        # BOSS's OWN self-checks (its evaluator running late, its scheduler) are about BOSS, not
+        # the app: every app-health surface leaves them out (health.py, app_alerts_view), and so
+        # does the inbox — they once became a "production" incident on BOSS (self-check) with a
+        # "still fails — take over?" card while the app was healthy (2026-11-07).
+        "AND COALESCE(a.rule_kind, '') <> 'meta' "
+        "AND COALESCE(a.labels->>'boss_meta', '') <> 'true' "
+        "AND COALESCE(a.labels->>'layer', '') <> 'boss' "
         f"{_SCOPE.format(t='a.')} ORDER BY seen_at LIMIT 500"),
         {"s": since, "p": project_id}).mappings().all()
     for r in rows:
