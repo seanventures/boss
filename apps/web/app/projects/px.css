@@ -153,16 +153,7 @@
 .px-jr[data-size="s"] .px-jr-wire { margin-top: 8px; min-width: 6px; } .px-jr[data-size="s"] .px-jr-cap { font-size: .5rem; font-weight: 500; }
 .px-jr[data-size="s"] .px-jr-node[data-s="now"] .px-jr-shape::after { inset: -4px; }
 
-/* station strip */
-.px-st { display: flex; align-items: center; flex: none; }
-.px-st-n { min-width: 18px; height: 18px; padding: 0 3px; border-radius: 5px; display: grid; place-items: center; font-size: .48rem; font-weight: 800;
-  border: 1.5px solid var(--border-strong); background: var(--surface-3); color: var(--faint); position: relative; }
-.px-st-n[data-s="done"] { border-color: var(--green); color: var(--green); background: var(--green-soft); }
-.px-st-n[data-s="now"] { border-color: var(--teal); color: var(--teal); background: color-mix(in srgb, var(--teal) 14%, transparent); }
-.px-st-n[data-s="now"]::after { content: ""; position: absolute; inset: -4px; border-radius: 7px; border: 1.5px solid var(--teal); animation: px-ring 1.8s ease-out infinite; }
-.px-st-n[data-s="waiting"] { border-color: var(--amber); background: var(--amber); color: #1b1300; border-radius: 50%; }
-.px-st-n[data-s="failed"] { border-color: var(--red); color: var(--red); background: var(--red-soft); }
-.px-st-w { width: 10px; height: 2px; background: var(--border-strong); } .px-st-w[data-s="done"] { background: var(--green); }
+/* station strip: app/stations.css (one component, 05-32) */
 .px-legend { display: flex; gap: 10px; flex-wrap: wrap; font-size: .55rem; color: var(--muted); align-items: center; }
 .px-legend span { display: inline-flex; gap: 4px; align-items: center; }
 

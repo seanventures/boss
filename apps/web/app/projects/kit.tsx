@@ -133,20 +133,8 @@ export function Timeline({ points, testid, onOpen }: {
 }
 
 /** THE STATION STRIP: one piece of work, Plan · Design · Build · Review · PR · Ship. */
-export function Stations({ stages }: { stages: { key: string; label: string; state: StepState }[] }) {
-  if (!stages.length) return <span className="px-st" aria-hidden />;
-  const said = stages.map((st) => `${st.key || st.label} ${STATE_WORD[st.state]}`).join(", ");
-  return (
-    <span className="px-st" role="img" aria-label={said}>
-      {stages.map((st, i) => (
-        <React.Fragment key={`${st.key}-${i}`}>
-          {i ? <span className="px-st-w" data-s={stages[i - 1].state === "done" ? "done" : undefined} /> : null}
-          <span className="px-st-n" data-s={st.state} title={`${st.key || st.label}: ${STATE_WORD[st.state]}`}>{st.label || st.key.slice(0, 1).toUpperCase()}</span>
-        </React.Fragment>
-      ))}
-    </span>
-  );
-}
+/** The six-station strip: THE shared component (app/stations.tsx), also Code Tasks' (05-32). */
+export { Stations } from "../stations";
 
 /** FLOW CHIPS: a path or a reason as nodes and arrows (≤ 4 words each). */
 export function Flow({ nodes, testid }: { nodes: { label: string; state?: StepState | string; type?: string; icon?: React.ReactNode }[]; testid?: string }) {

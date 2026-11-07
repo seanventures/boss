@@ -16,6 +16,8 @@ import type { BuildRow as Build } from "../../lib/factory-floor";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
 import { localTime, span, type Band } from "../agents/live-util";
 import { StationLine, WaitGlyph, activeStation, stationMoves } from "./station-line";
+import { Stations, fromFactory } from "../stations";
+import { nameOf } from "../agents/run-face";
 import { actorWords } from "../../lib/actor-words";
 
 /** States whose face never moves: motion would claim work that is not happening. */
@@ -95,6 +97,10 @@ export function BuildRow({ build: b, density = "row", band = "wide", now, still,
       <span className="fx-row-line">
         {(b.state === "queued" || b.state === "budget_wait") && !activeStation(b.stations)
           ? <WaitGlyph size={24} tip={b.tip || (b.state === "queued" ? "Waiting for a worker" : b.word)} /> : null}
+        {/* THE SAME STRIP AS THE PROJECT'S WORK ROWS (05-32: one station component), then the
+            faces at each station (who really stood there, seats, repair rounds) as the row's
+            faces — like a Work row's strip and faces. */}
+        <Stations stages={fromFactory(b.stations, (r) => nameOf(r).name)} testid={`fx-build-strip-${b.runId}`} />
         <StationLine stations={b.stations} density="row" band={band} still={frozen}
                      label={`Stations of ${b.app}`} />
       </span>
