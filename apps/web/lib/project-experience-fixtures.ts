@@ -69,15 +69,24 @@ const WORK = [
       build: `?${new URLSearchParams({ project_id: P, area: "code_tasks", view: "apps", build: String(id) })}`,
       href: href({ tab: "work", drawer: `build:${id}` }),
     })) },
-  { id: "wi_email", label: "Email-to-ticket intake", kind: "feature", state: "planned", age: "", source: "roadmap", stages: STAGES6([]),
-    agents: [juno], cost_usd: null, links: { workflow_run: "", build: "", pr: null, deploy: "", preview: "" }, detail: "Next up, ranked by Marshal.",
-    href: href({ tab: "work", drawer: "work:wi_email" }) },
-  { id: "wi_sla", label: "SLA timer ignores weekends", kind: "bug", state: "planned", age: "", source: "issue #12", stages: STAGES6([]),
-    agents: [], cost_usd: null, links: { workflow_run: "", build: "", pr: null, deploy: "", preview: "" }, detail: "GitHub issue #12.",
-    href: href({ tab: "work", drawer: "work:wi_sla" }) },
-  { id: "wi_tests", label: "Fix 6 failing tests", kind: "chore", state: "planned", age: "", source: "ci", stages: STAGES6([]),
-    agents: [], cost_usd: null, links: { workflow_run: "", build: "", pr: null, deploy: "", preview: "" }, detail: "tests/test_notify.py fails on the default branch.",
-    href: href({ tab: "work", drawer: "work:wi_tests" }) },
+  // PLANNED, in Marshal's rank (plan._planned): Next up first, with who plans it; each carries
+  // its own start body and the re-rank route.
+  ...[
+    ["wi_email", "Email-to-ticket intake", "feature", "ticket", "Feature", "next", 1, "", null, "Turn support emails into tickets."],
+    ["wi_sla", "SLA timer ignores weekends", "bug", "bug", "Bug", "next", 2, "", 12, "SLA timers keep counting through the weekend."],
+    ["wi_tests", "Fix 6 failing tests", "bug", "ci", "CI", "next", 3, "tests/test_notify.py", null, "tests/test_notify.py fails on the default branch."],
+    ["wi_index", "Index tickets by status", "chore", "roadmap", "from Roadmap", "later", 1, "", null, "tickets(status) has no index; the list p95 is 1.4 s."],
+  ].map(([id, label, kind, origin, originLabel, lane, rank, where, issue, detail], i) => ({
+    id, label, title: label, kind, state: "planned", age: "", source: "roadmap", source_label: "Roadmap", stages: STAGES6([]),
+    origin, origin_label: originLabel, lane, rank, where, next_up: i === 0, agents: i === 0 ? [juno] : [], cost_usd: 0,
+    links: { workflow_run: "", build: "", pr: null, deploy: "", preview: "",
+             issue: issue ? { provider: "github", number: issue, label: `#${issue}`, kind: "issue", external_url: `https://github.com/paramg/helpdesk-ai-demo/issues/${issue}` } : null },
+    detail, href: href({ tab: "roadmap", drawer: `rec:${id}` }),
+    move: { href: `/v1/projects/${P}/plan/${id}`, method: "POST" },
+    start: { href: `/v1/projects/${P}/work`, method: "POST",
+             body: { kind: kind === "chore" ? "feature" : kind, text: `${label}. ${detail}`, title: label, source_ref: `rec:${id}`,
+                     ...(issue ? { source_url: `https://github.com/paramg/helpdesk-ai-demo/issues/${issue}` } : {}) } },
+  })),
   { id: "wi_ui", run_number: 41, label: "UI refresh", kind: "feature", state: "done", age: "Wed", source: "", stages: STAGES6(["done", "done", "done", "done", "done", "done"]),
     agents: [juno, forge, vera], cost_usd: 3.4,
     links: { workflow_run: `?${new URLSearchParams({ project_id: P, area: "delivery_workflows", wfr: "wfr_41" })}`, build: "",
@@ -88,7 +97,33 @@ const WORK = [
     links: { workflow_run: `?${new URLSearchParams({ project_id: P, area: "delivery_workflows", wfr: "wfr_38" })}`, build: "",
              pr: { number: 1, external_url: "https://github.com/paramg/helpdesk-ai-demo/pull/1" }, deploy: href({ tab: "deployments" }), preview: "" },
     detail: "Merged and deployed to staging.", href: href({ tab: "work", drawer: "work:wi_slat" }) },
+  // THE ONBOARDING AGENT'S RUN as a piece of work (05-27): Setup, its own mini flow, Helm and Marshal.
+  { id: "onb_36", label: "Onboarding", title: "Onboarding", kind: "setup", state: "done", age: "4d", source: "onboarding", source_label: "Setup",
+    created_at: "2026-11-02T09:00:00Z", updated_at: "2026-11-02T09:06:00Z",
+    flow: [{ key: "discover", label: "Discover", state: "done" }, { key: "ready", label: "Ready", state: "done" }, { key: "backlog", label: "Backlog", state: "done" }],
+    stages: STAGES6(["skipped", "skipped", "skipped", "skipped", "skipped", "skipped"]), agents: [helm, marshal], cost_usd: 1.2, waiting: [],
+    links: { workflow_run: "", build: "", pr: null, deploy: "", preview: "", onboarding: href({ tab: "work", drawer: "onboarding" }) },
+    detail: "Helm onboarded the project.", href: href({ tab: "work", drawer: "onboarding" }) },
 ];
+
+/** GET /v1/projects/{id}/work/plan: Helm's plan for a Feature, from Minor Feature's real steps and
+ *  this project's history (3 runs: ≈ 25 min, ≈ $3). */
+export const FX_WORK_PLAN = {
+  kind: "feature", planner: helm,
+  workflow: { key: "minor_feature", name: "Minor Feature", chosen: "default", why: "the default for a change",
+              href: `?${new URLSearchParams({ project_id: P, area: "delivery_workflows", tab: "library", wf: "minor_feature" })}` },
+  nodes: [
+    { key: "plan", label: "Plan", type: "agent", agent: juno }, { key: "approve", label: "You approve", type: "you" },
+    { key: "build", label: "Build", type: "todo", agent: helm }, { key: "review", label: "Review", type: "todo" },
+    { key: "pr", label: "PR", type: "todo" }, { key: "ship", label: "Staging", type: "you" },
+  ],
+  estimate: { minutes: 25, minutes_basis: "history", minutes_runs: 3, usd: 3, usd_basis: "history", usd_runs: 3, metered: true },
+  options: [
+    { key: "minor_feature", name: "Minor Feature", detail: "A small addition to something that already exists.", work_class: "feature.minor", fits: true },
+    { key: "major_feature", name: "Major Feature", detail: "A feature large enough to deserve research and a spec.", work_class: "feature.major", fits: true },
+    { key: "fast_fix", name: "Fast Fix / Hotfix", detail: "Something is broken now.", work_class: "bugfix", fits: false },
+  ],
+};
 
 export const FX_WORK = { items: WORK };
 
@@ -108,7 +143,7 @@ export const FX_OVERVIEW = {
   needs_you: [
     { id: "dec_merge3", kind: "merge", label: "Merge PR #3", detail: "Tests 148/148 and review are clean. Only a person merges.",
       mini: [{ label: "Tests 148", state: "done" }, { label: "Review", state: "done" }, { label: "Merge", state: "waiting" }],
-      action: { label: "Review PR", href: "https://github.com/paramg/helpdesk-ai-demo/pull/3", decision_id: "dec_merge3" } },
+      work_id: "wi_visual", action: { label: "Review PR", href: "https://github.com/paramg/helpdesk-ai-demo/pull/3", decision_id: "dec_merge3" } },
     { id: "dec_prodhost", kind: "deploy", label: "Pick a prod host", detail: "Beacon can't choose this: production runs where you say.",
       mini: [], action: { label: "Pick host", href: href({ tab: "deployments" }), decision_id: "" } },
   ],

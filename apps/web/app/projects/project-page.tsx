@@ -21,7 +21,7 @@ import {
 import { GatedButton } from "../../components/gated";
 import { openDockAbout } from "../../lib/dock-subject";
 import {
-  PX_PATHS, TAB_WORDS, isMissingStatus, overviewFromStart, parseOnboarding, parseOverview, parseWork, pxHref, readPxUrl, usePxRead,
+  PX_PATHS, TAB_WORDS, isMissingStatus, needsYouCards, overviewFromStart, parseOnboarding, parseOverview, parseWork, pxHref, readPxUrl, usePxRead,
   workFromStartRow, writePxUrl, type Overview, type Onboarding, type PxUrl, type Tab, type WorkList, a, o,
 } from "../../lib/project-experience";
 import { FX_ONBOARDING, FX_ONBOARDING_PROJECT, FX_OVERVIEW, FX_WORK } from "../../lib/project-experience-fixtures";
@@ -220,9 +220,12 @@ function Header({ ctx, onboarding }: { ctx: PxCtx; onboarding: boolean }) {
 function NeedsBar({ ctx, onboarding }: { ctx: PxCtx; onboarding: Onboarding | null }) {
   // The overview already carries the onboarding agent's "only you" items (§14: `onb:<key>`);
   // the live onboarding record replaces them while the project onboards, never doubles them.
+  // ONE SOURCE (lib needsYouCards): the Work tab's Needs-you count is this same list's length.
+  const all = needsYouCards(ctx.overview.needs_you, onboarding, ctx.work?.items ?? []);
   const yours = onboarding?.only_you ?? [];
-  const items = yours.length ? ctx.overview.needs_you.filter((it) => !it.id.startsWith("onb:")) : ctx.overview.needs_you;
-  const n = items.length + yours.length;
+  // The live onboarding record's items keep their own links below; every other card is a button.
+  const items = yours.length ? all.filter((it) => !it.id.startsWith("onb:")) : all;
+  const n = all.length;
   if (!n) {
     return (
       <div className="px-needs-bar" data-calm data-testid="px-needs-bar" role="status">

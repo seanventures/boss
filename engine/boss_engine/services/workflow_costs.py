@@ -263,6 +263,8 @@ def _summarise(runs: list[tuple[int, bool]]) -> dict[str, Any]:
         "runs": len(runs),
         "low_usd": round(_percentile(usd, 0.2), 4),
         "high_usd": round(_percentile(usd, 0.8), 4),
+        # The typical run, for a single "≈ $3" (the Work tab's plan): the median.
+        "median_usd": round(_percentile(usd, 0.5), 4),
         "metered": any(metered for _, metered in runs),
     }
 

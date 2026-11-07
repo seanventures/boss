@@ -13,7 +13,7 @@ import {
 } from "@phosphor-icons/react";
 
 import { GatedButton } from "../../components/gated";
-import { KIND_WORDS, WORK_ORDER, WORK_WORDS, navigateTo, pxHref, runAccept, startOnboarding, type NextItem, type WorkItem } from "../../lib/project-experience";
+import { KIND_WORDS, WORK_ORDER, WORK_WORDS, navigateTo, pxHref, runAccept, startOnboarding, writePxUrl, type NextItem, type WorkItem } from "../../lib/project-experience";
 import { Empty, Face, Flow, HEALTH_WORD, Ico, Journey, PxLink, Ring, Said, Spark, Stations, Tag, Timeline } from "./kit";
 import { DemoLoginRow } from "./tab-settings";
 import { P95_SOURCE } from "./tab-deployments";
@@ -230,16 +230,19 @@ function WorkBar({ by }: { by: Record<string, number> }) {
 }
 
 function MiniRow({ w, ctx }: { w: WorkItem; ctx: PxCtx }) {
+  // The onboarding agent's run is a piece of work too (05-27): its own drawer, its own mini flow.
+  const setup = w.kind === "setup" && w.source === "onboarding";
+  const open = () => (setup ? writePxUrl({ drawer: "onboarding" }) : ctx.open("work", w.id));
   return (
     <div className="px-wk" data-s={w.state} style={{ gridTemplateColumns: "14px minmax(0,1fr) auto auto 14px" }} data-testid={`px-ov-work-${w.id}`}
-         onClick={() => ctx.open("work", w.id)}>
+         onClick={open}>
       <span className="px-dot" data-s={w.state === "running" ? "now" : w.state === "needs_you" || w.state === "stalled" ? "you" : w.state === "failed" ? "bad" : w.state === "done" ? "done" : undefined} aria-hidden />
       <span style={{ minWidth: 0 }}>
-        <button type="button" className="px-wk-t px-ell" style={{ display: "block", maxWidth: "100%" }} title={w.detail || w.label} onClick={(e) => { e.stopPropagation(); ctx.open("work", w.id); }}>{w.label}</button>
+        <button type="button" className="px-wk-t px-ell" style={{ display: "block", maxWidth: "100%" }} title={w.detail || w.label} onClick={(e) => { e.stopPropagation(); open(); }}>{w.label}</button>
         <span className="px-wk-sub"><span>{w.state === "stalled" ? "Stalled" : w.links.pr ? `PR #${w.links.pr.number}` : KIND_WORDS[w.kind] ?? w.kind}</span>{w.age ? <span className="px-mono">{w.age}</span> : null}
           {w.cost_usd !== null ? <span className="px-mono">${w.cost_usd.toFixed(2)}</span> : null}</span>
       </span>
-      <span className="px-hide-phone"><Stations stages={w.stages} /></span>
+      <span className="px-hide-phone">{w.flow.length ? <Flow nodes={w.flow.map((f) => ({ label: f.label, state: f.state, type: f.state }))} /> : <Stations stages={w.stages} />}</span>
       <span className="px-hide-phone"><FacesInline w={w} /></span>
       <CaretRight size={12} className="px-faint" aria-hidden />
     </div>

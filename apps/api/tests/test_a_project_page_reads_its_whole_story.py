@@ -116,7 +116,8 @@ def test_the_overview_draws_the_journey_needs_you_tiles_captain_and_try_it(world
     assert all(len(n["label"].split()) <= 5 for n in o["needs_you"])
     tiles = o["tiles"]
     assert tiles["open_work"]["by_state"]["done"] == 3
-    assert tiles["open_work"]["by_state"]["needs_you"] == 2
+    # The merge, the deploy gate, and the Onboarding row waiting on the app's secret (05-27).
+    assert tiles["open_work"]["by_state"]["needs_you"] == 3
     assert tiles["running"]["count"] == 1
     assert tiles["running"]["current"]["label"] == "Ticket search filters"
     done, total = tiles["running"]["current"]["progress"]
@@ -157,7 +158,7 @@ def test_every_piece_of_work_is_a_row_with_its_stations_agents_cost_and_links(wo
     assert waiting["state"] == "needs_you" and waiting["links"]["decision"]
     assert "waiting" in {s["state"] for s in waiting["stages"]}
     # Planned holds the roadmap's accepted items (seed_plan's Now / Next lanes), counted apart.
-    assert {**body["counts"], "planned": 0} == {"running": 1, "stalled": 1, "needs_you": 2,
+    assert {**body["counts"], "planned": 0} == {"running": 1, "stalled": 1, "needs_you": 3,
                                                 "planned": 0, "done": 3, "failed": 0}
     assert body["counts"]["planned"] == sum(1 for w in body["items"] if w["state"] == "planned")
 
@@ -165,7 +166,8 @@ def test_every_piece_of_work_is_a_row_with_its_stations_agents_cost_and_links(wo
 def test_the_work_tab_filters_by_state_and_finds_by_words_or_pr_number(world, client, helpdesk):
     pid = helpdesk["id"]
     needs = _get(world, client, world.owner, f"/v1/projects/{pid}/work", state="needs_you").json()
-    assert {w["state"] for w in needs["items"]} == {"needs_you"} and len(needs["items"]) == 2
+    assert {w["state"] for w in needs["items"]} == {"needs_you"} and len(needs["items"]) == 3
+    assert "Onboarding" in {w["label"] for w in needs["items"]}
     found = _get(world, client, world.owner, f"/v1/projects/{pid}/work", q="search").json()
     assert [w["title"] for w in found["items"]] == ["Ticket search filters"]
     by_pr = _get(world, client, world.owner, f"/v1/projects/{pid}/work", q="#2").json()
@@ -507,7 +509,7 @@ def test_the_captain_drawer_asks_about_the_whole_project(world, client, helpdesk
         ev = resolve_subject(db, helpdesk["id"], ref)
         other = resolve_subject(db, "someone-elses-project", ref)
     assert ev.found and ev.title == "HelpDesk AI Demo"
-    assert "1 running" in ev.status and "2 needs you" in ev.status
+    assert "1 running" in ev.status and "3 needs you" in ev.status
     assert ev.facts["repositories"] == REPO
     assert any("Ticket search filters" in line for line in ev.linked)
     assert not other.found

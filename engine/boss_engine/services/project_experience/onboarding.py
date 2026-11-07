@@ -33,6 +33,7 @@ It works with the ambient preview OFF: nothing here waits on the Chief of Staff'
 from __future__ import annotations
 
 import hashlib
+import re
 import json
 import logging
 import uuid
@@ -612,6 +613,10 @@ _SCAN = {"scan.no_ci": ("ci_setup", "medium", "Add CI", "chore"),
          "osv.vulnerable_dependency": ("security_patch", "high", "Patch a dependency", "bug")}
 
 
+#: A failing check named by its file ("tests/test_notify.py"), not by its job ("test (3.11)").
+_FILE = re.compile(r"[\w./-]+\.(py|js|mjs|cjs|ts|tsx|jsx|go|rb|java|kt|rs|php|cs)")
+
+
 def _score(task_class: str, severity: str, source: str, occurrences: int = 1) -> float:
     from ..ambient.chief_of_staff import priority, scores
 
@@ -622,12 +627,15 @@ def _score(task_class: str, severity: str, source: str, occurrences: int = 1) ->
 
 def _candidate(label: str, *, source: str, task_class: str, severity: str, kind: str,
                detail: str = "", ref: str = "", external_url: Optional[str] = None,
-               text_for_work: Optional[str] = None, score_source: str = "scan") -> dict[str, Any]:
+               text_for_work: Optional[str] = None, score_source: str = "scan",
+               where: Optional[str] = None) -> dict[str, Any]:
     digest = hashlib.sha1(f"{source}|{ref or label}".encode()).hexdigest()[:12]
     return {"id": f"cand_{digest}", "label": words(label, 5),
             "detail": detail or label, "source": source, "kind": kind,
             "task_class": task_class, "severity": severity, "ref": ref,
             "external_url": external_url, "text": text_for_work or detail or label,
+            # The file a failing check points at (screen 05 "tests/test_notify.py").
+            "where": where,
             "score": _score(task_class, severity, score_source), "state": "proposed"}
 
 
@@ -641,6 +649,8 @@ def _backlog(engine: Any, settings: Any, project_id: str, full: str, ci: Mapping
                               task_class="red_main", severity="high", kind="bug",
                               detail=f"CI fails on the default branch: {', '.join(failing[:5])}.",
                               ref="ci:main", external_url=ci.get("url"), score_source="ci",
+                              where=next((str(f) for f in failing if _FILE.fullmatch(str(f))),
+                                         None),
                               text_for_work=f"Make the default branch's CI pass again. Failing: "
                                             f"{', '.join(failing[:5]) or 'see CI'}."))
     try:
@@ -727,7 +737,9 @@ def _first_work(engine: Any, project_id: str, backlog: list[dict[str, Any]]) -> 
             "start": {"href": f"/v1/projects/{project_id}/work", "method": "POST",
                       "body": {"kind": top["kind"] if top["kind"] in ("feature", "bug", "ticket")
                                else "ticket", "text": top["text"], "title": top["label"],
-                               "source_ref": top["ref"]}},
+                               "source_ref": top["ref"],
+                               **({"source_url": top["external_url"]}
+                                  if top.get("external_url") else {})}},
             "others_href": project_href(project_id, tab="roadmap")}
 
 
@@ -1026,6 +1038,7 @@ def accept_backlog(connection: Connection, project_id: str, ids: list[str], *, a
             _REC_KIND.get(str(c.get("kind") or ""), "feature")
         facts = {"lane": lane, "rank": rank0 + n, "candidate_id": cid, "source": c.get("source"),
                  "ref": ref, "work_kind": c.get("kind"), "external_url": c.get("external_url"),
+                 "where": c.get("where"),
                  "text": c.get("text"), "onboarding_run_id": row["id"] if row else None}
         connection.execute(text(
             "INSERT INTO ambient_recommendations (work_item_id, project_id, detector, kind, "
