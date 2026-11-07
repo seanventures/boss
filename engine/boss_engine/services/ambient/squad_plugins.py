@@ -153,12 +153,36 @@ def _directive(p: Mapping[str, Any]) -> str:
 
 # ── launching ────────────────────────────────────────────────────────────────────────────────
 
+def workflow_to_start(connection: Connection, project_id: str, named: Any,
+                      default: str) -> str:
+    """The workflow a squad's decision starts: the one its lead named when THIS project has it,
+    else the squad's own (its template's execute_workflow). A lead's model may name a workflow
+    that does not exist here — "dependency_cve_patch" for the CVE squad (HelpDesk AI
+    2026-11-07) — and the launch failed with "no workflow …" every time, leaving the squad stuck
+    on a card asking a person which workflow opens a draft PR."""
+    named = str(named or "").strip()
+    if not named or named == default:
+        return default
+
+    def have(key: str) -> Optional[str]:
+        found = connection.execute(text(
+            "SELECT workflow_key FROM workflow_definitions WHERE project_id = :p "
+            "AND (workflow_key = :w OR name = :w) ORDER BY updated_at DESC LIMIT 1"),
+            {"p": project_id, "w": key}).scalar()
+        return str(found) if found else None
+
+    # Neither here: the named one, so the launch says plainly what is missing.
+    return have(named) or have(default) or named
+
+
 def launch_workflow(connection: Connection, item: Mapping[str, Any], *, squad: Mapping[str, Any],
                     proposal: Mapping[str, Any], decision: Optional[Mapping[str, Any]],
                     launchers: Launchers) -> dict[str, Any]:
     """Hand the decided work to a workflow. -> {"kind": "workflow_run", "ref"} or {"error"}."""
     p = packet(connection, item, squad=squad, proposal=proposal, decision=decision)
-    key = (proposal.get("body") or {}).get("workflow") or squad["execute_workflow"]
+    key = workflow_to_start(connection, item["project_id"],
+                            (proposal.get("body") or {}).get("workflow"),
+                            squad["execute_workflow"])
     lead = squad["lead"]
     got = launchers.start(connection, project_id=item["project_id"], actor=party_id(lead),
                           workflow_key=key, directive=_directive(p),

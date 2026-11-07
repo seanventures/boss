@@ -1041,6 +1041,7 @@ _WITHDRAW_WHY = {
     "policy": "BOSS refused that action twice; the outcome is recorded, nobody needs to answer",
     "healthy": "the app is healthy: the alert cleared, nothing failing is left",
     "rebatch": "it moved onto the project's one card",
+    "retry": "BOSS tried the squad's launch once more now that what stopped it is fixed",
     "stale_rollback": "the rollback it proposed is not to a known-good release, so the squad "
                       "fixes forward instead",
 }
@@ -1128,16 +1129,15 @@ def _settle_withdrawn(connection: Connection, project_id: str, card_id: Optional
     return "observed"
 
 
-#: Every open ambient card a tick re-judges: the Chief of Staff's, the project's one card, and
-#: the cards squads raised on their own before the one-card rule (asks.py) — all but the
-#: production-mitigation card (roll back prod? three answers, urgent: its own card).
+#: Every open ambient card a tick re-judges: the Chief of Staff's, the project's one card, the
+#: cards squads raised on their own before the one-card rule (asks.py), and the incident squad's
+#: mitigation card (roll back? three answers, urgent). That one stays its own card — never
+#: batched, never withdrawn for the mode — but it is re-judged for being VALID
+#: (asks.mitigation_verdict): a rollback to a release that is no longer known-good is withdrawn.
 _OPEN_CARDS = (
     "SELECT id, project_id, question, recommendation, created_at FROM decisions "
     "WHERE project_id = :p AND status = ANY(:open) "
     "AND recommendation->>'asked_by' IS NOT NULL AND recommendation->>'work_item_id' IS NOT NULL "
-    "AND (recommendation->>'asked_by' = :cos OR recommendation->>'card' = 'ambient' "
-    "  OR COALESCE(recommendation->>'action', '') <> 'incident_squad.mitigate' "
-    "  OR recommendation->>'mitigation' = 'escalate') "
     "ORDER BY created_at")
 
 
@@ -1162,6 +1162,28 @@ def reconsider(connection: Connection, project_id: str, *, mode: str) -> list[di
     for card in _open_cards(connection, project_id):
         rec = dict(card.get("recommendation") or {})
         mine = rec.get("asked_by") == PARTY or rec.get("card") == asks.CARD
+        if not mine and asks.is_mitigation_card(card):
+            verdict, item = asks.mitigation_verdict(connection, card)
+            if verdict != "stale_rollback" or item is None:
+                continue
+            entries = [asks.legacy_entry(card)]
+            try:
+                with connection.begin_nested():
+                    outcome = asks.settle(connection, project_id, card["id"], item, entries[0],
+                                          verdict)
+            except (board.Conflict, board.LeaseLost, ledger.GateRefused, LookupError):
+                log.info("ambient reconsider kept mitigation card %s", card["id"],
+                         exc_info=True)
+                continue
+            note = _WITHDRAW_WHY[verdict]
+            settled = [{"work_item_id": item["id"], "verdict": verdict, "outcome": outcome}]
+            out.append({"decision_id": card["id"], "settled": settled,
+                        "withdrawn": bool(_withdraw_with_note(
+                            connection, card["id"], project_id,
+                            f"Withdrawn: {note[0].upper()}{note[1:]}.", actor=PARTY,
+                            why={"why": note, "reasons": [verdict], "mode": mode,
+                                 "items": [item["id"]]}))})
+            continue
         if rec.get("batch"):
             entries = list(rec["batch"])
         elif mine:

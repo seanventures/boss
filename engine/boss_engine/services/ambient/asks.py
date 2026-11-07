@@ -70,6 +70,8 @@ WITHDRAW_WHY = {
     "healthy": "the app is healthy: the alert cleared, nothing failing is left",
     "rebatch": "it moved onto the project's one card",
     "moot": "the item it asked about has moved on",
+    "retry": "BOSS tried the squad's launch once more now that what stopped it is fixed, so "
+             "nobody needs to answer",
     "stale_rollback": "the rollback it proposed is not to a known-good release (that release "
                       "was rolled back from, or an incident blamed it), so the squad fixes "
                       "forward instead",
@@ -499,6 +501,117 @@ def verdict(connection: Connection, card: Mapping[str, Any], entry: Mapping[str,
         return "policy", item
     if mode == "off" and not (card.get("recommendation") or {}).get("manual"):
         return "off", item
+    if kind == "question" and launch_to_retry(connection, item) is not None:
+        return "retry", item
+    return "ask", item
+
+
+#: The finding BOSS posts when it tries a failed launch once more (never "Could not start …",
+#: so the retry itself is not counted as a refusal).
+RETRY_NOTE = "Trying the launch once more"
+
+
+def launch_to_retry(connection: Connection, item: Mapping[str, Any]) -> Optional[dict[str, Any]]:
+    """The squad decision whose launch BOSS refused ONCE and that was never retried, or None.
+    A squad stuck on a launch that failed for a reason BOSS has since fixed (8bfebcde7: the
+    launch now acts as the squad's agent, verified; a workflow the lead named that the project
+    does not have now falls back to the squad's own) asks a person nothing new: the reconsider
+    pass tries it once more. A second refusal is the policy's answer (MAX_REFUSED_LAUNCHES)."""
+    if refused_launches(connection, item["id"]) != 1:
+        return None
+    if connection.execute(text(
+            "SELECT 1 FROM work_item_messages WHERE work_item_id = :w AND kind = 'finding' "
+            "AND sender = 'boss' AND body->>'summary' LIKE :r LIMIT 1"),
+            {"w": item["id"], "r": RETRY_NOTE + "%"}).first():
+        return None
+    from .squad_plugins import EXECUTORS
+
+    row = connection.execute(text(
+        "SELECT act_id, action, chosen, decided_by, proposal_id, consensus, created_at "
+        "FROM agent_act_decisions WHERE work_item_id = :w AND action = ANY(:a) "
+        "AND chosen = action AND proposal_id IS NOT NULL ORDER BY created_at DESC LIMIT 1"),
+        {"w": item["id"], "a": list(EXECUTORS)}).mappings().first()
+    if row is None:
+        return None
+    failed_after = connection.execute(text(
+        "SELECT 1 FROM work_item_messages WHERE work_item_id = :w AND kind = 'finding' "
+        "AND sender = 'boss' AND created_at >= :t AND (body->>'summary' LIKE 'Could not start %' "
+        "OR body->>'summary' LIKE 'Could not convene%') LIMIT 1"),
+        {"w": item["id"], "t": row["created_at"]}).first()
+    carried = any((((m.get("body") or {}).get("packet") or {}).get("decided") or {})
+                  .get("act_id") == row["act_id"]
+                  for m in collab.messages(connection, item["id"], kinds=("handoff",)))
+    if not failed_after or carried:
+        return None
+    return dict(row)
+
+
+def retry_launch(connection: Connection, project_id: str, item: Mapping[str, Any], *,
+                 launchers: Any = None) -> str:
+    """Try a refused squad launch once more, as the squad's lead under the decision it already
+    made (the launchers verify that identity, live). Started: the item runs on, linked to the
+    run. Refused again: the policy's answer — recorded, the item ends, nobody is asked."""
+    from . import squad_plugins, squads
+
+    found = launch_to_retry(connection, item)
+    roster = squads.roster(connection, item["id"])
+    if found is None or roster is None:
+        return "back_on_board"
+    prop = next((m for m in collab.messages(connection, item["id"], kinds=("proposal",))
+                 if m["id"] == found["proposal_id"]), None)
+    if prop is None:
+        return "back_on_board"
+    lead = roster["lead"]
+    connection.execute(text(
+        "UPDATE work_items SET lease_owner = NULL, lease_kind = NULL, lease_token = NULL, "
+        "lease_expires_at = NULL WHERE id = :id AND lease_kind = 'agent' AND lease_owner <> :o"),
+        {"id": item["id"], "o": lead})
+    token = board.claim(connection, item["id"], owner=lead)["lease_token"]
+    board.start(connection, item["id"], owner=lead, token=token)
+    collab.post(connection, item["id"], kind="finding", sender="boss", body={
+        "summary": f"{RETRY_NOTE}: what stopped it is fixed",
+        "evidence": [{"kind": "act", "ref": found["act_id"]}]})
+    if launchers is None:
+        from ...config import get_settings
+
+        launchers = squad_plugins.ToolLaunchers(get_settings())
+    done = squad_plugins.EXECUTORS[found["action"]](
+        connection, board.get(connection, item["id"]), squad=roster, proposal=prop,
+        decision=found, launchers=launchers)
+    if done.get("error"):
+        from .squad_turns import stop_by_policy
+
+        stop_by_policy(connection, board.get(connection, item["id"]), roster, token,
+                       action=found["action"])
+        return "stopped_by_policy"
+    return "relaunched"
+
+
+def is_mitigation_card(card: Mapping[str, Any]) -> bool:
+    """The squad's own "Roll back X to Y?" card (three answers, urgent): it stays its own card,
+    never batched or withdrawn for the mode — but it is still re-judged for being VALID."""
+    rec = card.get("recommendation") or {}
+    return (rec.get("action") == "incident_squad.mitigate"
+            and rec.get("mitigation") != "escalate" and rec.get("card") != CARD)
+
+
+def mitigation_verdict(connection: Connection, card: Mapping[str, Any]
+                       ) -> tuple[str, Optional[dict[str, Any]]]:
+    """A mitigation card re-judged: 'stale_rollback' when the release it proposes is no longer
+    the last known-good one (incident_squad.rollback_still_known_good — the same rule as
+    stack_deploy.rollback_option and the blamed releases), 'moot' when its item moved on, else
+    'ask' (it stands, as its own card). Being its own card never exempts it from this check
+    (HelpDesk AI 2026-11-07: "Roll back helpdesk-ai-v3 to c6d4d3a (known fix)?" — c6d4d3a was
+    the release INC-1 rolled back from — sat pending after the rule changed)."""
+    rec = card.get("recommendation") or {}
+    item = board.get(connection, str(rec.get("work_item_id") or ""))
+    if (item is None or item["lifecycle"] != "needs_you"
+            or item.get("needs_you_decision_id") != card["id"]):
+        return "moot", item
+    from ..incident_squad import rollback_still_known_good
+
+    if rollback_still_known_good(connection, item, rec) is False:
+        return "stale_rollback", item
     return "ask", item
 
 
@@ -575,6 +688,8 @@ def settle(connection: Connection, project_id: str, card_id: Optional[str],
     board.unask(connection, item_id, actor=COS, reason=WITHDRAW_WHY[why])
     if why in ("off", "rebatch", "moot"):
         return "back_on_board"
+    if why == "retry":
+        return retry_launch(connection, project_id, item)
     if why == "stale_rollback":
         from ..incident_squad import withdraw_rollback
 

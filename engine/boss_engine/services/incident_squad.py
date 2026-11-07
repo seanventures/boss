@@ -656,8 +656,34 @@ def similar_incidents(connection: Connection, project_id: str, *, app: str,
                           "incident": attrs.get("incident_ref") or attrs.get("incident_id"),
                           "incident_id": attrs.get("incident_id"),
                           "cause_key": attrs.get("cause_key"),
+                          "bad_releases": precedent_bad_releases(attrs),
                           "similarity": round(min(score, 1.0), 2)})
     return sorted(found, key=lambda f: -f["similarity"])[:3]
+
+
+_ROLLBACK_FIX = re.compile(r"roll ?back|revert", re.I)
+
+
+def precedent_bad_releases(attrs: Mapping[str, Any]) -> list[str]:
+    """The release(s) a precedent whose fix WAS a rollback rolled back from: what that lesson
+    knows is bad. Applying the lesson ("roll back to the last good release") rolls back to the
+    CURRENT last known-good release, never to one of these (HelpDesk AI 2026-11-07: INC-1's
+    lesson, applied on fa64985, proposed rolling back to c6d4d3a — the release INC-1 rolled back
+    from). Newer precedents record `rolled_back_from`; older ones name it as their diff evidence."""
+    attrs = attrs or {}
+    if not _ROLLBACK_FIX.search(str((attrs.get("detail") or {}).get("fix_summary") or "")):
+        return []
+    out = [str(c) for c in attrs.get("rolled_back_from") or () if c]
+    if not out:
+        out = [str(e.get("ref")) for e in attrs.get("evidence") or ()
+               if isinstance(e, Mapping) and e.get("type") == "diff" and e.get("ref")]
+    return [c for c in dict.fromkeys(out) if len(c) >= 7]
+
+
+def _same_commit(a: Any, b: Any) -> bool:
+    """Two commit refs name the same commit (either may be abbreviated, at least 7 chars)."""
+    a, b = str(a or "").lower(), str(b or "").lower()
+    return len(a) >= 7 and len(b) >= 7 and (a.startswith(b) or b.startswith(a))
 
 
 def runbooks_for(connection: Connection, project_id: str, ctx: Ctx) -> list[dict[str, Any]]:
@@ -1014,14 +1040,37 @@ class _Pass:
             "summary": short_label(f"Applying learning: {applied['fix'] or applied['title']}", 12),
             "evidence": [{"kind": "kg_node", "ref": applied["node_id"],
                           "note": f"from {applied.get('incident') or 'a past incident'}"}]})
+        bad = self._blame_precedent_releases(applied)
         self.decide(lead, Q_LEARN, applied["choice"],
                     f"Same signature as {applied.get('incident') or 'a past incident'} "
                     f"(similarity {applied['similarity']}). Its known fix comes first: "
-                    f"{clean_text(applied['fix'] or 'see the precedent', 160).rstrip('.')}.",
+                    f"{clean_text(applied['fix'] or 'see the precedent', 160).rstrip('.')}."
+                    + (f" Never back to {', '.join(c[:7] for c in bad)}, the release it rolled "
+                       "back from." if bad else ""),
                     evidence=evidence, options=[p["choice"] for p in found]
                     + ["No precedent"], confidence=applied["similarity"])
         self.learning = applied
         return applied
+
+    def _blame_precedent_releases(self, applied: Mapping[str, Any]) -> list[str]:
+        """Applying a rollback lesson: the release that lesson rolled back from is blamed on THIS
+        incident too (finalize_ctx.squad.blamed_commits), so the one known-good rule
+        (stack_deploy.rollback_option, via implicated_commits) — the squad's target, the console's
+        button, the redeploy and its approval — never rolls back to it. The lesson's fix is then
+        "roll back to the CURRENT last known-good release", never the commit it once replaced."""
+        bad = [c for c in applied.get("bad_releases") or () if c]
+        ctx = self.ctx
+        if not bad or not ctx.incident_id:
+            return bad
+        squad_ctx = dict(ctx.fctx.get("squad") or {})
+        blamed = list(squad_ctx.get("blamed_commits") or [])
+        new = [c for c in bad if not any(_same_commit(c, b) for b in blamed)]
+        if new:
+            blamed = (blamed + new)[-10:]
+            _merge_squad_ctx(self.c, ctx.incident_id, {"blamed_commits": blamed})
+            squad_ctx["blamed_commits"] = blamed
+            ctx.fctx["squad"] = squad_ctx
+        return bad
 
     def _log_use(self, ids: list[str], use_kind: str, seat: str) -> None:
         """The incident used these learnings: kg_usage rows, anchored on the incident (the unit of
@@ -1055,6 +1104,11 @@ class _Pass:
                 target = None
         else:
             target = self.ctx.deploy.get("previous_commit_sha")
+        blamed = (self.ctx.fctx.get("squad") or {}).get("blamed_commits") or ()
+        if target and any(_same_commit(target, b) for b in blamed):
+            # Whatever answered (an effect without a deploy history), a release this incident
+            # blamed (or a lesson it applied rolled back from) is never the target.
+            target = None
         self._target = str(target) if target else None
         return self._target
 
@@ -1476,7 +1530,8 @@ class _Pass:
         return {"node_id": row["id"], "title": row["name"],
                 "incident": attrs.get("incident_ref") or attrs.get("incident_id"),
                 "incident_id": attrs.get("incident_id"), "cause_key": attrs.get("cause_key"),
-                "fix": (attrs.get("detail") or {}).get("fix_summary")}
+                "fix": (attrs.get("detail") or {}).get("fix_summary"),
+                "bad_releases": precedent_bad_releases(attrs)}
 
     def same_lesson(self, learned: Mapping[str, Any], cause: Mapping[str, Any]) -> bool:
         """Is today's incident the precedent's lesson again? The lead judges (the one agent
@@ -1560,6 +1615,8 @@ class _Pass:
                 "UPDATE kg_nodes SET attrs = attrs || CAST(:a AS JSONB) WHERE id = :n"),
                 {"a": json.dumps({"incident_id": inc, "incident_ref": ref,
                                   "incidents": [{"id": inc, "ref": ref}],
+                                  **({"rolled_back_from": [commit]}
+                                     if mitigated and commit else {}),
                                   **({"cause_key": self.cause_key}
                                      if getattr(self, "cause_key", "") else {})}),
                  "n": node_id})

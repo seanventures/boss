@@ -1133,7 +1133,10 @@ def stack_history(connection: Connection, target_ids: list[str]) -> dict[str, li
     blamed = implicated_commits(connection, list(target_ids))
     for t, rows in hist.items():
         for h in rows:
-            h["implicated"] = str(h.get("commit_sha")) in blamed.get(t, set())
+            sha = str(h.get("commit_sha") or "")
+            # A blamed ref may be abbreviated (a lesson names its release by 12 characters).
+            h["implicated"] = bool(sha) and any(
+                len(b) >= 7 and sha.startswith(b) for b in blamed.get(t, set()))
     return hist
 
 
