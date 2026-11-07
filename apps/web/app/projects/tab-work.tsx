@@ -1,43 +1,34 @@
 "use client";
 
 /**
- * WORK (screen 5, contract §3/§14): new work inline (Feature · Bug · Ticket) with Helm's plan —
- * the chosen workflow's real steps as a strip, ≈ time and ≈ cost from this project's history, and
- * "change" to pick another workflow — then every task as a row: the station strip (the onboarding
+ * WORK (screen 5, contract §3/§14): the New work bar (it opens the New work modal, new-work.tsx:
+ * Helm's understanding, the workflow's real steps, ≈ time and ≈ cost from this project's history,
+ * the chips, Start or Add to Next) — then every task as a row: the station strip (the onboarding
  * row's own Discover → Ready → Backlog), who works it, its cost, its issue chip and every link,
  * grouped Needs you · Running · Planned · Done. Needs you is the header bar's own list (one
  * count); Planned is Marshal's rank, re-ranked by drag or Alt+↑/↓ and saved through the plan
  * route. A row opens its drawer in place. List or Board.
  */
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   ArrowBendDownRight, ArrowDown, ArrowUp, Bug, CaretDown, Check, Code, Compass, Database, DotsSixVertical, EnvelopeSimple, FlowArrow, GitMerge,
-  GitPullRequest, GithubLogo, Globe, Hammer, HandWaving, Kanban, Lightning, ListBullets, MagnifyingGlass, PauseCircle, Play, Plus, RocketLaunch,
-  Sparkle, TerminalWindow, Ticket, XCircle,
+  GitPullRequest, GithubLogo, Globe, HandWaving, Kanban, Lightning, ListBullets, PauseCircle, Play,
+  TerminalWindow, Ticket, XCircle,
 } from "@phosphor-icons/react";
 
 import { GatedButton, useGate } from "../../components/gated";
-import { post } from "../workflows/delivery-api";
-import { ReadinessPanel, unaccepted, type Readiness } from "../workflow-readiness-ui";
-import { startBody, type StartView } from "../../lib/start-project";
 import {
-  ATTEMPT_WORDS, KIND_WORDS, PX_PATHS, WORK_ORDER, WORK_WORDS, attemptsPill, dollarsAbout, isMissingStatus, movePlanItem, needsYouCards,
-  parseWorkPlan, pxHref, reRank, runAccept, startWork, usePxRead, workWhen, writePxUrl,
-  type Attempt, type NeedsYou, type PlanNode, type WorkItem, type WorkPlan, type WorkState,
+  ATTEMPT_WORDS, KIND_WORDS, WORK_ORDER, WORK_WORDS, attemptsPill, movePlanItem, needsYouCards,
+  pxHref, reRank, runAccept, startWork, workWhen, writePxUrl,
+  type Attempt, type NeedsYou, type WorkItem, type WorkState,
 } from "../../lib/project-experience";
-import { FX_WORK_PLAN } from "../../lib/project-experience-fixtures";
 import { localWith, stampLocal, whenLocal } from "../../lib/local-time";
-import { Empty, Face, Flow, Ico, Loading, Failed, EngineNotReady, PxLink, Said, Stations, Cost } from "./kit";
+import { Empty, Face, Flow, Loading, Failed, EngineNotReady, PxLink, Said, Stations, Cost } from "./kit";
+import { NewWorkBar } from "./new-work";
 import type { PxCtx } from "./project-page";
 import { WhyLine } from "../../components/stuck-work";
 import "./work.css";
 
-type Kind = "feature" | "bug" | "ticket";
-const KINDS: { key: Kind; label: string; icon: typeof Sparkle; ph: string }[] = [
-  { key: "feature", label: "Feature", icon: Sparkle, ph: "Describe it — e.g. \"let agents tag tickets by product\"" },
-  { key: "bug", label: "Bug", icon: Bug, ph: "What's wrong — e.g. \"SLA timer ignores weekends\"" },
-  { key: "ticket", label: "Ticket", icon: Ticket, ph: "Paste a GitHub or Plane issue link" },
-];
 /** The row's tile (05-29): what the work is waiting on, else what kind it is and where it came from. */
 function RowTile({ w }: { w: WorkItem }) {
   const setup = w.kind === "setup";
@@ -95,8 +86,8 @@ function useNeeds(ctx: PxCtx, items: WorkItem[]) {
 export function WorkTab({ ctx }: { ctx: PxCtx }) {
   const [filter, setFilter] = useState<WorkState | "all">("all");
   const [view, setView] = useState<"list" | "board">("list");
-  // The row a Start just made: it slides in (150 ms) once the list has it.
-  const [fresh, setFresh] = useState("");
+  // The row a Start just made (the New work modal's): it slides in (150 ms) once the list has it.
+  const fresh = ctx.freshWork ?? "";
   const raw = ctx.work?.items ?? [];
   // DRAG TO RE-RANK (05-23): the order a person just set shows at once; a refusal puts it back.
   const [order, setOrder] = useState<string[] | null>(null);
@@ -136,7 +127,7 @@ export function WorkTab({ ctx }: { ctx: PxCtx }) {
   const showLoose = filter === "all" || filter === "needs_you";
   return (
     <div className="px-stack" data-testid="px-work">
-      <Composer ctx={ctx} onStarted={setFresh} />
+      <NewWorkBar ctx={ctx} said={ctx.workSaid} />
       <div className="px-row px-wrap">
         <div className="px-filters" role="group" aria-label="Filter work">
           <button type="button" className="px-filter" aria-pressed={filter === "all"} onClick={() => setFilter("all")} data-testid="px-work-f-all">All <span className="px-mono">{items.length}</span></button>
@@ -161,7 +152,7 @@ export function WorkTab({ ctx }: { ctx: PxCtx }) {
           : ctx.workState === "error" ? <Failed what="Work" error={null} onRetry={ctx.refreshWork} />
           : <EngineNotReady what="The work list"><a className="px-btn" href={pxHref("?area=code_tasks")}>Open Code Tasks</a></EngineNotReady>
       ) : !items.length && !needs.loose.length ? (
-        <div className="px-card"><Empty icon={Kanban} title="No work yet" line="Describe a feature or a bug above. Helm plans it, you approve, the crew builds it to a PR." testid="px-work-empty" /></div>
+        <div className="px-card"><Empty icon={Kanban} title="No work yet" line="Press New work above (or N) to describe a feature or a bug. Helm plans it, you approve, the crew builds it to a PR." testid="px-work-empty" /></div>
       ) : view === "list" ? (
         <div className="px-list" data-testid="px-work-rows">
           {WORK_ORDER.filter((k) => groupOf(k).length || (k === "needs_you" && showLoose && needs.loose.length)).map((k) => (
@@ -291,140 +282,6 @@ function useRankDrag(all: WorkItem[], rankable: boolean, onRank: (id: string, to
     };
   };
   return { index, can, props };
-}
-
-const NODE_ICON: Record<string, React.ReactNode> = {
-  build: <Hammer size={11} aria-hidden />, review: <MagnifyingGlass size={11} aria-hidden />, pr: <GitPullRequest size={11} aria-hidden />,
-  ship: <RocketLaunch size={11} aria-hidden />, design: <Sparkle size={11} aria-hidden />,
-};
-/** Before BOSS answers (or on an engine without the plan route): the wireframe's strip, said as typical. */
-const TYPICAL: PlanNode[] = [
-  { key: "plan", label: "Plan", type: "agent", agent: { name: "Juno", role_key: "pm", avatar: "" } },
-  { key: "approve", label: "You approve", type: "you", agent: null },
-  { key: "build", label: "Build", type: "todo", agent: null }, { key: "review", label: "Review", type: "todo", agent: null },
-  { key: "pr", label: "PR", type: "todo", agent: null }, { key: "ship", label: "Staging", type: "todo", agent: null },
-];
-
-function Composer({ ctx, onStarted }: { ctx: PxCtx; onStarted: (id: string) => void }) {
-  const [kind, setKind] = useState<Kind>("feature");
-  const [text, setText] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [said, setSaid] = useState<{ text: string; tone?: "red" | "green" }>({ text: "" });
-  const input = useRef<HTMLInputElement>(null);
-  // "change" on Helm's plan: another of this project's workflows (cleared when the kind changes).
-  const [picked, setPicked] = useState("");
-  const [choosing, setChoosing] = useState(false);
-  // HELM'S PLAN for this kind (and the picked workflow), read before Start (05-31).
-  const plan = usePxRead<WorkPlan>(PX_PATHS.workPlan(ctx.projectId, kind, picked), parseWorkPlan, { everyMs: 120_000, demo: () => parseWorkPlan({ ...FX_WORK_PLAN, kind }) });
-  // A start refused for what the project lacks: the checklist, and Start anyway with the ticks.
-  const [refusal, setRefusal] = useState<Readiness | null>(null);
-  const [startAnyway, setStartAnyway] = useState<string[]>([]);
-  // "New work" in the header lands here with `&compose=1`: focus the box, then drop the flag.
-  useEffect(() => {
-    const p = new URLSearchParams(window.location.search);
-    if (p.get("compose") === "1") {
-      // An answer's "New work" card (Edit) brings its words and kind: prefilled, never sent.
-      const words = p.get("compose_text");
-      const k = p.get("compose_kind");
-      if (words) setText(words);
-      if (k === "feature" || k === "bug" || k === "ticket") setKind(k);
-      input.current?.focus();
-      input.current?.scrollIntoView?.({ block: "center" });
-      writePxUrl({ compose: null, compose_text: null, compose_kind: null }, "replace");
-    }
-  });
-  const choose = (k: Kind) => { setKind(k); setPicked(""); setChoosing(false); };
-  const start = async () => {
-    const t = text.trim();
-    if (!t || busy) return;
-    setBusy(true); setSaid({ text: "" });
-    try {
-      const extra = { ...(startAnyway.length ? { start_anyway: startAnyway } : {}), ...(picked ? { workflow_key: picked } : {}) };
-      let r = await startWork(ctx.projectId, kind, t, extra);
-      // NOT READY (409 from THE start door, §3): the project's checklist, and Start anyway with the ticks.
-      if (!r.ok && r.readiness) { setRefusal(r.readiness as Readiness); return; }
-      // AN ENGINE WITHOUT §3's POST: the project's normal start door (the old "What should we add?").
-      if (!r.ok && isMissingStatus(r.status)) {
-        const view = await fetch(`/v1/projects/${encodeURIComponent(ctx.projectId)}/start`, { cache: "no-store" }).then((x) => (x.ok ? x.json() : null)).catch(() => null);
-        if (view) {
-          const s = await post("start", { ...startBody(view as StartView, t), ...(startAnyway.length ? { start_anyway: startAnyway } : {}) });
-          if (!s.ok && "readiness" in s && s.readiness) { setRefusal(s.readiness); return; }
-          r = s.ok ? { ok: true, status: 200, body: {}, error: null } : { ok: false, status: 400, body: null, error: typeof s.error === "string" ? s.error : "It didn't start." };
-        }
-      }
-      if (r.ok) {
-        setText(""); setRefusal(null); setStartAnyway([]);
-        setSaid({ text: r.demo ? "Sample mode — nothing was sent." : `Started — ${plan.data?.nodes[0]?.agent?.name ?? "Helm"} is planning it.`, tone: "green" });
-        const id = typeof r.body?.run_id === "string" ? r.body.run_id : "";
-        if (id) onStarted(id);
-        ctx.refreshWork();
-      } else setSaid({ text: r.error ?? "It didn't start.", tone: "red" });
-    } finally { setBusy(false); }
-  };
-  const k = KINDS.find((x) => x.key === kind)!;
-  const p = plan.data;
-  const nodes = p?.nodes.length ? p.nodes : TYPICAL;
-  const est = p?.estimate ?? null;
-  const wfName = p?.workflow ? `${p.workflow.name.replace(/\s+workflow$/i, "")} workflow` : plan.state === "loading" ? "Reading the plan…" : "Minor Feature workflow";
-  return (
-    <section className="px-card" aria-label="New work" data-testid="px-composer" style={{ borderColor: "var(--accent-line)" }}>
-      <form className="px-row px-wrap" onSubmit={(e) => { e.preventDefault(); void start(); }}>
-        <Ico icon={Plus} c="teal" />
-        <div className="px-seg" role="group" aria-label="Kind of work">
-          {KINDS.map((x) => (
-            <button key={x.key} type="button" aria-pressed={kind === x.key} onClick={() => choose(x.key)} data-testid={`px-compose-${x.key}`}>
-              <x.icon size={13} aria-hidden /> {x.label}</button>
-          ))}
-        </div>
-        <label className="px-sr" htmlFor="px-compose-text">Describe the work</label>
-        <input id="px-compose-text" ref={input} className="px-input" style={{ flex: "1 1 260px", width: "auto" }} value={text} placeholder={k.ph}
-               inputMode={kind === "ticket" ? "url" : undefined}
-               onChange={(e) => setText(e.target.value)} data-testid="px-compose-text" maxLength={2000} />
-        <GatedButton permission="workflow_run:start" projectId={ctx.projectId} type="submit" className="px-btn" data-kind="primary" data-testid="px-compose-start"
-                     disabled={!text.trim() || busy || (!!refusal && unaccepted(refusal, startAnyway).length > 0)}>
-          <Play size={12} weight="fill" aria-hidden /> {busy ? "Starting…" : refusal ? "Start anyway" : "Start"}</GatedButton>
-      </form>
-      <div className="px-row px-wrap px-plan" style={{ marginTop: 10 }} data-testid="px-compose-plan" data-state={p ? "ready" : plan.state}>
-        <span className="px-lbl">{p?.planner?.name ?? "Helm"}&apos;s plan</span>
-        <Flow testid="px-compose-strip" nodes={nodes.map((n) => ({
-          label: n.label, type: n.type === "you" ? "waiting" : n.type === "agent" ? "agent" : "todo",
-          icon: n.type === "agent" && n.agent ? <Face agent={n.agent} size={16} /> : NODE_ICON[n.key],
-        }))} />
-        {est?.minutes ? (
-          <span className="px-tag" data-tone="cost" data-testid="px-compose-est-min"
-                title={est.minutes_basis === "history" ? `Median agent time to the pull request over the last ${est.minutes_runs} run${est.minutes_runs === 1 ? "" : "s"} of this workflow here` : "The steps' typical time — no run of this workflow here yet"}>
-            ≈ {est.minutes} min</span>
-        ) : null}
-        {est && est.usd !== null ? (
-          <span className="px-tag" data-tone="cost" data-testid="px-compose-est-usd"
-                title={`Median cost of the last ${est.usd_runs} run${est.usd_runs === 1 ? "" : "s"} of this workflow here`}>≈ {dollarsAbout(est.usd)}</span>
-        ) : est ? <span className="px-faint" style={{ fontSize: ".58rem" }} data-testid="px-compose-est-usd-none" title="BOSS prices a workflow from its own runs in this project">cost after its first run</span> : null}
-        <span className="px-faint px-wf-pick" style={{ fontSize: ".6rem" }} data-testid="px-compose-workflow">
-          <span title={p?.workflow?.why ? `Start runs ${p.workflow.name}: ${p.workflow.why}` : undefined}>{wfName}</span>
-          {" · "}
-          <button type="button" className="px-linkbtn" aria-haspopup="listbox" aria-expanded={choosing} data-testid="px-compose-change"
-                  disabled={!p?.options.length} onClick={() => setChoosing((v) => !v)}>change</button>
-          {choosing && p ? (
-            <span className="px-wf-menu" role="listbox" aria-label="Workflow for this work" data-testid="px-compose-workflows"
-                  onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); setChoosing(false); } }}>
-              {p.options.map((o) => (
-                <button key={o.key} type="button" role="option" aria-selected={p.workflow?.key === o.key} data-testid={`px-compose-wf-${o.key}`}
-                        data-fits={o.fits || undefined} title={o.detail || undefined}
-                        onClick={() => { setPicked(o.key); setChoosing(false); }}>
-                  {p.workflow?.key === o.key ? <Check size={11} weight="bold" aria-hidden /> : <span style={{ width: 11 }} aria-hidden />}
-                  <span>{o.name}</span>{o.fits ? <span className="px-tag" data-tone="green">fits a {k.label.toLowerCase()}</span> : null}
-                </button>
-              ))}
-              {picked ? <button type="button" role="option" aria-selected={false} data-testid="px-compose-wf-default" onClick={() => { setPicked(""); setChoosing(false); }}>
-                <span style={{ width: 11 }} aria-hidden /><span>Back to the project&apos;s default</span></button> : null}
-            </span>
-          ) : null}
-        </span>
-      </div>
-      {refusal ? <div style={{ marginTop: 10 }} data-testid="px-compose-readiness"><ReadinessPanel readiness={refusal} accepted={startAnyway} onAccept={setStartAnyway} /></div> : null}
-      <Said text={said.text} tone={said.tone} />
-    </section>
-  );
 }
 
 /** "Stalled · since Tue 14:05": amber, in the viewer's own time. */

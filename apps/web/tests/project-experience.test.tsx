@@ -329,7 +329,9 @@ describe("the Project page header, Needs you and tabs (screen 4)", () => {
     await act(async () => { window.dispatchEvent(new PopStateEvent("popstate")); });
     await settle();
     await press(tid("px-head-new-work"));
-    expect([params().get("tab"), params().get("compose")]).toEqual(["work", null]); // compose consumed by the composer
+    // The New work modal opens on this tab (no jump to Work), with the box focused.
+    expect([params().get("tab"), params().get("compose")]).toEqual([null, null]);
+    expect(tid("px-composer")).not.toBeNull();
     expect(document.activeElement?.getAttribute("data-testid")).toBe("px-compose-text");
   });
 
@@ -432,10 +434,11 @@ describe("Work (screens 5, 5b)", () => {
   it("New work posts §3 and the rows open their drawer with every link", async () => {
     const calls = engine();
     await openProject("&tab=work");
+    await press(tid("px-nw-bar-input")); await settle(6); // the bar opens the New work modal
     await press(tid("px-compose-bug"));
     const box = tid("px-compose-text") as HTMLInputElement;
     await act(async () => {
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(box, "SLA ignores weekends");
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(box, "SLA ignores weekends");
       box.dispatchEvent(new Event("input", { bubbles: true }));
     });
     await press(tid("px-compose-start"));
@@ -465,9 +468,10 @@ describe("Work (screens 5, 5b)", () => {
       return undefined;
     });
     await openProject("&tab=work");
+    await press(tid("px-nw-bar-input")); await settle(6); // the bar opens the New work modal
     const box = tid("px-compose-text") as HTMLInputElement;
     await act(async () => {
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(box, "Add CSV export");
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(box, "Add CSV export");
       box.dispatchEvent(new Event("input", { bubbles: true }));
     });
     await press(tid("px-compose-start"));
@@ -480,7 +484,10 @@ describe("Work (screens 5, 5b)", () => {
   it("a viewer cannot start work: Start and Start now are greyed", async () => {
     engine();
     await openProject("&tab=work", "viewer");
-    expect(tid("px-compose-start")!.getAttribute("aria-disabled")).toBe("true");
+    // The bar is greyed and opens nothing; the header's New work too.
+    expect(tid("px-nw-bar-input")!.getAttribute("aria-disabled")).toBe("true");
+    await press(tid("px-nw-bar-input"));
+    expect(tid("px-composer")).toBeNull();
     expect(tid("px-work-start-wi_email")!.getAttribute("aria-disabled")).toBe("true");
     expect(tid("px-head-new-work")!.getAttribute("aria-disabled")).toBe("true");
   });
@@ -758,9 +765,10 @@ describe("sample mode (?px_demo=1)", () => {
     const calls = engine();
     await openProject("&px_demo=1&tab=work");
     expect(tid("px-demo-banner")).not.toBeNull();
+    await press(tid("px-nw-bar-input")); await settle(6); // the bar opens the New work modal
     const box = tid("px-compose-text") as HTMLInputElement;
     await act(async () => {
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(box, "x");
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(box, "x");
       box.dispatchEvent(new Event("input", { bubbles: true }));
     });
     await press(tid("px-compose-start"));
@@ -948,9 +956,10 @@ describe("the engine's own answers (what the API serves, not the sample)", () =>
       return undefined;
     });
     await openProject("&tab=work");
+    await press(tid("px-nw-bar-input")); await settle(6); // the bar opens the New work modal
     const input = tid("px-compose-text") as HTMLInputElement;
     await act(async () => {
-      const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+      const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!;
       set.call(input, "Add CSV export");
       input.dispatchEvent(new Event("input", { bubbles: true }));
     });

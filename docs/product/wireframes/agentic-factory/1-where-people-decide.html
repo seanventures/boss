@@ -1,0 +1,250 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Where people decide</title>
+<link rel="stylesheet" href="../project-experience/console.css"><link rel="stylesheet" href="../project-experience/project.css">
+<link rel="stylesheet" href="../project-experience/new-project-v2/np2.css"><link rel="stylesheet" href="af.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/fill/style.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/bold/style.css">
+</head>
+<body data-active="budget" data-crumb="Govern|Where people decide" data-base="../project-experience/">
+<div id="content">
+
+<div class="af-head">
+  <span class="ico"><i class="ph-fill ph-hand-palm"></i></span>
+  <div><h1>Where people decide</h1><p>7 kinds of decision need a person. Agents decide everything else, and show you why.</p></div>
+  <span class="wf-spacer"></span>
+  <span class="tag" data-tone="green" title="Captain authority is on: area agents act on their own below this line"><span class="dot" data-s="done"></span>Agents on</span>
+  <span class="btn" title="Stop all agent work now, on every project (the kill switch, unchanged)"><i class="ph ph-stop-circle" style="color:var(--red)"></i>Stop all</span>
+</div>
+<div class="af-tabs" role="tablist">
+  <span>Spend</span><span>Limits</span><span aria-selected="true"><i class="ph ph-hand-palm"></i>Where people decide <span class="pin">1</span></span><span>More ▾</span>
+</div>
+
+<!-- ── HERO: the loop as a diagram ─────────────────────────────── -->
+<section class="card">
+  <div class="af-loop" title="How every decision flows: agents decide unless it is on the list">
+    <div class="af-lnode"><b>Signals</b><small>always on</small>
+      <div class="af-sig"><span><i class="ph ph-pulse"></i>alerts</span><span><i class="ph ph-git-pull-request"></i>PRs</span><span><i class="ph ph-hourglass"></i>stalls</span><span><i class="ph ph-bug"></i>CVEs</span><span><i class="ph ph-currency-dollar"></i>spend</span><span><i class="ph ph-hard-drives"></i>hosts</span></div></div>
+    <span class="af-arrow" data-t="agents"></span>
+    <div class="af-lnode" data-t="agents"><b>Area agents decide and act</b><small>under Helm, the captain · each one explains itself as a diagram</small>
+      <div class="af-faces"><span class="face" data-a="helm" title="Helm · captain"></span><span class="face" data-a="beacon_live" title="SRE"></span><span class="face" data-a="marshal" title="Shepherd"></span><span class="face" data-a="vera" title="Security"></span><span class="face" data-a="forge" title="Infra"></span><span class="face" data-a="juno" title="Knowledge"></span><span class="tag">+4</span></div>
+      <div class="big" style="color:var(--teal)">142 <small style="font-size:.54rem;font-weight:400;color:var(--faint)">done alone · 24 h</small></div></div>
+    <span class="af-arrow" data-t="gate"></span>
+    <div class="af-lnode" data-t="gate"><b>On the list?</b><small>7 kinds · checked in code, not by the model</small>
+      <div class="big" style="color:var(--amber)">6 <small style="font-size:.54rem;font-weight:400;color:var(--faint)">stopped here · 24 h</small></div></div>
+    <span class="af-arrow" data-t="gate"></span>
+    <div class="af-lnode" data-t="you"><b>A person decides</b><small>median answer 4 min · 1 waiting now</small>
+      <div class="row" style="gap:6px"><img class="face" data-size="s" src="../project-experience/faces/you.svg" alt=""><span style="font-size:.56rem;font-weight:700">Merge PR #3</span></div></div>
+  </div>
+  <div class="af-stats" style="margin-top:12px">
+    <div class="af-stat" data-t="auto"><div class="n">96%</div><div class="k">decided by agents · 24 h</div><div class="af-ratio"><i data-t="auto" style="width:96%"></i><i data-t="you" style="width:4%"></i></div></div>
+    <div class="af-stat" data-t="you"><div class="n">6</div><div class="k">waited for a person · 5 answered</div></div>
+    <div class="af-stat" data-t="ok"><div class="n">0</div><div class="k">boundary crossed without a person</div></div>
+    <div class="af-stat"><div class="n">2</div><div class="k">agents overridden by you · both explained</div></div>
+  </div>
+</section>
+
+<!-- ── ONE INPUT: tell BOSS a rule ─────────────────────────────── -->
+<div class="af-cap">Change a rule in your words <span class="pin">2</span></div>
+<div class="np2-in" data-multi title="Say who decides what. Helm turns it into rule changes you confirm.">
+  <span class="kind"><i class="ph-fill ph-scales"></i></span>
+  <div class="txt">Nothing goes to prod on Fridays after 3pm. Anything over $200 a day needs Sarah, not me.
+Let agents merge into staging branches on their own.<span class="caret"></span></div>
+  <div class="np2-in-foot"><span>⇧↵ new line · ⌘↵ apply</span><span class="wf-spacer"></span><span class="np2-hide-s">Helm read it below ↓</span></div>
+</div>
+<div class="ub" style="margin-top:10px">
+  <div class="ub-h"><span class="face" data-a="helm" data-size="m"></span>
+    <div><b>Here’s what I understood</b> <span class="pin">3</span><small>3 changes · replayed on the last 30 days so you see the effect first</small></div></div>
+  <div class="ub-grid">
+    <div>
+      <div class="ub-f"><span class="lbl">Production deploy</span><span>Add a quiet window: <mark>Fri 15:00 → Mon 08:00, your time zone (Europe/London)</mark>. Scope: <b>whole install</b>.</span><i class="ph ph-pencil-simple ed"></i></div>
+      <div class="ub-f"><span class="lbl">Spend above a cap</span><span>Above <b>$200 a day</b>, <span class="face" data-a="vera" style="width:14px;height:14px;vertical-align:-3px"></span> Sarah decides <mark>instead of you</mark>; you are told. Cap was $500.</span><i class="ph ph-pencil-simple ed"></i></div>
+    </div>
+    <div>
+      <div class="ub-f" data-q><span class="lbl">Merge · check</span><span>Merging into <span class="mono">staging/*</span> is <b>not</b> the default branch, so it is already off the list: agents do it today. <mark>Nothing to change.</mark> Merging to <span class="mono">main</span> still needs a person.</span><i class="ph ph-pencil-simple ed"></i></div>
+      <div class="ub-f"><span class="lbl">Last 30 days</span><span><span class="tag" data-tone="amber">3 deploys</span> would have waited until Monday · <span class="tag" data-tone="amber">2 builds</span> would have gone to Sarah</span><i></i></div>
+    </div>
+  </div>
+  <div class="ub-act">
+    <span class="btn" data-kind="ok"><i class="ph-bold ph-check"></i>Looks right</span><span class="btn"><i class="ph ph-pencil-simple"></i>Fix it</span>
+    <span class="faint" style="font-size:.54rem"><i class="ph ph-shield-check"></i> Changing this list is itself on the list: it asks for your passkey.</span>
+    <span class="wf-spacer"></span>
+    <span class="btn" data-kind="primary"><i class="ph ph-check-circle"></i>Apply 2 changes <span class="pin" style="margin-left:4px">4</span></span>
+  </div>
+</div>
+
+<!-- ── THE LIST ─────────────────────────────────────────────────── -->
+<div class="af-cap">The list · only these wait for a person <span class="pin">5</span></div>
+<div class="af-bounds">
+  <div class="af-b" data-open title="Production deploy · click to change">
+    <div class="af-b-h"><span class="bi"><i class="ph-bold ph-rocket-launch"></i></span><b>Production deploy</b><i class="ph ph-caret-down"></i></div>
+    <div class="def">Always a person · quiet Fri 15:00 → Mon</div>
+    <div class="meta"><span class="af-scope"><span aria-selected="true">Install</span><span>1 project</span></span><span class="face" data-a="you"></span>Owner seat<span class="wf-spacer"></span><span class="af-mini"><i style="height:6px"></i><i style="height:12px"></i><i style="height:4px"></i></span>2 · 24h</div>
+    <div class="why">Can’t be taken back: customers see it.</div>
+  </div>
+  <div class="af-b">
+    <div class="af-b-h"><span class="bi"><i class="ph-bold ph-git-merge"></i></span><b>Merge to the default branch</b><i class="ph ph-caret-down"></i></div>
+    <div class="def">Always a person · after review + tests</div>
+    <div class="meta"><span class="af-scope"><span aria-selected="true">Install</span><span>project</span></span><span class="face" data-a="you"></span>Maintainers<span class="wf-spacer"></span>3 · 24h</div>
+    <div class="why">It is what ships next. Self-fixes to BOSS count too.</div>
+  </div>
+  <div class="af-b">
+    <div class="af-b-h"><span class="bi"><i class="ph-bold ph-currency-dollar"></i></span><b>Spend above a cap</b><i class="ph ph-caret-down"></i></div>
+    <div class="def">Above $500 a run or $500 a day</div>
+    <div class="meta"><span class="af-scope"><span aria-selected="true">Install</span><span>2 projects</span></span><span class="face" data-a="you"></span>Owner<span class="wf-spacer"></span>1 · 24h</div>
+    <div class="why">Money spent can’t be recalled. Under the cap, FinOps decides.</div>
+  </div>
+  <div class="af-b">
+    <div class="af-b-h"><span class="bi"><i class="ph-bold ph-key"></i></span><b>Secrets and credentials</b><i class="ph ph-caret-down"></i></div>
+    <div class="def">Add, reveal, rotate or grant a secret</div>
+    <div class="meta"><span class="af-scope"><span aria-selected="true">Install</span></span><span class="face" data-a="you"></span>Owner · passkey<span class="wf-spacer"></span>0 · 24h</div>
+    <div class="why">Only a person can hand over a key. Agents use secrets by name and never see them.</div>
+  </div>
+  <div class="af-b">
+    <div class="af-b-h"><span class="bi"><i class="ph-bold ph-megaphone"></i></span><b>Talking to the outside</b><i class="ph ph-caret-down"></i></div>
+    <div class="def">Email, post or page anyone outside the team</div>
+    <div class="meta"><span class="af-scope"><span aria-selected="true">Install</span><span>project</span></span><span class="face" data-a="you"></span>Owner<span class="wf-spacer"></span>0 · 24h</div>
+    <div class="why">Can’t be unsent. Messages to your own team don’t count.</div>
+  </div>
+  <div class="af-b">
+    <div class="af-b-h"><span class="bi"><i class="ph-bold ph-trash"></i></span><b>Deleting data</b><i class="ph ph-caret-down"></i></div>
+    <div class="def">Drop, purge, retire a host, forget facts</div>
+    <div class="meta"><span class="af-scope"><span aria-selected="true">Install</span></span><span class="face" data-a="you"></span>Owner · type the name<span class="wf-spacer"></span>0 · 24h</div>
+    <div class="why">Gone is gone. Agents may archive; only a person deletes.</div>
+  </div>
+  <div class="af-b">
+    <div class="af-b-h"><span class="bi"><i class="ph-bold ph-identification-card"></i></span><b>Who can do what</b><i class="ph ph-caret-down"></i></div>
+    <div class="def">Roles, invites, keys, agent powers</div>
+    <div class="meta"><span class="af-scope"><span aria-selected="true">Install</span></span><span class="face" data-a="you"></span>Admin · passkey<span class="wf-spacer"></span>0 · 24h</div>
+    <div class="why">An agent never raises its own powers or anyone else’s.</div>
+  </div>
+  <div class="af-b" data-lock title="Fixed: changing the list is always a person, with a passkey">
+    <div class="af-b-h"><span class="bi"><i class="ph-bold ph-lock-simple"></i></span><b>Changing this list</b><i class="ph ph-lock-simple"></i></div>
+    <div class="def">Owner · passkey · always</div>
+    <div class="meta"><span class="tag">fixed</span><span class="wf-spacer"></span>last change 3 d ago</div>
+    <div class="why">So no agent can move the line it works under.</div>
+  </div>
+</div>
+
+<!-- popover for the open card -->
+<div class="af-pop"><div class="pop">
+  <div class="pop-h"><span class="bi" style="color:var(--amber)"><i class="ph-bold ph-rocket-launch"></i></span><b>Production deploy</b><span class="anchor"><i class="ph ph-arrow-up"></i>from the card</span></div>
+  <div class="af-kv">
+    <span>Who decides</span><span class="row" style="gap:6px"><span class="np2-chip"><span class="face" data-a="you"></span>Owner seat <i class="ph ph-caret-down"></i></span><span class="np2-chip" data-dashed>+ backup person</span></span>
+    <span>Scope</span><span><span class="af-scope"><span aria-selected="true">Whole install</span><span>Per project</span></span> <span class="faint">NorthPeak Retail adds a second approver</span></span>
+    <span>Quiet window</span><span>Fri 15:00 → Mon 08:00 · <a class="link-chip">+ window</a></span>
+    <span>Agents may</span><span>Prepare the deploy, run preflight, roll staging back alone; <b>wait at the button</b></span>
+    <span>On my behalf</span><span>Off · <a class="link-chip" title="Was Account › Approve on my behalf: a delegate key with a daily cap, max 90 days">let a delegate approve…</a></span>
+    <span>Full auto</span><span class="faint"><i class="ph ph-lock-simple"></i> Never: irreversible actions are never auto-approved, at any cost</span>
+  </div>
+  <div class="af-trail">
+    <div><span class="t">09:12</span><span class="face" data-a="you"></span><span>You approved HelpDesk v1.4 → prod · after Beacon’s preflight</span><a class="link-chip">diagram</a></div>
+    <div><span class="t">Tue</span><i class="ph ph-rocket-launch" style="color:var(--accent-text)"></i><span>Release agent asked · held 2 h by the quiet window</span><a class="link-chip">diagram</a></div>
+    <div><span class="t">Mon</span><span class="face" data-a="you"></span><span>You changed the scope to Whole install · passkey</span><a class="link-chip">audit</a></div>
+  </div>
+  <div class="pop-f"><a class="faint" style="font-size:.56rem;margin-right:auto">Full audit trail ↗</a><span class="btn" data-kind="ghost">Cancel</span><span class="btn" data-kind="primary">Save · passkey</span></div>
+</div></div>
+
+<!-- ── EVERYTHING ELSE: the monitoring agents ───────────────────── -->
+<div class="af-cap">Everything else runs on its own · the agents watching <span class="pin">6</span></div>
+<div class="af-agents">
+  <div class="af-a"><span class="av"><span class="face" data-a="helm"></span></span><span class="nm">Helm · Captain <span class="tag" data-tone="blue">authority</span></span><span class="w">Routes every signal to an owner, breaks ties</span>
+    <span class="bars"><span class="af-ratio"><i data-t="auto" style="width:100%"></i></span>31 alone · 0 waited</span></div>
+  <div class="af-a"><span class="av"><span class="face" data-a="marshal"></span></span><span class="nm">Shepherd</span><span class="w">Stalled builds and runs: retry, re-route, unstick</span>
+    <span class="bars"><span class="af-ratio"><i data-t="auto" style="width:92%"></i><i data-t="you" style="width:8%"></i></span>24 alone · 2 waited</span></div>
+  <div class="af-a"><span class="av"><span class="face" data-a="beacon_live"></span></span><span class="nm">SRE on call</span><span class="w">Alerts and incidents: triage, restart, roll staging back</span>
+    <span class="bars"><span class="af-ratio"><i data-t="auto" style="width:94%"></i><i data-t="you" style="width:6%"></i></span>17 alone · 1 waited</span></div>
+  <div class="af-a"><span class="av"><span class="face" data-a="vera"></span></span><span class="nm">Security <span class="tag" data-tone="idle">new watch</span></span><span class="w">CVEs in your deps: open a fix PR, rate the risk</span>
+    <span class="bars"><span class="af-ratio"><i data-t="auto" style="width:100%"></i></span>4 fix PRs · 0 waited</span></div>
+  <div class="af-a"><span class="av"><i class="ph-bold ph-currency-dollar"></i></span><span class="nm">FinOps</span><span class="w">Spend pace: cheaper models, pause runaway jobs</span>
+    <span class="bars"><span class="af-ratio"><i data-t="auto" style="width:90%"></i><i data-t="you" style="width:10%"></i></span>9 alone · 1 waited</span></div>
+  <div class="af-a"><span class="av"><i class="ph-bold ph-rocket-launch"></i></span><span class="nm">Release</span><span class="w">Staging deploys, smoke checks, prepares prod</span>
+    <span class="bars"><span class="af-ratio"><i data-t="auto" style="width:78%"></i><i data-t="you" style="width:22%"></i></span>7 alone · 2 waited</span></div>
+  <div class="af-a"><span class="av"><span class="face" data-a="forge"></span></span><span class="nm">Infra <span class="tag" data-tone="idle">new watch</span></span><span class="w">Host health: disk, Docker, ports, certificates</span>
+    <span class="bars"><span class="af-ratio"><i data-t="auto" style="width:100%"></i></span>12 alone · 0 waited</span></div>
+  <div class="af-a"><span class="av"><i class="ph-bold ph-door-open"></i></span><span class="nm">Onboarding</span><span class="w">New repos and folders: map, set up, test, backlog</span>
+    <span class="bars"><span class="af-ratio"><i data-t="auto" style="width:100%"></i></span>1 repo · 0 waited</span></div>
+  <div class="af-a"><span class="av"><span class="face" data-a="juno"></span></span><span class="nm">Knowledge</span><span class="w">Lessons and rules from finished work, kept current</span>
+    <span class="bars"><span class="af-ratio"><i data-t="auto" style="width:100%"></i></span>37 learned · 0 waited</span></div>
+</div>
+
+<!-- ── LAST 24 HOURS ─────────────────────────────────────────────── -->
+<div class="af-cap">Last 24 hours · alone vs waited <span class="pin">7</span></div>
+<section class="card">
+  <div class="af-axis"><span></span><div><span>08:00 yesterday</span><span>14:00</span><span>20:00</span><span>02:00</span><span>now</span></div><span></span></div>
+  <div class="af-lanes">
+    <div class="af-lane"><span class="who"><i class="ph ph-hourglass"></i><span class="l">Shepherd</span></span><div class="af-track"><b style="left:4%"></b><b style="left:11%"></b><b style="left:19%"></b><b data-t="you" style="left:33%" title="Waited: retry would exceed the run cap"></b><b style="left:47%"></b><b style="left:58%"></b><b data-t="you" style="left:71%"></b><b style="left:88%"></b></div><span class="n">24 · 2✋</span></div>
+    <div class="af-lane"><span class="who"><i class="ph ph-pulse"></i><span class="l">SRE</span></span><div class="af-track"><b style="left:9%"></b><b data-t="fix" style="left:28%" title="Rolled staging back · recovered in 4 min"></b><b style="left:52%"></b><b data-t="you" style="left:63%" title="Waited: page the customer status page (outside)"></b><b style="left:90%"></b></div><span class="n">17 · 1✋</span></div>
+    <div class="af-lane"><span class="who"><i class="ph ph-bug"></i><span class="l">Security</span></span><div class="af-track"><b data-t="fix" style="left:15%"></b><b data-t="fix" style="left:16.5%"></b><b data-t="fix" style="left:61%"></b><b data-t="fix" style="left:80%"></b></div><span class="n">4 · 0✋</span></div>
+    <div class="af-lane"><span class="who"><i class="ph ph-currency-dollar"></i><span class="l">FinOps</span></span><div class="af-track"><b style="left:22%"></b><b style="left:40%"></b><b data-t="you" style="left:44%" title="Waited: a build above the $500 cap"></b><b style="left:77%"></b></div><span class="n">9 · 1✋</span></div>
+    <div class="af-lane"><span class="who"><i class="ph ph-rocket-launch"></i><span class="l">Release</span></span><div class="af-track"><b style="left:12%"></b><b data-t="you" style="left:38%" title="Waited: prod deploy · you approved in 3 min"></b><b style="left:55%"></b><b data-t="you" style="left:96%" title="Waiting now: merge PR #3"></b></div><span class="n">7 · 2✋</span></div>
+    <div class="af-lane"><span class="who"><i class="ph ph-hard-drives"></i><span class="l">Infra</span></span><div class="af-track"><b style="left:6%"></b><b data-t="fix" style="left:31%" title="Cleared 18 GB of Docker build cache on boss-1"></b><b style="left:66%"></b><b style="left:84%"></b></div><span class="n">12 · 0✋</span></div>
+  </div>
+  <div class="row wrap" style="gap:12px;margin-top:8px;font-size:.52rem;color:var(--faint)"><span><b style="display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--teal)"></b> decided alone</span><span><b style="display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--green)"></b> fixed something</span><span><b style="display:inline-block;width:11px;height:11px;border-radius:3px;background:var(--amber)"></b> waited for a person</span><span class="wf-spacer"></span><a class="link-chip">Open in Agents at work ↗</a></div>
+
+  <div class="af-cap" style="margin-top:14px">Picked: SRE · 10:40 · decided alone <span class="pin">8</span></div>
+  <div class="af-why">
+    <span class="fl-n" data-t="signal"><span><i class="ph-bold ph-lightning"></i> 5xx at 6.6%</span><small>order-api · staging</small></span><span class="fl-w"></span>
+    <span class="fl-n" data-t="agent"><span><span class="face" data-a="beacon" data-size="s"></span> SRE</span><small>bad deploy 6bf2 · 92%</small></span><span class="fl-w"></span>
+    <span class="fl-n" data-t="decision"><span>On the list?</span><small>staging rollback · no</small></span><span class="fl-w"></span>
+    <span class="fl-n" data-t="done"><span><i class="ph-bold ph-arrow-counter-clockwise"></i> Rolled back</span><small>1 min · $0.06</small></span><span class="fl-w" data-s="done"></span>
+    <span class="fl-n" data-t="done"><span>✓ Recovered</span><small>in 4 min</small></span>
+  </div>
+</section>
+
+<!-- ── CLICKS + PARITY ───────────────────────────────────────────── -->
+<div class="af-cap">Clicks, old vs new <span class="pin">9</span></div>
+<section class="card">
+  <div class="cc">
+    <b>See what needs a person</b>
+    <div class="cc-bars"><div class="cc-bar"><span class="b" style="width:calc(7 * 26px)"></span>7 <em>Govern › Autonomy grid (2) · Identity › Seats (2) · Ops › Approval rules (3): three areas, and nothing names the 7 kinds</em></div>
+      <div class="cc-bar" data-new><span class="b" style="width:calc(1 * 26px)"></span><b>1</b> <em>Govern › Where people decide</em></div></div>
+    <b>“Over $200 → Sarah”</b>
+    <div class="cc-bars"><div class="cc-bar"><span class="b" style="width:calc(8 * 26px)"></span>8 <em>Limits: type the cap, Save (3) · Seats: change holder + step-up (4) · then check Project › Settings autonomy (1+)</em></div>
+      <div class="cc-bar" data-new><span class="b" style="width:calc(2 * 26px)"></span><b>2</b> <em>type it · Apply (passkey) · or 3 through the card’s popover</em></div></div>
+    <b>What did agents do alone yesterday?</b>
+    <div class="cc-bars"><div class="cc-bar"><span class="b" style="width:calc(4 * 26px)"></span>4 <em>Agents at work › Resolved tab, then Activity with filters, per agent</em></div>
+      <div class="cc-bar" data-new><span class="b" style="width:calc(1 * 26px)"></span><b>1</b> <em>the same page: lanes + the picked decision as a diagram</em></div></div>
+  </div>
+</section>
+
+<div class="af-cap">Parity · where every control lives now (21 of 21 kept)</div>
+<section class="card"><table class="parity"><thead><tr><th>Capability</th><th>Was</th><th>Now</th></tr></thead><tbody>
+  <tr><td>Supervised / Full auto, $ threshold</td><td>Govern › Autonomy; Project › Settings; v2 AutonomyControl</td><td>Spend above a cap card. Full auto = “below the cap, FinOps decides”. One place; projects override by scope.</td></tr>
+  <tr><td>Irreversible backstop (deploy, merge, delete, send, pay, rotate, grant)</td><td>Code only (autonomy.py)</td><td>Shown: the 7 cards are that list, named. Still enforced in code; a card can tighten, never loosen it.</td></tr>
+  <tr><td>A0–A3 per task class grid + confirm</td><td>Govern › Autonomy</td><td>More › Per-area autonomy (unchanged grid) for experts. The default reads as the cards.</td></tr>
+  <tr><td>“Raise to A3” suggestion</td><td>Server chip</td><td>Agent card suggestion with its evidence (clean runs, 0 violations); a person accepts. Never self-raised.</td></tr>
+  <tr><td>Evidence-based auto-downgrade</td><td>autonomy_engine, invisible</td><td>Shows on the agent’s card and in the trail.</td></tr>
+  <tr><td>Stop all · Reason · Every project · Resume</td><td>Autonomy panel</td><td>Header button, same confirm.</td></tr>
+  <tr><td>Approval seats per risk tier</td><td>Identity › Seats</td><td>“Who decides” on each card; Identity › Seats stays as the full table.</td></tr>
+  <tr><td>Approve on my behalf (kinds, projects, ≤ 90 days, cap, tier 3)</td><td>Account › Agents</td><td>“On my behalf” on each card; same delegate key, shown once.</td></tr>
+  <tr><td>Tool rules, service gates, budget gates</td><td>Ops › Approval rules (read-only)</td><td>Under each card (“Agents may…”), read-only as before.</td></tr>
+  <tr><td>Step-up on writes</td><td>Per sheet</td><td>Every save here asks for the passkey.</td></tr>
+  <tr><td>Limits: pace, $/month, /day, burst, at-limit, per project, 30-day replay</td><td>Govern › Limits</td><td>Unchanged tab; the Spend card links to it. Typed rules also replay 30 days.</td></tr>
+  <tr><td>Advanced limits board, cap preview, version refusal</td><td>More › Advanced</td><td>Unchanged.</td></tr>
+  <tr><td>Envelopes: tier-2+ initiative approval</td><td>More › Envelopes</td><td>Spend card’s trail; tier shown in words.</td></tr>
+  <tr><td>Self-fix switch, caps, approval, protected paths</td><td>More › Self-fix</td><td>Unchanged tab; installing a self-fix is a “Merge to the default branch” decision, shown on that card.</td></tr>
+  <tr><td>Sharing / telemetry, Delete what was sent</td><td>More › Sharing</td><td>Unchanged; “Delete what was sent” is a Deleting data decision.</td></tr>
+  <tr><td>Decision inbox actions, reasons, hand-off, content-hash approval</td><td>Approvals</td><td>Unchanged. Each card’s trail links to the decision.</td></tr>
+  <tr><td>Agents at work flow charts, Override…</td><td>Agents at work</td><td>Lanes link there; the picked decision uses the same diagram.</td></tr>
+  <tr><td>Contact-point verification</td><td>Observability › Notify</td><td>Unchanged; adding an outside destination is a Talking to the outside decision.</td></tr>
+  <tr><td>Role editor critical-add retype</td><td>Identity › Roles</td><td>Unchanged; it is a Who can do what decision.</td></tr>
+  <tr><td>Retire host typed confirm</td><td>Infra › host</td><td>Unchanged; it is a Deleting data decision.</td></tr>
+  <tr><td>Per-project autonomy + weekly ambient budget</td><td>Project › Settings</td><td>Project scope on each card; the budget moves to the Spend card with a per-project row.</td></tr>
+</tbody></table></section>
+
+<div class="notes">
+<b>Design notes: one short list of what people decide, and everything else runs on its own</b><ol class="np2-n">
+  <li><b>1</b> Govern’s Autonomy tab becomes <b>Where people decide</b>. It is the compliance boundary for the install: 7 kinds of decision, plus an 8th that is fixed (changing the list). Everything else runs on its own under the captain.</li>
+  <li><b>2</b> One multi-line input takes a rule in plain words (same pattern as Add a project). Helm reads it against the list, not a keyword match.</li>
+  <li><b>3</b> <b>Here’s what I understood</b> shows each change, flags the parts already handled (merging to staging branches), and replays the last 30 days so the effect shows before you apply it.</li>
+  <li><b>4</b> One primary, <b>Apply</b>. It asks for a passkey because changing the list is on the list.</li>
+  <li><b>5</b> Each card shows its default, scope (install or per project), who decides, the 24 h count and the reason in one line. A click opens a popover with the details and the audit trail. The cards follow the irreversible backstop in <span class="mono">autonomy.py</span>: a card may make a rule stricter and can never make it looser.</li>
+  <li><b>6</b> The monitoring agents, one card each. Each card shows what the agent watches and what it did alone vs. what waited. Security CVE and Infra host-health are new watchers (see AUDIT.md).</li>
+  <li><b>7</b> The last 24 h as lanes: teal = decided alone, green = fixed something, amber = waited for a person. Hover any mark for its one-line reason.</li>
+  <li><b>8</b> Any mark opens the decision as a diagram (signal → agent → on the list? → act → outcome), the same diagram as Agents at work. The prose stays behind the expand.</li>
+  <li><b>9</b> Click counts and the 21-row parity table: nothing is removed. Expert grids stay under More.</li>
+</ol></div>
+</div>
+<script src="../project-experience/shell.js"></script>
+</body></html>

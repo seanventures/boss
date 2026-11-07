@@ -34,9 +34,20 @@ function useAsked(): string {
   return asked;
 }
 
+/** A draft a door carried here (`&cap_draft=`, New work's "Open in Ask Helm"): it waits in the
+ *  box for the person to send — never sent for them — and is taken once. */
+function useDraft(): string {
+  const [draft] = useState(() => {
+    try { return new URLSearchParams(window.location.search).get("cap_draft") ?? ""; } catch { return ""; }
+  });
+  useEffect(() => { if (draft) writePxUrl({ cap_draft: null }, "replace"); }, [draft]);
+  return draft;
+}
+
 export function CaptainDrawer({ ctx, onClose }: { ctx: PxCtx; onClose: () => void }) {
   const read = usePxRead<CaptainDetail | null>(PX_PATHS.captain(ctx.projectId), parseCaptainDetail, { everyMs: 60_000 });
   const asked = useAsked();
+  const draft = useDraft();
   const [history, setHistory] = useState(false);
   const base = ctx.overview.captain;
   const c = read.data;
@@ -67,7 +78,7 @@ export function CaptainDrawer({ ctx, onClose }: { ctx: PxCtx; onClose: () => voi
         </div>
       ) : null}
       <div className="px-capd" data-history={history ? "1" : undefined} data-testid="px-capd-chat">
-        <AgentChat key={`${ctx.projectId}|${roleKey}|${asked}`} projectId={ctx.projectId} actor={ctx.actor}
+        <AgentChat key={`${ctx.projectId}|${roleKey}|${asked}|${draft}`} projectId={ctx.projectId} actor={ctx.actor} initialMessage={draft || undefined}
                    initialTaskId={subjectRef({ kind: "project", id: ctx.projectId })}
                    roleName={name === "BOSS" ? undefined : name} roleKey={roleKey || undefined}
                    placeholder={`Ask ${name}, or describe new work…`}

@@ -364,8 +364,49 @@ def estimate(connection: Connection, project_id: str, workflow_key: str,
 
 # ── the read: GET /v1/projects/{id}/work/plan ───────────────────────────────────────────────
 
-def options(connection: Connection, project_id: str, kind: str) -> list[dict[str, Any]]:
-    """Every active product workflow this project can start, the kind's own first."""
+#: What the old New build called each size (Quick · Small · Spec first · Major), kept on the
+#: workflow it maps to so a person who knew the sizes finds them in the Workflow chip.
+WAS_SIZE = {"fast_fix": "Quick", "minor_feature": "Small", "major_feature": "Spec first · Major"}
+
+
+def steps(connection: Connection, project_id: str, spec: Mapping[str, Any],
+          roster: Optional[Mapping[str, Any]] = None) -> list[dict[str, Any]]:
+    """The workflow's REAL steps, in its own order, for the Workflow chip's numbered strip and
+    its Steps list: {id, label, you (a person approves here), agent?}. Fan-out and join markers
+    are not steps anyone does."""
+    from ..workflow_capabilities import CAPABILITIES, prd_auto_approved
+
+    prd_auto = prd_auto_approved()
+    roster = roster if roster is not None else agents(connection, project_id)
+    out = []
+    for step in spec.get("steps") or []:
+        if not isinstance(step, dict) or str(step.get("kind") or "") in ("parallel", "join"):
+            continue
+        cap = _cap(step)
+        found = CAPABILITIES.get(cap)
+        label = (step.get("label") or step.get("name") or (found.label if found else "")
+                 or str(step.get("id") or "").replace("_", " ").capitalize())
+        who = _who(step)
+        # The panel's PRD waits on a person while auto-approval is off (the strip's own rule).
+        you = _gated(step, prd_auto) or (cap == "meeting" and not prd_auto)
+        out.append({"id": str(step.get("id") or ""), "capability": cap, "label": str(label),
+                    "you": you, **({"approve": _APPROVES.get(cap) or f"Approve {str(label).lower()}"}
+                                   if you else {}),
+                    **({"agent": face(roster, who)} if who else {})})
+    return out
+
+
+#: What a person approves at a step that waits on them, in their words.
+_APPROVES = {"meeting": "the PRD", "spec_review": "the spec", "ux_review": "how it looks",
+             "deploy": "the deploy", "redeploy": "the deploy", "release_approval": "the release",
+             "merge": "merge PR"}
+
+
+def options(connection: Connection, project_id: str, kind: str,
+            with_steps: bool = False) -> list[dict[str, Any]]:
+    """Every active product workflow this project can start, the kind's own first. With
+    `with_steps`, each carries its step count, the steps a person approves, its estimate from
+    this project's history and the old size it replaces (the Workflow chip's popover)."""
     from ..workflow_catalogue import CATALOGUE
 
     classes = {e["key"]: e.get("work_class") for e in CATALOGUE}
@@ -373,25 +414,155 @@ def options(connection: Connection, project_id: str, kind: str) -> list[dict[str
                                                                       "feature.major"),
             "bug": ("bugfix",)}[kind]
     rows = connection.execute(text(
-        "SELECT workflow_key, name, description FROM workflow_definitions WHERE project_id = :p "
-        "AND status = 'active' AND namespace = 'product' AND active_version_id IS NOT NULL "
-        "ORDER BY name"), {"p": project_id}).mappings().all()
+        "SELECT d.workflow_key, d.name, d.description, v.spec FROM workflow_definitions d "
+        "JOIN workflow_versions v ON v.id = d.active_version_id WHERE d.project_id = :p "
+        "AND d.status = 'active' AND d.namespace = 'product' ORDER BY d.name"),
+        {"p": project_id}).mappings().all()
+    roster = agents(connection, project_id) if with_steps else None
     out = []
     for r in rows:
         work_class = classes.get(str(r["workflow_key"]))
         if work_class == "project.new":
             continue  # a new app is not work on this one
-        out.append({"key": r["workflow_key"], "name": r["name"],
-                    "detail": r["description"] or "", "work_class": work_class,
-                    "fits": work_class in fits})
+        one = {"key": r["workflow_key"], "name": r["name"],
+               "detail": r["description"] or "", "work_class": work_class,
+               "fits": work_class in fits}
+        if with_steps:
+            spec = as_json(r["spec"], {}) or {}
+            listed = steps(connection, project_id, spec, roster)
+            est = estimate(connection, project_id, str(r["workflow_key"]), spec)
+            one.update({"steps": len(listed),
+                        "approvals": [s.get("approve") or s["label"] for s in listed if s["you"]],
+                        "minutes": est.get("minutes"), "usd": est.get("usd"),
+                        "was": WAS_SIZE.get(str(r["workflow_key"]))})
+        out.append(one)
     out.sort(key=lambda o: (not o["fits"], o["work_class"] == "any", o["name"]))
     return out
 
 
+# ── the chips' defaults: the tracker, the targets, who is told ─────────────────────────────
+
+def tracker(connection: Connection, project_id: str) -> Optional[dict[str, Any]]:
+    """Where "create an issue" files it: the project's connected work tracker, else GitHub Issues
+    on its repository through its GitHub connection. None when neither exists."""
+    from ..work_orchestration import connected_tracker
+    from .common import repos
+
+    try:
+        with connection.begin_nested():
+            row = connected_tracker(connection, project_id)
+    except Exception:  # noqa: BLE001 — no tracker table on an old engine: the repo's issues
+        row = None
+    if row is not None:
+        config = row.get("configuration") or {}
+        where = (f"{config.get('owner')}/{config.get('repo')}"
+                 if config.get("owner") and config.get("repo") else
+                 str(config.get("project_identifier") or config.get("project_key")
+                     or config.get("project_id") or ""))
+        return {"provider": str(row["provider_key"]), "name": str(row.get("display_name")
+                                                                  or row["provider_key"]),
+                "where": where, "connected": True}
+    repo = next(iter(repos(connection, project_id)), None)
+    if repo:
+        return {"provider": "github_issues", "name": "GitHub", "where": repo["full_name"],
+                "connected": False}
+    return None
+
+
+def create_issue(connection: Connection, project_id: str, *, title: str,
+                 body: str) -> dict[str, Any]:
+    """File the work as an issue (the Issue chip's "create"): {issue} or {error}."""
+    from ..work_orchestration import connected_tracker, with_credential
+    from ..work_tracker_adapters import get_adapter
+    from .common import repos
+
+    row = None
+    try:
+        with connection.begin_nested():
+            row = connected_tracker(connection, project_id)
+    except Exception:  # noqa: BLE001
+        row = None
+    if row is None:
+        repo = next(iter(repos(connection, project_id)), None)
+        if not repo or "/" not in repo["full_name"]:
+            return {"error": "This project has no tracker and no repository to file it in."}
+        owner, name = repo["full_name"].split("/", 1)
+        row = {"provider_key": "github_issues", "configuration": {
+            "owner": owner, "repo": name, "credential": "github_connection",
+            "provider_key": "github_issues"}}
+    try:
+        config = with_credential(connection, project_id, dict(row["configuration"] or {}))
+        made = get_adapter(str(row["provider_key"])).create_issue(
+            config, title=title[:200], description_html=body.replace("\n", "<br>"),
+            description_text=body)
+    except Exception as exc:  # noqa: BLE001 — the work still starts; the issue is a mirror
+        return {"error": f"The issue was not created ({type(exc).__name__})."}
+    if made is None or not made.external_url:
+        return {"error": "The tracker did not create the issue."}
+    found = issue_of(source_url=made.external_url) or {
+        "provider": str(row["provider_key"]), "label": made.external_key or "Issue",
+        "external_url": made.external_url, "kind": "issue", "number": None}
+    return {"issue": found}
+
+
+def targets(connection: Connection, project_id: str) -> list[dict[str, Any]]:
+    """Where the work deploys after merge: the project's active targets, staging first;
+    production only with a person (the deploy step's gate)."""
+    from .common import web_url
+    from .health import env_label
+
+    rows = connection.execute(text(
+        "SELECT id, app_name, environment, domains, public_url FROM deployment_targets "
+        "WHERE project_id = :p AND status = 'active' ORDER BY "
+        "(lower(environment) IN ('production', 'prod')), environment, app_name"),
+        {"p": project_id}).mappings().all()
+    out = []
+    for r in rows:
+        domains = r["domains"] if isinstance(r["domains"], list) else []
+        url = web_url(r["public_url"] or (domains[0] if domains else None)) or ""
+        port = re.search(r":(\d{2,5})(?:/|$)", url)
+        out.append({"id": r["id"], "label": env_label(r["environment"]),
+                    "environment": r["environment"], "app": r["app_name"], "url": url,
+                    "port": int(port.group(1)) if port else None,
+                    "prod": str(r["environment"] or "").lower() in ("production", "prod")})
+    return out
+
+
+def tell(connection: Connection, project_id: str) -> dict[str, Any]:
+    """Who hears when the work needs someone or its PR is ready: the project's own routes
+    (Settings › Notifications), as names."""
+    try:
+        from .notify_routes import view as routes_view
+
+        with connection.begin_nested():
+            got = routes_view(connection, project_id)
+    except Exception:  # noqa: BLE001 — no routes table: the console is told
+        return {"routes": [{"event": "needs_you", "label": "Needs you", "words": "Console"},
+                           {"event": "pr_ready", "label": "PR ready", "words": "Console"}]}
+    out = []
+    for row in got.get("routes") or []:
+        if not isinstance(row, Mapping) or row.get("event") == "incidents":
+            continue
+        out.append({"event": row.get("event"), "label": row.get("label"),
+                    "words": row.get("words") or "Console"})
+    return {"routes": out}
+
+
+def defaults(connection: Connection, project_id: str) -> dict[str, Any]:
+    """The New work modal's other chips, from this project's own record."""
+    found = targets(connection, project_id)
+    staging = next((t for t in found if not t["prod"]), None)
+    return {"tracker": tracker(connection, project_id), "targets": found,
+            "target": staging["id"] if staging else None, "tell": tell(connection, project_id),
+            "priority": "normal"}
+
+
 def plan(connection: Connection, project_id: str, kind: str = "feature",
-         workflow_key: Optional[str] = None) -> dict[str, Any]:
+         workflow_key: Optional[str] = None, detail: bool = False) -> dict[str, Any]:
     """Helm's plan for new work of `kind`: the workflow, its strip, the estimates and the
-    workflows "change" offers. Raises LookupError for an unknown picked workflow."""
+    workflows "change" offers. With `detail` (the New work modal), the workflow's real steps,
+    each option's steps and estimate, and the other chips' defaults. Raises LookupError for an
+    unknown picked workflow."""
     from ..workflow_catalogue import work_class_label
 
     kind = kind if kind in KINDS else "feature"
@@ -400,7 +571,10 @@ def plan(connection: Connection, project_id: str, kind: str = "feature",
     roster = agents(connection, project_id)
     captain = face(roster, "engineering_captain")
     out: dict[str, Any] = {"kind": kind, "planner": captain, "workflow": None, "nodes": [],
-                           "estimate": None, "options": options(connection, project_id, kind)}
+                           "steps": [], "estimate": None,
+                           "options": options(connection, project_id, kind, with_steps=detail)}
+    if detail:
+        out["defaults"] = defaults(connection, project_id)
     if resolved is None:
         return out
     spec = as_json(resolved.get("spec"), {}) or {}
@@ -413,9 +587,11 @@ def plan(connection: Connection, project_id: str, kind: str = "feature",
                                if chosen.get("work_class") else "the default for a change"),
                        "href": href(project_id, area="delivery_workflows", tab="library", wf=key)}
     out["nodes"] = strip(connection, project_id, spec)
+    out["steps"] = steps(connection, project_id, spec, roster)
     out["estimate"] = estimate(connection, project_id, key, spec)
     return out
 
 
-__all__ = ["KINDS", "choose", "estimate", "issue_of", "options", "plan", "round_minutes",
-           "strip", "ticket_link", "ticket_title"]
+__all__ = ["KINDS", "WAS_SIZE", "choose", "create_issue", "defaults", "estimate", "issue_of",
+           "options", "plan", "round_minutes", "steps", "strip", "targets", "tell",
+           "ticket_link", "ticket_title", "tracker"]
