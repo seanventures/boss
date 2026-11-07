@@ -758,6 +758,9 @@ class AgentMessageSummary(BaseModel):
     content: str
     tool_calls: list[dict[str, Any]] = Field(default_factory=list)
     actions: list[dict[str, Any]] = Field(default_factory=list)
+    #: The answer's "New work" card and its record chips (turn_cards); absent on a question.
+    proposal: Optional[dict[str, Any]] = None
+    citations: list[dict[str, Any]] = Field(default_factory=list)
     created_at: str
 
 
@@ -942,6 +945,23 @@ class AgentChatResponse(BaseModel):
     #: reply cited as [act:…]. Absent for BOSS-in-general, which is not an agent.
     act_id: Optional[str] = None
     cited_acts: list[str] = Field(default_factory=list)
+    #: THE ANSWER'S CARDS (turn_cards, screen 09): a typed offer to start work —
+    #: {kind: "new_work", title, text, work_kind, estimate {usd, minutes, basis}, steps[],
+    #: start {href, method, body}, edit_href, offer_id, state} — and the records the reply named,
+    #: [{kind: pr|run|file|doc|issue|env|place, ref, label, href, external, title}].
+    proposal: Optional[dict[str, Any]] = None
+    citations: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class AgentProposalOutcomeRequest(BaseModel):
+    """Start or Not now on an answer's "New work" card."""
+    project_id: str
+    thread_id: str
+    message_id: str
+    outcome: Literal["started", "dismissed"]
+    run_id: Optional[str] = None
+    href: Optional[str] = None
+    actor: str = "executive_console"
 
 
 class MeetingProposeRequest(BaseModel):

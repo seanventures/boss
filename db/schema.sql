@@ -11288,3 +11288,10 @@ CREATE TABLE IF NOT EXISTS project_host_folders (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (project_id, host_id, path)
 );
+
+-- AN ANSWER'S CARDS (screen 09, services/turn_cards.py): the typed "New work" offer a turn made
+-- (title, text, estimate, plan strip, Start / Edit / Not now and what was chosen) and the
+-- records its reply named (PR / run / file / doc chips). Stored per message, like
+-- `proposed_actions`, so a reopened thread shows them.
+ALTER TABLE agent_messages ADD COLUMN IF NOT EXISTS proposal JSONB;
+ALTER TABLE agent_messages ADD COLUMN IF NOT EXISTS citations JSONB NOT NULL DEFAULT '[]'::jsonb;

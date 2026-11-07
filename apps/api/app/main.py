@@ -148,6 +148,7 @@ from .schemas import (
     AgentActionRunRequest,
     AgentActionRunResponse,
     AgentChatResponse,
+    AgentProposalOutcomeRequest,
     CommandProposeRequest,
     CommandProposeResponse,
     MeetingProposeRequest,
@@ -13691,6 +13692,28 @@ def engine_agent_chat(payload: AgentChatRequest, request: Request) -> AgentChatR
     threads, gates confirmations, and answers questions grounded in live engine
     data via the read-tool layer. This is the canonical endpoint."""
     return agent_turn(payload, request, endpoint="/v1/engine/agent/chat")
+
+
+@app.post("/v1/engine/agent/proposal")
+@permit(P.ASSISTANT_CHAT, scope=Scope.project(body="project_id"),
+        confine=(Confine.body("thread_id", "agent_thread"),))
+def agent_proposal_outcome(payload: AgentProposalOutcomeRequest, request: Request) -> dict:
+    """Start or Not now on an answer's "New work" card (turn_cards). Start itself is THE start
+    door (POST /v1/projects/{id}/work) — this records what the person chose on the card, spends
+    the offer it came from, and tells the conversation a start happened."""
+    with begin(engine) as connection:
+        thread = connection.execute(text(
+            "SELECT project_id FROM agent_threads WHERE id = :t"),
+            {"t": payload.thread_id}).mappings().first()
+        if thread is None or str(thread["project_id"]) != payload.project_id:
+            raise HTTPException(status_code=404, detail="No such conversation.")
+        try:
+            card = orchestration_agent.record_proposal_outcome(
+                connection, thread_id=payload.thread_id, message_id=payload.message_id,
+                outcome=payload.outcome, run_id=payload.run_id, href=payload.href)
+        except LookupError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+    return {"proposal": card}
 
 
 @app.post("/v1/agent/chat", response_model=AgentChatResponse, deprecated=True)
