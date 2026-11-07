@@ -233,7 +233,7 @@ def test_a_server_in_infra_names_the_project_of_each_app_on_it(world, client, he
 # ── §12 Health ──────────────────────────────────────────────────────────────────────────────
 
 def test_health_shows_each_environment_its_slo_and_how_monitoring_gets_set_up(world, client,
-                                                                              helpdesk):
+                                                                              helpdesk, engine):
     r = _get(world, client, world.owner, f"/v1/projects/{helpdesk['id']}/health")
     assert r.status_code == 200, r.text
     h = r.json()
@@ -241,6 +241,11 @@ def test_health_shows_each_environment_its_slo_and_how_monitoring_gets_set_up(wo
     assert env["health"] == "healthy" and env["uptime_pct"] == 100.0
     assert env["slo"] == {"target": 99.5, "burn": "ok", "budget_used_pct": 0}
     assert len(env["series"]["latency"]) == 30
+    assert h["monitoring_pack"]["rules"] == 7 and h["monitoring_pack"]["managed_in"] == "repo"
+    with engine.begin() as db:      # before Beacon's pack: no rules, and the empty state says how
+        db.execute(text("DELETE FROM app_alerts WHERE project_id = :p"), {"p": helpdesk["id"]})
+        db.execute(text("DELETE FROM app_alert_rules WHERE project_id = :p"), {"p": helpdesk["id"]})
+    h = _get(world, client, world.owner, f"/v1/projects/{helpdesk['id']}/health").json()
     assert h["monitoring_pack"]["rules"] == 0 and h["monitoring_pack"]["managed_in"] == "none"
     assert "Beacon" in h["empty"]["detail"]
     assert h["links"]["observability"].startswith(f"?project_id={helpdesk['id']}&area=observability")
@@ -250,7 +255,7 @@ def test_health_shows_each_environment_its_slo_and_how_monitoring_gets_set_up(wo
     # Every console link names a view the console has (Observability has no rules/logs view).
     assert h["monitoring_pack"]["href"].endswith("area=observability&view=alerts")
     assert "view=logs" not in str(h) and "view=rules" not in str(h)
-    assert h["alerts"] == [] and h["incidents"] == []
+    assert h["alerts"] == []          # no rules, nothing fired; the seeded incidents stay
 
 
 def test_a_firing_alert_and_the_squad_on_it_show_on_health(world, client, helpdesk, engine):
