@@ -98,6 +98,10 @@ def test_recent_work_and_the_running_tile_show_short_titles(world, client, helpd
     labels = [w["label"] for w in _get(world, client, f"/v1/projects/{helpdesk['id']}/work")["items"]]
     assert "Finish the visual refresh" in labels, labels
     labels += [w["label"] for w in o["recent_work"]]
+    # Recent work is what moved (running, waiting, done) before roadmap items only planned.
+    states = [w["state"] for w in o["recent_work"]]
+    assert "planned" not in states or states.index("planned") >= len(
+        [w for w in o["recent_work"] if w["state"] != "planned"])
     assert all(len(lbl.split()) <= 6 and not lbl.endswith("…") for lbl in labels)
     assert not any(lbl.startswith("Finish the visual refresh the last") for lbl in labels)
     cur = o["tiles"]["running"]["current"]
@@ -114,6 +118,7 @@ def test_needs_you_names_the_action_not_the_question(world, client, engine, help
     assert [m["label"] for m in by_label["Merge PR #3"]["mini"]][-1] == "Merge"
     deploy = by_label["Deploy PR #5 to Staging"]
     assert deploy["action"]["label"] == "Approve deploy" and deploy["kind"] == "deploy"
+    assert "drawer=needs" in deploy["action"]["href"]   # approves in its drawer, in place
     assert [m["state"] for m in deploy["mini"]] == ["done", "waiting", "todo"]
     host = by_label["Pick a prod host"]
     assert host["action"]["label"] == "Pick host" and "add=target" in host["action"]["href"]
@@ -215,6 +220,15 @@ def test_going_live_withdraws_the_requests_it_overtook(engine, helpdesk):
             {"i": f"sdep_{uuid.uuid4().hex[:12]}", "p": helpdesk["id"], "t": helpdesk["target_id"],
              "r": REPO, "c": "b" * 40})
         assert did in on_deploy_healthy(c, helpdesk["id"])
+
+
+def test_the_card_the_page_and_the_bell_count_the_same_needs_you(world, client, engine, helpdesk):
+    o = _get(world, client, f"/v1/projects/{helpdesk['id']}/overview")
+    card = next(i for i in _get(world, client, "/v1/projects/summary")["items"]
+                if i["id"] == helpdesk["id"])
+    with world.acting_as(world.ctx(world.owner)):
+        live = client.get("/v1/agents/live", params={"project_id": helpdesk["id"]}).json()
+    assert card["needs_you"] == len(o["needs_you"]) == live["attention"]["count"]
 
 
 # ── This week, Journey, What's next ─────────────────────────────────────────────────────────

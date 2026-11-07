@@ -123,7 +123,7 @@ export function OverviewTab({ ctx }: { ctx: PxCtx }) {
               </div>
               <Spark series={t.staging.series} tone="green" label="Staging latency, last 24 hours" />
             </>
-          ) : <span className="px-faint">Not deployed yet</span>}
+          ) : <span className="px-faint">Not deployed</span>}
         </Tile>
         <Tile label="Cost · week" icon={Coins} c="violet" testid="px-tile-cost" onClick={() => goHref(ctx, t.cost_week?.href ?? "?area=budget", () => ctx.tab("settings", { section: "autonomy" }))}>
           {t.cost_week ? (
@@ -238,7 +238,7 @@ function MiniRow({ w, ctx }: { w: WorkItem; ctx: PxCtx }) {
          onClick={open}>
       <span className="px-dot" data-s={w.state === "running" ? "now" : w.state === "needs_you" || w.state === "stalled" ? "you" : w.state === "failed" ? "bad" : w.state === "done" ? "done" : undefined} aria-hidden />
       <span style={{ minWidth: 0 }}>
-        <button type="button" className="px-wk-t px-ell" style={{ display: "block", maxWidth: "100%" }} onClick={(e) => { e.stopPropagation(); open(); }}>{w.label}</button>
+        <button type="button" className="px-wk-t px-ell" style={{ display: "block", maxWidth: "100%" }} title={w.detail || w.label} onClick={(e) => { e.stopPropagation(); open(); }}>{w.label}</button>
         <span className="px-wk-sub"><span>{w.state === "stalled" ? "Stalled" : w.links.pr ? `PR #${w.links.pr.number}` : KIND_WORDS[w.kind] ?? w.kind}</span>{w.age ? <span className="px-mono">{w.age}</span> : null}
           {w.cost_usd !== null ? <span className="px-mono">${w.cost_usd.toFixed(2)}</span> : null}</span>
       </span>
@@ -277,7 +277,7 @@ function CaptainCard({ ctx }: { ctx: PxCtx }) {
   return (
     <section className="px-card" aria-labelledby="px-ov-cap" data-testid="px-ov-captain">
       <div className="px-card-h"><Ico icon={SteeringWheel} c="blue" /><h2 id="px-ov-cap">Captain</h2>
-        <a className="px-more" href="#" data-testid="px-ov-captain-change" onClick={(e) => { e.preventDefault(); ctx.tab("settings", { section: "captain" }); }}>Change</a></div>
+        <a className="px-more" href="#" data-testid="px-ov-captain-change" title="Hand the project to another captain" onClick={(e) => { e.preventDefault(); ctx.tab("settings", { section: "captain" }); }}>Change</a></div>
       <div className="px-cap">
         <Face agent={c} size={48} state={c.status ? "working" : "idle"} standalone />
         <div style={{ minWidth: 0 }}>
@@ -343,7 +343,8 @@ function NextCard({ ctx }: { ctx: PxCtx }) {
       }) : (
         <div className="px-empty" style={{ padding: "10px 6px" }} data-testid="px-ov-next-empty">
           <Sparkle size={22} weight="duotone" style={{ color: "var(--px-violet, #8b7cf6)" }} aria-hidden />
-          <p style={{ margin: "6px 0 10px" }}>Nothing ranked yet. Helm ranks issues, failing checks and ideas into a backlog.</p>
+          <h3 style={{ margin: "6px 0 2px" }}>Helm is drafting ideas</h3>
+          <p style={{ margin: "0 0 10px" }}>It ranks issues, failing checks and ideas into a backlog.</p>
           <GatedButton permission="workflow_run:start" projectId={ctx.projectId} className="px-btn" data-size="s" data-testid="px-ov-next-rank"
                        onClick={() => void startOnboarding(ctx.projectId).then((r) => { setSaid(r.ok ? (r.demo ? "Sample mode — nothing was sent." : "Helm is ranking the backlog.") : (r.error ?? "Not started.")); if (r.ok && !r.demo) ctx.refreshWork(); })}>
             Rank the backlog</GatedButton>

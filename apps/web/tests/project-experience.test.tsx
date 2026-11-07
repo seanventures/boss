@@ -292,8 +292,9 @@ describe("the Project page header, Needs you and tabs (screen 4)", () => {
   it("has the repo, live URL, health, status, captain with Ask, and New work", async () => {
     engine();
     await openProject();
-    expect(tid("px-head-repo")!.getAttribute("href")).toBe("https://github.com/paramg/helpdesk-ai-demo");
-    expect(tid("px-head-repo")!.getAttribute("target")).toBe("_blank");
+    // X-33: the repo chip opens Repo & knowledge (GitHub is one link away there).
+    expect(tid("px-head-repo")!.textContent).toContain("paramg/helpdesk-ai-demo");
+    expect(new URLSearchParams(tid("px-head-repo")!.getAttribute("href")!.split("?")[1]).get("tab")).toBe("knowledge");
     expect(tid("px-head-live")!.getAttribute("href")).toBe("http://203.0.113.20:8004");
     await press(tid("px-head-health"));
     expect(params().get("tab")).toBe("health");
@@ -388,7 +389,7 @@ describe("Overview (screen 4)", () => {
     await openProject();
     expect(tid("px-project-note")).not.toBeNull();
     expect($("h1")!.textContent).toBe("Order service");
-    expect(tid("px-head-repo")!.getAttribute("href")).toBe("https://github.com/acme/orders");
+    expect(tid("px-head-repo")!.textContent).toContain("acme/orders");
     expect(tid("px-needs-bar")!.textContent).toContain("1 needs you");
   });
 

@@ -454,7 +454,10 @@ def view(connection: Connection, project_id: str, *, now: Optional[datetime] = N
         "tiles": tiles(project_id, items, envs, _cost_week(connection, project_id, now)),
         "captain": captain_service.view(connection, project_id, roster=roster,
                                         with_last_said=False),
-        "recent_work": items[:5],
+        # Recent WORK (screen 04): what moved — running, waiting on you, done — before roadmap
+        # items that are only planned; at most five, newest first within that order.
+        "recent_work": ([w for w in items if w["state"] != "planned"]
+                        + [w for w in items if w["state"] == "planned"])[:5],
         "next": next_items(connection, project_id, onboarding),
         "try_it": {"url": url, "env": try_env["key"] if try_env else None,
                    "demo_logins": try_env["logins"] if try_env else [],
@@ -549,7 +552,16 @@ def summary(connection: Connection, project_ids: Iterable[str], *,
         run, build = runs.get(pid, {}), builds.get(pid, {})
         tgs = targets.get(pid, [])
         onb = onboarding.get(pid, {})
-        waiting = count_waiting_on_operator(connection, pid, now=now)
+        # The same count as the project's Needs-you bar and the bell: decisions waiting on a
+        # person plus what only a person can set up (needs.setup_cards).
+        from .needs import setup_cards
+
+        try:
+            with connection.begin_nested():
+                setup_n = len(setup_cards(connection, pid))
+        except Exception:  # noqa: BLE001 — a card never fails over its setup line
+            setup_n = 0
+        waiting = count_waiting_on_operator(connection, pid, now=now) + setup_n
         live = int(run.get("live") or 0) + int(build.get("live") or 0)
         worked = int(run.get("total") or 0) + int(build.get("total") or 0) > 0
         non_prod = any(t["deployed"] and str(t["environment"]).lower() not in PRODUCTION
