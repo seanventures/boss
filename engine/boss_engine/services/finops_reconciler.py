@@ -258,7 +258,8 @@ class FinopsReconcilerService:
                         connection,
                         project_id,
                         None,
-                        f"Commitment {commitment['id']} is {verdict} ({utilization:.0%} used)",
+                        f"{commitment.get('provider') or 'Provider'} commitment is {verdict} "
+                        f"({utilization:.0%} used)",
                         {"action": "review_commitment", "commitment_id": commitment["id"],
                          "verdict": verdict},
                         {"committed_usd_micros": committed, "actual_usd_micros": actual,

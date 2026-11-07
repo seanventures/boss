@@ -194,7 +194,9 @@ RECORDED_ON_APPROVAL = frozenset({
     "reconcile_legacy_provider_exposure",
     "reconcile_provider_changeset",
     "verify_provider_outcome_before_retry",
-    "verify_provider_outcome_then_settle_or_release",
+    # (An expired budget hold with no recorded outcome no longer asks a person: the budget
+    # governor settles it at its estimate by policy — budget._settle_unknown_at_estimate. A card
+    # raised before that is still answered as a general card and closes itself on the next pass.)
     # A next action an agent-room summary named as a decision (agent_converse): approving records
     # the person's answer on the conversation; nothing is started.
     "decide",
@@ -207,13 +209,23 @@ RECORDED_ON_APPROVAL = frozenset({
     # The stuck-work Shepherd found a build no safe move can unblock (stuck_work._raise_card):
     # the card says what a person must do; the build's own page carries the diagnosis.
     "stuck_work_needs_person",
+    # A subscription's hourly keep-alive got a rejected login (subscription_keepalive): the
+    # owner signs in again; the card records the answer and starts nothing.
+    "sign_in_to_subscription_again",
+    # An incident acknowledged and then left idle with no safe fix (acked_idle._escalate): the
+    # person takes it or closes it on the incident; the card records the answer.
+    "incident_needs_owner",
 })
 #: Producers that build the action from a provider key (comms: configure_or_enable_slack_…).
 RECORDED_ON_APPROVAL_PREFIXES = ("configure_or_enable_",)
 
+#: The project's ONE always-on card (ambient/asks._recommendation): classified by the card's
+#: work item and asker (is_ambient_card), carried by ambient/answers.on_answered per entry.
+AMBIENT_CARD_ACTIONS = frozenset({"ambient_route", "ambient_card"})
+
 #: Every action BOSS is known to write. The enforcing test fails on a producer outside it.
 KNOWN_ACTIONS = (REFUSAL_REASONS | CARRIED_OUT_ON_APPROVAL | WORKFLOW_GATE_ACTIONS
-                 | RECORDED_ON_APPROVAL)
+                 | RECORDED_ON_APPROVAL | AMBIENT_CARD_ACTIONS)
 
 KINDS = ("refusal", "deploy_gate", "workflow_gate", "architecture_review", "pull_request",
          "change_set", "general")

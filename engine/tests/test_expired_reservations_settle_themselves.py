@@ -1,5 +1,5 @@
-"""An expired budget hold settles itself from BOSS's own evidence; only a genuinely unknown
-outcome reaches a person, and then as one card per cause.
+"""An expired budget hold settles itself from BOSS's own evidence, and a genuinely unknown
+outcome is settled at its estimate by policy: no person is asked about housekeeping.
 
 2026-11-01, northpeak-lending: 68 'Reconcile expired budget reservation res_…' tier-2 cards,
 one per knowledge.embed hold. The governed embedder wrote its outcome on a closed connection
@@ -9,8 +9,8 @@ The class fix, enforced here:
      the caller's connection is gone; a failure raised before the network is marked as such;
   2. the expiry pass releases a hold whose linked receipt failed, settles one whose receipt
      carries the provider's usage, and resolves any card already open for it (system actor);
-  3. holds still unknown are grouped: one card per project+category+reason, and older
-     one-per-reservation cards fold into it.
+  3. holds still unknown are settled at their estimate (counted as spent) and recorded; any card
+     still open for them closes itself (2026-11-07; it used to be one card per cause).
 """
 from __future__ import annotations
 
@@ -109,46 +109,62 @@ def test_an_open_card_for_a_hold_that_now_qualifies_is_resolved_by_the_system(da
         assert _status(db, rid) == "released"
 
 
-def test_unknown_outcomes_of_one_cause_are_one_card_and_old_cards_fold_into_it(database, project):
+def test_unknown_outcomes_settle_at_their_estimate_and_never_ask_a_person(database, project):
+    """Laptop, 2026-11-07: "Reconcile 4 expired budget reservations from knowledge.embed
+    (knowledge)" asked a person about $0.008 of embeddings a crash-looping build had started.
+    An unknown outcome is housekeeping: it is settled at its estimate by policy (counted as
+    spent, never under-counted) and recorded; a card already open for it — one per
+    reservation or the old group card — closes itself in words."""
     engine, _ = database
     with engine.begin() as db:
-        # Two holds already flooded as one card each, three more new: a call started (receipt
-        # in progress, or no linked evidence at all) and no result was recorded.
         old_holds = [_hold(db, project, receipt_status="in_progress", link=False)[0] for _ in range(2)]
-        old_cards = []
-        for rid in old_holds:
-            old_cards.append(create_blocking_decision(
-                db, project, None, f"Reconcile expired budget reservation {rid}",
-                {"action": ACTION, "reservation_id": rid}, {"reserved_usd_micros": 2000},
-                "budget_outcome_unknown"))
-            db.execute(text("INSERT INTO events(id,project_id,event_type,actor,entity_type,entity_id,data) "
-                            "VALUES(:i,:p,'budget.reservation_reconciliation_required','budget_governor',"
-                            "'budget_reservation',:r,'{}')"),
-                       {"i": "evt_" + uuid.uuid4().hex[:12], "p": project, "r": rid})
-        new_holds = [_hold(db, project, receipt_status="in_progress")[0] for _ in range(2)]
-        new_holds.append(_hold(db, project)[0])
+        old_cards = [create_blocking_decision(
+            db, project, None, f"Reconcile expired budget reservation {i + 1}",
+            {"action": ACTION, "reservation_id": rid}, {"reserved_usd_micros": 2000},
+            "budget_outcome_unknown") for i, rid in enumerate(old_holds)]
+        grouped = [_hold(db, project, receipt_status="in_progress")[0] for _ in range(2)]
+        group_card = create_blocking_decision(
+            db, project, None, "Reconcile 2 expired budget reservations",
+            {"action": ACTION, "grouped": True, "category": "knowledge",
+             "reservation_reason": REASON, "reservation_ids": grouped},
+            {"reserved_usd_micros": 4000}, "budget_outcome_unknown")
+        bare = _hold(db, project)[0]
     for _ in range(2):  # a second tick changes nothing
         with engine.begin() as db:
             BudgetGovernor(Settings()).status_for_project(db, project)
     with engine.begin() as db:
-        pending = _pending(db, project)
-        assert len(pending) == 1, json.dumps([dict(p) for p in pending], default=str)
-        rec = pending[0]["recommendation"]
-        rec = rec if isinstance(rec, dict) else json.loads(rec)
-        assert rec["grouped"] is True and sorted(rec["reservation_ids"]) == sorted(old_holds + new_holds)
-        for card in old_cards:
-            row = db.execute(text("SELECT status, resolution_note, executed_by FROM decisions WHERE id=:d"),
-                             {"d": card}).mappings().one()
-            assert row["status"] == "resolved" and pending[0]["id"] in row["resolution_note"]
-            assert row["executed_by"] == "budget_governor"
-        # Paid work is held on the group card, not on a per-reservation one.
-        refused = BudgetGovernor(Settings()).reserve(db, project, "model", 100000, "fixture", 15)
-        assert refused.get("decision_id") in (None, pending[0]["id"])
-        # The group card closes itself once its last hold is settled or released.
-        governor = BudgetGovernor(Settings())
-        for rid in old_holds + new_holds:
-            governor.release(db, project, rid, "Fixture: reconciled")
         assert _pending(db, project) == []
+        for rid in old_holds + grouped + [bare]:
+            assert _status(db, rid) == "consumed"
+            cost = db.execute(text("SELECT estimated_usd_micros, actual_usd_micros, status "
+                                   "FROM cost_receipts WHERE reservation_id=:r"),
+                              {"r": rid}).mappings().one()
+            assert cost["estimated_usd_micros"] == 2000 and cost["actual_usd_micros"] is None
+            assert cost["status"] == "estimated"          # counted as spent, marked as an estimate
+            ev = db.execute(text("SELECT data FROM events WHERE entity_id=:r AND event_type="
+                                 "'budget.reservation_auto_reconciled'"), {"r": rid}).scalar_one()
+            ev = ev if isinstance(ev, dict) else json.loads(ev)
+            assert ev["outcome"] == "settled_at_estimate" and ev["why"]
+        for card in old_cards + [group_card]:
+            row = db.execute(text("SELECT status, resolution_note, executed_by FROM decisions "
+                                  "WHERE id=:d"), {"d": card}).mappings().one()
+            assert row["status"] == "resolved" and row["executed_by"] == "budget_governor"
+            # (A hold settled by an earlier pass before its card existed closes as "already".)
+            assert row["resolution_note"] in (BudgetGovernor.UNKNOWN_OUTCOME_NOTE,
+                                              BudgetGovernor.ALREADY_RECONCILED_NOTE)
+        # Nothing new for a person, and no hold left to block paid work.
+        assert db.execute(text("SELECT count(*) FROM decisions WHERE project_id=:p AND "
+                               "status='pending'"), {"p": project}).scalar() == 0
+
+
+def test_a_spend_boundary_is_asked_in_plain_words(database, project):
+    from boss_engine.services import decision_words
+    from boss_engine.services.budget import cap_question
+
+    q = cap_question("knowledge", REASON, 2000, {"whose": "today's", "cap_usd_micros": 5_000_000})
+    assert q.startswith("Knowledge indexing would spend past today's budget cap of $5")
+    assert decision_words.card_problems({"question": q, "recommendation": {
+        "action": "increase_budget_or_defer", "recommended": "Raise the cap"}}) == []
 
 
 def test_the_governed_adapter_links_its_receipt_and_writes_its_outcome_on_a_closed_connection(

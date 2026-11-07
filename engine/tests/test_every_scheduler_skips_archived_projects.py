@@ -52,6 +52,8 @@ GUARDED: dict[str, str] = {
     "services/person_wait.py::poll_due": "poll_due",
     # The always-on stuck-work Shepherd: `due` picks builds with live_sql (stuck_work.py).
     "services/stuck_work.py::sweep": "due",
+    # Nothing stays acknowledged and idle: `due` picks incidents with live_sql (acked_idle.py).
+    "services/acked_idle.py::sweep": "due",
     # Autonomous agents (BOSSAPP-902): the Chief of Staff's tick triages live projects only
     # (and its owners' turn picks items with live_sql); the learning tick runs detectors for
     # live projects only; the SRE squad's watch skips an archived project.

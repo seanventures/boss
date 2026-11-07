@@ -480,7 +480,7 @@ def resume_interrupted(settings: Settings) -> dict:
                     governance = {}
                 create_blocking_decision(
                     c, row["project_id"], None,
-                    f"Reconcile interrupted Discovery research {row['id']}",
+                    "Check the spend of Discovery research that was interrupted while it ran",
                     {"action": "review_model_spend_and_receipts_before_retry"},
                     {"run_id": row["id"], "recorded_usage": row["usage"],
                      "reservation_id": governance.get("reservation_id"),

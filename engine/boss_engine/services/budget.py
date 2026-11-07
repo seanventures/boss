@@ -270,6 +270,34 @@ def policy_version(connection: Connection, project_id: str) -> tuple[str, Option
     return (str(version) if version is not None else "none"), actor
 
 
+
+def _money(micros: Any) -> str:
+    from .model_failures import _usd
+
+    return _usd(int(micros or 0))
+
+
+def cap_question(category: Any, reason: Any, amount_usd_micros: int,
+                 period: dict[str, Any]) -> str:
+    """A spend boundary in plain words: "Knowledge indexing would spend past today's budget cap
+    of $5 — raise the cap, or wait for it to reset?". Stable within the period (no running
+    totals), so a repeated refusal folds into the same card; the amounts ride in cost_summary."""
+    from .decision_words import spend_subject
+
+    whose = str(period.get("whose") or "the project's")
+    cap = int(period.get("cap_usd_micros") or 0)
+    return (f"{spend_subject(category, reason)} would spend past {whose} budget cap"
+            + (f" of {_money(cap)}" if cap else "")
+            + " — raise the cap, or wait for it to reset?")[:300]
+
+
+def allocation_question(category: Any, reason: Any, amount_usd_micros: int,
+                        available_usd_micros: Any) -> str:
+    from .decision_words import spend_subject
+
+    return (f"{spend_subject(category, reason)} would spend more than its budget allocation "
+            "has left — raise the allocation, or let it wait?")[:300]
+
 class BudgetGovernor:
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -553,15 +581,20 @@ class BudgetGovernor:
 
     def reconcile_expired_reservations(self, connection: Connection, project_id: Optional[str] = None,
                                        *, now: Optional[datetime] = None) -> dict[str, int]:
-        """Settle what BOSS can prove about each expired positive hold; group the rest.
+        """Settle every expired positive hold. Housekeeping, never a person's question.
 
         1. A hold whose linked receipt failed (or never left BOSS) is RELEASED; one whose receipt
            carries the provider's usage is SETTLED at that actual. Each records an event and, via
            release/settle, resolves any card already open for it (resolution_note says why,
            executed_by is the budget governor).
-        2. A hold still unknown — a call started and no result was recorded — needs a person, but
-           as ONE card per cause (project + category + reason): an open group card gains the new
-           reservation, an older one-per-reservation card is folded into the group card.
+        2. A hold still unknown — a call started and no result was recorded (its worker died
+           mid-call) — is SETTLED AT ITS ESTIMATE by policy: the money may have been spent, so it
+           is counted as spent (never under-counted), recorded as an estimated cost receipt with
+           an event saying why. Laptop, 2026-11-07: "Reconcile 4 expired budget reservations from
+           knowledge.embed (knowledge)" asked a person about $0.008 of embeddings a crash-looping
+           build had started. Only a real spend boundary reaches a person: if what is counted
+           puts the project over a cap, the next reservation is refused in plain words
+           (`cap_question`).
         """
         out = {"released": 0, "settled": 0, "grouped": 0}
         # release/settle read the budget status, which runs this pass again: one pass at a time.
@@ -579,19 +612,19 @@ class BudgetGovernor:
             "SELECT r.id, r.project_id, r.category, r.reason, r.amount_usd_micros FROM budget_reservations r "
             "WHERE r.status='active' AND r.amount_usd_micros > 0 AND r.expires_at <= :now_utc "
             "AND (CAST(:project_id AS text) IS NULL OR r.project_id=:project_id) "
-            # New holds, and holds still on an open one-per-reservation card (the flood before
-            # this pass existed). A hold a person already answered, or one already on a group
-            # card, is not raised again.
+            # New holds, and holds a card still asks about (one per reservation, or the group
+            # card of before 2026-11-07). A hold a person already answered is left as answered.
             "AND (NOT EXISTS (SELECT 1 FROM events e WHERE e.entity_id=r.id "
             "     AND e.event_type='budget.reservation_reconciliation_required') "
             "  OR EXISTS (SELECT 1 FROM decisions d WHERE d.project_id=r.project_id "
             "     AND d.status = ANY(:open_statuses) "
             "     AND d.recommendation->>'action'='verify_provider_outcome_then_settle_or_release' "
-            "     AND d.recommendation->>'reservation_id'=r.id "
-            "     AND COALESCE(d.recommendation->>'grouped','false')<>'true')) "
+            "     AND (d.recommendation->>'reservation_id'=r.id OR (jsonb_typeof("
+            "       d.recommendation->'reservation_ids') = 'array' AND "
+            "       d.recommendation->'reservation_ids' @> jsonb_build_array(r.id))))) "
             "ORDER BY r.created_at FOR UPDATE OF r SKIP LOCKED"),
-            {"now_utc": now, "project_id": project_id, "open_statuses": _open_statuses()}).mappings().all()
-        unknown: dict[tuple[str, str, str], list[dict]] = {}
+            {"now_utc": now, "project_id": project_id,
+             "open_statuses": _open_statuses()}).mappings().all()
         for row in rows:
             outcome = self._recorded_outcome(connection, row["id"])
             if outcome and outcome["kind"] == "release":
@@ -622,11 +655,49 @@ class BudgetGovernor:
                 self._mark_system_resolved(connection, row["project_id"], row["id"])
                 out["settled"] += 1
                 continue
-            key = (row["project_id"], str(row["category"] or ""), str(row["reason"] or ""))
-            unknown.setdefault(key, []).append(dict(row))
-        for (pid, category, reason), group in unknown.items():
-            out["grouped"] += self._group_unknown(connection, pid, category, reason, group)
+            self._settle_unknown_at_estimate(connection, dict(row))
+            out["settled"] += 1
+        # A card still open about holds that are no longer active (settled or released while
+        # nothing was listening) asks nothing: it closes itself, in words.
+        connection.execute(text(
+            "UPDATE decisions d SET status='resolved', executed_by='budget_governor', "
+            "executed_at=clock_timestamp(), updated_at=clock_timestamp(), resolution_note=:note "
+            "WHERE d.status='pending' AND (CAST(:project_id AS text) IS NULL OR "
+            "d.project_id=:project_id) "
+            "AND d.recommendation->>'action'='verify_provider_outcome_then_settle_or_release' "
+            "AND NOT EXISTS (SELECT 1 FROM budget_reservations r WHERE r.status='active' AND "
+            "  (r.id = d.recommendation->>'reservation_id' OR r.id IN (SELECT "
+            "   jsonb_array_elements_text(CASE WHEN jsonb_typeof(d.recommendation->"
+            "   'reservation_ids') = 'array' THEN d.recommendation->'reservation_ids' "
+            "   ELSE '[]'::jsonb END))))"),
+            {"project_id": project_id,
+             "note": self.ALREADY_RECONCILED_NOTE})
         return out
+
+    #: The note an unknown-outcome hold is settled with (budget.reservation_auto_reconciled).
+    UNKNOWN_OUTCOME_NOTE = ("Settled at its estimate by policy: the call started and no result "
+                            "was recorded (its worker stopped mid-call), so the money may have "
+                            "been spent and is counted as spent.")
+
+    ALREADY_RECONCILED_NOTE = ("Already reconciled: every reservation it asked about is settled "
+                               "or released.")
+
+    def _settle_unknown_at_estimate(self, connection: Connection, row: dict) -> None:
+        """The policy for a hold whose outcome nobody recorded: count the estimate as spent
+        (an estimated cost receipt, linked to the call's own receipt when there is one) and
+        record why. Resolves any card still open for it, in words."""
+        receipt_id = connection.execute(text(
+            "SELECT id FROM receipts WHERE effect_scope->>'budget_reservation_id'=:r "
+            "ORDER BY created_at DESC LIMIT 1"), {"r": row["id"]}).scalar()
+        skill = str(row["reason"] or "").split(":", 1)[0].strip()[:200] or str(row["category"] or "")
+        self.settle(connection, row["project_id"], row["id"], receipt_id, row["category"], skill,
+                    int(row["amount_usd_micros"]), None, note=self.UNKNOWN_OUTCOME_NOTE)
+        emit_event(connection, row["project_id"], "budget.reservation_auto_reconciled",
+                   "budget_governor", "budget_reservation", row["id"],
+                   {"outcome": "settled_at_estimate", "receipt_id": receipt_id,
+                    "estimated_usd_micros": int(row["amount_usd_micros"]),
+                    "policy": "unknown_outcome_counts_as_spent", "why": self.UNKNOWN_OUTCOME_NOTE})
+        self._mark_system_resolved(connection, row["project_id"], row["id"])
 
     def _mark_system_resolved(self, connection: Connection, project_id: str, reservation_id: str) -> None:
         connection.execute(text(
@@ -636,72 +707,6 @@ class BudgetGovernor:
             "AND (recommendation->>'reservation_id'=:r "
             "OR recommendation->'reservation_ids' @> jsonb_build_array(CAST(:r AS text)))"),
             {"p": project_id, "r": reservation_id})
-
-    def _group_unknown(self, connection: Connection, project_id: str, category: str, reason: str,
-                       group: list[dict]) -> int:
-        """Put every still-unknown hold of one cause on one open card. Returns the holds newly
-        placed on it."""
-        ids = [g["id"] for g in group]
-        card = connection.execute(text(
-            "SELECT id, recommendation FROM decisions WHERE project_id=:p AND status = ANY(:open_statuses) "
-            "AND recommendation->>'action'='verify_provider_outcome_then_settle_or_release' "
-            "AND recommendation->>'grouped'='true' AND recommendation->>'category'=:c "
-            "AND recommendation->>'reservation_reason'=:reason ORDER BY created_at LIMIT 1 FOR UPDATE"),
-            {"p": project_id, "c": category, "reason": reason,
-             "open_statuses": _open_statuses()}).mappings().first()
-        held = set()
-        if card is not None:
-            rec = card["recommendation"] if isinstance(card["recommendation"], dict) else {}
-            held = set(rec.get("reservation_ids") or [])
-        new = [i for i in ids if i not in held]
-        all_ids = sorted(held | set(ids))
-        total = int(connection.execute(text(
-            "SELECT COALESCE(SUM(amount_usd_micros),0) FROM budget_reservations "
-            "WHERE id = ANY(:ids) AND status='active'"), {"ids": all_ids}).scalar_one())
-        skill = reason.split(":", 1)[0].strip() or category
-        question = (f"Reconcile {len(all_ids)} expired budget reservation"
-                    f"{'s' if len(all_ids) != 1 else ''} from {skill} ({category}): "
-                    "a call started and no result was recorded")
-        recommendation = {"action": "verify_provider_outcome_then_settle_or_release",
-                          "reason_code": "budget_outcome_unknown", "grouped": True,
-                          "category": category, "reservation_reason": reason,
-                          "reservation_ids": all_ids,
-                          **({"reservation_id": all_ids[0]} if len(all_ids) == 1 else {})}
-        if not new:
-            decision_id = card["id"]
-        elif card is None:
-            decision_id = create_blocking_decision(
-                connection, project_id, None, question, recommendation,
-                {"reserved_usd_micros": total, "reservations": len(all_ids)}, "budget_outcome_unknown")
-        else:
-            decision_id = card["id"]
-            connection.execute(text(
-                "UPDATE decisions SET question=:q, recommendation=CAST(:rec AS jsonb), "
-                "cost_summary=CAST(:cost AS jsonb), updated_at=clock_timestamp() WHERE id=:id"),
-                {"q": question, "rec": json.dumps(recommendation), "id": decision_id,
-                 "cost": json.dumps({"reserved_usd_micros": total, "reservations": len(all_ids)})})
-        # Fold each older one-card-per-reservation decision into the group card.
-        folded = connection.execute(text(
-            "UPDATE decisions SET status='resolved', executed_by='budget_governor', "
-            "executed_at=clock_timestamp(), updated_at=clock_timestamp(), resolution_note=:note "
-            "WHERE project_id=:p AND status = ANY(:open_statuses) AND id<>:d "
-            "AND recommendation->>'action'='verify_provider_outcome_then_settle_or_release' "
-            "AND recommendation->>'reservation_id' = ANY(:ids) "
-            "AND COALESCE(recommendation->>'grouped','false')<>'true' RETURNING id"),
-            {"p": project_id, "d": decision_id, "ids": ids, "open_statuses": _open_statuses(),
-             "note": f"Grouped into decision {decision_id}: one card for every expired reservation "
-                     f"of the same cause ({skill}, {category})."}).scalars().all()
-        for reservation_id in new:
-            emit_event(connection, project_id, 'budget.reservation_reconciliation_required',
-                       'budget_governor', 'budget_reservation', reservation_id,
-                       {"decision_id": decision_id, "grouped": True,
-                        "held_usd_micros": int(next(g["amount_usd_micros"] for g in group
-                                                    if g["id"] == reservation_id))})
-        if folded:
-            emit_event(connection, project_id, 'budget.reconciliation_grouped', 'budget_governor',
-                       'decision', decision_id, {"folded_decision_ids": list(folded),
-                                                 "reservation_ids": all_ids})
-        return len(new)
 
     def status_for_project(self, connection: Connection, project_id: str,
                            *, now: Optional[datetime] = None) -> dict:
@@ -1473,8 +1478,11 @@ class BudgetGovernor:
                 connection,
                 project_id,
                 None,
-                "Budget reservation denied",
-                {"action": "increase_budget_or_defer"},
+                cap_question(category, reason, amount_usd_micros, refusal),
+                {"action": "increase_budget_or_defer",
+                 "recommended": "Raise the cap in Govern › Limits, or let the work wait until "
+                                "the period resets.",
+                 "why_a_person": "Spending past a cap the project set is a person's call."},
                 {
                     "requested_usd_micros": amount_usd_micros,
                     "available_usd_micros": refusal["available_usd_micros"],
@@ -1555,8 +1563,11 @@ class BudgetGovernor:
                     connection,
                     project_id,
                     None,
-                    "Budget allocation reservation denied",
-                    {"action": "increase_allocation_or_defer"},
+                    allocation_question(category, reason, amount_usd_micros,
+                                        allocation_snapshot["available_usd_micros"]),
+                    {"action": "increase_allocation_or_defer",
+                     "recommended": "Raise the allocation, or let the work wait.",
+                     "why_a_person": "Spending past an allocation is a person's call."},
                     {
                         "allocation_id": allocation_id,
                         "requested_usd_micros": amount_usd_micros,
@@ -2115,6 +2126,7 @@ class BudgetGovernor:
         *,
         included_in_subscription: bool = False,
         allow_expired: bool = False,
+        note: str = "Cost receipt recorded.",
     ) -> str:
         """Record a cost receipt and consume the reservation.
 
@@ -2184,7 +2196,7 @@ class BudgetGovernor:
             ),
             {"reservation_id": reservation_id},
         )
-        self._resolve_reconciliation(connection, project_id, reservation_id, 'Cost receipt recorded.')
+        self._resolve_reconciliation(connection, project_id, reservation_id, note)
         emit_event(
             connection,
             project_id,

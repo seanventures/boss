@@ -79,6 +79,8 @@ DIRECT_INSERTS = {
     # raises for a person (review_rollback_or_retry).
     ("engine/boss_engine/services/self_fix_install.py", "request_approval"),
     ("engine/boss_engine/services/self_fix_install.py", "_incident"),
+    # Taking an installed self-fix back out asks a person first (self_fix.remove).
+    ("engine/boss_engine/services/self_fix_install.py", "request_removal"),
 }
 #: The Postgres body of create_blocking_decision: its callers are the producers scanned above.
 SINK_INSERTS = {("engine/boss_engine/services/core.py", "_create_blocking_decision_postgres")}
@@ -240,6 +242,10 @@ def _resolve_action(module: Module, expr: ast.expr, func: Optional[ast.FunctionD
                       none=f.none, unresolved=f.unresolved)
                 for f in _resolve_action(module, expr.func.value, func, depth)]
     if isinstance(expr, ast.JoinedStr):
+        # `f"{self.IDENTITY}_reconciliation"`: a class constant read where the class sets it.
+        whole = _class_constant_fstring(module, expr)
+        if whole is not None:
+            return [Found(where, action=whole)]
         head = expr.values[0] if expr.values else None
         if isinstance(head, ast.Constant) and isinstance(head.value, str) and head.value:
             return [Found(where, prefix=head.value)]
@@ -256,6 +262,36 @@ def _resolve_action(module: Module, expr: ast.expr, func: Optional[ast.FunctionD
         if constant is not None:
             return [Found(where, action=constant)]
     return [Found(where, unresolved=f"action is {ast.unparse(expr)}")]
+
+
+def _class_constant_fstring(module: Module, expr: ast.JoinedStr) -> Optional[str]:
+    """The string an f-string of literals and `self.CONST` values makes, each CONST read from
+    the enclosing class body; None when any part is something else."""
+    owner = _enclosing_class(module, expr)
+    out = []
+    for value in expr.values:
+        if isinstance(value, ast.Constant) and isinstance(value.value, str):
+            out.append(value.value)
+            continue
+        if not (isinstance(value, ast.FormattedValue) and isinstance(value.value, ast.Attribute)
+                and isinstance(value.value.value, ast.Name) and value.value.value.id == "self"
+                and owner is not None):
+            return None
+        found = None
+        for node in owner.body:
+            if isinstance(node, ast.Assign) and any(
+                    isinstance(t, ast.Name) and t.id == value.value.attr for t in node.targets) \
+                    and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+                found = node.value.value
+        if found is None:
+            return None
+        out.append(found)
+    return "".join(out)
+
+
+def _module_function(module: Module, name: str) -> Optional[ast.FunctionDef]:
+    return next((n for n in module.tree.body if isinstance(n, ast.FunctionDef) and n.name == name),
+                None)
 
 
 def _module_constant(module: Module, name: str) -> Optional[str]:
@@ -316,6 +352,28 @@ def _resolve_recommendation(module: Module, expr: Optional[ast.expr],
         if assigned:
             return [f for value in assigned
                     for f in _resolve_recommendation(module, value, func, depth)]
+    if isinstance(expr, ast.Call):
+        # A builder in the same module (ambient/asks._recommendation): the action it sets.
+        builder = _module_function(module, _called_name(expr) or "") \
+            if isinstance(expr.func, ast.Name) else None
+        if builder is not None:
+            set_here = [node.value for node in ast.walk(builder) if isinstance(node, ast.Assign)
+                        and any(isinstance(t, ast.Subscript) and isinstance(t.slice, ast.Constant)
+                                and t.slice.value == "action" for t in node.targets)]
+            if set_here:
+                return [f for value in set_here
+                        for f in _resolve_action(module, value, builder, depth + 1)]
+        # A wrapper that stamps more keys onto the recommendation it is given
+        # (incident_response.link_release_and_merge): the action is the one passed in.
+        passed = [a for a in [*expr.args, *(kw.value for kw in expr.keywords)]
+                  if isinstance(a, ast.Name) and a.id in {"recommendation", "rec"}]
+        if passed and func is not None:
+            # What the name held BEFORE this call (`rec = wrap(rec)` must not read itself).
+            if passed[0].id in _params(func) or passed[0].id in _kwonly(func):
+                return _through_wrapper(module, func, passed[0].id, depth,
+                                        _resolve_recommendation)
+            return [f for value in _assignments(func, passed[0].id, before=expr.lineno)
+                    for f in _resolve_recommendation(module, value, func, depth + 1)]
     return [Found(where, unresolved=f"recommendation is {ast.unparse(expr)}")]
 
 

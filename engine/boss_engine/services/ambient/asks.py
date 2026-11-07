@@ -70,6 +70,8 @@ WITHDRAW_WHY = {
     "healthy": "the app is healthy: the alert cleared, nothing failing is left",
     "rebatch": "it moved onto the project's one card",
     "moot": "the item it asked about has moved on",
+    "moving": "the work it was stuck on is moving again (an agent took a turn on its build "
+              "after it asked, or the build finished), so nobody needs to take it",
     "retry": "BOSS tried the squad's launch once more now that what stopped it is fixed, so "
              "nobody needs to answer",
     "stale_rollback": "the rollback it proposed is not to a known-good release (that release "
@@ -499,11 +501,29 @@ def verdict(connection: Connection, card: Mapping[str, Any], entry: Mapping[str,
         return "backlog", item
     elif refused_launches(connection, item["id"]) >= MAX_REFUSED_LAUNCHES:
         return "policy", item
+    if kind == "question" and item_moving(connection, item["id"], card.get("created_at")):
+        # A squad that said it is stuck, whose work is moving again: a stale ask.
+        return "moving", item
     if mode == "off" and not (card.get("recommendation") or {}).get("manual"):
         return "off", item
     if kind == "question" and launch_to_retry(connection, item) is not None:
         return "retry", item
     return "ask", item
+
+
+def item_moving(connection: Connection, item_id: str, asked_at: Any) -> bool:
+    """A build the item launched has moved since the ask (stuck_work.moved_since: an agent turn
+    after it, or it finished). The same test the Shepherd's own "stuck" card is withdrawn by."""
+    from .. import stuck_work
+
+    if asked_at is None:
+        return False
+    try:
+        with connection.begin_nested():
+            return any(stuck_work.moved_since(connection, run, asked_at)
+                       for run in stuck_work.runs_of_item(connection, item_id))
+    except Exception:  # noqa: BLE001 — an ask that cannot be judged stays asked
+        return False
 
 
 #: The finding BOSS posts when it tries a failed launch once more (never "Could not start …",
@@ -686,7 +706,7 @@ def settle(connection: Connection, project_id: str, card_id: Optional[str],
     left to proceed, with the reason on the ledger. Returns what happened."""
     item_id = item["id"]
     board.unask(connection, item_id, actor=COS, reason=WITHDRAW_WHY[why])
-    if why in ("off", "rebatch", "moot"):
+    if why in ("off", "rebatch", "moot", "moving"):
         return "back_on_board"
     if why == "retry":
         return retry_launch(connection, project_id, item)

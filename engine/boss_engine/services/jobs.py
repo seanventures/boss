@@ -2708,7 +2708,7 @@ class JobLeaseService:
             connection,
             project_id,
             task_id,
-            f"Budget state {policy['budget_state']} deferred job: {kind}",
+            f"Budget state {policy['budget_state']} deferred a job: {_key_words(kind)}",
             {
                 "action": "review_budget_policy",
                 "job_id": job_id,
@@ -2760,7 +2760,7 @@ class JobLeaseService:
             connection,
             project_id,
             task_id,
-            f"Budget blocked spend-gated job: {kind}",
+            f"Budget blocked a spend-gated job: {_key_words(kind)}",
             {"action": "create_budget_reservation"},
             {"reservation_id": reservation_id},
             "budget_missing_for_job",
@@ -2863,3 +2863,9 @@ class JobLeaseService:
             str(outbox_message_id),
             deadletter_id,
         )
+
+
+def _key_words(value):
+    from .decision_words import key_words
+
+    return key_words(value)

@@ -25,6 +25,8 @@ _log = logging.getLogger("boss.subscription_keepalive")
 #: just the provider) is what keeps `core.create_blocking_decision`'s own same-question merge
 #: from folding a fresh occurrence into a stale pending one.
 _CARD_QUESTION = "The {provider} subscription login stopped working at {at} — sign in again?"
+#: What the card asks a person to do (decision_words.card_problems: a recommended answer).
+CARD_ACTION = "sign_in_to_subscription_again"
 
 
 def _ping_codex(binary: Optional[str], spec: Any) -> tuple[bool, str]:
@@ -60,11 +62,15 @@ def _credential_state(conn, project_id: str, source_id: str) -> Optional[str]:
 
 
 def _raise_login_card(conn, project_id: str, source_id: str, provider: str) -> None:
+    # The moment it stopped keeps a later rejection (after a recovery) its own card.
     question = _CARD_QUESTION.format(provider=model_failures.provider_name(provider),
                                      at=datetime.now(timezone.utc).isoformat())
     core.create_blocking_decision(
         conn, project_id, None, question,
-        {"source_id": source_id},
+        {"action": CARD_ACTION, "source_id": source_id,
+         "recommended": "Sign in again in Setup › Repo and models; agent turns on this "
+                        "subscription wait until you do.",
+         "why_a_person": "Only the account's owner can sign in to it."},
         {},
         reason=f"the hourly keep-alive got a rejected login from {provider} source {source_id}",
         risk_tier=2,

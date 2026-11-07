@@ -2833,7 +2833,7 @@ def cockpit(connection: Any, settings: Any, project_id: str, run_id: str, *,
         "routes": _routes(connection, run_id),
         # Why it waits, and what the Shepherd found when it stopped moving (stuck_work).
         "why": waiting,
-        "diagnosis": stuck_work.public_diagnosis(fctx),
+        "diagnosis": stuck_work.public_diagnosis(fctx, connection=connection, run=run),
     }
     for key in ("finalize_ctx", "spec", "state"):
         out["run"].pop(key, None)

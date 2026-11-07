@@ -947,7 +947,7 @@ def block_community_investigation(
     if was_running:
         create_blocking_decision(
             connection, row["project_id"], None,
-            f"Reconcile interrupted investigation {investigation_id}",
+            "Check the spend of an investigation that was interrupted while it ran",
             {"action": "review_model_spend_and_host_effects_before_retry"},
             {"investigation_id": investigation_id, "recorded_usage": "unknown"},
             "investigation_unverified_effects", default_action="hold",

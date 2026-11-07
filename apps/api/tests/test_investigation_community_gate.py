@@ -93,7 +93,7 @@ def test_community_worker_blocks_legacy_queued_and_running_rows(
                 text("SELECT count(*) FROM decisions WHERE project_id = :project "
                      "AND question = :question AND status = 'pending'"),
                 {"project": PROJECT,
-                 "question": f"Reconcile interrupted investigation {running}"},
+                 "question": "Check the spend of an investigation that was interrupted while it ran"},
             ).scalar_one() == 1
     finally:
         with engine.begin() as connection:
@@ -101,7 +101,7 @@ def test_community_worker_blocks_legacy_queued_and_running_rows(
                 text("DELETE FROM decisions WHERE project_id = :project "
                      "AND question = :question"),
                 {"project": PROJECT,
-                 "question": f"Reconcile interrupted investigation {running}"},
+                 "question": "Check the spend of an investigation that was interrupted while it ran"},
             )
             connection.execute(
                 text("DELETE FROM events WHERE entity_id IN (:queued, :running)"),

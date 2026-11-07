@@ -593,7 +593,8 @@ def test_a_typed_decision_refused_by_the_cap_stops_once_with_one_decision(
         refusals = c.execute(
             text("SELECT COALESCE(SUM(COALESCE((recommendation->>'occurrences')::int, 1)), 0) "
                  "FROM decisions WHERE project_id = :p "
-                 "AND question = 'Budget reservation denied'"), {"p": project}).scalar_one()
+                 "AND recommendation->>'action' = 'increase_budget_or_defer'"),
+            {"p": project}).scalar_one()
     assert state["step"]["status"] in workflows.STOPPED_STEP_STATES, state
     assert state["step"]["attempt"] == 1, "stopped once, not retried"
     assert refusals == 1, "one refusal, one decision"
