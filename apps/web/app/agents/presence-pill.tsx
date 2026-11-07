@@ -64,6 +64,12 @@ function openAgents(patch: Record<string, string | null> = {}): void {
 /** Where `Review` goes: Live, on the card, when it can be decided there (or is a run's step or
  *  setup, which only Live draws); otherwise the decision in Approvals. */
 export function reviewPatch(item: AttentionSummary["items"][number]): Record<string, string | null> {
+  // What only a person can set up (a prod host, a value) opens where it is set (X-14).
+  if (item.kind === "setup" && item.href) {
+    const patch: Record<string, string | null> = { view: null, role: null, run: null, focus: null };
+    new URLSearchParams(item.href.replace(/^[^?]*\?/, "")).forEach((v, k) => { patch[k] = v; });
+    return patch;
+  }
   if (item.decideInline || item.id.startsWith("run:") || item.id.startsWith("ready:")) {
     return { area: "workforce", view: null, role: null, run: null, focus: item.id };
   }

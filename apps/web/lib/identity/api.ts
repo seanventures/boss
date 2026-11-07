@@ -37,7 +37,8 @@ export class IdentityError extends Error {
     this.attemptsLeft = typeof extra.attempts_left === "number" ? extra.attempts_left : null;
     this.retryAfter = extra.retryAfter ?? null;
     this.body = extra.body ?? {};
-    this.detail = typeof this.body.detail === "string" && typeof this.body.error === "string" ? this.body.detail : null;
+    // An internal error's `detail` is the exception class for the log reader (X-73): never shown.
+    this.detail = typeof this.body.detail === "string" && typeof this.body.error === "string" && this.body.error !== "internal_error" ? this.body.detail : null;
   }
   get stepUp(): boolean { return this.status === 401 && this.code === "step_up_required"; }
 }
@@ -134,6 +135,8 @@ export const REFUSAL_WORDS: Readonly<Record<string, (body: Body) => string>> = {
   run_token_required: () => "Only a running agent can do this",
   unknown_provider: () => "BOSS doesn't know that provider",
   vault_error: () => "The vault couldn't do that",
+  // A 500 names its exception class in `detail` for the log reader; a person reads this instead.
+  internal_error: (b) => `BOSS hit an error it didn't expect${strOf(b.request_id) ? ` (request ${strOf(b.request_id)}, in BOSS's API log)` : ""}. Try again in a moment.`,
   rate_limited: () => "Too many tries",
 };
 
@@ -161,6 +164,20 @@ export function errorSentence(status: number, code: string, permission?: unknown
  * so no screen ever says only "That didn't work" when the API gave a reason
  * (tests/every-identity-refusal-has-words.test.ts keeps the literal in this function alone).
  */
+export type RefusalFix = { label: string; href?: string; command?: string };
+
+/** The next step a refusal names (`fix` in the body: a console place, or a command for the BOSS
+ *  host), so an error line carries its fix action (X-73). */
+export function refusalFix(e: unknown): RefusalFix | null {
+  if (!(e instanceof IdentityError)) return null;
+  const f = e.body.fix;
+  if (!f || typeof f !== "object") return null;
+  const r = f as Record<string, unknown>;
+  const label = strOf(r.label);
+  if (!label) return null;
+  return { label, ...(strOf(r.href) ? { href: strOf(r.href) } : {}), ...(strOf(r.command) ? { command: strOf(r.command) } : {}) };
+}
+
 export function refusalSentence(e: unknown): string {
   // The API's own sentence when it wrote one (a bare code in `detail` is never shown).
   if (e instanceof IdentityError) return e.detail && /\s/.test(e.detail) ? e.detail : e.message;

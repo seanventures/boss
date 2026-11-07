@@ -197,7 +197,10 @@ def _deploy_values(connection: Connection, project_id: str) -> dict[str, Any]:
                     if apps else None),
             "actions": [_action("Open app secrets", "GET", f"/v1/apps/{a}/secrets?project_id="
                                 f"{project_id}", permission="app_secret:read_metadata",
-                                open_href=where)
+                                # PX-43: the app's secrets now live HERE (Settings › Deploy
+                                # values); the link lands on that exact section.
+                                open_href=href(project_id, area="project", tab="settings",
+                                               section="deploy_values"))
                         for a in apps]}
 
 
@@ -294,17 +297,23 @@ def _captain(connection: Connection, project_id: str) -> dict[str, Any]:
     return {"key": "captain", "label": "Captain & squad", "icon": "user", "captain": {
         k: cap.get(k) for k in ("agent_id", "name", "role_key", "avatar", "chosen")},
             "items": cap.get("squad") or [], "candidates": cap.get("candidates") or [],
-            # Edit squad lands on the captain's own team in Agent Studio › Organization.
-            "squad_href": href(project_id, area="workforce", view="org",
-                               focus=cap.get("role_key") or None),
+            # Edit squad opens THE SQUAD EDITOR for this project (13-18 / PX-43): Settings ›
+            # Captain & squad with the editor open — the project's team (project_agents, app
+            # "*"), the same table every new build seeds from — never the org-wide chart.
+            "squad_href": href(project_id, area="project", tab="settings", section="captain",
+                               edit="squad"),
+            "squad_set": {"label": "Edit squad", "method": "POST",
+                          "href": f"/v1/projects/{project_id}/agents",
+                          "permission": "work_item:manage",
+                          "body": {"app": "*", "action": "set", "role_keys": ["…"]}},
             "actions": [_action("Change captain", "POST", f"/v1/projects/{project_id}/captain",
                                 requires=STEP_UP, permission="project:update",
                                 body={"agent_id": "…"})]}
 
 
-#: The project's autonomy level in the wireframe's words (13-20); the catalogue's own names
-#: (task_classes.LEVEL_NAMES) are the tooltip.
-LEVEL_WORDS = {"A0": "Ask", "A1": "Propose", "A2": "Act", "A3": "Ship"}
+#: The project's autonomy level in the catalogue's ONE naming (task_classes.LEVEL_NAMES, 13-20);
+#: kept as a name for older imports.
+from ..ambient.task_classes import LEVEL_NAMES as LEVEL_WORDS  # noqa: E402
 
 
 def project_level(classes: list[dict[str, Any]]) -> str:
@@ -372,7 +381,8 @@ def _autonomy(connection: Connection, project_id: str) -> dict[str, Any]:
               "href": autonomy} for c in classes]
     return {"key": "autonomy", "label": "Autonomy & budget", "icon": "gauge", "items": items,
             "level": level,
-            "levels": [{"key": k, "label": f"{k} {LEVEL_WORDS[k]}", "name": tc.LEVEL_NAMES[k]}
+            "levels": [{"key": k, "label": f"{k} {tc.LEVEL_NAMES[k]}", "name": tc.LEVEL_NAMES[k],
+                        "meaning": tc.LEVEL_MEANINGS[k]}
                        for k in tc.LEVELS],
             "ambient": {"daily_cap_usd": round(int(amb["daily_cap_usd_micros"]) / 1_000_000, 2),
                         "max_concurrent": amb["max_concurrent"],

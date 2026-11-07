@@ -74,12 +74,22 @@ def _status(connection: Connection, project_id: str) -> str:
 
 def squad(connection: Connection, project_id: str, roster: Mapping[str, Mapping[str, Any]],
           captain_key: Optional[str], limit: int = 5) -> list[dict[str, Any]]:
-    """The crew: the agents who acted in this project most recently (agent_acts), else the
-    project's delivery roles, never the captain itself."""
-    keys = [str(k) for k in connection.execute(text(
-        "SELECT role_key FROM agent_acts WHERE project_id = :p AND role_key IS NOT NULL "
-        "GROUP BY role_key ORDER BY max(started_at) DESC NULLS LAST LIMIT 12"),
-        {"p": project_id}).scalars().all()]
+    """The crew: the project's CHOSEN team when someone chose one (Settings › Edit squad, the
+    project_agents table at app "*", in the crew's reading order), else the agents who acted in
+    this project most recently (agent_acts), else the project's delivery roles; never the
+    captain itself. Editing the squad therefore changes the squad every surface shows (13-18)."""
+    chosen = [str(k) for k in connection.execute(text(
+        "SELECT role_key FROM project_agents WHERE project_id = :p AND app_key = '*' "
+        "ORDER BY role_key"), {"p": project_id}).scalars().all()]
+    # Plans · Builds · Tests · Deploys · Ranks (the crew row's order), whatever the role keys.
+    order = ("product_manager", "pm", "software_engineer", "backend_engineer", "frontend_engineer",
+             "qa_engineer", "qa", "sre", "chief_of_staff")
+    keys = sorted(chosen, key=lambda k: (order.index(k) if k in order else len(order), k))
+    if not keys:
+        keys = [str(k) for k in connection.execute(text(
+            "SELECT role_key FROM agent_acts WHERE project_id = :p AND role_key IS NOT NULL "
+            "GROUP BY role_key ORDER BY max(started_at) DESC NULLS LAST LIMIT 12"),
+            {"p": project_id}).scalars().all()]
     if not keys:
         keys = [k for k in ("product_manager", "software_engineer", "qa_engineer", "sre",
                             "chief_of_staff") if k in roster]
