@@ -220,11 +220,15 @@
 @media (max-width: 860px) {
   .spj-sheet .spj-import { grid-template-columns: minmax(0, 1fr); }
   .spj-sheet .spj-col + .spj-col { border-left: 0; border-top: 1px solid var(--border); }
+  .spj-sheet .spj-head .spj-seg { order: 5; width: 100%; }
+  .spj-sheet .spj-head .spj-seg > button { flex: 1; justify-content: center; }
 }
 @media (max-width: 600px) {
   .bx-np-backdrop:has(.spj-sheet) { padding: 0; }
   .bx-np-sheet.spj-sheet { border-radius: 0; min-height: 100vh; max-height: 100vh; overflow-y: auto; width: 100vw; }
   .spj-sheet .spj-head .spj-seg { order: 5; width: 100%; }
+  .spj-sheet .spj-head .bx-np-title { font-size: 1.15rem; }
+  .spj-sheet .spj-head { column-gap: 8px; }
   .spj-sheet .spj-head .spj-seg > button { flex: 1; justify-content: center; padding: 7px 6px; font-size: .72rem; }
 }
 .spj-sample-link[aria-current="page"] { color: var(--accent-text); }
