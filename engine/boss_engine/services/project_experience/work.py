@@ -497,7 +497,9 @@ def _run_items(connection: Connection, project_id: str, limit: int,
         "SELECT r.id, r.status, r.created_at, r.updated_at, r.completed_at, r.workflow_version_id, "
         "r.input->>'title' AS title, r.input->>'directive' AS directive, "
         "r.input->>'work_kind' AS work_kind, r.error, r.blocked_reason, d.name AS workflow, "
-        "d.workflow_key FROM workflow_runs r JOIN workflow_definitions d ON "
+        "d.workflow_key, (SELECT count(*) FROM workflow_runs n WHERE n.project_id = r.project_id "
+        "AND n.created_at <= r.created_at) AS run_number "
+        "FROM workflow_runs r JOIN workflow_definitions d ON "
         "d.id = r.workflow_definition_id WHERE r.project_id = :p AND d.namespace = 'product' "
         "AND COALESCE(r.mode, 'normal') <> 'test' ORDER BY r.created_at DESC LIMIT :n"),
         {"p": project_id, "n": limit}).mappings().all()]
@@ -568,6 +570,8 @@ def _run_items(connection: Connection, project_id: str, limit: int,
         title = r["title"] or r["workflow"]
         out.append({
             "id": rid, "source": "workflow_run", "source_label": "Workflow",
+            # "Run #43": the run's number in its project (the drawer's story counts the same way).
+            "run_number": int(r["run_number"] or 0) or None,
             "label": words(title, 6), "title": title,
             "kind": kind_of(r["workflow_key"], r["work_kind"]), "state": state, "status": status,
             "age": age(r["created_at"], now), "created_at": iso(r["created_at"]),

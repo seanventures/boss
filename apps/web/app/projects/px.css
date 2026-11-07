@@ -194,6 +194,9 @@
 .px-wk-t { font-weight: 600; font-size: .7rem; background: none; border: 0; color: var(--ink); padding: 0; font: inherit; font-weight: 600; text-align: left; cursor: pointer; }
 .px-wk-sub { font-size: .57rem; color: var(--faint); display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 2px; }
 .px-wk-links { display: flex; gap: 4px; justify-content: flex-end; flex-wrap: wrap; }
+/* the row's 22px tile (05-29); a planned feature's is plain */
+.px-wk-ico { width: 22px; height: 22px; border-radius: 7px; }
+.px-wk-ico[data-plain] { --c: var(--muted); background: var(--surface-3); }
 /* grouped work (a build, its retries and follow-ups): the pill toggles the attempts, the chevron turns */
 .px-wk[data-s="stalled"] { box-shadow: inset 3px 0 0 color-mix(in srgb, var(--amber) 70%, transparent); }
 .px-wk[data-open] { background: color-mix(in srgb, var(--accent) 4%, transparent); }

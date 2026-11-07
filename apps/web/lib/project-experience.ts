@@ -95,6 +95,8 @@ export type Attempt = {
   cost_usd: number | null; pr: { number: number; external_url: string } | null; build: string; href: string;
 };
 export type AttemptState = (typeof ATTEMPT_STATES)[number];
+  /** "Run #43": the workflow run's number in its project (null for a build on its own). */
+  run_number: number | null; created_at: string; updated_at: string;
 /** How an item is accepted (§2/§14): the roadmap's accept, or THE start door with its body. */
 export type Accept = { href: string; method: string; body: R };
 export type NextItem = {
@@ -244,7 +246,7 @@ const parseAttempt = (v: unknown): Attempt => {
 /** The work item an attempt opens in the drawer: the group's row, seen as that one attempt. */
 export function attemptAsItem(w: WorkItem, t: Attempt): WorkItem {
   return {
-    ...w, id: t.id, label: t.label, state: t.state === "handed_on" ? "failed" : t.state, cost_usd: t.cost_usd,
+    ...w, id: t.id, label: t.label, run_number: null, created_at: t.created_at, state: t.state === "handed_on" ? "failed" : t.state, cost_usd: t.cost_usd,
     stalled_since: t.stalled_since, detail: t.title || w.detail, attempts: [], attempt_count: 1, followups: 0, retries: 0,
     links: { ...w.links, build: t.build, pr: t.pr, preview: "", decision: t.state === "needs_you" ? w.links.decision : "" },
     href: t.href,
@@ -271,6 +273,7 @@ export const ATTEMPT_WORDS: Record<AttemptState, string> = {
   planned: "Queued", running: "Running", stalled: "Stalled", handed_on: "Handed on", needs_you: "Needs you", done: "Done", failed: "Failed",
 };
 export const parseAccept = (v: unknown): Accept | null => {
+    run_number: nn(x.run_number), created_at: s(x.created_at), updated_at: s(x.updated_at),
   const x = o(v);
   return s(x.href) ? { href: s(x.href), method: s(x.method, "POST"), body: o(x.body) } : null;
 };
@@ -755,7 +758,7 @@ export function workFromStartRow(raw: unknown, projectId: string): WorkItem {
     links: { workflow_run: `?${new URLSearchParams({ project_id: projectId, area: "delivery_workflows", wfr: run })}`, build: "", deploy: "",
              preview: "", decision: "", pr: pr ? { number: prNo, external_url: pr } : null },
     detail: s(r.status), href: "", source: s(r.workflow), source_label: "Workflow",
-    stalled_since: "", attempts: [], attempt_count: 1, followups: 0, retries: 0,
+    stalled_since: "", attempts: [], attempt_count: 1, followups: 0, retries: 0, run_number: null, created_at: "", updated_at: "",
   };
 }
 /** The open-work bar's segments, in the order and colours of the mock (running · needs you · planned · done). */
