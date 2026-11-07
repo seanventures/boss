@@ -30,3 +30,28 @@ export function MovedToProjectSettings({ section, testid = "moved-to-project-set
     </a>
   );
 }
+
+/**
+ * WORKFLOWS › NEW BUILD HAS MOVED (Add a project v2, c-after-create.html note 3): a new app is
+ * Add a project (one screen), adding a feature is Project › New work (it builds onto the app's
+ * branch). Shown above the old composer for one release; the composer keeps working beneath it.
+ */
+export function MovedNewBuild({ projectId, testid = "moved-new-build" }: { projectId?: string | null; testid?: string }) {
+  const newApp = consoleHref({ new_project: "idea" });
+  const newWork = consoleHref({ area: "project", tab: "work", compose: "1", app: undefined, build: undefined, wfr: undefined,
+                                ...(projectId ? { project_id: projectId } : {}) });
+  const link = { display: "inline-flex", alignItems: "center", gap: 5, padding: "4px 10px", borderRadius: 8,
+                 fontWeight: 600, fontSize: "0.75rem", textDecoration: "none" } as const;
+  return (
+    <div className="px-moved" role="status" data-testid={testid}
+         style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "10px 14px", margin: "6px 0 12px", borderRadius: 12,
+                  background: "var(--accent-soft)", border: "1px solid var(--accent-line)", color: "var(--ink)", fontSize: "0.8rem" }}>
+      <ArrowRight size={14} aria-hidden />
+      <b style={{ fontWeight: 650 }}>New build has moved</b>
+      <span style={{ color: "var(--muted)" }}>A new app is one screen now; a feature is New work on its project. This page goes next release.</span>
+      <span style={{ flex: 1 }} />
+      <a href={newApp} data-testid={`${testid}-new-app`} style={{ ...link, background: "var(--accent)", color: "#fff" }}>New app → Add a project</a>
+      <a href={newWork} data-testid={`${testid}-new-work`} style={{ ...link, border: "1px solid var(--accent-line)", color: "var(--accent-text)" }}>Add a feature → New work</a>
+    </div>
+  );
+}

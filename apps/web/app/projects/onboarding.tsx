@@ -304,6 +304,10 @@ export function OnboardingView({ projectId, ob, onRefresh }: { projectId: string
           ) : null}
         </div>
         {ob.error ? <p className="px-ob-error" role="alert" data-testid="px-ob-error"><XCircle size={13} aria-hidden /> {ob.error}</p> : null}
+        {ob.seed?.note ? (
+          <p className="px-faint" data-testid="px-ob-note" style={{ margin: "10px 0 0" }} title="Your note from Add a project: Helm reads it, Marshal weighs it for the first work">
+            <b style={{ color: "var(--ink)" }}>Your note</b> · “{ob.seed.note}”</p>
+        ) : null}
       </section>
 
       {ob.state !== "not_started" ? (

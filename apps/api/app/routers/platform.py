@@ -213,6 +213,10 @@ def mount_platform_routers(app: FastAPI) -> None:
     from .host_folders import router as host_folders_router
 
     app.include_router(host_folders_router)
+    # Add a project v2 (new-project-v2): Helm's understanding, the preview, Create and start.
+    from .add_project import router as add_project_router
+
+    app.include_router(add_project_router)
 
     # BOSSAPP-768 — Rules review: the business rules agents propose, approved by a person
     try:

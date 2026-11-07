@@ -50,6 +50,7 @@ import { CaptainCanRunIt } from "./workflows/captain-can-run-it";
 import { Library, type Schedule } from "./workflows/library";
 import { get, post } from "./workflows/delivery-api";
 import { NewProjectComposer } from "./workflows/new-project-composer";
+import { MovedNewBuild } from "./projects/moved";
 import { DossierCompact } from "./discoveries-ui";
 import { MeetingCompact } from "./meeting-room-ui";
 import { ArchitecturePanel } from "./architecture-ui";
@@ -1258,6 +1259,8 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
           <header className="wf-lib-head">
             {tabs}
           </header>
+          {/* ADD A PROJECT v2: this tab has moved; it keeps working for one release. */}
+          <MovedNewBuild projectId={projectId} />
           <div className="dw-composer-open">
             <NewProjectComposer
               projectId={projectId} actor={actor} workflows={installed} catalogue={catalogue}

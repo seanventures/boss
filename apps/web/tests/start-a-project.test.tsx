@@ -90,10 +90,11 @@ describe("the URL opens the flow at a choice", () => {
     window.history.replaceState(null, "", "/?org=org_1&new_project=import");
     stubFetch((c) => (c.path === "/v1/github/repos" ? { body: registryFixture() } : undefined));
     await mountAs(<ProjectMenu projects={[{ id: "p1", name: "Acme Shop" }]} activeId="p1" homeId="p1" orgId="org_1" />);
-    expect(tid("start-project")!.getAttribute("data-step")).toBe("import");
-    expect(tid("import-repo")).not.toBeNull();
-    await click(tid("start-close"));
-    expect(tid("start-project")).toBeNull();
+    // Add a project v2: the one screen, reading a repo, its results listed inline.
+    expect(tid("add-project")!.getAttribute("data-kind")).toBe("repo");
+    expect(tid("ap-results")).not.toBeNull();
+    await click(tid("ap-close"));
+    expect(tid("add-project")).toBeNull();
     expect(new URL(window.location.href).searchParams.has("new_project")).toBe(false);
     expect(new URL(window.location.href).searchParams.get("org")).toBe("org_1");
   });
@@ -102,23 +103,27 @@ describe("the URL opens the flow at a choice", () => {
     window.history.replaceState(null, "", "/?org=org_1");
     stubFetch(() => undefined);
     await mountAs(<ProjectMenu projects={[{ id: "p1", name: "Acme Shop" }]} activeId="p1" homeId="p1" />);
-    expect(tid("start-project")).toBeNull();
+    expect(tid("add-project")).toBeNull();
     window.history.pushState(null, "", "/?org=org_1&new_project=sample");
     await act(async () => { window.dispatchEvent(new PopStateEvent("popstate")); });
-    expect(tid("start-project")!.getAttribute("data-step")).toBe("sample");
+    // The sample starts in one press: the door opens the sheet and starts it.
+    expect(tid("add-project")).not.toBeNull();
+    expect(tid("ap-sample")).not.toBeNull();
   });
 
-  it("/?new_project=idea opens one sentence box; the full form is one press away, with Back", async () => {
+  it("/?new_project=idea opens the one input; the full form is More ways › Blank, with Back", async () => {
     window.history.replaceState(null, "", "/?new_project=idea");
     stubFetch(() => undefined);
     await mountAs(<ProjectMenu projects={[{ id: "p1", name: "Acme Shop" }]} activeId="p1" homeId="p1" />);
-    expect(tid("start-idea-step")!.querySelector("label span")!.textContent).toBe("Describe it in a sentence");
+    expect(tid("ap-input")!.getAttribute("aria-label")).toBe("Your idea, a repo or a folder");
+    expect(tid("add-project")!.getAttribute("data-kind")).toBe("idea");
     expect(tid("new-project-form")).toBeNull();
-    await click(tid("idea-form"));
+    await click(tid("ap-more-ways"));
+    await click(tid("ap-way-blank"));
     // Both project types are still offered: an app, or a knowledge graph of an existing codebase.
     expect($$('[data-testid="new-project-type"] input').map((i) => (i as HTMLInputElement).value)).toEqual(["app", "knowledge_graph"]);
     await click(tid("new-project-back"));
-    expect(tid("start-idea-step")).not.toBeNull();
+    expect(tid("add-project")).not.toBeNull();
   });
 });
 

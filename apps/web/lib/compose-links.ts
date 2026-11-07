@@ -10,23 +10,28 @@
  */
 export const COMPOSE_AREA = "delivery_workflows";
 
+/** ADDING A FEATURE MOVED (Add a project v2, c-after-create.html note 3): it is Project › New
+ *  work, which already builds onto the app's branch. The door opens the project's Work tab with
+ *  New work focused (`compose=1`); Workflows › New build shows "Moved" for one release. */
 export function addFeaturePatch(appKey?: string | null): Record<string, string | null> {
-  return { area: COMPOSE_AREA, compose: "add", app: appKey ?? null, view: null, role: null, build: null };
+  return { area: "project", tab: "work", compose: "1", app: appKey ?? null, view: null, role: null, build: null };
 }
 
 /** Every "New build" door's tooltip. Each door is a GatedButton on workflow_run:start, what the
  *  composer's Start sends (POST /v1/delivery-workflows/start). */
-export const NEW_BUILD_TIP = "Start a new app or add to an existing one";
+export const NEW_BUILD_TIP = "Add a project: a new app from an idea, a repo or a folder";
 
-/** The New project composer, "A new app" chosen; its mode switch offers "Add to an existing app". */
+/** A NEW APP opens Add a project (one screen, app/start-project/add-project.tsx) wherever the
+ *  person is: the sheet is drawn by the mounted StartProjectHost (`?new_project=idea`). */
 export function newProjectPatch(): Record<string, string | null> {
-  return { area: COMPOSE_AREA, compose: "new", app: null, view: null, role: null, build: null };
+  return { new_project: "idea", compose: null, app: null };
 }
 
 /**
- * EVERY "New build" / "New project" DOOR OPENS THE COMPOSER (operator, 2026-10-07), never an
- * agent chat: the top bar, the Factory's header and empty states, the palette. "Plan it with an
- * agent" is an option inside the composer. Pushes the URL and announces it, as a rail click does.
+ * EVERY "New build" / "New project" DOOR OPENS ADD A PROJECT (Add a project v2 absorbed Workflows
+ * › New build's new app), never an agent chat: the top bar, the Factory's header and empty
+ * states, the palette. "Plan with an agent first" is an option inside it. Pushes the URL and
+ * announces it, as a rail click does.
  */
 export function openNewProject(): void {
   try {
@@ -40,10 +45,5 @@ export function openNewProject(): void {
     }
     window.history.pushState(null, "", `/?${url.searchParams}`);
     window.dispatchEvent(new PopStateEvent("popstate"));
-    // The shell switches its visible area on popstate. Reset after that render,
-    // so a build opened from scrolled setup starts at its heading and Brief.
-    window.requestAnimationFrame(() => {
-      window.scrollTo({ top: 0, left: 0, behavior: "instant" });
-    });
   } catch { /* non-browser */ }
 }

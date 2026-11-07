@@ -1,7 +1,8 @@
 "use client";
 
 /**
- * THE ONE "ADD A PROJECT" SHEET, WHEREVER IT IS ASKED FOR (screen 03; PX-20).
+ * THE ONE "ADD A PROJECT" SHEET, WHEREVER IT IS ASKED FOR (screen 03; PX-20; v2 one screen:
+ * app/start-project/add-project.tsx, which also absorbs Workflows › New build's new app).
  *
  * `?new_project=import|idea|sample|1` opens it — the Projects page's `+ Add project`, the rail's
  * `+ Add project`, the first run's doors and the project menu all write that. It used to be
@@ -16,7 +17,7 @@
 import React, { useEffect, useState, useSyncExternalStore } from "react";
 
 import { EMPTY_DRAFT, NewProjectSheet, type NewProjectDraft } from "../new-project-sheet";
-import { StartProjectSheet } from "./start-sheet";
+import { AddProjectSheet } from "./add-project";
 import { NEW_PROJECT_PARAM, clearStepParam, projectPageHref, stepFromParam, type StartStep } from "../../lib/start-project";
 
 // ── one owner among the mounted hosts ──────────────────────────────────────────────────────
@@ -79,6 +80,17 @@ export function StartProjectHost({ projectId, homeId, step: forced, onStep: forc
   }, [setStep]);
   if (!owner || !step) return null;
   const close = () => { setStep(null); clearStepParam(); };
+  // "Build it" from a dossier or a panel (lib/research-panels composerHref) and the Command
+  // Center's ideas carry the brief: written into the one input, never started unseen; consumed.
+  const prefill = (() => {
+    try {
+      const p = new URL(window.location.href).searchParams;
+      const brief = p.get("brief");
+      if (!brief) return "";
+      const title = p.get("title");
+      return title && !brief.startsWith(title) ? `${title}\n${brief}` : brief;
+    } catch { return ""; }
+  })();
   if (step === "form") {
     return (
       <NewProjectSheet draft={draft} onDraft={setDraft} onClose={close} onBack={() => setStep("idea")}
@@ -89,5 +101,8 @@ export function StartProjectHost({ projectId, homeId, step: forced, onStep: forc
                        }} />
     );
   }
-  return <StartProjectSheet step={step} onStep={setStep} onClose={close} projectId={projectId} homeId={homeId} />;
+  // ADD A PROJECT v2 (new-project-v2): ONE screen for every door — an idea, a repo, a folder, the
+  // sample in one press. The old three-tab sheet (start-sheet.tsx) stays for one release behind it.
+  const startKind = step === "import" ? "repo" : step === "sample" ? "sample" : "idea";
+  return <AddProjectSheet key={step} startKind={startKind} initialText={prefill} onClose={close} onForm={() => setStep("form")} projectId={projectId} homeId={homeId} />;
 }

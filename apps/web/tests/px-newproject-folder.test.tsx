@@ -78,12 +78,13 @@ describe("the one Add-a-project sheet (PX-20)", () => {
     stubFetch((c) => (c.path === "/v1/github/repos" ? { body: { items: [] } } : undefined));
     window.history.replaceState(null, "", "/?area=projects&new_project=import");
     await mountAs(<><StartProjectHost projectId="p1" homeId="p1" /><StartProjectHost projectId="p1" homeId="p1" /></>);
-    expect($$('[data-testid="start-project"]').length).toBe(1);
-    expect(tid("start-project")!.getAttribute("data-step")).toBe("import");
-    // No GitHub account yet: it still opens and says where to connect one (contract §15).
-    expect(tid("import-none")!.textContent).toBe("No repos yet · Connect on Repo and models ›");
-    await click(tid("start-close"));
-    expect(tid("start-project")).toBeNull();
+    // Add a project v2: the one screen, opened reading a repo.
+    expect($$('[data-testid="add-project"]').length).toBe(1);
+    expect(tid("add-project")!.getAttribute("data-kind")).toBe("repo");
+    // No GitHub account yet: it still opens and says where to allow one (contract §15).
+    expect(tid("ap-results")!.textContent).toContain("Allow more in Repo and models ›");
+    await click(tid("ap-close"));
+    expect(tid("add-project")).toBeNull();
     expect(window.location.search).toBe("?area=projects");
   });
 });

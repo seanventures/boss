@@ -1201,7 +1201,8 @@ def _marshal_first(engine: Any, settings: Any, project_id: str, run_id: str,
         message="Which of these should be the project's first piece of work?",
         choices=[{"key": c["id"], "means": f"{c['label']}: {c['detail']}"[:300],
                   "label": c["label"]} for c in top],
-        context={"candidates": [{k: c.get(k) for k in ("id", "label", "detail", "why", "source",
+        context={"person_note": _note_for(engine, project_id),
+                 "candidates": [{k: c.get(k) for k in ("id", "label", "detail", "why", "source",
                                                        "kind", "task_class", "severity",
                                                        "occurrences", "score")} for c in top]},
         hints=[f"{c['label']}: Chief-of-Staff score {c['score']} ({c['why'] or c['source']})"
@@ -1217,6 +1218,19 @@ def _marshal_first(engine: Any, settings: Any, project_id: str, run_id: str,
         return [first, *rest]
     backlog[0].update(first_by="score", why_first="highest Chief-of-Staff score")
     return backlog
+
+
+def _note_for(engine: Any, project_id: str) -> Optional[str]:
+    """The person's note to Helm from Add a project ("start with the SLA bugs"): data for
+    Marshal's first-work pick, never an instruction."""
+    from .add_project import seed_of
+
+    try:
+        with engine.connect() as c:
+            seed = seed_of(c, project_id)
+    except Exception:  # noqa: BLE001 — a pick without the note is still a pick
+        return None
+    return (seed or {}).get("note")
 
 
 # ── one source: the proposed backlog IS the Roadmap's proposals ────────────────────────────
@@ -1852,7 +1866,19 @@ def view(connection: Connection, project_id: str) -> dict[str, Any]:
             "start": {"href": f"/v1/projects/{project_id}/onboarding/start", "method": "POST"},
             "accept_backlog": {"href": f"/v1/projects/{project_id}/onboarding/backlog/accept",
                                "method": "POST"},
-            "href": project_href(project_id, tab="onboarding")}
+            "href": project_href(project_id, tab="onboarding"),
+            # ADD A PROJECT v2: what the person said on the one screen (their note to Helm).
+            "seed": _seed_note(connection, project_id)}
+
+
+def _seed_note(connection: Connection, project_id: str) -> Optional[dict[str, Any]]:
+    from .add_project import seed_of
+
+    seed = seed_of(connection, project_id)
+    if not seed:
+        return None
+    return {"kind": seed["kind"], "note": seed.get("note"),
+            "title": (seed.get("brief") or {}).get("title") or None}
 
 
 # ── accepting the proposed backlog (screen 10 "Accept backlog / Edit") ─────────────────────

@@ -3,7 +3,7 @@
 # One line per operation: its declaration, then the built-in roles allowed
 # (O owner, A admin, P operator, V viewer, U auditor; '-' none). Every other role is denied
 # 403, or 404 when the operation names an object the role cannot even read.
-# 1777 operations.
+# 1783 operations.
 "GET /.well-known/boss-jwks.json": ["public:jwks", "OAPVU"]
 "GET /docs": ["public:api_description", "OAPVU"]
 "GET /docs/oauth2-redirect": ["public:api_description", "OAPVU"]
@@ -77,6 +77,7 @@
 "POST /v1/acts/backfill": ["permit system:operate @ project(body=project_id)", "OA"]
 "GET /v1/acts/{act_id}": ["permit agent:read @ project(query=project_id)", "OAPVU"]
 "GET /v1/acts/{act_id}/tools": ["permit agent:read @ project(query=project_id)", "OAPVU"]
+"POST /v1/add-project": ["permit project:create @ org", "OA"]
 "GET /v1/agent-groups": ["permit agent:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/agent-groups": ["permit agent:publish @ project(body=project_id)", "OA"]
 "GET /v1/agent-groups/runs": ["permit workflow_run:read @ project(query=project_id)", "OAPVU"]
@@ -1342,6 +1343,11 @@
 "POST /v1/projects": ["permit project:create @ org", "OA"]
 "POST /v1/projects/onboarding/execute": ["permit worker:lease @ org", "-"]
 "GET /v1/projects/summary": ["authenticated", "OAPVU"]
+"POST /v1/projects/{project_id}/add-project/connectors": ["permit project:create @ org", "OA"]
+"GET /v1/projects/{project_id}/add-project/preview": ["permit project:read @ project(path=project_id)", "OAPVU"]
+"GET /v1/projects/{project_id}/add-project/repo/{repo_id}": ["permit repository:read @ project(path=project_id)", "OAPVU"]
+"GET /v1/projects/{project_id}/add-project/started": ["permit project:read @ project(path=project_id)", "OAPVU"]
+"POST /v1/projects/{project_id}/add-project/understand": ["permit project:create @ org", "OA"]
 "GET /v1/projects/{project_id}/agents": ["permit agent:read @ project(path=project_id)", "OAPVU"]
 "POST /v1/projects/{project_id}/agents": ["permit work_item:manage @ project(path=project_id)", "OAP"]
 "GET /v1/projects/{project_id}/archive": ["permit project:read @ project(path=project_id)", "OAPVU"]

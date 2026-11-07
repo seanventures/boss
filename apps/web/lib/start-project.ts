@@ -40,6 +40,8 @@ export function clearStepParam(): void {
     const url = new URL(window.location.href);
     if (!url.searchParams.has(NEW_PROJECT_PARAM)) return;
     url.searchParams.delete(NEW_PROJECT_PARAM);
+    // A "Build it" prefill (brief, title) is consumed with the sheet.
+    url.searchParams.delete("brief"); url.searchParams.delete("title");
     window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
   } catch { /* non-browser */ }
 }

@@ -11295,3 +11295,20 @@ CREATE TABLE IF NOT EXISTS project_host_folders (
 -- `proposed_actions`, so a reopened thread shows them.
 ALTER TABLE agent_messages ADD COLUMN IF NOT EXISTS proposal JSONB;
 ALTER TABLE agent_messages ADD COLUMN IF NOT EXISTS citations JSONB NOT NULL DEFAULT '[]'::jsonb;
+
+-- ADD A PROJECT v2 (new-project-v2 wireframes; services/project_experience/add_project.py):
+-- what the person confirmed on the one screen, kept as the project's SEED. `brief` is Helm's
+-- rewrite as confirmed (title, problem, who uses it, must-haves, out of scope, done when, open
+-- questions with the answers picked); `picks` the six boxes (captain, stack, connectors,
+-- workflow, code, staging), the Tell choice and a repository's note to Helm. The PRD meeting
+-- reads the brief as the start's directive; onboarding shows the note and hands it to Marshal.
+CREATE TABLE IF NOT EXISTS project_seeds (
+  project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL DEFAULT 'idea' CHECK (kind IN ('idea', 'repo', 'folder', 'sample')),
+  words TEXT NOT NULL DEFAULT '',
+  brief JSONB NOT NULL DEFAULT '{}'::jsonb,
+  picks JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_by TEXT NOT NULL DEFAULT 'boss',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);

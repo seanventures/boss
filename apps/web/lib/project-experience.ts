@@ -285,6 +285,8 @@ export type Onboarding = {
    *  run's trigger (created · manual · repo_added); the test baseline and where it came from. */
   read_ago_s?: number | null; runs?: number; trigger?: string; started_at?: string;
   tests?: { passed: number; total: number; failing: number; source: string; cause: string } | null;
+  /** Add a project v2: the person's note to Helm from the one screen (lines under the repo). */
+  seed?: { kind: string; note: string | null; title: string | null } | null;
 };
 export type JumpItem = { label: string; kind: string; href: string; sub: string; external: boolean };
 export type SettingsItem = { label: string; value: string; sub: string; reveal: { href: string; requires: string } | null; href: string };

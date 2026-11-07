@@ -20,6 +20,7 @@ import { DemoLoginRow } from "./tab-settings";
 import { P95_SOURCE, p95Words } from "./tab-deployments";
 import { whenLocal } from "../../lib/local-time";
 import type { PxCtx } from "./project-page";
+import { StartedCards } from "./started-cards";
 
 /** Each Needs-you card's icon, by what it asks. */
 const NEED_ICON: Record<string, Icon> = { merge: GitMerge, deploy: RocketLaunch, plan: ListChecks, setup: Wrench, question: Question };
@@ -96,6 +97,8 @@ export function OverviewTab({ ctx }: { ctx: PxCtx }) {
     ? <CardFailed card={card} why={ov.errors[card]} onRetry={ctx.refreshOverview} /> : null);
   return (
     <div className="px-stack" data-testid="px-overview">
+      {/* Right after Create and start (Add a project v2): the first stage, the PRD first. */}
+      <StartedCards ctx={ctx} />
       {ov.journey.length || ov.errors?.journey ? (
         <section className="px-card" aria-labelledby="px-ov-j">
           <div className="px-card-h"><Ico icon={Path} c="teal" /><h2 id="px-ov-j">Journey</h2>
