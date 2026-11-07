@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { labRunHref } from "../components/v2/templates/template-sheet";
 import { labHref } from "../app/factory/lab-links";
-import { ProjectAway } from "../app/project-away";
+import { ShellCrumbs } from "../app/shell-crumbs";
 import { codeOnly } from "./_helpers/source";
 
 /**
@@ -39,10 +39,17 @@ describe("a lab project's run can be opened", () => {
     expect(page).toContain("const activeProjectId = otherProject ? otherProject.id : selectedOrg.project_id;");
   });
 
-  it("says which project is open and the way back", () => {
-    const html = renderToStaticMarkup(<ProjectAway name="Bank lab (insecure by design)" homeName="BOSS" lab />);
-    expect(html).toContain("Lab project: ");
-    expect(html).toContain("Back to BOSS");
+  it("says which project is open and that it is a lab, in the breadcrumb (no banner)", () => {
+    const html = renderToStaticMarkup(
+      <ShellCrumbs active="code_tasks" areaLabel="Code Tasks" routeMode={false} onProjects={() => {}}
+                   projects={{ items: [{ id: "boss", name: "BOSS" }, { id: "proj_lab1", name: "Bank lab (insecure by design)" }], homeId: "boss" }}
+                   projectId="proj_lab1" />);
+    expect(html).toContain("Bank lab (insecure by design)");
+    expect(html).toContain('data-testid="crumb-lab"');
     expect(html).toContain("never deployed to a host");
+    // The way back is the rail's project list and the avatar menu's project menu; the crumb opens
+    // this project's page.
+    expect(html).toContain('data-testid="crumb-project"');
+    expect(html).toContain("project_id=proj_lab1");
   });
 });

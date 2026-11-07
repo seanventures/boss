@@ -1,5 +1,4 @@
 
-import { ProjectAway } from "./project-away";
 import { networkTrustedConsole } from "../lib/console-session";
 import { accessForArea } from "../lib/identity/area-access";
 import { checkWith } from "../lib/identity/check";
@@ -1030,12 +1029,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             objectType={ownerResolution.target?.type ?? "object"}
           />
         ) : null}
-        {otherProject ? (
-          <ProjectAway name={otherProject.name}
-                       homeName={otherProjectFeed?.items.find((p) => p.id === selectedOrg.project_id)?.name
-                                 ?? selectedOrg.org_name}
-                       lab={/lab \(insecure by design\)$/.test(otherProject.name)} />
-        ) : null}
+        {/* WHICH PROJECT IS OPEN is the top bar's breadcrumb now (with a Lab chip for a template's
+            lab); the rail's list and the avatar menu switch projects. No "Project: X ← Back to Y". */}
         {/* ONE AGENT SURFACE.
             There were three: this chat area, a Metatron Captain page, and the Task Shepherd
             autopilot. The operator used one of them and did not like it — "I never used
