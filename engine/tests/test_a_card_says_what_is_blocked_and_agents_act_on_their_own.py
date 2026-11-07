@@ -444,3 +444,81 @@ def test_an_owed_item_that_gets_no_turn_says_why_on_the_ledger(eng, project):  #
     with eng.begin() as c:
         assert len([r for r in ledger.list_decisions(c, project, work_item_id=waiting)
                     if r["question"] == owners.Q_WHY_NO_TURN]) == 1
+
+
+# ── parked while the person decides; aged so nothing waits forever; one card, every entry ────
+
+def test_work_whose_build_waits_on_its_merge_card_is_parked_until_the_person_decides(
+        eng, project):  # noqa: F811
+    """helpdesk 2026-11-07: CVE items whose builds had finished and waited on their merge cards
+    took a squad turn every 30 minutes and every owner slot. Parked now; due again once the
+    person answers."""
+    from boss_engine.services.ambient import owners
+
+    with eng.begin() as c:
+        item = _restarts_item(c, project)
+        _handed(c, item)
+        wfr = f"wfr_t_{uuid4().hex[:10]}"
+        rid = _run(c, project, title="Bump esbuild past 0.21.5", ctx={"workflow_run_id": wfr})
+        c.execute(text("INSERT INTO work_item_links (work_item_id, kind, ref, project_id, "
+                       "created_by) VALUES (:w, 'workflow_run', :r, :p, 'test')"),
+                  {"w": item["id"], "r": wfr, "p": project})
+        assert [d["id"] for d in owners.due_items(c, project_id=project)] == [item["id"]]
+        merge = _merge_card(c, project, rid)
+        assert owners.waits_on_a_decision(c, item) == merge
+        assert owners.due_items(c, project_id=project) == [], "parked: nothing it can change"
+        c.execute(text("UPDATE decisions SET status = 'approved' WHERE id = :d"), {"d": merge})
+        assert [d["id"] for d in owners.due_items(c, project_id=project)] == [item["id"]]
+
+
+def test_a_low_priority_item_that_waited_too_long_gets_a_turn_whatever_its_score(
+        eng, project, monkeypatch):  # noqa: F811
+    from datetime import timedelta
+
+    from boss_engine.services.ambient import owners
+
+    with eng.begin() as c:
+        old = open_item(c, project, task_class="system_health", fingerprint="fp:old",
+                        title="Low but long waiting", subject_ref="repo:acme/old")["item"]
+        _handed(c, old)                                   # handed over first: waited longest
+        busier = []
+        for n in range(3):
+            other = open_item(c, project, task_class="system_health", fingerprint=f"fp:hot{n}",
+                              title=f"Busier work {n}", subject_ref=f"repo:acme/h{n}")["item"]
+            _handed(c, other)
+            busier.append(other["id"])
+        c.execute(text("UPDATE work_items SET effective_score = 90 WHERE id = ANY(:b)"),
+                  {"b": busier})
+        c.execute(text("UPDATE work_items SET effective_score = 10 WHERE id = :w"),
+                  {"w": old["id"]})
+        assert old["id"] not in [d["id"] for d in owners.due_items(c, project_id=project,
+                                                                   limit=3)]
+        # Past the aging threshold with no turn on any of them: the longest wait goes first.
+        later = owners.now() + timedelta(minutes=owners.STARVE_MINUTES + 5)
+        monkeypatch.setattr(owners, "now", lambda: later)
+        due = [d["id"] for d in owners.due_items(c, project_id=project, limit=3)]
+    assert due[0] == old["id"], due
+
+
+def test_two_cards_raised_with_the_same_words_become_one_card_asking_both(eng, project):  # noqa: F811
+    """create_blocking_decision folds a same-question pending decision into the open one; the
+    second item used to wait on a card whose batch did not list it, so a withdrawal left it
+    stuck on Needs you."""
+    with eng.begin() as c:
+        items, cards = [], []
+        for _ in range(2):
+            item = _restarts_item(c, project)
+            items.append(item["id"])
+            cards.append(asks.raise_card(c, project, [{
+                "ask_kind": "question", "asked_by": INFRA, "task_class": "system_health",
+                "squad": "Squad", "words": "squad is stuck", "detail": REASON,
+                "question": "Squad is stuck on this install — let it go on, or take it?",
+                "work_item_id": item["id"]}]))
+        card = _card(c, cards[0])
+        assert cards[0] == cards[1]
+        assert sorted(e["work_item_id"] for e in card["recommendation"]["batch"]) == sorted(items)
+        _grant(c, project, "infra_steward")
+        cos.reconsider(c, project, mode="propose")
+        after = [board.get(c, i) for i in items]
+    assert {i["lifecycle"] for i in after} == {"proposed"}
+    assert {i["needs_you_decision_id"] for i in after} == {None}

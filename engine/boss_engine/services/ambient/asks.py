@@ -397,6 +397,20 @@ def raise_card(connection: Connection, project_id: str, entries: Sequence[Mappin
         connection, project_id, None, clean_text(card_question(entries), 300), rec,
         {"ambient_cost_usd_micros": sum(int(i.get("cost_usd_micros") or 0) for i in items)},
         "ambient_needs_you", risk_tier=_risk_tier(entries), default_action="hold")
+    merged = connection.execute(text(
+        "SELECT id, question, recommendation, options, created_at FROM decisions "
+        "WHERE id = :d AND NOT (COALESCE(recommendation->'work_item_ids', '[]'::jsonb) "
+        "@> CAST(:w AS JSONB))"),
+        {"d": decision_id, "w": json.dumps([e["work_item_id"] for e in entries])}
+    ).mappings().first()
+    if merged is not None:
+        # create_blocking_decision folds a same-question pending decision into the open one. An
+        # ambient card that already asks the same words is joined (its batch gains these
+        # entries) — never left asking without them while their items wait on it.
+        card = dict(merged, project_id=project_id)
+        if (card.get("recommendation") or {}).get("card") == CARD:
+            join_card(connection, card, entries, actor=actor)
+            return decision_id
     connection.execute(text("UPDATE decisions SET options = CAST(:o AS JSONB) WHERE id = :d"),
                        {"o": json.dumps(card_options(entries)), "d": decision_id})
     for e in entries:

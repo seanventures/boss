@@ -84,6 +84,8 @@ _HANDED = (
     "  (SELECT max(e.created_at) FROM events e WHERE e.project_id = w.project_id "
     "     AND e.event_type = 'ambient.item_transitioned' AND e.entity_id = w.id "
     "     AND e.data->>'to' = 'proposed' AND e.data ? 'withdrawn') AS returned_at, "
+    "  (SELECT min(h.created_at) FROM work_item_messages h WHERE h.work_item_id = w.id "
+    "     AND h.kind = 'handoff' AND h.sender = :cos) AS handed_at, "
     "  EXISTS (SELECT 1 FROM work_item_messages m WHERE m.work_item_id = w.id "
     "     AND m.kind = 'squad') AS has_squad, "
     "  EXISTS (SELECT 1 FROM work_item_messages m WHERE m.work_item_id = w.id "
@@ -120,6 +122,39 @@ def owed_since(row: Mapping[str, Any]) -> Any:
     return since if since is not None and (last is None or since > last) else None
 
 
+#: AGING: a due item whose owners have had no turn on it for this long goes ahead of priority
+#: (oldest first), so no item waits forever while higher-scored ones keep coming back.
+STARVE_MINUTES = 120
+
+
+def starving_since(row: Mapping[str, Any]) -> Any:
+    """When its owners last worked the item (or it was handed over), if that is longer ago than
+    STARVE_MINUTES — else None."""
+    waited = row.get("squad_turn_at") or row.get("handed_at")
+    if waited is None or waited >= now() - timedelta(minutes=STARVE_MINUTES):
+        return None
+    return waited
+
+
+def _epoch(value: Any) -> float:
+    return value.timestamp() if value is not None else 0.0
+
+
+def waits_on_a_decision(connection: Connection, row: Mapping[str, Any]) -> Optional[str]:
+    """PARKED: the open decision the work this item launched waits on (a finished build's merge
+    card, a held step) — the same test as a stalled hand-off (chief_of_staff._run_asks). Nothing
+    the squad does can change it until the person decides, so it is not given turns; it is due
+    again once that decision is answered or withdrawn."""
+    from .. import stuck_work
+    from .chief_of_staff import _run_asks
+
+    runs = [str(r["id"]) for r in stuck_work.runs_of_item(connection, row["id"])]
+    runs += [str(x) for x in connection.execute(text(
+        "SELECT ref FROM work_item_links WHERE work_item_id = :w "
+        "AND kind IN ('workflow_run', 'code_task')"), {"w": row["id"]}).scalars()]
+    return _run_asks(connection, str(row["project_id"]), list(dict.fromkeys(runs)))
+
+
 def due_items(connection: Connection, *, project_id: Optional[str] = None,
               limit: int = DEFAULT_ITEMS_PER_TICK,
               held: Optional[list[dict[str, Any]]] = None) -> list[dict[str, Any]]:
@@ -140,8 +175,10 @@ def due_items(connection: Connection, *, project_id: Optional[str] = None,
     rows = connection.execute(text(_HANDED.format(live=projects_archive.live_sql("w.project_id"))),
                               {"p": project_id, "cos": COS,
                                               "nosquad": f"{NO_SQUAD}%"}).mappings().all()
-    # Stable: owed items first, each group still in priority order.
-    rows = sorted(rows, key=lambda r: owed_since(r) is None)
+    # Owed items first; then STARVING ones (due, but no turn for STARVE_MINUTES), oldest first;
+    # then the rest in priority order (the sort is stable).
+    rows = sorted(rows, key=lambda r: (owed_since(r) is None, starving_since(r) is None,
+                                       _epoch(starving_since(r))))
 
     def hold(r: Mapping[str, Any], why: str) -> None:
         if held is not None and owed_since(r) is not None:
@@ -167,6 +204,14 @@ def due_items(connection: Connection, *, project_id: Optional[str] = None,
                 {"w": r["id"], "q": _q_triage()}).first()
             if triaged is None and r["lifecycle"] == "proposed":
                 out.append({**r, "kind": "incident"})
+            continue
+        parked = waits_on_a_decision(connection, r)
+        if parked:
+            # Its build finished and waits on the person's own card (helpdesk 2026-11-07: five
+            # CVE items, each built and waiting on its merge card, took a squad turn every 30
+            # minutes and every owner slot). Parked until that decision is answered.
+            hold(r, "the work it launched waits on your open decision; its owners go on "
+                    "once that is answered")
             continue
         if r["no_squad"]:
             hold(r, "this project could not seat a squad for it")
