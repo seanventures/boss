@@ -1041,6 +1041,8 @@ _WITHDRAW_WHY = {
     "policy": "BOSS refused that action twice; the outcome is recorded, nobody needs to answer",
     "healthy": "the app is healthy: the alert cleared, nothing failing is left",
     "rebatch": "it moved onto the project's one card",
+    "stale_rollback": "the rollback it proposed is not to a known-good release, so the squad "
+                      "fixes forward instead",
 }
 
 

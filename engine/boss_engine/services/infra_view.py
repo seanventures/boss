@@ -1500,14 +1500,10 @@ def _approver(name: Optional[str], viewer: Optional[str], types: dict[str, str]
 
 
 def _stack_history(connection: Any, target_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
-    hist: dict[str, list[dict[str, Any]]] = {t: [] for t in target_ids}
-    if target_ids:
-        for h in connection.execute(text(
-                "SELECT id, target_id, status, commit_sha, apply_started_at, created_at "
-                "FROM stack_deployments WHERE target_id = ANY(:t)"),
-                {"t": list(target_ids)}).mappings():
-            hist[h["target_id"]].append(dict(h))
-    return hist
+    from .stack_deploy import stack_history
+
+    # The same history the rollback route reads: known-good targets only (rollback_option).
+    return stack_history(connection, list(target_ids))
 
 
 def _run_history(connection: Any, target_ids: list[str]) -> dict[str, list[dict[str, Any]]]:

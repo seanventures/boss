@@ -163,7 +163,9 @@ class RuleMind:
                               "verdict).", "by": self.by}
         strong = float(context.get("confidence") or 0) >= 0.7
         if kind == "critique":
-            key = "agree" if strong else "concern"
+            # Weak evidence is an objection (a person decides), never a "concern": a concern is
+            # an acceptance with a named risk (collab.tally), and the rule has no risk to name.
+            key = "agree" if strong else "object"
             return {"key": key, "confidence": 0.6, "by": self.by,
                     "reason": ("The cause is corroborated and the action has an undo."
                                if strong else "The cause is not corroborated yet.")}
@@ -256,6 +258,28 @@ class Effects(Protocol):
                        ctx: "Ctx") -> dict[str, Any]: ...
 
 
+def rollback_live(connection: Connection, incident_id: str, deployment_id: str
+                  ) -> dict[str, Any]:
+    """Is the rollback redeploy live? {state: pending | live | failed, at, word}. When it is,
+    the incident's mitigated_at becomes the moment it went live (not when it was decided)."""
+    row = connection.execute(text(
+        "SELECT status, commit_sha, finished_at, updated_at FROM stack_deployments "
+        "WHERE id = :d"), {"d": deployment_id}).mappings().first()
+    if row is None:
+        return {"state": "failed", "at": None, "word": "The rollback was not planned"}
+    sha = str(row["commit_sha"] or "")[:7]
+    if row["status"] == "healthy":
+        at = row["finished_at"] or row["updated_at"]
+        connection.execute(text(
+            "UPDATE incidents SET mitigated_at = :t WHERE id = :i"), {"t": at, "i": incident_id})
+        return {"state": "live", "at": at, "word": f"Rolled back: {sha} is live"}
+    if row["status"] in ("failed", "rejected", "cancelled", "canceled", "superseded"):
+        return {"state": "failed", "at": None,
+                "word": f"The rollback to {sha} did not go live ({row['status']})"}
+    return {"state": "pending", "at": None,
+            "word": f"Waiting for the rollback to {sha} to go live"}
+
+
 class BossEffects:
     """Real targets. A rollback plans a governed redeploy of the last healthy commit
     (stack_deploy.rollback_stack_deploy — its own approval rules still apply); the fix is the
@@ -272,9 +296,27 @@ class BossEffects:
         if not deployment:
             return {"ok": False, "word": "No BOSS deployment to roll back"}
         planned = rollback_stack_deploy(connection.engine, self.settings,
-                                        deployment_id=deployment, actor=party_id(actor))
-        return {"ok": True, "word": f"Redeploying {str(ctx.deploy.get('previous_commit_sha'))[:7]}",
+                                        deployment_id=deployment, actor=party_id(actor),
+                                        authority=ctx.rollback_authority)
+        to = str((planned or {}).get("commit_sha") or self.rollback_target(connection, ctx=ctx)
+                 or "")
+        # PENDING until the redeploy is live: mitigated_at is when it went live, and recovery is
+        # judged from then (check_recovery), never from when it was decided.
+        return {"ok": True, "word": f"Redeploying {to[:7]}", "pending": True,
+                "deployment_id": str((planned or {}).get("id") or ""),
                 "ref": str((planned or {}).get("id") or deployment)}
+
+    def rollback_target(self, connection, *, ctx) -> Optional[str]:
+        """The last KNOWN-GOOD commit the serving deployment would roll back to
+        (stack_deploy.rollback_option, the route's own rule), or None: then no rollback."""
+        from .stack_deploy import get_stack_deployment
+
+        deployment = ctx.deploy.get("stack_deployment_id")
+        if not deployment:
+            return None
+        found = get_stack_deployment(connection, str(deployment)) or {}
+        return found.get("rollback_commit") if "rollback" in (found.get("actions") or []) \
+            else None
 
     def start_fix(self, connection, *, project_id, ctx, brief, actor) -> dict[str, Any]:
         from .incident_response import _response_in_flight
@@ -314,8 +356,11 @@ class BossEffects:
             return alert_recovery(connection, ctx)
         squad_ctx = (ctx.fctx.get("squad") or {})
         check_id = squad_ctx.get("recovery_check_id")
+        # Judged from when the mitigation went LIVE (Pass.verify's rollback gate), never from
+        # when it was decided: the bad release's own minutes are not "recovered".
         row = (look_at_recovery(connection, check_id) if check_id else
-               start_recovery_check(connection, project_id, ctx.incident_id))
+               start_recovery_check(connection, project_id, ctx.incident_id,
+                                    since=ctx.mitigation_live_at))
         if not check_id:
             _merge_squad_ctx(connection, ctx.incident_id, {"recovery_check_id": row["id"],
                                                            "item_id": ctx.item["id"]})
@@ -344,6 +389,11 @@ class Ctx:
     #: The app's name and environment as a person reads them (app_place), "" when unknown.
     place_name: str = ""
     place_env: str = ""
+    #: The decision a rollback runs under (rollback_approval): set by the squad just before it
+    #: calls Effects.rollback, so the deploy asks nobody a second time.
+    rollback_authority: Optional[dict[str, Any]] = None
+    #: When the rollback redeploy went live (Pass.verify's gate): recovery is judged from then.
+    mitigation_live_at: Optional[datetime] = None
 
     @property
     def incident_id(self) -> Optional[str]:
@@ -892,6 +942,13 @@ class _Pass:
                     evidence=chosen["evidence"], options=[c["key"] for c in candidates],
                     confidence=chosen["confidence"],
                     cost=int(verdict.get("cost_usd_micros") or 0))
+        if ctx.incident_id and chosen["basis"] == "change" and commit:
+            # The release this incident BLAMED is never a rollback target again
+            # (stack_deploy.implicated_commits): kept on the incident across occurrences.
+            blamed = list((ctx.fctx.get("squad") or {}).get("blamed_commits") or [])
+            if commit not in blamed:
+                _merge_squad_ctx(self.c, ctx.incident_id,
+                                 {"blamed_commits": (blamed + [commit])[-10:]})
         if ctx.incident_id:
             from .incident_response import _evidence as add_evidence
 
@@ -981,12 +1038,30 @@ class _Pass:
             LOG.info("incident squad: usage not logged for %s", self.item_id, exc_info=True)
 
     # 4. mitigate --------------------------------------------------------------------------
+    def rollback_target(self) -> Optional[str]:
+        """The LAST KNOWN-GOOD release to roll back to, or None. Real targets answer from the
+        deploy history (BossEffects.rollback_target: never a release that was rolled back from
+        or that an incident blamed, never past a rollback); effects without a history (tests,
+        the demo fixture) fall back to the release before the serving one."""
+        if hasattr(self, "_target"):
+            return self._target
+        fn = getattr(self.effects, "rollback_target", None)
+        if callable(fn):
+            try:
+                target = fn(self.c, ctx=self.ctx)
+            except Exception:  # noqa: BLE001 — no answer is no known-good target
+                LOG.info("incident squad: no rollback target for %s", self.item_id,
+                         exc_info=True)
+                target = None
+        else:
+            target = self.ctx.deploy.get("previous_commit_sha")
+        self._target = str(target) if target else None
+        return self._target
+
     def mitigation_action(self) -> Optional[str]:
-        """Rollback when the release is the suspect and an earlier healthy release exists."""
+        """Rollback when the release is the suspect and a known-good release exists."""
         cause = getattr(self, "cause", None) or {}
-        rollback_ok = bool(self.ctx.deploy.get("previous_commit_sha")) and (
-            cause.get("basis") in ("change", "memory"))
-        if not rollback_ok:
+        if cause.get("basis") not in ("change", "memory") or not self.rollback_target():
             return None
         return "prod_rollback" if self.ctx.is_prod else "staging_rollback"
 
@@ -994,7 +1069,7 @@ class _Pass:
         action = self.mitigation_action()
         if action is None:
             return None
-        prev = str(self.ctx.deploy.get("previous_commit_sha"))
+        prev = str(self.rollback_target())
         learned = getattr(self, "learning", None)
         summary = f"Roll back {self.ctx.app} to {prev[:7]}" + (
             " (known fix)" if learned else "")
@@ -1002,6 +1077,7 @@ class _Pass:
             "action": action, "summary": summary,
             "verify": f"5xx back under the alert threshold for {self.ctx.app}",
             "undo": {"action": "redeploy", "commit": str(self.ctx.deploy.get("commit_sha"))},
+            "to_commit": prev,
             "confidence": float((getattr(self, "cause", None) or {}).get("confidence") or 0)})
 
     def deliberate(self, proposal: dict[str, Any]) -> dict[str, Any]:
@@ -1013,8 +1089,14 @@ class _Pass:
         cause = getattr(self, "cause", None) or {}
         context = {"action": action, "summary": proposal["body"]["summary"],
                    "cause": cause.get("summary"), "confidence": cause.get("confidence"),
-                   "release_commits": len(self.ctx.diff.get("commits") or []),
-                   "environment": self.ctx.environment}
+                   # An unknown diff is "unknown", never 0: a critic read "0 commits" as an
+                   # anomaly and withheld agreement (HelpDesk AI 2026-11-07).
+                   "release_commits": len(self.ctx.diff["commits"])
+                   if self.ctx.diff.get("commits") else "unknown",
+                   "rollback_to": proposal["body"].get("to_commit"),
+                   "environment": self.ctx.environment,
+                   "autonomy": verdict.get("level"),
+                   "needs_a_person": bool(verdict.get("needs_person"))}
         crit = self.mind.choose(
             self.c, project_id=self.p, item_id=self.item_id, seat=self.squad.critic,
             kind="critique", question=f"Is it safe to {proposal['body']['summary'].lower()}?",
@@ -1046,7 +1128,7 @@ class _Pass:
         proposal = self.propose_mitigation()
         if proposal is None:
             self.decide(self.squad.lead, Q_MITIGATE, "Fix forward",
-                        "No earlier healthy release to roll back to, or the release is not the "
+                        "No known-good release to roll back to, or the release is not the "
                         "suspect. The fix goes forward.", evidence=self.cause_evidence(),
                         options=["Roll back", "Restart", "Fix forward"], confidence=0.6)
             return self.fix_and_verify(mitigated=False)
@@ -1054,14 +1136,16 @@ class _Pass:
         gate, record = talk["gate"], talk["consensus"]
         undo = proposal["body"].get("undo")
         if gate["allowed"] and not gate["needs_person"] and record["result"] == "approved":
-            self.decide(self.squad.lead, Q_MITIGATE, _rollback_word(self.ctx),
+            self.decide(self.squad.lead, Q_MITIGATE, _rollback_word(self.ctx, self.rollback_target()),
                         f"{proposal['body']['summary']}. A critic agreed; the undo is a "
                         "redeploy of the serving commit.", evidence=self.cause_evidence(),
-                        options=[_rollback_word(self.ctx), "Fix forward"],
+                        options=[_rollback_word(self.ctx, self.rollback_target()), "Fix forward"],
                         action=proposal["body"]["action"], consensus=record,
                         proposal_id=proposal["id"], undo=undo, cost=talk["cost"],
                         confidence=proposal["body"].get("confidence"))
-            return self.execute_rollback()
+            return self.execute_rollback(authority={
+                "approved_by": self.squad.lead, "decision_id": None,
+                "basis": f"{gate.get('task_class')} at {gate.get('level')}, critic agreed"})
         return self.ask_person(proposal, gate, record, talk["cost"])
 
     def cause_evidence(self) -> list[dict[str, Any]]:
@@ -1077,9 +1161,8 @@ class _Pass:
         dissent = record.get("dissent") or []
         rec = self.decide(
             f"squad:{self.item_id}", Q_MITIGATE, "Recommend rollback",
-            f"Squad recommends: {proposal['body']['summary']} ({approve} of {voted} approve"
-            f"{', ' + str(len(dissent)) + ' dissent' if dissent else ''}). "
-            "Production needs a person.", evidence=self.cause_evidence(),
+            f"Squad recommends: {proposal['body']['summary']} ({_consensus_words(record)}). "
+            f"{_why_a_person(gate, record, self.ctx)}", evidence=self.cause_evidence(),
             options=["Recommend rollback", "Recommend fix only"],
             action="propose", consensus=record, proposal_id=proposal["id"], cost=cost,
             confidence=proposal["body"].get("confidence"))
@@ -1102,21 +1185,44 @@ class _Pass:
         return {"stage": "needs_you", "item": moved,
                 "decision_id": moved.get("needs_you_decision_id"), "consensus": record}
 
-    def execute_rollback(self) -> dict[str, Any]:
+    def run_rollback(self, *, actor: str, authority: dict[str, Any]) -> dict[str, Any]:
+        """THE ONE WAY a decided rollback runs (the squad within its autonomy, or a person's
+        answer): under that decision's authority (one question, never a second "Deploy …?"),
+        and the incident's mitigated_at is when the redeploy went LIVE — now for an immediate
+        rollback, else when BossEffects.check_recovery sees it live."""
         lead = self.squad.lead
         board.assert_lease(self.c, self.item_id, owner=lead, token=self.token, lock=True)
-        done = self.effects.rollback(self.c, project_id=self.p, ctx=self.ctx, actor=lead)
+        self.ctx.rollback_authority = authority
+        try:
+            done = self.effects.rollback(self.c, project_id=self.p, ctx=self.ctx, actor=actor)
+        finally:
+            self.ctx.rollback_authority = None
         if done.get("link"):
             board.link(self.c, self.item_id, *done["link"], actor=lead)
         evidence = self.base_evidence()[:2] + [
-            {"kind": "commit", "ref": str(self.ctx.deploy.get("previous_commit_sha"))[:40],
+            {"kind": "commit", "ref": str(self.rollback_target() or
+                                          self.ctx.deploy.get("previous_commit_sha"))[:40],
              "note": clean_text(done.get("word"), 200)}]
         self.post("finding", lead, {"summary": short_label(done.get("word") or "Rolled back", 6),
                                     "evidence": evidence})
         if self.ctx.incident_id:
+            pending = bool(done.get("pending")) and done.get("ok", True)
             self.c.execute(text(
-                "UPDATE incidents SET lifecycle = 'monitoring', mitigated_at = now(), "
-                "status = 'remediating' WHERE id = :i"), {"i": self.ctx.incident_id})
+                "UPDATE incidents SET lifecycle = 'monitoring', status = 'remediating', "
+                "mitigated_at = CASE WHEN :pending THEN NULL ELSE clock_timestamp() END "
+                "WHERE id = :i"),
+                {"i": self.ctx.incident_id, "pending": pending})
+            if pending and done.get("deployment_id"):
+                _merge_squad_ctx(self.c, self.ctx.incident_id,
+                                 {"rollback_deployment_id": done["deployment_id"],
+                                  "item_id": self.item_id})
+                squad_ctx = dict(self.ctx.fctx.get("squad") or {})
+                squad_ctx["rollback_deployment_id"] = done["deployment_id"]
+                self.ctx.fctx["squad"] = squad_ctx
+        return done
+
+    def execute_rollback(self, *, authority: dict[str, Any]) -> dict[str, Any]:
+        done = self.run_rollback(actor=self.squad.lead, authority=authority)
         if not done.get("ok", True):
             return self.escalate(done.get("word") or "The rollback could not run")
         return self.fix_and_verify(mitigated=True)
@@ -1216,9 +1322,25 @@ class _Pass:
                      "smallest fix. State the root cause in the pull request.")
         return "\n".join(lines)
 
+    def rollback_gate(self) -> Optional[dict[str, Any]]:
+        """A rollback planned but not live yet is not a mitigation: wait for it (the incident's
+        mitigated_at is set when it goes live, rollback_live), and say so if it never does."""
+        dep = (self.ctx.fctx.get("squad") or {}).get("rollback_deployment_id")
+        if not dep or not self.ctx.incident_id:
+            return None
+        live = rollback_live(self.c, self.ctx.incident_id, str(dep))
+        if live["state"] == "live":
+            self.ctx.mitigation_live_at = live["at"]
+            return None
+        return {"status": "waiting" if live["state"] == "pending" else "unconfirmed",
+                "word": live["word"],
+                "evidence": [{"kind": "incident", "ref": self.ctx.incident_id,
+                              "note": live["word"]}]}
+
     def verify(self, *, mitigated: bool) -> dict[str, Any]:
         lead = self.squad.lead
-        seen = self.effects.check_recovery(self.c, project_id=self.p, ctx=self.ctx)
+        seen = self.rollback_gate() or self.effects.check_recovery(
+            self.c, project_id=self.p, ctx=self.ctx)
         status = seen.get("status")
         evidence = _evid(*(seen.get("evidence") or []), *self.base_evidence()[:1])
         if status == "waiting":
@@ -1270,8 +1392,10 @@ class _Pass:
         postmortem = None
         if ctx.incident_id:
             self.c.execute(text(
+                # resolved_at IS when the squad verified recovery: never an earlier stamp (an
+                # alert that cleared in a quiet window while the bad release was still live).
                 "UPDATE incidents SET status = 'resolved', lifecycle = 'resolved', "
-                "resolved_at = COALESCE(resolved_at, now()) WHERE id = :i"),
+                "resolved_at = clock_timestamp() WHERE id = :i"),
                 {"i": ctx.incident_id})
             from .sre_postmortem import draft_postmortem
 
@@ -1410,17 +1534,17 @@ class _Pass:
             f"{ctx.failing_route or ctx.app} 5xx",
             f"{top.get('exc_type')}" if top.get("exc_type") else "",
             "after a release" if commit else "") if x)
+        fix_summary = ("Roll back to the last good release, then fix forward with a regression "
+                       "test" if mitigated else "Fix forward with a regression test")
         try:
             with self.c.begin_nested():
                 item = lw.record(
                     self.c, project_id=self.p, learning_kind="precedent",
-                    title=short_label(f"{ctx.app}: {cause.get('summary') or symptom}", 12),
+                    title=lesson_title(cause, symptom, mitigated, app=ctx.app),
                     statement=f"{symptom}: {cause.get('means') or cause.get('summary')}",
                     detail={"symptom": symptom,
                             "cause_summary": cause.get("summary") or cause.get("means"),
-                            "fix_summary": ("Roll back to the last healthy release, then fix "
-                                            "forward with a regression test" if mitigated else
-                                            "Fix forward with a regression test"),
+                            "fix_summary": fix_summary,
                             "applies_to": [x for x in (ctx.failing_route, ctx.app) if x],
                             "reuse_count": 0},
                     about={"symbols": [n.get("path") or n["name"] for n in changed[:5]]},
@@ -1603,8 +1727,62 @@ def recovery_question(app: Any, environment: Any, *, rolled_back: bool,
     return f"{where} still fails and no fix has landed — take over?"
 
 
-def _rollback_word(ctx: "Ctx") -> str:
-    return f"Roll back to {str(ctx.deploy.get('previous_commit_sha') or '')[:7]}".strip()
+def lesson_title(cause: Mapping[str, Any], symptom: str, mitigated: bool, *,
+                 app: str = "") -> str:
+    """A lesson is named by what broke and what fixed it ("A release-branch routing table lookup
+    threw on an unknown queue → roll back to the last good release"), never by the app it
+    happened in: "helpdesk-ai-v3 · from INC-1" told nobody anything."""
+    what = clean_text(cause.get("means") or cause.get("summary") or symptom, 200)
+    what = re.split(r"(?<=[.;])\s", what)[0].rstrip(".;")
+    for name in {app, app.lower()} - {""}:
+        what = re.sub(rf"\b(on|in|of|for)\s+{re.escape(name)}\b", "", what, flags=re.I)
+        what = re.sub(rf"^{re.escape(name)}\s*[:·-]\s*", "", what, flags=re.I)
+        what = what.replace(name, "the app")
+    what = re.sub(r"\s{2,}", " ", what).strip() or symptom
+    fix = "roll back to the last good release" if mitigated else "fix forward with a test"
+    head = " ".join(what.split()[:14])
+    return f"{head[:1].upper()}{head[1:]} → {fix}"
+
+
+def _rollback_word(ctx: "Ctx", to: Optional[str] = None) -> str:
+    return f"Roll back to {str(to or ctx.deploy.get('previous_commit_sha') or '')[:7]}".strip()
+
+
+def _consensus_words(record: Mapping[str, Any]) -> str:
+    """What the squad said, as it happened: the votes when there was a vote, else the critic's
+    position — never "0 of 0 approve"."""
+    votes = record.get("votes") or []
+    dissent = record.get("dissent") or []
+    tail = f", {len(dissent)} dissent" if dissent else ""
+    if votes:
+        approve = sum(1 for v in votes if v.get("vote") == "approve")
+        return f"{approve} of {len(votes)} approve{tail}"
+    crit = [c for c in record.get("critiques") or [] if c.get("position")]
+    if not crit:
+        return "no critic answered"
+    pos = {"agree": "the critic agrees", "concern": "the critic agrees, with a concern",
+           "object": "the critic objects", "unsafe": "the critic calls it unsafe"}
+    return pos.get(str(crit[-1]["position"]), f"critic: {crit[-1]['position']}")
+
+
+def _why_a_person(gate: Mapping[str, Any], record: Mapping[str, Any], ctx: "Ctx") -> str:
+    """Why THIS rollback needs a person, from the gate and the consensus that decided it — the
+    environment the incident is really in, never a fixed "Production needs a person"."""
+    env = ctx.env_known or "an unnamed environment"
+    if gate.get("grace"):
+        return f"{gate['grace'].get('reason') or 'New project'}: a person decides."
+    if not gate.get("allowed") or gate.get("needs_person") and gate.get("consensus_mode") in (
+            "squad_vote_and_person", "recommend_only"):
+        reason = clean_text(gate.get("reason"), 160).rstrip(".")
+        if ctx.is_prod:
+            return f"A rollback in {env} needs a person" + (f" ({reason})." if reason else ".")
+        return (f"{reason[:1].upper()}{reason[1:]}: a person decides." if reason
+                else "A person decides.")
+    if record.get("result") == "needs_person":
+        return "The critic called it unsafe: a person decides."
+    if record.get("result") == "rejected":
+        return "The critic objected: a person decides."
+    return "No critic agreed yet: a person decides."
 
 
 def _minutes_since(value: Any) -> Optional[int]:
@@ -1723,7 +1901,7 @@ HANDLERS = {klass: route_incident for klass in INCIDENT_CLASSES}
 def resume(connection: Connection, *, project_id: str, item_id: str, answer: str, actor: str,
            settings: Any = None, mind: Optional[Mind] = None,
            effects: Optional[Effects] = None, squad: Optional[Squad] = None,
-           note: str = "") -> dict[str, Any]:
+           note: str = "", decision_id: Optional[str] = None) -> dict[str, Any]:
     """A person answered the squad's Needs-you card: `approve` (roll back, then fix), `fix_only`
     or `hold`. The person's decision is its own ledger row (the gate lets only a person take a
     production action), the squad's recommendation gets its outcome, and the squad continues."""
@@ -1772,21 +1950,57 @@ def resume(connection: Connection, *, project_id: str, item_id: str, answer: str
                options=PERSON_OPTIONS, action=body["action"],
                consensus=record, proposal_id=proposal["id"], undo=body.get("undo"),
                how="approved", confidence=body.get("confidence"))
-    board.assert_lease(connection, item_id, owner=squad.lead, token=run.token, lock=True)
-    done = run.effects.rollback(connection, project_id=project_id, ctx=run.ctx, actor=who)
-    if done.get("link"):
-        board.link(connection, item_id, *done["link"], actor=squad.lead)
-    run.post("finding", squad.lead, {
-        "summary": short_label(done.get("word") or "Rolled back", 6),
-        "evidence": run.base_evidence()[:2] + [
-            {"kind": "commit", "ref": str(run.ctx.deploy.get("previous_commit_sha"))[:40]}]})
-    if run.ctx.incident_id:
-        connection.execute(text(
-            "UPDATE incidents SET lifecycle = 'monitoring', mitigated_at = now(), "
-            "status = 'remediating' WHERE id = :i"), {"i": run.ctx.incident_id})
+    # The person's answer on the card IS the rollback's approval: the deploy runs under it.
+    done = run.run_rollback(actor=who, authority={"approved_by": who.split(":", 1)[-1]
+                                                  if who.startswith("person:") else who,
+                                                  "decision_id": decision_id})
     if not done.get("ok", True):
         return run.escalate(done.get("word") or "The rollback could not run")
     return run.fix_and_verify(mitigated=True, fix_authorised_by=who)
+
+
+_SHA = re.compile(r"\bto ([0-9a-f]{7,40})\b")
+
+
+def rollback_still_known_good(connection: Connection, item: Mapping[str, Any],
+                              recommendation: Mapping[str, Any]) -> Optional[bool]:
+    """For a squad's open "Roll back X to Y?" card: is Y still the last KNOWN-GOOD release
+    (BossEffects.rollback_target)? None when the card is not a rollback or nothing can tell
+    (demo fixtures, no BOSS deployment): then the card stands."""
+    if recommendation.get("mitigation") not in ("prod_rollback", "staging_rollback") or \
+            recommendation.get("demo"):
+        return None
+    proposal = next((m for m in collab.messages(connection, item["id"], kinds=("proposal",))
+                     if m["id"] == recommendation.get("proposal_id")), None)
+    body = (proposal or {}).get("body") or {}
+    proposed = str(body.get("to_commit") or "")
+    if not proposed:
+        found = _SHA.search(str(body.get("summary") or ""))
+        proposed = found.group(1) if found else ""
+    if not proposed:
+        return None
+    ctx = load_context(connection, item["project_id"], item["id"])
+    if not ctx.deploy.get("stack_deployment_id"):
+        return None
+    target = BossEffects(None).rollback_target(connection, ctx=ctx)
+    return bool(target) and str(target).startswith(proposed)
+
+
+def withdraw_rollback(connection: Connection, *, project_id: str, item_id: str,
+                      why: str) -> dict[str, Any]:
+    """The reconsider path's answer to a stale rollback card: the squad records why it no
+    longer rolls back and fixes forward (the fix's own gate still decides who starts it)."""
+    item = board.get(connection, item_id, project_id=project_id)
+    squad = assemble_squad(connection, project_id, (item or {}).get("app"))
+    run = _start_pass(connection, project_id, item_id, squad=squad, mind=RuleMind(),
+                      effects=BossEffects(None))
+    run.cause = run._cause_from_ledger()
+    run.learning = run._learning_from_ledger()
+    run.decide(squad.lead, Q_MITIGATE, "Fix forward",
+               f"Rollback withdrawn: {clean_text(why, 200).rstrip('.')}.",
+               evidence=run.cause_evidence(), options=["Roll back", "Fix forward"],
+               confidence=0.8)
+    return run.fix_and_verify(mitigated=False)
 
 
 def _watching(connection: Connection, item_id: str) -> bool:
@@ -1857,7 +2071,8 @@ def on_needs_you_answered(connection: Connection, settings: Any, decision: Mappi
 
         mind, effects = demo.demo_mind(), demo.FixtureEffects()
     resume(connection, project_id=decision["project_id"], item_id=item_id, answer=answer,
-           actor=actor, settings=settings, mind=mind, effects=effects, note=note or "")
+           actor=actor, settings=settings, mind=mind, effects=effects, note=note or "",
+           decision_id=decision.get("id"))
 
 
 __all__ = ["Squad", "assemble_squad", "RuleMind", "ScriptedMind", "AgentMind", "BossEffects",

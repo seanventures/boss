@@ -1461,6 +1461,14 @@ def _group(connection, target: dict, now: datetime, rules_by_id: dict[str, dict]
                 "                  ELSE lifecycle END, "
                 " acked_by = CASE WHEN status IN ('resolved', 'dismissed') THEN NULL "
                 "                 ELSE acked_by END, "
+                # A NEW OCCURRENCE starts its own clock: the last one's acked/mitigated/
+                # resolved times live on in its archived occurrence, never on this one.
+                " acked_at = CASE WHEN status IN ('resolved', 'dismissed') THEN NULL "
+                "                 ELSE acked_at END, "
+                " mitigated_at = CASE WHEN status IN ('resolved', 'dismissed') THEN NULL "
+                "                     ELSE mitigated_at END, "
+                " resolved_at = CASE WHEN status IN ('resolved', 'dismissed') THEN NULL "
+                "                    ELSE resolved_at END, "
                 " first_seen = CASE WHEN status IN ('resolved', 'dismissed') THEN :now "
                 "                   ELSE first_seen END WHERE id = :id"),
                 {"id": inc_id, "now": now, "title": title, "alerted": alerted})
@@ -1616,6 +1624,12 @@ def _maybe_resolve_incidents(connection, target: dict, now: datetime) -> list[di
         if ctx.get("alert") in (None, {}):
             continue        # reported only: the monitor never closes what it did not raise
         if incident_response._response_in_flight(connection, target["project_id"], inc_id):
+            continue
+        if incident_response.squad_working(connection, inc_id):
+            # An incident squad owns it: the squad closes it by its own recovery check, once
+            # its mitigation is live. An alert that clears in a quiet window while the bad
+            # release still serves is not recovery (HelpDesk AI 2026-11-07: resolved 13:38,
+            # the rollback went live 13:39).
             continue
         connection.execute(sql(
             "UPDATE incidents SET status = 'resolved', lifecycle = 'resolved', "

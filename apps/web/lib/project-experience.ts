@@ -310,7 +310,7 @@ export type HealthView = {
   /** One row per alert rule (screen 12): firing since …, resolved at …, or ok · quiet 3d. */
   alerts: { id: string; label: string; condition: string; severity: "page" | "ticket" | "info"; state: "firing" | "resolved" | "ok" | "off"; since: string; quiet: string; href: string }[];
   incidents: { id: string; label: string; state: "running" | "needs_you" | "resolved"; since: string; duration_s: number | null; outcome: string; graph_href: string;
-               mini: { label: string; state: StepState; type: string }[] }[];
+               mini: { label: string; state: StepState; type: string; at?: string | null }[] }[];
   monitoring_pack: { rules: number; off: number; managed_in: string; href: string; kinds: string[]; file: { path: string; external_url: string } | null } | null;
   links: { grafana: string; grafana_reason: string; logs: string; observability: string };
 };
@@ -752,7 +752,7 @@ export const parseHealth = (v: unknown): HealthView => {
       const y = o(z);
       return { id: s(y.id), label: label4(y.label), state: oneOf(y.state, ["running", "needs_you", "resolved"] as const, "running"),
                since: s(y.since), duration_s: nn(y.duration_s), outcome: s(y.outcome_word), graph_href: s(y.graph_href),
-               mini: a(y.mini).map((m) => ({ label: label4(o(m).label), state: oneOf(o(m).state, STEP_STATES, "todo"), type: s(o(m).type) })) };
+               mini: a(y.mini).map((m) => ({ label: label4(o(m).label), state: oneOf(o(m).state, STEP_STATES, "todo"), type: s(o(m).type), at: s(o(m).at) || null })) };
     }),
     monitoring_pack: Object.keys(mp).length ? { rules: n(mp.rules), off: n(mp.off), managed_in: s(mp.managed_in), href: s(mp.href),
       kinds: a(mp.kinds).map((k) => s(k)).filter(Boolean),

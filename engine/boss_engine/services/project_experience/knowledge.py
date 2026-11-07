@@ -453,6 +453,18 @@ def learned_label(kind: str, name: str, attrs: dict[str, Any]) -> str:
         m = re.match(r"What made (.+?) pass", name)
         cmd = _cmd_head(m.group(1) if m else detail.get("command"), last=True)
         return f"Make {cmd} pass" if cmd else (shorten(name, 5) or "A fix")
+    if kind == "precedent":
+        # An incident's lesson: what broke → what fixed it, never the app it happened in (the
+        # older "helpdesk-ai-v3: …" names read "Helpdesk-ai-v3 · from INC-1").
+        cause = str(detail.get("cause_summary") or "")
+        if not cause:
+            cause = name.split("→", 1)[0]
+            cause = cause.split(": ", 1)[1] if ": " in cause else cause
+        fix = str(detail.get("fix_summary") or (name.split("→", 1)[1] if "→" in name else ""))
+        step = ("roll back" if fix.lower().startswith("roll back") else
+                "fix forward" if fix else "")
+        head = shorten(cause, 6) or "An incident"
+        return f"{head} → {step}" if step else head
     if kind == "workaround":
         problem = str(detail.get("problem") or name)
         m = re.match(r"`([^`]+)`", problem)

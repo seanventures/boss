@@ -176,7 +176,8 @@ function IncidentRow({ i }: { i: Incident }) {
           const look = NODE_LOOK[m.type] ?? NODE_LOOK[m.state];
           const I = look?.icon;
           return {
-            label: m.label, state: m.state,
+            // THE REAL TIME of each step (fired, mitigation live, recovery verified) on hover.
+            label: m.label, state: m.state, title: m.at ? `${m.label} · ${dayTime(m.at)}` : undefined,
             type: m.type === "agent" ? "agent" : look?.t ?? (m.state === "done" ? "done" : m.state),
             icon: m.type === "agent" ? <Face agent={{ name: "Beacon", role_key: "sre" }} size={16} />
               : I ? <I size={11} aria-hidden /> : m.state === "done" ? <Check size={11} weight="bold" aria-hidden /> : undefined,

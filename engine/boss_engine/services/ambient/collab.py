@@ -11,7 +11,7 @@ ledger.record_decision writes `decision`, board.finish writes `resolve`). `a2a.p
 
     finding     {summary, evidence[]}
     hypothesis  {summary, confidence 0..1, evidence[]}
-    proposal    {action (catalogue), summary, verify?, undo?, confidence?, workflow?}
+    proposal    {action (catalogue), summary, verify?, undo?, confidence?, workflow?, to_commit?}
     critique    reply_to=<proposal>  {position: agree|object|concern|unsafe, summary}
     vote        reply_to=<proposal>  {vote: approve|reject|abstain, reason?}   one per voter
     handoff     {to: <party>, summary, seat?, via?: {kind, ref}, packet?: {...}}
@@ -131,6 +131,9 @@ def _body(connection: Connection, project_id: str, kind: str, body: Mapping[str,
         if b.get("workflow"):
             # The workflow a start_workflow / open_draft_pr proposal hands the work to.
             out["workflow"] = clean_text(b["workflow"], 80)
+        if b.get("to_commit"):
+            # The release a rollback proposal goes back to (the known-good commit it named).
+            out["to_commit"] = clean_text(b["to_commit"], 64)
         return out
     if kind in ("critique", "vote"):
         if reply is None or reply["kind"] != "proposal":
@@ -293,7 +296,10 @@ def tally(connection: Connection, item_id: str, proposal_id: str, *,
     participants = list(dict.fromkeys([proposer] + [c["critic"] for c in critiques]
                                       + [v["voter"] for v in votes]))
     checkers = [c for c in critiques if c["critic"] != proposer]
-    agree = [c for c in checkers if c["position"] == "agree"] + [
+    # A CONCERN is "acceptable, with a named risk" (the critic's own option): it agrees, and its
+    # risk stays on the record. Read as no answer, it left a staging rollback the squad may
+    # take at A2 waiting on a person (HelpDesk AI 2026-11-07).
+    agree = [c for c in checkers if c["position"] in ("agree", "concern")] + [
         {"critic": v["voter"], "position": "agree"} for v in votes
         if v["voter"] != proposer and v["vote"] == "approve"]
     objections = [c for c in checkers if c["position"] in ("object", "unsafe")] + [
@@ -331,7 +337,9 @@ def tally(connection: Connection, item_id: str, proposal_id: str, *,
         dissent += [{"party": d["role"], "position": d["position"], "reason": d["reason"]}
                     for d in counted["dissent_records"]
                     if d["role"] not in {x["party"] for x in dissent}]
+    concerns = [{"party": c["critic"], "reason": c.get("summary") or "a concern"}
+                for c in checkers if c["position"] == "concern"]
     return {"mode": mode, "proposal_id": proposal_id, "proposer": proposer,
             "action": body.get("action"), "participants": participants, "votes": votes,
-            "critiques": critiques, "dissent": dissent, "quorum_rule": rule, "result": result,
+            "critiques": critiques, "dissent": dissent, "concerns": concerns, "quorum_rule": rule, "result": result,
             "needs_person": needs_person, "tally": counted}

@@ -433,6 +433,14 @@ def _flows(connection: Connection, project_id: str, items: list[dict[str, Any]]
             {"p": project_id, "ids": ids}).mappings():
         lessons[str(r["wid"])] = {"id": str(r["id"]), "name": str(r["name"] or ""),
                                   "ref": str(r["ref"])}
+    # THE REAL TIMES (when it fired, when the mitigation went live, when recovery was
+    # verified), from the incident row — never when a decision about them was taken.
+    times: dict[str, dict[str, Any]] = {}
+    for r in connection.execute(text(
+            "SELECT l.work_item_id, i.first_seen, i.mitigated_at, i.resolved_at "
+            "FROM work_item_links l JOIN incidents i ON i.id = l.ref "
+            "WHERE l.work_item_id = ANY(:ids) AND l.kind = 'incident'"), {"ids": ids}).mappings():
+        times.setdefault(str(r["work_item_id"]), dict(r))
     out: dict[str, list[dict[str, str]]] = {}
     for it in items:
         wid = str(it["id"])
@@ -463,6 +471,13 @@ def _flows(connection: Connection, project_id: str, items: list[dict[str, Any]]
             resolved = life in ("resolved", "dismissed")
             nodes.append({"label": "Recovered" if resolved else "Verify",
                           "state": "done" if resolved else "now"})
+        when = times.get(wid) or {}
+        stamp = {"signal": when.get("first_seen"), "fix": when.get("mitigated_at")}
+        for n in nodes:
+            at = (when.get("resolved_at") if n["label"] == "Recovered" and n["state"] == "done"
+                  else stamp.get(str(n.get("type") or "")))
+            if at is not None:
+                n["at"] = iso(at)
         out[wid] = nodes
     return out
 
@@ -478,7 +493,9 @@ def incidents(connection: Connection, project_id: str, *, limit: int = 10
 
     rows = connection.execute(text(
         "SELECT w.id, w.title, w.lifecycle, w.outcome, w.app, w.created_at, "
-        "COALESCE(w.resolved_at, w.updated_at) AS updated_at, "
+        "COALESCE((SELECT i.resolved_at FROM work_item_links l JOIN incidents i ON i.id = l.ref "
+        "  WHERE l.work_item_id = w.id AND l.kind = 'incident' LIMIT 1), w.resolved_at, "
+        "  w.updated_at) AS updated_at, "
         "(SELECT l.ref FROM work_item_links l WHERE l.work_item_id = w.id AND l.kind = 'incident' "
         " LIMIT 1) AS incident_id FROM work_items w WHERE w.project_id = :p AND w.ambient "
         "AND w.task_class = ANY(:classes) ORDER BY (w.lifecycle IN ('resolved', 'dismissed')), "

@@ -70,6 +70,9 @@ WITHDRAW_WHY = {
     "healthy": "the app is healthy: the alert cleared, nothing failing is left",
     "rebatch": "it moved onto the project's one card",
     "moot": "the item it asked about has moved on",
+    "stale_rollback": "the rollback it proposed is not to a known-good release (that release "
+                      "was rolled back from, or an incident blamed it), so the squad fixes "
+                      "forward instead",
 }
 
 
@@ -485,6 +488,11 @@ def verdict(connection: Connection, card: Mapping[str, Any], entry: Mapping[str,
     if kind == "incident":
         if alerts_state(connection, item) in ("meta", "cleared"):
             return "healthy", item
+        from ..incident_squad import rollback_still_known_good
+
+        if rollback_still_known_good(connection, item, card.get("recommendation") or {}) \
+                is False:
+            return "stale_rollback", item
     elif backlog_twin(connection, item):
         return "backlog", item
     elif refused_launches(connection, item["id"]) >= MAX_REFUSED_LAUNCHES:
@@ -567,6 +575,12 @@ def settle(connection: Connection, project_id: str, card_id: Optional[str],
     board.unask(connection, item_id, actor=COS, reason=WITHDRAW_WHY[why])
     if why in ("off", "rebatch", "moot"):
         return "back_on_board"
+    if why == "stale_rollback":
+        from ..incident_squad import withdraw_rollback
+
+        withdraw_rollback(connection, project_id=project_id, item_id=item_id,
+                          why=WITHDRAW_WHY[why])
+        return "fix_forward"
     if why == "backlog":
         return _settle_backlog(connection, item, card_id=card_id,
                                proposal_id=entry.get("proposal_id"))
