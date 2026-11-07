@@ -74,7 +74,9 @@ const SETTINGS = { sections: [
   { key: "autonomy", label: "Autonomy & budget", icon: "gauge", items: [], level: "A1",
     levels: [{ key: "A0", label: "A0 Ask", name: "Ask", meaning: "Watches and asks; changes nothing" }, { key: "A1", label: "A1 Propose", name: "Propose", meaning: "Proposes the change; a person decides" },
              { key: "A2", label: "A2 Act", name: "Act", meaning: "Acts up to a draft (a branch or draft PR); a person approves" }, { key: "A3", label: "A3 Ship", name: "Ship", meaning: "Acts and ships on its own, then reports" }],
-    ambient: { daily_cap_usd: 7.14, week_cap_usd: 50, week_spent_usd: 14 }, govern_href: Q({ area: "budget", tab: "limits" }), actions: [] },
+    ambient: { daily_cap_usd: 7.14, week_cap_usd: 50, week_spent_usd: 14 }, govern_href: Q({ area: "budget", tab: "limits" }), actions: [],
+    review_builds: { install: false, project: null, classes: {}, effective: false, source: "install",
+                     captain_authority: { state: "on", sponsor: "Param" } } },
   { key: "repos", label: "Repos", icon: "git-branch",
     items: [{ full_name: "paramg/helpdesk-ai-demo", branch: "main", access_ok: true, access_words: "access ✓", external_url: "https://github.com/paramg/helpdesk-ai-demo" }],
     actions: [{ label: "Add", method: "PUT", href: `/v1/projects/${P}/repos/{repo_id}`, open: Q({ area: "setup", focus: "repository", open: "add" }) }] },
@@ -190,6 +192,20 @@ describe("Settings (screen 13) on the engine's answer", () => {
     await type(tid("px-set-budget-input"), "70");
     await press(tid("px-set-budget-save"));
     expect(calls.find((c) => c.method === "PUT" && c.path === "/v1/ambient/settings")?.body).toEqual({ project_id: P, daily_cap_usd_micros: 10_000_000 });
+  });
+
+  it("always-on builds start on the Captain's authority unless the project asks to review them first", async () => {
+    const calls = engine();
+    await open();
+    const toggle = tid("px-set-review-builds-toggle")!;
+    expect(toggle.getAttribute("role")).toBe("switch");
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    expect(tid("px-set-review-builds-why")!.textContent).toContain("Captain authority (sponsored by Param)");
+    expect(tid("px-set-review-builds-why")!.textContent).toContain("merging and production deploys still need you");
+    await press(toggle);
+    expect(calls.find((c) => c.method === "PUT" && c.path === "/v1/ambient/review-builds")?.body).toEqual({ project_id: P, review: true });
+    expect(tid("px-set-review-builds-toggle")!.getAttribute("aria-checked")).toBe("true");
+    expect(tid("px-set-review-builds-why")!.textContent).toContain("waits on one card");
   });
 
   it("13-24…13-28: repos show their access; each route says its channels and can be changed", async () => {

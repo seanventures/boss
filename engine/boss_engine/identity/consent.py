@@ -931,7 +931,7 @@ def require_for_schedule(db: Any, *, project_id: str, spec: Any, input_data: Any
         return None
     needed = frozenset(k for k in needed if catalogue.is_known(k) and catalogue.meta(k).delegable)
     standing = [g for g in grants.for_person(ctx.principal.id, db=db)
-                if not g.task_run_id and grants.covers(g, agent_ids=[p.agent_id for p in agents], permissions=needed,
+                if not g.task_run_id and not grants.is_captain_authority(g) and grants.covers(g, agent_ids=[p.agent_id for p in agents], permissions=needed,
                                                        project_id=project_id, repos=repos, run_id=None)]
     if not standing:
         raise ConsentRequired(_consent_body(db, ctx_person=ctx.principal.id, org_id=ctx.principal.org_id, agents=agents,

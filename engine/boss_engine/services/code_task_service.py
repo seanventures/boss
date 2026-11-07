@@ -2908,6 +2908,10 @@ def authority_refusal_words(reason: str, agent_name: Optional[str] = None) -> st
         return (f"The grant this build runs under does not let {who} act, and {who} is the agent "
                 "that builds it. Retry it from the console (in a workflow run, Retry on the build "
                 f"step): you will be asked to consent again, this time for {who} too.")
+    if "captain_review" in r:
+        return ("Always-on builds in this project wait for a person's review before they start "
+                "(Project ▸ Settings ▸ Autonomy & budget). Approve the card to let it start on the "
+                "project's Captain authority, or reject it to drop it.")
     if "no_grant" in r or "no grant" in r or r == "noauthority":
         return ("No one's authority covers this build: it was started by BOSS itself (or a key) and no "
                 "person's grant lets its builder act. Start it again from the console as a person "

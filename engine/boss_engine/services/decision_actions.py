@@ -201,6 +201,9 @@ RECORDED_ON_APPROVAL = frozenset({
     # A build BOSS started on its own was refused for want of a person's grant (person_wait):
     # the person gives the builder a standing grant; BOSS resumes every paused build by itself.
     "grant_builder_authority",
+    # "Review always-on builds before they start" is on (person_wait): approving lets the build
+    # start on the project's Captain authority at the next Shepherd tick; rejecting drops it.
+    "review_always_on_build",
     # The stuck-work Shepherd found a build no safe move can unblock (stuck_work._raise_card):
     # the card says what a person must do; the build's own page carries the diagnosis.
     "stuck_work_needs_person",

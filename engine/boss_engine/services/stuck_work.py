@@ -47,6 +47,7 @@ MAX_FIXES_PER_ITEM = 3
 #: Why BOSS does not fix it itself, per cause: the one line a person reads under "what to do".
 WHY_NOT: dict[str, str] = {
     "no_grant": "Only a person can let an agent act for them.",
+    "review": "You asked to review always-on builds before they start.",
     "crash_loop": "It is BOSS's own bug: another attempt runs the same code.",
     "budget": "Raising a budget is a person's call.",
     "no_worker": "BOSS cannot start its own worker from inside it (infrastructure).",
@@ -514,6 +515,13 @@ def triage(ev: Mapping[str, Any]) -> dict[str, Any]:
         return {"cause_code": cause_code, "cause": cause, "proof": proof, "moves": moves,
                 "pick": pick, "next": nxt, "who": who, "why_not": WHY_NOT.get(cause_code, "")}
 
+    if pw.get("blocker_type") == "always_on_review":
+        return t("review", f"Waiting for your review before {pw.get('builder') or 'its builder'} starts",
+                 "An always-on squad decided it; this project reviews always-on builds before they "
+                 "start (Project ▸ Settings ▸ Autonomy & budget).",
+                 ["ask_person"], "ask_person",
+                 "Approve the card to let it start on the project's Captain authority, or reject it.",
+                 "you")
     if code == "person_grant" or pw.get("blocker_type") == "authority_no_grant":
         return t("no_grant", f"No person's grant lets {pw.get('builder') or 'its builder'} act",
                  "Started by an always-on agent, not a person; the build refused to run without "
@@ -849,7 +857,7 @@ def diagnose(connection: Any, settings: Any, run_id: str, *, adapter: Any = None
     # A card only when work is HALTED on a person: an ended build is over (its page and this
     # diagnosis say why); a card for each of 150 old failures would bury the ones that matter.
     ended = (ev.get("run") or {}).get("status") in ENDED_STATUSES
-    halted = needs_person and (not ended or tri.get("cause_code") in ("crash_loop", "no_grant"))
+    halted = needs_person and (not ended or tri.get("cause_code") in ("crash_loop", "no_grant", "review"))
     card = _raise_card(connection, run_id, ev, tri, nxt, headline) if halted else None
     project = (ev.get("run") or {}).get("project_id")
     from .project_experience.common import href as _href
