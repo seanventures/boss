@@ -7,6 +7,7 @@
  * SRE → investigator and engineer → squad vote (2 agree · 1 dissent) → staging rollback →
  * recovered in 4m → postmortem.
  */
+import { LEVEL_WORDS } from "./autonomy-levels";
 
 type Wire = Record<string, unknown>;
 type N = { id: string; type: string; label: string; stage: number; badges?: string[]; ref?: Wire };
@@ -287,10 +288,10 @@ function autonomy(): Wire {
   return {
     classes: CLASSES.map(([k, title, level, ceiling, risk, owner]) => ({
       task_class: k, title, level, ceiling, max_ceiling: ceiling, default_level: level, risk, owner_role: owner || null,
-      level_name: { A0: "Observe", A1: "Propose", A2: "Act to draft", A3: "Act and report" }[level],
+      level_name: LEVEL_WORDS[level],
       suggested_level: k === "ci_fix_boss_pr" ? "A3" : null, source: "default",
     })),
-    levels: [{ level: "A0", name: "Observe" }, { level: "A1", name: "Propose" }, { level: "A2", name: "Act to draft" }, { level: "A3", name: "Act and report" }],
+    levels: Object.entries(LEVEL_WORDS).map(([level, name]) => ({ level, name })),
   };
 }
 

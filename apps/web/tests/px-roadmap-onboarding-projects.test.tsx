@@ -292,7 +292,8 @@ describe("Projects (screen 02): cards", () => {
       journey: [{ key: "onboarding", label: "Onboarded", state: "done" }, { key: "ready", label: "Ready", state: "done" }, { key: "backlog", label: "Backlog", state: "done" },
                 { key: "working", label: "Working", state: "waiting" }, { key: "staging", label: "Staging", state: "done" }, { key: "production", label: "Production", state: "todo" }],
       uptime_pct: 99.9, lines: ["staging healthy", "3 merged · 1 building"], line_tone: "done", status_label: "Working",
-      crew: [{ name: "Juno", role_key: "product_manager" }, { name: "Forge", role_key: "builder" }], cost_week: 14.2, series: [1, 2, 3, 2, 4, 1, 1],
+      crew: [{ name: "Juno", role_key: "pm", state: "idle" }, { name: "Forge", role_key: "software_engineer", state: "working" }],
+      live_agents: [{ name: "Forge", role_key: "software_engineer", state: "working" }], cost_week: 14.2, series: [1, 2, 3, 2, 4, 1, 1],
       captain: { name: "Helm", role_key: "engineering_captain" }, updated_at: "2026-11-06T10:00:00Z" },
     { id: "np", name: "NorthPeak Retail", repo: "northpeak/saleor", stage: "onboarding", needs_you: 0, running: 0, health: "unknown", journey: [],
       onboarding_active: true, onboarding_progress: [4, 6], lines: ["mapping code", "1,284 nodes so far"], line_tone: "now", status_label: "Onboarding",
@@ -315,7 +316,12 @@ describe("Projects (screen 02): cards", () => {
     expect(tid("px-card-lines-hd")!.textContent).toContain("staging healthy");
     expect(tid("px-card-lines-hd")!.textContent).toContain("3 merged · 1 building");
     expect(tid("px-card-crew-hd")).not.toBeNull();
-    expect(tid("px-stat-running-faces")).not.toBeNull();
+    // 02-05 the Running tile shows who is acting now (live_agents): Forge, not the whole crew.
+    expect(tid("px-stat-running-faces")!.querySelectorAll(".px-face, [class*='avatar'], img, svg").length).toBeGreaterThan(0);
+    expect(tid("px-stat-running-faces")!.innerHTML).toContain("Forge");
+    expect(tid("px-stat-running-faces")!.innerHTML).not.toContain("Juno");
+    // 02-16 the card's crew is always drawn, the working face only on who acts now.
+    expect(tid("px-card-crew-hd")!.getAttribute("title")).toBe("Juno, Forge (working now)");
     expect(tid("px-stat-cost")!.textContent).toContain("of $150 cap");
     expect(tid("px-stat-projects")!.textContent).toContain("3");
     expect(tid("px-card-journey-hd")!.textContent).toBe("OnboardReadyWorkingDeployed");

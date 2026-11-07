@@ -318,9 +318,12 @@
    size, so a long name with SEV + Sample + Repo-managed flows onto a second line instead of
    spilling across the condition beside it ("SEV4 Custom PromQL Sample" drawn on top of each other). */
 .obs-arule > * { min-width: 0; }
-.obs-arule-name { grid-area: name; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; }
-.obs-arule-name > .obs-strong { min-width: 0; overflow-wrap: anywhere; }
-.obs-arule-name > .obs-sev, .obs-arule-name > .obs-chip, .obs-arule-name > .obs-adot { flex: none; }
+.obs-arule-name { grid-area: name; display: flex; flex-wrap: wrap; align-items: flex-start; gap: 4px 8px; min-width: 0; }
+.obs-arule-name > .obs-arule-more, .obs-arule-name > .obs-adot { flex: none; margin-top: 2px; }
+.obs-arule-name > .obs-adot { margin-top: 7px; }
+.obs-arule-label { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.obs-arule-label > .obs-strong { min-width: 0; overflow-wrap: anywhere; }
+.obs-arule-label > .obs-sev, .obs-arule-label > .obs-chip { flex: none; }
 .obs-arule-cond { grid-area: cond; min-width: 0; overflow-wrap: anywhere; }
 .obs-arule-state { grid-area: state; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
 .obs-arule-respond { grid-area: respond; flex-wrap: wrap; }

@@ -215,8 +215,9 @@ def view(connection: Connection, project_id: str) -> dict[str, Any]:
         "(lower(t.environment) IN ('production', 'prod')), t.environment, t.app_name"),
         {"p": project_id}).mappings().all()]
     health = {t["target_id"]: t for t in health_view(connection, project_id).get("targets") or []}
-    # ONE SOURCE for uptime and p95: the Health tab's environments (the app's own p95 when it
-    # reports one, else the probe's), so Overview, Health and Deployments show the same number.
+    # ONE SOURCE for health, uptime and p95: the Health tab's environments (health.state_of,
+    # obs_view.probe_window over 24 h), so the header, Overview, Health, Deployments and
+    # Observability show the same word and the same number.
     from .health import environments as health_environments
 
     same = {e["target_id"]: e for e in health_environments(connection, project_id)}
@@ -245,10 +246,11 @@ def view(connection: Connection, project_id: str) -> dict[str, Any]:
         is_prod = str(t["environment"] or "").lower() in PRODUCTION
         envs.append({
             "key": t["environment"], "label": label, "app": t["app_name"], "target_id": t["id"],
-            "url": url, "health": health_word(h.get("status")), "status": h.get("status"),
-            "uptime_pct": one.get("uptime_pct", h.get("uptime_7d")),
-            "p95_ms": one.get("p95_ms", h.get("p95_ms")),
-            "p95_source": one.get("p95_source", "probe"),
+            "url": url, "health": one.get("health") or health_word(h.get("status")),
+            "health_reason": one.get("health_reason"), "status": h.get("status"),
+            "uptime_pct": one.get("uptime_pct") if one else h.get("uptime_24h"),
+            "p95_ms": one.get("p95_ms") if one else None,
+            "p95_source": one.get("p95_source", "probe"), "window": one.get("window", "24 h"),
             "error_rate": one.get("error_rate"),
             # The 24 h strip: each point's share of good answers (1 = all good).
             "series": [round(max(0.0, 1 - float(v) / 100.0), 3)

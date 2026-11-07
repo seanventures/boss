@@ -20,7 +20,7 @@ import { onChanged } from "../app/changed";
 import { obsWrite } from "../app/observability/obs-write";
 import { useAreaShown } from "./area-shown";
 import { isConsoleLive, subscribeConsoleLive } from "./console-live";
-import { isHydrated, markHydrated } from "./local-time";
+import { isHydrated, localWith, markHydrated } from "./local-time";
 
 // ── shared enums (§ Shared enums) ────────────────────────────────────────────────────────────
 
@@ -63,7 +63,9 @@ export function label4(v: unknown): string {
 
 // ── types ────────────────────────────────────────────────────────────────────────────────────
 
-export type Agent = { name: string; role_key: string; avatar: string; role?: string; agent_id?: string };
+export type Agent = { name: string; role_key: string; avatar: string; role?: string; agent_id?: string;
+  /** "working" when the agent is acting right now (the working-face avatar). */
+  state?: "working" | "idle" };
 export type Node = { key: string; label: string; state: StepState; sub: string; href: string;
   /** The node's tooltip in words ("Ready for work: 6 of 6 checks"). */
   detail?: string };
@@ -77,6 +79,8 @@ export type ProjectCard = {
   status_label: string; onboarding_active: boolean; start_onboarding: Accept | null; archived: boolean;
   uptime_pct: number | null; onboarding_progress: [number, number] | null; lines: string[]; line_tone: string;
   crew: Agent[]; merged: number; building: number; week_cap_usd: number | null;
+  /** 02-05 the agents acting right now (the Running tile's working faces). */
+  live_agents: Agent[];
 };
 export type ProjectsSummary = { items: ProjectCard[]; week_cap_usd: number | null };
 export type Repo = { full_name: string; branch: string; access: { read: boolean; write: boolean; pr: boolean }; external_url: string };
@@ -87,6 +91,20 @@ export type NeedsYou = {
    *  items), the PR on GitHub, and when it was asked (the drawer). */
   work_id?: string; work_label?: string; external_url?: string; created_at?: string;
 };
+/** X-75 ONE TIME BASIS for a piece of work, on every surface (Work rows, Overview's Recent work,
+ *  drawers): a finished item (done / failed) is placed by WHEN IT FINISHED (`updated_at`):
+ *  "12h" within a day, "Sat" this week, else "Nov 2", in the viewer's zone; anything still
+ *  open by how long since it started (`age`). Never "Sat" on one screen and "12h" on another. */
+export function workWhen(w: { state: string; age?: string; updated_at?: string | null; created_at?: string | null }, nowMs: number = Date.now()): string {
+  if (w.state !== "done" && w.state !== "failed") return w.age || "";
+  const at = Date.parse(w.updated_at || w.created_at || "");
+  if (!Number.isFinite(at)) return w.age || "";
+  const ago = Math.max(0, nowMs - at);
+  if (ago < 3_600_000) return `${Math.max(1, Math.floor(ago / 60_000))}m`;
+  if (ago < 86_400_000) return `${Math.floor(ago / 3_600_000)}h`;
+  return ago < 6 * 86_400_000 ? localWith(at, { weekday: "short" }) : localWith(at, { month: "short", day: "numeric" });
+}
+
 export type WorkItem = {
   id: string; label: string; kind: string; state: WorkState; age: string;
   stages: { key: string; label: string; state: StepState }[]; agents: Agent[]; cost_usd: number | null;
@@ -137,7 +155,9 @@ export type NextItem = {
 };
 export type DemoLogin = { user: string; label: string; reveal: { href: string; requires: string } | null };
 export type Overview = {
-  project: { id: string; name: string; initials: string; stage: Stage; repos: Repo[]; live_url: string; status_label: string; health: Health };
+  project: { id: string; name: string; initials: string; stage: Stage; repos: Repo[]; live_url: string; status_label: string; health: Health;
+    /** Why it is not healthy, in words (health.state_of): "SLO breached: 98.13% up, target 99.5%". */
+    health_reason?: string };
   journey: Node[]; needs_you: NeedsYou[];
   /** Cards that could not load this time ({card: words}): each shows "Couldn't load · Retry". */
   errors?: Record<string, string>;
@@ -146,16 +166,21 @@ export type Overview = {
   tiles: {
     open_work: { count: number; by_state: Record<string, number>; href: string } | null;
     running: { count: number; current: { label: string; progress: [number, number]; agent: Agent | null; sub?: string; id?: string } | null; href: string } | null;
-    staging: { health: Health; uptime_pct: number | null; p95_ms: number | null; series: number[]; href: string; p95_source?: string; label?: string } | null;
+    staging: { health: Health; uptime_pct: number | null; p95_ms: number | null; series: number[]; href: string; p95_source?: string; label?: string;
+               health_reason?: string; window?: string } | null;
     cost_week: { usd: number; delta_pct: number | null; cap_usd: number | null; series: number[]; href: string;
       /** No money this week because the work runs on a subscription: the list price instead. */
-      on_subscription?: boolean; list_usd?: number | null; list_series?: number[] } | null;
+      on_subscription?: boolean; list_usd?: number | null; list_series?: number[];
+      /** The list-price delta on a subscription week; first_week: nothing last week to compare. */
+      list_delta_pct?: number | null; first_week?: boolean; cap_pct?: number | null } | null;
   };
   captain: Captain | null; recent_work: WorkItem[]; next: NextItem[];
   try_it: { url: string; demo_logins: DemoLogin[] } | null;
   week: { at: string; label: string; kind: string; href: string; detail?: string }[];
 };
-export type Captain = { agent_id: string; name: string; role_key: string; avatar: string; status: string; squad: Agent[]; last_said: string };
+export type Captain = { agent_id: string; name: string; role_key: string; avatar: string; status: string; squad: Agent[]; last_said: string;
+  /** 04-34 Marshal (Chief of Staff), who ranks this project's backlog against the others: closes the crew row. */
+  ranker?: Agent | null };
 export type WorkList = { items: WorkItem[] };
 /** A repository on Repo & knowledge (screen 06): access is tri-state — true / false as the last
  *  check found, null when it was never checked. */
@@ -192,6 +217,8 @@ export type Environment = {
   host_projects: number | null;
   /** Where p95 comes from: the app's own metrics, or BOSS's probe. */
   p95_source?: string;
+  /** The window uptime and p95 are measured over ("24 h"), said beside them. */
+  window?: string; health_reason?: string;
   uptime_pct: number | null; p95_ms: number | null;
   error_rate: number | null; series: number[];
   /** 24 hourly bars, oldest first (08-08): each hour's probes and its state. */
@@ -213,6 +240,7 @@ export type Recommendation = {
 };
 export type Roadmap = { now: NextItem[]; next: NextItem[]; later: NextItem[]; recommendations: Recommendation[]; counts: Record<string, number> };
 export type OnboardingItem = { key: string; label: string; state: StepState; owner: "agent" | "you"; action: { label: string; href: string } | null; detail: string; sub: string };
+export type OnboardingLog = { at: string; agent: string; label: string; state: StepState; text: string };
 export type Onboarding = {
   state: "not_started" | "running" | "ready" | "needs_you" | "failed";
   stages: Node[]; discover: { nodes: Node[]; live?: Node[] }; checklist: OnboardingItem[]; only_you: OnboardingItem[];
@@ -222,6 +250,10 @@ export type Onboarding = {
   backlog: NextItem[];
   /** What the agent is doing now, in words: the engine's `now`, else the checklist item in progress. */
   now: string; elapsed_s: number; error: string;
+  /** The Now line's agent (role key) and whether it moves now (10-09); the live log (Watch). */
+  now_agent: string; now_live: boolean; log: OnboardingLog[];
+  /** THE PHASE, one place (00b-13 / PX-15): live only while the run moves, and its title. */
+  live: boolean; title: string;
   /** Screen 10: the Ready card's rows (its words, the agent on each), the whole backlog's size,
    *  which candidates are already on the Roadmap, and the accept route ("Accept backlog"). */
   ready: (OnboardingItem & { agent: string })[]; backlog_total: number; accepted: string[]; accept_backlog: Accept | null;
@@ -248,10 +280,11 @@ export type SettingsSection = {
 };
 export type Settings = { sections: SettingsSection[] };
 export type HealthView = {
-  environments: { key: string; label: string; target_id: string; url: string; health: Health; uptime_pct: number | null; error_rate: number | null; p95_ms: number | null;
+  environments: { key: string; label: string; target_id: string; url: string; health: Health; health_reason?: string; window?: string; p95_source?: string;
+                  uptime_pct: number | null; error_rate: number | null; p95_ms: number | null;
                   series: { errors: number[]; latency: number[] }; slo: { target: number | null; burn: "ok" | "warning" | "breach"; budget_used_pct: number | null }; href: string }[];
   /** One row per alert rule (screen 12): firing since …, resolved at …, or ok · quiet 3d. */
-  alerts: { id: string; label: string; condition: string; severity: "page" | "ticket" | "info"; state: "firing" | "resolved" | "ok"; since: string; quiet: string; href: string }[];
+  alerts: { id: string; label: string; condition: string; severity: "page" | "ticket" | "info"; state: "firing" | "resolved" | "ok" | "off"; since: string; quiet: string; href: string }[];
   incidents: { id: string; label: string; state: "running" | "needs_you" | "resolved"; since: string; duration_s: number | null; outcome: string; graph_href: string;
                mini: { label: string; state: StepState; type: string }[] }[];
   monitoring_pack: { rules: number; off: number; managed_in: string; href: string; kinds: string[]; file: { path: string; external_url: string } | null } | null;
@@ -268,7 +301,8 @@ export const parseAgent = (v: unknown): Agent | null => {
   const x = o(v);
   const name = s(x.name);
   if (!name && !s(x.role_key)) return null;
-  return { name: name || s(x.role_key), role_key: s(x.role_key), avatar: s(x.avatar), role: s(x.role) || undefined, agent_id: s(x.agent_id) || undefined };
+  return { name: name || s(x.role_key), role_key: s(x.role_key), avatar: s(x.avatar), role: s(x.role) || undefined, agent_id: s(x.agent_id) || undefined,
+           ...(x.state === "working" || x.state === "idle" ? { state: x.state } : {}) };
 };
 const agents = (v: unknown): Agent[] => a(v).map(parseAgent).filter((x): x is Agent => x !== null);
 export const parseNode = (v: unknown): Node => {
@@ -298,6 +332,7 @@ export const parseCard = (v: unknown): ProjectCard => {
       ? [n(x.onboarding_progress[0]), n(x.onboarding_progress[1])] : null,
     lines: a(x.lines).map((l) => s(l)).filter(Boolean), line_tone: s(x.line_tone),
     crew: a(x.crew).map(parseAgent).filter((g): g is Agent => g !== null),
+    live_agents: a(x.live_agents).map(parseAgent).filter((g): g is Agent => g !== null),
     merged: n(x.merged), building: n(x.building), week_cap_usd: nn(x.week_cap_usd),
   };
 };
@@ -396,7 +431,7 @@ export const parseCaptain = (v: unknown): Captain | null => {
   const x = o(v);
   if (!s(x.name) && !s(x.role_key)) return null;
   return { agent_id: s(x.agent_id), name: s(x.name) || s(x.role_key), role_key: s(x.role_key), avatar: s(x.avatar), status: s(x.status),
-           squad: agents(x.squad), last_said: s(x.last_said) };
+           squad: agents(x.squad), last_said: s(x.last_said), ranker: parseAgent(x.ranker) };
 };
 
 /** The captain drawer's read (§7 GET …/captain, screen 09): scope, facts known, what it and
@@ -450,7 +485,7 @@ export const parseOverview = (v: unknown): Overview => {
   return {
     project: { id: s(p.id), name, initials: s(p.initials) || initialsOf(name), stage: oneOf(p.stage, STAGES, "onboarding"),
                repos: a(p.repos).map(parseRepo), live_url: s(p.live_url), status_label: s(p.status_label),
-               health: oneOf(p.health ?? st.health, HEALTHS, "unknown") },
+               health: oneOf(p.health ?? st.health, HEALTHS, "unknown"), health_reason: s(p.health_reason) },
     journey: a(x.journey).map(parseNode),
     roadmap_count: nn(x.roadmap_count),
     needs_you: a(x.needs_you).map((it) => {
@@ -465,9 +500,11 @@ export const parseOverview = (v: unknown): Overview => {
       running: Object.keys(rn).length ? { count: n(rn.count), href: s(rn.href),
         current: Object.keys(cur).length ? { label: s(cur.label), progress: [prog[0] ?? 0, prog[1] ?? 0], agent: parseAgent(cur.agent), sub: s(cur.sub), id: s(cur.id) } : null } : null,
       staging: Object.keys(st).length ? { health: oneOf(st.health, HEALTHS, "unknown"), uptime_pct: nn(st.uptime_pct), p95_ms: nn(st.p95_ms), p95_source: s(st.p95_source), label: s(st.label),
+                                          health_reason: s(st.health_reason), window: s(st.window),
                                           series: nums(st.series), href: s(st.href) } : null,
       cost_week: Object.keys(cw).length ? { usd: n(cw.usd), delta_pct: nn(cw.delta_pct), cap_usd: nn(cw.cap_usd), series: nums(cw.series), href: s(cw.href),
-                                            on_subscription: cw.on_subscription === true, list_usd: nn(cw.list_usd), list_series: nums(cw.list_series) } : null,
+                                            on_subscription: cw.on_subscription === true, list_usd: nn(cw.list_usd), list_series: nums(cw.list_series),
+                                            list_delta_pct: nn(cw.list_delta_pct), first_week: cw.first_week === true, cap_pct: nn(cw.cap_pct) } : null,
     },
     captain: parseCaptain(x.captain),
     recent_work: a(x.recent_work).map(parseWorkItem).slice(0, 5),
@@ -552,6 +589,7 @@ export const parseDeployments = (v: unknown): Deployments => {
       return { key: s(y.key), label: s(y.label, s(y.key)), url: s(y.url), health: oneOf(y.health, HEALTHS, "unknown"), host: s(y.host),
                host_href: s(y.host_href), target_id: s(y.target_id), app: s(y.app), manage_href: s(y.manage_href),
                host_name: s(y.host_name) || s(y.host), host_projects: nn(y.host_projects), p95_source: s(y.p95_source),
+               window: s(y.window), health_reason: s(y.health_reason),
                uptime_pct: nn(y.uptime_pct), p95_ms: nn(y.p95_ms), error_rate: nn(y.error_rate), series: nums(y.series),
                hours: a(y.hours).map((h) => { const z = o(h); return { at: s(z.at), n: n(z.n), ok: n(z.ok),
                  state: oneOf(z.state, ["healthy", "degraded", "down", "none"] as const, "none") }; }),
@@ -595,6 +633,10 @@ export const parseOnboarding = (v: unknown): Onboarding => {
                                            estimate_runs: n(o(fw.estimate_basis).minutes_runs), estimate_basis: s(o(fw.estimate_basis).minutes),
                                            external_url: s(fw.external_url) } : null,
     backlog: a(x.backlog).map((b) => ({ ...parseNext(b), accepted: s(o(b).state) === "accepted" })), now, elapsed_s: n(x.elapsed_s), error: s(x.error),
+    now_agent: s(x.now_agent), now_live: typeof x.now_live === "boolean" ? x.now_live : state === "running",
+    log: a(x.log).map((z) => { const y = o(z); return { at: s(y.at), agent: s(y.agent), label: s(y.label), state: oneOf(y.state, STEP_STATES, "done"), text: s(y.text) }; }),
+    live: typeof x.live === "boolean" ? x.live : state === "running",
+    title: s(x.title, state === "running" ? "Helm is reading your repo" : state === "not_started" ? "Helm hasn't started" : state === "failed" ? "Onboarding stopped" : "Helm read your repo"),
     ready: (a(x.ready).length ? a(x.ready) : a(x.checklist)).map((z) => ({ ...item(z), agent: s(o(z).agent) })),
     backlog_total: n(x.backlog_total, a(x.backlog).length), accepted: a(x.accepted).map((i) => s(i)),
     accept_backlog: parseAccept(x.accept_backlog),
@@ -670,13 +712,14 @@ export const parseHealth = (v: unknown): HealthView => {
     environments: a(x.environments).map((e) => {
       const y = o(e); const ser = o(y.series); const slo = o(y.slo);
       return { key: s(y.key), label: s(y.label, s(y.key)), target_id: s(y.target_id), url: s(y.url), health: oneOf(y.health, HEALTHS, "unknown"), uptime_pct: nn(y.uptime_pct),
+               health_reason: s(y.health_reason), window: s(y.window), p95_source: s(y.p95_source),
                error_rate: nn(y.error_rate), p95_ms: nn(y.p95_ms), series: { errors: nums(ser.errors), latency: nums(ser.latency) },
                slo: { target: nn(slo.target), burn: oneOf(slo.burn, ["ok", "warning", "breach"] as const, "ok"), budget_used_pct: nn(slo.budget_used_pct) }, href: s(y.href) };
     }),
     alerts: a(x.alerts).map((z) => {
       const y = o(z);
       return { id: s(y.id), label: label4(y.label), condition: s(y.condition), severity: oneOf(y.severity, ["page", "ticket", "info"] as const, "info"),
-               state: oneOf(y.state, ["firing", "resolved", "ok"] as const, "firing"), since: s(y.since), quiet: s(y.quiet), href: s(y.href) };
+               state: oneOf(y.state, ["firing", "resolved", "ok", "off"] as const, "firing"), since: s(y.since), quiet: s(y.quiet), href: s(y.href) };
     }),
     incidents: a(x.incidents).map((z) => {
       const y = o(z);

@@ -13,11 +13,11 @@ import {
 } from "@phosphor-icons/react";
 
 import { GatedButton } from "../../components/gated";
-import { KIND_WORDS, WORK_ORDER, WORK_WORDS, navigateTo, pxHref, runAccept, startOnboarding, writePxUrl, type NextItem, type WorkItem } from "../../lib/project-experience";
+import { KIND_WORDS, WORK_ORDER, WORK_WORDS, navigateTo, pxHref, runAccept, startOnboarding, workWhen, writePxUrl, type NextItem, type WorkItem } from "../../lib/project-experience";
 import { Empty, Face, Flow, HEALTH_WORD, Ico, Journey, PxLink, REC_KIND_WORDS, Ring, Said, Spark, Stations, Tag, Timeline, Cost, CardFailed } from "./kit";
 import { notifyChanged } from "../changed";
 import { DemoLoginRow } from "./tab-settings";
-import { P95_SOURCE } from "./tab-deployments";
+import { P95_SOURCE, p95Words } from "./tab-deployments";
 import { whenLocal } from "../../lib/local-time";
 import type { PxCtx } from "./project-page";
 
@@ -42,6 +42,13 @@ const CREW_VERB: Record<string, string> = {
 };
 
 const WORK_TONE: Record<string, string> = { running: "var(--teal)", stalled: "color-mix(in srgb, var(--amber) 55%, var(--surface-3))", needs_you: "var(--amber)", planned: "var(--quiet)", done: "var(--green)", failed: "var(--red)" };
+
+/** 04-15 the cost delta tag: green when the week costs less than last week, red when more, and
+ *  "first week" (idle) when last week cost nothing, so there is no % to show. */
+function CostDelta({ pct, first, what }: { pct: number | null; first?: boolean; what: string }) {
+  if (pct !== null) return <Tag tone={pct <= 0 ? "green" : "red"} title={what}>{pct > 0 ? "+" : "−"}{Math.abs(pct)}%</Tag>;
+  return first ? <Tag tone="idle" title="Nothing was spent last week, so there is no change to show">first week</Tag> : null;
+}
 
 function goHref(ctx: PxCtx, href: string, fallback: () => void) {
   // A contract href that names this page's own tab switches in place; anything else navigates.
@@ -125,8 +132,9 @@ export function OverviewTab({ ctx }: { ctx: PxCtx }) {
               <div className="px-row">
                 <Ring pct={t.staging.uptime_pct ?? 0} tone={t.staging.health === "healthy" ? "green" : t.staging.health === "down" ? "red" : "amber"} label={`Uptime ${t.staging.uptime_pct ?? "unknown"}%`}>
                   {t.staging.uptime_pct ?? "—"}</Ring>
-                <div><div style={{ color: "var(--green)", fontWeight: 600 }}>{HEALTH_WORD[t.staging.health]}</div>
-                  {t.staging.p95_ms !== null ? <span className="px-mono px-faint" style={{ fontSize: ".58rem" }} title={P95_SOURCE[t.staging.p95_source ?? ""] ?? undefined}>p95 {t.staging.p95_ms}ms</span> : null}</div>
+                <div><div style={{ color: `var(--${t.staging.health === "healthy" ? "green" : t.staging.health === "down" ? "red" : t.staging.health === "degraded" ? "amber" : "muted"})`, fontWeight: 600 }}
+                           title={t.staging.health_reason || undefined} data-testid="px-tile-staging-health">{HEALTH_WORD[t.staging.health]}</div>
+                  {t.staging.p95_ms !== null ? <span className="px-mono px-faint" style={{ fontSize: ".58rem" }} title={P95_SOURCE[t.staging.p95_source ?? ""] ?? undefined} data-testid="px-tile-staging-p95">{p95Words(t.staging.p95_ms, t.staging.window)}</span> : null}</div>
               </div>
               <Spark series={t.staging.series} tone="green" label="Staging latency, last 24 hours" />
             </>
@@ -137,16 +145,18 @@ export function OverviewTab({ ctx }: { ctx: PxCtx }) {
             <>
               {t.cost_week.on_subscription ? (
                 <>
-                  <div className="px-row"><span className="px-num" style={{ color: "var(--teal)" }}>$0</span><Tag tone="green" title="Runs on your model subscription: no money spent this week">On subscription</Tag></div>
+                  <div className="px-row"><span className="px-num" style={{ color: "var(--teal)" }}>$0</span><Tag tone="green" title="Runs on your model subscription: no money spent this week">On subscription</Tag>
+                    <CostDelta pct={t.cost_week.list_delta_pct ?? null} first={t.cost_week.first_week} what="List price against last week" /></div>
                   <Spark series={t.cost_week.list_series ?? []} fill label="List price per day this week" />
-                  <small className="px-faint">≈ ${(t.cost_week.list_usd ?? 0).toFixed(2)} at list price</small>
+                  <small className="px-faint">≈ ${(t.cost_week.list_usd ?? 0).toFixed(2)} at list price{t.cost_week.cap_usd ? ` · 0% of $${t.cost_week.cap_usd} cap` : ""}</small>
                 </>
               ) : (
                 <>
               <div className="px-row"><span className="px-num" style={{ color: "var(--teal)" }}>${t.cost_week.usd.toFixed(2)}</span>
-                {t.cost_week.delta_pct !== null ? <Tag tone={t.cost_week.delta_pct <= 0 ? "green" : "red"} title="Against last week">{t.cost_week.delta_pct > 0 ? "+" : "−"}{Math.abs(t.cost_week.delta_pct)}%</Tag> : null}</div>
+                <CostDelta pct={t.cost_week.delta_pct} first={t.cost_week.first_week} what="Against last week" /></div>
               <Spark series={t.cost_week.series} fill label="Cost per day this week" />
-              {t.cost_week.cap_usd ? <small className="px-faint">{Math.round((100 * t.cost_week.usd) / t.cost_week.cap_usd)}% of ${t.cost_week.cap_usd} cap</small> : null}
+              {t.cost_week.cap_usd ? <small className="px-faint" data-testid="px-tile-cost-cap">{t.cost_week.cap_pct ?? Math.round((100 * t.cost_week.usd) / t.cost_week.cap_usd)}% of ${t.cost_week.cap_usd} cap</small>
+                : <small className="px-faint" data-testid="px-tile-cost-cap">No weekly cap set</small>}
                 </>
               )}
             </>
@@ -242,17 +252,18 @@ function MiniRow({ w, ctx }: { w: WorkItem; ctx: PxCtx }) {
   const setup = w.kind === "setup" && w.source === "onboarding";
   const open = () => (setup ? writePxUrl({ drawer: "onboarding" }) : ctx.open("work", w.id));
   return (
-    <div className="px-wk" data-s={w.state} style={{ gridTemplateColumns: "14px minmax(0,1fr) auto auto 14px" }} data-testid={`px-ov-work-${w.id}`}
+    <div className="px-wk px-ov-wk" data-s={w.state} data-testid={`px-ov-work-${w.id}`}
          onClick={open}>
       <span className="px-dot" data-s={w.state === "running" ? "now" : w.state === "needs_you" || w.state === "stalled" ? "you" : w.state === "failed" ? "bad" : w.state === "done" ? "done" : undefined} aria-hidden />
       <span style={{ minWidth: 0 }}>
         <button type="button" className="px-wk-t px-ell" style={{ display: "block", maxWidth: "100%" }} title={w.detail || w.label} onClick={(e) => { e.stopPropagation(); open(); }}>{w.label}</button>
-        <span className="px-wk-sub"><span>{w.state === "stalled" ? "Stalled" : w.links.pr ? `PR #${w.links.pr.number}` : KIND_WORDS[w.kind] ?? w.kind}</span>{w.age ? <span className="px-mono">{w.age}</span> : null}
+        <span className="px-wk-sub"><span>{w.state === "stalled" ? "Stalled" : w.links.pr ? `PR #${w.links.pr.number}` : KIND_WORDS[w.kind] ?? w.kind}</span>{workWhen(w) ? <span className="px-mono">{workWhen(w)}</span> : null}
           <Cost usd={w.cost_usd} list={w.list_usd} /></span>
       </span>
-      <span className="px-hide-phone">{w.flow.length ? <Flow nodes={w.flow.map((f) => ({ label: f.label, state: f.state, type: f.state }))} /> : <Stations stages={w.stages} />}</span>
+      {/* 04 at 390: the station strip stays (wireframe .wk-row > .st); faces and the chevron go. */}
+      <span className="px-ov-wk-st">{w.flow.length ? <Flow nodes={w.flow.map((f) => ({ label: f.label, state: f.state, type: f.state }))} /> : <Stations stages={w.stages} />}</span>
       <span className="px-hide-phone"><FacesInline w={w} /></span>
-      <CaretRight size={12} className="px-faint" aria-hidden />
+      <CaretRight size={12} className="px-faint px-hide-phone" aria-hidden />
     </div>
   );
 }
@@ -305,13 +316,14 @@ function CaptainCard({ ctx }: { ctx: PxCtx }) {
         <button type="button" className="px-btn" data-kind="primary" data-testid="px-ov-ask" onClick={() => ctx.ask()}><ChatCircleDots size={13} /> Ask {c.name}</button>
         <button type="button" className="px-btn" data-testid="px-ov-plan-week" onClick={() => ctx.ask("Plan next week for this project.")}><MapTrifold size={13} /> Plan next week</button>
       </div>
-      {c.squad.length ? (
+      {c.squad.length || c.ranker ? (
         <div className="px-crew" data-testid="px-ov-crew">
-          {c.squad.map((m) => (
-            <a key={m.name} className="px-crew-m" href={pxHref(`?area=workforce&role=${encodeURIComponent(m.role_key || m.name)}`)}
-               title={m.role_key === "chief_of_staff" ? "Chief of Staff ranks this project's backlog against the others" : `${m.name} · ${m.role} — opens Agent Studio`}
+          {/* 04-34 the label and its tooltip read the ONE verb the engine gives (`role`). */}
+          {[...c.squad, ...(c.ranker ? [c.ranker] : [])].map((m) => (
+            <a key={m.role_key || m.name} className="px-crew-m" href={pxHref(`?area=workforce&role=${encodeURIComponent(m.role_key || m.name)}`)}
+               title={m.role_key === "chief_of_staff" ? "Chief of Staff ranks this project's backlog against the others" : `${m.name} ${(m.role ?? "works here").toLowerCase()} — opens Agent Studio`}
                data-testid={`px-ov-crew-${m.role_key || m.name}`}>
-              <Face agent={m} size={22} /><span>{m.name}<small>{CREW_VERB[m.role_key || ""] ?? m.role}</small></span></a>
+              <Face agent={m} size={22} /><span>{m.name}<small>{m.role || CREW_VERB[m.role_key || ""] || ""}</small></span></a>
           ))}
         </div>
       ) : null}

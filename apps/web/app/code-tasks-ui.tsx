@@ -5,7 +5,8 @@
  *
  *   Factory  [● Floor] [Apps 12]  ·  3 building · 2 need you  ·  [Find a build] [+ New build ▾]
  *
- * `?area=code_tasks` opens on the Floor; `view=apps` is the Apps tab; `view=repositories` the
+ * `?area=code_tasks` opens on the Floor (the Builds tab); `view=apps` is the Apps tab; `view=lab`
+ * the lab projects (01-06: Builds, Apps, Lab); `view=repositories` the
  * project's repositories (multi-repo); `view=components&app=<key>` an app's components (reached
  * from its Apps row, drawn under the Apps tab); `build=<run>` opens that
  * build's cockpit full width over either tab (`run=` from older links is rewritten to it).
@@ -29,6 +30,7 @@ import { AppsTab } from "./factory/apps-tab";
 import { Cockpit } from "./factory/cockpit";
 import { startDirectChangeAction } from "./factory/floor-actions";
 import { FloorView } from "./factory/floor";
+import { LabTab } from "./factory/lab-links";
 import { isInternalRun } from "./factory/legacy-build-parts";
 import { BenchmarkSheetBody } from "./factory/benchmark-sheet";
 import { ProjectRepositories } from "./multirepo/project-repos";
@@ -42,10 +44,10 @@ export {
 } from "./factory/legacy-build-parts";
 import { useAreaKeydown } from "../lib/area-keys";
 
-type View = "floor" | "apps" | "repositories" | "components";
+type View = "floor" | "apps" | "lab" | "repositories" | "components";
 type UrlState = { view: View; build: string | null; app?: string | null; changeset?: string | null };
 
-const VIEWS = new Set<View>(["apps", "repositories", "components"]);
+const VIEWS = new Set<View>(["apps", "lab", "repositories", "components"]);
 
 /** Where the URL says the Factory is. `run=` (older links) reads as `build=`. */
 export function readFactoryUrl(search: string): UrlState & { legacyRun: boolean; wantsNew: boolean } {
@@ -357,11 +359,13 @@ export function CodeTasksHome({ projectId, orgId, codeTasks, codeTaskTotal, apiR
         <h2 className="ag-sr">Code Tasks</h2>
         <span className="fx-tabs" role="tablist" aria-label="Code Tasks views">
           <button type="button" role="tab" aria-selected={url.view === "floor"} className="fx-tab" data-testid="fx-view-floor"
-                  title="What needs you and what's building" onClick={() => setView("floor")}>Floor</button>
+                  title="What needs you and what's building" onClick={() => setView("floor")}>Builds</button>
           <button type="button" role="tab" aria-selected={url.view === "apps" || url.view === "components"} className="fx-tab" data-testid="fx-view-apps"
                   title="Every app, where it runs, how it got there" onClick={() => setView("apps")}>
             Apps{counts?.apps ? <span className="fx-tab-count">{counts.apps}</span> : null}
           </button>
+          <button type="button" role="tab" aria-selected={url.view === "lab"} className="fx-tab" data-testid="fx-view-lab"
+                  title="Lab projects: insecure-by-design training apps, built apart from real apps" onClick={() => setView("lab")}>Lab</button>
           <button type="button" role="tab" aria-selected={url.view === "repositories"} className="fx-tab" data-testid="fx-view-repositories"
                   title="Which repositories this project uses, and One repo or Several" onClick={() => setView("repositories")}>Repositories</button>
         </span>
@@ -405,6 +409,10 @@ export function CodeTasksHome({ projectId, orgId, codeTasks, codeTaskTotal, apiR
         <div role="tabpanel" aria-label="Components">
           <AppComponentsView projectId={projectId} appKey={url.app} onBack={() => setView("apps")} />
         </div>
+      ) : url.view === "lab" ? (
+        <div role="tabpanel" aria-label="Lab">
+          <LabTab projectId={projectId} />
+        </div>
       ) : url.view === "repositories" ? (
         <div role="tabpanel" aria-label="Repositories">
           <ProjectRepositories projectId={projectId} />
@@ -415,7 +423,7 @@ export function CodeTasksHome({ projectId, orgId, codeTasks, codeTaskTotal, apiR
                    onOpen={openBuild} onNew={openNewProject} onComponents={openComponents} />
         </div>
       ) : (
-        <div role="tabpanel" aria-label="Floor">
+        <div role="tabpanel" aria-label="Builds">
           <FloorView projectId={projectId} actor={actor} floor={floor.data} error={floor.error} loading={floor.loading}
                      refresh={reloadFloor} paused={!live} query={query} orgId={orgId ?? null}
                      onOpen={openBuild} onPlan={plan} onDirect={() => setSheet("direct")} onApps={() => setView("apps")} />

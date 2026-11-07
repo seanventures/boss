@@ -8,6 +8,9 @@ a NAME, so it is made once, by rule, from the brief's lead clause:
 
   1. the work's own name first: stacked "Follow-up: … —" leads and "· retry N" tails off
      (work.clean_title, the Work tab's grouping reads the same);
+  1b. a KIND LABEL lead is not the name: "Bug: weekend tickets breach SLA…", "[Feature] …",
+     "Ticket - …" name the work after what it says, never "Bug" (a one-word lead, or a lead made
+     only of kind words such as bug, feature, ticket, fix, chore, minor feature, P1);
   2. the first sentence, then the head of it before a colon, a dash, a semicolon or a bracket
      ("Add SLA timers to tickets: each priority gets…" → "Add SLA timers to tickets");
   3. still long: cut at the first conjunction that starts a second thought (" and let ",
@@ -30,6 +33,13 @@ _JOINERS = frozenset("a an the to of and or for with in on at by from as into vi
 _ARTICLES = frozenset({"the", "a", "an"})
 _HEADS = re.compile(r"\s*(?::\s|\s[—–-]\s|;|\(|\s\d\)\s)")
 _SENTENCE = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9])|\n+")
+#: words that only say what KIND of work it is (a label lead, never a title on its own).
+_KIND_WORDS = frozenset("bug bugs bugfix fix hotfix feature feat features ticket tickets issue task "
+                        "chore story epic request idea enhancement improvement todo note minor major "
+                        "new small quick report urgent high low medium priority p0 p1 p2 p3 "
+                        "refactor docs doc question".split())
+_LABEL_LEAD = re.compile(r"^\s*(?:\[([^\]]{1,30})\]|\(([^)]{1,30})\)|([A-Za-z0-9][\w /&+-]{0,30}?)"
+                         r"\s*(?::|\s[—–-])\s)\s*")
 _CLAUSES = (" and let ", " but ", " so that ", " so ", " because ", " which ", " that ",
             " and then ", " then ", " and ")
 
@@ -40,6 +50,28 @@ def _clean(title: Any) -> str:
     except ImportError:  # pragma: no cover — the Work tab's helper is always there
         return " ".join(str(title or "").split())
     return " ".join(clean_title(title).split())
+
+
+def strip_label(text: str) -> str:
+    """Drop a kind-label lead ("Bug:", "[Feature]", "Minor feature -", "P1:") so the title comes
+    from what the brief SAYS. A one-word lead before a colon is a label too ("Frontend: …").
+    Kept when nothing meaningful follows it."""
+    t = text
+    for _ in range(3):
+        m = _LABEL_LEAD.match(t)
+        if not m:
+            break
+        lead = (m.group(1) or m.group(2) or m.group(3) or "").strip()
+        words = [w.lower() for w in re.split(r"[\s/&+-]+", lead) if w]
+        rest = t[m.end():].strip()
+        bracketed = bool(m.group(1) or m.group(2))
+        is_label = bool(words) and (all(w in _KIND_WORDS for w in words)
+                                    or (len(words) == 1 and not bracketed and ":" in t[:m.end()])
+                                    or (bracketed and len(words) <= 2))
+        if not is_label or len(rest.split()) < 2:
+            break
+        t = rest
+    return t
 
 
 def _trim(words: list[str], limit: int) -> list[str]:
@@ -56,7 +88,7 @@ def _tidy(text: str) -> str:
 
 def shorten(text: Any, limit: int = 6) -> str:
     """A short title from a brief or a long title (rules 2–4)."""
-    raw = _clean(text)
+    raw = strip_label(_clean(text))
     if not raw:
         return ""
     first = _SENTENCE.split(raw, maxsplit=1)[0].strip()
@@ -99,11 +131,16 @@ def short_title(title: Any, brief: Any = None, *, stored: Any = None, limit: int
     kept = _clean(stored)
     if kept:
         return _tidy(kept) if len(kept.split()) <= limit + 2 else shorten(kept, limit)
-    t = _clean(title)
+    t = strip_label(_clean(title))
     b = _clean(brief)
     if t and not (b and _is_cut_of(t, b)) and len(t.split()) <= limit and not re.search(
             r"[.:;]\s", t):
-        return _tidy(t)
+        if not (b and t.lower().strip(" :") in _KIND_WORDS):
+            return _tidy(t)
+    # A title that is only the start of the brief (or only a kind word, "Bug") is named from
+    # the brief itself.
+    if b and (not t or _is_cut_of(t, b) or t.lower().strip(" :") in _KIND_WORDS):
+        return shorten(b, limit)
     return shorten(t or b, limit)
 
 
@@ -113,4 +150,4 @@ def title_fields(title: Any, brief: Any = None, *, stored: Any = None) -> dict[s
     return {"label": short_title(title, brief, stored=stored) or full, "title": full}
 
 
-__all__ = ["shorten", "short_title", "title_fields"]
+__all__ = ["shorten", "short_title", "strip_label", "title_fields"]

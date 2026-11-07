@@ -229,7 +229,9 @@ def project_new_work(project_id: str, payload: NewWorkBody) -> dict[str, Any]:
     link = (payload.source_url or "").strip() or (new_work.ticket_link(said) if kind == "ticket"
                                                   else None)
     issue = new_work.issue_of(payload.source_ref, link, repo)
-    title = ((payload.title or "").strip()[:80]
+    from boss_engine.services.project_experience.titles import strip_label
+
+    title = (strip_label(" ".join((payload.title or "").split()))[:80]
              or (new_work.ticket_title(said, link) if kind == "ticket" else None)
              or _title_of(said, page["name"]))
     run_input: dict[str, Any] = {"directive": said[:8000], "title": title, "work_kind": kind}

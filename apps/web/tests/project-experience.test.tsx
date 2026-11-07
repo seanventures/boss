@@ -591,7 +591,9 @@ describe("Repo & knowledge (screen 6)", () => {
     expect($$("[data-testid='px-kn-repos'] .px-fl-n").map((n) => n.textContent)).toEqual(["Read", "Branch", "Open PR", "Merge: you", "Staging"]);
     expect(tid("px-kn-dossier")!.textContent).toContain("142 / 148");
     expect(tid("px-kn-open-graph")!.getAttribute("href")).toContain("area=knowledge");
-    expect(tid("px-kn-add-repo")!.getAttribute("href")).toContain("focus=repository");
+    // 06-01: Add repo opens the Import-a-repo picker on this page, not a link to Setup's Add-account sheet.
+    expect(tid("px-kn-add-repo")!.tagName).toBe("BUTTON");
+    expect(tid("px-kn-add-repo")!.getAttribute("href")).toBeNull();
   });
 });
 
@@ -732,7 +734,9 @@ describe("⌘K jump (screen 11, §9) and the rail", () => {
     await press(tid("palette-jump-pr"));
     expect(open).toHaveBeenCalledWith("https://github.com/paramg/helpdesk-ai-demo/pull/3", "_blank", "noopener,noreferrer");
     await press(tid("palette-jump-ask"));
-    expect(params().get("agent")).toBe(`project:${P}`);
+    // 09-01: on the project's page, Ask Helm opens the captain drawer (screen 09), not the dock.
+    expect(params().get("drawer")).toBe("captain");
+    expect(params().get("cap_ask")).toBe("pr 3");
     expect(tid("palette-jump-new-work")).not.toBeNull();
     open.mockRestore();
   });

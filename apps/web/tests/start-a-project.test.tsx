@@ -388,6 +388,59 @@ describe("screen 2 — Add a project › Existing · repo or folder (wireframe 0
     expect(calls.some((c) => c.path.endsWith("/captain") && c.method === "POST")).toBe(false);
   });
 
+  it("03-25: a repo a NEW project cannot reach says Connect GitHub on the spot, and nothing is created", async () => {
+    const reg = registryFixture();
+    reg.items[1] = { ...reg.items[1], new_project: { ok: false, code: "github_not_connected", message: "Connect GitHub first: a new project reaches a repository through the organisation's GitHub App." } };
+    const calls = stubFetch((c) => {
+      if (c.path === "/v1/github/repos") return { body: reg };
+      if (c.path === "/v1/github/repos/ghr_api/facts") return { body: { ...FACTS, files_total: 214 } };
+      return undefined;
+    });
+    const go = vi.fn();
+    await mountAs(<StartProjectSheet step="import" onStep={() => {}} onClose={() => {}} projectId="p1" homeId="p1" go={go} />);
+    await click(tid("import-repo-ghr_api"));
+    expect(tid("import-connect-github")!.textContent).toContain("Connect GitHub first");
+    expect(new URLSearchParams(tid("import-connect-github-go")!.getAttribute("href")!.split("?")[1]).get("focus")).toBe("repository");
+    expect((tid("import-create") as HTMLButtonElement).disabled).toBe(true);
+    await click(tid("import-create"));
+    expect(calls.some((c) => c.method === "POST" && c.path === "/v1/projects")).toBe(false);
+    expect(go).not.toHaveBeenCalled();
+  });
+
+  it("03-25: a 409 github_not_connected on the repo is said with Connect GitHub — never swallowed into a page with no repo", async () => {
+    const reg = registryFixture();
+    stubFetch((c) => {
+      if (c.path === "/v1/github/repos") return { body: reg };
+      if (c.path === "/v1/github/repos/ghr_api/facts") return { body: { ...FACTS, files_total: 214 } };
+      if (c.method === "POST" && c.path === "/v1/projects") return { status: 201, body: { id: "orders", name: "Api" } };
+      if (c.method === "PUT" && c.path === "/v1/projects/orders/repos/ghr_api") {
+        return { status: 409, body: { error: "github_not_connected", message: "Connect GitHub for this project first (Setup › GitHub access)." } };
+      }
+      return undefined;
+    });
+    const go = vi.fn();
+    await mountAs(<StartProjectSheet step="import" onStep={() => {}} onClose={() => {}} projectId="p1" homeId="p1" go={go} />);
+    await click(tid("import-repo-ghr_api"));
+    await click(tid("import-create"));
+    expect(tid("import-connect-github")!.textContent).toContain("Connect GitHub for this project first");
+    expect(tid("import-connect-github-go")).not.toBeNull();
+    expect(go).not.toHaveBeenCalled();
+  });
+
+  it("03-11: rows listed before the push time was kept are read again once, and each gets its age", async () => {
+    const reg = registryFixture();
+    reg.items[1] = { ...reg.items[1], used_by: [] };
+    const fresh = { ...reg, items: reg.items.map((r) => ({ ...r, pushed_at: new Date(Date.now() - 12 * 86_400_000).toISOString() })) };
+    const calls = stubFetch((c) => {
+      if (c.method === "POST" && c.path === "/v1/github/repos/refresh") return { body: fresh };
+      if (c.path === "/v1/github/repos") return { body: reg };
+      return undefined;
+    });
+    await mountAs(<StartProjectSheet step="import" onStep={() => {}} onClose={() => {}} projectId="p1" homeId="p1" go={() => {}} />);
+    expect(calls.filter((c) => c.method === "POST" && c.path === "/v1/github/repos/refresh")).toHaveLength(1);
+    expect(tid("import-age-ghr_api")!.textContent).toBe("12d");
+  });
+
   it("names its accounts from the registry, the connection's first", () => {
     expect(accountsOf(registryFixture())).toEqual(["acme"]);
     expect(accountsOf(null)).toEqual([]);

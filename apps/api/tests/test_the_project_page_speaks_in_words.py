@@ -76,6 +76,12 @@ def _sweep(engine, project_id):
      "Finish the visual refresh"),
     ("Ticket search filters", "Ticket search filters"),
     ("fix the login page so users can reset passwords", "Fix the login page"),
+    # 05-04: a kind label is not a name; the title comes from what the brief says.
+    ("Bug: weekend tickets breach SLA because timers count Saturdays",
+     "Weekend tickets breach SLA"),
+    ("[Feature] Export tickets to CSV", "Export tickets to CSV"),
+    ("Minor feature - add a dark mode toggle", "Add a dark mode toggle"),
+    ("P1: login page crashes on Safari", "Login page crashes on Safari"),
 ])
 def test_a_title_is_a_short_name_never_the_briefs_first_words(brief, expected):
     from boss_engine.services.project_experience.titles import short_title
@@ -83,6 +89,16 @@ def test_a_title_is_a_short_name_never_the_briefs_first_words(brief, expected):
     got = short_title(brief)
     assert got == expected
     assert len(got.split()) <= 6 and not got.endswith(("the", "to", "and", "…"))
+
+
+def test_a_kind_word_title_is_named_from_its_brief():
+    """05-04: work stored with the title "Bug" (the old cut at the colon) reads as what it is."""
+    from boss_engine.services.project_experience.titles import short_title
+
+    assert short_title("Bug", "Bug: weekend tickets breach SLA because timers count Saturdays") \
+        == "Weekend tickets breach SLA"
+    for kind in ("Bug", "Feature", "Ticket", "Fix"):
+        assert short_title(kind, f"{kind}: export tickets to CSV") == "Export tickets to CSV"
 
 
 def test_a_stored_short_title_wins_and_a_real_title_is_kept():

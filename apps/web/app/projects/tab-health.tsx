@@ -14,11 +14,11 @@ import {
 import { PX_PATHS, isPxDemo, navigateTo, parseHealth, pxHref, usePxRead, type HealthView } from "../../lib/project-experience";
 import { FX_HEALTH } from "../../lib/project-experience-fixtures";
 import { Empty, EngineNotReady, Face, Flow, HEALTH_TONE, HEALTH_WORD, Ico, PxLink, ReadGate, Ring, Spark, Tag } from "./kit";
-import { whenLocal } from "../../lib/local-time";
 import { AppAlertsTab } from "../observability/alerts-tab";
 import { usePulse } from "../../lib/obs-view";
 import "../infra/infra.css";
 import "../observability/obs.css";
+import { P95_SOURCE } from "./tab-deployments";
 import type { PxCtx } from "./project-page";
 
 type Env = HealthView["environments"][number];
@@ -36,6 +36,15 @@ export function dayTime(iso: string, now: Date = new Date()): string {
   const days = (now.getTime() - d.getTime()) / 86_400_000;
   if (days < 6) return d.toLocaleDateString([], { weekday: "short" });
   return d.toLocaleDateString([], { month: "short", day: "numeric" });
+}
+/** "09:52" when it is today, else as dayTime ("Wed", "Nov 2"): THE ONE CLOCK of this tab, the same
+ *  24-hour local text as the incidents ("Today 09:38") and the parity component's history
+ *  ("Resolved 09:52"), never "9:52 AM" beside "09:52" (12-09). */
+export function clockTime(iso: string, now: Date = new Date()): string {
+  const d = new Date(iso);
+  if (!/^\d{4}-\d{2}-\d{2}T/.test(iso) || Number.isNaN(d.getTime())) return iso;
+  return d.toDateString() === now.toDateString()
+    ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false }) : dayTime(iso, now);
 }
 /** 840 → "14 min", 7200 → "2 h". */
 export const spanWords = (sec: number | null) => (sec === null ? "" : sec < 3600 ? `${Math.max(1, Math.round(sec / 60))} min` : `${Math.round(sec / 360) / 10} h`);
@@ -118,14 +127,15 @@ function EnvCard({ e, ctx }: { e: Env; ctx: PxCtx }) {
   return (
     <section className="px-card" aria-labelledby={`px-h-${e.key}`} data-testid={`px-h-env-${e.key}`}>
       <div className="px-card-h"><Ico icon={Heartbeat} c="green" /><h2 id={`px-h-${e.key}`}>{e.label}</h2>
-        <Tag tone={HEALTH_TONE[e.health]}><span className="px-dot" data-s={e.health} data-round aria-hidden />{HEALTH_WORD[e.health]}</Tag>
+        <Tag tone={HEALTH_TONE[e.health]} title={e.health_reason || undefined}><span className="px-dot" data-s={e.health} data-round aria-hidden />{HEALTH_WORD[e.health]}</Tag>
+        {e.health_reason && e.health !== "healthy" ? <small className="px-h-why" data-testid={`px-h-env-why-${e.key}`} data-s={e.health}>{e.health_reason}</small> : null}
         {url ? <a className="px-chip" href={url} target="_blank" rel="noreferrer noopener" title="Opens the live app" data-testid={`px-h-env-url-${e.key}`}><Globe size={11} aria-hidden />{url.replace(/^https?:\/\//, "")} ↗</a> : null}
-        <span className="px-spacer" /><small className="px-faint">last 24h</small></div>
+        <span className="px-spacer" /><small className="px-faint" title={P95_SOURCE.probe}>last 24h</small></div>
       <div className="px-grid px-g4 px-h-nums">
         <button type="button" className="px-h-num" onClick={open} data-testid={`px-h-env-uptime-${e.key}`} title="Full charts">
           <span className="px-lbl">Uptime</span>
           <span className="px-row" style={{ marginTop: 6 }}>
-            <Ring pct={e.uptime_pct ?? 0} tone={e.health === "healthy" ? "green" : "amber"} label={`Uptime ${e.uptime_pct ?? "unknown"}%`}>{e.uptime_pct ?? "—"}</Ring>
+            <Ring pct={e.uptime_pct ?? 0} tone={e.health === "healthy" ? "green" : e.health === "down" ? "red" : "amber"} label={`Uptime ${e.uptime_pct ?? "unknown"}%`}>{e.uptime_pct ?? "—"}</Ring>
             {e.slo.target !== null ? <small className="px-faint">SLO {e.slo.target}%</small> : null}
           </span>
         </button>
@@ -135,7 +145,7 @@ function EnvCard({ e, ctx }: { e: Env; ctx: PxCtx }) {
           <Spark series={e.series.errors} tone="amber" label="Error rate, last 24 hours" />
         </button>
         <button type="button" className="px-h-num" onClick={open} data-testid={`px-h-env-p95-${e.key}`} title="Full charts">
-          <span className="px-lbl">p95 latency</span>
+          <span className="px-lbl" title={P95_SOURCE[e.p95_source || "probe"]}>p95 latency</span>
           <span className="px-num px-mono">{e.p95_ms ?? "—"}<small className="px-faint"> ms</small></span>
           <Spark series={e.series.latency} tone="teal" label="p95 latency, last 24 hours" />
         </button>
@@ -199,13 +209,13 @@ function NoIncidents() {
 
 /** One alert rule: its name, severity and where it stands (firing / resolved at … / ok · quiet). */
 function AlertLineRow({ x }: { x: AlertLine }) {
-  const when = x.state === "firing" ? `firing since ${dayTime(x.since)}` : x.state === "resolved" ? `resolved ${whenLocal(x.since)}` : x.quiet || "quiet";
+  const when = x.state === "firing" ? `firing since ${x.since ? clockTime(x.since) : "now"}` : x.state === "resolved" ? `resolved ${x.since ? clockTime(x.since) : ""}`.trim() : x.quiet || "quiet";
   return (
     <div className="px-li px-h-al" data-testid={`px-h-al-${x.id}`} data-s={x.state}>
       <span className="px-dot" data-round data-s={x.state === "firing" ? "bad" : x.state === "resolved" ? "done" : undefined} aria-hidden />
       <span style={{ minWidth: 0 }}><b className="px-ell" title={x.condition || undefined}>{x.href ? <PxLink href={x.href} className="">{x.label}</PxLink> : x.label}</b>
         <small>{x.severity} · {when}</small></span>
-      <Tag tone={x.state === "firing" ? "red" : x.state === "resolved" ? "green" : undefined}>{x.state}</Tag>
+      <Tag tone={x.state === "firing" ? "red" : x.state === "resolved" ? "green" : "idle"}>{x.state}</Tag>
     </div>
   );
 }
@@ -275,7 +285,7 @@ function AlertRules({ ctx, envs }: { ctx: PxCtx; envs: { label: string; targetId
             <a className="px-chip" style={{ marginLeft: 8 }} href={pxHref(`?area=observability&app=${encodeURIComponent(t.targetId)}&atab=alerts`)}
                data-testid={`px-h-rules-obs-${t.targetId}`}>In Observability</a></summary>
           <div className="inf" style={{ marginTop: 10 }}>
-            <AppAlertsTab projectId={ctx.projectId} actor={ctx.actor} targetId={t.targetId}
+            <AppAlertsTab projectId={ctx.projectId} actor={ctx.actor} targetId={t.targetId} plainNames
                           onIncident={(id) => navigateTo(pxHref(`?area=observability&app=${encodeURIComponent(t.targetId)}${id ? `&inc=${encodeURIComponent(id)}` : ""}`))} />
           </div>
         </details>

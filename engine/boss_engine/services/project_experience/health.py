@@ -92,41 +92,127 @@ def _metrics(connection: Connection, target_ids: list[str], since: datetime
     return out
 
 
+#: The window every uptime and p95 on the project pages is measured over (said beside them).
+WINDOW_WORD = "24 h"
+
+
+def state_of(probe: Any, uptime: Optional[float], firing: list[str],
+             target: float = DEFAULT_SLO) -> tuple[str, Optional[str]]:
+    """THE HEALTH OF ONE ENVIRONMENT, decided once (12-05): the probe's verdict, the SLO over
+    the last 24 h and what is firing — never "Healthy" beside a breached SLO or a firing alert.
+    → (healthy | degraded | down | unknown, the reason in words or None)."""
+    verdict = health_word(probe)
+    if verdict == "down":
+        return "down", "Not answering its health check"
+    if verdict == "unknown":
+        return "unknown", None
+    b = burn(uptime, target)
+    if b == "breach":
+        return "degraded", f"SLO breached: {uptime:g}% up, target {target:g}%"
+    if firing:
+        more = f" (+{len(firing) - 1} more)" if len(firing) > 1 else ""
+        return "degraded", f"{firing[0]} firing{more}"
+    if verdict == "degraded":
+        return "degraded", "Slow or failed health checks"
+    if b == "warning":
+        return "degraded", f"SLO at risk: {uptime:g}% up, target {target:g}%"
+    return "healthy", None
+
+
+def firing_alerts(connection: Connection, target_ids: list[str]) -> dict[str, list[str]]:
+    """Per target, the names of the app's alerts firing now (BOSS's own platform alerts are not
+    the app's), in the same words as the Alerts card."""
+    if not target_ids:
+        return {}
+    out: dict[str, list[str]] = {}
+    for r in connection.execute(text(
+            "SELECT COALESCE(a.subject_id, a.target_id) AS t, a.alertname, a.rule_kind, "
+            "a.annotations FROM app_alerts a WHERE COALESCE(a.subject_id, a.target_id) = ANY(:ids) "
+            "AND a.state = 'firing' AND COALESCE(a.labels->>'layer', '') <> 'boss' "
+            "AND COALESCE(a.labels->>'boss_meta', '') <> 'true' "
+            "ORDER BY COALESCE(a.fired_at, a.active_at) DESC"), {"ids": target_ids}).mappings():
+        ann = as_json(r["annotations"], {}) or {}
+        name = alert_name(ann.get("summary"), r["alertname"], r["rule_kind"])
+        got = out.setdefault(str(r["t"]), [])
+        if name not in got:
+            got.append(name)
+    return out
+
+
+def target_states(connection: Connection, target_ids: list[str], *,
+                  now: Optional[datetime] = None) -> dict[str, dict[str, Any]]:
+    """Batched (the Projects list): per target, THE health (state_of) from its newest probes, its
+    24 h uptime (obs_view.probe_window, the one source) and what fires."""
+    from ..deployment_health import verdict
+    from ..obs_view import probe_window
+
+    if not target_ids:
+        return {}
+    newest: dict[str, list[dict[str, Any]]] = {}
+    for r in connection.execute(text(
+            "SELECT t, ok, latency_ms FROM (SELECT deployment_target_id AS t, ok, latency_ms, "
+            " checked_at, row_number() OVER (PARTITION BY deployment_target_id "
+            " ORDER BY checked_at DESC) AS n FROM deployment_health_samples "
+            " WHERE deployment_target_id = ANY(:ids) AND checked_at >= :since) s "
+            "WHERE n <= 10 ORDER BY t, checked_at DESC"),
+            {"ids": target_ids, "since": (now or datetime.now(timezone.utc)) - timedelta(days=7)}
+    ).mappings():
+        newest.setdefault(str(r["t"]), []).append(dict(r))
+    window = probe_window(connection, target_ids, now=now)
+    fires = firing_alerts(connection, target_ids)
+    out = {}
+    for tid in target_ids:
+        up = window.get(tid, {}).get("uptime")
+        pct = round(up * 100, 2) if up is not None else None
+        state, why = state_of(verdict(newest.get(tid, [])), pct, fires.get(tid, []))
+        out[tid] = {"health": state, "health_reason": why, "uptime_pct": pct,
+                    "p95_ms": window.get(tid, {}).get("p95_ms")}
+    return out
+
+
 def environments(connection: Connection, project_id: str, *,
                  now: Optional[datetime] = None) -> list[dict[str, Any]]:
     from ..deployment_health import health_view
+    from ..obs_view import probe_window
 
     now = now or datetime.now(timezone.utc)
     view = health_view(connection, project_id, now=now, points=POINTS)
     targets = view.get("targets") or []
-    metrics = _metrics(connection, [t["target_id"] for t in targets], now - timedelta(hours=24))
+    ids = [t["target_id"] for t in targets]
+    metrics = _metrics(connection, ids, now - timedelta(hours=24))
+    # ONE SOURCE for uptime and p95 (15-03 / PX-09): BOSS's probes over the last 24 h, the same
+    # numbers Observability's app row prints; the window is said beside them.
+    window = probe_window(connection, ids, now=now)
+    fires = firing_alerts(connection, ids)
     hosts = {str(r["id"]): dict(r) for r in connection.execute(text(
         "SELECT t.id, t.host_id, h.address, h.name FROM deployment_targets t "
         "LEFT JOIN deployment_hosts h ON h.id = t.host_id WHERE t.id = ANY(:ids)"),
-        {"ids": [t["target_id"] for t in targets]}).mappings()} if targets else {}
+        {"ids": ids}).mappings()} if targets else {}
     apps = {t["app_name"] for t in targets}
     out = []
     for t in targets:
         m = metrics.get(t["target_id"], {})
-        uptime = t.get("uptime_7d")
+        w = window.get(t["target_id"], {})
+        uptime = round(w["uptime"] * 100, 2) if w.get("uptime") is not None else None
         label = env_label(t["environment"])
         if len(apps) > 1:
             label = words(f"{t['app_name']} {label}")
-        latency = m.get("latency_s") or [s["ms"] for s in t.get("series") or []
-                                         if s.get("ms") is not None][-POINTS:]
+        latency = [s["ms"] for s in t.get("series") or [] if s.get("ms") is not None][-POINTS:]
         errors = m.get("errors_s") or [0.0 if s.get("ok") else 100.0
                                        for s in t.get("series") or []][-POINTS:]
+        state, why = state_of(t["status"], uptime, fires.get(t["target_id"], []))
         out.append({
             "key": str(t["environment"]), "label": label, "app": t["app_name"],
             "target_id": t["target_id"], "url": web_url(t.get("url")),
-            "health": health_word(t["status"]), "status": t["status"],
+            "health": state, "health_reason": why, "status": t["status"],
             "uptime_pct": uptime, "error_rate": m.get("error_rate"),
-            "p95_ms": m.get("p95_ms") if m.get("p95_ms") is not None else t.get("p95_ms"),
-            # Where the p95 comes from, said with it: the app's own requests, else BOSS's probe.
-            "p95_source": "app" if m.get("p95_ms") is not None else "probe",
+            "p95_ms": w.get("p95_ms"),
+            # Where the p95 comes from and over what, said with it: BOSS's probe, last 24 h.
+            "p95_source": "probe", "window": WINDOW_WORD,
             "series": {"errors": errors, "latency": latency},
-            "slo": {"target": DEFAULT_SLO, "burn": burn(t.get("uptime_24h")),
-                    "budget_used_pct": budget_used(t.get("uptime_24h"))},
+            "slo": {"target": DEFAULT_SLO, "burn": burn(uptime),
+                    "budget_used_pct": budget_used(uptime)},
+            "firing": fires.get(t["target_id"], []),
             "last_checked": t.get("last_checked"), "last_error": t.get("last_error"),
             "deployed_commit": (t.get("deployed_commit") or "")[:7] or None,
             "deployed_at": t.get("deployed_at"),
@@ -148,26 +234,20 @@ def _short(title: Any) -> str:
 
 def rule_words(name: Any) -> str:
     """An alert rule's name in words: `HelpdeskErrorRate` / `error_rate_high` → "Error rate
-    high"; ≤ 4 words."""
-    import re as _re
+    high"; ≤ 4 words (app_alerts.rule_name_words, the one rule)."""
+    from ..app_alerts import rule_name_words
 
-    raw = str(name or "").strip()
-    if not raw:
-        return "Alert"
-    spaced = _re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", raw.replace("_", " ").replace("-", " "))
-    parts = [p for p in spaced.split() if p.lower() not in ("helpdesk", "app", "boss", "alert")]
-    text_ = " ".join(parts or spaced.split()).lower()
-    return words(text_[:1].upper() + text_[1:], 4)
+    return rule_name_words(name, 4)
 
 
-def alert_name(summary: Any, rule: Any) -> str:
-    """An alert's NAME on screen 12: its summary when that is a short name ("5xx on
-    /api/tickets", ≤ 4 words, not a sentence), else the rule's name in words ("Error rate") —
-    never a long sentence cut to fit ("1 rule group(s) are evaluating late…")."""
-    said = " ".join(str(summary or "").split())
-    if said and len(said.split()) <= 4 and not said.endswith((".", "!", "?")):
-        return said
-    return rule_words(rule)
+def alert_name(summary: Any, rule: Any, kind: Any = None) -> str:
+    """An alert's NAME on screen 12 — THE SAME NAME Observability and the parity component show
+    (app_alerts.rule_label): the built-in rule's label, else its summary when that is a short
+    name ("5xx on /api/tickets"), else the rule's name in words ("Error rate") — never a long
+    sentence cut to fit ("1 rule group(s) are evaluating late…") nor `TicketsApi5xx`."""
+    from ..app_alerts import rule_label
+
+    return rule_label(kind, rule, summary)
 
 
 def _quiet(at: Optional[datetime], now: datetime) -> str:
@@ -195,24 +275,28 @@ def alerts(connection: Connection, project_id: str, *, now: Optional[datetime] =
         "r.created_at, r.last_state, t.app_name, t.environment, "
         "(SELECT row_to_json(x) FROM (SELECT a.id, a.state, a.active_at, a.fired_at, a.cleared_at "
         " FROM app_alerts a WHERE a.rule_id = r.id ORDER BY COALESCE(a.fired_at, a.active_at) DESC "
-        " LIMIT 1) x) AS last "
-        "FROM app_alert_rules r JOIN deployment_targets t ON t.id = COALESCE(r.subject_id, r.target_id) "
-        "WHERE r.project_id = :p AND r.enabled AND t.status = 'active' "
+        " LIMIT 1) x) AS last, r.enabled "
+        "FROM app_alert_rules r "
+        "JOIN deployment_targets t ON t.id = COALESCE(r.subject_id, r.target_id) "
+        "WHERE r.project_id = :p AND t.status = 'active' "
         "AND COALESCE(r.labels->>'layer', '') <> 'boss' "
         "AND COALESCE(r.labels->>'boss_meta', '') <> 'true' "
         "ORDER BY t.environment, r.created_at"), {"p": project_id}).mappings().all()
+    # EVERY RULE the pack counts and the parity component lists, a switched-off one too (as
+    # "off"), so "5 rules · 1 off" sits above five rows here and five in the component (12-17).
     envs = {str(r["environment"]) for r in rules}
     out: list[dict[str, Any]] = []
     for r in rules:
         labels = as_json(r["labels"], {}) or {}
         ann = as_json(r["annotations"], {}) or {}
         last = as_json(r["last"], {}) or {}
-        b = aa.BUILTIN.get(str(r["kind"]), {})
-        name = b.get("label") or alert_name(ann.get("summary"), r["alert"])
+        name = alert_name(ann.get("summary"), r["alert"], r["kind"])
         if len(envs) > 1:
             name = f"{name} · {env_label(r['environment'])}"
         state, since = "ok", None
-        if last and last.get("state") in ("firing", "pending"):
+        if not r["enabled"]:
+            state = "off"
+        elif last and last.get("state") in ("firing", "pending"):
             state, since = "firing", last.get("fired_at") or last.get("active_at")
         elif last and last.get("cleared_at") and \
                 str(last["cleared_at"]) >= (now - timedelta(days=1)).isoformat():
@@ -228,7 +312,7 @@ def alerts(connection: Connection, project_id: str, *, now: Optional[datetime] =
             "state": state, "pending": bool(last) and last.get("state") == "pending",
             "since": iso(since) if since else None,
             "quiet": _quiet(quiet_from if isinstance(quiet_from, datetime) else None, now)
-            if state == "ok" else None,
+            if state == "ok" else ("switched off" if state == "off" else None),
             "cleared_at": last.get("cleared_at"), "app": r["app_name"], "env": r["environment"],
             "href": href(project_id, area="observability", view="alerts",
                          alert=last["id"]) if last.get("id") else
@@ -243,7 +327,7 @@ def alerts(connection: Connection, project_id: str, *, now: Optional[datetime] =
         "LEFT JOIN app_alert_rules r ON r.id = a.rule_id "
         "WHERE a.project_id = :p AND COALESCE(a.labels->>'layer', '') <> 'boss' "
         "AND COALESCE(a.labels->>'boss_meta', '') <> 'true' "
-        "AND (r.id IS NULL OR NOT r.enabled) "
+        "AND r.id IS NULL "
         "AND (a.state IN ('pending', 'firing') OR a.active_at >= :since "
         "OR a.cleared_at >= :since) ORDER BY (a.state <> 'resolved') DESC, "
         "COALESCE(a.fired_at, a.active_at) DESC LIMIT :n"),
@@ -265,7 +349,7 @@ def alerts(connection: Connection, project_id: str, *, now: Optional[datetime] =
             "app": r["app_name"], "env": r["environment"], "incident_id": r["incident_id"],
             "href": href(project_id, area="observability", view="alerts", alert=r["id"]),
         })
-    order = {"firing": 0, "resolved": 1, "ok": 2}
+    order = {"firing": 0, "resolved": 1, "ok": 2, "off": 3}
     out.sort(key=lambda x: (order.get(x["state"], 3), -(datetime.fromisoformat(str(x["since"]))
                                                          .timestamp() if x.get("since") else 0)))
     return out[:limit]
@@ -467,11 +551,14 @@ def monitoring_pack(connection: Connection, project_id: str) -> dict[str, Any]:
         "SELECT r.kind, r.alert, r.expr, r.source, r.enabled FROM app_alert_rules r "
         "JOIN deployment_targets t ON t.id = COALESCE(r.subject_id, r.target_id) "
         "WHERE r.project_id = :p AND t.status = 'active' "
-        "AND COALESCE(r.labels->>'layer', '') <> 'boss' ORDER BY r.created_at"),
+        "AND COALESCE(r.labels->>'layer', '') <> 'boss' "
+        "AND COALESCE(r.labels->>'boss_meta', '') <> 'true' ORDER BY r.created_at"),
         {"p": project_id}).mappings().all()
     rows = [r for r in every if r["enabled"]]
     off = len(every) - len(rows)
-    rules = len(rows)
+    # THE COUNT IS EVERY RULE, the off ones included and said: "5 rules · 1 off" above the five
+    # rules the Alerts card and the parity component list (12-17 / PX-35).
+    rules = len(every)
     repo = sum(1 for r in rows if r["source"] == "yaml")
     managed = "none" if not rules else "repo" if repo else "boss"
     kinds: list[str] = []
@@ -534,12 +621,21 @@ def view(connection: Connection, project_id: str, *, now: Optional[datetime] = N
 
 def rollup(envs: list[dict[str, Any]]) -> str:
     """The worst health across environments (for the header dot and project cards)."""
+    return worst(envs)[0]
+
+
+def worst(envs: list[dict[str, Any]]) -> tuple[str, Optional[str]]:
+    """(the worst health across environments, its reason with the environment named)."""
     order = ("down", "degraded", "healthy")
     for word in order:
-        if any(e["health"] == word for e in envs):
-            return word
-    return "unknown"
+        hit = next((e for e in envs if e.get("health") == word), None)
+        if hit:
+            why = hit.get("health_reason")
+            name = hit.get("label") or env_label(hit.get("key") or hit.get("environment"))
+            return word, (f"{name}: {why}" if why and len(envs) > 1 else why)
+    return "unknown", None
 
 
-__all__ = ["DEFAULT_SLO", "alerts", "rule_words", "burn", "env_label", "environments", "health_word",
-           "incidents", "links", "monitoring_pack", "rollup", "view"]
+__all__ = ["DEFAULT_SLO", "WINDOW_WORD", "alerts", "rule_words", "burn", "env_label",
+           "environments", "firing_alerts", "health_word", "incidents", "links",
+           "monitoring_pack", "rollup", "state_of", "target_states", "view", "worst"]

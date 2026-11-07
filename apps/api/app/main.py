@@ -1853,6 +1853,17 @@ async def authn_error_answers_with_its_own_status(_request: Request, exc: AuthnE
                         headers={"Cache-Control": "no-store"})
 
 
+from boss_engine.identity.vault import VaultError as _VaultError, refusal as _vault_refusal  # noqa: E402
+
+
+@app.exception_handler(_VaultError)
+async def vault_refusal_in_words(_request: Request, exc: _VaultError):
+    """A vault refusal no route caught (BOSSAPP-913 13-03 / X-73): the vault's own words and the
+    fix (vault.refusal), never "VaultNotFound (see the API log …)". The code is secret-free."""
+    status, body = _vault_refusal(exc)
+    return JSONResponse(status_code=status, content=body, headers={"Cache-Control": "no-store"})
+
+
 from boss_engine.services.projects_archive import ProjectArchived as _ProjectArchived  # noqa: E402
 
 

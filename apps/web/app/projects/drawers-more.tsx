@@ -16,7 +16,7 @@ import {
 import { GatedButton } from "../../components/gated";
 import { useGuardedCall } from "../../components/identity/identity-provider";
 import { IdentityError, idPost, refusalSentence } from "../../lib/identity/api";
-import { isPxDemo } from "../../lib/project-experience";
+import { isPxDemo, workWhen } from "../../lib/project-experience";
 import { notifyChanged } from "../changed";
 import {
   PX_PATHS, parseDeployments, parseWorkStory, startOnboarding, usePxRead, type Agent, type Deployments, type NeedsYou, type Node,
@@ -193,7 +193,7 @@ export function StageBody({ ctx, n }: { ctx: PxCtx; n: Node }) {
           {items.length ? <div data-testid="px-stage-work">{items.map((w) => (
             <button key={w.id} type="button" className="px-li px-li-btn" onClick={() => ctx.open("work", w.id)}>
               <span className="px-dot" data-s={w.state === "running" ? "now" : w.state === "needs_you" ? "you" : w.state === "stalled" ? "stalled" : undefined} aria-hidden />
-              <span style={{ minWidth: 0 }}><b className="px-ell" style={{ display: "block" }}>{w.label}</b><small>{w.links.pr ? `PR #${w.links.pr.number}` : w.age}</small></span>
+              <span style={{ minWidth: 0 }}><b className="px-ell" style={{ display: "block" }}>{w.label}</b><small>{w.links.pr ? `PR #${w.links.pr.number}` : workWhen(w)}</small></span>
               <Stations stages={w.stages} /></button>))}</div>
             : <Empty icon={Kanban} title="Nothing in flight" line="New work starts from New work, the Roadmap or What's next." />}
         </>

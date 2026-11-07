@@ -182,8 +182,26 @@ def _group(kind: str, layer: Optional[str], source: Optional[str]) -> str:
 
 
 def _short(label: str, limit: int = 18) -> str:
+    """A diagram label that fits. X-74: words are never cut mid-word — a phrase loses whole
+    words from its end (never ending on "the", "to", …); only a single long NAME (a file, a
+    symbol) is shortened with "…", and its full text is the node's tooltip (`detail`)."""
+    from .titles import _JOINERS  # noqa: PLC2701 — the one list of words a title never ends on
+
     label = " ".join(str(label or "").split())
-    return label if len(label) <= limit else label[: limit - 1].rstrip() + "…"
+    if len(label) <= limit:
+        return label
+    words_ = label.split()
+    if len(words_) > 1:
+        out: list[str] = []
+        for w in words_:
+            if len(" ".join(out + [w])) > limit:
+                break
+            out.append(w)
+        while len(out) > 1 and out[-1].lower().strip(",.;:") in _JOINERS:
+            out.pop()
+        if out:
+            return " ".join(out).rstrip(",.;:")
+    return label[: limit - 1].rstrip() + "…"
 
 
 def node_label(kind: str, name: Any, path: Any, attrs: Any = None) -> str:
@@ -199,7 +217,7 @@ def node_label(kind: str, name: Any, path: Any, attrs: Any = None) -> str:
     if kind == "symbol" and "." in name_:
         return _short(name_.rsplit(".", 1)[-1])  # PgUserStore.signIn → signIn
     if kind in LEARNED_KINDS:
-        return _short(learned_label(kind, name_, as_json(attrs, {}) or {}), 22)
+        return _short(learned_label(kind, name_, as_json(attrs, {}) or {}), 28)
     if kind == "rule":
         return _short(shorten(name_, 3) or name_)
     return _short(name_)
@@ -497,17 +515,24 @@ def docs(connection: Connection, project_id: str, facts_docs: dict[str, Any],
     base = f"https://github.com/{repo}/blob/HEAD/" if repo else None
     roster = agents(connection, project_id)
     for r in connection.execute(text(
-            "SELECT id, COALESCE(title, directive) AS title, updated_at, role_keys, "
+            "SELECT id, COALESCE(title, directive) AS title, updated_at, role_keys, decision_id, "
             "left(state->>'prd_markdown', 1500) AS prd FROM meeting_runs "
             "WHERE project_id = :p AND status = 'completed' AND state ? 'prd_markdown' "
             "ORDER BY updated_at DESC LIMIT 6"), {"p": project_id}).mappings().all():
         keys = as_json(r["role_keys"], []) or []
-        lead = "product_manager" if "product_manager" in keys else (keys[0] if keys else None)
+        # 06-14 THE AUTHOR IS AN AGENT, BY NAME ("Juno · approved Nov 3"): the panel's convener,
+        # who writes every stock PRD (the Work tab's planner reads the same), else the panel's
+        # product manager — never a role title when the roster knows the agent's name.
+        from ..workflow_catalogue import default_agent_for
+
+        convener = default_agent_for("meeting")
+        lead = (convener if convener in roster else "product_manager" if "product_manager" in keys
+                else (keys[0] if keys else convener))
         pm = face(roster, lead) if lead else None
-        approved = _prd_approved(connection, project_id, str(r["id"]))
+        approved = _prd_approved(connection, project_id, str(r["id"]), r["decision_id"])
         when = short_day(approved or r["updated_at"])
         sub = " · ".join(x for x in ((pm or {}).get("name"),
-                                     f"approved {when}" if approved else when) if x)
+                                     f"approved {when}" if approved else f"written {when}") if x)
         out.append({"label": f"PRD · {prd_title(r['prd'], r['title'])}",
                     "detail": _excerpt(r["prd"]) or r["title"],
                     "kind": "prd", "sub": sub, "agent": pm,
@@ -557,8 +582,17 @@ def prd_title(markdown: Any, fallback: Any) -> str:
     return re.sub(r"[\s+&/,;:—–-]+$", "", got) or "PRD"
 
 
-def _prd_approved(connection: Connection, project_id: str, meeting_id: str) -> Any:
-    """When a person approved the spec of the workflow run whose panel wrote this PRD."""
+def _prd_approved(connection: Connection, project_id: str, meeting_id: str,
+                  decision_id: Any = None) -> Any:
+    """When a person approved this PRD: the meeting's own approval decision (the PRD gate), else
+    the spec review of the workflow run whose panel wrote it. None when nobody approved it."""
+    if decision_id:
+        at = connection.execute(text(
+            "SELECT COALESCE(approved_at, updated_at) FROM decisions WHERE id = :d AND "
+            "project_id = :p AND status IN ('approved', 'executed')"),
+            {"d": str(decision_id), "p": project_id}).scalar()
+        if at is not None:
+            return at
     return connection.execute(text(
         "SELECT d.approved_at FROM workflow_step_runs m JOIN workflow_step_runs s "
         "ON s.workflow_run_id = m.workflow_run_id AND s.step_id = 'spec_review' "
@@ -599,6 +633,14 @@ def decisions(connection: Connection, project_id: str, limit: int = 3) -> list[d
         " d.recommendation->>'action' = 'review_architecture') "
         "ORDER BY COALESCE(d.approved_at, d.updated_at) DESC LIMIT :n"),
         {"p": project_id, "n": limit}).mappings().all()
+    # 06-14 a plan reads like the wireframe's PRD row, "Juno · approved Nov 3": the AGENT who
+    # wrote it (the same convener rule as the PRD rows), then approved and the day; the person
+    # who approved it rides in `approved_by` (the row's tooltip).
+    from ..workflow_catalogue import default_agent_for
+
+    roster = agents(connection, project_id)
+    writer_key = default_agent_for("meeting")
+    writer = face(roster, writer_key) if writer_key in roster else None
     for r in rows:
         kind = "Plan" if r["cap"] in ("spec_review", "meeting") else "Design"
         name = short_title(r["title"], r["directive"], limit=4) if (r["title"] or r["directive"]) \
@@ -607,18 +649,31 @@ def decisions(connection: Connection, project_id: str, limit: int = 3) -> list[d
         when = r["approved_at"] or r["updated_at"]
         out.append({"label": f"{kind} · {name}" if name else f"{kind} approved",
                     "detail": r["question"], "kind": "decision", "at": iso(when),
-                    "sub": "Approved · " + ", ".join(x for x in (by, short_day(when)) if x),
+                    "sub": " · ".join(x for x in ((writer or {}).get("name") if kind == "Plan"
+                                                  else None, f"approved {short_day(when)}") if x),
+                    "approved_by": by, "agent": writer if kind == "Plan" else None,
                     "href": href(project_id, area="decisions", decision=r["id"])})
     return out[:limit]
 
+def _facts_docs(connection: Connection, project_id: str) -> dict[str, Any]:
+    """What the repo reading found as documents (README, runbooks, ADRs), from the newest dossier."""
+    from ..ambient import dossier as dossier_service
+
+    rows = dossier_service.get(connection, project_id)
+    return ((as_json(rows[0].get("facts"), {}) or {}).get("docs") or {}) if rows else {}
+
+
+def project_docs(connection: Connection, project_id: str) -> list[dict[str, Any]]:
+    """THE project's documents, exactly as Repo & knowledge lists them (PRDs, README, runbooks,
+    ADRs): ⌘K finds the same rows the Docs card shows (11-15)."""
+    the_repos = repo_rows(connection, project_id)
+    primary = the_repos[0]["full_name"] if the_repos else None
+    return docs(connection, project_id, _facts_docs(connection, project_id), primary)
+
+
 def view(connection: Connection, project_id: str) -> dict[str, Any]:
     d = dossier(connection, project_id)
-    facts_docs: dict[str, Any] = {}
-    if d is not None:
-        from ..ambient import dossier as dossier_service
-
-        row = dossier_service.get(connection, project_id)[0]
-        facts_docs = (as_json(row.get("facts"), {}) or {}).get("docs") or {}
+    facts_docs: dict[str, Any] = _facts_docs(connection, project_id) if d is not None else {}
     the_repos = repo_rows(connection, project_id)
     primary = the_repos[0]["full_name"] if the_repos else None
     hot = ((d or {}).get("hotspots") or [{}])[0].get("path") if d else None

@@ -94,10 +94,18 @@ def test_every_section_reads_in_words_like_the_wireframe(world, client, helpdesk
                                  "open": f"?project_id={helpdesk['id']}&area=infra&add=target"}
     assert rows[0]["host_href"] == f"?project_id={helpdesk['id']}&area=infra&host={helpdesk['host_id']}"
 
-    assert "view=org" in s["captain"]["squad_href"]
+    # 13-18 / PX-43: Edit squad opens THIS project's squad editor, never the org chart.
+    assert s["captain"]["squad_href"] == (f"?project_id={helpdesk['id']}&area=project&tab=settings"
+                                          "&section=captain&edit=squad")
+    # PX-43: Open app secrets lands on Settings › Deploy values itself.
+    opens = {a["open"] for a in s["deploy_values"]["actions"] if a["label"] == "Open app secrets"}
+    assert opens == {f"?project_id={helpdesk['id']}&area=project&tab=settings&section=deploy_values"}
     auto = s["autonomy"]
     assert auto["level"] == "A1"
     assert [lv["label"] for lv in auto["levels"]] == ["A0 Ask", "A1 Propose", "A2 Act", "A3 Ship"]
+    # 13-20: ONE naming — the tooltip name is the label's word, the meaning is said beside it.
+    assert [lv["name"] for lv in auto["levels"]] == ["Ask", "Propose", "Act", "Ship"]
+    assert all(lv["meaning"] for lv in auto["levels"])
     assert auto["ambient"]["week_cap_usd"] == pytest.approx(50.0, abs=0.01)
     assert auto["ambient"]["week_spent_usd"] == pytest.approx(14.0)
     assert s["repos"]["items"][0]["access_words"] == "access ✓"
@@ -199,3 +207,52 @@ def test_rotate_needs_a_fresh_step_up_is_audited_and_never_returns_a_value(world
             "'project.demo_logins_rotated'"), {"p": pid}).scalar()
     assert after and before not in after
     assert audited == 1
+
+
+def test_edit_squad_changes_the_squad_every_surface_shows(world, client, helpdesk):
+    """13-18: the squad is the project's chosen team once someone chose one (Edit squad →
+    POST …/agents action=set at app "*"); the Settings card and the Overview crew read it."""
+    pid = helpdesk["id"]
+    with world.acting_as(world.ctx(world.owner)):
+        roles = client.get(f"/v1/projects/{pid}/agents?app=*").json()
+        r = client.post(f"/v1/projects/{pid}/agents",
+                        json={"app": "*", "action": "set", "role_keys": ["sre", "qa"]})
+        assert r.status_code == 200, r.text
+        cap = client.get(f"/v1/projects/{pid}/captain").json()
+    assert roles  # the editor's starting team answers
+    assert [m["role_key"] for m in cap["squad"]] == ["qa", "sre"]  # Tests, then Deploys
+
+
+def test_the_api_answers_a_vault_refusal_in_words_with_the_fix(world, client, helpdesk,
+                                                                monkeypatch):
+    """13-03 / X-73: a vault error no route caught never shows its class name ("VaultNotFound
+    (see the API log …)"): the words and the fix, from identity.vault.refusal."""
+    from boss_engine.identity import vault
+    from boss_engine.services.project_experience import demo_logins
+
+    for exc, code in ((vault.MasterKeyMissing("master_key_not_configured"), "vault_not_set_up"),
+                      (vault.VaultDecryptError("kek_mismatch"), "vault_unreadable")):
+        def boom(*_a, _exc=exc, **_k):
+            raise _exc
+        monkeypatch.setattr(demo_logins, "reveal", boom)
+        with world.acting_as(world.ctx(world.owner)):
+            r = client.get(f"/v1/projects/{helpdesk['id']}/demo-logins/reveal?env=staging")
+        body = r.json()
+        assert r.status_code == 503, r.text
+        assert body["error"] == code
+        assert "Vault" not in body["detail"] and "MasterKey" not in body["detail"]
+        assert "API log" not in body["detail"] and " " in body["detail"]
+        assert body["fix"]["command"] == "boss doctor"
+
+
+def test_every_vault_refusal_has_words():
+    from boss_engine.identity import vault
+
+    for exc in (vault.MasterKeyMissing("x"), vault.MasterKeyMismatch("x"), vault.VaultDecryptError("x"),
+                vault.VaultNotFound("not_found"), vault.VaultNotFound("no_connection"),
+                vault.VaultNeedsReauth("expired"), vault.VaultForbidden("wrong_kind"),
+                vault.VaultError("other")):
+        status, body = vault.refusal(exc)
+        assert 400 <= status < 600
+        assert body["error"].startswith("vault_") and len(body["detail"].split()) >= 6
+        assert type(exc).__name__ not in body["detail"]

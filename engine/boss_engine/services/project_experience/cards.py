@@ -5,7 +5,10 @@
   merged, building     "3 merged · 1 building"
   lines                the two status lines: ("staging healthy", "3 merged · 1 building"),
                        ("mapping code", "1,284 nodes so far"), ("not deployed yet", "idle")
-  crew                 the faces of the agents on live work (working faces), at most 3
+  crew                 the crew's faces, one per job (Plans · Builds · Tests · Deploys), from the
+                       project's real roster; `state: working` on the ones acting right now
+  live_agents          the agents acting right now (an open act on a live run or build): the
+                       Running tile's faces
   week_cap_usd         the project's weekly budget cap (daily × 7, or monthly × 7 / 30)
 
 One query per fact for all projects; nothing here calls out of BOSS.
@@ -21,8 +24,14 @@ from sqlalchemy.engine import Connection
 from .common import avatar_of
 from .health import env_label
 
-#: Who does the work on a live project, in the order a card shows them (squad role keys).
-CREW_KEYS = ("product_manager", "builder", "qa", "sre")
+#: Who does the work, one face per job in the order a card shows them; each job lists the role
+#: keys real rosters use (an org's "pm" / "software_engineer" as well as the seeded names).
+CREW_SLOTS = (("pm", "product_manager", "product_owner", "planner"),
+              ("software_engineer", "builder", "engineer", "backend_engineer",
+               "frontend_engineer", "developer"),
+              ("qa", "qa_engineer", "tester"),
+              ("sre", "site_reliability_engineer", "devops_engineer", "deployment_manager"))
+CREW_KEYS = tuple(k for slot in CREW_SLOTS for k in slot)
 CHECK_TOTAL = 7
 
 
@@ -43,13 +52,17 @@ def extras(connection: Connection, project_ids: Iterable[str]) -> dict[str, dict
         "WHERE t.project_id = ANY(:ids) AND t.status = 'active' AND s.checked_at > now() - "
         "interval '7 days' GROUP BY t.project_id"), p).mappings()}
     deployed = {str(r["project_id"]): r for r in connection.execute(text(
-        "SELECT DISTINCT ON (t.project_id) t.project_id, t.environment, "
+        "SELECT DISTINCT ON (t.project_id) t.project_id, t.id, t.environment, "
         "(SELECT ok FROM deployment_health_samples h WHERE h.deployment_target_id = t.id "
         " ORDER BY checked_at DESC LIMIT 1) AS ok FROM deployment_targets t "
         "WHERE t.project_id = ANY(:ids) AND t.status = 'active' AND EXISTS (SELECT 1 FROM "
         "stack_deployments s WHERE s.target_id = t.id AND s.status = 'healthy') "
         "ORDER BY t.project_id, (lower(t.environment) IN ('staging', 'stage')) DESC"),
         p).mappings()}
+    # THE SAME HEALTH WORD as the card's dot, the header and the Health tab (health.state_of).
+    from .health import target_states
+
+    states = target_states(connection, [str(r["id"]) for r in deployed.values()])
     onboarding = {str(r["project_id"]): r for r in connection.execute(text(
         "SELECT DISTINCT ON (project_id) project_id, state, checklist FROM project_onboarding_runs "
         "WHERE project_id = ANY(:ids) ORDER BY project_id, started_at DESC"), p).mappings()}
@@ -60,9 +73,6 @@ def extras(connection: Connection, project_ids: Iterable[str]) -> dict[str, dict
     building = {str(r[0]): int(r[1]) for r in connection.execute(text(
         "SELECT project_id, count(*) FROM code_task_runs WHERE project_id = ANY(:ids) "
         "AND status IN ('running', 'queued') GROUP BY project_id"), p).all()}
-    live_runs = {str(r[0]): int(r[1]) for r in connection.execute(text(
-        "SELECT project_id, count(*) FROM workflow_runs WHERE project_id = ANY(:ids) "
-        "AND status IN ('running', 'queued', 'validating') GROUP BY project_id"), p).all()}
     graph = {str(r[0]): int(r[1] or 0) for r in connection.execute(text(
         "SELECT project_id, sum(nodes) FROM kg_repo_index WHERE project_id = ANY(:ids) "
         "GROUP BY project_id"), p).all()}
@@ -81,6 +91,24 @@ def extras(connection: Connection, project_ids: Iterable[str]) -> dict[str, dict
         crews.setdefault(str(r["project_id"]), []).append({
             "name": persona.get("callsign") or r["display_name"], "role_key": r["role_key"],
             "role": r["display_name"], "avatar": avatar_of(spec, str(r["role_key"]))})
+    # Who is acting RIGHT NOW: an open act (no end) on a run or build that is still live.
+    working: dict[str, list[dict[str, Any]]] = {}
+    for r in connection.execute(text(
+            "SELECT DISTINCT ON (a.project_id, a.role_key) a.project_id, a.role_key, "
+            "ro.display_name, ro.spec FROM agent_acts a JOIN roles ro ON ro.project_id = "
+            "a.project_id AND ro.role_key = a.role_key WHERE a.project_id = ANY(:ids) "
+            "AND a.ended_at IS NULL AND a.status = 'active' AND a.role_key IS NOT NULL AND ("
+            " EXISTS (SELECT 1 FROM workflow_runs w WHERE w.id = a.workflow_run_id AND w.status IN "
+            "  ('queued', 'validating', 'running')) OR "
+            " EXISTS (SELECT 1 FROM code_task_runs c WHERE c.id = a.code_task_run_id AND c.status "
+            "  IN ('running', 'queued'))) "
+            "ORDER BY a.project_id, a.role_key, a.started_at DESC"), p).mappings():
+        spec = r["spec"] if isinstance(r["spec"], dict) else {}
+        persona = spec.get("persona") if isinstance(spec.get("persona"), dict) else {}
+        working.setdefault(str(r["project_id"]), []).append({
+            "name": persona.get("callsign") or r["display_name"], "role_key": r["role_key"],
+            "role": r["display_name"], "avatar": avatar_of(spec, str(r["role_key"])),
+            "state": "working"})
     out: dict[str, dict[str, Any]] = {}
     for pid in ids:
         up = uptime.get(pid)
@@ -104,22 +132,27 @@ def extras(connection: Connection, project_ids: Iterable[str]) -> dict[str, dict
             lines = ["mapping code", f"{nodes:,} nodes so far" if nodes else "reading the repo"]
             tone = "now"
         elif dep:
-            ok = dep["ok"]
-            word = "healthy" if ok else ("down" if ok is False else "no signal yet")
+            state = (states.get(str(dep["id"])) or {}).get("health", "unknown")
+            word = {"unknown": "no signal yet"}.get(state, state)
             lines = [f"{env_label(dep['environment']).lower()} {word}", work]
-            tone = "done" if ok else ("bad" if ok is False else None)
+            tone = {"healthy": "done", "down": "bad", "degraded": "you"}.get(state)
         else:
             lines = ["not deployed yet", work]
             tone = None
-        live = bool(live_runs.get(pid) or b)
-        order = {k: i for i, k in enumerate(CREW_KEYS)}
-        crew = sorted(crews.get(pid, []), key=lambda f: order.get(f["role_key"], 9))[:3] if live \
-            else []
+        now_on = {f["role_key"] for f in working.get(pid, [])}
+        have = {f["role_key"]: f for f in crews.get(pid, [])}
+        crew = []
+        for slot in CREW_SLOTS:
+            # The job's face: the one acting now, else the first the roster has.
+            key = next((k for k in slot if k in have and k in now_on), None) or \
+                next((k for k in slot if k in have), None)
+            if key:
+                crew.append({**have[key], "state": "working" if key in now_on else "idle"})
         out[pid] = {"uptime_pct": uptime_pct, "onboarding_progress": progress, "merged": m,
                     "building": b, "lines": lines, "line_tone": tone,
-                    "crew": [{**f, "state": "working"} for f in crew],
+                    "crew": crew, "live_agents": working.get(pid, [])[:4],
                     "week_cap_usd": caps.get(pid)}
     return out
 
 
-__all__ = ["CREW_KEYS", "extras"]
+__all__ = ["CREW_KEYS", "CREW_SLOTS", "extras"]

@@ -19,13 +19,18 @@ import { FX_DEPLOYMENTS } from "../../lib/project-experience-fixtures";
 import { deployTarget } from "../infra/infra-actions";
 import { EngineNotReady, Face, Flow, HEALTH_TONE, HEALTH_WORD, Ico, PxLink, ReadGate, Ring, Said, Tag } from "./kit";
 import { DemoLoginRow } from "./tab-settings";
+import { ConfirmSheet } from "./confirm-sheet";
 import { whenLocal } from "../../lib/local-time";
 import type { PxCtx } from "./project-page";
 
 const BEACON = { name: "Beacon", role_key: "sre" };
 /** A history row's state in a word, when the engine sent none (X-77: badge + colour + word). */
 const HIST_WORD: Record<string, string> = { failed: "Failed", waiting: "Needs you", now: "Deploying", skipped: "Not approved", todo: "Queued" };
-export const P95_SOURCE: Record<string, string> = { app: "p95 from the app's own requests (24 h)", probe: "p95 from BOSS's health probe (24 h)" };
+/** Where every p95 on the project pages comes from (one source, obs_view.probe_window), in words. */
+export const P95_SOURCE: Record<string, string> = { app: "p95 from the app's own requests, last 24 h", probe: "p95 of BOSS's health probes that answered, last 24 h — the same number as Observability" };
+/** "p95 207ms · 24 h": the number and its window, on every project surface (15-03 / PX-09). */
+export const p95Words = (ms: number | null | undefined, window?: string) =>
+  ms === null || ms === undefined ? "" : `p95 ${ms}ms · ${window || "24 h"}`;
 
 /** "14:00" in the viewer's zone. */
 const hourLocal = (iso: string) => { try { return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); } catch { return iso; } };
@@ -123,16 +128,36 @@ export function DeploymentsTab({ ctx }: { ctx: PxCtx }) {
   );
 }
 
+/** What the Redeploy sheet says, in rows: what, where, which commit, who approves (08-05). */
+export function redeployRows(e: Environment): { label: string; value: string; mono?: boolean }[] {
+  const where = [e.host_name || e.host, e.url].filter(Boolean).join(" · ");
+  const ld = e.last_deploy;
+  return [
+    { label: "What", value: `${e.app || "This app"} on ${e.label}` },
+    { label: "Where", value: where || "This environment's server" },
+    { label: "Commit", value: ld ? [...new Set([ld.commit, ld.label].filter(Boolean))].join(" · ") : "The last deployed commit", mono: !!ld?.commit },
+    { label: "Approval", value: e.policy === "auto"
+      ? "None needed: this environment deploys on its own (Govern policy)"
+      : "A person approves it in Needs you (Govern policy)" },
+  ];
+}
+
 function EnvCard({ e, ctx }: { e: Environment; ctx: PxCtx }) {
-  const [said, setSaid] = useState("");
-  const [busy, setBusy] = useState(false);
-  const redeploy = async () => {
-    if (isPxDemo()) { setSaid("Sample mode — nothing was sent."); return; }
-    setBusy(true);
+  const [said, setSaid] = useState<{ text: string; ok: boolean }>({ text: "", ok: true });
+  const [asking, setAsking] = useState(false);
+  /** Resolves null when planned (the sheet closes and a green line says what happens next),
+   *  else the refusal in words — shown red in the sheet and under the card, never green. */
+  const redeploy = async (): Promise<string | null> => {
+    if (isPxDemo()) { setSaid({ text: "Sample mode — nothing was sent.", ok: true }); return null; }
     const r = await deployTarget(ctx.projectId, e.target_id, "", e.last_deploy?.commit || null);
-    setBusy(false);
-    setSaid(r.ok ? "Redeploy planned · approve it in Needs you." : (r.error ?? "Not planned."));
-    if (r.ok) ctx.refreshWork();
+    if (!r.ok) {
+      const why = r.error || "The redeploy was not planned.";
+      setSaid({ text: `Not redeployed: ${why}`, ok: false });
+      return why;
+    }
+    setSaid({ text: e.policy === "auto" ? "Redeploy planned · Beacon deploys it now." : "Redeploy planned · approve it in Needs you.", ok: true });
+    ctx.refreshWork();
+    return null;
   };
   const host = e.host_name || e.host;
   const url = e.url ? (/^https?:/.test(e.url) ? e.url : `http://${e.url}`) : "";
@@ -140,18 +165,18 @@ function EnvCard({ e, ctx }: { e: Environment; ctx: PxCtx }) {
     <section className="px-card px-env" aria-labelledby={`px-env-${e.key}`} data-testid={`px-env-${e.key}`}>
       <div className="px-card-h"><Ico icon={Flask} c="green" />
         <h2 id={`px-env-${e.key}`}><button type="button" className="px-linkish" onClick={() => ctx.open("env", e.target_id || e.key)} data-testid={`px-env-open-${e.key}`}>{e.label}</button></h2>
-        <Tag tone={HEALTH_TONE[e.health]}><span className="px-dot" data-s={e.health} data-round aria-hidden />{HEALTH_WORD[e.health]}</Tag>
+        <Tag tone={HEALTH_TONE[e.health]} title={e.health_reason || undefined}><span className="px-dot" data-s={e.health} data-round aria-hidden />{HEALTH_WORD[e.health]}</Tag>
         <span className="px-spacer" />
         {e.target_id && e.last_deploy ? (
           <GatedButton permission="deployment:create" projectId={ctx.projectId} className="px-btn" data-size="s" data-testid={`px-env-redeploy-${e.key}`}
-                       title="Plan this commit again on this environment (asks for approval like any deploy)" disabled={busy} onClick={() => void redeploy()}>
-            <ArrowCounterClockwise size={12} aria-hidden /> {busy ? "Planning…" : "Redeploy"}</GatedButton>
+                       title="Plan this commit again on this environment (asks for approval like any deploy)" onClick={() => setAsking(true)}>
+            <ArrowCounterClockwise size={12} aria-hidden /> Redeploy</GatedButton>
         ) : null}
       </div>
       {url ? <a className="px-env-url" href={url} target="_blank" rel="noreferrer noopener" data-testid={`px-env-url-${e.key}`}>
         <Globe size={12} aria-hidden />{url}<ArrowSquareOut size={10} aria-label="opens in a new tab" /></a> : null}
       <div className="px-env-m">
-        {e.uptime_pct !== null ? <Ring pct={e.uptime_pct} tone={e.health === "healthy" ? "green" : "amber"} size="l" label={`Uptime ${e.uptime_pct}%`}>{Math.round(e.uptime_pct * 10) / 10}%</Ring> : null}
+        {e.uptime_pct !== null ? <Ring pct={e.uptime_pct} tone={e.health === "healthy" ? "green" : e.health === "down" ? "red" : "amber"} size="l" label={`Uptime ${e.uptime_pct}%`}>{Math.round(e.uptime_pct * 10) / 10}%</Ring> : null}
         <div style={{ flex: 1, minWidth: 0 }}>
           <span className="px-lbl">24h</span>
           {e.hours.some((h) => h.n > 0) ? (
@@ -168,7 +193,7 @@ function EnvCard({ e, ctx }: { e: Environment; ctx: PxCtx }) {
           ) : <div className="px-faint" style={{ fontSize: ".56rem" }}>No checks yet</div>}
         </div>
         <dl className="px-kv">
-          <dt title={P95_SOURCE[e.p95_source ?? ""] ?? undefined}>p95</dt><dd className="px-mono">{e.p95_ms !== null ? `${e.p95_ms}ms` : "—"}</dd>
+          <dt title={P95_SOURCE[e.p95_source ?? ""] ?? undefined}>p95 · {e.window || "24 h"}</dt><dd className="px-mono" data-testid={`px-env-p95-${e.key}`}>{e.p95_ms !== null ? `${e.p95_ms}ms` : "—"}</dd>
           <dt>Errors</dt><dd className="px-mono">{e.error_rate !== null ? `${e.error_rate}%` : "—"}</dd>
         </dl>
       </div>
@@ -186,7 +211,12 @@ function EnvCard({ e, ctx }: { e: Environment; ctx: PxCtx }) {
             <HardDrives size={11} aria-hidden /> runs on {host} ↗</PxLink>
         ) : null}
       </div>
-      <Said text={said} tone={/^not |refus|fail/i.test(said) ? "red" : "green"} />
+      <Said text={said.text} tone={said.ok ? "green" : "red"} />
+      {asking ? (
+        <ConfirmSheet title={`Redeploy ${e.label}?`} icon={<Ico icon={ArrowCounterClockwise} c="teal" />} rows={redeployRows(e)}
+                      lede="BOSS plans this commit again on this environment, through the same gates as any deploy."
+                      press="Redeploy" onConfirm={redeploy} onClose={() => setAsking(false)} testid={`px-env-redeploy-sheet-${e.key}`} />
+      ) : null}
     </section>
   );
 }

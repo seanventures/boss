@@ -72,8 +72,8 @@ const SETTINGS = { sections: [
     actions: [{ label: "Add a target", method: "POST", href: "/v1/deployment-targets", open: Q({ area: "infra", add: "target" }) }] },
   { key: "captain", label: "Captain & squad", icon: "user", items: [], candidates: [], squad_href: Q({ area: "workforce" }), actions: [] },
   { key: "autonomy", label: "Autonomy & budget", icon: "gauge", items: [], level: "A1",
-    levels: [{ key: "A0", label: "A0 Ask", name: "Observe" }, { key: "A1", label: "A1 Propose", name: "Propose" },
-             { key: "A2", label: "A2 Act", name: "Act to draft" }, { key: "A3", label: "A3 Ship", name: "Act and report" }],
+    levels: [{ key: "A0", label: "A0 Ask", name: "Ask", meaning: "Watches and asks; changes nothing" }, { key: "A1", label: "A1 Propose", name: "Propose", meaning: "Proposes the change; a person decides" },
+             { key: "A2", label: "A2 Act", name: "Act", meaning: "Acts up to a draft (a branch or draft PR); a person approves" }, { key: "A3", label: "A3 Ship", name: "Ship", meaning: "Acts and ships on its own, then reports" }],
     ambient: { daily_cap_usd: 7.14, week_cap_usd: 50, week_spent_usd: 14 }, govern_href: Q({ area: "budget", tab: "limits" }), actions: [] },
   { key: "repos", label: "Repos", icon: "git-branch",
     items: [{ full_name: "paramg/helpdesk-ai-demo", branch: "main", access_ok: true, access_words: "access ✓", external_url: "https://github.com/paramg/helpdesk-ai-demo" }],
@@ -100,7 +100,8 @@ async function open(role: "owner" | "viewer" = "owner", q = "") {
   await settle();
 }
 
-beforeEach(() => { vi.stubGlobal("confirm", () => true); });
+// 13-12: no native confirm() anywhere on the page — a call fails the test.
+beforeEach(() => { vi.stubGlobal("confirm", () => { throw new Error("window.confirm() was called"); }); });
 afterEach(() => { unmount(); });
 
 describe("Settings (screen 13) on the engine's answer", () => {
@@ -144,6 +145,14 @@ describe("Settings (screen 13) on the engine's answer", () => {
     expect(put?.body).toEqual({ project_id: P, env: "deploy", mode: "test", value: "sk-test-123" });
     expect(document.body.textContent).not.toContain("sk-test-123");
     await press(tid("px-set-value-remove-SMTP_URL"));
+    // 13-12: Remove asks in the console's own sheet; nothing is sent until it is confirmed.
+    expect(tid("px-set-value-remove-sheet")).not.toBeNull();
+    expect(tid("px-set-value-remove-sheet")!.getAttribute("role")).toBe("dialog");
+    expect(calls.some((c) => c.method === "DELETE")).toBe(false);
+    await press(tid("px-set-value-remove-sheet-cancel"));
+    expect(tid("px-set-value-remove-sheet")).toBeNull();
+    await press(tid("px-set-value-remove-SMTP_URL"));
+    await press(tid("px-set-value-remove-sheet-go"));
     expect(calls.find((c) => c.method === "DELETE")?.path).toBe("/v1/apps/helpdesk-ai-demo/secrets/SMTP_URL");
     await press(tid("px-set-add-value"));
     await type(tid("px-set-value-name"), "smtp_password");
@@ -201,5 +210,76 @@ describe("Settings (screen 13) on the engine's answer", () => {
     expect(tid("moved")!.textContent).toContain("Open");
     const q = new URLSearchParams(tid("moved")!.getAttribute("href")!.split("?")[1]);
     expect([q.get("project_id"), q.get("area"), q.get("tab"), q.get("section")]).toEqual([P, "project", "settings", "autonomy"]);
+  });
+});
+
+describe("Settings round 2 (13-03 / X-73, 13-18, 13-20)", () => {
+  it("13-03 / X-73: a refused reveal says what is wrong in words, in red, with the fix — never the exception class", async () => {
+    engine((c) => (c.path.startsWith(`/v1/projects/${P}/demo-logins/reveal`) ? { status: 503, body: {
+      error: "vault_not_set_up", detail: "BOSS's secrets vault isn't set up on this install (no master key), so saved values can't be read or changed. Run boss doctor on the BOSS host to set it up.",
+      fix: { label: "Run boss doctor on the BOSS host", command: "boss doctor" } } } : undefined));
+    await open();
+    await press(tid("px-login-reveal-admin@demo.test"));
+    const line = tid("px-said-line")!;
+    expect(line.textContent).toContain("secrets vault isn't set up");
+    expect(line.hasAttribute("data-ok")).toBe(false);
+    expect(tid("px-said")!.getAttribute("role")).toBe("alert");
+    expect(tid("px-said-fix")!.textContent).toBe("boss doctor");
+    expect(document.body.textContent).not.toMatch(/VaultNotFound|MasterKeyMissing|see the API log/);
+  });
+
+  it("X-73: a 500 never prints its exception class; it says BOSS hit an error and the request id", async () => {
+    engine((c) => (c.path.startsWith(`/v1/projects/${P}/demo-logins/reveal`) ? { status: 500, body: {
+      error: "internal_error", detail: "VaultNotFound (see the API log, request req_abc)", request_id: "req_abc" } } : undefined));
+    await open();
+    await press(tid("px-login-reveal-admin@demo.test"));
+    expect(tid("px-said-line")!.textContent).toContain("BOSS hit an error it didn't expect (request req_abc");
+    expect(document.body.textContent).not.toContain("VaultNotFound");
+  });
+
+  it("13-07: a refused Rotate shows red, never green", async () => {
+    engine((c) => (c.method === "POST" && c.path.includes("/demo-logins/rotate") ? { status: 503, body: {
+      error: "vault_not_set_up", detail: "BOSS's secrets vault isn't set up on this install (no master key), so saved values can't be read or changed.", fix: { label: "Run boss doctor", command: "boss doctor" } } } : undefined));
+    await open();
+    await press(tid("px-set-demo-rotate"));
+    const line = $$("[data-testid='px-said-line']").find((x) => x.textContent!.includes("vault"))!;
+    expect(line.hasAttribute("data-ok")).toBe(false);
+  });
+
+  it("13-18 / PX-43: Edit squad opens the squad editor here; Save states the project's team", async () => {
+    const calls = engine((c) => {
+      if (c.path.startsWith("/api/project-agents") && c.method === "GET") return { body: { agents: [{ role_key: "product_manager" }, { role_key: "software_engineer" }] } };
+      if (c.path.startsWith("/api/agent")) return { body: { items: [{ role_key: "product_manager", display_name: "Juno" }, { role_key: "software_engineer", display_name: "Forge" }, { role_key: "qa_engineer", display_name: "Vera" }] } };
+      return undefined;
+    });
+    await open();
+    expect(tid("px-set-squad")!.tagName).toBe("BUTTON");
+    await press(tid("px-set-squad"));
+    expect(tid("px-set-squad-editor")).not.toBeNull();
+    await press(tid("px-set-squad-product_manager")!.querySelector("button"));
+    await act(async () => {
+      const sel = tid("px-set-squad-add") as HTMLSelectElement;
+      sel.value = "qa_engineer";
+      sel.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await settle();
+    await press(tid("px-set-squad-save"));
+    const post = calls.find((c) => c.method === "POST" && c.path.startsWith("/api/project-agents"));
+    expect(post?.body).toMatchObject({ project_id: P, app: "*", action: "set", role_keys: ["software_engineer", "qa_engineer"] });
+  });
+
+  it("13-18: a link with edit=squad lands with the editor open", async () => {
+    engine((c) => (c.path.startsWith("/api/") ? { body: { agents: [], items: [] } } : undefined));
+    await open("owner", "&section=captain&edit=squad");
+    expect(tid("px-set-squad-editor")).not.toBeNull();
+  });
+
+  it("13-20: the level's tooltip says the same name as its label, and what it allows", async () => {
+    engine();
+    await open();
+    const a2 = tid("px-set-level-A2")!;
+    expect(a2.textContent).toBe("A2 Act");
+    expect(a2.getAttribute("title")).toBe("A2 Act — Acts up to a draft (a branch or draft PR); a person approves");
+    expect(document.body.innerHTML).not.toMatch(/Act to draft|Act and report|Observe/);
   });
 });

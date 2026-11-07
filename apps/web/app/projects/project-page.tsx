@@ -12,7 +12,7 @@
  * Everything about ONE project is here, at most two clicks away; shared things (servers, the
  * cross-app view) stay in Infra and Observability, linked both ways.
  */
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowSquareOut, ChatCircleDots, Check, ClipboardText, Compass, GearSix, GitBranch, Globe, HandWaving, Heartbeat, House, Kanban, MapTrifold,
   Plus, RocketLaunch, TreeStructure, GitMerge, CloudCheck, ListChecks, GithubLogo, type Icon,
@@ -21,7 +21,7 @@ import {
 import { GatedButton } from "../../components/gated";
 import { openDockAbout } from "../../lib/dock-subject";
 import {
-  PX_PATHS, TAB_WORDS, isMissingStatus, needsYouCards, overviewFromStart, parseOnboarding, parseOverview, parseWork, pxHref, readPxUrl, usePxRead,
+  PX_PATHS, TAB_WORDS, isMissingStatus, navigateTo, needsYouCards, overviewFromStart, parseOnboarding, parseOverview, parseWork, projectHref, pxHref, readPxUrl, usePxRead,
   workFromStartRow, writePxUrl, type Overview, type Onboarding, type PxUrl, type Tab, type WorkList, a, o,
 } from "../../lib/project-experience";
 import { FX_ONBOARDING, FX_ONBOARDING_PROJECT, FX_OVERVIEW, FX_WORK } from "../../lib/project-experience-fixtures";
@@ -31,11 +31,11 @@ import { OverviewTab } from "./tab-overview";
 import { WorkTab } from "./tab-work";
 import { RoadmapTab } from "./tab-roadmap";
 import { KnowledgeTab } from "./tab-knowledge";
-import { DeploymentsTab } from "./tab-deployments";
+import { DeploymentsTab, p95Words } from "./tab-deployments";
 import { HealthTab } from "./tab-health";
 import { SettingsTab } from "./tab-settings";
 import { DrawerHost } from "./drawers";
-import { OnboardingView, elapsedWords } from "./onboarding";
+import { OnboardingView, clockWords, useElapsed } from "./onboarding";
 import "./px.css";
 
 export const TAB_ICONS: Record<Tab, Icon> = {
@@ -56,10 +56,52 @@ export type PxCtx = {
   ask: (question?: string) => void;
 };
 
-/** The Ask BOSS dock, scoped to this project and talking as its captain (§7): ⌘K's "Ask Helm…"
- *  off the project page. On the project page `ctx.ask` opens the captain drawer (screen 09). */
+/** ASK THE CAPTAIN, from any door (09-01: header Ask, Overview Ask Helm, ⌘K "Ask Helm…"): the
+ *  captain drawer (screen 09) on this project's page, the question riding as `cap_ask` (sent
+ *  once when the drawer opens). Already on the page: the drawer opens in place; elsewhere the
+ *  page opens with it. The drawer IS the Ask BOSS dock's conversation scoped to the project
+ *  (09-02), so there is one agent path. Only with no project at all does the dock open. */
+export function askCaptainHref(projectId: string, question = ""): string {
+  const q = question.trim();
+  return projectHref(projectId, q ? { drawer: "captain", cap_ask: q } : { drawer: "captain" });
+}
+
 export function askCaptain(projectId: string, captain: { name: string; role_key: string } | null, question = ""): void {
-  openDockAbout({ subject: { kind: "project", id: projectId }, question, role: captain?.name ?? null, roleKey: captain?.role_key || null, history: "push" });
+  if (!projectId) {
+    openDockAbout({ subject: { kind: "project", id: projectId }, question, role: captain?.name ?? null, roleKey: captain?.role_key || null, history: "push" });
+    return;
+  }
+  let here = false;
+  try {
+    const now = new URLSearchParams(window.location.search);
+    here = now.get("area") === "project" && now.get("project_id") === projectId;
+  } catch { /* non-browser */ }
+  if (here) writePxUrl({ drawer: "captain", cap_ask: question.trim() ? question.trim() : null });
+  else navigateTo(askCaptainHref(projectId, question));
+}
+
+export function useStickyHead(): (el: HTMLDivElement | null) => void {
+  const observer = useRef<ResizeObserver | null>(null);
+  return useCallback((el: HTMLDivElement | null) => {
+    observer.current?.disconnect();
+    observer.current = null;
+    if (!el) return;
+    const measure = () => {
+      const bar = document.querySelector<HTMLElement>(".bx-topbar");
+      const top = bar ? Math.round(bar.getBoundingClientRect().height) : 0;
+      el.style.setProperty("--px-top", `${top}px`);
+      const tabs = el.querySelector<HTMLElement>(".px-tabs");
+      // Everything above the tab row (screen 10 has no tabs: then nothing stays on a phone but the block's foot).
+      el.style.setProperty("--px-stick-off", `${Math.max(0, Math.round(el.offsetHeight - (tabs?.offsetHeight ?? 0)))}px`);
+    };
+    measure();
+    if (typeof ResizeObserver !== "undefined") {
+      observer.current = new ResizeObserver(measure);
+      observer.current.observe(el);
+      const bar = document.querySelector<HTMLElement>(".bx-topbar");
+      if (bar) observer.current.observe(bar);
+    }
+  }, []);
 }
 
 export function ProjectPage({ projectId, actor, orgId }: { projectId: string; actor: string; orgId?: string | null }) {
@@ -88,6 +130,7 @@ export function ProjectPage({ projectId, actor, orgId }: { projectId: string; ac
 
   const tab = useCallback((t: Tab, extra: Record<string, string | null> = {}) => writePxUrl({ tab: t === "overview" ? null : t, drawer: null, ...extra }), []);
   const ctxBase = { projectId, actor, orgId: orgId ?? null };
+  const stickyRef = useStickyHead();
 
   if (!overview) {
     const failed = ov.state === "error" || (ov.state === "missing" && start.state === "error");
@@ -113,9 +156,13 @@ export function ProjectPage({ projectId, actor, orgId }: { projectId: string; ac
     tab, open: openDrawer, ask: (q) => writePxUrl({ drawer: "captain", cap_ask: q?.trim() ? q.trim() : null }),
   };
   const ob = onboarding.data;
-  const onboardingNow = overview.project.stage === "onboarding" && ob !== null;
-  // SCREEN 10 is its own page (`tab=onboarding`), and the Overview while the project onboards.
-  const obView = url.view === "onboarding" || (url.tab === "overview" && onboardingNow);
+  // PX-15: "Onboarding" (with the working face and the timer) only once a run has started —
+  // a project whose onboarding never started says so on its page, not "Onboarding" up here.
+  const onboardingStage = overview.project.stage === "onboarding" && ob !== null;
+  const onboardingNow = onboardingStage && ob.state !== "not_started";
+  // SCREEN 10 is its own page (`tab=onboarding`), and the Overview while the project onboards
+  // (or has not started: its Start onboarding button).
+  const obView = url.view === "onboarding" || (url.tab === "overview" && onboardingStage);
   // The tab's badge is the Work list's "All" count (wireframe: Work 9 = All 9), never a second number.
   const openCount = ctx.work ? ctx.work.items.length
     : Object.values(overview.tiles.open_work?.by_state ?? {}).reduce((x, y) => x + y, 0) || undefined;
@@ -124,7 +171,7 @@ export function ProjectPage({ projectId, actor, orgId }: { projectId: string; ac
     <div className="px" data-testid="px-project" data-tab={url.tab}>
       {ov.demo ? <DemoBanner /> : null}
       {ov.state === "missing" ? <div className="px-note" role="note" data-testid="px-project-note">BOSS didn&apos;t answer with this project&apos;s overview, so journey, health and cost are missing here; work and repo are live.</div> : null}
-      <div className="px-sticky">
+      <div className="px-sticky" data-sticky="" data-testid="px-sticky" ref={stickyRef}>
         {/* The top bar carries the breadcrumb (Projects / <project> / <tab>); the page draws none (04). */}
         <Header ctx={ctx} onboarding={onboardingNow || (obView && ob?.state === "running")} />
         {/* Screen 10 draws no Needs-you bar or tabs: its "Only you can" card is that list. */}
@@ -172,7 +219,12 @@ function Header({ ctx, onboarding }: { ctx: PxCtx; onboarding: boolean }) {
   const p = ctx.overview.project;
   const repo = p.repos[0];
   const staging = ctx.overview.tiles.staging;
-  const health = staging?.health ?? p.health;
+  // 10-08 one clock: the header's elapsed is the live card's (same source, same words).
+  const elapsed = useElapsed(ctx.onboarding ?? null);
+  // THE PROJECT'S HEALTH (health.state_of, worst environment): the same word as the tiles, the
+  // cards and the Health tab — never "Healthy" beside a breached SLO or a firing alert (12-05).
+  const health = p.health !== "unknown" ? p.health : staging?.health ?? p.health;
+  const healthWhy = p.health_reason || staging?.health_reason || "";
   const captain = ctx.overview.captain;
   const url = usePxUrl();
   return (
@@ -202,11 +254,13 @@ function Header({ ctx, onboarding }: { ctx: PxCtx; onboarding: boolean }) {
              href={pxHref(`?project_id=${encodeURIComponent(ctx.projectId)}&area=project&tab=health`)}
              data-testid="px-head-health" aria-current={url.tab === "health" ? "page" : undefined}
              onClick={(e) => { if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return; e.preventDefault(); ctx.tab("health"); }}
-             title={[p.live_url || health !== "unknown" ? HEALTH_WORD[health] : "Nothing deployed yet", staging?.uptime_pct != null ? `${staging.uptime_pct}%` : "", staging?.p95_ms != null ? `p95 ${staging.p95_ms}ms` : ""].filter(Boolean).join(" · ") + " — opens Health"}>
+             title={[p.live_url || health !== "unknown" ? HEALTH_WORD[health] : "Nothing deployed yet", healthWhy,
+                     staging?.uptime_pct != null ? `${staging.label || "Staging"} ${staging.uptime_pct}% up` : "",
+                     p95Words(staging?.p95_ms, staging?.window)].filter(Boolean).join(" · ") + " — opens Health"}>
             <span className="px-dot" data-s={health} data-round aria-hidden />{p.live_url || health !== "unknown" ? HEALTH_WORD[health] : "No health yet"}</a>
           <span className="px-tag" data-tone={onboarding ? "blue" : "green"} data-testid="px-head-status" title="Project stage on the journey">{onboarding ? <><Compass size={11} aria-hidden /> Onboarding</>
             : <>{(() => { const I = STAGE_ICON[p.stage] ?? Compass; return <I size={11} aria-hidden />; })()} {p.status_label || "Ready"}</>}</span>
-          {onboarding && ctx.onboarding?.elapsed_s ? <span className="px-mono px-faint" style={{ fontSize: ".6rem" }} data-testid="px-head-elapsed">{elapsedWords(ctx.onboarding.elapsed_s)}</span> : null}
+          {onboarding && elapsed ? <span className="px-mono px-faint" style={{ fontSize: "var(--fs-meta)" }} data-testid="px-head-elapsed">{clockWords(elapsed)}</span> : null}
         </div>
       </div>
       <span className="px-spacer" />

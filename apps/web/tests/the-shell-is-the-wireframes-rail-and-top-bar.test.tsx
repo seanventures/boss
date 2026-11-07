@@ -106,7 +106,7 @@ describe("the rail", () => {
     // Activity log stays (parity: it was on the rail before), between Observability and Self-fixes.
     expect(order.filter((a) => a !== "activity")).toEqual(WIREFRAME_RAIL);
     expect($('[data-area-nav="decisions"]')!.title).toBe("Approvals — Explicit approvals before real effects");
-    expect($('[data-testid="nav-badge-decisions"]')!.textContent).toBe("2");
+    expect($('[data-testid="nav-badge-decisions"]')!.textContent).toBe("3") // X-14: the bell's count, not the server's first paint;
     expect($('[data-testid="nav-projects-new"]')).not.toBeNull();
   });
 
@@ -122,6 +122,11 @@ describe("the rail", () => {
     expect($('[data-testid="nav-add-project"]')!.title).toBe("Add a project — new from an idea, or an existing repo");
     // A state dot on every row: amber needs you, teal running, grey not started.
     expect($(`[data-testid="nav-project-${id("HelpDesk AI Demo")}"] .bx-nav-dot`)!.dataset.s).toBe("you");
+  });
+
+  it("X-14 the rail's Approvals badge is the bell's number (the server's 2 is first paint only)", async () => {
+    await mount("overview");
+    expect($("[data-testid='nav-badge-decisions']")!.textContent).toBe("3");
   });
 
   it("railProjects: needs-you first, then most recent, the open one always in", () => {

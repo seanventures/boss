@@ -19,7 +19,7 @@ import { GatedButton, useGate } from "../../components/gated";
 import { useConsoleLive } from "../../lib/console-live";
 import { usePolledRead } from "../../lib/log-stream";
 import {
-  LEVEL_WORDS, MISSING, MODE_WORDS, autonomyPath, money, microsUsd, parseAutonomy, parseScorecard, parseSettings, polled, resumeAgents,
+  LEVEL_MEANINGS, LEVEL_WORDS, MISSING, MODE_WORDS, autonomyPath, money, microsUsd, parseAutonomy, parseScorecard, parseSettings, polled, resumeAgents,
   scorecardPath, setAlwaysOn, setLevel, settingsPath, stopAgents, type AlwaysOnMode, type ClassRow, type Envelope, type ModeState, type StopState,
 } from "../../lib/ambient";
 import { showToast } from "../client-forms";
@@ -152,7 +152,7 @@ export function AutonomyMatrix({ projectId, classes, track, onChanged }: {
         <thead>
           <tr>
             <th>Task class</th>
-            {LEVELS.map((l) => <th key={l} title={LEVEL_WORDS[l]}>{l}<br /><span className="aa-sub">{LEVEL_WORDS[l]}</span></th>)}
+            {LEVELS.map((l) => <th key={l} title={`${l} ${LEVEL_WORDS[l]} — ${LEVEL_MEANINGS[l]}`}>{l}<br /><span className="aa-sub">{LEVEL_WORDS[l]}</span></th>)}
             <th>Track record</th><th />
           </tr>
         </thead>

@@ -45,7 +45,7 @@ export function ProjectsHome({ projectId, actor, orgId, projects = [], homeId, s
     id: p.id, name: p.name, initials: p.name.slice(0, 2).toUpperCase(), repo: "", stage: "ready", journey: [], needs_you: 0, running: 0,
     health: "unknown", live_url: "", captain: null, updated_at: "", href: projectHref(p.id), cost_week: null, series: [],
     status_label: "", onboarding_active: false, start_onboarding: null, archived: false, uptime_pct: null, onboarding_progress: null,
-    lines: [], line_tone: "", crew: [], merged: 0, building: 0, week_cap_usd: null,
+    lines: [], line_tone: "", crew: [], live_agents: [], merged: 0, building: 0, week_cap_usd: null,
   })), [projects]);
   const cards = read.data?.items ?? (read.state === "missing" ? fallback : null);
   const withRepo = (cards ?? []).some((c) => c.repo);
@@ -100,7 +100,8 @@ function ProjectsList({ cards, note, cap, onRetry, onChanged }: {
   const cost = live.reduce((t, c) => t + (c.cost_week ?? 0), 0);
   const listed = live.reduce((t, c) => t + (c.list_week ?? 0), 0);
   const costSaid = costWords(cost, listed);
-  const crew = live.flatMap((c) => c.crew).filter((g, i, all) => all.findIndex((x) => x.role_key === g.role_key) === i).slice(0, 4);
+  // 02-05 the Running tile's faces are the agents acting right now (live_agents), never the roster.
+  const crew = live.flatMap((c) => c.live_agents).filter((g, i, all) => all.findIndex((x) => x.role_key === g.role_key && x.name === g.name) === i).slice(0, 4);
   const counts: Record<Filter, number> = {
     all: live.length, needs: live.filter((c) => c.needs_you > 0).length,
     working: live.filter(isWorking).length, onboarding: live.filter(isOnboarding).length, archived: cards.filter((c) => c.archived).length,
@@ -132,7 +133,7 @@ function ProjectsList({ cards, note, cap, onRetry, onChanged }: {
               onClick={needs ? () => setFilter("needs") : undefined} />
         <Stat label="Running" value={String(running)} tone={running ? "teal" : undefined} testid="px-stat-running"
               onClick={running ? () => setFilter("working") : undefined}>
-          {crew.length ? <span className="px-faces" data-testid="px-stat-running-faces">{crew.map((g) => <Face key={g.role_key} agent={g} size={22} state="working" />)}</span> : null}
+          {crew.length ? <span className="px-faces" data-testid="px-stat-running-faces">{crew.map((g) => <Face key={`${g.role_key}-${g.name}`} agent={g} size={22} state="working" />)}</span> : null}
         </Stat>
         <Stat label="Cost · week" value={costSaid ? costSaid.text + (costSaid.plan ? " · plan" : "") : live.some((c) => c.cost_week !== null) ? "$0.00" : "—"} testid="px-stat-cost"
               sub={cap ? `of $${cap % 1 ? cap.toFixed(2) : cap} cap` : undefined} />
@@ -248,7 +249,7 @@ export function ProjectCardView({ card, onChanged }: { card: ProjectCard; onChan
         ) : <Ring pct={0} tone="teal" size="s" label="No health signal yet">—</Ring>}
         <div style={{ minWidth: 0, flex: 1, fontSize: ".6rem" }} data-testid={`px-card-lines-${card.id}`}>
           <span className="px-pc-line1" data-tone={card.line_tone || undefined}>
-            <span className="px-dot" data-s={card.line_tone === "done" ? "done" : card.line_tone === "now" ? "now" : card.line_tone === "bad" ? "bad" : undefined} aria-hidden />
+            <span className="px-dot" data-s={card.line_tone === "done" ? "done" : card.line_tone === "now" ? "now" : card.line_tone === "bad" ? "bad" : card.line_tone === "you" ? "you" : undefined} aria-hidden />
             {lines[0]}</span>
           {card.status_label === "Not onboarded" && !card.archived ? (
             <GatedButton permission="workflow_run:start" projectId={card.id} className="px-linkbtn" data-testid={`px-card-onboard-${card.id}`}
@@ -260,8 +261,9 @@ export function ProjectCardView({ card, onChanged }: { card: ProjectCard; onChan
       </div>
       <div className="px-pc-foot">
         {card.captain ? <><Face agent={card.captain} size={20} state={card.onboarding_active ? "working" : "idle"} /><span>{card.captain.name}</span></> : <span className="px-faint">No captain yet</span>}
-        {card.crew.length ? <span className="px-faces" title={card.crew.map((g) => g.name).join(", ")} data-testid={`px-card-crew-${card.id}`}>
-          {card.crew.map((g) => <Face key={g.role_key} agent={g} size={20} state="working" />)}</span> : null}
+        {/* 02-16 the crew's faces, always; the working face on the ones acting right now. */}
+        {card.crew.length ? <span className="px-faces" title={card.crew.map((g) => `${g.name}${g.state === "working" ? " (working now)" : ""}`).join(", ")} data-testid={`px-card-crew-${card.id}`}>
+          {card.crew.map((g) => <Face key={g.role_key} agent={g} size={20} state={g.state === "working" ? "working" : "idle"} />)}</span> : null}
         <span className="px-spacer" />
         <Cost usd={card.cost_week} list={card.list_week} testid={`px-card-cost-${card.id}`} />
       </div>

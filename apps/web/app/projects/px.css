@@ -119,8 +119,12 @@
 .px a.px-hchip:hover { text-decoration: none; border-color: var(--accent-line); }
 .px-captain { display: inline-flex; align-items: center; gap: 8px; padding: 4px 6px 4px 4px; border-radius: 999px; border: 1px solid var(--border-strong); background: var(--surface); }
 .px-captain b { font-size: .66rem; display: block; line-height: 1.1; } .px-captain small { font-size: .52rem; color: var(--faint); display: block; }
-.px-sticky { display: flex; flex-direction: column; gap: 12px; padding: 14px 16px 0; margin: 0 0 2px; border-radius: 14px;
-  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 7%, var(--void)), transparent); }
+.px-sticky { display: flex; flex-direction: column; gap: 12px; padding: 14px 16px 0; margin: 0 0 2px; border-radius: 0 0 14px 14px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 7%, var(--base)), var(--base) 70%); }
+/* X-30 THE HEADER IS STICKY: header, Needs-you bar and tabs stay under the console's top bar
+   while the tab scrolls (the window is the scroll container; --px-top is the top bar's measured
+   height, set by ProjectPage). Under the top bar (30), under every drawer and sheet. */
+.px-sticky[data-sticky] { position: sticky; top: var(--px-top, 62px); z-index: 25; }
 .px-needs-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 12px; border-radius: 10px; font-size: .64rem;
   background: color-mix(in srgb, var(--amber) 9%, var(--surface)); border: 1px solid color-mix(in srgb, var(--amber) 40%, transparent); animation: px-glow 1.8s ease-in-out 1; }
 .px-needs-bar[data-calm] { background: var(--surface); border-color: var(--border); animation: none; }
@@ -405,6 +409,16 @@ textarea.px-input { resize: vertical; min-height: 64px; }
   .px-set-nav { position: static; flex-direction: row; overflow-x: auto; }
   .px-set-nav button { white-space: nowrap; }
   .px-sticky { padding: 10px 0 0; background: none; }
+  /* 01-15 / X-41 ON A PHONE: the full header scrolls away and a COMPACT STICKY TAB BAR stays
+     (the tabs scroll sideways; mark and spacer hidden; the title takes the full width): the
+     block sticks at minus everything above its tab row (--px-stick-off, measured). */
+  .px-sticky[data-sticky] { top: calc(var(--px-top, 62px) - var(--px-stick-off, 0px)); background: var(--base);
+    margin: 0 -16px 2px; padding: 10px 16px 0; border-radius: 0; box-shadow: 0 8px 12px -12px rgba(0, 0, 0, .7); }
+  .px-head > .px-spacer { display: none; }
+}
+/* X-87 THE PHONE GUTTER IS 16 px on project pages (the shell's narrow rule was 12 px). */
+@media (max-width: 760px) {
+  .bx-content:is([data-active="project"], [data-active="projects"]) { padding-left: 16px; padding-right: 16px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .px *, .px *::before, .px *::after, .px-drawer, .px-sheet, .px-needs-bar { animation: none !important; transition: none !important; }
@@ -713,7 +727,7 @@ button.px-h-num:focus-visible { outline: 2px solid var(--accent-text); outline-o
 .px-pc[data-needs]:hover { border-color: var(--amber); }
 .px-pc-line1 { display: flex; align-items: center; gap: 5px; color: var(--muted); }
 .px-pc-line1[data-tone="done"] { color: var(--green); } .px-pc-line1[data-tone="now"] { color: var(--teal); }
-.px-pc-line1[data-tone="bad"] { color: var(--red); }
+.px-pc-line1[data-tone="bad"] { color: var(--red); } .px-pc-line1[data-tone="you"] { color: var(--amber); }
 .px-pc-spark { width: 70px; height: 24px; flex: none; }
 .px-pc-spark .px-spark { height: 24px; }
 .px-pc-plus { width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; background: color-mix(in srgb, var(--teal) 14%, var(--surface));
@@ -783,3 +797,25 @@ button.px-h-num:focus-visible { outline: 2px solid var(--accent-text); outline-o
 .px-ck-i[data-s="skipped"] .px-ck-b { border-style: dashed; color: var(--faint); background: var(--surface-3); }
 .px-ck-i[data-s="skipped"] .px-ck-t { color: var(--muted); }
 .px-ck-when { font-weight: 600; color: var(--muted); }
+
+/* 04 Recent work rows: desktop 5 columns; at 390 the wireframe keeps dot · title · station strip. */
+.px-ov-wk { grid-template-columns: 14px minmax(0, 1fr) auto auto 14px; }
+@media (max-width: 760px) {
+  .px-ov-wk { grid-template-columns: 14px minmax(0, 1fr) auto; row-gap: 6px; }
+  .px-ov-wk > .px-ov-wk-st { grid-column: 3; grid-row: 1; }
+}
+
+/* THE confirm sheet (confirm-sheet.tsx): what, where, which commit, who approves; refusal in red. */
+.px-sheet.px-confirm { width: min(480px, 100%); }
+.px-confirm-b { padding: 14px 18px; display: flex; flex-direction: column; gap: 12px; }
+.px-confirm-lede { margin: 0; color: var(--muted); line-height: 1.45; }
+.px-confirm-rows { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px 14px; margin: 0; }
+.px-confirm-rows dt { color: var(--faint); font-size: var(--fs-meta); text-transform: uppercase; letter-spacing: .04em; align-self: center; }
+.px-confirm-rows dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.px-confirm-err { margin: 0; display: flex; gap: 8px; align-items: flex-start; padding: 8px 10px; border-radius: var(--r-sm);
+  color: var(--red); background: color-mix(in srgb, var(--red) 10%, transparent); border: 1px solid color-mix(in srgb, var(--red) 35%, transparent); line-height: 1.4; }
+.px-confirm-err svg { flex: none; margin-top: 1px; }
+.px-btn[data-kind="danger"] { background: var(--red); border-color: var(--red); color: #fff; }
+
+/* Why an environment is not healthy, beside its tag (health.state_of, 12-05). */
+.px-h-why { font-size: var(--fs-meta); color: var(--amber); } .px-h-why[data-s="down"] { color: var(--red); }

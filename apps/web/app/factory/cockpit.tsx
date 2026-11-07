@@ -137,7 +137,7 @@ export function Cockpit({ projectId, runId, actor, onClose, onOpenBuild }: Cockp
     if (error && !loading) {
       return (
         <section className="fx-cockpit" data-testid="fx-cockpit" data-run={runId}>
-          <button type="button" className="ag-link fx-back" onClick={onClose}>← Floor</button>
+          <button type="button" className="ag-link fx-back" onClick={onClose}>← Builds</button>
           <span className="fx-unreachable" data-testid="fx-unreachable">
             <span>Can&apos;t reach BOSS</span>
             <button type="button" className="ag-btn" title={error} onClick={refresh}>Retry</button>
@@ -156,7 +156,7 @@ function CockpitSkeleton({ runId, onClose }: { runId: string; onClose: () => voi
   return (
     <section className="fx-cockpit" data-testid="fx-cockpit" data-run={runId} aria-busy="true">
       <span className="ag-sr" role="status">Loading</span>
-      <button type="button" className="ag-link fx-back" onClick={onClose}>← Floor</button>
+      <button type="button" className="ag-link fx-back" onClick={onClose}>← Builds</button>
       <div className="fx-skel-line" aria-hidden>{Array.from({ length: 8 }, (_, i) => <span key={i} className="fx-skel-bay" />)}</div>
       <div className="fx-body">
         <div className="fx-story" aria-hidden>{Array.from({ length: 4 }, (_, i) => <span key={i} className="fx-skel-bar" />)}</div>
@@ -357,7 +357,7 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
       <span className="ag-sr" aria-live="polite" data-testid="fx-announce">{announce}</span>
       <header className="fx-ck-head">
         <div className="fx-head-1">
-          <button type="button" className="ag-link fx-back" onClick={onClose} data-testid="fx-back">← Floor</button>
+          <button type="button" className="ag-link fx-back" onClick={onClose} data-testid="fx-back">← Builds</button>
           <h1 ref={h1} tabIndex={-1} className="fx-ck-app ag-trunc" title={c.app} data-user-text>{c.app}</h1>
           {/* THE EVERYDAY JOB, IN THE OPEN: a feature added to this app, built on its branch with its
               tests kept. It used to be ⋯ › Change it; that sheet stays for a rebuild. */}

@@ -20,16 +20,20 @@ import {
 
 import { GatedButton } from "../../components/gated";
 import { useGuardedCall } from "../../components/identity/identity-provider";
-import { IdentityError, idDelete, idGet, idPost, idPut, refusalSentence } from "../../lib/identity/api";
+import { IdentityError, idDelete, idGet, idPost, idPut, refusalFix, refusalSentence, type RefusalFix } from "../../lib/identity/api";
 import {
   PX_PATHS, a, isPxDemo, n, usePageSearch, o, parseSettings, pxHref, s, setCaptain, usePxRead, writePxUrl,
   type Agent, type Settings, type SettingsAction, type SettingsSection,
 } from "../../lib/project-experience";
 import { notifyChanged } from "../changed";
+import { apiWrite } from "../../lib/api-write";
+import { LEVEL_MEANINGS, levelLabel } from "../../lib/autonomy-levels";
 import { FX_SETTINGS } from "../../lib/project-experience-fixtures";
 import { Face, Ico, PxLink, ReadGate, Said, Tag, type Tone } from "./kit";
 import type { PxCtx } from "./project-page";
 import { CaptainPicker, captainChoices } from "./captain-picker";
+import { ConfirmSheet } from "./confirm-sheet";
+import { AddRepoDrawer } from "./add-repo";
 
 /** The section nav and card icons, in the wireframe's order and colours (13-01). */
 const SECTION_ICON: Record<string, { icon: Icon; c: Tone | "grey" }> = {
@@ -78,16 +82,34 @@ function openLinks(sec: SettingsSection, skip: string[] = []): SettingsAction[] 
 /** One write the section's own form sends, step-up aware; sample mode sends nothing. */
 function useWrite() {
   const guarded = useGuardedCall();
-  return async (label: string, call: () => Promise<unknown>): Promise<{ ok: boolean; body: unknown; said: string }> => {
-    if (isPxDemo()) return { ok: true, body: {}, said: "Sample mode — nothing was sent." };
+  return async (label: string, call: () => Promise<unknown>): Promise<{ ok: boolean; body: unknown; said: string; fix: RefusalFix | null }> => {
+    if (isPxDemo()) return { ok: true, body: {}, said: "Sample mode — nothing was sent.", fix: null };
     try {
       const body = await guarded(label, call);
-      return { ok: true, body, said: "" };
+      return { ok: true, body, said: "", fix: null };
     } catch (e) {
-      return { ok: false, body: null,
+      return { ok: false, body: null, fix: refusalFix(e),
                said: e instanceof IdentityError && e.code === "step_up_cancelled" ? "Not changed: you cancelled the check." : refusalSentence(e) };
     }
   };
+}
+
+/** What a write said: green when it worked, red (an alert) when it was refused — from the result,
+ *  never guessed from the words — with the refusal's fix action beside it (13-03 / X-73). */
+export type Line = { text: string; ok: boolean; fix?: RefusalFix | null };
+export const NO_LINE: Line = { text: "", ok: true };
+export const lineOf = (r: { ok: boolean; said: string; fix?: RefusalFix | null }, okText: string): Line =>
+  (r.ok ? { text: r.said || okText, ok: true } : { text: r.said, ok: false, fix: r.fix ?? null });
+
+export function SaidLine({ line }: { line: Line }) {
+  if (!line.text) return null;
+  return (
+    <span className="px-row px-wrap" style={{ gap: 6 }} data-testid="px-said-line" data-ok={line.ok ? "" : undefined}>
+      <Said text={line.text} tone={line.ok ? "green" : "red"} />
+      {!line.ok && line.fix?.href ? <PxLink href={line.fix.href} className="px-more" testid="px-said-fix">{line.fix.label} ›</PxLink> : null}
+      {!line.ok && line.fix?.command && !line.fix.href ? <code className="px-code" title={line.fix.label} data-testid="px-said-fix">{line.fix.command}</code> : null}
+    </span>
+  );
 }
 
 export function SettingsTab({ ctx }: { ctx: PxCtx }) {
@@ -142,6 +164,7 @@ function SectionCard({ sec, ctx, onChanged, setRef }: { sec: SettingsSection; ct
   const meta = SECTION_ICON[sec.key];
   const [adding, setAdding] = useState(false);
   const [env, setEnv] = useState<string | null>(null);
+  const [addingRepo, setAddingRepo] = useState(false);
   const raw = o(sec.raw);
   const head: React.ReactNode[] = [];
   if (sec.key === "deploy_values") {
@@ -149,11 +172,14 @@ function SectionCard({ sec, ctx, onChanged, setRef }: { sec: SettingsSection; ct
     head.push(<span key="sp" className="px-spacer" />);
     if (o(raw.add).href) head.push(<GatedButton key="add" permission="app_secret:write" projectId={ctx.projectId} className="px-more px-linkbtn" data-testid="px-set-add-value" onClick={() => setAdding((v) => !v)}><Plus size={11} aria-hidden /> Add value</GatedButton>);
   }
-  if (sec.key === "repos") openLinks(sec).filter((x) => x.label === "Add").forEach((x) => head.push(<PxLink key="add" href={x.open} className="px-more" testid="px-set-repos-add"><Plus size={11} aria-hidden /> Add</PxLink>));
+  // 13-23: + Add opens today's Import-a-repo picker on this page (add-repo.tsx), not the Add-account sheet.
+  if (sec.key === "repos") openLinks(sec).filter((x) => /^Add\b/.test(x.label)).slice(0, 1).forEach(() => head.push(
+    <button key="add" type="button" className="px-more px-linkbtn" data-testid="px-set-repos-add" title="Pick a repository to add to this project"
+            onClick={() => setAddingRepo(true)}><Plus size={11} aria-hidden /> Add</button>));
   if (sec.key === "notifications" && s(raw.href)) head.push(<PxLink key="cp" href={s(raw.href)} className="px-more" testid="px-set-notify-cps">Contact points</PxLink>);
   // A section the engine does not shape here (an older engine): its console links.
   const known = ["demo_logins", "deploy_values", "targets", "captain", "autonomy", "repos", "notifications"].includes(sec.key);
-  if (!known || (!Object.keys(raw).length && sec.key !== "captain")) openLinks(sec).forEach((x) => head.push(<PxLink key={`${x.label}-${x.open}`} href={x.open} className="px-more" testid={`px-set-act-${sec.key}`}>{x.label}</PxLink>));
+  if (!known || (!Object.keys(raw).length && sec.key !== "captain")) openLinks(sec).filter((x) => !(sec.key === "repos" && /^Add\b/.test(x.label))).forEach((x) => head.push(<PxLink key={`${x.label}-${x.open}`} href={x.open} className="px-more" testid={`px-set-act-${sec.key}`}>{x.label}</PxLink>));
   return (
     <section ref={setRef} className="px-card" aria-labelledby={`px-set-${sec.key}`} data-testid={`px-set-${sec.key}`} style={{ scrollMarginTop: 80 }}>
       <div className="px-card-h">
@@ -165,6 +191,7 @@ function SectionCard({ sec, ctx, onChanged, setRef }: { sec: SettingsSection; ct
         {head}
       </div>
       <SectionBody ctx={ctx} sec={sec} onChanged={onChanged} adding={adding} setAdding={setAdding} env={env} />
+      {addingRepo ? <AddRepoDrawer projectId={ctx.projectId} onClose={() => setAddingRepo(false)} onAdded={onChanged} /> : null}
     </section>
   );
 }
@@ -223,14 +250,14 @@ const roleRank = (label: string) => { const i = ["admin", "agent", "customer"].i
 function DemoLogins({ ctx, sec, picked }: { ctx: PxCtx; sec: SettingsSection; picked: string | null }) {
   const [cur] = useDemoEnv(sec, picked);
   const write = useWrite();
-  const [said, setSaid] = useState("");
+  const [said, setSaid] = useState<Line>(NO_LINE);
   const raw = o(sec.raw);
   const from = s(raw.users_from);
   const fromWords = s(raw.users_from_words) || (from === "manifest" ? "boss.deploy.yaml" : from === "repository" ? "the app's seed" : "");
   const rotate = async () => {
     if (!cur?.rotate) return;
     const r = await write("Rotate the demo login password.", () => idPost<unknown>(cur.rotate!.href, {}));
-    setSaid(r.ok ? (s(o(r.body).note) || r.said || "Rotated.") : r.said);
+    setSaid(lineOf(r, s(o(r.body).note) || "Rotated."));
   };
   if (!cur) return <p className="px-faint" data-testid="px-demo-logins-none">{sec.hint || "No demo users found · add demo_logins: to boss.deploy.yaml"}</p>;
   return (
@@ -250,7 +277,7 @@ function DemoLogins({ ctx, sec, picked }: { ctx: PxCtx; sec: SettingsSection; pi
             <ArrowsClockwise size={11} aria-hidden /> Rotate</GatedButton>
         ) : null}
       </div>
-      <Said text={said} tone={/^not |refus|fail|cancel/i.test(said) ? "red" : "green"} />
+      <SaidLine line={said} />
     </div>
   );
 }
@@ -284,7 +311,7 @@ function ValueEntry({ ctx, name, put, onDone, onCancel }: { ctx: PxCtx; name: st
   const [key, setKey] = useState(name ?? "");
   const [value, setValue] = useState("");
   const [busy, setBusy] = useState(false);
-  const [why, setWhy] = useState("");
+  const [why, setWhy] = useState<Line>(NO_LINE);
   const valid = /^[A-Z][A-Z0-9_]{1,63}$/.test(key) && value.length > 0;
   const save = async () => {
     setBusy(true);
@@ -292,7 +319,7 @@ function ValueEntry({ ctx, name, put, onDone, onCancel }: { ctx: PxCtx; name: st
     const r = await write(`Set ${key}.`, () => idPut<unknown>(href, { ...put.body, value, mode: put.body.mode === "generated" ? "test" : (put.body.mode ?? "test") }));
     setBusy(false);
     setValue("");
-    if (r.ok) onDone(r.said || `${key} is set. The next deploy uses it.`); else setWhy(r.said);
+    if (r.ok) onDone(r.said || `${key} is set. The next deploy uses it.`); else setWhy(lineOf(r, ""));
   };
   return (
     <form className="px-set-entry" data-testid="px-set-value-entry" onSubmit={(e) => { e.preventDefault(); if (valid) void save(); }}>
@@ -302,7 +329,7 @@ function ValueEntry({ ctx, name, put, onDone, onCancel }: { ctx: PxCtx; name: st
              autoComplete="new-password" onChange={(e) => setValue(e.target.value)} data-testid="px-set-value-input" />
       <GatedButton permission="app_secret:write" projectId={ctx.projectId} type="submit" className="px-btn" data-kind="primary" data-size="s" disabled={!valid || busy} data-testid="px-set-value-save">{busy ? "Saving…" : "Save"}</GatedButton>
       <button type="button" className="px-btn" data-size="s" onClick={onCancel}>Cancel</button>
-      {why ? <span style={{ flexBasis: "100%" }}><Said text={why} tone="red" /></span> : null}
+      {why.text ? <span style={{ flexBasis: "100%" }}><SaidLine line={why} /></span> : null}
     </form>
   );
 }
@@ -311,16 +338,19 @@ function DeployValues({ ctx, sec, onChanged, adding, setAdding }: { ctx: PxCtx; 
   const rows = valueRows(sec);
   const write = useWrite();
   const [open, setOpen] = useState<string | null>(null);
-  const [said, setSaid] = useState("");
+  const [said, setSaid] = useState<Line>(NO_LINE);
+  const [asking, setAsking] = useState<ValueRow | null>(null);
   const add = o(o(sec.raw).add);
-  const remove = async (r: ValueRow) => {
-    if (!r.remove) return;
-    if (typeof window !== "undefined" && !window.confirm(`Remove ${r.name}? Deploys stop receiving it.`)) return;
+  // Remove asks first in the console's own sheet (13-12), never the browser's confirm().
+  /** Resolves to null when removed (the sheet closes), else the refusal in words (shown red in the sheet). */
+  const remove = async (r: ValueRow): Promise<string | null> => {
+    if (!r.remove) return null;
     const res = await write(`Remove ${r.name}.`, () => idDelete<unknown>(r.remove!.href));
-    setSaid(res.ok ? (res.said || `${r.name} was removed.`) : res.said);
-    if (res.ok) onChanged();
+    setSaid(lineOf(res, `${r.name} was removed.`));
+    if (res.ok) { onChanged(); return null; }
+    return lineOf(res, "").text || "It was not removed.";
   };
-  const done = (text: string) => { setSaid(text); setOpen(null); setAdding(false); onChanged(); };
+  const done = (text: string) => { setSaid({ text, ok: true }); setOpen(null); setAdding(false); onChanged(); };
   return (
     <div data-testid="px-set-values">
       {adding && s(add.href) ? <ValueEntry ctx={ctx} name={null} put={actionOf(add)} onDone={done} onCancel={() => setAdding(false)} /> : null}
@@ -341,14 +371,20 @@ function DeployValues({ ctx, sec, onChanged, adding, setAdding }: { ctx: PxCtx; 
               ) : null}
               {r.state !== "you" && r.managed === "you" && r.remove ? (
                 <GatedButton permission="app_secret:write" projectId={ctx.projectId} className="px-chip px-linkbtn" data-testid={`px-set-value-remove-${r.name}`}
-                             title="Remove it (asks first)" onClick={() => void remove(r)}>Remove</GatedButton>
+                             title="Remove it (asks first)" onClick={() => setAsking(r)}>Remove</GatedButton>
               ) : null}
             </span>
           </div>
           {open === r.name && r.put ? <ValueEntry ctx={ctx} name={r.name} put={r.put} onDone={done} onCancel={() => setOpen(null)} /> : null}
         </React.Fragment>
       )) : <p className="px-faint" style={{ margin: 0 }}>No deploy values yet. BOSS generates the ones the app asks for on its first deploy.</p>}
-      <Said text={said} tone={/^not |refus|fail|cancel/i.test(said) ? "red" : "green"} />
+      <SaidLine line={said} />
+      {asking ? (
+        <ConfirmSheet title={`Remove ${asking.name}?`} press="Remove" pressKind="danger" testid="px-set-value-remove-sheet"
+                      lede="Deploys stop receiving this value. It can't be brought back; set it again to restore it."
+                      rows={[{ label: "Value", value: asking.name, mono: true }]}
+                      onConfirm={() => remove(asking)} onClose={() => setAsking(null)} />
+      ) : null}
     </div>
   );
 }
@@ -392,7 +428,7 @@ function Autonomy({ ctx, sec, onChanged }: { ctx: PxCtx; sec: SettingsSection; o
   const write = useWrite();
   const levels = a(raw.levels).map(o);
   const [level, setLevel] = useState(s(raw.level));
-  const [said, setSaid] = useState("");
+  const [said, setSaid] = useState<Line>(NO_LINE);
   const [editing, setEditing] = useState(false);
   const amb = o(raw.ambient);
   const cap = n(amb.week_cap_usd), spent = n(amb.week_spent_usd);
@@ -404,14 +440,14 @@ function Autonomy({ ctx, sec, onChanged }: { ctx: PxCtx; sec: SettingsSection; o
     setLevel(key);
     const r = await write(`Set this project's autonomy to ${key}.`, () => idPut<unknown>(PX_PATHS.settings(ctx.projectId).replace(/\/settings$/, "/autonomy"), { level: key }));
     if (!r.ok) setLevel(before);
-    setSaid(r.ok ? (r.said || `Autonomy is ${key} for this project.`) : r.said);
+    setSaid(lineOf(r, `Autonomy is ${levelLabel(key)} for this project.`));
     if (r.ok) onChanged();
   };
   const saveCap = async () => {
     const week = Number(capIn);
-    if (!Number.isFinite(week) || week < 0) { setSaid("Give the week's budget in dollars."); return; }
+    if (!Number.isFinite(week) || week < 0) { setSaid({ text: "Give the week's budget in dollars.", ok: false }); return; }
     const r = await write("Change the ambient budget.", () => idPut<unknown>("/v1/ambient/settings", { project_id: ctx.projectId, daily_cap_usd_micros: Math.round((week / 7) * 1_000_000) }));
-    setSaid(r.ok ? (r.said || `Ambient budget is $${Math.round(week)} a week.`) : r.said);
+    setSaid(lineOf(r, `Ambient budget is $${Math.round(week)} a week.`));
     if (r.ok) { setEditing(false); onChanged(); }
   };
   if (!levels.length) {
@@ -424,7 +460,7 @@ function Autonomy({ ctx, sec, onChanged }: { ctx: PxCtx; sec: SettingsSection; o
       <div className="px-seg px-set-level" role="radiogroup" aria-label="Autonomy level" style={{ margin: "6px 0 12px" }}>
         {levels.map((l) => (
           <GatedButton key={s(l.key)} permission="autonomy:manage" projectId={ctx.projectId} type="button" role="radio" aria-checked={level === s(l.key)}
-                       aria-selected={level === s(l.key)} title={`${s(l.key)} · ${s(l.name)}`} data-testid={`px-set-level-${s(l.key)}`} onClick={() => void pick(s(l.key))}>
+                       aria-selected={level === s(l.key)} title={`${levelLabel(s(l.key))} — ${s(l.meaning) || LEVEL_MEANINGS[s(l.key)] || ""}`} data-testid={`px-set-level-${s(l.key)}`} onClick={() => void pick(s(l.key))}>
             {s(l.label)}</GatedButton>
         ))}
       </div>
@@ -448,7 +484,7 @@ function Autonomy({ ctx, sec, onChanged }: { ctx: PxCtx; sec: SettingsSection; o
       </div>
       <span className="px-faint" style={{ fontSize: ".54rem", display: "block", marginTop: 6 }}>
         Org caps still apply (<a href={pxHref(s(raw.govern_href) || "?area=budget&tab=limits")} data-testid="px-set-govern">Govern</a>)</span>
-      <Said text={said} tone={/^not |refus|fail|cancel|give /i.test(said) ? "red" : "green"} />
+      <SaidLine line={said} />
     </div>
   );
 }
@@ -482,14 +518,14 @@ function Notifications({ ctx, sec, onChanged }: { ctx: PxCtx; sec: SettingsSecti
   const write = useWrite();
   const [open, setOpen] = useState<string | null>(null);
   const [picked, setPicked] = useState<string[]>([]);
-  const [said, setSaid] = useState("");
+  const [said, setSaid] = useState<Line>(NO_LINE);
   if (!routes.length) {
     return sec.items.length ? <div>{sec.items.map((it) => <div key={it.label} className="px-li"><span /><span><b>{it.label}</b><small>{it.value}</small></span>{it.href ? <PxLink href={it.href}>Open</PxLink> : <span />}</div>)}</div>
       : <p className="px-faint" style={{ margin: 0 }}>Nobody is told yet.</p>;
   }
   const save = async (event: string, href: string) => {
     const r = await write("Change who is told.", () => idPut<unknown>(href, { contact_point_ids: picked }));
-    setSaid(r.ok ? (r.said || "Saved.") : r.said);
+    setSaid(lineOf(r, "Saved."));
     if (r.ok) { setOpen(null); onChanged(); }
   };
   return (
@@ -523,7 +559,7 @@ function Notifications({ ctx, sec, onChanged }: { ctx: PxCtx; sec: SettingsSecti
           </div>
         );
       })() : null}
-      <Said text={said} tone={/^not |refus|fail|cancel/i.test(said) ? "red" : "green"} />
+      <SaidLine line={said} />
     </div>
   );
 }
@@ -555,17 +591,21 @@ function SectionBody({ ctx, sec, onChanged, adding, setAdding, env }: { ctx: PxC
 function CaptainSection({ ctx, sec }: { ctx: PxCtx; sec: SettingsSection }) {
   const c = ctx.overview.captain;
   const [picking, setPicking] = useState(false);
-  const [said, setSaid] = useState("");
+  const [said, setSaid] = useState<Line>(NO_LINE);
   const choose = async (agentId: string, name: string) => {
     const r = await setCaptain(ctx.projectId, agentId);
-    setSaid(r.ok ? (r.demo ? "Sample mode — nothing was sent." : `${name} is the captain now.`) : (r.error ?? "Not changed."));
+    setSaid(r.ok ? { text: r.demo ? "Sample mode — nothing was sent." : `${name} is the captain now.`, ok: true } : { text: r.error ?? "Not changed.", ok: false });
     setPicking(false);
     if (r.ok && !r.demo) notifyChanged("project.captain");
   };
   // Who may captain (§14 `candidates`, the engine's list), else the captain and its squad.
   const choices = c ? (sec.candidates.length ? sec.candidates : [c as Agent, ...c.squad])
     .map((m) => ({ name: m.name, role_key: m.role_key, agent_id: m.agent_id || m.role_key })) : [];
-  const squadHref = s(o(sec.raw).squad_href) || "?area=workforce";
+  // Edit squad opens the squad editor right here (13-18 / PX-43); a link that says `edit=squad`
+  // (Overview's crew, ⌘K) lands with it open.
+  const asked = usePageSearch().get("edit") === "squad";
+  const [editing, setEditing] = useState(asked);
+  useEffect(() => { if (asked) setEditing(true); }, [asked]);
   return (
     <div data-testid="px-set-captain-body">
       {c ? (
@@ -580,14 +620,83 @@ function CaptainSection({ ctx, sec }: { ctx: PxCtx; sec: SettingsSection }) {
         <div className="px-row px-wrap" style={{ marginTop: 10 }}>
           <span className="px-faces">{c.squad.slice(0, 5).map((m) => <Face key={m.name} agent={m} size={22} />)}</span>
           <small className="px-faint" style={{ fontSize: ".56rem" }}>{c.squad.length} in squad</small><span className="px-spacer" />
-          <a href={pxHref(squadHref)} data-testid="px-set-squad" style={{ fontSize: ".58rem" }}>Edit squad</a>
+          <GatedButton permission="work_item:manage" projectId={ctx.projectId} className="px-linkbtn" data-testid="px-set-squad" aria-expanded={editing}
+                       style={{ fontSize: ".58rem" }} title="Choose who works on this project" onClick={() => setEditing((v) => !v)}>Edit squad</GatedButton>
         </div>
       ) : null}
+      {editing && c ? <SquadEditor ctx={ctx} captainKey={c.role_key} onDone={(t) => { setEditing(false); writePxUrl({ edit: null }, "replace"); if (t) setSaid({ text: t, ok: true }); }} /> : null}
       {picking && c ? (
         <CaptainPicker choices={captainChoices(o(sec.raw).candidates, choices)} current={c.role_key}
                        onChoose={(m) => void choose(m.agent_id || m.role_key, m.name)} />
       ) : null}
-      <Said text={said} />
+      <SaidLine line={said} />
+    </div>
+  );
+}
+
+/** THE SQUAD EDITOR (13-18): the project's team — the agents every build here starts with
+ *  (project_agents at app "*", through the console's /api/project-agents relay, the same door as
+ *  the Command Center's team picker). Remove with ✕, add from the project's agents, Save states
+ *  the whole team (`action: set`); the captain is not part of the squad and is never removed. */
+function SquadEditor({ ctx, captainKey, onDone }: { ctx: PxCtx; captainKey: string; onDone: (said?: string) => void }) {
+  const [team, setTeam] = useState<string[] | null>(null);
+  const [roles, setRoles] = useState<{ role_key: string; name: string }[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [line, setLine] = useState<Line>(NO_LINE);
+  useEffect(() => {
+    let live = true;
+    void (async () => {
+      try {
+        const [t, r] = await Promise.all([
+          fetch(`/api/project-agents?project_id=${encodeURIComponent(ctx.projectId)}&app=*`, { cache: "no-store" }),
+          fetch(`/api/agent?view=roles&project_id=${encodeURIComponent(ctx.projectId)}`, { cache: "no-store" }),
+        ]);
+        const tb = o(t.ok ? await t.json() : {}), rb = o(r.ok ? await r.json() : {});
+        if (!live) return;
+        setTeam(a(tb.agents).map((x) => s(o(x).role_key)).filter(Boolean));
+        setRoles(a(rb.items).map((x) => ({ role_key: s(o(x).role_key), name: s(o(x).display_name) || s(o(x).role_key) })).filter((x) => x.role_key));
+      } catch { if (live) { setTeam([]); setLine({ text: "BOSS didn't answer with the project's agents. Try again in a moment.", ok: false }); } }
+    })();
+    return () => { live = false; };
+  }, [ctx.projectId]);
+  const nameOf = (k: string) => roles.find((r) => r.role_key === k)?.name || k.replace(/_/g, " ");
+  const cur = (team ?? []).filter((k) => k !== captainKey);
+  const free = roles.filter((r) => r.role_key !== captainKey && !cur.includes(r.role_key));
+  const save = async () => {
+    if (isPxDemo()) { setLine({ text: "Sample mode — nothing was sent.", ok: true }); return; }
+    if (!cur.length) { setLine({ text: "Keep at least one agent in the squad.", ok: false }); return; }
+    setBusy(true);
+    try {
+      const keep = (team ?? []).includes(captainKey) ? [captainKey, ...cur] : cur;
+      const res = await apiWrite("/api/project-agents", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ project_id: ctx.projectId, app: "*", action: "set", role_keys: keep }) });
+      const body = o(await res.json().catch(() => ({})));
+      if (res.ok) { notifyChanged("project.captain"); notifyChanged("agents"); onDone(`The squad is ${cur.map(nameOf).join(", ")}. New work here starts with them.`); return; }
+      else setLine({ text: s(body.detail) || s(body.error) || "The squad wasn't changed. Try again.", ok: false });
+    } catch { setLine({ text: "BOSS didn't answer. The squad wasn't changed.", ok: false }); }
+    setBusy(false);
+  };
+  return (
+    <div className="px-set-entry" role="group" aria-label="Edit squad" data-testid="px-set-squad-editor">
+      {team === null ? <span className="px-faint">Loading the squad…</span> : (
+        <>
+          {cur.map((k) => (
+            <span key={k} className="px-chip px-row" style={{ gap: 6 }} data-testid={`px-set-squad-${k}`}>
+              <Face agent={{ name: nameOf(k), role_key: k }} size={18} />{nameOf(k)}
+              <button type="button" className="px-icon-btn" aria-label={`Take ${nameOf(k)} off the squad`} onClick={() => setTeam((t) => (t ?? []).filter((x) => x !== k))}>✕</button>
+            </span>
+          ))}
+          <select className="px-input" value="" aria-label="Add an agent to the squad" data-testid="px-set-squad-add"
+                  onChange={(e) => { const v = e.target.value; if (v) setTeam((t) => [...(t ?? []), v]); }}>
+            <option value="">+ Add an agent…</option>
+            {free.map((r) => <option key={r.role_key} value={r.role_key}>{r.name}</option>)}
+          </select>
+          <span className="px-spacer" />
+          <GatedButton permission="work_item:manage" projectId={ctx.projectId} className="px-btn" data-kind="primary" data-size="s" disabled={busy} data-testid="px-set-squad-save" onClick={() => void save()}>{busy ? "Saving…" : "Save"}</GatedButton>
+          <button type="button" className="px-btn" data-size="s" onClick={() => onDone()}>Cancel</button>
+        </>
+      )}
+      {line.text ? <span style={{ flexBasis: "100%" }}><SaidLine line={line} /></span> : null}
     </div>
   );
 }
@@ -612,7 +721,7 @@ export function DemoLoginRow({ projectId, login, compact }: {
   const guarded = useGuardedCall();
   const [shown, setShown] = useState<string | null>(null);
   const [left, setLeft] = useState(0);
-  const [why, setWhy] = useState("");
+  const [why, setWhy] = useState<Line>(NO_LINE);
   useEffect(() => {
     if (!shown) return undefined;
     setLeft(30);
@@ -621,15 +730,15 @@ export function DemoLoginRow({ projectId, login, compact }: {
   }, [shown]);
   const fetchIt = async (): Promise<string | null> => {
     if (!login.reveal) return null;
-    setWhy("");
+    setWhy(NO_LINE);
     if (isPxDemo()) return "demo-sample-pass";
     try {
       const body = await guarded("Show the demo login password.", () => idGet<unknown>(login.reveal!.href));
       const pw = revealedPassword(body, login.value);
-      if (!pw) setWhy("BOSS has no password for this login yet.");
+      if (!pw) setWhy({ text: "BOSS has no password for this login yet. Rotate makes a new one.", ok: false });
       return pw || null;
     } catch (e) {
-      setWhy(e instanceof IdentityError && e.code === "step_up_cancelled" ? "Not shown: you cancelled the check." : refusalSentence(e));
+      setWhy({ text: e instanceof IdentityError && e.code === "step_up_cancelled" ? "Not shown: you cancelled the check." : refusalSentence(e), ok: false, fix: refusalFix(e) });
       return null;
     }
   };
@@ -653,12 +762,12 @@ export function DemoLoginRow({ projectId, login, compact }: {
               {shown ? <EyeSlash size={compact ? 13 : 12} aria-hidden /> : <Eye size={compact ? 13 : 12} aria-hidden />}{compact ? null : (shown ? " Hide" : " Reveal")}</GatedButton>
             <GatedButton permission="secret:manage" projectId={projectId} className="px-icon-btn" data-testid={`px-login-copy-${tid}`}
                          aria-label={`Copy the password for ${login.value || login.label}`} title="Copy"
-                         onClick={() => void (async () => { const pw = shown ?? (await fetchIt()); if (pw) { await navigator.clipboard?.writeText(pw); setWhy("Copied."); } })()}>
+                         onClick={() => void (async () => { const pw = shown ?? (await fetchIt()); if (pw) { await navigator.clipboard?.writeText(pw); setWhy({ text: "Copied.", ok: true }); } })()}>
               <Copy size={13} /></GatedButton>
           </>
         ) : login.href ? <PxLink href={login.href}>Open <ArrowSquareOut size={10} /></PxLink> : null}
       </span>
-      {why ? <span style={{ gridColumn: "1 / -1" }}><Said text={why} tone={why === "Copied." ? "green" : "red"} /></span> : null}
+      {why.text ? <span style={{ gridColumn: "1 / -1" }}><SaidLine line={why} /></span> : null}
     </div>
   );
 }

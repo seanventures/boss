@@ -53,6 +53,13 @@ describe("can() at the right scope", () => {
     expect(checkWith(org, project, null, "deployment:production").allowed).toBe(false);
     expect(checkWith(org, project, "acme-web", "user:read").allowed).toBe(true);
   });
+  it("answers another project from an org-wide grant, never a 'still loading' that never ends (00b-15)", () => {
+    const owner = snapshotFrom({ epoch: 1, scope: "org", permissions: ["workflow_run:start"], step_up_fresh_until: null, catalogue_fingerprint: "x" });
+    expect(checkWith(owner, project, "new-project", "workflow_run:start").allowed).toBe(true);
+    const other = checkWith(org, project, "new-project", "workflow_run:start");
+    expect(other.allowed).toBe(false);
+    expect(other.reason).not.toMatch(/still loading/);
+  });
   it("says what is missing and who to ask", () => {
     expect(checkWith(org, null, null, "user:invite").reason).toBe("Needs “Invite people” · ask an Admin");
   });

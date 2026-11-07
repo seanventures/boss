@@ -50,6 +50,8 @@ const READY = {
   ready: REAL.ready.map((r) => (r.key === "deploy_target" ? { ...r, state: "done", owner: "agent", sub: "Staging ready", action: null } : r)),
   checklist: REAL.checklist.map((r) => (r.key === "deploy_target" ? { ...r, state: "done", owner: "agent", sub: "Staging ready", action: null } : r)),
   only_you: [],
+  // The engine's one state machine once Ready is 6/6: Work it is current, Deploy ahead.
+  stages: REAL.stages.map((st) => ({ ...st, state: st.key === "first_work" ? "now" : st.key === "deploy" ? "todo" : "done" })),
 };
 
 function engine(onboarding: unknown) {
@@ -107,8 +109,8 @@ describe("Onboarding is its own page (screen 10)", () => {
     expect(tid("px-ob-live")!.textContent).toContain("96 files mapped");
     expect(tid("px-ob-live")!.textContent).toContain("71 / 190 pass");
     // Discovered: the findings themselves.
-    expect(tid("px-discover-files")!.textContent).toBe("109 files");
-    expect(tid("px-discover-tests")!.textContent).toBe("71/190 tests");
+    expect(tid("px-discover-label-files")!.textContent).toBe("109 files");
+    expect(tid("px-discover-label-tests")!.textContent).toBe("71/190 tests");
     // Ready for work: six rows, the agent on each, the tests row sends its failures to the backlog.
     // The counter says what it counts; the skipped build is a muted clock "on first build", never
     // an empty box beside the ticks.
@@ -190,5 +192,84 @@ describe("Onboarding is its own page (screen 10)", () => {
     at("area=projects&new_project=import");
     const href = new URLSearchParams(projectPageHref("hd-2", "home", "project", "onboarding").split("?")[1]);
     expect([href.get("project_id"), href.get("area"), href.get("tab"), href.get("new_project")]).toEqual(["hd-2", "project", "onboarding", null]);
+  });
+});
+
+describe("one state machine: the strip, the cards, the live card and the guide never contradict (10-08, PX-15, 00b-13/15)", () => {
+  it("a finished read is not live anywhere: done tags, no live badge, a Now line that names whose move it is, and Watch opens the log", async () => {
+    engine({ ...READY, live: false, title: "Helm read your repo", now: "Marshal suggests Add CI first · start it when you are ready", now_agent: "chief_of_staff", now_live: false,
+             log: [{ at: "2026-11-07T05:37:30Z", agent: "engineering_captain", label: "Started", state: "done", text: "Helm started reading the repository." },
+                   { at: "2026-11-07T05:37:34Z", agent: "sre", label: "Staging host", state: "done", text: "Staging deploys to staging." }] });
+    await open();
+    expect(tid("px-ob-live-tag")).toBeNull();
+    expect(tid("px-ob-discovered-tag")!.textContent).toBe("done");
+    expect(tid("px-ob-livecard")!.textContent).toContain("done");
+    expect(tid("px-ob-now")!.textContent).toContain("Marshal suggests Add CI first");
+    expect(tid("px-ob-now")!.getAttribute("data-live")).toBeNull();
+    expect(tid("px-ob-log")).toBeNull();
+    await press(tid("px-ob-watch"));
+    expect(tid("px-ob-log")!.textContent).toContain("Staging deploys to staging.");
+    expect(params().get("area")).toBe("project");          // Watch stays on the page
+  });
+
+  it("the header's elapsed and the live card's clock are one clock (same words, same second)", async () => {
+    const started = new Date(Date.now() - (8 * 3600 + 12 * 60 + 40) * 1000).toISOString();
+    engine({ ...RUNNING, started_at: started, elapsed_s: 8 * 3600 + 12 * 60 });
+    await open();
+    const head = tid("px-head-elapsed")!.textContent;
+    expect(head).toBe(tid("px-ob-clock")!.textContent);
+    expect(head).toMatch(/^8h 1[23]m$/);
+  });
+
+  it("the stage strip shows exactly one current stage and nothing after it is ticked", async () => {
+    engine(READY);
+    await open();
+    const states = $$("[data-testid='px-ob-stages'] .px-ob-s").map((x) => x.getAttribute("data-s"));
+    const first = states.findIndex((s) => s !== "done" && s !== "skipped");
+    if (first >= 0) expect(states.slice(first + 1).every((s) => s === "todo")).toBe(true);
+    // Discover done shows its tick, never the failed cross.
+    expect(tid("px-ob-stage-discover")!.getAttribute("data-s")).toBe("done");
+  });
+
+  it("the Discovered tag follows the run: live only while it moves, not started before", async () => {
+    const { discoveredTag } = await import("../app/projects/onboarding");
+    expect(discoveredTag("running", "now").word).toBe("live");
+    expect(discoveredTag("ready", "done").word).toBe("done");
+    expect(discoveredTag("needs_you", "now").word).toBe("in progress");
+    expect(discoveredTag("not_started", "todo").word).toBe("not started");
+    expect(discoveredTag("failed", "failed").word).toBe("failed");
+  });
+
+  it("the first-run guide reads the same machine: before the start nothing is current, no live badge, no clock", async () => {
+    const { guideSteps } = await import("../app/projects/first-run");
+    const notStarted = parseOnboarding({ state: "not_started", stages: [{ key: "discover", label: "Discover", state: "todo", sub: "" }] });
+    const before = guideSteps({ name: "HelpDesk", repo: "acme/helpdesk" }, notStarted);
+    expect(before.map((s) => s.state)).toEqual(["done", "todo", "todo", "todo"]);
+    expect(before[1].sub).toBe("not started yet");
+    expect(notStarted.live).toBe(false);
+    expect(notStarted.title).toBe("Helm hasn't started");
+    const mid = parseOnboarding({ ...READY, stages: [
+      { key: "discover", label: "Discover", state: "done", sub: "done · 3m" }, { key: "ready", label: "Ready for work", state: "now", sub: "4 of 6" },
+      { key: "backlog", label: "Propose backlog", state: "todo", sub: "drafting" }, { key: "first_work", label: "Work it", state: "todo", sub: "" },
+      { key: "deploy", label: "Deploy", state: "todo", sub: "" }] });
+    const steps = guideSteps({ name: "HelpDesk", repo: "acme/helpdesk" }, mid);
+    expect(steps.map((s) => s.state)).toEqual(["done", "done", "now", "todo"]);
+    expect(steps.filter((s) => s.state === "now")).toHaveLength(1);
+    expect(steps.every((s) => !/\b(todo|now|done)$/.test(s.sub))).toBe(true);
+  });
+
+  it("10-11: every Discovered label sits outside its node, away from Helm, so none crosses an edge", async () => {
+    engine(READY);
+    await open();
+    for (const key of ["files", "stack", "tests", "hotspots", "docs"]) {
+      const g = tid(`px-discover-${key}`)!;
+      const c = g.querySelector("circle")!; const t = tid(`px-discover-label-${key}`)!;
+      const cx = Number(c.getAttribute("cx")); const tx = Number(t.getAttribute("x"));
+      const anchor = t.getAttribute("text-anchor");
+      // Left of Helm: the label ends left of the node; right (or centre-bottom): it starts right of it.
+      if (cx < 200) { expect(anchor).toBe("end"); expect(tx).toBeLessThan(cx - 14); }
+      else { expect(anchor).toBe("start"); expect(tx).toBeGreaterThan(cx + 14); }
+      expect(g.querySelector("title")!.textContent).toContain(t.textContent!);
+    }
   });
 });
