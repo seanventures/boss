@@ -600,14 +600,25 @@ def decisions(connection: Connection, project_id: str, limit: int = 3) -> list[d
                     "href": href(project_id, area="decisions", decision=r["id"])})
     return out[:limit]
 
+def _facts_docs(connection: Connection, project_id: str) -> dict[str, Any]:
+    """What the repo reading found as documents (README, runbooks, ADRs), from the newest dossier."""
+    from ..ambient import dossier as dossier_service
+
+    rows = dossier_service.get(connection, project_id)
+    return ((as_json(rows[0].get("facts"), {}) or {}).get("docs") or {}) if rows else {}
+
+
+def project_docs(connection: Connection, project_id: str) -> list[dict[str, Any]]:
+    """THE project's documents, exactly as Repo & knowledge lists them (PRDs, README, runbooks,
+    ADRs): ⌘K finds the same rows the Docs card shows (11-15)."""
+    the_repos = repo_rows(connection, project_id)
+    primary = the_repos[0]["full_name"] if the_repos else None
+    return docs(connection, project_id, _facts_docs(connection, project_id), primary)
+
+
 def view(connection: Connection, project_id: str) -> dict[str, Any]:
     d = dossier(connection, project_id)
-    facts_docs: dict[str, Any] = {}
-    if d is not None:
-        from ..ambient import dossier as dossier_service
-
-        row = dossier_service.get(connection, project_id)[0]
-        facts_docs = (as_json(row.get("facts"), {}) or {}).get("docs") or {}
+    facts_docs: dict[str, Any] = _facts_docs(connection, project_id) if d is not None else {}
     the_repos = repo_rows(connection, project_id)
     primary = the_repos[0]["full_name"] if the_repos else None
     hot = ((d or {}).get("hotspots") or [{}])[0].get("path") if d else None

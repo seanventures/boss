@@ -342,3 +342,9 @@
 /* Lab projects (insecure-template apps are built apart): a link to each one's own Factory. */
 .fx-labs { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; margin: 0 0 10px; font-size: 0.68421rem; }
 .fx-labs-k { color: var(--muted, #6b7280); }
+
+/* Code Tasks › Lab (01-06): one row per lab project. */
+.fx-lab-list { display: flex; flex-direction: column; gap: 6px; }
+.fx-lab-row { display: flex; align-items: center; gap: 6px; padding: 10px 12px; border: 1px solid var(--border, #263248); border-radius: 10px; text-decoration: none; color: inherit; }
+.fx-lab-row:hover { border-color: var(--accent-line, #3b82f6); }
+.fx-lab-go { margin-left: auto; }

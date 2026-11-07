@@ -12,7 +12,7 @@
  * Everything about ONE project is here, at most two clicks away; shared things (servers, the
  * cross-app view) stay in Infra and Observability, linked both ways.
  */
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowSquareOut, ChatCircleDots, Check, ClipboardText, Compass, GearSix, GitBranch, Globe, HandWaving, Heartbeat, House, Kanban, MapTrifold,
   Plus, RocketLaunch, TreeStructure, GitMerge, CloudCheck, ListChecks, GithubLogo, type Icon,
@@ -21,7 +21,7 @@ import {
 import { GatedButton } from "../../components/gated";
 import { openDockAbout } from "../../lib/dock-subject";
 import {
-  PX_PATHS, TAB_WORDS, isMissingStatus, needsYouCards, overviewFromStart, parseOnboarding, parseOverview, parseWork, pxHref, readPxUrl, usePxRead,
+  PX_PATHS, TAB_WORDS, isMissingStatus, navigateTo, needsYouCards, overviewFromStart, parseOnboarding, parseOverview, parseWork, projectHref, pxHref, readPxUrl, usePxRead,
   workFromStartRow, writePxUrl, type Overview, type Onboarding, type PxUrl, type Tab, type WorkList, a, o,
 } from "../../lib/project-experience";
 import { FX_ONBOARDING, FX_ONBOARDING_PROJECT, FX_OVERVIEW, FX_WORK } from "../../lib/project-experience-fixtures";
@@ -56,10 +56,52 @@ export type PxCtx = {
   ask: (question?: string) => void;
 };
 
-/** The Ask BOSS dock, scoped to this project and talking as its captain (§7): ⌘K's "Ask Helm…"
- *  off the project page. On the project page `ctx.ask` opens the captain drawer (screen 09). */
+/** ASK THE CAPTAIN, from any door (09-01: header Ask, Overview Ask Helm, ⌘K "Ask Helm…"): the
+ *  captain drawer (screen 09) on this project's page, the question riding as `cap_ask` (sent
+ *  once when the drawer opens). Already on the page: the drawer opens in place; elsewhere the
+ *  page opens with it. The drawer IS the Ask BOSS dock's conversation scoped to the project
+ *  (09-02), so there is one agent path. Only with no project at all does the dock open. */
+export function askCaptainHref(projectId: string, question = ""): string {
+  const q = question.trim();
+  return projectHref(projectId, q ? { drawer: "captain", cap_ask: q } : { drawer: "captain" });
+}
+
 export function askCaptain(projectId: string, captain: { name: string; role_key: string } | null, question = ""): void {
-  openDockAbout({ subject: { kind: "project", id: projectId }, question, role: captain?.name ?? null, roleKey: captain?.role_key || null, history: "push" });
+  if (!projectId) {
+    openDockAbout({ subject: { kind: "project", id: projectId }, question, role: captain?.name ?? null, roleKey: captain?.role_key || null, history: "push" });
+    return;
+  }
+  let here = false;
+  try {
+    const now = new URLSearchParams(window.location.search);
+    here = now.get("area") === "project" && now.get("project_id") === projectId;
+  } catch { /* non-browser */ }
+  if (here) writePxUrl({ drawer: "captain", cap_ask: question.trim() ? question.trim() : null });
+  else navigateTo(askCaptainHref(projectId, question));
+}
+
+export function useStickyHead(): (el: HTMLDivElement | null) => void {
+  const observer = useRef<ResizeObserver | null>(null);
+  return useCallback((el: HTMLDivElement | null) => {
+    observer.current?.disconnect();
+    observer.current = null;
+    if (!el) return;
+    const measure = () => {
+      const bar = document.querySelector<HTMLElement>(".bx-topbar");
+      const top = bar ? Math.round(bar.getBoundingClientRect().height) : 0;
+      el.style.setProperty("--px-top", `${top}px`);
+      const tabs = el.querySelector<HTMLElement>(".px-tabs");
+      // Everything above the tab row (screen 10 has no tabs: then nothing stays on a phone but the block's foot).
+      el.style.setProperty("--px-stick-off", `${Math.max(0, Math.round(el.offsetHeight - (tabs?.offsetHeight ?? 0)))}px`);
+    };
+    measure();
+    if (typeof ResizeObserver !== "undefined") {
+      observer.current = new ResizeObserver(measure);
+      observer.current.observe(el);
+      const bar = document.querySelector<HTMLElement>(".bx-topbar");
+      if (bar) observer.current.observe(bar);
+    }
+  }, []);
 }
 
 export function ProjectPage({ projectId, actor, orgId }: { projectId: string; actor: string; orgId?: string | null }) {
@@ -88,6 +130,7 @@ export function ProjectPage({ projectId, actor, orgId }: { projectId: string; ac
 
   const tab = useCallback((t: Tab, extra: Record<string, string | null> = {}) => writePxUrl({ tab: t === "overview" ? null : t, drawer: null, ...extra }), []);
   const ctxBase = { projectId, actor, orgId: orgId ?? null };
+  const stickyRef = useStickyHead();
 
   if (!overview) {
     const failed = ov.state === "error" || (ov.state === "missing" && start.state === "error");
@@ -124,7 +167,7 @@ export function ProjectPage({ projectId, actor, orgId }: { projectId: string; ac
     <div className="px" data-testid="px-project" data-tab={url.tab}>
       {ov.demo ? <DemoBanner /> : null}
       {ov.state === "missing" ? <div className="px-note" role="note" data-testid="px-project-note">BOSS didn&apos;t answer with this project&apos;s overview, so journey, health and cost are missing here; work and repo are live.</div> : null}
-      <div className="px-sticky">
+      <div className="px-sticky" data-sticky="" data-testid="px-sticky" ref={stickyRef}>
         {/* The top bar carries the breadcrumb (Projects / <project> / <tab>); the page draws none (04). */}
         <Header ctx={ctx} onboarding={onboardingNow || (obView && ob?.state === "running")} />
         {/* Screen 10 draws no Needs-you bar or tabs: its "Only you can" card is that list. */}

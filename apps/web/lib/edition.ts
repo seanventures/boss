@@ -166,7 +166,7 @@ export function communityNavCopy(areaId: string): { label?: string; sub?: string
   if (areaId === "code_tasks") {
     return {
       label: "Code Tasks",
-      sub: "Builds, apps and gated PRs",
+      sub: "Builds, apps and gated PRs (was Factory)",
     };
   }
   if (areaId === "discovery") {

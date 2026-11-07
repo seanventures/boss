@@ -730,7 +730,9 @@ describe("⌘K jump (screen 11, §9) and the rail", () => {
     await press(tid("palette-jump-pr"));
     expect(open).toHaveBeenCalledWith("https://github.com/paramg/helpdesk-ai-demo/pull/3", "_blank", "noopener,noreferrer");
     await press(tid("palette-jump-ask"));
-    expect(params().get("agent")).toBe(`project:${P}`);
+    // 09-01: on the project's page, Ask Helm opens the captain drawer (screen 09), not the dock.
+    expect(params().get("drawer")).toBe("captain");
+    expect(params().get("cap_ask")).toBe("pr 3");
     expect(tid("palette-jump-new-work")).not.toBeNull();
     open.mockRestore();
   });
