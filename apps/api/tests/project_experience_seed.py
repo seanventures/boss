@@ -299,12 +299,92 @@ def seed(db, project_id: str, *, now: datetime | None = None, connection_id: str
         recs.append(wid)
 
     chain = seed_followup_chain(db, project_id, now=now)
+    shipping = seed_ship_story(db, project_id, target_id=target_id, host_id=host_id,
+                               merged=merged, merge=merge, live_sdep=sdep, now=now)
     built = dossier.build(db, project_id=project_id, repo=REPO, paths=list(TREE), actor="seed",
                           seed_signals=False)
     return {"project_id": project_id, "binding_id": binding, "merged": merged, "running": running,
             "merge": merge, "deploy": deploy, "target_id": target_id, "host_id": host_id,
             "stack_deployment_id": sdep, "recommendations": recs, "dossier_id": built["id"],
-            "chain": chain}
+            "chain": chain, "shipping": shipping}
+
+
+VISUAL_BRIEF = ("Finish the visual refresh the last change promised but did not deliver. The ticket "
+                "list still looks plain. Do all of this in the existing web app: 1) An app header "
+                "with the HelpDesk name and navigation. 2) Coloured priority and SLA chips.")
+MERGE_SHAS = ["c1a7e0d4b2f94a1e8c3d", "6ba65005c585441eddfc", "f3f130c9a1b2"]
+
+
+def seed_ship_story(db, project_id: str, *, target_id: str, host_id: str, merged: list,
+                    merge: dict, live_sdep: str, now: datetime | None = None) -> dict[str, Any]:
+    """How code shipped this week (screen 08), as the deploy path writes it:
+
+      * each merged PR's recorded merge commit (pr_merge.record's finalize_ctx.merge.sha), so a
+        deploy names "PR #2", not a hash;
+      * the deploy history on staging: a first deploy that failed on a port clash 7 days ago,
+        PR #1 and PR #2 live (with apply durations), then the live PR #4 (the seed's healthy one);
+      * a SUPERSEDED request: PR #2's commit asked to ship again 3 days ago, still pending —
+        BOSS withdraws it (cleared_causes: a later deploy went live), so it never shows in Needs
+        you, and the run parked on it follows the live deploy;
+      * the open brief of "Visual refresh finish" as the build's title, the way the start door
+        used to cut it (80 characters of the brief): the page shows its short title.
+    """
+    now = now or datetime.now(timezone.utc)
+    builds = [m["build_id"] for m in merged]
+    for build_id, sha in zip(builds, MERGE_SHAS):
+        db.execute(text(
+            "UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx, '{}'::jsonb) || "
+            "jsonb_build_object('merge', jsonb_build_object('sha', CAST(:s AS TEXT))) WHERE id = :i"),
+            {"s": sha, "i": build_id})
+    db.execute(text(
+        "UPDATE code_task_runs SET title = :t, spec = CAST(:sp AS JSONB) WHERE id = :i"),
+        {"t": VISUAL_BRIEF[:80], "sp": json.dumps({"instructions": VISUAL_BRIEF}),
+         "i": merge["build_id"]})
+    db.execute(text(
+        "UPDATE workflow_runs SET input = input || jsonb_build_object('title', CAST(:t AS TEXT), "
+        "'directive', CAST(:d AS TEXT)) WHERE id = :i"),
+        {"t": VISUAL_BRIEF[:80], "d": VISUAL_BRIEF, "i": merge["run_id"]})
+    db.execute(text("UPDATE stack_deployments SET commit_sha = :c, apply_started_at = created_at - "
+                    "interval '3 minutes', finished_at = created_at WHERE id = :i"),
+               {"c": MERGE_SHAS[2], "i": live_sdep})
+
+    def deploy(commit: str, *, status: str, days: float, minutes: float = 3.0, reason: str = "",
+               decision: str = "", run_id: str | None = None, sid: str = "") -> str:
+        sid = sid or _id("sdep")
+        at = now - timedelta(days=days)
+        db.execute(text(
+            "INSERT INTO stack_deployments (id, project_id, target_id, host_id, repository, ref, "
+            "commit_sha, manifest, status, open_url, created_by, created_at, apply_started_at, "
+            "finished_at, failure_reason, decision_id, workflow_run_id) VALUES (:i, :p, :t, :h, :r, "
+            "'main', :c, CAST(:m AS JSONB), :s, :u, 'ceo', :at, :st, :fin, :why, :d, :w)"),
+            {"i": sid, "p": project_id, "t": target_id, "h": host_id, "r": REPO, "c": commit,
+             "m": json.dumps({"name": "helpdesk-ai-demo", "kind": "compose",
+                              "generated_env_keys": ["DEMO_PASSWORD"], "demo_logins": DEMO_USERS}),
+             "s": status, "u": STAGING_URL if status == "healthy" else None, "at": at,
+             "st": None if status == "awaiting_approval" else at,
+             "fin": None if status == "awaiting_approval" else at + timedelta(minutes=minutes),
+             "why": reason or None, "d": decision or None, "w": run_id})
+        return sid
+
+    first = deploy("0a1b2c3d4e5f", status="failed", days=7, minutes=1.2,
+                   reason="Port 8000 was taken on the host. Beacon moved the app to 8004.")
+    pr1 = deploy(MERGE_SHAS[0], status="healthy", days=6, minutes=2 + 50 / 60)
+    pr2 = deploy(MERGE_SHAS[1], status="healthy", days=4, minutes=3 + 10 / 60)
+    # The overtaken request: PR #2 asked to ship AGAIN three days ago (before PR #4 went live
+    # two days ago), parked on a workflow step and never answered.
+    stale_decision, stale = _id("dec"), _id("sdep")
+    db.execute(text(
+        "INSERT INTO decisions (id, project_id, question, recommendation, status, risk_tier, "
+        "created_at) VALUES (:i, :p, :q, CAST(:r AS JSONB), 'pending', 2, :t)"),
+        {"i": stale_decision, "p": project_id, "t": now - timedelta(days=3),
+         "q": f"Deploy {REPO}@{MERGE_SHAS[1][:12]} to {HOST_ADDRESS} (/opt/boss-apps/helpdesk)?",
+         "r": json.dumps({"action": "deploy_stack", "deployment_id": stale, "target_id": target_id,
+                          "repository": REPO, "commit": MERGE_SHAS[1], "host": HOST_ADDRESS,
+                          "workflow_run_id": merged[1]["run_id"]})})
+    deploy(MERGE_SHAS[1], status="awaiting_approval", days=3, decision=stale_decision,
+           run_id=merged[1]["run_id"], sid=stale)
+    return {"first": first, "pr1": pr1, "pr2": pr2, "superseded": stale,
+            "superseded_decision": stale_decision}
 
 
 __all__ = ["DEMO_USERS", "HOST_ADDRESS", "REPO", "STAGING_URL", "TREE", "seed"]

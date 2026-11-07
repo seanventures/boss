@@ -128,10 +128,12 @@ class NewWorkBody(BaseModel):
 
 
 def _title_of(text_in: str, fallback: str) -> str:
-    """The console's startBody rule: the first line, trailing punctuation off, ≤ 80 chars."""
-    first = (text_in or "").strip().splitlines()[0] if (text_in or "").strip() else ""
-    first = first.rstrip(".!?").strip()[:80]
-    return first or fallback
+    """THE SHORT TITLE stored when work is created (titles.shorten): a name like "Add SLA
+    timers to tickets", never the brief's first 80 characters cut mid-sentence. The run, its
+    build and its pull request all carry it; the brief stays whole in `directive`."""
+    from boss_engine.services.project_experience.titles import shorten
+
+    return shorten(text_in or "", 6) or fallback
 
 
 @router.post("/v1/projects/{project_id}/work")

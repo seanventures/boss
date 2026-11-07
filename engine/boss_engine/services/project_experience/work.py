@@ -25,6 +25,7 @@ from typing import Any, Iterable, Mapping, Optional
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
+from .titles import short_title
 from .common import (LIVE_RUN, age, agents, as_json, aware, face, href, iso, pr_number,
                      project_href, words)
 
@@ -572,7 +573,8 @@ def _run_items(connection: Connection, project_id: str, limit: int,
             "id": rid, "source": "workflow_run", "source_label": "Workflow",
             # "Run #43": the run's number in its project (the drawer's story counts the same way).
             "run_number": int(r["run_number"] or 0) or None,
-            "label": words(title, 6), "title": title,
+            # A short NAME (titles.short_title), never the brief's first words.
+            "label": short_title(title, r["directive"]), "title": title,
             "kind": kind_of(r["workflow_key"], r["work_kind"]), "state": state, "status": status,
             "age": age(r["created_at"], now), "created_at": iso(r["created_at"]),
             "updated_at": iso(r["updated_at"]),
@@ -634,7 +636,7 @@ def _build_items(connection: Connection, project_id: str,
         title = clean_title(raw_title)
         out.append({
             "id": key, "source": "code_task", "source_label": "Build",
-            "label": words(title, 6), "title": title,
+            "label": short_title(title), "title": title,
             # A build that is itself a fix of another's failing checks is a Fix, not a Feature.
             "kind": "fix" if _leads(raw_title) else kind_of(None), "state": state,
             "status": str(latest.get("status") or ""),

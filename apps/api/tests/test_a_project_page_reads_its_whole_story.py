@@ -107,7 +107,8 @@ def test_the_overview_draws_the_journey_needs_you_tiles_captain_and_try_it(world
     merge = next(n for n in decisions if n["kind"] == "merge")
     assert merge["label"] == "Merge PR #3" and merge["action"]["label"] == "Review PR"
     assert merge["action"]["href"].startswith(f"?project_id={helpdesk['id']}&area=decisions")
-    assert all(len(n["label"].split()) <= 4 for n in o["needs_you"])
+    # Short human labels (needs.py): "Deploy PR #5 to Staging" is the longest.
+    assert all(len(n["label"].split()) <= 5 for n in o["needs_you"])
     tiles = o["tiles"]
     assert tiles["open_work"]["by_state"]["done"] == 3
     assert tiles["open_work"]["by_state"]["needs_you"] == 2

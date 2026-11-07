@@ -19,7 +19,7 @@ from . import captain as captain_service
 from . import demo_logins as demo
 from . import onboarding as onboarding_service
 from . import work as work_service
-from .common import (LIVE_RUN, STAGE_LABELS, STAGES, STATUS_LABELS, agents, avatar_of, face, href,
+from .common import (LIVE_RUN, web_url, STAGE_LABELS, STAGES, STATUS_LABELS, agents, avatar_of, face, href,
                      initials, iso, pr_number, project_href, repos, require_project, short_day,
                      words)
 from .health import environments as health_environments
@@ -47,17 +47,25 @@ def stage_of(got: Mapping[str, bool], *, active: bool) -> str:
 
 
 def journey(project_id: str, got: Mapping[str, bool], stage: str, *, needs_you: int = 0,
-            subs: Optional[Mapping[str, str]] = None) -> list[dict[str, Any]]:
+            subs: Optional[Mapping[str, str]] = None, details: Optional[Mapping[str, str]] = None,
+            prod_waits: bool = False) -> list[dict[str, Any]]:
+    """The six stages. The current one is `now` (teal, pulsing) — work waiting on a person is
+    said in its sub and the Needs-you card, not by locking the Working node; Production is
+    `waiting` (amber, "needs you") whenever it waits on a person (staging is live, no prod
+    host yet). `detail` is the node's tooltip in words."""
     out = []
     for key in STAGES:
         if key == stage:
-            state = "waiting" if needs_you and key == "working" else "now"
+            state = "now"
         elif got.get(key):
             state = "done"
+        elif key == "production" and prod_waits:
+            state = "waiting"
         else:
             state = "todo"
         out.append({"key": key, "label": STAGE_LABELS[key], "state": state,
                     "sub": (subs or {}).get(key) or "",
+                    "detail": (details or {}).get(key) or "",
                     "href": project_href(project_id, tab=_TAB_OF.get(key, "overview"),
                                          drawer=f"stage:{key}")})
     return out
@@ -67,72 +75,82 @@ _TAB_OF = {"onboarding": "overview", "ready": "overview", "backlog": "roadmap",
            "working": "work", "staging": "deployments", "production": "deployments"}
 
 
+def journey_subs(connection: Connection, project: Mapping[str, Any], items: list[dict[str, Any]],
+                 envs: list[dict[str, Any]], onboarding: Mapping[str, Any],
+                 waiting: list[dict[str, Any]]) -> tuple[dict[str, str], dict[str, str], bool]:
+    """Each node's few words (screen 04: "Nov 2", "6/6", "7 of 12", "3 merged", "2h ago",
+    "needs you") and its tooltip, all from the record; and whether production waits on a person."""
+    from .common import age
+
+    project_id = str(project["id"])
+    checklist = onboarding.get("checklist") or []
+    done = sum(1 for c in checklist if c.get("state") in ("done", "skipped"))
+    open_recs, accepted = (int(v or 0) for v in connection.execute(text(
+        "SELECT count(*) FILTER (WHERE status = 'open'), count(*) FILTER (WHERE status = "
+        "'accepted') FROM ambient_recommendations WHERE project_id = :p"),
+        {"p": project_id}).first() or (0, 0))
+    proposed = len(onboarding.get("backlog") or []) + open_recs + accepted
+    merged = int(connection.execute(text(
+        "SELECT count(DISTINCT finalize_ctx->'merge'->>'sha') FROM code_task_runs "
+        "WHERE project_id = :p AND COALESCE(finalize_ctx->'merge'->>'sha', '') <> ''"),
+        {"p": project_id}).scalar() or 0)
+    running = sum(1 for w in items if w["state"] == "running")
+    people = [n for n in waiting if not str(n.get("id", "")).startswith("onb:")]
+
+    def newest(prod: bool) -> Optional[datetime]:
+        at = [e.get("deployed_at") for e in envs if (str(e["key"]).lower() in PRODUCTION) == prod
+              and e.get("deployed_at")]
+        if not at:
+            return None
+        return max(datetime.fromisoformat(str(a)) if isinstance(a, str) else a for a in at)
+
+    staged, shipped = newest(False), newest(True)
+    prod_waits = staged is not None and shipped is None
+    created = short_day(project["created_at"]) or ""
+    subs = {"onboarding": created,
+            "ready": f"{done}/{len(checklist)}" if checklist else "",
+            "backlog": (f"{accepted} of {proposed}" if accepted else f"{proposed} proposed")
+            if proposed else "",
+            "working": (f"{merged} merged" if merged else f"{running} running" if running
+                        else f"{len(people)} need you" if people else ""),
+            "staging": f"{age(staged)} ago" if staged else "",
+            "production": f"{age(shipped)} ago" if shipped else
+            ("needs you" if prod_waits else "Set up")}
+    stack = ((onboarding.get("discover") or {}).get("nodes") or [])
+    found = ", ".join(str(n.get("sub")) for n in stack if n.get("sub"))[:80]
+    working = ", ".join(x for x in (f"{merged} merged" if merged else "",
+                                    f"{running} building" if running else "",
+                                    f"{len(people)} waiting on you" if people else "") if x)
+    details = {
+        "onboarding": f"Onboarded {created}" + (f" — {found}" if found else ""),
+        "ready": (f"Ready for work: {done} of {len(checklist)} checks" if checklist
+                  else "Ready for work"),
+        "backlog": (f"Backlog: {proposed} items proposed, you accepted {accepted}" if proposed
+                    else "No backlog ranked yet"),
+        "working": f"Working: {working}" if working else "No work yet",
+        "staging": (f"Staging last deployed {age(staged)} ago" if staged
+                    else "Staging deploys after the first merge"),
+        "production": ("Production needs a person: pick a host, then approve" if prod_waits
+                       else f"Production last deployed {age(shipped)} ago" if shipped
+                       else "Production is set up once staging is live"),
+    }
+    return subs, details, prod_waits
+
+
 # ── needs you ───────────────────────────────────────────────────────────────────────────────
 
 def _decision_kind(decision: Mapping[str, Any]) -> str:
-    from ..decision_actions import kind_of
+    from .needs import decision_kind
 
-    kind = kind_of(decision)
-    rec = decision.get("recommendation") if isinstance(decision.get("recommendation"), dict) else {}
-    cap = str(rec.get("capability") or "")
-    if kind == "pull_request" or cap in ("release_approval", "wait_for_ci"):
-        return "merge"
-    if kind in ("deploy_gate", "change_set") or cap in ("deploy", "redeploy"):
-        return "deploy"
-    if kind == "architecture_review" or cap in ("spec_review", "meeting", "research",
-                                                "architecture"):
-        return "plan"
-    if kind == "refusal":
-        return "setup"
-    return "question"
-
-
-_ACTION_WORDS = {"merge": "Review PR", "deploy": "Approve deploy", "plan": "Review plan",
-                 "setup": "Fix setup", "question": "Answer"}
+    return decision_kind(decision)
 
 
 def needs_you(connection: Connection, project_id: str, work_items: list[dict[str, Any]],
               onboarding: Optional[Mapping[str, Any]] = None) -> list[dict[str, Any]]:
-    from ..decision_actions import waiting_on_operator
+    """Needs you in words (needs.cards): labels and mini flows from each decision's data."""
+    from .needs import cards
 
-    runs = {w["id"]: w for w in work_items if w.get("source") == "workflow_run"}
-    by_decision = {d: w for w in work_items for d in w.get("decision_ids") or []}
-    out = []
-    for d in waiting_on_operator(connection, project_id):
-        rec = d.get("recommendation") if isinstance(d.get("recommendation"), dict) else {}
-        kind = _decision_kind(d)
-        run = runs.get(str(rec.get("workflow_run_id") or "")) or by_decision.get(str(d["id"]))
-        links = (run or {}).get("links") or {}
-        pr_url = rec.get("pull_request_url") or (links.get("pr") or {}).get("external_url")
-        number = pr_number(pr_url) if pr_url else None
-        env = str(rec.get("environment") or "").strip()
-        if kind == "merge" and number:
-            label = f"Merge PR #{number}"
-        elif kind == "deploy":
-            label = f"Deploy to {env}" if env else "Approve a deploy"
-        elif kind == "plan":
-            label = "Approve the plan"
-        else:
-            label = words(d.get("question") or "Answer a question", 4)
-        mini = [{"label": s["name"], "state": s["state"]} for s in (run or {}).get("stages") or []
-                if s["state"] != "skipped"]
-        out.append({"id": d["id"], "kind": kind, "label": label,
-                    "detail": str(d.get("question") or ""),
-                    "work_id": (run or {}).get("id"), "work_label": (run or {}).get("label"),
-                    "mini": mini, "risk_tier": d.get("risk_tier"),
-                    "created_at": iso(d.get("created_at")),
-                    "external_url": pr_url or None,
-                    "action": {"label": _ACTION_WORDS[kind], "decision_id": d["id"],
-                               "href": href(project_id, area="decisions", decision=d["id"])}})
-    for item in (onboarding or {}).get("only_you") or []:
-        action = item.get("action") or {}
-        out.append({"id": f"onb:{item['key']}", "kind": "setup", "label": item["label"],
-                    "detail": item.get("detail") or "", "mini": [], "work_id": None,
-                    "action": {"label": action.get("label") or "Open",
-                               "href": action.get("href") or project_href(project_id,
-                                                                          drawer="onboarding"),
-                               "decision_id": None}})
-    return out
+    return cards(connection, project_id, work_items, onboarding)
 
 
 # ── tiles ───────────────────────────────────────────────────────────────────────────────────
@@ -184,8 +202,23 @@ def _cost_week(connection: Connection, project_id: str, now: datetime) -> dict[s
         monthly = int(policy["monthly_cap_usd_micros"] or 0)
         micros = daily * 7 if daily else (monthly * 7 // 30 if monthly else 0)
         cap = round(micros / 1_000_000, 2) if micros else None
+    # ON A SUBSCRIPTION the week costs no money, but the work still has a list price: say so
+    # ("On subscription · ≈ $57.55 at list price"), never a bare $0.00 (PX-10).
+    included = [0.0] * 7
+    for r in connection.execute(text(
+            "SELECT date_trunc('day', created_at) AS d, sum(cost_usd_micros) AS m FROM llm_calls "
+            "WHERE project_id = :p AND included_in_subscription AND created_at >= :s "
+            "GROUP BY 1"), {"p": project_id, "s": days[0]}).mappings():
+        at = r["d"] if r["d"].tzinfo else r["d"].replace(tzinfo=timezone.utc)
+        i = (at.date() - days[0].date()).days
+        if 0 <= i < 7:
+            included[i] += round((r["m"] or 0) / 1_000_000, 2)
+    on_plan = week == 0 and sum(included) > 0
     return {"usd": week, "delta_pct": delta, "cap_usd": cap, "series": series,
-            "href": href(project_id, area="budget")}
+            "on_subscription": on_plan,
+            "list_usd": round(sum(included), 2) if sum(included) else None,
+            "list_series": [round(v, 2) for v in included],
+            "href": href(project_id, area="budget", tab="limits")}
 
 
 def tiles(project_id: str, items: list[dict[str, Any]], envs: list[dict[str, Any]],
@@ -198,7 +231,12 @@ def tiles(project_id: str, items: list[dict[str, Any]], envs: list[dict[str, Any
         w = running[0]
         live = [s for s in w["stages"] if s["state"] != "skipped"]
         done = sum(1 for s in live if s["state"] == "done")
+        now_stage = next((st for st in live if st["state"] == "now"), None)
+        doing = {"plan": "Planning", "design": "Designing", "build": "Building",
+                 "review": "Reviewing", "pr": "Opening PR", "ship": "Shipping"}.get(
+            str((now_stage or {}).get("key")), "Working")
         current = {"id": w["id"], "label": w["label"], "progress": [done, len(live)],
+                   "sub": f"{doing} · {w['age']}" if w.get("age") else doing,
                    "agent": (w.get("agents") or [None])[0], "href": w["href"]}
     staging = next((e for e in envs if str(e["key"]).lower() in ("staging", "stage")), None) or \
         next((e for e in envs if str(e["key"]).lower() not in PRODUCTION), None)
@@ -208,7 +246,8 @@ def tiles(project_id: str, items: list[dict[str, Any]], envs: list[dict[str, Any
         "running": {"count": len(running), "current": current,
                     "href": project_href(project_id, tab="work") + "&state=running"},
         "staging": ({"health": staging["health"], "uptime_pct": staging["uptime_pct"],
-                     "p95_ms": staging["p95_ms"], "series": staging["series"]["latency"],
+                     "p95_ms": staging["p95_ms"], "p95_source": staging.get("p95_source"),
+                     "series": staging["series"]["latency"],
                      "label": staging["label"], "url": staging.get("url"),
                      "href": project_href(project_id, tab="health")}
                     if staging else {"health": "unknown", "uptime_pct": None, "p95_ms": None,
@@ -221,20 +260,43 @@ def tiles(project_id: str, items: list[dict[str, Any]], envs: list[dict[str, Any
 # ── what's next and the week ────────────────────────────────────────────────────────────────
 
 def next_items(connection: Connection, project_id: str, onboarding: Mapping[str, Any],
-               limit: int = 4) -> list[dict[str, Any]]:
+               limit: int = 3) -> list[dict[str, Any]]:
+    """WHAT'S NEXT: the top `limit` of the ranked backlog — open roadmap recommendations by
+    score, then the onboarding agent's ranked candidates — each with its Accept (the roadmap's
+    accept route, or THE start door with its body)."""
+    from .titles import short_title
+
+    # Accepted first (the Roadmap's Next lane, "Feature · accepted" with a Next tag), then the
+    # open ones by score, each with its Accept.
+    out: list[dict[str, Any]] = []
+    for r in connection.execute(text(
+            "SELECT r.work_item_id, r.title, r.why, r.kind FROM ambient_recommendations r "
+            "LEFT JOIN work_items w ON w.id = r.work_item_id WHERE r.project_id = :p "
+            "AND r.status = 'accepted' AND COALESCE(w.lifecycle, '') NOT IN "
+            "('done', 'resolved', 'dismissed', 'in_progress', 'running') "
+            "ORDER BY r.score DESC LIMIT :n"), {"p": project_id, "n": limit}).mappings():
+        out.append({"id": r["work_item_id"], "label": short_title(r["title"], limit=5),
+                    "detail": r["why"] or r["title"], "why": r["why"], "kind": r["kind"],
+                    "source": "roadmap", "state": "next", "accepted": True,
+                    "href": project_href(project_id, tab="roadmap",
+                                         drawer=f"rec:{r['work_item_id']}"), "accept": None})
     recs = connection.execute(text(
         "SELECT work_item_id, title, why, kind, detector FROM ambient_recommendations "
         "WHERE project_id = :p AND status = 'open' ORDER BY score DESC LIMIT :n"),
         {"p": project_id, "n": limit}).mappings().all()
-    out = [{"id": r["work_item_id"], "label": words(r["title"], 5), "detail": r["why"] or r["title"],
+
+    out += [{"id": r["work_item_id"], "label": short_title(r["title"], limit=5),
+            "detail": r["why"] or r["title"], "why": r["why"], "kind": r["kind"],
             "source": "roadmap", "state": "next",
             "href": project_href(project_id, tab="roadmap", drawer=f"rec:{r['work_item_id']}"),
             "accept": {"href": f"/v1/ambient/roadmap/{r['work_item_id']}/accept", "method": "POST",
                        "body": {"as": "ticket", "project_id": project_id}}} for r in recs]
+    out = out[:limit]
     for c in (onboarding.get("backlog") or [])[: max(0, limit - len(out))]:
         source = c.get("source") if c.get("source") in ("roadmap", "ticket", "bug", "ci") \
             else "roadmap"
-        out.append({"id": c["id"], "label": c["label"], "detail": c.get("detail"),
+        out.append({"id": c["id"], "label": short_title(c["label"], c.get("text"), limit=5),
+                    "detail": c.get("detail"), "kind": c.get("kind"),
                     "source": source, "state": "proposed", "external_url": c.get("external_url"),
                     "href": c.get("href") or project_href(project_id, tab="roadmap"),
                     "accept": {"href": f"/v1/projects/{project_id}/work", "method": "POST",
@@ -245,49 +307,78 @@ def next_items(connection: Connection, project_id: str, onboarding: Mapping[str,
     return out[:limit]
 
 
-def week(connection: Connection, project_id: str, now: datetime, limit: int = 12
+def week(connection: Connection, project_id: str, now: datetime, limit: int = 6
          ) -> list[dict[str, Any]]:
+    """THIS WEEK as a timeline: at most `limit` points, oldest first, ONE per thing that
+    happened. A pull request is one event (merged beats opened, at its first build: every retry
+    and follow-up carries the same PR and once drew "PR #3 opened" four times); a deploy is one
+    per environment and commit; labels are ≤ 3 words."""
+    from .titles import shorten
+
     since = now - timedelta(days=7)
     out: list[dict[str, Any]] = []
+    seen_deploys: set[tuple[str, str]] = set()
     for r in connection.execute(text(
             "SELECT s.id, s.finished_at, s.commit_sha, t.environment FROM stack_deployments s "
             "JOIN deployment_targets t ON t.id = s.target_id WHERE s.project_id = :p "
-            "AND s.status = 'healthy' AND s.finished_at >= :s ORDER BY s.finished_at DESC LIMIT 6"),
+            "AND s.status = 'healthy' AND s.finished_at >= :s ORDER BY s.finished_at DESC LIMIT 12"),
             {"p": project_id, "s": since}).mappings():
+        key = (str(r["environment"] or ""), str(r["commit_sha"] or ""))
+        if key in seen_deploys:
+            continue
+        seen_deploys.add(key)
+        from .health import env_label
+
         out.append({"at": iso(r["finished_at"]), "kind": "deploy",
-                    "label": words(f"Deployed to {r['environment']}"),
-                    "href": href(project_id, area="infra", view="deploys", deploy=r["id"])})
+                    "label": f"{env_label(r['environment'])} deploy",
+                    "href": href(project_id, area="infra", view="deploys", deploy=f"stack:{r['id']}")})
+    prs: dict[int, dict[str, Any]] = {}
     for r in connection.execute(text(
-            "SELECT id, pull_request_url, pull_request_number, created_at, updated_at, status "
-            "FROM code_task_runs WHERE project_id = :p AND COALESCE(pull_request_url, '') <> '' "
-            "AND updated_at >= :s ORDER BY updated_at DESC LIMIT 6"),
-            {"p": project_id, "s": since}).mappings():
-        n = r["pull_request_number"] or pr_number(r["pull_request_url"])
-        out.append({"at": iso(r["updated_at"]), "kind": "pr", "label": f"PR #{n} opened" if n
-                    else "PR opened", "external_url": r["pull_request_url"],
-                    "href": href(project_id, area="code_tasks", view="apps", build=r["id"])})
+            "SELECT DISTINCT ON (n) n, id, url, opened FROM (SELECT COALESCE(pull_request_number, "
+            "CAST(substring(pull_request_url from '/pull/([0-9]+)') AS INT)) AS n, id, "
+            "pull_request_url AS url, created_at AS opened FROM code_task_runs WHERE project_id = :p "
+            "AND COALESCE(pull_request_url, '') <> '') x WHERE n IS NOT NULL "
+            "ORDER BY n, opened"), {"p": project_id}).mappings():
+        if r["opened"] is not None and r["opened"] >= since:
+            prs[int(r["n"])] = {"at": iso(r["opened"]), "kind": "pr",
+                                "label": f"PR #{r['n']} opened", "external_url": r["url"],
+                                "href": href(project_id, area="code_tasks", view="apps",
+                                             build=r["id"])}
     for r in connection.execute(text(
             "SELECT id, approved_at, recommendation->>'pull_request_url' AS url FROM decisions "
             "WHERE project_id = :p AND status IN ('approved', 'executed') AND approved_at >= :s "
-            "AND recommendation->>'action' = 'review_pull_request' ORDER BY approved_at DESC "
-            "LIMIT 6"), {"p": project_id, "s": since}).mappings():
+            "AND recommendation->>'action' = 'review_pull_request' ORDER BY approved_at"),
+            {"p": project_id, "s": since}).mappings():
         n = pr_number(r["url"])
-        out.append({"at": iso(r["approved_at"]), "kind": "merge",
-                    "label": f"PR #{n} merged" if n else "PR merged", "external_url": r["url"],
-                    "href": href(project_id, area="decisions", decision=r["id"])})
+        if n is None:
+            continue
+        prs[n] = {"at": iso(r["approved_at"]), "kind": "merge", "label": f"PR #{n} merged",
+                  "external_url": r["url"],
+                  "href": href(project_id, area="decisions", decision=r["id"])}
+    out.extend(prs.values())
     for r in connection.execute(text(
             "SELECT id, title, first_seen FROM incidents WHERE project_id = :p AND first_seen >= :s "
             "ORDER BY first_seen DESC LIMIT 4"), {"p": project_id, "s": since}).mappings():
-        out.append({"at": iso(r["first_seen"]), "kind": "incident", "label": words(r["title"]),
+        out.append({"at": iso(r["first_seen"]), "kind": "incident",
+                    "label": shorten(r["title"], 3) or "Incident",
                     "href": project_href(project_id, tab="health")})
     for r in connection.execute(text(
             "SELECT id, COALESCE(title, directive) AS title, updated_at FROM meeting_runs "
             "WHERE project_id = :p AND status = 'completed' AND updated_at >= :s "
             "ORDER BY updated_at DESC LIMIT 4"), {"p": project_id, "s": since}).mappings():
-        out.append({"at": iso(r["updated_at"]), "kind": "idea", "label": words(r["title"]),
+        out.append({"at": iso(r["updated_at"]), "kind": "idea",
+                    "label": shorten(r["title"], 3) or "Plan agreed",
                     "href": href(project_id, area="meetings", meeting=r["id"])})
-    out.sort(key=lambda e: e["at"] or "", reverse=True)
-    return out[:limit]
+    # Identical words on the same day are one point.
+    seen: set[tuple[str, str]] = set()
+    unique = []
+    for e in sorted(out, key=lambda e: e["at"] or "", reverse=True):
+        key = (e["label"], (e["at"] or "")[:10])
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(e)
+    return sorted(unique[:limit], key=lambda e: e["at"] or "")
 
 
 # ── the overview ────────────────────────────────────────────────────────────────────────────
@@ -327,9 +418,11 @@ def view(connection: Connection, project_id: str, *, now: Optional[datetime] = N
     logins = demo.listing(connection, project_id)
     try_env = next((e for e in logins["environments"] if str(e["key"]).lower() in
                     ("staging", "stage")), None) or next(iter(logins["environments"]), None)
-    subs = {"onboarding": short_day(project["created_at"]) or "",
-            "working": f"{sum(1 for w in items if w['state'] == 'running')} running"
-            if facts["active"] else ""}
+    subs, details, prod_waits = journey_subs(connection, project, items, envs, onboarding, waiting)
+    if prod_waits and not any(n.get("id") == "prod:host" for n in waiting):
+        from .needs import prod_host_card
+
+        waiting.append(prod_host_card(project_id))
     return {
         "project": {"id": project["id"], "name": project["name"], "initials":
                     initials(project["name"]), "description": project["description"],
@@ -337,8 +430,13 @@ def view(connection: Connection, project_id: str, *, now: Optional[datetime] = N
                     "health": rollup(envs), "status_label": STATUS_LABELS[stage],
                     "archived": project["archived_at"] is not None},
         "journey": journey(project_id, facts["got"], stage,
-                           needs_you=len(waiting), subs=subs),
+                           needs_you=len(waiting), subs=subs, details=details,
+                           prod_waits=prod_waits),
         "needs_you": waiting,
+        # The Roadmap tab's count: what is proposed or accepted and not done yet.
+        "roadmap_count": int(connection.execute(text(
+            "SELECT count(*) FROM ambient_recommendations WHERE project_id = :p "
+            "AND status IN ('open', 'accepted')"), {"p": project_id}).scalar() or 0),
         "tiles": tiles(project_id, items, envs, _cost_week(connection, project_id, now)),
         "captain": captain_service.view(connection, project_id, roster=roster,
                                         with_last_said=False),
@@ -456,17 +554,28 @@ def summary(connection: Connection, project_ids: Iterable[str], *,
         ordered = sorted(tgs, key=lambda t: (str(t["environment"]).lower() not in ("staging",
                                                                                   "stage"),
                                              str(t["environment"]).lower() in PRODUCTION))
-        url = next((t["open_url"] or t["public_url"] or ((t["domains"] or [None])[0]
-                                                         if isinstance(t["domains"], list) else None)
-                    for t in ordered if t["deployed"]), None)
+        url = web_url(next((t["open_url"] or t["public_url"] or ((t["domains"] or [None])[0]
+                                                                 if isinstance(t["domains"], list)
+                                                                 else None)
+                            for t in ordered if t["deployed"]), None))
         roster = roles.get(pid, {})
         key = captains.get(pid) if captains.get(pid) in roster else captain_service.default_role(roster)
         f = face(roster, key) if key else None
         updated = max([v for v in (run.get("updated"), build.get("updated"), p["created_at"])
                        if v is not None])
+        # "Onboarding · Helm is reading it" only while an onboarding job is MOVING; a project
+        # that never ran one (or whose run ended) is "Not onboarded", with Start onboarding.
+        onboarding_active = onb.get("state") == "running"
+        status = STATUS_LABELS[stage]
+        if stage == "onboarding" and not onboarding_active:
+            status = "Not onboarded" if onb.get("state") in (None, "not_started", "failed") \
+                else "Ready for work"
         out.append({"id": pid, "name": p["name"], "initials": initials(p["name"]),
                     "repo": primary.get(pid), "stage": stage,
-                    "status_label": STATUS_LABELS[stage],
+                    "status_label": status, "onboarding_active": onboarding_active,
+                    "start_onboarding": (None if onboarding_active else
+                                         {"href": f"/v1/projects/{pid}/onboarding/start",
+                                          "method": "POST"}),
                     "journey": [{"key": j["key"], "label": j["label"], "state": j["state"]}
                                 for j in journey(pid, got, stage, needs_you=waiting)],
                     "needs_you": waiting, "running": live, "health": health, "live_url": url,

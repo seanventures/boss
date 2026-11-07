@@ -38,6 +38,18 @@ def project_href(project_id: str, tab: Optional[str] = None, drawer: Optional[st
     return href(project_id, area="project", tab=tab, drawer=drawer)
 
 
+def web_url(value: Any) -> Optional[str]:
+    """THE ONE PLACE an app's address becomes a link: a bare `203.0.113.20:8004` (what a deploy
+    records as its open URL) gets `http://`, so a link opens the app, never
+    `<console>/203.0.113.20:8004`. None stays None."""
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    if re.match(r"^[a-z][a-z0-9+.-]*://", raw, re.I):
+        return raw
+    return f"http://{raw.lstrip('/')}"
+
+
 def words(value: Any, limit: int = 4) -> str:
     """A node label: at most `limit` words (contract: every label ≤ 4 words)."""
     parts = str(value or "").split()
