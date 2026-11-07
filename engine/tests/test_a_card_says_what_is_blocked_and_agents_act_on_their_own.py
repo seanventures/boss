@@ -367,3 +367,80 @@ def test_a_card_of_nudges_names_the_stalled_work(eng, project):  # noqa: F811
                             "asked": False, "ask_kind": "handoff"}]
     assert cos.batch_question(mixed) == \
         "Chief of Staff suggests 2 hand-offs: a nudge (esbuild bump), docs"
+
+
+# ── an item put back on the board gets its owners' next turn, or the reason is recorded ──────
+#
+# After cc8b6e8fb the live card withdrew ("granted") and work_3c4d… went back on the board — then
+# sat an hour with no turn: five higher-scored helpdesk CVE items filled the three owner slots of
+# every tick. An item owed a turn now goes first; one that still gets none says why, on the ledger.
+
+def _handed(c, item):
+    collab.post(c, item["id"], kind="handoff", sender=cos.PARTY,
+                body={"to": INFRA, "from": cos.PARTY, "summary": "Propose"})
+
+
+def _returned(c, pid):
+    """The live item's path: a stuck question, withdrawn because the squad can now read."""
+    item = _restarts_item(c, pid)
+    _handed(c, item)
+    _grant(c, pid, "infra_steward")
+    legacy = {"squad": "Squad", "words": "squad is stuck: this install", "detail": REASON,
+              "ask_kind": "question", "asked_by": INFRA, "task_class": "system_health",
+              "question": "Squad is stuck on this install — let it go on, or take it?",
+              "work_item_id": item["id"]}
+    asks.place(c, None, pid, [legacy], urgent=True)   # the project's one card
+    return item
+
+
+def test_an_item_put_back_on_the_board_goes_ahead_of_higher_priority_work(eng, project):  # noqa: F811
+    from boss_engine.services.ambient import owners
+
+    with eng.begin() as c:
+        busier = []
+        for n in range(3):
+            other = open_item(c, project, task_class="system_health", fingerprint=f"fp:busy{n}",
+                              title=f"Busier work {n}", subject_ref=f"repo:acme/b{n}")["item"]
+            _handed(c, other)
+            busier.append(other["id"])
+        mine = _returned(c, project)
+        c.execute(text("UPDATE work_items SET effective_score = 90 WHERE id = ANY(:b)"),
+                  {"b": busier})
+        c.execute(text("UPDATE work_items SET effective_score = 47 WHERE id = :w"),
+                  {"w": mine["id"]})
+        before = [d["id"] for d in owners.due_items(c, project_id=project, limit=3)]
+        assert mine["id"] not in before, "waiting on the card: not the owners' to work"
+        cos.reconsider(c, project, mode="propose")        # withdrawn: back on the board
+        due = owners.due_items(c, project_id=project, limit=3)
+    assert due[0]["id"] == mine["id"] and due[0].get("owed"), [d["id"] for d in due]
+
+
+def test_an_owed_item_that_gets_no_turn_says_why_on_the_ledger(eng, project):  # noqa: F811
+    from boss_engine.services.ambient import owners
+
+    from ._squad_support import Launchers
+
+    with eng.begin() as c:
+        first = _returned(c, project)
+        second = _returned(c, project)
+        cos.reconsider(c, project, mode="propose")
+        owed = [d["id"] for d in owners.due_items(c, project_id=project, limit=5)
+                if d.get("owed")]
+    assert sorted(owed) == sorted([first["id"], second["id"]])
+    quiet = ScriptedSquadModel({})
+    report = owners.work(eng, settings(), project_id=project, limit=1, model=quiet,
+                         launchers=Launchers(), rounds=1)
+    [turned] = [w["work_item_id"] for w in report["worked"] if w["kind"] == "squad"]
+    [waiting] = [i for i in (first["id"], second["id"]) if i != turned]
+    with eng.begin() as c:
+        said = [r for r in ledger.list_decisions(c, project, work_item_id=waiting)
+                if r["question"] == owners.Q_WHY_NO_TURN]
+    assert len(said) == 1 and said[0]["chosen"] == "wait"
+    assert "first in line for the next tick" in said[0]["rationale"]
+    # The next tick gives it its turn, and the reason is not written twice.
+    report = owners.work(eng, settings(), project_id=project, limit=1, model=quiet,
+                         launchers=Launchers(), rounds=1)
+    assert [w["work_item_id"] for w in report["worked"] if w["kind"] == "squad"] == [waiting]
+    with eng.begin() as c:
+        assert len([r for r in ledger.list_decisions(c, project, work_item_id=waiting)
+                    if r["question"] == owners.Q_WHY_NO_TURN]) == 1

@@ -38,7 +38,7 @@ from __future__ import annotations
 
 import logging
 from datetime import timedelta
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
@@ -81,6 +81,9 @@ _HANDED = (
     "SELECT w.id, w.project_id, w.task_class, w.lifecycle, w.answered_at, w.effective_score, "
     "  (SELECT max(e.created_at) FROM events e WHERE e.project_id = w.project_id "
     "     AND e.event_type = 'ambient.squad_turn' AND e.entity_id = w.id) AS squad_turn_at, "
+    "  (SELECT max(e.created_at) FROM events e WHERE e.project_id = w.project_id "
+    "     AND e.event_type = 'ambient.item_transitioned' AND e.entity_id = w.id "
+    "     AND e.data->>'to' = 'proposed' AND e.data ? 'withdrawn') AS returned_at, "
     "  EXISTS (SELECT 1 FROM work_item_messages m WHERE m.work_item_id = w.id "
     "     AND m.kind = 'squad') AS has_squad, "
     "  EXISTS (SELECT 1 FROM work_item_messages m WHERE m.work_item_id = w.id "
@@ -107,9 +110,27 @@ def _newer_than(connection: Connection, item_id: str, since: Any,
     return row is not None
 
 
+def owed_since(row: Mapping[str, Any]) -> Any:
+    """When the item was put back to its owners and is OWED their next turn: a person answered
+    it, or the Chief of Staff withdrew the question it waited on (board.unask, "withdrawn"),
+    after the squad's last turn. None when nothing is owed."""
+    last = row.get("squad_turn_at")
+    back = [t for t in (row.get("answered_at"), row.get("returned_at")) if t is not None]
+    since = max(back) if back else None
+    return since if since is not None and (last is None or since > last) else None
+
+
 def due_items(connection: Connection, *, project_id: Optional[str] = None,
-              limit: int = DEFAULT_ITEMS_PER_TICK) -> list[dict[str, Any]]:
-    """The handed-over items the owners should work this tick, highest priority first."""
+              limit: int = DEFAULT_ITEMS_PER_TICK,
+              held: Optional[list[dict[str, Any]]] = None) -> list[dict[str, Any]]:
+    """The handed-over items the owners should work this tick: first every item OWED a turn
+    (put back on the board since its squad's last turn), then the rest by priority.
+
+    OWED FIRST, NEVER STARVED (boss-dogfood 2026-11-07): the Chief of Staff put the Infra
+    Steward's item back on the board when it withdrew its question, and it sat an hour with no
+    turn — five higher-scored helpdesk CVE items, each due again every 30 minutes, filled the
+    three slots of every tick. An owed item now goes ahead of priority; one that still cannot
+    be worked this tick is appended to `held` with the reason, for the ledger (`_work`)."""
     incident = set(_incident_classes())
     out: list[dict[str, Any]] = []
     room: dict[str, int] = {}
@@ -119,10 +140,23 @@ def due_items(connection: Connection, *, project_id: Optional[str] = None,
     rows = connection.execute(text(_HANDED.format(live=projects_archive.live_sql("w.project_id"))),
                               {"p": project_id, "cos": COS,
                                               "nosquad": f"{NO_SQUAD}%"}).mappings().all()
+    # Stable: owed items first, each group still in priority order.
+    rows = sorted(rows, key=lambda r: owed_since(r) is None)
+
+    def hold(r: Mapping[str, Any], why: str) -> None:
+        if held is not None and owed_since(r) is not None:
+            held.append({"id": r["id"], "project_id": r["project_id"], "why": why,
+                         "since": owed_since(r)})
+
     for r in rows:
         if len(out) >= limit:
-            break
+            if owed_since(r) is None:
+                break
+            hold(r, f"the owners' turns this tick were full ({limit} items install-wide); "
+                    "it is first in line for the next tick")
+            continue
         if policy.is_stopped(connection, r["project_id"]):
+            hold(r, "ambient work is stopped in this project")
             continue
         if r["task_class"] in incident:
             # The SRE squad's first pass; later passes are its own (resume on the answer,
@@ -135,6 +169,7 @@ def due_items(connection: Connection, *, project_id: Optional[str] = None,
                 out.append({**r, "kind": "incident"})
             continue
         if r["no_squad"]:
+            hold(r, "this project could not seat a squad for it")
             continue
         # ONE OWNER FOR EACH PIECE OF WORK: what onboarding's backlog already proposes is the
         # person's to decide there — left to it (its findings become the backlog item's
@@ -147,6 +182,7 @@ def due_items(connection: Connection, *, project_id: Optional[str] = None,
             if r["project_id"] not in graced:
                 graced[r["project_id"]] = policy.grace(connection, r["project_id"]) is not None
             if graced[r["project_id"]]:
+                hold(r, "the project is in its onboarding grace: the backlog is looked at first")
                 continue
         if not r["has_squad"]:
             # THE RATE GUARD reaches the owners too: a new squad's proposal asks a person, so
@@ -156,15 +192,43 @@ def due_items(connection: Connection, *, project_id: Optional[str] = None,
                 room[r["project_id"]] = policy.ask_room(connection, r["project_id"])
             if r["lifecycle"] == "proposed" and room[r["project_id"]] > 0:
                 out.append({**r, "kind": "assemble"})
+            else:
+                hold(r, "this project's hour of cards is used up, so no new squad is seated")
             continue
         roster = squads.roster(connection, r["id"]) or {"members": []}
         members = {m["party"] for m in roster["members"]}
         last = r["squad_turn_at"]
         stale = last is None or last < now() - timedelta(minutes=SQUAD_RECHECK_MINUTES)
-        answered = r["answered_at"] is not None and (last is None or r["answered_at"] > last)
-        if stale or answered or _newer_than(connection, r["id"], last, members):
-            out.append({**r, "kind": "squad"})
+        if stale or owed_since(r) is not None or _newer_than(connection, r["id"], last, members):
+            out.append({**r, "kind": "squad", "owed": owed_since(r) is not None})
     return out
+
+
+#: The question an owed item's silence is recorded under (once per return to the board).
+Q_WHY_NO_TURN = "Give this item its owners' next turn now?"
+
+
+def say_why_no_turn(connection: Connection, item_id: str, why: str, since: Any) -> bool:
+    """AN OWED ITEM IS NEVER SILENT: the reason it got no turn, on the ledger as the Chief of
+    Staff's decision — once per return to the board (not every tick). True if recorded."""
+    from . import ledger
+
+    item = board.get(connection, item_id)
+    if item is None or item["lifecycle"] in board.TERMINAL:
+        return False
+    if connection.execute(text(
+            "SELECT 1 FROM agent_act_decisions WHERE work_item_id = :w AND decided_by = :c "
+            "AND question = :q AND created_at >= :s LIMIT 1"),
+            {"w": item_id, "c": COS, "q": Q_WHY_NO_TURN, "s": since}).first():
+        return False
+    ledger.record_decision(
+        connection, project_id=item["project_id"], decided_by=COS, work_item_id=item_id,
+        task_class=item["task_class"], question=Q_WHY_NO_TURN, chosen="wait",
+        options=["turn", "wait"], reversibility="reversible",
+        undo={"action": "reopen", "work_item_id": item_id},
+        evidence=[{"kind": "work_item", "ref": item_id}],
+        rationale=f"It is back with its owners but they took no turn on it: {why}.")
+    return True
 
 
 def _q_triage() -> str:
@@ -227,8 +291,11 @@ def _work(engine: Any, settings: Any, report: dict[str, Any], *, project_id: Opt
     with engine.begin() as c:
         if policy.stop_state(c, None)["stopped"]:
             return {**report, "skipped": "stopped"}
+        held: list[dict[str, Any]] = []
         todo = due_items(c, project_id=project_id,
-                         limit=item_limit(settings) if limit is None else limit)
+                         limit=item_limit(settings) if limit is None else limit, held=held)
+    for h in held:
+        _say_why(engine, h["id"], h["why"], h["since"], report)
     for entry in todo:
         item_id = entry["id"]
         pid = entry["project_id"]
@@ -253,10 +320,18 @@ def _work(engine: Any, settings: Any, report: dict[str, Any], *, project_id: Opt
                 "work_item_id": item_id, "kind": "squad", "rounds": run["rounds"],
                 "turns": len(run["turns"]), "settled": [s.get("state") for s in run["settled"]],
                 "stopped": (run.get("stopped") or {}).get("guard")})
+            if entry.get("owed") and not run["turns"]:
+                # Owed a turn and a guard refused it (turn or spend cap, a take-over …): said.
+                stop = run.get("stopped") or {}
+                _say_why(engine, item_id, f"a squad guard stopped it ({stop.get('guard')}: "
+                                          f"{stop.get('reason')})", owed_since(entry), report)
         except Exception as exc:  # noqa: BLE001 — one item's failure never stops the others
             log.warning("ambient owners failed on %s", item_id, exc_info=True)
             report["worked"].append({"work_item_id": item_id, "kind": "error",
                                      "reason": f"{type(exc).__name__}: {exc}"[:300]})
+            if owed_since(entry) is not None:
+                _say_why(engine, item_id, f"its turn failed ({type(exc).__name__})",
+                         owed_since(entry), report)
     # Incidents the SRE squad is watching recover: look again (no model unless it has a verdict).
     with engine.begin() as c:
         pids = [project_id] if project_id else [str(p) for p in c.execute(text(
@@ -276,6 +351,15 @@ def _work(engine: Any, settings: Any, report: dict[str, Any], *, project_id: Opt
     return report
 
 
+def _say_why(engine: Any, item_id: str, why: str, since: Any, report: dict[str, Any]) -> None:
+    try:
+        with engine.begin() as c:
+            if say_why_no_turn(c, item_id, why, since):
+                report.setdefault("held", []).append({"work_item_id": item_id, "why": why})
+    except Exception:  # noqa: BLE001 — recording the reason never stops the tick
+        log.warning("could not record why %s got no turn", item_id, exc_info=True)
+
+
 def projects_with_owner_work(connection: Connection) -> list[str]:
     """Projects with a handed-over item still live (the tick visits them even with no new
     signal)."""
@@ -286,5 +370,6 @@ def projects_with_owner_work(connection: Connection) -> list[str]:
         "AND h.sender = :cos)"), {"cos": COS}).scalars()]
 
 
-__all__ = ["work", "due_items", "projects_with_owner_work", "enabled", "item_limit",
-           "SQUAD_ROUNDS_PER_TICK", "SQUAD_RECHECK_MINUTES", "NO_SQUAD"]
+__all__ = ["work", "due_items", "owed_since", "say_why_no_turn", "Q_WHY_NO_TURN",
+           "projects_with_owner_work", "enabled", "item_limit", "SQUAD_ROUNDS_PER_TICK",
+           "SQUAD_RECHECK_MINUTES", "NO_SQUAD"]
