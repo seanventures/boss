@@ -614,7 +614,7 @@ Breadcrumb `Projects / HelpDesk AI Demo / Onboarding`.
 - [ ] **10-25** Backlog item 3 `SLA timers`, `issue #9`, `feature`. Pass when it is real.
 - [ ] **10-26** Backlog item 4 `UI refresh`, `TODO ×7` (note), `feature`. Pass when it is real.
 - [ ] **10-27** `… +8 more` row. Pass when the count is real and it expands or links to the full list.
-- [ ] **10-28** Backlog buttons: primary `Accept backlog` (dimmed, tooltip "Unlocks when Ready is 6/6") and `Edit`. Per contract §14, these resolve to "See the roadmap": items are accepted one by one on the Roadmap and What's next. Pass when the build shows the buttons the contract settles on, they unlock at 6/6, and they lead to the Roadmap.
+- [ ] **10-28** Backlog buttons: primary `Accept backlog` (dimmed, tooltip "Unlocks when Ready is 6/6") and `Edit`, exactly as in the wireframe. `Accept backlog` really accepts: the ranked items go into the Roadmap's Now/Next lanes (shown with a toast and a link), and nothing starts a build until the user starts that item. `Edit` opens the backlog editor (reorder, drop, rename) before accepting. Pass when both unlock at 6/6, Accept writes the items to the Roadmap (visible after a reload), and no build starts.
 - [ ] **10-29** Design note 1: the agent does the checklist and asks only what it cannot; the amber item is mirrored in Needs you and on the bell. Pass when it holds.
 - [ ] **10-30** Design note 2: Work it = build → review → tests → PR, never skipped; Deploy = staging by policy, prod a person. Pass when it holds.
 - [ ] **10-31** Design note 3: on completion this page becomes the Overview (screen 04) at the same URL, and the journey keeps these stages as its first nodes. Pass when it holds.
