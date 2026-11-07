@@ -16,6 +16,7 @@
  */
 import React, { useEffect, useId, useState } from "react";
 import { createPortal } from "react-dom";
+import { Flask, FolderPlus, GitBranch, Lightbulb, X } from "@phosphor-icons/react";
 
 import { GatedButton, useGate } from "../../components/gated";
 import { useGuardedCall } from "../../components/identity/identity-provider";
@@ -168,29 +169,23 @@ export function StartProjectSheet({ step, onStep, onClose, projectId, homeId, go
         <div className="spj-head">
           {/* ADD A PROJECT (BOSSAPP-914 screen 3): New · from an idea | Existing · repo, as tabs, with
               Try a sample beside them. The choice screen (presets) stays one press away. */}
-          {step === "idea" || step === "import" ? (
-            <>
-              <h2 id={titleId} className="bx-np-title" style={{ flex: "none" }}>Add a project</h2>
-              <div className="spj-seg" role="tablist" aria-label="New or existing">
-                <button type="button" role="tab" aria-selected={step === "idea"} data-testid="start-tab-idea" disabled={!!busy}
-                        onClick={() => { setRefusal(null); setError(null); onStep("idea"); }}>New · from an idea</button>
-                <button type="button" role="tab" aria-selected={step === "import"} data-testid="start-tab-import" disabled={!!busy}
-                        onClick={() => { setRefusal(null); setError(null); onStep("import"); }}>Existing · repo</button>
-              </div>
-              <span style={{ flex: 1 }} />
-              <button type="button" className="spj-more" data-testid="start-tab-sample" disabled={!!busy} onClick={() => onStep("sample")}>Try a sample</button>
-              <button type="button" className="spj-more" data-testid="start-tab-presets" disabled={!!busy} onClick={() => onStep("choose")}>Presets</button>
-            </>
-          ) : null}
-          {step !== "choose" && step !== "idea" && step !== "import" ? (
-            <button type="button" className="spj-back" data-testid="start-back" disabled={!!busy}
-                    onClick={() => { setRefusal(null); setError(null); onStep("choose"); }}>Back</button>
-          ) : null}
-          {step === "idea" || step === "import" ? null : (
-            <h2 id={titleId} className="bx-np-title">{step === "sample" ? "Try a sample" : "New project"}</h2>
-          )}
-          <button type="button" className="spj-close" aria-label="Close" title="Close" data-testid="start-close"
-                  disabled={!!busy} onClick={onClose}>×</button>
+          {/* ONE HEAD ON EVERY STEP (screen 03, PX-39): Add a project · New | Existing · Try a sample.
+              The sample and the presets are this sheet's third door, never a different title. */}
+          <span className="spj-ico" aria-hidden><FolderPlus size={17} weight="duotone" /></span>
+          <h2 id={titleId} className="bx-np-title" style={{ flex: "none" }}>Add a project</h2>
+          <div className="spj-seg" role="tablist" aria-label="New or existing">
+            <button type="button" role="tab" aria-selected={step === "idea"} data-testid="start-tab-idea" disabled={!!busy}
+                    onClick={() => { setRefusal(null); setError(null); onStep("idea"); }}><Lightbulb size={14} aria-hidden /> New · from an idea</button>
+            <button type="button" role="tab" aria-selected={step === "import"} data-testid="start-tab-import" disabled={!!busy}
+                    onClick={() => { setRefusal(null); setError(null); onStep("import"); }}><GitBranch size={14} aria-hidden /> Existing · repo or folder</button>
+          </div>
+          <span style={{ flex: 1 }} />
+          <button type="button" className="spj-more spj-sample-link" data-testid="start-tab-sample" disabled={!!busy}
+                  aria-current={step === "sample" || step === "choose" ? "page" : undefined}
+                  onClick={() => { setRefusal(null); setError(null); onStep("sample"); }}>
+            <Flask size={13} aria-hidden /> Try a sample</button>
+          <button type="button" className="spj-close" aria-label="Close" title="Close (Esc)" data-testid="start-close"
+                  disabled={!!busy} onClick={onClose}><X size={16} weight="bold" aria-hidden /></button>
         </div>
 
         {step === "choose" ? (
@@ -239,7 +234,8 @@ export function StartProjectSheet({ step, onStep, onClose, projectId, homeId, go
               <li><b>Pull request</b><span>You merge</span></li>
               <li><b>Preview</b><span>Live</span></li>
             </ol>
-            <p className="spj-quiet">Hello World. One page and one test. About 8 minutes.</p>
+            <p className="spj-quiet">Hello World. One page and one test. About 8 minutes.
+              {" "}<button type="button" className="spj-more" data-testid="start-tab-presets" disabled={!!busy} onClick={() => onStep("choose")}>More samples &amp; presets</button></p>
             {refusal ? (
               <div data-testid="start-sample-readiness">
                 <ReadinessPanel readiness={refusal} accepted={startAnyway} onAccept={setStartAnyway} />

@@ -24,6 +24,8 @@ export type RegistryRepo = {
   checks?: { read?: CheckResult; write?: CheckResult; pull_requests?: CheckResult } | null;
   checked_at?: string | null; state: RepoState;
   used_by?: { project_id: string; name: string }[];
+  /** GitHub's last push (Add a project shows "3h", "12d"). */
+  pushed_at?: string | null;
 };
 export type RegistryConnection = {
   kind: "app" | "token"; account_login?: string | null; account_type?: string | null;

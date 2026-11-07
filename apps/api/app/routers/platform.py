@@ -209,6 +209,10 @@ def mount_platform_routers(app: FastAPI) -> None:
     from .project_experience import router as project_experience_router
 
     app.include_router(project_experience_router)
+    # Add a project › Folder on host (screen 03): read-only folder probe + the source record.
+    from .host_folders import router as host_folders_router
+
+    app.include_router(host_folders_router)
 
     # BOSSAPP-768 — Rules review: the business rules agents propose, approved by a person
     try:

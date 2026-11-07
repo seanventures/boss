@@ -447,7 +447,18 @@ def host_facts_from(out: str) -> dict[str, Any]:
         tools.setdefault("docker", bool(facts["docker"]))
     if "SUDO_OK" in out or "SUDO_NO" in out:
         facts["sudo"] = "SUDO_OK" in out
+    from .project_experience.host_overview import capacity_from
+
+    capacity = capacity_from(out)
+    if capacity:
+        facts["capacity"] = capacity
     return facts
+
+
+def _capacity_probe() -> str:
+    from .project_experience.host_overview import CAPACITY_PROBE
+
+    return CAPACITY_PROBE
 
 
 def host_has(facts: Optional[Mapping[str, Any]]) -> list[str]:
@@ -512,6 +523,9 @@ def preflight_host(access: HostAccess, manifest: DeployManifest) -> Preflight:
         "command -v tar >/dev/null 2>&1 && echo TAR_OK || echo TAR_MISSING; "
         "command -v curl >/dev/null 2>&1 && echo CURL_OK || echo CURL_MISSING; "
         + _tools_probe([t for t, _ in needed])
+        # HOW FULL THE MACHINE IS (Infra › server, screen 14): cpus, load, memory, disk, OS and
+        # the running images — read-only, kept on the host's record with the other facts.
+        + "; " + _capacity_probe()
     )
     result = access.run(probe, timeout=40)
     out = result.output

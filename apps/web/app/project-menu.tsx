@@ -5,9 +5,8 @@ import React, { useEffect, useRef, useState } from "react";
 import { GatedButton } from "../components/gated";
 import { consoleHref } from "./console-href";
 import { useDetailsDismiss } from "../lib/details-dismiss";
-import { EMPTY_DRAFT, NewProjectSheet, type NewProjectDraft } from "./new-project-sheet";
-import { StartProjectSheet } from "./start-project/start-sheet";
-import { NEW_PROJECT_PARAM, clearStepParam, projectPageHref, stepFromParam, type StartStep } from "../lib/start-project";
+import { StartProjectHost } from "./start-project/start-host";
+import { NEW_PROJECT_PARAM, stepFromParam, type StartStep } from "../lib/start-project";
 import { ArchiveDialog, ArchivedNotice, ArchivedProjects, useArchived } from "./project-archive";
 import type { ProjectType } from "@boss/api-client";
 
@@ -84,9 +83,6 @@ export function ProjectMenu({ projects, activeId, homeId, orgId }: {
     window.addEventListener("popstate", read);
     return () => window.removeEventListener("popstate", read);
   }, []);
-  const closeStart = () => { setStep(null); clearStepParam(); };
-  // The draft is the menu's, not the sheet's form: a passkey prompt or a refused step-up keeps it.
-  const [draft, setDraft] = useState<NewProjectDraft>(EMPTY_DRAFT);
   const [archiving, setArchiving] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
   const active = projects.find((p) => p.id === activeId);
@@ -158,18 +154,8 @@ export function ProjectMenu({ projects, activeId, homeId, orgId }: {
         ) : null}
       </div>
     </details>
-    {step === "form" ? (
-      <NewProjectSheet draft={draft} onDraft={setDraft} onClose={closeStart} onBack={() => setStep("idea")}
-                       onCreated={(id, type) => {
-                         setDraft(EMPTY_DRAFT);
-                         clearStepParam();
-                         // A knowledge-graph project opens on its setup: import, team, first scan.
-                         // An app opens on its page: "What should we build?", the description ready.
-                         window.location.assign(type === "knowledge_graph" ? knowledgeSetupHref(id, homeId) : projectPageHref(id, homeId));
-                       }} />
-    ) : step ? (
-      <StartProjectSheet step={step} onStep={setStep} onClose={closeStart} projectId={activeId} homeId={homeId} />
-    ) : null}
+    {/* THE ONE ADD-A-PROJECT SHEET (start-host.tsx): drawn by whichever host mounted first. */}
+    <StartProjectHost projectId={activeId} homeId={homeId} step={step} onStep={setStep} />
     {archiving && active ? (
       <ArchiveDialog projectId={active.id} name={active.name} onClose={() => setArchiving(false)}
                      onArchived={goHome} />

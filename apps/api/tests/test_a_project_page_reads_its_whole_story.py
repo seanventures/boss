@@ -317,7 +317,7 @@ def test_jump_finds_a_pr_by_number_a_run_by_words_and_the_captain_by_name(world,
     pr = _get(world, client, world.owner, "/v1/jump", q="#3", project_id=pid).json()["items"]
     assert any(i["kind"] == "pr" and i["label"].startswith("PR #3") for i in pr)
     run = _get(world, client, world.owner, "/v1/jump", q="search", project_id=pid).json()["items"]
-    assert any(i["kind"] == "run" and i["label"] == "Ticket search filters" for i in run)
+    assert any(i["kind"] == "run" and i["label"] == "Run · Ticket search filters" for i in run)
     proj = _get(world, client, world.owner, "/v1/jump", q="HelpDesk").json()["items"]
     assert any(i["kind"] == "project" and i["project_id"] == pid for i in proj)
     hidden = _get(world, client, world.stranger, "/v1/jump", q="x", project_id=pid)

@@ -107,20 +107,23 @@ def refresh(db: Any, settings: Any, project_id: str, *, actor: str = "operator",
         seen.add(key)
         db.execute(sql(
             "INSERT INTO github_repos (id, org_id, source, github_repo_id, full_name, description, "
-            "default_branch, language, private, archived, reachable, last_seen_at) "
-            "VALUES (:id, :o, :src, :gid, :full, :desc, :branch, :lang, :priv, :arch, true, now()) "
+            "default_branch, language, private, archived, reachable, last_seen_at, pushed_at) "
+            "VALUES (:id, :o, :src, :gid, :full, :desc, :branch, :lang, :priv, :arch, true, now(), "
+            "CAST(:pushed AS TIMESTAMPTZ)) "
             "ON CONFLICT (org_id, lower(full_name)) DO UPDATE SET source = EXCLUDED.source, "
             "github_repo_id = COALESCE(EXCLUDED.github_repo_id, github_repos.github_repo_id), "
             "full_name = EXCLUDED.full_name, description = COALESCE(EXCLUDED.description, github_repos.description), "
             "default_branch = COALESCE(EXCLUDED.default_branch, github_repos.default_branch), "
             "language = COALESCE(EXCLUDED.language, github_repos.language), private = EXCLUDED.private, "
-            "archived = EXCLUDED.archived, reachable = true, last_seen_at = now(), updated_at = now()"),
+            "archived = EXCLUDED.archived, reachable = true, last_seen_at = now(), updated_at = now(), "
+            "pushed_at = COALESCE(EXCLUDED.pushed_at, github_repos.pushed_at)"),
             {"id": make_id("ghr"), "o": org_id, "src": source,
              "gid": item.get("id") if isinstance(item.get("id"), int) else None, "full": full,
              "desc": (str(item["description"])[:300] if item.get("description") else None),
              "branch": item.get("default_branch"), "lang": item.get("language"),
              "priv": bool(item.get("private")) if item.get("private") is not None else None,
-             "arch": bool(item.get("archived"))})
+             "arch": bool(item.get("archived")),
+             "pushed": str(item["pushed_at"]) if item.get("pushed_at") else None})
     # Gone from the installation: not reachable, never silently still allowed.
     rows = db.execute(sql("SELECT id, full_name FROM github_repos WHERE org_id = :o"), {"o": org_id}).mappings().all()
     gone = [r["id"] for r in rows if norm_repo(r["full_name"]) not in seen]
@@ -178,6 +181,7 @@ def _shape(row: dict[str, Any], used_by: list[dict[str, Any]]) -> dict[str, Any]
         "checks": {k: {"ok": (checks.get(k) or {}).get("ok"), "state": (checks.get(k) or {}).get("state")}
                    for k in ("read", "write", "pull_requests")},
         "checked_at": iso(row.get("checked_at")), "state": state_of(row),
+        "pushed_at": iso(row.get("pushed_at")),
         "used_by": used_by,
     }
 

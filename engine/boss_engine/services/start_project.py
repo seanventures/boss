@@ -186,11 +186,13 @@ def mapping(item: Optional[dict[str, Any]]) -> dict[str, Any]:
     state = str(item.get("status") or "pending")
     files, parsed = int(item.get("files") or 0), int(item.get("parsed") or 0)
     nodes = int(((item.get("graph") or {}).get("nodes")) or 0)
+    counts = {"files": files or None, "parsed": parsed if files else None}
     if state == "indexed" or (state not in ("queued", "running", "pending") and nodes > 0):
-        return {"state": "done", "percent": 100, "done": True}
+        return {"state": "done", "percent": 100, "done": True,
+                "files": files or None, "parsed": files or parsed or None}
     if state == "running":
         pct = min(99, round(parsed * 100 / files)) if files else 5
-        return {"state": "running", "percent": pct, "done": False}
+        return {"state": "running", "percent": pct, "done": False, **counts}
     if state in ("failed", "too_large"):
         return {"state": "failed", "percent": 0, "done": False, "error": item.get("error") or state}
     return {"state": "queued", "percent": 0, "done": False}
@@ -226,6 +228,8 @@ def repo_facts(connection: Connection, project_id: str, repo_id: str, *,
             "description": row.get("description"), "private": row.get("private"),
             "facts": found, "read_from": source if paths else None,
             "mapping": mapping(item), "in_project": item is not None,
+            # Add a project › Map code "0 / 214 files": how many files the repository has.
+            "files_total": len(paths or []) or None,
             "suggested_name": suggested_name(full_name)}
 
 
