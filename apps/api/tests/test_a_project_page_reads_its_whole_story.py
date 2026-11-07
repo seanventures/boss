@@ -239,7 +239,7 @@ def test_health_shows_each_environment_its_slo_and_how_monitoring_gets_set_up(wo
     h = r.json()
     env = h["environments"][0]
     assert env["health"] == "healthy" and env["uptime_pct"] == 100.0
-    assert env["slo"] == {"target": 99.5, "burn": "ok"}
+    assert env["slo"] == {"target": 99.5, "burn": "ok", "budget_used_pct": 0}
     assert len(env["series"]["latency"]) == 30
     assert h["monitoring_pack"]["rules"] == 0 and h["monitoring_pack"]["managed_in"] == "none"
     assert "Beacon" in h["empty"]["detail"]
