@@ -79,8 +79,8 @@ def test_a_firing_rule_comes_first_and_says_since_when(world, client, helpdesk, 
     rule = helpdesk["alerting"]["rules"]["AppErrorRate"]
     with engine.begin() as db:
         db.execute(text(
-            "INSERT INTO app_alerts (id, project_id, target_id, subject_id, rule_id, rule_kind, "
-            "fingerprint, alertname, labels, state, active_at, fired_at) VALUES (:i, :p, :t, :t, :r, "
+            "INSERT INTO app_alerts (id, project_id, target_id, rule_id, rule_kind, "
+            "fingerprint, alertname, labels, state, active_at, fired_at) VALUES (:i, :p, :t, :r, "
             "'error_rate', :f, 'AppErrorRate', '{\"severity\": \"sev1\"}', 'firing', now(), now())"),
             {"i": f"alr_{uuid.uuid4().hex[:10]}", "p": helpdesk["id"], "t": helpdesk["target_id"],
              "r": rule, "f": uuid.uuid4().hex})
