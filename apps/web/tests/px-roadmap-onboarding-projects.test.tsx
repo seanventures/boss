@@ -52,9 +52,9 @@ const PLAN = {
 const REC = {
   id: "rec_sla", work_item_id: "rec_sla", title: "Regression test for SLA weekend pause", kind: "hardening", detector: "incident_cause",
   proposed_shape: "ticket", status: "open", rank: 1, score: 9, squad: ["qa"], why: "Two incidents trace to sla.mjs.",
-  badges: { kind: "Hardening", value: 1.9, effort: 1, risk: 1, evidence: 3, sources: 2, cost_usd: 2, detector: "Incident patterns" },
+  badges: { kind: "Hardening", value: 1.9, effort: 1, risk: 1, evidence: 3, sources: 2, cost_usd: 2, detector: "Incident hotspot" },
   strip: [{ type: "signal", label: "Incidents", badges: ["×2"] }, { type: "signal", label: "Code graph", badges: ["×1"] },
-          { type: "agent", label: "Incident patterns", badges: [] }, { type: "action", label: "Hardening sla.mjs", badges: [] }],
+          { type: "agent", label: "Incident hotspot", badges: [], icon: "detective" }, { type: "action", label: "Hardening sla.mjs", badges: [] }],
 };
 const READY_ROWS = [
   ["repo_access", "Repo access", "done", "read · branch · PR", "engineering_captain"], ["baseline_build", "Builds clean", "done", "make setup · 1m 40s", "builder"],
@@ -146,7 +146,7 @@ describe("Roadmap (screen 07): recommendations", () => {
     expect(document.body.textContent).not.toMatch(/resolved_by_change|Resolved_by_change/);
     const flow = tid("px-rec-flow-rec_sla")!.textContent!;
     expect(flow).toContain("2 incidents");
-    expect(flow).toContain("Incident patterns");
+    expect(flow).toContain("Incident hotspot");
     expect(flow).toContain("Test + fix");
     expect(tid("px-rec-cost-rec_sla")!.textContent).toBe("≈ $2");
     await press(tid("px-rec-whybtn-rec_sla"));

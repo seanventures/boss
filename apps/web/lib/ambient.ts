@@ -42,7 +42,7 @@ export type ItemSummary = {
   updated_at: string | null; resolved_at: string | null;
 };
 
-export type StripNode = { type: NodeType; label: string; badges: string[] };
+export type StripNode = { type: NodeType; label: string; badges: string[]; /** A detector's icon (Phosphor name). */ icon?: string };
 export type ListItem = ItemSummary & { badges: ItemBadges; strip: StripNode[] };
 
 export const TABS = ["needs_you", "running", "resolved_by_agents", "overridden", "failed"] as const;
@@ -419,7 +419,7 @@ export const riskLevel = (r: number): Level3 => (r < 1.1 ? "low" : r < 1.3 ? "me
 
 const parseStrip = (w: unknown): StripNode[] => a(w).slice(0, 6).map((x) => {
   const p = parseNode({ ...o(x), id: "s" });
-  return { type: p.type, label: p.label, badges: p.badges.slice(0, 2) };
+  return { type: p.type, label: p.label, badges: p.badges.slice(0, 2), ...(typeof o(x).icon === "string" ? { icon: String(o(x).icon) } : {}) };
 });
 
 export const parseRec = (w: unknown): Recommendation => {

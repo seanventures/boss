@@ -757,14 +757,14 @@ def _one_line(value: str) -> str:
 
 SOURCE_LABEL = {"incident": "Incidents", "code": "Code graph", "review": "Review findings",
                 "design": "PRD decisions", "cost": "Cost", "test": "Test runs",
-                "stage": "Stage timings", "friction": "Overrides"}
+                "stage": "Stage timings", "friction": "Overrides", "alerts": "Live app"}
 KIND_LABEL = {"hardening": "Hardening", "test_gap": "Test gap", "refactor": "Refactor",
               "feature": "Feature", "design_fix": "Design fix", "cost": "Cost",
               "process": "Process"}
 EVIDENCE_TO_SOURCE = {"incident": "incident", "kg_node": "code", "commit": "code",
                       "code_task": "review", "meeting": "design", "decision": "design",
                       "receipt": "cost", "workflow_run": "cost", "step_run": "stage",
-                      "query": "code"}
+                      "query": "code", "deployment_target": "alerts"}
 
 
 def _badges(rec: Mapping[str, Any]) -> dict[str, Any]:
@@ -817,6 +817,7 @@ def diagram(rec: Mapping[str, Any]) -> dict[str, Any]:
         det = learning.DETECTORS.get(key)
         did = f"detector:{key}"
         nodes.append({"id": did, "type": "agent", "label": short_label(det.title if det else key),
+                      "icon": learning.DETECTOR_ICONS.get(key, "magnifying-glass"),
                       "stage": 1, "badges": [], "ref": {"kind": "detector", "id": key}})
         for n in nodes:
             if n["type"] == "signal":

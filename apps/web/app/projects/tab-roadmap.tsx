@@ -11,7 +11,7 @@
  */
 import React, { useState } from "react";
 import {
-  ArrowRight, ArrowsLeftRight, CaretRight, ChartLineUp, ChatCircleDots, Chats, Check, Clock, Coins, DotsThree, Fire,
+  ArrowRight, ArrowsLeftRight, BellSlash, CaretRight, Compass, Detective, Gauge, Plug, Shuffle, TrendUp, ChartLineUp, ChatCircleDots, Chats, Check, Clock, Coins, DotsThree, Fire,
   HandPointing, Kanban, Lightbulb, MagnifyingGlass, MapTrifold, Play, Sparkle, TestTube, Timer, Warning, X, type Icon,
 } from "@phosphor-icons/react";
 
@@ -38,8 +38,15 @@ const DOES: Record<string, string> = {
 };
 /** An evidence source's icon (the card's first nodes). */
 const SOURCE_ICON: Record<string, Icon> = {
-  incidents: Warning, "code graph": Fire, "review findings": MagnifyingGlass, "prd decisions": Chats, cost: Coins, "test runs": TestTube,
+  incidents: Warning, "code graph": Fire, "live app": Plug, "review findings": MagnifyingGlass, "prd decisions": Chats, cost: Coins, "test runs": TestTube,
   "stage timings": Timer, overrides: HandPointing,
+};
+/** Each detector's icon (wireframe 07): the engine names it (`icon`), older engines by its name. */
+const DETECTOR_ICON: Record<string, Icon> = {
+  detective: Detective, "bell-slash": BellSlash, fire: Fire, "test-tube": TestTube, "magnifying-glass": MagnifyingGlass,
+  compass: Compass, coins: Coins, shuffle: Shuffle, gauge: Gauge, "hand-pointing": HandPointing, "trend-up": TrendUp,
+  "Incident hotspot": Detective, "Incident patterns": Detective, "Alert gap": BellSlash, "Feature demand": TrendUp,
+  "Slow query": Gauge, "Code hotspot": Fire, "Test gap": TestTube,
 };
 const KIND_TAG: Record<string, string> = {
   hardening: "Hardening", test_gap: "Test gap", refactor: "Refactor", feature: "Feature", design_fix: "Design fix", cost: "Cost", process: "Performance",
@@ -216,12 +223,15 @@ export function recFlow(r: Recommendation, squad: { name: string; role_key?: str
     return { label, type: "signal", icon: <I size={11} aria-hidden /> };
   });
   const found = r.strip.find((n) => n.type === "agent");
-  // A detector's own name; a raw key (an engine without its registry) reads as words, never `snake_case`.
+  // A detector's own name (wireframe 07: "Incident hotspot", "Alert gap"…); a raw key (an engine
+  // without its registry) reads as words, never `snake_case`.
   const detector = found && found.label !== "seed" ? { ...found, label: found.label.includes("_") ? found.label.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase()) : found.label } : null;
-  const does = r.proposed_shape === "prd" ? "Write PRD" : DOES[r.kind] ?? "Do it";
+  const DI = DETECTOR_ICON[detector?.icon ?? ""] ?? DETECTOR_ICON[detector?.label ?? ""] ?? MagnifyingGlass;
+  const does = detector?.icon === "bell-slash" || detector?.label === "Alert gap" ? "Add alert"
+    : r.proposed_shape === "prd" ? "Write PRD" : DOES[r.kind] ?? "Do it";
   return [
     ...signals,
-    ...(detector ? [{ label: detector.label, type: "boss", icon: <MagnifyingGlass size={11} aria-hidden /> }] : []),
+    ...(detector ? [{ label: detector.label, type: "decision", icon: <DI size={11} aria-hidden /> }] : []),
     { label: does, type: "agent", icon: <Face agent={{ name: who, role_key: role || "engineering_captain" }} size={16} /> },
   ];
 }

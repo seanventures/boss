@@ -18,6 +18,7 @@ Where each reads (the shapes are the writers'; see the notes at each detector):
   slow_stage       code_task.build_profile events (stages.*.wall_min) and
                    finalize_ctx.stage_timings
   user_friction    person-made steer / cancel / stop / retry / waive / reject events
+  alert_gap        deployment_targets with a live deploy × app_alert_rules (none enabled on it)
 """
 from __future__ import annotations
 
@@ -116,7 +117,7 @@ def _incidents_by_file(connection: Connection, project_id: str,
 
 # ── 1. code hotspots ────────────────────────────────────────────────────────────────────────
 
-@detector("hotspot", title="Hotspot finder", kind="refactor", shape="ticket", source="kg",
+@detector("hotspot", title="Code hotspot", kind="refactor", shape="ticket", source="kg",
           evidence_source="code", squad=("software_engineer", "chief_architect"))
 def hotspot(connection: Connection, project_id: str, *, since: datetime, now: datetime,
             scale: float) -> list[Finding]:
@@ -177,7 +178,7 @@ def _cause_key(payload: dict) -> tuple[str, str]:
     return "", ""
 
 
-@detector("incident_cause", title="Incident patterns", kind="hardening", shape="ticket",
+@detector("incident_cause", title="Incident hotspot", kind="hardening", shape="ticket",
           source="kg", evidence_source="incident", squad=("sre", "software_engineer"))
 def incident_cause(connection: Connection, project_id: str, *, since: datetime,
                    now: datetime, scale: float) -> list[Finding]:
@@ -229,7 +230,7 @@ def _stem(path: str) -> str:
     return name.split(".", 1)[0].lower()
 
 
-@detector("missing_tests", title="Test gap finder", kind="test_gap", shape="ticket",
+@detector("missing_tests", title="Test gap", kind="test_gap", shape="ticket",
           source="kg", evidence_source="code", squad=("qa", "software_engineer"))
 def missing_tests(connection: Connection, project_id: str, *, since: datetime,
                   now: datetime, scale: float) -> list[Finding]:
@@ -288,7 +289,7 @@ def _head(body: str, words: int = 8) -> str:
     return " ".join(first[:words]) + ("…" if len(first) > words else "")
 
 
-@detector("review_repeat", title="Review patterns", kind="process", shape="ticket",
+@detector("review_repeat", title="Review repeats", kind="process", shape="ticket",
           source="kg", evidence_source="review", squad=("qa", "adversarial_reviewer"))
 def review_repeat(connection: Connection, project_id: str, *, since: datetime,
                   now: datetime, scale: float) -> list[Finding]:
@@ -410,7 +411,7 @@ def design_drift(connection: Connection, project_id: str, *, since: datetime,
 
 # ── 6. cost spikes per workflow / task class ────────────────────────────────────────────────
 
-@detector("cost_spike", title="Cost watcher", kind="cost", shape="ticket", source="cost",
+@detector("cost_spike", title="Cost spike", kind="cost", shape="ticket", source="cost",
           evidence_source="cost", squad=("finops_sentinel", "model_spend_analyst"))
 def cost_spike(connection: Connection, project_id: str, *, since: datetime, now: datetime,
                scale: float) -> list[Finding]:
@@ -455,7 +456,7 @@ def cost_spike(connection: Connection, project_id: str, *, since: datetime, now:
 
 # ── 7. flaky tests ──────────────────────────────────────────────────────────────────────────
 
-@detector("flaky_test", title="Flaky test finder", kind="test_gap", shape="ticket",
+@detector("flaky_test", title="Flaky tests", kind="test_gap", shape="ticket",
           source="ci", evidence_source="test", squad=("qa",))
 def flaky_test(connection: Connection, project_id: str, *, since: datetime, now: datetime,
                scale: float) -> list[Finding]:
@@ -521,7 +522,7 @@ STAGE_TARGET_MIN = {"design": 5.0, "spec": 4.0, "plan": 4.0, "review_plan": 4.0,
 DEFAULT_STAGE_TARGET = 8.0
 
 
-@detector("slow_stage", title="Stage timer", kind="process", shape="ticket", source="build",
+@detector("slow_stage", title="Slow stage", kind="process", shape="ticket", source="build",
           evidence_source="stage", squad=("engineering_captain", "software_engineer"))
 def slow_stage(connection: Connection, project_id: str, *, since: datetime, now: datetime,
                scale: float) -> list[Finding]:
@@ -589,7 +590,7 @@ _NOT_A_PERSON = ("boss", "system", "worker", "scheduler", "shepherd", "agent:", 
                  "squad:")
 
 
-@detector("user_friction", title="Friction finder", kind="process", shape="ticket",
+@detector("user_friction", title="Repeated overrides", kind="process", shape="ticket",
           source="person", evidence_source="friction", squad=("pm", "engineering_captain"))
 def user_friction(connection: Connection, project_id: str, *, since: datetime,
                   now: datetime, scale: float) -> list[Finding]:
@@ -640,3 +641,50 @@ def user_friction(connection: Connection, project_id: str, *, since: datetime,
             {"count": g["n"], "runs": len(g["entities"]), "people": len(g["people"]),
              "action": what, "where": where}, g["last"], severity="medium"))
     return sorted(out, key=lambda f: -f.impact)[:10]
+
+
+# ── 10. alert gaps ──────────────────────────────────────────────────────────────────────────
+
+
+@detector("alert_gap", title="Alert gap", kind="hardening", shape="ticket", source="alert",
+          evidence_source="incident", squad=("sre",))
+def alert_gap(connection: Connection, project_id: str, *, since: datetime, now: datetime,
+              scale: float) -> list[Finding]:
+    """A live app that no alert rule watches: when it breaks, nobody is told. One finding per
+    deployed target with no enabled rule (production first; incidents on it raise the value)."""
+    if not table_exists(connection, "app_alert_rules"):
+        return []
+    rows = connection.execute(text(
+        "SELECT t.id, t.app_name, t.environment, max(COALESCE(s.finished_at, s.created_at)) AS live_at "
+        "FROM deployment_targets t JOIN stack_deployments s ON s.target_id = t.id "
+        "AND s.status = 'healthy' WHERE t.project_id = :p AND t.status = 'active' "
+        "AND NOT EXISTS (SELECT 1 FROM app_alert_rules r WHERE r.target_id = t.id AND r.enabled) "
+        "GROUP BY t.id, t.app_name, t.environment LIMIT 50"), {"p": project_id}).mappings().all()
+    out: list[Finding] = []
+    for r in rows:
+        env = str(r["environment"] or "").lower()
+        prod = env in ("production", "prod")
+        incidents = int(connection.execute(text(
+            "SELECT count(*) FROM incidents WHERE project_id = :p AND first_seen > :s "
+            "AND (CAST(:t AS TEXT) IS NULL OR COALESCE(target_id, '') = :t)"),
+            {"p": project_id, "s": since, "t": r["id"]}).scalar() or 0) \
+            if table_exists(connection, "incidents") and _has_column(connection, "incidents",
+                                                                    "target_id") else 0
+        impact = clamp((45 if prod else 32) + 8 * min(incidents, 3))
+        app = str(r["app_name"] or "app")
+        out.append(Finding(
+            "alert_gap", (str(r["id"]),), f"target:{r['id']}",
+            f"Alert rule for {app} {env}".strip()[:120],
+            f"{app} is live on {env or 'its target'} and no alert rule watches it: when it "
+            "breaks, nobody is told." + (f" {plural(incidents, 'incident')} hit it lately."
+                                         if incidents else ""),
+            impact, 1, [ev("deployment_target", r["id"], f"live, no alert rule")],
+            {"app": app, "environment": env, "incidents": incidents}, r["live_at"],
+            severity="high" if prod else "medium"))
+    return sorted(out, key=lambda f: -f.impact)[:10]
+
+
+def _has_column(connection: Connection, table: str, column: str) -> bool:
+    return bool(connection.execute(text(
+        "SELECT 1 FROM information_schema.columns WHERE table_name = :t AND column_name = :c"),
+        {"t": table, "c": column}).first())

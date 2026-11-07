@@ -184,3 +184,55 @@ def test_findings_about_one_file_group_into_one_recommendation(eng, project):
     assert {m.detector for m in g.members} == {"hotspot", "incident_cause", "missing_tests"}
     assert g.source_kinds == ["code", "incident"]
     assert len(g.evidence) == len({(e["kind"], e["ref"]) for e in g.evidence})
+
+
+# ── alert gaps (screen 07's "Alert gap", 07-12) ─────────────────────────────────────────────
+
+def _live_target(c, pid, env: str, app: str = "helpdesk") -> str:
+    import uuid
+
+    from sqlalchemy import text
+
+    host, target = f"dhost_{uuid.uuid4().hex[:8]}", f"dept_{uuid.uuid4().hex[:8]}"
+    c.execute(text("INSERT INTO deployment_hosts (id, project_id, name, address, ssh_user, status, "
+                   "created_by) VALUES (:i, :p, :i, '203.0.113.30', 'deploy', 'verified', 't')"),
+              {"i": host, "p": pid})
+    c.execute(text("INSERT INTO deployment_targets (id, project_id, app_name, repo, environment, "
+                   "target_kind, target_ref, domains, status, created_by, host_id) VALUES (:i, :p, "
+                   ":a, 'acme/x', :e, 'host', :h, '[]'::jsonb, 'active', 't', :h)"),
+              {"i": target, "p": pid, "a": app, "e": env, "h": host})
+    c.execute(text("INSERT INTO stack_deployments (id, project_id, target_id, host_id, repository, "
+                   "ref, commit_sha, manifest, status, created_by, created_at, finished_at) VALUES "
+                   "(:i, :p, :t, :h, 'acme/x', 'main', 'abc1234', '{}'::jsonb, 'healthy', 't', now(), "
+                   "now())"), {"i": f"sdep_{uuid.uuid4().hex[:8]}", "p": pid, "t": target, "h": host})
+    return target
+
+
+def test_a_live_app_no_alert_rule_watches_is_an_alert_gap(eng, project):
+    import uuid
+
+    from sqlalchemy import text
+
+    with eng.begin() as c:
+        prod = _live_target(c, project, "production", "shop")
+        staging = _live_target(c, project, "staging", "shop")
+        watched = _live_target(c, project, "preview", "shop")
+        c.execute(text("INSERT INTO app_alert_rules (id, project_id, target_id, kind, alert, expr) "
+                       "VALUES (:i, :p, :t, 'error_rate', 'Errors', 'x > 1')"),
+                  {"i": f"arule_{uuid.uuid4().hex[:8]}", "p": project, "t": watched})
+        found = _found(c, project, "alert_gap")
+    assert [f.subject for f in found] == [f"target:{prod}", f"target:{staging}"]
+    assert found[0].title == "Alert rule for shop production"
+    assert found[0].severity == "high" and found[0].impact > found[1].impact
+    assert found[0].evidence == [{"kind": "deployment_target", "ref": prod, "note": "live, no alert rule"}]
+    det = learning.DETECTORS["alert_gap"]
+    assert (det.title, det.squad, learning.DETECTOR_ICONS["alert_gap"]) == ("Alert gap", ("sre",), "bell-slash")
+
+
+def test_every_detector_is_named_as_the_wireframe_names_it_with_an_icon(eng, project):
+    from boss_engine.services.ambient import detectors  # noqa: F401 — registers them
+
+    assert learning.DETECTORS["incident_cause"].title == "Incident hotspot"
+    for key, det in learning.DETECTORS.items():
+        assert len(det.title.split()) <= 4 and "_" not in det.title, key
+        assert key in learning.DETECTOR_ICONS, key
