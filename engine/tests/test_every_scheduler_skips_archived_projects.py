@@ -50,6 +50,8 @@ GUARDED: dict[str, str] = {
     "services/factory_flow.py::tick": "tick",
     "services/process_manager.py::tick": "tick",
     "services/person_wait.py::poll_due": "poll_due",
+    # The always-on stuck-work Shepherd: `due` picks builds with live_sql (stuck_work.py).
+    "services/stuck_work.py::sweep": "due",
     # Autonomous agents (BOSSAPP-902): the Chief of Staff's tick triages live projects only
     # (and its owners' turn picks items with live_sql); the learning tick runs detectors for
     # live projects only; the SRE squad's watch skips an archived project.

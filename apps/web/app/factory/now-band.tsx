@@ -10,6 +10,7 @@ import React from "react";
 
 import type { Cockpit } from "../../lib/cockpit";
 import { nowFacts, type NowFact } from "../../lib/build-detail";
+import { WhyLine } from "../../components/stuck-work";
 
 export function nowInput(c: Cockpit) {
   return {
@@ -46,6 +47,9 @@ export function NowBand({ c, now }: { c: Cockpit; now: number | null }) {
       <div className="fx-nowband-head">
         <span className="fx-sec-title">NOW</span>
         <span className="fx-nowband-stage" data-tone={head.tone} title={head.tip} data-testid="fx-now-stage">{head.value}</span>
+        {/* What it waits for, from the server (stuck_work.wait_reason): "Queued · 1h 19m" alone
+            said nothing about what the build was waiting on. */}
+        {c.why ? <WhyLine why={c.why} testId="fx-now-why" compact /> : null}
         {note ? <span className="fx-nowband-note ag-trunc" title={`${note.tip}: ${note.value}`} data-user-text data-testid="fx-now-note">{note.value}</span> : null}
       </div>
       <dl className="fx-nowband-grid">

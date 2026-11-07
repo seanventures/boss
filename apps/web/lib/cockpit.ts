@@ -6,6 +6,7 @@
  * maps none of its own. No percent, no ETA, no test counts (only commands are real), no hunks.
  */
 
+import { parseDiagnosis, parseWaitReason, type Diagnosis, type WaitReason } from "./stuck-work";
 import { parseRoutes, type RouteRow } from "./model-routes";
 import { parseSummary, type BuildSummary } from "./build-detail";
 import { parseAttention, type AttentionItem } from "./agents-live-board";
@@ -156,6 +157,10 @@ export type Cockpit = {
   routes: RouteRow[];
   /** What the build is doing now (build_detail.now_summary); null from an older API. */
   summary: BuildSummary | null;
+  /** What it waits for, in words (stuck_work.wait_reason); null while an agent is on it. */
+  why: WaitReason | null;
+  /** What the Shepherd found when it stopped moving (stuck_work), or null. */
+  diagnosis: Diagnosis | null;
 };
 
 // ── Parsers ─────────────────────────────────────────────────────────────────────────────────
@@ -343,6 +348,8 @@ export function parseCockpit(w: unknown): Cockpit {
     outputs: parseOutputs(o.outputs),
     routes: parseRoutes(o.routes),
     summary: parseSummary(o.summary),
+    why: parseWaitReason(o.why),
+    diagnosis: parseDiagnosis(o.diagnosis),
   };
 }
 

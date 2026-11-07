@@ -3040,21 +3040,51 @@ def _run_code_task_once(engine, settings: Settings, jobs, run_id: str,
                 # (L2b) instead of failing the run outright.
                 from . import person_wait
 
-                budget = get_engine_ports().budget
+                ports = get_engine_ports()
+                budget = ports.budget if ports is not None else None
                 reservation_id = run.get("reservation_id")
                 budget_adapter = SimpleNamespace(
-                    release=lambda **_: _release(
+                    release=lambda **_: (_release(
                         budget, c, run["project_id"], reservation_id, words, run_id=run_id,
-                    ),
+                    ) if budget is not None else None),
                 )
-                person_wait.enter_waiting_on_person(
-                    c, budget_adapter, run_id=run_id, project_id=run["project_id"],
-                    task_id=run.get("task_id"), reason=exc.reason, question=words,
-                )
+                try:
+                    with c.begin_nested():
+                        waited = person_wait.enter_waiting_on_person(
+                            c, budget_adapter, run_id=run_id, project_id=run["project_id"],
+                            task_id=run.get("task_id"), reason=exc.reason, question=words,
+                            refused_grant_id=_refused_grant(c, run_id),
+                        )
+                except Exception as wait_exc:  # noqa: BLE001
+                    # Pausing failed: never a 500 the worker cannot report (the run would be
+                    # re-leased for ever, saying "Queued"). Block it in words instead.
+                    logger.exception("person_wait_failed run_id=%s", run_id)
+                    _fail(c, run_id, run["project_id"],
+                          f"{words} (BOSS could not pause it to ask: {type(wait_exc).__name__})",
+                          status="blocked", failure_class="needs_human", reason_code="no_authority")
+                    return {"status": "blocked", "done": True, "reason": "no_authority",
+                            "authority": exc.reason, "message": words}
+                if waited.get("resumed"):
+                    # A standing grant already covers it: re-queued under that grant, no ask.
+                    return {"status": "running", "done": True, "reason": "authority_found",
+                            "grant_id": waited.get("grant_id")}
         return {"status": "waiting_on_person", "done": True, "reason": "no_authority",
                 "authority": exc.reason, "message": words}
     finally:
         owned_process.terminate_owner(run_id, reason="run_ended", grace=2.0)
+
+
+def _refused_grant(c, run_id: str) -> Optional[str]:
+    """The grant the refused attempt carried (its build's recorded authority), so a refusal under
+    a grant is never 'resumed' under that same grant in a loop."""
+    try:
+        from boss_engine.identity.runs import original_build_authority
+
+        with c.begin_nested():
+            acting = original_build_authority(c, run_id)
+        return getattr(acting, "grant_id", None)
+    except Exception:  # noqa: BLE001 — unknown: treat as none
+        return None
 
 
 def _run_project(engine, run_id: str) -> Optional[str]:

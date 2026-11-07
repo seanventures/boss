@@ -9,7 +9,8 @@ blind for the whole of a build. Each pass works from BOTH sides of the ownership
   container or image labelled `boss.owner` (or named `boss-prev-*`) with no live preview, a
   temp directory under one of BOSS's prefixes that nothing claims: removed.
 
-Plus the periodic jobs that used to happen only lazily or never: preview expiry and idle-stop,
+Plus the periodic jobs that used to happen only lazily or never: lost job leases (reap_jobs),
+preview expiry and idle-stop,
 the 75%-disk prune of BOSS's own Docker artefacts, and table retention for the tick tables.
 
 Every action is scoped to what BOSS created. Never `docker system prune`, never `--volumes`,
@@ -390,6 +391,19 @@ _TABLES_EVERY = 3600.0
 _last_tables = 0.0
 
 
+def reap_jobs(engine: Any, settings: Any = None) -> dict[str, int]:
+    """Jobs whose holder is gone: a lease an hour past expiry that nobody took back. Spent
+    attempts end (deadlettered, the build told why); the rest are queued again
+    (JobLeaseService.reap_lost_leases). Before this, 18 `connection.proof` jobs on the laptop had
+    said `running` since October and an `architecture.draft` was `leased` to a worker id that no
+    longer existed."""
+    from ..config import get_settings
+    from .jobs import JobLeaseService
+
+    with engine.begin() as c:
+        return JobLeaseService(settings or get_settings()).reap_lost_leases(c, actor="reaper")
+
+
 def tick(engine: Any, settings: Any = None) -> dict[str, Any]:
     """One reaper pass. Every part is independent: one failing never stops the others."""
     global _last_tables
@@ -409,6 +423,8 @@ def tick(engine: Any, settings: Any = None) -> dict[str, Any]:
         report["previews"] = _safe(_reap_previews)
         report["preview_workdirs"] = _safe(
             lambda: preview_service.sweep_preview_workdirs(engine))
+    if engine is not None:
+        report["jobs"] = _safe(lambda: reap_jobs(engine, settings))
     report["dirs"] = _safe(lambda: reap_dirs())
     # A run that died never dropped its build-services database (build_services).
     from . import build_services

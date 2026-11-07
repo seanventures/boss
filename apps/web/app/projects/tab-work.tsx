@@ -29,6 +29,7 @@ import { FX_WORK_PLAN } from "../../lib/project-experience-fixtures";
 import { localWith, stampLocal, whenLocal } from "../../lib/local-time";
 import { Empty, Face, Flow, Ico, Loading, Failed, EngineNotReady, PxLink, Said, Stations, Cost } from "./kit";
 import type { PxCtx } from "./project-page";
+import { WhyLine } from "../../components/stuck-work";
 import "./work.css";
 
 type Kind = "feature" | "bug" | "ticket";
@@ -483,8 +484,11 @@ export function WorkRow({ w, ctx, fresh = false, rank = null }: { w: WorkItem; c
             ) : null}
             {w.where ? <span className="px-mono px-ell" data-testid={`px-work-where-${w.id}`} title="The file its failing check names">{w.where}</span> : null}
             {source && w.source !== "code_task" && w.source !== "workflow_run" ? <span>{source}</span> : null}
-            {w.state === "stalled" ? <StalledTag w={w} /> : null}
-            {w.state === "needs_you" ? (setup && w.waiting.length ? <span>Waiting: {w.waiting[0].label}</span> : w.age ? <span>Waiting {w.age}</span> : null)
+            {w.state === "stalled" && !w.why ? <StalledTag w={w} /> : null}
+            {/* WAITING FOR WHAT, from the server (stuck_work.wait_reason): replaces the bare
+                stage/age words whenever the build is not working. */}
+            {w.why ? <WhyLine why={w.why} testId={`px-work-why-${w.id}`} compact />
+              : w.state === "needs_you" ? (setup && w.waiting.length ? <span>Waiting: {w.waiting[0].label}</span> : w.age ? <span>Waiting {w.age}</span> : null)
               : w.state === "running" ? <span>{whereNow(w)}</span>
               : w.state === "planned" ? (w.next_up ? <span data-testid={`px-work-next-${w.id}`}>Next up</span> : null)
               : w.state === "done" || w.state === "failed" ? <span>{doneDay(w)}</span>
@@ -505,7 +509,7 @@ export function WorkRow({ w, ctx, fresh = false, rank = null }: { w: WorkItem; c
                     onClick={() => writePxUrl({ tab: "onboarding", drawer: null })}><FlowArrow size={11} aria-hidden /> Onboarding run</button>
           ) : null}
           {w.links.build && w.state !== "done" ? <PxLink href={w.links.build} title="Build page in Code Tasks" testid={`px-work-build-${w.id}`}><Code size={11} aria-hidden /> Build</PxLink> : null}
-          {w.links.build && (w.state === "running" || w.state === "stalled") ? <PxLink href={`${w.links.build}&view=logs`} title="The build's live log" testid={`px-work-log-${w.id}`}><TerminalWindow size={11} aria-hidden /> Live log</PxLink> : null}
+          {w.links.log && (w.state === "running" || w.state === "stalled" || (w.state === "needs_you" && !!w.why)) ? <PxLink href={w.links.log} title="This build's live log" testid={`px-work-log-${w.id}`}><TerminalWindow size={11} aria-hidden /> Live log</PxLink> : null}
           {w.links.pr ? <PxLink href={w.links.pr.external_url} title="Pull request on GitHub" testid={`px-work-pr-${w.id}`}>{w.state === "done" ? <GitMerge size={11} aria-hidden /> : <GitPullRequest size={11} aria-hidden />} PR #{w.links.pr.number}</PxLink> : null}
           {w.links.preview ? <PxLink href={w.links.preview} title="The running preview"><Globe size={11} aria-hidden /> Preview</PxLink> : null}
           {w.links.deploy ? <PxLink href={w.links.deploy} title="Where it is deployed"><Globe size={11} aria-hidden /> Staging</PxLink> : null}

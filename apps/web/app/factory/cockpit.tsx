@@ -45,6 +45,7 @@ import { stopBuild, steerBuild } from "./cockpit-actions";
 import { RateIt, ReasonChips, sendReasons } from "../improve/rate-it";
 import { ShareRunSheet } from "../improve/share-run";
 import { ActPopover, StationFaceView, areaHref, money, secondsWord, spanOf } from "./cockpit-util";
+import { DiagnosisFlow, WhyLine } from "../../components/stuck-work";
 import { LogsDrawer, type LogTab } from "./logs-drawer";
 import { Outputs, defaultOpen, type OutputKey } from "./outputs";
 import { StationLine, bayWord } from "./station-line";
@@ -61,6 +62,8 @@ export type CockpitProps = {
   projectId: string;
   /** The build (code task run id) from `?build=`. */
   runId: string;
+  /** `?logs=build|preview|deploy`: open the Logs drawer on that tab (a "Live log" link). */
+  initialLogs?: LogTab | null;
   actor: string;
   orgId?: string | null;
   /** `← Floor` / Esc: the shell clears `build=` and restores focus to the opening row. */
@@ -117,7 +120,7 @@ function usePaused(): boolean {
   return paused;
 }
 
-export function Cockpit({ projectId, runId, actor, onClose, onOpenBuild }: CockpitProps) {
+export function Cockpit({ projectId, runId, actor, onClose, onOpenBuild, initialLogs }: CockpitProps) {
   const { data, error, loading, refresh } = useCockpit(projectId, runId, actor);
   // A build that is one lane of a multi-repo change opens the change's cockpit (every lane, one
   // set of PRs); an ordinary build is answered 404 and keeps this page exactly as it was.
@@ -148,7 +151,7 @@ export function Cockpit({ projectId, runId, actor, onClose, onOpenBuild }: Cockp
     return <CockpitSkeleton runId={runId} onClose={onClose} />;
   }
   return <CockpitView key={data.run.id} c={data} projectId={projectId} runId={runId} actor={actor}
-                      onClose={onClose} onOpenBuild={onOpenBuild} refresh={refresh} />;
+                      onClose={onClose} onOpenBuild={onOpenBuild} refresh={refresh} initialLogs={initialLogs ?? null} />;
 }
 
 function CockpitSkeleton({ runId, onClose }: { runId: string; onClose: () => void }) {
@@ -168,9 +171,10 @@ function CockpitSkeleton({ runId, onClose }: { runId: string; onClose: () => voi
   );
 }
 
-function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh }: {
+function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh, initialLogs = null }: {
   c: CockpitData; projectId: string; runId: string; actor: string;
   onClose: () => void; onOpenBuild: (runId: string) => void; refresh: () => void;
+  initialLogs?: LogTab | null;
 }) {
   useIdentityVersion(); // names and faces re-resolve when the install's identities load
   const h1 = useRef<HTMLHeadingElement>(null);
@@ -181,7 +185,8 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
   const menuId = useId();
   const [filter, setFilter] = useState<StationKey | null>(null);
   const [open, setOpen] = useState<OutputKey | null>(() => defaultOpen(c));
-  const [logs, setLogs] = useState<LogTab | null>(null);
+  // A "Live log" link (`?logs=build`) lands with this build's log open, not on a closed drawer.
+  const [logs, setLogs] = useState<LogTab | null>(initialLogs);
   const [menu, setMenu] = useState(false);
   const [attempts, setAttempts] = useState(false);
   const [confirmStop, setConfirmStop] = useState(false);
@@ -481,6 +486,10 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
         {settingsOpen ? <AppSetupSheet projectId={projectId} runId={c.run.id} appName={c.app}
                                        tab="settings" onClose={() => setSettingsOpen(false)} /> : null}
       </header>
+      {/* WAITING FOR WHAT, said under the header (never a bare "Queued"), and what the Shepherd
+          found when it stopped moving (stuck_work). */}
+      {c.why && !c.diagnosis ? <div className="fx-why"><WhyLine why={c.why} testId="fx-why" /></div> : null}
+      <DiagnosisFlow d={c.diagnosis} testId="fx-diagnosis" />
 
       {c.attention.length ? (
         <div className="fx-strip" data-testid="fx-strip" aria-label="Needs you" role="region">

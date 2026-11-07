@@ -8,6 +8,7 @@
  *   env:<key>     an environment's full picture;  deploy:<id>  one deploy
  * Prose lives here, never on the page.
  */
+import { DiagnosisFlow, WhyLine } from "../../components/stuck-work";
 import React, { useEffect, useState } from "react";
 import {
   ArrowsOut, ChatCircleDots, Code, FileText, FlowArrow, GitMerge, GitPullRequest, Globe, Graph, ListChecks, PaperPlaneRight, Path, PauseCircle, Question,
@@ -158,7 +159,7 @@ function WorkDrawer({ ctx, w, onClose }: { ctx: PxCtx; w: WorkItem; onClose: () 
       {w.state === "needs_you" ? (
         <div className="px-ny" data-testid="px-drawer-work-needs">
           <span className="px-ny-ico" aria-hidden>!</span>
-          <b style={{ flex: 1 }}>{l.pr ? "Ready to merge" : "Waiting on you"}</b>
+          <b style={{ flex: 1 }}>{l.pr ? "Ready to merge" : w.why?.who === "you" ? w.why.words : "Waiting on you"}</b>
           {/* ONE ACTION (screen 05b): merging is approving the build's merge question in BOSS;
               with no question on record it opens the PR on GitHub. */}
           {l.pr ? (l.decision
@@ -172,10 +173,15 @@ function WorkDrawer({ ctx, w, onClose }: { ctx: PxCtx; w: WorkItem; onClose: () 
         <div className="px-ny" data-testid="px-drawer-work-stalled">
           <span className="px-ny-ico" aria-hidden>‖</span>
           <span style={{ flex: 1 }}><b>Stalled{w.stalled_since ? ` since ${whenLocal(w.stalled_since)}` : ""}</b>
-            <small className="px-faint" style={{ display: "block" }}>Nothing is working on it. Open the build to retry or stop it.</small></span>
+            <small className="px-faint" style={{ display: "block" }}>{w.why?.words || "Nothing is working on it. Open the build to retry or stop it."}</small></span>
           {l.build ? <PxLink href={l.build} className="px-btn" testid="px-drawer-work-stalled-open">Open build</PxLink> : null}
         </div>
       ) : null}
+      {/* What its build waits for, and what the Shepherd found when it stopped (stuck_work). */}
+      {w.why && w.state !== "stalled" && !(w.state === "needs_you" && w.why.who === "you") ? (
+        <div data-testid="px-drawer-work-why"><WhyLine why={w.why} testId="px-drawer-why" /></div>
+      ) : null}
+      <DiagnosisFlow d={w.diagnosis} testId="px-drawer-diagnosis" />
       <WorkStoryBody ctx={ctx} w={w} story={story} />
       <DrawerAttempts w={w} ctx={ctx} />
       {w.detail && !story ? <p style={{ margin: 0, lineHeight: 1.5 }} className="px-muted">{w.detail}</p> : null}
@@ -186,7 +192,7 @@ function WorkDrawer({ ctx, w, onClose }: { ctx: PxCtx; w: WorkItem; onClose: () 
           {l.build ? <PxLink href={l.build} testid="px-drawer-link-build"><Code size={11} aria-hidden /> Build in Code Tasks</PxLink> : null}
           {l.pr ? <PxLink href={l.pr.external_url} testid="px-drawer-link-pr"><GitPullRequest size={11} aria-hidden /> PR #{l.pr.number}</PxLink> : null}
           {l.deploy ? <PxLink href={l.deploy}><RocketLaunch size={11} aria-hidden /> Deploy</PxLink> : null}
-          {l.build ? <PxLink href={`${l.build}&view=logs`}><Terminal size={11} aria-hidden /> Logs</PxLink> : null}
+          {l.log ? <PxLink href={l.log} testid="px-drawer-link-log"><Terminal size={11} aria-hidden /> Live log</PxLink> : null}
           {/* THIS RUN'S OWN LESSONS (05b-16): what its agents learned, consulted and reused —
               the run's learned feed, not the whole graph. */}
           <button type="button" className="px-chip" data-testid="px-drawer-link-learned" onClick={() => ctx.open("learned", w.id)}><Graph size={11} aria-hidden /> What it learned</button>

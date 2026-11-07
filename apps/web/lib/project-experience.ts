@@ -13,6 +13,7 @@
  * `?px_demo=1` renders the contract's sample project (lib/project-experience-fixtures.ts) with a
  * "Sample data" banner; writes in that mode send nothing.
  */
+import { parseDiagnosis, parseWaitReason, type Diagnosis, type WaitReason } from "./stuck-work";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 
@@ -93,6 +94,8 @@ export type NeedsYou = {
   /** The piece of work it belongs to (a merge's build; the Onboarding row for its "only you"
    *  items), the PR on GitHub, and when it was asked (the drawer). */
   work_id?: string; work_label?: string; external_url?: string; created_at?: string;
+  /** What the Shepherd found about the stuck or refused work this card is about (stuck_work). */
+  diagnosis?: Diagnosis | null;
   /** A deploy's release card (engine release_scope, needs.release_of): the commits it ships as
    *  Approvals draws them (`preview`, an action preview), the hash an approval must carry, and
    *  whether approving needs the person's reason. Null when the deploy has no card. */
@@ -126,8 +129,12 @@ export type WorkItem = {
   stages: { key: string; label: string; state: StepState }[]; agents: Agent[]; cost_usd: number | null;
   /** What the subscription calls would have cost at list price (costWords). */
   list_usd?: number | null;
-  links: { workflow_run: string; build: string; pr: { number: number; external_url: string } | null; deploy: string; preview: string; decision: string };
+  links: { workflow_run: string; build: string; pr: { number: number; external_url: string } | null; deploy: string; preview: string; decision: string;
+    /** Its build's own live log: the build page with Logs open on that run (`logs=build`). */
+    log?: string };
   detail: string; href: string; source: string;
+  /** What its build waits for, in words (stuck_work.wait_reason), and what the Shepherd found. */
+  why?: WaitReason | null; diagnosis?: Diagnosis | null;
   /** "Build" | "Workflow" | "Roadmap": the human word for `source` (never the raw string). */
   source_label: string;
   /** When it stopped moving (ISO), for a `stalled` item. */
@@ -362,6 +369,16 @@ export const parseCard = (v: unknown): ProjectCard => {
 };
 export const parseSummary = (v: unknown): ProjectsSummary => ({ items: a(o(v).items).map(parseCard).filter((c) => c.id), week_cap_usd: nn(o(v).week_cap_usd) });
 
+/** A build link as its live log: the same build, `logs=build` (never the old `view` value, which the
+ *  build page never read — the old "Live log" opened the page with Logs closed). */
+export function logOfBuild(build: string): string {
+  if (!build) return "";
+  const [path, query = ""] = build.split("?");
+  const q = new URLSearchParams(query);
+  q.delete("view");
+  q.set("logs", "build");
+  return `${path}?${q.toString()}`;
+}
 export const parseWorkItem = (v: unknown): WorkItem => {
   const x = o(v); const l = o(x.links); const pr = o(l.pr);
   return {
@@ -369,8 +386,10 @@ export const parseWorkItem = (v: unknown): WorkItem => {
     stages: a(x.stages).map((st) => ({ key: s(o(st).key), label: s(o(st).label), state: oneOf(o(st).state, STEP_STATES, "todo") })),
     agents: agents(x.agents), cost_usd: nn(x.cost_usd), list_usd: nn(x.list_usd),
     links: { workflow_run: s(l.workflow_run), build: s(l.build), deploy: s(l.deploy), preview: s(l.preview), decision: s(l.decision),
+             log: s(l.log) || (s(l.build) ? logOfBuild(s(l.build)) : ""),
              pr: pr.number || pr.external_url ? { number: n(pr.number), external_url: s(pr.external_url) } : null },
     detail: s(x.detail), href: s(x.href), source: s(x.source),
+    why: parseWaitReason(x.why), diagnosis: parseDiagnosis(x.diagnosis),
     source_label: s(x.source_label) || SOURCE_WORDS[s(x.source)] || "",
     stalled_since: s(x.stalled_since),
     attempts: a(x.attempts).map(parseAttempt).filter((t) => t.id),
@@ -517,6 +536,7 @@ export const parseOverview = (v: unknown): Overview => {
       return { id: s(y.id), kind: oneOf(y.kind, ["merge", "deploy", "plan", "question", "setup"] as const, "question"), label: s(y.label),
                icon: s(y.icon), work_id: s(y.work_id), work_label: s(y.work_label), external_url: s(y.external_url), created_at: s(y.created_at),
                detail: s(y.detail), mini: mini(y.mini), release: parseRelease(y.release),
+               diagnosis: parseDiagnosis(y.diagnosis),
                action: act.label || act.href ? { label: s(act.label, "Open"), href: s(act.href), decision_id: s(act.decision_id) } : null };
     }),
     tiles: {
