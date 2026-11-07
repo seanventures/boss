@@ -24,6 +24,8 @@ import { plainClick } from "../agents/live-util";
 import { HEAD, SPAN, askMenuSide, askMenuWidth, dur, leaveTo, obsAsks, timeTicks } from "./obs-util";
 import type { ObsTabProps } from "./obs-home";
 import { AppDrawer } from "./app-drawer";
+import { AppsRows, type AppsAll } from "./apps-rows";
+import type { Polled } from "../../lib/factory-floor";
 import { PulseStrip, StripTable } from "./pulse-strip";
 import { Empty, LiveRegion, Skeleton, StateWord, ZoneHead, useAnnouncer } from "../infra/kit";
 import { useLocalTime } from "../../lib/local-time";
@@ -101,8 +103,11 @@ function PulseRowView({ row, pulse, onOpen, changed, now }: {
 
 // ── the tab ─────────────────────────────────────────────────────────────────────────────────
 
-export function AppsTab(props: ObsTabProps) {
+export function AppsTab(props: ObsTabProps & { all?: Polled<AppsAll> }) {
   const { pulse, url, go, query } = props;
+  // Screen 15: every app as a row (default); the Pulse — the 24-hour strip with its deploy
+  // pins and table — one press away (`apps=pulse`), unchanged.
+  const pulseView = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("apps") === "pulse";
   const data = pulse.data;
   // The clock starts after mount (the server and the first client render agree), and is read
   // again whenever a new answer lands.
@@ -143,6 +148,24 @@ export function AppsTab(props: ObsTabProps) {
     go(hit ? { app: hit.targetId, watch: null } : { q: app || null, watch: null }, "replace");
   }, [data, go]);
 
+  const viewSwitch = (
+    <span className="inf-seg obs-apps-view" role="radiogroup" aria-label="Show apps as" data-testid="obs-apps-view">
+      <button type="button" role="radio" aria-checked={!pulseView} className="inf-seg-btn" data-testid="obs-apps-view-rows"
+              onClick={() => go({ apps: null }, "replace")} title="One row per app, across your projects">Rows</button>
+      <button type="button" role="radio" aria-checked={pulseView} className="inf-seg-btn" data-testid="obs-apps-view-pulse"
+              onClick={() => go({ apps: "pulse" }, "replace")} title="This project's 24-hour pulse with deploy pins">Pulse</button>
+    </span>
+  );
+  if (!pulseView && props.all) {
+    return (
+      <div className="obs-apps" data-testid="obs-apps">
+        <div className="obs-apps-bar">{viewSwitch}</div>
+        <AppsRows all={props.all} query={query || url.q} currentProject={props.projectId} onOpen={(id) => go({ app: id }, "push")} />
+        <NotWatchedZone data={data} />
+        {url.app ? <AppDrawer {...props} targetId={url.app} row={data?.rows.find((r) => r.targetId === url.app) ?? null} /> : null}
+      </div>
+    );
+  }
   if (pulse.loading && !data) return <Skeleton testId="obs-apps-loading" />;
   // UNREACHABLE IS ONE STATE, NOT THREE. With no answer the tab said "Nothing deployed yet" and
   // "Every scraped app is watched" under the header's "Can't reach BOSS" — two claims about apps
@@ -158,6 +181,7 @@ export function AppsTab(props: ObsTabProps) {
 
   return (
     <div className="obs-apps" data-testid="obs-apps">
+      {props.all ? <div className="obs-apps-bar">{viewSwitch}</div> : null}
       <LiveRegion text={said} />
       <section className="obs-pulse" aria-labelledby="obs-pulse-head">
         <div className="obs-prow obs-prow-head">
@@ -185,27 +209,36 @@ export function AppsTab(props: ObsTabProps) {
         )}
       </section>
 
-      <section className="obs-zone" aria-labelledby="obs-not-watched-head" data-testid="obs-not-watched">
-        <ZoneHead id="obs-not-watched-head" label="NOT WATCHED" count={data?.notWatched.length ?? 0}
-                  tip="Prometheus scrapes it, but no health check watches it" />
-        {data && data.notWatched.length ? (
-          <ul className="obs-list">
-            {data.notWatched.map((n) => (
-              <li key={`${n.app}|${n.env}`} className="obs-line">
-                <span className="obs-strong" data-copy="data" data-user-text>{n.app} · {n.env}</span>
-                {n.scrapeUrl ? <span className="inf-mono inf-trunc inf-faint" title={n.scrapeUrl} data-copy="data">{n.scrapeUrl}</span> : null}
-                <span className="ag-spacer" />
-                {n.dashboardUrl ? (
-                  <a className="inf-link" href={n.dashboardUrl} target="_blank" rel="noreferrer noopener">Dashboard ↗</a>
-                ) : <span className="inf-faint" title="Deploy the monitoring stack in Sources">No dashboard</span>}
-              </li>
-            ))}
-          </ul>
-        ) : <Empty>Every scraped app is watched</Empty>}
-      </section>
+      <NotWatchedZone data={data} />
 
       {url.app ? <AppDrawer {...props} targetId={url.app} row={data?.rows.find((r) => r.targetId === url.app) ?? null} /> : null}
     </div>
+  );
+}
+
+/** NOT WATCHED: scraped by Prometheus, no health check — under the rows and under the Pulse. */
+function NotWatchedZone({ data }: { data: Pulse | null }) {
+  // Unreachable is one state: no claim about scraped apps nobody has read.
+  if (!data) return null;
+  return (
+      <section className="obs-zone" aria-labelledby="obs-not-watched-head" data-testid="obs-not-watched">
+      <ZoneHead id="obs-not-watched-head" label="NOT WATCHED" count={data?.notWatched.length ?? 0}
+                tip="Prometheus scrapes it, but no health check watches it" />
+      {data && data.notWatched.length ? (
+        <ul className="obs-list">
+          {data.notWatched.map((n) => (
+            <li key={`${n.app}|${n.env}`} className="obs-line">
+              <span className="obs-strong" data-copy="data" data-user-text>{n.app} · {n.env}</span>
+              {n.scrapeUrl ? <span className="inf-mono inf-trunc inf-faint" title={n.scrapeUrl} data-copy="data">{n.scrapeUrl}</span> : null}
+              <span className="ag-spacer" />
+              {n.dashboardUrl ? (
+                <a className="inf-link" href={n.dashboardUrl} target="_blank" rel="noreferrer noopener">Dashboard ↗</a>
+              ) : <span className="inf-faint" title="Deploy the monitoring stack in Sources">No dashboard</span>}
+            </li>
+          ))}
+        </ul>
+      ) : <Empty>Every scraped app is watched</Empty>}
+    </section>
   );
 }
 

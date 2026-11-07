@@ -403,6 +403,8 @@ export type ObsBodies = {
   rules?: (targetId: string) => unknown; history?: (url: URL) => unknown; alerts?: (url: URL) => unknown;
   /** Any other GET by exact path (monitoring: /v1/contact-points, /v1/monitoring/services/x/live, …). */
   gets?: Record<string, (url: URL) => unknown>;
+  /** GET /v1/observability/apps/all (screen 15's rows, across projects). */
+  appsAll?: unknown;
 };
 export type Recorded = { url: string; method: string; body: unknown };
 
@@ -438,6 +440,7 @@ export function mockObsFetch(bodies: ObsBodies = {}) {
     if (/^\/v1\/apps\/[^/]+\/alerts$/.test(path)) return json(bodies.history ? bodies.history(u) : historyWire());
     if (path === "/v1/alerts") return json(bodies.alerts ? bodies.alerts(u) : allAlertsWire());
     if (path === "/v1/observability/apps") return json(bodies.pulse ?? pulseWire());
+    if (path === "/v1/observability/apps/all") return json(bodies.appsAll ?? appsAllWire());
     if (path.startsWith("/v1/observability/apps/")) {
       const id = decodeURIComponent(path.split("/")[4] ?? "");
       return json(bodies.app ? bodies.app(id) : appWire(id));
@@ -463,4 +466,16 @@ export function mockObsFetch(bodies: ObsBodies = {}) {
   });
   vi.stubGlobal("fetch", fn);
   return { fn, calls, writes };
+}
+
+/** Screen 15's rows: the Pulse's apps of project p1 plus another project's app (a firing one). */
+export function appsAllWire(over: Record<string, unknown> = {}) {
+  const mine = PULSE_ROWS.map((r) => ({ ...r, firing: r.target_id === "t_down" ? 2 : 0,
+    project: { id: "p1", name: "HelpDesk AI Demo", initials: "HD" },
+    health_href: `?project_id=p1&area=project&tab=health&app=${r.target_id}`,
+    drawer_href: `?project_id=p1&area=observability&app=${r.target_id}` }));
+  const other = { ...PULSE_ROWS[3], target_id: "t_np", app: "northpeak", env: "preview", firing: 1, state: "degraded", word: "Slow",
+    project: { id: "p2", name: "NorthPeak Retail", initials: "NP" },
+    health_href: "?project_id=p2&area=project&tab=health&app=t_np", drawer_href: "?project_id=p2&area=observability&app=t_np" };
+  return { rows: [...mine, other], counts: {}, projects: 2, partial: [], ...over };
 }

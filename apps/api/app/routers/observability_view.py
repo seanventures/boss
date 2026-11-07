@@ -57,6 +57,24 @@ def build_observability_router(
         return _read(project_id, request, response, lambda c: obs_view.pulse(
             c, settings(), project_id.strip(), win=obs_view.window_of(win), cells=cells))
 
+    @router.get("/v1/observability/apps/all")
+    @authenticated(note="Every app of every project the caller may read: visible_project_rows "
+                        "(project:read) narrowed to observability:read per project.")
+    def obs_apps_all(request: Request, response: Response, win: str = "24h",
+                     cells: Optional[int] = None):
+        """Observability › Apps across the organisation (screen 15): one row per app, each with
+        its project and a link to that project's Health tab."""
+        from apps.api.app.main import visible_project_rows
+        from boss_engine.identity import viewer as _viewer
+
+        rows = visible_project_rows(request)
+        projects = [{"id": str(r["id"]), "name": str(r["name"] or r["id"])} for r in rows
+                    if _viewer.may(str(r["id"]), P.OBSERVABILITY_READ.value) is not False]
+        with begin(engine) as connection:
+            body = obs_view.apps_across(connection, settings(), projects,
+                                        win=obs_view.window_of(win), cells=cells)
+        return etagged(request, response, jsonable_encoder(body))
+
     @router.get("/v1/observability/apps/{target_id}")
     @permit(P.OBSERVABILITY_READ, scope=Scope.project(query="project_id"))
     def obs_app(target_id: str, project_id: str, request: Request, response: Response,
