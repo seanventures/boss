@@ -10,6 +10,9 @@ GET  /v1/projects/{id}/captain                    §7  the captain and squad
 POST /v1/projects/{id}/captain                    §7  change the captain (owner/admin)
 GET  /v1/projects/{id}/onboarding                 §8  the onboarding agent's record
 POST /v1/projects/{id}/onboarding/start           §8  start (or show) onboarding
+POST /v1/projects/{id}/onboarding/backlog/accept §8  accept proposed backlog onto Roadmap › Next
+GET  /v1/projects/{id}/plan                       §6  the Roadmap's Now · Next · Later lanes
+POST /v1/projects/{id}/plan/{item}                §6  move an accepted item (Next ↔ Later, order)
 POST /v1/projects/onboarding/execute                  the worker's leased onboarding job
 GET  /v1/jump?q=&project_id=                      §9  ⌘K
 GET  /v1/projects/{id}/settings                   §11 Project › Settings (sections + actions)
@@ -85,8 +88,16 @@ def projects_summary(request: Request, include_archived: bool = False) -> dict[s
     rows = visible_project_rows(request, include_archived=include_archived)
     with begin(_engine) as connection:
         items = overview.summary(connection, [str(r["id"]) for r in rows])
+        # Screen 02's card facts (ring, status lines, crew, caps): cards.extras, batched.
+        from boss_engine.services.project_experience import cards
+
+        more = cards.extras(connection, [i["id"] for i in items])
+    for item in items:
+        item.update(more.get(item["id"], {}))
+    caps = [i["week_cap_usd"] for i in items if i.get("week_cap_usd") and not i.get("archived")]
     first_run = not any(i.get("repo") for i in items)
     return {"items": items, "first_run": first_run,
+            "week_cap_usd": round(sum(caps), 2) if caps else None,
             "first_run_href": "?area=projects&first_run=1" if first_run else None}
 
 
@@ -188,6 +199,11 @@ def project_new_work(project_id: str, payload: NewWorkBody) -> dict[str, Any]:
     started = start_delivery_workflow(WorkflowStartBody(**body))
     run_id = str(((started or {}).get("run") or {}).get("id") or "")
     with begin(_engine) as connection:
+        if run_id and payload.source_ref:
+            # Started from a roadmap item (plan.link_started): it leaves Next / Later.
+            from boss_engine.services.project_experience import plan
+
+            plan.link_started(connection, project_id, payload.source_ref, run_id)
         found = next((w for w in work.everything(connection, project_id) if w["id"] == run_id), None)
     out = {"work": found, "run_id": run_id or None,
            "href": project_href(project_id, tab="work", drawer=f"run:{run_id}") if run_id else
@@ -284,6 +300,73 @@ def project_onboarding_start(project_id: str, request: Request) -> dict[str, Any
         _legacy_bar(connection, project_id, "workflow_execute")
         # An archived project answers 409 through the app's ProjectArchived handler.
         return onboarding.start(connection, project_id, trigger="manual", actor=_actor(request))
+
+
+class BacklogAcceptBody(BaseModel):
+    ids: list[str] = Field(default_factory=list, max_length=50)
+    lane: str = "next"
+    titles: dict[str, str] = Field(default_factory=dict)
+
+
+@router.post("/v1/projects/{project_id}/onboarding/backlog/accept")
+@permit(P.WORK_ITEM_MANAGE, scope=Scope.project(path="project_id"))
+def project_onboarding_backlog_accept(project_id: str, payload: BacklogAcceptBody,
+                                      request: Request) -> dict[str, Any]:
+    """Screen 10's "Accept backlog": the chosen candidates, in the order given, go on the
+    Roadmap's Next lane as accepted items (planned work). Nothing starts: a build starts only
+    when a person starts an item. Idempotent."""
+    from boss_engine.services.project_experience import onboarding
+
+    if not payload.ids:
+        raise HTTPException(status_code=422, detail={
+            "error": "ids_required", "message": "Pick at least one item to accept."})
+    with begin(_engine) as connection:
+        _require_project(connection, project_id)
+        try:
+            return onboarding.accept_backlog(connection, project_id, list(payload.ids),
+                                             actor=_actor(request), lane=payload.lane,
+                                             titles=payload.titles)
+        except LookupError as error:
+            raise _missing(error) from None
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail={"error": "bad_lane",
+                                                         "message": str(error)}) from None
+
+
+# ── §6 the roadmap's plan (Now · Next · Later) ──────────────────────────────────────────────
+
+@router.get("/v1/projects/{project_id}/plan")
+@permit(P.PROJECT_READ, scope=Scope.project(path="project_id"))
+def project_plan(project_id: str) -> dict[str, Any]:
+    from boss_engine.services.project_experience import plan
+
+    with begin(_engine) as connection:
+        _require_project(connection, project_id)
+        return plan.lanes(connection, project_id)
+
+
+class PlanMoveBody(BaseModel):
+    lane: str
+    before: Optional[str] = None
+
+
+@router.post("/v1/projects/{project_id}/plan/{item_id}")
+@permit(P.WORK_ITEM_MANAGE, scope=Scope.project(path="project_id"))
+def project_plan_move(project_id: str, item_id: str, payload: PlanMoveBody,
+                      request: Request) -> dict[str, Any]:
+    """Move an accepted roadmap item between Next and Later, or reorder it (drag on the Plan)."""
+    from boss_engine.services.project_experience import plan
+
+    with begin(_engine) as connection:
+        _require_project(connection, project_id)
+        try:
+            return plan.move(connection, project_id, item_id, lane=payload.lane,
+                             before=payload.before, actor=_actor(request))
+        except LookupError as error:
+            raise _missing(error) from None
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail={"error": "bad_lane",
+                                                         "message": str(error)}) from None
 
 
 class LeasedJobBody(BaseModel):

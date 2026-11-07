@@ -62,7 +62,17 @@ CHECKLIST: tuple[tuple[str, str], ...] = (
 )
 LABELS = dict(CHECKLIST)
 STAGES = (("discover", "Discover"), ("ready", "Ready for work"), ("backlog", "Propose backlog"),
-          ("first_work", "First work"))
+          ("first_work", "Work it"), ("deploy", "Deploy"))
+#: The Ready-for-work card's rows (screen 10), in its order; `workflow` is read, not probed.
+READY_CARD = ("repo_access", "baseline_build", "tests", "workflow", "deploy_target", "secrets")
+#: The checklist item's words on the Ready card (screen 10: "Builds clean", "Staging host").
+CARD_LABELS = {"repo_access": "Repo access", "baseline_build": "Builds clean", "tests": "Tests run",
+               "workflow": "Workflow picked", "deploy_target": "Staging host",
+               "secrets": "App secrets", "models": "Models", "knowledge": "Code mapped"}
+#: Who does each item (the face on its row; screen 10 shows the agent doing it).
+ITEM_AGENT = {"repo_access": "engineering_captain", "models": "engineering_captain",
+              "knowledge": "engineering_captain", "tests": "qa", "baseline_build": "builder",
+              "workflow": "engineering_captain", "deploy_target": "sre", "secrets": "sre"}
 _DISCOVER_KEYS = ("repo_access", "knowledge", "tests")
 _READY_KEYS = ("models", "baseline_build", "deploy_target", "secrets")
 
@@ -380,7 +390,7 @@ def _pass(engine: Any, settings: Any, row: Mapping[str, Any], probes: Probes) ->
     # BACKLOG AND FIRST WORK.
     backlog = _backlog(engine, settings, project_id, full, ci, dossier_facts or {}, probes)
     first = _first_work(engine, project_id, backlog)
-    discover = _discover_nodes(engine, run_id, stack, ci)
+    discover = _discover_nodes(engine, run_id, stack, ci, dossier_facts or {})
     _record(engine, run_id, backlog=backlog, first_work=first, discover=discover)
     return False
 
@@ -721,23 +731,40 @@ def _first_work(engine: Any, project_id: str, backlog: list[dict[str, Any]]) -> 
             "others_href": project_href(project_id, tab="roadmap")}
 
 
-def _discover_nodes(engine: Any, run_id: str, stack: Mapping[str, Any], ci: Mapping[str, Any]
-                    ) -> list[dict[str, Any]]:
+def _discover_nodes(engine: Any, run_id: str, stack: Mapping[str, Any], ci: Mapping[str, Any],
+                    facts: Optional[Mapping[str, Any]] = None) -> list[dict[str, Any]]:
+    """What Helm found, as the radial diagram's nodes (screen 10): each label IS the finding —
+    "214 files", "FastAPI+React", "142/148 tests", "3 hotspots", "4 docs" — green once found."""
+    facts = facts or {}
     with engine.connect() as c:
         row = _get(c, run_id) or {}
     checklist = as_json(row.get("checklist"), {}) or {}
 
-    def node(label: str, key: str) -> dict[str, Any]:
+    def state(key: str) -> str:
         item = checklist.get(key) or {}
-        state = item.get("state") or "todo"
-        return {"label": label, "state": "waiting" if item.get("owner") == "you" and state != "done"
-                else state, "sub": item.get("sub") or ""}
+        st = item.get("state") or "todo"
+        return "waiting" if item.get("owner") == "you" and st != "done" else st
 
-    words_ = " · ".join(w for w in (stack.get("language"), stack.get("framework")) if w)
-    return [node("Repo access", "repo_access"),
-            {"label": "Stack found", "state": "done" if words_ else "skipped",
-             "sub": words_ or "Not recognised"},
-            node("Mapping code", "knowledge"), node("Tests run", "tests")]
+    files = int(facts.get("files") or 0)
+    stack_words = "+".join(w for w in (stack.get("framework"), stack.get("language")) if w)
+    checks, passing = int(ci.get("checks") or 0), int(ci.get("passing") or 0)
+    test_files = int((facts.get("tests") or {}).get("files") or 0)
+    tests = (f"{passing}/{checks} tests" if checks else
+             f"{test_files} test files" if test_files else "No tests yet")
+    hotspots = len(facts.get("hotspots") or [])
+    docs = int((facts.get("docs") or {}).get("docs") or 0)
+    return [
+        {"key": "files", "label": f"{files} files" if files else "Mapping code",
+         "state": "done" if files else state("knowledge"), "sub": ""},
+        {"key": "stack", "label": stack_words or "Stack unknown",
+         "state": "done" if stack_words else "skipped", "sub": ""},
+        {"key": "tests", "label": tests, "state": state("tests") if checks else
+         ("done" if test_files else "skipped"), "sub": ""},
+        {"key": "hotspots", "label": f"{hotspots} hotspot{'s' if hotspots != 1 else ''}",
+         "state": "done" if files else "todo", "sub": ""},
+        {"key": "docs", "label": f"{docs} doc{'s' if docs != 1 else ''}",
+         "state": "done" if files else "todo", "sub": ""},
+    ]
 
 
 # ── the view (GET …/onboarding) ─────────────────────────────────────────────────────────────
@@ -755,23 +782,101 @@ def _stage_state(items: list[dict[str, Any]]) -> str:
     return "todo"
 
 
+def _workflow_item(connection: Connection, project_id: str) -> dict[str, Any]:
+    """Which workflow new work runs through (start_project.how_to_start): a read, not a probe."""
+    from ..start_project import how_to_start
+
+    plan = _safe(lambda: how_to_start(connection, project_id, has_repo=True), {}) or {}
+    name = plan.get("workflow_name")
+    if name:
+        return {"key": "workflow", "label": CARD_LABELS["workflow"], "state": "done",
+                "owner": "agent", "detail": f"New work runs through {name}.", "sub": str(name),
+                "action": None}
+    return {"key": "workflow", "label": CARD_LABELS["workflow"], "state": "todo", "owner": "agent",
+            "detail": "No feature workflow is mapped for this project yet.", "sub": "Not mapped",
+            "action": None}
+
+
+def _deploy_stage(connection: Connection, project_id: str) -> tuple[str, str]:
+    """(state, sub) of the Deploy stage: staging live (done), a target set (auto / you approve),
+    or not set up."""
+    row = connection.execute(text(
+        "SELECT t.environment, t.auto_deploy, EXISTS (SELECT 1 FROM stack_deployments s WHERE "
+        "s.target_id = t.id AND s.status = 'healthy') AS live FROM deployment_targets t "
+        "WHERE t.project_id = :p AND t.status = 'active' ORDER BY "
+        "(lower(t.environment) IN ('staging', 'stage')) DESC LIMIT 1"),
+        {"p": project_id}).mappings().first()
+    if not row:
+        return "todo", "not set up"
+    env = str(row["environment"] or "staging").lower()
+    policy = "auto" if row["auto_deploy"] else "you approve"
+    return ("done" if row["live"] else "todo"), f"{env} {policy}"
+
+
+#: What the agent is doing on each check, as a verb phrase ("Beacon is checking the staging host").
+NOW_WORDS = {"repo_access": "checking repo access", "models": "checking the model",
+             "knowledge": "mapping the code", "tests": "running the tests",
+             "baseline_build": "checking the build", "workflow": "picking the workflow",
+             "deploy_target": "checking the staging host", "secrets": "reading the app's secrets"}
+
+
+def _now_line(items: list[dict[str, Any]], running: bool) -> str:
+    """What the agent is doing now, in one line ("Beacon is checking the staging host · :8004")."""
+    if not running:
+        return ""
+    names = {"engineering_captain": "Helm", "qa": "Vera", "builder": "Forge", "sre": "Beacon"}
+    doing = next((i for i in items if i.get("state") == "now" and i.get("owner") != "you"), None)
+    if not doing:
+        return ""
+    who = names.get(ITEM_AGENT.get(doing["key"], ""), "Helm")
+    verb = NOW_WORDS.get(doing["key"], f"on {CARD_LABELS.get(doing['key'], doing['key']).lower()}")
+    what = (doing.get("sub") or "").strip()
+    return f"{who} is {verb} · {what}" if what else f"{who} is {verb}"
+
+
+def _elapsed_words(seconds: int) -> str:
+    if seconds < 60:
+        return f"{seconds}s"
+    if seconds < 3600:
+        return f"{seconds // 60}m"
+    return f"{seconds // 3600}h {seconds % 3600 // 60}m"
+
+
 def view(connection: Connection, project_id: str) -> dict[str, Any]:
     row = latest(connection, project_id)
     if row is None:
         return {"state": "not_started", "run_id": None, "stages": [
             {"key": k, "label": label, "state": "todo", "sub": ""} for k, label in STAGES],
-            "discover": {"nodes": []}, "checklist": [], "only_you": [], "first_work": None,
-            "backlog": [], "elapsed_s": 0,
-            "start": {"href": f"/v1/projects/{project_id}/onboarding/start", "method": "POST"}}
+            "discover": {"nodes": []}, "checklist": [], "ready": [], "only_you": [],
+            "first_work": None, "backlog": [], "backlog_total": 0, "accepted": [], "now": "",
+            "elapsed_s": 0,
+            "start": {"href": f"/v1/projects/{project_id}/onboarding/start", "method": "POST"},
+            "accept_backlog": {"href": f"/v1/projects/{project_id}/onboarding/backlog/accept",
+                               "method": "POST"}}
     checklist = as_json(row["checklist"], {}) or {}
     items = []
     for key, label in CHECKLIST:
         item = dict(checklist.get(key) or _item(key, "todo"))
         item.pop("_read", None)
         item["label"] = label
+        item["agent"] = ITEM_AGENT.get(key)
         items.append(item)
     by_key = {i["key"]: i for i in items}
+    workflow = _workflow_item(connection, project_id)
+    workflow["agent"] = ITEM_AGENT["workflow"]
+    by_key["workflow"] = workflow
+    # THE READY CARD (screen 10): six rows in its words, then any item only a person can do
+    # (a missing model) so nothing that waits on you is hidden.
+    ready_rows = [{**by_key[k], "label": CARD_LABELS[k]} for k in READY_CARD if k in by_key]
+    ready_rows += [{**i, "label": CARD_LABELS.get(i["key"], i["label"])} for i in items
+                   if i["key"] not in READY_CARD and i["owner"] == "you" and i["state"] != "done"]
     backlog = as_json(row["backlog"], []) or []
+    accepted = {str(r) for r in connection.execute(text(
+        "SELECT facts->>'candidate_id' FROM ambient_recommendations WHERE project_id = :p "
+        "AND detector = 'onboarding' AND facts ? 'candidate_id'"), {"p": project_id}).scalars()}
+    for b in backlog:
+        if b.get("id") in accepted:
+            b["state"] = "accepted"
     first = as_json(row["first_work"], None)
     discover_items = [by_key[k] for k in _DISCOVER_KEYS]
     ready_items = [by_key[k] for k in _READY_KEYS]
@@ -781,33 +886,164 @@ def view(connection: Connection, project_id: str) -> dict[str, Any]:
                                        for i in ready_items):
         ready_state = "now" if ready_state != "done" else ready_state
     running = row["state"] == "running"
-    stages = [
-        {"key": "discover", "label": "Discover", "state": discover_state,
-         "sub": by_key["knowledge"].get("sub") or ""},
-        {"key": "ready", "label": "Ready for work", "state": ready_state,
-         "sub": f"{sum(1 for i in items if i['state'] in ('done', 'skipped'))} / {len(items)} done"},
-        {"key": "backlog", "label": "Propose backlog",
-         "state": "done" if backlog else ("now" if running and discover_state == "done" else "todo"),
-         "sub": f"{len(backlog)} proposed" if backlog else ""},
-        {"key": "first_work", "label": "First work",
-         "state": "now" if first and not running else "todo",
-         "sub": first["label"] if first else ""},
-    ]
     started = row["started_at"]
     end = row["finished_at"] or datetime.now(timezone.utc)
     started = started if started.tzinfo else started.replace(tzinfo=timezone.utc)
     end = end if end.tzinfo else end.replace(tzinfo=timezone.utc)
+    elapsed = max(0, int((end - started).total_seconds()))
+    discover_done_at = max([str(i.get("at") or "") for i in discover_items] or [""])
+    took = ""
+    if discover_state == "done" and discover_done_at:
+        try:
+            at = datetime.fromisoformat(discover_done_at)
+            took = _elapsed_words(max(0, int((at - started).total_seconds())))
+        except ValueError:
+            took = ""
+    done_rows = sum(1 for r in ready_rows if r["state"] in ("done", "skipped"))
+    deploy_state, deploy_sub = _deploy_stage(connection, project_id)
+    worked = bool(connection.execute(text(
+        "SELECT 1 FROM workflow_runs WHERE project_id = :p AND created_at > :at LIMIT 1"),
+        {"p": project_id, "at": started}).first())
+    stages = [
+        {"key": "discover", "label": "Discover", "state": discover_state,
+         "sub": (f"done · {took}" if took else "done") if discover_state == "done"
+         else (by_key["knowledge"].get("sub") or "")},
+        {"key": "ready", "label": "Ready for work", "state": ready_state,
+         "sub": f"{done_rows} of {len(ready_rows)}"},
+        {"key": "backlog", "label": "Propose backlog",
+         "state": "done" if backlog else ("now" if running and discover_state == "done" else "todo"),
+         "sub": f"{len(backlog)} proposed" if backlog else ("drafting" if running else "")},
+        {"key": "first_work", "label": "Work it",
+         "state": "done" if worked else ("now" if first and not running else "todo"),
+         "sub": "verified loop"},
+        {"key": "deploy", "label": "Deploy", "state": deploy_state, "sub": deploy_sub},
+    ]
     nodes = as_json(row["discover"], []) or []
     only_you = [i for i in items if i["owner"] == "you" and i["state"] != "done"]
+    # THE LIVE DIAGRAM (screen 00b): what Helm is doing while it reads — the stack it found, the
+    # code being mapped (118 / 214 files), the tests (142 / 148 pass), then the Ready check.
+    stack = ((as_json(row["facts"], {}) or {}).get("stack") or {})
+    stack_words = " · ".join(w for w in (stack.get("framework"), stack.get("language")) if w)
+    know, tests = by_key["knowledge"], by_key["tests"]
+    live = [{"key": "stack", "label": "Stack found", "state": "done" if stack_words else (
+                "now" if running else "todo"), "sub": stack_words},
+            {"key": "mapping", "label": "Mapping code", "state": know.get("state") or "todo",
+             "sub": know.get("sub") or ""},
+            {"key": "tests", "label": "Tests run", "state": tests.get("state") or "todo",
+             "sub": tests.get("sub") or ""},
+            {"key": "ready", "label": "Ready check", "state": ready_state if ready_state == "done"
+             else "todo", "sub": ""}]
     return {"run_id": row["id"], "state": row["state"], "trigger": row["trigger"],
-            "stages": stages, "discover": {"nodes": nodes}, "checklist": items,
-            "only_you": only_you, "first_work": first, "backlog": backlog[:10],
+            "stages": stages, "discover": {"nodes": nodes, "live": live}, "checklist": items,
+            "ready": ready_rows, "only_you": only_you, "first_work": first,
+            "backlog": backlog[:20], "backlog_total": len(backlog),
+            "accepted": sorted(accepted & {str(b.get("id")) for b in backlog}),
+            "now": _now_line(items, running),
             "error": row["error"], "started_at": iso(row["started_at"]),
             "finished_at": iso(row["finished_at"]),
-            "elapsed_s": max(0, int((end - started).total_seconds())),
+            "elapsed_s": elapsed,
             "start": {"href": f"/v1/projects/{project_id}/onboarding/start", "method": "POST"},
+            "accept_backlog": {"href": f"/v1/projects/{project_id}/onboarding/backlog/accept",
+                               "method": "POST"},
             "href": project_href(project_id, tab="overview", drawer="onboarding")}
 
 
-__all__ = ["CHECKLIST", "JOB_KIND", "MAX_WAIT_S", "Probes", "advance", "execute_job", "latest",
-           "start", "view"]
+# ── accepting the proposed backlog (screen 10 "Accept backlog / Edit") ─────────────────────
+
+#: A backlog candidate's kind → the roadmap's recommendation kind (ambient_recommendations CHECK).
+_REC_KIND = {"bug": "hardening", "ticket": "feature", "feature": "feature", "chore": "process"}
+_TASK_REC_KIND = {"missing_tests": "test_gap", "ci_setup": "process", "todo_triage": "refactor",
+                  "doc_drift": "process", "security_patch": "hardening", "red_main": "hardening"}
+LANES = ("next", "later")
+
+
+def accept_backlog(connection: Connection, project_id: str, ids: list[str], *, actor: str,
+                   lane: str = "next", titles: Optional[Mapping[str, str]] = None
+                   ) -> dict[str, Any]:
+    """Put the chosen candidates of the proposed backlog on the Roadmap, in the order given, on
+    the `lane` (Next unless said): each becomes an ACCEPTED roadmap item — planned work on the
+    Work tab, a row in Roadmap › Next — and NOTHING STARTS: a build starts only when a person
+    starts that item. Idempotent: a candidate already on the roadmap is left where it is.
+    `titles` renames candidates (the Edit step: reorder, drop, rename before accepting)."""
+    titles = {str(k): " ".join(str(v).split())[:200] for k, v in (titles or {}).items()
+              if str(v or "").strip()}
+    if lane not in LANES:
+        raise ValueError("lane is next or later")
+    row = latest(connection, project_id)
+    backlog = {str(b.get("id")): b for b in (as_json(row["backlog"], []) or [])} if row else {}
+    unknown = [i for i in ids if i not in backlog]
+    if unknown:
+        raise LookupError(f"Not in the proposed backlog: {', '.join(unknown[:5])}")
+    rank0 = int(connection.execute(text(
+        "SELECT COALESCE(max((facts->>'rank')::int), 0) FROM ambient_recommendations "
+        "WHERE project_id = :p AND status = 'accepted' AND facts->>'lane' = :l"),
+        {"p": project_id, "l": lane}).scalar() or 0)
+    added, kept = [], []
+    for n, cid in enumerate(dict.fromkeys(ids), start=1):
+        c = backlog[cid]
+        ref = str(c.get("ref") or cid)
+        if ref.startswith("rec:"):
+            # An open roadmap recommendation: accepted where it is (the ledger and its ticket).
+            item_id = ref.split(":", 1)[1]
+            status = connection.execute(text(
+                "SELECT status FROM ambient_recommendations WHERE work_item_id = :w AND "
+                "project_id = :p"), {"w": item_id, "p": project_id}).scalar()
+            if status in ("open", "snoozed"):
+                from ..ambient import roadmap as ambient_roadmap
+
+                ambient_roadmap.accept(connection, item_id, project_id=project_id, actor=actor,
+                                       as_="ticket", plane=False)
+            connection.execute(text(
+                "UPDATE ambient_recommendations SET facts = facts || CAST(:f AS JSONB) "
+                "WHERE work_item_id = :w AND NOT (facts ? 'lane')"),
+                {"w": item_id, "f": json.dumps({"lane": lane, "rank": rank0 + n,
+                                                "candidate_id": cid})})
+            if titles.get(cid):
+                connection.execute(text(
+                    "UPDATE ambient_recommendations SET title = :t WHERE work_item_id = :w"),
+                    {"t": titles[cid], "w": item_id})
+            (added if status in ("open", "snoozed") else kept).append(cid)
+            continue
+        fingerprint = f"onboarding:{hashlib.sha1(ref.encode()).hexdigest()[:16]}"
+        exists = connection.execute(text(
+            "SELECT work_item_id FROM ambient_recommendations WHERE project_id = :p "
+            "AND fingerprint = :f AND status IN ('accepted', 'open', 'snoozed') LIMIT 1"),
+            {"p": project_id, "f": fingerprint}).scalar()
+        if exists:
+            kept.append(cid)
+            continue
+        item_id = f"wi_{uuid.uuid4().hex[:16]}"
+        title = titles.get(cid) or str(c.get("label") or c.get("detail") or "Backlog item")[:200]
+        connection.execute(text(
+            "INSERT INTO work_items (id, project_id, subject_type, subject_id, title, description, "
+            "ambient, fingerprint, lifecycle, task_class, source, created_by, outcome, "
+            "resolved_by, resolved_at) VALUES (:i, :p, 'roadmap', :s, :t, :d, true, :f, "
+            "'resolved', 'roadmap_item', 'onboarding', :a, 'accepted onto the roadmap', :a, now())"),
+            {"i": item_id, "p": project_id, "s": fingerprint, "t": title,
+             "d": str(c.get("text") or c.get("detail") or title)[:4000], "f": fingerprint,
+             "a": actor})
+        kind = _TASK_REC_KIND.get(str(c.get("task_class") or "")) or \
+            _REC_KIND.get(str(c.get("kind") or ""), "feature")
+        facts = {"lane": lane, "rank": rank0 + n, "candidate_id": cid, "source": c.get("source"),
+                 "ref": ref, "work_kind": c.get("kind"), "external_url": c.get("external_url"),
+                 "text": c.get("text"), "onboarding_run_id": row["id"] if row else None}
+        connection.execute(text(
+            "INSERT INTO ambient_recommendations (work_item_id, project_id, detector, kind, "
+            "fingerprint, subject, title, why, proposed_shape, facts, score, priority_score, "
+            "status, accepted_as, decided_by, decided_at) VALUES (:w, :p, 'onboarding', :k, :f, "
+            ":sub, :t, :y, 'ticket', CAST(:facts AS JSONB), :sc, :sc, 'accepted', 'ticket', :a, "
+            "now())"),
+            {"w": item_id, "p": project_id, "k": kind, "f": fingerprint, "sub": ref, "t": title,
+             "y": str(c.get("detail") or title)[:600], "facts": json.dumps(facts, default=str),
+             "sc": float(c.get("score") or 0), "a": actor})
+        added.append(cid)
+    from ..ambient._common import emit
+
+    emit(connection, project_id, "project.backlog_accepted", actor, "project", project_id,
+         {"accepted": added, "already": kept, "lane": lane})
+    return {"accepted": added, "already": kept, "lane": lane, "started": [],
+            "href": project_href(project_id, tab="roadmap")}
+
+
+__all__ = ["CHECKLIST", "JOB_KIND", "LANES", "MAX_WAIT_S", "Probes", "accept_backlog", "advance",
+           "execute_job", "latest", "start", "view"]

@@ -119,6 +119,8 @@ export type Recommendation = {
   proposed_shape: "ticket" | "epic" | "prd" | string; status: RecStatus | string; rank: number | null; score: number;
   value: Level3; effort: Level3; risk: Level3; evidence: number; sources: number; single_source: boolean;
   resurfaced: boolean; snoozed_until: string | null; strip: StripNode[];
+  /** The item's estimate in dollars, who would do it (role keys) and why (roadmap screen). */
+  cost_usd?: number | null; squad?: string[]; why?: string; subject?: string;
 };
 export type RoadmapView = { status: string; recommendations: Recommendation[]; counts: Record<string, number> };
 /** The drawer's text (GET /v1/ambient/roadmap/{id} → detail): only shown on ⓘ. */
@@ -431,6 +433,7 @@ export const parseRec = (w: unknown): Recommendation => {
     value: valueLevel(n(b.value)), effort: effortLevel(n(b.effort, 1)), risk: riskLevel(n(b.risk, 1)),
     evidence: n(b.evidence), sources: n(b.sources), single_source: b.single_source === true, resurfaced: b.resurfaced === true,
     snoozed_until: sn(y.snoozed_until), strip: parseStrip(y.strip),
+    cost_usd: typeof b.cost_usd === "number" ? b.cost_usd : null, squad: a(y.squad).map((q) => s(q)).filter(Boolean), why: s(y.why), subject: s(y.subject),
   };
 };
 

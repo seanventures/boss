@@ -10,14 +10,14 @@
  * list the console already has (names only) and say so; nothing is hidden.
  */
 import React, { useMemo, useState } from "react";
-import { Folders, Plus, Lightning, Coins, HandWaving, GitBranch } from "@phosphor-icons/react";
+import { Folders, Plus } from "@phosphor-icons/react";
 
 import { GatedButton } from "../../components/gated";
 import {
-  PX_PATHS, isPxDemo, navigateTo, parseSummary, projectHref, readPxUrl, usePxRead, writePxUrl, type ProjectCard, type ProjectsSummary,
+  PX_PATHS, navigateTo, parseSummary, projectHref, startOnboarding, usePxRead, type Node, type ProjectCard, type ProjectsSummary,
 } from "../../lib/project-experience";
 import { FX_SUMMARY } from "../../lib/project-experience-fixtures";
-import { DemoBanner, Empty, Face, Faces, openAddProject, usePxUrl, HEALTH_TONE, HEALTH_WORD, Ico, Journey, Loading, Ring, Spark, Tag } from "./kit";
+import { DemoBanner, Empty, Face, openAddProject, usePxUrl, HEALTH_WORD, Ico, Journey, Ring, Said, Spark, Tag } from "./kit";
 import { FirstRun } from "./first-run";
 import "./px.css";
 
@@ -33,16 +33,18 @@ export type ProjectsHomeProps = {
 
 const FILTERS = [
   { key: "all", label: "All" }, { key: "needs", label: "Needs you" }, { key: "working", label: "Working" },
-  { key: "onboarding", label: "Onboarding" },
+  { key: "onboarding", label: "Onboarding" }, { key: "archived", label: "Archived" },
 ] as const;
 type Filter = (typeof FILTERS)[number]["key"];
 
 export function ProjectsHome({ projectId, actor, orgId, projects = [], homeId, setupUnfinished = false }: ProjectsHomeProps) {
-  const read = usePxRead<ProjectsSummary>(PX_PATHS.summary(), parseSummary, { everyMs: 20_000, demo: () => parseSummary(FX_SUMMARY) });
+  const read = usePxRead<ProjectsSummary>(PX_PATHS.summaryAll(), parseSummary, { everyMs: 20_000, demo: () => parseSummary(FX_SUMMARY) });
   const url = usePxUrl();
   const fallback = useMemo<ProjectCard[]>(() => projects.map((p) => ({
     id: p.id, name: p.name, initials: p.name.slice(0, 2).toUpperCase(), repo: "", stage: "ready", journey: [], needs_you: 0, running: 0,
     health: "unknown", live_url: "", captain: null, updated_at: "", href: projectHref(p.id), cost_week: null, series: [],
+    status_label: "", onboarding_active: false, start_onboarding: null, archived: false, uptime_pct: null, onboarding_progress: null,
+    lines: [], line_tone: "", crew: [], merged: 0, building: 0, week_cap_usd: null,
   })), [projects]);
   const cards = read.data?.items ?? (read.state === "missing" ? fallback : null);
   const withRepo = (cards ?? []).some((c) => c.repo);
@@ -57,32 +59,50 @@ export function ProjectsHome({ projectId, actor, orgId, projects = [], homeId, s
       {firstRun ? (
         <FirstRun projectId={projectId} actor={actor} cards={cards ?? []} />
       ) : cards === null ? (
-        read.state === "error" ? <ProjectsList cards={fallback} note={read.error ?? "The project summary didn't load."} homeId={homeId} orgId={orgId} />
-          : <Loading rows={2} label="Loading projects" />
+        read.state === "error" ? <ProjectsList cards={fallback} cap={null} note={read.error ?? "The project summary didn't load."} onRetry={read.refresh} />
+          : <ProjectsSkeleton />
       ) : (
-        <ProjectsList cards={cards} homeId={homeId} orgId={orgId}
+        <ProjectsList cards={cards} cap={read.data?.week_cap_usd ?? null} onChanged={read.refresh}
                       note={read.state === "missing" ? "BOSS didn't answer with the project summary, so stages, health and cost are missing; names and links are live." : null} />
       )}
+      <span hidden>{homeId}{orgId}</span>
+      {/* + Add project opens THE sheet here even when the top bar draws no project menu (PX-20). */}
     </div>
   );
 }
 
-function ProjectsList({ cards, note }: { cards: ProjectCard[]; note?: string | null; homeId?: string; orgId?: string | null }) {
+/** Loading: the shape of the page (4 tiles, 3 cards), never a spinner over nothing. */
+function ProjectsSkeleton() {
+  return (
+    <div className="px-stack" role="status" aria-label="Loading projects" data-testid="px-loading">
+      <div className="px-grid px-g4">{[0, 1, 2, 3].map((i) => <div key={i} className="px-skel" style={{ minHeight: 96 }} />)}</div>
+      <div className="px-grid px-g3">{[0, 1, 2].map((i) => <div key={i} className="px-skel" style={{ minHeight: 200 }} />)}</div>
+    </div>
+  );
+}
+
+const isWorking = (c: ProjectCard) => !c.archived && (c.stage === "working" || c.running > 0);
+const isOnboarding = (c: ProjectCard) => !c.archived && (c.onboarding_active || (c.stage === "onboarding" && c.status_label !== "Not onboarded"));
+
+function ProjectsList({ cards, note, cap, onRetry, onChanged }: {
+  cards: ProjectCard[]; note?: string | null; cap: number | null; onRetry?: () => void; onChanged?: () => void;
+}) {
   const [filter, setFilter] = useState<Filter>("all");
-  const shown = cards
-    .filter((c) => filter === "all" || (filter === "needs" ? c.needs_you > 0 : filter === "working" ? c.stage === "working" || c.running > 0 : c.stage === "onboarding"))
+  const live = cards.filter((c) => !c.archived);
+  const shown = (filter === "archived" ? cards.filter((c) => c.archived) : live)
+    .filter((c) => filter === "all" || filter === "archived" || (filter === "needs" ? c.needs_you > 0 : filter === "working" ? isWorking(c) : isOnboarding(c)))
     // Needs-you first (the operator's rule: what waits on you is always on top), then the newest.
     .sort((x, y) => (y.needs_you > 0 ? 1 : 0) - (x.needs_you > 0 ? 1 : 0) || y.updated_at.localeCompare(x.updated_at));
-  const needs = cards.reduce((t, c) => t + c.needs_you, 0);
-  const running = cards.reduce((t, c) => t + c.running, 0);
-  const cost = cards.reduce((t, c) => t + (c.cost_week ?? 0), 0);
+  const needs = live.reduce((t, c) => t + c.needs_you, 0);
+  const running = live.reduce((t, c) => t + c.running, 0);
+  const cost = live.reduce((t, c) => t + (c.cost_week ?? 0), 0);
+  const crew = live.flatMap((c) => c.crew).filter((g, i, all) => all.findIndex((x) => x.role_key === g.role_key) === i).slice(0, 4);
   const counts: Record<Filter, number> = {
-    all: cards.length, needs: cards.filter((c) => c.needs_you > 0).length,
-    working: cards.filter((c) => c.stage === "working" || c.running > 0).length, onboarding: cards.filter((c) => c.stage === "onboarding").length,
+    all: live.length, needs: live.filter((c) => c.needs_you > 0).length,
+    working: live.filter(isWorking).length, onboarding: live.filter(isOnboarding).length, archived: cards.filter((c) => c.archived).length,
   };
   return (
     <>
-      <nav className="px-crumbs" aria-label="Breadcrumb"><span aria-current="page">Projects</span></nav>
       <div className="px-page-h">
         <Ico icon={Folders} c="blue" size="l" />
         <div>
@@ -95,36 +115,45 @@ function ProjectsList({ cards, note }: { cards: ProjectCard[]; note?: string | n
           <Plus size={14} weight="bold" aria-hidden /> Add project
         </GatedButton>
       </div>
-      {note ? <div className="px-note" role="note" data-testid="px-projects-note">{note}</div> : null}
-      <div className="px-grid px-g4" data-testid="px-projects-stats">
-        <Stat label="Projects" value={String(cards.length)} icon={Folders} />
-        <Stat label="Need you" value={String(needs)} icon={HandWaving} tone={needs ? "amber" : undefined}
+      {note ? (
+        <div className="px-note" role={onRetry ? "alert" : "note"} data-testid="px-projects-note">
+          {onRetry ? "Couldn't load projects. " : ""}{note}
+          {onRetry ? <button type="button" className="px-btn" data-size="s" style={{ marginLeft: 8 }} onClick={onRetry} data-testid="px-projects-retry">Retry</button> : null}
+        </div>
+      ) : null}
+      <div className="px-grid px-g4 px-pl-stats" data-testid="px-projects-stats">
+        <Stat label="Projects" value={String(live.length)} testid="px-stat-projects" />
+        <Stat label="Need you" value={String(needs)} tone={needs ? "amber" : undefined} testid="px-stat-needs"
               sub={needs ? `in ${counts.needs} project${counts.needs === 1 ? "" : "s"}` : "all clear"}
               onClick={needs ? () => setFilter("needs") : undefined} />
-        <Stat label="Running" value={String(running)} icon={Lightning} tone={running ? "teal" : undefined}
-              onClick={running ? () => setFilter("working") : undefined} />
-        <Stat label="Cost · week" value={cards.some((c) => c.cost_week !== null) ? `$${cost.toFixed(2)}` : "—"} icon={Coins} />
+        <Stat label="Running" value={String(running)} tone={running ? "teal" : undefined} testid="px-stat-running"
+              onClick={running ? () => setFilter("working") : undefined}>
+          {crew.length ? <span className="px-faces" data-testid="px-stat-running-faces">{crew.map((g) => <Face key={g.role_key} agent={g} size={22} state="working" />)}</span> : null}
+        </Stat>
+        <Stat label="Cost · week" value={live.some((c) => c.cost_week !== null) ? `$${cost.toFixed(2)}` : "—"} testid="px-stat-cost"
+              sub={cap ? `of $${cap % 1 ? cap.toFixed(2) : cap} cap` : undefined} />
       </div>
       <div className="px-filters" role="group" aria-label="Filter projects">
         {FILTERS.map((f) => (
           <button key={f.key} type="button" className="px-filter" aria-pressed={filter === f.key} data-testid={`px-filter-${f.key}`}
                   onClick={() => setFilter(f.key)}>
-            {f.key === "needs" ? <span className="px-dot" data-s="you" aria-hidden /> : null}{f.label} {counts[f.key] ? <span className="px-mono">{counts[f.key]}</span> : null}
+            {f.key === "needs" ? <span className="px-dot" data-s="you" aria-hidden /> : null}{f.label}{f.key === "all" || counts[f.key] ? <> {counts[f.key]}</> : null}
           </button>
         ))}
       </div>
       <div className="px-grid px-g3" data-testid="px-project-cards">
-        {shown.map((c) => <ProjectCardView key={c.id} card={c} />)}
+        {shown.map((c) => <ProjectCardView key={c.id} card={c} onChanged={onChanged} />)}
         {filter === "all" ? (
           <button type="button" className="px-pc-new" data-testid="px-card-add" onClick={() => openAddProject("import")}>
-            <Ico icon={Plus} c="teal" size="l" />
+            <span className="px-pc-plus" aria-hidden><Plus size={22} /></span>
             <b>Add project</b>
             <small>New idea · existing repo</small>
           </button>
         ) : null}
       </div>
       {!shown.length && filter !== "all" ? (
-        <Empty icon={Folders} title="Nothing here" line="No project matches this filter." testid="px-projects-filter-empty">
+        <Empty icon={Folders} title={filter === "archived" ? "No archived projects" : "Nothing here"}
+               line={filter === "archived" ? "Projects you archive wait here; they keep their history." : "No project matches this filter."} testid="px-projects-filter-empty">
           <button type="button" className="px-btn" onClick={() => setFilter("all")}>Show all</button>
         </Empty>
       ) : null}
@@ -132,58 +161,97 @@ function ProjectsList({ cards, note }: { cards: ProjectCard[]; note?: string | n
   );
 }
 
-function Stat({ label, value, icon, sub, tone, onClick }: { label: string; value: string; icon: typeof Folders; sub?: string; tone?: "amber" | "teal"; onClick?: () => void }) {
+function Stat({ label, value, sub, tone, onClick, children, testid }: {
+  label: string; value: string; sub?: string; tone?: "amber" | "teal"; onClick?: () => void; children?: React.ReactNode; testid?: string;
+}) {
   const body = (
     <>
-      <div className="px-row"><Ico icon={icon} c={tone ?? "blue"} /><span className="px-lbl">{label}</span></div>
+      <span className="px-lbl">{label}</span>
       <span className="px-num" style={tone ? { color: `var(--${tone})` } : undefined}>{value}</span>
+      {children}
       {sub ? <small className="px-faint">{sub}</small> : null}
     </>
   );
   return onClick ? (
-    <button type="button" className="px-card px-stat" data-tone={tone} data-link onClick={onClick} style={{ textAlign: "left", font: "inherit", color: "inherit" }}>{body}</button>
-  ) : <div className="px-card px-stat" data-tone={tone}>{body}</div>;
+    <button type="button" className="px-card px-stat" data-tone={tone} data-link onClick={onClick} data-testid={testid} style={{ textAlign: "left", font: "inherit", color: "inherit" }}>{body}</button>
+  ) : <div className="px-card px-stat" data-tone={tone} data-testid={testid}>{body}</div>;
 }
 
-const STAGE_WORD: Record<string, { label: string; tone: "green" | "amber" | "blue" | "violet" | "idle" }> = {
-  onboarding: { label: "Onboarding", tone: "blue" }, ready: { label: "Ready", tone: "green" }, backlog: { label: "Backlog", tone: "violet" },
-  working: { label: "Working", tone: "green" }, staging: { label: "Live", tone: "green" }, production: { label: "In prod", tone: "green" },
-};
+/** Screen 02's card strip: four stages (Onboard · Ready · Working · Deployed) from the six. */
+export function cardJourney(card: ProjectCard): Node[] {
+  const by = Object.fromEntries(card.journey.map((j) => [j.key, j]));
+  const pick = (...keys: string[]): Node["state"] => {
+    const states = keys.map((k) => by[k]?.state).filter(Boolean) as Node["state"][];
+    if (states.includes("waiting")) return "waiting";
+    if (states.includes("now")) return "now";
+    if (states.includes("failed")) return "failed";
+    return states.some((x) => x === "done") ? "done" : "todo";
+  };
+  const deployed = by.staging?.state === "done" || by.production?.state === "done" ? "done" : pick("staging", "production");
+  const ready = pick("ready", "backlog");
+  return [
+    { key: "onboarding", label: "Onboard", state: card.onboarding_active ? "now" : pick("onboarding"), sub: "", href: "" },
+    { key: "ready", label: "Ready", state: ready === "done" || by.working?.state === "done" || by.working?.state === "now" || by.working?.state === "waiting" ? "done" : ready, sub: "", href: "" },
+    { key: "working", label: "Working", state: by.working?.state === "waiting" ? "now" : pick("working"), sub: "", href: "" },
+    { key: "staging", label: "Deployed", state: deployed, sub: "", href: "" },
+  ];
+}
 
-export function ProjectCardView({ card }: { card: ProjectCard }) {
+export function ProjectCardView({ card, onChanged }: { card: ProjectCard; onChanged?: () => void }) {
   const href = projectHref(card.id);
-  const stage = STAGE_WORD[card.stage] ?? STAGE_WORD.ready;
   const open = () => navigateTo(href);
+  const [said, setSaid] = useState("");
+  const deployed = card.journey.some((j) => (j.key === "staging" || j.key === "production") && j.state === "done");
+  const pill = card.needs_you ? <Tag tone="amber">{card.needs_you} need you</Tag>
+    : card.onboarding_active ? <Tag tone="blue">Onboarding</Tag>
+    : card.archived ? <Tag tone="idle">Archived</Tag>
+    : deployed ? <Tag tone="green">Live</Tag>
+    : card.status_label === "Not onboarded" ? <Tag tone="idle">Not onboarded</Tag>
+    : <Tag tone={card.stage === "working" ? "green" : "blue"}>{card.status_label || "Ready"}</Tag>;
+  const startOnb = async () => {
+    const r = await startOnboarding(card.id);
+    setSaid(r.ok ? (r.demo ? "Sample mode — nothing was sent." : "Helm is reading it now.") : (r.error ?? "It didn't start."));
+    if (r.ok && !r.demo) onChanged?.();
+  };
+  const progress = card.onboarding_progress;
+  const lines = card.lines.length ? card.lines : [card.live_url ? "live" : "not deployed yet"];
   return (
     <article className="px-card px-pc" data-needs={card.needs_you > 0 || undefined} data-link data-testid={`px-card-${card.id}`}
+             title={`Open ${card.name}`}
              onClick={(e) => { if ((e.target as HTMLElement).closest("a,button")) return; open(); }}>
-      <div className="px-row">
+      <div className="px-row" style={{ alignItems: "flex-start" }}>
         <span className="px-mark" data-size="s" aria-hidden>{card.initials}</span>
         <div style={{ minWidth: 0, flex: 1 }}>
           {/* A real link: the card's name is how a keyboard (and a middle-click) opens it. */}
           <a className="px-pc-name px-ell" href={href} data-console-load data-testid={`px-card-open-${card.id}`} style={{ display: "block" }}>{card.name}</a>
-          <div className="px-pc-repo px-ell">{card.repo ? <><GitBranch size={10} aria-hidden /> {card.repo}</> : "no repo yet"}</div>
+          <div className="px-pc-repo px-ell">{card.repo || "no repo yet"}</div>
         </div>
-        {card.needs_you ? <Tag tone="amber">{card.needs_you} need you</Tag> : <Tag tone={stage.tone}>{stage.label}</Tag>}
+        {pill}
       </div>
-      {card.journey.length ? <Journey nodes={card.journey} size="s" testid={`px-card-journey-${card.id}`} /> : null}
+      {card.journey.length ? <Journey nodes={cardJourney(card)} size="s" testid={`px-card-journey-${card.id}`} /> : null}
       <div className="px-row">
-        {card.health !== "unknown" ? (
-          <Ring pct={card.health === "healthy" ? 100 : card.health === "degraded" ? 60 : 20} tone={HEALTH_TONE[card.health] === "idle" ? "teal" : (HEALTH_TONE[card.health] as "green")}
-                size="s" label={`Health: ${HEALTH_WORD[card.health]}`}>{card.health === "healthy" ? "ok" : "!"}</Ring>
-        ) : null}
-        <div style={{ minWidth: 0, flex: 1, fontSize: ".6rem" }}>
-          {card.live_url ? (
-            <a href={card.live_url} target="_blank" rel="noreferrer noopener" className="px-ell" style={{ display: "block" }}>
-              <span className="px-dot" data-s={card.health} data-round aria-hidden /> {card.live_url.replace(/^https?:\/\//, "")}
-            </a>
-          ) : <span className="px-faint">{card.stage === "onboarding" ? "Helm is reading it" : "not deployed yet"}</span>}
-          {card.running ? <span className="px-faint" style={{ display: "block" }}>{card.running} running</span> : null}
+        {card.onboarding_active && progress ? (
+          <Ring pct={progress[1] ? (100 * progress[0]) / progress[1] : 0} tone="teal" size="s" label={`Onboarding ${progress[0]} of ${progress[1]}`}>{progress[0]}/{progress[1]}</Ring>
+        ) : card.uptime_pct !== null ? (
+          <Ring pct={card.uptime_pct} tone={card.health === "down" ? "red" : card.health === "degraded" ? "amber" : "green"} size="s"
+                label={`Uptime ${card.uptime_pct}% this week, ${HEALTH_WORD[card.health]}`}>{card.uptime_pct >= 99.95 ? "100" : card.uptime_pct.toFixed(1).replace(/\.0$/, "")}</Ring>
+        ) : <Ring pct={0} tone="teal" size="s" label="No health signal yet">—</Ring>}
+        <div style={{ minWidth: 0, flex: 1, fontSize: ".6rem" }} data-testid={`px-card-lines-${card.id}`}>
+          <span className="px-pc-line1" data-tone={card.line_tone || undefined}>
+            <span className="px-dot" data-s={card.line_tone === "done" ? "done" : card.line_tone === "now" ? "now" : card.line_tone === "bad" ? "bad" : undefined} aria-hidden />
+            {lines[0]}</span>
+          {card.status_label === "Not onboarded" && !card.archived ? (
+            <GatedButton permission="workflow_run:start" projectId={card.id} className="px-linkbtn" data-testid={`px-card-onboard-${card.id}`}
+                         onClick={() => void startOnb()}>Not onboarded · Start onboarding</GatedButton>
+          ) : lines[1] ? <span className="px-faint px-ell" style={{ display: "block" }}>{lines[1]}</span> : null}
+          {said ? <Said text={said} tone={said.startsWith("Helm") || said.startsWith("Sample") ? "green" : "red"} /> : null}
         </div>
-        {card.series.length > 1 ? <div style={{ width: 80 }}><Spark series={card.series} label={`${card.name} cost this week`} /></div> : null}
+        {card.series.length > 1 ? <div className="px-pc-spark"><Spark series={card.series} label={`${card.name} cost this week`} /></div> : null}
       </div>
       <div className="px-pc-foot">
-        {card.captain ? <><Face agent={card.captain} size={20} /><span>{card.captain.name}</span></> : <span className="px-faint">No captain yet</span>}
+        {card.captain ? <><Face agent={card.captain} size={20} state={card.onboarding_active ? "working" : "idle"} /><span>{card.captain.name}</span></> : <span className="px-faint">No captain yet</span>}
+        {card.crew.length ? <span className="px-faces" title={card.crew.map((g) => g.name).join(", ")} data-testid={`px-card-crew-${card.id}`}>
+          {card.crew.map((g) => <Face key={g.role_key} agent={g} size={20} state="working" />)}</span> : null}
         <span className="px-spacer" />
         {card.cost_week !== null ? <span className="px-mono">${card.cost_week.toFixed(2)}</span> : null}
       </div>

@@ -777,7 +777,9 @@ def _badges(rec: Mapping[str, Any]) -> dict[str, Any]:
             "value": float(rec["value"] or 0), "status": rec["status"],
             "resurfaced": bool(rec.get("resurfaced_from")),
             "detector": learning.DETECTORS[rec["detector"]].title
-            if rec["detector"] in learning.DETECTORS else rec["detector"]}
+            if rec["detector"] in learning.DETECTORS else rec["detector"],
+            # The card's "≈ $2" (the roadmap screen): the item's own estimate, in dollars.
+            "cost_usd": round(int(rec.get("estimated_cost_usd_micros") or 0) / 1_000_000, 2)}
 
 
 def node_label(rec: Mapping[str, Any]) -> str:
@@ -868,6 +870,10 @@ def _summary(rec: Mapping[str, Any], rank: Optional[int] = None) -> dict[str, An
     out = {k: rec.get(k) for k in keys}
     out["id"] = rec["work_item_id"]
     out["rank"] = rank
+    # Who would do it (the card's agent pill) and why, for "Why ›" (the drawer has the rest).
+    out["squad"] = list(rec.get("squad") or (learning.DETECTORS[rec["detector"]].squad
+                                             if rec["detector"] in learning.DETECTORS else []))
+    out["why"] = rec.get("why")
     out["badges"] = _badges(rec)
     out["strip"] = [{"type": n["type"], "label": n["label"], "badges": n["badges"][:2]}
                     for n in diagram(rec)["nodes"]][:6]
@@ -882,6 +888,9 @@ def list_roadmap(connection: Connection, project_id: str, *, status: str = "open
     if status not in STATUSES + ("all",):
         raise ValueError(f"status is one of {', '.join(STATUSES + ('all',))}")
     _wake_snoozed(connection, project_id)
+    # THE DETECTORS' OWN NAMES on every card ("Incident patterns", never `incident_cause`): the
+    # registry fills when the detectors module is imported, which a read never did on its own.
+    from . import detectors  # noqa: F401
     rows = connection.execute(text(
         "SELECT * FROM ambient_recommendations WHERE project_id = :p "
         "AND (:s = 'all' OR status = :s) AND (CAST(:k AS TEXT) IS NULL OR kind = :k) "

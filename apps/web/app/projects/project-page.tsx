@@ -35,7 +35,7 @@ import { DeploymentsTab } from "./tab-deployments";
 import { HealthTab } from "./tab-health";
 import { SettingsTab } from "./tab-settings";
 import { DrawerHost } from "./drawers";
-import { OnboardingView } from "./onboarding";
+import { OnboardingView, elapsedWords } from "./onboarding";
 import "./px.css";
 
 export const TAB_ICONS: Record<Tab, Icon> = {
@@ -192,7 +192,8 @@ function Header({ ctx, onboarding }: { ctx: PxCtx; onboarding: boolean }) {
                     data-testid="px-head-health" title="Open Health" onClick={() => ctx.tab("health")}>
               <span className="px-dot" data-s={health} data-round aria-hidden />{HEALTH_WORD[health]}</button>
           ) : null}
-          <span className="px-tag" data-tone={onboarding ? "blue" : "green"} data-testid="px-head-status">{onboarding ? "Onboarding" : p.status_label || "Ready"}</span>
+          <span className="px-tag" data-tone={onboarding ? "blue" : "green"} data-testid="px-head-status">{onboarding ? <><Compass size={11} aria-hidden /> Onboarding</> : p.status_label || "Ready"}</span>
+          {onboarding && ctx.onboarding?.elapsed_s ? <span className="px-mono px-faint" style={{ fontSize: ".6rem" }} data-testid="px-head-elapsed">{elapsedWords(ctx.onboarding.elapsed_s)}</span> : null}
         </div>
       </div>
       <span className="px-spacer" />

@@ -71,8 +71,12 @@ export type ProjectCard = {
   id: string; name: string; initials: string; repo: string; stage: Stage; journey: Node[];
   needs_you: number; running: number; health: Health; live_url: string; captain: Agent | null;
   updated_at: string; href: string; cost_week: number | null; series: number[];
+  /** Screen 02 (cards.extras): the ring's number, the two status lines, the live crew. */
+  status_label: string; onboarding_active: boolean; start_onboarding: Accept | null; archived: boolean;
+  uptime_pct: number | null; onboarding_progress: [number, number] | null; lines: string[]; line_tone: string;
+  crew: Agent[]; merged: number; building: number; week_cap_usd: number | null;
 };
-export type ProjectsSummary = { items: ProjectCard[] };
+export type ProjectsSummary = { items: ProjectCard[]; week_cap_usd: number | null };
 export type Repo = { full_name: string; branch: string; access: { read: boolean; write: boolean; pr: boolean }; external_url: string };
 export type NeedsYou = {
   id: string; kind: "merge" | "deploy" | "plan" | "question" | "setup"; label: string; detail: string; icon?: string;
@@ -170,11 +174,14 @@ export type Roadmap = { now: NextItem[]; next: NextItem[]; later: NextItem[]; re
 export type OnboardingItem = { key: string; label: string; state: StepState; owner: "agent" | "you"; action: { label: string; href: string } | null; detail: string; sub: string };
 export type Onboarding = {
   state: "not_started" | "running" | "ready" | "needs_you" | "failed";
-  stages: Node[]; discover: { nodes: Node[] }; checklist: OnboardingItem[]; only_you: OnboardingItem[];
+  stages: Node[]; discover: { nodes: Node[]; live?: Node[] }; checklist: OnboardingItem[]; only_you: OnboardingItem[];
   first_work: { label: string; kind: string; source: string; estimate_min: number | null; estimate_usd: number | null; start: Accept | null; others_href: string } | null;
   backlog: NextItem[];
   /** What the agent is doing now, in words: the engine's `now`, else the checklist item in progress. */
   now: string; elapsed_s: number; error: string;
+  /** Screen 10: the Ready card's rows (its words, the agent on each), the whole backlog's size,
+   *  which candidates are already on the Roadmap, and the accept route ("Accept backlog"). */
+  ready: (OnboardingItem & { agent: string })[]; backlog_total: number; accepted: string[]; accept_backlog: Accept | null;
 };
 export type JumpItem = { label: string; kind: string; href: string; sub: string; external: boolean };
 export type SettingsItem = { label: string; value: string; sub: string; reveal: { href: string; requires: string } | null; href: string };
@@ -231,9 +238,17 @@ export const parseCard = (v: unknown): ProjectCard => {
     live_url: s(x.live_url), captain: parseAgent(x.captain), updated_at: s(x.updated_at), href: s(x.href),
     // `cost_week` is the week's dollars (a number); an object {usd} is read the same way.
     cost_week: nn(x.cost_week) ?? nn(o(x.cost_week).usd), series: nums(x.series).length ? nums(x.series) : nums(o(x.cost_week).series),
+    status_label: s(x.status_label), onboarding_active: x.onboarding_active === true, archived: x.archived === true,
+    start_onboarding: parseAccept(x.start_onboarding),
+    uptime_pct: nn(x.uptime_pct),
+    onboarding_progress: Array.isArray(x.onboarding_progress) && x.onboarding_progress.length === 2
+      ? [n(x.onboarding_progress[0]), n(x.onboarding_progress[1])] : null,
+    lines: a(x.lines).map((l) => s(l)).filter(Boolean), line_tone: s(x.line_tone),
+    crew: a(x.crew).map(parseAgent).filter((g): g is Agent => g !== null),
+    merged: n(x.merged), building: n(x.building), week_cap_usd: nn(x.week_cap_usd),
   };
 };
-export const parseSummary = (v: unknown): ProjectsSummary => ({ items: a(o(v).items).map(parseCard).filter((c) => c.id) });
+export const parseSummary = (v: unknown): ProjectsSummary => ({ items: a(o(v).items).map(parseCard).filter((c) => c.id), week_cap_usd: nn(o(v).week_cap_usd) });
 
 export const parseWorkItem = (v: unknown): WorkItem => {
   const x = o(v); const l = o(x.links); const pr = o(l.pr);
@@ -430,10 +445,14 @@ export const parseOnboarding = (v: unknown): Onboarding => {
   const doing = checklist.find((c) => c.state === "now" && c.owner === "agent");
   const now = s(x.now) || (state === "running" && doing ? [doing.label, doing.sub || doing.detail].filter(Boolean).join(" · ") : "");
   return {
-    state, stages: a(x.stages).map(parseNode), discover: { nodes: a(o(x.discover).nodes).map(parseNode) }, checklist, only_you: onlyYou,
+    state, stages: a(x.stages).map(parseNode),
+    discover: { nodes: a(o(x.discover).nodes).map(parseNode), live: a(o(x.discover).live).map(parseNode) }, checklist, only_you: onlyYou,
     first_work: Object.keys(fw).length ? { label: s(fw.label), kind: s(fw.kind), source: s(fw.source), estimate_min: nn(fw.estimate_min),
                                            estimate_usd: nn(fw.estimate_usd), start: parseAccept(fw.start), others_href: s(fw.others_href) } : null,
-    backlog: a(x.backlog).map(parseNext), now, elapsed_s: n(x.elapsed_s), error: s(x.error),
+    backlog: a(x.backlog).map((b) => ({ ...parseNext(b), accepted: s(o(b).state) === "accepted" })), now, elapsed_s: n(x.elapsed_s), error: s(x.error),
+    ready: (a(x.ready).length ? a(x.ready) : a(x.checklist)).map((z) => ({ ...item(z), agent: s(o(z).agent) })),
+    backlog_total: n(x.backlog_total, a(x.backlog).length), accepted: a(x.accepted).map((i) => s(i)),
+    accept_backlog: parseAccept(x.accept_backlog),
   };
 };
 
@@ -524,13 +543,19 @@ export const parseHealth = (v: unknown): HealthView => {
 const enc = encodeURIComponent;
 export const PX_PATHS = {
   summary: () => "/v1/projects/summary",
+  /** Screen 02 reads archived projects too (its Archived filter); the rail does not. */
+  summaryAll: () => "/v1/projects/summary?include_archived=true",
   overview: (id: string) => `/v1/projects/${enc(id)}/overview`,
   work: (id: string, state = "", q = "") => `/v1/projects/${enc(id)}/work${state || q ? `?${new URLSearchParams({ ...(state ? { state } : {}), ...(q ? { q } : {}) })}` : ""}`,
   knowledge: (id: string) => `/v1/projects/${enc(id)}/knowledge`,
   deployments: (id: string) => `/v1/projects/${enc(id)}/deployments`,
   captain: (id: string) => `/v1/projects/${enc(id)}/captain`,
+  workStory: (id: string, work: string) => `/v1/projects/${enc(id)}/work/${enc(work)}/story`,
   onboarding: (id: string) => `/v1/projects/${enc(id)}/onboarding`,
   onboardingStart: (id: string) => `/v1/projects/${enc(id)}/onboarding/start`,
+  backlogAccept: (id: string) => `/v1/projects/${enc(id)}/onboarding/backlog/accept`,
+  plan: (id: string) => `/v1/projects/${enc(id)}/plan`,
+  planMove: (id: string, item: string) => `/v1/projects/${enc(id)}/plan/${enc(item)}`,
   settings: (id: string) => `/v1/projects/${enc(id)}/settings`,
   health: (id: string) => `/v1/projects/${enc(id)}/health`,
   jump: (q: string, projectId?: string) => `/v1/jump?${new URLSearchParams({ q, ...(projectId ? { project_id: projectId } : {}) })}`,
@@ -743,6 +768,33 @@ export const setCaptain = (projectId: string, agentId: string) =>
   pxWrite(PX_PATHS.captain(projectId), { agent_id: agentId }, "Change captain");
 export const startOnboarding = (projectId: string) =>
   pxWrite(PX_PATHS.onboardingStart(projectId), {}, "Start onboarding");
+/** Screen 10 "Accept backlog" (after Edit): the chosen candidates, in this order, renamed where
+ *  the person renamed them, go on the Roadmap's Next lane. Nothing starts. */
+export const acceptBacklog = (projectId: string, ids: string[], titles: Record<string, string> = {}) =>
+  pxWrite(PX_PATHS.backlogAccept(projectId), { ids, titles }, "Accept backlog");
+/** Screen 07: move an accepted item to Next or Later, before another card (drag). */
+export const movePlanItem = (projectId: string, itemId: string, lane: PlanLane, before?: string) =>
+  pxWrite(PX_PATHS.planMove(projectId, itemId), { lane, ...(before ? { before } : {}) }, "Move");
+
+// ── the Roadmap's plan (§6 GET /v1/projects/{id}/plan) ─────────────────────────────────────────
+export type PlanLane = "next" | "later";
+export type PlanCard = {
+  id: string; label: string; title: string; state: WorkState | "planned"; agent: Agent | null; href: string;
+  lane: "now" | PlanLane; source: string; external_url: string; start: Accept | null;
+};
+export type Plan = { now: PlanCard[]; next: PlanCard[]; later: PlanCard[]; counts: Record<string, number> };
+const planCard = (lane: PlanCard["lane"]) => (z: unknown): PlanCard => {
+  const y = o(z);
+  return { id: s(y.id), label: s(y.label) || s(y.title), title: s(y.title) || s(y.label), lane,
+           state: (s(y.state) || "planned") as PlanCard["state"], agent: parseAgent(y.agent), href: s(y.href),
+           source: s(y.source), external_url: s(y.external_url), start: parseAccept(y.start) };
+};
+export const parsePlan = (v: unknown): Plan => {
+  const x = o(v);
+  const counts: Record<string, number> = {};
+  for (const [k, c] of Object.entries(o(x.counts))) counts[k] = n(c);
+  return { now: a(x.now).map(planCard("now")), next: a(x.next).map(planCard("next")), later: a(x.later).map(planCard("later")), counts };
+};
 
 // ── adapters: what the screens can show from reads that exist today ─────────────────────────
 

@@ -251,10 +251,22 @@ describe("the first run (screens 0a, 0b) keeps every Get started item", () => {
     expect($$("[data-testid='px-first-run-guided'] select, [data-testid='px-first-run-guided'] [role=listbox]")).toEqual([]);
     expect(tid("px-discover")).not.toBeNull();
     expect(tid("px-guide-you-secrets")!.textContent).toContain("App secret");
+    // Configured workspace chips MANAGE in Repo and models; they never open an add sheet (PX-30).
+    expect(setupGo("px-guide-ws-github").get("open")).toBeNull();
+    expect(tid("px-guide-marshal")!.getAttribute("title")).toBe("Ranked by Marshal");
+    // "Start when ready" waits for Ready (4 of 6 here), then starts the engine's own first work.
+    expect((tid("px-guide-start") as HTMLButtonElement).disabled).toBe(true);
+    expect(tid("px-guide-start")!.getAttribute("title")).toBe("Starts when Ready is done");
+    unmount();
+    const after = engine((c) => (c.path === "/v1/projects/northpeak-retail/onboarding"
+      ? { body: { ...FX_ONBOARDING, stages: FX_ONBOARDING.stages.map((x) => (x.key === "ready" ? { ...x, state: "done" } : x)) } } : undefined));
+    await mountAs(<ProjectsHome projectId={P} actor="ceo" projects={[]} />);
+    await settle();
     await press(tid("px-guide-start"));
     // The engine's own start for its first work (§14): the door's kind, text, title and source_ref.
-    expect(calls.find((c) => c.method === "POST" && c.path === "/v1/projects/northpeak-retail/work")?.body).toEqual({
+    expect(after.find((c) => c.method === "POST" && c.path === "/v1/projects/northpeak-retail/work")?.body).toEqual({
       kind: "bug", text: "Make the default branch's CI pass again. Failing: 6 tests.", title: "Fix 6 failing tests", source_ref: "ci:main" });
+    expect(calls.some((c) => c.method === "POST" && c.path.endsWith("/work"))).toBe(false);
   });
 
   it("0b: a missing model or GitHub account is an Only-you card that links to Setup, never a picker", async () => {
@@ -519,17 +531,19 @@ describe("Work (screens 5, 5b)", () => {
 });
 
 describe("Roadmap (screen 7)", () => {
-  it("Accept makes it work; Reject asks a reason in one tap; Not now snoozes", async () => {
+  it("Accept makes it work; Reject asks a reason in one tap; Snooze is in the ⋯ menu", async () => {
     const calls = engine();
     await openProject("&tab=roadmap");
     expect($$("[data-testid^='px-rec-rec_']").length).toBeGreaterThanOrEqual(4);
     await press(tid("px-rec-accept-rec_weekend"));
     expect(calls.find((c) => c.path === "/v1/ambient/roadmap/rec_weekend/accept")?.body).toMatchObject({ project_id: P, as: "ticket" });
     await press(tid("px-rec-reject-rec_reply"));
-    expect((tid("px-rec-reject-confirm-rec_reply") as HTMLButtonElement).disabled).toBe(true);
+    // One tap: a reason chip is always chosen ("Not now" first), so Reject never goes without one.
+    expect(tid("px-rec-why-not_valuable")!.getAttribute("aria-checked")).toBe("true");
     await press(tid("px-rec-why-duplicate"));
     await press(tid("px-rec-reject-confirm-rec_reply"));
     expect(calls.find((c) => c.path === "/v1/ambient/roadmap/rec_reply/reject")?.body).toMatchObject({ category: "duplicate" });
+    await press(tid("px-rec-more-rec_index")); // snooze lives in the card's ⋯ menu
     await press(tid("px-rec-snooze-rec_index"));
     expect(calls.some((c) => c.path === "/v1/ambient/roadmap/rec_index/snooze")).toBe(true);
     await press(tid("px-rm-plan-ask"));
@@ -647,7 +661,7 @@ describe("Settings (screen 13): demo logins with user names, reveal behind the s
 });
 
 describe("Onboarding in progress (screen 10, §8)", () => {
-  it("shows the stages, what the agent is doing, the checklist with only-you items in amber, and Start", async () => {
+  it("shows the stages, what the agent is doing, the checklist with only-you items in amber, and a locked Accept backlog", async () => {
     const calls = engine();
     await openProject("", "owner", "northpeak-retail");
     expect(tid("px-onboarding")).not.toBeNull();
@@ -656,8 +670,10 @@ describe("Onboarding in progress (screen 10, §8)", () => {
     expect(tid("px-ob-item-secrets")!.dataset.s).toBe("you");
     expect(tid("px-ob-act-secrets")!.getAttribute("href")).toContain("area=infra");
     expect(tid("px-needs-ob-secrets")).not.toBeNull(); // the only-you item is also in Needs you
-    await press(tid("px-ob-start"));
-    expect(calls.some((c) => c.method === "POST" && c.path === "/v1/projects/northpeak-retail/work")).toBe(true);
+    // Accept backlog / Edit unlock only when Ready is complete (4 of 6 here); nothing starts.
+    expect((tid("px-ob-accept") as HTMLButtonElement).disabled).toBe(true);
+    expect(tid("px-ob-accept")!.getAttribute("title")).toContain("Unlocks when Ready is 6/6");
+    expect(calls.some((c) => c.method === "POST" && c.path === "/v1/projects/northpeak-retail/work")).toBe(false);
   });
 });
 

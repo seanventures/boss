@@ -20,7 +20,8 @@
  */
 import React, { useEffect, useState } from "react";
 import {
-  Brain, Check, Compass, FolderPlus, GitBranch, GithubLogo, GitPullRequest, Lightbulb, Lightning, Path, Plus, Signpost, Sparkle, Flask, HandWaving, Play,
+  Brain, Check, Compass, FolderPlus, GitBranch, GithubLogo, GitPullRequest, Lightbulb, Lightning, Path, Plug, Plus, Signpost, Sparkle, Flask, HandWaving, Play,
+  XCircle,
 } from "@phosphor-icons/react";
 
 import { GatedButton } from "../../components/gated";
@@ -36,7 +37,9 @@ import { welcomeState, type WelcomeState } from "../setup/welcome";
 import { Face, Flow, Ico, Journey, Said, openAddProject, usePxUrl } from "./kit";
 import { DiscoverDiagram } from "./onboarding";
 
-const setupHref = (focus: "repository" | "models") => pxHref(`?area=setup&focus=${focus}&open=add`);
+/** Repo and models, at GitHub or Models: `add` opens its add sheet (a step still to do); a
+ *  configured one is MANAGED there (PX-30: "Manage ›" never opens an add sheet). */
+const setupHref = (focus: "repository" | "models", add = true) => pxHref(`?area=setup&focus=${focus}${add ? "&open=add" : ""}`);
 const QUICK_PR = "?area=welcome&focus=try";
 const FLOW = [
   { label: "Idea", icon: <Lightbulb size={12} aria-hidden />, type: "todo" },
@@ -87,7 +90,7 @@ function WorkspaceDoor({ id, step, title, icon, tone, known, loading, done, done
   id: string; step: number; title: string; icon: typeof Brain; tone: "teal" | "violet"; known: boolean; loading: boolean; done: boolean;
   doneText: string; todoText: string; todoLabel: string; focus: "repository" | "models"; primary: boolean;
 }) {
-  const href = setupHref(focus);
+  const href = setupHref(focus, !(known && done));
   return (
     <div className="px-door" data-current={primary || undefined} data-done={(known && done) || undefined} data-testid={`px-fr-${id}`}
          data-state={!known ? "unknown" : done ? "configured" : "todo"}>
@@ -108,7 +111,8 @@ function WorkspaceDoor({ id, step, title, icon, tone, known, loading, done, done
         <>
           <p>{todoText}</p>
           <div className="px-row px-wrap">
-            <a className="px-btn" data-kind={primary ? "primary" : undefined} href={href} data-testid={`px-fr-${id}-go`}>{todoLabel}</a>
+            <a className="px-btn" data-kind={primary ? "primary" : undefined} href={href} data-testid={`px-fr-${id}-go`}>
+              {focus === "repository" ? <Plug size={13} aria-hidden /> : <Plus size={13} aria-hidden />} {todoLabel}</a>
           </div>
         </>
       )}
@@ -148,9 +152,9 @@ export function FirstRun({ projectId, cards }: { projectId: string; actor: strin
 
       <div className="px-grid px-g3">
         <WorkspaceDoor id="github" step={1} title="Connect GitHub" icon={GithubLogo} tone="teal" known={known} loading={status === "loading"} done={s.github.done}
-                       doneText={githubWords(s)} todoText="Pick the repos the crew may work on." todoLabel="Connect GitHub ›" focus="repository" primary={current === 1} />
+                       doneText={githubWords(s)} todoText="Pick the repos the crew may work on." todoLabel="Connect" focus="repository" primary={current === 1} />
         <WorkspaceDoor id="model" step={2} title="Add a model" icon={Brain} tone="violet" known={known} loading={status === "loading"} done={s.model.done}
-                       doneText={modelWords(s)} todoText="A subscription, an API key, or a local model." todoLabel="Add a model ›" focus="models" primary={current === 2} />
+                       doneText={modelWords(s)} todoText="A subscription, an API key, or a local model." todoLabel="Add model" focus="models" primary={current === 2} />
         <div className="px-door" data-current={current === 3 || undefined} data-testid="px-fr-project">
           <div className="px-row"><Ico icon={FolderPlus} c="green" size="l" /><span className="px-tag" data-tone="blue">Step 3</span></div>
           <h3>Add a project</h3>
@@ -244,12 +248,12 @@ function Guided({ card, s, known }: { card: ProjectCard; s: WelcomeState; known:
               never a project's — shown read-only here, each a link to its own page. */}
           <div className="px-row px-wrap" data-testid="px-guide-workspace" style={{ marginBottom: 8, fontSize: ".6rem" }}>
             <span className="px-lbl">Workspace</span>
-            <a className="px-chip" href={setupHref("repository")} data-testid="px-guide-ws-github" title="GitHub accounts live in Setup › Repo and models"
+            <a className="px-chip" href={setupHref("repository", !(known && s.github.done))} data-testid="px-guide-ws-github" title="GitHub accounts live in Setup › Repo and models"
                style={{ color: known && s.github.done ? "var(--green)" : "var(--amber)" }}>
               <GithubLogo size={11} aria-hidden /> {!known ? "GitHub ?" : s.github.done ? `GitHub ✓ ${s.github.login ?? ""} · ${s.github.repos} repo${s.github.repos === 1 ? "" : "s"}` : "GitHub — connect"}</a>
-            <a className="px-chip" href={setupHref("models")} data-testid="px-guide-ws-model" title="Models live in Setup › Repo and models"
+            <a className="px-chip" href={setupHref("models", !(known && s.model.done))} data-testid="px-guide-ws-model" title="Models live in Setup › Repo and models"
                style={{ color: known && s.model.done ? "var(--green)" : "var(--amber)" }}>
-              <Brain size={11} aria-hidden /> {!known ? "Model ?" : s.model.done ? `Model ✓ ${s.model.label ?? ""}` : "Model — add"}</a>
+              <Brain size={11} aria-hidden /> {!known ? "Model ?" : s.model.done ? `Model ✓ ${modelWords(s)}` : "Model — add"}</a>
           </div>
           <ol style={{ listStyle: "none", margin: 0, padding: 0 }} data-testid="px-guide-steps">
             {steps.map((st) => (
@@ -272,7 +276,7 @@ function Guided({ card, s, known }: { card: ProjectCard; s: WelcomeState; known:
                              onClick={() => void startOnboarding(card.id).then((r) => { setSaid(r.ok ? (r.demo ? "Sample mode — nothing was sent." : "Onboarding started.") : (r.error ?? "It didn't start.")); if (r.ok) ob.refresh(); })}>
                   <Compass size={12} /> Start onboarding</GatedButton>
               </div>
-            ) : o ? <DiscoverDiagram nodes={o.discover.nodes} /> : (
+            ) : o ? <DiscoverDiagram nodes={o.discover.live?.length ? o.discover.live : o.discover.nodes} /> : (
               <p className="px-faint" data-testid="px-guide-waiting">{ob.state === "missing" ? "Helm's live view didn't load — the project page shows its progress." : ob.state === "error" ? (ob.error ?? "Helm's live view didn't load.") : "Starting…"}</p>
             )}
             <a className="px-btn" data-kind="ghost" href={projectHref(card.id)} data-testid="px-guide-open-project">Open {card.name} →</a>
@@ -300,17 +304,20 @@ function Guided({ card, s, known }: { card: ProjectCard; s: WelcomeState; known:
               <small className="px-faint">Everything else Helm does itself.</small>
             </section>
             <section className="px-card" aria-labelledby="px-g-first">
-              <div className="px-card-h"><Ico icon={Sparkle} c="violet" /><h2 id="px-g-first">First work, suggested</h2><Face agent={{ name: "Helm", role_key: "engineering_captain" }} size={20} /></div>
+              <div className="px-card-h"><Ico icon={Sparkle} c="violet" /><h2 id="px-g-first">First work, suggested</h2>
+                <span className="px-more" title="Ranked by Marshal" data-testid="px-guide-marshal"><Face agent={{ name: "Marshal", role_key: "chief_of_staff" }} size={20} /></span></div>
               {o?.first_work ? (
                 <>
                   <b style={{ fontSize: ".72rem" }}>{o.first_work.label}</b>
                   <div className="px-row px-wrap" style={{ margin: "6px 0 10px" }}>
-                    {o.first_work.source ? <span className="px-tag" data-tone="red">{o.first_work.source.toUpperCase()}</span> : null}
+                    {o.first_work.source ? <span className="px-tag" data-tone={o.first_work.source === "ci" || o.first_work.kind === "bug" ? "red" : undefined}>
+                      {o.first_work.source === "ci" ? <XCircle size={11} aria-hidden /> : null}{o.first_work.source === "ci" ? "CI" : o.first_work.source === "bug" ? "Bug" : o.first_work.source === "ticket" ? "Issue" : "Roadmap"}</span> : null}
                     {o.first_work.estimate_min !== null ? <span className="px-tag" data-tone="cost">≈ {o.first_work.estimate_min} min</span> : null}
                     {o.first_work.estimate_usd !== null ? <span className="px-tag" data-tone="cost">≈ ${o.first_work.estimate_usd.toFixed(2)}</span> : null}
                   </div>
                   <div className="px-row px-wrap">
                     <GatedButton permission="workflow_run:start" projectId={card.id} className="px-btn" data-kind="primary" data-testid="px-guide-start"
+                                 disabled={ready?.state !== "done"} title={ready?.state !== "done" ? "Starts when Ready is done" : "Start it now: a build opens a PR on your repo"}
                                  onClick={() => void startFirst()}><Play size={12} weight="fill" /> Start when ready</GatedButton>
                     {o.first_work.others_href ? <a className="px-btn" data-kind="ghost" href={pxHref(o.first_work.others_href)}>Other ideas</a> : null}
                   </div>
