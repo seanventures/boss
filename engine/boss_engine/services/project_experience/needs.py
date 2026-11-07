@@ -164,7 +164,7 @@ def prod_host_card(project_id: str) -> dict[str, Any]:
     return {"id": "prod:host", "kind": "setup", "label": "Pick a prod host",
             "detail": "Beacon can't choose this", "icon": "cloud", "mini": [], "work_id": None,
             "action": {"label": "Pick host", "decision_id": None,
-                       "href": href(project_id, area="infra", add="target")}}
+                       "href": href(project_id, area="infra", add="target", env="production")}}
 
 
 def prod_waits(connection: Connection, project_id: str) -> bool:

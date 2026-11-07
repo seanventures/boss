@@ -275,7 +275,8 @@ def _targets(connection: Connection, project_id: str) -> dict[str, Any]:
         items.append({"kind": "missing", "id": "production", "env": "production",
                       "env_label": "Production", "words": "no host yet", "state": "you",
                       "action": {"label": "Pick host",
-                                 "open": href(project_id, area="infra", add="target")}})
+                                 "open": href(project_id, area="infra", add="target",
+                                              env="production")}})
     used = {str(r["host_id"]): r["environment"] for r in rows if r["host_id"]}
     items += [{"kind": "host", "id": h["id"],
                "name": host_label(h["name"], h["address"], used.get(str(h["id"]))),

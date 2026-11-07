@@ -8,6 +8,7 @@
  * on refusal; nothing is retried behind the operator's back. After a write the caller says
  * `notifyChanged("infra")` and refreshes its poll (see `afterWrite`).
  */
+import { detailText } from "../../lib/api-error";
 import { apiWrite, type Press } from "../../lib/api-write";
 import { notifyChanged } from "../changed";
 import { declareAction } from "../../lib/identity/guarded-action";
@@ -19,14 +20,9 @@ const enc = encodeURIComponent;
 /** The API's sentence for a refusal: `detail` (string or `{message}`), else the status. */
 export function apiSentence(body: unknown, status: number): string {
   const b = (body ?? {}) as { detail?: unknown; error?: unknown; message?: unknown };
-  const d = b.detail ?? b.error ?? b.message;
-  if (typeof d === "string" && d) return d;
-  if (d && typeof d === "object") {
-    const m = (d as { message?: unknown; detail?: unknown }).message ?? (d as { detail?: unknown }).detail;
-    if (typeof m === "string" && m) return m;
-    return JSON.stringify(d);
-  }
-  return `The API answered ${status}.`;
+  // ONE READER (lib/api-error detailText): {headline, action}, {message}, validation lists —
+  // always words, never the refusal's JSON.
+  return detailText(b.detail ?? b.error ?? b.message) || `The API answered ${status}.`;
 }
 
 /** One keyed write. `press` names the button (a second, different press in its scope is refused
@@ -111,7 +107,7 @@ export const bindSecret = (projectId: string, targetId: string, actor: string, n
   send("POST", `/v1/deployment-targets/${enc(targetId)}/secrets`, { project_id: projectId, actor, name, secret_ref_id: secretRefId },
        P(`infra-target-${targetId}`, "Bind secret"));
 export const createStackTarget = (projectId: string, actor: string, f: { host_id: string; app_name: string; environment: string;
-  repository: string; public_url: string | null; manifest_path: string }) =>
+  repository: string; public_url: string | null; manifest_path: string; port?: number | null }) =>
   send<{ id?: string }>("POST", "/v1/deployments/stack/targets", { project_id: projectId, actor, ...f }, P("infra-target-add", "Create"));
 /** `More` on the App target sheet: port, entry, publishable ports, health check (merged, never
  *  replacing the target's other resources — main.py update_deployment_target_endpoint). */

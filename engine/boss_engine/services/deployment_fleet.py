@@ -190,19 +190,68 @@ def get_host(connection, host_id: str) -> Optional[dict[str, Any]]:
 #: another project; BOSS's own agent found "attach refused across projects" and had no way on.
 #: Managing the machine (its key, verify, retire) stays with the project that registered it.
 #: A SQL predicate over deployment_hosts (alias optional) with the project bound as `:p`.
+#: Another project's host is shared only once it is VERIFIED (2026-11-07): an unproven machine
+#: is its owner's to finish, and a target on it would fail at deploy time.
 def usable_hosts_sql(alias: str = "") -> str:
     a = f"{alias}." if alias else ""
-    return (f"({a}project_id = :p OR {a}project_id IN (SELECT p2.id FROM projects p2 "
+    return (f"({a}project_id = :p OR ({a}status = 'verified' AND {a}project_id IN ("
+            "SELECT p2.id FROM projects p2 "
             "JOIN workspaces w2 ON w2.id = p2.workspace_id WHERE w2.org_id = "
             "(SELECT w1.org_id FROM projects p1 JOIN workspaces w1 ON w1.id = p1.workspace_id "
-            "WHERE p1.id = :p)))")
+            "WHERE p1.id = :p))))")
 
 
 def host_usable_by(connection, host_id: str, project_id: str) -> bool:
-    """May `project_id` deploy onto this host (its own, or one its organisation shares)?"""
+    """May `project_id` deploy onto this host (its own, or a verified one its org shares)?"""
     return bool(connection.execute(
         sql(f"SELECT 1 FROM deployment_hosts WHERE id = :h AND {usable_hosts_sql()}"),
         {"h": host_id, "p": project_id}).first())
+
+
+class HostNotUsable(ValueError):
+    """Why a project may not place an app on a host, said as {headline, action}."""
+
+    def __init__(self, headline: str, action: str, *, status_code: int = 404):
+        super().__init__(f"{headline} {action}")
+        self.headline = headline
+        self.action = action
+        self.status_code = status_code
+
+    def to_dict(self) -> dict[str, str]:
+        return {"headline": self.headline, "action": self.action}
+
+
+def usable_host(connection, host_id: str, project_id: str) -> dict[str, Any]:
+    """THE ONE RULE for placing an app on a host: create a target, attach one, set up a deploy.
+
+    A project may use its own hosts and the verified hosts its organisation shares
+    (`usable_hosts_sql`). Each create/attach path used to ask "is the host in THIS project?" on
+    its own, so the onboarding agent offered the shared, verified 2.29.2.202 for staging and the
+    stack-target create then refused it ("No such host in this project."). Managing the machine
+    (key, verify, retire) stays with the project that registered it.
+    """
+    host = get_host(connection, str(host_id)) if host_id else None
+    if not host or not host_usable_by(connection, host["id"], project_id):
+        if host and host.get("project_id") != project_id and host.get("status") != "verified" \
+                and _same_org(connection, str(host.get("project_id") or ""), project_id):
+            raise HostNotUsable(
+                f"Host {host['name']!r} belongs to another project and is not verified yet.",
+                "A shared host is usable once its own project verifies it in Infra.",
+                status_code=422)
+        raise HostNotUsable("No such host in this project or its organisation.",
+                            "Add the VM in Infra first, then create the target on it.")
+    if host.get("status") == "retired":
+        raise HostNotUsable(f"Host {host['name']!r} is retired.",
+                            "Pick an active host, or register the VM again.", status_code=422)
+    return host
+
+
+def _same_org(connection, project_a: str, project_b: str) -> bool:
+    return bool(connection.execute(
+        sql("SELECT 1 FROM projects pa JOIN workspaces wa ON wa.id = pa.workspace_id "
+            "JOIN projects pb ON pb.id = :b JOIN workspaces wb ON wb.id = pb.workspace_id "
+            "WHERE pa.id = :a AND wa.org_id = wb.org_id"),
+        {"a": project_a, "b": project_b}).first())
 
 
 def list_hosts(connection, project_id: str, *, include_retired: bool = False
@@ -906,10 +955,10 @@ def attach_target(connection, *, target_id: str, host_id: str) -> dict[str, Any]
     ).mappings().first()
     if not target:
         raise ValueError(f"no such deployment target: {target_id}")
-    if target["project_id"] != host.get("project_id") and not host_usable_by(
-            connection, host_id, target["project_id"]):
-        raise ValueError(
-            "host and target belong to different organisations; attach refused")
+    try:
+        usable_host(connection, host_id, target["project_id"])
+    except HostNotUsable as refused:
+        raise ValueError(f"{refused.headline} {refused.action} (attach refused)") from None
 
     connection.execute(
         sql("UPDATE deployment_targets SET host_id = :h, target_ref = :ref, "
@@ -1050,6 +1099,24 @@ def _first_free_port(connection, address: str, *, start: int = 3000,
     return None
 
 
+def suggest_port(connection, host: dict[str, Any], *, project_id: str = "",
+                 app_name: str = "") -> Optional[int]:
+    """The port a new target on this host should get: the app's own earlier port when nobody
+    holds it now, else the first free one in the host's range (port_min..port_max). The same
+    choice `create_deployment_target` makes, offered BEFORE the create (the confirm sheets)."""
+    address = str(host.get("address") or "")
+    if not address:
+        return None
+    taken = _ports_assigned_on(connection, address)
+    if project_id and app_name:
+        had = _port_the_app_had(connection, project_id, app_name, address)
+        if had and had not in taken:
+            return had
+    low = int(host.get("port_min") or 3000)
+    high = int(host.get("port_max") or 65535)
+    return _first_free_port(connection, address, start=low, end=high)
+
+
 def create_deployment_target(
     connection, *, project_id: str, app_name: str, environment: str = "staging",
     repo: Optional[str] = None, host_id: Optional[str] = None, port: Optional[int] = None,
@@ -1125,9 +1192,10 @@ def create_deployment_target(
     hosts = [dict(h) for h in list_hosts(connection, project_id)]
     verified = [h for h in hosts if h.get("status") == "verified"]
     if host_id:
-        host = get_host(connection, host_id) if host_usable_by(connection, host_id, project_id) else None
-        if not host:
-            return {"ok": False, "error": f"no such deployment host: {host_id}",
+        try:
+            host = usable_host(connection, host_id, project_id)
+        except HostNotUsable as refused:
+            return {"ok": False, "error": f"{refused.headline} {refused.action}",
                     "hosts": [{"host_id": h["id"], "name": h["name"],
                                "status": h["status"]} for h in hosts]}
     elif len(verified) == 1:

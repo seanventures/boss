@@ -184,7 +184,7 @@ export function addFromUrl(add: string | null | undefined, hostCount: number): A
 }
 
 export function InfraAddMenu({ projectId, actor, go, fleet, url }: InfraTabProps & { fleet: Polled<Fleet> }) {
-  const [open, setOpen] = useState<{ item: AddItem; hostId: string | null } | null>(null);
+  const [open, setOpen] = useState<{ item: AddItem; hostId: string | null; environment?: string | null } | null>(null);
   const pre = fleet.data?.preconditions;
   // A LINK THAT SAYS WHAT TO ADD opens it (the workflow editor's "Set up where it deploys"),
   // once, then drops `add` from the address so Back does not reopen it.
@@ -192,13 +192,15 @@ export function InfraAddMenu({ projectId, actor, go, fleet, url }: InfraTabProps
   // `add=target&host=<id>` (Project › onboarding's "Use for staging") places the app on that
   // machine: the sheet opens with it chosen, and the host's own drawer does not open under it.
   const onHost = url?.host ?? null;
+  // `env=` names the environment the opener asks for (onboarding asks for staging).
+  const askedEnv = url?.env ?? null;
   useEffect(() => {
     if (!wanted || !fleet.data) return;
     const item = addFromUrl(wanted, fleet.data.racks.length);
     const placed = item === "target" && onHost && fleet.data.racks.some((r) => r.id === onHost) ? onHost : null;
-    if (item && pre?.canWrite) setOpen({ item, hostId: placed });
-    go(placed ? { add: null, host: null } : { add: null }, "replace");
-  }, [wanted, onHost, fleet.data, pre?.canWrite, go]);
+    if (item && pre?.canWrite) setOpen({ item, hostId: placed, environment: item === "target" ? askedEnv : null });
+    go(placed ? { add: null, host: null, env: null } : { add: null, env: null }, "replace");
+  }, [wanted, onHost, askedEnv, fleet.data, pre?.canWrite, go]);
   useEffect(() => {
     const on = (e: Event) => {
       const d = (e as CustomEvent<{ item: AddItem; hostId: string | null }>).detail;
@@ -231,7 +233,7 @@ export function InfraAddMenu({ projectId, actor, go, fleet, url }: InfraTabProps
       {open?.item === "hwaccount" ? <HwAccountSheet projectId={projectId} actor={actor} onClose={close} /> : null}
       {open?.item === "secret" ? <SecretsSheet projectId={projectId} actor={actor} onClose={close} /> : null}
       {open?.item === "target" ? (
-        <AppTargetSheet projectId={projectId} actor={actor} racks={fleet.data.racks} hostId={open.hostId} onClose={close}
+        <AppTargetSheet projectId={projectId} actor={actor} racks={fleet.data.racks} hostId={open.hostId} environment={open.environment ?? undefined} onClose={close}
                         onCreated={(id) => { close(); fleet.refresh(); if (id) go({ view: null, target: id, host: null }); }} />
       ) : null}
     </>

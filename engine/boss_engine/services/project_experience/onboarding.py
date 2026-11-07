@@ -695,37 +695,129 @@ def _ci(engine: Any, settings: Any, run_id: str, project_id: str, full: str, bra
     return {**result, "tests_found": tests_found, "test_cmd": test_cmd, "baseline": baseline}
 
 
-def _deploy_item(engine: Any, project_id: str) -> dict[str, Any]:
+def _target_item(connection: Connection, project_id: str) -> Optional[dict[str, Any]]:
+    """deploy_target done, when the project has an active target (staging first); else None."""
+    target = connection.execute(text(
+        "SELECT t.environment, t.app_name, h.name AS host, h.address FROM deployment_targets t "
+        "LEFT JOIN deployment_hosts h ON h.id = t.host_id WHERE t.project_id = :p AND "
+        "t.status = 'active' ORDER BY (lower(t.environment) IN ('staging', 'stage')) DESC "
+        "LIMIT 1"), {"p": project_id}).mappings().first()
+    if not target:
+        return None
+    where = target["address"] or target["host"] or "its target"
+    return _item("deploy_target", "done", detail=f"{target['environment'].title()} "
+                 f"deploys to {where}.", sub=f"{target['environment'].title()} ready")
+
+
+def _offered_host(connection: Connection, project_id: str) -> Optional[dict[str, Any]]:
+    """The verified host onboarding offers for staging: the project's own first, else a shared one."""
     from ..deployment_fleet import usable_hosts_sql
 
+    row = connection.execute(text(
+        f"SELECT id, name, address, project_id FROM deployment_hosts WHERE status = 'verified' "
+        f"AND {usable_hosts_sql()} ORDER BY (project_id = :p) DESC, created_at LIMIT 1"),
+        {"p": project_id}).mappings().first()
+    return dict(row) if row else None
+
+
+def _deploy_item(engine: Any, project_id: str) -> dict[str, Any]:
     with engine.connect() as c:
-        target = c.execute(text(
-            "SELECT t.environment, t.app_name, h.name AS host, h.address FROM deployment_targets t "
-            "LEFT JOIN deployment_hosts h ON h.id = t.host_id WHERE t.project_id = :p AND "
-            "t.status = 'active' ORDER BY (lower(t.environment) IN ('staging', 'stage')) DESC "
-            "LIMIT 1"), {"p": project_id}).mappings().first()
-        if target:
-            where = target["address"] or target["host"] or "its target"
-            return _item("deploy_target", "done", detail=f"{target['environment'].title()} "
-                         f"deploys to {where}.", sub=f"{target['environment'].title()} ready")
-        host = c.execute(text(
-            f"SELECT id, name, address, project_id FROM deployment_hosts WHERE status = 'verified' "
-            f"AND {usable_hosts_sql()} ORDER BY (project_id = :p) DESC, created_at LIMIT 1"),
-            {"p": project_id}).mappings().first()
+        done = _target_item(c, project_id)
+        if done:
+            return done
+        host = _offered_host(c, project_id)
     if host:
         shared = host["project_id"] != project_id
         where = host["address"] or host["name"]
+        # IN PLACE (2026-11-07): the action is a confirm sheet on the onboarding page that POSTs
+        # `post` (use_for_staging), never a trip to Infra's generic App target sheet; `href` stays
+        # as the way to Infra for a client that does not know `do`.
         return _item("deploy_target", "todo", owner="you",
                      detail=f"Use the verified{' shared' if shared else ''} host {where} for "
                             "staging. Adding a deploy target needs your confirmation.",
                      sub=f"Use {where}",
-                     action={"label": "Use for staging", "href": href(
-                         project_id, area="infra", add="target", host=host["id"])})
+                     action={"label": "Use for staging", "do": "staging_target",
+                             "host_id": host["id"],
+                             "post": f"/v1/projects/{project_id}/onboarding/deploy-target",
+                             "href": href(project_id, area="infra", add="target",
+                                          host=host["id"], env="staging")})
     return _item("deploy_target", "todo", owner="you",
                  detail="No verified server yet: add one and BOSS deploys staging there.",
                  sub="Needs a server", action={"label": "Add a server",
                                                "href": href(project_id, area="infra",
                                                             add="host")})
+
+
+def _stack_name(repository: str) -> str:
+    """A stack's default name, as the App target sheet makes it ("Shift_Swap" → "shift-swap")."""
+    base = re.sub(r"[^a-z0-9]+", "-", repository.rsplit("/", 1)[-1].lower()).strip("-")
+    return base or "app"
+
+
+def staging_proposal(connection: Connection, project_id: str,
+                     host_id: Optional[str] = None) -> dict[str, Any]:
+    """What "Use for staging" will make, for its confirm sheet: what, where, port, manifest.
+
+    Raises LookupError when there is nothing to offer (no repository, no usable host), and
+    deployment_fleet.HostNotUsable for a host this project may not use."""
+    from ..deployment_fleet import suggest_port, usable_host
+    from ..stack_deploy import DEFAULT_MANIFEST_PATH
+    from .common import require_project
+
+    the_repos = repos(connection, project_id)
+    if not the_repos:
+        raise LookupError("This project has no repository yet. Add one first.")
+    repository = the_repos[0]["full_name"]
+    if host_id:
+        host = usable_host(connection, host_id, project_id)
+    else:
+        offered = _offered_host(connection, project_id)
+        if not offered:
+            raise LookupError("No verified server yet. Add one in Infra first.")
+        host = usable_host(connection, offered["id"], project_id)
+    name = str(require_project(connection, project_id).get("name") or "")
+    app_name = _stack_name(repository)
+    return {"project": name or app_name, "app_name": app_name, "repository": repository,
+            "environment": "staging", "host_id": host["id"], "host": host["name"],
+            "address": host["address"], "shared": host.get("project_id") != project_id,
+            "port": suggest_port(connection, host, project_id=project_id, app_name=app_name),
+            "manifest_path": DEFAULT_MANIFEST_PATH}
+
+
+def use_for_staging(connection: Connection, project_id: str, *, host_id: Optional[str],
+                    port: Optional[int] = None, actor: str) -> dict[str, Any]:
+    """Onboarding's "Use for staging", done in place: the staging stack target on the offered
+    host (the project's own, or a verified one its organisation shares), then the checklist row
+    turns green and the run moves on. Raises StackDeployError / HostNotUsable in words."""
+    from ..stack_deploy import create_stack_target
+
+    plan = staging_proposal(connection, project_id, host_id)
+    target = create_stack_target(
+        connection, project_id=project_id, host_id=plan["host_id"], app_name=plan["app_name"],
+        repository=plan["repository"], environment="staging",
+        manifest_path=plan["manifest_path"], port=port or plan["port"], actor=actor)
+    _mark_deploy_done(connection, project_id)
+    return {"target_id": target.get("id"), "app_name": plan["app_name"],
+            "environment": "staging", "host": plan["host"], "address": plan["address"],
+            "port": port or plan["port"], "onboarding": view(connection, project_id)}
+
+
+def _mark_deploy_done(connection: Connection, project_id: str) -> None:
+    """The latest run's deploy_target row is done now; a run that waited only on it moves on."""
+    row = latest(connection, project_id)
+    item = _target_item(connection, project_id)
+    if row is None or item is None:
+        return
+    row = _get(connection, str(row["id"]), lock=True) or row
+    checklist = as_json(row["checklist"], {}) or {}
+    checklist["deploy_target"] = item
+    state = row["state"]
+    if state == "needs_you":
+        state = _final_state({**row, "checklist": checklist})
+    connection.execute(text(
+        "UPDATE project_onboarding_runs SET checklist = CAST(:c AS JSONB), state = :s, "
+        "updated_at = now() WHERE id = :i"),
+        {"c": json.dumps(checklist, default=str), "s": state, "i": row["id"]})
 
 
 def _names(names: list[str], limit: int = 4) -> str:
@@ -1615,6 +1707,13 @@ def view(connection: Connection, project_id: str) -> dict[str, Any]:
         if set(yours) <= have:
             said = f"{_names(yours)} set by you"
             sec.update(state="done", owner="agent", detail=said + ".", sub=said, action=None)
+    # THE DEPLOY TARGET IS READ LIVE TOO: a target made since the run looked (onboarding's own
+    # "Use for staging", or Infra) is done here at once.
+    dep = by_key.get("deploy_target")
+    if dep and dep.get("state") != "done":
+        made = _target_item(connection, project_id)
+        if made:
+            dep.update({k: v for k, v in made.items() if k not in ("label", "at")}, action=None)
     truth = _tests_truth(connection, project_id, by_key.get("tests") or {})
     if truth:
         by_key["tests"]["sub"] = truth["line"]

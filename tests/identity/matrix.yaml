@@ -3,7 +3,7 @@
 # One line per operation: its declaration, then the built-in roles allowed
 # (O owner, A admin, P operator, V viewer, U auditor; '-' none). Every other role is denied
 # 403, or 404 when the operation names an object the role cannot even read.
-# 1768 operations.
+# 1777 operations.
 "GET /.well-known/boss-jwks.json": ["public:jwks", "OAPVU"]
 "GET /docs": ["public:api_description", "OAPVU"]
 "GET /docs/oauth2-redirect": ["public:api_description", "OAPVU"]
@@ -191,6 +191,8 @@
 "POST /v1/ambient/dossier": ["permit work_item:manage @ project(body=project_id)", "OAP"]
 "POST /v1/ambient/incidents/{work_item_id}/route": ["permit work_item:manage @ work_item(path=work_item_id)", "OAP"]
 "POST /v1/ambient/learning/tick": ["permit worker:lease @ org", "-"]
+"GET /v1/ambient/mode": ["permit autonomy:read @ org", "OAPVU"]
+"PUT /v1/ambient/mode": ["permit autonomy:manage @ org", "OA"]
 "POST /v1/ambient/outcomes/sweep": ["permit work_item:manage @ project(body=project_id)", "OAP"]
 "POST /v1/ambient/resume": ["permit autonomy:manage @ project(body=project_id)", "OA"]
 "POST /v1/ambient/resume-all": ["permit autonomy:manage @ org", "OA"]
@@ -646,6 +648,7 @@
 "POST /v1/email/test": ["permit comms:manage @ project(body=project_id)", "OA"]
 "POST /v1/engine/agent/action": ["permit assistant:chat @ project(body=project_id) +confine(body.thread_id->agent_thread)", "OAP"]
 "POST /v1/engine/agent/chat": ["permit assistant:chat @ project(body=project_id)", "OAP"]
+"POST /v1/engine/agent/proposal": ["permit assistant:chat @ project(body=project_id) +confine(body.thread_id->agent_thread)", "OAP"]
 "GET /v1/enterprise/identity-providers": ["permit identity_provider:read @ org", "OAU"]
 "POST /v1/enterprise/identity-providers": ["permit identity_provider:manage @ org", "O"]
 "GET /v1/enterprise/identity-rollout-policies": ["permit identity_provider:read @ org", "OAU"]
@@ -1224,6 +1227,7 @@
 "POST /v1/observability-suite/recommend": ["permit observability:read @ org", "OAPVU"]
 "GET /v1/observability-suite/status": ["permit observability:read @ project(query=project_id) +confine(query.host_target_id->deployment_target)", "OAPVU"]
 "GET /v1/observability/apps": ["permit observability:read @ project(query=project_id)", "OAPVU"]
+"GET /v1/observability/apps/all": ["authenticated", "OAPVU"]
 "GET /v1/observability/apps/{target_id}": ["permit observability:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/observability/apps/{target_id}/probe": ["permit observability:manage @ project(body=project_id)", "OA"]
 "POST /v1/observability/grafana/check": ["permit observability:manage @ project(body=project_id)", "OA"]
@@ -1356,10 +1360,13 @@
 "POST /v1/projects/{project_id}/host-folders": ["permit project:update @ project(path=project_id)", "OA"]
 "GET /v1/projects/{project_id}/host-folders/hosts": ["permit host:read @ project(path=project_id)", "OAPVU"]
 "POST /v1/projects/{project_id}/host-folders/probe": ["permit host:exec @ project(path=project_id)", "OA"]
+"GET /v1/projects/{project_id}/hosts/{host_id}/free-port": ["permit host:read @ project(path=project_id)", "OAPVU"]
 "GET /v1/projects/{project_id}/knowledge": ["permit project:read @ project(path=project_id)", "OAPVU"]
 "PUT /v1/projects/{project_id}/notification-routes/{event}": ["permit observability:manage @ project(path=project_id)", "OA"]
 "GET /v1/projects/{project_id}/onboarding": ["permit project:read @ project(path=project_id)", "OAPVU"]
 "POST /v1/projects/{project_id}/onboarding/backlog/accept": ["permit work_item:manage @ project(path=project_id)", "OAP"]
+"GET /v1/projects/{project_id}/onboarding/deploy-target": ["permit project:read @ project(path=project_id)", "OAPVU"]
+"POST /v1/projects/{project_id}/onboarding/deploy-target": ["permit deployment_target:manage @ project(path=project_id)", "OA"]
 "POST /v1/projects/{project_id}/onboarding/start": ["permit workflow_run:start @ project(path=project_id)", "OAP"]
 "GET /v1/projects/{project_id}/overview": ["permit project:read @ project(path=project_id)", "OAPVU"]
 "GET /v1/projects/{project_id}/plan": ["permit project:read @ project(path=project_id)", "OAPVU"]
@@ -1377,6 +1384,8 @@
 "POST /v1/projects/{project_id}/unarchive": ["permit project:delete @ org", "O"]
 "GET /v1/projects/{project_id}/work": ["permit project:read @ project(path=project_id)", "OAPVU"]
 "POST /v1/projects/{project_id}/work": ["permit workflow_run:start @ project(path=project_id)", "OAP"]
+"GET /v1/projects/{project_id}/work/plan": ["permit project:read @ project(path=project_id)", "OAPVU"]
+"GET /v1/projects/{project_id}/work/{work_id}/story": ["permit project:read @ project(path=project_id)", "OAPVU"]
 "GET /v1/provider-conformance": ["permit infra:read @ org", "OAPVU"]
 "GET /v1/provider-definitions": ["permit model_provider:read @ org", "OAPVU"]
 "GET /v1/provider-health": ["permit model_provider:read @ project(query=project_id)", "OAPVU"]

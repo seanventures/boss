@@ -10,6 +10,7 @@ import { apiWrite, isAborted, type WriteMethod } from "../api-write";
 import { sendToEnrolment } from "./enrolment";
 import { humanise, needsWords, permissionName } from "./words";
 import { refusalCode } from "./refusal-code";
+import { detailText } from "../api-error";
 
 export type IdentityErrorCode =
   | "unauthenticated" | "step_up_required" | "forbidden" | "csrf_failed" | "not_found" | "invalid_credentials"
@@ -148,6 +149,9 @@ export function errorSentence(status: number, code: string, permission?: unknown
   // The API's own sentence, when it wrote one (refusalCode takes a bare `detail` as the code).
   if (/\s/.test(code)) return code;
   if (strOf(body.detail) && /\s/.test(strOf(body.detail))) return strOf(body.detail);
+  // A refusal said as an object ({headline, action}, {message}): its words, never "Check the fields".
+  const said = body.detail && typeof body.detail === "object" && !Array.isArray(body.detail) ? detailText(body.detail) : "";
+  if (said && /\s/.test(said) && !said.startsWith("{")) return said;
   if (strOf(body.message)) return strOf(body.message);
   if (status === 429) return "Too many tries";
   if (status === 404) return "Not found";

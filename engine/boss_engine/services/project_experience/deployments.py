@@ -295,7 +295,8 @@ def view(connection: Connection, project_id: str) -> dict[str, Any]:
                       if not hosts else
                       {"state": "none",
                        "action": {"label": "Set up production",
-                                  "href": href(project_id, area="infra", add="target")}})
+                                  "href": href(project_id, area="infra", add="target",
+                                               env="production")}})
     preview = next((e for e in logins["environments"] if e["key"] == "preview"), None)
     out = {"environments": envs, "production": production, "ship_path": ship_path(envs),
            "preview": ({"demo_logins": preview["logins"]} if preview else None),

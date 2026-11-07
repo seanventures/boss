@@ -215,7 +215,8 @@ def test_deployments_show_staging_with_health_last_deploy_and_who_to_sign_in_as(
     assert d["production"]["state"] == "none"
     assert d["production"]["action"]["label"] == "Set up production"
     # Infra opens its own + Add sheet from `add=` (it has no `targets` or `hosts` view).
-    assert d["production"]["action"]["href"] == f"?project_id={helpdesk['id']}&area=infra&add=target"
+    assert d["production"]["action"]["href"] == \
+        f"?project_id={helpdesk['id']}&area=infra&add=target&env=production"
     # How code ships: merge → build → staging (a person approves) → smoke → prod, a person.
     assert [n["label"] for n in d["ship_path"]] == ["PR merged", "Image built",
                                                     "Staging · you approve", "Smoke test",

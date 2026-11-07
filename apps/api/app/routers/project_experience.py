@@ -13,6 +13,9 @@ POST /v1/projects/{id}/captain                    §7  change the captain (owner
 GET  /v1/projects/{id}/onboarding                 §8  the onboarding agent's record
 POST /v1/projects/{id}/onboarding/start           §8  start (or show) onboarding
 POST /v1/projects/{id}/onboarding/backlog/accept §8  accept proposed backlog onto Roadmap › Next
+GET  /v1/projects/{id}/onboarding/deploy-target   §8  what "Use for staging" will make
+POST /v1/projects/{id}/onboarding/deploy-target   §8  make it in place (step-up), the row turns green
+GET  /v1/projects/{id}/hosts/{host}/free-port         the port a new target there would get
 GET  /v1/projects/{id}/plan                       §6  the Roadmap's Now · Next · Later lanes
 POST /v1/projects/{id}/plan/{item}                §6  move an accepted item (Next ↔ Later, order)
 POST /v1/projects/onboarding/execute                  the worker's leased onboarding job
@@ -391,6 +394,81 @@ def project_onboarding_backlog_accept(project_id: str, payload: BacklogAcceptBod
         except ValueError as error:
             raise HTTPException(status_code=422, detail={"error": "bad_lane",
                                                          "message": str(error)}) from None
+
+
+def _refused(error: Exception) -> HTTPException:
+    """A StackDeployError / HostNotUsable as {headline, action}: words, never raw JSON."""
+    said = error.to_dict() if hasattr(error, "to_dict") else {"headline": str(error), "action": ""}
+    return HTTPException(status_code=getattr(error, "status_code", 422), detail={
+        "headline": said.get("headline") or str(error), "action": said.get("action") or "",
+        "message": " ".join(x for x in (said.get("headline"), said.get("action")) if x)})
+
+
+@router.get("/v1/projects/{project_id}/onboarding/deploy-target")
+@permit(P.PROJECT_READ, scope=Scope.project(path="project_id"))
+def project_onboarding_deploy_target(project_id: str,
+                                     host_id: Optional[str] = None) -> dict[str, Any]:
+    """What onboarding's "Use for staging" will make (its confirm sheet): what, where, port,
+    manifest. Reads only; the port is the first free one in the host's range."""
+    from boss_engine.services.deployment_fleet import HostNotUsable
+    from boss_engine.services.project_experience import onboarding
+
+    with begin(_engine) as connection:
+        _require_project(connection, project_id)
+        try:
+            return onboarding.staging_proposal(connection, project_id, host_id)
+        except LookupError as error:
+            raise _missing(error) from None
+        except HostNotUsable as error:
+            raise _refused(error) from None
+
+
+class StagingTargetBody(BaseModel):
+    host_id: Optional[str] = None
+    port: Optional[int] = Field(default=None, ge=1, le=65535)
+
+
+@router.post("/v1/projects/{project_id}/onboarding/deploy-target")
+@permit(P.DEPLOYMENT_TARGET_MANAGE, scope=Scope.project(path="project_id"))
+def project_onboarding_deploy_target_use(project_id: str, payload: StagingTargetBody,
+                                         request: Request) -> dict[str, Any]:
+    """Onboarding's "Use for staging", in place: the staging stack target on the offered host
+    (this project's own, or a verified host its organisation shares), then the checklist row is
+    done and the run moves on. deployment_target:manage asks for step-up, as Infra's create."""
+    from boss_engine.services.deployment_fleet import HostNotUsable
+    from boss_engine.services.project_experience import onboarding
+    from boss_engine.services.stack_deploy import StackDeployError
+
+    with begin(_engine) as connection:
+        _require_project(connection, project_id)
+        _legacy_bar(connection, project_id, "providerops_manage")
+        try:
+            return onboarding.use_for_staging(connection, project_id, host_id=payload.host_id,
+                                              port=payload.port, actor=_actor(request))
+        except LookupError as error:
+            raise _missing(error) from None
+        except (HostNotUsable, StackDeployError) as error:
+            raise _refused(error) from None
+
+
+@router.get("/v1/projects/{project_id}/hosts/{host_id}/free-port")
+@permit(P.HOST_READ, scope=Scope.project(path="project_id"))
+def project_host_free_port(project_id: str, host_id: str,
+                           app_name: Optional[str] = None) -> dict[str, Any]:
+    """The port a new target on this host would get (deployment_fleet.suggest_port): the app's
+    earlier port when free, else the first free one in the host's range. Infra's App target
+    sheet suggests it."""
+    from boss_engine.services.deployment_fleet import HostNotUsable, suggest_port, usable_host
+
+    with begin(_engine) as connection:
+        _require_project(connection, project_id)
+        try:
+            host = usable_host(connection, host_id, project_id)
+        except HostNotUsable as error:
+            raise _refused(error) from None
+        return {"host_id": host["id"], "address": host["address"],
+                "port": suggest_port(connection, host, project_id=project_id,
+                                     app_name=str(app_name or ""))}
 
 
 # ── §6 the roadmap's plan (Now · Next · Later) ──────────────────────────────────────────────

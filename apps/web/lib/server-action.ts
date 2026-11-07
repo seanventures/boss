@@ -1,3 +1,4 @@
+import { detailText } from "./api-error";
 import { apiWrite, type WriteInit } from "./api-write";
 import { identityRefusal, identitySentence, type IdentityRefusalInfo } from "./identity/guarded-action";
 import {
@@ -101,7 +102,7 @@ export async function refusalFrom(response: Response): Promise<ApiRefusal> {
         const d = detail as Record<string, unknown>;
         said = [d.message, d.next_action, d.reason]
           .filter((v): v is string => typeof v === "string" && !!v.trim()).join(" ")
-          || JSON.stringify(detail).slice(0, 300);
+          || detailText(detail);
       }
     } catch {
       said = raw.slice(0, 300);

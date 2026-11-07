@@ -91,7 +91,8 @@ def test_every_section_reads_in_words_like_the_wireframe(world, client, helpdesk
     assert [(r["env_label"], r["words"], r["state"]) for r in rows] == [
         ("Staging", "docker · port 8004", "done"), ("Production", "no host yet", "you")]
     assert rows[1]["action"] == {"label": "Pick host",
-                                 "open": f"?project_id={helpdesk['id']}&area=infra&add=target"}
+                                 "open": f"?project_id={helpdesk['id']}&area=infra&add=target"
+                                         "&env=production"}
     assert rows[0]["host_href"] == f"?project_id={helpdesk['id']}&area=infra&host={helpdesk['host_id']}"
 
     # 13-18 / PX-43: Edit squad opens THIS project's squad editor, never the org chart.

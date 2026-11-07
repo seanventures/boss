@@ -21,6 +21,7 @@ import {
   allPresets, estimateLine, mappingWords, startBody, startProjectApi, workHref, type StartView,
 } from "../../lib/start-project";
 import { post } from "../workflows/delivery-api";
+import { detailText } from "../../lib/api-error";
 import { ReadinessPanel, unaccepted, type Readiness } from "../workflow-readiness-ui";
 import "./start-project.css";
 
@@ -92,7 +93,7 @@ export function ProjectStartCard({ projectId, orgId, actor }: {
     setBusy(false);
     if (!r.ok) {
       if ("readiness" in r && r.readiness) { setRefusal(r.readiness); return; }
-      setError(typeof r.error === "string" ? r.error : r.error ? JSON.stringify(r.error) : "It did not start.");
+      setError(typeof r.error === "string" ? r.error : detailText(r.error) || "It did not start.");
       return;
     }
     const data = (r.data ?? {}) as { run?: { id?: string }; id?: string };

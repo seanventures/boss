@@ -244,7 +244,13 @@ export type Recommendation = {
   status: string; rank: number | null; href: string;
 };
 export type Roadmap = { now: NextItem[]; next: NextItem[]; later: NextItem[]; recommendations: Recommendation[]; counts: Record<string, number> };
-export type OnboardingItem = { key: string; label: string; state: StepState; owner: "agent" | "you"; action: { label: string; href: string } | null; detail: string; sub: string };
+/** An item's one action: a link (`href`), or — with `do` — a job the page does in place
+ *  (`do: "staging_target"`: the confirm sheet that POSTs `post` for `host_id`; `href` is Infra). */
+export type OnboardingAction = { label: string; href: string; do?: "staging_target"; host_id?: string; post?: string };
+export type OnboardingItem = { key: string; label: string; state: StepState; owner: "agent" | "you"; action: OnboardingAction | null; detail: string; sub: string };
+/** What onboarding's "Use for staging" will make (GET …/onboarding/deploy-target). */
+export type StagingProposal = { project: string; app_name: string; repository: string; environment: string; host_id: string; host: string;
+                                address: string; shared: boolean; port: number | null; manifest_path: string };
 export type OnboardingLog = { at: string; agent: string; label: string; state: StepState; text: string };
 export type Onboarding = {
   state: "not_started" | "running" | "ready" | "needs_you" | "failed";
@@ -622,7 +628,9 @@ export const parseOnboarding = (v: unknown): Onboarding => {
   const item = (z: unknown): OnboardingItem => {
     const y = o(z); const act = o(y.action);
     return { key: s(y.key), label: label4(y.label), state: oneOf(y.state, STEP_STATES, "todo"), owner: y.owner === "you" ? "you" : "agent",
-             action: act.label || act.href ? { label: s(act.label, "Do it"), href: s(act.href) } : null, detail: s(y.detail), sub: s(y.sub) };
+             action: act.label || act.href ? { label: s(act.label, "Do it"), href: s(act.href),
+                                               ...(act.do === "staging_target" && s(act.post) ? { do: "staging_target" as const, host_id: s(act.host_id), post: s(act.post) } : {}) } : null,
+             detail: s(y.detail), sub: s(y.sub) };
   };
   const checklist = a(x.checklist).map(item);
   const onlyYou = a(x.only_you).length ? a(x.only_you).map(item) : checklist.filter((c) => c.owner === "you" && c.state !== "done");

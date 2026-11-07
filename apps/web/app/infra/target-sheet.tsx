@@ -31,12 +31,16 @@ import { useSecrets } from "./secrets-sheet";
 type Kind = "machine" | "cloud";
 const lines = (s: string) => s.split("\n").map((x) => x.trim()).filter(Boolean);
 
-export function AppTargetSheet({ projectId, actor, racks, hostId, onClose, onCreated }: {
+export function AppTargetSheet({ projectId, actor, racks, hostId, environment = "staging", onClose, onCreated }: {
   projectId: string; actor: string; racks: Rack[]; hostId?: string | null;
+  /** The environment the opener asks for; a new target is staging unless someone says otherwise. */
+  environment?: string;
   onClose: () => void; onCreated: (targetId: string | null) => void;
 }) {
   const vms = racks.filter((r) => r.state.tone === "green" && r.id !== "this");
+  const [vm, setVm] = useState(() => (hostId && vms.some((h) => h.id === hostId) ? hostId : vms[0]?.id ?? ""));
   const [kind, setKind] = useState<Kind>("machine");
+  const port = useSuggestedPort(projectId, kind === "machine" ? vm : "");
   const [more, setMore] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -69,14 +73,17 @@ export function AppTargetSheet({ projectId, actor, racks, hostId, onClose, onCre
                       publicUrl: v("public_url"), manifestPath: v("manifest_path") || DEFAULT_MANIFEST_PATH };
       const problem = targetFormProblem(input);
       if (problem) { setError(problem); return; }
+      const wantedPort = v("app_port") ? Number(v("app_port")) : null;
+      if (wantedPort !== null && !(Number.isInteger(wantedPort) && wantedPort >= 1 && wantedPort <= 65535)) {
+        setError("Port is a number from 1 to 65535, or blank."); return;
+      }
       setBusy(true);
       const r = await createStackTarget(projectId, actor, { host_id: input.hostId, app_name: input.name, environment: input.environment,
-        repository: input.repository, public_url: input.publicUrl || null, manifest_path: input.manifestPath });
+        repository: input.repository, public_url: input.publicUrl || null, manifest_path: input.manifestPath, port: wantedPort });
       if (!r.ok) { setBusy(false); setError(r.error); return; }
       const id = r.data.id ? String(r.data.id) : null;
       if (id && more) {
         const patch: Record<string, unknown> = {};
-        if (v("app_port")) patch.app_port = Number(v("app_port"));
         if (v("publishable_ports")) patch.publishable_ports = v("publishable_ports");
         if (v("app_entry")) patch.app_entry = v("app_entry");
         if (v("scheme")) patch.health_checks = [{ kind: "http", path: "/", expect: 200, scheme: v("scheme") }];
@@ -124,7 +131,7 @@ export function AppTargetSheet({ projectId, actor, racks, hostId, onClose, onCre
             <div className="inf-form-row">
               <label className="inf-field"><span>VM</span>
                 {vms.length ? (
-                  <select name="host_id" defaultValue={hostId && vms.some((h) => h.id === hostId) ? hostId : vms[0].id} data-testid="inf-target-vm">
+                  <select name="host_id" value={vm} onChange={(e) => setVm(e.target.value)} data-testid="inf-target-vm">
                     {vms.map((h) => <option key={h.id} value={h.id}>{h.name}{h.address ? ` · ${h.address}` : ""}</option>)}
                   </select>
                 ) : <span className="inf-muted" title="A stack runs on a verified machine">No ready machine</span>}
@@ -132,7 +139,10 @@ export function AppTargetSheet({ projectId, actor, racks, hostId, onClose, onCre
               <label className="inf-field" title="Lowercase letters, digits and dashes"><span>Name</span>
                 <input name="name" placeholder="optional · from the repository" autoComplete="off" spellCheck={false} data-testid="inf-target-name" /></label>
               <label className="inf-field"><span>Environment</span>
-                <input name="environment" defaultValue="production" autoComplete="off" data-testid="inf-target-env" /></label>
+                <input name="environment" defaultValue={environment} autoComplete="off" data-testid="inf-target-env" /></label>
+              <label className="inf-field" title="The port the app listens on: the first free one in the machine's range"><span>Port</span>
+                <input name="app_port" key={`${vm}:${port ?? ""}`} type="number" min={1} max={65535} defaultValue={port ?? undefined}
+                       placeholder={port === undefined ? "finding a free port…" : "chosen at the first deploy"} data-testid="inf-target-port" /></label>
             </div>
             <div className="inf-form-row">
               <label className="inf-field"><span>Repository</span>
@@ -151,8 +161,6 @@ export function AppTargetSheet({ projectId, actor, racks, hostId, onClose, onCre
                     title="Port, health check, app entry, credential">More {more ? "▴" : "▾"}</button>
             {more ? (
               <div className="inf-form-row" data-testid="inf-target-more-fields">
-                <label className="inf-field" title="The port the app listens on"><span>Port</span>
-                  <input name="app_port" type="number" min={1} max={65535} placeholder="3010" data-testid="inf-target-port" /></label>
                 <label className="inf-field" title="Comma-separated, ranges allowed, e.g. 3003,4000,10000-10001"><span>Publishable ports</span>
                   <input name="publishable_ports" placeholder="3003,4000" autoComplete="off" data-testid="inf-target-publish" /></label>
                 <label className="inf-field" title="Health check scheme"><span>Health</span>
@@ -211,6 +219,21 @@ export function AppTargetSheet({ projectId, actor, racks, hostId, onClose, onCre
       </form>
     </Sheet>
   );
+}
+
+/** The first free port on a machine for a new target (GET …/hosts/{id}/free-port): `undefined`
+ *  while asking, `null` when there is none to suggest (the first deploy then chooses). */
+export function useSuggestedPort(projectId: string, hostId: string): number | null | undefined {
+  const [port, setPort] = useState<{ host: string; port: number | null } | null>(null);
+  useEffect(() => {
+    if (!hostId) return undefined;
+    let live = true;
+    void read<{ port?: number | null }>(`/v1/projects/${encodeURIComponent(projectId)}/hosts/${encodeURIComponent(hostId)}/free-port`)
+      .then((r) => { if (live) setPort({ host: hostId, port: r.ok && typeof r.data.port === "number" ? r.data.port : null }); });
+    return () => { live = false; };
+  }, [projectId, hostId]);
+  if (!hostId) return null;
+  return port && port.host === hostId ? port.port : undefined;
 }
 
 /** A stack's default name: the repository's name, lower-case with dashes ("Shift_Swap" → "shift-swap"). */

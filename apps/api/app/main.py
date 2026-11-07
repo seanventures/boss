@@ -9025,16 +9025,13 @@ def register_deployment_target(payload: dict):
 
         target_ref = payload["target_ref"]
         if host_id:
-            from boss_engine.services.deployment_fleet import get_host, target_ref_for
+            from boss_engine.services.deployment_fleet import (
+                HostNotUsable, target_ref_for, usable_host)
 
-            host = get_host(connection, host_id)
-            if not host or host.get("project_id") != payload["project_id"]:
-                raise HTTPException(status_code=422, detail=(
-                    f"no deployment host {host_id} in this project; add the VM under Hosts "
-                    "first"))
-            if host.get("status") == "retired":
-                raise HTTPException(status_code=422, detail=(
-                    f"host {host['name']} is retired; nothing may be scheduled on it"))
+            try:
+                host = usable_host(connection, host_id, payload["project_id"])
+            except HostNotUsable as refused:
+                raise HTTPException(status_code=422, detail=refused.to_dict()) from None
             target_ref = target_ref_for(host)
 
         connection.execute(text("""
@@ -10559,7 +10556,8 @@ def create_stack_target_endpoint(payload: open_bodies.StackTargetCreateBody):
                 app_name=str(payload.get("app_name") or ""), repository=repository,
                 environment=str(payload.get("environment") or "production"),
                 manifest_path=payload.get("manifest_path"),
-                public_url=payload.get("public_url"), actor=actor)
+                public_url=payload.get("public_url"), port=payload.get("port") or None,
+                actor=actor)
         except StackDeployError as exc:
             raise _stack_error(exc)
 
@@ -11523,7 +11521,7 @@ def setup_deployment_for_code_task_endpoint(run_id: str, payload: open_bodies.Co
     if not host_id:
         raise HTTPException(status_code=422, detail="host_id is required")
 
-    from boss_engine.services.deployment_fleet import attach_target, get_host
+    from boss_engine.services.deployment_fleet import HostNotUsable, attach_target, usable_host
 
     with begin(engine) as connection:
         run = connection.execute(
@@ -11536,14 +11534,13 @@ def setup_deployment_for_code_task_endpoint(run_id: str, payload: open_bodies.Co
         require_project_actor(connection, run["project_id"], actor, "task_create")
         assert_run_is_deployable(run)
 
-        host = get_host(connection, host_id)
-        if not host:
-            raise HTTPException(status_code=404, detail="no such deployment host")
-        if host.get("project_id") != run["project_id"]:
-            # Binding a foreign host would also grant this project use of its SSH key.
-            raise HTTPException(
-                status_code=422,
-                detail="host belongs to a different project; setup-deployment refused")
+        # ONE RULE (deployment_fleet.usable_host): this project's hosts, or a verified host its
+        # organisation shares. Another organisation's machine (and its SSH key) never.
+        try:
+            host = usable_host(connection, host_id, run["project_id"])
+        except HostNotUsable as refused:
+            raise HTTPException(status_code=refused.status_code,
+                                detail=f"{refused.headline} {refused.action}") from None
         if host.get("status") != "verified":
             # A target pointed at an unproven host fails at deploy time, long after the
             # decision was made and somewhere less obvious than here.

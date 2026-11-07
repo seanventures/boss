@@ -1188,23 +1188,35 @@ def _target(connection: Connection, target_id: str) -> Optional[dict]:
 def create_stack_target(connection: Connection, *, project_id: str, host_id: str,
                         app_name: str, repository: str, environment: str = "production",
                         manifest_path: Optional[str] = None, public_url: Optional[str] = None,
-                        actor: str) -> dict[str, Any]:
+                        port: Optional[int] = None, actor: str) -> dict[str, Any]:
     """Where a stack is deployed: a repository, on a host, for an environment.
 
     `target_ref` is derived from the host, as every fleet target's is; a stack target never
     carries an address of its own.
     """
-    from .deployment_fleet import get_host, target_ref_for
+    from .deployment_fleet import HostNotUsable, _ports_assigned_on, target_ref_for, usable_host
 
     owner, repo = split_repository(repository)
-    host = get_host(connection, host_id)
-    if not host or host.get("project_id") != project_id:
-        raise StackDeployError("No such host in this project.",
-                               "Add the VM in Infra first, then create the target on it.",
-                               status_code=404)
-    if host.get("status") == "retired":
-        raise StackDeployError(f"Host {host['name']!r} is retired.",
-                               "Pick an active host, or register the VM again.")
+    # ONE RULE (deployment_fleet.usable_host): this project's hosts and the verified hosts its
+    # organisation shares. "Host in this project" alone refused the shared host onboarding offered.
+    try:
+        host = usable_host(connection, host_id, project_id)
+    except HostNotUsable as refused:
+        raise StackDeployError(refused.headline, refused.action,
+                               status_code=refused.status_code) from None
+    if port is not None:
+        try:
+            port = int(port)
+        except (TypeError, ValueError):
+            raise StackDeployError(f"Port {port!r} is not a number.",
+                                   "Give a port between 1 and 65535, or leave it blank.") from None
+        if not 1 <= port <= 65535:
+            raise StackDeployError(f"Port {port} is out of range.",
+                                   "Give a port between 1 and 65535, or leave it blank.")
+        holder = _ports_assigned_on(connection, str(host["address"])).get(port)
+        if holder:
+            raise StackDeployError(f"Port {port} on {host['address']} is already {holder}'s.",
+                                   "Pick another port, or leave it blank.", status_code=409)
     name = str(app_name or "").strip() or repo
     environment = str(environment or "production").strip() or "production"
     path = str(manifest_path or "").strip().lstrip("/") or None
@@ -1234,8 +1246,11 @@ def create_stack_target(connection: Connection, *, project_id: str, host_id: str
              "        :h, :mp, :url, now(), now())"),
         {"i": target_id, "p": project_id, "a": name, "r": f"{owner}/{repo}", "e": environment,
          "k": TARGET_KIND, "ref": target_ref_for(host),
-         "dom": json.dumps([url] if url else []),
-         "req": json.dumps([{"kind": "repo_owner", "name": owner}]),
+         # A PORT OF ITS OWN is said as the domain `address:port` (target_address, address_env:
+         # APP_BASE_URL and PORT), which is also what reserves it (_ports_assigned_on).
+         "dom": json.dumps([url] if url else [f"{host['address']}:{port}"] if port else []),
+         "req": json.dumps([{"kind": "repo_owner", "name": owner}]
+                           + ([{"kind": "app_port", "name": str(port)}] if port else [])),
          "by": actor, "h": host_id, "mp": path, "url": url})
     emit_event(connection, project_id, "deployment.stack_target_created", actor,
                "deployment_target", target_id,

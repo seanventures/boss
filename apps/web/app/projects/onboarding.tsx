@@ -32,6 +32,7 @@ import {
   type NextItem, type Node, type Onboarding, type OnboardingItem,
 } from "../../lib/project-experience";
 import { Face, Ico, STATE_WORD } from "./kit";
+import { ItemAction } from "./staging-target-sheet";
 import "./onboarding.css";
 
 const STAGE_ICON: Record<string, React.ReactNode> = {
@@ -339,7 +340,7 @@ export function OnboardingView({ projectId, ob, onRefresh }: { projectId: string
                       never an empty box beside the ticks. */}
                   <span className="px-ck-b" aria-hidden>{c.state === "done" ? <Check size={11} weight="bold" /> : c.state === "skipped" ? <Clock size={11} weight="bold" /> : you ? "!" : c.state === "failed" ? "✕" : ""}</span>
                   <span className="px-ck-t">{c.label}<small>{c.state === "skipped" ? <><b className="px-ck-when">{skipWord(c.key)}</b>{c.sub || c.detail ? ` · ${c.sub || c.detail}` : ""}</> : c.sub || c.detail}</small><span className="px-sr">{you ? "needs you" : c.state === "skipped" ? skipWord(c.key) : STATE_WORD[c.state]}. {c.detail}</span></span>
-                  {you && c.action ? <a className="px-btn" data-kind="amber" data-size="s" href={pxHref(c.action.href)} data-testid={`px-ob-act-${c.key}`}>{c.action.label}</a>
+                  {you && c.action ? <ItemAction projectId={projectId} action={c.action} testid={`px-ob-act-${c.key}`} onDone={onRefresh} />
                     : <span title={`${crewOf(c.agent).name} ${c.state === "now" ? "is on it" : "did this"}`}><Face agent={crewOf(c.agent)} size={20} state={c.state === "now" ? "working" : "idle"} /></span>}
                 </div>
               );
@@ -350,7 +351,7 @@ export function OnboardingView({ projectId, ob, onRefresh }: { projectId: string
       </div>
 
       <div className="px-grid px-g2 px-ob-cards">
-        <OnlyYouCard ob={ob} />
+        <OnlyYouCard ob={ob} projectId={projectId} onRefresh={onRefresh} />
         {/* One primary per view (X-78): Accept backlog until the backlog is on the Roadmap, then Start. */}
         <FirstWorkCard projectId={projectId} ob={ob} readyDone={unlocked} onSaid={setSaid} primary={!ob.backlog.some((b) => !b.accepted)} />
       </div>
@@ -366,7 +367,7 @@ export function OnboardingView({ projectId, ob, onRefresh }: { projectId: string
 }
 
 /** "Only you can" (00b-21..23): the amber items, each with its one action. */
-export function OnlyYouCard({ ob, extra }: { ob: Onboarding | null; extra?: React.ReactNode }) {
+export function OnlyYouCard({ ob, extra, projectId, onRefresh }: { ob: Onboarding | null; extra?: React.ReactNode; projectId?: string; onRefresh?: () => void }) {
   const items: OnboardingItem[] = ob?.only_you ?? [];
   return (
     <section className="px-card" aria-labelledby="px-ob-you" data-testid="px-ob-only-you">
@@ -376,7 +377,8 @@ export function OnlyYouCard({ ob, extra }: { ob: Onboarding | null; extra?: Reac
         <div key={it.key} className="px-ny" data-testid={`px-ob-you-${it.key}`}>
           <span className="px-ny-ico" aria-hidden>!</span>
           <div style={{ flex: 1, minWidth: 0 }}><div className="px-ny-t">{it.label}{it.sub ? ` · ${it.sub}` : ""}</div><small className="px-faint">{it.detail}</small></div>
-          {it.action ? <a className="px-btn" data-kind="amber" data-size="s" href={pxHref(it.action.href)}>{it.action.label}</a> : null}
+          {it.action && projectId ? <ItemAction projectId={projectId} action={it.action} testid={`px-ob-you-act-${it.key}`} onDone={onRefresh} />
+            : it.action ? <a className="px-btn" data-kind="amber" data-size="s" href={pxHref(it.action.href)}>{it.action.label}</a> : null}
         </div>
       ))}
       {!items.length && !extra ? <p className="px-faint" style={{ margin: "0 0 6px" }} data-testid="px-ob-you-none">Nothing — Helm asks only for what it can&apos;t do itself.</p> : null}

@@ -50,6 +50,10 @@ function describe(detail: unknown): string {
   }
   if (typeof detail === "object") {
     const entry = detail as Record<string, unknown>;
+    // A REFUSAL SAID AS {headline, action} (StackDeployError, HostNotUsable): both, in words.
+    // The App target sheet printed it as raw JSON ({"headline":"No such host…","action":…}).
+    const headline = describe(entry.headline);
+    if (headline) return [headline, describe(entry.action)].filter(Boolean).join(" ");
     for (const key of ["message", "reason", "error", "detail"]) {
       const text = describe(entry[key]);
       if (text) return text;
