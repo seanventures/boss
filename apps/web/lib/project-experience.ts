@@ -198,7 +198,7 @@ export type Knowledge = {
              /** `env`: BOSS could not run the suite (its environment, not the app's tests): the
               *  ring says so instead of a pass rate; `not_run` tests never ran. */
              tests: { passed: number; total: number; failing: number; from: string; href: string;
-                      env?: { sentence: string; reason: string; owner: string } | null; not_run?: number } | null; test_files: number | null;
+                      env?: { sentence: string; reason: string; owner: string } | null; not_run?: number } | null; test_files: number | null; tests_line: string;
              code_map: { parts: { dir: string; files: number }[]; files: number };
              by: string; built_ago: string; built_at: string; href: string } | null;
   graph: { nodes: GraphNode[]; edges: { from: string; to: string; label: string; kind: string }[]; href: string; hub: string;
@@ -546,6 +546,8 @@ export const parseKnowledge = (v: unknown): Knowledge => {
                         env: tests.env ? { sentence: s(o(tests.env).sentence), reason: s(o(tests.env).reason), owner: s(o(tests.env).owner) } : null,
                         not_run: n(tests.not_run) } : null,
       test_files: nn(tests.files),
+      // The tests' one statement ("40 test files · full suite on next build"), as Onboarding says it.
+      tests_line: s(tests.line),
       code_map: { parts: a(cm.parts).map((z) => ({ dir: s(o(z).dir), files: n(o(z).files) })).filter((z) => z.files > 0), files: n(cm.files) },
       by: s(d.by, "Helm"), built_ago: s(d.built_ago), built_at: s(d.built_at), href: s(d.href) } : null,
     graph: { nodes: a(g.nodes).map((z) => ({ id: s(o(z).id), label: s(o(z).label), kind: s(o(z).kind), group: s(o(z).group), detail: s(o(z).detail) })),
@@ -1048,8 +1050,8 @@ export const acceptRecommendation = async (projectId: string, id: string, as: Ac
   (isPxDemo() ? demoOk() : fromAa(await aaAccept(projectId, id, as)));
 export const rejectRecommendation = async (projectId: string, id: string, reason: string, category: RejectCategory) =>
   (isPxDemo() ? demoOk() : fromAa(await aaReject(projectId, id, reason, category)));
-export const snoozeRecommendation = async (projectId: string, id: string, days = 14) =>
-  (isPxDemo() ? demoOk() : fromAa(await aaSnooze(projectId, id, days)));
+export const snoozeRecommendation = async (projectId: string, id: string, days = 14, reason = "") =>
+  (isPxDemo() ? demoOk() : fromAa(await aaSnooze(projectId, id, days, Date.now(), reason)));
 
 /** Follow a console link the way a click on it would: the shell reveals an in-console area
  *  without a page load (its link handler), anything else navigates. */

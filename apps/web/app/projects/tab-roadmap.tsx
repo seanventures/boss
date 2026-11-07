@@ -11,19 +11,19 @@
  */
 import React, { useState } from "react";
 import {
-  ArrowRight, ArrowsLeftRight, BellSlash, CaretRight, Compass, Detective, Gauge, Plug, Shuffle, TrendUp, ChartLineUp, ChatCircleDots, Chats, Check, Clock, Coins, DotsThree, Fire,
+  ArrowRight, ArrowsLeftRight, BellSlash, CaretRight, Compass, Detective, Gauge, GitPullRequest, Plug, Shuffle, TrendUp, ChartLineUp, ChatCircleDots, Chats, Check, Clock, Coins, DotsThree, Fire,
   HandPointing, Kanban, Lightbulb, MagnifyingGlass, MapTrifold, Play, Sparkle, TestTube, Timer, Warning, X, type Icon,
 } from "@phosphor-icons/react";
 
 import { GatedButton } from "../../components/gated";
-import { parseRoadmap, roadmapPath, type Recommendation, type RejectCategory, type RoadmapView } from "../../lib/ambient";
+import { parseRec, parseRoadmap, recPath, roadmapPath, type Recommendation, type RejectCategory, type RoadmapView } from "../../lib/ambient";
 import {
   PX_PATHS, acceptRecommendation, movePlanItem, parsePlan, rejectRecommendation, runAccept, snoozeRecommendation, usePxRead,
   type Plan, type PlanCard, type PlanLane,
 } from "../../lib/project-experience";
 import { FX_ROADMAP } from "../../lib/project-experience-fixtures";
 import { notifyChanged } from "../changed";
-import { Empty, Face, Flow, Ico, ReadGate, Said, Tag } from "./kit";
+import { Drawer, Empty, Face, Flow, Ico, REC_KIND_WORDS, ReadGate, Said, Tag } from "./kit";
 import type { PxCtx } from "./project-page";
 
 /** The squad's role keys → the crew's names (the kit's faces). */
@@ -47,10 +47,9 @@ const DETECTOR_ICON: Record<string, Icon> = {
   compass: Compass, coins: Coins, shuffle: Shuffle, gauge: Gauge, "hand-pointing": HandPointing, "trend-up": TrendUp,
   "Incident hotspot": Detective, "Incident patterns": Detective, "Alert gap": BellSlash, "Feature demand": TrendUp,
   "Slow query": Gauge, "Code hotspot": Fire, "Test gap": TestTube,
+  warning: Warning, chats: Chats, "git-pull-request": GitPullRequest, plug: Plug, timer: Timer, "chart-line-up": ChartLineUp,
 };
-const KIND_TAG: Record<string, string> = {
-  hardening: "Hardening", test_gap: "Test gap", refactor: "Refactor", feature: "Feature", design_fix: "Design fix", cost: "Cost", process: "Performance",
-};
+const KIND_TAG = REC_KIND_WORDS;
 /** The one-tap reject reasons the wireframe names → the engine's categories (each teaches its detector). */
 export const REJECT_CHIPS: { label: string; category: RejectCategory }[] = [
   { label: "Not now", category: "not_valuable" }, { label: "Wrong idea", category: "wrong" },
@@ -183,7 +182,11 @@ function Recommendations({ ctx, rm, status, onStatus, onChanged }: {
   ctx: PxCtx; rm: RoadmapView; status: string; onStatus: (s: string) => void; onChanged: () => void;
 }) {
   const [done, setDone] = useState<Record<string, "accepted" | "rejected" | "snoozed">>({});
-  const recs = rm.recommendations;
+  // A card decided here STAYS as its outcome (wireframe 07: the green "Accepted → On Work · Next"
+  // card) when the list re-reads and it has left the Open filter (tester 07-17/18).
+  const [kept, setKept] = useState<Record<string, Recommendation>>({});
+  const listed = new Set(rm.recommendations.map((r) => r.id));
+  const recs = [...rm.recommendations, ...Object.values(kept).filter((r) => !listed.has(r.id))];
   const captain = ctx.overview.captain?.name ?? "Helm";
   return (
     <section aria-labelledby="px-rm-recs" className="px-stack" style={{ gap: 10 }} data-testid="px-rm-recs">
@@ -200,7 +203,7 @@ function Recommendations({ ctx, rm, status, onStatus, onChanged }: {
       </div>
       {recs.length ? recs.map((r, i) => (
         <RecCard key={r.id} ctx={ctx} r={r} i={i} state={done[r.id] ?? (r.status === "accepted" ? "accepted" : undefined)}
-                 onDone={(s) => { setDone((d) => ({ ...d, [r.id]: s })); onChanged(); }} />
+                 onDone={(s) => { setDone((d) => ({ ...d, [r.id]: s })); setKept((k) => ({ ...k, [r.id]: r })); onChanged(); }} />
       )) : (
         <div className="px-card"><Empty icon={Lightbulb} tone="violet" title={status === "open" ? "No ideas yet" : "Nothing here"} testid="px-rm-empty"
                line={status === "open" ? `${captain} proposes work from incidents, hot code, test gaps and your PRDs.` : "No recommendation is in this state."}>
@@ -210,10 +213,22 @@ function Recommendations({ ctx, rm, status, onStatus, onChanged }: {
   );
 }
 
-/** A card's diagram: each evidence source (count in words) → the detector → the agent that does it. */
+/** A card's diagram (wireframe 07): the recommendation's CONCRETE evidence ("2 incidents", "sla.py
+ *  hot") → the detector that read it ("Incident hotspot") → the agent who would do it ("Test + fix").
+ *  The engine builds it from the record (`card`); never the provenance chain (Code graph → Roadmap
+ *  → Onboarding), which read the same on every card — that stays in Why ›. */
 export function recFlow(r: Recommendation, squad: { name: string; role_key?: string }[] = []) {
   const role = r.squad?.[0] ?? "";
   const who = squad.find((m) => m.role_key === role)?.name ?? CREW_NAME[role] ?? "Helm";
+  if (r.card) {
+    const c = r.card;
+    const DI = c.detector ? DETECTOR_ICON[c.detector.icon] ?? DETECTOR_ICON[c.detector.label] ?? MagnifyingGlass : MagnifyingGlass;
+    return [
+      ...c.evidence.map((e) => { const I = DETECTOR_ICON[e.icon] ?? ChartLineUp; return { label: e.label, type: "signal", icon: <I size={11} aria-hidden /> }; }),
+      ...(c.detector ? [{ label: c.detector.label, type: "decision", icon: <DI size={11} aria-hidden /> }] : []),
+      { label: c.does || "Do it", type: "agent", icon: <Face agent={{ name: who, role_key: role || "engineering_captain" }} size={16} />, title: `${who} would do it` },
+    ];
+  }
   const signals = r.strip.filter((n) => n.type === "signal").slice(0, 2).map((n) => {
     const count = Number((n.badges.find((b) => b.startsWith("×")) ?? "").slice(1)) || 0;
     const I = SOURCE_ICON[n.label.toLowerCase()] ?? ChartLineUp;
@@ -238,14 +253,19 @@ export function recFlow(r: Recommendation, squad: { name: string; role_key?: str
 
 function RecCard({ ctx, r, i, state, onDone }: { ctx: PxCtx; r: Recommendation; i: number; state?: "accepted" | "rejected" | "snoozed"; onDone: (s: "accepted" | "rejected" | "snoozed") => void }) {
   const [rejecting, setRejecting] = useState(false);
-  const [chip, setChip] = useState<string>(REJECT_CHIPS[0].label);
+  // No reason is preselected (tester 07-14): a person picks one, or says one, before Reject.
+  const [chip, setChip] = useState<string>("");
+  const [snoozing, setSnoozing] = useState(false);
+  const [days, setDays] = useState(14);
+  const [snoozeWhy, setSnoozeWhy] = useState("");
+  const until = new Date(Date.now() + days * 86_400_000).toLocaleDateString(undefined, { day: "numeric", month: "short" });
   const [reason, setReason] = useState("");
   const [said, setSaid] = useState("");
   const [menu, setMenu] = useState(false);
   const [why, setWhy] = useState(false);
   const act = async (fn: () => Promise<{ ok: boolean; error: string | null; demo?: boolean }>, s: "accepted" | "rejected" | "snoozed") => {
     const res = await fn();
-    if (res.ok) { setSaid(res.demo ? "Sample mode — nothing was sent." : ""); onDone(s); setRejecting(false); setMenu(false); }
+    if (res.ok) { setSaid(res.demo ? "Sample mode — nothing was sent." : ""); onDone(s); setRejecting(false); setSnoozing(false); setMenu(false); }
     else setSaid(res.error ?? "It didn't go through.");
   };
   if (state === "accepted") {
@@ -262,15 +282,17 @@ function RecCard({ ctx, r, i, state, onDone }: { ctx: PxCtx; r: Recommendation; 
     return (
       <div className="px-rc" data-s={state} data-testid={`px-rec-${r.id}`}>
         <span className="px-rank">{state === "rejected" ? <X size={13} /> : <Clock size={13} />}</span>
-        <div className="px-faint">{r.title} — {state === "rejected" ? "rejected; the detector learns from it" : "snoozed for two weeks"}<Said text={said} /></div><span />
+        <div className="px-faint">{r.title} — {state === "rejected" ? "rejected; the detector learns from it" : `not now — back on ${until}`}<Said text={said} /></div><span />
       </div>
     );
   }
   const valuePct = r.value === "high" ? 82 : r.value === "medium" ? 60 : 30;
   const category = REJECT_CHIPS.find((c) => c.label === chip)?.category ?? "other";
-  const reject = () => void act(() => rejectRecommendation(ctx.projectId, r.id, reason.trim() || chip, category), "rejected");
+  const hasReason = Boolean(chip || reason.trim());
+  const reject = () => { if (hasReason) void act(() => rejectRecommendation(ctx.projectId, r.id, reason.trim() || chip, category), "rejected"); };
+  const snooze = () => void act(() => snoozeRecommendation(ctx.projectId, r.id, days, snoozeWhy.trim()), "snoozed");
   return (
-    <div className="px-rc" data-s={rejecting ? "rejecting" : undefined} data-testid={`px-rec-${r.id}`}>
+    <div className="px-rc" data-s={rejecting ? "rejecting" : snoozing ? "snoozing" : undefined} data-testid={`px-rec-${r.id}`}>
       <span className="px-rank">{r.rank ?? i + 1}</span>
       <div style={{ minWidth: 0 }}>
         <div className="px-rc-t">{r.title}</div>
@@ -288,12 +310,28 @@ function RecCard({ ctx, r, i, state, onDone }: { ctx: PxCtx; r: Recommendation; 
               <input className="px-input" style={{ flex: "1 1 200px" }} placeholder="Say more (optional)" value={reason} onChange={(e) => setReason(e.target.value)} aria-label="Say more" />
             </div>
           </form>
+        ) : snoozing ? (
+          <form className="px-stack" style={{ gap: 8, marginTop: 8 }} data-testid={`px-rec-snooze-form-${r.id}`} onSubmit={(e) => { e.preventDefault(); snooze(); }}>
+            <span className="px-lbl">Not now — back on</span>
+            <div className="px-row px-wrap" style={{ gap: 6 }}>
+              <div className="px-filters" role="radiogroup" aria-label="Snooze for" style={{ margin: 0 }}>
+                {[7, 14, 30].map((d) => (
+                  <button key={d} type="button" className="px-filter" role="radio" aria-checked={days === d} data-testid={`px-rec-snooze-${d}`}
+                          onClick={() => setDays(d)}>{d === 7 ? "1 week" : d === 14 ? "2 weeks" : "1 month"}</button>
+                ))}
+              </div>
+              <span className="px-mono px-faint" data-testid={`px-rec-snooze-until-${r.id}`}>{until}</span>
+              <input className="px-input" style={{ flex: "1 1 200px" }} placeholder="Why not now? (optional)" value={snoozeWhy}
+                     onChange={(e) => setSnoozeWhy(e.target.value)} aria-label="Why not now" />
+            </div>
+          </form>
         ) : (
           <div className="px-row px-wrap px-rc-meta">
             <Tag>{KIND_TAG[r.kind] ?? r.kindLabel}</Tag>
             <span className="px-score">Value <span className="px-bar" role="img" aria-label={`Value ${valuePct}%`}><span style={{ width: `${valuePct}%`, background: "var(--green)" }} /></span></span>
             <span className="px-score">Effort <b>{r.effort === "low" ? "S" : r.effort === "medium" ? "M" : "L"}</b></span>
-            {r.cost_usd ? <span className="px-tag px-mono" data-testid={`px-rec-cost-${r.id}`}>≈ ${r.cost_usd < 1 ? r.cost_usd.toFixed(2) : Math.round(r.cost_usd)}</span> : null}
+            {r.cost_usd ? <span className="px-tag px-mono" data-testid={`px-rec-cost-${r.id}`}
+                                title={r.card?.cost_basis ? `About $${r.cost_usd.toFixed(2)}: ${r.card.cost_basis}` : "This item's estimate"}>≈ ${r.cost_usd < 1 ? r.cost_usd.toFixed(2) : Math.round(r.cost_usd)}</span> : null}
             <button type="button" className="px-linkbtn" aria-expanded={why} data-testid={`px-rec-whybtn-${r.id}`}
                     onClick={() => (why ? setWhy(false) : r.why ? setWhy(true) : ctx.open("rec", r.id))}>Why? <CaretRight size={10} /></button>
           </div>
@@ -304,10 +342,17 @@ function RecCard({ ctx, r, i, state, onDone }: { ctx: PxCtx; r: Recommendation; 
         ) : null}
         <Said text={said} tone="red" />
       </div>
-      {rejecting ? (
+      {snoozing ? (
         <div className="px-rc-act">
           <GatedButton permission="work_item:manage" projectId={ctx.projectId} className="px-btn" data-kind="primary" data-size="s"
-                       data-testid={`px-rec-reject-confirm-${r.id}`} onClick={reject}>Reject</GatedButton>
+                       data-testid={`px-rec-snooze-confirm-${r.id}`} onClick={snooze}><Clock size={12} /> Snooze</GatedButton>
+          <button type="button" className="px-btn" data-kind="ghost" data-size="s" onClick={() => setSnoozing(false)} data-testid={`px-rec-snooze-cancel-${r.id}`}>Cancel</button>
+        </div>
+      ) : rejecting ? (
+        <div className="px-rc-act">
+          <GatedButton permission="work_item:manage" projectId={ctx.projectId} className="px-btn" data-kind="primary" data-size="s"
+                       data-testid={`px-rec-reject-confirm-${r.id}`} disabled={!hasReason}
+                       title={hasReason ? `Reject: ${reason.trim() || chip}` : "Pick a reason first"} onClick={reject}>Reject</GatedButton>
           <button type="button" className="px-btn" data-kind="ghost" data-size="s" onClick={() => setRejecting(false)} data-testid={`px-rec-cancel-${r.id}`}>Cancel</button>
         </div>
       ) : (
@@ -322,7 +367,7 @@ function RecCard({ ctx, r, i, state, onDone }: { ctx: PxCtx; r: Recommendation; 
             {menu ? (
               <span className="px-menu" role="menu">
                 <GatedButton permission="work_item:manage" projectId={ctx.projectId} role="menuitem" className="px-menu-i" data-testid={`px-rec-snooze-${r.id}`}
-                             onClick={() => void act(() => snoozeRecommendation(ctx.projectId, r.id, 14), "snoozed")}><Clock size={12} /> Snooze 2 weeks</GatedButton>
+                             onClick={() => { setMenu(false); setSnoozing(true); }}><Clock size={12} /> Not now…</GatedButton>
                 <button type="button" role="menuitem" className="px-menu-i" onClick={() => { setMenu(false); ctx.open("rec", r.id); }}><Sparkle size={12} /> Details</button>
               </span>
             ) : null}
@@ -330,5 +375,64 @@ function RecCard({ ctx, r, i, state, onDone }: { ctx: PxCtx; r: Recommendation; 
         </div>
       )}
     </div>
+  );
+}
+
+/** WHY › FULL REASONING (tester 07-10): the recommendation's own record — its diagram, the ≈ cost
+ *  and what it is based on, the whole why (never cut), every piece of evidence and how it ranks.
+ *  GET /v1/ambient/roadmap/{id}. Accepting and rejecting stay on the Roadmap card. */
+type RecFull = { rec: Recommendation; why: string; evidence: { kind: string; ref: string; note: string }[];
+  value: number | null; effort: number | null; strength: number | null; work: string };
+const parseRecFull = (raw: unknown): RecFull => {
+  const o = (v: unknown) => (v && typeof v === "object" ? v as Record<string, unknown> : {});
+  const d = o(o(raw).detail);
+  const facts = o(d.facts);
+  const num = (v: unknown) => (typeof v === "number" ? v : null);
+  return {
+    rec: parseRec(raw), why: typeof d.why === "string" ? d.why : "",
+    evidence: (Array.isArray(d.evidence) ? d.evidence : []).map((e) => ({ kind: String(o(e).kind ?? ""), ref: String(o(e).ref ?? ""), note: String(o(e).note ?? "") })),
+    value: num(d.value), effort: num(d.effort_units), strength: num(d.evidence_strength),
+    work: typeof facts.text === "string" ? facts.text : "",
+  };
+};
+
+export function RecDrawer({ ctx, id, onClose }: { ctx: PxCtx; id: string; onClose: () => void }) {
+  const read = usePxRead<RecFull>(recPath(ctx.projectId, id), parseRecFull);
+  const f = read.data;
+  const r = f?.rec;
+  return (
+    <Drawer title={r?.title || "Recommendation"} icon={<Ico icon={Lightbulb} c="violet" />} onClose={onClose} testid="px-drawer-rec"
+            sub={r ? <>
+              <Tag>{KIND_TAG[r.kind] ?? r.kindLabel}</Tag>
+              {r.card?.detector ? <span>{r.card.detector.label}</span> : null}
+              {r.cost_usd ? <span className="px-tag px-mono" data-testid="px-drawer-rec-cost" title={r.card?.cost_basis || "This item's estimate"}>
+                ≈ ${r.cost_usd < 1 ? r.cost_usd.toFixed(2) : Math.round(r.cost_usd)}{r.card?.cost_basis ? ` · ${r.card.cost_basis}` : ""}</span> : null}
+            </> : null}>
+      {!f ? <p className="px-faint">{read.state === "loading" ? "Reading it…" : read.error ?? "This recommendation isn't here any more."}</p> : (
+        <div className="px-stack" style={{ gap: 14 }}>
+          <Flow nodes={recFlow(f.rec, ctx.overview.captain?.squad ?? [])} testid="px-drawer-rec-flow" />
+          <section>
+            <span className="px-lbl">Why</span>
+            <p style={{ margin: "4px 0 0", whiteSpace: "pre-wrap", lineHeight: 1.5 }} data-testid="px-drawer-rec-why">{f.why || f.rec.why || "No reasoning was recorded."}</p>
+          </section>
+          {f.work && f.work !== f.why ? (
+            <section><span className="px-lbl">The work</span>
+              <p style={{ margin: "4px 0 0", whiteSpace: "pre-wrap", lineHeight: 1.5 }} data-testid="px-drawer-rec-work">{f.work}</p></section>
+          ) : null}
+          {f.evidence.length ? (
+            <section><span className="px-lbl">Evidence · {f.evidence.length}</span>
+              <ul style={{ margin: "4px 0 0", paddingLeft: 16, lineHeight: 1.5 }} data-testid="px-drawer-rec-evidence">
+                {f.evidence.map((e, i) => <li key={`${e.kind}-${e.ref}-${i}`}>{e.note || `${e.kind.replace(/_/g, " ")} ${e.ref}`}</li>)}
+              </ul></section>
+          ) : null}
+          <section className="px-row px-wrap" style={{ gap: 12 }} data-testid="px-drawer-rec-rank">
+            {f.value !== null ? <span className="px-score">Value <b>{Math.round(f.value)}</b>/100</span> : null}
+            {f.effort !== null ? <span className="px-score">Effort <b>{f.effort}</b> unit{f.effort === 1 ? "" : "s"}</span> : null}
+            {f.strength !== null ? <span className="px-score">Evidence <b>{Math.round(f.strength * 100)}%</b></span> : null}
+          </section>
+          <button type="button" className="px-btn" data-kind="primary" onClick={() => { onClose(); ctx.tab("roadmap"); }}>Accept or reject on the Roadmap</button>
+        </div>
+      )}
+    </Drawer>
   );
 }

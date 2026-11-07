@@ -14,7 +14,8 @@ import {
 
 import { GatedButton } from "../../components/gated";
 import { KIND_WORDS, WORK_ORDER, WORK_WORDS, navigateTo, pxHref, runAccept, startOnboarding, workWhen, writePxUrl, type NextItem, type WorkItem } from "../../lib/project-experience";
-import { Empty, Face, Flow, HEALTH_WORD, Ico, Journey, PxLink, Ring, Said, Spark, Stations, Tag, Timeline, Cost, CardFailed } from "./kit";
+import { Empty, Face, Flow, HEALTH_WORD, Ico, Journey, PxLink, REC_KIND_WORDS, Ring, Said, Spark, Stations, Tag, Timeline, Cost, CardFailed } from "./kit";
+import { notifyChanged } from "../changed";
 import { DemoLoginRow } from "./tab-settings";
 import { P95_SOURCE, p95Words } from "./tab-deployments";
 import { whenLocal } from "../../lib/local-time";
@@ -28,6 +29,7 @@ const SOURCE_WORDS: Record<string, { word: string; icon: Icon }> = {
   ci: { word: "Failing CI", icon: Warning },
 };
 const NEXT_KIND_WORDS: Record<string, string> = {
+  ...REC_KIND_WORDS,
   feature: "Feature", test_gap: "Test gap", incident_hotspot: "Incident hotspot", alert_gap: "Alert gap", bug: "Bug", ticket: "Ticket", chore: "Chore",
   security: "Security", dependency: "Dependency", performance: "Performance", docs: "Docs",
 };
@@ -335,13 +337,20 @@ const acceptPermission = (n: NextItem) => (n.accept && n.accept.href.startsWith(
 
 function NextCard({ ctx }: { ctx: PxCtx }) {
   const [said, setSaid] = useState("");
+  // ACCEPTED ONCE (tester 07-03): an item accepted here turns into "Next" at once — no second
+  // Accept to press while the Overview re-reads — and the Roadmap re-reads too.
+  const [accepted, setAccepted] = useState<Record<string, true>>({});
+  const [busy, setBusy] = useState<string | null>(null);
   const accept = async (n: NextItem) => {
-    if (!n.accept) return;
+    if (!n.accept || busy) return;
+    setBusy(n.id);
     const r = await runAccept(ctx.projectId, n.accept);
+    setBusy(null);
     const planned = n.accept.href.startsWith("/v1/ambient/");
     setSaid(r.ok ? (r.demo ? "Sample mode — nothing was sent." : planned ? `${n.label} is planned work now.` : `${n.label} started — it's on Work.`)
       : (r.error ?? "Not accepted."));
-    if (r.ok && !r.demo) ctx.refreshWork();
+    if (r.ok) setAccepted((a) => ({ ...a, [n.id]: true }));
+    if (r.ok && !r.demo) { ctx.refreshWork(); ctx.refreshOverview?.(); notifyChanged("project.roadmap"); }
   };
   const next = ctx.overview.next;
   return (
@@ -360,10 +369,10 @@ function NextCard({ ctx }: { ctx: PxCtx }) {
               {n.href ? <PxLink href={n.href} className="px-wk-t" onOpen={() => goHref(ctx, n.href, () => undefined)}><b>{n.label}</b></PxLink> : <b>{n.label}</b>}
               <small className="px-row" style={{ gap: 4 }}><Src size={10} aria-hidden />{[kind, n.accepted ? "accepted" : src.word].filter(Boolean).join(" · ")}</small>
             </span>
-            {n.accepted || !n.accept ? <Tag tone="green">Next</Tag> : (
+            {n.accepted || accepted[n.id] || !n.accept ? <Tag tone="green">Next</Tag> : (
               <GatedButton permission={acceptPermission(n)} projectId={ctx.projectId} className="px-btn" data-size="s" data-testid={`px-ov-accept-${n.id}`}
                            title={n.accept.href.startsWith("/v1/ambient/") ? "Accept it: it joins Work as planned" : "Accept it: it starts through the project's normal path"}
-                           onClick={() => void accept(n!)}>Accept</GatedButton>
+                           disabled={busy === n.id} onClick={() => void accept(n!)}>Accept</GatedButton>
             )}
           </div>
         );

@@ -22,7 +22,7 @@ from __future__ import annotations
 import re
 from collections import Counter
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
@@ -136,4 +136,29 @@ def last_full_run(connection: Connection, project_id: str) -> Optional[dict[str,
     return out
 
 
-__all__ = ["last_full_run", "parse_counts", "setup_cause"]
+def suite_words(run: Optional[Mapping[str, Any]], test_files: int) -> dict[str, str]:
+    """THE ONE STATEMENT about a project's tests, said the same everywhere (Onboarding's live
+    diagram, Discovered, the Ready checklist, the dossier): `label` names it in ≤ 3 words for a
+    node ("40 test files", "142/148 tests"), `line` is the whole truth in one line.
+
+    A suite BOSS could not run (`env`, suite_environment) has no pass rate: its counts are
+    BOSS's environment, not the app ("71 / 190 pass" after the sandbox fix was a false claim),
+    so it says what the repo holds and when the full run comes — "40 test files · full suite on
+    next build"."""
+    files = max(0, int(test_files or 0))
+    named = f"{files} test file{'s' if files != 1 else ''}" if files else ""
+    if run and run.get("env"):
+        label = named or "Suite not run"
+        return {"label": label, "line": f"{label} · full suite on next build", "state": "env"}
+    if run and run.get("total"):
+        failing = int(run.get("failing") or 0)
+        return {"label": f"{run['passed']}/{run['total']} tests",
+                "line": (f"{failing} failing → backlog" if failing
+                         else f"{run['passed']} / {run['total']} pass"),
+                "state": "failing" if failing else "passing"}
+    if named:
+        return {"label": named, "line": f"{named} · first build runs them", "state": "unrun"}
+    return {"label": "No tests yet", "line": "No tests", "state": "none"}
+
+
+__all__ = ["last_full_run", "parse_counts", "setup_cause", "suite_words"]

@@ -219,8 +219,9 @@ function Dossier({ ctx, k, onStarted }: { ctx: PxCtx; k: Knowledge; onStarted: (
           <span className="px-lbl">Tests</span>
           {d.tests?.env ? (
             <div style={{ marginTop: 6 }} data-testid="px-kn-tests-env">
-              <b>Couldn&apos;t run the full suite</b>
-              <div className="px-faint" style={{ fontSize: ".58rem" }}>{d.tests.env.reason} · BOSS re-runs it on the next build</div>
+              {/* ONE TRUTH: Onboarding's diagram, Discovered and the Ready checklist say these words. */}
+              <b>{d.tests_line || `${d.test_files ?? 0} test files · full suite on next build`}</b>
+              <div className="px-faint" style={{ fontSize: ".58rem" }}>BOSS couldn&apos;t run the full suite last time: {d.tests.env.reason}</div>
             </div>
           ) : d.tests ? (
             <div className="px-row" style={{ marginTop: 6 }} data-testid="px-kn-tests">

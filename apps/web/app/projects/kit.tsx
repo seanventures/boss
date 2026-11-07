@@ -99,28 +99,39 @@ export function Journey({ nodes, size, onOpen, testid = "px-journey" }: { nodes:
   );
 }
 
-/** A TIMELINE: up to six points, oldest first, a day label over each ("Mon", "Today"), the dot
- *  coloured by kind and a few words under it. Fits any width: points share the row. */
+/** A recommendation's kind in words — ONE map for the Roadmap card and Overview's What's next
+ *  (the engine's KIND_LABEL): "Add CI" read Performance on one and Process on the other. */
+export const REC_KIND_WORDS: Record<string, string> = {
+  hardening: "Hardening", test_gap: "Test gap", refactor: "Refactor", feature: "Feature", design_fix: "Design fix",
+  cost: "Cost", process: "Process",
+};
+
+/** THIS WEEK's labels over the dots (screen 04 "Mon · Mon · Wed · Thu · Today"): each point's day in
+ *  the viewer's own calendar — Today, Yesterday, else the weekday. When EVERY point happened today,
+ *  a row of "Today"s says nothing, so each says its time instead ("09:12"). */
+export function timelineLabels(ats: (string | null)[], now: Date = new Date()): string[] {
+  const dates = ats.map((at) => { const d = at ? new Date(at) : null; return d && !Number.isNaN(d.getTime()) ? d : null; });
+  const same = (x: Date, y: Date) => x.getFullYear() === y.getFullYear() && x.getMonth() === y.getMonth() && x.getDate() === y.getDate();
+  const yesterday = new Date(now); yesterday.setDate(now.getDate() - 1);
+  const known = dates.filter((d): d is Date => d !== null);
+  if (known.length > 1 && known.every((d) => same(d, now))) {
+    return dates.map((d) => d ? d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) : "");
+  }
+  return dates.map((d) => !d ? "" : same(d, now) ? "Today" : same(d, yesterday) ? "Yesterday" : d.toLocaleDateString(undefined, { weekday: "short" }));
+}
+
+/** A TIMELINE: up to six points, oldest first, a day label over each ("Mon", "Today"; times when
+ *  all of them are today), the dot coloured by kind and a few words under it. Fits any width. */
 export function Timeline({ points, testid, onOpen }: {
   points: { at: string | null; label: string; kind: string; href?: string; detail?: string }[]; testid?: string; onOpen?: (i: number) => void;
 }) {
   if (!points.length) return null;
-  const day = (at: string | null) => {
-    if (!at) return "";
-    const d = new Date(at);
-    if (Number.isNaN(d.getTime())) return "";
-    const now = new Date();
-    const same = (x: Date, y: Date) => x.getFullYear() === y.getFullYear() && x.getMonth() === y.getMonth() && x.getDate() === y.getDate();
-    if (same(d, now)) return "Today";
-    const y = new Date(now); y.setDate(now.getDate() - 1);
-    if (same(d, y)) return "Yesterday";
-    return d.toLocaleDateString(undefined, { weekday: "short" });
-  };
+  const labels = timelineLabels(points.map((p) => p.at));
   return (
     <ol className="px-tl" data-testid={testid} aria-label="Timeline">
       {points.map((p, i) => (
         <li key={`${p.label}-${i}`} className="px-tl-p" data-k={p.kind} data-testid={testid ? `${testid}-${i}` : undefined} title={p.detail || undefined}>
-          <span className="px-tl-day">{day(p.at)}</span>
+          <span className="px-tl-day">{labels[i]}</span>
           <span className="px-tl-dot" aria-hidden />
           {p.href ? (
             <a className="px-tl-cap" href={/^https?:/.test(p.href) ? p.href : pxHref(p.href)} {...(/^https?:/.test(p.href) ? { target: "_blank", rel: "noreferrer noopener" } : {})}

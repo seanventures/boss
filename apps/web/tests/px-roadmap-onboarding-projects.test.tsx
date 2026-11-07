@@ -56,6 +56,8 @@ const REC = {
   strip: [{ type: "signal", label: "Incidents", badges: ["×2"] }, { type: "signal", label: "Code graph", badges: ["×1"] },
           { type: "agent", label: "Incident hotspot", badges: [], icon: "detective" }, { type: "action", label: "Hardening sla.mjs", badges: [] }],
 };
+const REC_CARD = { evidence: [{ label: "2 incidents", icon: "warning" }, { label: "sla.mjs hot", icon: "fire" }],
+  detector: { label: "Incident hotspot", icon: "detective" }, does: "Test + fix", cost_usd: 2, cost_basis: "this item's estimate" };
 const READY_ROWS = [
   ["repo_access", "Repo access", "done", "read · branch · PR", "engineering_captain"], ["baseline_build", "Builds clean", "done", "make setup · 1m 40s", "builder"],
   ["tests", "Tests run", "done", "6 failing → backlog", "qa"], ["workflow", "Workflow picked", "done", "Minor feature", "engineering_captain"],
@@ -86,6 +88,11 @@ function engine(opts: { ready?: boolean; summary?: unknown; plan?: unknown } = {
         work: FX_WORK, knowledge: FX_KNOWLEDGE, deployments: FX_DEPLOYMENTS, onboarding, settings: FX_SETTINGS, health: FX_HEALTH,
       };
       return { body: table[m[2]] };
+    }
+    if (c.path === "/v1/ambient/roadmap/rec_sla" && c.method === "GET") {
+      return { body: { ...REC, card: REC_CARD, detail: { why: "Two incidents trace to sla.mjs. The weekend pause skips Saturday and Sunday, so a ticket opened Friday breaches on Monday.",
+        evidence: [{ kind: "incident", ref: "inc_1", note: "Weekend ticket breached SLA" }, { kind: "incident", ref: "inc_2", note: "Second weekend breach" }],
+        facts: { incident_cause: { incidents: 2 } }, value: 72, effort_units: 2, evidence_strength: 0.8 } } };
     }
     if (c.path === "/v1/ambient/roadmap") {
       return { body: { ...FX_ROADMAP, items: [REC, ...((FX_ROADMAP as { items: unknown[] }).items ?? [])], counts: { open: 5, accepted: 7, rejected: 2, snoozed: 1, resolved_by_change: 0 } } };
@@ -169,6 +176,74 @@ describe("Roadmap (screen 07): recommendations", () => {
     await press(tid("px-rec-accept-rec_sla"));
     expect(tid("px-rec-rec_sla")!.textContent).toContain("On Work · Next");
     expect(tid("px-rec-open-rec_sla")).not.toBeNull();
+  });
+});
+
+describe("Roadmap (screen 07): round 3 — every decision says itself", () => {
+  it("Reject waits for a reason: none is preselected, and the button says which one it sends", async () => {
+    const calls = engine();
+    await openProject("&tab=roadmap");
+    await press(tid("px-rec-reject-rec_sla"));
+    expect($$("[data-testid^='px-rec-why-'][aria-checked='true']")).toHaveLength(0);
+    const confirm = tid("px-rec-reject-confirm-rec_sla") as HTMLButtonElement;
+    expect(confirm.disabled).toBe(true);
+    await press(confirm);
+    expect(calls.some((c) => c.path.endsWith("/reject"))).toBe(false);
+    await press(tid("px-rec-why-duplicate"));
+    expect(confirm.disabled).toBe(false);
+    expect(confirm.getAttribute("title")).toBe("Reject: Duplicate");
+  });
+
+  it("Not now asks how long and why, shows the date, and sends both", async () => {
+    const calls = engine();
+    await openProject("&tab=roadmap");
+    await press(tid("px-rec-more-rec_sla"));
+    await press(tid("px-rec-snooze-rec_sla"));
+    expect(tid("px-rec-snooze-form-rec_sla")).not.toBeNull();
+    await press(tid("px-rec-snooze-30"));
+    expect(tid("px-rec-snooze-until-rec_sla")!.textContent).toBe(new Date(Date.now() + 30 * 86_400_000).toLocaleDateString(undefined, { day: "numeric", month: "short" }));
+    const input = document.querySelector<HTMLInputElement>("[aria-label='Why not now']")!;
+    await act(async () => { const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!; set.call(input, "after the launch"); input.dispatchEvent(new Event("input", { bubbles: true })); });
+    await press(tid("px-rec-snooze-confirm-rec_sla"));
+    const body = calls.find((c) => c.path === "/v1/ambient/roadmap/rec_sla/snooze")?.body as { until: string; reason: string };
+    expect(body.reason).toBe("after the launch");
+    expect(Math.round((Date.parse(body.until) - Date.now()) / 86_400_000)).toBe(30);
+  });
+
+  it("an accepted card stays as the green Accepted → On Work · Next card after the list re-reads", async () => {
+    engine();
+    await openProject("&tab=roadmap");
+    await press(tid("px-rec-accept-rec_sla"));
+    await settle(10);
+    expect(tid("px-rec-rec_sla")!.getAttribute("data-s")).toBe("accepted");
+    expect(tid("px-rec-rec_sla")!.textContent).toContain("On Work · Next");
+  });
+
+  it("Why › Full reasoning is the recommendation's own record: its diagram, ≈ cost, the whole why and its evidence", async () => {
+    engine();
+    await openProject("&tab=roadmap&drawer=rec%3Arec_sla");
+    await settle(10);
+    const d = tid("px-drawer-rec")!;
+    expect(d.textContent).not.toContain("Recommendations are ranked, accepted and rejected on the Roadmap.");
+    expect(tid("px-drawer-rec-why")!.textContent).toBe("Two incidents trace to sla.mjs. The weekend pause skips Saturday and Sunday, so a ticket opened Friday breaches on Monday.");
+    expect(tid("px-drawer-rec-flow")!.textContent).toContain("Incident hotspot");
+    expect(tid("px-drawer-rec-cost")!.textContent).toContain("≈ $2");
+    expect(tid("px-drawer-rec-evidence")!.textContent).toContain("Weekend ticket breached SLA");
+    expect(tid("px-drawer-rec-rank")!.textContent).toContain("72");
+  });
+});
+
+describe("Overview (screen 04): What's next accepts once", () => {
+  it("an accepted item turns into Next at once; there is no second Accept to press (tester 07-03)", async () => {
+    const calls = engine();
+    await openProject("");
+    const btn = $$("[data-testid^='px-ov-accept-']")[0];
+    expect(btn).toBeTruthy();
+    const id = btn.getAttribute("data-testid")!.replace("px-ov-accept-", "");
+    await press(btn);
+    expect(tid(`px-ov-accept-${id}`)).toBeNull();
+    const posts = calls.filter((c) => c.method === "POST" && c.path.includes("/accept"));
+    expect(posts).toHaveLength(1);
   });
 });
 
