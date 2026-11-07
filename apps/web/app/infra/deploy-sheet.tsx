@@ -16,6 +16,7 @@ import { listTargets, type TargetOption } from "./deploy-actions";
 import { afterWrite, deployTarget, listRefs, listRepositories } from "./infra-actions";
 import { ErrorLine } from "./infra-util";
 import { Sheet } from "./kit";
+import { MovedToProjectSettings } from "../projects/moved";
 
 /** The release packet, or why it is not one: `Line 2: Unexpected token`. */
 export function packetProblem(text: string): { value: Record<string, unknown> | null; error: string | null } {
@@ -105,6 +106,8 @@ export function DeploySheet({ projectId, actor, onClose, onPlanned, initialTarge
   return (
     <Sheet title="Deploy" testId="inf-deploy-sheet" onClose={onClose}>
       <form className="inf-form" noValidate onSubmit={(e) => { e.preventDefault(); void plan(); }}>
+        {/* A project's targets & hosts live on Project › Settings now; this sheet keeps deploying. */}
+        <MovedToProjectSettings section="targets" projectId={projectId} testid="inf-deploy-moved" />
         <div className="inf-form-row">
           <label className="inf-field"><span>Repository</span>
             {repos.length ? (

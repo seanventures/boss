@@ -10205,6 +10205,18 @@ CREATE TABLE IF NOT EXISTS notification_policies (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_notification_policies_root
   ON notification_policies(project_id) WHERE parent_id IS NULL;
 
+-- Project › Settings › Notifications (BOSSAPP-914 §11): who is told when something needs a
+-- person, or a pull request is ready, per project (project_experience/notify_routes.py).
+-- Incidents use the routing tree's root above; these two events route here.
+CREATE TABLE IF NOT EXISTS project_notification_routes (
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  event TEXT NOT NULL CHECK (event IN ('needs_you', 'pr_ready')),
+  contact_point_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+  updated_by TEXT NOT NULL DEFAULT 'boss',
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (project_id, event)
+);
+
 -- One row per (group, contact point): what was last sent and when, so group_interval and
 -- repeat_interval apply and an incident is ONE thread.
 CREATE TABLE IF NOT EXISTS notification_groups (

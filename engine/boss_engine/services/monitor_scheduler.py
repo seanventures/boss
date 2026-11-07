@@ -494,6 +494,14 @@ def tick(engine, settings: Any, *, now: Optional[datetime] = None,
                 engine, lambda c: notify.plan(c, settings, pid, now))) or {}).get("enqueued", 0)
         out["enqueued"] = planned
     guard("plan", plan)
+
+    # Project › Settings › Notifications: Needs-you and PR-ready messages to the channels a
+    # person routed them to (notify_routes), queued in the same outbox, delivered just below.
+    def routes():
+        from .project_experience import notify_routes
+
+        return notify_routes.plan_all(engine, settings, now)
+    out["routed"] = guard("routes", routes)
     out["delivery"] = guard("deliver", lambda: notify.deliver_due(engine, settings, now=now))
     from . import bundled_monitoring
 

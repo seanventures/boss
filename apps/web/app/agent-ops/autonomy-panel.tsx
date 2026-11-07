@@ -24,6 +24,7 @@ import {
 } from "../../lib/ambient";
 import { showToast } from "../client-forms";
 import "./agent-ops.css";
+import { MovedToProjectSettings } from "../projects/moved";
 
 const LEVELS = ["A0", "A1", "A2", "A3"];
 const rank = (l: string) => Math.max(0, LEVELS.indexOf(l));
@@ -192,6 +193,8 @@ export function AutonomyPanel({ projectId }: { projectId: string }) {
   const reload = () => { auto.reload(); settings.reload(); };
   return (
     <section className="aa aa-safety" data-testid="aa-autonomy" aria-label="Autonomy and safety">
+      {/* This project's level and ambient budget live on Project › Settings now (README parity). */}
+      <MovedToProjectSettings section="autonomy" projectId={projectId} testid="aa-autonomy-moved" />
       <div className="aa-safety-top">
         {settings.data ? <KillSwitch projectId={projectId} stop={settings.data.stop} onChanged={reload} /> : <div className="aa-kill" />}
         {settings.data ? <EnvelopeMeter env={settings.data.envelope} /> : <div className="aa-env" />}

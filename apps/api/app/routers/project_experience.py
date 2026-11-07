@@ -455,6 +455,77 @@ def project_demo_logins_reveal(project_id: str, request: Request,
     return JSONResponse(out, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/projects/{project_id}/demo-logins/rotate")
+@permit(P.SECRET_MANAGE, scope=Scope.project(path="project_id"))
+def project_demo_logins_rotate(project_id: str, request: Request,
+                               env: str = Query(..., description="preview, staging, …")) -> Any:
+    """Settings › Demo logins › Rotate (13-06): a new generated password for one environment.
+    The same bar as the reveal (owner/admin, fresh step-up); audited; no value is returned."""
+    from apps.api.app.routers.identity_access import request_identity
+    from boss_engine.services.project_experience import settings_view
+
+    ctx = request_identity(request)
+    with begin(_engine) as connection:
+        _require_project(connection, project_id)
+        _legacy_bar(connection, project_id, "member_manage")
+        org_id = ctx.principal.org_id if ctx is not None else connection.execute(
+            _org_sql(), {"p": project_id}).scalar()
+        try:
+            out = settings_view.rotate_demo_logins(connection, _settings, org_id=str(org_id),
+                                                   project_id=project_id, env=env,
+                                                   actor=_actor(request))
+        except LookupError as error:
+            return JSONResponse({"error": "no_demo_login", "message": str(error)}, status_code=404)
+    return JSONResponse(out, headers={"Cache-Control": "no-store"})
+
+
+class ProjectLevelBody(BaseModel):
+    level: str = Field(..., description="A0, A1, A2 or A3")
+
+
+@router.put("/v1/projects/{project_id}/autonomy")
+@permit(P.AUTONOMY_MANAGE, scope=Scope.project(path="project_id"))
+def project_autonomy_set(project_id: str, payload: ProjectLevelBody, request: Request) -> Any:
+    """Settings › Autonomy & budget › Level (13-20): this project's level for every task class
+    (each within what its catalogue allows), recorded like any level change."""
+    from boss_engine.services.project_experience import settings_view
+
+    with begin(_engine) as connection:
+        _require_project(connection, project_id)
+        _legacy_bar(connection, project_id, "role_review")
+        try:
+            return settings_view.set_project_level(connection, project_id,
+                                                   payload.level.strip().upper(),
+                                                   actor=_actor(request))
+        except ValueError as error:
+            return JSONResponse({"error": "bad_level", "message": str(error)}, status_code=422)
+
+
+class RouteBody(BaseModel):
+    contact_point_ids: list[str] = Field(default_factory=list)
+
+
+@router.put("/v1/projects/{project_id}/notification-routes/{event}")
+@permit(P.OBSERVABILITY_MANAGE, scope=Scope.project(path="project_id"))
+def project_notification_route_set(project_id: str, event: str, payload: RouteBody,
+                                   request: Request) -> Any:
+    """Settings › Notifications (13-26…13-28): route Needs you, Incidents or PR ready to this
+    project's contact points."""
+    from boss_engine.services.project_experience import notify_routes
+
+    with begin(_engine) as connection:
+        _require_project(connection, project_id)
+        _legacy_bar(connection, project_id, "providerops_manage")
+        try:
+            return notify_routes.set_route(connection, project_id, event,
+                                           payload.contact_point_ids, actor=_actor(request))
+        except ValueError as error:
+            return JSONResponse({"error": "bad_event", "message": str(error)}, status_code=422)
+        except LookupError as error:
+            return JSONResponse({"error": "unknown_contact_point", "message": str(error)},
+                                status_code=422)
+
+
 def _org_sql():
     from sqlalchemy import text
 

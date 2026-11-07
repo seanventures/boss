@@ -292,8 +292,9 @@ export function PreviewControls({ runId, livePreviews = [] }: { runId: string; l
               </a>
               {p.demo_logins?.length ? (
                 <span className="detail" data-testid="preview-demo-logins"
-                      title="BOSS generated this password for the app's demo users; read it in the app's Setup › Demo logins">
-                  Demo login: {p.demo_logins.join(", ")} (Setup › Demo logins)
+                      title="BOSS generated this password for the app's demo users; reveal it in Project › Settings › Demo logins">
+                  Demo login: {p.demo_logins.join(", ")} · <a href={consoleHref({ area: "project", tab: "settings", section: "demo_logins", app: undefined, build: undefined })}
+                                                             data-testid="preview-demo-logins-moved">Moved to Project › Settings</a>
                 </span>
               ) : null}
             </>

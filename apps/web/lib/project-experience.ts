@@ -195,6 +195,9 @@ export type SettingsSection = {
   moved_from: string; hint: string;
   /** The captain section's choosable agents (§14 `candidates`). */
   candidates: Agent[];
+  /** The section as the engine sent it (screen 13 draws each section's own fields from it:
+   *  environments, rows in words, levels, routes…). Read with the o/a/s helpers. */
+  raw: Record<string, unknown>;
 };
 export type Settings = { sections: SettingsSection[] };
 export type HealthView = {
@@ -506,7 +509,7 @@ export const parseSettings = (v: unknown): Settings => ({
     }
     return {
       key, label: s(y.label), icon: s(y.icon), moved_from: s(y.moved_from), hint: s(y.hint),
-      items, candidates: agents(y.candidates),
+      items, candidates: agents(y.candidates), raw: y,
       actions: a(y.actions).map((q) => ({ label: s(o(q).label), href: s(o(q).href), method: s(o(q).method, "GET"), requires: s(o(q).requires),
                                           // An in-console href is its own place to go; an API route is not a link.
                                           open: s(o(q).open) || (s(o(q).href).startsWith("?") ? s(o(q).href) : "") })).filter((q) => q.label),

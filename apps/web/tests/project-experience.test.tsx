@@ -765,8 +765,11 @@ const API = {
   },
   settings: { sections: [
     { key: "targets", label: "Deploy targets", icon: "server",
-      items: [{ kind: "target", id: "dept_1", app: "helpdesk-ai-demo", env: "staging", env_label: "Staging", host: "203.0.113.10", policy: "person", paused: false, href: Q({ area: "infra", target: "dept_1" }),
+      items: [{ kind: "target", id: "dept_1", app: "helpdesk-ai-demo", env: "staging", env_label: "Staging", host: "203.0.113.10", host_name: "demo-host",
+                host_href: Q({ area: "infra", host: "dhost_1" }), words: "docker · port 8004", state: "done", policy: "person", paused: false, href: Q({ area: "infra", target: "dept_1" }),
                 actions: [{ label: "Edit", method: "PATCH", href: "/v1/deployment-targets/dept_1", open: Q({ area: "infra", target: "dept_1" }) }] },
+              { kind: "missing", id: "production", env: "production", env_label: "Production", words: "no host yet", state: "you",
+                action: { label: "Pick host", open: Q({ area: "infra", add: "target" }) } },
               { kind: "host", id: "dhost_1", name: "demo-host", address: "203.0.113.10", status: "verified", shared: false, href: Q({ area: "infra", host: "dhost_1" }) }],
       actions: [{ label: "Add a target", method: "POST", href: "/v1/deployment-targets", requires: "step_up", open: Q({ area: "infra", add: "target" }) },
                 { label: "Add a server", method: "POST", href: "/v1/deployment-hosts", open: Q({ area: "infra", add: "host" }) }] },
@@ -798,10 +801,11 @@ describe("the engine's own answers (what the API serves, not the sample)", () =>
     await openProject("&tab=settings");
     const hrefs = $$("[data-testid='px-settings'] a").map((a) => a.getAttribute("href") ?? "");
     expect(hrefs.filter((h) => h.startsWith("/v1/"))).toEqual([]);
-    const targets = $$("[data-testid='px-set-act-targets']").map((a) => new URLSearchParams(a.getAttribute("href")!.split("?")[1]).get("add"));
-    expect(targets).toEqual(["target", "host"]);
-    expect(tid("px-set-targets")!.textContent).toContain("helpdesk-ai-demo · Staging");
-    expect(tid("px-set-targets")!.textContent).toContain("a person approves");
+    // Screen 13: "Staging ✓ docker · port 8004" with its server's Infra drawer; Production "! no host yet · Pick host".
+    expect(tid("px-set-target-staging")!.textContent).toContain("docker · port 8004");
+    expect(new URLSearchParams(tid("px-set-host-staging")!.getAttribute("href")!.split("?")[1]).get("host")).toBe("dhost_1");
+    expect(tid("px-set-target-production")!.textContent).toContain("no host yet");
+    expect(new URLSearchParams(tid("px-set-pick-host")!.getAttribute("href")!.split("?")[1]).get("add")).toBe("target");
     expect(tid("px-set-repos")!.textContent).toContain("acme/helpdesk-ai-demo");
     expect(tid("px-set-autonomy")!.textContent).toContain("$5/day");
   });

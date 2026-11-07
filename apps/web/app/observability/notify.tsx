@@ -30,6 +30,7 @@ import { whenWord } from "./alerts-tab";
 import { obsWrite } from "./obs-write";
 import type { ObsTabProps } from "./obs-home";
 import { SevFlag } from "./severity";
+import { MovedToProjectSettings } from "../projects/moved";
 
 const VERIFY_TIP = "Unverified: high-urgency alerts skip it until it is verified with the code BOSS sent";
 const localZone = () => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"; } catch { return "UTC"; } };
@@ -591,6 +592,8 @@ export function NotifyTab({ projectId, actor }: ObsTabProps) {
   const cps = useContactPoints(projectId);
   return (
     <div className="obs-zone obs-notify" data-testid="obs-notify">
+      {/* Who is told about this project (Needs you, Incidents, PR ready) is on Project › Settings. */}
+      <MovedToProjectSettings section="notifications" projectId={projectId} testid="obs-notify-moved" />
       <ContactPoints projectId={projectId} actor={actor} cps={cps} refresh={cps.refresh} />
       <Policies projectId={projectId} actor={actor} cps={cps.data ?? []} />
       <RoutingPreview projectId={projectId} />
