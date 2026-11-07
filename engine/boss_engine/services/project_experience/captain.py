@@ -95,8 +95,11 @@ def squad(connection: Connection, project_id: str, roster: Mapping[str, Mapping[
             "GROUP BY role_key ORDER BY max(started_at) DESC NULLS LAST LIMIT 12"),
             {"p": project_id}).scalars().all()]
     if not keys:
-        keys = [k for k in ("product_manager", "software_engineer", "qa_engineer", "sre",
-                            "chief_of_staff") if k in roster]
+        # One per job (Plans · Builds · Tests · Deploys) from the roster's real role keys.
+        from .cards import CREW_SLOTS
+
+        keys = [k for k in (next((k for k in slot if k in roster), None) for slot in CREW_SLOTS)
+                if k]
     # Marshal (the Chief of Staff) is not in a project's squad: it ranks across projects and is
     # drawn apart (`ranker`), so "4 in squad" counts this project's own crew.
     room = limit
