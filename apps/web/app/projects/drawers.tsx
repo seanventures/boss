@@ -16,7 +16,7 @@ import {
 
 import { ATTEMPT_WORDS, KIND_WORDS, PX_PATHS, findWork, parseDeployments, pxHref, toTab, usePxRead, writePxUrl, type Deployments, type Onboarding, type WorkItem } from "../../lib/project-experience";
 import { FX_DEPLOYMENTS } from "../../lib/project-experience-fixtures";
-import { Drawer, Empty, Face, Flow, HEALTH_WORD, Ico, PxLink, STATE_WORD, Spark, Tag } from "./kit";
+import { Drawer, Empty, Face, Flow, HEALTH_WORD, Ico, PxLink, STATE_WORD, Spark, Tag, Cost } from "./kit";
 import { ActionButton } from "./tab-overview";
 import { DrawerAttempts } from "./tab-work";
 import { CaptainDrawer } from "./captain-drawer";
@@ -166,7 +166,7 @@ function WorkDrawer({ ctx, w, onClose }: { ctx: PxCtx; w: WorkItem; onClose: () 
     <Drawer title={w.label} icon={<Ico icon={w.state === "needs_you" ? GitPullRequest : w.state === "stalled" ? PauseCircle : FlowArrow} c={w.state === "needs_you" || w.state === "stalled" ? "amber" : "teal"} />} onClose={onClose} testid="px-drawer-work"
             sub={<><Tag>{KIND_WORDS[w.kind] ?? w.kind}</Tag>{w.state === "stalled" ? <Tag tone="amber">Stalled</Tag> : null}
               {story?.number ? <span className="px-mono" data-testid="px-drawer-work-number">Run #{story.number}</span> : null}
-              {w.cost_usd !== null ? <span className="px-mono">${w.cost_usd.toFixed(2)}</span> : null}
+              <Cost usd={w.cost_usd} list={w.list_usd} testid="px-drawer-work-cost" />
               {story?.minutes !== null && story?.minutes !== undefined ? <span className="px-mono">{story.minutes} min</span> : w.age ? <span className="px-mono">{w.age}</span> : null}</>}
             actions={full ? <a className="px-icon-btn" href={pxHref(full)} title={l.build ? "Open full page in Code Tasks" : "Open the workflow run"} aria-label="Open full page" data-testid="px-drawer-work-expand"><ArrowsOut size={15} /></a> : null}
             footer={<AskBox ctx={ctx} about={w.label} placeholder={`Ask ${ctx.overview.captain?.name ?? "BOSS"} about this work…`} />}>

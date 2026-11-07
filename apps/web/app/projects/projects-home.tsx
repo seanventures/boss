@@ -14,10 +14,10 @@ import { Folders, Plus } from "@phosphor-icons/react";
 
 import { GatedButton } from "../../components/gated";
 import {
-  PX_PATHS, navigateTo, parseSummary, projectHref, startOnboarding, usePxRead, type Node, type ProjectCard, type ProjectsSummary,
+  PX_PATHS, costWords, navigateTo, parseSummary, projectHref, startOnboarding, usePxRead, type Node, type ProjectCard, type ProjectsSummary,
 } from "../../lib/project-experience";
 import { FX_SUMMARY } from "../../lib/project-experience-fixtures";
-import { DemoBanner, Empty, Face, openAddProject, usePxUrl, HEALTH_WORD, Ico, Journey, Ring, Said, Spark, Tag } from "./kit";
+import { DemoBanner, Empty, Face, openAddProject, usePxUrl, HEALTH_WORD, Ico, Journey, Ring, Said, Spark, Tag, Cost } from "./kit";
 import { FirstRun } from "./first-run";
 import { StartProjectHost } from "../start-project/start-host";
 import "./px.css";
@@ -83,7 +83,7 @@ function ProjectsSkeleton() {
   );
 }
 
-const isWorking = (c: ProjectCard) => !c.archived && (c.stage === "working" || c.running > 0);
+const isWorking = (c: ProjectCard) => !c.archived && c.running > 0;
 const isOnboarding = (c: ProjectCard) => !c.archived && (c.onboarding_active || (c.stage === "onboarding" && c.status_label !== "Not onboarded"));
 
 function ProjectsList({ cards, note, cap, onRetry, onChanged }: {
@@ -98,6 +98,8 @@ function ProjectsList({ cards, note, cap, onRetry, onChanged }: {
   const needs = live.reduce((t, c) => t + c.needs_you, 0);
   const running = live.reduce((t, c) => t + c.running, 0);
   const cost = live.reduce((t, c) => t + (c.cost_week ?? 0), 0);
+  const listed = live.reduce((t, c) => t + (c.list_week ?? 0), 0);
+  const costSaid = costWords(cost, listed);
   const crew = live.flatMap((c) => c.crew).filter((g, i, all) => all.findIndex((x) => x.role_key === g.role_key) === i).slice(0, 4);
   const counts: Record<Filter, number> = {
     all: live.length, needs: live.filter((c) => c.needs_you > 0).length,
@@ -132,7 +134,7 @@ function ProjectsList({ cards, note, cap, onRetry, onChanged }: {
               onClick={running ? () => setFilter("working") : undefined}>
           {crew.length ? <span className="px-faces" data-testid="px-stat-running-faces">{crew.map((g) => <Face key={g.role_key} agent={g} size={22} state="working" />)}</span> : null}
         </Stat>
-        <Stat label="Cost · week" value={live.some((c) => c.cost_week !== null) ? `$${cost.toFixed(2)}` : "—"} testid="px-stat-cost"
+        <Stat label="Cost · week" value={costSaid ? costSaid.text + (costSaid.plan ? " · plan" : "") : live.some((c) => c.cost_week !== null) ? "$0.00" : "—"} testid="px-stat-cost"
               sub={cap ? `of $${cap % 1 ? cap.toFixed(2) : cap} cap` : undefined} />
       </div>
       <div className="px-filters" role="group" aria-label="Filter projects">
@@ -194,7 +196,9 @@ export function cardJourney(card: ProjectCard): Node[] {
   return [
     { key: "onboarding", label: "Onboard", state: card.onboarding_active ? "now" : pick("onboarding"), sub: "", href: "" },
     { key: "ready", label: "Ready", state: ready === "done" || by.working?.state === "done" || by.working?.state === "now" || by.working?.state === "waiting" ? "done" : ready, sub: "", href: "" },
-    { key: "working", label: "Working", state: by.working?.state === "waiting" ? "now" : pick("working"), sub: "", href: "" },
+    // Working pulses only while the card's work runs; a quiet project's work is done.
+    { key: "working", label: "Working", state: card.running > 0 || by.working?.state === "waiting" ? (pick("working") === "todo" ? "todo" : "now")
+        : pick("working") === "now" ? "done" : pick("working"), sub: "", href: "" },
     { key: "staging", label: "Deployed", state: deployed, sub: "", href: "" },
   ];
 }
@@ -204,12 +208,16 @@ export function ProjectCardView({ card, onChanged }: { card: ProjectCard; onChan
   const open = () => navigateTo(href);
   const [said, setSaid] = useState("");
   const deployed = card.journey.some((j) => (j.key === "staging" || j.key === "production") && j.state === "done");
+  // THE CHIP SAYS THE REAL STATE: Needs you · Onboarding · Working (only while something
+  // runs, teal and live) · Live · Idle — never "Working" over a card that says idle.
   const pill = card.needs_you ? <Tag tone="amber">{card.needs_you} need you</Tag>
     : card.onboarding_active ? <Tag tone="blue">Onboarding</Tag>
     : card.archived ? <Tag tone="idle">Archived</Tag>
+    : card.running > 0 ? <Tag tone="teal"><span className="px-dot" data-s="now" data-round aria-hidden />Working</Tag>
     : deployed ? <Tag tone="green">Live</Tag>
     : card.status_label === "Not onboarded" ? <Tag tone="idle">Not onboarded</Tag>
-    : <Tag tone={card.stage === "working" ? "green" : "blue"}>{card.status_label || "Ready"}</Tag>;
+    : card.status_label === "Idle" || card.stage === "working" ? <Tag tone="idle">Idle</Tag>
+    : <Tag tone="blue">{card.status_label || "Ready"}</Tag>;
   const startOnb = async () => {
     const r = await startOnboarding(card.id);
     setSaid(r.ok ? (r.demo ? "Sample mode — nothing was sent." : "Helm is reading it now.") : (r.error ?? "It didn't start."));
@@ -255,7 +263,7 @@ export function ProjectCardView({ card, onChanged }: { card: ProjectCard; onChan
         {card.crew.length ? <span className="px-faces" title={card.crew.map((g) => g.name).join(", ")} data-testid={`px-card-crew-${card.id}`}>
           {card.crew.map((g) => <Face key={g.role_key} agent={g} size={20} state="working" />)}</span> : null}
         <span className="px-spacer" />
-        {card.cost_week !== null ? <span className="px-mono">${card.cost_week.toFixed(2)}</span> : null}
+        <Cost usd={card.cost_week} list={card.list_week} testid={`px-card-cost-${card.id}`} />
       </div>
     </article>
   );

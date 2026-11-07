@@ -52,7 +52,7 @@ def stage_of(got: Mapping[str, bool], *, active: bool) -> str:
 
 def journey(project_id: str, got: Mapping[str, bool], stage: str, *, needs_you: int = 0,
             subs: Optional[Mapping[str, str]] = None, details: Optional[Mapping[str, str]] = None,
-            prod_waits: bool = False) -> list[dict[str, Any]]:
+            prod_waits: bool = False, active: bool = True) -> list[dict[str, Any]]:
     """The six stages. The current one is `now` (teal, pulsing) — work waiting on a person is
     said in its sub and the Needs-you card, not by locking the Working node; Production is
     `waiting` (amber, "needs you") whenever it waits on a person (staging is live, no prod
@@ -62,7 +62,9 @@ def journey(project_id: str, got: Mapping[str, bool], stage: str, *, needs_you: 
         if key == stage == "onboarding" and not got.get("_onboarding_running", True) \
                 and not got.get("onboarding"):
             state = "todo"
-        elif key == stage:
+        elif key == stage and (active or not got.get(key)):
+            # `now` pulses: only while something moves (work running or waiting on a person, an
+            # onboarding pass). A quiet project's furthest stage is done, not live.
             state = "now"
         elif got.get(key):
             state = "done"
@@ -445,7 +447,8 @@ def view(connection: Connection, project_id: str, *, now: Optional[datetime] = N
                     "archived": project["archived_at"] is not None},
         "journey": journey(project_id, facts["got"], stage,
                            needs_you=len(waiting), subs=subs, details=details,
-                           prod_waits=prod_waits),
+                           prod_waits=prod_waits,
+                           active=facts["active"] or bool(facts["got"].get("_onboarding_running"))),
         "needs_you": waiting,
         # The Roadmap tab's count: what is proposed or accepted and not done yet.
         "roadmap_count": int(connection.execute(text(
@@ -479,7 +482,11 @@ def _card_cost(connection: Connection, project_id: str, now: datetime) -> dict[s
             cost = _cost_week(connection, project_id, now)
     except Exception:  # noqa: BLE001 — the ledger unreadable: the card shows no cost, not an error
         return {"cost_week": None, "series": []}
-    return {"cost_week": cost["usd"], "series": cost["series"]}
+    # One presentation everywhere (cost_words): on a subscription the card says so, with the
+    # list price, never a bare $0.00.
+    return {"cost_week": cost["usd"], "series": cost["series"],
+            "on_subscription": cost.get("on_subscription", False),
+            "list_week": cost.get("list_usd"), "list_series": cost.get("list_series") or []}
 
 
 def summary(connection: Connection, project_ids: Iterable[str], *,
@@ -561,7 +568,8 @@ def summary(connection: Connection, project_ids: Iterable[str], *,
                 setup_n = len(setup_cards(connection, pid))
         except Exception:  # noqa: BLE001 — a card never fails over its setup line
             setup_n = 0
-        waiting = count_waiting_on_operator(connection, pid, now=now) + setup_n
+        decided = count_waiting_on_operator(connection, pid, now=now)
+        waiting = decided + setup_n
         live = int(run.get("live") or 0) + int(build.get("live") or 0)
         worked = int(run.get("total") or 0) + int(build.get("total") or 0) > 0
         non_prod = any(t["deployed"] and str(t["environment"]).lower() not in PRODUCTION
@@ -571,7 +579,10 @@ def summary(connection: Connection, project_ids: Iterable[str], *,
                       backlog=bool(onb.get("backlog")) or pid in recs or worked, worked=worked,
                       staging=non_prod, production=prod,
                       onboarding_running=onb.get("state") == "running")
-        stage = stage_of(got, active=bool(live or waiting) and worked)
+        # WORKING ONLY WHILE WORK MOVES: a running build or run, or work waiting on a person's
+        # decision. A setup card ("Pick a prod host") is Needs you, not work in progress.
+        moving = bool(live or decided) and worked
+        stage = stage_of(got, active=moving)
         health_words = ["healthy" if t["ok"] else "down" for t in tgs
                         if t["deployed"] and t["ok"] is not None]
         health = ("down" if "down" in health_words and "healthy" not in health_words else
@@ -593,6 +604,8 @@ def summary(connection: Connection, project_ids: Iterable[str], *,
         # that never ran one (or whose run ended) is "Not onboarded", with Start onboarding.
         onboarding_active = onb.get("state") == "running"
         status = STATUS_LABELS[stage]
+        if stage == "working" and not moving:
+            status = "Idle"
         if stage == "onboarding" and not onboarding_active:
             status = "Not onboarded" if onb.get("state") in (None, "not_started", "failed") \
                 else "Ready for work"
@@ -603,7 +616,8 @@ def summary(connection: Connection, project_ids: Iterable[str], *,
                                          {"href": f"/v1/projects/{pid}/onboarding/start",
                                           "method": "POST"}),
                     "journey": [{"key": j["key"], "label": j["label"], "state": j["state"]}
-                                for j in journey(pid, got, stage, needs_you=waiting)],
+                                for j in journey(pid, got, stage, needs_you=waiting,
+                                                 active=moving or onboarding_active)],
                     "needs_you": waiting, "running": live, "health": health, "live_url": url,
                     "captain": ({"name": f["name"], "role_key": f["role_key"],
                                  "avatar": f["avatar"], "agent_id": f.get("agent_id")}

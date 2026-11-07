@@ -14,7 +14,7 @@ import {
 
 import { GatedButton } from "../../components/gated";
 import { KIND_WORDS, WORK_ORDER, WORK_WORDS, navigateTo, pxHref, runAccept, startOnboarding, writePxUrl, type NextItem, type WorkItem } from "../../lib/project-experience";
-import { Empty, Face, Flow, HEALTH_WORD, Ico, Journey, PxLink, Ring, Said, Spark, Stations, Tag, Timeline } from "./kit";
+import { Empty, Face, Flow, HEALTH_WORD, Ico, Journey, PxLink, Ring, Said, Spark, Stations, Tag, Timeline, Cost } from "./kit";
 import { DemoLoginRow } from "./tab-settings";
 import { P95_SOURCE } from "./tab-deployments";
 import { whenLocal } from "../../lib/local-time";
@@ -240,7 +240,7 @@ function MiniRow({ w, ctx }: { w: WorkItem; ctx: PxCtx }) {
       <span style={{ minWidth: 0 }}>
         <button type="button" className="px-wk-t px-ell" style={{ display: "block", maxWidth: "100%" }} title={w.detail || w.label} onClick={(e) => { e.stopPropagation(); open(); }}>{w.label}</button>
         <span className="px-wk-sub"><span>{w.state === "stalled" ? "Stalled" : w.links.pr ? `PR #${w.links.pr.number}` : KIND_WORDS[w.kind] ?? w.kind}</span>{w.age ? <span className="px-mono">{w.age}</span> : null}
-          {w.cost_usd !== null ? <span className="px-mono">${w.cost_usd.toFixed(2)}</span> : null}</span>
+          <Cost usd={w.cost_usd} list={w.list_usd} /></span>
       </span>
       <span className="px-hide-phone">{w.flow.length ? <Flow nodes={w.flow.map((f) => ({ label: f.label, state: f.state, type: f.state }))} /> : <Stations stages={w.stages} />}</span>
       <span className="px-hide-phone"><FacesInline w={w} /></span>

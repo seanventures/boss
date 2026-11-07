@@ -15,7 +15,7 @@ import {
 
 import { AgentAvatar } from "../agent-avatar";
 import { useWrapMarks } from "../../lib/wrap-flow";
-import { isExternal, pxHref, readPxUrl, writePxUrl, type Agent, type Health, type Node, type PxUrl, type ReadState, type StepState } from "../../lib/project-experience";
+import { costWords, isExternal, pxHref, readPxUrl, writePxUrl, type Agent, type Health, type Node, type PxUrl, type ReadState, type StepState } from "../../lib/project-experience";
 
 export type Tone = "teal" | "green" | "amber" | "red" | "violet" | "blue";
 
@@ -24,7 +24,7 @@ export function Ico({ icon: I, c = "blue", size }: { icon: Icon; c?: Tone; size?
   return <span className="px-ico" data-c={c} data-size={size} aria-hidden><I size={size === "l" ? 22 : 16} weight="duotone" /></span>;
 }
 
-export function Tag({ tone, children, title }: { tone?: "green" | "amber" | "red" | "blue" | "violet" | "cost" | "idle"; children: React.ReactNode; title?: string }) {
+export function Tag({ tone, children, title }: { tone?: "green" | "amber" | "red" | "blue" | "violet" | "cost" | "idle" | "teal"; children: React.ReactNode; title?: string }) {
   return <span className="px-tag" data-tone={tone} title={title}>{children}</span>;
 }
 
@@ -357,4 +357,15 @@ export function usePxUrl(): PxUrl {
     return () => window.removeEventListener("popstate", read);
   }, []);
   return url;
+}
+
+/** What work cost, said one way everywhere (costWords): "$2.10", or "≈ $2.10" + the plan marker. */
+export function Cost({ usd, list, testid, empty }: { usd: number | null | undefined; list?: number | null; testid?: string; empty?: string }) {
+  const c = costWords(usd, list);
+  if (!c) return empty ? <span className="px-faint" style={{ fontSize: ".58rem" }} data-testid={testid}>{empty}</span> : null;
+  return (
+    <span className="px-mono px-cost" data-plan={c.plan ? "" : undefined} title={c.title} data-testid={testid}>
+      {c.text}{c.plan ? <span className="px-cost-plan" aria-label="on subscription">plan</span> : null}
+    </span>
+  );
 }

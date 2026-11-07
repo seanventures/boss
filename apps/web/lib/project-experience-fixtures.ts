@@ -205,6 +205,7 @@ export const FX_DEPLOYMENTS = {
               { label: "Smoke test", state: "done" }, { label: "Prod · you approve", state: "waiting" }],
   environments: [{ key: "staging", label: "Staging", url: "http://203.0.113.20:8004", health: "healthy", host: "203.0.113.20",
                    host_href: "?area=infra&host=h_202", uptime_pct: 99.9, p95_ms: 180, error_rate: 0.1,
+                   hours: Array.from({ length: 24 }, (_, i) => ({ at: new Date(Date.UTC(2026, 10, 6, i)).toISOString(), n: 12, ok: i === 14 ? 9 : 12, state: i === 14 ? "degraded" : "healthy" })),
                    series: [1, 1, 1, 1, 1, 1, 1, 1, 0.6, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
                    last_deploy: { commit: "a41c9e2", at: "2h ago", by: "Beacon", label: "PR #2", href: href({ tab: "deployments", drawer: "deploy:dep_2" }) },
                    demo_logins: [{ user: "admin@helpdesk.demo", label: "Admin", reveal: { href: "/v1/apps/helpdesk/demo-logins?project_id=helpdesk-ai-demo&env=deploy", requires: "step_up" } },

@@ -22,12 +22,61 @@ PRODUCTION = ("production", "prod")
 def _last_deploys(connection: Connection, target_ids: list[str]) -> dict[str, dict[str, Any]]:
     if not target_ids:
         return {}
+    # WHAT IS LIVE, AND SINCE WHEN. The newest LIVE deploy by the time it went live — not the
+    # newest row: a re-observation or a backfill writes a row for a commit already live, and its
+    # write time said "Last deploy PR #3 · 1m ago" beside History's real "Fri 10:55". A target
+    # with nothing live yet shows its newest attempt.
     rows = connection.execute(text(
         "SELECT DISTINCT ON (target_id) id, target_id, commit_sha, ref, status, created_by, "
         "created_at, finished_at, open_url, workflow_run_id FROM stack_deployments "
-        "WHERE target_id = ANY(:ids) ORDER BY target_id, created_at DESC"),
+        "WHERE target_id = ANY(:ids) "
+        "ORDER BY target_id, (status = 'healthy') DESC, COALESCE(finished_at, created_at) DESC"),
         {"ids": target_ids}).mappings().all()
-    return {str(r["target_id"]): dict(r) for r in rows}
+    out = {str(r["target_id"]): dict(r) for r in rows}
+    live = [(t, str(d["commit_sha"] or "")) for t, d in out.items()
+            if d["status"] == "healthy" and d["commit_sha"]]
+    for target, sha in live:
+        first = connection.execute(text(
+            "SELECT id, created_by, COALESCE(finished_at, created_at) AS at FROM stack_deployments "
+            "WHERE target_id = :t AND commit_sha = :c AND status = 'healthy' "
+            "ORDER BY COALESCE(finished_at, created_at) LIMIT 1"),
+            {"t": target, "c": sha}).mappings().first()
+        if first:
+            out[target]["live_at"] = first["at"]
+            out[target]["first_id"] = first["id"]
+            out[target]["first_by"] = first["created_by"]
+    return out
+
+
+def hourly(connection: Connection, target_ids: list[str], now: Any = None
+           ) -> dict[str, list[dict[str, Any]]]:
+    """THE 24 H STRIP (08-08): per target, 24 hourly bars, oldest first — each hour's probes,
+    the share that answered, and its state: `healthy`, `degraded` (some failed), `down` (most
+    failed) or `none` (no probe that hour, never a false healthy)."""
+    from datetime import datetime, timedelta, timezone
+
+    now = now or datetime.now(timezone.utc)
+    end = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+    start = end - timedelta(hours=24)
+    out: dict[str, list[dict[str, Any]]] = {}
+    for t in target_ids:
+        out[t] = [{"at": iso(start + timedelta(hours=i)), "n": 0, "ok": 0, "state": "none"}
+                  for i in range(24)]
+    if not target_ids:
+        return out
+    for r in connection.execute(text(
+            "SELECT deployment_target_id AS t, floor(extract(epoch FROM (checked_at - :s)) / 3600) "
+            "AS h, count(*) AS n, sum(CASE WHEN ok THEN 1 ELSE 0 END) AS okn "
+            "FROM deployment_health_samples WHERE deployment_target_id = ANY(:ids) "
+            "AND checked_at >= :s AND checked_at < :e GROUP BY 1, 2"),
+            {"ids": target_ids, "s": start, "e": end}).mappings():
+        i = int(r["h"])
+        if 0 <= i < 24:
+            n, ok = int(r["n"]), int(r["okn"] or 0)
+            share = ok / n if n else 0
+            out[str(r["t"])][i].update(n=n, ok=ok, state=(
+                "healthy" if share >= 0.99 else "down" if share < 0.5 else "degraded"))
+    return out
 
 
 #: A deploy's state in words (the raw status stays in `status`): Infra's own reading
@@ -172,6 +221,7 @@ def view(connection: Connection, project_id: str) -> dict[str, Any]:
 
     same = {e["target_id"]: e for e in health_environments(connection, project_id)}
     last = _last_deploys(connection, [t["id"] for t in targets])
+    hours = hourly(connection, [t["id"] for t in targets])
     prs = _pr_by_commit(connection, project_id)
     host_ids = sorted({str(t["host_id"]) for t in targets if t["host_id"]})
     shared = {str(r["host_id"]): int(r["n"]) for r in connection.execute(text(
@@ -203,6 +253,8 @@ def view(connection: Connection, project_id: str) -> dict[str, Any]:
             # The 24 h strip: each point's share of good answers (1 = all good).
             "series": [round(max(0.0, 1 - float(v) / 100.0), 3)
                        for v in ((one.get("series") or {}).get("errors") or [])],
+            # 24 hourly bars from the probes (oldest first): healthy · degraded · down · none.
+            "hours": hours.get(t["id"]) or [],
             "host": t["host_address"] or t["host_name"], "host_status": t["host_status"],
             "host_name": host_label(t["host_name"], t["host_address"], t["environment"]),
             "host_projects": shared.get(str(t["host_id"]), 1) if t["host_id"] else None,
@@ -212,10 +264,12 @@ def view(connection: Connection, project_id: str) -> dict[str, Any]:
             "last_deploy": ({"commit": (d["commit_sha"] or "")[:7] or None, "status": d["status"],
                              "pr": (prs.get(str(d["commit_sha"] or "")) or {}).get("number"),
                              "pr_url": (prs.get(str(d["commit_sha"] or "")) or {}).get("url"),
-                             "at": iso(d["finished_at"] or d["created_at"]),
-                             "by": _who_name(connection, d["created_by"]),
+                             # When it went live (the first live row of this commit).
+                             "at": iso(d.get("live_at") or d["finished_at"] or d["created_at"]),
+                             "by": _who_name(connection, d.get("first_by") or d["created_by"]),
                              "href": href(project_id, area="infra", view="deploys",
-                                          deploy=f"stack:{d['id']}")} if d else None),
+                                          deploy=f"stack:{d.get('first_id') or d['id']}")}
+                            if d else None),
             "demo_logins": by_env.get(t["environment"]) or [],
             "policy": "person" if is_prod or not t["auto_deploy"] else "auto",
             "paused": bool(t["paused"]),

@@ -24,7 +24,7 @@ import {
 } from "../../lib/project-experience";
 import { FX_DEPLOYMENTS } from "../../lib/project-experience-fixtures";
 import { whenLocal } from "../../lib/local-time";
-import { Empty, Face, Flow, HEALTH_TONE, HEALTH_WORD, PxLink, Ring, Said, Spark, STAGE_ICON, STATE_WORD, Stations, Tag } from "./kit";
+import { Empty, Face, Flow, HEALTH_TONE, HEALTH_WORD, PxLink, Ring, Said, Spark, STAGE_ICON, STATE_WORD, Stations, Tag, Cost } from "./kit";
 import type { PxCtx } from "./project-page";
 
 // ── 05b ─────────────────────────────────────────────────────────────────────────────────────
@@ -111,7 +111,7 @@ export function WorkStoryBody({ ctx, w, story }: { ctx: PxCtx; w: WorkItem; stor
                 </span>
                 <small className="px-faint" style={{ fontSize: ".54rem" }}>{parts.map((p) => p.label).join(" · ")}</small>
               </>
-            ) : <span className="px-faint" style={{ fontSize: ".58rem" }}>{w.cost_usd !== null ? `$${w.cost_usd.toFixed(2)}` : "No spend yet"}</span>}
+            ) : <Cost usd={w.cost_usd} list={w.list_usd} empty="No spend yet" />}
           </div>
         </div>
       ) : null}

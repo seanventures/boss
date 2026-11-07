@@ -27,6 +27,9 @@ const BEACON = { name: "Beacon", role_key: "sre" };
 const HIST_WORD: Record<string, string> = { failed: "Failed", waiting: "Needs you", now: "Deploying", skipped: "Not approved", todo: "Queued" };
 export const P95_SOURCE: Record<string, string> = { app: "p95 from the app's own requests (24 h)", probe: "p95 from BOSS's health probe (24 h)" };
 
+/** "14:00" in the viewer's zone. */
+const hourLocal = (iso: string) => { try { return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); } catch { return iso; } };
+
 /** "Wed 16:40" in the viewer's zone (a week's history reads by weekday), else "Nov 2". */
 export function dayTime(at: string): string {
   const d = new Date(at);
@@ -151,9 +154,16 @@ function EnvCard({ e, ctx }: { e: Environment; ctx: PxCtx }) {
         {e.uptime_pct !== null ? <Ring pct={e.uptime_pct} tone={e.health === "healthy" ? "green" : "amber"} size="l" label={`Uptime ${e.uptime_pct}%`}>{Math.round(e.uptime_pct * 10) / 10}%</Ring> : null}
         <div style={{ flex: 1, minWidth: 0 }}>
           <span className="px-lbl">24h</span>
-          {e.series.length ? (
-            <div className="px-health" role="img" aria-label="Health over the last 24 hours">
-              {e.series.map((b, i) => <span key={i} style={{ height: `${Math.max(20, b * 100)}%` }} data-s={b < 0.5 ? "bad" : b < 0.95 ? "warn" : undefined} />)}
+          {e.hours.some((h) => h.n > 0) ? (
+            // A TRUE 24 H STRIP: one bar per hour, oldest first; amber for an hour with failed
+            // checks, red for a down hour, faint for an hour with no check (never a false green).
+            <div className="px-health" data-hourly role="img" data-testid={`px-env-hours-${e.key}`}
+                 aria-label={`Health by hour, last 24 hours: ${e.hours.filter((h) => h.state === "healthy").length} healthy, ${e.hours.filter((h) => h.state === "degraded").length} degraded, ${e.hours.filter((h) => h.state === "down").length} down`}>
+              {e.hours.map((h, i) => (
+                <span key={i} data-s={h.state === "down" ? "bad" : h.state === "degraded" ? "warn" : h.state === "none" ? "none" : undefined}
+                      style={{ height: h.state === "none" ? "20%" : `${Math.max(30, h.n ? (100 * h.ok) / h.n : 0)}%` }}
+                      title={`${hourLocal(h.at)} · ${h.n ? `${h.ok} of ${h.n} checks answered` : "no check"}`} />
+              ))}
             </div>
           ) : <div className="px-faint" style={{ fontSize: ".56rem" }}>No checks yet</div>}
         </div>

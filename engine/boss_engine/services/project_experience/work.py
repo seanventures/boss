@@ -407,6 +407,7 @@ def _attempt_item(project_id: str, r: Mapping[str, Any], costs: Mapping[str, int
         "created_at": iso(r.get("created_at")), "updated_at": iso(r.get("updated_at")),
         "stalled_since": iso(r.get("_since")) if state == "stalled" else None,
         "cost_usd": round(costs.get(str(r["id"]), 0) / 1_000_000, 2),
+        "list_usd": list_usd(costs, [str(r["id"])]),
         "pr": ({"number": r.get("pull_request_number") or pr_number(pr_url),
                 "external_url": pr_url} if pr_url else None),
         "build": href(project_id, area="code_tasks", view="apps", build=r["id"]),
@@ -429,17 +430,35 @@ def _group_fields(project_id: str, members: list[dict[str, Any]], root_id: str,
             "latest": latest}
 
 
-def _cost(connection: Connection, build_ids: list[str]) -> dict[str, int]:
-    """Money (micros) per build from llm_calls (a subscription's calls are $0)."""
-    from ..included_spend import LLM_MONEY_SQL
+class Costs(dict):
+    """Money (micros) per build, and `included`: what a subscription's calls would have cost at
+    list price, per build — never money, but never a bare $0.00 either (cost_words)."""
+
+    def __init__(self, money: dict[str, int], included: dict[str, int]):
+        super().__init__(money)
+        self.included = included
+
+
+def _cost(connection: Connection, build_ids: list[str]) -> Costs:
+    """Money (micros) per build from llm_calls (a subscription's calls are $0), with the list
+    price of the included calls beside it."""
+    from ..included_spend import LLM_INCLUDED_SQL, LLM_MONEY_SQL
 
     if not build_ids:
-        return {}
+        return Costs({}, {})
     rows = connection.execute(text(
-        f"SELECT code_task_run_id AS b, sum({LLM_MONEY_SQL}) AS m FROM llm_calls "
-        "WHERE code_task_run_id = ANY(:ids) GROUP BY code_task_run_id"),
+        f"SELECT code_task_run_id AS b, sum({LLM_MONEY_SQL}) AS m, sum({LLM_INCLUDED_SQL}) AS i "
+        "FROM llm_calls WHERE code_task_run_id = ANY(:ids) GROUP BY code_task_run_id"),
         {"ids": build_ids}).mappings().all()
-    return {str(r["b"]): int(r["m"] or 0) for r in rows}
+    return Costs({str(r["b"]): int(r["m"] or 0) for r in rows},
+                 {str(r["b"]): int(r["i"] or 0) for r in rows})
+
+
+def list_usd(costs: Mapping[str, int], ids: Iterable[str]) -> Optional[float]:
+    """The list price of the subscription calls of these builds, in dollars (None when none)."""
+    included = getattr(costs, "included", {}) or {}
+    micros = sum(int(included.get(str(i), 0)) for i in ids)
+    return round(micros / 1_000_000, 2) if micros else None
 
 
 def _deploys(connection: Connection, project_id: str, run_ids: list[str]) -> dict[str, dict]:
@@ -623,6 +642,8 @@ def _run_items(connection: Connection, project_id: str, limit: int,
             "action_label": ("Merge" if merge is not None and gate is None
                              else _gate_word(spec, gate_id) if gate is not None else None),
             "agents": faces[:4], "cost_usd": round(cost / 1_000_000, 2),
+            # On a subscription the money is $0; the work still has a list price (cost_words).
+            "list_usd": list_usd(costs, [str(b["id"]) for b in members]),
             "links": {
                 "workflow_run": href(project_id, area="delivery_workflows", wfr=rid),
                 "build": href(project_id, area="code_tasks", view="apps", build=build["id"])
@@ -689,6 +710,7 @@ def _build_items(connection: Connection, project_id: str,
             "stages": strip,
             "agents": [builder] if builder else [],
             "cost_usd": round(sum(costs.get(str(m["id"]), 0) for m in members) / 1_000_000, 2),
+            "list_usd": list_usd(costs, [str(m["id"]) for m in members]),
             "links": {"workflow_run": href(project_id, area="delivery_workflows", wfr=root["wfr"])
                       if root.get("wfr") else None,
                       "build": href(project_id, area="code_tasks", view="apps", build=latest["id"]),

@@ -71,6 +71,8 @@ export type ProjectCard = {
   id: string; name: string; initials: string; repo: string; stage: Stage; journey: Node[];
   needs_you: number; running: number; health: Health; live_url: string; captain: Agent | null;
   updated_at: string; href: string; cost_week: number | null; series: number[];
+  /** On a subscription: the week at list price (cost_words), never a bare $0.00. */
+  on_subscription?: boolean; list_week?: number | null;
   /** Screen 02 (cards.extras): the ring's number, the two status lines, the live crew. */
   status_label: string; onboarding_active: boolean; start_onboarding: Accept | null; archived: boolean;
   uptime_pct: number | null; onboarding_progress: [number, number] | null; lines: string[]; line_tone: string;
@@ -88,6 +90,8 @@ export type NeedsYou = {
 export type WorkItem = {
   id: string; label: string; kind: string; state: WorkState; age: string;
   stages: { key: string; label: string; state: StepState }[]; agents: Agent[]; cost_usd: number | null;
+  /** What the subscription calls would have cost at list price (costWords). */
+  list_usd?: number | null;
   links: { workflow_run: string; build: string; pr: { number: number; external_url: string } | null; deploy: string; preview: string; decision: string };
   detail: string; href: string; source: string;
   /** "Build" | "Workflow" | "Roadmap": the human word for `source` (never the raw string). */
@@ -116,7 +120,7 @@ export type WorkIssue = { provider: string; number: number | null; label: string
 export type Attempt = {
   id: string; label: string; kind: "build" | "retry" | "followup"; title: string;
   state: AttemptState; status: string; created_at: string; stalled_since: string;
-  cost_usd: number | null; pr: { number: number; external_url: string } | null; build: string; href: string;
+  cost_usd: number | null; list_usd?: number | null; pr: { number: number; external_url: string } | null; build: string; href: string;
 };
 export type AttemptState = (typeof ATTEMPT_STATES)[number];
 /** How an item is accepted (§2/§14): the roadmap's accept, or THE start door with its body. */
@@ -180,6 +184,8 @@ export type Environment = {
   p95_source?: string;
   uptime_pct: number | null; p95_ms: number | null;
   error_rate: number | null; series: number[];
+  /** 24 hourly bars, oldest first (08-08): each hour's probes and its state. */
+  hours: { at: string; n: number; ok: number; state: "healthy" | "degraded" | "down" | "none" }[];
   last_deploy: { commit: string; at: string; by: string; label: string; href: string; pr: number | null; pr_url: string } | null;
   demo_logins: DemoLogin[]; policy: "auto" | "person"; href: string;
 };
@@ -268,6 +274,7 @@ export const parseCard = (v: unknown): ProjectCard => {
     live_url: s(x.live_url), captain: parseAgent(x.captain), updated_at: s(x.updated_at), href: s(x.href),
     // `cost_week` is the week's dollars (a number); an object {usd} is read the same way.
     cost_week: nn(x.cost_week) ?? nn(o(x.cost_week).usd), series: nums(x.series).length ? nums(x.series) : nums(o(x.cost_week).series),
+    on_subscription: x.on_subscription === true, list_week: nn(x.list_week),
     status_label: s(x.status_label), onboarding_active: x.onboarding_active === true, archived: x.archived === true,
     start_onboarding: parseAccept(x.start_onboarding),
     uptime_pct: nn(x.uptime_pct),
@@ -285,7 +292,7 @@ export const parseWorkItem = (v: unknown): WorkItem => {
   return {
     id: s(x.id), label: s(x.label), kind: s(x.kind, "feature"), state: oneOf(x.state, WORK_STATES, "planned"), age: s(x.age),
     stages: a(x.stages).map((st) => ({ key: s(o(st).key), label: s(o(st).label), state: oneOf(o(st).state, STEP_STATES, "todo") })),
-    agents: agents(x.agents), cost_usd: nn(x.cost_usd),
+    agents: agents(x.agents), cost_usd: nn(x.cost_usd), list_usd: nn(x.list_usd),
     links: { workflow_run: s(l.workflow_run), build: s(l.build), deploy: s(l.deploy), preview: s(l.preview), decision: s(l.decision),
              pr: pr.number || pr.external_url ? { number: n(pr.number), external_url: s(pr.external_url) } : null },
     detail: s(x.detail), href: s(x.href), source: s(x.source),
@@ -321,14 +328,14 @@ const parseAttempt = (v: unknown): Attempt => {
   return {
     id: s(x.id), label: s(x.label, "Build"), kind: oneOf(x.kind, ["build", "retry", "followup"] as const, "build"), title: s(x.title),
     state: oneOf(x.state, ATTEMPT_STATES, "done"), status: s(x.status), created_at: s(x.created_at), stalled_since: s(x.stalled_since),
-    cost_usd: nn(x.cost_usd), pr: pr.number || pr.external_url ? { number: n(pr.number), external_url: s(pr.external_url) } : null,
+    cost_usd: nn(x.cost_usd), list_usd: nn(x.list_usd), pr: pr.number || pr.external_url ? { number: n(pr.number), external_url: s(pr.external_url) } : null,
     build: s(x.build), href: s(x.href),
   };
 };
 /** The work item an attempt opens in the drawer: the group's row, seen as that one attempt. */
 export function attemptAsItem(w: WorkItem, t: Attempt): WorkItem {
   return {
-    ...w, id: t.id, label: t.label, run_number: null, created_at: t.created_at, state: t.state === "handed_on" ? "failed" : t.state, cost_usd: t.cost_usd,
+    ...w, id: t.id, label: t.label, run_number: null, created_at: t.created_at, state: t.state === "handed_on" ? "failed" : t.state, cost_usd: t.cost_usd, list_usd: t.list_usd ?? null,
     stalled_since: t.stalled_since, detail: t.title || w.detail, attempts: [], attempt_count: 1, followups: 0, retries: 0,
     links: { ...w.links, build: t.build, pr: t.pr, preview: "", decision: t.state === "needs_you" ? w.links.decision : "" },
     href: t.href,
@@ -521,6 +528,8 @@ export const parseDeployments = (v: unknown): Deployments => {
                host_href: s(y.host_href), target_id: s(y.target_id), app: s(y.app), manage_href: s(y.manage_href),
                host_name: s(y.host_name) || s(y.host), host_projects: nn(y.host_projects), p95_source: s(y.p95_source),
                uptime_pct: nn(y.uptime_pct), p95_ms: nn(y.p95_ms), error_rate: nn(y.error_rate), series: nums(y.series),
+               hours: a(y.hours).map((h) => { const z = o(h); return { at: s(z.at), n: n(z.n), ok: n(z.ok),
+                 state: oneOf(z.state, ["healthy", "degraded", "down", "none"] as const, "none") }; }),
                last_deploy: Object.keys(ld).length ? { commit: s(ld.commit), at: s(ld.at), by: s(ld.by), pr: nn(ld.pr), pr_url: s(ld.pr_url),
                                                        label: s(ld.label) || (nn(ld.pr) ? `PR #${nn(ld.pr)}` : s(ld.commit)), href: s(ld.href) } : null,
                demo_logins: a(y.demo_logins).map(parseLogin), policy: y.policy === "person" ? "person" : "auto", href: s(y.href) };
@@ -1056,4 +1065,21 @@ export function reRank(planned: WorkItem[], id: string, to: number): { order: Wo
   const lane: PlanLane = boundary ? "next" : ((after ?? prev)?.lane || "next") as PlanLane;
   const before = boundary ? undefined : after?.id;
   return { order: order.map((w) => (w.id === id ? { ...w, lane } : w)), lane, ...(before ? { before } : {}) };
+}
+
+/**
+ * ONE WAY TO SAY WHAT WORK COST, everywhere (Overview tile, Recent work, Work rows, the work
+ * drawer, Projects cards): money as "$2.10"; work that ran on a subscription as "≈ $2.10" at
+ * list price with the plan marker ("On subscription · ≈ $2.10 at list price"), never a bare
+ * "$0.00". Null when there is nothing to say (no spend and no list price).
+ */
+export function costWords(usd: number | null | undefined, list?: number | null): { text: string; title: string; plan: boolean } | null {
+  const money = typeof usd === "number" && usd > 0 ? usd : 0;
+  const listed = typeof list === "number" && list > 0 ? list : 0;
+  if (money > 0) {
+    return { text: `$${money.toFixed(2)}`, plan: false,
+             title: listed ? `$${money.toFixed(2)} billed · plus ≈ $${listed.toFixed(2)} on your subscription at list price` : `$${money.toFixed(2)} billed` };
+  }
+  if (listed > 0) return { text: `≈ $${listed.toFixed(2)}`, plan: true, title: `On subscription · ≈ $${listed.toFixed(2)} at list price (no money spent)` };
+  return null;
 }

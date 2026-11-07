@@ -27,7 +27,7 @@ import {
 } from "../../lib/project-experience";
 import { FX_WORK_PLAN } from "../../lib/project-experience-fixtures";
 import { localWith, stampLocal, whenLocal } from "../../lib/local-time";
-import { Empty, Face, Flow, Ico, Loading, Failed, EngineNotReady, PxLink, Said, Stations } from "./kit";
+import { Empty, Face, Flow, Ico, Loading, Failed, EngineNotReady, PxLink, Said, Stations, Cost } from "./kit";
 import type { PxCtx } from "./project-page";
 import "./work.css";
 
@@ -493,7 +493,7 @@ export function WorkRow({ w, ctx, fresh = false, rank = null }: { w: WorkItem; c
               : w.state === "planned" ? (w.next_up ? <span data-testid={`px-work-next-${w.id}`}>Next up</span> : null)
               : w.state === "done" || w.state === "failed" ? <span>{doneDay(w)}</span>
               : w.state === "stalled" ? null : w.age ? <span>{w.age}</span> : null}
-            {w.cost_usd !== null && (w.cost_usd > 0 || (w.state !== "planned" && !setup)) ? <span className="px-mono">${w.cost_usd.toFixed(2)}</span> : null}
+            <Cost usd={w.cost_usd} list={w.list_usd} testid={`px-work-cost-${w.id}`} />
           </span>
         </span>
         {w.flow.length ? (
@@ -565,7 +565,7 @@ function AttemptRow({ t, ctx }: { t: Attempt; ctx: PxCtx }) {
       <span className="px-tag" data-tone={t.state === "stalled" || t.state === "needs_you" ? "amber" : t.state === "failed" ? "red" : t.state === "done" ? "green" : t.state === "running" ? "blue" : "idle"}
             title={t.state === "handed_on" ? "Its checks failed; the repair continued in the next attempt." : t.stalled_since ? `No progress since ${stampLocal(t.stalled_since)}` : undefined}>
         {ATTEMPT_WORDS[t.state]}</span>
-      <span className="px-mono px-faint px-hide-phone">{t.cost_usd !== null ? `$${t.cost_usd.toFixed(2)}` : ""}</span>
+      <span className="px-faint px-hide-phone"><Cost usd={t.cost_usd} list={t.list_usd} /></span>
       <span className="px-row" style={{ gap: 4, justifyContent: "flex-end" }}>
         {t.pr ? <PxLink href={t.pr.external_url} testid={`px-attempt-pr-${t.id}`}><GitPullRequest size={11} aria-hidden /> #{t.pr.number}</PxLink> : null}
         <button type="button" className="px-btn" data-size="s" onClick={() => ctx.open("work", t.id)} data-testid={`px-attempt-open-${t.id}`}>Open</button>
