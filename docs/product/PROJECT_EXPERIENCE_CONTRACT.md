@@ -297,6 +297,39 @@ Every shape above is served as written; these are the extra fields and the decis
   `decisions&decision=`, `infra&view=deploys&deploy=`, `agent_ops&item=`, `meetings&meeting=`.
   `area=project` / `area=projects` are the console's new ids (§10).
 
+- **Page in words (2026-11-07, GAPS 4–17).**
+  - **Titles.** Every `label` of a piece of work is `titles.short_title` (a stored short title,
+    else the brief's lead clause by rule, ≤ 6 words, never a cut sentence); `title` keeps the
+    full text. New work stores that short title.
+  - **Needs you.** Built from the decision's data (`needs.py`): a stack deploy is "Deploy PR #3 to
+    Staging" (mini: `PR #3 merged → Staging · you → Smoke test`), a PR question "Merge PR #3"
+    (`Tests N → Review → Merge`); `action.href` opens the work's drawer (Review PR) or the card's
+    `needs:` drawer, `action.approvals_href` is Approvals. `needs.setup_cards` (onboarding's
+    only-you items + `prod:host` "Pick a prod host", `icon: cloud`) is the ONE list of setup items:
+    Overview `needs_you`, the Projects card's `needs_you` and `/v1/agents/live` `attention.count`
+    (now decisions + setup, with `decisions` and `setup` beside it) all count it. Labels may be 5
+    words ("Deploy PR #5 to Staging").
+  - **Superseded deploys.** `cleared_causes` withdraws a `deploy_stack` question once a later
+    deploy went live on its target (or, for a workflow, the same commit is already live); the
+    request is closed `rejected` with "Superseded …", its parked step follows the live deploy, and
+    Infra reads it as Superseded.
+  - **Overview.** `journey[].detail` (tooltip); Production is `waiting` ("needs you") when staging
+    is live and prod has no host; Onboarded is `todo` ("Not started") when onboarding never ran.
+    `week[]` ≤ 6 points oldest first, one per PR / deploy, ideas as "Plan agreed" with `detail`.
+    `next[]` ≤ 3 (accepted first with `accepted: true`, no accept). `tiles.running.current.sub`
+    ("Building · 12m"), `tiles.staging.p95_source` (`app|probe`), `tiles.cost_week.on_subscription`,
+    `list_usd`, `list_series`. `roadmap_count`. `recent_work` lists moved work before planned.
+  - **Deployments.** Uptime and p95 come from Health's environments (one number); env adds
+    `host_name`, `host_projects`, `p95_source`, `error_rate`, `series` (24 h, 0–1), `last_deploy.pr`
+    / `pr_url`; `history[]` adds `state_word`, `tone`, `state` (`done|failed|waiting|now|skipped|
+    recovered`), `recovered`, `title`, `duration`, `smoke`, `reason`, `by` (a name), `by_agent`;
+    superseded requests are left out. Deploy links are Infra stack refs (`deploy=stack:<id>`; a bare
+    `sdep_…` is read as one too). Every app address carries a scheme (`common.web_url`).
+  - **Demo users.** A deploy whose boss.deploy.yaml names none records the users found in the app's
+    seed / login files at that commit (`demo_logins_from: repository`); a one-time backfill names
+    them for apps deployed earlier. GET `/v1/identity/github/signin` and `/reach` are
+    `authenticated:self` (your own status; no step-up).
+
 ## 15. Models and GitHub accounts are global
 
 Models and GitHub accounts are workspace settings (Setup › Models, Setup › GitHub, routing in Setup › Advanced). The project page never offers a model or account picker. The first-run checklist starts at "Add project"; above it a read-only "Workspace ready" row shows GitHub ✓ and Model ✓ with links to the global pages. If either is missing, "Only you can" shows a card linking to the global page. Onboarding's model check is read-only.
