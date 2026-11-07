@@ -222,6 +222,15 @@ def test_going_live_withdraws_the_requests_it_overtook(engine, helpdesk):
         assert did in on_deploy_healthy(c, helpdesk["id"])
 
 
+def test_the_card_the_page_and_the_bell_count_the_same_needs_you(world, client, engine, helpdesk):
+    o = _get(world, client, f"/v1/projects/{helpdesk['id']}/overview")
+    card = next(i for i in _get(world, client, "/v1/projects/summary")["items"]
+                if i["id"] == helpdesk["id"])
+    with world.acting_as(world.ctx(world.owner)):
+        live = client.get("/v1/agents/live", params={"project_id": helpdesk["id"]}).json()
+    assert card["needs_you"] == len(o["needs_you"]) == live["attention"]["count"]
+
+
 # ── This week, Journey, What's next ─────────────────────────────────────────────────────────
 
 def test_this_week_is_one_point_per_thing_oldest_first(world, client, engine, helpdesk):

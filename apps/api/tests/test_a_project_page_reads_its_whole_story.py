@@ -73,7 +73,8 @@ def test_the_projects_list_shows_the_project_with_its_stage_crew_and_what_waits(
     assert card["name"] == "HelpDesk AI Demo" and card["initials"] == "HD"
     assert card["repo"] == REPO
     assert card["stage"] == "working"
-    assert card["needs_you"] == 2 and card["running"] >= 1
+    # Decisions (2) plus what only a person can set up — the page's Needs-you count.
+    assert card["needs_you"] >= 2 and card["running"] >= 1
     assert card["health"] == "healthy" and card["live_url"] == STAGING_URL
     assert card["captain"]["role_key"] == "engineering_captain"
     assert [j["key"] for j in card["journey"]] == ["onboarding", "ready", "backlog", "working",

@@ -548,7 +548,16 @@ def summary(connection: Connection, project_ids: Iterable[str], *,
         run, build = runs.get(pid, {}), builds.get(pid, {})
         tgs = targets.get(pid, [])
         onb = onboarding.get(pid, {})
-        waiting = count_waiting_on_operator(connection, pid, now=now)
+        # The same count as the project's Needs-you bar and the bell: decisions waiting on a
+        # person plus what only a person can set up (needs.setup_cards).
+        from .needs import setup_cards
+
+        try:
+            with connection.begin_nested():
+                setup_n = len(setup_cards(connection, pid))
+        except Exception:  # noqa: BLE001 — a card never fails over its setup line
+            setup_n = 0
+        waiting = count_waiting_on_operator(connection, pid, now=now) + setup_n
         live = int(run.get("live") or 0) + int(build.get("live") or 0)
         worked = int(run.get("total") or 0) + int(build.get("total") or 0) > 0
         non_prod = any(t["deployed"] and str(t["environment"]).lower() not in PRODUCTION
