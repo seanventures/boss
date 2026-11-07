@@ -21,7 +21,7 @@ a value BOSS generated, only a demo-login name. `listing` reads names and presen
 from __future__ import annotations
 
 import re
-from typing import Any, Iterable
+from typing import Any, Iterable, Optional
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
@@ -102,7 +102,7 @@ def discover_in_repository(connection: Connection, project_id: str, repository: 
 
 
 def backfill_deployed_users(engine: Any, settings: Any, *, read_for: Any = None,
-                            limit: int = 20) -> list[str]:
+                            limit: int = 20, project_id: Optional[str] = None) -> list[str]:
     """THE ONE-TIME REPAIR for apps deployed before deploys read their demo users: the newest
     healthy deploy of each project whose manifest names none (and generated a demo password)
     reads the app's seed/login files at the commit it shipped and records the names on that
@@ -117,7 +117,8 @@ def backfill_deployed_users(engine: Any, settings: Any, *, read_for: Any = None,
         rows = c.execute(_text(
             "SELECT DISTINCT ON (s.target_id) s.id, s.project_id, s.repository, s.commit_sha, "
             "s.manifest FROM stack_deployments s WHERE s.status = 'healthy' "
-            "ORDER BY s.target_id, s.created_at DESC")).mappings().all()
+            "AND (CAST(:p AS TEXT) IS NULL OR s.project_id = :p) "
+            "ORDER BY s.target_id, s.created_at DESC"), {"p": project_id}).mappings().all()
     todo = [dict(r) for r in rows
             if not (as_json(r["manifest"], {}) or {}).get("demo_logins")
             and (as_json(r["manifest"], {}) or {}).get("generated_env_keys")
@@ -207,7 +208,8 @@ def users(connection: Connection, project_id: str) -> tuple[list[dict[str, str]]
     found = _manifest_users(connection, project_id)
     if found:
         return found, "manifest"
-    found = _discovered_users(connection, project_id) or _deployed_users(connection, project_id)
+    # What the newest deploy read at the commit it shipped is more current than onboarding's read.
+    found = _deployed_users(connection, project_id) or _discovered_users(connection, project_id)
     if found:
         return found, "repository"
     return [], "none"

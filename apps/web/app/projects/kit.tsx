@@ -101,7 +101,7 @@ export function Journey({ nodes, size, onOpen, testid = "px-journey" }: { nodes:
 /** A TIMELINE: up to six points, oldest first, a day label over each ("Mon", "Today"), the dot
  *  coloured by kind and a few words under it. Fits any width: points share the row. */
 export function Timeline({ points, testid, onOpen }: {
-  points: { at: string | null; label: string; kind: string; href?: string }[]; testid?: string; onOpen?: (i: number) => void;
+  points: { at: string | null; label: string; kind: string; href?: string; detail?: string }[]; testid?: string; onOpen?: (i: number) => void;
 }) {
   if (!points.length) return null;
   const day = (at: string | null) => {
@@ -118,7 +118,7 @@ export function Timeline({ points, testid, onOpen }: {
   return (
     <ol className="px-tl" data-testid={testid} aria-label="Timeline">
       {points.map((p, i) => (
-        <li key={`${p.label}-${i}`} className="px-tl-p" data-k={p.kind} data-testid={testid ? `${testid}-${i}` : undefined}>
+        <li key={`${p.label}-${i}`} className="px-tl-p" data-k={p.kind} data-testid={testid ? `${testid}-${i}` : undefined} title={p.detail || undefined}>
           <span className="px-tl-day">{day(p.at)}</span>
           <span className="px-tl-dot" aria-hidden />
           {p.href ? (

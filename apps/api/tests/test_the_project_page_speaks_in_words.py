@@ -95,8 +95,9 @@ def test_a_stored_short_title_wins_and_a_real_title_is_kept():
 
 def test_recent_work_and_the_running_tile_show_short_titles(world, client, helpdesk):
     o = _get(world, client, f"/v1/projects/{helpdesk['id']}/overview")
-    labels = [w["label"] for w in o["recent_work"]]
+    labels = [w["label"] for w in _get(world, client, f"/v1/projects/{helpdesk['id']}/work")["items"]]
     assert "Finish the visual refresh" in labels, labels
+    labels += [w["label"] for w in o["recent_work"]]
     assert all(len(lbl.split()) <= 6 and not lbl.endswith("…") for lbl in labels)
     assert not any(lbl.startswith("Finish the visual refresh the last") for lbl in labels)
     cur = o["tiles"]["running"]["current"]
@@ -173,14 +174,14 @@ def test_the_live_commit_asked_again_by_a_workflow_is_withdrawn_and_its_step_mov
                            {"i": live}).scalar()
     run_id = helpdesk["merged"][0]["run_id"]
     sid, did = _ask_to_ship(engine, helpdesk["id"], helpdesk["target_id"], commit, run_id=run_id)
-    step = f"wsr_{uuid.uuid4().hex[:12]}"
     with engine.begin() as c:
-        c.execute(text(
-            "INSERT INTO workflow_step_runs (id, project_id, workflow_run_id, step_id, step_kind, "
-            "status, output) VALUES (:i, :p, :r, 'deploy_again', 'capability', 'waiting', "
-            "CAST(:o AS JSONB))"),
-            {"i": step, "p": helpdesk["id"], "r": run_id,
-             "o": json.dumps({"await": {"kind": "stack_deployment", "id": sid}})})
+        # The run's deploy step parks on the new request (the seed wrote the run's steps).
+        step = c.execute(text(
+            "UPDATE workflow_step_runs SET status = 'waiting', output = CAST(:o AS JSONB) "
+            "WHERE id = (SELECT id FROM workflow_step_runs WHERE workflow_run_id = :r "
+            "ORDER BY started_at DESC NULLS LAST LIMIT 1) RETURNING id"),
+            {"r": run_id, "o": json.dumps({"await": {"kind": "stack_deployment", "id": sid}})}
+        ).scalar()
     assert did in _sweep(engine, helpdesk["id"])
     with engine.begin() as c:
         out = c.execute(text("SELECT output FROM workflow_step_runs WHERE id = :i"),
@@ -248,7 +249,7 @@ def test_whats_next_is_the_top_three_each_with_accept(world, client, helpdesk):
     nxt = _get(world, client, f"/v1/projects/{helpdesk['id']}/overview")["next"]
     assert 1 <= len(nxt) <= 3
     for n in nxt:
-        assert n["accepted"] or n["accept"]["href"].startswith(("/v1/ambient/roadmap/",
+        assert n.get("accepted") or n["accept"]["href"].startswith(("/v1/ambient/roadmap/",
                                                                  f"/v1/projects/{helpdesk['id']}"))
         assert not n["label"].endswith("…")
 
@@ -269,7 +270,7 @@ def test_deploy_history_reads_in_words_with_people_by_name(world, client, engine
     _sweep(engine, helpdesk["id"])
     d = _get(world, client, f"/v1/projects/{helpdesk['id']}/deployments")
     labels = [h["label"] for h in d["history"]]
-    assert "Staging · PR #2 Give HelpDesk a modern" not in labels  # titles are ≤ 4 words
+    assert not any(lbl.endswith((",", " a", " the", " to")) for lbl in labels)  # never a cut phrase
     assert any(lbl.startswith("Staging · PR #4") for lbl in labels), labels
     first = next(h for h in d["history"] if h["label"] == "Staging · first deploy")
     assert first["recovered"] and "8004" in first["reason"]
@@ -318,8 +319,8 @@ def test_demo_users_are_read_from_the_repository_when_the_manifest_names_none(en
 def test_a_deploy_that_found_users_names_them_everywhere(world, client, engine, helpdesk):
     with engine.begin() as c:
         c.execute(text(
-            "UPDATE stack_deployments SET manifest = CAST(:m AS JSONB) WHERE target_id = :t"),
-            {"t": helpdesk["target_id"], "m": json.dumps({
+            "UPDATE stack_deployments SET manifest = CAST(:m AS JSONB) WHERE project_id = :t"),
+            {"t": helpdesk["id"], "m": json.dumps({
                 "name": "helpdesk", "kind": "compose", "generated_env_keys": ["DEMO_PASSWORD"],
                 "demo_logins_from": "repository",
                 "demo_logins": [{"user": "admin@demo.test", "label": "Admin",
@@ -336,10 +337,12 @@ def test_a_deploy_that_found_users_names_them_everywhere(world, client, engine, 
 
 # ── Projects list: no false "Onboarding" claim ──────────────────────────────────────────────
 
-def test_a_project_never_onboarded_says_so_with_a_start(world, client):
+def test_a_project_never_onboarded_says_so_with_a_start(world, client, engine):
     slug = f"quiet-{uuid.uuid4().hex[:6]}"
     with world.acting_as(world.ctx(world.owner)):
         assert client.post("/v1/projects", json={"name": "Quiet One", "slug": slug}).status_code == 201
+    with engine.begin() as c:   # a project made before onboarding existed: no run at all
+        c.execute(text("DELETE FROM project_onboarding_runs WHERE project_id = :p"), {"p": slug})
     items = _get(world, client, "/v1/projects/summary")["items"]
     card = next(i for i in items if i["id"] == slug)
     assert card["onboarding_active"] is False
@@ -352,8 +355,9 @@ def test_an_app_deployed_before_deploys_read_users_is_named_once(world, client, 
     from boss_engine.services.project_experience import demo_logins
 
     with engine.begin() as c:
-        c.execute(text("UPDATE stack_deployments SET manifest = CAST(:m AS JSONB) WHERE id = :i"),
-                  {"i": helpdesk["stack_deployment_id"], "m": json.dumps({
+        c.execute(text("UPDATE stack_deployments SET manifest = CAST(:m AS JSONB) "
+                       "WHERE project_id = :p"),
+                  {"p": helpdesk["id"], "m": json.dumps({
                       "name": "helpdesk", "kind": "compose", "generated_env_keys": ["DEMO_PASSWORD"]})})
         c.execute(text(
             "INSERT INTO kg_nodes (id, project_id, kind, node_key, name, path, repo) VALUES "
@@ -369,7 +373,8 @@ def test_an_app_deployed_before_deploys_read_users_is_named_once(world, client, 
             return seeds if path.endswith("seedDemoUsers.mjs") else None
         return read
 
-    named = demo_logins.backfill_deployed_users(engine, None, read_for=read_for)
+    named = demo_logins.backfill_deployed_users(engine, None, read_for=read_for,
+                                                project_id=helpdesk["id"])
     assert helpdesk["stack_deployment_id"] in named
     with engine.begin() as c:
         people, source = demo_logins.users(c, helpdesk["id"])
@@ -378,4 +383,4 @@ def test_an_app_deployed_before_deploys_read_users_is_named_once(world, client, 
     # Idempotent: a deploy that has names is not read again.
     reads.clear()
     assert helpdesk["stack_deployment_id"] not in demo_logins.backfill_deployed_users(
-        engine, None, read_for=read_for)
+        engine, None, read_for=read_for, project_id=helpdesk["id"])

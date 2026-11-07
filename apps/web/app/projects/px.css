@@ -479,7 +479,8 @@ a.px-crew-m:hover span { color: var(--accent-text); }
 .px-hist[data-s="waiting"] .px-ck-b, .px-hist[data-s="now"] .px-ck-b { border-color: var(--amber); color: var(--amber); }
 .px-hist[data-s="recovered"] .px-ck-b { border-color: var(--amber); color: var(--amber); }
 a.px-hist, a.px-hist:hover { color: inherit; text-decoration: none; }
-a.px-hist:hover b { color: var(--accent-text); }
+.px .px-card a.px-hist b { color: var(--ink); font-size: .66rem; }
+.px .px-card a.px-hist:hover b { color: var(--accent-text); }
 .px-hist[data-s="skipped"] .px-ck-b { border-color: var(--border-strong); color: var(--faint); }
 @media (max-width: 760px) {
   .px-env-m { flex-wrap: wrap; gap: 12px; }
@@ -490,6 +491,11 @@ a.px-hist:hover b { color: var(--accent-text); }
 /* What's next: titles read as names (ink), the link is the row. */
 .px-li .px-wk-t b { color: var(--ink); }
 .px-li a.px-wk-t:hover b { color: var(--accent-text); }
+/* All seven tabs fit at 1024 and 768 (PX-19: Health and Settings never hidden). */
+@media (max-width: 1100px) { .px-tab { padding: 9px 8px; } .px-tabs { gap: 0; } }
+@media (max-width: 900px) { .px-tab { padding: 9px 6px; font-size: .6rem; } .px-tab .px-nbadge { margin-left: 3px; } }
+/* Demo-login rows give the user name the room (never "customer@demo..."). */
+@media (min-width: 761px) { .px-cred { grid-template-columns: 96px minmax(0, 1.5fr) minmax(0, .8fr) auto; } }
 /* Tabs scroll sideways on narrow screens with a fade that says there is more (PX-19). */
 @media (max-width: 760px) {
   .px-tabs { overflow-x: auto; scrollbar-width: none; -webkit-mask-image: linear-gradient(90deg, #000 85%, transparent); mask-image: linear-gradient(90deg, #000 85%, transparent); }

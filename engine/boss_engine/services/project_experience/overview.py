@@ -221,7 +221,7 @@ def _cost_week(connection: Connection, project_id: str, now: datetime) -> dict[s
         at = r["d"] if r["d"].tzinfo else r["d"].replace(tzinfo=timezone.utc)
         i = (at.date() - days[0].date()).days
         if 0 <= i < 7:
-            included[i] += round((r["m"] or 0) / 1_000_000, 2)
+            included[i] += round(float(r["m"] or 0) / 1_000_000, 2)
     on_plan = week == 0 and sum(included) > 0
     return {"usd": week, "delta_pct": delta, "cap_usd": cap, "series": series,
             "on_subscription": on_plan,
@@ -375,8 +375,10 @@ def week(connection: Connection, project_id: str, now: datetime, limit: int = 6
             "SELECT id, COALESCE(title, directive) AS title, updated_at FROM meeting_runs "
             "WHERE project_id = :p AND status = 'completed' AND updated_at >= :s "
             "ORDER BY updated_at DESC LIMIT 4"), {"p": project_id, "s": since}).mappings():
-        out.append({"at": iso(r["updated_at"]), "kind": "idea",
-                    "label": shorten(r["title"], 3) or "Plan agreed",
+        # A panel's plan reads "Plan agreed" on the dot (≤ 4 words, never a cut sentence);
+        # its short title is the tooltip.
+        out.append({"at": iso(r["updated_at"]), "kind": "idea", "label": "Plan agreed",
+                    "detail": shorten(r["title"], 6),
                     "href": href(project_id, area="meetings", meeting=r["id"])})
     # Identical words on the same day are one point.
     seen: set[tuple[str, str]] = set()
