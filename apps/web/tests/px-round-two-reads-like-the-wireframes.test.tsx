@@ -81,3 +81,29 @@ describe("one station strip (05-32)", () => {
     expect($("[data-testid='s'] [data-station='build']")!.getAttribute("title")).toBe("Build: in progress · BOSS, Forge");
   });
 });
+
+describe("Overview cards load or fail on their own (04 states)", () => {
+  it("a card BOSS couldn't read says Couldn't load · Retry inside itself; the others still show", async () => {
+    const { FX_OVERVIEW } = await import("../lib/project-experience-fixtures");
+    const { parseOverview } = await import("../lib/project-experience");
+    const { OverviewTab } = await import("../app/projects/tab-overview");
+    const ov = parseOverview({ ...FX_OVERVIEW, errors: { tile_cost: "Couldn't load (OperationalError)", needs_you: "Couldn't load", captain: "x" } });
+    const refreshed: string[] = [];
+    const ctx = { projectId: "helpdesk", actor: "ceo", orgId: null, overview: ov, demo: false, work: null, workState: "ready" as const,
+                  refreshWork: () => undefined, refreshOverview: () => refreshed.push("overview"), onboarding: null,
+                  tab: () => undefined, open: () => undefined, ask: () => undefined };
+    await mountAs(<OverviewTab ctx={ctx} />);
+    expect($("[data-testid='px-tile-cost'] [data-testid='px-card-failed-tile_cost']")!.textContent).toContain("Couldn't load");
+    expect($("[data-testid='px-ov-needs'] [data-testid='px-card-failed-needs_you']")).not.toBeNull();
+    expect($("[data-testid='px-ov-captain'] [data-testid='px-card-failed-captain']")).not.toBeNull();
+    // Every other card still answers.
+    expect($("[data-testid='px-tile-work'] [data-testid^='px-card-failed']")).toBeNull();
+    expect($("[data-testid='px-tile-staging']")!.textContent).not.toContain("Couldn't load");
+    expect($("[data-testid='px-ov-next']")).not.toBeNull();
+    // Retry inside a tile is never a nested button, and reads the Overview again.
+    const retry = $("[data-testid='px-card-retry-tile_cost']")!;
+    expect(retry.tagName).toBe("SPAN");
+    retry.click();
+    expect(refreshed).toEqual(["overview"]);
+  });
+});

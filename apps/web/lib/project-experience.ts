@@ -137,6 +137,8 @@ export type DemoLogin = { user: string; label: string; reveal: { href: string; r
 export type Overview = {
   project: { id: string; name: string; initials: string; stage: Stage; repos: Repo[]; live_url: string; status_label: string; health: Health };
   journey: Node[]; needs_you: NeedsYou[];
+  /** Cards that could not load this time ({card: words}): each shows "Couldn't load · Retry". */
+  errors?: Record<string, string>;
   /** The Roadmap tab's count (open + accepted). */
   roadmap_count?: number | null;
   tiles: {
@@ -456,6 +458,7 @@ export const parseOverview = (v: unknown): Overview => {
     captain: parseCaptain(x.captain),
     recent_work: a(x.recent_work).map(parseWorkItem).slice(0, 5),
     next: a(x.next).map(parseNext),
+    errors: Object.fromEntries(Object.entries(o(x.errors)).map(([k, v]) => [k, s(v, "Couldn't load")])),
     try_it: Object.keys(ti).length ? { url: s(ti.url), demo_logins: a(ti.demo_logins).map(parseLogin) } : null,
     // A week's event opens its record in the console (a PR's build, a deploy), else where it lives.
     week: a(x.week).map((w) => ({ at: s(o(w).at), label: label4(o(w).label), kind: s(o(w).kind), href: s(o(w).href) || s(o(w).external_url), detail: s(o(w).detail) })),

@@ -357,3 +357,17 @@ export function Cost({ usd, list, testid, empty }: { usd: number | null | undefi
     </span>
   );
 }
+
+/** A card that couldn't load this time (04 states): "Couldn't load · Retry", inside the card,
+ *  while every other card still shows. */
+export function CardFailed({ card, why, onRetry }: { card: string; why?: string; onRetry?: () => void }) {
+  return (
+    <div className="px-card-failed" role="alert" data-testid={`px-card-failed-${card}`} title={why || undefined}>
+      <CloudSlash size={14} aria-hidden /><span>Couldn&apos;t load</span><span aria-hidden>·</span>
+      {/* Inside a tile (itself a button) Retry is a span with the button role, never nested. */}
+      <span role="button" tabIndex={0} className="px-linkbtn" data-testid={`px-card-retry-${card}`}
+            onClick={(e) => { e.stopPropagation(); onRetry?.(); }}
+            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); onRetry?.(); } }}>Retry</span>
+    </div>
+  );
+}

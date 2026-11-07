@@ -14,7 +14,7 @@ import {
 
 import { GatedButton } from "../../components/gated";
 import { KIND_WORDS, WORK_ORDER, WORK_WORDS, navigateTo, pxHref, runAccept, startOnboarding, writePxUrl, type NextItem, type WorkItem } from "../../lib/project-experience";
-import { Empty, Face, Flow, HEALTH_WORD, Ico, Journey, PxLink, Ring, Said, Spark, Stations, Tag, Timeline, Cost } from "./kit";
+import { Empty, Face, Flow, HEALTH_WORD, Ico, Journey, PxLink, Ring, Said, Spark, Stations, Tag, Timeline, Cost, CardFailed } from "./kit";
 import { DemoLoginRow } from "./tab-settings";
 import { P95_SOURCE } from "./tab-deployments";
 import { whenLocal } from "../../lib/local-time";
@@ -81,24 +81,29 @@ export function OverviewTab({ ctx }: { ctx: PxCtx }) {
   const ov = ctx.overview;
   const t = ov.tiles;
   const fresh = useFresh(ov.needs_you.map((n) => n.id));
+  // EACH CARD LOADS OR FAILS ON ITS OWN (04 states): a card BOSS couldn't read this time says
+  // "Couldn't load · Retry" inside itself; every other card still shows.
+  const failed = (card: string) => (ov.errors?.[card]
+    ? <CardFailed card={card} why={ov.errors[card]} onRetry={ctx.refreshOverview} /> : null);
   return (
     <div className="px-stack" data-testid="px-overview">
-      {ov.journey.length ? (
+      {ov.journey.length || ov.errors?.journey ? (
         <section className="px-card" aria-labelledby="px-ov-j">
           <div className="px-card-h"><Ico icon={Path} c="teal" /><h2 id="px-ov-j">Journey</h2>
             <a className="px-more" href="#" title="Each stage opens what happened there" onClick={(e) => { e.preventDefault(); ctx.open("stage", "how"); }}>How it works <Info size={11} /></a></div>
-          <Journey nodes={ov.journey} onOpen={(n) => goHref(ctx, n.href, () => ctx.open("stage", n.key))} />
+          {failed("journey") ?? <Journey nodes={ov.journey} onOpen={(n) => goHref(ctx, n.href, () => ctx.open("stage", n.key))} />}
         </section>
       ) : null}
 
       <div className="px-grid px-g4" data-testid="px-tiles">
         <Tile label="Open work" icon={Kanban} c="blue" testid="px-tile-work" onClick={() => goHref(ctx, t.open_work?.href ?? "", () => ctx.tab("work"))}>
+          {failed("tile_work") ?? <>
           <span className="px-num">{t.open_work?.count ?? ctx.work?.items.filter((w) => w.state !== "done").length ?? 0}</span>
-          {t.open_work ? <WorkBar by={t.open_work.by_state} /> : null}
+          {t.open_work ? <WorkBar by={t.open_work.by_state} /> : null}</>}
         </Tile>
         <Tile label="Running" icon={Lightning} c="teal" testid="px-tile-running"
               onClick={() => (t.running?.current?.id ? ctx.open("work", t.running.current.id) : goHref(ctx, t.running?.href ?? "", () => ctx.tab("work")))}>
-          {t.running?.current ? (
+          {failed("tile_running") ?? (t.running?.current ? (
             <div className="px-row">
               <Ring pct={t.running.current.progress[1] ? (100 * t.running.current.progress[0]) / t.running.current.progress[1] : 30} tone="teal"
                     label={`${t.running.current.progress[0]} of ${t.running.current.progress[1]} steps`}>
@@ -110,10 +115,10 @@ export function OverviewTab({ ctx }: { ctx: PxCtx }) {
                   <span>{t.running.current.sub || t.running.current.agent?.name}</span></div>
               </div>
             </div>
-          ) : <span className="px-faint">Nothing running</span>}
+          ) : <span className="px-faint">Nothing running</span>)}
         </Tile>
         <Tile label="Staging" icon={Heartbeat} c="green" testid="px-tile-staging" onClick={() => goHref(ctx, t.staging?.href ?? "", () => ctx.tab("health"))}>
-          {t.staging ? (
+          {failed("tile_staging") ?? (t.staging ? (
             <>
               <div className="px-row">
                 <Ring pct={t.staging.uptime_pct ?? 0} tone={t.staging.health === "healthy" ? "green" : t.staging.health === "down" ? "red" : "amber"} label={`Uptime ${t.staging.uptime_pct ?? "unknown"}%`}>
@@ -123,10 +128,10 @@ export function OverviewTab({ ctx }: { ctx: PxCtx }) {
               </div>
               <Spark series={t.staging.series} tone="green" label="Staging latency, last 24 hours" />
             </>
-          ) : <span className="px-faint">Not deployed</span>}
+          ) : <span className="px-faint">Not deployed</span>)}
         </Tile>
         <Tile label="Cost · week" icon={Coins} c="violet" testid="px-tile-cost" onClick={() => goHref(ctx, t.cost_week?.href ?? "?area=budget", () => ctx.tab("settings", { section: "autonomy" }))}>
-          {t.cost_week ? (
+          {failed("tile_cost") ?? (t.cost_week ? (
             <>
               {t.cost_week.on_subscription ? (
                 <>
@@ -143,7 +148,7 @@ export function OverviewTab({ ctx }: { ctx: PxCtx }) {
                 </>
               )}
             </>
-          ) : <span className="px-faint">No spend yet</span>}
+          ) : <span className="px-faint">No spend yet</span>)}
         </Tile>
       </div>
 
@@ -151,7 +156,7 @@ export function OverviewTab({ ctx }: { ctx: PxCtx }) {
         <div className="px-stack">
           <section className="px-card" aria-labelledby="px-ov-ny" data-testid="px-ov-needs">
             <div className="px-card-h"><Ico icon={HandWaving} c="amber" /><h2 id="px-ov-ny">Needs you</h2><span className="px-nbadge" data-tone={ov.needs_you.length ? "amber" : undefined}>{ov.needs_you.length}</span></div>
-            {ov.needs_you.length ? ov.needs_you.map((it) => {
+            {failed("needs_you") ?? (ov.needs_you.length ? ov.needs_you.map((it) => {
               const KindIcon = (it.icon === "cloud" ? Cloud : NEED_ICON[it.kind]) ?? Question;
               return (
                 <div key={it.id} className="px-ny" data-testid={`px-ov-ny-${it.id}`} data-new={fresh(it.id) ? "1" : undefined}
@@ -166,21 +171,21 @@ export function OverviewTab({ ctx }: { ctx: PxCtx }) {
                   {it.action ? <ActionButton ctx={ctx} label={it.action.label} href={it.action.href} amber testid={`px-ov-ny-act-${it.id}`} /> : null}
                 </div>
               );
-                        }) : <Empty icon={HandWaving} tone="green" title="All clear" line="Nothing is waiting on you. Helm asks here when it needs a person." />}
+                        }) : <Empty icon={HandWaving} tone="green" title="All clear" line="Nothing is waiting on you. Helm asks here when it needs a person." />)}
           </section>
 
           <section className="px-card" aria-labelledby="px-ov-rw">
             <div className="px-card-h"><Ico icon={Kanban} c="blue" /><h2 id="px-ov-rw">Recent work</h2>
               <a className="px-more" href="#" onClick={(e) => { e.preventDefault(); ctx.tab("work"); }} data-testid="px-ov-all-work">All work <ArrowRight size={11} /></a></div>
-            {ov.recent_work.length ? <div>{ov.recent_work.map((w) => <MiniRow key={w.id} w={w} ctx={ctx} />)}</div>
+            {failed("recent_work") ?? (ov.recent_work.length ? <div>{ov.recent_work.map((w) => <MiniRow key={w.id} w={w} ctx={ctx} />)}</div>
               : <Empty icon={Kanban} title="No work yet" line="Describe a feature or a bug and the crew takes it from there.">
-                  <button type="button" className="px-btn" data-kind="primary" onClick={() => ctx.tab("work", { compose: "1" })}>New work</button></Empty>}
+                  <button type="button" className="px-btn" data-kind="primary" onClick={() => ctx.tab("work", { compose: "1" })}>New work</button></Empty>)}
           </section>
 
-          {ov.week.length ? (
+          {ov.week.length || ov.errors?.week ? (
             <section className="px-card px-hide-phone" aria-labelledby="px-ov-wk">
               <div className="px-card-h"><Ico icon={ClockCounterClockwise} c="blue" /><h2 id="px-ov-wk">This week</h2></div>
-              <Timeline points={ov.week} testid="px-ov-week" onOpen={(i) => goHref(ctx, ov.week[i].href, () => undefined)} />
+              {failed("week") ?? <Timeline points={ov.week} testid="px-ov-week" onOpen={(i) => goHref(ctx, ov.week[i].href, () => undefined)} />}
             </section>
           ) : null}
         </div>
@@ -188,10 +193,11 @@ export function OverviewTab({ ctx }: { ctx: PxCtx }) {
         <div className="px-stack">
           <CaptainCard ctx={ctx} />
           <NextCard ctx={ctx} />
-          {ov.try_it && (ov.try_it.url || ov.try_it.demo_logins.length) ? (
+          {ov.try_it && (ov.try_it.url || ov.try_it.demo_logins.length || ov.errors?.try_it) ? (
             <section className="px-card" aria-labelledby="px-ov-try" data-testid="px-ov-try">
               <div className="px-card-h"><Ico icon={Key} c="green" /><h2 id="px-ov-try">Try it</h2>
                 <a className="px-more" href="#" data-testid="px-ov-try-settings" onClick={(e) => { e.preventDefault(); ctx.tab("settings", { section: "demo_logins" }); }}><GearSix size={11} aria-hidden /> Settings</a></div>
+              {failed("try_it")}
               {ov.try_it.url ? (
                 <div className="px-row" style={{ fontSize: ".64rem" }}><Globe size={13} aria-hidden /><span className="px-faint" style={{ width: 54 }}>URL</span>
                   <a className="px-mono" href={ov.try_it.url} target="_blank" rel="noreferrer noopener" data-testid="px-ov-try-url">{ov.try_it.url.replace(/^https?:\/\//, "")} ↗</a></div>
@@ -263,6 +269,14 @@ export function ActionButton({ ctx, label, href, amber, testid }: { ctx: PxCtx; 
 
 function CaptainCard({ ctx }: { ctx: PxCtx }) {
   const c = ctx.overview.captain;
+  if (ctx.overview.errors?.captain) {
+    return (
+      <section className="px-card" aria-labelledby="px-ov-cap" data-testid="px-ov-captain">
+        <div className="px-card-h"><Ico icon={SteeringWheel} c="blue" /><h2 id="px-ov-cap">Captain</h2></div>
+        <CardFailed card="captain" why={ctx.overview.errors.captain} onRetry={ctx.refreshOverview} />
+      </section>
+    );
+  }
   if (!c) {
     return (
       <section className="px-card" aria-labelledby="px-ov-cap">
@@ -322,7 +336,8 @@ function NextCard({ ctx }: { ctx: PxCtx }) {
     <section className="px-card" aria-labelledby="px-ov-next" data-testid="px-ov-next">
       <div className="px-card-h"><Ico icon={Lightbulb} c="violet" /><h2 id="px-ov-next">What&apos;s next</h2>
         <a className="px-more" href="#" onClick={(e) => { e.preventDefault(); ctx.tab("roadmap"); }} data-testid="px-ov-roadmap">Roadmap <ArrowRight size={11} /></a></div>
-      {next.length ? next.slice(0, 3).map((n, i) => {
+      {ctx.overview.errors?.next ? <CardFailed card="next" why={ctx.overview.errors.next} onRetry={ctx.refreshOverview} />
+        : next.length ? next.slice(0, 3).map((n, i) => {
         const src = SOURCE_WORDS[n.source] ?? SOURCE_WORDS.roadmap;
         const Src = src.icon;
         const kind = n.kind ? (NEXT_KIND_WORDS[n.kind] ?? n.kind.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase())) : "";

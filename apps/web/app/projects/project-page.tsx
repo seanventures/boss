@@ -46,6 +46,8 @@ export const TAB_ICONS: Record<Tab, Icon> = {
 export type PxCtx = {
   projectId: string; actor: string; orgId: string | null; overview: Overview; demo: boolean;
   work: WorkList | null; workState: "loading" | "ready" | "missing" | "error"; refreshWork: () => void;
+  /** Read the Overview again (a card's "Couldn't load · Retry"). */
+  refreshOverview?: () => void;
   /** The onboarding agent's record (§8), for its drawer and the Needs-you bar. */
   onboarding: Onboarding | null;
   /** Switch tab (push: Back returns). */
@@ -101,6 +103,7 @@ export function ProjectPage({ projectId, actor, orgId }: { projectId: string; ac
     ...ctxBase, overview, demo: ov.demo,
     work: work.data ?? workFallback, workState: work.data ? "ready" : workFallback ? "ready" : work.state === "missing" ? (start.state === "missing" ? "missing" : start.state) : work.state,
     refreshWork: () => { work.refresh(); start.refresh(); },
+    refreshOverview: () => ov.refresh(),
     onboarding: onboarding.data,
     // ASK THE CAPTAIN opens its drawer (screen 09) on this page; a question rides as `cap_ask`
     // and is sent once when the drawer opens (the dock's own conversation, one agent path).

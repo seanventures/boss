@@ -757,3 +757,7 @@ button.px-h-num:focus-visible { outline: 2px solid var(--accent-text); outline-o
 .px-cost { display: inline-flex; align-items: center; gap: 4px; }
 .px-cost-plan { font-family: var(--sans, inherit); font-size: .5rem; font-weight: 700; letter-spacing: .02em; text-transform: uppercase;
   padding: 0 5px; border-radius: 999px; color: var(--px-violet, #8b7cf6); background: color-mix(in srgb, var(--px-violet, #8b7cf6) 14%, transparent); }
+
+/* A card that couldn't load (04 states): one line inside the card, red, with Retry. */
+.px-card-failed { display: flex; align-items: center; gap: 6px; padding: 8px 4px; font-size: .62rem; color: var(--red); }
+.px-card-failed .px-linkbtn { all: unset; cursor: pointer; color: var(--accent-text); font-weight: 600; text-decoration: underline; }

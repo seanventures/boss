@@ -163,3 +163,22 @@ def test_a_quiet_project_is_idle_not_working(world, client, engine, helpdesk):
     assert card["running"] == 0
     assert all(j["state"] != "now" for j in card["journey"]), card["journey"]
     assert card["status_label"] != "Working"
+
+
+def test_each_overview_card_loads_or_fails_on_its_own(world, client, engine, helpdesk,
+                                                      monkeypatch):
+    from boss_engine.services.project_experience import overview
+
+    def broken(*_a, **_k):
+        raise RuntimeError("ledger unreadable")
+
+    monkeypatch.setattr(overview, "_cost_week", broken)
+    monkeypatch.setattr(overview, "week", broken)
+    ov = _get(world, client, world.owner, f"/v1/projects/{helpdesk['id']}/overview")
+    assert set(ov["errors"]) == {"tile_cost", "week"}
+    assert ov["tiles"]["cost_week"] is None and ov["week"] == []
+    # Every other card still answers.
+    assert ov["journey"] and ov["needs_you"] and ov["recent_work"] and ov["captain"]
+    assert ov["tiles"]["open_work"]["count"] > 0
+    monkeypatch.undo()
+    assert _get(world, client, world.owner, f"/v1/projects/{helpdesk['id']}/overview")["errors"] == {}

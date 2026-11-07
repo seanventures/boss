@@ -417,28 +417,62 @@ def _facts(connection: Connection, project_id: str, items: list[dict[str, Any]],
     return {"got": got, "active": active}
 
 
+#: The Overview's cards, each of which loads or fails on its own (04 "Couldn't load · Retry").
+CARDS = ("journey", "tile_work", "tile_running", "tile_staging", "tile_cost", "needs_you",
+         "recent_work", "week", "captain", "next", "try_it")
+
+
 def view(connection: Connection, project_id: str, *, now: Optional[datetime] = None
          ) -> dict[str, Any]:
+    """The Overview's one read — but EACH CARD LOADS OR FAILS ON ITS OWN (screen 04 states): a
+    store that fails takes only the cards it feeds, which come back named in `errors`
+    ({card: words}) with their empty default; every other card still answers."""
+    import logging
+
     from .deployments import live_url
 
+    log = logging.getLogger(__name__)
     now = now or datetime.now(timezone.utc)
     project = require_project(connection, project_id)
-    roster = agents(connection, project_id)
-    onboarding = onboarding_service.view(connection, project_id)
-    items = work_service.everything(connection, project_id, now=now, onboarding=onboarding)
-    envs = health_environments(connection, project_id, now=now)
-    facts = _facts(connection, project_id, items, envs, onboarding)
+    errors: dict[str, str] = {}
+
+    def part(cards: tuple[str, ...], fn: Any, default: Any) -> Any:
+        try:
+            with connection.begin_nested():
+                return fn()
+        except Exception as exc:  # noqa: BLE001 — one card's store never blanks the page
+            log.exception("overview: %s failed", "/".join(cards))
+            for card in cards:
+                errors.setdefault(card, f"Couldn't load ({type(exc).__name__})")
+            return default
+
+    roster = part(("captain",), lambda: agents(connection, project_id), {})
+    onboarding = part(("journey",), lambda: onboarding_service.view(connection, project_id),
+                      {"state": "not_started", "stages": [], "backlog": []})
+    items = part(("tile_work", "tile_running", "recent_work", "journey"),
+                 lambda: work_service.everything(connection, project_id, now=now,
+                                                 onboarding=onboarding), [])
+    envs = part(("tile_staging", "journey"),
+                lambda: health_environments(connection, project_id, now=now), [])
+    facts = part(("journey",), lambda: _facts(connection, project_id, items, envs, onboarding),
+                 {"got": {}, "active": False})
     stage = stage_of(facts["got"], active=facts["active"])
-    waiting = needs_you(connection, project_id, items, onboarding)
-    the_repos = repos(connection, project_id)
-    url = live_url(envs)
-    logins = demo.listing(connection, project_id)
+    waiting = part(("needs_you",), lambda: needs_you(connection, project_id, items, onboarding),
+                   [])
+    the_repos = part(("journey",), lambda: repos(connection, project_id), [])
+    url = live_url(envs) if envs else None
+    logins = part(("try_it",), lambda: demo.listing(connection, project_id),
+                  {"environments": [], "source": "none"})
     try_env = next((e for e in logins["environments"] if str(e["key"]).lower() in
                     ("staging", "stage")), None) or next(iter(logins["environments"]), None)
-    subs, details, prod_waits = journey_subs(connection, project, items, envs, onboarding, waiting)
+    subs, details, prod_waits = part(
+        ("journey",), lambda: journey_subs(connection, project, items, envs, onboarding, waiting),
+        ({}, {}, False))
     # Production waits on a person exactly when Needs you holds "Pick a prod host" (one rule,
     # needs.prod_waits), so the journey node and the card never disagree.
     prod_waits = any(n.get("id") == "prod:host" for n in waiting)
+    cost = part(("tile_cost",), lambda: _cost_week(connection, project_id, now), None)
+    the_tiles = tiles(project_id, items, envs, cost)   # cost None → the tile's "Couldn't load"
     return {
         "project": {"id": project["id"], "name": project["name"], "initials":
                     initials(project["name"]), "description": project["description"],
@@ -451,24 +485,26 @@ def view(connection: Connection, project_id: str, *, now: Optional[datetime] = N
                            active=facts["active"] or bool(facts["got"].get("_onboarding_running"))),
         "needs_you": waiting,
         # The Roadmap tab's count: what is proposed or accepted and not done yet.
-        "roadmap_count": int(connection.execute(text(
+        "roadmap_count": part(("next",), lambda: int(connection.execute(text(
             "SELECT count(*) FROM ambient_recommendations WHERE project_id = :p "
-            "AND status IN ('open', 'accepted')"), {"p": project_id}).scalar() or 0),
-        "tiles": tiles(project_id, items, envs, _cost_week(connection, project_id, now)),
-        "captain": captain_service.view(connection, project_id, roster=roster,
-                                        with_last_said=False),
+            "AND status IN ('open', 'accepted')"), {"p": project_id}).scalar() or 0), None),
+        "tiles": the_tiles,
+        "captain": part(("captain",), lambda: captain_service.view(
+            connection, project_id, roster=roster, with_last_said=False), None),
         # Recent WORK (screen 04): what moved — running, waiting on you, done — before roadmap
         # items that are only planned; at most five, newest first within that order.
         "recent_work": ([w for w in items if w["state"] != "planned"]
                         + [w for w in items if w["state"] == "planned"])[:5],
-        "next": next_items(connection, project_id, onboarding),
+        "next": part(("next",), lambda: next_items(connection, project_id, onboarding), []),
         "try_it": {"url": url, "env": try_env["key"] if try_env else None,
                    "demo_logins": try_env["logins"] if try_env else [],
                    "users_from": logins["source"]},
         "onboarding": {"state": onboarding["state"], "stages": onboarding["stages"],
                        "href": onboarding.get("href") or project_href(project_id,
                                                                       drawer="onboarding")},
-        "week": week(connection, project_id, now),
+        "week": part(("week",), lambda: week(connection, project_id, now), []),
+        # Cards that could not load this time, in words: each shows "Couldn't load · Retry".
+        "errors": errors,
     }
 
 
