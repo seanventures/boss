@@ -288,6 +288,28 @@ async function openProject(q = "", role: "owner" | "viewer" = "owner", id = P) {
   await settle(8);
 }
 
+describe("the header's health chip opens Health from every tab (12-24)", () => {
+  for (const tab of ["overview", "work", "roadmap", "knowledge", "deployments", "settings", "health"]) {
+    it(`from ${tab}`, async () => {
+      engine();
+      await openProject(`&tab=${tab}`);
+      const chip = tid("px-head-health")!;
+      expect(chip.tagName).toBe("A");
+      expect(new URLSearchParams(chip.getAttribute("href")!.split("?")[1]).get("tab")).toBe("health");
+      await press(chip);
+      expect(params().get("tab")).toBe("health");
+    });
+  }
+  it("is there before anything is deployed, saying so", async () => {
+    engine((c) => (c.path === `/v1/projects/${P}/overview`
+      ? { body: { ...FX_OVERVIEW, project: { ...FX_OVERVIEW.project, live_url: "", health: "unknown" }, tiles: { ...FX_OVERVIEW.tiles, staging: null } } } : undefined));
+    await openProject("&tab=work");
+    expect(tid("px-head-health")!.textContent).toBe("No health yet");
+    await press(tid("px-head-health"));
+    expect(params().get("tab")).toBe("health");
+  });
+});
+
 describe("the Project page header, Needs you and tabs (screen 4)", () => {
   it("has the repo, live URL, health, status, captain with Ask, and New work", async () => {
     engine();

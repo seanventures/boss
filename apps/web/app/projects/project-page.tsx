@@ -165,6 +165,7 @@ function Header({ ctx, onboarding }: { ctx: PxCtx; onboarding: boolean }) {
   const staging = ctx.overview.tiles.staging;
   const health = staging?.health ?? p.health;
   const captain = ctx.overview.captain;
+  const url = usePxUrl();
   return (
     <div className="px-head" data-testid="px-head">
       <span className="px-mark" aria-hidden title={p.name}>{p.initials}</span>
@@ -185,12 +186,15 @@ function Header({ ctx, onboarding }: { ctx: PxCtx; onboarding: boolean }) {
                title={`${staging?.label ?? "Staging"} — opens the live app`}>
               <Globe size={11} aria-hidden />{(staging?.label ?? "staging").toLowerCase()} · {p.live_url.replace(/^https?:\/\//, "")}<ArrowSquareOut size={10} aria-label="opens in a new tab" /></a>
           ) : null}
-          {p.live_url || health !== "unknown" ? (
-            <button type="button" className="px-hchip" style={{ border: 0, cursor: "pointer", color: health === "healthy" ? "var(--green)" : health === "unknown" ? "var(--faint)" : `var(--${HEALTH_TONE[health]})` }}
-                    data-testid="px-head-health" onClick={() => ctx.tab("health")}
-                    title={[HEALTH_WORD[health], staging?.uptime_pct != null ? `${staging.uptime_pct}%` : "", staging?.p95_ms != null ? `p95 ${staging.p95_ms}ms` : ""].filter(Boolean).join(" · ") + " — opens Health"}>
-              <span className="px-dot" data-s={health} data-round aria-hidden />{HEALTH_WORD[health]}</button>
-          ) : null}
+          {/* THE HEALTH CHIP, ON EVERY TAB (12-24): a link to this project's Health tab — the
+              environments' word, or "No health yet" before anything is deployed (Health's own
+              empty state says what comes next). */}
+          <a className="px-hchip px-hchip-health" data-s={health}
+             href={pxHref(`?project_id=${encodeURIComponent(ctx.projectId)}&area=project&tab=health`)}
+             data-testid="px-head-health" aria-current={url.tab === "health" ? "page" : undefined}
+             onClick={(e) => { if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return; e.preventDefault(); ctx.tab("health"); }}
+             title={[p.live_url || health !== "unknown" ? HEALTH_WORD[health] : "Nothing deployed yet", staging?.uptime_pct != null ? `${staging.uptime_pct}%` : "", staging?.p95_ms != null ? `p95 ${staging.p95_ms}ms` : ""].filter(Boolean).join(" · ") + " — opens Health"}>
+            <span className="px-dot" data-s={health} data-round aria-hidden />{p.live_url || health !== "unknown" ? HEALTH_WORD[health] : "No health yet"}</a>
           <span className="px-tag" data-tone={onboarding ? "blue" : "green"} data-testid="px-head-status" title="Project stage on the journey">{onboarding ? <><Compass size={11} aria-hidden /> Onboarding</>
             : <>{(() => { const I = STAGE_ICON[p.stage] ?? Compass; return <I size={11} aria-hidden />; })()} {p.status_label || "Ready"}</>}</span>
           {onboarding && ctx.onboarding?.elapsed_s ? <span className="px-mono px-faint" style={{ fontSize: ".6rem" }} data-testid="px-head-elapsed">{elapsedWords(ctx.onboarding.elapsed_s)}</span> : null}

@@ -767,3 +767,11 @@ button.px-h-num:focus-visible { outline: 2px solid var(--accent-text); outline-o
 .px-doc-body p { margin: 0; overflow-wrap: anywhere; }
 
 .px-kn-access-why { display: block; color: var(--red); font-size: .56rem; margin-top: 2px; overflow-wrap: anywhere; }
+
+/* The header's health chip (12-24): a link on every tab, coloured by the word it says. */
+.px-hchip-health { text-decoration: none; cursor: pointer; }
+.px-hchip-health[data-s="healthy"] { color: var(--green); }
+.px-hchip-health[data-s="degraded"] { color: var(--amber); }
+.px-hchip-health[data-s="down"] { color: var(--red); }
+.px-hchip-health[data-s="unknown"] { color: var(--faint); }
+.px-hchip-health[aria-current="page"] { box-shadow: inset 0 0 0 1px currentColor; }
