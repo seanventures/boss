@@ -55,7 +55,7 @@
 .obs-prows > [role="listitem"] + [role="listitem"] { border-top: 1px solid var(--border); }
 .obs-prow {
   display: grid; align-items: center; column-gap: 12px; min-height: 46px; padding: 4px 0;
-  grid-template-columns: 5.68421rem minmax(7.89474rem, 1.5fr) 5.05263rem minmax(11.57895rem, 4.2fr) 2.94737rem 4.84211rem 2.73684rem;
+  grid-template-columns: 5.68421rem minmax(7.89474rem, 1.5fr) 5.05263rem minmax(11.57895rem, 4.2fr) 2.94737rem 4.84211rem auto;
   grid-template-areas: "state name host strip uptime p95 go" "table table table table table table table";
 }
 .obs-prow-head { min-height: 32px; border-bottom: 1px solid var(--border); grid-template-areas: "label label label ticks . . ."; }
@@ -466,3 +466,13 @@ a.obs-who:hover .obs-who-name { text-decoration: underline; }
 .obs-answer { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; margin-top: 4px; border: 1px solid color-mix(in srgb, var(--amber) 45%, transparent); border-radius: var(--r-sm); background: var(--amber-soft); min-width: 0; }
 .obs-answer-q { font-size: 0.84rem; color: var(--ink); font-weight: 600; overflow-wrap: anywhere; }
 .obs-answer-opts { display: flex; flex-wrap: wrap; gap: 6px; }
+/* A rule is one line until opened (▸): the PromQL and its settings sit behind the expander. */
+.obs-arule-more { flex: none; width: 18px; height: 18px; display: inline-grid; place-items: center; padding: 0; border: 0; border-radius: 4px;
+  background: none; color: var(--faint); font-size: 0.72rem; cursor: pointer; }
+.obs-arule-more:hover { color: var(--ink); background: var(--surface-2); }
+.obs-arule-more:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 1px; }
+.obs-arule[data-open="1"] { padding-bottom: 10px; }
+
+/* Each app row links to its Project › Health (screen 15), a labelled chip, the word hidden on a phone. */
+.obs-project-health { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; text-decoration: none; color: var(--accent-text); }
+@media (max-width: 639px) { .obs-project-health-word { display: none; } }

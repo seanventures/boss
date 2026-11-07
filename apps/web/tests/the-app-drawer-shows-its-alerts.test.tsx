@@ -275,9 +275,17 @@ describe("New alert rule (the builder)", () => {
 });
 
 describe("rules as queries", () => {
-  it("every rule shows its PromQL and what decides when it fires, labelled with tooltips", async () => {
+  it("every rule is one line; its PromQL and what decides when it fires open behind ▸, labelled with tooltips", async () => {
     await openObs("?view=apps&app=t_down&atab=alerts");
     const er = $("[data-testid='obs-rule-error_rate']")!;
+    // Collapsed by default: name, severity, condition in words, state and the actions only.
+    expect(er.querySelector("[data-testid='obs-rule-query']")).toBeNull();
+    expect(er.querySelector("[data-testid='obs-rule-edit']")).not.toBeNull();
+    expect(er.querySelector("[data-testid='obs-rule-silence']")).not.toBeNull();
+    expect(er.querySelector("[data-testid='obs-rule-respond']")).not.toBeNull();
+    expect(er.querySelector("[data-testid='obs-rule-more']")!.getAttribute("aria-expanded")).toBe("false");
+    await click(er.querySelector("[data-testid='obs-rule-more']"));
+    expect(er.querySelector("[data-testid='obs-rule-more']")!.getAttribute("aria-expanded")).toBe("true");
     expect(text(er.querySelector("[data-testid='obs-rule-query']"))).toBe(FIRING_ALERT.expr);
     const f = (id: string) => er.querySelector(`[data-testid='obs-fact-${id}']`)!;
     expect(text(f("every"))).toBe("Every1 min");

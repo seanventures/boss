@@ -35,6 +35,16 @@ describe("one Pulse", () => {
     expect(text(rows[4].querySelector(".obs-nostrip"))).toBe("Not deployed");
   });
 
+  it("every app row links to its Project › Health with a labelled chip (screen 15)", async () => {
+    await openObs("?view=apps");
+    for (const row of $$("[data-testid='obs-pulse-row']")) {
+      const chip = row.querySelector("[data-testid='obs-app-project-health']")!;
+      expect(text(chip)).toBe("Project › Health");
+      const q = new URLSearchParams((chip.getAttribute("href") ?? "").split("?")[1]);
+      expect([q.get("area"), q.get("tab")]).toEqual(["project", "health"]);
+    }
+  });
+
   it("a Down row says how long, from when it went down", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true, now: NOW_MS });
     await openObs("?view=apps");

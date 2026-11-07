@@ -63,10 +63,17 @@ function RuleRow({ r, busy, onEdit, onSilence, onRespond, onEndSilence, severiti
   severities?: SevInfo[];
 }) {
   const lt = useLocalTime();
+  // ONE LINE PER RULE (operator, 2026-11-06: "a wall of text"): name, severity, the condition in
+  // words, its state and its actions. The PromQL and every parameter sit behind the expander.
+  const [open, setOpen] = useState(false);
   const tone = r.silence ? "grey" : r.stateTone;
   return (
-    <li className="obs-arule" data-testid={`obs-rule-${r.kind === "custom" ? r.alert : r.kind}`} data-state={r.state ?? ""}>
+    <li className="obs-arule" data-testid={`obs-rule-${r.kind === "custom" ? r.alert : r.kind}`} data-state={r.state ?? ""} data-open={open ? "1" : "0"}>
       <span className="obs-arule-name">
+        <button type="button" className="obs-arule-more" aria-expanded={open} data-testid="obs-rule-more"
+                aria-label={open ? `Hide the query and settings of ${r.label}` : `Show the query and settings of ${r.label}`}
+                title={open ? "Hide the PromQL and settings" : "The PromQL and every setting that decides when it fires"}
+                onClick={() => setOpen((v) => !v)}>{open ? "▾" : "▸"}</button>
         <Dot tone={tone} />
         <span className="obs-strong" title={r.description ?? r.summary ?? undefined}>{r.label}</span>
         <SevFlag sev={r.severity} catalog={severities} />
@@ -82,7 +89,7 @@ function RuleRow({ r, busy, onEdit, onSilence, onRespond, onEndSilence, severiti
         </span>
         {r.valueWord && !r.silence ? <span className="inf-faint inf-num" data-copy="data">{r.valueWord}</span> : null}
       </span>
-      <RuleFacts r={r} severities={severities} />
+      {open ? <RuleFacts r={r} severities={severities} /> : null}
       <span className="obs-inc-auto obs-arule-respond">
         <GatedButton permission="observability:manage" type="button" role="switch" aria-checked={r.autoRespond}
                      aria-label={`Respond automatically to ${r.label}`} className="obs-switch" data-testid="obs-rule-respond"

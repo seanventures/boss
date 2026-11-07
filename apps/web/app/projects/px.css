@@ -627,3 +627,56 @@ a.px-hist:hover b { color: var(--accent-text); }
 .px-set-level > button { white-space: nowrap; }
 @media (max-width: 1100px) { .px-set-level > button { padding: 7px 9px; } }
 .px-set-foot > svg { flex: none; }
+
+/* ── Health tab (screen 12) — owned by the Health slice ───────────────────────────────────── */
+.px-h-nums { align-items: start; }
+.px-h-num { display: flex; flex-direction: column; gap: 6px; min-width: 0; background: none; border: 0; padding: 0; text-align: left; color: inherit; font: inherit; }
+button.px-h-num { cursor: pointer; border-radius: 10px; }
+button.px-h-num:hover .px-spark { filter: brightness(1.2); }
+button.px-h-num:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 3px; }
+.px-h-num .px-num { margin-top: 2px; }
+.px-h-num .px-num small { font-size: .55rem; }
+.px-h-burn { margin-top: 8px; }
+.px-h-prod { padding: 10px 14px; }
+.px-h-inc { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; gap: 10px; align-items: start; padding: 10px 0; border-top: 1px solid var(--border); }
+.px-h-inc:first-of-type { border-top: 0; }
+.px-h-inc-ico { width: 20px; height: 20px; border-radius: 5px; display: grid; place-items: center; margin-top: 2px; font-weight: 800; font-size: .62rem; }
+.px-h-inc-ico[data-s="resolved"] { background: var(--green); color: #032015; }
+.px-h-inc-ico[data-s="needs_you"], .px-h-inc-ico[data-s="running"] { background: var(--amber); color: #1b1300; border-radius: 50%; }
+.px-h-inc-b { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.px-h-inc-b > b { font-size: .66rem; }
+.px-h-inc-b > small { font-size: .56rem; }
+.px-h-inc .px-fl { padding: 6px 2px 2px; }
+.px-h-graph { white-space: nowrap; }
+.px-h-al b { font-size: .66rem; }
+.px-h-kinds { gap: 6px; margin: 10px 0 8px; }
+.px-h-kinds .px-tag { gap: 4px; }
+.px-h-file { font-size: .6rem; display: inline-flex; align-items: center; gap: 4px; }
+.px-h-links { display: flex; flex-direction: column; gap: 6px; }
+.px-h-link { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 9px 10px; border: 1px solid var(--border);
+  border-radius: 10px; font-size: .62rem; color: var(--accent-text); text-decoration: none; background: color-mix(in srgb, var(--surface-2, var(--surface)) 60%, transparent); }
+.px-h-link:hover { border-color: var(--accent-line, var(--border-strong)); }
+.px-h-link[data-off] { color: var(--faint); cursor: not-allowed; }
+.px-h-link small { display: block; font-size: .52rem; color: var(--faint); }
+/* The alert-rules component inside the page speaks the page's type scale (screen 12, §13). */
+.px .px-h-rules-card { padding: 12px 14px; }
+.px .px-h-rules-card .obs-arule, .px .px-h-rules-card .obs-line, .px .px-h-rules-card .obs-alert { font-size: .62rem; }
+.px .px-h-rules-card .obs-arule-source, .px .px-h-rules-card .obs-facts, .px .px-h-rules-card .obs-promql { font-size: .56rem; }
+.px .px-h-rules-card .inf-dsec-head h4 { font-size: .52rem; letter-spacing: .12em; }
+.px .px-h-rules-card .inf-link, .px .px-h-rules-card .inf-seg-btn, .px .px-h-rules-card .obs-chip { font-size: .58rem; }
+.px .px-h-rules-card summary { font-size: .7rem; }
+@media (max-width: 760px) {
+  .px-h-inc { grid-template-columns: 22px minmax(0, 1fr); }
+  .px-h-inc > .px-h-graph { grid-column: 2; justify-self: start; }
+}
+.px-h-noinc { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 10px; align-items: start; padding: 6px 0; }
+.px-h-noinc .px-fl-n { opacity: .75; }
+/* The rules component reads at the page's size: one scale for every cell, chip and switch label. */
+.px .px-h-rules-card .obs-alerts-tab { font-size: .6rem; }
+.px .px-h-rules-card .obs-alerts-tab *:not(h4):not(.obs-promql):not(code) { font-size: inherit; }
+.px .px-h-rules-card .obs-promql, .px .px-h-rules-card code { font-size: .54rem; }
+.px .px-h-rules-card .obs-arule { min-height: 30px; padding: 3px 2px; }
+.px .px-h-rules-card .obs-sev, .px .px-h-rules-card .obs-chip { padding: 1px 6px; }
+.px-h-al b a, .px-h-al b a:hover { color: var(--ink); text-decoration: none; }
+.px-h-al b a:hover { color: var(--accent-text); }
+[data-testid^="px-h-env-"] .px-card-h small { white-space: nowrap; }

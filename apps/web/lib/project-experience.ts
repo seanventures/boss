@@ -202,10 +202,12 @@ export type SettingsSection = {
 export type Settings = { sections: SettingsSection[] };
 export type HealthView = {
   environments: { key: string; label: string; target_id: string; url: string; health: Health; uptime_pct: number | null; error_rate: number | null; p95_ms: number | null;
-                  series: { errors: number[]; latency: number[] }; slo: { target: number | null; burn: "ok" | "warning" | "breach" }; href: string }[];
-  alerts: { id: string; label: string; severity: "page" | "ticket" | "info"; state: "firing" | "resolved"; since: string; href: string }[];
-  incidents: { id: string; label: string; state: "running" | "needs_you" | "resolved"; graph_href: string; mini: { label: string; state: StepState }[] }[];
-  monitoring_pack: { rules: number; managed_in: string; href: string } | null;
+                  series: { errors: number[]; latency: number[] }; slo: { target: number | null; burn: "ok" | "warning" | "breach"; budget_used_pct: number | null }; href: string }[];
+  /** One row per alert rule (screen 12): firing since …, resolved at …, or ok · quiet 3d. */
+  alerts: { id: string; label: string; condition: string; severity: "page" | "ticket" | "info"; state: "firing" | "resolved" | "ok"; since: string; quiet: string; href: string }[];
+  incidents: { id: string; label: string; state: "running" | "needs_you" | "resolved"; since: string; duration_s: number | null; outcome: string; graph_href: string;
+               mini: { label: string; state: StepState; type: string }[] }[];
+  monitoring_pack: { rules: number; off: number; managed_in: string; href: string; kinds: string[]; file: { path: string; external_url: string } | null } | null;
   links: { grafana: string; grafana_reason: string; logs: string; observability: string };
 };
 
@@ -524,19 +526,22 @@ export const parseHealth = (v: unknown): HealthView => {
       const y = o(e); const ser = o(y.series); const slo = o(y.slo);
       return { key: s(y.key), label: s(y.label, s(y.key)), target_id: s(y.target_id), url: s(y.url), health: oneOf(y.health, HEALTHS, "unknown"), uptime_pct: nn(y.uptime_pct),
                error_rate: nn(y.error_rate), p95_ms: nn(y.p95_ms), series: { errors: nums(ser.errors), latency: nums(ser.latency) },
-               slo: { target: nn(slo.target), burn: oneOf(slo.burn, ["ok", "warning", "breach"] as const, "ok") }, href: s(y.href) };
+               slo: { target: nn(slo.target), burn: oneOf(slo.burn, ["ok", "warning", "breach"] as const, "ok"), budget_used_pct: nn(slo.budget_used_pct) }, href: s(y.href) };
     }),
     alerts: a(x.alerts).map((z) => {
       const y = o(z);
-      return { id: s(y.id), label: label4(y.label), severity: oneOf(y.severity, ["page", "ticket", "info"] as const, "info"),
-               state: y.state === "resolved" ? "resolved" : "firing", since: s(y.since), href: s(y.href) };
+      return { id: s(y.id), label: label4(y.label), condition: s(y.condition), severity: oneOf(y.severity, ["page", "ticket", "info"] as const, "info"),
+               state: oneOf(y.state, ["firing", "resolved", "ok"] as const, "firing"), since: s(y.since), quiet: s(y.quiet), href: s(y.href) };
     }),
     incidents: a(x.incidents).map((z) => {
       const y = o(z);
       return { id: s(y.id), label: label4(y.label), state: oneOf(y.state, ["running", "needs_you", "resolved"] as const, "running"),
-               graph_href: s(y.graph_href), mini: mini(y.mini) };
+               since: s(y.since), duration_s: nn(y.duration_s), outcome: s(y.outcome_word), graph_href: s(y.graph_href),
+               mini: a(y.mini).map((m) => ({ label: label4(o(m).label), state: oneOf(o(m).state, STEP_STATES, "todo"), type: s(o(m).type) })) };
     }),
-    monitoring_pack: Object.keys(mp).length ? { rules: n(mp.rules), managed_in: s(mp.managed_in), href: s(mp.href) } : null,
+    monitoring_pack: Object.keys(mp).length ? { rules: n(mp.rules), off: n(mp.off), managed_in: s(mp.managed_in), href: s(mp.href),
+      kinds: a(mp.kinds).map((k) => s(k)).filter(Boolean),
+      file: s(o(mp.file).path) ? { path: s(o(mp.file).path), external_url: s(o(mp.file).external_url) } : null } : null,
     links: { grafana: s(l.grafana), grafana_reason: s(l.grafana_reason), logs: s(l.logs), observability: s(l.observability) },
   };
 };

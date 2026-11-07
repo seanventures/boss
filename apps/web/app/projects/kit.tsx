@@ -28,7 +28,7 @@ export function Tag({ tone, children, title }: { tone?: "green" | "amber" | "red
 }
 
 export const HEALTH_TONE: Record<Health, "green" | "amber" | "red" | "idle"> = { healthy: "green", degraded: "amber", down: "red", unknown: "idle" };
-export const HEALTH_WORD: Record<Health, string> = { healthy: "Healthy", degraded: "Degraded", down: "Down", unknown: "No signal" };
+export const HEALTH_WORD: Record<Health, string> = { healthy: "Healthy", degraded: "Degraded", down: "Down", unknown: "Unknown" };
 
 /** A ring chart: `pct` 0-100, the text inside, colour by meaning. */
 export function Ring({ pct, children, tone = "green", size, label }: { pct: number; children?: React.ReactNode; tone?: "green" | "teal" | "amber" | "red"; size?: "s" | "l"; label: string }) {

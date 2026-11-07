@@ -270,11 +270,24 @@ export const FX_SETTINGS = {
 export const FX_HEALTH = {
   environments: [{ key: "staging", label: "Staging", target_id: "tgt_staging", health: "healthy", uptime_pct: 99.9, error_rate: 0.4, p95_ms: 180,
                    series: { errors: [0.2, 0.3, 0.1, 0.6, 0.4, 0.2, 0.3, 0.5, 0.4, 0.3], latency: [170, 180, 175, 190, 182, 176, 181, 185, 178, 180] },
-                   slo: { target: 99.5, burn: "ok" }, href: "?area=observability&app=helpdesk" }],
-  alerts: [{ id: "al_5xx", label: "5xx on /api/tickets", severity: "page", state: "resolved", since: "Thu", href: "?area=observability&view=alerts" }],
-  incidents: [{ id: "wi_inc1", label: "tickets 5xx 6.6%", state: "resolved", graph_href: "?area=agent_ops&item=wi_inc1",
-                mini: [{ label: "Alert", state: "done" }, { label: "Beacon triaged", state: "done" }, { label: "Rollback", state: "done" }, { label: "Resolved", state: "done" }] }],
-  monitoring_pack: { rules: 6, managed_in: "repo", href: "?area=observability&view=rules" },
+                   slo: { target: 99.5, burn: "ok", budget_used_pct: 22 }, href: "?area=observability&app=helpdesk" }],
+  alerts: [
+    { id: "al_5xx", label: "5xx on /api/tickets", condition: "Custom PromQL", severity: "page", state: "resolved", since: "2026-11-06T09:26:00Z", quiet: "", href: "?area=observability&view=alerts" },
+    { id: "al_p95", label: "p95 latency", condition: "> 800 ms for 5 min", severity: "ticket", state: "ok", since: "", quiet: "quiet 3d", href: "?area=observability&view=alerts" },
+    { id: "al_hc", label: "Health check", condition: "3 failed probes in 10 min", severity: "page", state: "ok", since: "", quiet: "quiet 5d", href: "?area=observability&view=alerts" },
+  ],
+  incidents: [
+    { id: "wi_inc1", label: "5xx on /api/tickets", state: "resolved", since: "2026-11-06T09:12:00Z", duration_s: 840, outcome_word: "resolved by the squad",
+      graph_href: "?area=agent_ops&item=wi_inc1",
+      mini: [{ label: "Alert", state: "done", type: "signal" }, { label: "SRE squad", state: "done", type: "agent" }, { label: "Pool exhausted", state: "done", type: "cause" },
+             { label: "Pool 10→20", state: "done", type: "fix" }, { label: "Recovered", state: "done" }] },
+    { id: "wi_inc2", label: "Slow ticket list", state: "needs_you", since: "2026-11-04T10:00:00Z", duration_s: null, outcome_word: "fix needs your approval",
+      graph_href: "?area=agent_ops&item=wi_inc2",
+      mini: [{ label: "p95 1.4s", state: "done", type: "signal" }, { label: "SRE squad", state: "done", type: "agent" }, { label: "Missing index", state: "done", type: "cause" },
+             { label: "Approve fix", state: "waiting", type: "decision" }, { label: "Recovered", state: "todo" }] },
+  ],
+  monitoring_pack: { rules: 6, managed_in: "repo", href: "?area=observability&view=alerts", kinds: ["Uptime", "5xx", "Latency", "Disk", "DB conns", "TLS"],
+                     file: { path: "monitoring/alerts.yaml", external_url: "https://github.com/paramg/helpdesk-ai-demo/blob/main/monitoring/alerts.yaml" } },
   links: { grafana: "", logs: "?area=activity", observability: "?area=observability&app=helpdesk" },
 };
 
