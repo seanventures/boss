@@ -57,6 +57,9 @@ NO_ACTION_BY_DESIGN = {
     # and decision_actions.is_ambient_card classifies it by work_item_id + asked_by: the answer
     # is carried out by ambient/answers.on_answered (test_an_ambient_card_is_carried_out).
     ("engine/boss_engine/services/ambient/board.py", "needs_you"),
+    # The same card asking about several items at once (the Chief of Staff's one card per
+    # project per tick): carried by answers.on_answered → chief_of_staff.carry_card.
+    ("engine/boss_engine/services/ambient/board.py", "needs_you_batch"),
 }
 
 #: Functions that write a decision row themselves instead of through create_blocking_decision.

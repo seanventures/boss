@@ -134,6 +134,10 @@ ACTIONS: dict[str, Action] = {a.key: a for a in (
     Action("ask_question", "Ask a question", "A1", "low", "reversible"),
     Action("comment", "Comment", "A1", "low", "compensable"),
     Action("convene_meeting", "Convene a panel", "A1", "low", "reversible"),
+    # Handing an item to the agent that owns its class changes nothing outside BOSS: the owner
+    # still acts only within the class's level (its own gate). A routine hand-off is what an
+    # always-on agent does by itself from A1; it shows on the board and in the digest.
+    Action("route", "Hand to its owner", "A1", "low", "reversible"),
     # A2: do the work up to a reviewable artifact or a reversible staging change.
     Action("label", "Label", "A2", "low", "reversible"),
     Action("nudge", "Nudge", "A2", "low", "compensable"),

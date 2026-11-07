@@ -184,6 +184,38 @@ def learning_on(settings: Any, mode: Optional[str] = None) -> bool:
     return explicit if explicit is not None else cos_mode(settings, mode) != "off"
 
 
+# ── the rate guard on asking a person ────────────────────────────────────────────────────────
+
+#: New person-facing ambient asks (Needs-you cards) per project per rolling hour. A mode switch,
+#: a first scan of a big repository or a burst of signals must never become a burst of cards:
+#: past this, the Chief of Staff holds its suggestions for the next card and owners do not seat
+#: new squads (whose proposals would ask again) until the hour has room. Incidents are exempt.
+ASKS_PER_PROJECT_HOUR = 3
+
+
+def asks_per_hour(settings: Any = None) -> int:
+    value = getattr(settings, "ambient_asks_per_hour", None) if settings is not None else None
+    try:
+        return max(0, int(ASKS_PER_PROJECT_HOUR if value is None else value))
+    except (TypeError, ValueError):
+        return ASKS_PER_PROJECT_HOUR
+
+
+def asks_last_hour(connection: Connection, project_id: str) -> int:
+    """Ambient cards raised here in the last hour (a withdrawn one asked nobody: not counted)."""
+    return int(connection.execute(text(
+        "SELECT count(*) FROM decisions WHERE project_id = :p "
+        "AND recommendation->>'asked_by' IS NOT NULL "
+        "AND recommendation->>'work_item_id' IS NOT NULL "
+        "AND status <> 'withdrawn' AND created_at > now() - interval '1 hour'"),
+        {"p": project_id}).scalar() or 0)
+
+
+def ask_room(connection: Connection, project_id: str, settings: Any = None) -> int:
+    """How many more ambient cards this project may raise this hour."""
+    return max(0, asks_per_hour(settings) - asks_last_hour(connection, project_id))
+
+
 # ── settings and the stop ────────────────────────────────────────────────────────────────────
 
 def settings_for(connection: Connection, project_id: str) -> dict[str, Any]:

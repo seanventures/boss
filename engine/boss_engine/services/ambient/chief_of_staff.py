@@ -27,17 +27,30 @@ ONE TICK, PER PROJECT
      confident files a QUESTION for a person, not an action (§4 L3 step 2).
   4. SCORE with work_orchestration's drivers (value, urgency, cost of delay, risk, confidence),
      then work the highest priority first.
-  5. DECIDE per autonomy level, through the gate:
-       A0              observe: recorded for the digest, nobody is asked;
-       A1 (or `propose` mode, the default)  propose: a Needs-you card "Hand to SRE?";
-       A2/A3 in `route` mode               route: handed straight to the owning agent.
+  5. DECIDE per autonomy level, through the gate (`disposition`, one rule for raising AND for
+     re-judging a card):
+       A0 (or the always-on agents off)     observe: recorded for the digest, nobody is asked;
+       A1+ in `route` mode ("Act within levels")  route: handed straight to the owning agent,
+                                            which still acts only within the class's level;
+       `propose` mode ("Ask first"), or an unsure reading   ask — on ONE batched card per
+                                            project per tick ("Chief of Staff suggests 5
+                                            hand-offs: tests for 3 hot files, docs, a nudge"),
+                                            never one card per item; at most
+                                            policy.ASKS_PER_PROJECT_HOUR cards an hour, the rest
+                                            wait for the next card. An incident in `propose`
+                                            mode gets its own card at once.
      The owner is the class's role, or — when several roles could own it — the one with the
      better track record on this class here, else the model's pick among them (light
-     contract-net, §6), else the catalogue owner.
+     contract-net, §6), else the catalogue owner. Signals the Recommended roadmap records
+     (`learn.*`) are its own: the Chief of Staff never triages them.
   6. RECORD every call in the decision ledger (decided_by agent:chief_of_staff, evidence = the
      signals, confidence, rationale ≤ 3 sentences) and SHOW it on the board: claim → finding →
      proposal → decision → handoff (or Needs you). That sequence is what the console draws as
      signal → Chief of Staff → owner → outcome (read_model.graph).
+  7. RE-JUDGE what it already asked (`reconsider`, every tick, even while off): a suggestion the
+     policy would no longer put to a person (the mode now routes it, its class only watches, the
+     always-on agents were turned off) leaves its card and proceeds; an empty card is withdrawn
+     with a note in words. Turning the mode on, up or off never leaves stale cards behind.
 
 SAFETY
 ------
@@ -48,6 +61,7 @@ holds an item's lease only for its own turn and lets go before the owner claims 
 """
 from __future__ import annotations
 
+import json
 import logging
 import math
 import re
@@ -62,7 +76,7 @@ from ..decision_actions import OPEN_STATUSES
 
 from . import board, collab, guards, ledger, policy, signals
 from . import task_classes as tc
-from ._common import clean_text, now, person
+from ._common import clean_text, emit, now, person
 
 log = logging.getLogger(__name__)
 
@@ -500,8 +514,12 @@ def _estimate(connection: Connection, project_id: str, task_class: str) -> Optio
 
 #: Classes the Chief of Staff routes straight to their squad in `route` mode at any level.
 ROUTE_AT_ANY_LEVEL = frozenset({"incident_response", "incident_staging_mitigation"})
-#: Chief-of-Staff Needs-you cards per class per project per day (BOSS_AMBIENT_COS_CARDS).
+#: Chief-of-Staff suggestions per class per project per day (BOSS_AMBIENT_COS_CARDS); the rest
+#: are recorded for the digest.
 DEFAULT_CARDS_PER_CLASS = 3
+#: Signals that belong to the Recommended roadmap (roadmap.py records them and ranks them
+#: itself): the Chief of Staff never triages them into a hand-off or a question of its own.
+ROADMAP_KINDS = "learn.%"
 
 
 def _seat(task_class: str) -> dict[str, str]:
@@ -519,12 +537,52 @@ def cards_per_class(settings: Any) -> int:
 
 
 def cards_today(connection: Connection, project_id: str, task_class: str) -> int:
-    """Cards the Chief of Staff raised on this class here since midnight (UTC)."""
+    """Suggestions the Chief of Staff put to a person on this class here since midnight (UTC),
+    whether their card is raised yet or still waits for the next one."""
     return int(connection.execute(text(
-        "SELECT count(*) FROM decisions WHERE project_id = :p "
-        "AND recommendation->>'asked_by' = :cos AND recommendation->>'task_class' = :c "
+        "SELECT count(*) FROM agent_act_decisions WHERE project_id = :p AND decided_by = :cos "
+        "AND task_class = :c AND (chosen LIKE 'propose:%' OR chosen = 'ask') "
         "AND created_at >= date_trunc('day', now())"),
         {"p": project_id, "cos": PARTY, "c": task_class}).scalar() or 0)
+
+
+def disposition(connection: Connection, project_id: str, task_class: str, *, asked: bool,
+                mode: str, owner_role: Optional[str] = None) -> str:
+    """THE ONE ANSWER to "does a person see this?", per task class, level and mode — used when an
+    item is triaged AND every tick for the cards already asked (`reconsider`), so the two can
+    never disagree. Returns:
+
+      observe   the class only watches here (A0), or the always-on agents are off: recorded for
+                the digest, nobody is asked;
+      roadmap   a Recommended-roadmap item: roadmap.py ranks it and a person reviews it there;
+      route     `route` mode ("Act within levels") and the class allows a hand-off without a
+                person (A1+, the `route` action): handed to the owner, shown on the board and in
+                the digest. The owner still acts only within the class's level;
+      ask       a person decides: `propose` mode ("Ask first"), the reading is not sure what
+                the problem is, or the Chief of Staff owns the class itself (a stalled handoff)
+                and its own next action (a nudge) needs a higher level than the class has.
+                Asked on ONE batched card per project per tick (`ask_batch`).
+    """
+    klass = tc.task_class(task_class)
+    if klass.key == "roadmap_item":
+        return "roadmap"
+    if mode == "off":
+        return "observe"
+    to_propose = policy.gate(connection, project_id, klass.key,
+                             "ask_question" if asked else "propose")
+    if not to_propose["allowed"] and not to_propose["needs_person"]:
+        return "observe"
+    if asked:
+        return "ask"
+    if mode == "route":
+        # Owned by the Chief of Staff itself, "handing it over" IS taking its next action: that
+        # action's own gate decides. Anyone else's hand-off is the `route` action (A1+).
+        own = (owner_role or klass.owner_role) == ROLE
+        hand = policy.gate(connection, project_id, klass.key,
+                           NEXT_ACTION.get(klass.key, "propose") if own else "route")
+        if (hand["allowed"] and not hand["needs_person"]) or klass.key in ROUTE_AT_ANY_LEVEL:
+            return "route"
+    return "ask"
 
 
 def run_already_asks(connection: Connection, project_id: str,
@@ -544,6 +602,84 @@ def run_already_asks(connection: Connection, project_id: str,
         "   AND decision_id IS NOT NULL)) "
         "ORDER BY d.created_at DESC LIMIT 1"),
         {"p": project_id, "r": sorted(runs), "open": sorted(OPEN_STATUSES)}).scalar()
+
+
+# ── words a person reads ─────────────────────────────────────────────────────────────────────
+#
+# Every question the Chief of Staff puts to a person is built from structured data — a file's
+# short name, a repository's name, the task's short title — never from a raw subject key
+# (`module:acme/web:src/pages/A.jsx`, `task:crun_…`, `subject:stage:solo`).
+
+#: One suggestion, said in a few words: {name} is board.plain_subject, {title} the short title.
+_ONE = {"missing_tests": "tests for {name}", "doc_drift": "docs for {name}",
+        "ci_setup": "CI for {name}", "security_patch": "a patch for {name}",
+        "dependency_upgrade": "an upgrade of {name}", "flaky_test": "a flaky test fix",
+        "stale_handoff": "a nudge on “{title}”", "workflow_failure": "a fix for “{title}”",
+        "system_health": "a check on “{title}”", "ci_fix_boss_pr": "a CI fix on {name}",
+        "red_main": "red main on {name}", "incident_response": "the incident on {name}",
+        "incident_staging_mitigation": "the incident on {name}"}
+#: Several of one kind on a batched card.
+_MANY = {"missing_tests": "tests for {n} hot files", "doc_drift": "docs for {n} repos",
+         "ci_setup": "CI for {n} repos", "security_patch": "{n} security patches",
+         "dependency_upgrade": "{n} upgrades", "flaky_test": "{n} flaky tests",
+         "stale_handoff": "{n} nudges", "workflow_failure": "{n} failed steps",
+         "system_health": "{n} health checks"}
+#: One of a kind on a batched card beside others: the shortest word.
+_SHORT = {"missing_tests": "tests", "doc_drift": "docs", "ci_setup": "CI",
+          "stale_handoff": "a nudge", "security_patch": "a patch", "dependency_upgrade":
+          "an upgrade", "workflow_failure": "a failed step", "system_health": "a health check"}
+
+
+def what_words(task_class: str, item: Mapping[str, Any]) -> str:
+    """One suggestion in a few plain words: "tests for TicketDetailPage.jsx"."""
+    from .board import plain_subject
+
+    klass = tc.task_class(task_class)
+    name = plain_subject(item)
+    title = _short_title(item.get("title"))
+    pattern = _ONE.get(klass.key)
+    if pattern is None or ("{name}" in pattern and not name):
+        return f"{klass.title.lower()}: “{title}”" if title else klass.title.lower()
+    return pattern.format(name=name or "", title=title)
+
+
+def _short_title(value: Any, words: int = 7) -> str:
+    from ._common import short_label
+
+    body = clean_text(value, 200)
+    short = short_label(body, words)
+    return short + ("…" if len(body.split()) > words else "")
+
+
+def batch_question(entries: Sequence[Mapping[str, Any]]) -> str:
+    """The card's one line. One suggestion: "Hand to QA: tests for TicketDetailPage.jsx?".
+    Several: "Chief of Staff suggests 5 hand-offs: tests for 3 hot files, docs, a nudge"."""
+    me = _label(ROLE)
+    if len(entries) == 1:
+        e = entries[0]
+        if e.get("asked"):
+            return f"What kind of problem is “{_short_title(e.get('title'))}”?"
+        if e.get("owner") == PARTY:
+            action = tc.ACTIONS.get(str(e.get("next_action")), tc.ACTIONS["propose"]).title
+            return f"{action}: “{_short_title(e.get('title'))}”?"
+        return f"Hand to {e['owner_label']}: {e['words']}?"
+    by_class: dict[str, list[Mapping[str, Any]]] = {}
+    for e in entries:
+        by_class.setdefault("?" if e.get("asked") else str(e["task_class"]), []).append(e)
+    parts = []
+    for key, group in sorted(by_class.items(), key=lambda kv: -len(kv[1])):
+        n = len(group)
+        if key == "?":
+            parts.append("a question" if n == 1 else f"{n} questions")
+        elif n == 1:
+            parts.append(_SHORT.get(key) or tc.task_class(key).title.lower())
+        else:
+            parts.append(_MANY.get(key, "{n} × " + tc.task_class(key).title.lower())
+                         .format(n=n))
+    handoffs = sum(1 for e in entries if not e.get("asked"))
+    head = (f"{me} suggests {len(entries)} hand-offs" if handoffs == len(entries) else
+            f"{me} has {len(entries)} suggestions")
+    return f"{head}: {', '.join(parts)}"
 
 
 # ── project-less signals ─────────────────────────────────────────────────────────────────────
@@ -604,7 +740,11 @@ def _hold(connection: Connection, group: Sequence[Mapping[str, Any]],
 def triage_group(connection: Connection, settings: Any, project_id: str,
                  group: Sequence[Mapping[str, Any]], reading: Reading, *, mode: str,
                  budget: Budget) -> dict[str, Any]:
-    """Open or join the one item for this group, then observe, propose or route it."""
+    """Open or join the one item for this group, then observe, route or suggest it.
+
+    A suggestion a person must answer is NOT asked here: it is recorded (ledger + proposal) and
+    the item waits for this tick's ONE batched card (`ask_batch`). Only an incident in `propose`
+    mode gets a card of its own at once — it is urgent and about one running app."""
     klass = tc.task_class(reading.task_class)
     group = sorted(group, key=lambda s: (-_SEVERITY_RANK.get(s["severity"], 2),
                                          str(s.get("first_seen_at") or "")))
@@ -651,8 +791,6 @@ def triage_group(connection: Connection, settings: Any, project_id: str,
     owner = f"agent:{owner_role}"
     next_key = NEXT_ACTION.get(klass.key, "propose")
     next_gate = policy.gate(connection, project_id, klass.key, next_key)
-    to_propose = policy.gate(connection, project_id, klass.key,
-                             "ask_question" if reading.asked else "propose")
     cost = reading.cost_usd_micros + route_cost
     who = _label(owner_role)
     owner_free = next_gate["allowed"] and not next_gate["needs_person"]
@@ -667,15 +805,22 @@ def triage_group(connection: Connection, settings: Any, project_id: str,
                {"key": f"route:{owner_role}", "label": f"Hand to {who}"},
                {"key": "ask", "label": "Ask what it is"}]
     board.assert_lease(connection, item_id, owner=PARTY, token=token, lock=True)
+    disp = disposition(connection, project_id, klass.key, asked=reading.asked, mode=mode,
+                       owner_role=owner_role)
 
-    if not to_propose["allowed"] and not to_propose["needs_person"]:
-        # A0 (OBSERVE): recorded for the digest; nobody is asked, nothing is handed over.
+    if disp in ("observe", "roadmap"):
+        # OBSERVE: recorded for the digest; nobody is asked, nothing is handed over.
+        why = ("the Recommended roadmap ranks these and a person reviews them there"
+               if disp == "roadmap" else f"{klass.title} is {level} here")
         act = ledger.record_decision(
             connection, **common, question=f"What to do with this {klass.title.lower()}?",
             chosen="observe", action="observe", options=options,
-            rejected=[{"option": f"propose:{owner_role}", "why": f"{klass.title} is {level} here"}],
-            rationale=f"{klass.title}: {reading.why}. It runs at {level} here, so BOSS records "
-                      "it for the digest and asks nobody.")
+            rejected=[{"option": f"propose:{owner_role}", "why": why}],
+            rationale=(f"{klass.title}: {reading.why}. "
+                       + ("The Recommended roadmap ranks it, so BOSS asks nobody here."
+                          if disp == "roadmap" else
+                          f"It runs at {level} here, so BOSS records it for the digest and "
+                          "asks nobody.")))
         board.release(connection, item_id, owner=PARTY, token=token, reason="observed")
         return {"outcome": "observed", "work_item_id": item_id, "act_id": act["act_id"],
                 "task_class": klass.key, "level": level}
@@ -698,15 +843,11 @@ def triage_group(connection: Connection, settings: Any, project_id: str,
         return {"outcome": "linked", "work_item_id": item_id, "act_id": act["act_id"],
                 "decision_id": asks, "task_class": klass.key, "level": level}
 
-    # An incident goes straight to the SRE squad in `route` mode whatever its level: the squad
-    # only investigates on its own, and a production mitigation is still a person's call.
-    direct = (mode == "route" and not reading.asked
-              and (tc.level_rank(level) >= tc.level_rank("A2")
-                   or klass.key in ROUTE_AT_ANY_LEVEL))
+    direct = disp == "route"
     cap = cards_per_class(settings)
     if not direct and not reading.asked and cards_today(connection, project_id, klass.key) >= cap:
-        # NOISE CONTROL 2: at most `cap` Chief-of-Staff cards per class per project per day;
-        # the rest are recorded for the digest (observe) and stay on the list.
+        # NOISE CONTROL 2: at most `cap` suggestions per class per project per day; the rest
+        # are recorded for the digest (observe) and stay on the list.
         act = ledger.record_decision(
             connection, **common, question=f"What to do with this {klass.title.lower()}?",
             chosen="observe", action="observe", options=options,
@@ -717,30 +858,31 @@ def triage_group(connection: Connection, settings: Any, project_id: str,
         board.release(connection, item_id, owner=PARTY, token=token, reason="daily card cap")
         return {"outcome": "capped", "work_item_id": item_id, "act_id": act["act_id"],
                 "task_class": klass.key, "level": level}
-    action_key = "ask_question" if reading.asked else "propose"
-    summary = (f"Hand to {who}: {tc.ACTIONS[next_key].title.lower()}" if not reading.asked
+    action_key = "ask_question" if reading.asked else ("route" if direct else "propose")
+    words = what_words(klass.key, item)
+    summary = (f"Hand to {who}: {words}" if not reading.asked
                else f"Is this {klass.title.lower()}?")
     proposal = collab.post(connection, item_id, kind="proposal", sender=PARTY, body={
-        "action": action_key, "summary": summary, "confidence": reading.confidence,
-        "undo": {"action": "dismiss"}})
+        "action": "ask_question" if reading.asked else "propose", "summary": summary,
+        "confidence": reading.confidence, "undo": {"action": "dismiss"}})
     if reading.asked:
         chosen = "ask"
         why_level = "the reading is not sure enough to act on"
     elif direct:
         chosen = f"route:{owner_role}"
-        why_level = f"{klass.title} runs at {level} here, so it goes straight to {who}"
+        why_level = (f"{klass.title} runs at {level} here, so the hand-off goes straight to "
+                     f"{who}, who acts only within that level")
     else:
         chosen = f"propose:{owner_role}"
-        why_level = (f"{klass.title} runs at {level} here" if tc.level_rank(level) < 2 else
-                     "BOSS asks before handing anything over (propose mode)")
+        why_level = "BOSS asks before handing anything over (Ask first)"
     rejected = [{"option": o["key"], "why": "not this level" if o["key"] != "observe"
                  else "worth a person's look"} for o in options if o["key"] != chosen]
     act = ledger.record_decision(
         connection, **common,
         question=("What kind of problem is this?" if reading.asked
                   else f"Who should own this {klass.title.lower()}?"),
-        chosen=chosen, action=action_key, options=options, rejected=rejected,
-        proposal_id=proposal["id"],
+        chosen=chosen, action=action_key, options=options,
+        rejected=rejected, proposal_id=proposal["id"],
         rationale=(f"{klass.title}: {reading.why} ({reading.by}, "
                    f"{reading.confidence:.0%}). {who} {route_why}. {why_level[0].upper()}"
                    f"{why_level[1:]}."))
@@ -751,41 +893,342 @@ def triage_group(connection: Connection, settings: Any, project_id: str,
         board.release(connection, item_id, owner=PARTY, token=token, reason=f"routed to {owner}")
         return {"outcome": "routed", "work_item_id": item_id, "act_id": act["act_id"],
                 "owner": owner, "task_class": klass.key, "level": level}
-    estimate = _estimate(connection, project_id, klass.key)
-    board.needs_you(
-        connection, item_id, actor=PARTY, token=token,
-        question=(f"Is this {klass.title.lower()}?" if reading.asked
-                  else f"{tc.ACTIONS[next_key].title}?" if owner_role == ROLE
-                  else f"Hand to {who}?"),
-        recommendation={"action": "ambient_route", "owner": owner, "owner_label": who,
-                        "next_action": next_key, "owner_may_act": owner_free,
-                        "act_id": act["act_id"], "estimate_usd": estimate,
-                        "priority": round(priority(drivers), 1)},
-        options=[{"key": "approve", "label": tc.ACTIONS[next_key].title if owner_role == ROLE
-                  else f"Hand to {who}"},
-                 {"key": "reject", "label": "Dismiss"}],
-        risk_tier=1 if klass.risk == "low" else 2,
-        cost_of_waiting=f"{severity} · ×{sum(int(s.get('occurrences') or 1) for s in group)}")
-    board.release(connection, item_id, owner=PARTY, token=token, reason="asked a person")
+    if klass.key in ROUTE_AT_ANY_LEVEL and not reading.asked:
+        # An incident is asked on its OWN card, now: it is urgent and about one running app.
+        estimate = _estimate(connection, project_id, klass.key)
+        board.needs_you(
+            connection, item_id, actor=PARTY, token=token, question=f"Hand to {who}?",
+            recommendation={"action": "ambient_route", "owner": owner, "owner_label": who,
+                            "next_action": next_key, "owner_may_act": owner_free,
+                            "act_id": act["act_id"], "estimate_usd": estimate,
+                            "priority": round(priority(drivers), 1), "words": words},
+            options=[{"key": "approve", "label": f"Hand to {who}"},
+                     {"key": "reject", "label": "Dismiss"}],
+            risk_tier=1 if klass.risk == "low" else 2,
+            cost_of_waiting=f"{severity} · ×{sum(int(s.get('occurrences') or 1) for s in group)}")
+        board.release(connection, item_id, owner=PARTY, token=token, reason="asked a person")
+        return {"outcome": "proposed", "work_item_id": item_id, "act_id": act["act_id"],
+                "owner": owner, "task_class": klass.key, "level": level}
+    # Everything else waits for this tick's ONE card (ask_batch), under the hourly rate guard.
+    board.release(connection, item_id, owner=PARTY, token=token, reason="waits for the card")
     return {"outcome": "asked" if reading.asked else "proposed", "work_item_id": item_id,
-            "act_id": act["act_id"], "owner": owner, "task_class": klass.key, "level": level}
+            "act_id": act["act_id"], "owner": owner, "task_class": klass.key, "level": level,
+            "batched": True}
+
+
+# ── one card per project per tick ────────────────────────────────────────────────────────────
+
+#: Suggestions the Chief of Staff recorded that no card asks yet: its latest call on the item is
+#: a suggestion (propose / ask) with no outcome, the item is back on the board with nobody
+#: holding it, nobody was handed it, and no card is open on it.
+_WAITING = (
+    "SELECT w.id, w.title, w.task_class, w.subject_ref, w.app, w.severity, w.effective_score, "
+    "w.created_at, x.act_id, x.chosen FROM work_items w "
+    "JOIN LATERAL (SELECT a.act_id, a.chosen, a.outcome FROM agent_act_decisions a "
+    "  WHERE a.work_item_id = w.id AND a.decided_by = :cos ORDER BY a.created_at DESC "
+    "  LIMIT 1) x ON true "
+    "WHERE w.project_id = :p AND w.ambient AND w.lifecycle = 'proposed' "
+    "AND w.lease_owner IS NULL AND w.needs_you_decision_id IS NULL "
+    "AND w.task_class <> 'roadmap_item' AND x.outcome IS NULL "
+    "AND (x.chosen LIKE 'propose:%' OR x.chosen = 'ask') "
+    "AND NOT EXISTS (SELECT 1 FROM work_item_messages h WHERE h.work_item_id = w.id "
+    "  AND h.kind = 'handoff' AND h.sender = :cos) "
+    "ORDER BY w.effective_score DESC NULLS LAST, w.created_at LIMIT :n")
+
+
+def waiting_suggestions(connection: Connection, project_id: str,
+                        limit: int = MAX_ITEMS_PER_TICK) -> list[dict[str, Any]]:
+    return [dict(r) for r in connection.execute(text(_WAITING), {
+        "cos": PARTY, "p": project_id, "n": limit}).mappings()]
+
+
+def _entry(connection: Connection, project_id: str, row: Mapping[str, Any]) -> dict[str, Any]:
+    """One suggestion on a card, as structured data the console can draw (no raw keys)."""
+    klass = tc.task_class(row["task_class"])
+    asked = row["chosen"] == "ask"
+    owner_role = (str(row["chosen"]).split(":", 1)[1] if ":" in str(row["chosen"])
+                  else ROUTES.get(klass.key, (klass.owner_role,))[0])
+    next_key = NEXT_ACTION.get(klass.key, "propose")
+    gate = policy.gate(connection, project_id, klass.key, next_key)
+    return {"work_item_id": row["id"], "act_id": row["act_id"], "task_class": klass.key,
+            "kind": klass.title, "title": _short_title(row["title"], 12),
+            "words": what_words(klass.key, row), "asked": asked,
+            "owner": f"agent:{owner_role}", "owner_label": _label(owner_role),
+            "next_action": next_key, "owner_may_act": gate["allowed"] and not gate["needs_person"],
+            "severity": row["severity"]}
+
+
+def ask_batch(connection: Connection, settings: Any, project_id: str, *,
+              mode: str = "propose", manual: bool = False) -> dict[str, Any]:
+    """Put every waiting suggestion in front of a person on ONE card, if the hour has room.
+
+    Returns {"asked": [item ids], "decision_id"} or {"held": [item ids], "reason"}. Held ones wait
+    for the next tick's card (the rate guard: policy.ask_room) — and are judged again then: one
+    the policy no longer asks (the mode changed while it waited) proceeds without a card.
+    `manual`: a person pressed "Triage now" while the always-on agents are off — the card stays
+    when the tick next sweeps (reconsider withdraws only what the agents asked by themselves)."""
+    rows = []
+    settled = []
+    for row in waiting_suggestions(connection, project_id):
+        owner = str(row["chosen"]).split(":", 1)[1] if ":" in str(row["chosen"]) else None
+        verdict = disposition(connection, project_id, row["task_class"],
+                              asked=row["chosen"] == "ask", mode=mode, owner_role=owner)
+        if verdict == "ask":
+            rows.append(row)
+            continue
+        with connection.begin_nested():
+            item = board.get(connection, row["id"])
+            settled.append(_settle_withdrawn(
+                connection, project_id, None, item, {**_entry(connection, project_id, row)},
+                verdict))
+    if not rows:
+        return {"asked": [], **({"settled": settled} if settled else {})}
+    if policy.ask_room(connection, project_id, settings) <= 0:
+        return {"asked": [], "held": [r["id"] for r in rows],
+                "reason": f"{policy.asks_per_hour(settings)} cards already this hour"}
+    held: list[tuple[str, str]] = []
+    entries: list[dict[str, Any]] = []
+    for row in rows:
+        try:
+            with connection.begin_nested():
+                got = board.claim(connection, row["id"], owner=PARTY, minutes=TURN_LEASE_MINUTES)
+        except (board.Conflict, board.LeaseLost):
+            continue
+        held.append((row["id"], got["lease_token"]))
+        entries.append(_entry(connection, project_id, row))
+    if not held:
+        return {"asked": []}
+    rec: dict[str, Any] = {"action": "ambient_route", "batch": entries, "count": len(entries),
+                           "manual": bool(manual)}
+    if len(entries) == 1:
+        lead = entries[0]
+        rec.update({k: lead[k] for k in ("owner", "owner_label", "next_action",
+                                         "owner_may_act", "act_id", "words")})
+        rec["estimate_usd"] = _estimate(connection, project_id, lead["task_class"])
+        options = [{"key": "approve", "label": (
+                       "Answer" if lead["asked"] else
+                       tc.ACTIONS[lead["next_action"]].title if lead["owner"] == PARTY
+                       else f"Hand to {lead['owner_label']}")},
+                   {"key": "reject", "label": "Dismiss"}]
+    else:
+        options = [{"key": "approve", "label": "Hand all over"},
+                   {"key": "reject", "label": "Dismiss all"}]
+    risky = any(tc.task_class(e["task_class"]).risk != "low" for e in entries)
+    moved = board.needs_you_batch(
+        connection, held, actor=PARTY, question=batch_question(entries), recommendation=rec,
+        options=options, risk_tier=2 if risky else 1,
+        cost_of_waiting=f"{len(entries)} item{'s' if len(entries) > 1 else ''} wait")
+    for item_id, token in held:
+        board.release(connection, item_id, owner=PARTY, token=token, reason="asked a person")
+    return {"asked": [i for i, _ in held], "decision_id": moved["needs_you_decision_id"]}
+
+
+# ── withdrawing what the policy no longer asks ───────────────────────────────────────────────
+
+_WITHDRAW_WHY = {
+    "route": "BOSS now hands this over by itself — each kind of work runs at its own level — "
+             "so it shows in Agents at work and in the digest instead",
+    "observe": "this kind of work only watches here, so nobody is asked",
+    "off": "the always-on agents are off, so nothing waits on this answer",
+    "roadmap": "the Recommended roadmap ranks this; it is not a hand-off",
+    "moot": "the item it asked about has moved on",
+}
+
+
+def _roadmap_only(connection: Connection, item_id: str) -> bool:
+    """Every signal behind the item is the Recommended roadmap's own (learn.*)."""
+    row = connection.execute(text(
+        "SELECT count(*) AS n, count(*) FILTER (WHERE s.kind LIKE :k) AS learn "
+        "FROM work_item_links l JOIN signals s ON s.id = l.ref "
+        "WHERE l.work_item_id = :w AND l.kind = 'signal'"),
+        {"w": item_id, "k": ROADMAP_KINDS}).mappings().one()
+    return int(row["n"]) > 0 and int(row["n"]) == int(row["learn"])
+
+
+def _verdict(connection: Connection, project_id: str, card: Mapping[str, Any],
+             entry: Mapping[str, Any], mode: str) -> tuple[str, Optional[dict[str, Any]]]:
+    """('ask' | 'route' | 'observe' | 'off' | 'roadmap' | 'moot', the item)."""
+    item = board.get(connection, str(entry.get("work_item_id") or ""))
+    if (item is None or item["lifecycle"] != "needs_you"
+            or item.get("needs_you_decision_id") != card["id"]):
+        return "moot", item
+    if _roadmap_only(connection, item["id"]) or item["task_class"] == "roadmap_item":
+        return "roadmap", item
+    if mode == "off":
+        return ("ask" if (card.get("recommendation") or {}).get("manual") else "off"), item
+    act = connection.execute(text(
+        "SELECT chosen FROM agent_act_decisions WHERE act_id = :a"),
+        {"a": str(entry.get("act_id") or "")}).scalar()
+    asked = bool(entry.get("asked")) or act == "ask"
+    owner = str(entry.get("owner") or "")
+    return disposition(connection, project_id, item["task_class"], asked=asked, mode=mode,
+                       owner_role=owner.split(":", 1)[1] if ":" in owner else None), item
+
+
+def _settle_withdrawn(connection: Connection, project_id: str, card_id: Optional[str],
+                      item: Mapping[str, Any], entry: Mapping[str, Any], verdict: str) -> str:
+    """The item a withdrawn question (`card_id`), or a suggestion still waiting for its card
+    (None), was about: back on the board, then handed over (route), recorded for the digest
+    (observe / off), or left to the Recommended roadmap."""
+    item_id = item["id"]
+    note = _WITHDRAW_WHY[verdict]
+    board.unask(connection, item_id, actor=PARTY, reason=note)
+    cited = ([{"kind": "decision", "ref": card_id}] if card_id
+             else [{"kind": "act", "ref": str(entry["act_id"])}])
+    lead_in = "The question was withdrawn" if card_id else "It no longer needs a person"
+    held = board.claim(connection, item_id, owner=PARTY, minutes=TURN_LEASE_MINUTES)
+    token = held["lease_token"]
+    klass = tc.task_class(item["task_class"])
+    owner = str(entry.get("owner") or f"agent:{klass.owner_role}")
+    who = str(entry.get("owner_label") or _label(owner.split(":", 1)[-1]))
+    common = dict(project_id=project_id, decided_by=PARTY, work_item_id=item_id,
+                  task_class=klass.key, evidence=cited,
+                  reversibility="reversible", undo={"action": "dismiss", "work_item_id": item_id},
+                  options=["observe", f"route:{owner.split(':', 1)[-1]}", "ask"])
+    if verdict == "route":
+        ledger.record_decision(
+            connection, **common, question=f"Who should own this {klass.title.lower()}?",
+            chosen=f"route:{owner.split(':', 1)[-1]}", action="route",
+            rationale=(f"{lead_in}: {note}. {who} takes it and acts only within the "
+                       "class's level."))
+        next_key = str(entry.get("next_action") or NEXT_ACTION.get(klass.key, "propose"))
+        collab.post(connection, item_id, kind="handoff", sender=PARTY, body={
+            "to": owner, "from": PARTY, **_seat(klass.key),
+            "summary": tc.ACTIONS.get(next_key, tc.ACTIONS["propose"]).title})
+        board.release(connection, item_id, owner=PARTY, token=token, reason=f"routed to {owner}")
+        return "routed"
+    ledger.record_decision(
+        connection, **common, question=f"What to do with this {klass.title.lower()}?",
+        chosen="observe", action="observe",
+        rationale=f"{lead_in}: {note}. BOSS records it for the digest.")
+    if verdict == "roadmap":
+        board.finish(connection, item_id, actor=PARTY, lifecycle="dismissed", token=token,
+                     outcome="left to the Recommended roadmap")
+        return "left_to_roadmap"
+    board.release(connection, item_id, owner=PARTY, token=token, reason="observed")
+    return "observed"
+
+
+def _open_cards(connection: Connection, project_id: str) -> list[dict[str, Any]]:
+    return [dict(r) for r in connection.execute(text(
+        "SELECT id, project_id, question, recommendation, created_at FROM decisions "
+        "WHERE project_id = :p AND status = ANY(:open) AND recommendation->>'asked_by' = :cos "
+        "ORDER BY created_at"),
+        {"p": project_id, "open": sorted(OPEN_STATUSES), "cos": PARTY}).mappings()]
+
+
+def reconsider(connection: Connection, project_id: str, *, mode: str) -> list[dict[str, Any]]:
+    """WITHDRAW WHAT THE POLICY NO LONGER ASKS (the way cleared_causes withdraws a superseded
+    deploy question). Every tick, each open card the Chief of Staff raised is judged again,
+    suggestion by suggestion, with `disposition` — the same rule that raised it. A suggestion a
+    person no longer needs to answer (the mode now routes it, its class only watches, the
+    always-on agents were turned off, it belongs to the Recommended roadmap) leaves the card and
+    its item proceeds: handed over, or recorded for the digest. A card left with nothing to ask
+    is withdrawn with a note in words (status `withdrawn`, event `decision.withdrawn`); a card
+    left with some is narrowed to them. Returns what changed."""
+    from ..run_decisions import _withdraw_with_note
+
+    out: list[dict[str, Any]] = []
+    for card in _open_cards(connection, project_id):
+        rec = dict(card.get("recommendation") or {})
+        entries = list(rec.get("batch") or [
+            {**rec, "work_item_id": rec.get("work_item_id")}])
+        keep, gone = [], []
+        for entry in entries:
+            verdict, item = _verdict(connection, project_id, card, entry, mode)
+            (keep if verdict == "ask" else gone).append((entry, item, verdict))
+        if not gone:
+            continue
+        settled = []
+        for entry, item, verdict in list(gone):
+            if verdict == "moot" or item is None:
+                continue
+            try:
+                with connection.begin_nested():
+                    settled.append({"work_item_id": item["id"], "verdict": verdict,
+                                    "outcome": _settle_withdrawn(connection, project_id,
+                                                                 card["id"], item, entry,
+                                                                 verdict)})
+            except (board.Conflict, board.LeaseLost, ledger.GateRefused, LookupError):
+                # Someone holds it (a person took it over): it stays on the card for now.
+                log.info("ambient reconsider kept %s on %s", item["id"], card["id"],
+                         exc_info=True)
+                gone.remove((entry, item, verdict))
+                keep.append((entry, item, "ask"))
+        if not gone:
+            continue
+        reasons = sorted({v for _, _, v in gone})
+        if keep:
+            narrowed = [e for e, _, _ in keep]
+            lead = narrowed[0]
+            new_rec = {**rec, "batch": narrowed, "count": len(narrowed),
+                       "work_item_id": lead["work_item_id"],
+                       "work_item_ids": [e["work_item_id"] for e in narrowed]}
+            question = (batch_question(narrowed) if all("words" in e for e in narrowed)
+                        else card["question"])
+            connection.execute(text(
+                "UPDATE decisions SET recommendation = CAST(:r AS JSONB), question = :q, "
+                "updated_at = now() WHERE id = :d"),
+                {"r": json.dumps(new_rec, default=str), "q": question[:300], "d": card["id"]})
+            emit(connection, project_id, "ambient.card_narrowed", PARTY, "decision", card["id"],
+                 {"removed": [e.get("work_item_id") for e, _, _ in gone], "reasons": reasons})
+            out.append({"decision_id": card["id"], "narrowed": True, "settled": settled})
+            continue
+        note = "; ".join(_WITHDRAW_WHY[v] for v in reasons)
+        if _withdraw_with_note(connection, card["id"], project_id,
+                               f"Withdrawn: {note[0].upper()}{note[1:]}.", actor=PARTY,
+                               why={"why": note, "reasons": reasons, "mode": mode,
+                                    "items": [s["work_item_id"] for s in settled]}):
+            out.append({"decision_id": card["id"], "withdrawn": True, "settled": settled})
+    return out
+
+
+def reconsider_everywhere(engine: Any, *, mode: str) -> dict[str, Any]:
+    """`reconsider` in every project with an open Chief-of-Staff card (the tick runs it even while
+    the always-on agents are off: turning them off withdraws what they asked by themselves)."""
+    with engine.begin() as c:
+        pids = [str(p) for p in c.execute(text(
+            "SELECT DISTINCT project_id FROM decisions WHERE status = ANY(:open) "
+            "AND recommendation->>'asked_by' = :cos AND project_id IS NOT NULL"),
+            {"open": sorted(OPEN_STATUSES), "cos": PARTY}).scalars()]
+    out: dict[str, Any] = {}
+    for pid in pids:
+        try:
+            with engine.begin() as c:
+                if policy.is_stopped(c, pid):
+                    continue
+                done = reconsider(c, pid, mode=mode)
+            if done:
+                out[pid] = done
+        except Exception as exc:  # noqa: BLE001 — one project's failure is reported, not raised
+            log.warning("ambient reconsider failed for %s", pid, exc_info=True)
+            out[pid] = {"error": f"{type(exc).__name__}: {exc}"[:300]}
+    return out
 
 
 # ── following up the cards it asked ──────────────────────────────────────────────────────────
 
+#: A card asks about one item or several (`batch`): each item's own suggestion (its owner, its
+#: act) is its entry in the batch, else the card's recommendation itself. A WITHDRAWN card was
+#: never answered: it is not an answer to carry.
 _ANSWERED = (
     "SELECT w.id, w.lifecycle, w.task_class, w.title, d.id AS decision_id, d.status AS answer, "
-    "d.approved_by, d.executed_by, d.recommendation, x.outcome AS cos_outcome "
+    "d.approved_by, d.executed_by, d.recommendation, e.entry, x.outcome AS cos_outcome "
     "FROM work_items w JOIN decisions d ON d.id = w.needs_you_decision_id "
-    "JOIN agent_act_decisions x ON x.act_id = d.recommendation->>'act_id' "
+    "CROSS JOIN LATERAL (SELECT COALESCE((SELECT b FROM jsonb_array_elements(CASE WHEN "
+    "  jsonb_typeof(d.recommendation->'batch') = 'array' THEN d.recommendation->'batch' "
+    "  ELSE '[]'::jsonb END) b WHERE b->>'work_item_id' = w.id LIMIT 1), d.recommendation) "
+    "  AS entry) e "
+    "JOIN agent_act_decisions x ON x.act_id = e.entry->>'act_id' "
     "WHERE w.project_id = :p AND w.ambient AND w.lifecycle IN ('needs_you', 'proposed') "
     "AND d.recommendation->>'asked_by' = :cos AND NOT (d.status = ANY(:open_statuses)) "
+    "AND d.status <> 'withdrawn' "
     "AND x.outcome IS NULL AND (CAST(:w AS TEXT) IS NULL OR w.id = :w) "
     "ORDER BY d.updated_at LIMIT 50")
 
 
 def _carry(connection: Connection, row: Mapping[str, Any]) -> dict[str, Any]:
-    rec = dict(row["recommendation"] or {})
+    rec = dict(row.get("entry") or row["recommendation"] or {})
     answer = str(row["answer"])
     who = person(row["approved_by"] or row["executed_by"] or "operator")
     approved = answer in ("approved", "executed")
@@ -835,12 +1278,26 @@ def carry_answer(connection: Connection, *, item_id: str,
     return _carry(connection, rows[0]) if rows else None
 
 
+def carry_card(connection: Connection, *, decision_id: str,
+               recommendation: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """A person answered a card: carry the answer to EVERY item it asked about (one answer, one
+    card, however many hand-offs it held)."""
+    ids = [str(e.get("work_item_id")) for e in recommendation.get("batch") or []
+           if e.get("work_item_id")] or [str(recommendation.get("work_item_id") or "")]
+    out = []
+    for item_id in dict.fromkeys(i for i in ids if i):
+        done = carry_answer(connection, item_id=item_id, decision_id=decision_id)
+        if done:
+            out.append(done)
+    return out
+
+
 def follow_up(connection: Connection, project_id: str) -> list[dict[str, Any]]:
     """A person answered a card the Chief of Staff asked: carry the answer through. Approved →
     the item goes back on the board and is handed to its owner; rejected → dismissed (it cools
     down). Either way the Chief of Staff's decision gets its outcome, which is what earns or
     loses a class its autonomy (policy.review_track_record). Normally decisions.py carries the
-    answer at once (answers.on_answered → carry_answer); this is the tick's safety net."""
+    answer at once (answers.on_answered → carry_card); this is the tick's safety net."""
     return [_carry(connection, row) for row in _answered_rows(connection, project_id)]
 
 
@@ -848,10 +1305,10 @@ def follow_up(connection: Connection, project_id: str) -> list[dict[str, Any]]:
 
 def triage_project(connection: Connection, settings: Any, project_id: str, *,
                    mode: Optional[str] = None, adapter: Any = None, decider: Any = None,
-                   max_model_calls: Optional[int] = None) -> dict[str, Any]:
-    """One project's turn: follow up answers, then dedupe, classify, rank and decide."""
-    from ..agent_service import decision_threshold
-
+                   max_model_calls: Optional[int] = None,
+                   manual: bool = False) -> dict[str, Any]:
+    """One project's turn: follow up answers, withdraw what the policy no longer asks, then
+    dedupe, classify, rank and decide — and ask what needs a person on ONE card."""
     mode = mode or policy.effective_mode(connection, settings)
     report: dict[str, Any] = {"mode": mode, "items": [], "follow_ups": [], "model_calls": 0,
                               "model_cost_usd_micros": 0}
@@ -860,18 +1317,38 @@ def triage_project(connection: Connection, settings: Any, project_id: str, *,
     if stop["stopped"]:
         return {**report, "stopped": stop}
     if mode == "off":
+        report["reconsidered"] = reconsider(connection, project_id, mode=mode)
         return report
     report["follow_ups"] = follow_up(connection, project_id)
     from . import answers
 
     report["answers"] = answers.sweep(connection, settings, project_id)
+    report["reconsidered"] = reconsider(connection, project_id, mode=mode)
     rows = connection.execute(text(
-        "SELECT * FROM signals WHERE project_id = :p AND status = 'new' "
+        "SELECT * FROM signals WHERE project_id = :p AND status = 'new' AND kind NOT LIKE :rk "
         "ORDER BY array_position(ARRAY['critical','high','medium','low','info'], severity), "
-        "last_seen_at DESC LIMIT :n"), {"p": project_id, "n": MAX_SIGNALS_PER_TICK}).mappings()
+        "last_seen_at DESC LIMIT :n"),
+        {"p": project_id, "n": MAX_SIGNALS_PER_TICK, "rk": ROADMAP_KINDS}).mappings()
     pending = [signals._out(r) for r in rows]  # noqa: SLF001 — the inbox's own row shape
-    if not pending:
-        return report
+    if pending:
+        _triage_pending(connection, settings, project_id, pending, report, mode=mode,
+                        adapter=adapter, decider=decider, max_model_calls=max_model_calls)
+    if mode != "off" and not policy.is_stopped(connection, project_id):
+        with connection.begin_nested():
+            report["card"] = ask_batch(connection, settings, project_id, mode=mode,
+                                       manual=manual)
+    counts: dict[str, int] = {}
+    for entry in report["items"]:
+        counts[entry["outcome"]] = counts.get(entry["outcome"], 0) + 1
+    report["counts"] = counts
+    return report
+
+
+def _triage_pending(connection: Connection, settings: Any, project_id: str,
+                    pending: list[dict[str, Any]], report: dict[str, Any], *, mode: str,
+                    adapter: Any, decider: Any, max_model_calls: Optional[int]) -> None:
+    from ..agent_service import decision_threshold
+
     calls = int(max_model_calls if max_model_calls is not None
                 else getattr(settings, "ambient_cos_model_calls", 3) or 0)
     budget = Budget(calls_left=max(0, calls), adapter=adapter, decider=decider)
@@ -904,24 +1381,34 @@ def triage_project(connection: Connection, settings: Any, project_id: str, *,
             break
     report["model_calls"] = budget.calls
     report["model_cost_usd_micros"] = budget.spent_usd_micros
-    counts: dict[str, int] = {}
-    for entry in report["items"]:
-        counts[entry["outcome"]] = counts.get(entry["outcome"], 0) + 1
-    report["counts"] = counts
-    return report
 
 
 def projects_with_work(connection: Connection, limit: int = MAX_PROJECTS_PER_TICK) -> list[str]:
-    """Projects with new signals, or with an ambient card a person answered that is not carried yet."""
+    """Projects with new signals (not the roadmap's own), an ambient card a person answered that
+    is not carried yet, an open Chief-of-Staff card to judge again, or suggestions still waiting
+    for a card."""
     rows = connection.execute(text(
         "SELECT project_id FROM (SELECT project_id FROM signals WHERE status = 'new' "
-        "AND project_id IS NOT NULL UNION SELECT w.project_id FROM work_items w "
+        "AND project_id IS NOT NULL AND kind NOT LIKE :rk UNION SELECT w.project_id "
+        "FROM work_items w "
         "JOIN decisions d ON d.id = w.needs_you_decision_id WHERE w.ambient "
         "AND w.lifecycle IN ('needs_you', 'proposed') AND NOT (d.status = ANY(:open_statuses)) "
+        "AND d.status <> 'withdrawn' "
         "AND d.recommendation->>'asked_by' IS NOT NULL "
-        "AND (d.recommendation->>'asked_by' = :cos OR w.lifecycle = 'needs_you')) x "
+        "AND (d.recommendation->>'asked_by' = :cos OR w.lifecycle = 'needs_you') "
+        "UNION SELECT project_id FROM decisions WHERE status = ANY(:open_statuses) "
+        "AND recommendation->>'asked_by' = :cos AND project_id IS NOT NULL "
+        "UNION SELECT w.project_id FROM work_items w WHERE w.ambient "
+        "AND w.lifecycle = 'proposed' AND w.lease_owner IS NULL "
+        "AND w.needs_you_decision_id IS NULL AND w.task_class <> 'roadmap_item' "
+        "AND w.created_by = :cos AND NOT EXISTS (SELECT 1 FROM work_item_messages h "
+        "  WHERE h.work_item_id = w.id AND h.kind = 'handoff' AND h.sender = :cos) "
+        "AND EXISTS (SELECT 1 FROM agent_act_decisions a WHERE a.work_item_id = w.id "
+        "  AND a.decided_by = :cos AND a.outcome IS NULL "
+        "  AND (a.chosen LIKE 'propose:%' OR a.chosen = 'ask'))) x "
         "JOIN projects p ON p.id = x.project_id ORDER BY project_id LIMIT :n"),
-        {"cos": PARTY, "n": limit, "open_statuses": sorted(OPEN_STATUSES)}).scalars().all()
+        {"cos": PARTY, "n": limit, "open_statuses": sorted(OPEN_STATUSES),
+         "rk": ROADMAP_KINDS}).scalars().all()
     return [str(r) for r in rows]
 
 
@@ -930,13 +1417,18 @@ def tick(engine: Any, settings: Any = None, *, project_id: Optional[str] = None,
          mode: Optional[str] = None, squad_model: Any = None, launchers: Any = None,
          incident_mind: Any = None, incident_effects: Any = None) -> dict[str, Any]:
     """The worker's ambient tick: expire leases, sweep the adapters, triage every project with
-    work. Each project in its own transaction, so one project's failure never stops another's."""
+    work. Each project in its own transaction, so one project's failure never stops another's.
+    While the always-on agents are off it still withdraws the cards they asked by themselves."""
     from ...config import get_settings
 
     settings = settings or get_settings()
     with engine.begin() as c:
         # The effective mode: BOSS_AMBIENT_COS pins it; else what a person chose in Govern.
-        mode = mode or policy.effective_mode(c, settings)
+        effective = policy.effective_mode(c, settings)
+    # A mode passed in that is not the install's (a person's "Triage now" while it is off):
+    # what it asks stays until that person answers, whatever the always-on agents do next.
+    manual = mode is not None and mode != effective
+    mode = mode or effective
     do_sweep = policy.signals_on(settings, mode) if sweep is None else bool(sweep)
     report: dict[str, Any] = {"mode": mode, "sweep": None, "expired": [], "projects": {}}
     with engine.begin() as c:
@@ -948,6 +1440,7 @@ def tick(engine: Any, settings: Any = None, *, project_id: Optional[str] = None,
         with engine.begin() as c:
             report["sweep"] = signals.sweep(c, project_id=project_id)
     if mode == "off":
+        report["reconsidered"] = reconsider_everywhere(engine, mode=mode)
         return report
     if project_id is None:
         with engine.begin() as c:
@@ -962,7 +1455,8 @@ def tick(engine: Any, settings: Any = None, *, project_id: Optional[str] = None,
         try:
             with engine.begin() as c:
                 report["projects"][pid] = triage_project(c, settings, pid, mode=mode,
-                                                         adapter=adapter, decider=decider)
+                                                         adapter=adapter, decider=decider,
+                                                         manual=manual)
         except Exception as exc:  # noqa: BLE001 — one project's failure is reported, not raised
             log.warning("ambient triage failed for %s", pid, exc_info=True)
             report["projects"][pid] = {"error": f"{type(exc).__name__}: {exc}"[:300]}
@@ -978,4 +1472,6 @@ def tick(engine: Any, settings: Any = None, *, project_id: Optional[str] = None,
 
 __all__ = ["ROLE", "PARTY", "MODES", "Reading", "Budget", "mode_of", "rule_candidates",
            "classify", "route", "scores", "priority", "subject_ref", "triage_group",
-           "follow_up", "triage_project", "projects_with_work", "tick"]
+           "disposition", "ask_batch", "reconsider", "reconsider_everywhere", "batch_question",
+           "what_words", "carry_card", "follow_up", "triage_project", "projects_with_work",
+           "tick"]

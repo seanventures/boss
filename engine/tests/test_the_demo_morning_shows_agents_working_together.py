@@ -12,7 +12,7 @@ from __future__ import annotations
 import pytest
 from sqlalchemy import text
 
-from boss_engine.services.ambient import board, demo, ledger, read_model
+from boss_engine.services.ambient import board, collab, demo, ledger, read_model
 
 from ._ambient_support import eng, project  # noqa: F401
 
@@ -29,15 +29,18 @@ def _by_class(c, pid):
 def test_the_morning_runs_every_branch_of_the_flow(eng, project, demo_ok):
     with eng.begin() as c:
         out = demo.load(c, None, project_id=project)
-    # In route mode an incident goes straight to the SRE squad (chief_of_staff.ROUTE_AT_ANY_LEVEL):
-    # it waits, handed over, for the owners' turn on the tick (owners.work).
-    assert out["triage"]["counts"] == {"routed": 3, "proposed": 2, "observed": 1}
+    # In route mode ("Act within levels") an incident goes straight to the SRE squad and every
+    # routine hand-off at A1+ goes straight to its owner (the spend spike to FinOps): they wait,
+    # handed over, for the owners' turn on the tick (owners.work). Only the nudge — the Chief of
+    # Staff's own action, which needs A2 — asks a person, on the morning's one card.
+    assert out["triage"]["counts"] == {"routed": 4, "proposed": 1, "observed": 1}
+    assert out["triage"]["card"]["asked"] and len(out["triage"]["card"]["asked"]) == 1
     assert sorted(out["owners_played"]) == ["security_reviewer", "software_engineer"]
     with eng.begin() as c:
         items = _by_class(c, project)
         assert {k: i["lifecycle"] for k, i in items.items()} == {
             "incident_response": "proposed", "ci_fix_boss_pr": "resolved",
-            "security_patch": "in_progress", "cost_anomaly": "needs_you",
+            "security_patch": "in_progress", "cost_anomaly": "proposed",
             "stale_handoff": "needs_you", "todo_triage": "proposed"}
         # Two alerts, one incident.
         incident = items["incident_response"]
@@ -54,10 +57,14 @@ def test_the_morning_runs_every_branch_of_the_flow(eng, project, demo_ok):
         deciders = [d["decided_by"] for d in ledger.list_decisions(
             c, project, work_item_id=items["ci_fix_boss_pr"]["id"])]
         assert deciders == ["agent:chief_of_staff", "agent:software_engineer"]
-        # The stale PR is the Chief of Staff's own to nudge: it asks "Nudge?", not "Hand to …".
+        # The stale PR is the Chief of Staff's own to nudge: it asks "Nudge: …?", not "Hand to
+        # …", in words (the PR's title), never a raw key.
         q = c.execute(text("SELECT question FROM decisions WHERE id = :d"),
             {"d": items["stale_handoff"]["needs_you_decision_id"]}).scalar()
-        assert q.startswith("Nudge?")
+        assert q.startswith("Nudge: “PR #37") and "pr:" not in q
+        handed = [m["body"]["to"] for m in collab.messages(
+            c, items["cost_anomaly"]["id"], kinds=("handoff",))]
+        assert handed == ["agent:finops_sentinel"]
 
 
 def test_running_the_morning_again_adds_nothing(eng, project, demo_ok):

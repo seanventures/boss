@@ -88,8 +88,8 @@ export type AlwaysOnMode = "off" | "propose" | "route";
 export type ModeState = { mode: AlwaysOnMode; source: "env" | "console" | "default"; pinned: boolean; by: string | null; at: string | null };
 export const MODE_WORDS: Record<AlwaysOnMode, { label: string; tip: string }> = {
   off: { label: "Off", tip: "No agent picks up work by itself" },
-  propose: { label: "Ask first", tip: "Agents triage and propose; a person approves every handover" },
-  route: { label: "Act within levels", tip: "Each kind of work runs at its own level below (A2+ acts and reports)" },
+  propose: { label: "Ask first", tip: "Agents triage and suggest; a person approves handovers on one card per project" },
+  route: { label: "Act within levels", tip: "Hand-offs go straight to the owning agent from A1; each kind of work then runs at its own level below" },
 };
 export type SettingsView = { settings: Record<string, unknown>; envelope: Envelope; stop: StopState; mode: ModeState };
 

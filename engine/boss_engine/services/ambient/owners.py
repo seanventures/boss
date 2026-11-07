@@ -22,6 +22,8 @@ WHEN AN ITEM IS WORKED (bounded, in code, never a prompt)
   person, never a Recommended-roadmap item (a person accepts those);
 * at most `BOSS_AMBIENT_SQUAD_ITEMS` items per tick install-wide (default 3), highest priority
   first, each for at most SQUAD_ROUNDS_PER_TICK rounds;
+* no NEW squad is seated in a project whose hour of person-facing cards is used up
+  (policy.ask_room): its proposals would ask again, so they wait for room;
 * a squad that already took turns runs again only when something NEW happened since its last
   turn (a person answered, a run or panel it started came back, a non-member posted), or after
   SQUAD_RECHECK_MINUTES — so an idle squad costs nothing per minute;
@@ -110,6 +112,7 @@ def due_items(connection: Connection, *, project_id: Optional[str] = None,
     """The handed-over items the owners should work this tick, highest priority first."""
     incident = set(_incident_classes())
     out: list[dict[str, Any]] = []
+    room: dict[str, int] = {}
     from .. import projects_archive   # an archived project's items are never worked
 
     rows = connection.execute(text(_HANDED.format(live=projects_archive.live_sql("w.project_id"))),
@@ -133,7 +136,12 @@ def due_items(connection: Connection, *, project_id: Optional[str] = None,
         if r["no_squad"]:
             continue
         if not r["has_squad"]:
-            if r["lifecycle"] == "proposed":
+            # THE RATE GUARD reaches the owners too: a new squad's proposal asks a person, so
+            # while this project's hour of cards is used up no new squad is seated (it is next
+            # tick's, or next hour's). Squads already working go on.
+            if r["project_id"] not in room:
+                room[r["project_id"]] = policy.ask_room(connection, r["project_id"])
+            if r["lifecycle"] == "proposed" and room[r["project_id"]] > 0:
                 out.append({**r, "kind": "assemble"})
             continue
         roster = squads.roster(connection, r["id"]) or {"members": []}

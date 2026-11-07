@@ -319,8 +319,10 @@ class BossEffects:
         if not check_id:
             _merge_squad_ctx(connection, ctx.incident_id, {"recovery_check_id": row["id"],
                                                            "item_id": ctx.item["id"]})
-        status = {"recovered": "recovered", "failed": "failing", "timed_out": "failing"}.get(
-            row["status"], "waiting")
+        # Timed out = the window closed without enough traffic to say either way: NOT the same
+        # as failing, and the card a person reads must not claim it is.
+        status = {"recovered": "recovered", "failed": "failing",
+                  "timed_out": "unconfirmed"}.get(row["status"], "waiting")
         return {"status": status, "word": row.get("summary") or status,
                 "evidence": [{"kind": "incident", "ref": ctx.incident_id,
                               "note": clean_text(row.get("summary"), 200)}]}
@@ -1214,13 +1216,19 @@ class _Pass:
                 ledger.record_outcome(self.c, mitigation["act_id"], outcome="succeeded",
                                       outcome_ref=self.ctx.incident_id)
             return self.close(mitigated=mitigated)
-        # failing or unknown: undo is a person's call now; say so on the board
-        self.decide(lead, Q_VERIFY, "Still failing",
+        # failing or not confirmed: a person's call now; say so on the board, in plain words
+        # that say what was done (a rollback, or nothing yet) and what was seen.
+        unconfirmed = status == "unconfirmed"
+        verdict = "Not confirmed" if unconfirmed else "Still failing"
+        self.decide(lead, Q_VERIFY, verdict,
                     clean_text(seen.get("word") or "Not recovered.", 240).rstrip(".") + ".",
-                    evidence=evidence, options=["Recovered", "Still failing"], confidence=0.8)
-        if mitigation and not mitigation.get("outcome"):
+                    evidence=evidence, options=["Recovered", "Still failing", "Not confirmed"],
+                    confidence=0.6 if unconfirmed else 0.8)
+        if mitigation and not mitigation.get("outcome") and not unconfirmed:
             ledger.record_outcome(self.c, mitigation["act_id"], outcome="failed")
-        return self.escalate("Mitigation did not recover the app; undo and decide")
+        return self.escalate(recovery_question(self.ctx.app, self.ctx.environment,
+                                               rolled_back=bool(mitigation),
+                                               unconfirmed=unconfirmed))
 
     def _mitigation_act(self) -> Optional[dict[str, Any]]:
         rows = [d for d in ledger.list_decisions(self.c, self.p, work_item_id=self.item_id)
@@ -1484,6 +1492,20 @@ def _short_ref(ref: Any, index: int) -> str:
     """A past incident's short name for a label: 'INC-31 (D2, Oct 18)' -> 'INC-31'."""
     word = str(ref or "").split(" ")[0].strip()
     return word[:24] if word else f"#{index + 1}"
+
+
+def recovery_question(app: Any, environment: Any, *, rolled_back: bool,
+                      unconfirmed: bool) -> str:
+    """The escalation a person reads when an incident is not seen to recover — what was done
+    and what was seen, about the app by name: never "mitigation did not recover" when nothing
+    was rolled back, never "failing" when the window simply had too little traffic."""
+    where = str(app or "The app") + (f" ({environment})" if environment else "")
+    if unconfirmed:
+        return (f"{where}: too little traffic to confirm it recovered"
+                + (" after the rollback" if rolled_back else "") + " — check it or close it?")
+    if rolled_back:
+        return f"{where} did not recover after the rollback — undo it or take over?"
+    return f"{where} still fails and no fix has landed — take over?"
 
 
 def _rollback_word(ctx: "Ctx") -> str:

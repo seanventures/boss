@@ -415,11 +415,11 @@ def needs_you(connection: Connection, item_id: str, *, actor: str, question: str
         assert_lease(connection, item_id, owner=actor, token=token)
     if item["lifecycle"] in TERMINAL:
         raise Conflict(f"the item is already {item['lifecycle']}")
-    subject = item.get("subject_ref") or item.get("app") or item["title"]
+    subject = plain_subject(item)
     asked = clean_text(question, 300)
     decision_id = create_blocking_decision(
         connection, item["project_id"], None,
-        f"{asked} — {subject}" if subject and subject not in asked else asked,
+        f"{asked} — {subject}" if subject and subject.lower() not in asked.lower() else asked,
         {**dict(recommendation), "work_item_id": item_id, "task_class": item["task_class"],
          "autonomy_level": item["autonomy_level"], "asked_by": actor,
          "cost_of_waiting": clean_text(cost_of_waiting, 300)},
@@ -437,6 +437,87 @@ def needs_you(connection: Connection, item_id: str, *, actor: str, question: str
     moved = _transition(connection, _must(connection, item_id), "needs_you", actor=actor,
                         extra={"decision_id": decision_id})
     return {**moved, "needs_you_decision_id": decision_id}
+
+
+def plain_subject(item: Mapping[str, Any]) -> Optional[str]:
+    """What an item is about, in the words a person uses: a file's short name, a repository's
+    name, an app, a pull request number. Never a raw key (`module:acme/web:src/a/b.jsx`,
+    `run:wfr_…`, `subject:stage:solo`): a subject with no plain name gives None, and the
+    question stands on its own words."""
+    ref = str(item.get("subject_ref") or "")
+    kind, _, rest = ref.partition(":")
+    if kind == "app" or (not ref and item.get("app")):
+        return clean_text(item.get("app") or rest, 80) or None
+    if kind == "module":
+        path = rest.split(":", 1)[-1]
+        return clean_text(path.rstrip("/").rsplit("/", 1)[-1], 80) or None
+    if kind == "repo":
+        return clean_text(rest.rstrip("/").rsplit("/", 1)[-1], 80) or None
+    if kind == "pr":
+        number = rest.rsplit("#", 1)[-1] if "#" in rest else ""
+        return f"PR #{number}" if number.isdigit() else None
+    if kind == "dep":
+        return clean_text(rest, 80) or None
+    if kind == "host":
+        return "this install" if rest in ("install", "") else clean_text(rest, 80)
+    return None
+
+
+def needs_you_batch(connection: Connection, held: Iterable[tuple[str, str]], *, actor: str,
+                    question: str, recommendation: Mapping[str, Any],
+                    options: Iterable[Mapping[str, Any]] = (), risk_tier: int = 1,
+                    cost_of_waiting: str = "") -> dict[str, Any]:
+    """Put SEVERAL items in front of a person on ONE Decisions row: one card, one answer, every
+    item linked to it and waiting on it. `held` is [(item_id, lease token)] — the asker holds
+    each item while it asks. The recommendation names the lead item (`work_item_id`) and every
+    item (`work_item_ids`); the per-item detail rides in it (`batch`)."""
+    from ..core import create_blocking_decision
+
+    held = list(held)
+    if not held:
+        raise ValueError("a card asks about at least one item")
+    items = []
+    for item_id, token in held:
+        item = _must(connection, item_id)
+        assert_lease(connection, item_id, owner=actor, token=token)
+        if item["lifecycle"] in TERMINAL:
+            raise Conflict(f"the item is already {item['lifecycle']}")
+        items.append(item)
+    lead = items[0]
+    decision_id = create_blocking_decision(
+        connection, lead["project_id"], None, clean_text(question, 300),
+        {**dict(recommendation), "work_item_id": lead["id"],
+         "work_item_ids": [i["id"] for i in items], "task_class": lead["task_class"],
+         "autonomy_level": lead["autonomy_level"], "asked_by": actor,
+         "cost_of_waiting": clean_text(cost_of_waiting, 300)},
+        {"ambient_cost_usd_micros": sum(int(i.get("cost_usd_micros") or 0) for i in items)},
+        "ambient_needs_you", risk_tier=int(risk_tier), default_action="hold")
+    option_list = [{"key": str(o.get("key")), "label": clean_text(o.get("label"), 80)}
+                   for o in options if o.get("key")]
+    if option_list:
+        connection.execute(text("UPDATE decisions SET options = CAST(:o AS JSONB) WHERE id = :d"),
+                           {"o": json.dumps(option_list), "d": decision_id})
+    for item in items:
+        link(connection, item["id"], "decision", decision_id, actor=actor)
+        connection.execute(text(
+            "UPDATE work_items SET needs_you_decision_id = :d, needs_you_at = now(), "
+            "answered_at = NULL WHERE id = :id"), {"d": decision_id, "id": item["id"]})
+        _transition(connection, _must(connection, item["id"]), "needs_you", actor=actor,
+                    extra={"decision_id": decision_id})
+    return {"needs_you_decision_id": decision_id, "items": [i["id"] for i in items]}
+
+
+def unask(connection: Connection, item_id: str, *, actor: str, reason: str) -> dict[str, Any]:
+    """The question an item waits on was WITHDRAWN (nobody answered it; the policy no longer
+    asks): the item stops waiting on a person and goes back on the board, unanswered."""
+    item = _must(connection, item_id)
+    if item["lifecycle"] != "needs_you":
+        return item
+    connection.execute(text(
+        "UPDATE work_items SET needs_you_decision_id = NULL, needs_you_at = NULL "
+        "WHERE id = :id"), {"id": item_id})
+    return _transition(connection, item, "proposed", actor=actor,
+                       extra={"withdrawn": clean_text(reason, 300)})
 
 
 def answered(connection: Connection, item_id: str, *, actor: str,
@@ -540,5 +621,6 @@ __all__ = [
     "LIFECYCLES", "LIVE", "TERMINAL", "LeaseLost", "Conflict", "get", "live_for_fingerprint",
     "links", "open_item", "link", "claim", "assert_lease", "renew", "release", "take_over",
     "on_person_action", "cancel_agent_leases", "expire_leases", "start", "needs_you", "answered",
+    "needs_you_batch", "unask", "plain_subject",
     "finish", "dismiss", "add_cost", "list_items",
 ]

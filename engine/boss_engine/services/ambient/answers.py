@@ -10,9 +10,9 @@ the only place that decides who acts on that answer:
     recommendation                       carried to
     action = incident_squad.mitigate     incident_squad.on_needs_you_answered (SRE squad resumes:
                                          approve = roll back + fix, revise = fix only, else hold)
-    asked_by = agent:chief_of_staff      chief_of_staff.carry_answer (approve → handoff to the
-                                         owner, whose squad works it on the next tick; reject →
-                                         dismissed, cools down)
+    asked_by = agent:chief_of_staff      chief_of_staff.carry_card (approve → handoff to the
+                                         owner of EVERY item on the card, whose squad works it
+                                         on the next tick; reject → dismissed, cools down)
     proposal_id (a squad's card)         squad_turns.person_answered (the person's ledger row;
                                          the squad carries it out at its next round)
     anything else                        board.answered (the item goes back to its holder)
@@ -62,9 +62,10 @@ def on_answered(connection: Connection, settings: Any, decision: Mapping[str, An
         on_needs_you_answered(connection, settings, decision, actor, verdict, note)
         return "incident"
     if rec.get("asked_by") == COS:
-        from .chief_of_staff import carry_answer
+        from .chief_of_staff import carry_card
 
-        carry_answer(connection, item_id=str(item_id), decision_id=str(decision["id"]))
+        # One card may ask about several items (a batched card): the answer reaches each.
+        carry_card(connection, decision_id=str(decision["id"]), recommendation=rec)
         return "chief_of_staff"
     if item["lifecycle"] != "needs_you" or item.get("needs_you_decision_id") != decision["id"]:
         return "already"
