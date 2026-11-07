@@ -18,13 +18,13 @@
   {
    "key": "backlog",
    "label": "Propose backlog",
-   "state": "done",
+   "state": "todo",
    "sub": "2 proposed"
   },
   {
    "key": "first_work",
    "label": "Work it",
-   "state": "now",
+   "state": "todo",
    "sub": "verified loop"
   },
   {

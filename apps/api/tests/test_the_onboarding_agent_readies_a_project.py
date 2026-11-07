@@ -226,10 +226,16 @@ def test_it_readies_the_project_and_proposes_the_backlog_and_first_work(world, c
     stages = {s["key"]: s["state"] for s in run["stages"]}
     # Discover is done (it read everything); the red default branch fails READY, not Discover.
     assert stages["discover"] == "done" and stages["ready"] == "failed"
-    assert stages["backlog"] == "done"
+    # ONE STATE MACHINE (10-08): Ready is current (failed), so everything after it is ahead —
+    # the drafted backlog keeps its words ("N proposed") but is not ticked before Ready.
+    assert stages["backlog"] == "todo" and run["stages"][2]["sub"].endswith(" proposed")
     assert all(b["why"] for b in backlog), "every item says why in a few words"
     assert first["first_by"] == "score" and first["why_first"] == "highest Chief-of-Staff score"
-    assert stages["first_work"] == "now"
+    assert stages["first_work"] == "todo" and stages["deploy"] == "todo"
+    assert not run["live"] and run["title"] == "Helm read your repo"
+    # The Now line names whose move it is once the read is done: only you, here.
+    assert run["now"].startswith("Waiting on you") and run["now_live"] is False
+    assert run["log"][0]["label"] == "Started" and run["log"][-1]["label"] == "Finished"
     # Screen 10's Discovered map: each node's label IS the finding; screen 00b's live diagram
     # names the steps (Stack found · Mapping code · Tests run · Ready check).
     nodes = run["discover"]["nodes"]
@@ -368,3 +374,46 @@ def test_the_worker_leases_onboarding_jobs_under_a_declared_permission():
 
     assert "project.onboarding" in capabilities()
     assert JOB_KIND_PERMISSIONS["project.onboarding"] == "workflow_run:start"
+
+
+# ── 10-08: the stage strip is one state machine ───────────────────────────────────────────────
+
+def _strip(*states):
+    keys = ("discover", "ready", "backlog", "first_work", "deploy")
+    return [{"key": k, "label": k, "state": st, "sub": ""} for k, st in zip(keys, states)]
+
+
+def test_the_stage_strip_has_one_current_stage_and_nothing_after_it_is_done():
+    """Tester 10-08: Ready current while later stages were ticked (Deploy done from an older
+    staging deploy, Propose backlog done while Ready was 4 of 6)."""
+    for run_state in ("running", "ready", "needs_you", "failed"):
+        for raw in (("done", "now", "done", "now", "done"), ("done", "done", "done", "now", "done"),
+                    ("done", "failed", "done", "todo", "done"), ("now", "todo", "todo", "todo", "done"),
+                    ("done", "done", "done", "done", "todo")):
+            out = [s["state"] for s in onboarding.linear_stages(_strip(*raw), run_state)]
+            current = [i for i, st in enumerate(out) if st not in ("done", "skipped")]
+            if current:
+                first = current[0]
+                assert out[first] in ("now", "failed", "waiting"), (run_state, raw, out)
+                assert all(st == "todo" for st in out[first + 1:]), (run_state, raw, out)
+                assert all(st in ("done", "skipped") for st in out[:first])
+    assert [s["state"] for s in onboarding.linear_stages(
+        _strip("done", "done", "done", "done", "done"), "not_started")] == ["todo"] * 5
+    assert [s["state"] for s in onboarding.linear_stages(
+        _strip("done", "now", "todo", "todo", "todo"), "failed")][1] == "failed"
+
+
+def test_the_now_line_names_whose_move_it_is():
+    items = [{"key": "deploy_target", "state": "now", "owner": "agent", "sub": "port 8004"},
+             {"key": "secrets", "state": "todo", "owner": "you", "sub": "OPENAI_API_KEY"}]
+    live = onboarding.now_of(items, running=True)
+    assert live == {"agent": "sre", "text": "Beacon is checking the staging host · port 8004",
+                    "live": True}
+    waiting = onboarding.now_of(items, running=False, run_state="needs_you")
+    assert waiting["text"] == "Waiting on you · App secrets: OPENAI_API_KEY" and not waiting["live"]
+    stages = [{"key": "discover", "state": "done"}, {"key": "ready", "state": "done"},
+              {"key": "backlog", "state": "done"}, {"key": "first_work", "state": "now"}]
+    pick = onboarding.now_of([], running=False, run_state="ready", stages=stages,
+                             first={"label": "Fix 6 failing tests"})
+    assert pick["agent"] == "chief_of_staff" and "Fix 6 failing tests" in pick["text"]
+    assert onboarding.now_of([], running=False, run_state="not_started")["text"] == ""

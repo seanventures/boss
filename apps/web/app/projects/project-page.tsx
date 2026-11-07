@@ -113,9 +113,13 @@ export function ProjectPage({ projectId, actor, orgId }: { projectId: string; ac
     tab, open: openDrawer, ask: (q) => writePxUrl({ drawer: "captain", cap_ask: q?.trim() ? q.trim() : null }),
   };
   const ob = onboarding.data;
-  const onboardingNow = overview.project.stage === "onboarding" && ob !== null;
-  // SCREEN 10 is its own page (`tab=onboarding`), and the Overview while the project onboards.
-  const obView = url.view === "onboarding" || (url.tab === "overview" && onboardingNow);
+  // PX-15: "Onboarding" (with the working face and the timer) only once a run has started —
+  // a project whose onboarding never started says so on its page, not "Onboarding" up here.
+  const onboardingStage = overview.project.stage === "onboarding" && ob !== null;
+  const onboardingNow = onboardingStage && ob.state !== "not_started";
+  // SCREEN 10 is its own page (`tab=onboarding`), and the Overview while the project onboards
+  // (or has not started: its Start onboarding button).
+  const obView = url.view === "onboarding" || (url.tab === "overview" && onboardingStage);
   // The tab's badge is the Work list's "All" count (wireframe: Work 9 = All 9), never a second number.
   const openCount = ctx.work ? ctx.work.items.length
     : Object.values(overview.tiles.open_work?.by_state ?? {}).reduce((x, y) => x + y, 0) || undefined;

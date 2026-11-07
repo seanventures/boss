@@ -1308,18 +1308,101 @@ NOW_WORDS = {"repo_access": "checking repo access", "models": "checking the mode
              "deploy_target": "checking the staging host", "secrets": "reading the app's secrets"}
 
 
+_CREW_NAMES = {"engineering_captain": "Helm", "qa": "Vera", "builder": "Forge", "sre": "Beacon",
+               "chief_of_staff": "Marshal"}
+
+
 def _now_line(items: list[dict[str, Any]], running: bool) -> str:
     """What the agent is doing now, in one line ("Beacon is checking the staging host · :8004")."""
-    if not running:
-        return ""
-    names = {"engineering_captain": "Helm", "qa": "Vera", "builder": "Forge", "sre": "Beacon"}
-    doing = next((i for i in items if i.get("state") == "now" and i.get("owner") != "you"), None)
-    if not doing:
-        return ""
-    who = names.get(ITEM_AGENT.get(doing["key"], ""), "Helm")
-    verb = NOW_WORDS.get(doing["key"], f"on {CARD_LABELS.get(doing['key'], doing['key']).lower()}")
-    what = (doing.get("sub") or "").strip()
-    return f"{who} is {verb} · {what}" if what else f"{who} is {verb}"
+    return now_of(items, running=running)["text"] if running else ""
+
+
+def now_of(items: list[dict[str, Any]], *, running: bool, run_state: str = "running",
+           stages: Optional[list[dict[str, Any]]] = None, first: Optional[Mapping[str, Any]] = None
+           ) -> dict[str, Any]:
+    """THE NOW LINE (10-09): who acts now and on what — {agent, text, live}. While the run moves,
+    the agent on the check in progress ("Beacon is checking the staging host · port 8004"); once
+    it has read the repo, the next move and whose it is (only you · Marshal's first pick), never a
+    line that pulses when nothing moves. Empty only before onboarding starts."""
+    if run_state == "not_started":
+        return {"agent": None, "text": "", "live": False}
+    if running:
+        doing = next((i for i in items if i.get("state") == "now" and i.get("owner") != "you"),
+                     None)
+        if doing is None:
+            return {"agent": "engineering_captain", "text": "Helm is reading the repository",
+                    "live": True}
+        role = ITEM_AGENT.get(doing["key"], "engineering_captain")
+        who = _CREW_NAMES.get(role, "Helm")
+        verb = NOW_WORDS.get(doing["key"],
+                             f"on {CARD_LABELS.get(doing['key'], doing['key']).lower()}")
+        what = (doing.get("sub") or "").strip()
+        return {"agent": role, "text": f"{who} is {verb} · {what}" if what else f"{who} is {verb}",
+                "live": True}
+    if run_state == "failed":
+        return {"agent": "engineering_captain",
+                "text": "Helm stopped reading the repository · Try again restarts it",
+                "live": False}
+    yours = [i for i in items if i.get("owner") == "you" and i.get("state") != "done"]
+    if yours:
+        what = CARD_LABELS.get(yours[0]["key"], yours[0].get("label") or "a setting")
+        sub = (yours[0].get("sub") or "").strip()
+        return {"agent": ITEM_AGENT.get(yours[0]["key"], "engineering_captain"),
+                "text": f"Waiting on you · {what}" + (f": {sub}" if sub else ""), "live": False}
+    current = next((s for s in (stages or []) if s.get("state") not in ("done", "skipped")), None)
+    if current and current.get("key") == "first_work" and first:
+        return {"agent": "chief_of_staff",
+                "text": f"Marshal suggests {first.get('label') or 'the first work'} first · "
+                        "start it when you are ready", "live": False}
+    if current and current.get("key") == "deploy":
+        return {"agent": "sre", "text": "Beacon deploys to staging once the first work merges",
+                "live": False}
+    return {"agent": "engineering_captain", "text": "Helm has read the repository · nothing moves now",
+            "live": False}
+
+
+def linear_stages(stages: list[dict[str, Any]], run_state: str) -> list[dict[str, Any]]:
+    """THE ONE STATE MACHINE of the stage strip (10-03..08, 00b-08..11): the stages are a line,
+    so exactly one is current — the first that is not done — and nothing after it is done or
+    live, whatever its own facts say (staging can be live from before onboarding; Marshal can
+    draft a backlog while Ready is 4 of 6: both stay ahead, with their words). The current one is
+    `now` (or `failed`, or the stage's own `waiting`); before onboarding starts nothing is current.
+    The header, the strip, the first-run guide and the journey's first nodes all read this."""
+    out: list[dict[str, Any]] = []
+    current_seen = run_state == "not_started"
+    for st in stages:
+        st = dict(st)
+        raw = st.get("state") or "todo"
+        if current_seen:
+            st["state"] = "todo"
+        elif raw in ("done", "skipped"):
+            pass
+        else:
+            current_seen = True
+            st["state"] = ("failed" if run_state == "failed" or raw == "failed" else
+                           raw if raw in ("now", "waiting") else "now")
+        out.append(st)
+    return out
+
+
+def log_of(row: Mapping[str, Any], items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """THE LIVE LOG (Watch, 10-09): what the onboarding agent did, oldest first — the start, each
+    check as it settled (who, what, the words it left), the finish. From the record itself."""
+    out: list[dict[str, Any]] = [{"at": iso(row["started_at"]), "agent": "engineering_captain",
+                                  "label": "Started", "state": "done",
+                                  "text": "Helm started reading the repository."}]
+    for i in sorted((i for i in items if i.get("at")), key=lambda i: str(i.get("at"))):
+        out.append({"at": str(i["at"]), "agent": ITEM_AGENT.get(i["key"], "engineering_captain"),
+                    "label": CARD_LABELS.get(i["key"], i.get("label") or i["key"]),
+                    "state": i.get("state") or "todo",
+                    "text": (i.get("detail") or i.get("sub") or "").strip()})
+    if row.get("finished_at"):
+        out.append({"at": iso(row["finished_at"]), "agent": "engineering_captain",
+                    "label": "Finished" if row["state"] != "failed" else "Stopped",
+                    "state": "failed" if row["state"] == "failed" else "done",
+                    "text": (row.get("error") or "") if row["state"] == "failed"
+                    else "Helm finished reading the repository."})
+    return out
 
 
 def _elapsed_words(seconds: int) -> str:
@@ -1337,6 +1420,8 @@ def view(connection: Connection, project_id: str) -> dict[str, Any]:
             {"key": k, "label": label, "state": "todo", "sub": ""} for k, label in STAGES],
             "discover": {"nodes": []}, "checklist": [], "ready": [], "only_you": [],
             "first_work": None, "backlog": [], "backlog_total": 0, "accepted": [], "now": "",
+            "now_agent": None, "now_live": False, "log": [], "live": False,
+            "title": "Helm hasn't started",
             "elapsed_s": 0,
             "start": {"href": f"/v1/projects/{project_id}/onboarding/start", "method": "POST"},
             "accept_backlog": {"href": f"/v1/projects/{project_id}/onboarding/backlog/accept",
@@ -1348,6 +1433,11 @@ def view(connection: Connection, project_id: str) -> dict[str, Any]:
         item.pop("_read", None)
         item["label"] = label
         item["agent"] = ITEM_AGENT.get(key)
+        if key == "tests" and item.get("state") == "failed":
+            # FAILING TESTS ARE A FINDING, NOT A FAILED READ (10-16 "Tests run ✓ 6 failing →
+            # backlog"): Vera ran them and the failures went to the backlog. An older record
+            # that stored them as failed must not paint Discover red.
+            item["state"] = "done"
         items.append(item)
     by_key = {i["key"]: i for i in items}
     workflow = _workflow_item(connection, project_id)
@@ -1422,6 +1512,8 @@ def view(connection: Connection, project_id: str) -> dict[str, Any]:
          "sub": "verified loop"},
         {"key": "deploy", "label": "Deploy", "state": deploy_state, "sub": deploy_sub},
     ]
+    stages = linear_stages(stages, str(row["state"]))
+    discover_state = stages[0]["state"]
     nodes = as_json(row["discover"], []) or []
     only_you = [i for i in items if i["owner"] == "you" and i["state"] != "done"]
     # THE LIVE DIAGRAM (screen 00b): what Helm is doing while it reads — the stack it found, the
@@ -1429,23 +1521,39 @@ def view(connection: Connection, project_id: str) -> dict[str, Any]:
     stack = ((as_json(row["facts"], {}) or {}).get("stack") or {})
     base = ((as_json(row["facts"], {}) or {}).get("tests") or {})
     stack_words = " · ".join(w for w in (stack.get("framework"), stack.get("language")) if w)
+    if not stack_words:
+        # The same finding the Discovered map shows ("Express+Node"): one stack, never "found"
+        # there and "not started" here.
+        found = next((n for n in nodes if n.get("key") == "stack" and n.get("state") == "done"
+                      and n.get("label") not in (None, "", "Stack unknown")), None)
+        stack_words = " · ".join(str(found["label"]).split("+")) if found else ""
     know, tests = by_key["knowledge"], by_key["tests"]
     live = [{"key": "stack", "label": "Stack found", "state": "done" if stack_words else (
-                "now" if running else "todo"), "sub": stack_words},
+                "now" if running else "skipped"),
+             "sub": stack_words or ("" if running else "not recognised")},
             {"key": "mapping", "label": "Mapping code", "state": know.get("state") or "todo",
              "sub": know.get("sub") or ""},
             {"key": "tests", "label": "Tests run", "state": tests.get("state") or "todo",
              # 00b-17 "142 / 148 pass": the real counts when a run was read, else the item's sub.
              "sub": (f"{base['passed']} / {base['total']} pass" if base.get("total")
                      else tests.get("sub") or "")},
-            {"key": "ready", "label": "Ready check", "state": ready_state if ready_state == "done"
-             else "todo", "sub": ""}]
+            {"key": "ready", "label": "Ready check", "state": stages[1]["state"]
+             if stages[1]["state"] in ("done", "failed") or running else "todo", "sub": ""}]
+    if not running:
+        # A finished read draws nothing as moving: a check left in progress is not started.
+        live = [{**n, "state": "todo"} if n["state"] == "now" else n for n in live]
+    now = now_of(items, running=running, run_state=str(row["state"]), stages=stages, first=first)
     return {"run_id": row["id"], "state": row["state"], "trigger": row["trigger"],
             "stages": stages, "discover": {"nodes": nodes, "live": live}, "checklist": items,
             "ready": ready_rows, "only_you": only_you, "first_work": first,
             "backlog": backlog[:20], "backlog_total": len(backlog),
             "accepted": sorted(accepted & {str(b.get("id")) for b in backlog}),
-            "now": _now_line(items, running),
+            "now": now["text"], "now_agent": now["agent"], "now_live": now["live"],
+            "log": log_of(row, items),
+            # THE PHASE IN WORDS, one place (00b-13, PX-15): live only while the run moves.
+            "live": running,
+            "title": {"running": "Helm is reading your repo", "failed": "Onboarding stopped"}.get(
+                str(row["state"]), "Helm read your repo"),
             "error": row["error"], "started_at": iso(row["started_at"]),
             "finished_at": iso(row["finished_at"]),
             "elapsed_s": elapsed,

@@ -26,6 +26,8 @@ export type RegistryRepo = {
   used_by?: { project_id: string; name: string }[];
   /** GitHub's last push (Add a project shows "3h", "12d"). */
   pushed_at?: string | null;
+  /** Can a NEW project use it (03-25)? Refused before anything is created, in the API's words. */
+  new_project?: { ok: boolean; code?: string; message?: string } | null;
 };
 export type RegistryConnection = {
   kind: "app" | "token"; account_login?: string | null; account_type?: string | null;

@@ -85,7 +85,10 @@ def test_the_graph_is_centred_on_the_hottest_entity_with_rules_and_lessons(world
     assert hub["kind"] == "file" and hub["label"] == "sla.mjs" and hub["group"] == "hub"
     groups = {n["group"] for n in g["nodes"][1:]}
     assert {"rule", "learned", "data"} <= groups
-    assert all(len(n["label"]) <= 22 for n in g["nodes"])
+    # Short labels (a lesson may take up to 28 characters, whole words); a phrase is never cut
+    # mid-word with "…" (X-74) — only a single long name may be.
+    assert all(len(n["label"]) <= 28 for n in g["nodes"])
+    assert all(" " not in n["label"] for n in g["nodes"] if n["label"].endswith("…"))
     assert any(e["label"] for e in g["edges"]), "a rule edge carries its words"
     assert g["counts"] == {"nodes": 412, "rules": 2, "learned": 3}
 
@@ -147,6 +150,11 @@ def test_docs_and_decisions_have_short_titles_and_who(world, client, helpdesk, e
     prd = next(d for d in k["docs"] if d["kind"] == "prd")
     assert prd["label"] == "PRD · Visual Refresh Completion"
     assert "Visual Refresh Completion" in prd["detail"] and "**" not in prd["detail"]
+    # 06-14: the author is the agent by name, and "approved <day>" only when a person approved it.
+    assert prd["sub"].startswith(f"{prd['agent']['name']} · written ")
+    assert prd["agent"]["name"] != "Product Manager"
+    seeded = [d for d in k["docs"] if d["kind"] == "prd" and d is not prd]
+    assert seeded and all(" · approved " in d["sub"] for d in seeded), [d["sub"] for d in seeded]
 
 
 def test_no_dossier_offers_build_dossier_now_through_onboarding(world, client, helpdesk, engine):
@@ -158,3 +166,16 @@ def test_no_dossier_offers_build_dossier_now_through_onboarding(world, client, h
     assert k["build"]["href"] == f"/v1/projects/{helpdesk['id']}/onboarding/start"
     assert k["build"]["method"] == "POST" and k["build"]["state"] != "running"
     assert k["empty"]["label"] == "No dossier yet"
+
+
+def test_graph_labels_never_cut_a_sentence_mid_word():
+    """X-74 / 06-17: "The app has no test s…" was a sentence cut mid-word on the diagram."""
+    from boss_engine.services.project_experience.knowledge import _short, node_label
+
+    lesson = node_label("test_failure", "npm install && npm test fails: the app has no test "
+                        "script: add a `test` script to package.json", None, {})
+    assert lesson == "The app has no test script" and "…" not in lesson
+    assert _short("Make the weekend timers pause on holidays", 24) == "Make the weekend timers"
+    assert _short("Pause the timers on the weekend", 20) == "Pause the timers"  # never ends on "on"
+    # Only a single long NAME is shortened with an ellipsis (its full path is the tooltip).
+    assert _short("TicketDetailPageWithAVeryLongName", 18).endswith("…")

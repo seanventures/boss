@@ -241,8 +241,12 @@ export const FX_ROADMAP = {
 export const FX_CAPTAIN = { ...FX_OVERVIEW.captain, last_said: "PR #3 is ready for you to merge." };
 
 export const FX_ONBOARDING = {
-  state: "needs_you",
-  now: "Beacon is checking staging port 8004",
+  state: "running", live: true, title: "Helm is reading your repo",
+  now: "Beacon is checking staging port 8004", now_agent: "sre", now_live: true,
+  log: [{ at: "2026-11-03T09:00:00Z", agent: "engineering_captain", label: "Started", state: "done", text: "Helm started reading the repository." },
+        { at: "2026-11-03T09:03:00Z", agent: "engineering_captain", label: "Repo access", state: "done", text: "Read, branch and pull requests work." },
+        { at: "2026-11-03T09:05:40Z", agent: "builder", label: "Builds clean", state: "done", text: "make setup · 1m 40s" },
+        { at: "2026-11-03T09:06:10Z", agent: "sre", label: "Staging host", state: "now", text: "checking :8004" }],
   elapsed_s: 372,
   stages: [{ key: "discover", label: "Discover", state: "done", sub: "done · 3m" }, { key: "ready", label: "Ready for work", state: "now", sub: "4 of 6" },
            { key: "backlog", label: "Propose backlog", state: "todo", sub: "drafting" }, { key: "first_work", label: "Work it", state: "todo", sub: "verified loop" },

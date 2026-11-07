@@ -70,6 +70,28 @@ describe("the graph snippet's layout", () => {
       }
     }
   });
+  it("06-17/18 on the real HelpDesk graph: no label on a label, a node or an edge", () => {
+    const nodes = [{ id: "hub", label: "tickets.mjs" }, { id: "l1", label: "The app has no test script" }, { id: "sla", label: "sla.mjs" },
+                   { id: "fix", label: "Make npm test pass" }, { id: "met", label: "metrics.mjs" }, { id: "seed", label: "seedDemoTickets" },
+                   { id: "t", label: "sla.test.mjs" }, { id: "api", label: "api.js" }];
+    const edges = [["l1", "met"], ["l1", "hub"], ["l1", "api"], ["fix", "met"], ["fix", "hub"], ["fix", "api"], ["l1", "fix"], ["seed", "sla"], ["hub", "sla"], ["t", "sla"]]
+      .map(([from, to]) => ({ from, to }));
+    const laid = layoutGraph(nodes, 420, 240, edges);
+    const crosses = (box: { x: number; y: number; w: number; h: number }, a: { x: number; y: number; r: number }, b: { x: number; y: number; r: number }) => {
+      for (let i = 0; i <= 60; i++) {
+        const x = a.x + ((b.x - a.x) * i) / 60, y = a.y + ((b.y - a.y) * i) / 60;
+        if (Math.hypot(x - a.x, y - a.y) <= a.r || Math.hypot(x - b.x, y - b.y) <= b.r) continue;
+        if (x > box.x && x < box.x + box.w && y > box.y && y < box.y + box.h) return true;
+      }
+      return false;
+    };
+    for (const [id, l] of laid.labels) {
+      if (l.inside) continue;
+      for (const [other, o] of laid.labels) if (other !== id) expect(overlaps(l.box, o.box), `${id} over ${other}`).toBe(false);
+      for (const [nid, p] of laid.pos) if (nid !== id) expect(overlaps(l.box, circleBox(p)), `${id} over node ${nid}`).toBe(false);
+      for (const e of edges) expect(crosses(l.box, laid.pos.get(e.from)!, laid.pos.get(e.to)!), `${id} on edge ${e.from}→${e.to}`).toBe(false);
+    }
+  });
   it("centres the first node (the hub) and keeps a short hub label inside it", () => {
     const laid = layoutGraph([{ id: "hub", label: "Ticket" }, { id: "a", label: "Customer" }]);
     expect(laid.pos.get("hub")).toMatchObject({ x: 210, y: 120 });
@@ -187,5 +209,54 @@ describe("the knowledge client", () => {
     expect(docKey({ kind: "prd", href: "?area=meetings&meeting=m9" })).toBe("prd:m9");
     expect(docKey({ kind: "adr", href: "", path: "docs/adr-1.md" })).toBe("docs/adr-1.md");
     expect(stackIcon("Postgres 16")).not.toBe(stackIcon("React 18"));
+  });
+});
+
+describe("06-01 / 13-23: Add repo opens today's Import-a-repo picker on the project page", () => {
+  async function open(tab: "knowledge" | "settings") {
+    const { registryFixture, projectReposFixture } = await import("./_helpers/multirepo-fixtures");
+    const reg = registryFixture();
+    reg.items.push({ ...reg.items[1], id: "ghr_billing", full_name: "acme/billing", used_by: [], pushed_at: new Date(Date.now() - 3 * 3600_000).toISOString() });
+    window.history.replaceState(null, "", `/?org=org_1&project_id=${P}&area=project&tab=${tab}`);
+    const calls = stubFetch((c: Call) => {
+      if (c.path === "/v1/github/repos") return { body: reg };
+      if (c.path === `/v1/projects/${P}/repos` && c.method === "GET") return { body: projectReposFixture() };
+      if (c.method === "PUT" && c.path === `/v1/projects/${P}/repos/ghr_billing`) return { body: projectReposFixture() };
+      if (c.method !== "GET") return { body: { ok: true } };
+      if (c.path === "/v1/projects/summary") return { body: FX_SUMMARY };
+      const m = c.path.match(/^\/v1\/projects\/([^/]+)\/(overview|work|knowledge|deployments|onboarding|settings|health|captain)$/);
+      if (m) {
+        const table: Record<string, unknown> = { overview: FX_OVERVIEW, work: FX_WORK, knowledge: FX_KNOWLEDGE, deployments: FX_DEPLOYMENTS,
+                                                 onboarding: { ...FX_ONBOARDING, state: "ready" }, settings: FX_SETTINGS, health: FX_HEALTH };
+        return { body: table[m[2]] };
+      }
+      return undefined;
+    });
+    await mountAs(<ProjectPage projectId={P} actor="ceo" orgId="org_1" />, "owner");
+    await settle();
+    return calls;
+  }
+
+  it("Repo & knowledge › + Add repo: the picker (accounts, search, rows with last push), never the Add-account sheet, and Add binds it here", async () => {
+    const calls = await open("knowledge");
+    await press(tid("px-kn-add-repo"));
+    expect(params().get("area")).toBe("project");                  // stays on the page
+    expect(tid("px-add-repo")).not.toBeNull();
+    expect(tid("px-add-repo-search")).not.toBeNull();
+    expect(tid("px-add-repo-age-ghr_billing")!.textContent).toBe("3h");
+    // Already in this project: tagged, not pickable.
+    expect(tid("px-add-repo-here-ghr_web")!.textContent).toBe("in this project");
+    expect((tid("px-add-repo-repo-ghr_web") as HTMLButtonElement).disabled).toBe(true);
+    await press(tid("px-add-repo-repo-ghr_billing"));
+    await press(tid("px-add-repo-go"));
+    expect(calls.some((c) => c.method === "PUT" && c.path === `/v1/projects/${P}/repos/ghr_billing`)).toBe(true);
+    expect(tid("px-add-repo-said")!.textContent).toContain("Added acme/billing");
+  });
+
+  it("Settings › Repos › + Add opens the same picker", async () => {
+    await open("settings");
+    await press(tid("px-set-repos-add"));
+    expect(tid("px-add-repo")).not.toBeNull();
+    expect(params().get("area")).toBe("project");
   });
 });

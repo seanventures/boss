@@ -589,7 +589,9 @@ describe("Repo & knowledge (screen 6)", () => {
     expect($$("[data-testid='px-kn-repos'] .px-fl-n").map((n) => n.textContent)).toEqual(["Read", "Branch", "Open PR", "Merge: you", "Staging"]);
     expect(tid("px-kn-dossier")!.textContent).toContain("142 / 148");
     expect(tid("px-kn-open-graph")!.getAttribute("href")).toContain("area=knowledge");
-    expect(tid("px-kn-add-repo")!.getAttribute("href")).toContain("focus=repository");
+    // 06-01: Add repo opens the Import-a-repo picker on this page, not a link to Setup's Add-account sheet.
+    expect(tid("px-kn-add-repo")!.tagName).toBe("BUTTON");
+    expect(tid("px-kn-add-repo")!.getAttribute("href")).toBeNull();
   });
 });
 

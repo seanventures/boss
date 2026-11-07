@@ -26,7 +26,7 @@ import {
 import { GatedButton, useGate } from "../../components/gated";
 import { useGuardedCall } from "../../components/identity/identity-provider";
 import { IdentityError, idGet, idPost } from "../../lib/identity/api";
-import { multirepo, refusalMessage, type Registry, type RegistryRepo } from "../../lib/multirepo";
+import { multirepo, refusalCode, refusalMessage, type Registry, type RegistryRepo } from "../../lib/multirepo";
 import { accountsOf, importable, startProjectApi, type RepoFacts } from "../../lib/start-project";
 import { ageShort, folderRows, hostFolders, type FolderFacts, type FolderHost } from "../../lib/host-folder";
 import { consoleHref } from "../console-href";
@@ -74,6 +74,98 @@ function CheckRow({ label, sub, state, testId }: { label: string; sub: string; s
   );
 }
 
+/** THE ORG'S REGISTRY for a picker, with the account it opens on — and, once, a re-read from
+ *  GitHub when rows lack their last push (03-11: rows listed before the push time was kept). */
+export function useRegistry(projectId: string): { registry: Registry | null; loadError: string | null; account: string; setAccount: (a: string) => void; reload: () => void } {
+  const [registry, setRegistry] = useState<Registry | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [account, setAccount] = useState("");
+  const [n, setN] = useState(0);
+  const canRefresh = useGate("repository:register", projectId);
+  const refreshed = useRef(false);
+  useEffect(() => {
+    let alive = true;
+    multirepo.registry(projectId).then((r) => {
+      if (!alive) return;
+      setRegistry(r);
+      setAccount((cur) => cur || (accountsOf(r).find((a) => importable(r, a).length) ?? accountsOf(r)[0] ?? ""));
+    }).catch((e) => { if (alive) setLoadError(refusalMessage(e)); });
+    return () => { alive = false; };
+  }, [projectId, n]);
+  useEffect(() => {
+    if (!registry || refreshed.current || !canRefresh.allowed) return undefined;
+    if (!registry.items.some((r) => r.allowed && r.reachable !== false && !r.archived && !r.pushed_at)) return undefined;
+    refreshed.current = true;
+    let alive = true;
+    multirepo.refresh(projectId).then((r) => { if (alive && r) setRegistry(r); }).catch(() => undefined);
+    return () => { alive = false; };
+  }, [registry, canRefresh.allowed, projectId]);
+  return { registry, loadError, account, setAccount, reload: () => setN((x) => x + 1) };
+}
+
+/** TODAY'S IMPORT-A-REPO PICKER (03-08..13), one component wherever a repository is picked (Add a
+ *  project, and Add repo on a project: 06-01 / 13-23): the account chips (read-only, `+ account`
+ *  opens Repo and models), the search, and the rows — name, the last push ("3h", "12d"), or a tag
+ *  (`in use` by another project, `in this project` here). */
+export function RepoPicker({ registry, loadError, account, onAccount, query, onQuery, picked, onPick, addAccount, here, testid = "import" }: {
+  registry: Registry | null; loadError: string | null; account: string; onAccount: (a: string) => void;
+  query: string; onQuery: (q: string) => void; picked: string; onPick: (id: string) => void; addAccount: string;
+  /** Repository ids already in the project this picker adds to: tagged, not pickable. */
+  here?: Set<string>; testid?: string;
+}) {
+  const accounts = useMemo(() => accountsOf(registry), [registry]);
+  const repos = useMemo(() => {
+    const all = importable(registry, account);
+    const q = query.trim().toLowerCase();
+    return q ? all.filter((r) => r.full_name.toLowerCase().includes(q)) : all;
+  }, [registry, account, query]);
+  return (
+    <>
+      {loadError ? <p className="bx-np-error" role="alert" data-testid={`${testid}-load-error`}>{loadError}</p> : null}
+      <div className="spj-accounts" data-testid={`${testid}-accounts`}>
+        {accounts.map((a) => (
+          <button key={a} type="button" className="spj-acct" aria-pressed={a === account} data-testid={`${testid}-account-${a}`}
+                  title={`Repositories ${a} reaches`} onClick={() => onAccount(a)}>
+            <User size={11} aria-hidden /> {a}</button>
+        ))}
+        <a className="spj-link spj-small" href={addAccount} data-testid={`${testid}-add-account`}
+           title="Connect another GitHub account or allow more repositories in Repo and models">+ account</a>
+      </div>
+      <label className="spj-search">
+        <MagnifyingGlass size={14} aria-hidden />
+        <input type="search" placeholder="Search repos" aria-label="Search repos" data-testid={`${testid}-search`}
+               value={query} onChange={(e) => onQuery(e.target.value)} />
+      </label>
+      <ul className="spj-repos" role="listbox" aria-label="Repositories" data-testid={`${testid}-repos`} aria-busy={!registry && !loadError}>
+        {!registry && !loadError ? [0, 1, 2].map((i) => <li key={i} className="spj-skel" aria-hidden />) : null}
+        {repos.map((r) => {
+          const inHere = here?.has(r.id) ?? false;
+          const usedBy = inHere ? undefined : (r.used_by ?? [])[0];
+          return (
+            <li key={r.id}>
+              <button type="button" role="option" aria-selected={r.id === picked} className="spj-repo" disabled={inHere}
+                      data-testid={`${testid}-repo-${r.id}`} onClick={() => onPick(r.id)}
+                      title={inHere ? "Already in this project" : usedBy ? `Already used by ${usedBy.name}` : r.description ?? r.full_name}>
+                <GitBranch size={13} aria-hidden className="spj-faint" />
+                <span className="spj-mono">{r.full_name.split("/")[1]}</span>
+                <span style={{ flex: 1 }} />
+                {inHere ? <span className="spj-inuse" data-testid={`${testid}-here-${r.id}`}>in this project</span>
+                  : usedBy ? <span className="spj-inuse" data-testid={`${testid}-inuse-${r.id}`}>in use</span>
+                    : <small className="spj-mono spj-faint" data-testid={`${testid}-age-${r.id}`} title={r.pushed_at ? `Last push ${new Date(r.pushed_at).toLocaleString()}` : "Last push not known yet"}>{ageShort(r.pushed_at)}</small>}
+              </button>
+            </li>
+          );
+        })}
+        {registry && !repos.length ? (
+          <li className="spj-quiet" data-testid={`${testid}-none`}>
+            {query ? "No repo matches." : <>No repos yet · <a className="spj-link" href={addAccount}>Connect on Repo and models ›</a></>}
+          </li>
+        ) : null}
+      </ul>
+    </>
+  );
+}
+
 export function ImportRepo({ projectId, onCreated }: {
   /** The project open now: the org registry and the servers are read through it. */
   projectId: string;
@@ -83,9 +175,7 @@ export function ImportRepo({ projectId, onCreated }: {
   const guarded = useGuardedCall();
   const canCreate = useGate("project:create");
   const [source, setSource] = useState<Source>("github");
-  const [registry, setRegistry] = useState<Registry | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [account, setAccount] = useState("");
+  const { registry, loadError, account, setAccount } = useRegistry(projectId);
   const [query, setQuery] = useState("");
   const [picked, setPicked] = useState<string>("");
   const [facts, setFacts] = useState<RepoFacts | null>(null);
@@ -109,12 +199,6 @@ export function ImportRepo({ projectId, onCreated }: {
 
   useEffect(() => {
     let alive = true;
-    multirepo.registry(projectId).then((r) => {
-      if (!alive) return;
-      setRegistry(r);
-      const first = accountsOf(r).find((a) => importable(r, a).length) ?? accountsOf(r)[0] ?? "";
-      setAccount(first);
-    }).catch((e) => { if (alive) setLoadError(refusalMessage(e)); });
     idGet<CaptainRead>(`/v1/projects/${encodeURIComponent(projectId)}/captain`).then((c) => {
       if (!alive || !c) return;
       const candidates = Array.isArray(c.candidates) ? c.candidates : [];
@@ -136,7 +220,6 @@ export function ImportRepo({ projectId, onCreated }: {
     return () => { alive = false; };
   }, [source, hosts, projectId]);
 
-  const accounts = useMemo(() => accountsOf(registry), [registry]);
   const repos = useMemo(() => {
     const all = importable(registry, account);
     const q = query.trim().toLowerCase();
@@ -156,7 +239,7 @@ export function ImportRepo({ projectId, onCreated }: {
   }, [picked, projectId]);
 
   const pick = (id: string) => {
-    setPicked(id);
+    setPicked(id); setRefusedRepo(null);
     if (!named.current) {
       const full = repos.find((r) => r.id === id)?.full_name ?? "";
       const tail = full.split("/").pop() ?? "";
@@ -182,7 +265,12 @@ export function ImportRepo({ projectId, onCreated }: {
 
   // The folder's GitHub remote, when the registry reaches it: that repository joins the project too.
   const folderRepo = folder?.github ? (registry?.items ?? []).find((r) => r.full_name.toLowerCase() === folder.github!.toLowerCase() && r.allowed) ?? null : null;
-  const ready = source === "github" ? Boolean(repo) : Boolean(folder?.exists);
+  // 03-25 NEVER A PROJECT WITHOUT ITS REPO: a repository a new project cannot reach (no GitHub App
+  // for the org) is said on the row's column, with Connect GitHub — before anything is created.
+  const [refusedRepo, setRefusedRepo] = useState<{ message: string; project?: string } | null>(null);
+  const blocked = source === "github" && repo && repo.new_project && repo.new_project.ok === false
+    ? { message: repo.new_project.message || "Connect GitHub first." } : refusedRepo;
+  const ready = source === "github" ? Boolean(repo) && !blocked : Boolean(folder?.exists);
 
   const create = async () => {
     if (!ready || !name.trim() || busy) return;
@@ -194,7 +282,14 @@ export function ImportRepo({ projectId, onCreated }: {
       made = await guarded("Create the project.", () => startProjectApi.create(name.trim(), { type }));
       const id = made.id;
       if (source === "github" && repo) {
-        await guarded(`Add ${repo.full_name} to the project.`, () => multirepo.putProjectRepo(id, repo.id, {}));
+        try {
+          await guarded(`Add ${repo.full_name} to the project.`, () => multirepo.putProjectRepo(id, repo.id, {}));
+        } catch (e) {
+          if (refusalCode(e) !== "github_not_connected") throw e;
+          // Said here, with Connect GitHub — never swallowed into a project page with no repo.
+          setRefusedRepo({ message: refusalMessage(e), project: id });
+          return;
+        }
       } else if (folder) {
         await guarded(`Add ${folder.path} to the project.`, () => hostFolders.register(id, hostId, folder.path));
         if (folderRepo) await guarded(`Add ${folderRepo.full_name} to the project.`, () => multirepo.putProjectRepo(id, folderRepo.id, {}));
@@ -241,45 +336,9 @@ export function ImportRepo({ projectId, onCreated }: {
         </div>
         {source === "github" ? (
           <>
-            {loadError ? <p className="bx-np-error" role="alert" data-testid="import-load-error">{loadError}</p> : null}
-            <div className="spj-accounts" data-testid="import-accounts">
-              {accounts.map((a) => (
-                <button key={a} type="button" className="spj-acct" aria-pressed={a === account} data-testid={`import-account-${a}`}
-                        title={`Repositories ${a} reaches`} onClick={() => { setAccount(a); setPicked(""); }}>
-                  <User size={11} aria-hidden /> {a}</button>
-              ))}
-              <a className="spj-link spj-small" href={addAccount} data-testid="import-add-account"
-                 title="Connect another GitHub account or allow more repositories in Repo and models">+ account</a>
-            </div>
-            <label className="spj-search">
-              <MagnifyingGlass size={14} aria-hidden />
-              <input type="search" placeholder="Search repos" aria-label="Search repos" data-testid="import-search"
-                     value={query} onChange={(e) => setQuery(e.target.value)} />
-            </label>
-            <ul className="spj-repos" role="listbox" aria-label="Repositories" data-testid="import-repos" aria-busy={!registry && !loadError}>
-              {!registry && !loadError ? [0, 1, 2].map((i) => <li key={i} className="spj-skel" aria-hidden />) : null}
-              {repos.map((r) => {
-                const usedBy = (r.used_by ?? [])[0];
-                return (
-                  <li key={r.id}>
-                    <button type="button" role="option" aria-selected={r.id === picked} className="spj-repo"
-                            data-testid={`import-repo-${r.id}`} onClick={() => pick(r.id)}
-                            title={usedBy ? `Already used by ${usedBy.name}` : r.description ?? r.full_name}>
-                      <GitBranch size={13} aria-hidden className="spj-faint" />
-                      <span className="spj-mono">{r.full_name.split("/")[1]}</span>
-                      <span style={{ flex: 1 }} />
-                      {usedBy ? <span className="spj-inuse" data-testid={`import-inuse-${r.id}`}>in use</span>
-                        : <small className="spj-mono" data-testid={`import-age-${r.id}`}>{ageShort(r.pushed_at)}</small>}
-                    </button>
-                  </li>
-                );
-              })}
-              {registry && !repos.length ? (
-                <li className="spj-quiet" data-testid="import-none">
-                  {query ? "No repo matches." : <>No repos yet · <a className="spj-link" href={addAccount}>Connect on Repo and models ›</a></>}
-                </li>
-              ) : null}
-            </ul>
+            <RepoPicker registry={registry} loadError={loadError} account={account}
+                        onAccount={(a) => { setAccount(a); setPicked(""); }} query={query} onQuery={setQuery}
+                        picked={picked} onPick={pick} addAccount={addAccount} />
           </>
         ) : (
           <div className="spj-folder" data-testid="import-folder">
@@ -397,6 +456,13 @@ export function ImportRepo({ projectId, onCreated }: {
           <RocketLaunch size={15} aria-hidden /> {busy ? "Creating…" : "Start onboarding"}
         </GatedButton>
         <p className="spj-foot" data-testid="import-estimate">{capName} takes it from here · ≈ 5 min · ≈ $1</p>
+        {blocked ? (
+          <p className="spj-warn" role="alert" data-testid="import-connect-github">
+            <Warning size={13} weight="bold" aria-hidden />
+            <span>{blocked.message} <a className="spj-link" href={addAccount} data-testid="import-connect-github-go">Connect GitHub ›</a>
+              {refusedRepo?.project ? <> · <a className="spj-link" href={consoleHref({ project_id: refusedRepo.project, area: "project", tab: "settings", new_project: undefined })}>Open {name.trim()} without it</a></> : null}</span>
+          </p>
+        ) : null}
         {error ? <p className="bx-np-error" role="alert" data-testid="import-error">{error}</p> : null}
       </section>
     </div>
