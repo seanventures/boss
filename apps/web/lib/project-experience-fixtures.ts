@@ -173,7 +173,8 @@ export const FX_OVERVIEW = {
 };
 
 export const FX_KNOWLEDGE = {
-  repos: FX_OVERVIEW.project.repos.map((r) => ({ ...r, binding_id: "ghb_demo", last_push: "3h ago", via: "GitHub App · paramg", deploys_to: "Staging" })),
+  repos: FX_OVERVIEW.project.repos.map((r) => ({ ...r, binding_id: "ghb_demo", last_push: "3h ago", via: "GitHub App · paramg", deploys_to: "Staging",
+    deploy_check: { label: "Staging", state: "done", reason: "The last deploy to staging is live" } })),
   dossier: { stack: ["Python 3.11", "FastAPI", "React 18", "Vite", "Postgres 16", "Docker"],
              commands: { install: "make setup", test: "make test", build: "npm run build", run: "docker compose up" },
              tests: { passed: 142, total: 148, failing: 6, from: "PR #3 build", files: 38 },
