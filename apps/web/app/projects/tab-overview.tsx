@@ -16,7 +16,7 @@ import { GatedButton } from "../../components/gated";
 import { KIND_WORDS, WORK_ORDER, WORK_WORDS, navigateTo, pxHref, runAccept, startOnboarding, workWhen, writePxUrl, type NextItem, type WorkItem } from "../../lib/project-experience";
 import { Empty, Face, Flow, HEALTH_WORD, Ico, Journey, PxLink, Ring, Said, Spark, Stations, Tag, Timeline, Cost, CardFailed } from "./kit";
 import { DemoLoginRow } from "./tab-settings";
-import { P95_SOURCE } from "./tab-deployments";
+import { P95_SOURCE, p95Words } from "./tab-deployments";
 import { whenLocal } from "../../lib/local-time";
 import type { PxCtx } from "./project-page";
 
@@ -130,8 +130,9 @@ export function OverviewTab({ ctx }: { ctx: PxCtx }) {
               <div className="px-row">
                 <Ring pct={t.staging.uptime_pct ?? 0} tone={t.staging.health === "healthy" ? "green" : t.staging.health === "down" ? "red" : "amber"} label={`Uptime ${t.staging.uptime_pct ?? "unknown"}%`}>
                   {t.staging.uptime_pct ?? "—"}</Ring>
-                <div><div style={{ color: "var(--green)", fontWeight: 600 }}>{HEALTH_WORD[t.staging.health]}</div>
-                  {t.staging.p95_ms !== null ? <span className="px-mono px-faint" style={{ fontSize: ".58rem" }} title={P95_SOURCE[t.staging.p95_source ?? ""] ?? undefined}>p95 {t.staging.p95_ms}ms</span> : null}</div>
+                <div><div style={{ color: `var(--${t.staging.health === "healthy" ? "green" : t.staging.health === "down" ? "red" : t.staging.health === "degraded" ? "amber" : "muted"})`, fontWeight: 600 }}
+                           title={t.staging.health_reason || undefined} data-testid="px-tile-staging-health">{HEALTH_WORD[t.staging.health]}</div>
+                  {t.staging.p95_ms !== null ? <span className="px-mono px-faint" style={{ fontSize: ".58rem" }} title={P95_SOURCE[t.staging.p95_source ?? ""] ?? undefined} data-testid="px-tile-staging-p95">{p95Words(t.staging.p95_ms, t.staging.window)}</span> : null}</div>
               </div>
               <Spark series={t.staging.series} tone="green" label="Staging latency, last 24 hours" />
             </>

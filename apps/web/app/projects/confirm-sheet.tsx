@@ -1,27 +1,65 @@
 "use client";
 
 /**
- * THE ONE "ARE YOU SURE?" on project pages (13-12, 08-05): the console's own sheet (aria-modal,
- * Esc closes, focus kept inside), never the browser's window.confirm(). It says what happens and
- * where, then one primary action and Cancel. Enforced by tests/px-no-native-confirm.test.ts.
+ * THE project pages' confirm sheet: a small centred sheet that says what will happen, in rows
+ * (what, where, which commit, who approves…), with Cancel and one primary press. Used wherever
+ * a project page asks "are you sure" (Redeploy, Remove a value) — never the browser's confirm().
+ * A refusal from the press shows inside the sheet as an error (red, role=alert), never as green.
+ * (13-12, 08-05; enforced by tests/px-no-native-confirm.test.ts.)
  */
-import React from "react";
-import { Warning } from "@phosphor-icons/react";
+import React, { useEffect, useId, useRef, useState } from "react";
+import { WarningCircle, X } from "@phosphor-icons/react";
 
-import { Sheet } from "../../components/identity/kit";
+export type ConfirmRow = { label: string; value: React.ReactNode; mono?: boolean };
 
-export function ConfirmSheet({ title, confirm, danger, busy, onConfirm, onCancel, children, testid = "px-confirm-sheet" }: {
-  title: string; confirm: string; danger?: boolean; busy?: boolean; onConfirm: () => void; onCancel: () => void; children?: React.ReactNode; testid?: string;
+export function ConfirmSheet({ title, icon, rows, lede, press, pressKind = "primary", onConfirm, onClose, testid = "px-confirm" }: {
+  title: string; icon?: React.ReactNode; rows: ConfirmRow[]; lede?: string; press: string;
+  pressKind?: "primary" | "danger";
+  /** Resolves to null when it worked (the sheet closes), else the refusal in words (shown red). */
+  onConfirm: () => Promise<string | null>;
+  onClose: () => void; testid?: string;
 }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const ref = useRef<HTMLDivElement>(null);
+  const titleId = useId();
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  useEffect(() => {
+    const opener = document.activeElement as HTMLElement | null;
+    ref.current?.querySelector<HTMLElement>("[data-autofocus]")?.focus({ preventScroll: true });
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closeRef.current(); } };
+    document.addEventListener("keydown", onKey, true);
+    return () => { document.removeEventListener("keydown", onKey, true); opener?.focus?.({ preventScroll: true }); };
+  }, []);
+  const go = async () => {
+    setBusy(true); setError("");
+    let why: string | null;
+    try { why = await onConfirm(); } catch (e) { why = e instanceof Error ? e.message : "It did not go through."; }
+    setBusy(false);
+    if (why) setError(why); else onClose();
+  };
   return (
-    <Sheet title={title} icon={danger ? <Warning size={18} className="idn-warn" aria-hidden /> : undefined} onClose={onCancel} testId={testid}>
-      <div className="idn-lede2" data-copy="prose">{children}</div>
-      <div className="idn-mf">
-        <span className="idn-spacer" />
-        <button type="button" className="idn-btn sm ghost" onClick={onCancel} data-testid={`${testid}-cancel`}>Cancel</button>
-        <button type="button" className={`idn-btn sm${danger ? " danger solid" : " primary"}`} onClick={onConfirm} disabled={busy} data-autofocus data-testid={`${testid}-confirm`}>
-          {busy ? "Working…" : confirm}</button>
+    <div className="px-sheet-wrap" onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>
+      <div ref={ref} className="px-sheet px-confirm" role="dialog" aria-modal="true" aria-labelledby={titleId} data-testid={testid}>
+        <div className="px-sheet-h">{icon}<h2 id={titleId}>{title}</h2><span className="px-spacer" />
+          <button type="button" className="px-icon-btn" aria-label="Close" title="Close (Esc)" onClick={onClose}><X size={14} aria-hidden /></button></div>
+        <div className="px-confirm-b">
+          {lede ? <p className="px-confirm-lede">{lede}</p> : null}
+          <dl className="px-confirm-rows">
+            {rows.map((r) => (
+              <React.Fragment key={r.label}><dt>{r.label}</dt><dd className={r.mono ? "px-mono" : undefined} data-testid={`${testid}-${r.label.toLowerCase().replace(/\W+/g, "-")}`}>{r.value}</dd></React.Fragment>
+            ))}
+          </dl>
+          {error ? <p className="px-confirm-err" role="alert" data-testid={`${testid}-error`}><WarningCircle size={14} weight="fill" aria-hidden />{error}</p> : null}
+        </div>
+        <div className="px-drawer-f px-confirm-f">
+          <span className="px-spacer" />
+          <button type="button" className="px-btn" onClick={onClose} disabled={busy} data-testid={`${testid}-cancel`}>Cancel</button>
+          <button type="button" className="px-btn" data-kind={pressKind} data-autofocus onClick={() => void go()} disabled={busy} data-testid={`${testid}-go`}>
+            {busy ? "Working…" : press}</button>
+        </div>
       </div>
-    </Sheet>
+    </div>
   );
 }

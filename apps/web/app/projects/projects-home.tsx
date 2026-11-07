@@ -249,7 +249,7 @@ export function ProjectCardView({ card, onChanged }: { card: ProjectCard; onChan
         ) : <Ring pct={0} tone="teal" size="s" label="No health signal yet">—</Ring>}
         <div style={{ minWidth: 0, flex: 1, fontSize: ".6rem" }} data-testid={`px-card-lines-${card.id}`}>
           <span className="px-pc-line1" data-tone={card.line_tone || undefined}>
-            <span className="px-dot" data-s={card.line_tone === "done" ? "done" : card.line_tone === "now" ? "now" : card.line_tone === "bad" ? "bad" : undefined} aria-hidden />
+            <span className="px-dot" data-s={card.line_tone === "done" ? "done" : card.line_tone === "now" ? "now" : card.line_tone === "bad" ? "bad" : card.line_tone === "you" ? "you" : undefined} aria-hidden />
             {lines[0]}</span>
           {card.status_label === "Not onboarded" && !card.archived ? (
             <GatedButton permission="workflow_run:start" projectId={card.id} className="px-linkbtn" data-testid={`px-card-onboard-${card.id}`}

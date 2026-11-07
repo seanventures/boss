@@ -336,12 +336,13 @@ function DeployValues({ ctx, sec, onChanged, adding, setAdding }: { ctx: PxCtx; 
   const [asking, setAsking] = useState<ValueRow | null>(null);
   const add = o(o(sec.raw).add);
   // Remove asks first in the console's own sheet (13-12), never the browser's confirm().
-  const remove = async (r: ValueRow) => {
-    setAsking(null);
-    if (!r.remove) return;
+  /** Resolves to null when removed (the sheet closes), else the refusal in words (shown red in the sheet). */
+  const remove = async (r: ValueRow): Promise<string | null> => {
+    if (!r.remove) return null;
     const res = await write(`Remove ${r.name}.`, () => idDelete<unknown>(r.remove!.href));
     setSaid(lineOf(res, `${r.name} was removed.`));
-    if (res.ok) onChanged();
+    if (res.ok) { onChanged(); return null; }
+    return lineOf(res, "").text || "It was not removed.";
   };
   const done = (text: string) => { setSaid({ text, ok: true }); setOpen(null); setAdding(false); onChanged(); };
   return (
@@ -373,10 +374,10 @@ function DeployValues({ ctx, sec, onChanged, adding, setAdding }: { ctx: PxCtx; 
       )) : <p className="px-faint" style={{ margin: 0 }}>No deploy values yet. BOSS generates the ones the app asks for on its first deploy.</p>}
       <SaidLine line={said} />
       {asking ? (
-        <ConfirmSheet title={`Remove ${asking.name}?`} confirm="Remove" danger testid="px-set-value-remove-sheet"
-                      onConfirm={() => void remove(asking)} onCancel={() => setAsking(null)}>
-          <p style={{ margin: 0 }}>Deploys stop receiving <code className="px-code">{asking.name}</code>. The value can&apos;t be brought back; set it again to restore it.</p>
-        </ConfirmSheet>
+        <ConfirmSheet title={`Remove ${asking.name}?`} press="Remove" pressKind="danger" testid="px-set-value-remove-sheet"
+                      lede="Deploys stop receiving this value. It can't be brought back; set it again to restore it."
+                      rows={[{ label: "Value", value: asking.name, mono: true }]}
+                      onConfirm={() => remove(asking)} onClose={() => setAsking(null)} />
       ) : null}
     </div>
   );

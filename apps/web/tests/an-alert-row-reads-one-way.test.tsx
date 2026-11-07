@@ -41,7 +41,9 @@ describe("a rule row never overprints", () => {
     expect(rule(".obs-arule-state")).toMatch(/flex-wrap:\s*wrap/);
     expect(rule(".obs-arule-acts")).toMatch(/flex-wrap:\s*wrap/);
     expect(rule(".obs-arule > *")).toMatch(/min-width:\s*0/);
-    expect(css).toMatch(/\.obs-arule-name > \.obs-sev, \.obs-arule-name > \.obs-chip[^{]*\{[^}]*flex: none/);
+    // The name and its chips wrap as one block (12-15: a second line starts under the name).
+    expect(css).toMatch(/\.obs-arule-label > \.obs-sev, \.obs-arule-label > \.obs-chip[^{]*\{[^}]*flex: none/);
+    expect(rule(".obs-arule-label")).toMatch(/flex-wrap:\s*wrap/);
   });
 });
 

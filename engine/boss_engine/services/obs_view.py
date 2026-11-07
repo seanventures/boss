@@ -475,6 +475,33 @@ def _strips(connection: Any, ids: list[str], w: dict[str, Any]
     return strips, rollup
 
 
+#: THE window every "uptime · p95" on a project page and on Observability's 24 h Pulse reads.
+P95_WINDOW = "24h"
+
+
+def probe_window(connection: Any, ids: list[str], *, win: str = P95_WINDOW,
+                 now: Optional[datetime] = None) -> dict[str, dict[str, Any]]:
+    """ONE SOURCE for an app's uptime and p95 (15-03 / PX-09): BOSS's own health probes over
+    the window — the same rows, window bounds and percentile_cont as the Pulse rollup
+    (`_strips`), so the project tile, the header tooltip, Deployments, Health and Observability's
+    app row all print the same number. {target: {uptime (0..1|None), p95_ms, n, window}}."""
+    w = window_bounds(win, now=now)
+    out = {i: {"uptime": None, "p95_ms": None, "n": 0, "window": w["win"]} for i in ids}
+    if not ids:
+        return out
+    for r in connection.execute(text(
+            "SELECT deployment_target_id AS t, count(*) AS n, "
+            "       sum(CASE WHEN ok THEN 1 ELSE 0 END) AS okn, "
+            "       percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms) "
+            "         FILTER (WHERE ok AND latency_ms IS NOT NULL) AS p95 "
+            "FROM deployment_health_samples WHERE deployment_target_id = ANY(:ids) "
+            "AND checked_at >= :a AND checked_at < :z GROUP BY deployment_target_id"),
+            {"ids": list(ids), "a": w["start"], "z": w["end"]}).mappings():
+        out[str(r["t"])] = {"uptime": _ratio(int(r["okn"] or 0), int(r["n"])),
+                            "p95_ms": _int(r["p95"]), "n": int(r["n"]), "window": w["win"]}
+    return out
+
+
 def _opened_sql() -> tuple[str, str]:
     """An incident OPENS on the k-th consecutive failed probe (deployment_health.incidents'
     rule): the k-1 probes before it failed and the k-th before it did not, or does not exist.

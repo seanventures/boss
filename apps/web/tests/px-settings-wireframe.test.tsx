@@ -152,7 +152,7 @@ describe("Settings (screen 13) on the engine's answer", () => {
     await press(tid("px-set-value-remove-sheet-cancel"));
     expect(tid("px-set-value-remove-sheet")).toBeNull();
     await press(tid("px-set-value-remove-SMTP_URL"));
-    await press(tid("px-set-value-remove-sheet-confirm"));
+    await press(tid("px-set-value-remove-sheet-go"));
     expect(calls.find((c) => c.method === "DELETE")?.path).toBe("/v1/apps/helpdesk-ai-demo/secrets/SMTP_URL");
     await press(tid("px-set-add-value"));
     await type(tid("px-set-value-name"), "smtp_password");

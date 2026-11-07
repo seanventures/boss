@@ -32,6 +32,7 @@ import { ago, copyText, CopyButton, ErrorLine, localTime, Menu, useNow } from ".
 import { confirmed, Drawer, DrawerSection, Empty, Skeleton, Sheet, StateWord, TypedConfirm } from "./kit";
 import { StageLine } from "./rack";
 import { ServerOverview } from "./server-overview";
+import { setCrumbTrail } from "../shell-crumb-here";
 
 const STORES: { key: string; label: string; tip: string }[] = [
   { key: "database", label: "Database", tip: "database (survives restarts)" },
@@ -351,6 +352,14 @@ export function HostDrawer({ projectId, actor, hostId, canWrite, onClose, onResi
   const h = detail.data;
   // A drawer opened on a host that is gone (retired and deleted) says so rather than spinning.
   useEffect(() => { setError(null); }, [hostId]);
+  // THE BREADCRUMB NAMES THE SERVER (14-01): "Infra / Servers / 203.0.113.20" while it is open —
+  // a server is shared and org-wide, never "<project> / Infra".
+  const crumbName = h ? String(h.facts.address ?? h.name) : "";
+  useEffect(() => {
+    if (!crumbName) return undefined;
+    setCrumbTrail({ area: "infra", trail: [{ label: "Servers", href: "?area=infra&view=fleet" }, { label: crumbName }] });
+    return () => setCrumbTrail(null);
+  }, [crumbName]);
 
   const head = h ? (
     <>

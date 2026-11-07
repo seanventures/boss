@@ -43,7 +43,8 @@ function PulseRowView({ row, pulse, onOpen, changed, now }: {
   const right = row.state === "down" && Number.isFinite(sinceMs) && now !== null
     ? <span className="obs-down" title={`Down since ${lt.full(sinceMs)}`}>down {dur(((now ?? sinceMs) - sinceMs) / 1000)}</span>
     : row.p95Ms !== null
-      ? <span>p95 {ms(row.p95Ms)}</span>
+      // THE SAME p95 the project pages show (obs_view.probe_window): BOSS's probes over the window.
+      ? <span title={`p95 of BOSS's health probes that answered, last ${SPAN[pulse.window.win] ?? pulse.window.win}`}>p95 {ms(row.p95Ms)}</span>
       : notDeployed ? <span className="inf-faint">—</span>
         : <span className="inf-faint" title={row.state === "unknown" ? "No probes in this window" : "No latency recorded"}>
             {row.state === "unknown" ? "no probes" : "—"}</span>;

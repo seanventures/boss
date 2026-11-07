@@ -115,6 +115,41 @@ BUILTIN: dict[str, dict[str, Any]] = {
         "unit": "", "params": {},
     },
 }
+_NAME_NOISE = frozenset({"helpdesk", "app", "boss", "alert"})
+
+
+def rule_name_words(name: Any, limit: int = 4) -> str:
+    """A rule's identifier in words: `TicketsApi5xx` → "Tickets api 5xx", `error_rate_high` →
+    "Error rate high" (≤ `limit` words). Never the raw CamelCase or snake_case name."""
+    import re as _re
+
+    raw = str(name or "").strip()
+    if not raw:
+        return "Alert"
+    spaced = raw.replace("_", " ").replace("-", " ")
+    spaced = _re.sub(r"(?<=[a-z])(?=[A-Z0-9])|(?<=[0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])", " ",
+                     spaced)
+    parts = [p for p in spaced.split() if p.lower() not in _NAME_NOISE] or spaced.split()
+    text_ = " ".join(parts[:limit]).lower()
+    return text_[:1].upper() + text_[1:]
+
+
+def rule_label(kind: Any, alert: Any, summary: Any = None) -> str:
+    """THE NAME of a rule or of an alert it fired, on every surface (Observability's rules and
+    history, the project's Health card and parity component, incident drivers): the built-in
+    rule's label ("Error rate"); else its own summary when that is a short name ("5xx on
+    /api/tickets", ≤ 5 words, not a sentence); else its identifier in words ("Host disk
+    filling") — never `HostDiskFilling`."""
+    b = BUILTIN.get(str(kind or ""), {})
+    if b.get("label"):
+        return str(b["label"])
+    said = " ".join(str(summary or "").split())
+    if said and len(said.split()) <= 5 and not said.endswith((".", "!", "?")) \
+            and "(" not in said:
+        return said
+    return rule_name_words(alert)
+
+
 #: Which parameters a person may set, with their bounds (the edit sheet and the yaml).
 PARAM_BOUNDS: dict[str, dict[str, tuple[float, float]]] = {
     "error_rate": {"threshold": (0.1, 100.0), "window_minutes": (1, 1440),
@@ -2489,7 +2524,8 @@ def auto_responding(connection, target_id: Optional[str]) -> list[dict[str, Any]
     out = []
     for r in map(_rule_dict, rows):
         out.append({"rule_id": r["id"], "kind": r["kind"], "alert": r["alert"],
-                    "label": BUILTIN.get(r["kind"], {}).get("label") or r["alert"],
+                    "label": rule_label(r["kind"], r["alert"],
+                                        (r.get("annotations") or {}).get("summary")),
                     "on_behalf_of": (r.get("respond_link") or {}).get("on_behalf_of")})
     return out
 

@@ -226,6 +226,10 @@ describe("Deployments speak in words (screen 08)", () => {
     expect(card.querySelector('a[href="https://github.com/acme/helpdesk/pull/2"]')).not.toBeNull();
     expect(card.querySelector("dt")!.getAttribute("title")).toContain("app's own requests");
     await press(tid("px-env-redeploy-staging"));
+    // 08-05: nothing is sent before the confirm sheet says what, where, which commit, who approves.
+    expect(calls.find((c) => c.method === "POST" && c.path === "/v1/infra/targets/dept_1/deploy")).toBeFalsy();
+    expect(tid("px-env-redeploy-sheet-staging")).not.toBeNull();
+    await press(tid("px-env-redeploy-sheet-staging-go"));
     await settle();
     const post = calls.find((c) => c.method === "POST" && c.path === "/v1/infra/targets/dept_1/deploy");
     expect(post).toBeTruthy();
