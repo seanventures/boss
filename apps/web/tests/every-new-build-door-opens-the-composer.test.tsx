@@ -89,14 +89,20 @@ describe("no New build door opens the agent chat", () => {
     // project:create), not a build (tests/new-project-in-the-org.test.tsx holds it).
     // BOSSAPP-810: the menu's New project opens the start flow's sheet (three doors), whose
     // "New app from an idea" is the project sheet.
-    const PROJECT_DOORS = ["app/project-menu.tsx", "app/new-project-sheet.tsx", "app/start-project/start-sheet.tsx"];
+    // BOSSAPP-913: the start flow's sheets moved into one host (start-project/start-host.tsx) that
+    // the menu, the Projects page and its first run all mount; the menu opens it, it opens the
+    // project sheet.
+    const PROJECT_DOORS = ["app/project-menu.tsx", "app/new-project-sheet.tsx", "app/start-project/start-sheet.tsx",
+                           "app/start-project/start-host.tsx"];
     const labels = newProjectLabels();
     expect(labels.map((l) => l.split(":")[0]).every((f) => PROJECT_DOORS.includes(f)), labels.join(", "))
       .toBe(true);
     expect(labels.some((l) => l.startsWith("app/project-menu.tsx:"))).toBe(true);
     const menu = readFileSync(join(ROOT, "app", "project-menu.tsx"), "utf8");
-    // The menu's New project door opens the project sheet, never the build composer.
-    expect(menu).toMatch(/<NewProjectSheet\b/);
+    // The menu's New project door opens the start host, whose idea door is the project sheet —
+    // never the build composer.
+    expect(menu).toMatch(/<StartProjectHost\b/);
+    expect(readFileSync(join(ROOT, "app", "start-project", "start-host.tsx"), "utf8")).toMatch(/<NewProjectSheet\b/);
     for (const f of PROJECT_DOORS) {
       expect(readFileSync(join(ROOT, f), "utf8"), f).not.toMatch(/openNewProject|compose=/);
     }
