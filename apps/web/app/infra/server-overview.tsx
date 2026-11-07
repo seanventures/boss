@@ -40,10 +40,11 @@ export function CapRing({ pct, tone, label }: { pct: number | null; tone: "teal"
   );
 }
 
+/** Each project's mark keeps one of four token gradients (infra.css `.inf-so-mark[data-mark]`). */
 function mark(name: string): string {
-  let h = 0;
-  for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) % 360;
-  return `linear-gradient(135deg, hsl(${h} 70% 52%), hsl(${(h + 40) % 360} 70% 42%))`;
+  let h = 7;
+  for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return String(h % 4);
 }
 
 export function ServerOverview({ projectId, hostId, canExec }: { projectId: string; hostId: string; canExec: boolean }) {
@@ -76,7 +77,7 @@ export function ServerOverview({ projectId, hostId, canExec }: { projectId: stri
             <span className="inf-so-tag" data-tone={reach.state === "reachable" ? "green" : reach.state === "unreachable" ? "red" : "grey"}
                   data-testid="inf-server-reach" title={reach.reason ?? undefined}>
               <span className="inf-so-dot" aria-hidden />{reach.state === "reachable" ? "Reachable" : reach.state === "unreachable" ? "Unreachable" : "Not checked"}</span></div>
-          <p data-testid="inf-server-sub">{data.sub}{reach.state === "unreachable" && reach.reason ? ` · ${reach.reason}` : ""}</p>
+          <span className="inf-so-sub" data-testid="inf-server-sub">{data.sub}{reach.state === "unreachable" && reach.reason ? ` · ${reach.reason}` : ""}</span>
         </div>
       </header>
       <div className="inf-so-tiles" data-testid="inf-server-tiles">
@@ -107,7 +108,7 @@ export function ServerOverview({ projectId, hostId, canExec }: { projectId: stri
           <span className="inf-so-badge">{data.shared_by}</span></h4>
         {data.projects.length ? data.projects.map((p) => (
           <div key={p.target_id} className="inf-so-proj" data-testid={`inf-host-project-${p.id}`}>
-            <span className="inf-so-mark" style={{ background: mark(p.name) }} aria-hidden>{p.initials}</span>
+            <span className="inf-so-mark" data-mark={mark(p.name)} aria-hidden>{p.initials}</span>
             <span className="inf-so-pname"><b>{p.name}</b><small>{p.env}{p.port ? <span className="inf-mono"> :{p.port}</span> : null}</small></span>
             <span className="ag-spacer" />
             <span className="inf-so-tag" data-tone={p.health.tone === "green" ? "green" : p.health.tone === "red" ? "red" : p.health.tone === "amber" ? "amber" : "grey"}>
@@ -117,7 +118,7 @@ export function ServerOverview({ projectId, hostId, canExec }: { projectId: stri
                data-console-load data-testid={`inf-host-project-link-${p.id}`} title={`${p.name}: its deployments, demo logins and health`}>
               <RocketLaunch size={11} aria-hidden /> Project › Deployments</a>
           </div>
-        )) : <p className="inf-faint">No projects on this server yet</p>}
+        )) : <span className="inf-faint inf-so-sub">No projects on this server yet</span>}
       </section>
 
       <div className="inf-so-pair">
