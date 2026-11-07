@@ -440,8 +440,8 @@ def seed(db, project_id: str, *, now: datetime | None = None, connection_id: str
             "settings": settings_story, "plan": planned}
 
 VISUAL_BRIEF = ("Finish the visual refresh the last change promised but did not deliver. The ticket "
-                "list still looks plain. Do all of this in the existing web app: 1) An app header "
-                "with the HelpDesk name and navigation. 2) Coloured priority and SLA chips.")
+                "list still looks plain. Do all of this in the existing web app: an app header "
+                "with the HelpDesk name and navigation, and coloured priority and SLA chips.")
 MERGE_SHAS = ["c1a7e0d4b2f94a1e8c3d", "6ba65005c585441eddfc", "f3f130c9a1b2"]
 
 
@@ -513,6 +513,11 @@ def seed_ship_story(db, project_id: str, *, target_id: str, host_id: str, merged
                           "workflow_run_id": merged[1]["run_id"]})})
     deploy(MERGE_SHAS[1], status="awaiting_approval", days=3, decision=stale_decision,
            run_id=merged[1]["run_id"], sid=stale)
+    # What BOSS does at boot and on every tick (cleared_causes): the overtaken request is
+    # withdrawn and closed, so the story reads as a running install shows it.
+    from boss_engine.services.cleared_causes import withdraw_cleared
+
+    withdraw_cleared(db, project_id, actor="boss")
     return {"first": first, "pr1": pr1, "pr2": pr2, "superseded": stale,
             "superseded_decision": stale_decision}
 

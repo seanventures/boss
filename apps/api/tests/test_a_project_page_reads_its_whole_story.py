@@ -101,7 +101,8 @@ def test_the_overview_draws_the_journey_needs_you_tiles_captain_and_try_it(world
     assert o["project"]["repos"][0]["access"] == {"read": True, "write": True, "pr": True}
     assert o["project"]["live_url"] == STAGING_URL
     states = {j["key"]: j["state"] for j in o["journey"]}
-    assert states["staging"] == "done" and states["production"] == "todo"
+    # Staging is live and production has no host: production waits on a person (screen 04).
+    assert states["staging"] == "done" and states["production"] == "waiting"
     decisions = [n for n in o["needs_you"] if n["action"]["decision_id"]]
     assert {n["kind"] for n in decisions} == {"merge", "deploy"}
     merge = next(n for n in decisions if n["kind"] == "merge")
@@ -151,8 +152,10 @@ def test_every_piece_of_work_is_a_row_with_its_stations_agents_cost_and_links(wo
     waiting = rows[helpdesk["merge"]["run_id"]]
     assert waiting["state"] == "needs_you" and waiting["links"]["decision"]
     assert "waiting" in {s["state"] for s in waiting["stages"]}
-    assert body["counts"] == {"running": 1, "stalled": 1, "needs_you": 2, "planned": 0, "done": 3,
-                              "failed": 0}
+    # Planned holds the roadmap's accepted items (seed_plan's Now / Next lanes), counted apart.
+    assert {**body["counts"], "planned": 0} == {"running": 1, "stalled": 1, "needs_you": 2,
+                                                "planned": 0, "done": 3, "failed": 0}
+    assert body["counts"]["planned"] == sum(1 for w in body["items"] if w["state"] == "planned")
 
 
 def test_the_work_tab_filters_by_state_and_finds_by_words_or_pr_number(world, client, helpdesk):
@@ -339,9 +342,10 @@ def test_settings_hold_every_project_setting_with_the_existing_write_as_its_acti
     assert list(sections) == ["demo_logins", "deploy_values", "targets", "captain", "autonomy",
                               "repos", "notifications"]
     demo = sections["demo_logins"]
-    assert [i["user"] for i in demo["items"]] == [u["user"] for u in DEMO_USERS]
+    # One row per user per environment (Staging / Preview / Prod switch, screen 13).
+    assert sorted({i["user"] for i in demo["items"]}) == sorted(u["user"] for u in DEMO_USERS)
     assert demo["actions"][0]["requires"] == "step_up"
-    assert demo["actions"][0]["href"].endswith("/demo-logins/reveal?env=staging")
+    assert any(a["href"].endswith("/demo-logins/reveal?env=staging") for a in demo["actions"])
     assert sections["captain"]["actions"][0]["href"] == f"/v1/projects/{helpdesk['id']}/captain"
     assert any(i["kind"] == "target" and i["env"] == "staging" for i in sections["targets"]["items"])
     assert sections["repos"]["items"][0]["full_name"] == REPO

@@ -124,10 +124,9 @@ def test_needs_you_names_the_action_not_the_question(world, client, engine, help
 
 def test_a_deploy_request_overtaken_by_a_later_live_deploy_is_withdrawn(world, client, engine,
                                                                           helpdesk):
+    """The seed writes PR #2's commit asked again 3 days ago, before PR #4 went live; the sweep
+    (boot / tick, run by the seed as an install would) withdraws and closes it."""
     ship = helpdesk["shipping"]
-    before = _get(world, client, f"/v1/projects/{helpdesk['id']}/overview")
-    assert ship["superseded_decision"] in {n["id"] for n in before["needs_you"]}
-    assert ship["superseded_decision"] in _sweep(engine, helpdesk["id"])
     with engine.begin() as c:
         d = c.execute(text("SELECT status, resolution_note FROM decisions WHERE id = :i"),
                       {"i": ship["superseded_decision"]}).first()
@@ -145,6 +144,10 @@ def test_a_deploy_request_overtaken_by_a_later_live_deploy_is_withdrawn(world, c
     assert ship["superseded_decision"] not in _sweep(engine, helpdesk["id"])
     dep = _get(world, client, f"/v1/projects/{helpdesk['id']}/deployments")
     assert ship["superseded"] not in {h["id"] for h in dep["history"]}
+    # Infra reads the same row as Superseded (nobody said no).
+    from boss_engine.services.infra_view import deploy_status
+
+    assert deploy_status("rejected", decision_status="withdrawn")["word"] == "Superseded"
 
 
 def _ask_to_ship(engine, project_id, target_id, commit, *, run_id=None, minutes_ago=1):
