@@ -26,6 +26,7 @@ import { DecisionActs, NeedsBody, StageBody, WorkStoryBody, stageIcon, useWorkSt
 const NEED_ICON: Record<string, typeof GitMerge> = { merge: GitMerge, deploy: RocketLaunch, plan: ListChecks, setup: Wrench, question: Question };
 import { DemoLoginRow } from "./tab-settings";
 import { KnowledgeDrawer } from "./tab-knowledge";
+import { RecDrawer } from "./tab-roadmap";
 import { whenLocal } from "../../lib/local-time";
 import type { PxCtx } from "./project-page";
 
@@ -100,14 +101,7 @@ export function DrawerHost({ ctx, drawer, onClose }: { ctx: PxCtx; drawer: { kin
     );
   }
   if (drawer.kind === "env" || drawer.kind === "deploy") return <DeployDrawer ctx={ctx} drawer={drawer} onClose={onClose} />;
-  if (drawer.kind === "rec") {
-    return (
-      <Drawer title="Recommendation" icon={<Ico icon={Path} c="violet" />} onClose={onClose} testid="px-drawer-rec">
-        <p style={{ margin: 0 }}>Recommendations are ranked, accepted and rejected on the Roadmap.</p>
-        <button type="button" className="px-btn" data-kind="primary" onClick={() => ctx.tab("roadmap")}>Open the Roadmap</button>
-      </Drawer>
-    );
-  }
+  if (drawer.kind === "rec") return <RecDrawer ctx={ctx} id={drawer.id} onClose={onClose} />;
   return <Missing what="This" onClose={onClose} />;
 }
 

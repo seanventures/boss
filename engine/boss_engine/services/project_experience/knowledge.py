@@ -128,13 +128,16 @@ def dossier(connection: Connection, project_id: str) -> Optional[dict[str, Any]]
         built_dt = _dt.fromisoformat(str(built)) if isinstance(built, str) else built
     except ValueError:
         built_dt = None
-    from .test_runs import last_full_run
+    from .test_runs import last_full_run, suite_words
 
     run = last_full_run(connection, project_id)
+    test_files = int((facts.get("tests") or {}).get("files") or 0)
     return {"repo": row.get("repo"), "stack": _stack(facts), "commands": commands(facts),
             # THE TEST BASELINE says where its numbers came from ("the last full run, a blocked
             # build, 9h ago") and, when one setup error explains the failures, which one.
-            "tests": {"files": int((facts.get("tests") or {}).get("files") or 0),
+            "tests": {"files": test_files,
+                      # THE ONE STATEMENT (test_runs.suite_words), as Onboarding says it.
+                      "line": suite_words(run, test_files)["line"],
                       **({"passed": run["passed"], "total": run["total"],
                           "failing": run["failing"], "from": run["from"],
                           "source": run["label"], "ago": run["ago"],

@@ -210,7 +210,10 @@ def test_a_suite_boss_could_not_run_is_said_as_boss_s_not_as_119_failing(world, 
     _builds(engine, pid)
     run = _onboard(engine, pid, RealRepoProbes(repo))
     tests = {i["key"]: i for i in run["checklist"]}["tests"]
-    assert tests["state"] == "done" and tests["sub"] == "Re-runs on the next build"
+    # ONE TRUTH (round 3): the Ready checklist, the live diagram, Discovered and the dossier say
+    # the same words — never "71 / 190 pass" for a suite that did not run.
+    line = "40 test files · full suite on next build"
+    assert tests["state"] == "done" and tests["sub"] == line
     assert tests["detail"].startswith(
         "BOSS couldn't run the full suite in the last full run, a blocked build, 9h ago: the test "
         "database refused the login BOSS gave it.")
@@ -230,8 +233,11 @@ def test_a_suite_boss_could_not_run_is_said_as_boss_s_not_as_119_failing(world, 
     assert d["env"]["owner"] == "boss" and d["env"]["code"] == "28P01"
     assert d["source"] == "the last full run, a blocked build, 9h ago"
     assert d["files"] == 40
+    assert d["line"] == line
     node = next(n for n in run["discover"]["nodes"] if n["key"] == "tests")
     assert node["label"] == "40 test files", "no pass rate for a suite that did not run"
+    live = next(n for n in run["discover"]["live"] if n["key"] == "tests")
+    assert live["sub"] == line
     # Self-fixes sees it: one recommendation for the cause, naming the build.
     assert [r["signature"] for r in recs] == ["suite_environment:login:28P01"]
     assert recs[0]["title"].startswith("BOSS couldn't run the app's full suite")
@@ -369,3 +375,32 @@ def test_a_rerun_is_idempotent_and_says_when_it_read(world, client, engine, repo
     assert next(b for b in second["backlog"] if b["id"] == keep["id"])["state"] == "accepted"
     assert second["runs"] == 2 and second["read_ago_s"] is not None and second["read_ago_s"] < 60
     assert second["trigger"] == "manual"
+
+
+def test_a_run_recorded_before_the_suite_was_understood_reads_today_s_truth(world, client, engine,
+                                                                            repo):
+    """Round 3: the laptop's run was recorded with "Re-runs on the next build" on the Ready
+    checklist and an older run's 71 / 190 in its facts, so the live diagram said "Tests run ·
+    71 / 190 pass" beside Discovered's "40 test files". The view reads today's one statement."""
+    pid = _project(world, client, engine)
+    _builds(engine, pid)
+    _onboard(engine, pid, RealRepoProbes(repo))
+    with engine.begin() as db:
+        row = db.execute(text("SELECT id, checklist FROM project_onboarding_runs WHERE "
+                              "project_id = :p ORDER BY started_at DESC LIMIT 1"),
+                         {"p": pid}).mappings().first()
+        checklist = dict(row["checklist"])
+        legacy = dict(checklist["tests"], sub="Re-runs on the next build")
+        legacy.pop("source", None)
+        checklist["tests"] = legacy
+        db.execute(text("UPDATE project_onboarding_runs SET checklist = CAST(:c AS JSONB), "
+                        "facts = facts || CAST(:f AS JSONB) WHERE id = :i"),
+                   {"c": json.dumps(checklist), "i": row["id"],
+                    "f": json.dumps({"tests": {"passed": 71, "total": 190}})})
+    view = _view(engine, pid)
+    line = "40 test files · full suite on next build"
+    assert {i["key"]: i for i in view["checklist"]}["tests"]["sub"] == line
+    assert {r["key"]: r for r in view["ready"]}["tests"]["sub"] == line
+    assert next(n for n in view["discover"]["live"] if n["key"] == "tests")["sub"] == line
+    assert next(n for n in view["discover"]["nodes"] if n["key"] == "tests")["label"] == \
+        "40 test files"

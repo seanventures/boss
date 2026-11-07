@@ -121,6 +121,14 @@ export type Recommendation = {
   resurfaced: boolean; snoozed_until: string | null; strip: StripNode[];
   /** The item's estimate in dollars, who would do it (role keys) and why (roadmap screen). */
   cost_usd?: number | null; squad?: string[]; why?: string; subject?: string;
+  /** THE CARD'S OWN DIAGRAM (screen 07), from the engine (ambient/roadmap_card.py): concrete
+   *  evidence ("2 incidents", "sla.py hot") → the detector ("Incident hotspot") → what the agent
+   *  does, and the ≈ cost with what it is based on. Absent on an older engine. */
+  card?: RecCard | null;
+};
+export type RecCard = {
+  evidence: { label: string; icon: string }[]; detector: { label: string; icon: string } | null;
+  does: string; cost_usd: number | null; cost_basis: string;
 };
 export type RoadmapView = { status: string; recommendations: Recommendation[]; counts: Record<string, number> };
 /** The drawer's text (GET /v1/ambient/roadmap/{id} → detail): only shown on ⓘ. */
@@ -422,6 +430,16 @@ const parseStrip = (w: unknown): StripNode[] => a(w).slice(0, 6).map((x) => {
   return { type: p.type, label: p.label, badges: p.badges.slice(0, 2), ...(typeof o(x).icon === "string" ? { icon: String(o(x).icon) } : {}) };
 });
 
+const parseCard = (v: unknown): RecCard | null => {
+  if (!v || typeof v !== "object") return null;
+  const c = o(v);
+  const node = (x: unknown) => ({ label: s(o(x).label), icon: s(o(x).icon) });
+  return {
+    evidence: a(c.evidence).map(node).filter((e) => e.label).slice(0, 2),
+    detector: c.detector && s(o(c.detector).label) ? node(c.detector) : null,
+    does: s(c.does), cost_usd: typeof c.cost_usd === "number" && c.cost_usd > 0 ? c.cost_usd : null, cost_basis: s(c.cost_basis),
+  };
+};
 export const parseRec = (w: unknown): Recommendation => {
   const y = o(w);
   const b = o(y.badges);
@@ -434,6 +452,7 @@ export const parseRec = (w: unknown): Recommendation => {
     evidence: n(b.evidence), sources: n(b.sources), single_source: b.single_source === true, resurfaced: b.resurfaced === true,
     snoozed_until: sn(y.snoozed_until), strip: parseStrip(y.strip),
     cost_usd: typeof b.cost_usd === "number" ? b.cost_usd : null, squad: a(y.squad).map((q) => s(q)).filter(Boolean), why: s(y.why), subject: s(y.subject),
+    card: parseCard(y.card),
   };
 };
 
@@ -497,8 +516,8 @@ export const acceptRec = (projectId: string, id: string, as: AcceptAs, note = ""
 export const rejectRec = (projectId: string, id: string, reason: string, category: RejectCategory = "other") =>
   aaWrite(recWrite(id, "reject"), { project_id: projectId, reason, category }, "Reject");
 /** Not now: hidden until `until` (now + days, an ISO datetime; the engine allows ≤ 180 days). */
-export const snoozeRec = (projectId: string, id: string, days = 14, nowMs = Date.now()) =>
-  aaWrite(recWrite(id, "snooze"), { project_id: projectId, until: new Date(nowMs + days * 86_400_000).toISOString() }, "Not now");
+export const snoozeRec = (projectId: string, id: string, days = 14, nowMs = Date.now(), reason = "") =>
+  aaWrite(recWrite(id, "snooze"), { project_id: projectId, until: new Date(nowMs + days * 86_400_000).toISOString(), ...(reason ? { reason } : {}) }, "Not now");
 
 // ── the demo loader (a demo project only; autonomy:manage) ─────────────────────────────────
 

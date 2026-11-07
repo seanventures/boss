@@ -170,6 +170,20 @@ def median_build_usd(connection: Connection, project_id: str) -> float:
     return round(median(costs), 2) if len(costs) >= 3 else BASELINE_BUILD_USD
 
 
+def ticket_usd(connection: Connection, project_id: str) -> Optional[float]:
+    """What accepting an onboarding proposal (a ticket) costs on THIS project: the same estimate
+    New work and Onboarding's "First work" show (project_experience.new_work.plan: the median
+    of its past runs of that workflow), or None when it has no history — never a made-up number."""
+    from ..project_experience import new_work
+
+    try:
+        est = (new_work.plan(connection, project_id, "ticket") or {}).get("estimate") or {}
+    except LookupError:
+        return None
+    usd = est.get("usd")
+    return round(float(usd), 2) if usd else None
+
+
 def score(group: learning.Group, *, weight: float, build_usd: float,
           at: Optional[datetime] = None) -> dict[str, Any]:
     """The score's parts and the rank key, through work_value_scoring (design §14.3)."""
@@ -870,7 +884,9 @@ def diagram(rec: Mapping[str, Any]) -> dict[str, Any]:
     return {"nodes": nodes, "edges": edges}
 
 
-def _summary(rec: Mapping[str, Any], rank: Optional[int] = None) -> dict[str, Any]:
+def _summary(rec: Mapping[str, Any], rank: Optional[int] = None, *,
+             kinds: Optional[Mapping[str, str]] = None,
+             build_usd: Optional[float] = None) -> dict[str, Any]:
     keys = ("work_item_id", "project_id", "title", "kind", "detector", "detectors", "subject",
             "proposed_shape", "status", "score", "snoozed_until", "accepted_as", "artifact",
             "reject_category", "resurfaced_from", "recurred_at", "created_at", "decided_at",
@@ -886,6 +902,12 @@ def _summary(rec: Mapping[str, Any], rank: Optional[int] = None) -> dict[str, An
     out["strip"] = [{"type": n["type"], "label": n["label"], "badges": n["badges"][:2],
                      **({"icon": n["icon"]} if n.get("icon") else {})}
                     for n in diagram(rec)["nodes"]][:6]
+    # THE CARD'S OWN DIAGRAM (screen 07): concrete evidence → detector → who does it, + ≈ cost.
+    from .roadmap_card import card
+
+    out["card"] = card(rec, kinds=kinds, build_usd=build_usd)
+    if out["card"]["cost_usd"] and not out["badges"]["cost_usd"]:
+        out["badges"]["cost_usd"] = out["card"]["cost_usd"]
     return out
 
 
@@ -908,7 +930,16 @@ def list_roadmap(connection: Connection, project_id: str, *, status: str = "open
         "priority_score DESC, created_at DESC LIMIT :n"),
         {"p": project_id, "s": status, "k": kind, "d": detector,
          "n": max(1, min(int(limit), 100))}).mappings().all()
-    items = [_summary(serialize_row(r), rank=i + 1) for i, r in enumerate(rows)]
+    from .roadmap_card import signal_kinds
+
+    recs = [serialize_row(r) for r in rows]
+    kinds = signal_kinds(connection, recs)
+    # Onboarding proposes without an estimate: its cards say what a ticket costs HERE.
+    build_usd = ticket_usd(connection, project_id) if any(
+        r["detector"] == "onboarding" and not r.get("estimated_cost_usd_micros") for r in recs) \
+        else None
+    items = [_summary(r, rank=i + 1, kinds=kinds, build_usd=build_usd)
+             for i, r in enumerate(recs)]
     counts = {r["status"]: int(r["n"]) for r in connection.execute(text(
         "SELECT status, count(*) AS n FROM ambient_recommendations WHERE project_id = :p "
         "GROUP BY status"), {"p": project_id}).mappings()}
@@ -930,7 +961,12 @@ def get(connection: Connection, item_id: str, *, project_id: str) -> dict[str, A
                                        "priority_score", "estimated_cost_usd_micros", "squad",
                                        "source_kinds", "reject_reason", "proposal_act_id",
                                        "decision_act_id", "decided_by")}
-    return {**_summary(rec), **diagram(rec), "detail": detail}
+    from .roadmap_card import signal_kinds
+
+    build_usd = ticket_usd(connection, project_id) if rec["detector"] == "onboarding" \
+        and not rec.get("estimated_cost_usd_micros") else None
+    return {**_summary(rec, kinds=signal_kinds(connection, [rec]), build_usd=build_usd),
+            **diagram(rec), "detail": detail}
 
 
 def metrics(connection: Connection, project_id: str, *, days: int = 30) -> dict[str, Any]:

@@ -54,7 +54,10 @@
 @keyframes px-ring { 0% { opacity: .7; transform: scale(.96); } 100% { opacity: 0; transform: scale(1.12); } }
 @keyframes px-glow { 0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--amber) 0%, transparent); } 50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--amber) 45%, transparent); } }
 @keyframes px-slide { from { transform: translateX(24px); opacity: 0; } to { transform: none; opacity: 1; } }
-@keyframes px-rise { from { transform: translateY(6px); opacity: 0; } to { transform: none; opacity: 1; } }
+/* A card's entrance moves, it never fades: an entrance that starts at opacity 0 leaves a card that
+   is off screen when it mounts (Overview › This week, the last card) painted see-through — "faded,
+   like a disabled card" — in any capture and until it is scrolled to. */
+@keyframes px-rise { from { transform: translateY(6px); } to { transform: none; } }
 
 /* faces */
 .px-faces { display: inline-flex; align-items: center; }

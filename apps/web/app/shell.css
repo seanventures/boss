@@ -170,6 +170,42 @@
 }
 .bx-shell .bx-topbar > .bx-new-project .bx-new-label { display: none; }
 
+/* BUILDS, a chip beside the bell (round 3): the old strip under the bar, folded in. Same reads and
+   the same picker, which drops from the chip; the archived notice goes in the slot under the bar. */
+.bx-shell .bx-topbar > .bx-strip-chip {
+  position: relative; display: inline-flex; align-items: center; gap: 6px; min-height: 0; padding: 0; margin: 0;
+  background: transparent; backdrop-filter: none; border: 0; font-size: 0.63158rem; z-index: auto;
+}
+.bx-strip-chip > .bx-project-trigger, .bx-strip-chip[data-state="loading"], .bx-strip-chip[data-state="failed"] {
+  display: inline-flex; align-items: center; gap: 6px; height: 32px; min-height: 32px; padding: 0 10px;
+  border: 1px solid var(--panel-border); border-radius: 8px; background: transparent;
+  color: var(--ink-soft); font: inherit; font-size: 0.63158rem; cursor: pointer;
+}
+.bx-strip-chip[data-state="loading"], .bx-strip-chip[data-state="failed"] { cursor: default; color: var(--faint); }
+.bx-strip-chip[data-state="failed"] { border-color: color-mix(in srgb, var(--red) 45%, var(--panel-border)); }
+.bx-strip-chip > .bx-project-trigger:hover, .bx-strip-chip > .bx-project-trigger[aria-expanded="true"] { border-color: var(--active); color: var(--ink); }
+.bx-strip-chip > .bx-project-trigger[data-attention] { border-color: color-mix(in srgb, var(--amber) 45%, var(--panel-border)); }
+.bx-strip-chip .bx-project-trigger strong { font-family: var(--mono); font-size: 0.6rem; color: var(--ink); }
+.bx-strip-chip .bx-strip-label { font-family: inherit; font-size: inherit; letter-spacing: 0; text-transform: none; color: inherit; gap: 6px; }
+.bx-strip-chip .bx-strip-note { font-size: 0.55rem; color: var(--faint); }
+.bx-strip-chip[data-state="failed"] .bx-strip-note,
+.bx-strip-chip[data-state="ready"] > .bx-strip-label { display: none; }
+/* "2 need attention" says itself as an amber count on the chip, the words in its tooltip. */
+.bx-strip-chip .bx-project-attention {
+  min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; display: inline-grid; place-items: center;
+  background: var(--amber); color: #1b1300; font-family: var(--mono); font-size: 0.52632rem; font-weight: 800;
+}
+.bx-strip-sr, .bx-strip-chip > .bx-strip-error { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.bx-strip-chip .bx-strip-caret { color: var(--faint); font-size: 0.55rem; }
+.bx-strip-chip .bx-project-picker { top: calc(100% + 8px); left: auto; right: 0; z-index: 60; }
+.bx-strip-notice:empty { display: none; }
+.bx-strip-notice { padding: 8px 20px 0; }
+@media (max-width: 760px) {
+  .bx-strip-chip .bx-strip-word, .bx-strip-chip .bx-strip-caret { display: none; }
+  .bx-strip-chip > .bx-project-trigger { padding: 0 8px; }
+  .bx-strip-chip .bx-project-picker { position: fixed; top: 60px; left: 12px; right: 12px; width: auto; }
+}
+
 /* The bell: needs-you count in amber on its corner; a teal dot while agents are working. */
 .bx-bell {
   position: relative; display: inline-grid; place-items: center; width: 32px; height: 32px; padding: 0;

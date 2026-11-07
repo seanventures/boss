@@ -606,7 +606,7 @@ def _knowledge(engine: Any, settings: Any, run_id: str, row: Mapping[str, Any], 
 
 def _ci(engine: Any, settings: Any, run_id: str, project_id: str, full: str, branch: str,
         facts: Mapping[str, Any], probes: Probes) -> dict[str, Any]:
-    from .test_runs import last_full_run
+    from .test_runs import last_full_run, suite_words
 
     tests_found = int((facts.get("tests") or {}).get("files") or 0)
     cmds = facts.get("commands") or {}
@@ -625,6 +625,7 @@ def _ci(engine: Any, settings: Any, run_id: str, project_id: str, full: str, bra
     if state == "passed":
         tests = _item("tests", "done", detail=f"{good} of {n} checks pass on {branch}{run_with}.",
                       sub=f"{good} / {n} pass")
+        tests["source"] = "ci"
         base = _item("baseline_build", "done", detail=f"{branch} is green in CI.", sub="CI green")
     elif state == "failed":
         failing = result.get("failing") or []
@@ -632,11 +633,13 @@ def _ci(engine: Any, settings: Any, run_id: str, project_id: str, full: str, bra
         tests = _item("tests", "done", detail=f"The tests ran in CI: {bad} check(s) fail on "
                       f"{branch} ({', '.join(failing[:3])}); fixing them is in the backlog.",
                       sub=f"{bad} failing → backlog")
+        tests["source"] = "ci"
         base = _item("baseline_build", "failed", detail=f"{branch} is red in CI; fixing it is "
                      "proposed as the first work.", sub="CI red")
     elif state == "waiting" and n:
         tests = _item("tests", "now", detail=f"CI is still running on {branch}.",
                       sub=f"{good} / {n} done")
+        tests["source"] = "ci"
         base = _item("baseline_build", "now", detail="Waiting for CI on the default branch.",
                      sub="CI running")
     else:
@@ -662,7 +665,9 @@ def _ci(engine: Any, settings: Any, run_id: str, project_id: str, full: str, bra
                         f"{baseline.get('not_run', 0)} of {baseline['total']} tests never ran; "
                         f"the {baseline['passed']} that ran passed. BOSS re-runs the full suite "
                         "on the next build."),
-                sub="Re-runs on the next build")
+                # ONE TRUTH (test_runs.suite_words): the diagram, Discovered and the dossier
+                # say these same words.
+                sub=suite_words(baseline, tests_found)["line"])
         elif baseline:
             failing = int(baseline["failing"])
             cause = baseline.get("cause")
@@ -1077,6 +1082,28 @@ _SQUAD = {"red_main": ["qa", "software_engineer"], "issue_triage": ["software_en
 PROPOSE_TOP = 12
 
 
+def backlog_counts(connection: Connection, project_id: str) -> dict[str, int]:
+    """THE BACKLOG'S ONE COUNT (Overview › Journey, Onboarding › Propose backlog, the Roadmap
+    tab): the Roadmap's recommendations still open plus those a person accepted, from every
+    proposer — onboarding's proposals ARE open recommendations, so a candidate and its
+    recommendation are one item, never two (the Journey once said "10 proposed" over the
+    Roadmap's "5 new"). `open` is the Roadmap's "N new"."""
+    row = connection.execute(text(
+        "SELECT count(*) FILTER (WHERE status = 'open') AS open, "
+        "count(*) FILTER (WHERE status = 'accepted') AS accepted "
+        "FROM ambient_recommendations WHERE project_id = :p"), {"p": project_id}).mappings().first()
+    open_, accepted = int((row or {}).get("open") or 0), int((row or {}).get("accepted") or 0)
+    return {"open": open_, "accepted": accepted, "total": open_ + accepted}
+
+
+def backlog_words(counts: Mapping[str, int]) -> str:
+    """"5 proposed", or "2 of 7" once a person accepted some; "" when there is none."""
+    if not counts.get("total"):
+        return ""
+    return (f"{counts['accepted']} of {counts['total']}" if counts.get("accepted")
+            else f"{counts['total']} proposed")
+
+
 def _fingerprint(ref: str) -> str:
     return f"onboarding:{hashlib.sha1(ref.encode()).hexdigest()[:16]}"
 
@@ -1234,11 +1261,11 @@ def _discover_nodes(engine: Any, run_id: str, stack: Mapping[str, Any], ci: Mapp
     checks, passing = int(ci.get("checks") or 0), int(ci.get("passing") or 0)
     base = ci.get("baseline") or {}
     test_files = int((facts.get("tests") or {}).get("files") or 0)
-    tests = (f"{passing}/{checks} tests" if checks else
-             # A suite BOSS could not run has no pass rate to show (suite_environment).
-             (f"{test_files} test files" if test_files else "Suite not run") if base.get("env") else
-             f"{base['passed']}/{base['total']} tests" if base.get("total") else
-             f"{test_files} test files" if test_files else "No tests yet")
+    from .test_runs import suite_words
+
+    # CI's own checks when it ran, else THE ONE STATEMENT (test_runs.suite_words): a suite BOSS
+    # could not run has no pass rate to show.
+    tests = f"{passing}/{checks} tests" if checks else suite_words(base, test_files)["label"]
     hotspots = len(facts.get("hotspots") or [])
     docs = int((facts.get("docs") or {}).get("docs") or 0)
     return [
@@ -1330,6 +1357,28 @@ def _elapsed_words(seconds: int) -> str:
     return f"{seconds // 3600}h {seconds % 3600 // 60}m"
 
 
+def _tests_truth(connection: Connection, project_id: str,
+                 item: Mapping[str, Any]) -> Optional[dict[str, str]]:
+    """The tests' ONE STATEMENT as of now (test_runs.suite_words), for a run's tests item that
+    came from the suite rather than CI: a record written before the suite's environment was
+    understood ("71 / 190 pass", "Re-runs on the next build") reads today's truth, so the live
+    diagram, Discovered, the Ready checklist and the dossier never disagree. None for CI."""
+    from ..ambient import dossier as dossier_service
+    from .test_runs import last_full_run, suite_words
+
+    if item.get("state") != "done":
+        return None
+    source = item.get("source") or ("ci" if any(w in str(item.get("detail") or "")
+                                                for w in (" checks ", " in CI", "CI is "))
+                                    else "suite")
+    if source == "ci":
+        return None
+    rows = _safe(lambda: dossier_service.get(connection, project_id), []) or []
+    facts = as_json(rows[0].get("facts"), {}) if rows else {}
+    files = int(((facts or {}).get("tests") or {}).get("files") or 0)
+    return suite_words(_safe(lambda: last_full_run(connection, project_id), None), files)
+
+
 def view(connection: Connection, project_id: str) -> dict[str, Any]:
     row = latest(connection, project_id)
     if row is None:
@@ -1350,6 +1399,9 @@ def view(connection: Connection, project_id: str) -> dict[str, Any]:
         item["agent"] = ITEM_AGENT.get(key)
         items.append(item)
     by_key = {i["key"]: i for i in items}
+    truth = _tests_truth(connection, project_id, by_key.get("tests") or {})
+    if truth:
+        by_key["tests"]["sub"] = truth["line"]
     workflow = _workflow_item(connection, project_id)
     workflow["agent"] = ITEM_AGENT["workflow"]
     by_key["workflow"] = workflow
@@ -1416,13 +1468,16 @@ def view(connection: Connection, project_id: str) -> dict[str, Any]:
          "sub": f"{done_rows} of {len(ready_rows)}"},
         {"key": "backlog", "label": "Propose backlog",
          "state": "done" if backlog else ("now" if running and discover_state == "done" else "todo"),
-         "sub": f"{len(backlog)} proposed" if backlog else ("drafting" if running else "")},
+         "sub": backlog_words(backlog_counts(connection, project_id)) if backlog
+         else ("drafting" if running else "")},
         {"key": "first_work", "label": "Work it",
          "state": "done" if worked else ("now" if first and not running else "todo"),
          "sub": "verified loop"},
         {"key": "deploy", "label": "Deploy", "state": deploy_state, "sub": deploy_sub},
     ]
     nodes = as_json(row["discover"], []) or []
+    if truth:
+        nodes = [{**n, "label": truth["label"]} if n.get("key") == "tests" else n for n in nodes]
     only_you = [i for i in items if i["owner"] == "you" and i["state"] != "done"]
     # THE LIVE DIAGRAM (screen 00b): what Helm is doing while it reads — the stack it found, the
     # code being mapped (118 / 214 files), the tests (142 / 148 pass), then the Ready check.
@@ -1435,9 +1490,11 @@ def view(connection: Connection, project_id: str) -> dict[str, Any]:
             {"key": "mapping", "label": "Mapping code", "state": know.get("state") or "todo",
              "sub": know.get("sub") or ""},
             {"key": "tests", "label": "Tests run", "state": tests.get("state") or "todo",
-             # 00b-17 "142 / 148 pass": the real counts when a run was read, else the item's sub.
-             "sub": (f"{base['passed']} / {base['total']} pass" if base.get("total")
-                     else tests.get("sub") or "")},
+             # 00b-17 "142 / 148 pass": the Ready checklist's own words (test_runs.suite_words
+             # wrote them), never an older run's counts kept in the facts — a suite BOSS could
+             # not run reads "40 test files · full suite on next build" here too.
+             "sub": tests.get("sub") or (f"{base['passed']} / {base['total']} pass"
+                                         if base.get("total") else "")},
             {"key": "ready", "label": "Ready check", "state": ready_state if ready_state == "done"
              else "todo", "sub": ""}]
     return {"run_id": row["id"], "state": row["state"], "trigger": row["trigger"],

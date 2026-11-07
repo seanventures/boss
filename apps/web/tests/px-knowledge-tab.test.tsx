@@ -107,11 +107,14 @@ describe("Repo & knowledge (screen 06)", () => {
     const k = FX_KNOWLEDGE as unknown as { dossier: { tests: Record<string, unknown> } };
     const env = { sentence: "BOSS couldn't run the full suite: the test database refused the login BOSS gave it.",
                   reason: "the test database refused the login BOSS gave it", owner: "boss" };
-    await openKnowledge({ ...k, dossier: { ...k.dossier, tests: { ...k.dossier.tests, passed: 71, total: 190, failing: 0, not_run: 119, env } } });
+    await openKnowledge({ ...k, dossier: { ...k.dossier, tests: { ...k.dossier.tests, passed: 71, total: 190, failing: 0, not_run: 119, env,
+                                                                    files: 40, line: "40 test files · full suite on next build" } } });
     const t = tid("px-kn-tests-env")!;
-    expect(t.textContent).toContain("Couldn't run the full suite");
+    // ONE TRUTH (round 3): the engine's one statement, as Onboarding's diagram and checklist say it.
+    expect(t.textContent).toContain("40 test files · full suite on next build");
+    expect(t.textContent).toContain("couldn't run the full suite last time");
     expect(t.textContent).toContain("the test database refused the login BOSS gave it");
-    expect(t.textContent).toContain("re-runs it on the next build");
+    expect(t.textContent).not.toMatch(/71|190/);
     expect(tid("px-kn-tests")).toBeNull();
     expect(tid("px-kn-dossier")!.textContent).not.toMatch(/failing|all pass/);
   });

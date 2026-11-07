@@ -94,13 +94,15 @@ def journey_subs(connection: Connection, project: Mapping[str, Any], items: list
     from .common import age
 
     project_id = str(project["id"])
-    checklist = onboarding.get("checklist") or []
+    # ONE TRUTH with the Onboarding page (tester 04-02/03): "Ready" counts the Ready card's rows
+    # (6 of 6 there, 6/6 here — never the whole 7-item checklist), and "Onboarded" is the day
+    # the onboarding run finished, not the day the project was made.
+    checklist = onboarding.get("ready") or onboarding.get("checklist") or []
     done = sum(1 for c in checklist if c.get("state") in ("done", "skipped"))
-    open_recs, accepted = (int(v or 0) for v in connection.execute(text(
-        "SELECT count(*) FILTER (WHERE status = 'open'), count(*) FILTER (WHERE status = "
-        "'accepted') FROM ambient_recommendations WHERE project_id = :p"),
-        {"p": project_id}).first() or (0, 0))
-    proposed = len(onboarding.get("backlog") or []) + open_recs + accepted
+    # ONE COUNT (onboarding.backlog_counts): the Roadmap's open + accepted recommendations; a
+    # candidate onboarding proposed IS one of them, so it is never counted twice.
+    counts = onboarding_service.backlog_counts(connection, project_id)
+    proposed, accepted = counts["total"], counts["accepted"]
     merged = int(connection.execute(text(
         "SELECT count(DISTINCT finalize_ctx->'merge'->>'sha') FROM code_task_runs "
         "WHERE project_id = :p AND COALESCE(finalize_ctx->'merge'->>'sha', '') <> ''"),
@@ -117,11 +119,19 @@ def journey_subs(connection: Connection, project: Mapping[str, Any], items: list
 
     staged, shipped = newest(False), newest(True)
     prod_waits = staged is not None and shipped is None
-    created = short_day(project["created_at"]) or ""
+    def _when(v: Any) -> Any:
+        if isinstance(v, str):
+            try:
+                return datetime.fromisoformat(v.replace("Z", "+00:00"))
+            except ValueError:
+                return None
+        return v
+
+    created = short_day(_when(onboarding.get("finished_at") or onboarding.get("started_at"))
+                        or project["created_at"]) or ""
     subs = {"onboarding": created,
             "ready": f"{done}/{len(checklist)}" if checklist else "",
-            "backlog": (f"{accepted} of {proposed}" if accepted else f"{proposed} proposed")
-            if proposed else "",
+            "backlog": onboarding_service.backlog_words(counts),
             "working": (f"{merged} merged" if merged else f"{running} running" if running
                         else f"{len(people)} need you" if people else ""),
             "staging": f"{age(staged)} ago" if staged else "",
@@ -494,9 +504,8 @@ def view(connection: Connection, project_id: str, *, now: Optional[datetime] = N
                            active=facts["active"] or bool(facts["got"].get("_onboarding_running"))),
         "needs_you": waiting,
         # The Roadmap tab's count: what is proposed or accepted and not done yet.
-        "roadmap_count": part(("next",), lambda: int(connection.execute(text(
-            "SELECT count(*) FROM ambient_recommendations WHERE project_id = :p "
-            "AND status IN ('open', 'accepted')"), {"p": project_id}).scalar() or 0), None),
+        "roadmap_count": part(("next",), lambda: onboarding_service.backlog_counts(
+            connection, project_id)["total"], None),
         "tiles": the_tiles,
         "captain": part(("captain",), lambda: captain_service.view(
             connection, project_id, roster=roster, with_last_said=False), None),

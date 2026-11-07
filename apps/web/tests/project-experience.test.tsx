@@ -569,13 +569,15 @@ describe("Roadmap (screen 7)", () => {
     await press(tid("px-rec-accept-rec_weekend"));
     expect(calls.find((c) => c.path === "/v1/ambient/roadmap/rec_weekend/accept")?.body).toMatchObject({ project_id: P, as: "ticket" });
     await press(tid("px-rec-reject-rec_reply"));
-    // One tap: a reason chip is always chosen ("Not now" first), so Reject never goes without one.
-    expect(tid("px-rec-why-not_valuable")!.getAttribute("aria-checked")).toBe("true");
+    // One tap, never silent (round 3, tester 07-14): no reason is preselected; Reject waits for one.
+    expect(tid("px-rec-why-not_valuable")!.getAttribute("aria-checked")).toBe("false");
+    expect((tid("px-rec-reject-confirm-rec_reply") as HTMLButtonElement).disabled).toBe(true);
     await press(tid("px-rec-why-duplicate"));
     await press(tid("px-rec-reject-confirm-rec_reply"));
     expect(calls.find((c) => c.path === "/v1/ambient/roadmap/rec_reply/reject")?.body).toMatchObject({ category: "duplicate" });
     await press(tid("px-rec-more-rec_index")); // snooze lives in the card's ⋯ menu
     await press(tid("px-rec-snooze-rec_index"));
+    await press(tid("px-rec-snooze-confirm-rec_index")); // how long (2 weeks by default) and why, then Snooze
     expect(calls.some((c) => c.path === "/v1/ambient/roadmap/rec_index/snooze")).toBe(true);
     await press(tid("px-rm-plan-ask"));
     expect(params().get("drawer")).toBe("captain"); // asking the captain opens its drawer (screen 09)

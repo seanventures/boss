@@ -19,6 +19,7 @@ import { AgentChat } from "./agent-ui";
 import { dockChatKey, dockSpeaker } from "../lib/dock-subject";
 import { dockWidthFor, railForDock } from "../lib/shell-rail";
 import { ProjectStrip } from "./project-strip";
+import { STRIP_NOTICE_SLOT } from "./strip-notice";
 import { useFullPage } from "./workflows/full-page";
 import { ProjectMenu, type ProjectMenuItem } from "./project-menu";
 import { useDetailsDismiss } from "../lib/details-dismiss";
@@ -1664,6 +1665,11 @@ function ConsoleShellInner({
             <Plus size={15} weight="bold" aria-hidden /><span className="bx-new-label">New build</span>
           </GatedButton> : null}
 
+          {/* BUILDS, A CHIP BESIDE THE BELL (BOSSAPP-914 round 3): the old strip under the bar is in no
+              wireframe and cost a row of every screen (a tenth of a phone's). Same list, from the chip.
+              The Factory's Floor IS the list of builds (walk D19); a project's page has its Work tab. */}
+          {active !== "code_tasks" && active !== "projects" && active !== "project" && !routeMode && !fullPage ? <ProjectStrip projectId={scope.projectId ?? scope.project} area={active} chip /> : null}
+
           {/* THE BELL: what needs you (the count) and who is working (the teal dot), with the crew
               and the way to Approvals behind it — the old "1 working · 2 need you" pill, folded in. */}
           <PresencePill projectId={scope.projectId ?? scope.project} variant="bell" />
@@ -1749,8 +1755,8 @@ function ConsoleShellInner({
           </div>
         ) : null}
 
-        {/* The Factory's Floor IS the list of builds (walk D19): no second strip of them. */}
-        {active !== "code_tasks" && active !== "projects" && active !== "project" && !routeMode && !fullPage ? <ProjectStrip projectId={scope.projectId ?? scope.project} area={active} /> : null}
+        {/* The open project's archived notice, when the Builds chip in the top bar has one. */}
+        <div id={STRIP_NOTICE_SLOT} className="bx-strip-notice" />
 
         {/* The console gets out of the panel's way rather than hiding behind it. The dock is
             fixed-position, so without this inset the right-hand column of cards sat underneath

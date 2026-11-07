@@ -13,18 +13,18 @@
 .fx-tabs { display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-2); }
 .fx-tab {
   display: inline-flex; align-items: center; gap: 6px; min-height: 30px; padding: 0 12px; border: 0; border-radius: 999px;
-  background: transparent; color: var(--muted); font: inherit; font-size: 0.84rem; cursor: pointer;
+  background: transparent; color: var(--muted); font: inherit; font-size: var(--fs-ui); cursor: pointer;
 }
 .fx-tab[aria-selected="true"] { background: var(--surface); color: var(--ink); font-weight: 650; box-shadow: 0 0 0 1px var(--border); }
 .fx-tab:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 1px; }
-.fx-tab-count { font-size: 0.74rem; color: var(--faint); font-variant-numeric: tabular-nums; }
-.fx-head-counts { font-size: 0.82rem; color: var(--muted); white-space: nowrap; }
+.fx-tab-count { font-size: var(--fs-meta); color: var(--faint); font-variant-numeric: tabular-nums; }
+.fx-head-counts { font-size: var(--fs-meta); color: var(--muted); white-space: nowrap; }
 .fx-needs { color: var(--amber); font-weight: 650; }
 .fx-find {
   display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 10px; min-width: 0;
   border: 1px solid var(--border); border-radius: var(--r); background: var(--surface); color: var(--faint);
 }
-.fx-find input { width: 160px; min-width: 0; border: 0; outline: none; background: transparent; color: var(--ink); font: inherit; font-size: 0.84rem; }
+.fx-find input { width: 160px; min-width: 0; border: 0; outline: none; background: transparent; color: var(--ink); font: inherit; font-size: var(--fs-ui); }
 .fx-find:focus-within { border-color: var(--accent-line); }
 
 /* + New build ▾ */
@@ -37,7 +37,7 @@
 }
 .fx-menu button {
   min-height: 36px; padding: 0 12px; border: 0; border-radius: var(--r); background: none; color: var(--ink);
-  font: inherit; font-size: 0.84rem; text-align: left; cursor: pointer;
+  font: inherit; font-size: var(--fs-body); text-align: left; cursor: pointer;
 }
 .fx-menu button:hover, .fx-menu button:focus-visible { background: var(--surface-3); outline: none; }
 
@@ -67,22 +67,22 @@
 .fx-row-name > .fx-internal { flex: none; }
 .fx-row-open {
   display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 0; border: 0; background: none;
-  color: var(--ink); font: inherit; font-weight: 650; font-size: 0.88rem; text-align: left; cursor: pointer;
+  color: var(--ink); font: inherit; font-weight: 650; font-size: var(--fs-body); text-align: left; cursor: pointer;
 }
 .fx-row-open:hover { text-decoration: underline; }
 .fx-row-open:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; border-radius: 4px; }
-.fx-row-now { font-size: 0.8rem; color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.fx-row-now { font-size: var(--fs-ui); color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .fx-kn, .fx-time { font-variant-numeric: tabular-nums; }
 .fx-word-needs_plan, .fx-word-needs_waiver, .fx-word-needs_person, .fx-word-budget_refused, .fx-word-quiet { color: var(--amber); font-weight: 650; }
 .fx-word-failed, .fx-word-blocked { color: var(--red); font-weight: 650; }
 .fx-word-cancelled { color: var(--muted); }
-.fx-row-cost { font-size: 0.76rem; color: var(--faint); font-variant-numeric: tabular-nums; text-align: right; }
+.fx-row-cost { font-size: var(--fs-meta); color: var(--faint); font-variant-numeric: tabular-nums; text-align: right; }
 .fx-row-go { justify-self: end; }
 .fx-row[data-density="compact"] { min-height: 40px; grid-template-columns: minmax(4.73684rem, 7.36842rem) minmax(0, 1fr) minmax(7.89474rem, auto) 2.52632rem auto; }
 .fx-stopped { grid-template-columns: minmax(6.31579rem, 10.52632rem) 1.68421rem minmax(0, 1fr) auto auto; }
 .fx-prebuild { grid-template-columns: minmax(0, 3fr) minmax(0, 1fr) minmax(8.94737rem, auto) 2.94737rem auto; }
 .fx-group { list-style: none; }
-.fx-group-head { display: inline-flex; align-items: center; gap: 6px; padding: 8px 4px; border: 0; background: none; color: var(--ink); font: inherit; font-weight: 650; font-size: 0.86rem; cursor: pointer; }
+.fx-group-head { display: inline-flex; align-items: center; gap: 6px; padding: 8px 4px; border: 0; background: none; color: var(--ink); font: inherit; font-weight: 650; font-size: var(--fs-body); cursor: pointer; }
 
 /* The Line. */
 .fx-line { list-style: none; margin: 0; padding: 0; display: flex; align-items: center; min-width: 0; overflow: hidden; }
@@ -100,7 +100,7 @@
 }
 .fx-rounds {
   position: absolute; left: 50%; top: -4px; transform: translateX(-50%); padding: 0 3px; border-radius: 6px;
-  background: var(--surface); color: var(--amber); font-size: 0.68rem; font-weight: 700; font-variant-numeric: tabular-nums;
+  background: var(--surface); color: var(--amber); font-size: var(--fs-tag); font-weight: 700; font-variant-numeric: tabular-nums;
 }
 .fx-slot { display: inline-block; width: 12px; height: 12px; margin: 0 2px; border: 1.5px solid var(--border-strong); border-radius: 50%; opacity: 0.4; }
 .fx-bay[data-status="skipped"] .fx-slot { border-style: dashed; }
@@ -111,7 +111,7 @@
 .fx-wait { position: absolute; right: -4px; bottom: -4px; color: var(--amber); background: var(--surface); border-radius: 50%; }
 .fx-row[data-state="quiet"] .fx-bay[data-active] > .fx-bay-face { box-shadow: none; outline: 1.5px dashed var(--amber); outline-offset: 1px; border-radius: 50%; }
 .fx-seats { display: inline-flex; }
-.fx-line-folded { gap: 8px; font-size: 0.76rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.fx-line-folded { gap: 8px; font-size: var(--fs-meta); color: var(--muted); font-variant-numeric: tabular-nums; }
 .fx-fold-done { color: var(--green); }
 
 /* Header density (the cockpit): labelled bays. */
@@ -125,22 +125,22 @@
 }
 .fx-bay-name[aria-pressed="true"] { color: var(--accent-text); }
 .fx-bay-name:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
-.fx-bay-word { font-size: 0.74rem; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.fx-bay-word { font-size: var(--fs-meta); color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .fx-bay:is([data-status="stuck"], [data-status="failed"]) .fx-bay-word { color: var(--red); }
 /* Stopped and not reached: nothing happened there, so nothing red. */
 .fx-bay[data-status="stopped"] .fx-bay-word { color: var(--muted); }
 .fx-bay[data-status="pending"][data-not-reached] .fx-bay-word { color: var(--faint); }
 .fx-bay[data-status="needs_you"] .fx-bay-word { color: var(--amber); }
-.fx-bay-link { font-size: 0.74rem; color: var(--accent-text); text-decoration: none; }
+.fx-bay-link { font-size: var(--fs-meta); color: var(--accent-text); text-decoration: none; }
 .fx-loop { display: inline-flex; align-items: center; gap: 4px; }
 
 /* Apps: one aligned table. Every row — head, app, build — is the same grid, so columns line up. */
-.fx-apps { display: flex; flex-direction: column; min-width: 0; font-size: 0.84rem; }
+.fx-apps { display: flex; flex-direction: column; min-width: 0; font-size: var(--fs-body); }
 .fx-app-grid {
   display: grid; align-items: center; column-gap: 12px;
   grid-template-columns: 1.47368rem minmax(8.42105rem, 2fr) minmax(5.89474rem, 7.89474rem) minmax(5.47368rem, 1.2fr) minmax(4rem, 5.05263rem) minmax(3.15789rem, 0.8fr) minmax(2.94737rem, 3.78947rem) 2.73684rem minmax(3.36842rem, 4rem);
 }
-.fx-apps-head { padding: 0 12px 6px; border-bottom: 1px solid var(--border-soft); color: var(--muted); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.06em; }
+.fx-apps-head { padding: 0 12px 6px; border-bottom: 1px solid var(--border-soft); color: var(--muted); font-size: var(--fs-tag); text-transform: uppercase; letter-spacing: 0.06em; }
 .fx-apps-th { white-space: nowrap; }
 .fx-apps-sort { background: none; border: 0; padding: 0; font: inherit; color: inherit; text-transform: inherit; letter-spacing: inherit; cursor: pointer; }
 .fx-apps-sort[data-active] { color: var(--ink); }
@@ -162,14 +162,14 @@
 .fx-setup-chip {
   max-width: 100%; overflow: hidden; text-overflow: ellipsis;
   min-height: 24px; padding: 1px 8px; border-radius: 999px; cursor: pointer; white-space: nowrap;
-  font: inherit; font-size: 0.7rem; font-weight: 600; color: var(--amber);
+  font: inherit; font-size: var(--fs-tag); font-weight: 600; color: var(--amber);
   border: 1px solid color-mix(in srgb, var(--amber) 45%, transparent); background: var(--amber-soft);
 }
 .fx-setup-chip:hover { border-color: var(--amber); }
 .fx-setup-chip:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(46, 197, 197, 0.35); }
 @media (hover: none), (max-width: 640px) { .fx-setup-chip { min-height: 44px; } }
 .fx-app-acts { display: inline-flex; align-items: center; gap: 2px; margin-left: auto; flex: none; }
-.fx-app-add { font-size: 0.76rem; font-weight: 600; color: var(--accent-text); text-decoration: none; white-space: nowrap;
+.fx-app-add { font-size: var(--fs-meta); font-weight: 600; color: var(--accent-text); text-decoration: none; white-space: nowrap;
   padding: 4px 8px; border-radius: var(--r); opacity: 0; transition: opacity 0.15s; }
 .fx-app-add:hover { background: var(--accent-soft); }
 .fx-app-row:hover .fx-app-add, .fx-app-row:focus-within .fx-app-add { opacity: 1; }
@@ -179,12 +179,12 @@
 @media (prefers-reduced-motion: reduce) { .fx-app-add { transition: none; } }
 .fx-crew { display: inline-flex; align-items: center; gap: 4px; }
 .fx-crew-face { display: inline-flex; flex: none; }
-.fx-crew-more { font-size: 0.74rem; color: var(--muted); margin-left: 2px; }
+.fx-crew-more { font-size: var(--fs-meta); color: var(--muted); margin-left: 2px; }
 .fx-c-state { line-height: 1.3; }
 .fx-c-pr, .fx-c-deploy, .fx-c-spend, .fx-c-builds, .fx-c-updated { white-space: nowrap; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .fx-c-spend, .fx-c-builds, .fx-c-updated { text-align: right; font-variant-numeric: tabular-nums; color: var(--ink-soft); }
 .fx-pr { display: inline-flex; gap: 6px; align-items: baseline; }
-.fx-pr-state { font-size: 0.74rem; color: var(--muted); }
+.fx-pr-state { font-size: var(--fs-meta); color: var(--muted); }
 .fx-pr[data-state="merged"] .fx-pr-state { color: var(--green); }
 .fx-pr[data-state="closed"] .fx-pr-state { color: var(--muted); text-decoration: line-through; }
 .fx-c-deploy [data-ok] { color: var(--green); }
@@ -192,7 +192,7 @@
 .fx-app-build { min-height: 40px; padding: 4px 12px; cursor: pointer; border-radius: var(--r); color: var(--ink-soft); }
 .fx-app-build:hover, .fx-app-build:focus-visible { background: var(--surface-2, var(--surface-3)); outline: none; }
 .fx-build-n { display: inline-flex; align-items: baseline; gap: 2px; padding-left: 12px; }
-.fx-latest { margin-left: 8px; font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--accent-text); }
+.fx-latest { margin-left: 8px; font-size: var(--fs-tag); text-transform: uppercase; letter-spacing: 0.06em; color: var(--accent-text); }
 /* A build's stations, small and edge-less, so they fit the Crew column and never overlap State. */
 .fx-app-build .fx-c-crew { overflow: hidden; }
 .fx-app-build .fx-line { gap: 3px; transform: scale(0.72); transform-origin: left center; }
@@ -207,14 +207,14 @@
 }
 .fx-sheet-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .fx-sheet-head h2 { margin: 0; font-size: 1rem; }
-.fx-sheet-sub { flex: 1; color: var(--muted); font-size: 0.82rem; }
+.fx-sheet-sub { flex: 1; color: var(--muted); font-size: var(--fs-ui); }
 .fx-sheet-actions { display: flex; align-items: center; gap: 10px; }
 .fx-waive-gates { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; border: 0; }
-.fx-waive-gate { display: inline-flex; align-items: center; gap: 8px; min-height: 32px; font-size: 0.86rem; color: var(--ink); }
+.fx-waive-gate { display: inline-flex; align-items: center; gap: 8px; min-height: 32px; font-size: var(--fs-body); color: var(--ink); }
 .fx-waive-gate[data-disabled] { color: var(--faint); cursor: not-allowed; }
 .fx-form { display: flex; flex-direction: column; gap: 10px; }
-.fx-field { display: flex; flex-direction: column; gap: 4px; font-size: 0.8rem; color: var(--muted); }
-.fx-field textarea, .fx-field input { font: inherit; font-size: 0.86rem; }
+.fx-field { display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-ui); color: var(--muted); }
+.fx-field textarea, .fx-field input { font: inherit; font-size: var(--fs-body); }
 /* Dark inputs (walk D13): every field of a Factory sheet on the console's own tokens. */
 .fx-field textarea, .fx-field input, .fx-field select {
   padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--r); background: var(--surface); color: var(--ink);
@@ -227,24 +227,24 @@
 .fx-links-list { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
 .fx-link { display: flex; align-items: flex-start; gap: 10px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--r); }
 .fx-link-main { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
-.fx-link-words { font-size: 0.88rem; color: var(--ink); overflow-wrap: anywhere; }
-.fx-link-meta { font-size: 0.78rem; overflow-wrap: anywhere; }
-.fx-link-url { font-family: var(--mono, ui-monospace, monospace); font-size: 0.78rem; padding: 0; }
+.fx-link-words { font-size: var(--fs-body); color: var(--ink); overflow-wrap: anywhere; }
+.fx-link-meta { font-size: var(--fs-ui); overflow-wrap: anywhere; }
+.fx-link-url { font-family: var(--mono, ui-monospace, monospace); font-size: var(--fs-ui); padding: 0; }
 .fx-link-acts { display: inline-flex; align-items: center; gap: 8px; flex-shrink: 0; }
 /* Revealed test users: a table with headers, one line per login (no wrapping inside an email),
    scrolling sideways inside the row rather than the page; Hide puts it away. */
 .fx-link-users-wrap { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; margin-top: 6px; max-width: 100%; overflow-x: auto; }
-.fx-link-users { font-size: 0.78rem; border-collapse: collapse; }
+.fx-link-users { font-size: var(--fs-ui); border-collapse: collapse; }
 .fx-link-users th { padding: 2px 12px 2px 0; text-align: left; font: 600 0.66rem var(--mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--faint); }
 .fx-link-users td { padding: 3px 12px 3px 0; color: var(--ink); white-space: nowrap; border-top: 1px solid var(--border); }
 .fx-link-users code { font: 0.76rem var(--mono); white-space: normal; word-break: break-all; }
 .fx-link-users td:nth-child(2) { white-space: normal; min-width: 12em; }
 .fx-link { flex-wrap: wrap; }
 .fx-link > .fx-link-users-wrap { flex: 1 1 100%; }
-.fx-link-confirm { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 6px; font-size: 0.8rem; color: var(--amber); }
+.fx-link-confirm { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 6px; font-size: var(--fs-ui); color: var(--amber); }
 .fx-links { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .fx-link-opts { display: flex; align-items: flex-end; gap: 14px; flex-wrap: wrap; }
-.fx-links-empty, .fx-links-revoked { margin: 0; font-size: 0.82rem; }
+.fx-links-empty, .fx-links-revoked { margin: 0; font-size: var(--fs-ui); }
 @media (max-width: 560px) { .fx-link { flex-direction: column; } }
 
 /* Motion budget and stills. */
@@ -320,7 +320,7 @@
 
 /* BOSS's own builds are builds too (walk D14): a small tag beside the app name. */
 .fx-internal {
-  flex: none; font-size: 0.66rem; letter-spacing: 0.06em; padding: 1px 6px; border-radius: var(--r-sm);
+  flex: none; font-size: var(--fs-tag); letter-spacing: 0.06em; padding: 1px 6px; border-radius: var(--r-sm);
   border: 1px solid var(--border-strong); color: var(--muted);
 }
 
@@ -329,16 +329,25 @@
 .fx-bench-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; min-height: 48px; border-bottom: 1px solid var(--hair); min-width: 0; }
 .fx-bench-details { flex-basis: 100%; padding: 0 0 10px; }
 .fx-bench-name { font-weight: 650; color: var(--ink); max-width: 40%; }
-.fx-bench-tag { color: var(--muted); font-size: 0.8rem; min-width: 0; }
+.fx-bench-tag { color: var(--muted); font-size: var(--fs-ui); min-width: 0; }
 
 /* App ▸ Sign-in (F6): state, client, where people return to. */
-.fx-signin-state { margin: 0; font-size: 0.9rem; }
-.fx-signin-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; margin: 0; font-size: 0.82rem; }
+.fx-signin-state { margin: 0; font-size: var(--fs-body); }
+.fx-signin-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; margin: 0; font-size: var(--fs-ui); }
 .fx-signin-facts dt { color: var(--muted); }
 .fx-signin-facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 .fx-signin-uris { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; }
-.fx-signin-note { margin: 0; font-size: 0.78rem; }
+.fx-signin-note { margin: 0; font-size: var(--fs-ui); }
 
 /* Lab projects (insecure-template apps are built apart): a link to each one's own Factory. */
-.fx-labs { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; margin: 0 0 10px; font-size: 0.68421rem; }
+.fx-labs { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; margin: 0 0 10px; font-size: var(--fs-tag); }
 .fx-labs-k { color: var(--muted, #6b7280); }
+
+/* THE SHARED TYPE SCALE (round 3): the Floor's sections read at the Project page's sizes. */
+.fx .ag-zone-label { font-family: var(--mono); font-size: var(--fs-label); letter-spacing: .12em; }
+.fx .ag-zone-count { font-size: var(--fs-tag); }
+.fx .ag-live-quiet { font-size: var(--fs-ui); min-height: 28px; }
+.fx .ag-out-chip { font-size: var(--fs-meta); }
+.fx .ag-out-age { font-size: var(--fs-tag); }
+.fx .ag-link { font-size: var(--fs-meta); }
+.fx .fx-row-name, .fx .fx-row-open { font-size: var(--fs-row); }

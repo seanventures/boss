@@ -86,9 +86,14 @@
 .spj-wide { width: 100%; }
 
 /* Screen 3: the project page */
-.spj-page { display: grid; gap: 14px; margin-bottom: 16px; }
-.spj-page-head h2 { margin: 0; font-family: var(--display); font-size: 1.3rem; font-weight: 600; }
-.spj-page-head p { margin: 4px 0 0; color: var(--muted); font-size: 0.82rem; }
+.spj-page { display: grid; gap: 14px; margin-bottom: 16px; font-size: var(--fs-body); }
+/* The shared type scale (globals --fs-*), as the Project page reads. */
+.spj-page .spj-sub { font-size: var(--fs-title); }
+.spj-page .spj-next li b { font-size: var(--fs-ui); }
+.spj-page .spj-next li span { font-size: var(--fs-meta); }
+.spj-page .ag-btn { font-size: var(--fs-ui); }
+.spj-page-head h2 { margin: 0; font-family: var(--display); font-size: var(--fs-page); font-weight: 600; }
+.spj-page-head p { margin: 4px 0 0; color: var(--muted); font-size: var(--fs-ui); }
 .spj-page-head [data-done] { color: var(--green); }
 .spj-ask {
   display: grid; gap: 10px; padding: 16px; border: 1px solid var(--accent-line); border-radius: var(--r-xl, 12px);
@@ -99,7 +104,7 @@
 .spj-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .spj-chip {
   padding: 4px 10px; border: 1px solid var(--border-strong); border-radius: 999px; background: var(--surface);
-  color: var(--ink-soft); font: inherit; font-size: 0.78rem; cursor: pointer;
+  color: var(--ink-soft); font: inherit; font-size: var(--fs-ui); cursor: pointer;
 }
 .spj-chip:hover { border-color: var(--accent-line); color: var(--ink); }
 .spj-ask-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
@@ -109,9 +114,9 @@
   padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--r); background: var(--surface);
 }
 .spj-work li > * { margin: 0; line-height: 1.4; align-self: center; }
-.spj-work li > a.spj-link { display: inline-block; padding: 0; font-size: 0.8rem; }
+.spj-work li > a.spj-link { display: inline-block; padding: 0; font-size: var(--fs-ui); }
 .spj-work-title { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.spj-work-state { font-size: 0.8rem; color: var(--muted); }
+.spj-work-state { font-size: var(--fs-ui); color: var(--muted); }
 .spj-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
 .spj-work li[data-tone="amber"] .spj-dot { background: var(--amber); }
 .spj-work li[data-tone="amber"] .spj-work-state { color: var(--amber); }
@@ -132,25 +137,25 @@
 .spj-idea { display: grid; gap: 12px; }
 .spj-idea-name { max-width: 24rem; }
 .spj-idea-actions { justify-content: space-between; align-items: center; }
-.spj-more { border: 0; background: none; color: var(--accent-text); font: inherit; font-size: 0.8rem; cursor: pointer; padding: 0; }
+.spj-more { border: 0; background: none; color: var(--accent-text); font: inherit; font-size: var(--fs-ui); cursor: pointer; padding: 0; }
 .spj-more:hover { text-decoration: underline; }
 
 /* Add a project (BOSSAPP-914 screen 3): New | Existing as one segmented control in the head. */
 .spj-seg { display: inline-flex; border: 1px solid var(--border-strong); border-radius: 10px; overflow: hidden; }
-.spj-seg > button { padding: 7px 14px; font: inherit; font-size: 0.8rem; color: var(--muted); background: transparent; border: 0; cursor: pointer; white-space: nowrap; }
+.spj-seg > button { padding: 7px 14px; font: inherit; font-size: var(--fs-ui); color: var(--muted); background: transparent; border: 0; cursor: pointer; white-space: nowrap; }
 .spj-seg > button[aria-selected="true"] { background: var(--accent-soft); color: var(--ink); box-shadow: inset 0 -2px 0 var(--accent); }
 .spj-seg > button:focus-visible { outline: 2px solid var(--accent-text); outline-offset: -2px; }
 .spj-head { flex-wrap: wrap; }
 .spj-captain { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--accent-line); border-radius: 8px; background: var(--surface-2); }
 .spj-captain small { color: var(--faint); }
-.spj-live { display: inline-flex; align-items: center; gap: 4px; font-size: 0.7rem; color: var(--accent-text); background: var(--accent-soft); border-radius: 999px; padding: 1px 8px; margin-left: 6px; }
+.spj-live { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-tag); color: var(--accent-text); background: var(--accent-soft); border-radius: 999px; padding: 1px 8px; margin-left: 6px; }
 
 /* ── Add a project, screen 03 as the wireframe draws it (BOSSAPP-914) ───────────────────────── */
 .spj-sheet .spj-head { gap: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--border); margin: 0 -2px; }
 .spj-ico { width: 32px; height: 32px; border-radius: 9px; display: inline-grid; place-items: center; flex: none;
   background: color-mix(in srgb, var(--teal) 14%, transparent); color: var(--teal); }
 .spj-seg > button { display: inline-flex; align-items: center; gap: 6px; }
-.spj-sample-link { display: inline-flex; align-items: center; gap: 5px; color: var(--faint); font-size: .76rem; }
+.spj-sample-link { display: inline-flex; align-items: center; gap: 5px; color: var(--faint); font-size: var(--fs-meta); }
 .spj-sample-link:hover { color: var(--ink); }
 .spj-close { display: inline-grid; place-items: center; }
 .spj-sheet .spj-import { gap: 0; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
@@ -161,20 +166,20 @@
 .spj-col-title > span:first-child { background: var(--accent); color: #fff; width: 22px; height: 22px; font-weight: 700; }
 .spj-col-title .spj-live { display: inline-flex; align-items: center; width: auto; height: auto; }
 .spj-seg-s { align-self: flex-start; }
-.spj-seg-s > button { padding: 6px 12px; font-size: .76rem; }
+.spj-seg-s > button { padding: 6px 12px; font-size: var(--fs-meta); }
 .spj-accounts { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.spj-acct { display: inline-flex; align-items: center; gap: 4px; padding: 2px 9px; border-radius: 999px; font: inherit; font-size: .72rem;
+.spj-acct { display: inline-flex; align-items: center; gap: 4px; padding: 2px 9px; border-radius: 999px; font: inherit; font-size: var(--fs-meta);
   border: 1px solid var(--border-strong); background: var(--surface); color: var(--muted); cursor: pointer; }
 .spj-acct[aria-pressed="true"] { color: var(--ink); border-color: var(--accent-line); background: var(--accent-soft); }
-.spj-small { font-size: .72rem; color: var(--teal); }
+.spj-small { font-size: var(--fs-meta); color: var(--teal); }
 .spj-search { display: flex; align-items: center; gap: 8px; padding: 0 10px; border: 1px solid var(--border-strong); border-radius: 8px;
   background: var(--surface); color: var(--faint); }
-.spj-search input { flex: 1; min-width: 0; border: 0; background: none; color: var(--ink); font: inherit; font-size: .8rem; padding: 8px 0; outline: none; }
+.spj-search input { flex: 1; min-width: 0; border: 0; background: none; color: var(--ink); font: inherit; font-size: var(--fs-ui); padding: 8px 0; outline: none; }
 .spj-search:focus-within { border-color: var(--accent-line); }
 .spj-sheet .spj-repos { gap: 6px; max-height: 15rem; }
 .spj-sheet .spj-repo { padding: 9px 11px; border: 1px solid transparent; }
-.spj-sheet .spj-repo .spj-mono { color: var(--ink); font-weight: 600; font-size: .78rem; }
-.spj-repo small.spj-mono { font-weight: 400 !important; color: var(--faint) !important; font-size: .68rem !important; }
+.spj-sheet .spj-repo .spj-mono { color: var(--ink); font-weight: 600; font-size: var(--fs-ui); }
+.spj-repo small.spj-mono { font-weight: 400 !important; color: var(--faint) !important; font-size: var(--fs-tag) !important; }
 .spj-faint { color: var(--faint); }
 .spj-inuse { font-size: .62rem; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--border-strong); color: var(--muted); }
 .spj-skel { height: 34px; border-radius: 8px; background: linear-gradient(90deg, var(--surface-2), var(--surface), var(--surface-2));
@@ -183,7 +188,7 @@
 .spj-live { gap: 5px; color: var(--accent-text); }
 .spj-live i { width: 6px; height: 6px; border-radius: 50%; background: var(--teal); animation: spj-pulse 1.6s ease-in-out infinite; }
 @keyframes spj-pulse { 50% { opacity: .35; } }
-.spj-reading { display: flex; align-items: center; gap: 10px; margin: 0; color: var(--muted); font-size: .78rem; }
+.spj-reading { display: flex; align-items: center; gap: 10px; margin: 0; color: var(--muted); font-size: var(--fs-ui); }
 .spj-reading code { font-family: var(--mono); color: var(--ink-soft); }
 .spj-cks { display: grid; gap: 14px; }
 .spj-ck { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 10px; align-items: center; }
@@ -191,29 +196,29 @@
 .spj-ck[data-s="done"] .spj-ck-b { border: 0; background: var(--green); color: #032015; }
 .spj-ck[data-s="now"] .spj-ck-b { border: 2px solid var(--teal); box-shadow: 0 0 0 3px color-mix(in srgb, var(--teal) 22%, transparent); animation: spj-pulse 1.6s ease-in-out infinite; }
 .spj-ck[data-s="failed"] .spj-ck-b { border: 0; background: var(--red-soft, rgba(240,80,80,.18)); color: var(--red); }
-.spj-ck-t { display: grid; font-size: .8rem; font-weight: 600; color: var(--ink); }
-.spj-ck-t small { font-weight: 400; color: var(--faint); font-size: .7rem; }
+.spj-ck-t { display: grid; font-size: var(--fs-ui); font-weight: 600; color: var(--ink); }
+.spj-ck-t small { font-weight: 400; color: var(--faint); font-size: var(--fs-tag); }
 .spj-ck[data-s="failed"] .spj-ck-t small { color: var(--red); }
 .spj-bar-teal i { background: var(--teal); }
 .spj-lbl { font-family: var(--mono); font-size: .62rem; letter-spacing: .14em; text-transform: uppercase; color: var(--faint); }
 .spj-sheet .bx-np-field { gap: 6px; }
 .spj-pick-wrap { position: relative; }
 .spj-captain { width: 100%; font: inherit; color: var(--ink); cursor: pointer; text-align: left; border-color: var(--accent-line); background: var(--accent-soft); }
-.spj-captain small { color: var(--faint); font-size: .74rem; }
+.spj-captain small { color: var(--faint); font-size: var(--fs-meta); }
 .spj-pick-list { position: absolute; z-index: 5; left: 0; right: 0; top: calc(100% + 4px); margin: 0; padding: 4px; list-style: none; max-height: 14rem; overflow-y: auto;
   border: 1px solid var(--border-strong); border-radius: 10px; background: var(--surface); box-shadow: 0 12px 30px rgba(0,0,0,.35); }
-.spj-pick-list button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 8px; border: 0; border-radius: 7px; background: none; color: var(--ink-soft); font: inherit; font-size: .78rem; cursor: pointer; text-align: left; }
+.spj-pick-list button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 8px; border: 0; border-radius: 7px; background: none; color: var(--ink-soft); font: inherit; font-size: var(--fs-ui); cursor: pointer; text-align: left; }
 .spj-pick-list button:hover, .spj-pick-list button[aria-selected="true"] { background: var(--accent-soft); color: var(--ink); }
 .spj-pick-list small { color: var(--faint); }
 .spj-crew { display: flex; align-items: center; gap: 8px; }
 .spj-faces { display: inline-flex; }
 .spj-faces > * + * { margin-left: -6px; }
-.spj-crew small { color: var(--faint); font-size: .72rem; }
+.spj-crew small { color: var(--faint); font-size: var(--fs-meta); }
 .spj-go { display: inline-flex; justify-content: center; align-items: center; gap: 8px; padding: 11px; }
-.spj-foot { margin: 0; text-align: center; color: var(--faint); font-size: .7rem; }
+.spj-foot { margin: 0; text-align: center; color: var(--faint); font-size: var(--fs-tag); }
 .spj-folder { display: flex; flex-direction: column; gap: 10px; }
 .spj-select { display: flex; align-items: center; gap: 8px; padding: 0 10px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--surface); color: var(--faint); }
-.spj-select select { flex: 1; min-width: 0; border: 0; background: none; color: var(--ink); font: inherit; font-size: .8rem; padding: 8px 0; }
+.spj-select select { flex: 1; min-width: 0; border: 0; background: none; color: var(--ink); font: inherit; font-size: var(--fs-ui); padding: 8px 0; }
 @media (max-width: 1100px) {
   .spj-sheet .spj-col { padding: 14px; }
 }
@@ -229,9 +234,9 @@
   .spj-sheet .spj-head .spj-seg { order: 5; width: 100%; }
   .spj-sheet .spj-head .bx-np-title { font-size: 1.15rem; }
   .spj-sheet .spj-head { column-gap: 8px; }
-  .spj-sheet .spj-head .spj-seg > button { flex: 1; justify-content: center; padding: 7px 6px; font-size: .72rem; }
+  .spj-sheet .spj-head .spj-seg > button { flex: 1; justify-content: center; padding: 7px 6px; font-size: var(--fs-meta); }
 }
 .spj-sample-link[aria-current="page"] { color: var(--accent-text); }
-.spj-warn { display: flex; gap: 6px; align-items: flex-start; margin: 0; padding: 7px 10px; border-radius: 8px; font-size: .74rem;
+.spj-warn { display: flex; gap: 6px; align-items: flex-start; margin: 0; padding: 7px 10px; border-radius: 8px; font-size: var(--fs-meta);
   color: var(--amber); background: color-mix(in srgb, var(--amber) 12%, transparent); border: 1px solid color-mix(in srgb, var(--amber) 35%, transparent); }
 .spj-warn a { color: inherit; font-weight: 600; }
