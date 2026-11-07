@@ -226,6 +226,26 @@ describe("Planned, in Marshal's rank (05-18..23, 05-33)", () => {
     expect(tid("px-said")!.textContent).toMatch(/Fix 6 failing tests is next up/);
   });
 
+  it("the board's Planned column re-ranks by drag too", async () => {
+    const calls = engine();
+    await openWork();
+    await press(tid("px-work-board"));
+    const data = new Map<string, string>();
+    const dt = { setData: (k: string, v: string) => data.set(k, v), getData: (k: string) => data.get(k) ?? "", effectAllowed: "" };
+    const fire = async (el: Element, name: string) => {
+      const ev = new Event(name, { bubbles: true, cancelable: true });
+      Object.defineProperty(ev, "dataTransfer", { value: dt });
+      await act(async () => { el.dispatchEvent(ev); });
+    };
+    await fire(tid("px-board-wi_index")!, "dragstart");
+    await fire(tid("px-board-wi_sla")!, "dragover");
+    await fire(tid("px-board-wi_sla")!, "drop");
+    await settle(4);
+    expect(calls.find((c) => c.method === "POST" && c.path === `/v1/projects/${P}/plan/wi_index`)?.body).toEqual({ lane: "next", before: "wi_sla" });
+    expect($$("[aria-label='Planned'] [data-testid^='px-board-wi_']").map((n) => n.getAttribute("data-testid"))).toEqual(
+      ["px-board-wi_email", "px-board-wi_index", "px-board-wi_sla", "px-board-wi_tests"]);
+  });
+
   it("the keyboard does the same: ↓ and Alt+↑ move a row, across into Later and back", async () => {
     const calls = engine();
     await openWork();
@@ -306,7 +326,7 @@ describe("Needs you is one list (header bar = Work tab)", () => {
     expect(needsYouCards(ov.needs_you, null, work).map((c) => c.id)).toEqual(["dec_merge3", "dec_prodhost"]);
     const uncarded = work.map((w) => (w.id === "wi_visual" ? { ...w, action_label: "Merge", links: { ...w.links, decision: "?area=decisions&decision=dec_x" } } : w));
     const cards = needsYouCards(ov.needs_you.filter((c) => c.id !== "dec_merge3"), null, uncarded);
-    expect(cards.map((c) => [c.id, c.work_id])).toEqual([["dec_prodhost", undefined], ["work:wi_visual", "wi_visual"]]);
+    expect(cards.map((c) => [c.id, c.work_id || null])).toEqual([["dec_prodhost", null], ["work:wi_visual", "wi_visual"]]);
   });
 
   it("parses Helm's plan, and a missing field is empty, never a crash", () => {

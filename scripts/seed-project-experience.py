@@ -4,7 +4,11 @@
 NON-PRODUCTION ONLY. For the console engineer and the tester: one project with 3 merged PRs, a
 running build, a PR to merge, a deploy to approve, a healthy staging deploy with named demo
 users, two roadmap items and a dossier (apps/api/tests/project_experience_seed.py — the same
-rows the API tests read).
+rows the API tests read). For the Work tab (screen 05): Planned in Marshal's rank (Email-to-ticket
+intake next up, "SLA timer ignores weekends" carrying GitHub #12, "Fix 6 failing tests" naming
+tests/test_notify.py, two on Later), the onboarding agent's run as a row ($1.20 of model calls,
+the app's secret waiting on you), and three completed Minor Feature runs Helm's plan estimates
+time and cost from.
 
     export DATABASE_URL=postgresql+psycopg://boss:…@localhost:5432/boss_dev
     PYTHONPATH=engine:apps/api:. python3 scripts/seed-project-experience.py [--slug helpdesk-ai-demo]

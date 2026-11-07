@@ -80,10 +80,9 @@ export type ProjectsSummary = { items: ProjectCard[]; week_cap_usd: number | nul
 export type Repo = { full_name: string; branch: string; access: { read: boolean; write: boolean; pr: boolean }; external_url: string };
 export type NeedsYou = {
   id: string; kind: "merge" | "deploy" | "plan" | "question" | "setup"; label: string; detail: string; icon?: string;
-  /** The Work row this card belongs to (a merge's build, the onboarding row for its "only you" items). */
-  work_id?: string;
   mini: { label: string; state: StepState }[]; action: { label: string; href: string; decision_id: string } | null;
-  /** The piece of work it belongs to, the PR on GitHub, and when it was asked (the drawer). */
+  /** The piece of work it belongs to (a merge's build; the Onboarding row for its "only you"
+   *  items), the PR on GitHub, and when it was asked (the drawer). */
   work_id?: string; work_label?: string; external_url?: string; created_at?: string;
 };
 export type WorkItem = {

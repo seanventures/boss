@@ -9,6 +9,10 @@
 [data-testid="px-work-planned"] > [draggable="true"]:active { cursor: grabbing; }
 [data-testid="px-work-planned"] > [data-dragging] { opacity: .45; }
 [data-testid="px-work-planned"] > [data-drag-over] > .px-wk { box-shadow: inset 0 2px 0 var(--accent); }
+/* The board's Planned column re-ranks the same way. */
+.px-col > .px-card[draggable="true"] { cursor: grab; }
+.px-col > .px-card[data-dragging] { opacity: .45; }
+.px-col > .px-card[data-drag-over] { box-shadow: 0 -2px 0 var(--accent); }
 .px-wk[tabindex]:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .px-rank { display: inline-flex; align-items: center; gap: 2px; margin-right: 4px; }
 .px-rank-handle { color: var(--faint); display: inline-flex; padding: 0 2px; }

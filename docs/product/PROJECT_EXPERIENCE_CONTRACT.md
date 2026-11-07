@@ -292,6 +292,43 @@ Every shape above is served as written; these are the extra fields and the decis
   failing CI, scan findings), not stored roadmap items, so `/v1/ambient/roadmap/{id}/accept` has
   nothing to accept, and accepting all would start a build each; items are accepted one by one on
   the Roadmap and What's next (`accept` names the roadmap route or THE start door with its body).
+- **Work, second pass (screen 05: 05-01..07, 05-18..23, 05-27, 05-31, 05-33).**
+  - `GET /v1/projects/{id}/work/plan?kind=feature|bug|ticket&workflow_key=` (project:read) is Helm's
+    plan before Start: `{kind, planner, workflow {key, name, chosen: mapped|default|picked, why, href},
+    nodes[{key: plan|approve|design|build|review|pr|ship, label, type: agent|you|todo, agent?}],
+    estimate {minutes, minutes_basis: history|typical, minutes_runs, usd, usd_basis, usd_runs, metered},
+    options[{key, name, detail, work_class, fits}]}`. Nodes are the chosen workflow's real steps in
+    its order; `you` only where a person is asked (workflow_capabilities.stops_for_a_person, the PRD
+    while BOSS_MEETING_PRD_AUTO_APPROVE is off); a build always shows Review and PR after it. Time
+    is the median agent time to the PR over the workflow's last 20 completed runs here (gates and
+    the steps from the deploy on left out), else the steps' typical minutes; cost is the median of
+    workflow_costs (now also `median_usd`), else null — never invented. Feature/Ticket run the
+    project's small-feature path (how_to_start); Bug runs a `bugfix` mapping when the project has
+    one, else the same path; `workflow_key` (an active product workflow of this project) is
+    "change". An unknown one is 422 `unknown_workflow`.
+  - `POST …/work` adds `workflow_key` (the picked workflow; 422 `unknown_workflow` before anything
+    starts) and `source_url`. A Ticket pasted as a GitHub/Plane link keeps it (`source_ref`,
+    `source_url` on the run's input; titled "Issue #31" when the link is all it says); `issue:12` /
+    `pr:7` refs resolve against the project's repository.
+  - WorkItem `links.issue = {provider: github|plane|link, number, label: "#12", kind: issue|pr,
+    external_url}` on runs started from an issue and on planned items naming one.
+  - Planned items are in MARSHAL'S RANK (plan._planned: Next by rank, then Later — the order the
+    Roadmap's lanes read), never re-sorted by date, after the other work. Each adds `origin`
+    (`ci|bug|ticket|roadmap`), `origin_label` (`CI|Bug|Ticket|from Roadmap`), `lane`, `rank`,
+    `next_up` (the first; its `agents` is the planner, Juno), `where` (the file a failing check
+    names), `start` (THE start door with its body, incl. `source_url`) and `move` (`POST
+    /v1/projects/{id}/plan/{item}` `{lane, before?}`, work_item:manage — the drag and the ↑/↓ keys).
+    An accepted item whose work is already moving shows once, as that work.
+  - THE ONBOARDING ROW: while the onboarding agent has a run, the list holds `{id: <onb run id>,
+    source: onboarding, source_label: Setup, kind: setup, label: Onboarding, state: running|needs_you
+    |done|failed, flow[{key: discover|ready|backlog, label, state}], agents [Helm, Marshal],
+    cost_usd (its `onboarding`-stage model calls), waiting[{key, label, action}], links.onboarding}`
+    (drawer `onboarding`). It never counts as work for the journey (onboarded, worked, active).
+  - NEEDS YOU, ONE LIST: `needs_you[]` holds a card for every Work row in `needs_you` (a
+    `work:<id>` card when no waiting decision named it) and each card names its row in `work_id`
+    (the onboarding agent's only-you items name the Onboarding row). The header bar and the Work
+    tab's Needs-you count are that one list's length (console `needsYouCards`); a card that is no
+    row's ("Pick a prod host") is a row of its own in the Work tab's Needs you group.
 - **Area ids.** The console's ids are used as they exist: `knowledge` (not `knowledge_graph`),
   `workforce&role=` for an agent, `delivery_workflows&wfr=`, `code_tasks&view=apps&build=`,
   `decisions&decision=`, `infra&view=deploys&deploy=`, `agent_ops&item=`, `meetings&meeting=`.

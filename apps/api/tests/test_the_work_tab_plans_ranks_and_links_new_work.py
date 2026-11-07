@@ -379,3 +379,20 @@ def test_no_issue_without_a_link_or_an_issue_ref():
     assert ticket_link("see https://github.com/acme/x/issues/4, please") == \
         "https://github.com/acme/x/issues/4"
     assert ticket_link("no link here") is None
+
+
+def test_a_failing_check_names_its_file_only_when_it_is_one():
+    from boss_engine.services.project_experience import onboarding
+
+    assert onboarding._FILE.fullmatch("tests/test_notify.py")  # noqa: SLF001
+    assert not onboarding._FILE.fullmatch("test (3.11)")  # noqa: SLF001
+    cand = onboarding._candidate("Fix 1 failing check", source="ci", task_class="red_main",  # noqa: SLF001
+                                 severity="high", kind="bug", ref="ci:main",
+                                 where="tests/test_notify.py")
+    assert cand["where"] == "tests/test_notify.py"
+
+
+def test_the_plan_rounds_time_like_a_person_says_it():
+    from boss_engine.services.project_experience.new_work import round_minutes
+
+    assert [round_minutes(m) for m in (None, 0, 4, 9, 12, 23, 35)] == [None, None, 4, 9, 10, 25, 35]

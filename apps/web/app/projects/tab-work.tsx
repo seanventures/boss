@@ -1,9 +1,13 @@
 "use client";
 
 /**
- * WORK (screen 5, contract §3): new work inline (Feature · Bug · Ticket, Helm's plan as a strip),
- * then every task as a row — the station strip, who works it, its cost and every link — grouped
- * Needs you · Running · Planned · Done. A row opens its drawer in place. List or Board.
+ * WORK (screen 5, contract §3/§14): new work inline (Feature · Bug · Ticket) with Helm's plan —
+ * the chosen workflow's real steps as a strip, ≈ time and ≈ cost from this project's history, and
+ * "change" to pick another workflow — then every task as a row: the station strip (the onboarding
+ * row's own Discover → Ready → Backlog), who works it, its cost, its issue chip and every link,
+ * grouped Needs you · Running · Planned · Done. Needs you is the header bar's own list (one
+ * count); Planned is Marshal's rank, re-ranked by drag or Alt+↑/↓ and saved through the plan
+ * route. A row opens its drawer in place. List or Board.
  */
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -46,8 +50,9 @@ function RowTile({ w }: { w: WorkItem }) {
     : w.state === "failed" ? [XCircle, "red", "regular"]
     : w.origin === "ci" || /^ci$/i.test(w.source) ? [XCircle, "red", "regular"]
     : w.kind === "bug" || w.kind === "fix" || w.origin === "bug" ? [Bug, "red", "regular"]
+    : w.origin === "roadmap" ? [Database, "violet", "regular"]
     : w.kind === "chore" ? [XCircle, "red", "regular"]
-    : w.origin === "roadmap" || (w.source === "roadmap" && !w.origin) ? [Database, "violet", "regular"]
+    : w.source === "roadmap" && !w.origin ? [Database, "violet", "regular"]
     : w.kind === "ticket" ? [Ticket, undefined, "regular"]
     : [EnvelopeSimple, undefined, "regular"];
   const [I, c, weight] = t;
@@ -130,6 +135,7 @@ export function WorkTab({ ctx }: { ctx: PxCtx }) {
   const boardCols = (["needs_you", "stalled", "running", "planned", "done", "failed"] as WorkState[])
     .filter((k) => (k !== "stalled" && k !== "failed") || counts[k]);
   const groupOf = (k: WorkState) => shown.filter((w) => w.state === k);
+  const boardDrag = useRankDrag(planned, rankable, (id, to) => void rank(id, to));
   const showLoose = filter === "all" || filter === "needs_you";
   return (
     <div className="px-stack" data-testid="px-work">
@@ -181,6 +187,7 @@ export function WorkTab({ ctx }: { ctx: PxCtx }) {
               <div className="px-row" style={{ marginBottom: 8 }}><span className="px-lbl">{WORK_WORDS[k]}</span><span className="px-nbadge">{k === "needs_you" ? counts.needs_you : groupOf(k).length}</span></div>
               {groupOf(k).map((w) => (
                 <button key={w.id} type="button" className="px-card" data-link onClick={() => openItem(ctx, w)} data-testid={`px-board-${w.id}`}
+                        {...(k === "planned" ? boardDrag.props(w) : {})}
                         style={{ width: "100%", textAlign: "left", font: "inherit", color: "inherit", marginBottom: 8, display: "flex", flexDirection: "column", gap: 6, padding: 10 }}>
                   <b style={{ fontSize: ".66rem" }}>{w.label}</b>{w.flow.length ? <Flow nodes={w.flow.map((f) => ({ label: f.label, state: f.state, type: f.state }))} /> : <Stations stages={w.stages} />}
                   {attemptsPill(w) || w.state === "stalled" || w.next_up ? (
@@ -239,27 +246,14 @@ function NeedsCardRow({ card, ctx }: { card: NeedsYou; ctx: PxCtx }) {
 function PlannedRows({ rows, all, ctx, rankable, onRank, fresh }: {
   rows: WorkItem[]; all: WorkItem[]; ctx: PxCtx; rankable: boolean; onRank: (id: string, to: number) => void; fresh: string;
 }) {
-  const [dragging, setDragging] = useState<string | null>(null);
-  const [over, setOver] = useState<string | null>(null);
-  const index = (id: string) => all.findIndex((w) => w.id === id);
+  const drag = useRankDrag(all, rankable, onRank);
   return (
     <div role="list" aria-label="Planned work, in rank order" data-testid="px-work-planned">
       {rows.map((w) => {
-        const i = index(w.id);
-        const can = rankable && Boolean(w.move);
+        const i = drag.index(w.id);
+        const can = drag.can(w);
         return (
-          <div key={w.id} role="listitem" draggable={can} data-testid={`px-rank-${w.id}`}
-               data-dragging={dragging === w.id || undefined} data-drag-over={over === w.id && dragging !== w.id || undefined}
-               onDragStart={can ? (e) => { e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", w.id); setDragging(w.id); } : undefined}
-               onDragEnd={() => { setDragging(null); setOver(null); }}
-               onDragOver={can ? (e) => { if (dragging && dragging !== w.id) { e.preventDefault(); setOver(w.id); } } : undefined}
-               onDragLeave={() => setOver((cur) => (cur === w.id ? null : cur))}
-               onDrop={can ? (e) => {
-                 e.preventDefault();
-                 const id = dragging || e.dataTransfer.getData("text/plain");
-                 setDragging(null); setOver(null);
-                 if (id && id !== w.id) onRank(id, index(w.id));
-               } : undefined}
+          <div key={w.id} role="listitem" data-testid={`px-rank-${w.id}`} {...drag.props(w)}
                onKeyDown={can ? (e) => {
                  if (!e.altKey || (e.key !== "ArrowUp" && e.key !== "ArrowDown")) return;
                  e.preventDefault();
@@ -272,6 +266,34 @@ function PlannedRows({ rows, all, ctx, rankable, onRank, fresh }: {
       })}
     </div>
   );
+}
+
+/** Drag to re-rank, shared by the list's Planned group and the board's Planned column: drop a
+ *  row on another to put it in that one's place. */
+function useRankDrag(all: WorkItem[], rankable: boolean, onRank: (id: string, to: number) => void) {
+  const [dragging, setDragging] = useState<string | null>(null);
+  const [over, setOver] = useState<string | null>(null);
+  const index = (id: string) => all.findIndex((w) => w.id === id);
+  const can = (w: WorkItem) => rankable && Boolean(w.move);
+  const props = (w: WorkItem) => {
+    const ok = can(w);
+    return {
+      draggable: ok,
+      "data-dragging": dragging === w.id || undefined,
+      "data-drag-over": (over === w.id && dragging !== w.id) || undefined,
+      onDragStart: ok ? (e: React.DragEvent) => { e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", w.id); setDragging(w.id); } : undefined,
+      onDragEnd: () => { setDragging(null); setOver(null); },
+      onDragOver: ok ? (e: React.DragEvent) => { if (dragging && dragging !== w.id) { e.preventDefault(); setOver(w.id); } } : undefined,
+      onDragLeave: () => setOver((cur) => (cur === w.id ? null : cur)),
+      onDrop: ok ? (e: React.DragEvent) => {
+        e.preventDefault();
+        const id = dragging || e.dataTransfer.getData("text/plain");
+        setDragging(null); setOver(null);
+        if (id && id !== w.id) onRank(id, index(w.id));
+      } : undefined,
+    };
+  };
+  return { index, can, props };
 }
 
 const NODE_ICON: Record<string, React.ReactNode> = {
