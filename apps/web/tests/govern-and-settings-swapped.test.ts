@@ -46,7 +46,8 @@ describe("identity is a setting, not a platform headline", () => {
     // REWRITTEN AGAIN (identity S4): Identity is people, access roles, agents and audit now — the
     // installer password is gone — so the subtitle says what the area answers, not a protocol.
     const at = SHELL.indexOf('id: "enterprise"');
-    expect(SHELL.slice(at, at + 400)).toMatch(/Who can do what, and for whom/);
+    // The wireframe's words (BOSSAPP-914 shell.js): people, roles, agents and sign-in.
+    expect(SHELL.slice(at, at + 400)).toMatch(/People, roles, agents and sign-in/);
     expect(SHELL.slice(at, at + 400)).not.toMatch(/installer password|SSO/);
   });
 

@@ -63,7 +63,8 @@ describe("the sidebar docks to icons", () => {
   });
 
   it("gives the name back on hover, so icons are not a memory test", () => {
-    expect(SHELL).toContain("data-label={labelFor(a)}");
+    // "Label — purpose", as the wireframe's tooltips read (BOSSAPP-914 01-11).
+    expect(SHELL).toContain("data-label={`${labelFor(a)} — ${a.sub}`}");
     expect(CSS).toContain("content: attr(data-label)");
   });
 

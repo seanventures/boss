@@ -38,6 +38,8 @@ import "./identity/identity-auth.css";
 import "./identity/identity-account.css";
 import "./identity/identity-sso.css";
 import "./identity/identity-app-sign-in.css";
+// The shell (rail, top bar, drawer) last: its final word over the layers above (app/shell.css).
+import "./shell.css";
 import type { Metadata } from "next";
 import { Toaster } from "./client-forms";
 

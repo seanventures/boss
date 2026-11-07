@@ -14,6 +14,7 @@ import type { MeBanner } from "../../lib/identity/contract";
 import { useIdentity } from "./identity-provider";
 import { Face } from "./kit";
 import { avatarTone } from "../../lib/identity/avatar";
+import { useDetailsDismiss } from "../../lib/details-dismiss";
 
 
 
@@ -22,16 +23,21 @@ export async function signOut(): Promise<void> {
   window.location.assign("/login");
 }
 
-export function AccountMenu() {
+/** `compact`: the top bar's avatar alone (the name is the tooltip). `children`: more of the menu
+ *  (the shell's organization, New build and System rows), above Sign out. */
+export function AccountMenu({ compact = false, children }: { compact?: boolean; children?: React.ReactNode } = {}) {
   const { me } = useIdentity();
+  const box = React.useRef<HTMLDetailsElement>(null);
+  // A menu closes when the person looks away: on Esc and on a press anywhere outside it.
+  const { onToggle } = useDetailsDismiss(box);
   if (!me) return null;
   const mfa = me.sign_in.passkeys > 0 || me.sign_in.totp;
   const first = me.display_name.split(" ")[0];
   return (
-    <details className="idn-me" data-testid="account-menu">
-      <summary aria-label={`My account: ${me.display_name}`}>
-        <Face name={me.display_name} tone={avatarTone(me.principal_id, me.avatar_seed)} size={26} />
-        <span><b>{first}</b><span className="idn-me-role"> · {primaryRoleLabel(me.access_roles)}</span></span>
+    <details ref={box} className="idn-me" data-testid="account-menu" data-compact={compact || undefined} onToggle={onToggle}>
+      <summary aria-label={`My account: ${me.display_name}`} title={compact ? `${me.display_name} · ${primaryRoleLabel(me.access_roles)}` : undefined}>
+        <Face name={me.display_name} tone={avatarTone(me.principal_id, me.avatar_seed)} size={compact ? 30 : 26} />
+        {compact ? null : <span><b>{first}</b><span className="idn-me-role"> · {primaryRoleLabel(me.access_roles)}</span></span>}
         {mfa
           ? <ShieldCheck size={15} className="idn-ok" aria-label="MFA on" />
           : <ShieldWarning size={15} className="idn-warn" aria-label="No second factor" />}
@@ -45,6 +51,7 @@ export function AccountMenu() {
         <a role="menuitem" href="/account/sessions"><Devices size={16} aria-hidden /> Sessions</a>
         <a role="menuitem" href="/account/agents"><Robot size={16} aria-hidden /> Agents for me</a>
         <a role="menuitem" href="/account/keys"><Key size={16} aria-hidden /> API keys</a>
+        {children}
         <button role="menuitem" type="button" onClick={signOut} data-testid="sign-out"><SignOut size={16} aria-hidden /> Sign out</button>
       </div>
     </details>

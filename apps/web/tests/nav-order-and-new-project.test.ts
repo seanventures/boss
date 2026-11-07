@@ -114,8 +114,8 @@ describe("New build, from anywhere", () => {
   it("presses the same first door as the Factory: the New project composer", () => {
     // Operator, 2026-10-07 (superseding the 2026-10-04 "Plan it with Juno" door): New build
     // opens the composer; planning with an agent is an option inside it.
-    const btn = SHELL.slice(SHELL.indexOf('data-testid="topbar-new-project"'),
-                            SHELL.indexOf('className="bx-topbar-spacer"'));
+    const at = SHELL.indexOf('data-testid="topbar-new-project"');
+    const btn = SHELL.slice(at, SHELL.indexOf("</GatedButton>", at));
     expect(btn).toContain("openNewProject()");
     expect(btn).not.toContain("openPlan");
     expect(CT).toContain("onClick={openNewProject}");
