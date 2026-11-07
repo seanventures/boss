@@ -35,7 +35,8 @@ describe("Observability › Alerts", () => {
     expect(text(rows[0].querySelector("[data-testid='obs-alert-app']"))).toBe("api");
     expect(text(rows[0])).toContain("Agent: Opened an incident");
     expect(text($("[data-testid='obs-alerts-count']"))).toBe("2 firing");
-    expect(rec.calls.some((u) => u.startsWith("/v1/alerts?project_id=p1&state=firing"))).toBe(true);
+    // EVERY APP of every project you may read, plus BOSS itself: the across-projects list.
+    expect(rec.calls.some((u) => u.startsWith("/v1/alerts/all?state=firing"))).toBe(true);
   });
 
   it("filters by app, state and severity, in the URL", async () => {
@@ -47,7 +48,7 @@ describe("Observability › Alerts", () => {
     expect(params().get("astate")).toBe("all");
     expect(params().get("asev")).toBe("sev1");
     await settle();
-    expect(rec.calls.some((u) => u.includes("/v1/alerts?project_id=p1&app=t_down&state=all&severity=sev1&since=7d"))).toBe(true);
+    expect(rec.calls.some((u) => u.includes("/v1/alerts/all?app=t_down&state=all&severity=sev1&since=7d"))).toBe(true);
   });
 
   it("an app's name opens its drawer on the Alerts tab", async () => {

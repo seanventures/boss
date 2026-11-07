@@ -15,8 +15,8 @@
  */
 import type { FlowEdge, FlowNode } from "./ambient";
 
-export const NODE_W = 132;
-export const NODE_H = 70;
+export const NODE_W = 140;
+export const NODE_H = 80;
 export const GAP_X = 66;
 export const GAP_Y = 26;
 export const PAD = 24;

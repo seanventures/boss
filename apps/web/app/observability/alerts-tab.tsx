@@ -25,6 +25,7 @@ import {
   useRules, type Alert, type AlertRule, type HistoryWin, type SevInfo, type SignalSource,
 } from "../../lib/app-alerts";
 import { useLocalTime } from "../../lib/local-time";
+import { pxHref } from "../../lib/project-experience";
 import { showToast } from "../client-forms";
 import { notifyChanged } from "../changed";
 import { DrawerSection, Skeleton } from "../infra/kit";
@@ -270,8 +271,10 @@ export function AlertStatus({ a }: { a: Alert }) {
   return <StatusChip status={a.status} extraTip={ackTip} />;
 }
 
-export function AlertRow({ a, targetId, projectId, actor, onDone, showApp, onApp, onIncident, selected, onSelect, onAck, severities, plainNames }: {
+export function AlertRow({ a, targetId, projectId, actor, onDone, showApp, onApp, onIncident, selected, onSelect, onAck, severities, plainNames, project }: {
   a: Alert; targetId: string; projectId: string; actor: string; onDone: () => void; severities?: SevInfo[];
+  /** Observability › Alerts lists every project's: the project a row belongs to (its Health). */
+  project?: { name: string; href: string } | null;
   /** A project page (Health's parity component): the rule's identifier stays in the tooltip,
    *  never printed beside its name (X-73: no raw ids on project pages). */
   plainNames?: boolean;
@@ -308,6 +311,9 @@ export function AlertRow({ a, targetId, projectId, actor, onDone, showApp, onApp
           <button type="button" className="inf-link obs-strong" data-testid="obs-alert-app" title={`${a.app} · ${a.env}: its Alerts tab`}
                   onClick={onApp}>{a.app}</button>
         ) : null}
+        {project ? (project.href
+          ? <a className="obs-chip" href={pxHref(project.href)} data-testid="obs-alert-project" title={`${project.name}: its Health tab`}>{project.name}</a>
+          : <span className="obs-chip" data-testid="obs-alert-project" title="BOSS's own platform">{project.name}</span>) : null}
         {/* THE RULE IT CAME FROM, one press away: its switches (Respond automatically, Triage),
             Silence and Edit. Its alert name shows when the label alone could be two rules. */}
         {a.ruleId && a.sourceKind === "rule" ? (

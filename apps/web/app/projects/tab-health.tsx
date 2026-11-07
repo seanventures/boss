@@ -15,6 +15,7 @@ import { PX_PATHS, isPxDemo, navigateTo, parseHealth, pxHref, usePxRead, type He
 import { FX_HEALTH } from "../../lib/project-experience-fixtures";
 import { Empty, EngineNotReady, Face, Flow, HEALTH_TONE, HEALTH_WORD, Ico, PxLink, ReadGate, Ring, Spark, Tag } from "./kit";
 import { AppAlertsTab } from "../observability/alerts-tab";
+import { AlertsPanel, NO_ALERT_FILTER, type AlertsFilterState } from "../observability/alerts";
 import { usePulse } from "../../lib/obs-view";
 import "../infra/infra.css";
 import "../observability/obs.css";
@@ -23,7 +24,6 @@ import type { PxCtx } from "./project-page";
 
 type Env = HealthView["environments"][number];
 type Incident = HealthView["incidents"][number];
-type AlertLine = HealthView["alerts"][number];
 
 /** "Today 09:12", "Wed 09:12", "Nov 2 09:12": when something happened, in the viewer's zone. */
 export function dayTime(iso: string, now: Date = new Date()): string {
@@ -91,12 +91,6 @@ export function HealthTab({ ctx }: { ctx: PxCtx }) {
                     <a className="px-more" href={pxHref(`?area=agent_ops&project_id=${encodeURIComponent(ctx.projectId)}`)} data-testid="px-h-inc-all">In Agents at work <ArrowRight size={11} /></a></div>
                   {h.incidents.length ? h.incidents.map((i) => <IncidentRow key={i.id} i={i} />) : <NoIncidents />}
                 </section>
-                <section className="px-card" aria-labelledby="px-h-al" data-testid="px-h-alerts">
-                  <div className="px-card-h"><Ico icon={BellRinging} c="amber" /><h2 id="px-h-al">Alerts</h2>
-                    <Tag tone={h.alerts.some((x) => x.state === "firing") ? "red" : "green"}>{h.alerts.filter((x) => x.state === "firing").length} firing</Tag></div>
-                  {h.alerts.length ? h.alerts.map((x) => <AlertLineRow key={x.id} x={x} />)
-                    : <Empty icon={Bell} tone="green" title="Nothing has fired" line="Rules arrive with the first deploy; what fires shows here." testid="px-h-al-empty" />}
-                </section>
               </div>
               <div className="px-stack">
                 <Monitoring h={h} />
@@ -111,6 +105,8 @@ export function HealthTab({ ctx }: { ctx: PxCtx }) {
                 </section>
               </div>
             </div>
+            {/* Full width, as wide as Observability draws the same list. */}
+            <ProjectAlerts ctx={ctx} />
             <AlertRules ctx={ctx} envs={h.environments.map((e) => ({ label: e.label, targetId: e.target_id }))} />
           </>
         )}
@@ -171,13 +167,14 @@ function IncidentRow({ i }: { i: Incident }) {
       <span className="px-h-inc-ico" data-s={i.state} aria-hidden>{resolved ? <Check size={12} weight="bold" /> : "!"}</span>
       <div className="px-h-inc-b">
         <b>{i.label}</b>
-        <small className="px-faint">{[i.since ? dayTime(i.since) : "", spanWords(i.duration_s), i.outcome].filter(Boolean).join(" · ")}</small>
+        <small className="px-faint" data-testid={`px-h-inc-word-${i.id}`}>{[i.since ? dayTime(i.since) : "", spanWords(i.duration_s), i.outcome].filter(Boolean).join(" · ")}
+          {i.closes_at ? ` — by ${clockTime(i.closes_at)}` : ""}</small>
         <Flow testid={`px-h-inc-flow-${i.id}`} nodes={i.mini.map((m) => {
           const look = NODE_LOOK[m.type] ?? NODE_LOOK[m.state];
           const I = look?.icon;
           return {
             // THE REAL TIME of each step (fired, mitigation live, recovery verified) on hover.
-            label: m.label, state: m.state, title: m.at ? `${m.label} · ${dayTime(m.at)}` : undefined,
+            label: m.label, state: m.state, title: m.at ? `${m.label} · ${dayTime(m.at)}` : m.label,
             type: m.type === "agent" ? "agent" : look?.t ?? (m.state === "done" ? "done" : m.state),
             icon: m.type === "agent" ? <Face agent={{ name: "Beacon", role_key: "sre" }} size={16} />
               : I ? <I size={11} aria-hidden /> : m.state === "done" ? <Check size={11} weight="bold" aria-hidden /> : undefined,
@@ -210,19 +207,6 @@ function NoIncidents() {
   );
 }
 
-/** One alert rule: its name, severity and where it stands (firing / resolved at … / ok · quiet). */
-function AlertLineRow({ x }: { x: AlertLine }) {
-  const when = x.state === "firing" ? `firing since ${x.since ? clockTime(x.since) : "now"}` : x.state === "resolved" ? `resolved ${x.since ? clockTime(x.since) : ""}`.trim() : x.quiet || "quiet";
-  return (
-    <div className="px-li px-h-al" data-testid={`px-h-al-${x.id}`} data-s={x.state}>
-      <span className="px-dot" data-round data-s={x.state === "firing" ? "bad" : x.state === "resolved" ? "done" : undefined} aria-hidden />
-      <span style={{ minWidth: 0 }}><b className="px-ell" title={x.condition || undefined}>{x.href ? <PxLink href={x.href} className="">{x.label}</PxLink> : x.label}</b>
-        <small>{x.severity} · {when}</small></span>
-      <Tag tone={x.state === "firing" ? "red" : x.state === "resolved" ? "green" : "idle"}>{x.state}</Tag>
-    </div>
-  );
-}
-
 /** Beacon's monitoring pack: who keeps it, how many rules, where they live, what they watch. */
 function Monitoring({ h }: { h: HealthView }) {
   const m = h.monitoring_pack;
@@ -250,6 +234,40 @@ function Monitoring({ h }: { h: HealthView }) {
                  : "Beacon installs a monitoring pack (uptime, 5xx, latency, disk, TLS) on the first deploy."}>
           {m?.href ? <PxLink href={m.href} testid="px-h-pack">Alerts in Observability</PxLink> : null}
         </Empty>
+      )}
+    </section>
+  );
+}
+
+/**
+ * THIS PROJECT'S ALERTS — THE SAME LIST AS OBSERVABILITY › ALERTS (operator, 2026-11-07: "what is
+ * Alerts under Observability vs Alerts under Health — are they same?"). One component
+ * (AlertsPanel) and one data source: here it is this project's slice (its apps, never BOSS's own
+ * platform), there every app and BOSS itself. The lead line says so and links across.
+ */
+function ProjectAlerts({ ctx }: { ctx: PxCtx }) {
+  const [f, setFState] = React.useState<AlertsFilterState>(NO_ALERT_FILTER);
+  const demo = isPxDemo();
+  const setF = (patch: Record<string, string | null>) => setFState((cur) => {
+    const next = { ...cur } as Record<string, unknown>;
+    for (const [k, v] of Object.entries(patch)) {
+      next[k] = k === "astate" ? (v ?? "firing") : k === "aatt" ? v === "1" : k === "aflap" || k === "aack" ? (v === null ? null : v === "true") : v;
+    }
+    return next as AlertsFilterState;
+  });
+  const obs = (patch: Record<string, string>) =>
+    navigateTo(pxHref(`?${new URLSearchParams({ area: "observability", project_id: ctx.projectId, ...patch }).toString()}`));
+  return (
+    <section className="px-card" aria-labelledby="px-h-al" data-testid="px-h-alerts">
+      <div className="px-card-h"><Ico icon={BellRinging} c="amber" /><h2 id="px-h-al">Alerts</h2></div>
+      {demo ? <p className="px-faint" data-testid="px-h-al-demo">Sample mode: this project&apos;s alerts load from the engine.</p> : (
+        <div className="inf obs">
+          <AlertsPanel where={{ kind: "project", projectId: ctx.projectId }} projectId={ctx.projectId} actor={ctx.actor} f={f} setF={setF}
+                       otherHref={`?area=observability&project_id=${encodeURIComponent(ctx.projectId)}&view=alerts`}
+                       openApp={(a) => obs({ app: a.targetId, atab: "alerts" })}
+                       openIncident={(i) => (i.subjectId ? () => obs({ app: i.subjectId!, inc: i.id }) : null)}
+                       openAlertIncident={(a) => obs({ app: a.targetId, ...(a.incident ? { inc: a.incident.id } : {}) })} />
+        </div>
       )}
     </section>
   );

@@ -412,6 +412,12 @@
 .obs-attention-n { font-size: 1.1rem; font-weight: 750; font-variant-numeric: tabular-nums; }
 .obs-attention:not([data-n="0"]) .obs-attention-n { color: var(--red); }
 .obs-alerts-lead { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+/* What the alerts list covers ("All apps · 6 · and BOSS itself" / "This project · HelpDesk") and
+   the way to the other scope of the same list. */
+.obs-scope { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; font-size: var(--fs-meta); color: var(--ink); min-width: 0; }
+.obs-scope b { font-weight: 650; }
+a.obs-chip { text-decoration: none; color: inherit; }
+a.obs-chip:hover { border-color: var(--accent-line, var(--accent)); }
 .obs-rfacts { grid-area: facts; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .obs-facts { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin: 0; font-size: var(--fs-meta); min-width: 0; }
 .obs-fact { display: inline-flex; align-items: baseline; gap: 4px; min-width: 0; cursor: help; }
