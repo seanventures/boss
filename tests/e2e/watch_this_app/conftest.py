@@ -178,11 +178,25 @@ def revoke_grants() -> None:
         "WHERE user_principal_id = 'usr_asdev' AND status = 'active'")
 
 
+def unseed() -> None:
+    """The two apps the suite seeded go too, so another suite on the same database (Add a
+    server's deployments) starts from the project as it was."""
+    reset()
+    ids = [STAGING, PROD]
+    for table, col in (("deployment_health_samples", "deployment_target_id"), ("deployment_runs", "deployment_target_id"),
+                       ("monitored_services", "target_id"), ("app_metric_scrapes", "target_id")):
+        try:
+            sql(f"DELETE FROM {table} WHERE {col} = ANY(:ids)", ids=ids)
+        except Exception:  # noqa: BLE001 — a table (or column) this install does not have
+            pass
+    sql("DELETE FROM deployment_targets WHERE id = ANY(:ids)", ids=ids)
+
+
 @pytest.fixture(scope="session", autouse=True)
 def seeded():
     seed()
     yield
-    reset()
+    unseed()
 
 
 @pytest.fixture(autouse=True)
