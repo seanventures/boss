@@ -14,8 +14,13 @@ Environment (the suite is skipped without the first two):
   BOSS_E2E_API        the API it proxies to, e.g. http://127.0.0.1:8843 (read-backs of what
                       Create and start made: GET /v1/projects/{id}/add-project/started)
   BOSS_E2E_DEV_SEAMS  "1" when the API is the dev launcher with its /__dev/state seam (second
-                      factor fresh/lapsed, model cli/none/slow, readiness refusal). Tests that
-                      need a seam are skipped without it.
+                      factor fresh/lapsed, model cli/none/slow, readiness refusal; local-first:
+                      GitHub through the e2e fake, offline). Tests that need a seam are skipped
+                      without it.
+
+TWO DOORS (BOSSAPP-916): `open_sheet("idea"|"new")` opens Start a new app, `("import"|
+"existing")` Bring existing code, `("1"|"sample")` the two doors; `pick_door()` presses one.
+tests/e2e/local_first reuses this harness for the local-first use cases.
   BOSS_E2E_DATABASE_URL  optional: the API's database, to count projects by name (one press,
                       one project). Never printed.
   BOSS_E2E_VIEWPORTS  default "1440,390".

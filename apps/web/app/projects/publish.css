@@ -73,6 +73,7 @@
   .pub-sheet { width: 100vw; min-height: 100dvh; border-radius: 0; border: 0; }
   .pub-route { flex-direction: column; } .pub-arrow { transform: rotate(90deg); }
   .pub-primary { flex: 1 1 100%; justify-content: center; }
+  .pub-f > .pub-spacer { display: none; }
 }
 
 /* the header's quiet chip */

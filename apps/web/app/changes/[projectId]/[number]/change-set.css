@@ -70,6 +70,13 @@
 .cs-card-h > svg { color: var(--muted); }
 .cs-empty { margin: 4px 0; color: var(--faint); font-size: var(--fs-ui); }
 .cs-body p { margin: 0; white-space: pre-wrap; color: var(--ink-soft); overflow-wrap: anywhere; }
+.cs-body-md { color: var(--ink-soft); font-size: var(--fs-body); overflow-wrap: anywhere; min-width: 0; }
+.cs-body-md :is(h1, h2, h3, h4) { font-size: var(--fs-title); margin: 10px 0 4px; color: var(--ink); }
+.cs-body-md :is(p, ul, ol) { margin: 4px 0; white-space: normal; }
+.cs-body[data-clamp] .cs-body-md { max-height: 9.5em; overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, #000 60%, transparent); mask-image: linear-gradient(to bottom, #000 60%, transparent); }
+.cs-more { margin-top: 6px; background: none; border: 0; padding: 0; color: var(--accent-text); font: inherit; font-size: var(--fs-meta); cursor: pointer; }
+.cs-more:hover { text-decoration: underline; }
 
 /* files */
 .cs-add { color: var(--green); font-family: var(--mono); font-size: var(--fs-meta); }

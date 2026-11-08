@@ -540,12 +540,13 @@ def machine_view(project_id: str, found: Mapping[str, Any]) -> dict[str, Any]:
         if ch.get("ok") is not False:
             continue
         if key == "model" and not found.get("online"):
+            # The line reads on into its link: "… connect a local engine in Repo and models ›".
             cant.append({"key": key, "line": "Offline: the model is remote — connect a local "
-                                             "engine in Repo and models", "href": models,
-                         "link": "Repo and models"})
+                                             "engine", "href": models,
+                         "link": "in Repo and models"})
         elif key == "model":
-            cant.append({"key": key, "line": "No model can build yet — pick one in Repo and "
-                                             "models", "href": models, "link": "Repo and models"})
+            cant.append({"key": key, "line": "No model can build yet — pick one", "href": models,
+                         "link": "in Repo and models"})
         elif key == "git":
             cant.append({"key": key, "line": "git is not installed here — install git, then run "
                                              "onboarding again", "href": None, "link": None})

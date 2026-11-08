@@ -25,6 +25,7 @@ import type { MePermissionsResponse, MeResponse } from "../../../../lib/identity
 import { idGet, idPost, refusalSentence } from "../../../../lib/identity/api";
 import { changeSetPath, parseChangeSet, type ChangeSet, type ChangeSetNote } from "../../../../lib/repo-links";
 import { commentsByLine, highlight, langOf, parseUnifiedDiff, type DiffFile } from "../../../../lib/diff-view";
+import { Markdown } from "../../../markdown";
 import "./change-set.css";
 
 /** Files open on arrival: the first few, so the diff is there without a click. */
@@ -97,7 +98,7 @@ function ChangeSetPage({ projectId, number }: { projectId: string; number: strin
           </nav>
           <div className="cs-grid">
             <div className="cs-main">
-              {cs.body ? <section className="cs-card cs-body"><p data-user-text>{cs.body}</p></section> : null}
+              {cs.body ? <Body text={cs.body} /> : null}
               <Files cs={cs} files={files} inline={inline} />
               <Commits cs={cs} />
               <Review notes={cs.review} />
@@ -290,6 +291,18 @@ function Review({ notes }: { notes: ChangeSetNote[] }) {
           ) : null}
         </article>
       )) : <p className="cs-empty">No review yet: the review panel comments here.</p>}
+    </section>
+  );
+}
+
+/** The change's description, as written (Markdown), folded past a few lines with Show all. */
+function Body({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  const long = text.split("\n").length > 8 || text.length > 600;
+  return (
+    <section className="cs-card cs-body" data-testid="change-set-body" data-clamp={long && !open ? "" : undefined}>
+      <div className="cs-body-md" data-user-text><Markdown text={text} /></div>
+      {long ? <button type="button" className="cs-more" data-testid="change-set-body-more" onClick={() => setOpen((v) => !v)}>{open ? "Show less" : "Show all"}</button> : null}
     </section>
   );
 }

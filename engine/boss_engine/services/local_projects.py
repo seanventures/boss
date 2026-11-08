@@ -249,9 +249,21 @@ def list_import_folders(settings: Any, query: str = "", *, limit: int = 30) -> d
         if facts["git"]:
             branch = local_repo.git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=folder,
                                     check=False).strip() or None
+        files = _count_files(folder)
+        # The same reading a server's folder gets (host_folder.parse): its stack and build from
+        # the top-level files, so the Repo summary says what it is before anything is imported.
+        from .project_experience.host_folder import parse as _parse
+
+        try:
+            top = sorted(p.name for p in folder.iterdir() if p.name != ".git")[:200]
+        except OSError:
+            top = []
+        read = _parse(str(folder), "DIR\n" + ("GIT\n" if facts["git"] else "")
+                      + "".join(f"TOP {name}\n" for name in top) + f"FILES {files}\n")
         items.append({"path": str(folder.relative_to(base)), "name": folder.name,
                       "git": facts["git"], "github": facts["github"], "branch": branch,
-                      "files": _count_files(folder)})
+                      "files": files, "top": read.get("top") or [], "stack": read.get("stack") or [],
+                      "build": read.get("build")})
     return {"configured": True, "root": str(allowed), "items": items}
 
 

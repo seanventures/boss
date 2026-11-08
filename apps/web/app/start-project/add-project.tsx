@@ -48,7 +48,7 @@ import { templatesApi } from "../../lib/templates";
 import { ageShort, hostFolders, type FolderFacts, type FolderHost } from "../../lib/host-folder";
 import { accountsOf, allPresets, createFresh, installWideRefusal, nameFromIdea, projectPageHref, type Preset } from "../../lib/start-project";
 import {
-  addProjectApi, bringChoices, defaultWhere, detect, doorOf, estimateTip, estimateWords, hostPort, lineCount, nameFromTitle, repoSlug,
+  addProjectApi, bringChoices, defaultWhere, detect, doorOf, estimateTip, estimateWords, hostPort, lineCount, nameFromTitle, nextFreeName, repoSlug,
   type Brief, type BriefField, type Bring, type Door, type Kind, type LocalFolder, type Preview, type RepoCheck, type RepoRead, type Understanding,
 } from "../../lib/add-project";
 import { normalizeChannel } from "../workflows/compose-plan";
@@ -307,7 +307,8 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
       const f = localRows.find((x) => x.path === row.id);
       if (!f) return;
       setPickedFolder({ source: "local", path: f.path });
-      setFolder({ path: f.path, exists: true, git: f.git, github: f.github, branch: f.branch, files: f.files, suggested_name: nameFromFolder(f.name) });
+      setFolder({ path: f.path, exists: true, git: f.git, github: f.github, branch: f.branch, files: f.files, top: f.top ?? [], stack: f.stack ?? [],
+                  build: f.build ?? null, suggested_name: nameFromFolder(f.name) });
       setFolderError(null);
       auto({ name: nameFromFolder(f.name) });
       return;
@@ -399,7 +400,12 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
   useEffect(() => {
     if (!plan.newRepo.owner && account) setPlanState((p) => ({ ...p, newRepo: { ...p.newRepo, owner: account } }));
   }, [account, plan.newRepo.owner]);
-  const repoName = plan.newRepo.name || repoSlug(plan.name.trim() || nameFromIdea(ideaText) || "app");
+  // The name BOSS proposes (from the project's name); taken on GitHub, it moves to name-2, name-3 …
+  // on its own. A name the person typed is theirs: never changed.
+  const [bump, setBump] = useState(0);
+  const slug = repoSlug(plan.name.trim() || nameFromIdea(ideaText) || "app");
+  useEffect(() => { setBump(0); }, [slug]);
+  const repoName = plan.newRepo.name || nextFreeName(slug, bump);
   const [repoCheck, setRepoCheck] = useState<RepoCheck | null>(null);
   const [checking, setChecking] = useState(false);
   const wantCheck = door === "new" && hasGitHub && !!plan.newRepo.owner && !!repoName
@@ -423,6 +429,11 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
   // The default: on this machine with no GitHub account (or when BOSS cannot make the repo),
   // else a new GitHub repo. Never over the person's own pick.
   useEffect(() => { auto({ where: defaultWhere(hasGitHub, repoCheck) }); }, [hasGitHub, repoCheck, auto]);
+  useEffect(() => {
+    if (repoCheck?.reason === "exists" && !plan.newRepo.name && repoCheck.full_name === `${plan.newRepo.owner}/${repoName}` && bump < 20) {
+      setBump((b) => b + 1);
+    }
+  }, [repoCheck, plan.newRepo.name, plan.newRepo.owner, repoName, bump]);
 
   // ── the six boxes' derived values ──────────────────────────────────────────────────────
   const workflow = preview?.workflows.find((w) => w.key === plan.workflow) ?? preview?.workflows.find((w) => w.key === preview.default_workflow) ?? null;
@@ -653,7 +664,7 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
 
   const foot = (
     <div className="npx-foot">
-      {door === "choose" ? <span className="npx-faint npx-small" data-testid="ap-doors-note"><Laptop size={12} aria-hidden /> Code can stay on this machine · publish to GitHub any time</span>
+      {door === "choose" ? <span className="npx-faint npx-small npx-doors-note" data-testid="ap-doors-note"><Laptop size={12} aria-hidden /><span>Code can stay on this machine · GitHub any time</span></span>
         : cost ? <span className="npx-tag npx-cost" data-tone="cost" data-testid="ap-cost" title={estimateTip(workflow)}>{cost}</span>
         : <span className="npx-tag npx-cost" data-tone="cost" title="No run of this workflow here yet">cost after its first run</span>}
       {door !== "choose" ? <span className="npx-faint npx-hide-s"><ShieldCheck size={12} aria-hidden /> Nothing reaches prod without you</span> : null}
@@ -830,6 +841,9 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
                   </button>
                 );
               })}
+              {kind === "folder" && localFolders && !localFolders.configured ? (
+                <p className="npx-faint npx-pad" data-testid="ap-local-off"><Laptop size={12} aria-hidden /> This machine: {localFolders.words || "importing a folder here is off on this install."}</p>
+              ) : null}
               {folderRows.length ? <div className="npx-grp"><HardDrives size={12} aria-hidden />Folders on servers</div> : null}
               {folderRows.map((f, j) => {
                 const i = repoRows.length + localRows.length + j;

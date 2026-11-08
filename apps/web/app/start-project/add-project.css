@@ -232,6 +232,8 @@
 .npx-pop-ico { width: 24px; height: 24px; border-radius: 7px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent-text); }
 .npx-pop-anchor { font-size: var(--fs-label); color: var(--faint); margin-left: auto; }
 .npx-pop-b { display: flex; flex-direction: column; gap: 8px; max-height: 52vh; overflow-y: auto; }
+/* A long popover scrolls; its parts never shrink to slivers (the Code popover's One · Several tabs did). */
+.npx-pop-b > * { flex-shrink: 0; }
 .npx-pop-b p { margin: 0; font-size: var(--fs-meta); }
 .npx-pop-f { display: flex; align-items: center; gap: 8px; border-top: 1px solid var(--border); padding-top: 8px; font-size: var(--fs-tag); }
 .npx-list { display: flex; flex-direction: column; gap: 4px; }
@@ -410,6 +412,7 @@
   border: 1px solid var(--border-strong); background: var(--surface); white-space: nowrap; }
 .npx-door-flow i[data-you] { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 50%, transparent); background: var(--amber-soft); }
 .npx-door-where { display: flex; gap: 6px; flex-wrap: wrap; margin-top: auto; padding-top: 4px; }
+.npx-doors-note { display: inline-flex !important; align-items: center; gap: 5px; min-width: 0; }
 @media (max-width: 760px) {
   .npx-doors { grid-template-columns: minmax(0, 1fr); gap: 10px; } .npx-door { padding: 14px; }
   /* A phone's head inside a door: ← · the door's name · Try a sample · ✕ (the sheet's title stays

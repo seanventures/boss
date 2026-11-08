@@ -78,6 +78,7 @@ def test_the_import_directory_lists_its_folders_with_their_facts(client, world, 
     root = tmp_path / "import"
     (root / "notes" / "src").mkdir(parents=True)
     (root / "notes" / "src" / "a.js").write_text("x\n")
+    (root / "notes" / "package.json").write_text('{"name":"notes"}\n')
     (root / "notes" / "node_modules" / "dep").mkdir(parents=True)
     (root / "notes" / "node_modules" / "dep" / "i.js").write_text("y\n")
     _git(root / "notes", "init", "-q", "-b", "main")
@@ -96,7 +97,8 @@ def test_the_import_directory_lists_its_folders_with_their_facts(client, world, 
     by = {i["name"]: i for i in body["items"]}
     assert body["configured"] and set(by) == {"notes", "plain"}, "hidden folders are not offered"
     assert by["notes"]["git"] and by["notes"]["github"] == "acme/notes" and by["notes"]["branch"] == "main"
-    assert by["notes"]["files"] == 1, "dependencies are not counted"
+    assert by["notes"]["files"] == 2, "dependencies are not counted"
+    assert "src" in by["notes"]["top"] and by["notes"]["stack"], "read like a server's folder: its stack"
     assert not by["plain"]["git"] and by["plain"]["github"] is None and by["plain"]["files"] == 1
     assert "tok@" not in json.dumps(body), "a credential in a remote is never shown"
     with world.acting_as(world.ctx(world.viewer)):

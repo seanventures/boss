@@ -180,8 +180,15 @@ export function repoSlug(name: string): string {
  *  GitHub repo — unless BOSS cannot make one (its check said so): then on this machine. */
 export function defaultWhere(hasGitHub: boolean, check: RepoCheck | null): Where {
   if (!hasGitHub) return "local";
-  if (check && !check.ok) return "local";
+  // Only what BOSS cannot do moves the default (no credential, a personal account …); a name
+  // that is taken is renamed for the person (nextFreeName), and GitHub not answering is not a no.
+  if (check && !check.ok && !["exists", "failed"].includes(check.reason)) return "local";
   return "github_new";
+}
+
+/** The repo name BOSS proposes when the one from the brief is taken: name-2, name-3 … */
+export function nextFreeName(slug: string, bump: number): string {
+  return bump ? `${slug}-${bump + 1}` : slug;
 }
 
 /** The ways a picked folder can come in, and the one picked for the person. A GitHub remote
@@ -196,7 +203,9 @@ export function bringChoices(source: "local" | "host", github: string | null | u
   return { choices, pick };
 }
 
-export type LocalFolder = { path: string; name: string; git: boolean; github: string | null; branch: string | null; files: number };
+export type LocalFolder = { path: string; name: string; git: boolean; github: string | null; branch: string | null; files: number;
+  /** Read the way a server's folder is: its top-level names, stack and build words. */
+  top?: string[]; stack?: string[]; build?: string | null };
 export type LocalFolders = { configured: boolean; root?: string; items: LocalFolder[]; words?: string };
 export type RepoCheck = { ok: boolean; full_name: string; reason: string; words: string; exists: boolean; owner_type: string | null };
 

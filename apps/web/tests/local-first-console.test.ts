@@ -4,7 +4,7 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
-import { bringChoices, defaultWhere, doorOf, repoCheckFix, repoSlug, type RepoCheck } from "../lib/add-project";
+import { bringChoices, defaultWhere, doorOf, nextFreeName, repoCheckFix, repoSlug, type RepoCheck } from "../lib/add-project";
 import { publishSteps } from "../lib/local-first";
 import { createFresh, stepFromParam } from "../lib/start-project";
 
@@ -39,6 +39,16 @@ describe("where a new app's code lives", () => {
     expect(defaultWhere(true, null)).toBe("github_new");
     expect(defaultWhere(true, check({ ok: true }))).toBe("github_new");
     expect(defaultWhere(true, check({ reason: "personal_account" }))).toBe("local");
+    expect(defaultWhere(true, check({ reason: "no_github_credential" }))).toBe("local");
+    // A taken name is renamed for the person, and GitHub not answering is not a no.
+    expect(defaultWhere(true, check({ reason: "exists" }))).toBe("github_new");
+    expect(defaultWhere(true, check({ reason: "failed" }))).toBe("github_new");
+  });
+
+  it("proposes name-2, name-3 … when the name from the brief is taken", () => {
+    expect(nextFreeName("shop", 0)).toBe("shop");
+    expect(nextFreeName("shop", 1)).toBe("shop-2");
+    expect(nextFreeName("shop", 2)).toBe("shop-3");
   });
 
   it("gives each GitHub refusal its one fix", () => {

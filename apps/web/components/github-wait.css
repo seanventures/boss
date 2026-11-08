@@ -1,8 +1,9 @@
 /* GitHubWait (components/github-wait.tsx): calm, never red. Theme tokens only. */
-.gw { display: inline-flex; align-items: baseline; gap: 5px; flex-wrap: wrap; min-width: 0; max-width: 100%;
-  font-size: var(--fs-ui); color: var(--muted); }
-.gw-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--blue, var(--accent-text)); flex: none; align-self: center;
-  animation: gw-breathe 2.4s ease-in-out infinite; }
+/* One sentence that flows and wraps like words (a phone row read as three stacked fragments). */
+.gw { display: inline; min-width: 0; max-width: 100%; font-size: var(--fs-ui); color: var(--muted); overflow-wrap: anywhere; }
+.gw > span + span { margin-left: 5px; }
+.gw-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--blue, var(--accent-text)); vertical-align: middle;
+  margin-right: 1px; animation: gw-breathe 2.4s ease-in-out infinite; }
 .gw-label { font-weight: 600; color: var(--blue, var(--accent-text)); white-space: nowrap; }
 .gw-detail { overflow-wrap: anywhere; }
 .gw-next { white-space: nowrap; font-variant-numeric: tabular-nums; }
