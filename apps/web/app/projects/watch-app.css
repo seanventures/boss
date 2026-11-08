@@ -80,7 +80,7 @@
 .wa-gate { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; padding: 10px 12px; border: 1px solid var(--amber);
   border-radius: var(--r-lg, var(--r)); background: var(--amber-soft); min-width: 0; font-size: var(--fs-body); }
 .wa-gate-t { flex: 1 1 240px; min-width: 0; overflow-wrap: anywhere; }
-.wa-code-in { width: 9ch; min-height: 32px; padding: 2px 8px; border: 1px solid var(--amber); border-radius: var(--r); background: var(--surface);
+.wa-code-in { width: 12ch; min-height: 32px; padding: 2px 8px; border: 1px solid var(--amber); border-radius: var(--r); background: var(--surface);
   color: var(--ink); font-family: var(--mono); font-size: var(--fs-body); letter-spacing: .2em; }
 .wa-btn-amber { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 4px 12px; border: 0; border-radius: var(--r);
   background: var(--amber); color: var(--accent-ink); font: inherit; font-size: var(--fs-ui); font-weight: 700; cursor: pointer; }
