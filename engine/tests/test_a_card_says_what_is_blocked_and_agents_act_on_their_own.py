@@ -803,8 +803,8 @@ def test_a_batch_names_its_work_and_each_entry_has_its_own_finding_and_answers(e
                             {"d": card_id}).mappings().one()
             shown = needs.card(c, project, dict(row))
         assert board.get(eng.connect(), second["id"])["needs_you_decision_id"] == card_id
-        assert card["question"] == ("2 squads ran out of budget: this install, Bump esbuild "
-                                    "past 0.21.5 build")
+        assert card["question"] == ("2 squads ran out of budget: Updates restarted a build 2 "
+                                    "times, Bump esbuild past 0.21.5 build")
         entries = card["recommendation"]["batch"]
         assert [e["detail"] for e in entries] == [
             "Found so far: The build was restarted by an update",
@@ -925,10 +925,30 @@ def test_an_always_on_card_has_a_short_title_naming_its_work_and_keeps_its_quest
         row = dict(c.execute(text("SELECT * FROM decisions WHERE id = :d"),
                              {"d": card_id}).mappings().one())
         shown = needs.card(c, project, row)
-    assert shown["label"] == "This install: squad out of budget"
+    assert shown["label"] == "Updates restarted a build 2 times: squad out of budget"
     assert shown["question"] == row["question"] and " — Found so far" not in shown["detail"]
     assert shown["detail"].startswith("Found so far: The two restarts")
     assert shown["detail"].endswith("…") and "nothing to d…" not in shown["detail"]
     assert asks.card_short([{"ask_kind": "budget", "name": "this install"},
                             {"ask_kind": "budget", "name": "esbuild bump"}]) == \
         "2 squads out of budget"
+
+
+def test_no_card_subject_is_a_bare_place(eng, project):  # noqa: F811
+    """The operator: "Squad is stuck on this install" names a place, not what is wrong. An
+    install-wide item names its problem from its own title, on every card, entry and title."""
+    bare = re.compile(r"\b(this install|this project|this host)\b|^boss$", re.I)
+    with eng.begin() as c:
+        add_roles(c, project, INFRA_ROLES)
+        items = [open_item(c, project, task_class="system_health", fingerprint=f"fp:{ref}",
+                           title=title, subject_ref=ref)["item"]
+                 for ref, title in (("host:install", "Updates restarted a build 2 times in an hour"),
+                                    ("host:", "Disk 92% full on the data volume"))]
+        for item in items:
+            subject = asks.subject_words(c, item)
+            q = asks.question_entry(c, item, actor=INFRA, reason=REASON)
+            b = asks.budget_entry(c, {**item, "cost_usd_micros": 1_600_000}, actor=INFRA)
+            for said in (subject, q["question"], q["words"], b["name"], b["question"],
+                         asks.card_short([b]), asks.card_short([q])):
+                assert not bare.search(said), said
+    assert asks.subject_words(eng.connect(), items[0]) == "Updates restarted a build 2 times"

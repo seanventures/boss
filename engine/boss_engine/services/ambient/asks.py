@@ -150,6 +150,11 @@ def place_words(connection: Connection, item: Mapping[str, Any]) -> str:
     return name + (f" ({env})" if env else "")
 
 
+#: Places, not subjects: a card about one of these names what is wrong there instead.
+BARE_PLACES = frozenset({"this install", "the install", "install", "this project",
+                         "the project", "boss", "this host", "host"})
+
+
 def subject_words(connection: Connection, item: Mapping[str, Any]) -> str:
     """What an item is about, in a few plain words, from its rows."""
     dep = dependency_words(connection, item)
@@ -158,8 +163,17 @@ def subject_words(connection: Connection, item: Mapping[str, Any]) -> str:
     if item.get("task_class") in ("incident_response", "incident_staging_mitigation"):
         return place_words(connection, item)
     name = board.plain_subject(item)
-    if name:
+    if name and name.lower() not in BARE_PLACES:
         return name
+    if name:
+        # A PLACE IS NOT A SUBJECT. An install-wide item (the system doctor's, host:install)
+        # names what is wrong, from its own title: "Updates restarted a build 2 times", never
+        # "this install" (the operator: "Squad is stuck on this install" says nothing).
+        from ..project_experience.titles import shorten
+
+        said = re.sub(r"[“”\"]", "", shorten(item.get("title"), 6)).strip()
+        if said:
+            return said
     title = scrub(item.get("title"), 80)
     words = title.split()
     return " ".join(words[:8]) + ("…" if len(words) > 8 else "")
@@ -325,8 +339,7 @@ def entry_name(connection: Connection, item: Mapping[str, Any]) -> str:
         name, noun = stalled_name(connection, item)
         name = re.sub(r"[“”\"]", "", name)
         return f"{name} {noun}".strip()
-    return board.plain_subject(item) or " ".join(
-        re.sub(r"[“”\"]", "", scrub(item.get("title"), 80)).split()[:4])
+    return re.sub(r"[“”\"]", "", subject_words(connection, item)).strip()
 
 
 def budget_entry(connection: Connection, item: Mapping[str, Any], *, actor: str,
