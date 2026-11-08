@@ -156,5 +156,14 @@ def test_operator_boundary_preserves_human_and_api_policy_gates():
     # subscription sign-in, BOSSAPP-769); starting and polling one stay api_policy_gated.
     assert rows[("DELETE", "/v1/setup/sign-in/{sign_in_id}")]["mcp_status"] == (
         "operator_only_unavailable")
+    # +9 operator-only (matrix regenerated 2026-11-08, after the audit script's pydantic-v2
+    # crash was fixed): a person's acts, kept out of MCP — Delete project, merging a local
+    # change set (BOSSAPP-919: Merge is a person's approval), pushing waiting work to GitHub
+    # (BOSSAPP-922), decide/apply, a design revise, a roadmap reject, removing an external
+    # agent, revoking an approval delegation and rotating demo logins.
+    for key in (("POST", "/v1/projects/{project_id}/delete"),
+                ("POST", "/v1/projects/{project_id}/local-changes/{number}/merge"),
+                ("POST", "/v1/repos/push-pending/execute")):
+        assert rows[key]["mcp_status"] == "operator_only_unavailable"
     assert sum(row["mcp_status"] == "operator_only_unavailable"
-               for row in community["operations"]) == 72
+               for row in community["operations"]) == 81
