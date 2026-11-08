@@ -1023,8 +1023,12 @@ if [[ -d "$INSTALL_DIR/.git" || -f "$INSTALL_DIR/.git" ]]; then
           die "Recovery backup failed; existing source, credentials and volumes were left unchanged. Check the backup error above, start the installed database if needed, then retry."
         fi
         rm -rf "$_backup_bundle"
+        # A manifest that names a local repositories volume (BOSSAPP-915) must carry repos.tar:
+        # until a local project is published, that archive is its code's only other copy.
         [[ -s "$_recovery_backup/.env" && -s "$_recovery_backup/boss.dump" &&
            -s "$_recovery_backup/artifacts.tar" &&
+           ( ! -f "$_recovery_backup/manifest.json" || -s "$_recovery_backup/repos.tar" ||
+             -z "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("repos_volume") or "")' "$_recovery_backup/manifest.json" 2>/dev/null)" ) &&
            "$(cat "$_recovery_backup/source-commit" 2>/dev/null)" == "$_installed_commit" ]] ||
           die "Recovery backup is incomplete or for another source commit; existing checkout left unchanged."
         ui_ok "Private recovery backup: $_recovery_backup"

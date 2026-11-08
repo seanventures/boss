@@ -168,13 +168,15 @@ def test_actual_role_contracts_guard_before_application_or_api_initialization():
     assert config["services"]["api"]["cap_add"] == ["NET_ADMIN"]
 
 
-def resolved_config(project):
-    volumes = {"boss_community_" + k: {"name": project + "_boss_community_" + k} for k in ("pg", "identity", "artifacts", "recovery")}
+def resolved_config(project, repos=False):
+    kinds = ("pg", "identity", "artifacts", "recovery") + (("repos",) if repos else ())
+    volumes = {"boss_community_" + k: {"name": project + "_boss_community_" + k} for k in kinds}
     mount = {"type": "volume", "source": "boss_community_recovery", "target": recovery.ROOT, "read_only": True}
     services = {role: {"image": "fixture-" + role, "volumes": [copy.deepcopy(mount)], "command": command} for role, command in recovery.ROLES.items()}
     for role in ("worker", "egress", "mcp-tools"):
         services[role]["entrypoint"] = ["python3", recovery.GUARD]
-    services["api"]["volumes"] += [{"type": "volume", "source": "boss_community_" + k, "target": "/var/lib/boss/" + k} for k in ("identity", "artifacts")]
+    services["api"]["volumes"] += [{"type": "volume", "source": "boss_community_" + k, "target": "/var/lib/boss/" + k}
+                                   for k in ("identity", "artifacts") + (("repos",) if repos else ())]
     services["db"] = {"image": "postgres:16-alpine", "volumes": [{"type": "volume", "source": "boss_community_pg", "target": "/var/lib/postgresql/data"}]}
     return {"services": services, "volumes": volumes}
 
@@ -313,6 +315,18 @@ elif a[0] == 'run':
         volume = root / 'actual-recovery-volume'
         volume.mkdir(exist_ok=True)
         (volume / 'hold.json').write_text(data)
+    elif 'tar' in a:
+        # A volume is a directory here, so a restored repository can be read back for real.
+        import io, tarfile
+        mount = next(v for v in a if v.startswith('type=volume,src='))
+        volume = root / 'volumes' / mount.split('src=', 1)[1].split(',', 1)[0]
+        volume.mkdir(parents=True, exist_ok=True)
+        if '-xf' in a:
+            with tarfile.open(fileobj=io.BytesIO(sys.stdin.buffer.read())) as archive:
+                archive.extractall(volume)
+        else:
+            with tarfile.open(fileobj=sys.stdout.buffer, mode='w|') as archive:
+                archive.add(volume, arcname='.')
     else: sys.stdin.read()
 elif a[0] == 'compose':
     if 'config' in a:
@@ -479,7 +493,7 @@ def test_base_only_startup_interleaving_at_first_usable_target_env(restore_fixtu
             shutil.copy2(INSTALL / name, tools / name)
         text = (INSTALL / "restore.sh").read_text()
         start = text.index("# Only now publish startup configuration.")
-        end = text.index("for kind in identity artifacts;", start)
+        end = text.index("RESTORE_KINDS=(identity artifacts)", start)
         publication = text[start:end]
         text = text[:start] + text[end:]
         # Change only publication order: the same guard/marker/image behavior.
@@ -508,3 +522,69 @@ def test_image_identity_interface_and_revision_must_match(field):
     metadata[field] = "wrong"
     with pytest.raises(SystemExit):
         recovery.qualify_image(REPO, manifest, metadata, recovery.source_hashes(REPO))
+
+
+# ── LOCAL-FIRST PROJECTS (BOSSAPP-915): a local project's repository is restored, and checked ──
+
+def _repos_archive(root, backup):
+    """A real bare repository in the archive, laid out as BOSS keeps it."""
+    def run(*args, cwd):
+        subprocess.run([str(v) for v in args], cwd=cwd, check=True, capture_output=True)
+    vcs = "g" + "it"
+    volume = root / "source-repos"
+    bare = volume / "prj_local1" / "notes.git"
+    bare.parent.mkdir(parents=True)
+    run(vcs, "init", "--bare", "-b", "main", bare, cwd=root)
+    work = root / "work"
+    run(vcs, "clone", bare, work, cwd=root)
+    (work / "app.py").write_text("print('only copy')\n")
+    run(vcs, "add", "app.py", cwd=work)
+    run(vcs, "-c", "user.name=BOSS", "-c", "user.email=boss@example.invalid", "commit", "-m", "only copy", cwd=work)
+    run(vcs, "push", "origin", "HEAD:main", cwd=work)
+    with tarfile.open(backup / "repos.tar", "w") as out:
+        out.add(volume, arcname=".")
+    (backup / "repos.tar").chmod(0o600)
+    return vcs
+
+
+@pytest.mark.parametrize("offline", [False, True])
+def test_a_local_project_repository_is_restored_and_verified(restore_fixture, offline):
+    root, target, backup, _env = restore_fixture
+    recovery.write_json(root / "config.json", resolved_config("owned-fixture", repos=True))
+    vcs = _repos_archive(root, backup)
+    manifest = json.loads((backup / "manifest.json").read_text())
+    manifest["repos_volume"] = "owned-fixture_boss_community_repos"
+    manifest["repositories"] = ["prj_local1/notes.git"]
+    manifest["files"]["repos.tar"] = hashlib.sha256((backup / "repos.tar").read_bytes()).hexdigest()
+    recovery.write_json(backup / "manifest.json", manifest)
+    (backup / "manifest.json").chmod(0o600)
+    if offline:
+        (target / "scripts/install/recovery_guard.py").unlink()
+
+    result, trace = restore(restore_fixture, offline=offline)
+
+    assert result.returncode == 0, result.stderr
+    created = [a[-1] for a in trace if a[:2] == ["volume", "create"]]
+    assert "owned-fixture_boss_community_repos" in created
+    restored = root / "volumes" / "owned-fixture_boss_community_repos" / "prj_local1" / "notes.git"
+    log = subprocess.run([vcs, "--git-dir", str(restored), "log", "--format=%s", "main"],
+                         capture_output=True, text=True, check=True)
+    assert log.stdout.strip() == "only copy"
+    if offline:
+        base = json.loads((target / "scripts/install/community-compose.yml").read_text())
+        assert base["volumes"]["boss_community_repos"]["name"] == "owned-fixture_boss_community_repos"
+
+
+def test_restore_refuses_an_archive_with_repositories_into_a_target_without_the_volume(restore_fixture):
+    root, target, backup, _env = restore_fixture
+    _repos_archive(root, backup)
+    manifest = json.loads((backup / "manifest.json").read_text())
+    manifest["repos_volume"] = "x_boss_community_repos"
+    manifest["repositories"] = ["prj_local1/notes.git"]
+    manifest["files"]["repos.tar"] = hashlib.sha256((backup / "repos.tar").read_bytes()).hexdigest()
+    recovery.write_json(backup / "manifest.json", manifest)
+    (backup / "manifest.json").chmod(0o600)
+    result, trace = restore(restore_fixture)
+    assert result.returncode != 0 and "repositories volume" in result.stderr
+    assert not any(a[:2] == ["volume", "create"] for a in trace)
+    assert not (target / ".env").exists()

@@ -118,6 +118,9 @@ from pathlib import Path
 layout, manifest = [json.loads(Path(p).read_text()) for p in sys.argv[1:3]]
 if layout['master_key_relative'] != manifest['master_key_relative']:
     raise SystemExit('Target identity key path differs from the archive.')
+# Local projects' repositories (BOSSAPP-915) need somewhere to go in the target.
+if 'repos.tar' in manifest['files'] and not layout.get('repos_volume'):
+    raise SystemExit('The archive holds local repositories, but the target declares no repositories volume.')
 PY
 for kind in db api; do
   image_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]+"_image_id"])' "$BACKUP/manifest.json" "$kind")"
@@ -208,13 +211,33 @@ os.link(sys.argv[1], sys.argv[2])
 PY
 OVERRIDE="$INSTALL_DIR/.boss-restore-images.json"
 COMPOSE=("${DOCKER[@]}" compose -p "$PROJECT" -f "$COMPOSE_FILE" -f "$OVERRIDE" --env-file "$INSTALL_DIR/.env" --profile web --profile secrets)
-for kind in identity artifacts; do
+RESTORE_KINDS=(identity artifacts)
+if python3 -c 'import json,sys; sys.exit(0 if "repos.tar" in json.load(open(sys.argv[1]))["files"] else 1)' "$BACKUP/manifest.json"; then
+  RESTORE_KINDS+=(repos)
+fi
+for kind in "${RESTORE_KINDS[@]}"; do
   create_owned_volume "$kind"
   DATA_VOLUME="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]+"_volume"])' "$LOCK/layout.json" "$kind")"
   "${DOCKER[@]}" run --rm --network none --pull never --user 0:0 -i \
     --mount "type=volume,src=$DATA_VOLUME,dst=/restore" --entrypoint tar "$API_IMAGE" \
     -C /restore -xf - < "$BACKUP/$kind.tar"
 done
+# Every local repository the archive recorded is in the restored volume (BOSSAPP-915).
+if [[ " ${RESTORE_KINDS[*]} " == *" repos "* ]]; then
+  REPOS_DATA="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["repos_volume"])' "$LOCK/layout.json")"
+  "${DOCKER[@]}" run --rm --network none --pull never --user 0:0 \
+    --mount "type=volume,src=$REPOS_DATA,dst=/restore,readonly" --entrypoint tar "$API_IMAGE" \
+    -C /restore -cf - . </dev/null > "$LOCK/restored-repos.tar"
+  python3 - "$HELPER" "$LOCK/restored-repos.tar" "$BACKUP/manifest.json" <<'PY'
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location('backup_archive', sys.argv[1])
+helper = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(helper)
+if helper.repo_inventory(sys.argv[2]) != json.load(open(sys.argv[3]))['repositories']:
+    raise SystemExit('Restored local repositories differ from the archive; application must stay stopped.')
+PY
+  rm -f "$LOCK/restored-repos.tar"
+fi
 DATABASE_ATTEMPTED=1
 "${COMPOSE[@]}" up -d --no-deps --no-build --pull never db </dev/null
 ready=0

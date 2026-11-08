@@ -62,7 +62,7 @@ ENV_FILE="$INSTALL_DIR/.env"
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
   if [[ "$PURGE_DATA" -eq 1 ]]; then
-    echo 'Would back up the running database and artifacts (unless --skip-backup), then remove this Compose stack, its named volumes, .env, and env shim.'
+    echo 'Would back up the running database, artifacts and local repositories (unless --skip-backup), then remove this Compose stack, its named volumes, .env, and env shim.'
   else
     echo 'Would stop this Compose stack; containers, .env, volumes, images, backups, and checkout remain.'
   fi
@@ -75,7 +75,7 @@ if [[ "$PURGE_DATA" -eq 1 ]]; then
       echo 'Data purge needs a terminal confirmation or --confirm-purge DELETE-BOSS-DATA; nothing was removed.' >&2
       exit 1
     fi
-    printf 'This removes the BOSS database, identity keys, artifacts, CLI sessions, and .env. Type DELETE-BOSS-DATA: ' >/dev/tty
+    printf 'This removes the BOSS database, identity keys, artifacts, local repositories, CLI sessions, and .env. Type DELETE-BOSS-DATA: ' >/dev/tty
     read -r CONFIRM_PURGE </dev/tty || true
     [[ "$CONFIRM_PURGE" == 'DELETE-BOSS-DATA' ]] || { echo 'Confirmation did not match; nothing was removed.' >&2; exit 1; }
   fi

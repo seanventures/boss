@@ -87,11 +87,12 @@ def recovery_layout(config, layout, project, offline):
         name = volume["name"]
         if any(v.get("target", "").startswith("/var/lib/boss/identity") for v in config["services"]["mcp-tools"].get("volumes", [])):
             raise SystemExit("MCP recovery must not mount identity material.")
-    if name in (layout["db_volume"], layout["identity_volume"], layout["artifacts_volume"]):
+    data_keys = ["db_volume", "identity_volume", "artifacts_volume"] + (["repos_volume"] if layout.get("repos_volume") else [])
+    if name in [layout[key] for key in data_keys]:
         raise SystemExit("Recovery hold must have an independent volume.")
     layout["recovery_volume"] = name
-    if len({layout[key] for key in ("db_volume", "identity_volume", "artifacts_volume", "recovery_volume")}) != 4:
-        raise SystemExit("Recovery database, identity, artifacts and hold volumes must be distinct.")
+    if len({layout[key] for key in data_keys + ["recovery_volume"]}) != len(data_keys) + 1:
+        raise SystemExit("Recovery database, identity, artifacts, repositories and hold volumes must be distinct.")
     layout["all_volumes"] = sorted(set(layout["all_volumes"] + [name]))
     return layout
 
@@ -102,7 +103,8 @@ def prepare(config, layout, manifest, project, output: Path, offline):
     layout = recovery_layout(config, layout, project, offline)
     write_json(output / "layout.json", layout)
     volume_plan = {}
-    for kind in ("identity", "artifacts", "recovery"):
+    kinds = ("identity", "artifacts") + (("repos",) if layout.get("repos_volume") else ()) + ("recovery",)
+    for kind in kinds:
         if offline:
             logical = "boss_community_" + kind
         elif kind == "recovery":
@@ -131,6 +133,8 @@ def prepare(config, layout, manifest, project, output: Path, offline):
         volumes = {"boss_community_" + kind: {"name": layout[key]} for kind, key in (
             ("pg", "db_volume"), ("identity", "identity_volume"),
             ("artifacts", "artifacts_volume"), ("recovery", "recovery_volume"))}
+        if layout.get("repos_volume"):
+            volumes["boss_community_repos"] = {"name": layout["repos_volume"]}
         base = {"services": {"db": {
             "image": "${BOSS_RECOVERY_DB_IMAGE_ID:?reviewed immutable database image required}",
             "pull_policy": "never", "restart": "unless-stopped",

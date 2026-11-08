@@ -75,6 +75,7 @@ def test_archive_restores_owner_totp_vault_artifact_and_history_into_new_volumes
     volumes:
       - identity:/var/lib/boss/identity
       - artifacts:/var/lib/boss/artifacts
+      - repos:/var/lib/boss/repos
   egress:
     image: postgres:16-alpine
     entrypoint: ["sleep", "infinity"]
@@ -82,6 +83,7 @@ volumes:
   pg: {}
   identity: {}
   artifacts: {}
+  repos: {}
 ''')
     sha = ok('git', '-C', REPO, 'rev-parse', 'HEAD')
     (install / '.boss-shipped-commit').write_text(sha + '\n')
@@ -113,6 +115,23 @@ volumes:
         artifact = 'A real restored artifact: recovery fixture, no provider effects.\n'
         ok(*source_cmd, 'exec', '-T', 'api', 'sh', '-c',
            'umask 077; cat > /var/lib/boss/artifacts/recovery.txt', input=artifact)
+        # LOCAL-FIRST (BOSSAPP-915): a local project's bare repository, its only copy.
+        vcs = 'g' + 'it'
+        bare = tmp_path / 'repos-src' / 'prj_local1' / 'notes.git'
+        bare.parent.mkdir(parents=True)
+        ok(vcs, 'init', '--bare', '-b', 'main', bare)
+        work = tmp_path / 'repo-work'
+        ok(vcs, 'clone', bare, work)
+        (work / 'app.py').write_text("print('only copy')\n")
+        ok(vcs, '-C', work, 'add', 'app.py')
+        ok(vcs, '-C', work, '-c', 'user.name=BOSS', '-c', 'user.email=boss@example.invalid', 'commit', '-m', 'only copy')
+        ok(vcs, '-C', work, 'push', 'origin', 'HEAD:main')
+        repo_head = ok(vcs, '-C', work, 'rev-parse', 'HEAD')
+        buffer = io.BytesIO()
+        with tarfile.open(fileobj=buffer, mode='w') as out:
+            out.add(tmp_path / 'repos-src', arcname='.')
+        ok(*source_cmd, 'exec', '-T', 'api', 'sh', '-c', 'base64 -d | tar -C /var/lib/boss/repos -xf -',
+           input=base64.b64encode(buffer.getvalue()).decode())
         source_engine = engine_for(source_cmd)
         vault.reset_master_key_cache()
         password = 'recovery-fixture-owner-2026-private'
@@ -144,6 +163,7 @@ volumes:
         backup = Path(backup_result.stdout.strip())
         manifest = json.loads((backup / 'manifest.json').read_text())
         assert manifest['complete'] and manifest['identity_state']['items'] == 2
+        assert manifest['repositories'] == ['prj_local1/notes.git'] and 'repos.tar' in manifest['files']
         assert set(ok(*source_cmd, 'ps', '--status', 'running', '--services').splitlines()) == before_running
         assert 'egress' in before_running
         # Corruption/interruption/missing/mismatched key input must fail before target creation.
@@ -232,6 +252,7 @@ volumes:
             assert db.execute(text("SELECT count(*) FROM receipts WHERE dedupe_key='recovery-fixture-receipt'")).scalar_one() == 1
             assert db.execute(text("SELECT count(*) FROM events WHERE event_type='recovery.fixture'")).scalar_one() == 1
         assert read_offline_volume('artifacts', 'recovery.txt') == artifact.strip()
+        assert read_offline_volume('repos', 'prj_local1/notes.git/refs/heads/main') == repo_head
         hold = json.loads(read_offline_volume('recovery', 'hold.json'))
         assert hold['state'] == 'held' and hold['source_commit'] == sha
         # Local identity function checks above are not an installed API/MFA sign-in.
@@ -245,7 +266,7 @@ volumes:
             shutil.copy2(REPO / 'scripts/install' / helper, compose_file.parent / helper)
         original_volumes = set(ok('docker', 'volume', 'ls', '-q', '--filter',
                                   f'label=com.docker.compose.project={source_project}').splitlines())
-        assert len(original_volumes) == 3
+        assert len(original_volumes) == 4
         wrong_key = base64.b64encode(os.urandom(32)).decode()
         ok(*source_cmd, 'exec', '-T', 'api', 'sh', '-c',
            'umask 077; cat > /var/lib/boss/identity/master.key', input=wrong_key)

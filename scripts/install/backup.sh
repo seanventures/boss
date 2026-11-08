@@ -17,7 +17,8 @@ usage() {
 Usage: backup.sh [--dir INSTALL_DIR] [--backup-dir BACKUP_ROOT]
 
 Creates a private backup of .env, BOSS and optional Infisical Postgres databases,
-and the BOSS artifacts and identity-key volumes with a completion manifest. CLI session secrets (Claude setup token and Codex
+the BOSS artifacts and identity-key volumes, and the local repositories volume (the bare git
+repositories of local projects, their only copy until published) with a completion manifest. CLI session secrets (Claude setup token and Codex
 auth JSON) in .env are left blank; their decoded values are refused in decompressed
 database text and artifacts. Durable encrypted connection records are retained. Writers pause during the snapshot and resume on
 success or failure. If Postgres was stopped, it starts only for the snapshot
@@ -126,6 +127,15 @@ for field in db_volume identity_volume artifacts_volume; do
   volume="$(printf '%s' "$LAYOUT" | python3 -c 'import json,sys; print(json.load(sys.stdin)[sys.argv[1]])' "$field")"
   "${DOCKER[@]}" volume inspect "$volume" >/dev/null || { echo 'A recovery volume is missing; original data must be preserved.' >&2; exit 1; }
 done
+# LOCAL-FIRST PROJECTS (BOSSAPP-915): the repos volume holds local projects' bare repositories.
+# An install from before local-first declares none; one that declares it but never started with
+# it has no repositories yet. Either way there is nothing to lose, and the archive says so.
+REPOS_VOLUME="$(printf '%s' "$LAYOUT" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("repos_volume") or "")')"
+if [[ -n "$REPOS_VOLUME" ]] && ! "${DOCKER[@]}" volume inspect "$REPOS_VOLUME" >/dev/null 2>&1; then
+  echo 'The local repositories volume has not been created yet; no local repositories to back up.' >&2
+  REPOS_VOLUME=""
+  LAYOUT="$(printf '%s' "$LAYOUT" | python3 -c 'import json,sys; d=json.load(sys.stdin); d.pop("repos_volume",None); print(json.dumps(d))')"
+fi
 DB_CONTAINER="$("${COMPOSE[@]}" ps --all -q db)"
 DB_IMAGE_ID="$("${DOCKER[@]}" inspect --format '{{.Image}}' "$DB_CONTAINER")"
 if was_running db; then
@@ -246,7 +256,11 @@ if [[ "$IDENTITY_TABLES" == t ]]; then
 else
   printf '{"kcvs":[],"items":0}\n' > "$BACKUP/.identity-state.json"
 fi
-for kind in artifacts identity; do
+# The repos volume is archived inside the same pause of writers as the database dump, so a local
+# project's commits and its change-set rows describe the same moment.
+ARCHIVE_KINDS=(artifacts identity)
+[[ -z "$REPOS_VOLUME" ]] || ARCHIVE_KINDS+=(repos)
+for kind in "${ARCHIVE_KINDS[@]}"; do
   "${COMPOSE[@]}" run --rm --no-deps --pull never -T --entrypoint tar api \
     -C "/var/lib/boss/$kind" -cf - . </dev/null > "$BACKUP/$kind.tar"
 done

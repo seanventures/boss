@@ -269,7 +269,7 @@ def _stopped_database_backend(tmp: Path, env: dict[str, str]) -> None:
         "if [[ $1 == info ]]; then exit 0; fi\n"
         "if [[ $1 == image && $2 == inspect ]]; then [[ ${BOSS_TEST_API_IMAGE_MISSING:-0} != 1 ]] || exit 1; echo sha256:" + "a" * 64 + "; exit 0; fi\n"
         "if [[ $1 == inspect ]]; then echo sha256:" + "b" * 64 + "; exit 0; fi\n"
-        "if [[ $1 == volume && $2 == inspect ]]; then exit 0; fi\n"
+        "if [[ $1 == volume && $2 == inspect ]]; then [[ $3 != \"${BOSS_TEST_MISSING_VOLUME:-}\" ]] || exit 1; exit 0; fi\n"
         "if [[ $1 == compose && $2 == version ]]; then echo 'Docker Compose test'; exit 0; fi\n"
         "args=$*\n"
         "case \"$args\" in\n"
@@ -293,7 +293,8 @@ def _stopped_database_backend(tmp: Path, env: dict[str, str]) -> None:
         "  *' exec -T db pg_restore '*) cat >/dev/null ;;\n"
         "  *' run --rm --no-deps --pull never -T --entrypoint tar api '*)\n"
         "    if [[ ${BOSS_TEST_INTERRUPT_ARCHIVE:-0} == 1 ]]; then kill -TERM \"$PPID\"; exit 143; fi\n"
-        "    cat \"$BOSS_TEST_EMPTY_TAR\" ;;\n"
+        "    [[ -z ${BOSS_TEST_TRACE_ARCHIVES:-} ]] || echo \"archive ${args##*/var/lib/boss/}\" >> \"$BOSS_TEST_DOCKER_TRACE\"\n"
+        "    if [[ $args == *' /var/lib/boss/repos '* ]]; then cat \"$BOSS_TEST_REPOS_TAR\"; else cat \"$BOSS_TEST_EMPTY_TAR\"; fi ;;\n"
         "  *' stop db')\n"
         "    echo stopped > \"$BOSS_TEST_DB_STATE\"; echo stop >> \"$BOSS_TEST_DOCKER_TRACE\" ;;\n"
         "  *' stop') echo stopped > \"$BOSS_TEST_DB_STATE\"; echo stop-all >> \"$BOSS_TEST_DOCKER_TRACE\" ;;\n"
@@ -773,3 +774,115 @@ def test_interrupted_snapshot_discards_completion_and_restores_prior_state(insta
     assert (tmp / "db-state").read_text().strip() == "running"
     assert not list((tmp / "backups").glob("boss-*"))
     assert "down" not in (tmp / "docker-trace").read_text()
+
+
+# ── LOCAL-FIRST PROJECTS (BOSSAPP-915): the repos volume is a project's only copy until published ──
+
+def _local_project_repo(tmp: Path) -> tuple[Path, str]:
+    """A real bare repository laid out as BOSS keeps it: <root>/<project_id>/<name>.git."""
+    root = tmp / "repos-volume"
+    bare = root / "prj_local1" / "notes.git"
+    bare.parent.mkdir(parents=True)
+    _git("init", "--bare", "-b", "main", bare, cwd=tmp)
+    work = tmp / "repo-work"
+    _git("clone", bare, work, cwd=tmp)
+    _git("config", "user.name", "BOSS", cwd=work)
+    _git("config", "user.email", "boss@example.invalid", cwd=work)
+    (work / "app.py").write_text("print('only copy')\n")
+    _git("add", "app.py", cwd=work)
+    _git("commit", "-m", "the only copy of this code", cwd=work)
+    _git("push", "origin", "HEAD:main", cwd=work)
+    head = _git("rev-parse", "HEAD", cwd=work)
+    archive = tmp / "repos.tar"
+    with tarfile.open(archive, "w") as out:
+        out.add(root, arcname=".")
+    return archive, head
+
+
+def _with_repos_volume(env: dict[str, str]) -> None:
+    layout = json.loads(env["BOSS_TEST_LAYOUT"])
+    layout["services"]["api"]["volumes"].append(
+        {"type": "volume", "target": "/var/lib/boss/repos", "source": "repos"})
+    layout["volumes"]["repos"] = {"name": "fixture_repos"}
+    env["BOSS_TEST_LAYOUT"] = json.dumps(layout)
+
+
+def test_a_local_project_repository_survives_backup_and_restore(install_pair):
+    installed, _, _, env, tmp = install_pair
+    _stopped_database_backend(tmp, env)
+    (tmp / "db-state").write_text("running\n")
+    worker_state = tmp / "worker-state"
+    worker_state.write_text("running\n")
+    env["BOSS_TEST_WORKER_STATE"] = str(worker_state)
+    env["BOSS_TEST_TRACE_ARCHIVES"] = "1"
+    _with_repos_volume(env)
+    repos_tar, head = _local_project_repo(tmp)
+    env["BOSS_TEST_REPOS_TAR"] = str(repos_tar)
+
+    result = _run("bash", REPO / "scripts/install/backup.sh", "--dir", installed,
+                  "--backup-dir", tmp / "backups", cwd=REPO, env=env)
+
+    assert result.returncode == 0, result.stderr
+    backup = Path(result.stdout.strip())
+    # Archived inside the same pause of writers as the database dump.
+    trace = (tmp / "docker-trace").read_text().splitlines()
+    repos_at = next(i for i, line in enumerate(trace) if line.startswith("archive repos"))
+    assert trace.index("stop-worker") < repos_at < trace.index("start-worker")
+    manifest = json.loads((backup / "manifest.json").read_text())
+    assert manifest["repos_volume"] == "fixture_repos"
+    assert manifest["repositories"] == ["prj_local1/notes.git"]
+    assert "repos.tar" in manifest["files"]
+    validated = _run("python3", REPO / "scripts/install/backup_archive.py", "validate", backup, cwd=REPO)
+    assert validated.returncode == 0, validated.stderr
+
+    # Restore: what restore.sh pours into the new repos volume, then the code is all there.
+    restored = tmp / "restored-volume"
+    restored.mkdir()
+    with tarfile.open(backup / "repos.tar") as archive:
+        archive.extractall(restored)
+    clone = tmp / "restored-clone"
+    _git("clone", restored / "prj_local1" / "notes.git", clone, cwd=tmp)
+    assert _git("rev-parse", "HEAD", cwd=clone) == head
+    assert (clone / "app.py").read_text() == "print('only copy')\n"
+    _git("fsck", "--full", cwd=restored / "prj_local1" / "notes.git")
+
+
+def test_an_archive_that_lost_its_repositories_is_refused(install_pair):
+    installed, _, _, env, tmp = install_pair
+    _stopped_database_backend(tmp, env)
+    (tmp / "db-state").write_text("running\n")
+    _with_repos_volume(env)
+    env["BOSS_TEST_REPOS_TAR"] = str(_local_project_repo(tmp)[0])
+    result = _run("bash", REPO / "scripts/install/backup.sh", "--dir", installed,
+                  "--backup-dir", tmp / "backups", cwd=REPO, env=env)
+    assert result.returncode == 0, result.stderr
+    backup = Path(result.stdout.strip())
+    manifest = json.loads((backup / "manifest.json").read_text())
+
+    # Dropping repos.tar (and its checksum) from a manifest that names the volume fails closed.
+    stripped = dict(manifest, files={k: v for k, v in manifest["files"].items() if k != "repos.tar"})
+    (backup / "manifest.json").write_text(json.dumps(stripped))
+    refused = _run("python3", REPO / "scripts/install/backup_archive.py", "validate", backup, cwd=REPO)
+    assert refused.returncode != 0 and "repos.tar" in refused.stderr
+
+    # A manifest whose repository list disagrees with the archive fails closed too.
+    (backup / "manifest.json").write_text(json.dumps(dict(manifest, repositories=["prj_other/x.git"])))
+    refused = _run("python3", REPO / "scripts/install/backup_archive.py", "validate", backup, cwd=REPO)
+    assert refused.returncode != 0 and "repositories" in refused.stderr
+
+
+def test_an_install_without_the_repos_volume_still_backs_up(install_pair):
+    """An install whose declared repos volume was never created has no local repositories."""
+    installed, _, _, env, tmp = install_pair
+    _stopped_database_backend(tmp, env)
+    (tmp / "db-state").write_text("running\n")
+    _with_repos_volume(env)
+    env["BOSS_TEST_MISSING_VOLUME"] = "fixture_repos"
+    env["BOSS_TEST_REPOS_TAR"] = "/nonexistent"
+    result = _run("bash", REPO / "scripts/install/backup.sh", "--dir", installed,
+                  "--backup-dir", tmp / "backups", cwd=REPO, env=env)
+    assert result.returncode == 0, result.stderr
+    backup = Path(result.stdout.strip())
+    manifest = json.loads((backup / "manifest.json").read_text())
+    assert "repos_volume" not in manifest and "repos.tar" not in manifest["files"]
+    assert not (backup / "repos.tar").exists()

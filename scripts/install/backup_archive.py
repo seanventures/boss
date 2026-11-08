@@ -15,7 +15,12 @@ from pathlib import Path, PurePosixPath
 
 FORMAT = 1
 REQUIRED = {'.env', 'source-commit', 'boss.dump', 'artifacts.tar', 'identity.tar'}
+OPTIONAL = {'infisical.dump', 'repos.tar'}
 BLOCKED = {'CLAUDE_CODE_OAUTH_TOKEN', 'CODEX_AUTH_JSON'}
+# LOCAL-FIRST PROJECTS (BOSSAPP-915): the bare git repositories of local projects (and the GitHub
+# mirrors) live in their own named volume. Until a project is published it is the ONLY copy of
+# that project's code, so an archive of an install that declares the volume must carry it.
+REPOS_TARGET = '/var/lib/boss/repos'
 
 
 def fail(message):
@@ -130,6 +135,20 @@ def archive_members(path, *, identity=False, secrets=()):
     return key_bytes
 
 
+def repo_inventory(path):
+    """The bare repositories inside a repos archive: every `<...>.git` directory with a HEAD file."""
+    found = set()
+    with tarfile.open(path, 'r:') as archive:
+        for member in archive:
+            name = member.name
+            while name.startswith('./'):
+                name = name[2:]
+            pure = PurePosixPath(name)
+            if member.isfile() and pure.name == 'HEAD' and pure.parent.name.endswith('.git'):
+                found.add(str(pure.parent))
+    return sorted(found)
+
+
 def key_check(root, metadata, *, secrets=()):
     keys = archive_members(root / 'identity.tar', identity=True, secrets=secrets)
     name = metadata['master_key_relative']
@@ -168,8 +187,10 @@ def validate(root, manifest=None):
     state = manifest.get('identity_state')
     if not isinstance(state, dict) or not isinstance(state.get('items'), int) or state['items'] < 0:
         fail('Invalid database identity metadata.')
-    if not REQUIRED <= set(files) or set(files) - REQUIRED - {'infisical.dump'}:
+    if not REQUIRED <= set(files) or set(files) - REQUIRED - OPTIONAL:
         fail('Archive manifest has missing or unsupported files.')
+    if manifest.get('repos_volume') and 'repos.tar' not in files:
+        fail('The install keeps local repositories, but the archive has no repos.tar.')
     for name, checksum in files.items():
         path = root / name
         private_file(path)
@@ -185,6 +206,10 @@ def validate(root, manifest=None):
     if not path or PurePosixPath(path).is_absolute() or '..' in PurePosixPath(path).parts:
         fail('Invalid master-key path.')
     archive_members(root / 'artifacts.tar')
+    if 'repos.tar' in files:
+        archive_members(root / 'repos.tar')
+        if repo_inventory(root / 'repos.tar') != manifest.get('repositories'):
+            fail('The repositories in repos.tar differ from the manifest.')
     if key_check(root, manifest) != manifest.get('key_check_value'):
         fail('Archive key check value mismatch.')
     return manifest
@@ -203,6 +228,15 @@ def layout(config):
         if volume.get('external'):
             fail('Automatic recovery refuses external volumes.')
         result[name] = volume['name']
+    # Optional: an install from before local-first projects declares no repos volume.
+    mounts = [v for v in services['api'].get('volumes', []) if v.get('target') == REPOS_TARGET]
+    if mounts:
+        if len(mounts) != 1 or mounts[0].get('type') != 'volume':
+            fail(f'Automatic recovery requires a named volume at {REPOS_TARGET}.')
+        volume = config['volumes'][mounts[0]['source']]
+        if volume.get('external'):
+            fail('Automatic recovery refuses external volumes.')
+        result['repos_volume'] = volume['name']
     key_path = (services['api'].get('environment') or {}).get('BOSS_MASTER_KEY_FILE') or '/var/lib/boss/identity/master.key'
     pure = PurePosixPath(key_path)
     prefix = PurePosixPath('/var/lib/boss/identity')
@@ -251,8 +285,16 @@ def main():
         archive_members(root / 'artifacts.tar', secrets=secrets)
         manifest = {**metadata, 'format': FORMAT, 'complete': True,
                     'source_commit': (root / 'source-commit').read_text().strip()}
+        if metadata.get('repos_volume'):
+            if not (root / 'repos.tar').exists():
+                fail('The install keeps local repositories, but they were not archived.')
+            archive_members(root / 'repos.tar', secrets=secrets)
+            manifest['repositories'] = repo_inventory(root / 'repos.tar')
+        else:
+            manifest.pop('repos_volume', None)
+            (root / 'repos.tar').unlink(missing_ok=True)
         manifest['key_check_value'] = key_check(root, manifest, secrets=secrets)
-        names = REQUIRED | ({'infisical.dump'} if (root / 'infisical.dump').exists() else set())
+        names = REQUIRED | {name for name in OPTIONAL if (root / name).exists()}
         manifest['files'] = {name: digest(root / name) for name in sorted(names)}
         validate(root, manifest)
         target = root / 'manifest.json'

@@ -90,7 +90,7 @@ Without --ref, an install stays on the channel it was installed from:
   pinned   a commit install needs --ref to move
 The installed ref is recorded in .boss-release; `boss upgrade` runs this script.
 
-Fetch a fast-forward update, back up .env/Postgres/artifacts, then run the
+Fetch a fast-forward update, back up .env/Postgres/artifacts/local repositories, then run the
 fetched installer. Existing credentials and data volumes are retained.
 The backup path is printed before any source or container change.
 The installer remembers whether Mission Control was enabled. For installs

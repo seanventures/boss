@@ -476,7 +476,8 @@ Before changing source or containers, an upgrade writes a private backup under `
 - `.env`
 - BOSS and optional Infisical Postgres dumps
 - artifacts and the identity volume containing the master key needed for Owner TOTP and encrypted connections
-- a versioned completion manifest binding the source revision, database dumps, keys, and artifacts with checksums
+- the local repositories volume (`boss_community_repos`, `/var/lib/boss/repos`): the bare git repository of every local project and the GitHub mirrors. **Until a local project is published to GitHub, this is the only copy of its code.** It is archived in the same pause of writers as the database dump, so its commits match the change sets in the database
+- a versioned completion manifest binding the source revision, database dumps, keys, artifacts and local repositories with checksums, and listing every repository archived
 
 All running application writers, including egress, pause during the snapshot and resume even if it fails. CLI session volumes are excluded, and configured Claude/Codex session values are blanked from the archived `.env` and checked against decompressed content as described below. Their named volumes are retained during upgrade, and a data-purge recovery requires provider sign-in again.
 
@@ -577,7 +578,7 @@ git -C "$BOSS_FRESH" checkout "$(cat "${BOSS_BACKUP:?set BOSS_BACKUP to the back
   --dir "$BOSS_FRESH" --project boss-recovered
 ```
 
-The helper validates the completion manifest, file checksums, safe archive paths, master-key format and database key check value before creating target resources. It uses locally cached immutable database/API image IDs recorded by the backup; it never pulls or builds images. The target source revision must match the archive. It restores the identity and artifact volumes before application startup, restores each database with `pg_restore --exit-on-error --single-transaction`, then checks the restored database/key pairing. On any failure it reports an incomplete recovery, leaves application services stopped, and retains the new target for inspection; it never deletes the original stack.
+The helper validates the completion manifest, file checksums, safe archive paths, master-key format and database key check value before creating target resources. It uses locally cached immutable database/API image IDs recorded by the backup; it never pulls or builds images. The target source revision must match the archive. It restores the identity, artifact and local repositories volumes before application startup, checks that every repository the manifest lists is in the restored volume, restores each database with `pg_restore --exit-on-error --single-transaction`, then checks the restored database/key pairing. On any failure it reports an incomplete recovery, leaves application services stopped, and retains the new target for inspection; it never deletes the original stack.
 
 Normal recovery also requires a matching source/image pair containing the reviewed startup guard. Guard interface, image revision and guard/entrypoint file hashes are checked before target data resources. A separate recovery volume holds API, worker, egress and MCP startup before application imports; API checks it before privileged sandbox initialization. The exclusive held marker exists before any usable target `.env` or recovery base is published, closing the concurrent-start window. The complete environment appears atomically with the new project and image pins; owned volumes retain their Compose project/logical-volume labels. Base Compose retains the shared read-only mount and immutable image pins, so leaving out the generated image override does not remove the hold. MCP receives no identity-vault mount. The exact archived API/Python image is reused for the four held roles with explicit role commands; this does not qualify automatic readiness or resumption.
 
@@ -603,7 +604,7 @@ Backups contain private `.env` and identity keys and must be protected together.
 A remote archive install uses `.boss-shipped-commit` rather than Git.
 
 - **Update:** the local `upgrade.sh` requires a Git checkout, so use `remote.sh update` from your machine instead; it backs up on the VM first.
-- **Recover:** prepare a fresh checkout at the backed-up commit on the VM, then use current recovery tools and the complete database, identity-key and artifact archive. Pre-guard source requires explicit offline data-only recovery. Success retains the startup hold; it does not authorize starting the archived API.
+- **Recover:** prepare a fresh checkout at the backed-up commit on the VM, then use current recovery tools and the complete database, identity-key, artifact and local repositories archive. Pre-guard source requires explicit offline data-only recovery. Success retains the startup hold; it does not authorize starting the archived API.
 - **Failed update:** the new source is at the install path while the prior source remains at `PATH.prev` until installer/recreation succeeds. A failed build leaves the old containers running; after diagnosing the failure, you can move `PATH.prev` back to `PATH` before retrying. If recreation started, a database migration may have run: inspect the backup on that VM and use the complete recovery procedure above instead of only moving source. A failed source swap itself restores the prior source path, and the remote script refuses to discard a leftover `PATH.prev` on a later attempt.
 
 `user@your-vm` is a machine you administer:
@@ -634,7 +635,7 @@ boss uninstall --purge             # backs up, asks you to type DELETE-BOSS-DATA
 | Mode | Removes | Keeps |
 |---|---|---|
 | Safe uninstall (default) | Stops this Compose stack | Stopped containers and their exact image IDs, source, `.env`, named volumes, images, and backups, so a later upgrade can start the same database image for backup. Rerunning is safe. |
-| `--purge-data` | This stack's named volumes (including Postgres, identity keys, artifacts, and CLI sessions), then `.env` and the generated shell shim | Backups and the checkout |
+| `--purge-data` | This stack's named volumes (including Postgres, identity keys, artifacts, local repositories, and CLI sessions), then `.env` and the generated shell shim | Backups and the checkout |
 
 `--purge-data` first requires a successful private backup unless you explicitly add `--skip-backup`. `--yes` alone never authorizes a data purge; for a scripted purge, add `--confirm-purge DELETE-BOSS-DATA`.
 
