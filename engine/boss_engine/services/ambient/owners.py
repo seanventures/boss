@@ -147,14 +147,9 @@ def waits_on_a_decision(connection: Connection, row: Mapping[str, Any]) -> Optio
     card, a held step) — the same test as a stalled hand-off (chief_of_staff._run_asks). Nothing
     the squad does can change it until the person decides, so it is not given turns; it is due
     again once that decision is answered or withdrawn."""
-    from .. import stuck_work
-    from .chief_of_staff import _run_asks
+    from .chief_of_staff import _run_asks, item_runs
 
-    runs = [str(r["id"]) for r in stuck_work.runs_of_item(connection, row["id"])]
-    runs += [str(x) for x in connection.execute(text(
-        "SELECT ref FROM work_item_links WHERE work_item_id = :w "
-        "AND kind IN ('workflow_run', 'code_task')"), {"w": row["id"]}).scalars()]
-    return _run_asks(connection, str(row["project_id"]), list(dict.fromkeys(runs)))
+    return _run_asks(connection, str(row["project_id"]), item_runs(connection, row))
 
 
 def due_items(connection: Connection, *, project_id: Optional[str] = None,

@@ -257,3 +257,32 @@ def test_review_always_on_builds_is_off_by_default_and_set_per_project_class_and
         with engine.begin() as c:
             c.execute(text("DELETE FROM system_state WHERE key = 'ambient_review_builds'"))
             c.execute(text("UPDATE ambient_autonomy SET review_builds = NULL WHERE project_id = :p"), {"p": HOME})
+
+
+def test_one_entry_of_an_always_on_card_is_answered_on_its_own(client, engine):
+    """dec_558cbcf6 (2026-11-07): two spent budgets on one card with only "Approve all /
+    Dismiss all". Each entry now has its own answers, sent one by one; the card narrows to what
+    is left, and closes once nothing is."""
+    from boss_engine.services.ambient import asks, board
+
+    a, b = _item(engine), _item(engine)
+    with engine.begin() as c:
+        c.execute(text("UPDATE work_items SET cost_usd_micros = 1600000 WHERE id = ANY(:w)"),
+                  {"w": [a["id"], b["id"]]})
+        card_id = asks.raise_card(c, HOME, [asks.budget_entry(c, board.get(c, i["id"]),
+                                                              actor="agent:docs_writer")
+                                            for i in (a, b)])
+    first = client.post(f"/v1/ambient/cards/{card_id}/entries/{a['id']}/answer",
+                        json={"project_id": HOME, "answer": "approve", "actor": "ceo"})
+    assert first.status_code == 200, first.text
+    assert first.json()["card"] == "narrowed"
+    wrong = client.post(f"/v1/ambient/cards/{card_id}/entries/{b['id']}/answer",
+                        json={"project_id": "helpdesk", "answer": "reject", "actor": "ceo"})
+    assert wrong.status_code in (403, 404), wrong.text
+    last = client.post(f"/v1/ambient/cards/{card_id}/entries/{b['id']}/answer",
+                       json={"project_id": HOME, "answer": "reject", "actor": "ceo"})
+    assert last.status_code == 200, last.text
+    assert last.json()["card"] == "closed"
+    with engine.begin() as c:
+        assert board.get(c, a["id"])["squad_budget_usd_micros"] == 2_500_000
+        assert board.get(c, b["id"])["lifecycle"] == "resolved"

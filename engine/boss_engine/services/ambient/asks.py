@@ -79,6 +79,8 @@ WITHDRAW_WHY = {
               "after it asked, or the build finished), so nobody needs to take it",
     "retry": "BOSS tried the squad's launch once more now that what stopped it is fixed, so "
              "nobody needs to answer",
+    "settled": "the build it was about has ended, or waits on your own decision already in "
+               "Needs you, so nothing is left for its squad and nobody is asked",
     "funded": "the squad's budget for it was raised, so it goes on without an answer here",
     "granted": "the squad now reads with the tools it holds (BOSS's logs, health and run "
                "history), so it looks for itself first and asks again only if it is still stuck",
@@ -260,11 +262,34 @@ def _money(micros: int) -> str:
     return f"${dollars:.0f}" if dollars == int(dollars) else f"${dollars:.2f}"
 
 
-def found_so_far(connection: Connection, item_id: str, limit: int = 240) -> str:
-    """What the squad established so far, briefly: its last findings and hypotheses."""
+def found_so_far(connection: Connection, item_id: str, limit: int = 200) -> str:
+    """What the squad established so far, in ONE sentence: its last finding or hypothesis
+    (never several run together)."""
     said = [m["body"].get("summary") for m in collab.messages(
         connection, item_id, kinds=("finding", "hypothesis")) if m["sender"] != "boss"]
-    return scrub("; ".join(s for s in said[-2:] if s), limit) or "nothing settled yet"
+    last = next((s for s in reversed(said) if s), "")
+    sentence = re.split(r"(?<=[.!?])\s", scrub(last, 600), maxsplit=1)[0].rstrip(" .;")
+    return clean_text(sentence, limit) or "nothing settled yet"
+
+
+def quoted(value: Any, words: int = 10) -> str:
+    """A title for a card, in ONE pair of quotes and a few words: quotes it already carries are
+    dropped first (a doctor title "“Open draft PR …” build has not moved" rendered as ““…”)."""
+    body = re.sub(r"[“”\"]", "", scrub(value, 160)).split()
+    return "“" + " ".join(body[:words]) + ("…" if len(body) > words else "") + "”"
+
+
+def entry_name(connection: Connection, item: Mapping[str, Any]) -> str:
+    """The work an entry is about in a word or two, for a batch line: the build it names (by
+    the item that started it: "esbuild bump"), else its plain subject, else its first words."""
+    from .chief_of_staff import item_runs, stalled_name
+
+    if item_runs(connection, item):
+        name, noun = stalled_name(connection, item)
+        name = re.sub(r"[“”\"]", "", name)
+        return f"{name} {noun}".strip()
+    return board.plain_subject(item) or " ".join(
+        re.sub(r"[“”\"]", "", scrub(item.get("title"), 80)).split()[:4])
 
 
 def budget_entry(connection: Connection, item: Mapping[str, Any], *, actor: str,
@@ -275,17 +300,45 @@ def budget_entry(connection: Connection, item: Mapping[str, Any], *, actor: str,
     from .squad_turns import BUDGET_STEP_USD_MICROS, budget_of
 
     who = squad_name(squad_title, actor)
-    words = scrub(item.get("title"), 120).split()
-    title = " ".join(words[:10]) + ("…" if len(words) > 10 else "")
+    title = quoted(item.get("title"))
     budget, step = budget_of(item), BUDGET_STEP_USD_MICROS
-    question = (f"{who} used its {_money(budget)} on “{title}” — give it {_money(step)} more, "
+    question = (f"{who} used its {_money(budget)} on {title} — give it {_money(step)} more, "
                 "or close it?")
     return {"ask_kind": "budget", "work_item_id": item["id"], "task_class": item["task_class"],
             "asked_by": actor, "squad": who, "subject": title,
+            "name": entry_name(connection, item),
             "spent_usd_micros": int(item.get("cost_usd_micros") or 0),
             "budget_usd_micros": budget, "step_usd_micros": step,
             "detail": f"Found so far: {found_so_far(connection, item['id'])}",
             "words": f"{who.lower()} spent its budget: {title}", "question": question}
+
+
+def settle_settled(connection: Connection, item: Mapping[str, Any], *,
+                   card_id: Optional[str]) -> str:
+    """The item's build ended, or waits on the person's own card: nothing is left for its
+    squad, so it is closed — recorded, linked to that card, never asked."""
+    from .chief_of_staff import runs_settled
+
+    item_id = item["id"]
+    board.unask(connection, item_id, actor=COS, reason=WITHDRAW_WHY["settled"])
+    got = runs_settled(connection, item["project_id"], item, exclude=card_id)
+    if got and got[0] == "waits":
+        board.link(connection, item_id, "decision", str(got[1]), actor=COS,
+                   note="the work waits on this")
+        said = "Its build is done and waits on your own decision, already in Needs you"
+    else:
+        said = "The build it was about has ended"
+    token = _take_from_agent(connection, item_id)
+    ledger.record_decision(
+        connection, project_id=item["project_id"], work_item_id=item_id,
+        task_class=tc.task_class(item["task_class"]).key, decided_by=COS, chosen="close",
+        options=["close", "ask"], question="Is anything left for its squad to do?",
+        reversibility="reversible", undo={"action": "reopen", "work_item_id": item_id},
+        evidence=item_evidence(connection, item_id, card_id)
+        or [{"kind": "work_item", "ref": item_id}],
+        rationale=f"{said}, so nothing is left for its squad and nobody is asked.")
+    board.finish(connection, item_id, actor=COS, lifecycle="resolved", token=token, outcome=said)
+    return "settled"
 
 
 def ask_budget(connection: Connection, settings: Any, item_id: str) -> dict[str, Any]:
@@ -294,7 +347,12 @@ def ask_budget(connection: Connection, settings: Any, item_id: str) -> dict[str,
     asking lease is let go: whoever works it after the answer claims it fresh."""
     from . import squads
 
+    from .chief_of_staff import runs_settled
+
     item = board._must(connection, item_id)  # noqa: SLF001
+    if runs_settled(connection, item["project_id"], item):
+        # The build it is about ended, or waits on the person's own card: nothing to fund.
+        return {"outcome": settle_settled(connection, item, card_id=None)}
     roster = squads.roster(connection, item_id) or {}
     lead = str(roster.get("lead") or item.get("owner_actor") or COS)
     entry = budget_entry(connection, item, actor=lead, squad_title=str(roster.get("title") or ""))
@@ -347,6 +405,11 @@ def card_question(entries: Sequence[Mapping[str, Any]]) -> str:
         return batch_question(entries)
     if len(entries) == 1:
         return str(entries[0].get("question") or entries[0].get("words") or "")
+    if all(entry_kind(e) == "budget" for e in entries):
+        # A batch names the work: "2 squads ran out of budget: this install, esbuild bump".
+        names = ", ".join(dict.fromkeys(str(e.get("name") or e.get("subject") or "")
+                                        for e in entries))
+        return f"{len(entries)} squads ran out of budget: {names}"
     from .chief_of_staff import _MANY, _SHORT
 
     groups: dict[str, int] = {}
@@ -369,7 +432,7 @@ def card_question(entries: Sequence[Mapping[str, Any]]) -> str:
 
 def card_options(entries: Sequence[Mapping[str, Any]]) -> list[dict[str, str]]:
     """The card's answers, saying what each does (and approving does exactly that, `carry`).
-    One question: "Let it go on" / "I'll take it", or "Grant access" when the squad asked for a
+    One question: "Close it: expected" / "I'll take it", or "Grant access" when the squad asked for a
     skill it lacks. Never "Approve all" over a single question."""
     from .chief_of_staff import OWN_ACTIONS, PARTY
 
@@ -382,6 +445,13 @@ def card_options(entries: Sequence[Mapping[str, Any]]) -> list[dict[str, str]]:
                      else "Hand all over")
             return [{"key": "approve", "label": label},
                     {"key": "reject", "label": "Dismiss all"}]
+        if all(entry_kind(e) == "budget" for e in entries):
+            # "All" answers say what they do; each entry also has its own (answer_entry).
+            n = len(entries)
+            step = _money(int(entries[0].get("step_usd_micros") or 1_000_000))
+            return [{"key": "approve", "label": f"Give each {step} more"},
+                    {"key": "reject", "label": "Close both" if n == 2 else f"Close all {n}"},
+                    {"key": "take", "label": "I'll take them"}]
         if all(entry_kind(e) == "question" for e in entries):
             grants = [bool(e.get("grant")) for e in entries]
             label = ("Grant access to all" if all(grants) else
@@ -389,8 +459,9 @@ def card_options(entries: Sequence[Mapping[str, Any]]) -> list[dict[str, str]]:
                      "Grant where asked, close the rest")
             return [{"key": "approve", "label": label},
                     {"key": "reject", "label": "I'll take them"}]
-        return [{"key": "approve", "label": "Approve all"},
-                {"key": "reject", "label": "Dismiss all"}]
+        # Mixed kinds: each entry has its own answers (answer_entry); "all" says what it does.
+        return [{"key": "approve", "label": "Yes to each, as each asks"},
+                {"key": "reject", "label": "No to each"}]
     e = entries[0]
     kind = entry_kind(e)
     if kind == "squad":
@@ -672,6 +743,11 @@ def verdict(connection: Connection, card: Mapping[str, Any], entry: Mapping[str,
     if kind == "question" and item_moving(connection, item["id"], card.get("created_at")):
         # A squad that said it is stuck, whose work is moving again: a stale ask.
         return "moving", item
+    if kind in ("question", "budget"):
+        from .chief_of_staff import runs_settled
+
+        if runs_settled(connection, item["project_id"], item, exclude=card.get("id")):
+            return "settled", item         # its build ended or waits on the person's own card
     if kind == "budget":
         from .squad_turns import budget_of
 
@@ -844,6 +920,9 @@ def rewords(connection: Connection, entry: Mapping[str, Any],
     """A legacy entry, said again in plain words from its item's rows."""
     kind = entry_kind(entry)
     actor = str(entry.get("asked_by") or COS)
+    if kind == "budget":
+        return budget_entry(connection, item, actor=actor,
+                            squad_title=str(entry.get("squad") or ""))
     if kind == "squad":
         return squad_entry(connection, item, actor=actor, action=str(entry.get("action")),
                            proposal_id=entry.get("proposal_id"),
@@ -902,6 +981,8 @@ def settle(connection: Connection, project_id: str, card_id: Optional[str],
     board.unask(connection, item_id, actor=COS, reason=WITHDRAW_WHY[why])
     if why in ("off", "rebatch", "moot", "moving", "granted", "funded"):
         return "back_on_board"
+    if why == "settled":
+        return settle_settled(connection, item, card_id=card_id)
     if why == "retry":
         return retry_launch(connection, project_id, item)
     if why == "stale_rollback":
@@ -1102,6 +1183,63 @@ def grant_access(connection: Connection, item: Mapping[str, Any], entry: Mapping
     return ok
 
 
+#: An entry's own answer keys, as the verdict its carrier reads ("take" is request-changes).
+ENTRY_ANSWERS = {"approve": "approve", "reject": "reject", "take": "revise", "hold": "reject"}
+
+
+def entry_options(entry: Mapping[str, Any]) -> list[dict[str, str]]:
+    """One entry's own answers, as a card asking only it would offer them."""
+    return card_options([entry])
+
+
+def answer_entry(connection: Connection, settings: Any, decision_id: str, work_item_id: str,
+                 *, answer: str, actor: str, note: Optional[str] = None) -> dict[str, Any]:
+    """ONE ENTRY OF THE PROJECT'S CARD, ANSWERED ON ITS OWN ("Give it $1 more" on one spent
+    budget, "Close it" on the other). Carried by its own kind (`carry`), then it leaves the card;
+    the card is narrowed, or closed once nothing is left. A Chief-of-Staff hand-off is answered
+    on the card as a whole (chief_of_staff.carry_card). Raises LookupError / ValueError."""
+    if answer not in ENTRY_ANSWERS:
+        raise ValueError(f"answer is one of {', '.join(ENTRY_ANSWERS)}")
+    row = connection.execute(text(
+        "SELECT id, project_id, question, recommendation, options, status, created_at "
+        "FROM decisions WHERE id = :d FOR UPDATE"), {"d": decision_id}).mappings().first()
+    if row is None or (row["recommendation"] or {}).get("card") != CARD:
+        raise LookupError("no such always-on card")
+    if row["status"] not in _open_statuses():
+        raise ValueError("this card is already answered")
+    card = dict(row)
+    rec = dict(card["recommendation"] or {})
+    batch = list(rec.get("batch") or [])
+    entry = next((e for e in batch if str(e.get("work_item_id")) == work_item_id), None)
+    if entry is None:
+        raise LookupError("that work is not on this card")
+    if entry_kind(entry) == "handoff":
+        raise ValueError("a hand-off is answered on the card as a whole")
+    keys = {o["key"] for o in entry_options(entry)}
+    if answer not in keys:
+        raise ValueError(f"this entry's answers are {', '.join(sorted(keys))}")
+    carried = carry(connection, settings, card, entry, person(actor), ENTRY_ANSWERS[answer],
+                    note)
+    rest = [e for e in batch if str(e.get("work_item_id")) != work_item_id]
+    emit(connection, str(card["project_id"]), "ambient.entry_answered", person(actor),
+         "decision", decision_id, {"work_item_id": work_item_id, "answer": answer,
+                                    "carried": carried})
+    if not rest:
+        from ..run_decisions import _withdraw_with_note
+
+        _withdraw_with_note(connection, decision_id, str(card["project_id"]),
+                            "Answered entry by entry.", actor=person(actor),
+                            why={"why": "answered entry by entry", "items": [work_item_id]})
+        return {"carried": carried, "card": "closed"}
+    connection.execute(text(
+        "UPDATE decisions SET recommendation = CAST(:r AS JSONB), question = :q, "
+        "options = CAST(:o AS JSONB), updated_at = now() WHERE id = :d"),
+        {"r": json.dumps(_recommendation(rest, base=rec), default=str),
+         "q": clean_text(card_question(rest), 300), "o": json.dumps(card_options(rest)),
+         "d": decision_id})
+    return {"carried": carried, "card": "narrowed", "left": len(rest)}
+
+
 def carry_card(connection: Connection, settings: Any, decision: Mapping[str, Any], actor: str,
                verdict_word: str, note: Optional[str] = None) -> list[str]:
     rec = dict(decision.get("recommendation") or {})
@@ -1120,4 +1258,5 @@ __all__ = ["ask", "place", "park", "parked", "open_card", "raise_card", "join_ca
            "subject_words", "dependency_words", "place_words", "action_words", "scrub",
            "verdict", "settle", "legacy_entry", "rewords", "backlog_twin", "defer_to_backlog",
            "refused_launches", "alerts_state", "is_meta_alert", "carry", "carry_card",
-           "WITHDRAW_WHY", "RAW_ID", "MAX_REFUSED_LAUNCHES", "CARD"]
+           "WITHDRAW_WHY", "RAW_ID", "MAX_REFUSED_LAUNCHES", "CARD", "answer_entry",
+           "entry_options", "budget_entry", "ask_budget", "quoted", "ENTRY_ANSWERS"]

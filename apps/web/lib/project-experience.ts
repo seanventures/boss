@@ -100,8 +100,29 @@ export type NeedsYou = {
    *  Approvals draws them (`preview`, an action preview), the hash an approval must carry, and
    *  whether approving needs the person's reason. Null when the deploy has no card. */
   release?: NeedsRelease | null;
+  /** AN ALWAYS-ON CARD'S OWN ANSWERS (engine needs.ambient_answers): the card's, each with the
+   *  decision action that carries it ("Close both" → reject), and each entry's own question,
+   *  one-line finding and answers, answered one by one. Absent on every other card. */
+  answers?: NeedsAnswer[];
+  entries?: NeedsEntry[];
 };
-export type NeedsRelease = { preview: unknown; content_hash: string; needs_reason: boolean; sentence: string };
+export type NeedsAnswer = { action: "approve" | "reject" | "revise"; label: string };
+export type NeedsEntry = { work_item_id: string; question: string; detail: string; answers: { key: string; label: string }[] };
+function parseAnswers(v: unknown): NeedsAnswer[] | undefined {
+  if (!Array.isArray(v) || !v.length) return undefined;
+  return v.map((x) => x as Record<string, unknown>)
+    .filter((x) => x.action === "approve" || x.action === "reject" || x.action === "revise")
+    .map((x) => ({ action: x.action as NeedsAnswer["action"], label: String(x.label ?? "") }));
+}
+function parseEntries(v: unknown): NeedsEntry[] | undefined {
+  if (!Array.isArray(v) || !v.length) return undefined;
+  return v.map((x) => x as Record<string, unknown>).map((x) => ({
+    work_item_id: String(x.work_item_id ?? ""), question: String(x.question ?? ""), detail: String(x.detail ?? ""),
+    answers: (Array.isArray(x.answers) ? x.answers : []).map((a) => a as Record<string, unknown>)
+      .map((a) => ({ key: String(a.key ?? ""), label: String(a.label ?? "") })),
+  }));
+}
+export type NeedsRelease ={ preview: unknown; content_hash: string; needs_reason: boolean; sentence: string };
 function parseRelease(v: unknown): NeedsRelease | null {
   if (!v || typeof v !== "object") return null;
   const r = v as Record<string, unknown>;
@@ -541,6 +562,7 @@ export const parseOverview = (v: unknown): Overview => {
                icon: s(y.icon), work_id: s(y.work_id), work_label: s(y.work_label), external_url: s(y.external_url), created_at: s(y.created_at),
                detail: s(y.detail), mini: mini(y.mini), release: parseRelease(y.release),
                diagnosis: parseDiagnosis(y.diagnosis),
+               answers: parseAnswers(y.answers), entries: parseEntries(y.entries),
                action: act.label || act.href ? { label: s(act.label, "Open"), href: s(act.href), decision_id: s(act.decision_id) } : null };
     }),
     tiles: {

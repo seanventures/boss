@@ -749,3 +749,150 @@ def test_a_read_phase_past_its_spend_cap_still_answers(eng, project, monkeypatch
     assert model.results, "it read once"
     assert model.offered[-1] == [], "the turn past the cap is asked without tools"
     assert turn["status"] == "posted", turn
+
+
+# ── a batch names its work; each entry answers on its own; settled work never asks ──────────
+#
+# Live dec_558cbcf6 (boss-dogfood): "Agents ask about 2 things: 2 spent budgets", the first
+# entry's run-on "Found so far: …; …" as the card's detail, "Approve all / Dismiss all", a title
+# in doubled quotes — and its second entry about an esbuild build that had completed hours
+# before, its PR waiting on the merge card.
+
+STUCK_TITLE = ("“Open draft PR bumping esbuild 0.21.5 → ≥0.25.0 (GHSA-67mh-4w” build has not "
+               "moved for 4 min")
+
+
+def _stuck_build_item(c, pid, rid):
+    """The system doctor's "build has not moved" finding about build `rid`, as an item with a
+    seated squad (subject host:install; the build named only in the finding's evidence)."""
+    fid = f"sf_t{uuid4().hex[:12]}"
+    c.execute(text(
+        "INSERT INTO system_findings (id, project_id, kind, status, title, evidence) VALUES "
+        "(:i, :p, :k, 'resolved', :t, CAST(:e AS JSONB))"),
+        {"i": fid, "p": pid, "k": f"stuck_job_{fid}", "t": STUCK_TITLE,
+         "e": json.dumps({"stuck": [{"run_id": rid, "phase": "queued"}]})})
+    add_roles(c, pid, INFRA_ROLES)
+    sig = signal(c, pid, source="doctor", kind="doctor.stuck_job", title=STUCK_TITLE,
+                 subject_kind="host", subject_id="install", app=None, severity="medium",
+                 evidence=[{"kind": "finding", "ref": fid}])
+    item = open_item(c, pid, task_class="system_health", fingerprint=f"fp:{fid}",
+                     title=STUCK_TITLE, subject_ref="host:install", signal_ids=[sig["id"]])["item"]
+    squads.assemble(c, item["id"])
+    _handed(c, item)
+    collab.post(c, item["id"], kind="finding", sender=INFRA, body={
+        "summary": "The 4-minute stall is more likely an npm/esbuild timeout. The sandbox "
+                   "may need registry access."})
+    c.execute(text("UPDATE work_items SET cost_usd_micros = :m WHERE id = :w"),
+              {"m": squad_turns.SQUAD_BUDGET_USD_MICROS + 2_137, "w": item["id"]})
+    return item, fid
+
+
+def test_a_batch_names_its_work_and_each_entry_has_its_own_finding_and_answers(eng, project):  # noqa: F811
+    from boss_engine.services.project_experience import needs
+
+    try:
+        with eng.begin() as c:
+            first = _spent(c, project, finding="The build was restarted by an update. Not code.")
+            rid = _run(c, project, status="running", title="Bump esbuild past 0.21.5")
+            second, fid = _stuck_build_item(c, project, rid)
+            for item in (first, second):
+                asks.ask_budget(c, None, item["id"])
+            card_id = board.get(c, first["id"])["needs_you_decision_id"]
+            card = _card(c, card_id)
+            row = c.execute(text("SELECT * FROM decisions WHERE id = :d"),
+                            {"d": card_id}).mappings().one()
+            shown = needs.card(c, project, dict(row))
+        assert board.get(eng.connect(), second["id"])["needs_you_decision_id"] == card_id
+        assert card["question"] == ("2 squads ran out of budget: this install, Bump esbuild "
+                                    "past 0.21.5 build")
+        entries = card["recommendation"]["batch"]
+        assert [e["detail"] for e in entries] == [
+            "Found so far: The build was restarted by an update",
+            "Found so far: The 4-minute stall is more likely an npm/esbuild timeout"]
+        assert "““" not in entries[1]["question"] and entries[1]["question"].count("“") == 1
+        assert [o["label"] for o in card["options"]] == [
+            "Give each $1 more", "Close both", "I'll take them"]
+        assert [a["label"] for a in shown["answers"]] == [
+            "Give each $1 more", "Close both", "I'll take them"]
+        assert [[a["label"] for a in e["answers"]] for e in shown["entries"]] == [
+            ["Give it $1 more", "Close it", "I'll take it"]] * 2
+        assert "Found so far" not in shown["detail"], "no entry's detail stands for the card"
+    finally:
+        with eng.begin() as c:
+            c.execute(text("DELETE FROM system_findings WHERE id = :f"), {"f": fid})
+
+
+def test_each_entry_is_answered_on_its_own_and_the_card_closes_when_none_is_left(eng, project):  # noqa: F811
+    with eng.begin() as c:
+        _ceo(c, project)
+        a, b = _spent(c, project), _spent(c, project)
+        for item in (a, b):
+            asks.ask_budget(c, None, item["id"])
+        card_id = board.get(c, a["id"])["needs_you_decision_id"]
+        got = asks.answer_entry(c, None, card_id, a["id"], answer="approve", actor="ceo")
+        narrowed = _card(c, card_id)
+        raised = board.get(c, a["id"])
+        assert got["card"] == "narrowed" and raised["squad_budget_usd_micros"] == 2_500_000
+        assert narrowed["status"] == "pending"
+        assert [e["work_item_id"] for e in narrowed["recommendation"]["batch"]] == [b["id"]]
+        assert [o["label"] for o in narrowed["options"]] == [
+            "Give it $1 more", "Close it", "I'll take it"]
+        got = asks.answer_entry(c, None, card_id, b["id"], answer="reject", actor="ceo")
+        closed = _card(c, card_id)
+        assert got["card"] == "closed" and closed["status"] == "withdrawn"
+        assert board.get(c, b["id"])["lifecycle"] == "resolved"
+
+
+def test_work_about_a_build_that_ended_or_waits_on_its_merge_card_never_asks(eng, project):  # noqa: F811
+    fids = []
+    try:
+        with eng.begin() as c:
+            rid = _run(c, project, status="running", title="Bump esbuild past 0.21.5")
+            item, fid = _stuck_build_item(c, project, rid)
+            fids.append(fid)
+            merge = _merge_card(c, project, rid)       # the build completed: its PR waits on you
+        _tick(eng, project)
+        with eng.begin() as c:
+            after = board.get(c, item["id"])
+            links = [l["ref"] for l in board.links(c, item["id"]) if l["kind"] == "decision"]
+            pending = c.execute(text("SELECT count(*) FROM decisions WHERE project_id = :p AND "
+                                     "status = 'pending' AND id <> :m"),
+                                {"p": project, "m": merge}).scalar()
+        assert after["lifecycle"] == "resolved" and pending == 0, "never asked"
+        assert merge in links
+        # A card raised before the build settled withdraws itself on the next tick.
+        with eng.begin() as c:
+            rid2 = _run(c, project, status="running", title="Bump minimatch")
+            other, fid2 = _stuck_build_item(c, project, rid2)
+            fids.append(fid2)
+            card_id = asks.raise_card(c, project, [asks.budget_entry(
+                c, board.get(c, other["id"]), actor=INFRA)])
+            c.execute(text("UPDATE code_task_runs SET status = 'completed' WHERE id = :r"),
+                      {"r": rid2})
+            done = cos.reconsider(c, project, mode="propose")
+            card = _card(c, card_id)
+        assert [s["verdict"] for r in done for s in r.get("settled", [])] == ["settled"]
+        assert card["status"] == "withdrawn"
+    finally:
+        with eng.begin() as c:
+            c.execute(text("DELETE FROM system_findings WHERE id = ANY(:f)"), {"f": fids})
+
+
+def test_a_title_that_carries_quotes_is_quoted_once():
+    assert asks.quoted(STUCK_TITLE) == ("“Open draft PR bumping esbuild 0.21.5 → ≥0.25.0 "
+                                        "(GHSA-67mh-4w build…”")
+    assert cos.what_words("stale_handoff", {"title": "“Bump esbuild” stalled"}) == \
+        "a nudge on “Bump esbuild stalled”"
+
+
+def test_an_open_budget_card_in_older_words_rewords_itself(eng, project):  # noqa: F811
+    with eng.begin() as c:
+        item = _spent(c, project, finding="The restarts came from an update. Not from code.")
+        old = {**asks.budget_entry(c, board.get(c, item["id"]), actor=INFRA),
+               "detail": "Found so far: one thing.; another thing", "question": "Q ““x””?"}
+        card_id = asks.raise_card(c, project, [old])
+        cos.reconsider(c, project, mode="propose")
+        card = _card(c, card_id)
+    [entry] = card["recommendation"]["batch"]
+    assert entry["detail"] == "Found so far: The restarts came from an update"
+    assert card["question"] == entry["question"] and "““" not in card["question"]

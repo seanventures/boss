@@ -704,6 +704,53 @@ def stall_over(connection: Connection, item: Mapping[str, Any], since: Any) -> b
     return False
 
 
+def item_runs(connection: Connection, item: Mapping[str, Any]) -> list[str]:
+    """Every run or build an item is about, whatever its class: its subject, its signals'
+    subjects and cited runs, the builds a system-doctor finding behind it names (a "stuck job"
+    finding lists them), and the runs it launched (stuck_work.runs_of_item, its links)."""
+    from .. import stuck_work
+
+    runs = list(stalled_runs(connection, item))
+    for s in _signals_of(connection, item["id"]):
+        ev = s.get("evidence") if isinstance(s.get("evidence"), list) else []
+        for e in ev:
+            if not isinstance(e, Mapping) or not e.get("ref"):
+                continue
+            if e.get("kind") in ("code_task", "workflow_run"):
+                runs.append(str(e["ref"]))
+            elif e.get("kind") == "finding":
+                runs += [str(r) for r in connection.execute(text(
+                    "SELECT x->>'run_id' FROM system_findings f CROSS JOIN LATERAL "
+                    "jsonb_array_elements(CASE WHEN jsonb_typeof(f.evidence->'stuck') = 'array' "
+                    "THEN f.evidence->'stuck' ELSE '[]'::jsonb END) x WHERE f.id = :f"),
+                    {"f": str(e["ref"])}).scalars() if r]
+    runs += [str(r["id"]) for r in stuck_work.runs_of_item(connection, item["id"])]
+    runs += [str(x) for x in connection.execute(text(
+        "SELECT ref FROM work_item_links WHERE work_item_id = :w "
+        "AND kind IN ('workflow_run', 'code_task')"), {"w": item["id"]}).scalars()]
+    return list(dict.fromkeys(runs))
+
+
+def runs_settled(connection: Connection, project_id: str, item: Mapping[str, Any], *,
+                 exclude: Optional[str] = None) -> Optional[tuple[str, Optional[str]]]:
+    """THE WORK AN ITEM IS ABOUT IS SETTLED: ("waits", decision) when one of its runs waits on a
+    person's open decision (a merge card, a held step), ("ended", None) when every build it
+    names has ended — else None (or when it names no build). helpdesk/boss-dogfood 2026-11-07:
+    "the esbuild build has not moved for 4 min" was asked about hours after that build had
+    completed and its PR waited on the merge card."""
+    runs = item_runs(connection, item)
+    if not runs:
+        return None
+    waiting = _run_asks(connection, project_id, runs, exclude)
+    if waiting:
+        return "waits", waiting
+    statuses = [str(s) for s in connection.execute(text(
+        "SELECT status FROM code_task_runs WHERE id = ANY(:r)"), {"r": runs}).scalars()]
+    if statuses and all(s in ("completed", "cancelled", "failed") for s in statuses):
+        return "ended", None
+    return None
+
+
 def stall_verdict(connection: Connection, project_id: str, item: Mapping[str, Any],
                   since: Any, *, exclude: Optional[str] = None) -> Optional[str]:
     """'linked' (it waits on a person's decision), 'moving' (it moved or ended), or None."""
@@ -728,7 +775,7 @@ def stalled_name(connection: Connection, item: Mapping[str, Any]) -> tuple[str, 
     """The stalled work in a word or two, and what it is: ("esbuild", "bump"), from the item
     that started the build (its authority's work item, by plain subject), else the build's
     short title."""
-    for rid in stalled_runs(connection, item):
+    for rid in item_runs(connection, item):
         row = connection.execute(text(
             "SELECT title, finalize_ctx FROM code_task_runs WHERE id = :r"), {"r": rid}
         ).mappings().first()
@@ -868,7 +915,8 @@ def what_words(task_class: str, item: Mapping[str, Any]) -> str:
 def _short_title(value: Any, words: int = 7) -> str:
     from ._common import short_label
 
-    body = clean_text(value, 200)
+    # Quotes the title already carries are dropped: callers wrap it in their own (“…”).
+    body = re.sub(r"[“”\"]", "", clean_text(value, 200))
     short = short_label(body, words)
     return short + ("…" if len(body.split()) > words else "")
 
@@ -1311,6 +1359,8 @@ _WITHDRAW_WHY = {
     "healthy": "the app is healthy: the alert cleared, nothing failing is left",
     "rebatch": "it moved onto the project's one card",
     "retry": "BOSS tried the squad's launch once more now that what stopped it is fixed",
+    "settled": "the build it was about has ended, or waits on your own decision already in "
+               "Needs you, so nothing is left for its squad and nobody is asked",
     "funded": "the squad's budget for it was raised, so it goes on without an answer here",
     "granted": "the squad now reads with the tools it holds (BOSS's logs, health and run "
                "history), so it looks for itself first and asks again only if it is still stuck",
@@ -1443,7 +1493,8 @@ def _reword(connection: Connection, card: Mapping[str, Any],
 
     items = items or {}
     entries = [asks.rewords(connection, e, items[str(e.get("work_item_id"))])
-               if asks.entry_kind(e) == "question" and str(e.get("work_item_id")) in items
+               if asks.entry_kind(e) in ("question", "budget")
+               and str(e.get("work_item_id")) in items
                else dict(e) for e in entries]
     question = clean_text(asks.card_question(entries), 300) if all(
         "words" in e for e in entries) else str(card.get("question") or "")

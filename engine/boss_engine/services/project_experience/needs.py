@@ -170,6 +170,29 @@ def one_per_subject(cards_: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
+def ambient_answers(decision: Mapping[str, Any], batch: list[dict[str, Any]]
+                    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """(entries, answers) of an always-on card: every entry with its own question, one-line
+    finding and answers; and the card's answers, each with the decision action carrying it
+    (decision_actions.allowed_actions reads the same options). ([], []) for any other card."""
+    from ..ambient import asks
+    from ..decision_actions import allowed_actions, is_ambient_card
+
+    rec = decision.get("recommendation") if isinstance(decision.get("recommendation"), dict) else {}
+    if rec.get("card") != asks.CARD or not is_ambient_card(decision):
+        return [], []
+    acts = [a for a in allowed_actions({**dict(decision), "status": "pending"})
+            if a["action"] in ("approve", "reject", "revise")]
+    answers = [{"action": a["action"], "label": a["label"]} for a in acts]
+    entries = [{"work_item_id": e.get("work_item_id"), "question": e.get("question"),
+                "detail": e.get("detail"),
+                "answers": ([] if asks.entry_kind(e) == "handoff" else
+                            [{"key": o["key"], "label": o["label"]}
+                             for o in asks.entry_options(e)])}
+               for e in batch if e.get("work_item_id")]
+    return entries, answers
+
+
 def card(connection: Connection, project_id: str, decision: Mapping[str, Any],
          run: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
     """One Needs-you card from one waiting decision."""
@@ -210,8 +233,12 @@ def card(connection: Connection, project_id: str, decision: Mapping[str, Any],
     from .. import stuck_work
 
     diagnosis = (run or {}).get("diagnosis") or stuck_work.card_diagnosis(connection, decision)
-    said = next((str(e.get("detail")) for e in rec.get("batch") or []
-                 if isinstance(e, dict) and e.get("detail")), "") or str(rec.get("why") or "")
+    batch = [e for e in rec.get("batch") or [] if isinstance(e, dict)]
+    entries, answers = ambient_answers(decision, batch)
+    # A batch's entries each carry their own finding (`entries`): the card's line names the
+    # work, and no entry's detail stands for the others.
+    said = ("" if len(batch) > 1 else next((str(e.get("detail")) for e in batch
+                                             if e.get("detail")), "")) or str(rec.get("why") or "")
     detail = str(decision.get("question") or "")
     if diagnosis and (diagnosis.get("cause") or diagnosis.get("headline")):
         # Concise: what to do, then the cause in a few words; the diagram and Details carry more.
@@ -231,6 +258,10 @@ def card(connection: Connection, project_id: str, decision: Mapping[str, Any],
             # WHAT THIS DEPLOY SHIPS, as its release card lists it (release_scope): the drawer
             # shows these commits and approves with their hash, as Approvals does.
             **({"release": release} if release else {}),
+            # AN ALWAYS-ON CARD'S OWN ANSWERS: the card's (`answers`, each with the decision
+            # action that carries it) and each entry's (`entries`, answered one by one at
+            # /v1/ambient/cards/<id>/entries/<work item>/answer).
+            **({"answers": answers, "entries": entries} if answers else {}),
             # The button acts IN PLACE (04-19/21): Review PR opens the work's drawer (its PR,
             # checks and Merge); everything else opens this card's drawer, which approves or
             # rejects there with step-up. Approvals stays one link away inside it.

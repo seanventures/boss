@@ -253,6 +253,7 @@ export function NeedsBody({ ctx, n }: { ctx: PxCtx; n: NeedsYou }) {
     <>
       {n.mini.length ? <Flow nodes={n.mini} testid="px-drawer-needs-flow" /> : null}
       {n.detail ? <p style={{ margin: 0, lineHeight: 1.5 }}>{n.detail}</p> : null}
+      {n.entries && n.entries.length > 1 ? <NeedsEntries ctx={ctx} n={n} /> : null}
       {/* What the Shepherd found about the stuck or refused work this asks about (stuck_work). */}
       <DiagnosisFlow d={n.diagnosis} testId="px-drawer-needs-diagnosis" />
       <ReleaseList n={n} />
@@ -266,6 +267,55 @@ export function NeedsBody({ ctx, n }: { ctx: PxCtx; n: NeedsYou }) {
         {n.action?.decision_id ? <PxLink href={`?area=decisions&decision=${encodeURIComponent(n.action.decision_id)}`} testid="px-drawer-needs-approvals"><Warning size={11} aria-hidden /> Open in Approvals</PxLink> : null}
       </div>
     </>
+  );
+}
+
+
+/** EACH ENTRY OF AN ALWAYS-ON CARD, ANSWERED ON ITS OWN (engine asks.answer_entry): its
+ *  question, its one-line finding, and its own buttons ("Give it $1 more", "Close it",
+ *  "I'll take it"). An answered entry leaves the card; the card closes when none is left. */
+function NeedsEntries({ ctx, n }: { ctx: PxCtx; n: NeedsYou }) {
+  const guarded = useGuardedCall();
+  const [busy, setBusy] = React.useState("");
+  const [done, setDone] = React.useState<Record<string, string>>({});
+  const [said, setSaid] = React.useState<{ text: string; tone?: "red" | "green" }>({ text: "" });
+  const id = n.action?.decision_id;
+  if (!id || !n.entries) return null;
+  const answer = async (wid: string, key: string, label: string) => {
+    setBusy(`${wid}:${key}`); setSaid({ text: "" });
+    try {
+      if (isPxDemo()) { setSaid({ text: "Sample mode — nothing was sent." }); return; }
+      await guarded(`${label}.`, () => idPost(
+        `/v1/ambient/cards/${encodeURIComponent(id)}/entries/${encodeURIComponent(wid)}/answer`,
+        { project_id: ctx.projectId, answer: key }));
+      setDone((d) => ({ ...d, [wid]: label }));
+      notifyChanged("decision", { id });
+      ctx.refreshWork();
+    } catch (e) {
+      setSaid({ text: e instanceof IdentityError && e.code === "step_up_cancelled" ? "Not sent: you cancelled the check." : refusalSentence(e), tone: "red" });
+    } finally { setBusy(""); }
+  };
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }} data-testid="px-drawer-needs-entries">
+      {n.entries.map((e) => (
+        <div key={e.work_item_id} className="px-card" style={{ padding: 10, display: "flex", flexDirection: "column", gap: 6 }}
+             data-testid={`px-drawer-needs-entry-${e.work_item_id}`}>
+          <strong style={{ fontSize: ".72rem", lineHeight: 1.4 }}>{e.question}</strong>
+          {e.detail ? <span className="px-faint" style={{ fontSize: ".64rem", lineHeight: 1.45 }}>{e.detail}</span> : null}
+          {done[e.work_item_id] ? <Said text={`${done[e.work_item_id]} — sent.`} tone="green" /> : e.answers.length ? (
+            <div className="px-row px-wrap">
+              {e.answers.map((a, i) => (
+                <GatedButton key={a.key} permission="decision:approve" projectId={ctx.projectId} className="px-btn" data-size="s"
+                             {...(i === 0 ? { "data-kind": "amber" } : {})} disabled={Boolean(busy)}
+                             data-testid={`px-drawer-needs-entry-answer-${a.key}`}
+                             onClick={() => void answer(e.work_item_id, a.key, a.label)}>{a.label}</GatedButton>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      ))}
+      <Said text={said.text} tone={said.tone} />
+    </div>
   );
 }
 
@@ -329,6 +379,36 @@ export function DecisionActs({ ctx, n, onDone }: { ctx: PxCtx; n: NeedsYou; onDo
       setSaid({ text: e instanceof IdentityError && e.code === "step_up_cancelled" ? "Not sent: you cancelled the check." : refusalSentence(e), tone: "red" });
     } finally { setBusy(false); }
   };
+  // AN ALWAYS-ON CARD ANSWERS WITH ITS OWN WORDS ("Give it $1 more", "Close both", "I'll take
+  // it"), each sent as the decision action that carries it — never a bare Approve / Reject.
+  const own = async (a: { action: "approve" | "reject" | "revise"; label: string }) => {
+    setBusy(true); setSaid({ text: "" });
+    try {
+      if (isPxDemo()) { setSaid({ text: "Sample mode — nothing was sent." }); return; }
+      await guarded(`${a.label}.`, () => idPost(`/v1/decisions/${encodeURIComponent(id)}/${a.action}`,
+                                                { note: `${a.label} (from the project page).` }));
+      setSaid({ text: `${a.label} — sent.`, tone: "green" });
+      notifyChanged("decision", { id });
+      ctx.refreshWork();
+      onDone?.();
+    } catch (e) {
+      setSaid({ text: e instanceof IdentityError && e.code === "step_up_cancelled" ? "Not sent: you cancelled the check." : refusalSentence(e), tone: "red" });
+    } finally { setBusy(false); }
+  };
+  if (n.answers && n.answers.length) {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 8, flex: "1 1 100%" }} data-testid="px-drawer-needs-acts">
+        <div className="px-row px-wrap">
+          {n.answers.map((a, i) => (
+            <GatedButton key={a.action} permission="decision:approve" projectId={ctx.projectId} className="px-btn" data-size="s"
+                         {...(i === 0 ? { "data-kind": "amber" } : {})} disabled={busy}
+                         data-testid={`px-drawer-needs-answer-${a.action}`} onClick={() => void own(a)}>{a.label}</GatedButton>
+          ))}
+        </div>
+        <Said text={said.text} tone={said.tone} />
+      </div>
+    );
+  }
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8, flex: "1 1 100%" }} data-testid="px-drawer-needs-acts">
       {rejecting ? (

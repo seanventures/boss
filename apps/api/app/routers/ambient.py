@@ -21,6 +21,7 @@ from typing import Any, Callable, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import text
 
 from boss_engine.db import begin
 from boss_engine.identity import P, Scope, permit
@@ -86,6 +87,12 @@ class ModeBody(BaseModel):
     mode: str = Field(pattern="^(off|propose|route)$")
     actor: Optional[str] = None
     reason: str = Field(default="", max_length=500)
+
+
+class EntryAnswerBody(Body):
+    """One entry of the project's always-on card answered on its own (asks.answer_entry)."""
+    answer: str = Field(pattern="^(approve|reject|take|hold)$")
+    note: str = Field(default="", max_length=500)
 
 
 class SweepBody(Body):
@@ -179,6 +186,22 @@ def build_ambient_router(*, engine, settings: Callable[[], Any],
             _item(c, payload.project_id, work_item_id)
             return {"item": _errors(lambda: board.dismiss(c, work_item_id, actor=actor,
                                                           reason=payload.reason))}
+
+    # ── the project's one card, answered entry by entry ──────────────────────────────────────
+    @router.post("/v1/ambient/cards/{decision_id}/entries/{work_item_id}/answer")
+    @permit(P.DECISION_APPROVE, scope=Scope.of("decision", path="decision_id"))
+    def answer_entry(decision_id: str, work_item_id: str, payload: EntryAnswerBody) -> dict:
+        from boss_engine.services.ambient import asks
+
+        with begin(engine) as c:
+            actor = require_write_actor(c, payload.project_id, payload.actor, "decision_resolve")
+            owner = c.execute(text("SELECT project_id FROM decisions WHERE id = :d"),
+                              {"d": decision_id}).scalar()
+            if owner != payload.project_id:
+                raise HTTPException(status_code=404, detail="no such card here")
+            return _errors(lambda: asks.answer_entry(
+                c, settings(), decision_id, work_item_id, answer=payload.answer, actor=actor,
+                note=payload.note or None))
 
     # ── signals ──────────────────────────────────────────────────────────────────────────────
     @router.get("/v1/ambient/signals")
