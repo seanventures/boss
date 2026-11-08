@@ -188,3 +188,9 @@
 @media (max-width: 760px) { .af-axis div span:not(:first-child):not(:last-child) { display: none; } }
 /* the inline sheet scrolls with the page, so its footer is not sticky here (it is in the real sheet) */
 @media (max-width: 760px) { .af-sheet .np2-foot { position: static; } }
+
+/* one-line activity summary (Where people decide v2) */
+.af-sum{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:12px 0 4px;padding:10px 14px;border:1px solid var(--line);border-radius:12px;background:var(--panel);font-size:.6rem;color:var(--muted)}
+.af-sum b{font-size:.72rem;margin-right:2px}
+.af-sum .sep{color:var(--faint)}
+@media (max-width:640px){.af-sum .sep{display:none}.af-sum>span{flex-basis:100%}}
