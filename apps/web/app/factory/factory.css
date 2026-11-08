@@ -9,7 +9,7 @@
 /* Header: one row. */
 .fx-head { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 14px; min-width: 0; }
 .fx-head[hidden] { display: none; }
-.fx-title { margin: 0; font-size: 1.15rem; font-weight: 700; color: var(--ink); }
+.fx-title { margin: 0; font-size: var(--fs-page); font-weight: 700; color: var(--ink); }
 .fx-tabs { display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-2); }
 .fx-tab {
   display: inline-flex; align-items: center; gap: 6px; min-height: 30px; padding: 0 12px; border: 0; border-radius: 999px;
@@ -92,7 +92,7 @@
 /* The storm at a glance (walk D22): the line wrapper, and BOSS's hourglass while it waits. */
 .fx-row-line { display: inline-flex; align-items: center; gap: 4px; min-width: 0; overflow: hidden; }
 .fx-row-line > .px-st { margin-right: 10px; }
-.fx-row-line > .px-st .px-st-n { min-width: 22px; height: 22px; font-size: .62rem; }
+.fx-row-line > .px-st .px-st-n { min-width: 22px; height: 22px; font-size: var(--fs-tag); }
 .fx-row-line > .px-st .px-st-w { width: 12px; }
 .fx-wait {
   display: inline-flex; align-items: center; justify-content: center; flex: none; border-radius: 50%;
@@ -121,7 +121,7 @@
 .fx-bay-body { display: inline-flex; flex-direction: column; align-items: center; gap: 4px; min-width: 64px; }
 .fx-bay-name {
   padding: 0 4px; border: 0; border-radius: 4px; background: none; color: var(--faint); font: inherit;
-  font-size: 0.57895rem; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; cursor: pointer;
+  font-size: var(--fs-label); font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; cursor: pointer;
 }
 .fx-bay-name[aria-pressed="true"] { color: var(--accent-text); }
 .fx-bay-name:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
@@ -206,7 +206,7 @@
   border: 1px solid var(--border-strong); border-radius: var(--r-xl); background: var(--surface); box-shadow: var(--shadow);
 }
 .fx-sheet-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.fx-sheet-head h2 { margin: 0; font-size: 1rem; }
+.fx-sheet-head h2 { margin: 0; font-size: var(--fs-page); }
 .fx-sheet-sub { flex: 1; color: var(--muted); font-size: var(--fs-ui); }
 .fx-sheet-actions { display: flex; align-items: center; gap: 10px; }
 .fx-waive-gates { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; border: 0; }
@@ -235,9 +235,9 @@
    scrolling sideways inside the row rather than the page; Hide puts it away. */
 .fx-link-users-wrap { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; margin-top: 6px; max-width: 100%; overflow-x: auto; }
 .fx-link-users { font-size: var(--fs-ui); border-collapse: collapse; }
-.fx-link-users th { padding: 2px 12px 2px 0; text-align: left; font: 600 0.66rem var(--mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--faint); }
+.fx-link-users th { padding: 2px 12px 2px 0; text-align: left; font: 600 var(--fs-label) var(--mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--faint); }
 .fx-link-users td { padding: 3px 12px 3px 0; color: var(--ink); white-space: nowrap; border-top: 1px solid var(--border); }
-.fx-link-users code { font: 0.76rem var(--mono); white-space: normal; word-break: break-all; }
+.fx-link-users code { font: var(--fs-ui) var(--mono); white-space: normal; word-break: break-all; }
 .fx-link-users td:nth-child(2) { white-space: normal; min-width: 12em; }
 .fx-link { flex-wrap: wrap; }
 .fx-link > .fx-link-users-wrap { flex: 1 1 100%; }
@@ -356,4 +356,6 @@
 .fx .ag-out-chip { font-size: var(--fs-meta); }
 .fx .ag-out-age { font-size: var(--fs-tag); }
 .fx .ag-link { font-size: var(--fs-meta); }
+.fx .ag-btn { font-size: var(--fs-ui); }
+.fx .ag-att-error { font-size: var(--fs-meta); }
 .fx .fx-row-name, .fx .fx-row-open { font-size: var(--fs-row); }

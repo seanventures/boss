@@ -1,7 +1,7 @@
 /* The station strip (app/stations.tsx): one look on every surface that lists work. */
 @keyframes st-ring { 0% { opacity: .7; transform: scale(.96); } 100% { opacity: 0; transform: scale(1.12); } }
 .px-st { display: flex; align-items: center; flex: none; }
-.px-st-n { min-width: 18px; height: 18px; padding: 0 3px; border-radius: 5px; display: grid; place-items: center; font-size: .48rem; font-weight: 800;
+.px-st-n { min-width: 1.5em; height: 1.5em; padding: 0 3px; border-radius: 5px; display: grid; place-items: center; font-size: var(--fs-tag); font-weight: 800;
   border: 1.5px solid var(--border-strong); background: var(--surface-3); color: var(--faint); position: relative; }
 .px-st-n[data-s="done"] { border-color: var(--green); color: var(--green); background: var(--green-soft); }
 .px-st-n[data-s="now"] { border-color: var(--teal); color: var(--teal); background: color-mix(in srgb, var(--teal) 14%, transparent); }
