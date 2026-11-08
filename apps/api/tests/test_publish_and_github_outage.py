@@ -269,6 +269,41 @@ def test_creating_a_repository_answers_in_words_for_each_case():
 
 # ── 922: GitHub outage ───────────────────────────────────────────────────────────────────────
 
+def _preview_clones_the_mirror(engine, settings, run_id: str, mirror: Path) -> None:
+    """start_preview of a waiting_for_github run: the tree it would run comes from the mirror."""
+    from boss_engine.services import preview_service
+
+    class Cloned(Exception):
+        pass
+
+    seen: dict = {}
+
+    def stop_after_clone(_engine, _run_id, workdir):
+        seen["files"] = sorted(p.name for p in Path(workdir).iterdir())
+        raise Cloned()
+
+    def no_github(*_a, **_k):
+        raise AssertionError("a waiting build's preview must not reach for GitHub")
+
+    patch = pytest.MonkeyPatch()
+    try:
+        patch.setattr(preview_service, "_preview_sandbox", lambda _pid: None)
+        patch.setattr(preview_service, "_record_repo_manifests", stop_after_clone)
+        patch.setattr(preview_service, "github_token_for", no_github)
+        from boss_engine.identity import runs as identity_runs
+
+        patch.setattr(identity_runs, "repo_access", no_github)
+        with pytest.raises(Cloned):
+            preview_service.start_preview(engine, settings, run_id)
+    finally:
+        patch.undo()
+    assert "cart.js" in seen["files"] and "index.html" in seen["files"]
+    with engine.connect() as db:
+        run = dict(db.execute(text("SELECT * FROM code_task_runs WHERE id = :r"),
+                              {"r": run_id}).mappings().one())
+    assert preview_service.github_wait_mirror(run, settings) == mirror
+
+
 def test_a_github_outage_finishes_the_build_locally_then_pushes_and_opens_the_pr(
         engine, world, repo_root, hub):
     from boss_engine.services import github_outage, stuck_work
@@ -342,6 +377,8 @@ def test_a_github_outage_finishes_the_build_locally_then_pushes_and_opens_the_pr
         queued = db.execute(text("SELECT count(*) FROM jobs WHERE project_id = :p AND kind = "
                                  "'repo.push_pending' AND status = 'queued'"), {"p": pid}).scalar()
     assert run["status"] == "waiting_for_github" and queued == 1
+    # Its preview clones the local mirror (GitHub still answers 502 and has no branch yet).
+    _preview_clones_the_mirror(engine, settings, run_id, mirror)
     # The Shepherd's diagnosis says what waits and why.
     with engine.connect() as db:
         reason = stuck_work.wait_reason(db, run, job=None)

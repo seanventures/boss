@@ -2655,6 +2655,36 @@ def workspace_app_root(workspace: Path) -> Optional[Path]:
     return None
 
 
+def github_wait_mirror(run: dict, settings=None, *, any_status: bool = False) -> Optional[Path]:
+    """BOSSAPP-922: the local mirror that holds a GitHub build's branch while GitHub is down.
+
+    A build that ended `waiting_for_github` committed its work into the repository's bare mirror
+    (<repo root>/_mirrors/<owner>/<repo>.git); the push and the pull request come later. Until
+    then GitHub has no branch to clone, so its preview clones the mirror instead of failing.
+    `any_status` also answers for a run in any other state (a GitHub clone that just failed on an
+    outage). None when the run's repository is local, has no mirror, or the mirror lacks the
+    branch."""
+    from . import local_repo
+    from .github_outage import WAITING_STATUS
+
+    if not any_status and str(run.get("status") or "") != WAITING_STATUS:
+        return None
+    spec = run.get("spec") or {}
+    owner = str(spec.get("owner") or getattr(settings, "target_github_owner", "") or "")
+    repo = str(spec.get("repo") or getattr(settings, "target_github_repo", "") or "")
+    if not owner or not repo or local_repo.is_local_owner(owner):
+        return None
+    fctx = run.get("finalize_ctx") or {}
+    branch = fctx.get("work_branch") or f"boss/code/{fctx.get('root_run_id') or run.get('id')}"
+    try:
+        mirror = local_repo.mirror_path(owner, repo, settings)
+        if (mirror / "HEAD").is_file() and local_repo.branch_exists(mirror, branch):
+            return mirror
+    except local_repo.LocalRepoError:
+        return None
+    return None
+
+
 def assert_previewable(run: dict, run_id: str) -> None:
     """A preview is meaningful once the work exists as a PR *or* verify-green files.
 
@@ -2665,6 +2695,9 @@ def assert_previewable(run: dict, run_id: str) -> None:
     if run.get("pull_request_url"):
         return
     if _verify_green(run) and find_local_run_workspace(run_id) is not None:
+        return
+    # Built and committed while GitHub was down: the work exists, in the local mirror.
+    if github_wait_mirror({**run, "id": run.get("id") or run_id}) is not None:
         return
     raise PreviewNotReady(run_id, str(run.get("status") or "?"), str(run.get("phase") or "?"))
 
@@ -2774,18 +2807,42 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
         # The previewed app's code runs in this checkout: no token may be in it (IDENTITY.md
         # §7.10) — through egress under a delegated principal, else in git's environment only.
         from boss_engine.identity import runs as _identity_runs
+        from . import local_repo as _local_repo
+        from .transient_retry import is_transient_git_error
+
+        def _clone_mirror(mirror: Path):
+            # BOSSAPP-922: the branch is committed in the repository's local mirror and GitHub
+            # does not have it yet. file://, no credential, no egress.
+            return owned_process.boss_run(
+                ["git", "clone", "--depth", "1", "--branch", branch,
+                 _local_repo.file_url(mirror), str(workdir)],
+                capture_output=True, text=True, timeout=120, env=_local_repo._env(),  # noqa: SLF001
+                **({"umask": 0} if ident is not None else {}))
 
         def _token() -> str:
             with begin(engine) as _c:
                 return github_token_for(_c, settings, project_id, owner, repo) or ""
 
-        with _identity_runs.repo_access(engine, host=getattr(settings, "target_repo_host", "github") or "github",
-                                        owner=owner, repo=repo, project_id=project_id, token=_token) as _access:
-            clone_url = _access.url
-            clone = owned_process.boss_run(["git", "clone", "--depth", "1", "--branch", branch, clone_url, str(workdir)],
-                               capture_output=True, text=True, timeout=120, env=_access.boss_environ(),
-                               # BOSS's git, writing a tree the preview's uid must be able to edit
-                               **({"umask": 0} if ident is not None else {}))
+        _run_ref = {**run, "id": run.get("id") or run_id}
+        waiting_mirror = github_wait_mirror(_run_ref, settings)
+        if waiting_mirror is not None:
+            clone = _clone_mirror(waiting_mirror)
+        else:
+            with _identity_runs.repo_access(engine, host=getattr(settings, "target_repo_host", "github") or "github",
+                                            owner=owner, repo=repo, project_id=project_id, token=_token) as _access:
+                clone_url = _access.url
+                clone = owned_process.boss_run(["git", "clone", "--depth", "1", "--branch", branch, clone_url, str(workdir)],
+                                   capture_output=True, text=True, timeout=120, env=_access.boss_environ(),
+                                   # BOSS's git, writing a tree the preview's uid must be able to edit
+                                   **({"umask": 0} if ident is not None else {}))
+            if clone.returncode != 0 and is_transient_git_error(clone.stderr):
+                # GitHub did not answer: the mirror has the same branch when the build left it there.
+                fallback = github_wait_mirror(_run_ref, settings, any_status=True)
+                if fallback is not None:
+                    for leftover in list(workdir.iterdir()) if workdir.is_dir() else []:
+                        (shutil.rmtree(leftover, ignore_errors=True) if leftover.is_dir()
+                         and not leftover.is_symlink() else leftover.unlink(missing_ok=True))
+                    clone = _clone_mirror(fallback)
         if clone.returncode != 0:
             return _fail(f"git clone failed: {(clone.stderr or '')[-300:]}")
     _record_repo_manifests(engine, run_id, workdir)
