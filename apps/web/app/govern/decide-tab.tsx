@@ -77,8 +77,8 @@ function ListCard({ card, open, onOpen }: { card: Card; open: boolean; onOpen: (
               data-kind={card.key} aria-expanded={open} title="Fixed: changing the list is always a person, with a passkey">
         <span className="wd-b-h"><span className="wd-bi"><I size={16} weight="bold" /></span><b>{card.title}</b><LockSimple size={13} className="wd-caret" /></span>
         <span className="wd-def">{card.line}</span>
-        <span className="wd-meta"><span className="wd-tag">fixed</span><span className="wd-spacer" />
-          {card.last_change ? `last change ${ago(card.last_change.at)}` : "never changed"}</span>
+        <span className="wd-meta"><span className="wd-meta-l"><span className="wd-tag">fixed</span></span>
+          <span className="wd-meta-r">{card.last_change ? `last change ${ago(card.last_change.at)}` : "never changed"}</span></span>
         <span className="wd-why">{card.why}</span>
       </button>
     );
@@ -92,15 +92,20 @@ function ListCard({ card, open, onOpen }: { card: Card; open: boolean; onOpen: (
       <span className="wd-b-h"><span className="wd-bi"><I size={16} weight="bold" /></span><b>{card.title}</b><CaretDown size={12} className="wd-caret" /></span>
       <span className="wd-def" data-testid="wd-card-line">{card.line}</span>
       <span className="wd-meta">
-        <span className="wd-scope" title="Where this rule is set">
-          <span aria-selected="true">Install</span>
-          {card.scope.per_project ? <span>{card.scope.projects.length ? `${card.scope.projects.length} project${card.scope.projects.length > 1 ? "s" : ""}` : "project"}</span> : null}
+        <span className="wd-meta-l">
+          <span className="wd-scope" title="Where this rule is set">
+            <span aria-selected="true">Install</span>
+            {card.scope.per_project ? <span>{card.scope.projects.length ? `${card.scope.projects.length} project${card.scope.projects.length > 1 ? "s" : ""}` : "project"}</span> : null}
+          </span>
+          <span className="wd-who-row">
+            <Face who={card.decider.kind === "person" ? { name: card.decider.label } : card.decider.people[0] ?? null} />
+            <span className="wd-who" data-testid="wd-card-who">{card.decider.label}{step ? ` · ${step}` : ""}</span>
+          </span>
         </span>
-        <Face who={card.decider.kind === "person" ? { name: card.decider.label } : card.decider.people[0] ?? null} />
-        <span className="wd-who" data-testid="wd-card-who">{card.decider.label}{step ? ` · ${step}` : ""}</span>
-        <span className="wd-spacer" />
-        <Mini bars={card.bars} />
-        <span className="wd-count" data-testid="wd-card-count" title="Decisions of this kind in the last 24 hours">{card.count_24h} · 24h</span>
+        <span className="wd-meta-r" title="Decisions of this kind in the last 24 hours">
+          <Mini bars={card.bars} />
+          <span className="wd-count" data-testid="wd-card-count">{card.count_24h} · 24h</span>
+        </span>
       </span>
       {windows.length ? <span className="wd-quiet-chip">quiet {windowWords(windows[0])}{windows.length > 1 ? ` +${windows.length - 1}` : ""}</span> : null}
       <span className="wd-why">{card.why}</span>
@@ -179,7 +184,7 @@ function Popover({ card, board, projectId, onClose, onSaved }: {
                                   ...(card.key === "spend" && draft.cap_usd !== undefined ? { cap_usd: draft.cap_usd } : {}) };
     const r = await saveRule(projectId, card.key, rule, draft.scope === "project" ? projectId : "install");
     setBusy(false);
-    if (!r.ok) { setRefusal(r.error ?? "Not saved"); showToast("error", `Not saved: ${r.error}`); return; }
+    if (!r.ok) { const why = `Not saved: ${r.error ?? "the API refused it"}`; setRefusal(why); showToast("error", why); return; }
     showToast("success", `${card.title}: saved`);
     onSaved();
     onClose();

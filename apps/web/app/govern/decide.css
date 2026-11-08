@@ -37,6 +37,12 @@
 .wd-chip { display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--border-strong);
   background: var(--surface-2); color: var(--ink-soft); font-size: var(--fs-meta); text-decoration: none; max-width: 100%; overflow-wrap: anywhere; }
 a.wd-chip:hover { border-color: var(--accent-line); color: var(--ink); }
+/* Govern's 44px phone targets (.gv a, max-width 719px) drew every chip as a 44px pill: the chip
+   keeps its own 28px height and a transparent 8px halo carries the 44px target instead. */
+@media (max-width: 719px) {
+  .gv a.wd-chip { min-height: 28px; position: relative; }
+  .gv a.wd-chip::after { content: ""; position: absolute; inset: -8px -2px; }
+}
 .wd-kill { min-width: 0; }
 
 /* the one line */
@@ -53,10 +59,18 @@ a.wd-chip:hover { border-color: var(--accent-line); color: var(--ink); }
 .wd-cap-sub { font-family: inherit; letter-spacing: 0; text-transform: none; font-weight: 400; }
 
 /* the cards */
-.wd-bounds { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 12.5rem), 1fr)); gap: 12px; }
+/* Four a row (the wireframe) at any wide width, two on a tablet-wide column, one on a phone:
+   sized by the page's own width, not the window's, so the sidebar never squeezes a fifth in. */
+.wd { container: wd / inline-size; }
+.wd-bounds { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+@container wd (max-width: 900px) { .wd-bounds { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@container wd (max-width: 460px) { .wd-bounds { grid-template-columns: minmax(0, 1fr); } }
 .wd-b { position: relative; display: flex; flex-direction: column; align-items: stretch; gap: 7px; text-align: left; min-width: 0;
   border: 1.5px solid color-mix(in srgb, var(--amber) 42%, transparent); border-radius: 14px; padding: 12px 13px 11px; background: var(--surface);
   color: var(--ink); font: inherit; cursor: pointer; transition: border-color .12s, background .12s, box-shadow .12s; }
+/* Govern's phone tap-target rule centres every button's content (.gv button, max-width 719px);
+   a card is a button that reads top to bottom, left-aligned, at every width. */
+.gv .wd-b { align-items: stretch; justify-content: flex-start; }
 .wd-b:hover, .wd-b[data-open] { border-color: var(--amber); background: color-mix(in srgb, var(--amber) 6%, var(--surface)); }
 .wd-b[data-open] { box-shadow: 0 0 0 3px color-mix(in srgb, var(--amber) 22%, transparent); }
 .wd-b[data-lock] { border-color: var(--border-strong); background: var(--surface-2); }
@@ -69,6 +83,11 @@ a.wd-chip:hover { border-color: var(--accent-line); color: var(--ink); }
 .wd-caret { margin-left: auto; color: var(--faint); flex: none; }
 .wd-def { font-size: var(--fs-body); color: var(--ink-soft); line-height: 1.4; }
 .wd-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: var(--fs-meta); color: var(--faint); min-width: 0; }
+/* who decides on the left (wraps inside itself), the 24 h tally always at the right */
+.wd-b .wd-meta { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 4px 8px; flex-wrap: nowrap; }
+.wd-meta-l { display: flex; align-items: center; flex-wrap: wrap; gap: 5px 6px; min-width: 0; }
+.wd-who-row { display: inline-flex; align-items: center; gap: 5px; min-width: 0; }
+.wd-meta-r { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
 .wd-who { color: var(--muted); min-width: 0; overflow-wrap: anywhere; }
 .wd-count { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .wd-why { font-size: var(--fs-meta); color: var(--faint); border-top: 1px dashed var(--border); padding-top: 7px; line-height: 1.4; }
@@ -110,7 +129,8 @@ a.wd-chip:hover { border-color: var(--accent-line); color: var(--ink); }
 .wd-in { position: relative; display: grid; grid-template-columns: 40px minmax(0, 1fr); gap: 8px 12px; padding: 12px 14px; border-radius: 14px;
   border: 1.5px solid var(--accent-line); background: var(--surface); box-shadow: var(--glow); }
 .wd-in-kind { width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; color: var(--accent-text); background: var(--accent-soft); }
-.wd-in textarea { width: 100%; min-height: 72px; resize: vertical; border: 0; outline: 0; background: transparent; color: var(--ink); font: inherit;
+/* grows with the words (a phone showed 3 lines of a 4-line rule), up to 14 lines, then scrolls */
+.wd-in textarea { width: 100%; min-height: 72px; max-height: 14lh; field-sizing: content; resize: vertical; border: 0; outline: 0; background: transparent; color: var(--ink); font: inherit;
   font-size: var(--fs-body); line-height: 1.5; }
 .wd-in-foot { grid-column: 1 / -1; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .wd-ub { display: flex; flex-direction: column; gap: 10px; padding: 12px 16px; border-radius: 14px; min-width: 0; animation: wd-rise .15s ease-out;

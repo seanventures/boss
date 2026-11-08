@@ -133,3 +133,16 @@ def test_a_quiet_window_wraps_the_weekend_in_its_own_time_zone():
     with pytest.raises(dl.RuleLooser):
         dl.validate("prod_deploy", {"quiet": [{"from_day": "fri", "from_time": "25:00",
                                                "to_day": "mon", "to_time": "08:00"}]})
+
+
+def test_a_trail_names_its_actor_in_words_never_a_raw_key():
+    """The card's trail said "ceo approved …" and "autonomy:full_auto …": a seat reads as its
+    name, an automatic approval as BOSS, and a person not in the roster as nothing (the console
+    draws a person's face)."""
+    assert dl._actor_words("ceo") == "Owner seat"
+    assert dl._actor_words("release_manager") == "Release seat"
+    assert dl._actor_words("autonomy:full_auto") == "BOSS (automatic)"
+    assert dl._actor_words("auto_approval") == "BOSS (automatic)"
+    assert dl._actor_words("usr_abc") is None
+    assert dl._actor_words("") is None
+    assert ":" not in (dl._actor_words("policy:merge") or "")

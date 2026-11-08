@@ -730,6 +730,18 @@ def decider_view(decider: Mapping[str, Any], seats: Mapping[str, list[dict[str, 
             "people": holders, "vacant": not holders and seat != "owner"}
 
 
+def _actor_words(who: str) -> Optional[str]:
+    """A trail's actor that is not a person in the roster, in words: a seat by its name, an
+    automatic approval as BOSS — never a raw key ("ceo", "autonomy:full_auto")."""
+    if not who or who.startswith("usr_"):
+        return None
+    if who in SEAT_WORDS:
+        return SEAT_WORDS[who]
+    if who.startswith(("autonomy:", "auto_approval", "policy:", "system")):
+        return "BOSS (automatic)"
+    return who.replace("_", " ")
+
+
 def board(connection: Any, *, project_id: Optional[str], org_id: Optional[str],
           viewer: Optional[str] = None) -> dict[str, Any]:
     """GET /v1/decide: the 7 + 1 cards, each with its rule in force, who decides, scope, its 24 h
@@ -767,7 +779,7 @@ def board(connection: Any, *, project_id: Optional[str], org_id: Optional[str],
     for card in cards:
         for item in card.get("trail") or []:
             who = str(item.get("who") or "")
-            item["who_name"] = names.get(who) or (None if who.startswith("usr_") else who or None)
+            item["who_name"] = names.get(who) or _actor_words(who)
     return {"cards": cards, "people": roster, "backstop": {"spend_usd": BACKSTOP_SPEND_USD}}
 
 
