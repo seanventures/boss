@@ -31,6 +31,7 @@ SCHEDULER_NAME = re.compile(
 #: entry point -> the function in the same file whose body names projects_archive (itself, or the
 #: query helper it picks its work with).
 GUARDED: dict[str, str] = {
+    "services/add_server.py::tick": "tick",                       # server setups + the host watch
     "services/jobs.py::claim_job": "claim_job",                   # the lease: every job
     "services/knowledge/repo_index.py::enqueue_due": "_due_rows",
     "services/knowledge/ingest.py::tick": "tick",
@@ -80,6 +81,8 @@ _RECOVERY = ("recovers work already in flight; any new attempt goes through star
 _TARGETS = "probes only the targets deployment_health.sweep picked, which skips archived projects"
 
 EXEMPT: dict[str, str] = {
+    "services/add_server.py::claim": "takes the next attempt of ONE server setup that the guarded "
+                                     "tick (or that server's own page) picked; starts nothing itself",
     "identity/claim.py::claim": "the owner claim at install time, not a scheduler",
     "services/ambient/signals.py::sweep": "records what the sensors saw; starts no work — the "
                                           "Chief of Staff's tick (guarded) never triages an "
@@ -155,6 +158,7 @@ WORKER_ROUTES: dict[str, str] = {
     "/v1/activity/retention/prune": _HOUSE,
     "/v1/telemetry/tick": "install-wide Improve BOSS telemetry",
     "/v1/ambient/tick": "tick:services/ambient/chief_of_staff.py::tick",
+    "/v1/servers/tick": "tick:services/add_server.py::tick",
     "/v1/ambient/learning/tick": "tick:services/ambient/roadmap.py::tick",
     "/v1/qa/benchmark-apps/tuning-sweep": "the install's benchmark ledger",
     "/v1/model-gateway/leases": _LEASE, "/v1/model-gateway/leases/{x}/heartbeat": _LEASE,

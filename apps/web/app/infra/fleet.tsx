@@ -18,6 +18,7 @@ import type { Fleet, Rack, Resident, StageAction } from "../../lib/infra-view";
 import { openDockAbout } from "../../lib/dock-subject";
 import { navigate } from "../agents/live-util";
 import { showToast } from "../client-forms";
+import { AddServerSheet } from "./add-server";
 import { EnrollSheet, HostSheet, HwAccountSheet } from "./add-sheets";
 import { HostDrawer } from "./host-drawer";
 import { afterWrite, generateHostKey, provisionHost, verifyHost } from "./infra-actions";
@@ -31,7 +32,7 @@ import { AppTargetSheet } from "./target-sheet";
 
 // ── `+ Add ▾` is opened from the header and from the racks (`+ Place app`, `Add host`) ──────
 
-export type AddItem = "host" | "enroll" | "target" | "secret" | "hwaccount";
+export type AddItem = "server" | "host" | "enroll" | "target" | "secret" | "hwaccount";
 const ADD_EVENT = "boss:infra-add";
 export function openInfraAdd(item: AddItem, hostId?: string | null): void {
   try { window.dispatchEvent(new CustomEvent(ADD_EVENT, { detail: { item, hostId: hostId ?? null } })); } catch { /* not a browser */ }
@@ -147,7 +148,7 @@ export function FleetTab({ projectId, actor, url, go, query, fleet }: InfraTabPr
           <Empty testId="infra-fleet-empty">
             <span>No machines yet</span>
             {canWrite && pre?.outwardSshAllowed ? (
-              <GatedButton permission="host:manage" type="button" className="ag-btn" data-testid="inf-empty-add-host" onClick={() => openInfraAdd("host")}>Add host</GatedButton>
+              <GatedButton permission="host:manage" type="button" className="ag-btn" data-testid="inf-empty-add-host" onClick={() => openInfraAdd("server")}>Add a server</GatedButton>
             ) : null}
           </Empty>
         ) : null}
@@ -175,7 +176,7 @@ export function FleetTab({ projectId, actor, url, go, query, fleet }: InfraTabPr
 
 // ── `+ Add ▾` ───────────────────────────────────────────────────────────────────────────────
 
-const ADD_ITEMS: readonly AddItem[] = ["host", "enroll", "target", "secret", "hwaccount"];
+const ADD_ITEMS: readonly AddItem[] = ["server", "host", "enroll", "target", "secret", "hwaccount"];
 
 /** `?add=target` asks for an App target; with no machine to place it on, the Host sheet comes first. */
 export function addFromUrl(add: string | null | undefined, hostCount: number): AddItem | null {
@@ -217,7 +218,13 @@ export function InfraAddMenu({ projectId, actor, go, fleet, url }: InfraTabProps
   const pick = (item: AddItem) => () => setOpen({ item, hostId: null });
   return (
     <>
+      {pre.outwardSshAllowed ? (
+        <GatedButton permission="host:manage" className="ag-btn ag-btn-primary" data-testid="infra-add-server-btn"
+                     title="One line, one hand-over of access; the agent sets it up" onClick={pick("server")}>Add a server</GatedButton>
+      ) : null}
       <Menu label="+ Add ▾" testId="infra-add" tip="Add a machine, an app target, a secret or an account" items={[
+        { key: "server", label: "Server", testId: "infra-add-server", hidden: !pre.outwardSshAllowed,
+          tip: "Add a server: name it, hand over access once, and the agent sets it up", onPick: pick("server") },
         { key: "host", label: "Host", testId: "infra-add-host", hidden: !pre.outwardSshAllowed,
           tip: "A machine BOSS reaches over SSH", onPick: pick("host") },
         { key: "enroll", label: "Enroll machine", testId: "infra-add-enroll", tip: "Run the hardware agent on a machine you have", onPick: pick("enroll") },
@@ -225,6 +232,12 @@ export function InfraAddMenu({ projectId, actor, go, fleet, url }: InfraTabProps
         { key: "secret", label: "Secret", testId: "infra-add-secret", tip: "A key or token BOSS keeps by reference", onPick: pick("secret") },
         { key: "hwaccount", label: "Hardware account", testId: "infra-add-hwaccount", tip: "A provider account for machines", onPick: pick("hwaccount") },
       ]} />
+      {open?.item === "server" ? (
+        <AddServerSheet projectId={projectId} actor={actor} onClose={close}
+                        onAdded={(id) => { close(); fleet.refresh(); go({ view: null, host: id, target: null }); }}
+                        onManual={(kind) => setOpen({ item: kind === "dials_in" ? "enroll" : kind === "cloud" ? "hwaccount" : "host", hostId: null })}
+                        onCloud={() => { close(); go({ view: "cloud", host: null }); }} />
+      ) : null}
       {open?.item === "host" ? (
         <HostSheet projectId={projectId} actor={actor} onClose={close}
                    onAdded={(id) => { close(); fleet.refresh(); go({ view: null, host: id, target: null }); }} />

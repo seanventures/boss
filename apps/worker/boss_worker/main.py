@@ -123,6 +123,25 @@ def _sweep_deployment_health(client: ControlPlaneClient) -> None:
         LOGGER.debug("health_sweep_failed", exc_info=True)
 
 
+#: Add a server: the agent's clock for setups waiting on a key and for watched servers.
+SERVERS_TICK_INTERVAL_SECONDS = 10
+_last_servers_tick_monotonic = 0.0
+
+
+def _servers_tick(client: ControlPlaneClient) -> None:
+    """Advance server setups and read watched servers' health, on the background thread.
+    Swallows everything: one unreachable machine never takes the worker down."""
+    global _last_servers_tick_monotonic
+    now = time.monotonic()
+    if now - _last_servers_tick_monotonic < SERVERS_TICK_INTERVAL_SECONDS:
+        return
+    _last_servers_tick_monotonic = now
+    try:
+        client.servers_tick()
+    except Exception:  # noqa: BLE001
+        LOGGER.debug("servers_tick_failed", exc_info=True)
+
+
 #: The monitor scheduler's tick (BOSSAPP-598): rule groups carry their own interval and phase,
 #: so this only has to be shorter than the shortest one (15 s).
 MONITOR_TICK_INTERVAL_SECONDS = 10
@@ -633,6 +652,7 @@ def _run_background_sweeps(settings) -> None:
                 _watch_running_tasks(client)
                 _sweep_deployment_health(client)
                 _monitor_tick(client)
+                _servers_tick(client)
                 _tick_ambient(client)
                 # Learning too: a 45-minute build must not hold the roadmap and outcomes back.
                 _tick_ambient_learning(client)

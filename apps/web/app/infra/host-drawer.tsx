@@ -32,6 +32,8 @@ import { ago, copyText, CopyButton, ErrorLine, localTime, Menu, useNow } from ".
 import { confirmed, Drawer, DrawerSection, Empty, Skeleton, Sheet, StateWord, TypedConfirm } from "./kit";
 import { StageLine } from "./rack";
 import { ServerOverview } from "./server-overview";
+import { ServerSetup } from "./server-setup";
+import { openDockAbout } from "../../lib/dock-subject";
 import { setCrumbTrail } from "../shell-crumb-here";
 
 const STORES: { key: string; label: string; tip: string }[] = [
@@ -350,6 +352,8 @@ export function HostDrawer({ projectId, actor, hostId, canWrite, onClose, onResi
   const [busy, run] = useBusy();
   const [error, setError] = useState<string | null>(null);
   const h = detail.data;
+  const agentSetup = !!h && !h.thisComputer
+    && (h.facts.labels as Record<string, unknown> | undefined)?.added_by === "add_a_server";
   // A drawer opened on a host that is gone (retired and deleted) says so rather than spinning.
   useEffect(() => { setError(null); }, [hostId]);
   // THE BREADCRUMB NAMES THE SERVER (14-01): "Infra / Servers / 203.0.113.20" while it is open —
@@ -380,10 +384,23 @@ export function HostDrawer({ projectId, actor, hostId, canWrite, onClose, onResi
       {!h && detail.error ? <Empty testId="inf-host-missing"><span title={detail.error}>Can&apos;t read this machine</span></Empty> : null}
       {h ? (
         <>
+          {/* ADDED THROUGH ADD A SERVER: the agent sets it up; the diagram leads, and the old stepper
+              stays one press away ("Do it by hand"). */}
+          {agentSetup ? (
+            <ServerSetup hostId={h.id} onAskBoss={() => openDockAbout({
+              subject: { kind: "fleet", id: projectId }, role: "Deployment Manager", history: "push",
+              question: `What would it take to deploy this project onto ${h.name}?` })} />
+          ) : null}
           {/* THE SERVER AT A GLANCE (screen 14): capacity, the projects on it, plugins, changes. */}
           {!h.thisComputer ? <ServerOverview projectId={projectId} hostId={h.id} canExec={canWrite} /> : null}
-          {canWrite && !h.thisComputer && h.stage.stage !== "ready" && h.state.tone !== "none"
-            ? <Setup host={h} actor={actor} refresh={detail.refresh} /> : null}
+          {canWrite && !h.thisComputer && h.stage.stage !== "ready" && h.state.tone !== "none" ? (
+            agentSetup ? (
+              <details className="inf-by-hand" data-testid="inf-host-by-hand">
+                <summary title="The four-stage stepper: generate or adopt a key, authorise, verify, install Docker">Do it by hand</summary>
+                <Setup host={h} actor={actor} refresh={detail.refresh} />
+              </details>
+            ) : <Setup host={h} actor={actor} refresh={detail.refresh} />
+          ) : null}
           <DrawerSection label="FACTS" testId="inf-host-facts">
             {h.thisComputer ? (
               <dl className="inf-facts">

@@ -278,6 +278,10 @@ export type Deployments = {
   environments: Environment[];
   production: { state: "none" | "needs_host" | "ready"; action: { label: string; href: string } | null };
   ship_path: { label: string; state: StepState }[];
+  /** Ready servers this project may use (Add a server never moves an app; the app picks here). */
+  servers: { host_id: string; name: string; address: string; role: string; role_words: string; watching: boolean; used_here: number;
+             shared: boolean; href: string; action: OnboardingAction }[];
+  add_server_href: string;
   history: { id: string; label: string; sub: string; at: string; state: StepState; href: string; word: string; by: string; by_agent: boolean;
     /** A deploy that failed and an agent recovered (a later deploy went live): amber ↺. */
     recovered: boolean }[];
@@ -673,6 +677,14 @@ export const parseDeployments = (v: unknown): Deployments => {
     }),
     production: { state: oneOf(pr.state, ["none", "needs_host", "ready"] as const, "none"),
                   action: act.label || act.href ? { label: s(act.label, "Set up"), href: s(act.href) } : null },
+    servers: a(x.servers).map((v) => {
+      const y = o(v); const ac = o(y.action);
+      return { host_id: s(y.host_id), name: s(y.name), address: s(y.address), role: s(y.role), role_words: s(y.role_words),
+               watching: !!y.watching, used_here: n(y.used_here), shared: !!y.shared, href: s(y.href),
+               action: { label: s(ac.label, "Use"), href: s(ac.href), ...(ac.do === "staging_target" ? { do: "staging_target" as const } : {}),
+                         ...(ac.host_id ? { host_id: s(ac.host_id) } : {}), ...(ac.post ? { post: s(ac.post) } : {}) } };
+    }),
+    add_server_href: s(x.add_server_href, "?area=infra&add=server"),
     ship_path: mini(x.ship_path),
     history: a(x.history).map((h) => {
       const y = o(h);

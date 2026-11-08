@@ -509,6 +509,46 @@ def install_generated_key(connection, settings: Settings, *, host_id: str,
             "next": "Verify the host, then Provision it if docker is missing."}
 
 
+def run_on_host(connection, settings: Settings, host: dict, script: str, *,
+                timeout: int = 60):
+    """ONE WAY TO RUN A COMMAND ON A HOST WITH ITS OWN KEY: resolve the host's credential,
+    materialise it for this one call, run through deploy_service._ssh (the transport every deploy
+    uses, so the host-key pin applies), and discard the key file. Provisioning and a server's
+    setup (services/add_server.py) both come through here."""
+    from .deploy_service import _discard_key_file, _materialise_key, _ssh, _ssh_key_file
+    from .secret_backends import SecretUnavailable, resolve_target_secret
+
+    if not host.get("key_secret_ref"):
+        raise ValueError("no credential for this host yet — adopt or install a key first.")
+    probe_target = {"secret_refs": [{"name": "ssh_key", "secret_ref_id": host["key_secret_ref"]}]}
+    ephemeral = None
+    try:
+        material = resolve_target_secret(connection, probe_target, "ssh_key", settings)
+        key = ephemeral = _materialise_key(material) if material else _ssh_key_file(settings)
+    except (SecretUnavailable, Exception) as exc:  # noqa: BLE001
+        raise ValueError(f"host credential is unusable: {exc}")
+    try:
+        return _ssh(key, host["address"], (host.get("ssh_user") or "root").strip(),
+                    int(host.get("ssh_port") or 22), script, timeout=timeout)
+    finally:
+        if ephemeral:
+            _discard_key_file(ephemeral)
+
+
+def docker_install_script(host: dict) -> str:
+    """Install Docker if it is missing (apt docker.io), start it, and say the version."""
+    sudo = "" if (host.get("ssh_user") or "root").strip() == "root" else "sudo -n "
+    return (
+        "set -e; "
+        "if command -v docker >/dev/null; then echo DOCKER_PRESENT; else "
+        f"  {sudo}env DEBIAN_FRONTEND=noninteractive apt-get update -qq && "
+        f"  {sudo}env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "
+        "     docker.io >/dev/null 2>&1 && echo DOCKER_INSTALLED || echo DOCKER_FAILED; "
+        "fi; "
+        f"{sudo}systemctl enable --now docker >/dev/null 2>&1 || true; "
+        "command -v docker >/dev/null && docker --version || echo DOCKER_STILL_MISSING")
+
+
 def provision_host(connection, settings: Settings, *, host_id: str,
                    install_docker: bool = True,
                    actor: str = "operator") -> dict[str, Any]:
@@ -519,53 +559,21 @@ def provision_host(connection, settings: Settings, *, host_id: str,
     changes someone's machine and should be an explicit act.
     """
     require_direct_host_write_policy(settings)
-    from .deploy_service import _discard_key_file, _materialise_key, _ssh, _ssh_key_file
-    from .secret_backends import SecretUnavailable, resolve_target_secret
-
     host = get_host(connection, host_id)
     if not host:
         raise ValueError(f"no such deployment host: {host_id}")
     if not host.get("key_secret_ref"):
         raise ValueError("no credential for this host yet — adopt or install a key first.")
 
-    user = (host.get("ssh_user") or "root").strip()
     address = host["address"]
-    port = int(host.get("ssh_port") or 22)
-
-    probe_target = {"secret_refs": [{"name": "ssh_key", "secret_ref_id": host["key_secret_ref"]}]}
-    ephemeral = None
-    try:
-        material = resolve_target_secret(connection, probe_target, "ssh_key", settings)
-        key = ephemeral = _materialise_key(material) if material else _ssh_key_file(settings)
-    except (SecretUnavailable, Exception) as exc:  # noqa: BLE001
-        raise ValueError(f"host credential is unusable: {exc}")
-
     steps: list[str] = []
-    try:
-        if install_docker:
-            # Distro packages, not the convenience script piped from the internet: an
-            # unattended `curl | sh` on someone else's machine is not a thing to do quietly.
-            # `sudo -n` so a host without passwordless sudo fails fast instead of hanging on a
-            # prompt nobody can answer.
-            sudo = "" if user == "root" else "sudo -n "
-            script = (
-                "set -e; "
-                "if command -v docker >/dev/null; then echo DOCKER_PRESENT; else "
-                f"  {sudo}env DEBIAN_FRONTEND=noninteractive apt-get update -qq && "
-                f"  {sudo}env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "
-                "     docker.io >/dev/null 2>&1 && echo DOCKER_INSTALLED || echo DOCKER_FAILED; "
-                "fi; "
-                f"{sudo}systemctl enable --now docker >/dev/null 2>&1 || true; "
-                "command -v docker >/dev/null && docker --version || echo DOCKER_STILL_MISSING")
-            res = _ssh(key, address, user, port, script, timeout=300)
-            out = f"{getattr(res, 'stdout', '') or ''}{getattr(res, 'stderr', '') or ''}"
-            steps.append(out.strip()[-400:])
-            if "DOCKER_STILL_MISSING" in out:
-                raise ValueError(f"docker could not be installed on {address}: "
-                                 f"{out.strip()[-300:]}")
-    finally:
-        if ephemeral:
-            _discard_key_file(ephemeral)
+    if install_docker:
+        res = run_on_host(connection, settings, host, docker_install_script(host), timeout=300)
+        out = f"{getattr(res, 'stdout', '') or ''}{getattr(res, 'stderr', '') or ''}"
+        steps.append(out.strip()[-400:])
+        if "DOCKER_STILL_MISSING" in out:
+            raise ValueError(f"docker could not be installed on {address}: "
+                             f"{out.strip()[-300:]}")
 
     emit_event(connection, host["project_id"], "host.provisioned", actor,
                "deployment_host", host_id, {"host": host["name"], "steps": steps})
@@ -926,6 +934,17 @@ def verify_host(connection, settings: Settings, *, host_id: str) -> dict[str, An
               "deferred_to_app": deferred, "reachable": bool(probe_result.get("reachable")),
               "arch_detected": probe_result.get("arch_detected"),
               "connector": report.get("connector")}
+    # WHAT THE MACHINE SAID ABOUT ITSELF STAYS: the capacity read (host_overview, Add a server's
+    # read) lives at last_preflight.facts, and a verify that rewrote the record whole dropped it,
+    # so the server page went back to "not read yet" after every Re-verify.
+    prior = host.get("last_preflight") or {}
+    if isinstance(prior, str):
+        try:
+            prior = json.loads(prior)
+        except ValueError:
+            prior = {}
+    if isinstance(prior, dict) and prior.get("facts"):
+        stored["facts"] = prior["facts"]
     detected = probe_result.get("arch_detected")
     connection.execute(
         sql("UPDATE deployment_hosts SET status = :s, last_preflight_at = now(), "

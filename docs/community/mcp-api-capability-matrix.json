@@ -25915,6 +25915,24 @@
       "read_only_available": false
     },
     {
+      "method": "POST",
+      "path": "/v1/servers/tick",
+      "alias": "post_v1_servers_tick_610dc17d",
+      "domain": "other",
+      "summary": "Servers Tick",
+      "mcp_status": "api_policy_gated",
+      "reason": null,
+      "input_schema_quality": "parameters_only",
+      "mounted_input_schema_quality": "parameters_only",
+      "request_body_type_enforcement": "no_json_body",
+      "curated_input_fields": false,
+      "typed_input_schema": true,
+      "runtime_validated_input_schema": true,
+      "domain_scoped_direct_tool": true,
+      "requires_explicit_bound_api_credential": true,
+      "read_only_available": false
+    },
+    {
       "method": "GET",
       "path": "/v1/settings",
       "alias": "get_v1_settings_1268e768",

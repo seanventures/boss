@@ -6660,6 +6660,37 @@ ALTER TABLE deployment_hosts ADD COLUMN IF NOT EXISTS host_key_pinned_by TEXT;
 CREATE INDEX IF NOT EXISTS idx_deployment_hosts_project
   ON deployment_hosts(project_id, status, created_at DESC);
 
+-- ADD A SERVER (agentic-factory 3-add-a-server.html; services/add_server.py): a server that sets
+-- itself up. One row per host added through Add a server: what it is for (a ROLE, never an app),
+-- how access was handed over, what to set up, and where the agent is — key landed, read, install,
+-- verify, ready, watching — with a short log. The host itself stays in deployment_hosts; this is
+-- the agent's progress on it and, once ready, the Infra agent's watch of its health.
+CREATE TABLE IF NOT EXISTS server_setups (
+  host_id TEXT PRIMARY KEY REFERENCES deployment_hosts(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL DEFAULT 'ssh',
+  role TEXT NOT NULL DEFAULT 'staging',
+  access TEXT NOT NULL DEFAULT 'boss_key',
+  setup JSONB NOT NULL DEFAULT '{}'::jsonb,
+  watch JSONB NOT NULL DEFAULT '{}'::jsonb,
+  owner TEXT NOT NULL DEFAULT 'infra',
+  phase TEXT NOT NULL DEFAULT 'key',
+  blocked TEXT,
+  facts JSONB NOT NULL DEFAULT '{}'::jsonb,
+  steps JSONB NOT NULL DEFAULT '{}'::jsonb,
+  log JSONB NOT NULL DEFAULT '[]'::jsonb,
+  probe JSONB NOT NULL DEFAULT '{}'::jsonb,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at TIMESTAMPTZ,
+  watch_next_at TIMESTAMPTZ,
+  key_landed_at TIMESTAMPTZ,
+  ready_at TIMESTAMPTZ,
+  created_by TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_server_setups_due ON server_setups(phase, next_attempt_at);
+
 -- The app -> VM edge. Nullable so existing targets keep working before backfill.
 ALTER TABLE deployment_targets
   ADD COLUMN IF NOT EXISTS host_id TEXT REFERENCES deployment_hosts(id);

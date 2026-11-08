@@ -290,7 +290,7 @@ def _targets(connection: Connection, project_id: str) -> dict[str, Any]:
                                 open_href=href(project_id, area="infra", add="target")),
                         _action("Add a server", "POST", "/v1/deployment-hosts",
                                 permission="host:manage", body={"project_id": project_id},
-                                open_href=href(project_id, area="infra", add="host"))]}
+                                open_href=href(project_id, area="infra", add="server"))]}
 
 
 def _captain(connection: Connection, project_id: str) -> dict[str, Any]:

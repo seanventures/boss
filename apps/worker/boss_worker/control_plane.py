@@ -326,6 +326,13 @@ class ControlPlaneClient:
         response.raise_for_status()
         return response.json()
 
+    def servers_tick(self) -> dict[str, Any]:
+        """Add a server's agent: advance due setups (key landed → … → ready) and read the health
+        of watched servers (services/add_server.tick)."""
+        response = self._client.post("/v1/servers/tick")
+        response.raise_for_status()
+        return response.json()
+
     def sweep_deployment_health(self) -> dict[str, Any]:
         """Probe every deployed target that is due for a health sample.
 

@@ -20,6 +20,7 @@ import { deployTarget } from "../infra/infra-actions";
 import { EngineNotReady, Face, Flow, HEALTH_TONE, HEALTH_WORD, Ico, PxLink, ReadGate, Ring, Said, Tag } from "./kit";
 import { DemoLoginRow } from "./tab-settings";
 import { ConfirmSheet } from "./confirm-sheet";
+import { ItemAction } from "./staging-target-sheet";
 import { whenLocal } from "../../lib/local-time";
 import type { PxCtx } from "./project-page";
 
@@ -94,6 +95,7 @@ export function DeploymentsTab({ ctx }: { ctx: PxCtx }) {
                 {d.environments.map((e) => <EnvCard key={e.target_id || e.key} e={e} ctx={ctx} />)}
                 <Production d={d} />
               </div>
+              <Servers d={d} ctx={ctx} />
               <section className="px-card" aria-labelledby="px-dep-logins" data-testid="px-dep-logins">
                 <div className="px-card-h"><Ico icon={Key} c="green" /><h2 id="px-dep-logins">Demo logins</h2>
                   {envNames.map((n) => <Tag key={n}>{n}</Tag>)}
@@ -217,6 +219,30 @@ function EnvCard({ e, ctx }: { e: Environment; ctx: PxCtx }) {
                       lede="BOSS plans this commit again on this environment, through the same gates as any deploy."
                       press="Redeploy" onConfirm={redeploy} onClose={() => setAsking(false)} testid={`px-env-redeploy-sheet-${e.key}`} />
       ) : null}
+    </section>
+  );
+}
+
+/** SERVERS YOU CAN USE: where a server added in Infra shows up, ready. The app picks it here;
+ *  Add a server never moves an app, and production is never picked for you. */
+function Servers({ d, ctx }: { d: Deployments; ctx: PxCtx }) {
+  return (
+    <section className="px-card" aria-labelledby="px-dep-servers" data-testid="px-dep-servers">
+      <div className="px-card-h"><Ico icon={HardDrives} c="teal" /><h2 id="px-dep-servers">Servers you can use</h2>
+        <a className="px-more" href={pxHref(d.add_server_href)} data-testid="px-dep-add-server">Add a server</a></div>
+      {d.servers.length ? d.servers.map((sv) => (
+        <div key={sv.host_id} className="px-row px-wrap" data-testid={`px-dep-server-${sv.host_id}`} data-role={sv.role || undefined}>
+          <HardDrives size={14} aria-hidden />
+          <a href={pxHref(sv.href)} title={`${sv.address} — opens this server in Infra`}><b>{sv.name}</b></a>
+          <span className="px-faint px-mono">{sv.address}</span>
+          <Tag tone="green">Ready</Tag>
+          <Tag>{sv.role_words}</Tag>
+          {sv.watching ? <span className="px-faint">watched by the Infra agent</span> : null}
+          {sv.used_here ? <span className="px-faint">{sv.used_here} here</span> : null}
+          <span className="px-spacer" />
+          <ItemAction projectId={ctx.projectId} action={sv.action} testid={`px-dep-server-use-${sv.host_id}`} />
+        </div>
+      )) : <span className="px-faint" data-testid="px-dep-servers-none">No ready server yet. Add one in Infra; it shows here once the agent has set it up.</span>}
     </section>
   );
 }

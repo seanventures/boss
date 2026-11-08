@@ -715,6 +715,9 @@ def _offered_host(connection: Connection, project_id: str) -> Optional[dict[str,
 
     row = connection.execute(text(
         f"SELECT id, name, address, project_id FROM deployment_hosts WHERE status = 'verified' "
+        # A server added for PRODUCTION (Add a server's Role) is never offered for staging:
+        # production is a person's pick, on Project › Deployments.
+        f"AND COALESCE(labels->>'role', '') <> 'prod' "
         f"AND {usable_hosts_sql()} ORDER BY (project_id = :p) DESC, created_at LIMIT 1"),
         {"p": project_id}).mappings().first()
     return dict(row) if row else None
@@ -745,7 +748,7 @@ def _deploy_item(engine: Any, project_id: str) -> dict[str, Any]:
                  detail="No verified server yet: add one and BOSS deploys staging there.",
                  sub="Needs a server", action={"label": "Add a server",
                                                "href": href(project_id, area="infra",
-                                                            add="host")})
+                                                            add="server")})
 
 
 def _stack_name(repository: str) -> str:

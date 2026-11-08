@@ -290,15 +290,36 @@ def view(connection: Connection, project_id: str) -> dict[str, Any]:
         # Infra opens its own + Add sheet from `add=` (host, or an app target; with no machine
         # yet it asks for the host first).
         production = ({"state": "needs_host",
-                       "action": {"label": "Add a host", "href": href(project_id, area="infra",
-                                                                       add="host")}}
+                       "action": {"label": "Add a server", "href": href(project_id, area="infra",
+                                                                         add="server")}}
                       if not hosts else
                       {"state": "none",
                        "action": {"label": "Set up production",
                                   "href": href(project_id, area="infra", add="target",
                                                env="production")}})
     preview = next((e for e in logins["environments"] if e["key"] == "preview"), None)
+    # WHERE A READY SERVER SHOWS UP (Add a server never moves an app): every verified server this
+    # project may use, with its role. The app picks one here; production stays a person's choice.
+    from ..add_server import servers_for_project
+
+    has_staging = any(str(e["key"] or "").lower() not in PRODUCTION for e in envs)
+    servers = []
+    for sv in servers_for_project(connection, project_id):
+        if sv["role"] == "prod":
+            act = {"label": "Use for production", "href": href(project_id, area="infra", add="target",
+                                                               host=sv["host_id"], env="production"),
+                   "do": None}
+        elif not has_staging:
+            act = {"label": "Use for staging", "do": "staging_target", "host_id": sv["host_id"],
+                   "post": f"/v1/projects/{project_id}/onboarding/deploy-target",
+                   "href": href(project_id, area="infra", add="target", host=sv["host_id"], env="staging")}
+        else:
+            act = {"label": "Add an environment", "href": href(project_id, area="infra", add="target",
+                                                              host=sv["host_id"]), "do": None}
+        servers.append({**sv, "state": "ready", "href": href(project_id, area="infra", host=sv["host_id"]),
+                        "action": act})
     out = {"environments": envs, "production": production, "ship_path": ship_path(envs),
+           "servers": servers, "add_server_href": href(project_id, area="infra", add="server"),
            "preview": ({"demo_logins": preview["logins"]} if preview else None),
            "demo_logins": logins, "history": _history(connection, project_id)}
     if not envs:

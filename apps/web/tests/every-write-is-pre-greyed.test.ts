@@ -48,6 +48,7 @@ const NOT_WRITES = new Set([
   "lib/workflow-api.ts#checkSpec",               // POST …/check is a read-only dry run (workflow:read), run as you type
   "lib/stack-deploy.ts#deployFormProblem",       // pure form validation
   "lib/security-scan.ts#runSecurityScan",        // no browser caller (server actions only)
+  "lib/add-server.ts#readServer",                // POST …/servers/read reads the words and probes; creates nothing (assistant:chat), as you type
 ]);
 
 /** `file helper` uses that run only inside a press gated on a STRICTER permission (every role

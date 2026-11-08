@@ -367,7 +367,7 @@ def test_settings_hold_every_project_setting_with_the_existing_write_as_its_acti
     targets = sections["targets"]
     assert {a["label"]: a["open"] for a in targets["actions"]} == {
         "Add a target": f"?project_id={helpdesk['id']}&area=infra&add=target",
-        "Add a server": f"?project_id={helpdesk['id']}&area=infra&add=host"}
+        "Add a server": f"?project_id={helpdesk['id']}&area=infra&add=server"}
     target = next(i for i in targets["items"] if i["kind"] == "target")
     assert target["href"] == f"?project_id={helpdesk['id']}&area=infra&target={target['id']}"
     assert all("view=hosts" not in i.get("href", "") for i in targets["items"])

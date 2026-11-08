@@ -12,6 +12,8 @@
  * preflight records it, and `Read now` asks again (one read-only ssh session).
  */
 import React, { useCallback, useEffect, useState } from "react";
+
+import { onChanged } from "../changed";
 import {
   ArrowsClockwise, ChartLine, CheckCircle, ClockCounterClockwise, Cube, Database, Folders, Globe, HardDrives, Lock, Plugs,
   RocketLaunch, Stack, WarningCircle, XCircle, type Icon,
@@ -58,6 +60,8 @@ export function ServerOverview({ projectId, hostId, canExec }: { projectId: stri
       .catch(() => setState((s) => (s === "ready" ? s : "error")));
   }, [projectId, hostId]);
   useEffect(() => { setState("loading"); load(); }, [load]);
+  // An Infra write (a re-verify, a server's setup moving on) re-reads the glance.
+  useEffect(() => onChanged((n) => { if (n.source === "infra") load(); }), [load]);
   if (state === "loading" && !data) return <div className="inf-so inf-so-skel" data-testid="inf-server-loading" aria-busy="true"><span /><span /><span /><span /></div>;
   if (!data) return null;
   const readNow = async () => {
