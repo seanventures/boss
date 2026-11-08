@@ -43,7 +43,7 @@ import { templatesApi } from "../../lib/templates";
 import { ageShort, hostFolders, type FolderFacts, type FolderHost } from "../../lib/host-folder";
 import { accountsOf, allPresets, createFresh, installWideRefusal, nameFromIdea, projectPageHref, type Preset } from "../../lib/start-project";
 import {
-  addProjectApi, detect, estimateTip, estimateWords, lineCount, nameFromTitle,
+  addProjectApi, detect, estimateTip, estimateWords, hostPort, lineCount, nameFromTitle,
   type Brief, type BriefField, type Kind, type Preview, type RepoRead, type Understanding,
 } from "../../lib/add-project";
 import { normalizeChannel } from "../workflows/compose-plan";
@@ -562,7 +562,7 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
             </div>
             <PlanBoxes kind={kind} preview={preview} plan={plan} set={set} cards={cards} adapters={adapters}
                        helmPicks={u?.picks ?? EMPTY_PICKS} workflow={workflow} registry={allRepos} repoLabel={repoLabel} codeName={repo?.full_name ?? pickedFolder?.path ?? ""}
-                       live={helmLive} readFiles={read?.files_total ? `${read.files_total} files` : null}
+                       live={helmLive}
                        accountLogin={account} homeHref={homeHref} />
           </section>
 
@@ -735,7 +735,7 @@ function RepoCard({ kind, repo, read, readError, folder, folderError, note, live
     );
   }
   const will = (read?.onboarding_will ?? ["Map the code into the knowledge graph", "Run its build and tests; explain any failures", "List the business rules it finds", "Propose a first backlog for you to accept", "Set up staging"])
-    .map((w) => (w === "Set up staging" && staging ? `Set up staging on ${staging.host}${staging.port ? ` · :${staging.port}` : ""}` : w));
+    .map((w) => (w === "Set up staging" && staging ? `Set up staging on ${hostPort(staging.host, staging.port)}` : w));
   const health = read?.health ?? (folder ? [{ label: folder.git ? `git · ${folder.branch ?? "branch"}` : "no git", tone: "grey" }, { label: "no staging yet", tone: "grey" }] : []);
   const rows: BriefRow[] = [
     { key: "what", label: "What it is", col: 1, skeleton: [80],

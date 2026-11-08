@@ -170,8 +170,10 @@ CAPABILITIES: dict[str, Capability] = {
             # decision is approved automatically unless BOSS_MEETING_PRD_AUTO_APPROVE is turned
             # off: on boss-1 the step recorded `approved_by: auto_approval` twenty seconds after
             # the panel (wfr_9c78…). The owner kept it automatic, so the label stops promising
-            # a sign-off nobody gives.
-            label="PRD approval (automatic)",
+            # a sign-off nobody gives. Under identity enforcement the setting is off by default
+            # and a person DOES sign it, so "(automatic)" is not part of the name: label_for()
+            # adds it only where the install approves the PRD itself.
+            label="PRD approval",
             summary="The panel's PRD is approved before anything is built: by a person with the "
                     "ceo seat on the Approvals page when identity is enforced, automatically "
                     "when BOSS_MEETING_PRD_AUTO_APPROVE is on (the default without enforcement).",
@@ -1079,12 +1081,26 @@ def get(key: str) -> Capability:
         ) from None
 
 
+def label_for(capability_key: str, prd_auto_approve: Optional[bool] = None) -> str:
+    """THE label a step of this capability shows, as this install runs it.
+
+    A step the panel answers (the PRD approval) is "(automatic)" only where the install approves
+    the PRD itself (prd_auto_approved). Under identity enforcement a person signs it, and a label
+    saying "automatic" next to a "you approve" mark told the operator two opposite things.
+    """
+    capability = get(capability_key)
+    if capability.answered_by == "panel":
+        auto = prd_auto_approved() if prd_auto_approve is None else bool(prd_auto_approve)
+        return f"{capability.label} (automatic)" if auto else capability.label
+    return capability.label
+
+
 def palette() -> list[dict[str, Any]]:
     """Everything a builder needs to draw the palette, in flow order."""
     return [
         {
             "key": c.key,
-            "label": c.label,
+            "label": label_for(c.key),
             "summary": c.summary,
             "risk_tier": c.risk_tier,
             "required_inputs": list(c.required_inputs),

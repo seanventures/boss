@@ -19,7 +19,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AddProjectSheet } from "../app/start-project/add-project";
 import { MovedNewBuild } from "../app/projects/moved";
 import { resetCatalogue } from "../components/v2/templates/catalogue";
-import { detect, estimateWords, nameFromTitle, type Preview, type Understanding, type Workflow } from "../lib/add-project";
+import { detect, estimateWords, hostPort, nameFromTitle, type Preview, type Understanding, type Workflow } from "../lib/add-project";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { $$, click, mountAs, registryFixture, settle, stubFetch, tid, type, unmount, type Call } from "./_helpers/multirepo-fixtures";
 
 afterEach(() => { unmount(); window.history.replaceState(null, "", "/"); });
@@ -27,11 +29,11 @@ beforeEach(() => { resetCatalogue(); });
 
 const WORDS = "A helpdesk for our support team.\nCustomers email support@ and it becomes a ticket. AI drafts the reply; staff sign in with Google and approve.\nNo chat or phone for now.";
 
-const step = (id: string, label: string, you = false) => ({ id, label, you, agent: you ? null : { role_key: "pm", name: "Juno" } });
+const step = (id: string, label: string, you = false, short = label.toLowerCase()) => ({ id, label, short, you, agent: you ? null : { role_key: "pm", name: "Juno" } });
 const STANDARD: Workflow = {
   key: "standard_product_delivery", name: "Standard Product Delivery", short: "Standard", detail: "", work_class: "project.new", path: true,
-  steps: 5, step_list: [step("research", "Research"), step("prd", "PRD", true), step("build", "Build"), step("pr", "Pull request", true), step("deploy", "Staging")],
-  approvals: 2, approve_words: ["PRD", "Pull request"], input_schema: null,
+  steps: 5, step_list: [step("research", "Research"), step("prd", "PRD approval", true, "PRD"), step("build", "Build"), step("pr", "Pull request", true, "PR"), step("deploy", "Staging")],
+  approvals: 2, approve_words: ["PRD", "PR"], input_schema: null,
   estimate: { minutes: 35, minutes_basis: "history", minutes_runs: 7, usd: 5.2, usd_runs: 7 },
 };
 const SMALL: Workflow = { ...STANDARD, key: "minor_feature", name: "Minor Feature", short: "Small", steps: 3,
@@ -44,7 +46,7 @@ const PREVIEW: Preview = {
                           { agent_id: "a2", role_key: "chief_of_staff", name: "Marshal", role: "Chief of Staff" },
                           { agent_id: "a3", role_key: "qa", name: "Vera", role: "QA Lead" }] },
   staging: [{ host_id: "dh_1", host: "boss-1", address: "203.0.113.9", port: 8005, suggested: true, shared: false },
-            { host_id: "dh_2", host: "goldeneye", address: "203.0.113.10", port: 8012, suggested: false, shared: true }],
+            { host_id: "dh_2", host: "203.0.113.20", address: "203.0.113.20", port: 8006, suggested: false, shared: true }],
   readiness: [{ key: "model", label: "Model", ok: true, detail: "a model is connected", href: null },
               { key: "repository", label: "GitHub", ok: true, detail: "pushes to acme/web", href: null },
               { key: "budget", label: "Budget", ok: true, detail: "green", href: null },
@@ -176,7 +178,8 @@ describe("an idea: Helm's understanding, then Create and start", () => {
     expect(tid("ap-box-workflow")!.textContent).toContain("Small");
     await click(tid("ap-box-staging"));
     await click(tid("ap-staging-dh_2"));
-    expect(tid("ap-box-staging")!.textContent).toContain("goldeneye · :8012");
+    expect(tid("ap-box-staging")!.textContent).toContain("203.0.113.20:8006");
+    expect(tid("ap-box-staging")!.textContent).not.toContain(" · :");
     await click(tid("ap-box-captain"));
     await click(tid("ap-captain-qa"));
     expect(tid("ap-box-captain")!.textContent).toContain("Vera");
@@ -242,9 +245,12 @@ describe("a repo: inline results, Helm's read, onboarding", () => {
     const found = tid("ap-found")!;
     expect(found.textContent).toContain("Storefront UI");
     expect(found.textContent).toContain("src/inbox");
-    expect(tid("ap-onboarding-will")!.textContent).toContain("Set up staging on boss-1 · :8005");
+    expect(tid("ap-onboarding-will")!.textContent).toContain("Set up staging on boss-1:8005");
     expect(tid("ap-box-workflow")!.textContent).toContain("Onboard →");
     expect(tid("ap-then")!.textContent).toContain("You accept");
+    // The THEN strip is the onboarding stages and nothing else: the file count is the summary's.
+    expect(tid("ap-then")!.textContent!.trim().endsWith("You accept")).toBe(true);
+    expect(tid("ap-then")!.textContent).not.toMatch(/\d+ files/);
     await click(tid("ap-chip-rules"));
     await click(tid("ap-create"));
     expect(calls.find((c) => c.path === "/v1/add-project")!.body).toMatchObject({ kind: "repo", repo_ids: ["ghr_web"], map_rules: true, name: "Web" });
@@ -268,5 +274,49 @@ describe("Workflows › New build has moved", () => {
     expect(tid("moved-new-build-new-app")!.getAttribute("href")).toContain("new_project=idea");
     const work = new URLSearchParams(tid("moved-new-build-new-work")!.getAttribute("href")!.slice(1));
     expect([work.get("area"), work.get("tab"), work.get("compose"), work.get("project_id")]).toEqual(["project", "work", "1", "helpdesk"]);
+  });
+});
+
+describe("the walk's gaps stay closed (laptop walk 2026-11-07)", () => {
+  it("writes a staging host as host:port, one formatter", () => {
+    expect(hostPort("203.0.113.20", 8006)).toBe("203.0.113.20:8006");
+    expect(hostPort("boss-1", null)).toBe("boss-1");
+    expect(hostPort("2001:db8::1", 8006)).toBe("[2001:db8::1]:8006");
+  });
+
+  it("counts, strips, legends and lists 'you approve' from the one `you` per step, in few words", async () => {
+    api();
+    await mountAs(<AddProjectSheet projectId="p1" homeId="p1" onClose={() => {}} onForm={() => {}} go={vi.fn()} />);
+    await type(tid("ap-input"), WORDS);
+    await enter(tid("ap-input"));
+    const you = STANDARD.step_list.filter((s) => s.you).length;
+    expect(tid("ap-box-workflow")!.textContent).toContain(`${you} you approve`);
+    const strip = tid("ap-strip")!;
+    expect(strip.querySelectorAll("li[data-you]").length).toBe(you);
+    // The legend names what you approve in the step's few words, never its full label.
+    expect(strip.textContent).toContain("you approve: PRD · PR");
+    expect(strip.textContent).not.toContain("prd approval");
+    await click(tid("ap-box-workflow"));
+    expect(tid("ap-wf-steps")!.querySelectorAll(".npx-you-pill").length).toBe(you);
+  });
+
+  const css = readFileSync(join(__dirname, "../app/start-project/add-project.css"), "utf8");
+
+  it("the sheet grows with the root type, and the foot is one row above phone width", () => {
+    // A px width kept the sheet at 980px while the type grew 30% at 2260: Create wrapped left.
+    expect(css).toMatch(/\.npx-sheet \{[^}]*width: min\([\d.]+rem,/);
+    const wide = css.match(/@media \(min-width: 761px\) \{([\s\S]*?)\n\}/)![1];
+    expect(wide).toMatch(/\.npx-foot \{ flex-wrap: nowrap; \}/);
+    expect(wide).toMatch(/\.npx-foot > \.npx-faint \{[^}]*text-overflow: ellipsis/);
+  });
+
+  it("on a phone an open popover is not covered by the sticky foot", () => {
+    const phone = css.slice(css.indexOf("@media (max-width: 760px)"));
+    expect(phone).toMatch(/\.npx-sheet:has\(\.npx-body \.npx-pop\) \.npx-foot \{ display: none; \}/);
+  });
+
+  it("a long name ends in an ellipsis inside its chip", () => {
+    expect(css).toMatch(/\.npx-pchip \{[^}]*max-width: 100%[^}]*min-width: 0/);
+    expect(css).toMatch(/\.npx-pchip b \{[^}]*overflow: hidden; text-overflow: ellipsis; white-space: nowrap/);
   });
 });

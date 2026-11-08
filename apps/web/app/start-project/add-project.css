@@ -3,7 +3,9 @@
    prefers-reduced-motion stops all of it. */
 
 .bx-np-backdrop.npx-backdrop { display: block; overflow-y: auto; padding: 28px 16px; }
-.npx-sheet { position: relative; width: min(980px, calc(100vw - 32px)); margin: 0 auto; background: var(--surface); color: var(--ink);
+/* The sheet is sized in rem, like everything in it: the root grows on wide screens (layout-scale.css),
+   so a px width kept the sheet at 980px while its type grew 30% and the foot wrapped at 2260. */
+.npx-sheet { position: relative; width: min(51.6rem, calc(100vw - 32px)); margin: 0 auto; background: var(--surface); color: var(--ink);
   border: 1px solid var(--border-strong); border-radius: 16px; box-shadow: var(--shadow-lg); display: flex; flex-direction: column; font-size: .74rem; }
 .npx-sheet :is(button, a, input, select):focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
 .npx-sheet .npx-txt:focus-visible, .npx-hint input:focus-visible, .npx-inline:focus-visible { outline: none; }
@@ -80,7 +82,10 @@
 .npx-link { background: none; border: 0; padding: 0; color: var(--accent-text); font: inherit; font-size: .6rem; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 4px; }
 .npx-link:hover { text-decoration: underline; }
 .npx-pchip { display: inline-flex; align-items: center; gap: 6px; font: inherit; font-size: .62rem; padding: 4px 11px; border-radius: 999px; border: 1px solid var(--border-strong);
-  color: var(--ink-soft); background: var(--surface); cursor: pointer; white-space: nowrap; }
+  color: var(--ink-soft); background: var(--surface); cursor: pointer; white-space: nowrap; max-width: 100%; min-width: 0; box-sizing: border-box; }
+/* A long value (a project name) ends in an ellipsis inside the chip, never cut mid-word at its edge. */
+.npx-pchip b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.npx-pchip > svg { flex: none; }
 .npx-pchip:hover { border-color: var(--accent-line); }
 .npx-pchip[data-dashed] { border-style: dashed; color: var(--muted); }
 .npx-pchip[data-on] { border-color: color-mix(in srgb, var(--green) 55%, transparent); color: var(--green); background: var(--green-soft); }
@@ -117,7 +122,7 @@
 .npx-ub-key i { font-style: normal; }
 .npx-ub-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0 18px; transition: opacity .2s; }
 .npx-ub-grid[data-dim] { opacity: .55; }
-.npx-ub-f { display: grid; grid-template-columns: 92px minmax(0, 1fr) 16px; gap: 8px; align-items: start; padding: 7px 0; border-top: 1px solid var(--border);
+.npx-ub-f { display: grid; grid-template-columns: 4.85rem minmax(0, 1fr) .85rem; gap: 8px; align-items: start; padding: 7px 0; border-top: 1px solid var(--border);
   font-size: .64rem; color: var(--ink-soft); min-width: 0; }
 .npx-ub-f > .npx-lbl { padding-top: 3px; }
 .npx-ub-f > .npx-ed { color: var(--quiet); opacity: 0; transition: opacity .15s; }
@@ -252,7 +257,7 @@
 .npx-mini i[data-y] { background: var(--amber); border-radius: 50%; }
 .npx-steps-l { display: flex; flex-direction: column; font-size: .58rem; }
 .npx-steps-l summary { cursor: pointer; color: var(--muted); margin-bottom: 4px; }
-.npx-steps-l > div { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; gap: 6px; align-items: center; padding: 3px 0; border-top: 1px dashed var(--border); }
+.npx-steps-l > div { display: grid; grid-template-columns: .95rem minmax(0, 1fr) auto; gap: 6px; align-items: center; padding: 3px 0; border-top: 1px dashed var(--border); }
 .npx-n { width: 16px; height: 16px; border-radius: 50%; border: 1px solid var(--border-strong); display: inline-grid; place-items: center; font-size: .46rem; color: var(--muted); }
 .npx-n[data-you] { background: var(--amber); border-color: var(--amber); color: #1b1300; font-weight: 800; }
 .npx-you-pill { font-size: .5rem; font-weight: 700; padding: 0 6px; border-radius: 999px; background: var(--amber); color: #1b1300; }
@@ -268,6 +273,13 @@
 .npx-foot { display: flex; align-items: center; gap: 12px; padding: 12px 22px 14px; border-top: 1px solid var(--border); flex-wrap: wrap; position: sticky; bottom: 0; z-index: 20;
   background: var(--surface); border-radius: 0 0 16px 16px; }
 .npx-foot > .npx-faint { display: inline-flex; align-items: center; gap: 4px; font-size: .58rem; }
+/* Above phone width the foot is ONE row: the reassurance line gives way (ellipsis), never the button. */
+@media (min-width: 761px) {
+  .npx-foot { flex-wrap: nowrap; }
+  .npx-foot > * { flex: none; }
+  .npx-foot > .npx-spacer { flex: 1 1 0; }
+  .npx-foot > .npx-faint { flex: 0 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; display: block; }
+}
 .npx-flink { background: none; border: 0; color: var(--faint); font: inherit; font-size: .6rem; display: inline-flex; gap: 4px; align-items: center; cursor: pointer; }
 .npx-flink:hover { color: var(--ink); }
 .npx-primary { display: inline-flex; align-items: center; gap: 8px; padding: 10px 18px; border-radius: 10px; border: 1px solid var(--accent); background: var(--accent);
@@ -320,13 +332,18 @@
   .npx-ideas { top: calc(100% + 8px) !important; bottom: auto !important; }
   .npx-ub { padding: 10px 12px; }
   .npx-ub-grid { grid-template-columns: minmax(0, 1fr); }
-  .npx-ub-f { grid-template-columns: minmax(0, 1fr) 14px; }
+  .npx-ub-f { grid-template-columns: minmax(0, 1fr) .75rem; }
   .npx-ub-f > .npx-lbl { grid-column: 1 / -1; }
   .npx-ub-key, .npx-hide-s { display: none !important; }
   .npx-show-s { display: flex !important; }
   .npx-st li { width: 16px; height: 16px; font-size: .42rem; margin-right: 4px; }
   .npx-st li:not(:last-child)::after { width: 4px; }
+  /* The THEN stages wrap on a phone: a connector left dangling at a line's end says nothing. */
+  .npx-fl { gap: 6px; } .npx-fl-w { display: none; }
   .npx-foot { padding: 10px 14px; border-radius: 0; }
+  /* A popover opens in the flow on a phone; the sticky foot would sit over it. While one is
+     open the foot steps aside (its own "More ways" menu lives in the foot and keeps it). */
+  .npx-sheet:has(.npx-body .npx-pop) .npx-foot { display: none; }
   .npx-primary { flex: 1 1 100%; justify-content: center; order: 5; }
   .npx-cn-grid { grid-template-columns: minmax(0, 1fr); }
 }
