@@ -46,7 +46,7 @@ from ._common import clean_text, emit, person
 
 COS = "agent:chief_of_staff"
 CARD = "ambient"
-KINDS = ("handoff", "squad", "question", "incident")
+KINDS = ("handoff", "squad", "question", "incident", "budget")
 #: A squad whose decided action BOSS refused this many times stops: a policy outcome.
 MAX_REFUSED_LAUNCHES = 2
 
@@ -79,6 +79,7 @@ WITHDRAW_WHY = {
               "after it asked, or the build finished), so nobody needs to take it",
     "retry": "BOSS tried the squad's launch once more now that what stopped it is fixed, so "
              "nobody needs to answer",
+    "funded": "the squad's budget for it was raised, so it goes on without an answer here",
     "granted": "the squad now reads with the tools it holds (BOSS's logs, health and run "
                "history), so it looks for itself first and asks again only if it is still stuck",
     "stale_rollback": "the rollback it proposed is not to a known-good release (that release "
@@ -254,6 +255,60 @@ def grantable(connection: Connection, project_id: str, member: str,
         return None
 
 
+def _money(micros: int) -> str:
+    dollars = int(micros) / 1_000_000
+    return f"${dollars:.0f}" if dollars == int(dollars) else f"${dollars:.2f}"
+
+
+def found_so_far(connection: Connection, item_id: str, limit: int = 240) -> str:
+    """What the squad established so far, briefly: its last findings and hypotheses."""
+    said = [m["body"].get("summary") for m in collab.messages(
+        connection, item_id, kinds=("finding", "hypothesis")) if m["sender"] != "boss"]
+    return scrub("; ".join(s for s in said[-2:] if s), limit) or "nothing settled yet"
+
+
+def budget_entry(connection: Connection, item: Mapping[str, Any], *, actor: str,
+                 squad_title: str = "") -> dict[str, Any]:
+    """A squad that spent its budget on the item (spend above a cap is a person's call: the
+    compliance boundary). "Infra Steward's squad used its $1.50 on “Updates restarted a build 2
+    times” — give it $1 more, or close it?"; what it found so far rides as `detail`."""
+    from .squad_turns import BUDGET_STEP_USD_MICROS, budget_of
+
+    who = squad_name(squad_title, actor)
+    words = scrub(item.get("title"), 120).split()
+    title = " ".join(words[:10]) + ("…" if len(words) > 10 else "")
+    budget, step = budget_of(item), BUDGET_STEP_USD_MICROS
+    question = (f"{who} used its {_money(budget)} on “{title}” — give it {_money(step)} more, "
+                "or close it?")
+    return {"ask_kind": "budget", "work_item_id": item["id"], "task_class": item["task_class"],
+            "asked_by": actor, "squad": who, "subject": title,
+            "spent_usd_micros": int(item.get("cost_usd_micros") or 0),
+            "budget_usd_micros": budget, "step_usd_micros": step,
+            "detail": f"Found so far: {found_so_far(connection, item['id'])}",
+            "words": f"{who.lower()} spent its budget: {title}", "question": question}
+
+
+def ask_budget(connection: Connection, settings: Any, item_id: str) -> dict[str, Any]:
+    """Put a spent-budget item in front of a person, on the project's ONE card (joined, else
+    raised while the hour has room, else parked for the Chief of Staff's next card). Its
+    asking lease is let go: whoever works it after the answer claims it fresh."""
+    from . import squads
+
+    item = board._must(connection, item_id)  # noqa: SLF001
+    roster = squads.roster(connection, item_id) or {}
+    lead = str(roster.get("lead") or item.get("owner_actor") or COS)
+    entry = budget_entry(connection, item, actor=lead, squad_title=str(roster.get("title") or ""))
+    connection.execute(text(
+        "UPDATE work_items SET lease_owner = NULL, lease_kind = NULL, lease_token = NULL, "
+        "lease_expires_at = NULL WHERE id = :id AND lease_kind = 'agent'"), {"id": item_id})
+    got = place(connection, settings, item["project_id"], [entry], actor=lead)
+    if got.get("held"):
+        park(connection, item_id, entry, actor=lead)
+        return {"outcome": "parked"}
+    return {"outcome": "joined" if got.get("joined") else "asked",
+            "decision_id": got.get("decision_id")}
+
+
 def incident_entry(connection: Connection, item: Mapping[str, Any], *, actor: str,
                    question: str) -> dict[str, Any]:
     q = scrub(question, 200)
@@ -296,12 +351,15 @@ def card_question(entries: Sequence[Mapping[str, Any]]) -> str:
 
     groups: dict[str, int] = {}
     for e in entries:
-        key = "incident" if entry_kind(e) == "incident" else str(e.get("task_class") or "")
+        key = (entry_kind(e) if entry_kind(e) in ("incident", "budget")
+               else str(e.get("task_class") or ""))
         groups[key] = groups.get(key, 0) + 1
     parts = []
     for key, n in sorted(groups.items(), key=lambda kv: -kv[1]):
         if key == "incident":
             parts.append("an incident" if n == 1 else f"{n} incidents")
+        elif key == "budget":
+            parts.append("a spent budget" if n == 1 else f"{n} spent budgets")
         elif n == 1:
             parts.append(_SHORT.get(key) or tc.task_class(key).title.lower())
         else:
@@ -345,6 +403,13 @@ def card_options(entries: Sequence[Mapping[str, Any]]) -> list[dict[str, str]]:
     if kind == "incident":
         return [{"key": "approve", "label": "I'll take it"},
                 {"key": "reject", "label": "Close it"}]
+    if kind == "budget":
+        # Three answers, each carried by `carry`: approve raises the budget, reject closes it,
+        # "take" (sent as the request-changes action) hands it to the person.
+        return [{"key": "approve",
+                 "label": f"Give it {_money(int(e.get('step_usd_micros') or 1_000_000))} more"},
+                {"key": "reject", "label": "Close it"},
+                {"key": "take", "label": "I'll take it"}]
     label = ("Answer" if e.get("asked") else
              tc.ACTIONS.get(str(e.get("next_action")), tc.ACTIONS["propose"]).title
              if e.get("owner") == PARTY else f"Hand to {e.get('owner_label')}")
@@ -607,6 +672,11 @@ def verdict(connection: Connection, card: Mapping[str, Any], entry: Mapping[str,
     if kind == "question" and item_moving(connection, item["id"], card.get("created_at")):
         # A squad that said it is stuck, whose work is moving again: a stale ask.
         return "moving", item
+    if kind == "budget":
+        from .squad_turns import budget_of
+
+        if int(item.get("cost_usd_micros") or 0) < budget_of(item):
+            return "funded", item          # its budget was raised elsewhere: nothing to ask
     if kind == "question" and can_now_look(connection, item, entry):
         # A squad that asked before it held (or could use) the reads it now has: it looks
         # itself first (boss-dogfood 2026-11-07, "no tool access to host:install logs").
@@ -830,7 +900,7 @@ def settle(connection: Connection, project_id: str, card_id: Optional[str],
     left to proceed, with the reason on the ledger. Returns what happened."""
     item_id = item["id"]
     board.unask(connection, item_id, actor=COS, reason=WITHDRAW_WHY[why])
-    if why in ("off", "rebatch", "moot", "moving", "granted"):
+    if why in ("off", "rebatch", "moot", "moving", "granted", "funded"):
         return "back_on_board"
     if why == "retry":
         return retry_launch(connection, project_id, item)
@@ -963,6 +1033,9 @@ def carry(connection: Connection, settings: Any, decision: Mapping[str, Any],
                                "mitigation": "escalate", "work_item_id": item["id"]}},
             actor, "approve", note)
         return "incident"
+    if kind == "budget":
+        return carry_budget(connection, item, entry, actor=actor, verdict_word=verdict_word,
+                            note=note)
     if approve and entry.get("grant"):
         # "Grant access" DOES grant it: the skill goes to the asking agent's role (the one grant,
         # role_skills), as the person who approved — then the squad goes on, now able to look.
@@ -980,6 +1053,34 @@ def carry(connection: Connection, settings: Any, decision: Mapping[str, Any],
     board.answered(connection, item["id"], actor=actor)
     board.take_over(connection, item["id"], actor=actor, reason="took it from Needs you")
     return "question"
+
+
+def carry_budget(connection: Connection, item: Mapping[str, Any], entry: Mapping[str, Any], *,
+                 actor: str, verdict_word: str, note: Optional[str] = None) -> str:
+    """A spent-budget card answered. approve: the item's budget rises by the step, in the
+    person's name, and it is back with its squad, owed the next turn (answered_at); reject: it
+    is closed, resolved in their name; anything else ("I'll take it"): it is theirs."""
+    from .squad_turns import BUDGET_STEP_USD_MICROS, budget_of
+
+    who = person(actor)
+    if verdict_word == "approve":
+        step = int(entry.get("step_usd_micros") or BUDGET_STEP_USD_MICROS)
+        raised = budget_of(item) + step
+        connection.execute(text(
+            "UPDATE work_items SET squad_budget_usd_micros = :b WHERE id = :w"),
+            {"b": raised, "w": item["id"]})
+        collab.post(connection, item["id"], kind="finding", sender="boss", body={
+            "summary": f"{who} gave the squad {_money(step)} more (budget now {_money(raised)})"})
+        board.answered(connection, item["id"], actor=actor)
+        return "budget:raised"
+    if verdict_word == "reject":
+        collab.post(connection, item["id"], kind="finding", sender="boss", body={
+            "summary": f"{who} closed it" + (f": {clean_text(note, 200)}" if note else "")})
+        board.answered(connection, item["id"], actor=actor, to="resolved")
+        return "budget:closed"
+    board.answered(connection, item["id"], actor=actor)
+    board.take_over(connection, item["id"], actor=actor, reason="took it from Needs you")
+    return "budget:taken"
 
 
 def grant_access(connection: Connection, item: Mapping[str, Any], entry: Mapping[str, Any], *,

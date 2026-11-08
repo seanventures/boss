@@ -1311,6 +1311,7 @@ _WITHDRAW_WHY = {
     "healthy": "the app is healthy: the alert cleared, nothing failing is left",
     "rebatch": "it moved onto the project's one card",
     "retry": "BOSS tried the squad's launch once more now that what stopped it is fixed",
+    "funded": "the squad's budget for it was raised, so it goes on without an answer here",
     "granted": "the squad now reads with the tools it holds (BOSS's logs, health and run "
                "history), so it looks for itself first and asks again only if it is still stuck",
     "stale_rollback": "the rollback it proposed is not to a known-good release, so the squad "

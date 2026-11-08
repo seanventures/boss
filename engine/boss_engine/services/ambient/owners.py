@@ -80,6 +80,7 @@ def _incident_classes() -> tuple[str, ...]:
 _HANDED = (
     "SELECT w.id, w.project_id, w.task_class, w.lifecycle, w.answered_at, w.effective_score, "
     "  w.lease_owner, w.lease_kind, w.lease_expires_at, w.cost_usd_micros, "
+    "  w.squad_budget_usd_micros, "
     "  (SELECT max(e.created_at) FROM events e WHERE e.project_id = w.project_id "
     "     AND e.event_type = 'ambient.squad_turn' AND e.entity_id = w.id) AS squad_turn_at, "
     "  (SELECT max(e.created_at) FROM events e WHERE e.project_id = w.project_id "
@@ -158,7 +159,8 @@ def waits_on_a_decision(connection: Connection, row: Mapping[str, Any]) -> Optio
 
 def due_items(connection: Connection, *, project_id: Optional[str] = None,
               limit: int = DEFAULT_ITEMS_PER_TICK,
-              held: Optional[list[dict[str, Any]]] = None) -> list[dict[str, Any]]:
+              held: Optional[list[dict[str, Any]]] = None,
+              spent: Optional[list[dict[str, Any]]] = None) -> list[dict[str, Any]]:
     """The handed-over items the owners should work this tick: first every item OWED a turn
     (put back on the board since its squad's last turn), then the rest by priority.
 
@@ -176,6 +178,15 @@ def due_items(connection: Connection, *, project_id: Optional[str] = None,
     rows = connection.execute(text(_HANDED.format(live=projects_archive.live_sql("w.project_id"))),
                               {"p": project_id, "cos": COS,
                                               "nosquad": f"{NO_SQUAD}%"}).mappings().all()
+    # ITS SQUAD'S BUDGET IS SPENT: no turn can run, so it takes no slot. Spend above a cap is on
+    # the compliance boundary: it goes to `spent`, which `_work` puts in front of a person on
+    # the project's one card ("give it $1 more, or close it?"; asks.ask_budget) — never parked
+    # in silence (boss-dogfood 2026-11-07: $1.53 of $1.50, then every tick refused it).
+    over = [r for r in rows if r["has_squad"] and r["task_class"] not in incident
+            and int(r.get("cost_usd_micros") or 0) >= squad_turns.budget_of(r)]
+    if spent is not None:
+        spent.extend({"id": r["id"], "project_id": r["project_id"]} for r in over)
+    rows = [r for r in rows if r not in over]
     # Owed items first; then STARVING ones (due, but no turn for STARVE_MINUTES), oldest first;
     # then the rest in priority order (the sort is stable).
     rows = sorted(rows, key=lambda r: (owed_since(r) is None, starving_since(r) is None,
@@ -253,12 +264,6 @@ def due_items(connection: Connection, *, project_id: Optional[str] = None,
             # Another agent holds it (the lead resumes only a lapsed lease): said, not silent.
             hold(r, f"it is still leased by {r['lease_owner']} until {expires:%H:%M} UTC",
                  always=True)
-            continue
-        if int(r.get("cost_usd_micros") or 0) >= squad_turns.SQUAD_BUDGET_USD_MICROS:
-            # Its squad's budget is spent: no turn can run, so it takes no slot — and says why.
-            hold(r, f"its squad's budget for this item is spent "
-                    f"(${int(r['cost_usd_micros']) / 1e6:.2f} of "
-                    f"${squad_turns.SQUAD_BUDGET_USD_MICROS / 1e6:.2f})", always=True)
             continue
         last = r["squad_turn_at"]
         stale = last is None or last < now() - timedelta(minutes=SQUAD_RECHECK_MINUTES)
@@ -359,10 +364,22 @@ def _work(engine: Any, settings: Any, report: dict[str, Any], *, project_id: Opt
         if policy.stop_state(c, None)["stopped"]:
             return {**report, "skipped": "stopped"}
         held: list[dict[str, Any]] = []
+        spent: list[dict[str, Any]] = []
         todo = due_items(c, project_id=project_id,
-                         limit=item_limit(settings) if limit is None else limit, held=held)
+                         limit=item_limit(settings) if limit is None else limit, held=held,
+                         spent=spent)
     for h in held:
         _say_why(engine, h["id"], h["why"], h["since"], report)
+    for s in spent:
+        # A spent budget asks a person, on the project's one card (asks.ask_budget).
+        try:
+            with engine.begin() as c:
+                if policy.is_stopped(c, s["project_id"]):
+                    continue
+                got = asks.ask_budget(c, settings, s["id"])
+            report.setdefault("asked", []).append({"work_item_id": s["id"], **got})
+        except Exception:  # noqa: BLE001 — one item's ask never stops the others
+            log.warning("could not ask about the spent budget of %s", s["id"], exc_info=True)
     for entry in todo:
         item_id = entry["id"]
         pid = entry["project_id"]

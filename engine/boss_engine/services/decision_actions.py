@@ -20,6 +20,7 @@ what to do instead.
 """
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from typing import Any, Mapping, Optional
 
@@ -426,6 +427,39 @@ def _general_approve(decision: Mapping[str, Any]) -> dict[str, Any]:
         "this approval can use it when it runs again.")
 
 
+#: An always-on card's answers (ambient/asks.card_options) as the actions that carry them:
+#: approve and reject are themselves; a third answer ("I'll take it" on a spent-budget card) is
+#: sent as `revise`, which ambient/answers.on_answered carries like the others.
+_AMBIENT_ACTION = {"approve": ("approve", "approve"), "reject": ("reject", "reject"),
+                   # "Hold" (a squad's proposal, a mitigation) is carried as a refusal.
+                   "hold": ("reject", "neutral")}
+
+
+def _ambient_actions(decision: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """THE CARD'S OWN ANSWERS ARE ITS BUTTONS. An always-on card says what each answer does
+    ("Give it $1 more", "Close it", "I'll take it"); drawn as Approve / Reject they promised
+    nothing in particular. [] when the decision is not such a card or carries no answers."""
+    if not is_ambient_card(decision):
+        return []
+    options = decision.get("options")
+    if isinstance(options, str):
+        try:
+            options = json.loads(options)
+        except ValueError:
+            options = None
+    if not isinstance(options, list) or not all(isinstance(o, Mapping) and o.get("label")
+                                                for o in options):
+        return []
+    out: list[dict[str, Any]] = []
+    for o in options:
+        action, tone = _AMBIENT_ACTION.get(str(o.get("key")), ("revise", "neutral"))
+        if any(a["action"] == action for a in out):
+            continue                       # one button per action: the first answer names it
+        out.append(_action(action, str(o["label"]), tone,
+                           f"{o['label']}: BOSS carries this answer out at once."))
+    return out + [_delegate()]
+
+
 def allowed_actions(decision: Mapping[str, Any]) -> list[dict[str, Any]]:
     """Every action a person may take on this decision right now, in display order.
 
@@ -625,6 +659,9 @@ def allowed_actions(decision: Mapping[str, Any]) -> list[dict[str, Any]]:
                     "saying what to change."),
             _delegate(),
         ]
+    ambient = _ambient_actions(decision)
+    if ambient:
+        return ambient
     actions = [
         _general_approve(decision),
         _action("reject", "Reject", "reject", "Declines it; nothing is carried out."),

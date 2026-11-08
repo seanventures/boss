@@ -10939,6 +10939,9 @@ ALTER TABLE work_items ADD COLUMN IF NOT EXISTS needs_you_decision_id TEXT;
 ALTER TABLE work_items ADD COLUMN IF NOT EXISTS answered_at TIMESTAMPTZ;
 ALTER TABLE work_items ADD COLUMN IF NOT EXISTS cost_usd_micros BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE work_items ADD COLUMN IF NOT EXISTS squad JSONB NOT NULL DEFAULT '[]'::jsonb;
+-- A person's extra squad budget for this item, on top of the default (squad_turns.budget_of):
+-- "Give it $1 more" on a spent-budget card raises it. NULL = the default.
+ALTER TABLE work_items ADD COLUMN IF NOT EXISTS squad_budget_usd_micros BIGINT;
 DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'work_items_lifecycle_check'
                  AND conrelid = 'work_items'::regclass) THEN

@@ -630,26 +630,111 @@ def test_turn_ask_withdraw_and_the_next_tick_gives_the_turn(eng, project):  # no
     assert worked["kind"] == "squad" and worked["turns"] >= 1, report
 
 
-def test_a_squad_out_of_budget_takes_no_slot_and_says_why_once(eng, project):  # noqa: F811
+def _spent(c, pid, *, finding=None):
+    """The live item: its squad seated and handed over, $1.53 spent of $1.50."""
+    item = _restarts_item(c, pid)
+    _handed(c, item)
+    if finding:
+        collab.post(c, item["id"], kind="finding", sender=INFRA, body={"summary": finding})
+    c.execute(text("UPDATE work_items SET cost_usd_micros = :m WHERE id = :w"),
+              {"m": squad_turns.SQUAD_BUDGET_USD_MICROS + 26_945, "w": item["id"]})
+    return item
+
+
+def _tick(eng, pid):
     from boss_engine.services.ambient import owners
 
     from ._squad_support import Launchers
 
+    return owners.work(eng, settings(), project_id=pid, model=ScriptedSquadModel({}),
+                       launchers=Launchers(), rounds=1)
+
+
+def test_a_spent_budget_asks_a_person_on_the_projects_one_card(eng, project):  # noqa: F811
+    from boss_engine.services import decision_actions
+    from boss_engine.services.ambient import owners
+
     with eng.begin() as c:
-        item = _restarts_item(c, project)
-        _handed(c, item)
-        c.execute(text("UPDATE work_items SET cost_usd_micros = :m WHERE id = :w"),
-                  {"m": squad_turns.SQUAD_BUDGET_USD_MICROS + 26_945, "w": item["id"]})
-        assert owners.due_items(c, project_id=project) == []
-    for _ in range(2):
-        report = owners.work(eng, settings(), project_id=project, model=ScriptedSquadModel({}),
-                             launchers=Launchers(), rounds=1)
-        assert not [w for w in report["worked"] if w["work_item_id"] == item["id"]]
+        other = _restarts_item(c, project)                     # the project's card is open
+        card_id = asks.raise_card(c, project, [asks.question_entry(
+            c, other, actor=INFRA, reason=REASON, blocked="read the logs",
+            need="send the restart times")])
+        item = _spent(c, project, finding="The restarts line up with the upgrades at 19:43")
+        assert owners.due_items(c, project_id=project) == [], "it takes no slot"
+    report = _tick(eng, project)
+    assert not [w for w in report["worked"] if w["work_item_id"] == item["id"]]
     with eng.begin() as c:
-        said = [r for r in ledger.list_decisions(c, project, work_item_id=item["id"])
-                if r["question"] == owners.Q_WHY_NO_TURN]
-    assert len(said) == 1 and "budget for this item is spent ($1.53 of $1.50)" in \
-        said[0]["rationale"]
+        card = _card(c, card_id)
+        waiting = board.get(c, item["id"])
+        cards = c.execute(text("SELECT count(*) FROM decisions WHERE project_id = :p AND "
+                               "status = 'pending'"), {"p": project}).scalar()
+    assert cards == 1 and waiting["needs_you_decision_id"] == card_id, "joins the ONE card"
+    [entry] = [e for e in card["recommendation"]["batch"] if e["work_item_id"] == item["id"]]
+    assert entry["question"] == ("Infra Steward's squad used its $1.50 on “Updates restarted a "
+                                 "build 2 times in an hour” — give it $1 more, or close it?")
+    assert entry["detail"] == "Found so far: The restarts line up with the upgrades at 19:43"
+    alone = asks.card_options([entry])
+    assert [o["label"] for o in alone] == ["Give it $1 more", "Close it", "I'll take it"]
+    shown = decision_actions.allowed_actions({**card, "options": alone, "status": "pending"})
+    assert [(a["action"], a["label"]) for a in shown][:3] == [
+        ("approve", "Give it $1 more"), ("reject", "Close it"), ("revise", "I'll take it")]
+    # Asked once: the next tick neither asks again nor works it.
+    _tick(eng, project)
+    with eng.begin() as c:
+        again = c.execute(text("SELECT count(*) FROM decisions WHERE project_id = :p AND "
+                               "status = 'pending'"), {"p": project}).scalar()
+    assert again == 1
+
+
+def _budget_card(eng, pid):
+    with eng.begin() as c:
+        _ceo(c, pid)
+        item = _spent(c, pid)
+    _tick(eng, pid)
+    with eng.begin() as c:
+        return item, board.get(c, item["id"])["needs_you_decision_id"]
+
+
+def test_give_it_more_raises_the_budget_and_the_squad_is_owed_its_turn(eng, project):  # noqa: F811
+    from boss_engine.services.ambient import owners
+
+    item, card_id = _budget_card(eng, project)
+    _approve(eng, card_id)
+    with eng.begin() as c:
+        after = board.get(c, item["id"])
+        due = owners.due_items(c, project_id=project)
+    assert after["squad_budget_usd_micros"] == 2_500_000 and after["lifecycle"] != "needs_you"
+    assert due and due[0]["id"] == item["id"] and due[0].get("owed"), "its next turn is owed"
+    report = _tick(eng, project)
+    assert [w for w in report["worked"] if w["work_item_id"] == item["id"]][0]["turns"] >= 1
+
+
+def test_close_it_resolves_and_ill_take_it_hands_it_over(eng, project):  # noqa: F811
+    from boss_engine.services.decisions import DecisionService
+
+    item, card_id = _budget_card(eng, project)
+    with eng.begin() as c:
+        DecisionService(get_settings()).transition(c, card_id, action="reject", actor="ceo",
+                                                   note="expected: our upgrades")
+        closed = board.get(c, item["id"])
+    assert closed["lifecycle"] == "resolved"
+    other, other_card = _budget_card(eng, project)
+    with eng.begin() as c:
+        DecisionService(get_settings()).transition(c, other_card, action="revise", actor="ceo",
+                                                   note="I'll look")
+        taken = board.get(c, other["id"])
+    assert taken["lease_kind"] == "person"
+
+
+def test_a_spent_budget_card_withdraws_once_its_item_is_moot(eng, project):  # noqa: F811
+    item, card_id = _budget_card(eng, project)
+    with eng.begin() as c:
+        c.execute(text("UPDATE work_items SET squad_budget_usd_micros = 3000000 WHERE id = :w"),
+                  {"w": item["id"]})                           # funded elsewhere
+        done = cos.reconsider(c, project, mode="propose")
+        card = _card(c, card_id)
+    assert [s["verdict"] for r in done for s in r.get("settled", [])] == ["funded"]
+    assert card["status"] == "withdrawn"
 
 
 def test_a_read_phase_past_its_spend_cap_still_answers(eng, project, monkeypatch):  # noqa: F811

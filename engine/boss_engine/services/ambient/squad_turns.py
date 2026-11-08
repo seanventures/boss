@@ -67,7 +67,15 @@ MAX_ROUNDS_PER_RUN = 4
 MAX_PROPOSALS_PER_ITEM = 4
 #: What a squad may spend on one item's turns (the project envelope still applies on top).
 SQUAD_BUDGET_USD_MICROS = 1_500_000
+#: What a person adds with "Give it $1 more" on a spent-budget card (asks.budget_entry).
+BUDGET_STEP_USD_MICROS = 1_000_000
 BOARD_WINDOW = 30
+
+
+def budget_of(item: Mapping[str, Any]) -> int:
+    """The squad's budget for this item: the default, or what a person raised it to."""
+    raised = item.get("squad_budget_usd_micros")
+    return int(raised) if raised else SQUAD_BUDGET_USD_MICROS
 #: What a lead may propose (the board's own moves — findings, questions — are message kinds).
 PROPOSABLE = ("convene_meeting", "start_workflow", "open_draft_pr", "comment", "label", "nudge",
               "staging_rollback", "staging_restart", "silence_rule", "prod_rollback",
@@ -445,7 +453,7 @@ def _guard(connection: Connection, item_id: str) -> tuple[dict[str, Any], dict[s
         raise TurnRefused("lease_lost", str(exc)) from None
     if _turns(connection, item) >= MAX_TURNS_PER_ITEM:
         raise TurnRefused("turn_cap", f"{MAX_TURNS_PER_ITEM} squad turns spent on this item")
-    if int(item.get("cost_usd_micros") or 0) >= SQUAD_BUDGET_USD_MICROS:
+    if int(item.get("cost_usd_micros") or 0) >= budget_of(item):
         raise TurnRefused("budget", "the squad's budget for this item is spent")
     if policy.envelope(connection, item["project_id"])["available_usd_micros"] <= 0:
         raise TurnRefused("envelope", "today's ambient envelope is spent")
