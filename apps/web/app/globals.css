@@ -87,18 +87,19 @@
      card and row reads as the same product. Taken from the Workflows page as it renders (the
      console's best-read screen), not from the wireframes: their sizes were drawn small (meta
      11.4px, tags 10.6px, labels 10.3px) and made every screen built from them read a size small.
-     At the 19px root: display 26, page 21.5, title 16, body and rows 14, buttons and inputs 13.3,
-     meta 12.5, tags 12, MONO CAPS labels 11 px. Nothing that is read sits below 12px except a
-     caps label. tests/type-is-a-token.test.ts holds these floors and keeps literal sizes out. */
+     At the 19px root: display 26, page 21.5, title 16, body, rows, buttons and inputs 14,
+     meta 13.3, tags 13, MONO CAPS labels 11.4 px (raised a step on 2026-11-08: the dense project
+     pages measured a median of 13px against Workflows' 14px). Nothing that is read sits below
+     13px except a caps label. tests/type-is-a-token.test.ts holds these floors and keeps literal sizes out. */
   --fs-display: 1.368rem; /* a big number, a hero glyph */
   --fs-page: 1.132rem;  /* a page's title (h1) */
   --fs-title: .842rem;  /* a card's, sheet's or section's title */
   --fs-body: .737rem;   /* body text */
   --fs-row: .737rem;    /* a list row's title */
-  --fs-ui: .7rem;       /* buttons, inputs, tabs */
-  --fs-meta: .658rem;   /* meta lines, chips, counts, links */
-  --fs-tag: .632rem;    /* tags, badges, ages */
-  --fs-label: .579rem;  /* MONO CAPS section labels */
+  --fs-ui: .737rem;     /* buttons, inputs, tabs */
+  --fs-meta: .7rem;     /* meta lines, chips, counts, links */
+  --fs-tag: .684rem;    /* tags, badges, ages */
+  --fs-label: .6rem;    /* MONO CAPS section labels */
 
   /* shape */
   --r-sm: 8px;

@@ -22,18 +22,19 @@ const ROOT = join(__dirname, "..");
 const ROOT_PX = 19; // the laptop root (app/layout-scale.css)
 
 /** The floor of each token, in px at the 19px root. Workflows renders body and rows at ~14px,
- *  buttons at ~13.3px, meta at ~12.5px; nothing that is read goes below 12px except a MONO CAPS
- *  label, which reads at 11px because capitals are taller. */
+ *  buttons at ~14px, meta at ~13.3px; nothing that is read goes below 13px except a MONO CAPS
+ *  label, which reads at 11.4px because capitals are taller. Raised 2026-11-08 after the dense
+ *  project pages measured a size below Workflows. */
 const FLOORS: Record<string, number> = {
   "--fs-display": 24,
   "--fs-page": 20,
   "--fs-title": 15.5,
   "--fs-body": 13.5,
   "--fs-row": 13.5,
-  "--fs-ui": 13,
-  "--fs-meta": 12.5,
-  "--fs-tag": 12,
-  "--fs-label": 11,
+  "--fs-ui": 13.9,
+  "--fs-meta": 13.2,
+  "--fs-tag": 12.9,
+  "--fs-label": 11.3,
 };
 
 /** Stylesheets outside the console's scale: the marketing page has its own fluid type, and the
