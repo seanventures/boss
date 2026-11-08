@@ -124,6 +124,8 @@ EVENT_TYPES: frozenset[str] = frozenset({
     "project.created",
     # projects archive (BOSSAPP-768 S5): who archived or restored a project
     "project.archived", "project.restored",
+    # project delete (services/projects_delete.py): who deleted a project, with what it removed
+    "project.deleted",
     # KG P6a: a bank's external agent's per-execution Knowledge-Graph token, minted and revoked
     "external_agent.token_minted", "external_agent.token_revoked",
     # an always-on squad's launch: the agent, for whom (a person's approval or the class level),

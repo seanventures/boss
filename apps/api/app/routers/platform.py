@@ -199,6 +199,11 @@ def mount_platform_routers(app: FastAPI) -> None:
 
     app.include_router(projects_archive_router)
 
+    # Delete a project with a full cleanup (services/projects_delete.py).
+    from .projects_delete import router as projects_delete_router
+
+    app.include_router(projects_delete_router)
+
     # BOSSAPP-810 — New project: the project page's view and Import's repository facts (reads).
     from .start_project import router as start_project_router
 

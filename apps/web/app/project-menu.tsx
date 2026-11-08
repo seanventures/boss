@@ -8,6 +8,7 @@ import { useDetailsDismiss } from "../lib/details-dismiss";
 import { StartProjectHost } from "./start-project/start-host";
 import { NEW_PROJECT_PARAM, stepFromParam, type StartStep } from "../lib/start-project";
 import { ArchiveDialog, ArchivedNotice, ArchivedProjects, useArchived } from "./project-archive";
+import { DeleteProjectDialog } from "./project-delete";
 import type { ProjectType } from "@boss/api-client";
 
 export type ProjectMenuItem = { id: string; name: string; type?: ProjectType };
@@ -47,6 +48,8 @@ const NEW_PROJECT_TIP =
   "A new project in this organization: its own agents, skills, budget, settings and work, set up like the first one";
 const ARCHIVE_TIP = "Hide this project and pause its schedules, monitors and indexing. Nothing is deleted";
 const HOME_TIP = "The home project can't be archived: BOSS's own agent and the worker's schedules live there";
+const DELETE_TIP = "Delete this project and everything BOSS holds for it. The GitHub repository stays";
+const HOME_DELETE_TIP = "The home project can't be deleted: BOSS's own agent and the worker's schedules live there";
 
 /**
  * THE PROJECT MENU, in the top bar beside the organization: which project is open, the org's
@@ -84,6 +87,7 @@ export function ProjectMenu({ projects, activeId, homeId, orgId }: {
     return () => window.removeEventListener("popstate", read);
   }, []);
   const [archiving, setArchiving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
   const active = projects.find((p) => p.id === activeId);
   // Not in the list: it may be archived. Asked once per project; never for a listed one.
@@ -141,6 +145,17 @@ export function ProjectMenu({ projects, activeId, homeId, orgId }: {
             Archive project…
           </GatedButton>
         )) : null}
+        {active ? (isHome ? (
+          <button type="button" className="bx-project-menu-new bx-project-menu-archive bx-project-menu-delete" aria-disabled="true"
+                  title={HOME_DELETE_TIP} data-testid="delete-project" onClick={(event) => event.preventDefault()}>
+            Delete project…<span className="sr-only">{HOME_DELETE_TIP}</span>
+          </button>
+        ) : (
+          <GatedButton permission="project:delete" className="bx-project-menu-new bx-project-menu-archive bx-project-menu-delete"
+                       title={DELETE_TIP} data-testid="delete-project" onClick={() => { close(); setDeleting(true); }}>
+            Delete project…
+          </GatedButton>
+        )) : null}
         <button type="button" className="bx-project-menu-new bx-project-menu-toggle" aria-expanded={showArchived}
                 aria-controls="boss-archived-projects" data-testid="show-archived"
                 title="Projects that were archived: hidden from this list, restorable"
@@ -156,6 +171,9 @@ export function ProjectMenu({ projects, activeId, homeId, orgId }: {
     </details>
     {/* THE ONE ADD-A-PROJECT SHEET (start-host.tsx): drawn by whichever host mounted first. */}
     <StartProjectHost projectId={activeId} homeId={homeId} step={step} onStep={setStep} />
+    {deleting && active ? (
+      <DeleteProjectDialog projectId={active.id} name={active.name} onClose={() => setDeleting(false)} />
+    ) : null}
     {archiving && active ? (
       <ArchiveDialog projectId={active.id} name={active.name} onClose={() => setArchiving(false)}
                      onArchived={goHome} />

@@ -51,6 +51,7 @@ HEADLINES = {
     "agent.captain_authority": "built on the project's Captain authority",
     "project.created": "created a project",
     "project.archived": "archived a project", "project.restored": "restored a project",
+    "project.deleted": "deleted a project",
 }
 
 

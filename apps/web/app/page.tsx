@@ -1479,7 +1479,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
 
         {shows("project") ? (
         <section data-area="project" aria-label="Project">
-          <ProjectPage projectId={activeProjectId} actor={activeActorId} orgId={activeOrgId} />
+          <ProjectPage projectId={activeProjectId} actor={activeActorId} orgId={activeOrgId} homeId={selectedOrg.project_id} />
         </section>
         ) : null}
 

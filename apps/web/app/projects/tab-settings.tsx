@@ -34,6 +34,7 @@ import type { PxCtx } from "./project-page";
 import { CaptainPicker, captainChoices } from "./captain-picker";
 import { ConfirmSheet } from "./confirm-sheet";
 import { AddRepoDrawer } from "./add-repo";
+import { DangerZone } from "../project-delete";
 
 /** The section nav and card icons, in the wireframe's order and colours (13-01). */
 const SECTION_ICON: Record<string, { icon: Icon; c: Tone | "grey" }> = {
@@ -151,6 +152,8 @@ export function SettingsTab({ ctx }: { ctx: PxCtx }) {
                 {by.autonomy || by.repos ? <div className="px-grid px-g2">{card("autonomy")}{card("repos")}</div> : null}
                 {card("notifications")}
                 {st.sections.filter((x) => !["demo_logins", "deploy_values", "targets", "captain", "autonomy", "repos", "notifications"].includes(x.key)).map((x) => card(x.key))}
+                {/* THE DANGER ZONE, quiet at the foot: Archive (nothing deleted) and Delete project. */}
+                {!ctx.demo ? <DangerZone projectId={ctx.projectId} name={ctx.overview.project.name} home={!!ctx.homeId && ctx.homeId === ctx.projectId} /> : null}
               </div>
             </div>
           );

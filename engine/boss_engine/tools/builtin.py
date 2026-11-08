@@ -8638,6 +8638,9 @@ _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     # (operator_only, project:delete), the same service as the project menu's (BOSSAPP-768 S5).
     "archive_project",
     "restore_project",
+    # "Delete northpeak-bank-b": offered as a button only (irreversible, operator_only); the
+    # person presses it with the name typed back (Where people decide › Deleting data).
+    "delete_project",
     # "Put the architect and the SRE on it": the project's team, stated (agent_assignment
     # .set_team), the same service as Knowledge Graph › Setup › Assign the team.
     "set_project_team",

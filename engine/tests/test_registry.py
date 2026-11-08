@@ -99,7 +99,7 @@ _EXPECTED_TOOLS: set[str] = {
     # "Create a project called northpeak-bank-a": a new project in the org (project:create).
     "create_project",
     # Archive / restore a project: offered as a button a person presses (BOSSAPP-768 S5).
-    "archive_project", "restore_project",
+    "archive_project", "restore_project", "delete_project",
     # A knowledge-graph project's setup: where it is, and its team, stated (BOSSAPP-768 flow).
     "knowledge_project_setup", "set_project_team",
     # The first deployment. BOSS could create hosts and targets and could redeploy, and had
@@ -264,7 +264,7 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 175, (
+    assert len(reg.names()) == 176, (
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
     assert len(read) == 100  # + install_restarts + + dq_platform_status + kg_neighbors, dq_rulebook_status (rulebook source G6/G7) + aml_sample_status + knowledge_project_setup (BOSSAPP-768 project flow)
@@ -272,7 +272,7 @@ def test_default_registry_shape():
     #                         + wait_for (waiting for BOSS's own work) + kg_schema (what the knowledge graph holds) + code_graph_status, index_repository_code (a repository's code graph) + list_org_repositories (the org's repository registry) + list_projects, describe_project (a project's real state, any project)
     #                        + captain_goals, + 7 kg reads, + 3 self-fix reads, + read_app_logs, + my_recent_work, + system_health, + 7 template/security reads, + precheck_workflow
     #                        + query_project_data (the agent baseline's fenced row read)
-    assert len(write) == 75  # + load_dq_platform + add_document_from_file (G3) + add_regulation_document, set_ontology_pack, load_aml_sample + set_project_team (BOSSAPP-768 project flow)
+    assert len(write) == 76  # + delete_project, + load_dq_platform + add_document_from_file (G3) + add_regulation_document, set_ontology_pack, load_aml_sample + set_project_team (BOSSAPP-768 project flow)
     # + file_platform_gap, request_self_fix (BOSSAPP-571's doorway) + record_learning (BOSSAPP-768 S2b), + kg_propose_rule (BOSSAPP-768 S2a), + archive_project, restore_project (BOSSAPP-768 S5), + allow_repository, remove_project_repository + 5 captain writes (BOSSAPP-759), + create_project, + kg_propose_fact, + remove_app, + system_doctor_act, + run_security_scan (F4), + apply_template (F2),
     #                         + review_pull_request_again
     # the capabilities the user explicitly asked the agent to cover
@@ -578,6 +578,7 @@ def test_the_tools_that_are_never_pressed_by_the_model():
         # the captain's powers that APPLY moves a person has not seen one by one (BOSSAPP-759)
         "captain_drive", "captain_overwatch", "captain_theater",
         "decide",             # approves a gate; an agent that approves its own gates is ungated
+        "delete_project",     # deletes a project and everything it holds (Deleting data)
         "delete_workflow",    # removes a path a person authored
         # sets the project's ontology pack and loads the synthetic AML bank (case study 4)
         "load_aml_sample", "load_dq_platform",

@@ -37,6 +37,7 @@ import { SettingsTab } from "./tab-settings";
 import { DrawerHost } from "./drawers";
 import { OnboardingView, clockWords, useElapsed } from "./onboarding";
 import { NewWorkModal, type Prefill } from "./new-work";
+import { ProjectMoreMenu } from "../project-delete";
 import "./px.css";
 
 export const TAB_ICONS: Record<Tab, Icon> = {
@@ -46,6 +47,8 @@ export const TAB_ICONS: Record<Tab, Icon> = {
 
 export type PxCtx = {
   projectId: string; actor: string; orgId: string | null; overview: Overview; demo: boolean;
+  /** The org's home project (it cannot be archived or deleted), when the page was given it. */
+  homeId?: string;
   work: WorkList | null; workState: "loading" | "ready" | "missing" | "error"; refreshWork: () => void;
   /** Read the Overview again (a card's "Couldn't load · Retry"). */
   refreshOverview?: () => void;
@@ -111,7 +114,7 @@ export function useStickyHead(): (el: HTMLDivElement | null) => void {
   }, []);
 }
 
-export function ProjectPage({ projectId, actor, orgId }: { projectId: string; actor: string; orgId?: string | null }) {
+export function ProjectPage({ projectId, actor, orgId, homeId }: { projectId: string; actor: string; orgId?: string | null; homeId?: string }) {
   const url = usePxUrl();
   const demoOnboarding = projectId === FX_ONBOARDING_PROJECT;
   const ov = usePxRead<Overview>(PX_PATHS.overview(projectId), parseOverview, {
@@ -136,7 +139,7 @@ export function ProjectPage({ projectId, actor, orgId }: { projectId: string; ac
     ? { items: a(o(start.data).work).map((r) => workFromStartRow(r, projectId)) } : null), [work.state, start.data, projectId]);
 
   const tab = useCallback((t: Tab, extra: Record<string, string | null> = {}) => writePxUrl({ tab: t === "overview" ? null : t, drawer: null, ...extra }), []);
-  const ctxBase = { projectId, actor, orgId: orgId ?? null };
+  const ctxBase = { projectId, actor, orgId: orgId ?? null, homeId };
   const stickyRef = useStickyHead();
   // NEW WORK: one modal for the whole page. `compose=1` (the header's old door, ⌘K, an Ask-Helm
   // answer's "New work · Edit" with `compose_text`/`compose_kind`) opens it prefilled — never sent —
@@ -334,6 +337,11 @@ function Header({ ctx, onboarding }: { ctx: PxCtx; onboarding: boolean }) {
                      title="Describe a feature, a bug or paste a ticket (N)" onClick={() => ctx.newWork?.()}>
           <Plus size={14} weight="bold" aria-hidden /> New work
         </GatedButton>
+      ) : null}
+      {/* THE PROJECT'S ⋯ MENU: Settings, Archive project…, Delete project… (project-delete.tsx). */}
+      {!ctx.demo ? (
+        <ProjectMoreMenu projectId={ctx.projectId} name={p.name} home={!!ctx.homeId && ctx.homeId === ctx.projectId}
+                         onSettings={() => ctx.tab("settings")} />
       ) : null}
     </div>
   );

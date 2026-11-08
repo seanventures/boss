@@ -136,7 +136,7 @@ LIST_KINDS: tuple[Boundary, ...] = (
         "Drop, purge, retire a host, forget facts", "Gone is gone. Agents may archive; only a person deletes.",
         words=("delete", "deletes", "destroy", "drop", "purge", "wipe", "teardown", "terminate"),
         actions=(),
-        decision_actions=("infra_operation", "self_fix.remove"),
+        decision_actions=("infra_operation", "self_fix.remove", "delete_project"),
         seat="ceo", step_up="typed_name", per_project=False,
         agents_may="Archive, quarantine, mute; never delete",
         delegate="never"),
