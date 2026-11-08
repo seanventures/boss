@@ -2115,6 +2115,10 @@ def app_environment(workdir: Path, port: int, extra: Optional[dict[str, str]] = 
     # Cross-app links (F5): values BOSS computed for THIS launch (preview_link_environment),
     # added after the filter like PORT, never inherited.
     env.update(extra or {})
+    # ...and never over the launch's own PORT/HOST: launch_app waits on the port it returns, so
+    # an `extra` PORT (a boss.deploy.yaml literal `PORT: "3000"`) had the app bind one port
+    # while BOSS probed another (the release gate's known-good app, 2026-11-07).
+    env.update({"PORT": str(port), "HOST": "0.0.0.0"})
     return env
 
 

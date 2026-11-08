@@ -25,7 +25,7 @@
 .bx-shell .bx-sidebar { padding: 0 10px 10px; overflow: hidden; }
 .bx-shell .bx-brand { height: 56px; flex: none; padding: 0 8px; gap: 10px; }
 .bx-shell .bx-brand-logo { width: 26px; height: 28px; }
-.bx-shell .bx-brand-name { font-size: 0.89474rem; }
+.bx-shell .bx-brand-name { font-size: var(--fs-title); }
 
 /* The areas scroll inside the rail when the window is too short for them; brand and footer
    never move. A thin scrollbar that shows itself, so "there is more below" is visible. */
@@ -34,13 +34,13 @@
   overflow-y: auto; overscroll-behavior: contain;
   scrollbar-width: thin; scrollbar-color: var(--panel-border) transparent;
 }
-.bx-shell .bx-nav-label { padding: 12px 10px 4px; font-size: 0.55rem; letter-spacing: 0.16em; }
+.bx-shell .bx-nav-label { padding: 12px 10px 4px; font-size: var(--fs-tag); letter-spacing: 0.16em; }
 .bx-shell .bx-nav > div:first-of-type > .bx-nav-label { padding-top: 6px; }
 
 .bx-shell .bx-nav-item {
   min-height: 30px; padding: 5px 10px; gap: 10px;
   border: 1px solid transparent; border-radius: 7px;
-  color: var(--muted); font-size: 0.71053rem; font-weight: 500; line-height: 1.25;
+  color: var(--muted); font-size: var(--fs-ui); font-weight: 500; line-height: 1.25;
 }
 .bx-shell .bx-nav-item > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bx-shell .bx-nav-item svg { width: 16px; height: 16px; }
@@ -54,9 +54,9 @@
 
 /* Count badges: amber pill, mono, as on Approvals in the wireframe. */
 .bx-shell .bx-nav-badge {
-  min-width: 18px; height: 16px; padding: 0 6px; border: 0; border-radius: 999px;
+  min-width: 1.5em; height: 1.4em; padding: 0 6px; border: 0; border-radius: 999px;
   background: color-mix(in srgb, var(--amber) 16%, transparent); color: var(--amber);
-  font-family: var(--mono); font-size: 0.52632rem; font-weight: 700;
+  font-family: var(--mono); font-size: var(--fs-tag); font-weight: 700;
 }
 
 /* Projects: the row, its caret, and the compact list under it. */
@@ -76,7 +76,7 @@
   display: flex; flex-direction: column; gap: 0;
 }
 .bx-shell .bx-nav-child {
-  min-height: 25px; padding: 3px 8px; gap: 8px; font-size: 0.65789rem; font-weight: 500;
+  min-height: 25px; padding: 3px 8px; gap: 8px; font-size: var(--fs-meta); font-weight: 500;
 }
 .bx-shell .bx-nav-child svg { width: 13px; height: 13px; }
 .bx-shell a.bx-nav-item { text-decoration: none; }
@@ -92,20 +92,20 @@
 /* The footer: one block — who you are, and which control plane this console reads. */
 .bx-shell .bx-sidebar-foot { flex: none; gap: 4px; padding: 8px 6px 0; border-top: 1px solid var(--hair); }
 .bx-shell .bx-operator { gap: 8px; }
-.bx-shell .bx-operator-avatar { width: 24px; height: 24px; font-size: 0.57895rem; }
+.bx-shell .bx-operator-avatar { width: 24px; height: 24px; font-size: var(--fs-tag); }
 .bx-shell .bx-operator > span:last-child { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
-.bx-shell .bx-operator strong { font-size: 0.68421rem; max-width: 110px; }
-.bx-shell .bx-operator small { font-size: 0.55rem; }
+.bx-shell .bx-operator strong { font-size: var(--fs-ui); max-width: 8.5em; }
+.bx-shell .bx-operator small { font-size: var(--fs-tag); }
 .bx-control-line { display: flex; align-items: center; gap: 8px; min-width: 0; padding-left: 2px; }
-.bx-shell .bx-control-status { gap: 6px; padding: 0; font-size: 0.52632rem; white-space: nowrap; }
-.bx-shell .bx-control-host { margin: 0; padding: 0; font-size: 0.52632rem; min-width: 0; }
+.bx-shell .bx-control-status { gap: 6px; padding: 0; font-size: var(--fs-tag); white-space: nowrap; }
+.bx-shell .bx-control-host { margin: 0; padding: 0; font-size: var(--fs-tag); min-width: 0; }
 
 /* Docked to icons: the project list, the caret and the footer step aside; badges sit on the icon. */
 .bx-shell.nav-docked .bx-sidebar { padding: 0 8px 10px; }
 .bx-shell.nav-docked .bx-nav-projects .bx-nav-children,
 .bx-shell.nav-docked .bx-nav-caret-btn { display: none; }
 .bx-shell.nav-docked .bx-nav-item { justify-content: center; padding: 8px 0; min-height: 34px; }
-.bx-shell.nav-docked .bx-nav-badge { position: absolute; top: 1px; right: 2px; padding: 0 4px; min-width: 14px; height: 14px; }
+.bx-shell.nav-docked .bx-nav-badge { position: absolute; top: 1px; right: 2px; padding: 0 4px; min-width: 1.25em; height: 1.25em; }
 
 /* ── the top bar ──────────────────────────────────────────────────────────────────────────── */
 
@@ -123,7 +123,7 @@
 .bx-shell .bx-topbar > .bx-crumbs { flex: 0 1 auto; min-width: 0; }
 .bx-crumbs ol {
   display: flex; align-items: center; gap: 8px; min-width: 0; margin: 0; padding: 0; list-style: none;
-  font-family: var(--display); font-weight: 600; font-size: 0.78947rem; color: var(--ink);
+  font-family: var(--display); font-weight: 600; font-size: var(--fs-title); color: var(--ink);
 }
 .bx-crumb { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .bx-crumb[data-crumb="area"], .bx-crumb[data-crumb="tab"] { flex: 0 1 auto; }
@@ -140,7 +140,7 @@
   max-width: 17rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-decoration: none;
 }
 .bx-crumb-lab {
-  flex: none; padding: 1px 7px; border-radius: 999px; font-family: var(--mono); font-size: 0.52632rem; font-weight: 700;
+  flex: none; padding: 1px 7px; border-radius: 999px; font-family: var(--mono); font-size: var(--fs-tag); font-weight: 700;
   color: var(--amber); background: color-mix(in srgb, var(--amber) 14%, transparent);
   border: 1px solid color-mix(in srgb, var(--amber) 40%, transparent);
 }
@@ -149,26 +149,26 @@
 .bx-jump {
   display: inline-flex; align-items: center; gap: 8px; height: 34px; min-width: 13.68rem; padding: 0 8px 0 10px;
   border: 1px solid var(--panel-border); border-radius: 9px; background: var(--raised);
-  color: var(--faint); font: inherit; font-size: 0.68421rem; cursor: pointer;
+  color: var(--faint); font: inherit; font-size: var(--fs-ui); cursor: pointer;
   transition: border-color 0.14s ease, color 0.14s ease;
 }
 .bx-jump:hover, .bx-jump:focus-visible { border-color: var(--active); color: var(--ink-soft); }
 .bx-jump kbd {
   margin-left: auto; padding: 1px 6px; border: 1px solid var(--panel-border); border-radius: 5px;
-  background: transparent; color: var(--muted); font-family: var(--mono); font-size: 0.55rem;
+  background: transparent; color: var(--muted); font-family: var(--mono); font-size: var(--fs-tag);
 }
 
 /* Live: a green word with its dot, as in the wireframe; Paused goes quiet. */
 .bx-shell .bx-live-status {
   padding: 4px 2px; gap: 6px; color: var(--muted);
-  font-family: var(--mono); font-size: 0.63158rem; font-weight: 600;
+  font-family: var(--mono); font-size: var(--fs-tag); font-weight: 600;
 }
 .bx-shell .bx-live-status[data-live] { color: var(--green); }
 
 /* + New build: an icon button beside the bell. */
 .bx-shell .bx-topbar > .bx-new-project {
   display: inline-grid; place-items: center; width: 32px; height: 32px; padding: 0; margin: 0;
-  border-radius: 8px; order: 0; font-size: 0.78947rem;
+  border-radius: 8px; order: 0; font-size: var(--fs-title);
 }
 .bx-shell .bx-topbar > .bx-new-project .bx-new-label { display: none; }
 
@@ -176,29 +176,29 @@
    the same picker, which drops from the chip; the archived notice goes in the slot under the bar. */
 .bx-shell .bx-topbar > .bx-strip-chip {
   position: relative; display: inline-flex; align-items: center; gap: 6px; min-height: 0; padding: 0; margin: 0;
-  background: transparent; backdrop-filter: none; border: 0; font-size: 0.63158rem; z-index: auto;
+  background: transparent; backdrop-filter: none; border: 0; font-size: var(--fs-tag); z-index: auto;
 }
 .bx-strip-chip > .bx-project-trigger, .bx-strip-chip[data-state="loading"], .bx-strip-chip[data-state="failed"] {
   display: inline-flex; align-items: center; gap: 6px; height: 32px; min-height: 32px; padding: 0 10px;
   border: 1px solid var(--panel-border); border-radius: 8px; background: transparent;
-  color: var(--ink-soft); font: inherit; font-size: 0.63158rem; cursor: pointer;
+  color: var(--ink-soft); font: inherit; font-size: var(--fs-tag); cursor: pointer;
 }
 .bx-strip-chip[data-state="loading"], .bx-strip-chip[data-state="failed"] { cursor: default; color: var(--faint); }
 .bx-strip-chip[data-state="failed"] { border-color: color-mix(in srgb, var(--red) 45%, var(--panel-border)); }
 .bx-strip-chip > .bx-project-trigger:hover, .bx-strip-chip > .bx-project-trigger[aria-expanded="true"] { border-color: var(--active); color: var(--ink); }
 .bx-strip-chip > .bx-project-trigger[data-attention] { border-color: color-mix(in srgb, var(--amber) 45%, var(--panel-border)); }
-.bx-strip-chip .bx-project-trigger strong { font-family: var(--mono); font-size: 0.6rem; color: var(--ink); }
+.bx-strip-chip .bx-project-trigger strong { font-family: var(--mono); font-size: var(--fs-tag); color: var(--ink); }
 .bx-strip-chip .bx-strip-label { font-family: inherit; font-size: inherit; letter-spacing: 0; text-transform: none; color: inherit; gap: 6px; }
-.bx-strip-chip .bx-strip-note { font-size: 0.55rem; color: var(--faint); }
+.bx-strip-chip .bx-strip-note { font-size: var(--fs-tag); color: var(--faint); }
 .bx-strip-chip[data-state="failed"] .bx-strip-note,
 .bx-strip-chip[data-state="ready"] > .bx-strip-label { display: none; }
 /* "2 need attention" says itself as an amber count on the chip, the words in its tooltip. */
 .bx-strip-chip .bx-project-attention {
-  min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; display: inline-grid; place-items: center;
-  background: var(--amber); color: #1b1300; font-family: var(--mono); font-size: 0.52632rem; font-weight: 800;
+  min-width: 1.4em; height: 1.4em; padding: 0 4px; border-radius: 8px; display: inline-grid; place-items: center;
+  background: var(--amber); color: #1b1300; font-family: var(--mono); font-size: var(--fs-tag); font-weight: 800;
 }
 .bx-strip-sr, .bx-strip-chip > .bx-strip-error { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-.bx-strip-chip .bx-strip-caret { color: var(--faint); font-size: 0.55rem; }
+.bx-strip-chip .bx-strip-caret { color: var(--faint); font-size: var(--fs-tag); }
 .bx-strip-chip .bx-project-picker { top: calc(100% + 8px); left: auto; right: 0; z-index: 60; }
 .bx-strip-notice:empty { display: none; }
 .bx-strip-notice { padding: 8px 20px 0; }
@@ -217,15 +217,15 @@
 .bx-bell:hover, .bx-bell[aria-expanded="true"] { border-color: var(--active); color: var(--ink); }
 .bx-bell[data-needs] { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 45%, var(--panel-border)); }
 .bx-bell-n {
-  position: absolute; top: -6px; right: -6px; min-width: 17px; height: 17px; padding: 0 4px; border-radius: 9px;
+  position: absolute; top: -6px; right: -6px; min-width: 1.45em; height: 1.45em; padding: 0 4px; border-radius: 9px;
   display: grid; place-items: center; background: var(--amber); color: #1b1300;
-  font-family: var(--mono); font-size: 0.52632rem; font-weight: 800; box-shadow: 0 0 0 2px var(--base, #0b101e);
+  font-family: var(--mono); font-size: var(--fs-tag); font-weight: 800; box-shadow: 0 0 0 2px var(--base, #0b101e);
 }
 .bx-bell-working {
   position: absolute; bottom: 4px; right: 4px; width: 6px; height: 6px; border-radius: 50%;
   background: var(--teal); box-shadow: 0 0 6px color-mix(in srgb, var(--teal) 70%, transparent);
 }
-.ag-crew-empty { margin: 4px 6px 8px; color: var(--muted); font-size: 0.68421rem; }
+.ag-crew-empty { margin: 4px 6px 8px; color: var(--muted); font-size: var(--fs-ui); }
 
 /* The avatar menu: the face alone in the bar, the MFA shield on its corner. */
 .bx-shell .idn-me[data-compact] > summary,
@@ -243,11 +243,11 @@
 .bx-user-fallback > summary::-webkit-details-marker { display: none; }
 .bx-menu-sep {
   margin: 6px 0 2px; padding: 6px 10px 2px; border-top: 1px solid var(--border);
-  color: var(--faint); font-family: var(--mono); font-size: 0.5rem; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--faint); font-family: var(--mono); font-size: var(--fs-label); letter-spacing: 0.14em; text-transform: uppercase;
 }
 .bx-menu-org { min-width: 0; }
 .bx-menu-org-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bx-menu-aside { color: var(--faint); font-size: 0.57895rem; }
+.bx-menu-aside { color: var(--faint); font-size: var(--fs-tag); }
 /* The old System menu's rows, inside the avatar menu (not a floating panel of their own). */
 .idn-me-menu .bx-system-panel {
   position: static; min-width: 0; margin: 0; padding: 0 10px 4px; border: 0; box-shadow: none; background: transparent;
@@ -255,7 +255,7 @@
 }
 .idn-me-menu .bx-system-panel > div {
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
-  padding: 5px 0; font-size: 0.63158rem; color: var(--muted); border-bottom: 0;
+  padding: 5px 0; font-size: var(--fs-tag); color: var(--muted); border-bottom: 0;
 }
 .idn-me-menu { max-height: calc(100vh - 80px); overflow-y: auto; }
 
@@ -289,7 +289,7 @@
 .bx-nav-new {
   margin-left: auto; flex: none; padding: 1px 5px; border-radius: 4px;
   background: var(--accent-soft, rgba(47, 111, 224, 0.14)); color: var(--accent-text, var(--accent));
-  font-family: var(--mono); font-size: 0.47368rem; font-weight: 700; letter-spacing: 0.06em;
+  font-family: var(--mono); font-size: var(--fs-label); font-weight: 700; letter-spacing: 0.06em;
 }
 .bx-nav-skeleton { display: grid; gap: 7px; padding: 6px 8px; }
 .bx-nav-skeleton i {
@@ -300,7 +300,7 @@
 .bx-nav-skeleton i:nth-child(3) { width: 62%; }
 @keyframes bx-nav-shimmer { from { opacity: 0.45; } to { opacity: 0.9; } }
 @media (prefers-reduced-motion: reduce) { .bx-nav-skeleton i { animation: none; } }
-.bx-nav-failed { display: block; padding: 4px 8px; color: var(--faint); font-size: 0.6rem; }
+.bx-nav-failed { display: block; padding: 4px 8px; color: var(--faint); font-size: var(--fs-tag); }
 .bx-nav-failed .linklike { font-size: inherit; }
 .bx-operator-dot { color: var(--faint); }
 .bx-shell .bx-sidebar-foot .idn-face { flex: none; }
@@ -315,7 +315,7 @@
 
 /* The project menu inside the avatar menu: a row that opens in place. */
 .bx-menu-project { padding: 0 4px; }
-.bx-menu-project .bx-project-menu { display: block; font-size: 0.68421rem; }
+.bx-menu-project .bx-project-menu { display: block; font-size: var(--fs-ui); }
 .bx-menu-project .bx-project-menu > summary { max-width: none; padding: 7px 6px; }
 .bx-menu-project .bx-project-menu-panel {
   position: static; min-width: 0; margin-top: 4px; box-shadow: none; max-height: 16rem;

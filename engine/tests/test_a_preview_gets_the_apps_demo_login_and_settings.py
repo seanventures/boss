@@ -69,3 +69,31 @@ def test_a_session_key_the_compose_file_reads_is_generated_for_a_preview(tmp_pat
     assert len(env.values.get("SESSION_SECRET", "")) >= 32
     # A provider's credential or the database is not BOSS's to mint for a preview.
     assert "GOOGLE_CLIENT_SECRET" not in env.values and "DATABASE_URL" not in env.values
+
+
+PINNED_PORT = """version: 1
+name: helpdesk-mini
+kind: commands
+env:
+  PORT: "3000"
+  HOST: "127.0.0.1"
+  APP_ENV: staging
+install: ["true"]
+health: [{url: "{target.public_url}/healthz", expect: 200}]
+"""
+
+
+def test_a_port_the_manifest_pins_never_overrides_the_launchers(tmp_path):
+    """The release gate's known-good app (tests/e2e/fixtures/helpdesk-mini) declares the port its
+    DEPLOY listens on, `PORT: "3000"`. Since a literal became a setting every run gets (1aee54c41),
+    the app-start proof handed it to the app over the PORT launch_app chose: the app bound 3000
+    and BOSS probed its own port for 90 s (2026-11-07). The launcher's PORT and HOST always win."""
+    from boss_engine.services.preview_service import app_environment
+
+    (tmp_path / "boss.deploy.yaml").write_text(PINNED_PORT)
+    env = resolve(needs_from_app_dir(tmp_path), purpose="proof", bound={"PORT": "4000"})
+    assert "PORT" not in env.values and "HOST" not in env.values
+    assert {"PORT", "HOST"} <= set(env.supplied)
+    assert env.values["APP_ENV"] == "staging"          # the other literals still reach the app
+    launched = app_environment(tmp_path, 41234, {**env.values, "PORT": "3000", "HOST": "x"})
+    assert launched["PORT"] == "41234" and launched["HOST"] == "0.0.0.0"

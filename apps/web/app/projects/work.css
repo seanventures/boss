@@ -24,7 +24,7 @@
 @media (hover: none) { .px-rank button { opacity: 1; } }
 
 /* Helm's plan: the workflow it runs, and "change". */
-.px-plan { gap: 10px; font-size: .6rem; }
+.px-plan { gap: 10px; font-size: var(--fs-meta); }
 .px-wf-pick { position: relative; display: inline-flex; align-items: center; gap: 2px; }
 .px-linkbtn { background: none; border: 0; padding: 0; font: inherit; color: var(--accent-text); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
 .px-linkbtn:disabled { color: var(--faint); cursor: default; text-decoration: none; }
@@ -32,7 +32,7 @@
   display: flex; flex-direction: column; padding: 4px; border-radius: 10px; border: 1px solid var(--border-strong);
   background: var(--surface); box-shadow: 0 10px 30px color-mix(in srgb, #000 22%, transparent); animation: px-rise .12s ease-out; }
 .px-wf-menu button { display: flex; align-items: center; gap: 8px; text-align: left; padding: 7px 8px; border: 0; border-radius: 7px;
-  background: none; color: var(--ink); font: inherit; font-size: .62rem; cursor: pointer; }
+  background: none; color: var(--ink); font: inherit; font-size: var(--fs-meta); cursor: pointer; }
 .px-wf-menu button:hover, .px-wf-menu button:focus-visible { background: color-mix(in srgb, var(--accent) 10%, transparent); outline: none; }
 .px-wf-menu button[aria-selected="true"] { font-weight: 600; }
 .px-wf-menu .px-tag { margin-left: auto; }
