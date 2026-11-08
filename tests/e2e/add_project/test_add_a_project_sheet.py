@@ -18,7 +18,7 @@ import time
 import pytest
 
 from conftest import (CONSOLE, FIRST_READ_S, IDEA, PROJECT, TEN_LINES, Person, api, dev, lines_of,
-                      projects_named, started, unique)
+                      popguard, project_count, projects_named, started, unique)
 
 ACME = "acme/ledger-api"
 
@@ -229,8 +229,14 @@ def test_repo_search_arrows_enter_and_add_account(person: Person):
     assert rows.nth(0).get_attribute("aria-selected") == "false"
     p.box.press("ArrowUp")
     p.box.press("ArrowDown")
-    picked = rows.nth(1).inner_text().split("\n")[0].replace(" ", "")
-    p.box.press("Enter")
+    row = rows.nth(1)
+    picked = row.locator(".npx-mono").first.inner_text().replace(" ", "")
+    if row.get_attribute("data-in-use") is None:
+        p.box.press("Enter")
+    else:  # already in a project: ↵ would open it; a new project on it is said out loud
+        rid = (row.get_attribute("data-testid") or "").removeprefix("ap-repo-")
+        p.tid(f"ap-repo-{rid}-separate").click()
+        p.tid(f"ap-repo-{rid}-separate-yes").click()
     p.tid("ap-results").wait_for(state="detached")
     assert p.box.input_value().split("\n")[0] in picked or picked.startswith(p.box.input_value().split("\n")[0])
     card = p.tid("ap-found")
@@ -270,8 +276,7 @@ def test_every_read_needs_no_step_up(person: Person):
     dev(mfa="lapsed")
     p.open_sheet("idea")
     p.idea_with_brief()
-    p.type(ACME)
-    p.box.press("Enter")
+    p.pick_repo(ACME)
     p.p.wait_for_selector("[data-testid='ap-onboarding-will']", timeout=30_000)
     assert p.tid("step-up-sheet").count() == 0
     reads = [b for b in p.bad if b.startswith("401")]
@@ -391,9 +396,15 @@ def test_each_popover_changes_what_is_created(person: Person):
     # Code: an existing repo
     p.tid("ap-box-code").click()
     p.tid("ap-pop-code").wait_for()
-    repo_btn = p.p.locator("[data-testid^='ap-code-repo-']").first
-    repo_name = repo_btn.inner_text().split("\n")[0].strip()
-    repo_btn.click()
+    repo_btn = p.p.locator("button.npx-opt[data-testid^='ap-code-repo-']").first
+    repo_name = repo_btn.locator(".npx-mono").inner_text().strip()
+    if repo_btn.get_attribute("data-in-use") is None:
+        repo_btn.click()
+    else:  # already in a project: a separate one on the same code, asked once
+        rid = (repo_btn.get_attribute("data-testid") or "").removeprefix("ap-code-repo-")
+        p.tid(f"ap-code-repo-{rid}-separate").click()
+        p.tid(f"ap-code-repo-{rid}-separate-yes").click()
+        assert repo_btn.get_attribute("aria-selected") == "true"
     p.tid("ap-pop-code-done").click()
     assert repo_name.split("/")[-1] in p.tid("ap-box-code").inner_text()
 
@@ -713,8 +724,7 @@ def test_create_an_idea_lands_on_planning(person: Person):
 def test_create_a_repo_lands_on_onboarding(person: Person):
     p = person
     p.open_sheet("idea")
-    p.type(ACME)
-    p.box.press("Enter")
+    p.pick_repo(ACME)
     p.p.wait_for_selector("[data-testid='ap-onboarding-will']", timeout=30_000)
     name = unique("Ledger")
     p.name(name)
@@ -727,3 +737,176 @@ def test_create_a_repo_lands_on_onboarding(person: Person):
     seed = started(pid)["seed"]
     assert seed["kind"] == "repo" and seed["picks"]["repos"] == [ACME] and seed["picks"]["map_rules"] is True
     assert projects_named(name) in (None, 1)
+
+
+# ── the same repo again (operator, 2026-11-08: "what if we choose same repo again, will it create
+#    new or open the already imported one? did we test that use case?") ───────────────────────
+
+def _in_use(full_name: str) -> tuple[str, list[dict]]:
+    """(the repo's id, the projects it is in, in the order the sheet lists them). A repo no
+    project uses yet is put in one first, through the API's own deliberate path."""
+    status, body = api("GET", f"/v1/github/repos?project_id={PROJECT}")
+    assert status == 200, body
+    row = next(r for r in body.get("items", []) if r.get("full_name") == full_name)
+    used = list({u["project_id"]: u for u in row.get("used_by") or []}.values())
+    if used:
+        return row["id"], used
+    status, made = api("POST", "/v1/add-project", {"context_project_id": PROJECT, "kind": "repo", "name": unique("Bound"),
+                                                    "repo_ids": [row["id"]], "allow_shared_repo": True})
+    assert status == 200, made
+    return _in_use(full_name)
+
+
+def _on_project(p: Person, project_id: str) -> None:
+    """The page now is that project's (the sheet gone), and nothing new was made on the way."""
+    def there() -> bool:
+        from urllib.parse import parse_qs, urlparse
+        q = parse_qs(urlparse(p.p.url).query)
+        return "new_project" not in q and q.get("project_id", [PROJECT])[0] == project_id
+    end = time.monotonic() + 60
+    while time.monotonic() < end and not there():
+        p.p.wait_for_timeout(250)
+    assert there(), f"did not open {project_id}: {p.p.url}"
+
+
+def test_the_same_repo_again_opens_its_project_and_creates_nothing(person: Person):
+    p = person
+    rid, used = _in_use(ACME)
+    p.open_sheet("idea")
+    p.type(ACME)
+    row = p.tid(f"ap-repo-{rid}")
+    row.wait_for()
+    assert row.get_attribute("data-in-use") == ""
+    said = row.inner_text()
+    assert f"in {used[0]['name']}" in said and "Open ›" in said, said
+    block = p.tid(f"ap-repo-{rid}-inuse")
+    assert f"Add work to {used[0]['name']} instead" in block.inner_text()
+    assert "Make a separate project anyway" in block.inner_text()
+    if len(used) > 1:  # several projects: each is listed, each opens
+        assert p.tid(f"ap-repo-{rid}-open-{used[1]['project_id']}").is_visible()
+    p.check("a repo in use")
+    before = project_count()
+    p.box.press("Enter")
+    _on_project(p, used[0]["project_id"])
+    assert project_count() == before, "opening the project it is in makes nothing"
+
+
+def test_add_work_to_that_project_instead_carries_the_words(person: Person):
+    p = person
+    rid, used = _in_use(ACME)
+    p.open_sheet("idea")
+    p.type(f"{ACME}\nfix the SLA timer on reopened tickets")
+    p.tid(f"ap-repo-{rid}-addwork").click()
+    _on_project(p, used[0]["project_id"])
+    words = p.tid("px-compose-text")
+    words.wait_for(timeout=90_000)
+    assert "fix the SLA timer on reopened tickets" in words.input_value()
+
+
+def test_a_separate_project_on_the_same_repo_is_asked_once(person: Person):
+    p = person
+    rid, _used = _in_use(ACME)
+    p.open_sheet("idea")
+    p.type(ACME)
+    p.tid(f"ap-repo-{rid}-separate").click()
+    yes = p.tid(f"ap-repo-{rid}-separate-yes")
+    yes.wait_for()
+    assert "two sets of agents opening PRs on the same code" in p.tid(f"ap-repo-{rid}-inuse").inner_text()
+    p.check("asked once")
+    yes.click()
+    p.p.wait_for_selector("[data-testid='ap-onboarding-will']", timeout=30_000)
+    name = unique("Ledger twin")
+    p.name(name)
+    p.create()
+    pid = p.landed()
+    assert started(pid)["seed"]["picks"]["repos"] == [ACME]
+    assert projects_named(name) in (None, 1)
+
+
+def test_the_code_popover_follows_the_same_rules(person: Person):
+    p = person
+    rid, used = _in_use(ACME)
+    dev(model="none")
+
+    def code_popover():
+        p.open_sheet("idea")
+        p.type(IDEA)
+        p.box.press("Enter")
+        p.understood()
+        p.tid("ap-box-code").click()
+        p.tid("ap-pop-code").wait_for()
+        p.tid("ap-code-search").fill(ACME.split("/")[1])
+        opt = p.tid(f"ap-code-repo-{rid}")
+        opt.wait_for()
+        return opt
+
+    # 1 · the row opens the project it is in; nothing is made
+    opt = code_popover()
+    assert opt.get_attribute("data-in-use") == "" and f"in {used[0]['name']}" in opt.inner_text()
+    p.check("code popover, in use")
+    before = project_count()
+    opt.click()
+    _on_project(p, used[0]["project_id"])
+    assert project_count() == before
+    # 2 · Add work there instead, with the idea's words
+    code_popover()
+    p.tid(f"ap-code-repo-{rid}-addwork").click()
+    _on_project(p, used[0]["project_id"])
+    words = p.tid("px-compose-text")
+    words.wait_for(timeout=90_000)
+    assert IDEA[:40] in words.input_value()
+    # 3 · a separate project on the same code, asked once
+    opt = code_popover()
+    p.tid(f"ap-code-repo-{rid}-separate").click()
+    p.tid(f"ap-code-repo-{rid}-separate-yes").click()
+    assert opt.get_attribute("aria-selected") == "true"
+    p.tid("ap-pop-code-done").click()
+    name = unique("Expenses twin")
+    p.name(name)
+    p.expect(r"^409 POST /v1/add-project \{\"error\":\"not_ready\"")
+    p.create()
+    pid = p.landed()
+    assert started(pid)["seed"]["picks"]["repos"] == [ACME]
+    assert projects_named(name) in (None, 1)
+
+
+# ── every popover, whole in view (operator, 2026-11-08: the CODE popover opened under the footer) ──
+
+BOXES = ("captain", "stack", "connectors", "workflow", "code", "staging")
+
+
+def test_every_popover_opens_whole_in_view(sized: Person):
+    """At 1440, 1024, 390 and a short 1440x760: each box and chip popover opens whole in view
+    (never under the footer, never past the sheet), focus goes into it, and Esc gives it back."""
+    p = sized
+    dev(model="none")
+    p.open_sheet("idea")
+    p.tid("ap-ideas").click()
+    p.tid("ap-ideas-list").wait_for()
+    popguard.assert_whole(p.p, f"ideas @{p.width}")
+    p.p.keyboard.press("Escape")
+    p.tid("ap-ideas-list").wait_for(state="detached")
+    p.type(IDEA)
+    p.box.press("Enter")
+    p.understood()
+    for key in (*BOXES, "tell", "more"):
+        opener = p.tid(f"ap-box-{key}" if key in BOXES else f"ap-chip-{key}")
+        opener.click()
+        pop = p.tid(f"ap-pop-{key}")
+        pop.wait_for()
+        popguard.assert_whole(p.p, f"{key} @{p.width}x{p.p.viewport_size['height']}")
+        assert pop.evaluate("el => el.contains(document.activeElement)"), f"focus is not in the {key} popover"
+        p.p.keyboard.press("Escape")
+        pop.wait_for(state="detached")
+        assert opener.evaluate("el => el === document.activeElement"), f"Esc did not give focus back to the {key} box"
+        assert p.sheet.is_visible()
+    p.tid("ap-chip-name").click()
+    p.tid("ap-name-input").wait_for()
+    popguard.assert_whole(p.p, f"name @{p.width}")
+    p.tid("ap-name-input").press("Enter")
+    p.tid("ap-more-ways").click()
+    p.tid("ap-ways").wait_for()
+    popguard.assert_whole(p.p, f"more ways @{p.width}")
+    p.p.keyboard.press("Escape")
+    p.tid("ap-ways").wait_for(state="detached")
+    p.check("every popover")

@@ -26,6 +26,7 @@ import {
 } from "@phosphor-icons/react";
 
 import { GatedButton } from "../../components/gated";
+import { BoxPop } from "../../components/box-pop";
 import { Sheet } from "../infra/kit";
 import { ErrorLine } from "../infra/infra-util";
 import { ConnectSheet } from "../observability/connect-sheet";
@@ -120,15 +121,17 @@ function Chips({ w, edit, set }: { w: Watch; edit: Edit; set: (e: Edit) => void 
   );
 }
 
-function WatchPop({ w, edit, set, tellWord, targetId, onRemove, onDone, why, setWhy, busy }: {
+function WatchPop({ w, edit, set, tellWord, targetId, onRemove, onDone, onClose, why, setWhy, busy }: {
   w: Watch; edit: Edit; set: (e: Edit) => void; tellWord: string; targetId: string | null; onRemove: () => void; onDone: () => void;
+  /** Esc: close it, nothing saved. */
+  onClose: () => void;
   /** A later edit (on the landing) asks why; the sheet's first edit does not. */
   why?: string; setWhy?: (s: string) => void; busy?: boolean;
 }) {
   const builder = targetId ? pxHref(`?area=observability&app=${encodeURIComponent(targetId)}&atab=alerts`) : null;
   const needsWhy = setWhy !== undefined;
   return (
-    <div className="as-pop" role="dialog" aria-label={w.title} data-testid={`wa-pop-${w.kind}`}>
+    <BoxPop className="as-pop" role="dialog" aria-label={w.title} data-testid={`wa-pop-${w.kind}`} onEscape={onClose}>
       <header className="as-pop-h">{icon(w.icon)} <b>{titleOf(w.kind, { ...w.params, ...edit.params }, w.title)}</b><span className="ag-spacer" />
         <span className="wa-tone" data-tone={edit.tone}>{edit.tone} · {tellWord}</span></header>
       <Spark w={w} />
@@ -151,7 +154,7 @@ function WatchPop({ w, edit, set, tellWord, targetId, onRemove, onDone, why, set
                 title={needsWhy && (why ?? "").trim().length < 3 ? "Say why first: every later change keeps its reason" : undefined}
                 onClick={onDone}>Done</button>
       </footer>
-    </div>
+    </BoxPop>
   );
 }
 
@@ -350,7 +353,7 @@ export function WatchSheet({ projectId, actor, initialTarget, onClose, onStarted
                           {openWatchKind === w.kind ? (
                             <WatchPop w={w} edit={e} set={(x) => setEdit(w, x)} tellWord={tellWord} targetId={target.targetId}
                                       onRemove={() => { setEdit(w, { ...e, enabled: !e.enabled }); setOpenWatchKind(null); }}
-                                      onDone={() => setOpenWatchKind(null)} />
+                                      onDone={() => setOpenWatchKind(null)} onClose={() => setOpenWatchKind(null)} />
                           ) : null}
                         </React.Fragment>
                       );
@@ -389,7 +392,7 @@ export function WatchSheet({ projectId, actor, initialTarget, onClose, onStarted
                         value={`${read?.runbooks.length ?? 0} built in`} sub="serving · app down" />
               </div>
               {open ? (
-                <div className="as-pop" role="dialog" aria-label={BOX_TITLE[open]} data-testid={`wa-pop-${open}`}>
+                <BoxPop key={open} className="as-pop" role="dialog" aria-label={BOX_TITLE[open]} data-testid={`wa-pop-${open}`} onEscape={() => setOpen(null)}>
                   <header className="as-pop-h"><b>{BOX_TITLE[open]}</b><span className="ag-spacer" />
                     <button type="button" className="inf-link" data-testid="wa-pop-done" onClick={() => setOpen(null)}>Done</button></header>
                   {open === "signals" ? (
@@ -428,7 +431,7 @@ export function WatchSheet({ projectId, actor, initialTarget, onClose, onStarted
                       <span className="as-faint">Built-in runbooks; a rule's own runbook URL wins (set it in the full builder).</span>
                     </div>
                   )}
-                </div>
+                </BoxPop>
               ) : null}
               {read?.boundary ? <Strip b={read.boundary} alone={aloneNow} /> : null}
             </section>
@@ -583,6 +586,7 @@ export function WatchedCard({ l, projectId, actor, onChanged }: { l: Landing; pr
             </button>
             {openKind === w.kind && edit && w.ruleId ? (
               <WatchPop w={w} edit={edit} set={setEdit} tellWord={tellWord} targetId={l.targetId} why={why} setWhy={setWhy} busy={busy}
+                        onClose={() => setOpenKind(null)}
                         onRemove={() => void act(changeWatch(projectId, actor, l.targetId, { rule_id: w.ruleId!, reason: why, remove: true }), "Removed.")
                           .then((ok) => ok && setOpenKind(null))}
                         onDone={() => void act(changeWatch(projectId, actor, l.targetId, { rule_id: w.ruleId!, reason: why, params: edit.params, for_s: edit.forS, tone: edit.tone }), "Saved, with its why.")

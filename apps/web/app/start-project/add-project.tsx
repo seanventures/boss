@@ -33,6 +33,7 @@ import {
 import { AgentAvatar } from "../agent-avatar";
 import { consoleHref } from "../console-href";
 import { GatedButton, useGate } from "../../components/gated";
+import { BoxPop } from "../../components/box-pop";
 import { useGuardedCall } from "../../components/identity/identity-provider";
 import { notePress } from "../../lib/user-gesture";
 import { IdentityError } from "../../lib/identity/api";
@@ -50,7 +51,7 @@ import {
 import { normalizeChannel } from "../workflows/compose-plan";
 import { ReadinessPanel, asReadiness, unaccepted, type Readiness } from "../workflow-readiness-ui";
 import { useRegistry } from "./import-repo";
-import { PlanBoxes, egressOf, ownFields, type PlanState } from "./add-project-plan";
+import { InUseBlock, InUseTag, PlanBoxes, egressOf, ownFields, usedBy, type InUseActions, type PlanState } from "./add-project-plan";
 import { BriefCard, Marked, type BriefRow } from "../projects/brief-card";
 import { SAMPLE, knowledgePresetHref } from "./start-sheet";
 import "./start-project.css";
@@ -210,15 +211,43 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
   const [folder, setFolder] = useState<FolderFacts | null>(null);
   const [folderError, setFolderError] = useState<string | null>(null);
 
+  // ── a repo already in a project ────────────────────────────────────────────────────────
+  const [shared, setShared] = useState<string[]>([]);
+  const inUse: InUseActions = {
+    open: (pid) => go(projectPageHref(pid, homeId)),
+    addWork: (pid) => {
+      // The person's words go along as the work: an idea's words, or the lines under a repo.
+      const words = (kind === "idea" ? text : text.split("\n").slice(1).join("\n")).trim();
+      const q = new URLSearchParams({ tab: "work", compose: "1", compose_kind: "feature", ...(words ? { compose_text: words.slice(0, 1500) } : {}) });
+      go(`${projectPageHref(pid, homeId)}&${q.toString()}`);
+    },
+    shared,
+    share: (id) => setShared((s) => (s.includes(id) ? s : [...s, id])),
+  };
+  // In the results list, saying "separate" also picks it.
+  const inUseRows: InUseActions = { ...inUse, share: (id) => {
+    inUse.share(id); takeRepo(id);
+    // Back to the box, at its end: the lines under the repo are a note to Helm.
+    window.setTimeout(() => { const el = box.current; if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); } }, 0);
+  } };
+
+  const takeRepo = (id: string) => {
+    const r = allRepos.find((x) => x.id === id);
+    if (!r) return;
+    setPickedRepo(r.id); setPickedFolder(null); setForced("repo");
+    setText((t) => [r.full_name, ...t.split("\n").slice(1)].join("\n"));
+    auto({ name: r.full_name.split("/")[1].replace(/[-_.]+/g, " ").replace(/^./, (c) => c.toUpperCase()) });
+  };
   const pickRow = async (i: number) => {
     const row = rows[i];
     if (!row) return;
     if (row.type === "repo") {
       const r = allRepos.find((x) => x.id === row.id);
       if (!r) return;
-      setPickedRepo(r.id); setPickedFolder(null); setForced("repo");
-      setText((t) => [r.full_name, ...t.split("\n").slice(1)].join("\n"));
-      auto({ name: r.full_name.split("/")[1].replace(/[-_.]+/g, " ").replace(/^./, (c) => c.toUpperCase()) });
+      // THE SAME REPO AGAIN opens the project it is in, and creates nothing.
+      const used = usedBy(r);
+      if (used.length && !shared.includes(r.id)) { inUse.open(used[0].project_id); return; }
+      takeRepo(r.id);
       return;
     }
     const f = folderRows.find((x) => `${x.hostId}:${x.path}` === row.id);
@@ -366,6 +395,8 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
       audience: plan.audience || null, done_when: plan.doneWhen, read_first: plan.readFirst,
       talks_to: plan.talksTo.map((t) => ({ name: t })),
       staging: plan.staging, map_rules: kind !== "idea" && plan.mapRules, start_anyway: startAnyway,
+      // Only the person's "Make a separate project anyway" sends it (the server refuses otherwise).
+      allow_shared_repo: repoIds.some((id) => shared.includes(id)),
     };
     try {
       const r = await guarded("Create the project and start it.", () => withConsent(() =>
@@ -516,14 +547,14 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
                   <span className="npx-node-wrap">
                     <button type="button" className="npx-link-chip" data-testid="ap-ideas" aria-expanded={ideas} title="Start from an idea: example briefs" onClick={() => setIdeas((v) => !v)}><Sparkle size={12} aria-hidden />Ideas</button>
                     {ideas ? (
-                      <div className="npx-pop npx-ideas" role="listbox" aria-label="Example briefs" data-testid="ap-ideas-list">
+                      <BoxPop className="npx-pop npx-ideas" role="listbox" aria-label="Example briefs" data-testid="ap-ideas-list" onEscape={() => setIdeas(false)}>
                         {allPresets().filter((p) => p.kind === "app").slice(0, 10).map((p) => (
                           <button key={p.key} type="button" role="option" aria-selected={false} className="npx-opt" data-testid={`ap-idea-${p.key}`}
                                   onClick={() => { setUndo(text); setText(p.kind === "app" ? p.brief : ""); setIdeas(false); touched.current.delete("name"); }}>
                             <Sparkle size={12} aria-hidden /><b>{p.title}</b>
                           </button>
                         ))}
-                      </div>
+                      </BoxPop>
                     ) : null}
                   </span>
                   {undo !== null ? <button type="button" className="npx-link" data-testid="ap-undo" onClick={() => { setText(undo); setUndo(null); }}>Undo</button> : null}
@@ -579,17 +610,21 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
               {kind === "repo" && !registry && !loadError ? [0, 1].map((i) => <div key={i} className="npx-sk" aria-hidden />) : null}
               {loadError && kind === "repo" ? <p className="npx-faint">{loadError}</p> : null}
               {repoRows.map((r, i) => {
-                const used = (r.used_by ?? [])[0];
+                const users = usedBy(r);
+                const opens = users.length > 0 && !shared.includes(r.id);
                 return (
-                  <button key={r.id} type="button" role="option" aria-selected={cursor === i} className="npx-pick" data-testid={`ap-repo-${r.id}`}
-                          onMouseMove={() => { if (cursor !== i) setCursor(i); }} onClick={() => void pickRow(i)} title={used ? `Already used by ${used.name}` : r.description ?? r.full_name}>
+                  <React.Fragment key={r.id}>
+                  <button type="button" role="option" aria-selected={cursor === i} className="npx-pick" data-testid={`ap-repo-${r.id}`} data-in-use={users.length ? "" : undefined}
+                          onMouseMove={() => { if (cursor !== i) setCursor(i); }} onClick={() => void pickRow(i)} title={opens ? `Already in ${users[0].name}: opens it` : r.description ?? r.full_name}>
                     <GitBranch size={13} aria-hidden /><span className="npx-mono"><span className="npx-faint">{r.full_name.split("/")[0]}/</span><b>{r.full_name.split("/")[1]}</b></span>
                     {r.language ? <span className="npx-faint npx-small">{r.language}</span> : null}
                     <span className="npx-spacer" />
-                    {used ? <span className="npx-tag" title={`Already used by ${used.name}`}>in use</span> : null}
+                    {opens ? <InUseTag used={users} /> : null}
                     <span className="npx-faint npx-mono npx-small" title={r.pushed_at ? `Last push ${new Date(r.pushed_at).toLocaleString()}` : "Last push not known yet"}>{ageShort(r.pushed_at)}</span>
                     {cursor === i ? <span className="npx-kbd">↵</span> : null}
                   </button>
+                  {users.length ? <InUseBlock repoId={r.id} used={users} act={inUseRows} testid={`ap-repo-${r.id}`} /> : null}
+                  </React.Fragment>
                 );
               })}
               {kind === "repo" && registry && !repoRows.length ? <p className="npx-faint npx-pad">No repo matches. <a className="npx-link" href={addAccount}>Allow more in Repo and models ›</a></p> : null}
@@ -641,7 +676,7 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
             <PlanBoxes kind={kind} preview={preview} plan={plan} set={set} cards={cards} adapters={adapters}
                        helmPicks={u?.picks ?? EMPTY_PICKS} workflow={workflow} registry={allRepos} repoLabel={repoLabel} codeName={repo?.full_name ?? pickedFolder?.path ?? ""}
                        live={helmLive}
-                       accountLogin={account} homeHref={homeHref} />
+                       accountLogin={account} homeHref={homeHref} inUse={inUse} />
           </section>
 
           {askEgress && egress.length ? (
@@ -672,7 +707,7 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
             <button type="button" className="npx-flink" data-testid="ap-more-ways" aria-expanded={!!ways} title="Blank project · Knowledge-graph project · Presets"
                     onClick={() => setWays((w) => (w ? null : "menu"))}><DotsThree size={14} aria-hidden /> More ways</button>
             {ways ? (
-              <div className="npx-pop npx-ways" role="menu" data-testid="ap-ways">
+              <BoxPop className="npx-pop npx-ways" role="menu" data-testid="ap-ways" onEscape={() => setWays(null)}>
                 {ways === "menu" ? (
                   <>
                     <button type="button" role="menuitem" className="npx-opt" data-testid="ap-way-blank" onClick={onForm}><Plus size={13} aria-hidden /><b>Blank project</b><small>no build yet</small></button>
@@ -691,7 +726,7 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
                     ))}
                   </div>
                 )}
-              </div>
+              </BoxPop>
             ) : null}
           </span>
           <GatedButton permission="project:create" className="npx-primary" data-testid="ap-create"

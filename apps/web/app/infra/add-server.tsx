@@ -27,6 +27,7 @@ import {
 
 import { AgentAvatar } from "../agent-avatar";
 import { GatedButton } from "../../components/gated";
+import { BoxPop } from "../../components/box-pop";
 import { enrollCommand, enrollHardwareAgent, explainRawSecret, registerHardwareProvider } from "../../lib/hardware";
 import {
   createServer, KIND_WORDS, readServer, ROLE_LINE, ROLE_WORDS, STORES,
@@ -360,7 +361,7 @@ export function AddServerSheet({ projectId, actor, initialText = "", onClose, on
                     value="Infra agent" sub="fixes disk, Docker, certs" />
           </div>
           {open ? (
-            <div className="as-pop" role="dialog" aria-label={open} data-testid={`as-pop-${open}`} data-box={open}>
+            <BoxPop key={open} className="as-pop" role="dialog" aria-label={open} data-testid={`as-pop-${open}`} data-box={open} onEscape={() => setOpen(null)}>
               <header className="as-pop-h"><GearSix size={13} aria-hidden /> <b>{BOX_TITLE[open]}</b>
                 <span className="ag-spacer" />
                 <button type="button" className="inf-link" data-testid="as-pop-done" onClick={() => setOpen(null)}>Done</button></header>
@@ -440,7 +441,7 @@ export function AddServerSheet({ projectId, actor, initialText = "", onClose, on
                   <a className="inf-link" href="?area=budget&tab=autonomy" data-testid="as-owner-link">Where people decide ›</a>
                 </div>
               )}
-            </div>
+            </BoxPop>
           ) : null}
         </section>
 
@@ -537,7 +538,7 @@ function StoredKeyPicker({ keys, hint, picked, onPick }: {
           Choose… <CaretDown size={11} aria-hidden /></button>
       ) : null}
       {open ? (
-        <span className="as-keys" role="dialog" aria-label="Stored keys" data-testid="as-stored-list">
+        <BoxPop as="span" className="as-keys" role="dialog" aria-label="Stored keys" data-testid="as-stored-list">
           <label className="as-keys-q"><MagnifyingGlass size={12} aria-hidden />
             <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder={`Search ${keys.length} keys`}
                    aria-label="Search stored keys" data-testid="as-stored-search" spellCheck={false} autoComplete="off" /></label>
@@ -548,7 +549,7 @@ function StoredKeyPicker({ keys, hint, picked, onPick }: {
                 <Key size={12} aria-hidden /><span>{k.name}</span>{k.fingerprint ? <em>{k.fingerprint}</em> : null}</button>
             )) : <span className="as-faint" data-testid="as-stored-nomatch">No key matches “{q}”</span>}
           </span>
-        </span>
+        </BoxPop>
       ) : null}
     </span>
   );

@@ -127,6 +127,8 @@ export type CreateBody = {
   done_when?: string[]; read_first?: string[]; talks_to?: Record<string, unknown>[];
   staging?: { host_id: string; port: number | null } | null; map_rules?: boolean; start_anyway?: string[];
   dedupe_key?: string | null; project_id?: string | null;
+  /** A repo already in a project: only after "Make a separate project anyway". */
+  allow_shared_repo?: boolean;
 };
 export type CreateResult = {
   created: true; project_id: string; name: string; kind: Kind; href: string;

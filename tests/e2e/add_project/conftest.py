@@ -38,6 +38,11 @@ from typing import Any, Iterable, Optional
 
 import pytest
 
+import sys as _sys
+
+_sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import popover_guard as popguard  # noqa: E402 — tests/e2e/popover_guard.py, shared by the three suites
+
 CONSOLE = os.environ.get("BOSS_E2E_CONSOLE", "").rstrip("/")
 API = os.environ.get("BOSS_E2E_API", "").rstrip("/")
 SEAMS = os.environ.get("BOSS_E2E_DEV_SEAMS") == "1"
@@ -102,6 +107,20 @@ def started(project_id: str) -> dict:
     status, body = api("GET", f"/v1/projects/{project_id}/add-project/started")
     assert status == 200, body
     return body
+
+
+def project_count() -> Optional[int]:
+    """How many projects there are (None without BOSS_E2E_DATABASE_URL): "nothing is created"."""
+    url = os.environ.get("BOSS_E2E_DATABASE_URL")
+    if not url:
+        return None
+    from sqlalchemy import create_engine, text
+    eng = create_engine(url)
+    try:
+        with eng.connect() as c:
+            return int(c.execute(text("SELECT count(*) FROM projects")).scalar() or 0)
+    finally:
+        eng.dispose()
 
 
 def projects_named(name: str) -> Optional[int]:
@@ -249,6 +268,21 @@ class Person:
         assert state == "ok", f"Helm's brief did not come back ({state}): {self.tid('ap-understood').inner_text()[:300]}"
         return took
 
+    def pick_repo(self, full_name: str) -> None:
+        """Pick a repository from the results the way a person does: ↵ on a free one. A repo
+        already in a project opens that project on ↵, so for a new project on it the person says
+        "Make a separate project anyway" and confirms (that picks it)."""
+        self.type(full_name)
+        row = self.p.locator("[data-testid='ap-results'] [role='option']").first
+        row.wait_for()
+        if row.get_attribute("data-in-use") is None:
+            self.box.press("Enter")
+            return
+        rid = (row.get_attribute("data-testid") or "").removeprefix("ap-repo-")
+        self.tid(f"ap-repo-{rid}-separate").click()
+        self.tid(f"ap-repo-{rid}-separate-yes").click()
+        self.tid("ap-results").wait_for(state="detached")
+
     def name(self, name: str) -> None:
         self.tid("ap-chip-name").click()
         inp = self.tid("ap-name-input")
@@ -328,6 +362,8 @@ class Person:
                 and "Failed to load resource" not in e and "Download the React DevTools" not in e]
         bad = [b for b in self.bad if not any(a.search(b) for a in self.allowed)]
         problems += [f"console: {e}" for e in errs[:5]] + [f"http: {b}" for b in bad[:5]]
+        # Every popover that opened on this page was whole in view (popover_guard).
+        problems += [f"popover: {x}" for x in popguard.recorded(self.p)[:3]]
         assert not problems, f"{where} @{self.width}: " + "\n  ".join(problems)
 
 
@@ -342,12 +378,22 @@ def browser():
 
 @pytest.fixture(params=VIEWPORTS, ids=lambda w: f"w{w}")
 def person(request, browser):
-    width = request.param
-    kw: dict[str, Any] = dict(viewport={"width": width, "height": 844 if width < 600 else 900},
+    yield from _person(request, browser, request.param, 844 if request.param < 600 else 900)
+
+
+@pytest.fixture(params=popguard.SIZES, ids=lambda s: f"{s[0]}x{s[1]}")
+def sized(request, browser):
+    """A person at each of the popover guard's sizes: 1440, 1024, 390 and a short 1440x760."""
+    yield from _person(request, browser, *request.param)
+
+
+def _person(request, browser, width: int, height: int):
+    kw: dict[str, Any] = dict(viewport={"width": width, "height": height},
                               color_scheme="dark", permissions=["clipboard-read", "clipboard-write"])
     if width < 600:
         kw.update(is_mobile=True, has_touch=True, device_scale_factor=2)
     ctx = browser.new_context(**kw)
+    popguard.install(ctx)
     host = re.sub(r"^https?://", "", CONSOLE).split(":")[0].split("/")[0]
     ctx.add_cookies([{"name": "__Host-boss_session", "value": "dev", "domain": host, "path": "/", "secure": True, "sameSite": "Lax"}])
     page = ctx.new_page()

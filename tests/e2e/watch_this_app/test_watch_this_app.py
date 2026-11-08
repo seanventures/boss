@@ -15,8 +15,8 @@ import json
 import re
 from pathlib import Path
 
-from conftest import (APP, HOOK, PROD, PROJECT, STAGING, WORDS, Person, api, code_for, deliver, dev, fire, revoke_grants,
-                      rules_of, sql)
+from conftest import (APP, HOOK, PROD, PROJECT, STAGING, WORDS, Person, api, code_for, deliver, dev, fire, popguard,
+                      revoke_grants, rules_of, sql)
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -450,3 +450,34 @@ def test_fonts_use_the_type_scale_only():
     tsx = (ROOT / "apps/web/app/projects/watch-app.tsx").read_text()
     assert not re.search(r"fontSize:\s*[\"'\d]", tsx), "no inline font sizes"
     assert "Agent actions" in tsx and "Here's what I understood" not in tsx
+
+
+# ── every popover, whole in view (operator, 2026-11-08: Add a project's CODE popover opened under
+#    the footer; Watch this app reuses the box-and-popover pattern) ──────────────────────────
+
+def test_every_popover_opens_whole_in_view(sized: Person):
+    """At 1440, 1024, 390 and a short 1440x760: each box's and each watch's popover opens whole in
+    view, focus goes into it, Esc closes only it and gives focus back to what opened it."""
+    p = sized
+    p.open_sheet()
+    p.type()
+    size = f"{p.width}x{p.p.viewport_size['height']}"
+    for key in ("signals", "collector", "watches", "oncall", "tell", "runbooks"):
+        box = p.tid(f"wa-box-{key}")
+        pop = p.box(key)
+        popguard.assert_whole(p.p, f"{key} @{size}")
+        assert pop.evaluate("el => el.contains(document.activeElement)"), f"focus is not in the {key} popover"
+        p.p.keyboard.press("Escape")
+        pop.wait_for(state="detached")
+        assert box.evaluate("el => el === document.activeElement"), f"Esc did not give focus back to {key}"
+        assert p.tid("wa-sheet").is_visible(), "Esc closes the popover, not the sheet"
+    for kind in ("error_rate", "latency_p95", "health_check", "deploy_health"):
+        row = p.tid(f"wa-watch-{kind}")
+        row.click()
+        pop = p.tid(f"wa-pop-{kind}")
+        pop.wait_for()
+        popguard.assert_whole(p.p, f"watch {kind} @{size}")
+        p.p.keyboard.press("Escape")
+        pop.wait_for(state="detached")
+        assert row.evaluate("el => el === document.activeElement"), f"Esc did not give focus back to {kind}"
+    p.check("every popover")

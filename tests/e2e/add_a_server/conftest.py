@@ -39,6 +39,11 @@ from typing import Any, Optional
 
 import pytest
 
+import sys as _sys
+
+_sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import popover_guard as popguard  # noqa: E402 — tests/e2e/popover_guard.py, shared by the three suites
+
 CONSOLE = os.environ.get("BOSS_E2E_CONSOLE", "").rstrip("/")
 API = os.environ.get("BOSS_E2E_API", "").rstrip("/")
 DB = os.environ.get("BOSS_E2E_DATABASE_URL", "")
@@ -293,6 +298,8 @@ class Person:
                 and "Failed to load resource" not in e and "Download the React DevTools" not in e]
         bad = [b for b in self.bad if not any(a.search(b) for a in self.allowed)]
         problems += [f"console: {e}" for e in errs[:5]] + [f"http: {b}" for b in bad[:5]]
+        # Every popover that opened on this page was whole in view (popover_guard).
+        problems += [f"popover: {x}" for x in popguard.recorded(self.p)[:3]]
         assert not problems, f"{where} @{self.width}: " + "\n  ".join(problems)
 
 
@@ -307,12 +314,22 @@ def browser():
 
 @pytest.fixture(params=VIEWPORTS, ids=lambda w: f"w{w}")
 def person(request, browser):
-    width = request.param
-    kw: dict[str, Any] = dict(viewport={"width": width, "height": 844 if width < 600 else 900},
+    yield from _person(request, browser, request.param, 844 if request.param < 600 else 900)
+
+
+@pytest.fixture(params=popguard.SIZES, ids=lambda s: f"{s[0]}x{s[1]}")
+def sized(request, browser):
+    """A person at each of the popover guard's sizes: 1440, 1024, 390 and a short 1440x760."""
+    yield from _person(request, browser, *request.param)
+
+
+def _person(request, browser, width: int, height: int):
+    kw: dict[str, Any] = dict(viewport={"width": width, "height": height},
                               color_scheme="dark", timezone_id="UTC")
     if width < 600:
         kw.update(is_mobile=True, has_touch=True, device_scale_factor=2)
     ctx = browser.new_context(**kw)
+    popguard.install(ctx)
     ctx.grant_permissions(["clipboard-read", "clipboard-write"], origin=CONSOLE)
     host = re.sub(r"^https?://", "", CONSOLE).split(":")[0].split("/")[0]
     ctx.add_cookies([{"name": "__Host-boss_session", "value": "dev", "domain": host, "path": "/", "secure": True, "sameSite": "Lax"}])

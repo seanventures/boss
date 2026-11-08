@@ -18,7 +18,8 @@ import tempfile
 
 import pytest
 
-from conftest import NET, PROJECT, Person, api, clear_servers, dev, fresh_address, host_named, machine, setup_of, sql
+from conftest import (NET, PROJECT, Person, api, clear_servers, dev, fresh_address, host_named, machine, popguard,
+                      setup_of, sql)
 
 STEP_UP_401 = (r"^401 POST /v1/servers\b", r"^401 POST /v1/auth/step-up", r"status of 401")
 
@@ -572,3 +573,36 @@ def test_the_now_line_asks_boss_about_this_server(person: Person):
     name = sql("SELECT name FROM deployment_hosts WHERE id = :h", h=host_id)[0][0]
     assert "agent=fleet" in p.p.url and name, p.p.url  # the question goes into the dock (it consumes dock_ask)
     p.check("asked")
+
+
+# ── every popover, whole in view (operator, 2026-11-08: Add a project's CODE popover opened under
+#    the footer; Add a server reuses the box-and-popover pattern) ─────────────────────────────
+
+def test_every_popover_opens_whole_in_view(sized: Person):
+    """At 1440, 1024, 390 and a short 1440x760: each box's popover opens whole in view, focus goes
+    into it, Esc closes only it (never the sheet) and Done or Esc gives focus back to its box."""
+    p = sized
+    addr = fresh_address()
+    machine(addr)
+    p.open_sheet()
+    p.type(f"ubuntu@{addr}\nA staging box.")
+    size = f"{p.width}x{p.p.viewport_size['height']}"
+    for key in ("access", "name", "setup", "role", "watch", "owner"):
+        box = p.tid(f"as-box-{key}")
+        pop = p.box(key)
+        popguard.assert_whole(p.p, f"{key} @{size}")
+        assert pop.evaluate("el => el.contains(document.activeElement)"), f"focus is not in the {key} popover"
+        p.p.keyboard.press("Escape")
+        pop.wait_for(state="detached")
+        assert box.evaluate("el => el === document.activeElement"), f"Esc did not give focus back to {key}"
+        assert p.sheet.is_visible(), "Esc closes the popover, not the sheet"
+    p.box("role")
+    p.tid("as-pop-done").click()
+    p.tid("as-pop-role").wait_for(state="detached")
+    assert p.tid("as-box-role").evaluate("el => el === document.activeElement"), "Done gives focus back to its box"
+    if p.tid("as-stored-choose").count():
+        p.tid("as-stored-choose").click()
+        p.tid("as-stored-list").wait_for()
+        popguard.assert_whole(p.p, f"stored keys @{size}")
+        p.p.keyboard.press("Escape")
+    p.check("every popover")

@@ -9,13 +9,14 @@
  *
  * Every choice here is state the sheet owns (`PlanState`); this file draws it and edits it.
  */
-import React, { useEffect, useRef, useState } from "react";
+import React, { useRef, useState } from "react";
 import {
   ArrowSquareOut, BellRinging, CaretDown, Check, CheckSquare, Envelope, GitBranch, Globe, HardDrives,
   LockKey, PencilSimple, Plus, PuzzlePiece, Square, Trash, X, CreditCard, PaypalLogo, Hand,
 } from "@phosphor-icons/react";
 
 import { AgentAvatar } from "../agent-avatar";
+import { useBoxPop } from "../../components/box-pop";
 import type { TemplateCard } from "../../lib/templates";
 import type { StackAdapter } from "../../lib/templates";
 import { workflowInputFields, type WorkflowInputField } from "../../lib/workflow-inputs";
@@ -88,24 +89,20 @@ export function ownFields(w: Workflow | null | undefined): WorkflowInputField[] 
   return workflowInputFields(w?.input_schema).filter((f) => !WIZARD_COLLECTS.has(f.name) && f.name !== "notify_channel");
 }
 
-/** The box a click lands on, one open at a time; Esc closes it. */
+/** The box a click lands on, one open at a time; Esc closes it (useBoxPop, in Pop). */
 function usePopover(): [BoxKey | null, (k: BoxKey | null) => void] {
-  const [open, setOpen] = useState<BoxKey | null>(null);
-  useEffect(() => {
-    if (!open) return undefined;
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); setOpen(null); } };
-    document.addEventListener("keydown", onKey, true);
-    return () => document.removeEventListener("keydown", onKey, true);
-  }, [open]);
-  return [open, setOpen];
+  return useState<BoxKey | null>(null);
 }
 
-function Pop({ title, icon, anchor, children, onDone, foot, testid, wide }: {
+function Pop({ title, icon, anchor, children, onDone, onEscape, foot, testid, wide }: {
   title: string; icon: React.ReactNode; anchor: string; children: React.ReactNode; onDone: () => void;
+  /** Esc: close without Done's save (default: Done). */
+  onEscape?: () => void;
   foot?: React.ReactNode; testid: string; wide?: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => { ref.current?.querySelector<HTMLElement>("button, input, select, textarea")?.focus(); }, []);
+  // Whole in view, focus in, Esc out, focus back to its box: one rule for every box popover.
+  useBoxPop(ref, { onEscape: onEscape ?? onDone });
   return (
     <div className="npx-pop" role="dialog" aria-label={title} data-testid={`ap-pop-${testid}`} data-wide={wide || undefined} ref={ref}>
       <div className="npx-pop-h"><span className="npx-pop-ico" aria-hidden>{icon}</span><b>{title}</b>
@@ -114,6 +111,61 @@ function Pop({ title, icon, anchor, children, onDone, foot, testid, wide }: {
       <div className="npx-pop-b">{children}</div>
       <div className="npx-pop-f">{foot}<span className="npx-spacer" />
         <button type="button" className="npx-btn" data-testid={`ap-pop-${testid}-done`} onClick={onDone}>Done</button></div>
+    </div>
+  );
+}
+
+/** What the sheet does with a repository already in a project (operator, 2026-11-08: "what if we
+ *  choose same repo again, will it create new or open the already imported one?"): its row opens
+ *  that project; Add work goes to its New work with the words; a second project on the same code
+ *  only through "Make a separate project anyway", asked once. The server refuses the same
+ *  (repo_in_use) without the person's say-so. */
+export type InUseActions = {
+  open: (projectId: string) => void;
+  addWork: (projectId: string) => void;
+  /** Repository ids the person chose to share anyway. */
+  shared: string[];
+  share: (repoId: string) => void;
+};
+
+export function usedBy(r: { used_by?: { project_id: string; name: string }[] }): { project_id: string; name: string }[] {
+  return [...new Map((r.used_by ?? []).map((u) => [u.project_id, u])).values()];
+}
+
+/** The row's tag: "in <Project> · Open ›". */
+export function InUseTag({ used }: { used: { name: string }[] }) {
+  return (
+    <span className="npx-tag npx-inuse-tag" data-tone="amber" title={`Already in ${used.map((u) => u.name).join(", ")}: opens it`}>
+      in {used[0].name}{used.length > 1 ? ` +${used.length - 1}` : ""} · Open ›
+    </span>
+  );
+}
+
+/** Under an in-use row: every project it is in, Add work instead, Make a separate project anyway. */
+export function InUseBlock({ repoId, used, act, testid }: {
+  repoId: string; used: { project_id: string; name: string }[]; act: InUseActions; testid: string;
+}) {
+  const [asking, setAsking] = useState(false);
+  if (act.shared.includes(repoId)) return <p className="npx-inuse npx-faint" data-testid={`${testid}-shared`}>A separate project on the same code as {used[0].name}.</p>;
+  return (
+    <div className="npx-inuse" data-testid={`${testid}-inuse`}>
+      {used.length > 1 ? (
+        <span className="npx-inuse-in">In {used.slice(0, 3).map((u, i) => (
+          <React.Fragment key={u.project_id}>{i ? ", " : ""}<button type="button" className="npx-link" data-testid={`${testid}-open-${u.project_id}`}
+            onClick={() => act.open(u.project_id)}>{u.name} ›</button></React.Fragment>))}
+          {used.length > 3 ? <span className="npx-faint" title={used.slice(3).map((u) => u.name).join(", ")}> +{used.length - 3} more</span> : null}</span>
+      ) : null}
+      <button type="button" className="npx-link" data-testid={`${testid}-addwork`} onClick={() => act.addWork(used[0].project_id)}>
+        Add work to {used[0].name} instead</button>
+      {asking ? (
+        <span className="npx-inuse-ask" role="group" aria-label="Make a separate project">
+          <span>Two projects on one repo means two sets of agents opening PRs on the same code.</span>
+          <button type="button" className="npx-btn" data-testid={`${testid}-separate-yes`} autoFocus onClick={() => { act.share(repoId); setAsking(false); }}>Make it separate</button>
+          <button type="button" className="npx-link" data-testid={`${testid}-separate-no`} onClick={() => setAsking(false)}>Cancel</button>
+        </span>
+      ) : (
+        <button type="button" className="npx-link npx-faint" data-testid={`${testid}-separate`} onClick={() => setAsking(true)}>Make a separate project anyway</button>
+      )}
     </div>
   );
 }
@@ -138,13 +190,15 @@ export function StepStrip({ w, testid = "ap-strip" }: { w: Workflow | null; test
   );
 }
 
-export function PlanBoxes({ kind, preview, plan, set, cards, adapters, helmPicks, workflow, registry, repoLabel, codeName = "", live, accountLogin, homeHref }: {
+export function PlanBoxes({ kind, preview, plan, set, cards, adapters, helmPicks, workflow, registry, repoLabel, codeName = "", live, accountLogin, homeHref, inUse }: {
   kind: Kind; preview: Preview | null; plan: PlanState; set: (patch: Partial<PlanState>) => void;
   cards: TemplateCard[] | null; adapters: StackAdapter[]; helmPicks: { stack: Pick | null; connectors: Pick[]; workflow: Pick | null };
   workflow: Workflow | null; registry: RegistryRepo[]; repoLabel: { v: string; s: string };
   /** The picked repository's name or the folder's path (the Code box). */
   codeName?: string;
   live: boolean; accountLogin: string; homeHref: (p: Record<string, string>) => string;
+  /** A repo already in a project (the Code box's list): open it, add work to it, or share it. */
+  inUse: InUseActions;
 }) {
   const [open, setOpen] = usePopover();
   const toggle = (k: BoxKey) => setOpen(open === k ? null : k);
@@ -389,12 +443,19 @@ export function PlanBoxes({ kind, preview, plan, set, cards, adapters, helmPicks
                   <div className="npx-list npx-scroll">
                     {registry.filter((r) => !repoQ || r.full_name.toLowerCase().includes(repoQ.toLowerCase())).slice(0, 8).map((r) => {
                       const on = plan.repoIds.includes(r.id);
+                      const used = usedBy(r);
+                      // A repo already in a project opens that project, unless the person chose a separate one.
+                      const opens = used.length > 0 && !inUse.shared.includes(r.id);
                       return (
-                        <button key={r.id} type="button" className="npx-opt" aria-selected={on} data-testid={`ap-code-repo-${r.id}`}
-                                onClick={() => set({ repoIds: plan.layout === "one" ? [r.id] : on ? plan.repoIds.filter((x) => x !== r.id) : [...plan.repoIds, r.id].slice(0, 6) })}>
+                        <React.Fragment key={r.id}>
+                        <button type="button" className="npx-opt" aria-selected={on} data-testid={`ap-code-repo-${r.id}`} data-in-use={used.length ? "" : undefined}
+                                title={opens ? `Already in ${used[0].name}: opens it` : r.full_name}
+                                onClick={() => opens ? inUse.open(used[0].project_id) : set({ repoIds: plan.layout === "one" ? [r.id] : on ? plan.repoIds.filter((x) => x !== r.id) : [...plan.repoIds, r.id].slice(0, 6) })}>
                           {plan.layout === "several" ? (on ? <CheckSquare size={13} aria-hidden /> : <Square size={13} aria-hidden />) : <GitBranch size={12} aria-hidden />}
-                          <span className="npx-mono">{r.full_name}</span>{(r.used_by ?? []).length ? <span className="npx-tag">in use</span> : null}
+                          <span className="npx-mono">{r.full_name}</span>{opens ? <InUseTag used={used} /> : used.length ? <span className="npx-tag">shared</span> : null}
                         </button>
+                        {used.length ? <InUseBlock repoId={r.id} used={used} act={{ ...inUse, share: (id) => { inUse.share(id); set({ repoIds: plan.layout === "one" ? [id] : [...plan.repoIds.filter((x) => x !== id), id].slice(0, 6) }); } }} testid={`ap-code-repo-${r.id}`} /> : null}
+                        </React.Fragment>
                       );
                     })}
                   </div>
@@ -447,7 +508,7 @@ export function PlanBoxes({ kind, preview, plan, set, cards, adapters, helmPicks
             <BellRinging size={13} aria-hidden />Tell <b>{plan.tell ? plan.tell.replace(/^email:/, "") : "you · email"}</b>
           </button>
           {open === "tell" ? (
-            <Pop title="Who to tell" icon={<BellRinging size={14} />} anchor="Tell" testid="tell" onDone={() => { set({ tell: tellDraft.trim() }); setOpen(null); }}>
+            <Pop title="Who to tell" icon={<BellRinging size={14} />} anchor="Tell" testid="tell" onDone={() => { set({ tell: tellDraft.trim() }); setOpen(null); }} onEscape={() => setOpen(null)}>
               <button type="button" className="npx-opt" aria-selected={!tellDraft} onClick={() => setTellDraft("")}><b>You</b><small>email · in-app</small>{!tellDraft ? <Check size={12} weight="bold" className="npx-ok" aria-hidden /> : null}</button>
               <input className="npx-input" data-testid="ap-tell-input" placeholder="team@example.com or #slack-channel" value={tellDraft} onChange={(e) => setTellDraft(e.target.value)} />
               <span className="npx-sub">When</span>
@@ -528,17 +589,24 @@ function StepStripOrOnboarding({ kind, w, live }: { kind: Kind; w: Workflow | nu
 
 function NameChip({ plan, set }: { plan: PlanState; set: (p: Partial<PlanState>) => void }) {
   const [editing, setEditing] = useState(false);
-  return editing ? (
-    <label className="npx-pchip" data-editing>
-      <PencilSimple size={13} aria-hidden />Name
-      <input autoFocus className="npx-inline" data-testid="ap-name-input" maxLength={120} value={plan.name}
-             onChange={(e) => set({ name: e.target.value, named: true })} onBlur={() => setEditing(false)}
-             onKeyDown={(e) => { if (e.key === "Enter" || e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setEditing(false); } }} />
-    </label>
-  ) : (
+  return editing ? <NameEdit plan={plan} set={set} done={() => setEditing(false)} /> : (
     <button type="button" className="npx-pchip" data-testid="ap-chip-name" title="Prefilled from the brief or the repo · edit inline" onClick={() => setEditing(true)}>
       <PencilSimple size={13} aria-hidden />Name <b>{plan.name || "—"}</b>
     </button>
+  );
+}
+
+/** The Name chip, editing: in view like a popover, its own keys (↵ / Esc end the edit). */
+function NameEdit({ plan, set, done }: { plan: PlanState; set: (p: Partial<PlanState>) => void; done: () => void }) {
+  const ref = useRef<HTMLLabelElement>(null);
+  useBoxPop(ref, { fit: false });
+  return (
+    <label className="npx-pchip" data-editing ref={ref}>
+      <PencilSimple size={13} aria-hidden />Name
+      <input autoFocus className="npx-inline" data-testid="ap-name-input" maxLength={120} value={plan.name}
+             onChange={(e) => set({ name: e.target.value, named: true })} onBlur={done}
+             onKeyDown={(e) => { if (e.key === "Enter" || e.key === "Escape") { e.preventDefault(); e.stopPropagation(); done(); } }} />
+    </label>
   );
 }
 

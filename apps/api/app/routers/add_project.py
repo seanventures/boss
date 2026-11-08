@@ -280,6 +280,10 @@ class CreateAndStartBody(BaseModel):
     dedupe_key: Optional[str] = Field(default=None, max_length=200)
     #: A retry of phase 2 only: the project an earlier call made whose start was refused.
     project_id: Optional[str] = Field(default=None, max_length=120)
+    #: A repository already in a project of this org is refused (open that project, or add work
+    #: to it); a second project on the same code only with this, set by the sheet's deliberate
+    #: "Make a separate project anyway".
+    allow_shared_repo: bool = False
 
 
 class Refused(Exception):
@@ -434,6 +438,30 @@ def _version_of(db, pid: str, workflow_key: Optional[str]) -> tuple[Optional[str
     return str(key), (str(version) if version else None)
 
 
+def _refuse_a_repo_in_use(db, org_id: str, repo_ids: list[str]) -> None:
+    """ONE REPOSITORY, ONE PROJECT, unless the person says otherwise (operator, 2026-11-08: "what
+    if we choose same repo again, will it create new or open the already imported one?"). A repo
+    already bound to a project is refused before anything is written, naming the project: open it
+    or add work to it. Two projects on one repo is two sets of agents opening PRs on the same
+    code, so it takes `allow_shared_repo`."""
+    from boss_engine.multirepo import registry
+
+    for repo_id in repo_ids:
+        try:
+            row = registry.get_row(db, org_id, repo_id)
+        except Exception:  # noqa: BLE001 — an unknown repo is refused by its own step below
+            continue
+        using = registry.projects_using(db, org_id, str(row["full_name"]))
+        if not using:
+            continue
+        names = [u["name"] for u in using]
+        said = names[0] if len(names) == 1 else ", ".join(names[:-1]) + f" and {names[-1]}"
+        raise Refused("repository", 409, {
+            "error": "repo_in_use", "repository": str(row["full_name"]), "projects": using,
+            "message": (f"{row['full_name']} is already in {said}. Open {names[0]}, or add work to it; "
+                        "a second project on the same code needs “Make a separate project anyway”.")})
+
+
 def _create_and_start(request: Request, body: CreateAndStartBody) -> dict[str, Any]:  # noqa: C901
     from apps.api.app import identity_guard, main
     from boss_engine.multirepo import components, project_repos, registry
@@ -480,6 +508,8 @@ def _create_and_start(request: Request, body: CreateAndStartBody) -> dict[str, A
         with begin(_engine) as db:
             _require_project(db, body.context_project_id)
             org_id = _org(db, body.context_project_id)
+            if not body.allow_shared_repo:
+                _refuse_a_repo_in_use(db, org_id, body.repo_ids)
             project_type = "knowledge_graph" if body.map_rules and kind != "idea" else "app"
             try:
                 created = project_service.create(

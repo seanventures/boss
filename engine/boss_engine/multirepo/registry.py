@@ -281,6 +281,17 @@ def get_row(db: Any, org_id: str, repo_id: str) -> dict[str, Any]:
     return dict(row)
 
 
+def projects_using(db: Any, org_id: str, full_name: str) -> list[dict[str, Any]]:
+    """The org's projects already bound to this repository (active bindings), by name: the
+    registry's `used_by`, for one repository."""
+    rows = db.execute(sql(
+        "SELECT DISTINCT p.id AS project_id, p.name FROM github_repository_bindings b "
+        "JOIN projects p ON p.id = b.project_id JOIN workspaces w ON w.id = p.workspace_id "
+        "WHERE w.org_id = :o AND b.status = 'active' AND lower(b.full_name) = :f ORDER BY p.name"),
+        {"o": org_id, "f": norm_repo(full_name)}).mappings().all()
+    return [{"project_id": str(r["project_id"]), "name": str(r["name"])} for r in rows]
+
+
 def by_full_name(db: Any, org_id: str, full_name: str) -> Optional[dict[str, Any]]:
     row = db.execute(sql("SELECT * FROM github_repos WHERE org_id = :o AND lower(full_name) = :f"),
                      {"o": org_id, "f": norm_repo(full_name)}).mappings().first()
