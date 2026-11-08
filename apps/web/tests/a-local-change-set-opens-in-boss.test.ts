@@ -10,7 +10,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   blobHref, changeHref, changeSubHref, isLocalChangeUrl, isLocalRepo, linkTarget, parseChangeSet,
-  parseLocalChange, prLinkLabel, repoHostLabel, repoHref,
+  parseLocalChange, prLinkLabel, repoHostLabel, repoHref, reviewChangeWords,
 } from "../lib/repo-links";
 import { codeHref } from "../lib/kg-view";
 
@@ -37,6 +37,8 @@ describe("repo-links", () => {
     expect(linkTarget("https://github.com/acme/store/pull/3")).toEqual({ target: "_blank", rel: "noreferrer" });
     expect(prLinkLabel(LOCAL_PR)).toBe("Open change set");
     expect(prLinkLabel("https://github.com/acme/store/pull/3")).toBe("Open PR on GitHub");
+    expect(reviewChangeWords(LOCAL_PR)).toBe("Review change #3 ›");
+    expect(reviewChangeWords("https://github.com/acme/store/pull/3")).toBeNull();
   });
 
   it("never links a local repository to github.com", () => {
@@ -57,7 +59,21 @@ describe("repo-links", () => {
       merge: { how: "approve the review decision", decision_id: "dec_1" } });
     expect(cs.files[0]).toEqual({ path: "app.py", status: "added", additions: 2, deletions: 0 });
     expect(cs.merge?.decision_id).toBe("dec_1");
+    expect(cs.decision).toBeNull();
     expect(parseChangeSet(null).files).toEqual([]);
+    const empty = parseChangeSet(null);
+    expect([empty.draft, empty.labels, empty.pending_push, empty.run_id, empty.head_sha]).toEqual([false, [], false, null, null]);
+  });
+
+  it("reads the decision, the run and the checks' gates", () => {
+    const cs = parseChangeSet({ number: 1, state: "open", draft: true, labels: ["boss"], pending_push: true, run_id: "crun_1",
+      head_sha: "b".repeat(40), created_at: "2026-11-08T10:00:00Z", updated_at: "2026-11-08T10:05:00Z",
+      checks: { where: "BOSS's sandbox", run_status: "completed", tests_passed: "true", gates: { tests: "pass" } },
+      decision: { id: "dec_9", status: "pending", question: "Merge change #1?" } });
+    expect(cs.decision).toEqual({ id: "dec_9", status: "pending", question: "Merge change #1?" });
+    expect([cs.draft, cs.labels, cs.pending_push, cs.run_id]).toEqual([true, ["boss"], true, "crun_1"]);
+    expect(cs.checks?.gates).toEqual({ tests: "pass" });
+    expect(cs.created_at).toBe("2026-11-08T10:00:00Z");
   });
 
   it("no console file opens a pull_request_url without lib/repo-links.ts", () => {

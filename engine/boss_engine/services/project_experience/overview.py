@@ -541,6 +541,12 @@ def view(connection: Connection, project_id: str, *, now: Optional[datetime] = N
                            prod_waits=prod_waits, ats=ats,
                            active=facts["active"] or bool(facts["got"].get("_onboarding_running"))),
         "needs_you": waiting,
+        # BOSSAPP-922: work waiting for GitHub is an FYI under Needs you (BOSS pushes it on its
+        # own), never a card a person must act on and never counted as one.
+        "github_waits": [{"id": w["id"], "label": w["label"], "href": w.get("href"),
+                          "words": (w.get("github_wait") or {}).get("words"),
+                          "next_at": (w.get("github_wait") or {}).get("next_at")}
+                         for w in items if w.get("github_wait")],
         # The Roadmap tab's count: what is proposed or accepted and not done yet.
         "roadmap_count": part(("next",), lambda: onboarding_service.backlog_counts(
             connection, project_id)["total"], None),

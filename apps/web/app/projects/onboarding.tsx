@@ -33,6 +33,7 @@ import {
 } from "../../lib/project-experience";
 import { Face, Ico, STATE_WORD } from "./kit";
 import { ItemAction } from "./staging-target-sheet";
+import { fixedWords, type MachineChecks } from "../../lib/machine-checks";
 import "./onboarding.css";
 
 const STAGE_ICON: Record<string, React.ReactNode> = {
@@ -210,6 +211,40 @@ function OnboardingLogList({ ob }: { ob: Onboarding }) {
   );
 }
 
+/** A LOCAL PROJECT'S MACHINE CHECKS (BOSSAPP-924): the five checks as a row of dots (green ok,
+ *  amber not, grey unknown; the words on hover or tap), what the onboarding agent fixed itself,
+ *  and one line for what it could not fix, with its fix link. */
+export function MachineDots({ m }: { m: MachineChecks }) {
+  const [open, setOpen] = useState<string | null>(null);
+  const shown = m.dots.find((d) => d.key === open);
+  const fixed = fixedWords(m);
+  return (
+    <div className="px-ob-mc" data-testid="ob-machine" aria-label="This machine">
+      <ol className="px-ob-mc-row">
+        {m.dots.map((d, i) => (
+          <li key={d.key} className="px-ob-mc-i" data-w={i > 0 ? (m.dots[i - 1].ok === "true" ? "on" : "off") : undefined}>
+            <button type="button" className="px-ob-mc-dot" data-ok={d.ok} data-testid={`ob-dot-${d.key}`}
+                    aria-expanded={open === d.key} title={d.words || d.label}
+                    aria-label={`${d.label}: ${d.ok === "true" ? "ok" : d.ok === "false" ? "not ok" : "not known"}`}
+                    onClick={() => setOpen(open === d.key ? null : d.key)}>
+              {d.ok === "true" ? <Check size={10} weight="bold" aria-hidden /> : d.ok === "false" ? "!" : ""}
+            </button>
+            <span className="px-ob-mc-l">{d.label}</span>
+          </li>
+        ))}
+      </ol>
+      {shown?.words ? <p className="px-ob-mc-words" data-testid="ob-machine-words">{shown.words}</p> : null}
+      {fixed ? <p className="px-ob-mc-fixed" data-testid="ob-machine-fixed"><Check size={11} weight="bold" aria-hidden /> {fixed}</p> : null}
+      {m.cant.map((c) => (
+        <p key={c.key} className="px-ob-mc-cant" data-testid="ob-machine-cant" data-key={c.key}>
+          <Warning size={11} weight="bold" aria-hidden /> {c.line}
+          {c.href ? <> <a href={pxHref(c.href)} data-testid={`ob-machine-fix-${c.key}`}>{c.link || "Fix"} ›</a></> : null}
+        </p>
+      ))}
+    </div>
+  );
+}
+
 /** The workspace's GitHub and model (§15): read-only, each a link to its own Setup page. */
 function WorkspaceRow({ ob }: { ob: Onboarding }) {
   const repo = ob.checklist.find((c) => c.key === "repo_access");
@@ -263,6 +298,7 @@ export function OnboardingView({ projectId, ob, onRefresh }: { projectId: string
   const discover = ob.stages.find((x) => x.key === "discover");
   const found = discoveredTag(ob.state, discover?.state);
   const live = ob.discover.live ?? [];
+  const machine = ob.checklist.find((c) => c.key === "repo_access")?.machine ?? null;
   return (
     <div className="px-stack px-ob-view" data-testid="px-onboarding" data-state={ob.state}>
       <section className="px-card" aria-label="Onboarding stages">
@@ -289,6 +325,7 @@ export function OnboardingView({ projectId, ob, onRefresh }: { projectId: string
           </div>
         ) : null}
         {watching ? <OnboardingLogList ob={ob} /> : null}
+        {machine ? <MachineDots m={machine} /> : null}
         <div className="px-ob-foot">
           <WorkspaceRow ob={ob} />
           <span className="px-spacer" />

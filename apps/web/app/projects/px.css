@@ -845,3 +845,7 @@ button.px-h-num:focus-visible { outline: 2px solid var(--accent-text); outline-o
 [data-testid="px-drawer-learned"] .kg-strip-list { display: flex; flex-direction: column; gap: 6px; }
 [data-testid="px-drawer-learned"] .kg-strip-item { flex-wrap: wrap; height: auto; border-radius: 10px; align-items: baseline; }
 [data-testid="px-drawer-learned"] .kg-strip-title { white-space: normal; overflow: visible; text-overflow: clip; max-width: none; flex: 1 1 100%; min-width: 0; }
+
+/* Needs you › an FYI row (BOSSAPP-922 waiting for GitHub): calm blue, no action, not counted. */
+.px-ny.px-ny-fyi { background: color-mix(in srgb, var(--blue) 7%, var(--surface)); }
+.px-ny-ico.px-ny-ico-fyi { background: var(--blue); color: var(--surface); }

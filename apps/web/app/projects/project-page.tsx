@@ -20,6 +20,8 @@ import {
 
 import { GatedButton, useGate } from "../../components/gated";
 import { isLocalRepo } from "../../lib/repo-links";
+import { notifyChanged } from "../changed";
+import { LocalPublishChip } from "./publish-sheet";
 import { openDockAbout } from "../../lib/dock-subject";
 import {
   PX_PATHS, TAB_WORDS, isMissingStatus, navigateTo, needsYouCards, overviewFromStart, parseOnboarding, parseOverview, parseWork, projectHref, pxHref, readPxUrl, usePxRead,
@@ -299,6 +301,9 @@ function Header({ ctx, onboarding }: { ctx: PxCtx; onboarding: boolean }) {
             <a className="px-hchip" href="#" data-testid="px-head-norepo" onClick={(e) => { e.preventDefault(); ctx.tab("settings", { section: "repos" }); }}>
               <Plus size={11} aria-hidden /> Add a repo</a>
           )}
+          {/* LOCAL FIRST (BOSSAPP-921): a project whose code is on this machine says so, quietly,
+              with Publish to GitHub one press away. */}
+          {!ctx.demo && repo && isLocalRepo(repo.full_name) ? <LocalPublishChip projectId={ctx.projectId} onPublished={() => notifyChanged("project.published")} /> : null}
           {p.live_url ? (
             <a className="px-hchip" href={p.live_url} target="_blank" rel="noreferrer noopener" data-testid="px-head-live"
                title={`${staging?.label ?? "Staging"} — opens the live app`}>

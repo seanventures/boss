@@ -440,7 +440,7 @@ def _repos(connection: Connection, project_id: str) -> dict[str, Any]:
                       "actions": [_action(
                           "Remove", "DELETE", f"/v1/projects/{project_id}/repos/{r['binding_id']}",
                           requires=STEP_UP, permission="repository:manage", open_href=setup)]})
-    return {"key": "repos", "label": "Repos", "icon": "git-branch", "items": items,
+    return {"key": "repos", "label": "Code", "icon": "git-branch", "items": items,
             "actions": [_action("Add", "PUT",
                                 f"/v1/projects/{project_id}/repos/{{repo_id}}", requires=STEP_UP,
                                 permission="repository:manage",

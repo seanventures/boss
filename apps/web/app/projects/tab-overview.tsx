@@ -21,6 +21,7 @@ import { P95_SOURCE, p95Words } from "./tab-deployments";
 import { whenLocal } from "../../lib/local-time";
 import type { PxCtx } from "./project-page";
 import { StartedCards } from "./started-cards";
+import { GitHubWait } from "../../components/github-wait";
 
 /** Each Needs-you card's icon, by what it asks. */
 const NEED_ICON: Record<string, Icon> = { merge: GitMerge, deploy: RocketLaunch, plan: ListChecks, setup: Wrench, question: Question };
@@ -187,6 +188,17 @@ export function OverviewTab({ ctx }: { ctx: PxCtx }) {
                 </div>
               );
                         }) : <Empty icon={HandWaving} tone="green" title="All clear" line="Nothing is waiting on you. Helm asks here when it needs a person." />)}
+            {/* WAITING FOR GITHUB (BOSSAPP-922): an FYI, not a card — BOSS pushes it on its own,
+                so it is never counted in the badge and has no button. */}
+            {(ov.github_waits ?? []).map((g) => (
+              <div key={`gw-${g.id}`} className="px-ny px-ny-fyi" data-testid={`px-ov-gw-${g.id}`}>
+                <span className="px-ny-ico px-ny-ico-fyi" aria-hidden>i</span>
+                <div className="px-ny-b">
+                  <button type="button" className="px-wk-t" onClick={() => ctx.open("work", g.id)}>{g.label}</button>
+                  <GitHubWait nextAt={g.next_at} compact />
+                </div>
+              </div>
+            ))}
           </section>
 
           <section className="px-card" aria-labelledby="px-ov-rw">

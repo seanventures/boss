@@ -8,7 +8,7 @@
  * server's `word`; nothing here counts tests (only commands are real) or draws a diff (hunks are
  * not served: `View diff ↗` goes to the PR).
  */
-import { changeHref, changeSubHref, isLocalChangeUrl, linkTarget } from "../../lib/repo-links";
+import { changeHref, changeSubHref, isLocalChangeUrl, linkTarget, reviewChangeWords } from "../../lib/repo-links";
 import { latestPerStep } from "../../lib/model-routes";
 import { WhyThisModel } from "../why-this-model";
 import { CaretDown, CaretRight, Check, X } from "@phosphor-icons/react";
@@ -211,7 +211,7 @@ function PrBody({ c, actor, onRefresh }: { c: Cockpit; actor: string; onRefresh?
   return (
     <span className="fx-out-col">
       <span className="fx-out-links">
-        {pr.url ? <a className="ag-link" href={changeHref(pr.url)} {...linkTarget(pr.url)} data-testid="fx-pr-open">{isLocalChangeUrl(pr.url) ? "Open change set" : "Open PR ↗"}</a> : null}
+        {pr.url ? <a className="ag-link" href={changeHref(pr.url)} {...linkTarget(pr.url)} data-testid="fx-pr-open">{isLocalChangeUrl(pr.url) ? reviewChangeWords(pr.url) ?? "Open change set" : "Open PR ↗"}</a> : null}
         {pr.filesUrl || pr.url ? (
           <a className="ag-link" href={pr.filesUrl || changeSubHref(pr.url, "files") || undefined} {...linkTarget(pr.filesUrl || pr.url)}>{isLocalChangeUrl(pr.url) ? "View diff" : "View diff ↗"}</a>
         ) : null}
@@ -536,7 +536,8 @@ function PreviewBody({ c, actor, onLogs, onRefresh }: { c: Cockpit; actor: strin
   };
   // A PREVIEW RUNS A BRANCH: a build that opened no PR has none, and the press answered with an
   // internal error (tester P2). Disabled, and it says why.
-  const canRun = ["pr_open", "merged", "deployed"].includes(c.state.state);
+  // A build waiting for GitHub previews from this machine's copy (BOSSAPP-922).
+  const canRun = ["pr_open", "merged", "deployed", "github_wait"].includes(c.state.state);
   const cannotRun = canRun ? undefined : c.state.state === "done_no_pr"
     ? "This build opened no PR, so there is no branch to preview"
     : "Runs once the build has opened its PR";

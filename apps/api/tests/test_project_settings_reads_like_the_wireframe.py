@@ -65,7 +65,7 @@ def _sections(world, client, pid, who=None):
 def test_every_section_reads_in_words_like_the_wireframe(world, client, helpdesk):
     s = _sections(world, client, helpdesk["id"])
     assert [x["label"] for x in s.values()] == ["Demo logins", "Deploy values", "Targets & hosts",
-                                                "Captain & squad", "Autonomy & budget", "Repos",
+                                                "Captain & squad", "Autonomy & budget", "Code",
                                                 "Notifications"]
     demo = s["demo_logins"]
     assert demo["users_from_words"] == "boss.deploy.yaml"

@@ -1,6 +1,6 @@
 "use client";
 
-import { isLocalChangeUrl, prWhere } from "../lib/repo-links";
+import { changeHref, isLocalChangeUrl, prWhere, reviewChangeWords } from "../lib/repo-links";
 import { WhyAsked } from "./skills/why-asked";
 import { ReasonChips, rejectKind, sendReasons } from "./improve/rate-it";
 import React, { useEffect, useMemo, useState } from "react";
@@ -314,6 +314,15 @@ function DeployDestination({ recommendation, projectId }: {
 
 /** The engine's sentence for a PRD its workflow did not wait for (engine spec_gate.py): the
  *  build is already running, so approving starts nothing. */
+/** A review of a LOCAL change set (BOSSAPP-919): "Review change #n ›" opens BOSS's change-set
+ *  page in this tab, where the diff, the review and Merge are. */
+function LocalChangeLink({ recommendation }: { recommendation: Record<string, unknown> }) {
+  const url = typeof recommendation.pull_request_url === "string" ? recommendation.pull_request_url : "";
+  const words = recommendation.action === "review_pull_request" ? reviewChangeWords(url) : null;
+  if (!words) return null;
+  return <p className="dq-effect"><a href={changeHref(url)} data-testid="decision-review-change">{words}</a></p>;
+}
+
 export function specGateSkipped(recommendation: Record<string, unknown>): string {
   const skipped = recommendation.spec_gate_skipped as { said?: unknown } | undefined;
   return skipped && typeof skipped.said === "string" ? skipped.said : "";
@@ -1116,6 +1125,7 @@ function DecisionInboxRow({
           {isPending && !refusal && !preview ? (
             <>
               <p className="dq-effect">{approvalEffectLabel(decision.recommendation)}</p>
+              <LocalChangeLink recommendation={decision.recommendation} />
               <DeployDestination recommendation={decision.recommendation}
                                  projectId={projectId} />
             </>

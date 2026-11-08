@@ -1,0 +1,12 @@
+/* GitHubWait (components/github-wait.tsx): calm, never red. Theme tokens only. */
+.gw { display: inline-flex; align-items: baseline; gap: 5px; flex-wrap: wrap; min-width: 0; max-width: 100%;
+  font-size: var(--fs-ui); color: var(--muted); }
+.gw-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--blue, var(--accent-text)); flex: none; align-self: center;
+  animation: gw-breathe 2.4s ease-in-out infinite; }
+.gw-label { font-weight: 600; color: var(--blue, var(--accent-text)); white-space: nowrap; }
+.gw-detail { overflow-wrap: anywhere; }
+.gw-next { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.gw[data-compact] { font-size: var(--fs-tag); }
+.gw[data-compact] .gw-label { font-weight: 500; }
+@keyframes gw-breathe { 50% { opacity: .45; } }
+@media (prefers-reduced-motion: reduce) { .gw-dot { animation: none; } }

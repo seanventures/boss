@@ -499,17 +499,64 @@ def _local_access(engine: Any, settings: Any, project_id: str, repo: Mapping[str
         return _item("repo_access", "failed", owner="you",
                      detail=f"Could not check this machine: {_err(error)}", sub="Check failed")
     fixed = (" Fixed: " + ", ".join(found["fixed"]) + ".") if found.get("fixed") else ""
+    machine = machine_view(project_id, found)
     if found["ok"]:
-        return _item("repo_access", "done", sub="On this machine",
+        item = _item("repo_access", "done", sub="On this machine",
                      detail=f"{repo['full_name']} is on this machine; BOSS builds, reviews and "
                             f"merges here.{fixed} " + ("Online." if found["online"] else
                                                       "Offline: builds run on the local model."))
+        item["machine"] = machine
+        return item
     item = _item("repo_access", "failed", owner="you", sub="Needs you",
                  detail=found["summary"] + fixed,
                  action={"label": "Repo and models", "href": href(project_id, area="setup",
                                                                  focus="models")})
     item["_read"] = any(ch["key"] == "local_repo" and ch["ok"] for ch in found["checks"])
+    item["machine"] = machine
     return item
+
+
+#: The machine checks' row of dots, in this order (BOSSAPP-924).
+MACHINE_DOTS = (("git", "git"), ("local_repo", "repo"), ("disk", "disk"), ("network", "network"),
+                ("model", "model"))
+
+
+def machine_view(project_id: str, found: Mapping[str, Any]) -> dict[str, Any]:
+    """The onboarding agent's machine checks as the screen draws them: one dot per check (ok,
+    not ok, or unknown, with its words), what the agent fixed itself, and ONE short line per
+    thing it could not fix, with where it is fixed."""
+    by_key = {str(ch.get("key")): ch for ch in found.get("checks") or []}
+    dots = []
+    for key, label in MACHINE_DOTS:
+        ch = by_key.get(key) or {}
+        ok = ch.get("ok")
+        dots.append({"key": key, "label": label,
+                     "ok": "unknown" if ok is None else ("true" if ok else "false"),
+                     "words": str(ch.get("words") or "")[:300]})
+    models = href(project_id, area="setup", focus="models")
+    cant = []
+    for key, _label in MACHINE_DOTS:
+        ch = by_key.get(key) or {}
+        if ch.get("ok") is not False:
+            continue
+        if key == "model" and not found.get("online"):
+            cant.append({"key": key, "line": "Offline: the model is remote — connect a local "
+                                             "engine in Repo and models", "href": models,
+                         "link": "Repo and models"})
+        elif key == "model":
+            cant.append({"key": key, "line": "No model can build yet — pick one in Repo and "
+                                             "models", "href": models, "link": "Repo and models"})
+        elif key == "git":
+            cant.append({"key": key, "line": "git is not installed here — install git, then run "
+                                             "onboarding again", "href": None, "link": None})
+        elif key == "disk":
+            cant.append({"key": key, "line": "Under 2 GB free where BOSS keeps repositories — "
+                                             "free some space", "href": None, "link": None})
+        else:
+            cant.append({"key": key, "line": str(ch.get("words") or "")[:200], "href": None,
+                         "link": None})
+    return {"dots": dots, "fixed": [str(f) for f in found.get("fixed") or []],
+            "online": bool(found.get("online")), "cant": cant}
 
 
 def _read_repository(engine: Any, settings: Any, project_id: str, repo: Mapping[str, Any],

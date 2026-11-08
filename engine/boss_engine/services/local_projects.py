@@ -187,6 +187,74 @@ def folder_facts(source: Path) -> dict[str, Any]:
     return facts
 
 
+_SKIP_DIRS = {"node_modules", ".venv", "venv", "__pycache__", "dist", ".next", "target", ".git"}
+
+
+def _count_files(source: Path, cap: int = 5000) -> int:
+    """Files in the folder (dependencies and build output left out), counted up to `cap`."""
+    n = 0
+    stack = [source]
+    while stack and n < cap:
+        here = stack.pop()
+        try:
+            entries = list(here.iterdir())
+        except OSError:
+            continue
+        for entry in entries:
+            if entry.is_symlink():
+                continue
+            if entry.is_dir():
+                if entry.name not in _SKIP_DIRS:
+                    stack.append(entry)
+            else:
+                n += 1
+    return n
+
+
+def list_import_folders(settings: Any, query: str = "", *, limit: int = 30) -> dict[str, Any]:
+    """BRING EXISTING CODE › THIS MACHINE (BOSSAPP-923's screen): the folders inside the install's
+    import directory a person can import, each with what the choice needs — has it git history,
+    a GitHub remote, how many files. Only the import root is ever listed (never an arbitrary
+    path); a query filters by name, or names one folder path under the root."""
+    allowed = import_root(settings)
+    if allowed is None:
+        return {"configured": False, "items": [],
+                "words": "Importing from this machine is off on this install (BOSS_LOCAL_IMPORT_ROOT)."}
+    try:
+        base = allowed.resolve(strict=True)
+    except (OSError, RuntimeError):
+        return {"configured": True, "root": str(allowed), "items": [],
+                "words": f"The import directory {allowed} does not exist yet."}
+    q = str(query or "").strip().strip("/").lower()
+    candidates: list[Path] = []
+    if q and "/" in q:
+        try:
+            one = resolve_import_path(settings, q)
+            candidates = [one]
+        except LocalProjectError:
+            candidates = []
+    else:
+        try:
+            candidates = sorted((p for p in base.iterdir() if p.is_dir() and not p.is_symlink()
+                                 and not p.name.startswith(".")),
+                                key=lambda p: p.stat().st_mtime, reverse=True)
+        except OSError:
+            candidates = []
+        if q:
+            candidates = [p for p in candidates if q in p.name.lower()]
+    items = []
+    for folder in candidates[:limit]:
+        facts = folder_facts(folder)
+        branch = None
+        if facts["git"]:
+            branch = local_repo.git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=folder,
+                                    check=False).strip() or None
+        items.append({"path": str(folder.relative_to(base)), "name": folder.name,
+                      "git": facts["git"], "github": facts["github"], "branch": branch,
+                      "files": _count_files(folder)})
+    return {"configured": True, "root": str(allowed), "items": items}
+
+
 TarFetcher = Callable[[Mapping[str, Any], str], bytes]
 
 
@@ -405,5 +473,5 @@ def _require_git() -> None:
 
 
 __all__ = ["LocalProjectError", "bind", "create_for_project", "delete_local_repo", "folder_facts",
-           "import_code", "import_root", "local_binding", "machine_checks",
+           "import_code", "import_root", "list_import_folders", "local_binding", "machine_checks",
            "resolve_import_path", "status"]

@@ -111,7 +111,7 @@ describe("Settings (screen 13) on the engine's answer", () => {
     engine();
     await open();
     expect($$(".px-set-nav button").map((b) => b.textContent)).toEqual(
-      ["Demo logins", "Deploy values", "Targets & hosts", "Captain & squad", "Autonomy & budget", "Repos", "Notifications"]);
+      ["Demo logins", "Deploy values", "Targets & hosts", "Captain & squad", "Autonomy & budget", "Code", "Notifications"]);
   });
 
   it("13-02…13-06: demo logins switch environment, Admin first, the users' source, Rotate posts that environment", async () => {

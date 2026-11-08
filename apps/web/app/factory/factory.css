@@ -76,6 +76,8 @@
 .fx-word-needs_plan, .fx-word-needs_waiver, .fx-word-needs_person, .fx-word-budget_refused, .fx-word-quiet { color: var(--amber); font-weight: 650; }
 .fx-word-failed, .fx-word-blocked { color: var(--red); font-weight: 650; }
 .fx-word-cancelled { color: var(--muted); }
+/* BOSSAPP-922: waiting for GitHub is calm, never red. */
+.fx-word-github_wait { color: var(--blue); font-weight: 650; }
 .fx-row-cost { font-size: var(--fs-meta); color: var(--faint); font-variant-numeric: tabular-nums; text-align: right; }
 .fx-row-go { justify-self: end; }
 .fx-row[data-density="compact"] { min-height: 40px; grid-template-columns: minmax(4.73684rem, 7.36842rem) minmax(0, 1fr) minmax(7.89474rem, auto) 2.52632rem auto; }

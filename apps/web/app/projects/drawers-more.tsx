@@ -8,7 +8,7 @@
  *                   from the reads the page has (onboarding, work, roadmap, deployments);
  *   NeedsBody       a Needs-you item: why it waits, its path, the work and the PR.
  */
-import { changeHref, isLocalChangeUrl } from "../../lib/repo-links";
+import { changeHref, isLocalChangeUrl, reviewChangeWords } from "../../lib/repo-links";
 import { DiagnosisFlow } from "../../components/stuck-work";
 import React from "react";
 import {
@@ -435,7 +435,7 @@ export function DecisionActs({ ctx, n, onDone }: { ctx: PxCtx; n: NeedsYou; onDo
             {n.kind === "merge" ? <GitMerge size={12} aria-hidden /> : n.kind === "deploy" ? <RocketLaunch size={12} aria-hidden /> : <Check size={12} aria-hidden />} {actWord(n)}</GatedButton>
           <GatedButton permission="decision:approve" projectId={ctx.projectId} className="px-btn" data-size="s" disabled={busy}
                        data-testid="px-drawer-needs-reject" onClick={() => setRejecting(true)}>Reject</GatedButton>
-          {review ? <PxLink href={changeHref(review) ?? ""} testid="px-drawer-needs-review">{isLocalChangeUrl(review) ? "Review the change set" : "Review on GitHub"}</PxLink> : null}
+          {review ? <PxLink href={changeHref(review) ?? ""} testid="px-drawer-needs-review">{isLocalChangeUrl(review) ? reviewChangeWords(review) ?? "Review the change set" : "Review on GitHub"}</PxLink> : null}
         </div>
       )}
       <Said text={said.text} tone={said.tone} />

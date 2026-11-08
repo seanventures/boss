@@ -114,8 +114,21 @@ class GitRemotes:
         self.root = root
         root.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
+        # LOCAL-FIRST (BOSSAPP-917/921/922), opt-in: owners whose repositories exist only once
+        # made (POST /github/_owners), their account type, and GitHub down (POST /github/_outage).
+        self.fresh_owners: set[str] = set()
+        self.owner_types: dict[str, str] = {}
+        self.outage = False
 
-    def ensure(self, owner: str, repo: str, seed: Optional[dict[str, str]] = None) -> Path:
+    def is_fresh(self, owner: str) -> bool:
+        return owner.lower() in self.fresh_owners
+
+    def exists(self, owner: str, repo: str) -> bool:
+        repo = repo[:-4] if repo.endswith(".git") else repo
+        return (self.root / owner / f"{repo}.git" / "HEAD").is_file()
+
+    def ensure(self, owner: str, repo: str, seed: Optional[dict[str, str]] = None,
+               empty: bool = False) -> Path:
         repo = repo[:-4] if repo.endswith(".git") else repo
         bare = self.root / owner / f"{repo}.git"
         with self._lock:
@@ -126,6 +139,8 @@ class GitRemotes:
                            capture_output=True)
             subprocess.run(["git", "-C", str(bare), "config", "http.receivepack", "true"],
                            check=True, capture_output=True)
+            if empty:
+                return bare
             with tempfile.TemporaryDirectory() as work:
                 files = seed or DEFAULT_APP
                 for rel, content in files.items():
@@ -144,6 +159,10 @@ class GitRemotes:
     def serve(self, method: str, path: str, query: str, headers: dict[str, str],
               body: bytes) -> tuple[int, dict[str, str], bytes]:
         parts = path.strip("/").split("/")
+        if self.outage:
+            return 502, {"Content-Type": "text/plain"}, b"boss-e2e: GitHub is down (outage switched on)"
+        if len(parts) >= 2 and self.is_fresh(parts[0]) and not self.exists(parts[0], parts[1]):
+            return 404, {"Content-Type": "text/plain"}, b"Repository not found."
         if len(parts) >= 2:
             self.ensure(parts[0], parts[1])
             if not parts[1].endswith(".git"):

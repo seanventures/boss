@@ -11,6 +11,7 @@
  * answers that, they are grouped here from the build list with the same rule
  * (app-grouping.ts), and only what that list holds is shown: no faces, no deploys guessed.
  */
+import { changeHref, isLocalChangeUrl, linkTarget } from "../../lib/repo-links";
 import { CaretDown, CaretRight } from "@phosphor-icons/react";
 import React, { useEffect, useMemo, useState } from "react";
 
@@ -210,7 +211,7 @@ function PrCell({ number, url, state, repo, testId }: { number?: number; url?: s
   const tip = `PR #${number} is ${state ?? "open"}${repo ? ` · ${repo}` : ""}`;
   return (
     <span className="fx-pr" data-state={state ?? "open"}>
-      <a className="ag-link" href={url} target="_blank" rel="noreferrer" title={tip} data-testid={testId}
+      <a className="ag-link" href={changeHref(url) ?? undefined} {...linkTarget(url)} title={isLocalChangeUrl(url) ? `Change #${number} in BOSS` : tip} data-testid={testId}
          onClick={(e) => e.stopPropagation()}>#{number}</a>
       <span className="fx-pr-state">{state ?? "open"}</span>
     </span>
@@ -236,7 +237,7 @@ export function stationsThatRan(row: BuildRowData): BuildRowData["stations"] {
 }
 
 /** Builds still on the line say which station they are at; a shipped or stopped one does not. */
-const ON_THE_LINE = new Set(["building", "queued", "quiet", "budget_wait", "blocked", "needs_plan", "needs_waiver", "needs_person", "budget_refused"]);
+const ON_THE_LINE = new Set(["building", "queued", "quiet", "budget_wait", "github_wait", "blocked", "needs_plan", "needs_waiver", "needs_person", "budget_refused"]);
 
 function stateCell(b: { word: string; row?: BuildRowData }): { word: string; where: string } {
   const st = b.row && ON_THE_LINE.has(b.row.state) ? b.row.stations.find((s) => s.key === b.row?.station) : undefined;

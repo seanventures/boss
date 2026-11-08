@@ -4,9 +4,9 @@
   "canonical_key": "method + path",
   "request_body_type_enforcement_note": "pass_through_documented fields appear in OpenAPI but SkipValidation preserves the handler's existing input coercion and error statuses; runtime_validated_input_schema is a legacy schema-presence flag",
   "edition": "community",
-  "operation_count": 1813,
+  "operation_count": 1815,
   "counts": {
-    "api_policy_gated": 1553,
+    "api_policy_gated": 1555,
     "excluded": 107,
     "human_confirmation_gated": 72,
     "operator_only_unavailable": 81
@@ -24566,6 +24566,24 @@
     },
     {
       "method": "GET",
+      "path": "/v1/projects/{project_id}/github-repository/check",
+      "alias": "get_v1_projects_project_id_github_repository_check_fe58e434",
+      "domain": "workspace",
+      "summary": "Check Github Repository",
+      "mcp_status": "api_policy_gated",
+      "reason": null,
+      "input_schema_quality": "parameters_only",
+      "mounted_input_schema_quality": "parameters_only",
+      "request_body_type_enforcement": "no_json_body",
+      "curated_input_fields": false,
+      "typed_input_schema": true,
+      "runtime_validated_input_schema": true,
+      "domain_scoped_direct_tool": true,
+      "requires_explicit_bound_api_credential": true,
+      "read_only_available": true
+    },
+    {
+      "method": "GET",
       "path": "/v1/projects/{project_id}/health",
       "alias": "get_v1_projects_project_id_health_8f33a7cb",
       "domain": "workspace",
@@ -24761,6 +24779,24 @@
       "domain_scoped_direct_tool": false,
       "requires_explicit_bound_api_credential": true,
       "read_only_available": false
+    },
+    {
+      "method": "GET",
+      "path": "/v1/projects/{project_id}/local-folders",
+      "alias": "get_v1_projects_project_id_local_folders_efefb100",
+      "domain": "workspace",
+      "summary": "Local Folders",
+      "mcp_status": "api_policy_gated",
+      "reason": null,
+      "input_schema_quality": "parameters_only",
+      "mounted_input_schema_quality": "parameters_only",
+      "request_body_type_enforcement": "no_json_body",
+      "curated_input_fields": false,
+      "typed_input_schema": true,
+      "runtime_validated_input_schema": true,
+      "domain_scoped_direct_tool": true,
+      "requires_explicit_bound_api_credential": true,
+      "read_only_available": true
     },
     {
       "method": "GET",
