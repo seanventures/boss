@@ -401,6 +401,63 @@ def test_a_repository_project_starts_onboarding_with_the_note(client, world, eng
     assert view["seed"]["note"] == "start with the SLA bugs"
 
 
+def _repo_in_project(engine, world) -> tuple[str, str, str]:
+    """A registry repository already bound to world.project_a: (repo id, full name, project name)."""
+    rid = f"ghr_{uuid.uuid4().hex[:8]}"
+    full = f"acme/{rid}"
+    pid = world.project_a
+    with engine.begin() as db:
+        db.execute(text("INSERT INTO github_repos (id, org_id, full_name, allowed, checks) "
+                        "VALUES (:i, :o, :f, true, '{}'::jsonb)"), {"i": rid, "o": world.org, "f": full})
+        db.execute(text(
+            "INSERT INTO github_connections (id, project_id, connection_label, auth_method, credential_ref, "
+            "status, created_by) VALUES (:c, :p, 'test', 'personal_access_token', 'secret:none', 'active', "
+            "'test') ON CONFLICT (id) DO NOTHING"), {"c": f"ghc_{pid}", "p": pid})
+        db.execute(text(
+            "INSERT INTO github_repository_bindings (id, project_id, connection_id, owner, name, full_name, "
+            "role, default_branch, created_by) VALUES (:b, :p, :c, 'acme', :n, :f, 'primary', 'main', 'test')"),
+            {"b": f"ghb_{uuid.uuid4().hex[:10]}", "p": pid, "c": f"ghc_{pid}", "n": rid, "f": full})
+        pname = db.execute(text("SELECT name FROM projects WHERE id = :p"), {"p": pid}).scalar()
+    return rid, full, str(pname)
+
+
+def test_a_repo_already_in_a_project_is_refused_naming_it(client, world, engine):
+    """Choosing the same repo again opens the project it is in; Create never makes a second one
+    silently (operator, 2026-11-08)."""
+    rid, full, pname = _repo_in_project(engine, world)
+    name = f"Again {uuid.uuid4().hex[:6]}"
+    with _owner(world):
+        r = client.post("/v1/add-project", json={"context_project_id": world.project_a, "kind": "repo",
+                                                 "name": name, "repo_ids": [rid]})
+    assert r.status_code == 409, r.text
+    said = r.json()
+    assert said["step"] == "repository" and said["error"] == "repo_in_use" and said["created"] is False
+    assert pname in said["message"] and full in said["message"]
+    assert said["projects"] == [{"project_id": world.project_a, "name": pname}]
+    assert not _exists(engine, name), "nothing is written"
+    # The idea flow's Code popover picks the same way: refused too.
+    with _owner(world):
+        r = client.post("/v1/add-project", json={"context_project_id": world.project_a, "kind": "idea",
+                                                 "name": name, "words": WORDS, "repo_ids": [rid]})
+    assert r.status_code == 409 and r.json()["error"] == "repo_in_use", r.text
+    assert not _exists(engine, name)
+
+
+def test_a_separate_project_on_the_same_repo_only_when_asked(client, world, engine, monkeypatch):
+    from boss_engine.multirepo import project_repos
+
+    rid, _full, _pname = _repo_in_project(engine, world)
+    bound = []
+    monkeypatch.setattr(project_repos, "put", lambda db, s, pid, ref, **k: bound.append((pid, ref)))
+    name = f"Separate {uuid.uuid4().hex[:6]}"
+    with _owner(world):
+        r = client.post("/v1/add-project", json={"context_project_id": world.project_a, "kind": "repo",
+                                                 "name": name, "repo_ids": [rid], "allow_shared_repo": True})
+    assert r.status_code == 200, r.text
+    assert bound == [(r.json()["project_id"], rid)]
+    assert _exists(engine, name)
+
+
 def test_a_viewer_cannot_create_and_bad_input_is_a_sentence(client, world):
     with world.acting_as(world.ctx(world.viewer)):
         r = client.post("/v1/add-project", json={"context_project_id": world.project_a,

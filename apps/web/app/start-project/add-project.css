@@ -371,3 +371,14 @@
 .npx-egress-ok { display: flex; gap: 6px; align-items: center; margin: 8px 0; font-weight: 600; }
 .npx-draft { display: inline-flex; gap: 4px; align-items: center; color: var(--accent-text); }
 @media (max-width: 760px) { .npx-why { text-align: center; margin-top: 0; } }
+
+/* A repo already in a project: its row opens that project; under it, Add work instead and a
+   deliberate "Make a separate project anyway" (asked once, one line why). */
+.npx-inuse { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin: -2px 0 4px; padding: 0 10px 0 31px; font-size: var(--fs-meta); min-width: 0; }
+.npx-inuse-ask { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; flex: 1 1 100%; min-width: 0; padding: 6px 8px; border-radius: 9px;
+  border: 1px solid color-mix(in srgb, var(--amber) 55%, transparent); background: color-mix(in srgb, var(--amber) 6%, var(--surface)); color: var(--ink-soft); }
+.npx-inuse-ask > span { flex: 1 1 200px; min-width: 0; }
+.npx-pop .npx-inuse { padding-left: 24px; }
+.npx-inuse-tag { flex: 0 1 auto; min-width: 0; max-width: 60%; overflow: hidden; text-overflow: ellipsis; display: inline-block; }
+.npx-opt .npx-mono { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.npx-scroll:has(.npx-inuse) { max-height: 280px; }
