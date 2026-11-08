@@ -307,8 +307,15 @@ def _need(request: Request, permission: str, step: str, project_id: Optional[str
         if mode == "enforce":
             raise Refused(step, 401, {"error": "unauthenticated", "message": "Sign in first."})
         return
+    from boss_engine.identity.permissions_gen import PERMISSION_META
+
     org = ctx.principal.org_id
-    scope = ResolvedScope.in_project(org, project_id) if project_id else ResolvedScope.org_level(org)
+    # An org-wide permission (template:read) is held for the org, never "at a project": checked
+    # at the project it was refused ORG_ONLY_AT_PROJECT, so Start anyway on a project this flow
+    # had already made (retry.project_id) answered "You may not apply connectors".
+    org_wide = getattr(PERMISSION_META.get(permission), "scope", "") == "org"
+    scope = (ResolvedScope.in_project(org, project_id) if project_id and not org_wide
+             else ResolvedScope.org_level(org))
     decision = authz.check(ctx, permission, scope)
     if not decision.allowed and mode == "enforce":
         body = dict(decision.error_body())
@@ -368,8 +375,17 @@ def _run_input(body: CreateAndStartBody, brief: dict[str, Any], repo: Optional[s
         run_input["reference_links"] = links
     if repo:
         run_input["repository"] = repo
-    if body.talks_to:
-        run_input["app_links"] = body.talks_to
+    # TALKS TO (More detail): an app of THIS project, named by its key and an alias, is an app
+    # link the start requests; anything else ("Xero API", typed as words) is what the app calls,
+    # said in the directive. Sending words as app_links refused the whole create ("an alias is
+    # A-Z, 0-9 and _…", walk 2026-11-08).
+    links = [t for t in body.talks_to if t.get("provider_app_key") and t.get("alias")]
+    named = [str(t.get("name") or "").strip() for t in body.talks_to if t not in links]
+    if links:
+        run_input["app_links"] = links
+    if any(named):
+        run_input["directive"] = (run_input["directive"] + "\n\nIt talks to: "
+                                  + ", ".join(n for n in named if n) + ".")[:8000]
     return run_input
 
 

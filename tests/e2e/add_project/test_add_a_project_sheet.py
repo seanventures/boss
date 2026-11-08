@@ -287,15 +287,31 @@ def test_the_brief_looks_right_fix_it_rewrite_and_questions(person: Person):
     p.idea_with_brief()
     # open questions: a quick answer toggles
     chips = p.p.locator("[data-testid^='ap-q0-']")
+
+    def still_open() -> int:
+        m = re.search(r"open · (\d+)", p.tid("ap-understood").inner_text().lower())
+        return int(m.group(1)) if m else 0
+
     if chips.count():
+        before = still_open()
         chips.first.click()
         assert chips.first.get_attribute("aria-pressed") == "true"
-        assert "1 open" in p.tid("ap-understood").inner_text() or "open" in p.tid("ap-understood").inner_text()
+        assert still_open() == before - 1, "an answered question is no longer open"
         chips.first.click()
         assert chips.first.get_attribute("aria-pressed") == "false"
+        assert still_open() == before
 
-    # Fix it: title, a must-have edited, moved up, one added, one deleted
+    # Fix it › Cancel keeps the brief as it was
+    title = p.tid("ap-ub-row-title").inner_text()
     p.tid("ap-ub-fix").click()
+    p.tid("ap-fix-title").fill("Something else entirely")
+    p.tid("ap-ub-cancel").click()
+    assert p.tid("ap-ub-row-title").inner_text() == title
+    assert p.tid("ap-fix-title").count() == 0
+
+    # Fix it: title, a must-have edited, moved up, one added, one deleted; Save brief
+    p.tid("ap-ub-fix").click()
+    assert "Save brief" in p.tid("ap-ub-fix").inner_text()
     p.tid("ap-fix-title").fill("Receipts: snap, approve, export")
     musts = p.tid("ap-fix-musts").locator("li input")
     n = musts.count()
@@ -330,6 +346,9 @@ def test_the_brief_looks_right_fix_it_rewrite_and_questions(person: Person):
 
 def test_each_popover_changes_what_is_created(person: Person):
     p = person
+    # This dev install has no mail server: the email channel picked under Tell is refused with
+    # the checklist, and the person starts anyway (landed() ticks it).
+    p.expect(r"^409 POST /v1/add-project \{\"error\":\"not_ready\"")
     p.open_sheet("idea")
     p.idea_with_brief()
     name = unique("Receipts")
@@ -387,10 +406,10 @@ def test_each_popover_changes_what_is_created(person: Person):
 
     # Tell
     p.tid("ap-chip-tell").click()
-    p.tid("ap-tell-input").fill("#finance-builds")
+    p.tid("ap-tell-input").fill("finance@example.com")
     p.tid("ap-when-deployed").click()
     p.tid("ap-pop-tell-done").click()
-    assert "#finance-builds" in p.tid("ap-chip-tell").inner_text()
+    assert "finance@example.com" in p.tid("ap-chip-tell").inner_text()
 
     # More detail
     p.tid("ap-chip-more").click()
@@ -422,7 +441,7 @@ def test_each_popover_changes_what_is_created(person: Person):
     assert picks["connectors"] == []
     assert picks["repos"] == [repo_name]
     assert picks["staging"] is None
-    assert picks["notify"]["channel"] == "#finance-builds"
+    assert picks["notify"]["channel"] == "email:finance@example.com"
     assert "deployed" in picks["notify"]["when"]
     assert picks["audience"] == "Finance team on laptops"
     assert picks["done_when"] == ["A CSV opens in Excel"]
@@ -507,7 +526,7 @@ def test_egress_consent_is_asked_inline(person: Person):
     if with_egress is None:
         pytest.skip("no connector here talks to an outside host")
     p.tid("ap-pop-connectors-done").click()
-    p.create()
+    p.create(allow_egress=False)
     ask = p.tid("ap-egress")
     ask.wait_for()
     assert ask.locator(".npx-chip").count() >= 1
@@ -587,6 +606,7 @@ def test_a_slow_model_times_out_and_try_again_asks_again(person: Person):
     assert "longer than" in p.tid("ap-understood").inner_text()
     dev(model="cli")
     p.tid("ap-ub-retry").click()
+    p.p.wait_for_selector("[data-testid='ap-understood'][data-state='reading']", timeout=3000)
     assert p.understood(timeout_s=60) == "ok"
     p.check("timeout")
 
@@ -613,7 +633,7 @@ def test_plan_with_an_agent_first(person: Person):
     else:
         p.tid("ap-plan-agent").click()
     p.sheet.wait_for(state="detached")
-    p.p.wait_for_selector("[data-testid='converse-panel'], [role='dialog'][aria-label*='lan'], .cv-panel", timeout=20_000)
+    p.tid("ag-talk").wait_for(timeout=20_000)    # the plan conversation with the PM opens
     p.check("plan")
 
 
@@ -660,10 +680,14 @@ def test_double_pressing_create_makes_one_project(person: Person):
     p.name(name)
     btn = p.tid("ap-create")
     btn.dblclick()
+    if p.tid("ap-egress-allow").count():       # Helm's connectors talk out: allow, then again
+        p.tid("ap-egress-allow").check()
+        btn.dblclick()
     assert "Creating" in btn.inner_text() or "Created" in btn.inner_text(), "the press shows at once"
     p.landed()
     creates = [c for c in p.calls if c.endswith("/v1/add-project")]
-    assert len(creates) == 1, creates
+    # the press, and its retry after consent (or Start anyway) — never the second click
+    assert len(creates) == 1 + p.consented + p.started_anyway, creates
     assert projects_named(name) in (None, 1)
 
 

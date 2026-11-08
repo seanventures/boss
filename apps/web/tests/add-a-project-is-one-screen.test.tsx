@@ -316,9 +316,15 @@ describe("the walk's gaps stay closed (laptop walk 2026-11-07)", () => {
     expect(wide).toMatch(/\.npx-foot > \.npx-faint \{[^}]*text-overflow: ellipsis/);
   });
 
-  it("on a phone an open popover is not covered by the sticky foot", () => {
-    const phone = css.slice(css.indexOf("@media (max-width: 760px)"));
-    expect(phone).toMatch(/\.npx-sheet:has\(\.npx-body \.npx-pop\) \.npx-foot \{ display: none; \}/);
+  it("nothing is ever drawn under the foot: the body scrolls between a head and a foot that stay put", () => {
+    // Walk 2026-11-07: long box values ran under the footer (it was sticky inside a scrolling
+    // backdrop, 28 px above its edge). The sheet is the window's height at most, its body
+    // scrolls, the foot is not sticky; on a phone a popover opens in the body's flow, so the
+    // foot never covers it and needs no hiding.
+    expect(css).toMatch(/\.npx-sheet \{[^}]*max-height: calc\(100dvh - 56px\)/);
+    expect(css).toMatch(/\.npx-body \{[^}]*min-height: 0; overflow-y: auto/);
+    expect(css).not.toMatch(/\.npx-foot \{[^}]*position: sticky/);
+    expect(css).not.toMatch(/\.npx-foot \{ display: none; \}/);
   });
 
   it("a long name ends in an ellipsis inside its chip", () => {

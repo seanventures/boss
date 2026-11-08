@@ -141,7 +141,7 @@ describe("New app from an idea", () => {
     await type(tid("idea-text"), sentence);
     expect((tid("idea-name") as HTMLInputElement).value).toBe("Shift-swap board");
     await click(tid("idea-go"));
-    expect(calls.find((c) => c.path === "/v1/projects")!.body).toEqual({ name: "Shift-swap board", description: sentence });
+    expect(calls.find((c) => c.method === "POST" && c.path === "/v1/projects")!.body).toEqual({ name: "Shift-swap board", description: sentence });
     expect(calls.find((c) => c.path === "/api/delivery-workflows")!.body).toEqual({
       action: "start", project_id: "shift-swap-board", work_class: "project.new",
       input: { directive: sentence, title: "Shift-swap board" } });
@@ -168,7 +168,7 @@ describe("New app from an idea", () => {
     expect(tid("start-idea-readiness")).not.toBeNull();
     await click(tid("dw-readiness-start-anyway"));
     await click(tid("idea-go"));
-    expect(calls.filter((c) => c.path === "/v1/projects").length).toBe(1);
+    expect(calls.filter((c) => c.method === "POST" && c.path === "/v1/projects").length).toBe(1);
     expect((calls.filter((c) => c.path === "/api/delivery-workflows")[1].body as { start_anyway: string[] }).start_anyway).toEqual(["deployment_target"]);
     expect(go).toHaveBeenCalledTimes(1);
   });
@@ -216,7 +216,7 @@ describe("screen 1 — New project", () => {
     const go = vi.fn();
     await mountAs(<StartProjectSheet step="choose" onStep={() => {}} onClose={() => {}} projectId="p1" homeId="p1" go={go} />);
     await click(tid("preset-aml"));
-    expect(calls.find((c) => c.path === "/v1/projects")!.body).toEqual({ name: "AML alert investigation", project_type: "knowledge_graph" });
+    expect(calls.find((c) => c.method === "POST" && c.path === "/v1/projects")!.body).toEqual({ name: "AML alert investigation", project_type: "knowledge_graph" });
     const href = new URLSearchParams(String(go.mock.calls[0][0]).split("?")[1]);
     expect([href.get("project_id"), href.get("area"), href.get("kg_tab")]).toEqual(["aml-alert-investigation", "knowledge", "documents"]);
   });
@@ -232,7 +232,7 @@ describe("screen 1 — New project", () => {
     const go = vi.fn();
     await mountAs(<StartProjectSheet step="choose" onStep={() => {}} onClose={() => {}} projectId="p1" homeId="p1" go={go} />);
     await click(tid("preset-bug-triage-board"));
-    expect(calls.filter((c) => c.path === "/v1/projects").map((c) => (c.body as { name: string }).name))
+    expect(calls.filter((c) => c.method === "POST" && c.path === "/v1/projects").map((c) => (c.body as { name: string }).name))
       .toEqual(["Bug triage board", "Bug triage board 2"]);
     const href = new URLSearchParams(String(go.mock.calls[0][0]).split("?")[1]);
     expect([href.get("project_id"), href.get("area"), href.get("start_preset")]).toEqual(["bug-triage-board-2", "overview", "bug-triage-board"]);
@@ -252,7 +252,7 @@ describe("the sample", () => {
     await mountAs(<StartProjectSheet step="sample" onStep={() => {}} onClose={() => {}} projectId="p1" homeId="p1" go={go} />);
     expect($$(".spj-flow li b").map((b) => b.textContent)).toEqual(["Plan", "Build", "Review", "Pull request", "Preview"]);
     await click(tid("start-sample-go"));
-    expect(calls.find((c) => c.path === "/v1/projects")!.body).toEqual({ name: "Hello World" });
+    expect(calls.find((c) => c.method === "POST" && c.path === "/v1/projects")!.body).toEqual({ name: "Hello World" });
     expect(calls.find((c) => c.path.endsWith("/apply"))!.body).toEqual({
       project_id: "hello-world", new_app: { name: "Hello World" }, stack: "node", workflow_key: "minor_feature",
       dedupe_key: "sample:hello-world" });
@@ -279,7 +279,7 @@ describe("the sample", () => {
     await click(tid("dw-readiness-start-anyway"));
     await click(tid("start-sample-go"));
     // One project, two applies: the second says what it starts without.
-    expect(calls.filter((c) => c.path === "/v1/projects").length).toBe(1);
+    expect(calls.filter((c) => c.method === "POST" && c.path === "/v1/projects").length).toBe(1);
     expect((calls.filter((c) => c.path.endsWith("/apply"))[1].body as { start_anyway: string[] }).start_anyway).toEqual(["deployment_target"]);
     expect(go).toHaveBeenCalledTimes(1);
   });

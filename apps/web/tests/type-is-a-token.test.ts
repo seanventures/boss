@@ -52,7 +52,7 @@ const ALLOW: Record<string, string> = {
 /** Stylesheets written before the scale existed, and how many literal sizes each still has. The
  *  number can only go down: convert a rule to a token and lower it (remove the entry at 0). Every
  *  new stylesheet starts at zero, so it is not on this list.
- *  app/start-project/add-project.css is being reworked on feat/px-ap3, which converts it. */
+ */
 const LEGACY: Record<string, number> = {
   "app/activity/log.css": 38,
   "app/agents/agent-world.css": 238,
@@ -80,7 +80,6 @@ const LEGACY: Record<string, number> = {
   "app/self-fix/self-fix.css": 26,
   "app/setup/setup.css": 62,
   "app/skills/kit.css": 51,
-  "app/start-project/add-project.css": 63, // being reworked on feat/px-ap3, which brings it to 0
   "app/workflows/compose.css": 82,
   "app/workflows/editor.css": 16,
   "app/workflows/flow.css": 36,

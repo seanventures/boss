@@ -11,7 +11,7 @@
  * a refusal is an IdentityError whose body is the API's {error, message}. Callers wrap writes in
  * useGuardedCall so a step-up is asked for, never shown raw.
  */
-import { IdentityError, enc, idGet, idPost, idPut, idPatch, idDelete } from "./identity/api";
+import { IdentityError, enc, idFetch, idGet, idPost, idPut, idPatch, idDelete } from "./identity/api";
 
 // ── Shapes ────────────────────────────────────────────────────────────────────────────────────
 
@@ -195,7 +195,9 @@ const asComponents = (v: Record<string, unknown>): AppComponents | null =>
 
 export const multirepo = {
   registry: (projectId: string) => shaped(idGet(`/v1/github/repos?${q(projectId)}`), asRegistry),
-  refresh: (projectId: string) => shaped(idPost("/v1/github/repos/refresh", { project_id: projectId }), asRegistry),
+  /** A background re-read of the repos' push dates (an effect, never a press): it never opens
+   *  "Confirm it's you" — a lapsed second factor keeps the rows as they were. */
+  refresh: (projectId: string) => shaped(idFetch("POST", "/v1/github/repos/refresh", { project_id: projectId }, { background: true }), asRegistry),
   setAllowed: (projectId: string, id: string, allowed: boolean) =>
     idPatch<RegistryRepo>(`/v1/github/repos/${enc(id)}`, { project_id: projectId, allowed }),
   saveAllowed: (projectId: string, allowedIds: string[]) =>

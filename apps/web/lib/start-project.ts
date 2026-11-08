@@ -242,11 +242,23 @@ export const startProjectApi = {
   },
 };
 
+/** The slugs of the projects that exist (GET /v1/projects). */
+async function takenSlugs(): Promise<Set<string>> {
+  const r = await idGet<{ items?: { slug?: string; id?: string }[] }>("/v1/projects");
+  return new Set((r.items ?? []).map((p) => String(p.slug ?? p.id ?? "")));
+}
+
 /** Create a project under `name`, or `name 2`, `name 3`… when the name is taken (the sample and
  *  the presets: pressing Try a sample twice makes a second Hello World, never an error). */
 export async function createFresh(name: string, opts: { description?: string; type?: "app" | "knowledge_graph" } = {},
-                                  create = startProjectApi.create): Promise<CreatedProject> {
-  for (let n = 1; n <= 20; n++) {
+                                  create = startProjectApi.create,
+                                  taken: () => Promise<Set<string>> = takenSlugs): Promise<CreatedProject> {
+  // The free name is read from the project list first, so the press does not probe the API with
+  // refused creates (each was a 409 in the browser's console); a list that can't be read, or a
+  // race, still falls back to the next number.
+  const used = await taken().catch(() => new Set<string>());
+  const first = Array.from({ length: 20 }, (_, i) => i + 1).find((n) => !used.has(slugOf(n === 1 ? name : `${name} ${n}`))) ?? 1;
+  for (let n = first; n <= 20; n++) {
     try {
       return await create(n === 1 ? name : `${name} ${n}`, opts);
     } catch (e) {

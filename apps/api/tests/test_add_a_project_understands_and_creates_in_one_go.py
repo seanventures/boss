@@ -447,3 +447,35 @@ def test_connectors_without_a_stack_refuse_before_anything_is_kept(client, world
     assert r.status_code == 422, r.text
     assert r.json()["step"] == "connectors" and r.json()["message"] == "Pick a stack for the connectors."
     assert not _exists(engine, name)
+
+
+def test_start_anyway_on_the_kept_project_still_may_apply_connectors(world):
+    """Walk 2026-11-08: a readiness refusal kept the project; Start anyway resent the create with
+    retry.project_id, and its connectors step answered "You may not apply connectors
+    (template:read)": template:read is held org-wide, and was checked AT the project. Every
+    step's permission is checked where it is held."""
+    from types import SimpleNamespace
+
+    req = SimpleNamespace(state=SimpleNamespace(identity=world.ctx(world.owner, mfa=True),
+                                                identity_mode="enforce"))
+    route._need(req, "template:read", "apply_connectors", world.project_a)   # no refusal
+    route._need(req, "workflow_run:start", "start_the_plan", world.project_a)
+    with pytest.raises(route.Refused):
+        route._need(SimpleNamespace(state=SimpleNamespace(identity=world.ctx(world.viewer, mfa=True),
+                                                          identity_mode="enforce")),
+                    "workflow_run:start", "start_the_plan", world.project_a)
+
+
+def test_talks_to_in_words_goes_into_the_directive_not_app_links():
+    """More detail › Talks to "Xero API" was sent as an app link and refused the whole create
+    ("an alias is A-Z, 0-9 and _…"). Words are what the app calls; only an app of the project,
+    with its key and an alias, is a link."""
+    body = route.CreateAndStartBody(context_project_id="p", name="Receipts", words=WORDS,
+                                    talks_to=[{"name": "Xero API"},
+                                              {"provider_app_key": "billing", "alias": "BILLING"}])
+    run = route._run_input(body, {}, None)
+    assert "It talks to: Xero API." in run["directive"]
+    assert run["app_links"] == [{"provider_app_key": "billing", "alias": "BILLING"}]
+    plain = route._run_input(route.CreateAndStartBody(context_project_id="p", name="R", words=WORDS,
+                                                      talks_to=[{"name": "Stripe"}]), {}, None)
+    assert "app_links" not in plain

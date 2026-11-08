@@ -173,12 +173,25 @@ class Person:
         self.bad: list[str] = []
         self.allowed: list[re.Pattern] = []
         self.calls: list[str] = []
+        self.consented = 0
+        self.started_anyway = 0
+        # The crew's consent is asked with a 409 consent_required, then the same call goes again.
+        self.allowed.append(re.compile(r"^409 POST /v1/(add-project|templates/[^ ]+/apply) \{\"error\":\"consent_required\""))
         page.on("console", lambda m: self.errors.append(m.text[:400]) if m.type == "error" else None)
         page.on("pageerror", lambda e: self.errors.append(f"PAGEERROR {str(e)[:400]}"))
         page.on("dialog", lambda d: (self.errors.append("DIALOG " + d.message[:200]), d.dismiss()))
         page.on("request", lambda r: self.calls.append(f"{r.method} {r.url}") if "/v1/" in r.url else None)
-        page.on("response", lambda r: self.bad.append(f"{r.status} {r.request.method} {r.url.split('?')[0][len(CONSOLE):]}")
-                if "/v1/" in r.url and r.status >= 400 else None)
+        page.on("response", self._response)
+
+    def _response(self, r) -> None:
+        if "/v1/" not in r.url or r.status < 400:
+            return
+        said = ""
+        try:
+            said = " " + r.text()[:240].replace("\n", " ")
+        except Exception:  # noqa: BLE001 — a body already gone
+            pass
+        self.bad.append(f"{r.status} {r.request.method} {r.url.split('?')[0][len(CONSOLE):]}{said}")
 
     # the page --------------------------------------------------------------------------------
     @property
@@ -239,14 +252,53 @@ class Person:
         inp.press("Enter")
         assert name in self.tid("ap-chip-name").inner_text()
 
-    def create(self) -> None:
+    def create(self, allow_egress: bool = True) -> None:
+        """Press Create and start; when the connectors Helm picked talk to outside hosts, the
+        sheet asks first (inline) and the person ticks it and presses again."""
         self.tid("ap-create").click()
+        if not allow_egress:
+            return
+        ask = self.tid("ap-egress-allow")
+        try:
+            ask.wait_for(timeout=1500)
+        except Exception:  # noqa: BLE001 — nothing to allow
+            return
+        if not ask.is_checked():
+            ask.check()
+            self.tid("ap-create").click()
 
-    def landed(self, timeout_s: float = 90) -> str:
+    def landed(self, timeout_s: float = 90, start_anyway: bool = True) -> str:
         """The project Create and start landed on (its id from the URL)."""
-        self.p.wait_for_function(
-            f"() => {{ const u = new URL(location.href); const p = u.searchParams.get('project_id'); return p && p !== '{PROJECT}' && !u.searchParams.get('new_project'); }}",
-            timeout=timeout_s * 1000)
+        gone = (f"() => {{ const u = new URL(location.href); const p = u.searchParams.get('project_id'); "
+                f"return !!p && p !== '{PROJECT}' && !u.searchParams.get('new_project'); }}")
+        end = time.monotonic() + timeout_s
+        while time.monotonic() < end:
+            try:
+                if self.p.evaluate(gone):
+                    break
+            except Exception:  # noqa: BLE001 — the page is navigating (that is the landing)
+                self.p.wait_for_load_state("domcontentloaded")
+                continue
+            # The first start asks the person to let the crew act for them (the consent sheet):
+            # they allow it, once.
+            allow = self.p.locator("[data-testid='consent-durations'] button, [data-testid='consent-mr-allow']")
+            if allow.count() and allow.first.is_visible() and allow.first.is_enabled():
+                self.consented += 1
+                allow.first.click()
+            # What this dev install lacks (a mail server for an email channel …) is refused with
+            # the readiness checklist: the person ticks each item and presses Start anyway.
+            panel = self.tid("ap-readiness")
+            if start_anyway and panel.count() and panel.is_visible():
+                boxes = panel.locator("input[type='checkbox']:not(:checked)")
+                if boxes.count():
+                    for b in boxes.all():
+                        b.check()
+                    self.started_anyway += 1
+                    self.tid("ap-create").click()
+            self.p.wait_for_timeout(400)
+        else:
+            said = self.tid("ap-error").inner_text() if self.tid("ap-error").count() else ""
+            raise AssertionError(f"did not land: {said!r}; http: {self.bad[-3:]}")
         return self.p.evaluate("() => new URL(location.href).searchParams.get('project_id')")
 
     def expect(self, *patterns: str) -> None:

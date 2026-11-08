@@ -119,6 +119,7 @@ class EffectivePermissions:
 # Connection in the caller's transaction) or, when None, a short connection of its own.
 # =================================================================================================
 
+import contextvars  # noqa: E402
 import logging  # noqa: E402
 import threading  # noqa: E402
 import time  # noqa: E402
@@ -529,6 +530,37 @@ _AUDIT_LOCK = threading.Lock()
 AUDIT_REPEAT_SECONDS = 60.0
 
 
+#: The connection `check(db=…)` was given, while that check runs (its decision's audit falls back
+#: onto it; see _record_beside).
+_CALLER_DB: "contextvars.ContextVar[Any]" = contextvars.ContextVar("authz_caller_db", default=None)
+#: How long a decision's audit waits for the org's audit lock on its own connection.
+AUDIT_LOCK_WAIT = "2s"
+
+
+def _record_beside(event: Any, audit: Any) -> None:
+    """A decision's audit is written on its own short transaction, so a denial survives the
+    caller rolling back. THAT TRANSACTION NEVER WAITS FOREVER ON THE CALLER (2026-11-08: Create
+    and start with a repository hung for good — the create's transaction held the org's audit
+    lock after `project.created`, and a check made inside it, setup_actions'
+    org_credentials_refusal, waited for that lock on a second connection while the first waited
+    for the check). It waits AUDIT_LOCK_WAIT; when the lock is held, the event is written in the
+    caller's own transaction (the one `check(db=…)` was given, which already holds the lock), and
+    is kept or rolled back with what it audits."""
+    from sqlalchemy import text
+
+    caller = _CALLER_DB.get()
+    try:
+        with _epoch.connection(None, write=True) as conn:
+            if caller is not None:
+                conn.execute(text(f"SET LOCAL lock_timeout = '{AUDIT_LOCK_WAIT}'"))
+            audit.record(event, db=conn)
+        return
+    except Exception:  # noqa: BLE001 — a lock wait that ran out; retried below on the caller's
+        if caller is None:
+            raise
+    audit.record(event, db=caller)
+
+
 def _audit(ctx: AuthContext, decision: Decision, event_type: str) -> None:
     key = (ctx.principal.id, decision.permission,
            decision.scope.label() if decision.scope else "", event_type,
@@ -554,8 +586,7 @@ def _audit(ctx: AuthContext, decision: Decision, event_type: str) -> None:
             details={"reason": decision.reason.value if decision.reason else None,
                      "narrowed_by": list(decision.narrowed_by),
                      "via": [str(w) for w in decision.via]})
-        with _epoch.connection(None, write=True) as conn:
-            audit.record(event, db=conn)
+        _record_beside(event, audit)
     except NotImplementedError:
         pass   # S5's audit.record has not landed
     except Exception as exc:  # noqa: BLE001 — an audit failure never changes the decision
@@ -584,6 +615,14 @@ def check(ctx: AuthContext, permission: str, scope: ResolvedScope, *, db: Any = 
     """THE decision. Deny by default; never raises for a deny (only for a broken database).
     Denials are audited as `authz.denied` (S5's `audit.record`), critical allows as
     `authz.allowed_critical`."""
+    token = _CALLER_DB.set(db)
+    try:
+        return _check(ctx, permission, scope, db=db)
+    finally:
+        _CALLER_DB.reset(token)
+
+
+def _check(ctx: AuthContext, permission: str, scope: ResolvedScope, *, db: Any = None) -> Decision:
     deny = Decision.deny
     meta = PERMISSION_META.get(str(permission))
     if meta is None:                                                    # 0. catalogue

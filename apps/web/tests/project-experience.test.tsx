@@ -131,15 +131,15 @@ describe("Projects (screen 2)", () => {
     expect(tid("px-card-helpdesk-ai-demo")!.textContent).toContain("2 need you");
     const open = tid("px-card-open-helpdesk-ai-demo") as HTMLAnchorElement;
     expect(new URLSearchParams(open.getAttribute("href")!.split("?")[1]).get("area")).toBe("project");
-    // Filters narrow the cards; Add project opens the sheet's Existing door.
+    // Filters narrow the cards; Add project opens the one sheet (an empty box reads as an idea; the words decide).
     await press(tid("px-filter-onboarding"));
     expect($$("[data-testid^='px-card-'][data-link]").map((c) => c.dataset.testid)).toEqual(["px-card-northpeak-retail"]);
     await press(tid("px-filter-all"));
     await press(tid("px-add-project"));
-    expect(params().get("new_project")).toBe("import");
+    expect(params().get("new_project")).toBe("1");
     window.history.replaceState(null, "", "/?area=projects");
     await press(tid("px-card-add"));
-    expect(params().get("new_project")).toBe("import");
+    expect(params().get("new_project")).toBe("1");
   });
 
   it("an engine without §1 still lists the projects (names only) and says why", async () => {
@@ -756,7 +756,7 @@ describe("⌘K jump (screen 11, §9) and the rail", () => {
     expect(tid(`nav-project-${P}`)!.getAttribute("aria-current")).toBe("page");
     expect(tid("nav-project-northpeak-retail")).not.toBeNull();
     await press(tid("nav-add-project"));
-    expect(params().get("new_project")).toBe("import");
+    expect(params().get("new_project")).toBe("1");
   });
 });
 

@@ -72,7 +72,7 @@ function Grid({ rows, columns, children }: { rows: BriefRow[]; columns: 1 | 2; c
 
 export function BriefCard({
   state, agent, heading, title, sub, rows, chips, editing, onConfirm, onFix, onRewrite, onOpen, onRetry, confirmed, reading, foot, testid = "px-ub",
-  columns = 1, live, actions, hintPlaceholder,
+  columns = 1, live, actions, hintPlaceholder, saveLabel = "Done", onCancel,
 }: {
   state: BriefState; agent: Agent | null;
   /** What the card is, said plainly: "Task", "Project brief", "Repo summary". */
@@ -99,6 +99,10 @@ export function BriefCard({
   /** Presses of the surface's own beside the card's (Change, …). */
   actions?: React.ReactNode;
   hintPlaceholder?: string;
+  /** The Fix it press while editing ("Done"; Add a project: "Save brief"). */
+  saveLabel?: string;
+  /** Leave editing without keeping the changes (Add a project's Cancel). */
+  onCancel?: () => void;
 }) {
   const [hint, setHint] = useState("");
   const [open, setOpen] = useState(false);
@@ -176,7 +180,10 @@ export function BriefCard({
         ) : null}
         {onFix ? (
           <button type="button" className="px-btn" aria-pressed={editing} onClick={onFix} data-testid={`${testid}-fix`}>
-            {editing ? <><Check size={12} aria-hidden /> Done</> : <><PencilSimple size={12} aria-hidden /> {confirmed ? "Edit" : "Fix it"}</>}</button>
+            {editing ? <><Check size={12} aria-hidden /> {saveLabel}</> : <><PencilSimple size={12} aria-hidden /> {confirmed ? "Edit" : "Fix it"}</>}</button>
+        ) : null}
+        {editing && onCancel ? (
+          <button type="button" className="px-btn" data-kind="ghost" onClick={onCancel} data-testid={`${testid}-cancel`}>Cancel</button>
         ) : null}
         {onRewrite && !confirmed ? (
           <>
