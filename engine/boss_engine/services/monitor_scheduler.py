@@ -506,8 +506,13 @@ def tick(engine, settings: Any, *, now: Optional[datetime] = None,
     # (one `decision.overdue` reminder) or reopened, never silently expired
     # (DecisionService.expire_overdue / decision_actions.never_expires).
     def deadlines():
+        from .cleared_causes import reconsider_merge_questions
         from .decisions import DecisionService
 
+        # A merge question whose PR was merged or closed on GitHub (or whose change set
+        # settled) withdraws itself first, rate-limited; GitHub unreachable leaves it standing.
+        with begin(engine) as c:
+            reconsider_merge_questions(c, settings)
         with begin(engine) as c:
             return DecisionService(settings).expire_overdue(c)
     out["decisions_expired"] = guard("deadlines", deadlines) or 0

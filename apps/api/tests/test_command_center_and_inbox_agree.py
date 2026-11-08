@@ -34,11 +34,11 @@ SEEDED = {
     "dec_agree_overdue": ("pending", "connection_reconciliation", "hold",
                           "now() - interval '1 minute'", "expired"),
     # ON the boundary a hold question never expires (decision_actions.never_expires): past its
-    # deadline it waits on you, and one an older build expired is reopened by the sweep.
+    # deadline it waits on you. One an older build expired that no step waits on stays expired.
     "dec_agree_merge_overdue": ("pending", "review_pull_request", "hold",
                                 "now() - interval '1 minute'", "needs_action"),
     "dec_agree_merge_expired": ("expired", "review_pull_request", "hold",
-                                "now() - interval '20 days'", "needs_action"),
+                                "now() - interval '20 days'", "expired"),
     "dec_agree_approved": ("approved", "provide_github_token", "hold", "NULL", "resolved"),
 }
 
@@ -82,9 +82,9 @@ def test_an_expired_hold_decision_can_still_be_answered_from_its_own_group(engin
     expired = next(i for i in items if i["id"] == "dec_agree_expired_hold")
     assert expired["attention"] == "expired"
     assert "approve" in {a["action"] for a in expired["allowed_actions"]}
-    # A merge on the boundary that an older build expired is back in Needs action, open.
+    # A merge an older build expired that nothing waits on stays answerable in this group.
     merge = next(i for i in items if i["id"] == "dec_agree_merge_expired")
-    assert merge["attention"] == "needs_action" and merge["status"] == "pending"
+    assert merge["attention"] == "expired" and merge["status"] == "expired"
     assert [a["label"] for a in merge["allowed_actions"]][0] == "Approve and merge"
 
 

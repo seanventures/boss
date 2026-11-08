@@ -120,10 +120,7 @@ def test_only_open_gates_are_queued():
     """An answered decision is not waiting on anyone."""
     conn = FakeConn([gate("d1")])
     decision_queue(conn, "p")
-    # `expired` is a candidate too: a boundary question an older build let expire still waits
-    # on you (decision_actions.never_expires); attention keeps the rest out.
-    assert set(conn.statements[0][1]["open"]) == {"pending", "delegated", "revision_requested",
-                                                  "expired"}
+    assert set(conn.statements[0][1]["open"]) == {"pending", "delegated", "revision_requested"}
 
 
 def test_a_delegated_gate_is_still_open_and_says_who_has_it():

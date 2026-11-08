@@ -447,6 +447,106 @@ def on_deploy_healthy(connection: Any, project_id: str, *, actor: str = "boss") 
     return _guarded(withdraw_cleared, connection, project_id, actor=actor)
 
 
-__all__ = ["DEPLOY_QUESTIONS", "EFFECT_FAILURE_CAUSES", "PULL_REQUEST_QUESTIONS", "STUCK_QUESTIONS",
+# ── a merge question whose pull request or change set is already settled ────────────────────
+
+#: How often one merge question's pull request is read again, and how many are read per sweep:
+#: the sweep rides the monitor tick, and GitHub is never asked about the same PR every minute.
+RECHECK_EVERY_SECONDS = 15 * 60
+RECHECK_PER_SWEEP = 10
+_last_read: dict[str, float] = {}
+#: A change set in one of these is merged, shipped or closed: its approval asks nothing.
+_CHANGE_SET_SETTLED = {"merged": "was merged", "deploying": "was merged", "live": "was merged",
+                       "rolled_back": "was rolled back", "failed": "failed",
+                       "rejected": "was rejected", "cancelled": "was cancelled"}
+
+
+def _settled_change_sets(connection: Any, project_id: Optional[str], actor: str) -> list[str]:
+    """Approvals of local or multi-repo change sets that are already merged or closed."""
+    scope = "AND d.project_id = :p" if project_id else ""
+    try:
+        with connection.begin_nested():
+            rows = connection.execute(
+                text("SELECT d.id, d.project_id, d.status, cs.state, cs.title FROM decisions d "
+                     "JOIN repo_change_sets cs ON cs.decision_id = d.id "
+                     f"WHERE d.status = ANY(:open) AND cs.state = ANY(:settled) {scope}"),
+                {"open": _open_statuses(), "settled": sorted(_CHANGE_SET_SETTLED),
+                 **({"p": project_id} if project_id else {})}).mappings().all()
+    except Exception:  # noqa: BLE001 — no change sets on this install: nothing to settle
+        return []
+    out = []
+    for r in rows:
+        what = f"The change set “{r['title']}”" if r["title"] else "Its change set"
+        note = (f"{what} {_CHANGE_SET_SETTLED[str(r['state'])]}, so there is nothing left "
+                "to approve.")
+        if _withdraw(connection, dict(r), note, {"kind": "change_set_settled",
+                                                  "state": r["state"]}, actor):
+            out.append(str(r["id"]))
+    return out
+
+
+def _build_of(connection: Any, decision: Mapping[str, Any]) -> Optional[str]:
+    """The build (code_task_runs) whose pull request this merge question is about."""
+    rec = _json(decision.get("recommendation"))
+    return connection.execute(
+        text("SELECT id FROM code_task_runs WHERE project_id = :p AND pull_request_number IS NOT "
+             "NULL AND (id = :r OR decision_id = :d OR (CAST(:u AS TEXT) <> '' AND "
+             "pull_request_url = :u)) ORDER BY created_at DESC LIMIT 1"),
+        {"p": decision["project_id"], "r": str(rec.get("run_id") or ""), "d": decision["id"],
+         "u": str(rec.get("pull_request_url") or "")}).scalar()
+
+
+def reconsider_merge_questions(connection: Any, settings: Any,
+                               project_id: Optional[str] = None, *, actor: str = "boss",
+                               now: Optional[float] = None) -> list[str]:
+    """A MERGE QUESTION WHOSE PULL REQUEST IS ALREADY MERGED OR CLOSED WITHDRAWS ITSELF.
+
+    Merge questions sat answerable for weeks about pull requests merged or closed by hand in
+    GitHub (23 on the live install, 2026-11-08): nothing asked GitHub again after the build
+    finished. On the monitor tick, every unanswered merge question (open or expired) has its
+    pull request read through the project's own reader (pr_merge.observe, the same read the
+    deploy step makes): merged is recorded and closed is observed, and either withdraws the
+    question with a reason in words (on_pull_request_settled). A change set's approval is
+    withdrawn when its row says merged or closed. Rate-limited (RECHECK_EVERY_SECONDS per
+    question, RECHECK_PER_SWEEP per sweep); when GitHub cannot be read the question stands.
+    Returns the ids withdrawn."""
+    import time
+
+    from . import pr_merge
+
+    out = _settled_change_sets(connection, project_id, actor)
+    clock = time.monotonic() if now is None else now
+    read = 0
+    for decision in _candidates(connection, project_id):
+        if read >= RECHECK_PER_SWEEP:
+            break
+        rec = _json(decision.get("recommendation"))
+        if str(rec.get("action") or "") not in PULL_REQUEST_QUESTIONS:
+            continue
+        did = str(decision["id"])
+        last = _last_read.get(did)
+        if last is not None and clock - last < RECHECK_EVERY_SECONDS:
+            continue
+        try:
+            with connection.begin_nested():
+                build = _build_of(connection, decision)
+                if not build:
+                    continue
+                _last_read[did] = clock
+                read += 1
+                seen = pr_merge.observe(connection, settings, str(decision["project_id"]),
+                                        str(build))
+        except Exception:  # noqa: BLE001 — one unreadable question never stops the sweep
+            log.exception("reconsider: %s", did)
+            continue
+        if seen.get("unread"):
+            continue        # GitHub could not be asked: the question stands
+        status = connection.execute(text("SELECT status FROM decisions WHERE id = :i"),
+                                    {"i": did}).scalar()
+        if status == "withdrawn":
+            out.append(did)
+    return out
+
+
+__all__ = ["DEPLOY_QUESTIONS", "reconsider_merge_questions", "EFFECT_FAILURE_CAUSES", "PULL_REQUEST_QUESTIONS", "STUCK_QUESTIONS",
            "failed_effect_cause", "on_deploy_healthy", "on_effect_succeeded",
            "on_pull_request_settled", "withdraw_cleared"]

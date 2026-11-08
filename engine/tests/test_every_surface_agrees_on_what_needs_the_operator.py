@@ -60,13 +60,14 @@ CASES = [
     (decision("overdue", "pending", action=OFF_THE_LIST, deadline=NOW - timedelta(minutes=1)),
      "expired"),
     # ON THE COMPLIANCE BOUNDARY a hold-default question never expires (never_expires): past
-    # its deadline it still waits on you, and one an older build expired is waiting again — the
-    # four helpdesk merges (dec_409e473b…, 2026-11-08) vanished from Needs you this way.
+    # its deadline it still waits on you — the four helpdesk merges (dec_409e473b…,
+    # 2026-11-08) vanished from Needs you by expiring. One an older build already expired
+    # stays in the expired group unless the sweep reopens it because work still waits on it.
     (decision("merge_overdue", "pending", action="review_pull_request",
               deadline=NOW - timedelta(minutes=1)), "needs_action"),
     (decision("merge_expired", "expired", action="review_pull_request",
-              deadline=NOW - timedelta(days=1)), "needs_action"),
-    (decision("secret_expired", "expired"), "needs_action"),
+              deadline=NOW - timedelta(days=1)), "expired"),
+    (decision("secret_expired", "expired"), "expired"),
     # A boundary question whose default really applied something is not reopened.
     (decision("merge_expired_reject", "expired", action="review_pull_request",
               default="reject"), "resolved"),
@@ -107,9 +108,9 @@ def test_the_command_center_counts_exactly_the_decisions_the_inbox_shows_under_n
     inbox_expired = {r["id"] for r in rows if da.describe(r, NOW)["attention"] == "expired"}
     listed = {n["decision_id"] for n in out["needs_you"] if n["kind"] == "approval"}
     assert listed == inbox_needs_action == {"pending", "delegated", "stuck_pr", "not_yet_due",
-                                            "merge_overdue", "merge_expired", "secret_expired"}
+                                            "merge_overdue"}
     assert out["counts"]["approvals"] == len(inbox_needs_action)
-    assert out["counts"]["expired_answerable"] == len(inbox_expired) == 2
+    assert out["counts"]["expired_answerable"] == len(inbox_expired) == 4
 
 
 def test_the_v2_queue_lists_the_same_decisions_with_their_buttons():

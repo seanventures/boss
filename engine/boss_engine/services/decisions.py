@@ -159,24 +159,35 @@ class DecisionService:
 
     def reopen_boundary_decisions(self, connection: Connection,
                                   project_id: Optional[str] = None) -> list[str]:
-        """BOUNDARY QUESTIONS THAT EXPIRED BEFORE THEY STOPPED EXPIRING COME BACK.
+        """BOUNDARY QUESTIONS THAT EXPIRED WHILE WORK STILL WAITS ON THEM COME BACK.
 
-        Every expired, hold-default decision on the compliance boundary that can still be
-        answered (its run has not ended) is set back to pending with no deadline, with a
-        `decision.reopened` event. Runs on every sweep (expire_overdue: the inbox, the status
-        read, the Command Center, the monitor tick) and once at boot, so the helpdesk merges
-        that expired on 2026-11-08 reappear on upgrade with no edit to the database. Idempotent:
-        once reopened, nothing is left to find."""
-        from .run_decisions import refusal_to_answer
+        An expired, hold-default decision on the compliance boundary is set back to pending with
+        no deadline (`decision.reopened`) when a WAITING workflow step of a run that has not
+        ended references it (its decision, or the decision its await names — a deploy held
+        for its merge). That is exactly the helpdesk merges of 2026-11-08: their runs sat
+        "waiting on PR #3 to be merged". A boundary question nothing waits on any more (a
+        merge question from a build that finished weeks ago) stays expired: it is shown only
+        in Needs you's "older" line and Approvals' Expired view, never as today's work.
+        Runs on every sweep (expire_overdue: the inbox, the status read, the Command Center,
+        the monitor tick) and once at boot, so they reappear on upgrade with no edit to the
+        database. Idempotent: once reopened, nothing is left to find."""
+        from .run_decisions import _closed_run_states, refusal_to_answer
 
-        scope = "AND project_id = :project_id" if project_id else ""
+        scope = "AND d.project_id = :project_id" if project_id else ""
+        params: dict[str, Any] = {"closed": sorted(_closed_run_states())}
+        if project_id:
+            params["project_id"] = project_id
         rows = connection.execute(
             text(
-                "SELECT id, project_id, status, question, recommendation, default_action, "
-                "resolution_note FROM decisions WHERE status = 'expired' "
-                f"AND lower(COALESCE(default_action, 'hold')) = 'hold' {scope}"
+                "SELECT d.id, d.project_id, d.status, d.question, d.recommendation, "
+                "d.default_action, d.resolution_note FROM decisions d WHERE d.status = 'expired' "
+                f"AND lower(COALESCE(d.default_action, 'hold')) = 'hold' {scope} "
+                "AND EXISTS (SELECT 1 FROM workflow_step_runs s "
+                "  JOIN workflow_runs r ON r.id = s.workflow_run_id "
+                "  WHERE s.status = 'waiting' AND NOT (r.status = ANY(:closed)) "
+                "  AND (s.decision_id = d.id OR s.output->'await'->>'decision_id' = d.id))"
             ),
-            {"project_id": project_id} if project_id else {},
+            params,
         ).mappings().all()
         out: list[str] = []
         for row in rows:
@@ -198,8 +209,8 @@ class DecisionService:
             emit_event(connection, decision["project_id"], "decision.reopened", "system",
                        "decision", decision["id"],
                        {"was": "expired",
-                        "why": ("Only a person decides this, so it never expires: nothing was "
-                                "applied and it waits for an answer again.")})
+                        "why": ("Only a person decides this and its run is still waiting on "
+                                "it: nothing was applied, so it waits for an answer again.")})
         return out
 
     def hold_plan_gates(self, connection: Connection, project_id: Optional[str] = None) -> list[str]:

@@ -696,7 +696,8 @@ def never_expires(decision: Mapping[str, Any]) -> bool:
     bell and Approvals' default view while their runs sat "waiting on PR #3 to be merged".
     So such a decision stays open past its deadline and ages from when it was asked:
     DecisionService.expire_overdue clears the deadline and records ONE `decision.overdue`
-    reminder instead of expiring it, and reopens any that expired before this rule."""
+    reminder instead of expiring it, and reopens one that expired before this rule while a
+    waiting workflow step still waits on it."""
     if str(decision.get("default_action") or "hold").lower() != "hold":
         return False
     return on_the_boundary(decision)
@@ -733,7 +734,7 @@ def reopenable(decision: Mapping[str, Any]) -> bool:
 #:                 revision_requested nothing reads (the stuck pull requests): the operator is
 #:                 the only way it moves.
 #:                 A question on the compliance boundary (never_expires) is needs_action
-#:                 past its deadline and even when an older build expired it.
+#:                 past its deadline: it never expires.
 #:   expired       expired with a hold default, so nothing was applied and it can still be
 #:                 answered. Shown in its own group with its age, never in the default view:
 #:                 most of these are about work that has long moved on.
@@ -744,9 +745,8 @@ ATTENTION = ("needs_action", "expired", "resolved")
 #: The statuses a needs_action or expired decision can be in. A reader that selects in SQL
 #: selects these and classifies the rows with `attention`; the rule itself is never in SQL.
 ATTENTION_CANDIDATE_STATUSES = ("pending", "delegated", "revision_requested", "expired")
-#: The statuses a needs_action decision can be in: the same, since a boundary question an older
-#: build let expire is needs_action (never_expires) until the sweep reopens it.
-NEEDS_ACTION_CANDIDATE_STATUSES = ATTENTION_CANDIDATE_STATUSES
+#: The statuses a needs_action decision can be in (the same, without expired).
+NEEDS_ACTION_CANDIDATE_STATUSES = ("pending", "delegated", "revision_requested")
 
 
 def _deadline_passed(decision: Mapping[str, Any], now: Optional[datetime]) -> bool:
@@ -780,9 +780,10 @@ def attention(decision: Mapping[str, Any], now: Optional[datetime] = None) -> st
     if status == "revision_requested":
         return "resolved" if consumes_revision(decision) else "needs_action"
     if status in _REOPENABLE and reopenable({**dict(decision), "status": status}):
-        # A boundary question that expired before this rule (or before the sweep reopens it)
-        # still waits for a person, on every surface at once.
-        return "needs_action" if held else "expired"
+        # A boundary question an older build expired is back in needs_action only once the
+        # sweep reopens it, and it does so only while work still waits on it
+        # (DecisionService.reopen_boundary_decisions); the rest stay in this group.
+        return "expired"
     return "resolved"
 
 
