@@ -74,4 +74,7 @@ def delete_project(project_id: str, body: DeleteBody, request: Request) -> dict[
         "rows": done["rows"], "graph_dropped": done["graph_dropped"],
         "removed_apps": done["removed_apps"], "stopped": done["stopped"],
         "kept_for_other_projects": done["kept_for_others"],
+        # Its files on this machine (services/project_files.py): counts, and any path a row
+        # pointed outside BOSS's directories, which was left alone.
+        "files": done.get("files"), "files_refused": done.get("files_refused") or [],
     }

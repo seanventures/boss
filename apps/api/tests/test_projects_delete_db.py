@@ -335,3 +335,118 @@ def test_only_a_person_deletes_a_project():
     assert not spec.self_executable
     assert decide_list.classify({"recommendation": {"action": "delete_project"},
                                  "question": "Delete northpeak-bank-b?"}) == "delete"
+
+
+# ── ITS FILES ON THIS MACHINE (BOSSAPP-915 follow-up) ─────────────────────────────────────────
+
+@pytest.fixture
+def disk(tmp_path, monkeypatch):
+    """Every BOSS-owned root under tmp_path, so the test sees exactly what goes."""
+    from boss_engine.services import agent_shell, local_repo, preview_service, project_files
+
+    roots = {name: tmp_path / name for name in (
+        "repos", "artifacts", "previews", "sandboxes", "sandbox-runs", "agent-ws", "kg", "toolchains")}
+    for path in roots.values():
+        path.mkdir()
+    monkeypatch.setattr(local_repo, "root", lambda settings=None: roots["repos"])
+    monkeypatch.setattr(preview_service, "PREVIEW_ROOT", roots["previews"])
+    monkeypatch.setattr(agent_shell, "WORKSPACE_ROOT", roots["agent-ws"])
+    monkeypatch.setattr(project_files, "_artifact_root", lambda settings: roots["artifacts"])
+    monkeypatch.setattr(project_files, "_sandbox_root", lambda settings: roots["sandboxes"])
+    monkeypatch.setattr(project_files, "_kg_root", lambda settings: roots["kg"])
+    monkeypatch.setenv("BOSS_SANDBOX_RUN_ROOT", str(roots["sandbox-runs"]))
+    monkeypatch.setenv("BOSS_TOOLCHAIN_CACHE_ROOT", str(roots["toolchains"]))
+    roots["outside"] = tmp_path / "not-boss"
+    roots["outside"].mkdir()
+    return roots
+
+
+def _files_of(engine, disk, project: dict) -> dict:
+    """A local repository, a run's retained workspaces, a preview's tree and logs, artifacts,
+    and an outage mirror of a repository only this project uses."""
+    from pathlib import Path
+
+    from boss_engine.services import agent_shell, local_projects, local_repo, sandbox_identity
+
+    pid = project["id"]
+    run_id = f"crun_{uuid.uuid4().hex[:10]}"
+    only = f"only-{pid}"
+    with engine.begin() as db:
+        local_projects.create_for_project(db, get_settings(), pid, name="notes", actor="ceo")
+        db.execute(text("INSERT INTO code_task_runs (id, project_id, title, status, phase) VALUES "
+                        "(:i, :p, 'files', 'completed', 'done')"), {"i": run_id, "p": pid})
+        preview_id = db.execute(text("SELECT id FROM app_previews WHERE project_id = :p LIMIT 1"),
+                                {"p": pid}).scalar()
+        db.execute(text(
+            "INSERT INTO github_repository_bindings (id, project_id, connection_id, owner, name, "
+            "full_name, role, host, created_by) VALUES (:i, :p, (SELECT connection_id FROM github_repository_bindings WHERE project_id = :p AND connection_id IS NOT NULL LIMIT 1), 'acme', :n, :f, 'source', "
+            "'github', 'ceo')"),
+            {"i": f"ghrepo_{uuid.uuid4().hex[:10]}", "p": pid, "n": only, "f": f"acme/{only}"})
+    mirror = local_repo.mirror_path("acme", only)
+    local_repo.init_bare(mirror)
+    paths = {
+        "bare": Path(local_repo.bare_path(local_repo.owner_for(pid), "notes")),
+        "mirror": mirror,
+        "sandbox": disk["sandboxes"] / f"{run_id}-x1y2",
+        "agent_ws": agent_shell.workspace_for(run_id),
+        "uid_run": disk["sandbox-runs"] / sandbox_identity.owner_key(run_id),
+        "preview_tree": disk["previews"] / f"{preview_id}-abc",
+        "preview_log": disk["previews"] / f"{preview_id}.log",
+        "artifacts": disk["artifacts"] / pid,
+    }
+    for name, path in paths.items():
+        if name in ("bare", "mirror"):
+            continue
+        if name == "preview_log":
+            path.write_text("log\n")
+        else:
+            path.mkdir(parents=True, exist_ok=True)
+            (path / "kept.txt").write_text(name)
+    assert (paths["bare"] / "HEAD").is_file()
+    return paths
+
+
+def test_delete_removes_its_repository_workspaces_and_logs_and_no_one_elses(
+        world, owner, client, engine, hosts, disk):
+    a = _project(world, owner, client, engine)
+    b = _project(world, owner, client, engine)
+    mine, theirs = _files_of(engine, disk, a), _files_of(engine, disk, b)
+    # A row pointing outside BOSS's directories is refused, never followed.
+    stray = disk["outside"] / "precious.log"
+    stray.write_text("not BOSS's\n")
+    with engine.begin() as db:
+        db.execute(text("UPDATE app_previews SET log_path = :l WHERE project_id = :p"),
+                   {"l": str(stray), "p": a["id"]})
+
+    done = _delete(world, owner, client, a["id"], confirm_name=a["name"])
+    assert done.status_code == 200, done.text
+    body = done.json()
+    assert body["files"]["local_repo"] is True and body["files"]["failed"] == 0
+    assert body["files_refused"] == [str(stray)]
+
+    for name, path in mine.items():
+        assert not path.exists(), f"{name} of the deleted project is still on disk: {path}"
+    for name, path in theirs.items():
+        assert path.exists(), f"{name} of ANOTHER project was removed: {path}"
+    assert stray.read_text() == "not BOSS's\n"
+    # The roots themselves stay.
+    assert all(disk[k].is_dir() for k in ("repos", "artifacts", "previews", "sandboxes"))
+
+
+def test_a_mirror_another_project_uses_is_kept(world, owner, client, engine, hosts, disk):
+    from boss_engine.services import local_repo
+
+    a = _project(world, owner, client, engine)
+    b = _project(world, owner, client, engine)
+    with engine.begin() as db:
+        for pid in (a["id"], b["id"]):
+            db.execute(text(
+                "INSERT INTO github_repository_bindings (id, project_id, connection_id, owner, "
+                "name, full_name, role, host, created_by) VALUES (:i, :p, (SELECT connection_id FROM github_repository_bindings WHERE project_id = :p AND connection_id IS NOT NULL LIMIT 1), 'acme', 'shared', "
+                "'acme/shared', 'source', 'github', 'ceo')"),
+                {"i": f"ghrepo_{uuid.uuid4().hex[:10]}", "p": pid})
+    mirror = local_repo.mirror_path("acme", "shared")
+    local_repo.init_bare(mirror)
+    done = _delete(world, owner, client, a["id"], confirm_name=a["name"])
+    assert done.status_code == 200, done.text
+    assert (mirror / "HEAD").is_file()

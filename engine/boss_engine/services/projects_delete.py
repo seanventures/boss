@@ -32,7 +32,10 @@ apps/api/tests/test_projects_delete_db.py, so a new table is classified when it 
 OUTSIDE THE DATABASE, BEFORE IT. The project's deployed staging apps are removed from their hosts
 (the removal code of services/app_removal.py: its compose projects, container and folder under
 /opt/boss-apps); its previews are stopped; its queued and running jobs, builds and workflow runs
-are cancelled. A production app is never removed silently: the delete is refused ("Retire its
+are cancelled. AFTER IT (services/project_files.py): what BOSS keeps on this machine for the
+project — a local project's bare repositories (local_projects.delete_local_repo), its retained
+workspaces, preview trees and logs, artifacts, and a GitHub mirror no other project uses — only
+under BOSS-owned directories. A production app is never removed silently: the delete is refused ("Retire its
 production first") unless the person ticks "also take down production". The GitHub repository,
 its branches and pull requests are not touched.
 """
@@ -835,9 +838,18 @@ def delete_project(engine: Any, settings: Any, project_id: str, *, actor: str,
                                "WHERE id = :t"), {"t": app["target_id"]})
         removed.append({**app, "result": got.get("status") or "nothing"})
     stopped = _stop_work(engine, settings, project_id, actor)
+    from . import project_files
+
+    with begin(engine) as c:
+        # What the project keeps on this machine, read while its rows still say where.
+        files_plan = project_files.collect(c, settings, project_id)
     with begin(engine) as c:
         done = purge(c, settings, project_id, actor=actor, auth=auth,
                      extra={"apps_removed": [f"{a['app_name']} ({a['environment']})" for a in removed
                                              if a["result"] == "removed"],
                             "stopped": stopped})
-    return {**done, "removed_apps": removed, "stopped": stopped, "deleted": True}
+    # The rows are gone (committed): now its files — a local project's bare repositories, its
+    # retained workspaces, preview trees and logs, artifacts, and a mirror no one else uses.
+    files = project_files.remove(settings, files_plan)
+    return {**done, "removed_apps": removed, "stopped": stopped, "deleted": True,
+            "files": project_files.describe(files), "files_refused": files["refused"]}
