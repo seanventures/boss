@@ -292,9 +292,11 @@ def test_a_check_that_could_not_run_is_not_blamed_on_the_code():
 
 def _pipeline_source() -> str:
     """The governed pipeline's body: run_governed_code_task is now the wrapper that scopes the
-    run's harness latch (harness_failures.run_scope) and calls _run_governed_code_task."""
+    run's harness latch (harness_failures.run_scope), calls _run_governed_code_task and hands its
+    result to _hold_for_github (a build finished while GitHub was down waits for it)."""
     wrapper = inspect.getsource(gov.run_governed_code_task)
-    assert "return _run_governed_code_task(" in wrapper
+    assert "= _run_governed_code_task(" in wrapper
+    assert "return _hold_for_github(engine, run_id, result)" in wrapper
     return inspect.getsource(gov._run_governed_code_task)
 
 

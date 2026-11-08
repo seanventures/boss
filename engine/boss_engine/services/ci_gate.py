@@ -836,6 +836,15 @@ def reader_for_project(connection: Any, settings: Any, project_id: str,
                        repository: Optional[str] = None) -> HttpCiReader:
     """The project's GitHub, as Setup connected it. Tests replace this function."""
     from .kit_connections import github_state, github_token
+    from .local_repo import is_local
+
+    if is_local(repository):
+        # BOSSAPP-918: a local repository has no hosted CI; BOSS's sandbox is its CI.
+        from .local_repo_host import LocalGitAdapter
+
+        owner, _, name = str(repository).partition("/")
+        return AdapterCiReader(LocalGitAdapter(settings, owner=owner, repo=name,
+                                               project_id=project_id))
 
     state = github_state(connection, settings, project_id)
     if not state.get("connected") or not (repository or state.get("repo")):

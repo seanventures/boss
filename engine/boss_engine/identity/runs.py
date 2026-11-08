@@ -955,6 +955,12 @@ def repo_access(engine: Any, *, host: str, owner: str, repo: str, project_id: Op
 
     acting = lineage.current()
     kind = (host or "github").strip().lower()
+    from ..services.local_repo import is_local_owner
+
+    if kind == "local" or is_local_owner(owner):
+        # BOSSAPP-918: a repository BOSS keeps on this machine — file://, no credential, no egress.
+        yield git_access("local", owner, repo, "")
+        return
     if kind == "github" and engine is not None and egress_enabled() and acting is not None and acting.grant_id:
         shim = None
         with engine.begin() as db:

@@ -133,6 +133,18 @@ def _failed_effect_cause(effect_kind: str, **where: Any) -> dict:
     return failed_effect_cause(effect_kind, **where)
 
 
+def _adapter_for(settings: Settings, owner: Optional[str], repo: Optional[str]) -> Any:
+    """The repository's adapter: a local repository's (BOSSAPP-918) or GitHub's — the same
+    interface, so the pipeline never asks which."""
+    from . import local_repo
+
+    if local_repo.is_local_owner(owner) and repo:
+        from .local_repo_host import LocalGitAdapter
+
+        return LocalGitAdapter(settings, owner=str(owner), repo=str(repo))
+    return GitHubAdapter(settings, owner=owner, repo=repo)
+
+
 class SoftwareFactoryService:
     def __init__(
         self,
@@ -162,7 +174,7 @@ class SoftwareFactoryService:
         #
         # A run that names a repo gets that repo; the setting remains the default for runs that
         # do not.
-        self.github = GitHubAdapter(settings, owner=owner, repo=repo)
+        self.github = _adapter_for(settings, owner, repo)
         self.pipeline = make_pipeline_adapter(settings, github=self.github)
         #: A fixed adapter, when a caller (a test) supplies one. Otherwise each model call asks
         #: model_routing for the PROJECT's model at the time it is made.
@@ -180,6 +192,36 @@ class SoftwareFactoryService:
         self.github_connection_id: Optional[str] = None
 
     def bind_project_github(
+        self,
+        connection: Any,
+        project_id: str,
+        *,
+        selector: Optional[str] = None,
+        owner: Optional[str] = None,
+        repo: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Bind (see _bind_project_github). A build's outage-resilient adapter (github_outage,
+        BOSSAPP-922) stays in place across a rebind: the binding refreshes the GitHub adapter
+        INSIDE it, and a build already on its local mirror stays there."""
+        wrapper = self.github if hasattr(self.github, "go_offline") else None
+        if wrapper is None:
+            return self._bind_project_github(connection, project_id, selector=selector,
+                                             owner=owner, repo=repo)
+        self.github = wrapper.primary
+        try:
+            return self._bind_project_github(connection, project_id, selector=selector,
+                                             owner=owner, repo=repo)
+        finally:
+            wrapper._primary = self.github  # noqa: SLF001 — the wrapper's own adapter, refreshed
+            self.github = wrapper
+            if wrapper.offline:
+                from .local_repo_host import LocalSandboxPipeline
+
+                self.pipeline = LocalSandboxPipeline(self.settings, wrapper.mirror())
+            else:
+                self.pipeline = make_pipeline_adapter(self.settings, github=wrapper.primary)
+
+    def _bind_project_github(
         self,
         connection: Any,
         project_id: str,
@@ -212,6 +254,17 @@ class SoftwareFactoryService:
             "full_name": getattr(self.github, "repository_full_name", None),
             "source": "legacy_settings",
         }
+        from . import local_repo
+
+        if local_repo.is_local_owner(owner):
+            # BOSSAPP-918: the code lives in a repository BOSS keeps on this machine. Nothing
+            # to authenticate; the same adapter interface, backed by the bare repository.
+            self.github = _adapter_for(self.settings, owner, repo)
+            self.pipeline = make_pipeline_adapter(self.settings, github=self.github)
+            self.github_plane = "local"
+            plane.update({"github_plane": "local", "owner": owner, "repo": repo,
+                          "full_name": f"{owner}/{repo}", "source": "local"})
+            return plane
         try:
             target = resolve_repository_target(
                 connection,
@@ -235,6 +288,9 @@ class SoftwareFactoryService:
         plane["repo"] = target.get("repo") or plane["repo"]
         plane["full_name"] = target.get("full_name") or plane["full_name"]
         plane["source"] = target.get("source") or plane["source"]
+        if local_repo.is_local_owner(plane["owner"]):
+            return self._bind_project_github(connection, project_id, owner=plane["owner"],
+                                             repo=plane["repo"])
         binding_id = target.get("binding_id")
         if not binding_id:
             # Registry fell back to BOSS_TARGET_GITHUB_* — still the legacy plane.
@@ -2243,7 +2299,10 @@ class SoftwareFactoryService:
                     + f"BOSS built “{title}” in a sandbox and opened pull request #{pr.number}. "
                     f"Automated checks: {validation_status}"
                     + (f" — {validation_summary}" if validation_summary else "")
-                    + ". Review the diff on GitHub, then approve to merge or reject to send back."
+                    + (". Review the change in BOSS (it is on this machine), then approve to merge "
+                       "into the default branch or reject to send back."
+                       if getattr(self.github, "kind", "") == "local" else
+                       ". Review the diff on GitHub, then approve to merge or reject to send back.")
                     + (f" {ci_changed['ci_changed_note']}" if ci_changed else "")
                 ),
                 "head_sha": branch_head_sha,

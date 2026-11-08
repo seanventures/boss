@@ -218,6 +218,11 @@ def mount_platform_routers(app: FastAPI) -> None:
     from .host_folders import router as host_folders_router
 
     app.include_router(host_folders_router)
+    # Local-first projects (BOSSAPP-915): the local repository, its change sets and Merge,
+    # import, the machine checks, Publish to GitHub, and work waiting for GitHub.
+    from .local_projects import router as local_projects_router
+
+    app.include_router(local_projects_router)
     # Infra › Add a server (agentic-factory 3): read + probe, Add and set up, the setup page.
     from .add_server import router as add_server_router
 

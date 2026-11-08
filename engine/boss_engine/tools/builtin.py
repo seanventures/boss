@@ -3332,8 +3332,17 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
                 "       EXTRACT(EPOCH FROM (now() - updated_at))/60 AS running_min "
                 "FROM jobs WHERE project_id = :p AND status IN ('running','leased') "
                 "ORDER BY priority ASC LIMIT 25"), {"p": project_id}).mappings().all()
+            # Work that is DONE but waits on GitHub to come back (github_outage, BOSSAPP-922).
+            try:
+                from ..services.github_outage import waiting as _gh_waiting
+
+                with c.begin_nested():
+                    on_github = _gh_waiting(c, project_id)
+            except Exception:  # noqa: BLE001
+                on_github = []
         return {
             "threshold_minutes": threshold,
+            "waiting_for_github": on_github,
             "starved": [{**dict(r), "waited_min": round(float(r["waited_min"]), 1)}
                         for r in waiting],
             "holding_a_slot": [{**dict(r), "running_min": round(float(r["running_min"]), 1)}

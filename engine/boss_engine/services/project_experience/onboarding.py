@@ -451,6 +451,8 @@ def _pass(engine: Any, settings: Any, row: Mapping[str, Any], probes: Probes) ->
 
 def _repo_access(engine: Any, settings: Any, project_id: str, repo: Mapping[str, Any],
                  probes: Probes) -> dict[str, Any]:
+    if str(repo.get("full_name") or "").startswith("local_"):
+        return _local_access(engine, settings, project_id, repo)
     try:
         with engine.begin() as c:
             found = probes.check_repository(c, settings, project_id, repo["binding_id"])
@@ -480,6 +482,33 @@ def _repo_access(engine: Any, settings: Any, project_id: str, repo: Mapping[str,
                  action={"label": "Fix access", "href": href(project_id, area="setup",
                                                               focus="repository")})
     item["_read"] = read
+    return item
+
+
+def _local_access(engine: Any, settings: Any, project_id: str, repo: Mapping[str, Any]
+                  ) -> dict[str, Any]:
+    """A LOCAL project's first stage (BOSSAPP-924): the machine checks — git, the local
+    repository, disk, the network and the model — fixing what it can (the repository and its
+    first commit) and saying the rest in words, e.g. an offline machine whose model is remote."""
+    from ..local_projects import machine_checks
+
+    try:
+        with engine.begin() as c:
+            found = machine_checks(c, settings, project_id, fix=True)
+    except Exception as error:  # noqa: BLE001
+        return _item("repo_access", "failed", owner="you",
+                     detail=f"Could not check this machine: {_err(error)}", sub="Check failed")
+    fixed = (" Fixed: " + ", ".join(found["fixed"]) + ".") if found.get("fixed") else ""
+    if found["ok"]:
+        return _item("repo_access", "done", sub="On this machine",
+                     detail=f"{repo['full_name']} is on this machine; BOSS builds, reviews and "
+                            f"merges here.{fixed} " + ("Online." if found["online"] else
+                                                      "Offline: builds run on the local model."))
+    item = _item("repo_access", "failed", owner="you", sub="Needs you",
+                 detail=found["summary"] + fixed,
+                 action={"label": "Repo and models", "href": href(project_id, area="setup",
+                                                                 focus="models")})
+    item["_read"] = any(ch["key"] == "local_repo" and ch["ok"] for ch in found["checks"])
     return item
 
 

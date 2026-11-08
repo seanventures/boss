@@ -11419,3 +11419,91 @@ CREATE TABLE IF NOT EXISTS app_watches (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_app_watches_project ON app_watches (project_id);
+
+-- LOCAL-FIRST PROJECTS (BOSSAPP-915, services/local_repo.py, services/local_repo_host.py).
+-- A repository binding says which host holds the code: github (the default, every existing row),
+-- or local — a bare git repository BOSS keeps on this machine, named local_<project_id>/<name>.
+-- A local binding has NO connection (there is nothing to authenticate to), so it never shows up
+-- as a GitHub account, and every GitHub-only reader (which joins its connection) skips it.
+ALTER TABLE github_repository_bindings ADD COLUMN IF NOT EXISTS host TEXT NOT NULL DEFAULT 'github';
+ALTER TABLE github_repository_bindings ALTER COLUMN connection_id DROP NOT NULL;
+ALTER TABLE github_repository_bindings DROP CONSTRAINT IF EXISTS github_repository_bindings_host_check;
+ALTER TABLE github_repository_bindings ADD CONSTRAINT github_repository_bindings_host_check
+  CHECK (host IN ('github', 'local') AND (host = 'local' OR connection_id IS NOT NULL));
+
+-- A LOCAL CHANGE SET is a local repository's pull request: a branch, its diff against the base,
+-- the review panel's comments, the sandbox checks, and a person's Merge into the default branch.
+-- The pipeline opens one through the same create_pull_request call it uses for GitHub; its URL
+-- is http://boss-local/<owner>/<repo>/pull/<number>, which every PR-URL reader parses as usual.
+-- `pending_push` (BOSSAPP-922): a GitHub project's change made while GitHub was down, held in
+-- the repository's local mirror until the push-pending job pushes it and opens the real PR.
+CREATE TABLE IF NOT EXISTS local_change_sets (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  repository TEXT NOT NULL,
+  number INT NOT NULL,
+  branch TEXT NOT NULL,
+  base_branch TEXT NOT NULL,
+  title TEXT NOT NULL DEFAULT '',
+  body TEXT NOT NULL DEFAULT '',
+  state TEXT NOT NULL DEFAULT 'open',
+  draft BOOLEAN NOT NULL DEFAULT false,
+  labels JSONB NOT NULL DEFAULT '[]'::jsonb,
+  head_sha TEXT,
+  base_sha TEXT,
+  merged_sha TEXT,
+  merged_by TEXT,
+  merged_at TIMESTAMPTZ,
+  run_id TEXT,
+  pending_push BOOLEAN NOT NULL DEFAULT false,
+  github_pr_url TEXT,
+  github_pr_number INT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (repository, number),
+  CHECK (state IN ('open', 'merged', 'closed', 'published'))
+);
+CREATE INDEX IF NOT EXISTS idx_local_change_sets_project ON local_change_sets (project_id, state, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_local_change_sets_branch ON local_change_sets (repository, branch, state);
+CREATE TABLE IF NOT EXISTS local_change_set_notes (
+  id TEXT PRIMARY KEY,
+  change_set_id TEXT NOT NULL REFERENCES local_change_sets(id) ON DELETE CASCADE,
+  number INT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'comment',
+  event TEXT,
+  body TEXT NOT NULL DEFAULT '',
+  comments JSONB NOT NULL DEFAULT '[]'::jsonb,
+  in_reply_to INT,
+  author TEXT NOT NULL DEFAULT 'boss',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (kind IN ('review', 'comment', 'reply'))
+);
+CREATE SEQUENCE IF NOT EXISTS local_change_set_note_ids;
+CREATE INDEX IF NOT EXISTS idx_local_change_set_notes_cs ON local_change_set_notes (change_set_id, created_at);
+
+-- PUSH PENDING (BOSSAPP-922): a GitHub project's branch whose commits landed in the local mirror
+-- while GitHub was down. The worker's push-pending job pushes it and opens the pull request when
+-- GitHub answers again, with backoff; the build waits "waiting for GitHub", never failed.
+CREATE TABLE IF NOT EXISTS repo_push_pending (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  owner TEXT NOT NULL,
+  repo TEXT NOT NULL,
+  branch TEXT NOT NULL,
+  base_branch TEXT NOT NULL DEFAULT 'main',
+  run_id TEXT,
+  change_set_id TEXT,
+  status TEXT NOT NULL DEFAULT 'waiting',
+  attempts INT NOT NULL DEFAULT 0,
+  next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_error TEXT,
+  reason TEXT NOT NULL DEFAULT '',
+  pull_request_url TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (status IN ('waiting', 'pushing', 'done', 'failed'))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_repo_push_pending_open
+  ON repo_push_pending (owner, repo, branch) WHERE status IN ('waiting', 'pushing');
+CREATE INDEX IF NOT EXISTS idx_repo_push_pending_due ON repo_push_pending (status, next_attempt_at);

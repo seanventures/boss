@@ -277,6 +277,28 @@ def wait_reason(connection: Any, run: Mapping[str, Any], *, job: Any = "load",
         return out("person_grant", "you",
                    f"Waiting for you: let {builder} build for you (a standing grant)",
                    _clip(pw.get("ask") or "", 300), pw.get("opened_at"))
+    if status == "waiting_for_github":
+        # BOSSAPP-922: the build is done and its commits are safe in the repository's local
+        # mirror; the push-pending job pushes them and opens the PR when GitHub answers.
+        pending = None
+        try:
+            with connection.begin_nested():
+                pending = connection.execute(text(
+                    "SELECT attempts, next_attempt_at, last_error, status FROM repo_push_pending "
+                    "WHERE run_id = :r ORDER BY created_at DESC LIMIT 1"),
+                    {"r": run_id}).mappings().first()
+        except Exception:  # noqa: BLE001 — the words stand without the row
+            pending = None
+        detail = _clip(_as_dict(ctx.get("github_pending")).get("reason") or "", 300)
+        eta = None
+        if pending:
+            nxt = _aware(pending["next_attempt_at"])
+            eta = max(0, int((nxt - now).total_seconds() // 60)) if nxt else None
+            detail = _clip(f"{pending['attempts']} push tries so far"
+                           + (f"; last: {pending['last_error']}" if pending["last_error"] else ""), 300)
+        return out("github", "boss", "Waiting for GitHub: built and committed on this machine; "
+                   "BOSS pushes it and opens the pull request when GitHub answers",
+                   detail, run.get("updated_at"), eta)
     from .build_waits import why_waiting
 
     dec = _decision(connection, run.get("decision_id"))

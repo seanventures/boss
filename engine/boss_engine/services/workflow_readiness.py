@@ -69,8 +69,9 @@ class Need:
 #: catches.
 NEEDS: dict[str, Need] = {
     "repository": Need(
-        "repository", "A GitHub repository BOSS can push to",
-        "Connect in Repo and models.", "setup", (("focus", "repository"),)),
+        "repository", "A repository BOSS can push to (GitHub, or local on this machine)",
+        "Connect GitHub in Repo and models, or keep the code local.", "setup",
+        (("focus", "repository"),)),
     "model": Need(
         "model", "A connected model",
         "Connect in Repo and models.", "setup", (("focus", "models"),)),
@@ -502,6 +503,21 @@ def check(connection: Connection, settings: Any, project_id: str, key: str
     if key in ("repository", "model"):
         from .setup_service import connected_basics
 
+        if key == "repository":
+            # A LOCAL REPOSITORY (BOSSAPP-918) is a repository BOSS can push to: it is on this
+            # machine, needs no credential, and the build, review, merge, preview and deploy
+            # all run from it.
+            local = _scalar(connection, "SELECT full_name FROM github_repository_bindings WHERE "
+                                        "project_id = :p AND host = 'local' AND status = 'active' AND role <> 'mirror' "
+                                        "ORDER BY (role = 'primary') DESC LIMIT 1", p)
+            if local:
+                from . import local_repo
+
+                owner, _, name = str(local).partition("/")
+                if local_repo.exists(owner, name, settings):
+                    return True, f"keeps its code locally in {local}"
+                return False, (f"the local repository {local} is missing on this machine; "
+                               "run onboarding to make it again")
         basics = connected_basics(connection, settings, project_id)
         if key == "repository":
             if basics["github"]:

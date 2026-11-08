@@ -236,6 +236,17 @@ def add_project_started(project_id: str) -> dict[str, Any]:
 class FolderIn(BaseModel):
     host_id: str = Field(..., max_length=120)
     path: str = Field(..., max_length=500)
+    #: BOSSAPP-923: bring the folder's code into a repository BOSS keeps on this machine (its git
+    #: history kept when it has one). False keeps the folder read-only on its server, as before —
+    #: the way a folder with a GitHub remote stays on GitHub.
+    import_code: bool = False
+    keep_history: bool = True
+
+
+class LocalFolderIn(BaseModel):
+    """A folder on THIS machine, inside the install's import directory (BOSS_LOCAL_IMPORT_ROOT)."""
+    path: str = Field(..., max_length=500)
+    keep_history: bool = True
 
 
 class StagingIn(BaseModel):
@@ -255,6 +266,11 @@ class CreateAndStartBody(BaseModel):
     note: Optional[str] = Field(default=None, max_length=2000)
     repo_ids: list[str] = Field(default_factory=list, max_length=6)
     folder: Optional[FolderIn] = None
+    #: BOSSAPP-918: where a new app's code lives — "github" (a picked repository) or "local" (a
+    #: git repository BOSS keeps on this machine, publishable to GitHub later).
+    code_location: Optional[str] = Field(default=None, max_length=10)
+    #: BOSSAPP-923: import a folder on this machine as the project's local repository.
+    local_folder: Optional[LocalFolderIn] = None
     captain: Optional[str] = Field(default=None, max_length=120)
     crew: Optional[list[str]] = Field(default=None, max_length=20)
     #: The stack adapter id (Stack box) and the language connectors are applied for.
@@ -330,6 +346,9 @@ def _needs(body: "CreateAndStartBody", kind: str) -> list[tuple[str, str]]:
         out.append((P.REPOSITORY_MANAGE.value, "add_the_repository"))
     if body.folder is not None:
         out.append((P.PROJECT_UPDATE.value, "add_the_folder"))
+    if body.code_location == "local" or body.local_folder is not None or (
+            body.folder is not None and body.folder.import_code):
+        out.append((P.REPOSITORY_MANAGE.value, "keep_the_code_locally"))
     if body.captain and body.captain != "engineering_captain":
         out.append((P.PROJECT_UPDATE.value, "set_the_captain"))
     if body.crew:
@@ -450,8 +469,16 @@ def _create_and_start(request: Request, body: CreateAndStartBody) -> dict[str, A
         raise Refused("input", 422, {"error": "words_required", "message": "Say what it should do."})
     if kind == "repo" and not body.repo_ids:
         raise Refused("input", 422, {"error": "repo_required", "message": "Pick a repository."})
-    if kind == "folder" and body.folder is None:
+    if kind == "folder" and body.folder is None and body.local_folder is None:
         raise Refused("input", 422, {"error": "folder_required", "message": "Give a folder on a host."})
+    if body.code_location not in (None, "", "github", "local"):
+        raise Refused("input", 422, {"error": "bad_code_location",
+                                     "message": "Code location is github or local."})
+    local_code = body.code_location == "local" or body.local_folder is not None or bool(
+        body.folder is not None and body.folder.import_code)
+    if local_code and body.repo_ids:
+        raise Refused("input", 422, {"error": "local_and_repo", "message":
+                                     "Keep the code locally or pick a repository, not both."})
     actor = _actor(request)
     ctx = identity_guard.request_auth(request)
     for permission, step in _needs(body, kind):
@@ -517,7 +544,34 @@ def _create_and_start(request: Request, body: CreateAndStartBody) -> dict[str, A
             if repos:
                 steps.append({"key": "repository", "ok": True, "label": "Repository added"
                               if len(repos) == 1 else f"{len(repos)} repositories added"})
-            if body.folder is not None:
+            # LOCAL CODE (BOSSAPP-918/923): a new repository on this machine, or a folder's code
+            # imported into one (from this machine's import directory, or over ssh from a host).
+            if local_code:
+                from boss_engine.services import local_projects
+
+                try:
+                    if body.local_folder is not None:
+                        bound = local_projects.import_code(
+                            db, _settings, pid, name=body.name.strip(), actor=actor,
+                            path=body.local_folder.path, keep_history=body.local_folder.keep_history)
+                    elif body.folder is not None and body.folder.import_code:
+                        bound = local_projects.import_code(
+                            db, _settings, pid, name=body.name.strip(), actor=actor,
+                            path=body.folder.path, host_id=body.folder.host_id,
+                            keep_history=body.folder.keep_history)
+                    else:
+                        bound = local_projects.create_for_project(
+                            db, _settings, pid, name=body.name.strip(), actor=actor,
+                            title=(brief.get("title") or body.name).strip(),
+                            description=(brief.get("problem") or body.words.strip())[:500])
+                except local_projects.LocalProjectError as error:
+                    raise Refused("local_repository", error.status, error.body()) from None
+                repos.append({"id": bound["binding_id"], "full_name": str(bound["full_name"])})
+                steps.append({"key": "repository", "ok": True,
+                              "label": "Code kept on this machine" if not bound.get("history")
+                              else ("Code imported with its history" if bound["history"] == "kept"
+                                    else "Code imported")})
+            if body.folder is not None and not body.folder.import_code:
                 from boss_engine.services.project_experience import host_folder
 
                 try:

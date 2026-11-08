@@ -137,7 +137,9 @@ def test_the_cross_check_waits_for_every_pr(client, world, change):
 def test_a_build_that_is_not_part_of_a_change_says_so(client, world):
     with _as(world, "viewer"):
         r = client.get("/v1/runs/crun_nothing/change-set", params={"project_id": world.project_a})
-    assert r.status_code == 404 and r.json()["error"] == "no_change_set"
+    # 200 with no change set: the normal case is an answer, not a console error.
+    assert r.status_code == 200 and r.json()["change_set"] is None
+    assert r.json()["error"] == "no_change_set"
 
 
 def test_the_list_of_changes(client, world, change):

@@ -57,6 +57,8 @@ JOB_KIND_PERMISSIONS: dict[str, str] = {
     # repositories and GitHub
     "docs.update": P.GITHUB_MANAGE,
     "software_factory.propose_pr": P.CODE_TASK_CREATE,   # opens a PR from a build's boss/* branch
+    # a build finished while GitHub was down: push its branch from the mirror, open its PR
+    "repo.push_pending": P.CODE_TASK_CREATE,
     "github.pull_request.merge": P.GITHUB_MERGE,
     "change_set.merge": P.GITHUB_MERGE,             # a multi-repo change, merged as a set
     "github.deployment.create": P.DEPLOYMENT_CREATE,

@@ -636,7 +636,8 @@ def _binding(ctx: Context) -> Optional[dict[str, Any]]:
 
     def read() -> Optional[dict[str, Any]]:
         row = ctx.connection.execute(text(
-            "SELECT id, full_name, status, checks, checked_at, default_branch, connection_id "
+            "SELECT id, full_name, status, checks, checked_at, default_branch, connection_id, "
+            "COALESCE(host, 'github') AS host "
             "FROM github_repository_bindings WHERE project_id = :p "
             "AND (:r = '' OR lower(full_name) = lower(:r)) "
             "ORDER BY (role = 'primary') DESC LIMIT 1"),
@@ -702,6 +703,17 @@ def check_github(ctx: Context, step: dict[str, Any]) -> dict[str, Any]:
         return result("github.access", "fixable",
                       f"no repository binding{' for ' + repo if repo else ''} in this project",
                       action="Connect the repository in Repo and models.")
+    from .local_repo import exists as _local_exists, is_local as _is_local
+
+    if binding.get("host") == "local" or _is_local(binding.get("full_name")):
+        # BOSSAPP-918: a repository on this machine; no GitHub access is involved.
+        owner, _, name = str(binding["full_name"]).partition("/")
+        if _local_exists(owner, name, ctx.settings):
+            return result("github.access", "ready",
+                          f"{binding['full_name']} is local on this machine (no GitHub needed)")
+        return result("github.access", "will_fail",
+                      f"the local repository {binding['full_name']} is missing on this machine",
+                      action="Run onboarding: it makes the local repository again.")
     checks = binding.get("checks") or {}
     if isinstance(checks, str):
         checks = json.loads(checks)

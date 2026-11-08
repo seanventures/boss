@@ -149,10 +149,12 @@ def repos(connection: Connection, project_id: str) -> list[dict[str, Any]]:
             continue
         seen.add(full.lower())
         checks = as_json(r["checks"], {}) or {}
+        local = full.startswith("local_")
         out.append({"binding_id": r["id"], "full_name": full,
                     "branch": r["default_branch"] or "main", "primary": r["role"] == "primary",
-                    "access": access_of(checks),
-                    "external_url": f"https://github.com/{full}"})
+                    "access": access_of(checks), "host": "local" if local else "github",
+                    # A local repository (BOSSAPP-918) has no page on GitHub.
+                    "external_url": None if local else f"https://github.com/{full}"})
     return out
 
 

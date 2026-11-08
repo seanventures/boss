@@ -154,6 +154,9 @@ _HOUSE = "worker or install housekeeping; no project work"
 WORKER_ROUTES: dict[str, str] = {
     "/v1/worker/poll": "tick:services/jobs.py::claim_job",
     "/v1/worker/heartbeat": _LEASE, "/v1/worker/complete": _LEASE, "/v1/worker/fail": _LEASE,
+    # A build that finished while GitHub was down: its push, under the job's lease (github_outage).
+    "/v1/repos/push-pending/execute": _LEASE,
+    "/v1/projects/onboarding/execute": _LEASE,   # the onboarding agent's leased pass
     "/v1/self/host-stall": _HOUSE,
     "/v1/activity/retention/prune": _HOUSE,
     "/v1/telemetry/tick": "install-wide Improve BOSS telemetry",
