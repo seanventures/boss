@@ -207,7 +207,9 @@ def test_start_watching_sets_the_rules_the_channel_and_asks_only_for_the_code(pe
     assert "watched" in p.tid("wa-l-state").inner_text()
     steps = {k: p.tid(f"wa-l-step-{k}").get_attribute("data-state") for k in ("read", "collector", "data", "watches", "verify", "oncall")}
     assert steps == {"read": "done", "collector": "done", "data": "done", "watches": "done", "verify": "you", "oncall": "run"}, steps
-    assert re.search(r"\b20\d\d probes", p.tid("wa-l-step-data").inner_text()), "a week of BOSS probes is the first data"
+    # A week of BOSS's probes (one each 5 min is 2016; the seeded week thins as it ages).
+    probes = re.search(r"\b(\d{3,5}) probes", p.tid("wa-l-step-data").inner_text())
+    assert probes and int(probes.group(1)) >= 1000, "a week of BOSS probes is the first data"
     assert "#support-eng waits for the code" in p.tid("wa-l-now-text").inner_text()
     assert "Verify #support-eng" in p.tid("wa-l-gate").inner_text()
     p.check("landed")

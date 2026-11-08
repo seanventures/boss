@@ -116,11 +116,14 @@ function scrollIntoSight(pop: HTMLElement): void {
     let dy = 0;
     if (r.bottom > bottom) dy = r.bottom - bottom;
     if (r.top - dy < top) dy = r.top - top;
-    if (Math.abs(dy) >= 1) a.scrollTop += dy;
+    // Instant: the page's own scroll-behavior is smooth (globals.css), and a popover that glides
+    // in late is a popover under the footer for that long.
+    if (Math.abs(dy) >= 1) a.scrollTo({ top: a.scrollTop + dy, behavior: "instant" });
   }
   const r = pop.getBoundingClientRect();
   if (r.bottom > window.innerHeight - POP_GAP || r.top < POP_GAP) {
-    window.scrollBy({ top: r.bottom > window.innerHeight - POP_GAP ? Math.min(r.bottom - window.innerHeight + POP_GAP, r.top - POP_GAP) : r.top - POP_GAP });
+    window.scrollBy({ top: r.bottom > window.innerHeight - POP_GAP ? Math.min(r.bottom - window.innerHeight + POP_GAP, r.top - POP_GAP) : r.top - POP_GAP,
+                      behavior: "instant" });
   }
 }
 

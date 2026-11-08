@@ -358,8 +358,13 @@ class Person:
         problems += [f"outside the sheet: {x}" for x in m["outside"][:5]]
         problems += [f"runs out of its box: {x}" for x in m["clipped"][:5]]
         problems += [f"drawn under the footer: {x}" for x in m["underFoot"][:3]]
+        # `next dev` RESTARTS ITSELF near its memory threshold: the page's in-flight requests to the
+        # DEV SERVER then fail with these signatures (as in watch_this_app). They are the dev
+        # server's, never the console's; any /v1 failure is still caught below (self.bad).
+        dev_restart = re.compile(r"ERR_CONNECTION_REFUSED|ERR_INCOMPLETE_CHUNKED_ENCODING|Failed to fetch RSC payload")
         errs = [e for e in self.errors if not any(a.search(e) for a in self.allowed)
-                and "Failed to load resource" not in e and "Download the React DevTools" not in e]
+                and "Failed to load resource" not in e and "Download the React DevTools" not in e
+                and not dev_restart.search(e)]
         bad = [b for b in self.bad if not any(a.search(b) for a in self.allowed)]
         problems += [f"console: {e}" for e in errs[:5]] + [f"http: {b}" for b in bad[:5]]
         # Every popover that opened on this page was whole in view (popover_guard).

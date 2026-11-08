@@ -69,10 +69,22 @@ INIT = _PROBLEMS + r"""
   window.__popGuard = true;
   window.__popBad = [];
   const seen = new WeakSet();
-  const settle = (el) => setTimeout(() => requestAnimationFrame(() => {
-    if (!el.isConnected) return;
-    for (const p of __popProblems(el)) if (window.__popBad.length < 20) window.__popBad.push(p);
-  }), 450);
+  const keep = (el) => { for (const p of __popProblems(el)) if (window.__popBad.length < 20 && !window.__popBad.includes(p)) window.__popBad.push(p); };
+  // Measured twice: as it opens (this runs right after the commit that opened it, its reveal
+  // done), and once settled (its animation, a read landing above it) unless something scrolled
+  // in between: a test's own click or fill scrolls its target into view, which is not the
+  // popover's doing.
+  const settle = (el) => {
+    keep(el);
+    let scrolled = false;
+    const mark = () => { scrolled = true; };
+    // From the frame after it opened: the reveal's own scroll is dispatched in that frame.
+    requestAnimationFrame(() => requestAnimationFrame(() => document.addEventListener('scroll', mark, true)));
+    setTimeout(() => requestAnimationFrame(() => {
+      document.removeEventListener('scroll', mark, true);
+      if (el.isConnected && !scrolled) keep(el);
+    }), 450);
+  };
   const scan = () => {
     for (const el of document.querySelectorAll(%r)) { if (!seen.has(el)) { seen.add(el); settle(el); } }
   };
