@@ -258,7 +258,8 @@ def test_add_and_set_up_with_step_up_then_the_agent_sees_the_key_land(person: Pe
     assert p.tid("ss-step-key").get_attribute("data-state") == "now"
     assert "waiting for the key" in p.tid("ss-step-key").inner_text()
     assert "I ran it" not in p.tid("inf-host-drawer").inner_text().replace("no “I ran it”", "")
-    assert p.tid("ss-stat-memory").inner_text().startswith("—")
+    assert "not read yet" in p.tid("inf-server-memory").inner_text(), "no numbers before the key lands"
+    assert p.tid("ss-stats").count() == 0, "one set of numbers: the rings"
     # the old stepper is one press away while it is not ready
     by_hand = p.tid("inf-host-by-hand")
     by_hand.locator("> summary").click()
@@ -279,9 +280,13 @@ def test_add_and_set_up_with_step_up_then_the_agent_sees_the_key_land(person: Pe
     assert "Docker 27.3.1" in p.tid("ss-step-install").get_attribute("title")
     assert "staging pool" in p.tid("ss-step-ready").inner_text()
     assert p.tid("ss-gate").count() == 0, "the gate goes once the key landed"
-    assert p.tid("ss-stat-memory").inner_text().startswith("8.0 GB")
-    assert p.tid("ss-stat-disk").inner_text().startswith("88 GB") and "alerts at 80%" in p.tid("ss-stat-disk").inner_text()
-    assert re.match(r"^\d+", p.tid("ss-stat-ports").inner_text())
+    # ONE set of numbers: the rings carry memory, disk (with the alert line) and free ports
+    p.p.wait_for_function("() => (document.querySelector('[data-testid=inf-server-memory]')?.innerText || '').includes('8.0 GB')",
+                          timeout=30_000)
+    assert "alerts at 80%" in p.tid("inf-server-disk-alert").inner_text()
+    assert re.match(r"^\d+$", p.tid("inf-server-ports-free").inner_text().strip())
+    assert "free" in p.tid("inf-server-ports").inner_text()
+    assert p.tid("ss-stats").count() == 0 and p.tid("inf-server-overview").count() == 1, "no duplicate stats"
     assert "never moves an app" in p.tid("ss-note").inner_text()
     p.tid("ss-log-toggle").click()
     log = p.tid("ss-log").inner_text()
@@ -320,19 +325,47 @@ def test_use_a_key_i_already_have_is_write_only_and_lands_at_once(person: Person
 
 
 def test_pick_a_stored_key_from_the_vault(person: Person):
+    """Or pick a stored one is compact: the one or two most likely keys as chips, and Choose… for a
+    searchable list of the rest."""
     p = person
     addr = fresh_address()
-    status, made = api("POST", "/v1/secrets/keypair", {"project_id": PROJECT, "actor": "usr_asdev",
-                                                       "name": f"e2e-key-{os.urandom(3).hex()}", "backend": "database"})
-    assert status in (200, 201), made
-    machine(addr, run=made["public_key"])
+    made = []
+    for _ in range(3):
+        status, k = api("POST", "/v1/secrets/keypair", {"project_id": PROJECT, "actor": "usr_asdev",
+                                                        "name": f"e2e-key-{os.urandom(3).hex()}", "backend": "database"})
+        assert status in (200, 201), k
+        made.append(k)
+    oldest = made[0]
+    machine(addr, run=oldest["public_key"])
     p.open_sheet()
     p.type(f"root@{addr}")
-    ref = made.get("secret_ref_id") or made.get("id")
+    stored = p.tid("as-stored")
+    stored.wait_for()
+    assert stored.locator(".as-chip:not(.as-choose)").count() <= 2, "at most two keys as chips"
+    newest_ref = made[-1].get("secret_ref_id") or made[-1].get("id")
+    assert p.tid(f"as-stored-{newest_ref}").is_visible(), "the newest key is offered first"
+    ref = oldest.get("secret_ref_id") or oldest.get("id")
+    assert p.tid(f"as-stored-{ref}").count() == 0, "older keys wait behind Choose…"
+    p.tid("as-stored-choose").click()
+    p.tid("as-stored-list").wait_for()
+    p.check("stored list open")
+    p.tid("as-stored-search").fill("no-such-key-zz")
+    assert "No key matches" in p.tid("as-stored-nomatch").inner_text()
+    p.tid("as-stored-search").fill("")
+    key_name = p.tid(f"as-stored-opt-{ref}").locator("span").inner_text()
+    p.tid("as-stored-search").fill(key_name[-6:])
+    assert p.tid(f"as-stored-opt-{ref}").is_visible()
+    p.tid(f"as-stored-opt-{ref}").click()
+    assert p.tid("as-stored-list").count() == 0, "picking closes the list"
     chip = p.tid(f"as-stored-{ref}")
-    chip.click()
-    assert chip.get_attribute("aria-pressed") == "true"
+    assert chip.get_attribute("aria-pressed") == "true", "a key picked from the list shows as a chip"
+    assert stored.locator(".as-chip:not(.as-choose)").count() <= 2
     assert "stored key" in p.tid("as-box-access").inner_text()
+    # Esc closes the list without closing the sheet
+    p.tid("as-stored-choose").click()
+    p.tid("as-stored-list").wait_for()
+    p.p.keyboard.press("Escape")
+    assert p.tid("as-stored-list").count() == 0 and p.tid("as-gate").count() == 1
     p.tid("as-submit").click()
     host_id = _land(p)
     _wait_phase(p, "watching", timeout=90_000)

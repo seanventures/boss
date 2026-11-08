@@ -4,14 +4,14 @@
  * THE SERVER PAGE, SETTING ITSELF UP (agentic-factory 3-add-a-server.html §2): where Add and set
  * up lands. The diagram (key landed → read → install → verify → ready → watching), the Now line
  * with the live log, the gate while the key is awaited (the one line, Copy; the agent sees it
- * land, so there is no "I ran it"), and the stats: memory, disk free, free ports. A server never
+ * land, so there is no "I ran it"), then the server's rings with free ports and the disk alert line. A server never
  * moves an app: each app picks it on its own Project › Deployments page.
  *
  * The old stepper stays one press away ("Do it by hand") for anyone who wants it.
  */
 import React, { useEffect, useRef, useState } from "react";
 import {
-  ArrowSquareOut, CheckCircle, Cpu, Eye, HardDrive, Info, Key, MagnifyingGlass, Package, ShieldCheck, Terminal, Warning,
+  ArrowSquareOut, CheckCircle, Eye, Info, Key, MagnifyingGlass, Package, ShieldCheck, Terminal, Warning,
 } from "@phosphor-icons/react";
 
 import { AgentAvatar } from "../agent-avatar";
@@ -19,6 +19,7 @@ import { useServerSetup, type SetupStep } from "../../lib/add-server";
 import { notifyChanged } from "../changed";
 import { CopyButton, localTime } from "./infra-util";
 import { DrawerSection } from "./kit";
+import { ServerOverview } from "./server-overview";
 import "./add-server.css";
 
 const ICON: Record<string, React.ReactNode> = {
@@ -36,7 +37,9 @@ function Node({ s }: { s: SetupStep }) {
   );
 }
 
-export function ServerSetup({ hostId, onAskBoss }: { hostId: string; onAskBoss?: () => void }) {
+export function ServerSetup({ hostId, projectId, canExec, onAskBoss }: {
+  hostId: string; projectId: string; canExec: boolean; onAskBoss?: () => void;
+}) {
   const setup = useServerSetup(hostId);
   const [logOpen, setLogOpen] = useState(false);
   const v = setup.data;
@@ -48,9 +51,13 @@ export function ServerSetup({ hostId, onAskBoss }: { hostId: string; onAskBoss?:
     if (phase.current !== null && phase.current !== v.phase) notifyChanged("infra");
     phase.current = v.phase;
   }, [v]);
-  if (!v) return null;
-  const st = v.stats;
+  // ONE SET OF NUMBERS: the server's rings (CPU, memory, disk, ports) carry what setup adds,
+  // free ports and the disk alert line, instead of a second row of cards.
+  const glance = <ServerOverview projectId={projectId} hostId={hostId} canExec={canExec}
+                                 setup={v ? { freePorts: v.stats.freePorts, alertPct: v.stats.alertPct } : undefined} />;
+  if (!v) return glance;
   return (
+    <>
     <DrawerSection label="SETUP" testId="ss">
       <div className="ss" data-phase={v.phase} data-state={v.state}>
         <div className="ss-head">
@@ -89,17 +96,11 @@ export function ServerSetup({ hostId, onAskBoss }: { hostId: string; onAskBoss?:
             {v.log.map((l, i) => <li key={`${l.at}-${i}`}><time dateTime={l.at}>{localTime(l.at)}</time>{l.line}</li>)}
           </ol>
         ) : null}
-        <div className="ss-stats" data-testid="ss-stats">
-          <div className="ss-stat" data-testid="ss-stat-memory"><b>{st.memory ?? "—"}</b>
-            <span><Cpu size={11} aria-hidden /> memory{st.cpus ? ` · ${st.cpus} vCPU` : ""}{st.arch ? ` · ${st.arch}` : ""} {st.memory ? "(detected, not typed)" : "(after the key)"}</span></div>
-          <div className="ss-stat" data-testid="ss-stat-disk"><b>{st.diskFree ?? "—"}</b>
-            <span><HardDrive size={11} aria-hidden /> disk free · Infra agent alerts at {st.alertPct}%</span></div>
-          <div className="ss-stat" data-testid="ss-stat-ports"><b>{st.freePorts ?? "—"}</b>
-            <span>free ports (:{st.portRange}) for whichever apps pick it</span></div>
-        </div>
         <span className="ss-note" data-testid="ss-note"><Info size={13} aria-hidden />
           Adding a server never moves an app. Each app picks its servers on its own page (Project › Deployments), where this one shows as ready. Prod is never picked for you.</span>
       </div>
     </DrawerSection>
+    {glance}
+    </>
   );
 }

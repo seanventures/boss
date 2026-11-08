@@ -387,12 +387,12 @@ export function HostDrawer({ projectId, actor, hostId, canWrite, onClose, onResi
           {/* ADDED THROUGH ADD A SERVER: the agent sets it up; the diagram leads, and the old stepper
               stays one press away ("Do it by hand"). */}
           {agentSetup ? (
-            <ServerSetup hostId={h.id} onAskBoss={() => openDockAbout({
+            <ServerSetup hostId={h.id} projectId={projectId} canExec={canWrite} onAskBoss={() => openDockAbout({
               subject: { kind: "fleet", id: projectId }, role: "Deployment Manager", history: "push",
               question: `What would it take to deploy this project onto ${h.name}?` })} />
           ) : null}
           {/* THE SERVER AT A GLANCE (screen 14): capacity, the projects on it, plugins, changes. */}
-          {!h.thisComputer ? <ServerOverview projectId={projectId} hostId={h.id} canExec={canWrite} /> : null}
+          {!h.thisComputer && !agentSetup ? <ServerOverview projectId={projectId} hostId={h.id} canExec={canWrite} /> : null}
           {canWrite && !h.thisComputer && h.stage.stage !== "ready" && h.state.tone !== "none" ? (
             agentSetup ? (
               <details className="inf-by-hand" data-testid="inf-host-by-hand">

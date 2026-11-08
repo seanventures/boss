@@ -21,7 +21,7 @@
  */
 import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
-  CheckCircle, Cloud, Eye, GearSix, HardDrives, Key, PencilSimple, PlugsConnected, ShieldCheck, Tag, Terminal,
+  CaretDown, CheckCircle, Cloud, Eye, GearSix, HardDrives, Key, MagnifyingGlass, PencilSimple, PlugsConnected, ShieldCheck, Tag, Terminal,
   UserCircle, Wrench,
 } from "@phosphor-icons/react";
 
@@ -30,7 +30,7 @@ import { GatedButton } from "../../components/gated";
 import { enrollCommand, enrollHardwareAgent, explainRawSecret, registerHardwareProvider } from "../../lib/hardware";
 import {
   createServer, KIND_WORDS, readServer, ROLE_LINE, ROLE_WORDS, STORES,
-  type AccessMode, type Role, type ServerKind, type ServerRead,
+  type AccessMode, type Role, type ServerKind, type ServerRead, type StoredKey,
 } from "../../lib/add-server";
 import { afterWrite } from "./infra-actions";
 import { pasteKey } from "./cloud-actions";
@@ -263,14 +263,9 @@ export function AddServerSheet({ projectId, actor, initialText = "", onClose, on
                           aria-label="Private key, write-only"
                           onFocus={() => setMode("my_key")}
                           onChange={(e) => { setPrivateKey(e.target.value); setMode("my_key"); setStoredId(""); }} />
-                <span className="as-stored">
-                  <span className="as-faint">Or pick a stored one:</span>
-                  {read?.storedKeys.length ? read.storedKeys.map((k) => (
-                    <button key={k.id} type="button" className="as-chip" aria-pressed={mode === "stored_key" && storedId === k.id}
-                            data-testid={`as-stored-${k.id}`} title={k.fingerprint ?? k.name}
-                            onClick={(e) => { e.stopPropagation(); setStoredId(k.id); setMode("stored_key"); setPrivateKey(""); }}>{k.name}</button>
-                  )) : <span className="as-faint" data-testid="as-stored-none">none stored yet</span>}
-                </span>
+                <StoredKeyPicker keys={read?.storedKeys ?? []} hint={[name, address, user]}
+                                 picked={mode === "stored_key" ? storedId : ""}
+                                 onPick={(id) => { setStoredId(id); setMode("stored_key"); setPrivateKey(""); }} />
               </div>
             </div>
           ) : kind === "dials_in" ? (
@@ -495,4 +490,66 @@ function BoxBtn({ k, open, setOpen, icon, label, value, sub, auto, amber }: {
 function shortKey(fp: string): string {
   const [algo, rest] = fp.split(":");
   return rest && rest.length > 6 ? `${algo}:${rest.slice(0, 2)}…${rest.slice(-2)}` : fp;
+}
+
+/** The most likely stored keys first: one whose name mentions this server, then the newest. */
+export function rankKeys(keys: StoredKey[], hint: (string | null | undefined)[]): StoredKey[] {
+  const words = hint.map((h) => (h ?? "").toLowerCase().trim()).filter((h) => h.length > 2);
+  const hit = (k: StoredKey) => words.some((w) => k.name.toLowerCase().includes(w));
+  return [...keys.filter(hit), ...keys.filter((k) => !hit(k))];
+}
+
+/** OR PICK A STORED ONE, compactly: the one or two most likely keys as chips, and "Choose…" for
+ *  a searchable list of the rest. A key picked from the list shows as a chip too. */
+function StoredKeyPicker({ keys, hint, picked, onPick }: {
+  keys: StoredKey[]; hint: (string | null | undefined)[]; picked: string; onPick: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const wrap = useRef<HTMLSpanElement | null>(null);
+  const ranked = rankKeys(keys, hint);
+  const top = ranked.slice(0, 2);
+  const pickedKey = picked ? keys.find((k) => k.id === picked) : undefined;
+  const chips = pickedKey && !top.some((k) => k.id === picked) ? [...top.slice(0, 1), pickedKey] : top;
+  const found = ranked.filter((k) => !q.trim() || k.name.toLowerCase().includes(q.trim().toLowerCase())
+    || (k.fingerprint ?? "").toLowerCase().includes(q.trim().toLowerCase()));
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: MouseEvent) => { if (wrap.current && !wrap.current.contains(e.target as Node)) setOpen(false); };
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); setOpen(false); } };
+    document.addEventListener("mousedown", away);
+    window.addEventListener("keydown", esc, true); // before the sheet's own Esc
+    return () => { document.removeEventListener("mousedown", away); window.removeEventListener("keydown", esc, true); };
+  }, [open]);
+  if (!keys.length) return <span className="as-stored"><span className="as-faint">Or pick a stored one:</span>
+    <span className="as-faint" data-testid="as-stored-none">none stored yet</span></span>;
+  const pick = (id: string) => { onPick(id); setOpen(false); setQ(""); };
+  return (
+    <span className="as-stored" ref={wrap} data-testid="as-stored" onClick={(e) => e.stopPropagation()}>
+      <span className="as-faint">Or pick a stored one:</span>
+      {chips.map((k) => (
+        <button key={k.id} type="button" className="as-chip" aria-pressed={picked === k.id}
+                data-testid={`as-stored-${k.id}`} title={k.fingerprint ?? k.name} onClick={() => pick(k.id)}>{k.name}</button>
+      ))}
+      {keys.length > chips.length ? (
+        <button type="button" className="as-chip as-choose" aria-expanded={open} aria-haspopup="listbox" data-testid="as-stored-choose"
+                title={`All ${keys.length} stored keys`} onClick={() => setOpen((o) => !o)}>
+          Choose… <CaretDown size={11} aria-hidden /></button>
+      ) : null}
+      {open ? (
+        <span className="as-keys" role="dialog" aria-label="Stored keys" data-testid="as-stored-list">
+          <label className="as-keys-q"><MagnifyingGlass size={12} aria-hidden />
+            <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder={`Search ${keys.length} keys`}
+                   aria-label="Search stored keys" data-testid="as-stored-search" spellCheck={false} autoComplete="off" /></label>
+          <span role="listbox" aria-label="Stored keys" className="as-keys-l">
+            {found.length ? found.map((k) => (
+              <button key={k.id} type="button" role="option" aria-selected={picked === k.id} className="as-keys-o"
+                      data-testid={`as-stored-opt-${k.id}`} onClick={() => pick(k.id)}>
+                <Key size={12} aria-hidden /><span>{k.name}</span>{k.fingerprint ? <em>{k.fingerprint}</em> : null}</button>
+            )) : <span className="as-faint" data-testid="as-stored-nomatch">No key matches “{q}”</span>}
+          </span>
+        </span>
+      ) : null}
+    </span>
+  );
 }

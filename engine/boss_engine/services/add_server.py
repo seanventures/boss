@@ -301,7 +301,7 @@ def stored_keys(connection, project_id: str) -> list[dict[str, Any]]:
     rows = connection.execute(text(
         # The project's own keys (a deploy key someone stored), not each server's BOSS key.
         f"SELECT id, ref_key, metadata FROM secret_refs WHERE project_id = :p AND scope_id = :p "
-        f"AND {_SSH_KEY_SQL} ORDER BY created_at DESC LIMIT 8"), {"p": project_id}).mappings().all()
+        f"AND {_SSH_KEY_SQL} ORDER BY created_at DESC LIMIT 200"), {"p": project_id}).mappings().all()
     out = []
     for r in rows:
         meta = _j(r["metadata"]) or {}

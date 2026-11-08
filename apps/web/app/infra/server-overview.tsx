@@ -49,7 +49,18 @@ function mark(name: string): string {
   return String(h % 4);
 }
 
-export function ServerOverview({ projectId, hostId, canExec }: { projectId: string; hostId: string; canExec: boolean }) {
+/** What setup adds to the rings for a server added through Add a server. */
+export type SetupGlance = { freePorts: number | null; alertPct: number };
+
+/** Free ports in a range like "8000-8999" once the used ones are taken out. */
+export function freeIn(range: string | null, used: number): number | null {
+  const m = (range ?? "").match(/(\d+)\s*[-–]\s*(\d+)/);
+  return m ? Math.max(0, Number(m[2]) - Number(m[1]) + 1 - used) : null;
+}
+
+export function ServerOverview({ projectId, hostId, canExec, setup }: {
+  projectId: string; hostId: string; canExec: boolean; setup?: SetupGlance;
+}) {
   const [data, setData] = useState<HostOverview | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
   const [reading, setReading] = useState(false);
@@ -71,6 +82,7 @@ export function ServerOverview({ projectId, hostId, canExec }: { projectId: stri
     finally { setReading(false); }
   };
   const cap = data.capacity;
+  const free = setup?.freePorts ?? freeIn(cap.ports.range, cap.ports.used);
   const reach = data.reachable;
   return (
     <div className="inf-so" data-testid="inf-server-overview">
@@ -89,12 +101,15 @@ export function ServerOverview({ projectId, hostId, canExec }: { projectId: stri
           <div key={label} className="inf-so-tile" data-testid={`inf-server-${label.toLowerCase()}`}>
             <span className="inf-so-lbl">{label}</span>
             <div className="inf-so-row"><CapRing pct={v.pct} tone={tone} label={label} /><span className="inf-so-cap">{v.label ?? "not read yet"}</span></div>
+            {label === "Disk" && setup ? <span className="inf-so-cap inf-faint" data-testid="inf-server-disk-alert"
+                                               title="The Infra agent prunes build cache or tells you past this line">alerts at {setup.alertPct}%</span> : null}
           </div>
         ))}
         <div className="inf-so-tile" data-testid="inf-server-ports">
-          <span className="inf-so-lbl">Ports used</span>
-          <b className="inf-so-num">{cap.ports.used}</b>
-          <span className="inf-so-cap">{cap.ports.range ?? "any port"}</span>
+          <span className="inf-so-lbl">Ports</span>
+          <div className="inf-so-row"><b className="inf-so-num" data-testid="inf-server-ports-free">{free ?? cap.ports.used}</b>
+            <span className="inf-so-cap">{free !== null ? `free · ${cap.ports.used} used` : "used"}</span></div>
+          <span className="inf-so-cap inf-faint">{cap.ports.range ?? "any port"}</span>
         </div>
       </div>
       <div className="inf-so-read">
