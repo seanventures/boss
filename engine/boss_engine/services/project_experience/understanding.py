@@ -305,8 +305,9 @@ def _brief_of(args: Mapping[str, Any], files: Mapping[str, Mapping[str, Any]]) -
 
 
 #: What the brief is about. One turn shape for each (THE ONE UNDERSTANDING SERVICE): new work on
-#: a project (`understand`, this module) and a new app on Add a project (`understand_new_app`).
-SUBJECTS = ("work", "new_app")
+#: a project (`understand`, this module), a new app on Add a project (`understand_new_app`), and
+#: a rule change on Govern › Where people decide (decide_list.understand_rule_change).
+SUBJECTS = ("work", "new_app", "rule_change")
 
 
 def turn(connection: Optional[Connection], settings: Any, project_id: str, *, subject: str,

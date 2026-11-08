@@ -32,6 +32,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
+from .. import decide_list as _decide_list
+
+_on_the_list = _decide_list.on_the_list
+
 LEVELS = ("A0", "A1", "A2", "A3")
 #: THE ONE NAMING of the autonomy levels (BOSSAPP-913 13-20): Settings, Govern, every tooltip and
 #: badge read these words (the wireframe's A0 Ask · A1 Propose · A2 Act · A3 Ship); what a level
@@ -157,16 +161,20 @@ ACTIONS: dict[str, Action] = {a.key: a for a in (
     Action("prod_rollback", "Roll back prod", "A3", "high", "reversible"),
     Action("prod_restart", "Restart prod", "A3", "high", "reversible"),
     Action("quarantine_test", "Quarantine test", "A3", "low", "reversible"),
-    # Never a level's call.
-    Action("merge", "Merge", "A3", "high", "irreversible", always_a_person=True),
-    Action("deploy_prod", "Deploy to prod", "A3", "high", "irreversible", always_a_person=True),
+    # Never a level's call: these are entries on the ONE compliance list (decide_list.py,
+    # Govern › Where people decide), which says so, not this catalogue.
+    Action("merge", "Merge", "A3", "high", "irreversible", always_a_person=_on_the_list("merge")),
+    Action("deploy_prod", "Deploy to prod", "A3", "high", "irreversible",
+           always_a_person=_on_the_list("deploy_prod")),
     Action("send_external", "Send externally", "A3", "high", "irreversible",
-           always_a_person=True),
-    Action("pay", "Pay", "A3", "high", "irreversible", always_a_person=True),
+           always_a_person=_on_the_list("send_external")),
+    Action("pay", "Pay", "A3", "high", "irreversible", always_a_person=_on_the_list("pay")),
 )}
 
-#: The actions no autonomy level can take (autonomy.IRREVERSIBLE's ambient image).
+#: The actions no autonomy level can take: the list's own (decide_list.AMBIENT_ACTIONS).
 ALWAYS_A_PERSON = frozenset(k for k, a in ACTIONS.items() if a.always_a_person)
+assert ALWAYS_A_PERSON == _decide_list.AMBIENT_ACTIONS, (
+    "every ambient action on the compliance list is in this catalogue, and only those")
 
 
 def task_class(key: str) -> TaskClass:

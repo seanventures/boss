@@ -18,6 +18,7 @@ import { LimitsScreen } from "./limits-screen";
 import { GovernMeter } from "./meter";
 import { SelfFixTab } from "./self-fix-tab";
 import { AutonomyPanel } from "../agent-ops/autonomy-panel";
+import { WherePeopleDecide } from "./decide-tab";
 import { SharingTab } from "./sharing-tab";
 import { SPEND_PERIODS, SpendHome, type SpendPeriod } from "./spend-home";
 import { SpendTab } from "./spend-tab";
@@ -30,15 +31,18 @@ export const GOVERN_POLL_MS = 15_000;
  * Sharing and Self-fix. Old links keep working: ?tab=spend|envelopes|sharing|selffix open what
  * they opened, ?focus=… still lands on that row of the board.
  */
-type Tab = "overview" | "limits" | "autonomy" | "board" | "spend" | "envelopes" | "sharing" | "selffix";
+type Tab = "overview" | "limits" | "autonomy" | "areas" | "board" | "spend" | "envelopes" | "sharing" | "selffix";
 const MAIN: { key: Tab; label: string; tip: string }[] = [
   { key: "overview", label: "Spend", tip: "How much, on which model and project" },
   { key: "limits", label: "Limits", tip: "Caps, what happens at them, per project" },
-  // AUTONOMY & SAFETY (autonomous agents, BOSSAPP-905): what agents may do on their own, their
-  // track record, today's ambient budget and the stop switch — one surface.
-  { key: "autonomy", label: "Autonomy", tip: "What agents may do on their own, and the stop switch" },
+  // WHERE PEOPLE DECIDE (agentic-factory wireframe 1): the compliance list — the only decisions
+  // that wait for a person — and the stop switch. Keeps the `autonomy` key so old links land here.
+  { key: "autonomy", label: "Where people decide", tip: "The 7 decisions that wait for a person; agents do the rest" },
 ];
 const MORE: { key: Tab; label: string; tip: string }[] = [
+  // The expert A0–A3 grid per task class, always-on agents and today's agent budget (was the
+  // Autonomy tab; unchanged).
+  { key: "areas", label: "Per-area autonomy", tip: "The A0–A3 grid per task class, always-on agents and today's agent budget" },
   { key: "spend", label: "Where the money went", tip: "By agent, by step, savings and top drivers" },
   { key: "board", label: "Advanced limits", tip: "Pace, thresholds, token guides, review rounds" },
   { key: "envelopes", label: "Envelopes", tip: "Allocations, initiatives and commitments" },
@@ -124,7 +128,7 @@ export function GovernHome({ projectId, actor }: { projectId: string; actor: str
         ) : null}
         <details className="gv-moremenu" ref={moreRef} data-testid="gv-more">
           <summary className="ag-btn" data-current={inMore || undefined}
-                   title="Where the money went, advanced limits, envelopes, sharing, self-fix">More</summary>
+                   title="Per-area autonomy, where the money went, advanced limits, envelopes, sharing, self-fix">More</summary>
           <span className="gv-menu" role="tablist" aria-label="More">
             {MORE.map((t) => (
               <button key={t.key} type="button" role="tab" aria-selected={tab === t.key}
@@ -137,7 +141,7 @@ export function GovernHome({ projectId, actor }: { projectId: string; actor: str
           </span>
         </details>
       </header>
-      {tab !== "overview" && tab !== "limits" && tab !== "autonomy" ? (
+      {tab !== "overview" && tab !== "limits" && tab !== "autonomy" && tab !== "areas" ? (
         <GovernMeter meter={data?.meter ?? null} error={view.error} onRetry={view.reload} />
       ) : null}
       {frozen ? (
@@ -156,6 +160,8 @@ export function GovernHome({ projectId, actor }: { projectId: string; actor: str
         <LimitsScreen view={data} projectId={projectId} actor={actor} unreachable={!data && !!view.error}
                       focus={focus} onSaved={view.reload} onAdvanced={() => go("board")} onBack={() => go("overview")} />
       ) : tab === "autonomy" ? (
+        <WherePeopleDecide projectId={projectId} />
+      ) : tab === "areas" ? (
         <AutonomyPanel projectId={projectId} />
       ) : tab === "board" ? (
         <ControlBoard view={data} projectId={projectId} actor={actor} unreachable={!data && !!view.error}

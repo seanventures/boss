@@ -11343,3 +11343,29 @@ CREATE TABLE IF NOT EXISTS project_seeds (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- WHERE PEOPLE DECIDE (Govern; services/decide_list.py, the ONE source of the compliance list).
+-- `decide_rules` is each list entry's rule as a card or "change a rule in plain words" saved it,
+-- for the install (scope 'install') or one project (scope = the project id). A rule only ever
+-- makes an entry stricter than the backstop in code (decide_list.validate). Every change is
+-- kept in `decide_rule_changes`, with who made it, how (card | words) and the words they typed.
+CREATE TABLE IF NOT EXISTS decide_rules (
+  scope TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  rule JSONB NOT NULL DEFAULT '{}'::jsonb,
+  updated_by TEXT NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (scope, kind)
+);
+CREATE TABLE IF NOT EXISTS decide_rule_changes (
+  id TEXT PRIMARY KEY,
+  scope TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  before JSONB,
+  after JSONB NOT NULL,
+  actor TEXT NOT NULL,
+  via TEXT NOT NULL DEFAULT 'card' CHECK (via IN ('card', 'words')),
+  words TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_decide_rule_changes_kind ON decide_rule_changes (kind, created_at DESC);

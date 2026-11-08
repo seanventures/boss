@@ -96,8 +96,13 @@ function ReviewCell({ projectId, cls, onChanged }: { projectId: string; cls: Cla
   );
 }
 
-export function KillSwitch({ projectId, stop, onChanged, mode }: { projectId: string; stop: StopState; onChanged: () => void; mode?: ModeState }) {
-  const [confirming, setConfirming] = useState(false);
+export function KillSwitch({ projectId, stop, onChanged, mode, startConfirming, onCancel }: {
+  projectId: string; stop: StopState; onChanged: () => void; mode?: ModeState;
+  /** Open on the confirm (Where people decide's header "Stop all" opens it here). */
+  startConfirming?: boolean; onCancel?: () => void;
+}) {
+  const [confirming, setConfirmingRaw] = useState(!!startConfirming);
+  const setConfirming = (v: boolean) => { setConfirmingRaw(v); if (!v) onCancel?.(); };
   const [reason, setReason] = useState("");
   const [everywhere, setEverywhere] = useState(false);
   const org = useGate("autonomy:manage");

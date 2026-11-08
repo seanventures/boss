@@ -38,6 +38,7 @@ import { FlowCanvas } from "./flow-canvas";
 import { FlowThumb } from "./flow-thumb";
 import { Roadmap } from "./roadmap";
 import { StalledWork } from "./stalled-work";
+import { AgentLanes } from "./agent-lanes";
 import { ScorecardStrip } from "./scorecard";
 import "./agent-ops.css";
 
@@ -285,6 +286,7 @@ export function AgentOpsHome({ projectId, orgId }: { projectId: string; actor?: 
       ) : (
         <>
           <ScorecardStrip card={score.data} />
+          {!demo ? <AgentLanes projectId={projectId} /> : null}
           {missing ? (
             <div className="aa-empty" data-testid="aa-missing">
               <b>Autonomous agents aren't on this install yet</b>

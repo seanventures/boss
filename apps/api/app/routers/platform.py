@@ -414,6 +414,12 @@ def mount_platform_routers(app: FastAPI) -> None:
 
     app.include_router(govern_router)
 
+    # Govern › Where people decide: the ONE compliance list (services/decide_list.py).
+    # Imported unguarded: the list is the boundary every gate reads; a broken import fails boot.
+    from .decide_list import router as decide_list_router
+
+    app.include_router(decide_list_router)
+
     try:
         from .factory_flow import router as factory_flow_router
 

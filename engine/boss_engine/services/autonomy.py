@@ -34,6 +34,8 @@ import re
 from dataclasses import dataclass
 from typing import Any, Optional
 
+from . import decide_list as _decide_list
+
 SUPERVISED = "supervised"
 FULL_AUTO = "full_auto"
 MODES = (SUPERVISED, FULL_AUTO)
@@ -41,7 +43,7 @@ MODES = (SUPERVISED, FULL_AUTO)
 #: Ceiling on a single auto-approval, in US dollars. The artifact says $500; this is the
 #: default and is configurable per project, because $500 means something different to a
 #: two-person company than to a funded one.
-DEFAULT_THRESHOLD_USD = 500.0
+DEFAULT_THRESHOLD_USD = _decide_list.BACKSTOP_SPEND_USD
 
 #: Nothing above this risk tier is ever auto-approved, whatever it costs. A tier-3 action is
 #: one someone classified as dangerous, and cheapness does not make it safe.
@@ -51,17 +53,13 @@ MAX_AUTO_RISK_TIER = 1
 #: because the risk tier is set by whoever wrote the gate and may be wrong or missing, and this
 #: is the backstop for when it is.
 #:
+#: THE WORDS COME FROM THE ONE LIST (decide_list.LIST_KINDS, Govern › Where people decide):
+#: each entry on the compliance boundary names the words that put a gate on it, and this is
+#: their union, so the cards and this backstop can never disagree.
+#:
 #: Deliberately broad. A false positive costs a human ten seconds; a false negative deploys
 #: something nobody approved.
-IRREVERSIBLE = re.compile(
-    r"\b(deploy|deploys|deployment|ship|release|publish|merge|merges|merging"
-    r"|delete|deletes|destroy|drop|purge|wipe|teardown|terminate"
-    r"|send|email|notify|post|tweet|announce"
-    r"|pay|payment|charge|purchase|buy|refund|transfer"
-    r"|rotate|revoke|grant|permission|credential|secret|key"
-    r"|production|prod\b|customer|external)\b",
-    re.I,
-)
+IRREVERSIBLE: "re.Pattern[str]" = _decide_list.IRREVERSIBLE
 
 
 @dataclass(frozen=True)
@@ -252,7 +250,15 @@ def load_policy(connection, project_id: str) -> AutonomyPolicy:
         ),
         {"p": project_id},
     ).mappings().first()
-    return policy_from_row(dict(row) if row else None)
+    policy = policy_from_row(dict(row) if row else None)
+    # THE SPEND CARD (Where people decide) clamps Full auto: "below the cap, FinOps decides".
+    # A card only ever lowers the cap; nothing raises it above the backstop.
+    cap = _decide_list.spend_cap(connection, project_id)
+    if cap is not None and cap < policy.threshold_usd:
+        from dataclasses import replace
+
+        policy = replace(policy, threshold_usd=cap)
+    return policy
 
 
 def set_policy(connection, project_id: str, *, mode: str, actor: str,

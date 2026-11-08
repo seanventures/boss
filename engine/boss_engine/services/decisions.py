@@ -506,6 +506,22 @@ class DecisionService:
                                         delegated=delegated)
             except ci_gate.CiGateRefused as refused:
                 raise InvalidDecisionTransitionError(refused.message) from refused
+            # WHERE PEOPLE DECIDE (decide_list.py): an entry on the compliance list in its quiet
+            # window waits, and a named decider answers before their backup — enforced here, at
+            # the approval, not only drawn on the card. A policy approval never reaches an entry
+            # on the list (autonomy.IRREVERSIBLE is the same list), so only people are asked.
+            if not system_policy:
+                from . import decide_list
+
+                approver_ids = {actor}
+                if identity_ctx is not None:
+                    approver_ids.add(identity_ctx.principal.id)
+                if delegated is not None:
+                    approver_ids.add(getattr(delegated, "person_principal_id", "") or "")
+                held = decide_list.refuse_approval(connection, row, approver_ids,
+                                                   at=timestamp)
+                if held:
+                    raise InvalidDecisionTransitionError(held)
             # A RELEASE CARD IS APPROVED AS SHOWN (release_scope): only with the hash of the
             # commit list it showed, and — when that list carries commits from rejected or
             # unreviewed runs — only with the person's stated reason (force + note, as a merge
