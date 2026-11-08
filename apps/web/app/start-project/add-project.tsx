@@ -507,7 +507,7 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
             <textarea ref={box} className="npx-txt" data-testid="ap-input" aria-label="Your idea, a repo or a folder" maxLength={8000} autoFocus
                       placeholder={"A few lines about the app, e.g. “A helpdesk: customers email support@ and it becomes a ticket; AI drafts the reply; staff approve it.”\nOr paste owner/repo, a GitHub URL, or /srv/app"}
                       value={text} rows={kind === "idea" ? 5 : 1}
-                      onChange={(e) => { setText(e.target.value); if (pickedRepo || pickedFolder) { const d = detect(e.target.value); if (d.kind === "idea" || !repo || !e.target.value.toLowerCase().startsWith(repo.full_name.toLowerCase())) unpick(); } }}
+                      onChange={(e) => { setText(e.target.value); if (pickedRepo || pickedFolder) { const d = detect(e.target.value); if (d.kind === "idea" || !repo || !e.target.value.toLowerCase().startsWith(repo.full_name.toLowerCase())) { unpick(); setForced(null); } } }}
                       onKeyDown={(e) => { onBoxNav(e); onBoxKey(e); }} />
             <div className="npx-tools">
               {kind === "idea" ? (
@@ -653,7 +653,7 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
             </div>
           ) : null}
           {refusal ? (
-            <div className="npx-refusal" data-testid="ap-readiness">
+            <div data-testid="ap-readiness">
               <ReadinessPanel readiness={refusal} accepted={startAnyway} onAccept={setStartAnyway} />
             </div>
           ) : null}

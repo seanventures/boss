@@ -70,6 +70,13 @@ export function shortName(name: string): string {
   return name.replace(/^Login with /, "").split(/[,(]/)[0].trim() || name;
 }
 
+/** Helm's reason, in quotes once: a reason that already quotes the person's words
+ *  (`"staff sign in with Google" needs …`) is shown as written, never double-quoted. */
+export function quoted(why: string): string {
+  const w = why.trim();
+  return /["“”]/.test(w) ? w : `“${w}”`;
+}
+
 /** Every host the picked connectors' app talks to, once each. */
 export function egressOf(cards: TemplateCard[]): string[] {
   return [...new Set(cards.flatMap((c) => c.egress))];
@@ -246,7 +253,7 @@ export function PlanBoxes({ kind, preview, plan, set, cards, adapters, helmPicks
                   title="Connectors suggested from the brief (or found in the repo) · add or drop" onClick={() => toggle("connectors")}>
             <span className="npx-lbl">Connectors<CaretDown size={11} aria-hidden /></span>
             <span className="npx-cx">
-              {pickedCards.slice(0, 2).map((c) => <span key={c.key} data-on title={because(c.key) ? `“${because(c.key)}”` : c.summary}>{cxIcon(c.key)}{shortName(c.name)}</span>)}
+              {pickedCards.slice(0, 2).map((c) => <span key={c.key} data-on title={because(c.key) ? quoted(because(c.key)!) : c.summary}>{cxIcon(c.key)}{shortName(c.name)}</span>)}
               {pickedCards.length > 2 ? <span data-on>+{pickedCards.length - 2}</span> : null}
               {offered.length - pickedCards.length > 0 ? <span data-add>{pickedCards.length ? `+ ${offered.length - pickedCards.length}` : "+ add"}</span> : null}
               {!offered.length && !pickedCards.length ? <span data-add>none fit</span> : null}
@@ -262,7 +269,7 @@ export function PlanBoxes({ kind, preview, plan, set, cards, adapters, helmPicks
                   return (
                     <button key={c.key} type="button" className="npx-cn" data-on={on || undefined} aria-pressed={on} data-testid={`ap-cx-${c.key}`}
                             title={c.summary} onClick={() => toggleConnector(c.key)}>
-                      {cxIcon(c.key)}<span><b>{c.name}</b><small>{because(c.key) ? `“${because(c.key)}”` : c.summary}</small></span>
+                      {cxIcon(c.key)}<span><b>{c.name}</b><small>{because(c.key) ? quoted(because(c.key)!) : c.summary}</small></span>
                       {on ? <Check size={12} weight="bold" className="npx-ok" aria-hidden /> : null}
                     </button>
                   );

@@ -53,7 +53,8 @@ export type BriefField = (typeof BRIEF_FIELDS)[number];
 /** A project name from the brief's title ("HelpDesk AI: email support…" → "HelpDesk AI"). */
 export function nameFromTitle(title: string): string {
   const head = title.split(/[:—––—|]/)[0].trim();
-  return (head.length <= 40 ? head : head.split(/\s+/).slice(0, 4).join(" ")).slice(0, 60);
+  // A cut never ends on a comma or a dash ("Support helpdesk with AI-drafted," → "… AI-drafted").
+  return (head.length <= 40 ? head : head.split(/\s+/).slice(0, 4).join(" ")).slice(0, 60).replace(/[\s,;:.–—-]+$/, "");
 }
 
 // ── what BOSS will do ───────────────────────────────────────────────────────────────────────
