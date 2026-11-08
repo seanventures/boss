@@ -495,8 +495,19 @@ def readiness_dots(connection: Connection, settings: Any, project_id: str) -> li
     the readiness check's own rules (workflow_readiness.check)."""
     from ..workflow_readiness import check, need_for
 
+    # The repository dot names where the code is: "Local repo" for a project whose code BOSS
+    # keeps on this machine (BOSSAPP-918), "GitHub" otherwise.
+    repo_label = "GitHub"
+    try:
+        from ..local_projects import local_binding
+
+        with connection.begin_nested():
+            if local_binding(connection, project_id) is not None:
+                repo_label = "Local repo"
+    except Exception:  # noqa: BLE001 — an older schema: GitHub, as before
+        pass
     out = []
-    for key, label in (("model", "Model"), ("repository", "GitHub"), ("budget", "Budget"),
+    for key, label in (("model", "Model"), ("repository", repo_label), ("budget", "Budget"),
                        ("deployment_target", "Host")):
         try:
             with connection.begin_nested():

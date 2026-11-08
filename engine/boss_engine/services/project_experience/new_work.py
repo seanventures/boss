@@ -74,6 +74,15 @@ def issue_of(source_ref: Any = None, source_url: Any = None,
             return {"provider": "plane", "number": None, "label": key, "kind": "issue",
                     "external_url": _URL.search(candidate).group(0)}
     m = re.fullmatch(r"(issue|pr):(\d+)", ref)
+    if m and repo and str(repo).startswith("local_"):
+        # A repository BOSS keeps on this machine (BOSSAPP-918) has change sets, not GitHub
+        # issues: a PR reference opens its change set in BOSS; an issue has nowhere to go.
+        number = int(m.group(2))
+        if m.group(1) != "pr":
+            return None
+        pid = str(repo).split("/", 1)[0][len("local_"):]
+        return {"provider": "local", "number": number, "label": f"#{number}", "kind": "pr",
+                "external_url": url or f"/changes/{pid}/{number}"}
     if m and repo:
         number = int(m.group(2))
         path = "issues" if m.group(1) == "issue" else "pull"
@@ -463,6 +472,8 @@ def tracker(connection: Connection, project_id: str) -> Optional[dict[str, Any]]
                                                                   or row["provider_key"]),
                 "where": where, "connected": True}
     repo = next(iter(repos(connection, project_id)), None)
+    if repo and str(repo["full_name"]).startswith("local_"):
+        return None    # no GitHub Issues for a repository on this machine (BOSSAPP-918)
     if repo:
         return {"provider": "github_issues", "name": "GitHub", "where": repo["full_name"],
                 "connected": False}

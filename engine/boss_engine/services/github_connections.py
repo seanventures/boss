@@ -490,7 +490,7 @@ class GitHubConnectionService:
         rows = connection.execute(
             text(
                 f"""
-                SELECT id, project_id, connection_id, repository_id, owner, name,
+                SELECT id, project_id, connection_id, repository_id, host, owner, name,
                        full_name, role, default_branch, visibility, archived,
                        status, permissions, capabilities, metadata, last_synced_at,
                        created_by, created_at, updated_at
@@ -514,7 +514,7 @@ class GitHubConnectionService:
         row = connection.execute(
             text(
                 """
-                SELECT id, project_id, connection_id, repository_id, owner, name,
+                SELECT id, project_id, connection_id, repository_id, host, owner, name,
                        full_name, role, default_branch, visibility, archived,
                        status, permissions, capabilities, metadata, last_synced_at,
                        created_by, created_at, updated_at

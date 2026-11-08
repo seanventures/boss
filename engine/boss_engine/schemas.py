@@ -4687,8 +4687,11 @@ class GitHubConnectionLifecycleRequest(BaseModel):
 class GitHubRepositoryBindingSummary(BaseModel):
     id: str
     project_id: str
-    connection_id: str
+    #: None for a repository BOSS keeps on this machine (host "local", BOSSAPP-918).
+    connection_id: Optional[str] = None
     repository_id: Optional[int] = None
+    #: Where the code is: "github", or "local" (a bare repository BOSS keeps).
+    host: Literal["github", "local"] = "github"
     owner: str
     name: str
     full_name: str

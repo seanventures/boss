@@ -94,6 +94,7 @@ def _state_words(status: Any, decision_status: Any) -> tuple[str, str]:
 def _pr_by_commit(connection: Connection, project_id: str) -> dict[str, dict[str, Any]]:
     """commit → {number, title}: the pull request whose recorded merge it is, and its short
     title (titles.short_title of the build's title and brief)."""
+    from ..repo_links import pr_link
     from .common import pr_number
     from .titles import short_title
 
@@ -105,7 +106,8 @@ def _pr_by_commit(connection: Connection, project_id: str) -> dict[str, dict[str
             "ORDER BY created_at"), {"p": project_id}).mappings():
         n = r["n"] or pr_number(r["u"])
         if n and str(r["sha"]) not in out:
-            out[str(r["sha"])] = {"number": int(n), "url": r["u"],
+            # A local change set's URL (http://boss-local/…) opens BOSS's change-set view.
+            out[str(r["sha"])] = {"number": int(n), "url": pr_link(r["u"]),
                                   "title": short_title(r["title"], r["brief"])}
     return out
 

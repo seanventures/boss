@@ -835,11 +835,39 @@ def check_github_own_link(ctx: Context, step: dict[str, Any]) -> Optional[dict[s
                   action=f"Re-run the pre-check online; if it still fails, {GITHUB_LINK_FIX}.")
 
 
+def _local_bare(ctx: Context) -> Optional[tuple[Any, str]]:
+    """(bare repository, default branch) when the project's code is in a repository BOSS keeps
+    on this machine (BOSSAPP-918): its files are read there, with no token and no network."""
+    binding = _binding(ctx)
+    full = str((binding or {}).get("full_name") or "")
+    from . import local_repo
+
+    if not local_repo.is_local(full):
+        return None
+    owner, _, name = full.partition("/")
+    try:
+        git_dir = local_repo.bare_path(owner, name, ctx.settings)
+        if not (git_dir / "HEAD").is_file():
+            return None
+        return git_dir, local_repo.default_branch(git_dir)
+    except Exception:  # noqa: BLE001 — unreadable: the check says unknown
+        return None
+
+
 def _repo_files(ctx: Context, rel_dir: str) -> Optional[list[str]]:
-    """Names in a repository directory: from the local repo root, else GitHub (read-only)."""
+    """Names in a repository directory: from the local repo root, a local project's bare
+    repository, else GitHub (read-only)."""
     if ctx.repo_root is not None:
         d = ctx.repo_root / rel_dir
         return sorted(p.name for p in d.iterdir()) if d.is_dir() else []
+    bare = _local_bare(ctx)
+    if bare is not None:
+        from . import local_repo
+
+        prefix = rel_dir.strip("/") + "/"
+        names = {p[len(prefix):].split("/", 1)[0] for p in local_repo.list_paths(bare[0], bare[1])
+                 if p.startswith(prefix)}
+        return sorted(n for n in names if n)
     if ctx.offline:
         return None
     binding = _binding(ctx)
@@ -857,6 +885,11 @@ def _repo_text(ctx: Context, rel_path: str) -> Optional[str]:
     if ctx.repo_root is not None:
         p = ctx.repo_root / rel_path
         return p.read_text(errors="ignore") if p.is_file() else ""
+    bare = _local_bare(ctx)
+    if bare is not None:
+        from . import local_repo
+
+        return local_repo.read_file(bare[0], bare[1], rel_path) or ""
     if ctx.offline:
         return None
     binding = _binding(ctx)

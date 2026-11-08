@@ -691,7 +691,9 @@ def _registered_repos(db: Any) -> list[str]:
     point = nested() if callable(nested) else None
     try:
         rows = db.execute(_sql("SELECT DISTINCT lower(full_name) AS r FROM github_repository_bindings "
-                               "WHERE status = 'active' AND full_name LIKE '%/%' ORDER BY 1")).scalars().all()
+                               "WHERE status = 'active' AND full_name LIKE '%/%' "
+                               # A repository on this machine is not the GitHub App's (BOSSAPP-918).
+                               "AND full_name NOT LIKE 'local\\_%' ORDER BY 1")).scalars().all()
     except Exception:  # noqa: BLE001 — an older schema: nothing registered
         if point is not None:
             point.rollback()

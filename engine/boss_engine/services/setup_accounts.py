@@ -153,6 +153,8 @@ def build(connection: Connection, settings: Any, project_id: str, repository: di
     org_id = _org_of(connection, project_id)
     repos_by_conn: dict[str, list[dict[str, Any]]] = {}
     for repo in repository.get("repos") or []:
+        if repo.get("host") == "local":
+            continue    # BOSSAPP-918: a repository on this machine belongs to no account
         repos_by_conn.setdefault(str(repo.get("connection_id") or "install"), []).append(repo)
 
     accounts: list[dict[str, Any]] = []
@@ -252,12 +254,14 @@ def _repositories(connection: Connection, project_id: str, org_id: Optional[str]
     seen: set[str] = set()
     for repo in repository.get("repos") or []:
         full = str(repo["full_name"])
-        account = accounts.get(str(repo.get("connection_id") or "install"))
+        local = repo.get("host") == "local"
+        account = None if local else accounts.get(str(repo.get("connection_id") or "install"))
         seen.add(full.lower())
         out.append({
             "full_name": full, "binding_id": repo.get("binding_id"), "in_project": True,
             "default": bool(repo.get("default")), "account_id": account["id"] if account else None,
-            "via": account["name"] if account else None,
+            "via": "On this machine" if local else (account["name"] if account else None),
+            "host": repo.get("host") or "github", "external_url": repo.get("external_url"),
             "projects": used.get(full.lower(), []), "checks": repo.get("checks"), "pill": repo.get("pill"),
         })
     # THE ORG'S OTHER REPOSITORIES: allowed in the registry, not (yet) in this project.

@@ -135,12 +135,20 @@ def citations(connection: Connection, project_id: str, reply: str,
     by_id = {str(w["id"]): w for w in work}
     repo = _repo(connection, project_id) if (prs or issues or files or pr_urls) else None
     full = (repo or {}).get("full_name")
+    from .repo_links import is_local_repo
+
+    # A repository BOSS keeps on this machine (BOSSAPP-918) has no GitHub page: a PR is its
+    # change set in BOSS, and issues / file links on GitHub do not exist.
+    local = bool(full) and is_local_repo(full)
 
     for at, number in prs:
         w = by_pr.get(number)
         if w:
             out.append(_cite("pr", f"#{number}", f"PR #{number}", w["href"], at=at,
                              title=f"PR #{number} · {w.get('label') or ''}".rstrip(" ·")))
+        elif full and local:
+            out.append(_cite("pr", f"#{number}", f"Change #{number}",
+                             f"/changes/{project_id}/{number}", at=at))
         elif full:
             out.append(_cite("pr", f"#{number}", f"PR #{number}",
                              f"https://github.com/{full}/pull/{number}", at=at, external=True))
@@ -161,13 +169,13 @@ def citations(connection: Connection, project_id: str, reply: str,
             out.append(_cite("run", rid, label, w["href"], at=at, title=w.get("label") or label))
     pr_numbers = {n for _, n in prs}
     for at, number in issues:
-        if number in pr_numbers or not full:
+        if number in pr_numbers or not full or local:
             continue
         name = _issue_title(connection, project_id, number)
         out.append(_cite("issue", f"#{number}", f"#{number} {name}".strip() if name else f"#{number}",
                          f"https://github.com/{full}/issues/{number}", at=at, external=True,
                          title=f"Issue #{number}" + (f" · {name}" if name else "")))
-    if files and full:
+    if files and full and not local:
         names = list(dict.fromkeys(f for _, f in files))
         known = _known_files(connection, project_id, names)
         branch = (repo or {}).get("branch") or "HEAD"

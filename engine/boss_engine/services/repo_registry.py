@@ -23,6 +23,8 @@ from typing import Any, Optional
 
 from sqlalchemy import text
 
+from .local_repo import is_local
+
 
 class RepositoryResolutionError(RuntimeError):
     """The requested repository could not be resolved for this project."""
@@ -195,6 +197,30 @@ def repository_activity(
     return out
 
 
+def _fill_local_merged_counts(activity: list[dict[str, Any]], *, max_lookups: int) -> None:
+    if not activity:
+        return
+    try:
+        from ..db import get_engine
+
+        engine = get_engine()
+        with engine.connect() as c:
+            for repo in activity:
+                prs = [int(r["pr"]) for r in repo.get("recent_runs", []) if r.get("pr")][:max_lookups]
+                if not prs:
+                    repo["prs_merged"] = 0
+                    continue
+                merged = int(c.execute(text(
+                    "SELECT count(DISTINCT number) FROM local_change_sets WHERE repository = :r "
+                    "AND number = ANY(:n) AND state = 'merged'"),
+                    {"r": f"{repo['owner']}/{repo['repo']}", "n": prs}).scalar() or 0)
+                repo["prs_merged"] = merged
+                repo["merge_rate"] = round(merged / len(prs) * 100, 1)
+    except Exception:  # noqa: BLE001 — an honest blank, as for GitHub
+        for repo in activity:
+            repo.setdefault("prs_merged", None)
+
+
 def fill_merged_counts(activity: list[dict[str, Any]], *, token: str,
                        api_base_url: str = "https://api.github.com",
                        max_lookups: int = 25) -> None:
@@ -203,12 +229,19 @@ def fill_merged_counts(activity: list[dict[str, Any]], *, token: str,
     Bounded to `max_lookups` PRs per repo so a dashboard render can never fan out into
     an unbounded API sweep. Leaves prs_merged as None on any failure -- a wrong zero
     would read as "BOSS never lands anything", which is worse than an honest blank.
+
+    A repository BOSS keeps on this machine (BOSSAPP-919) has its merges in local_change_sets,
+    never on GitHub: those are counted from the database, with or without a token.
     """
+    _fill_local_merged_counts([r for r in activity if is_local(f"{r.get('owner')}/{r.get('repo')}")],
+                              max_lookups=max_lookups)
     if not token:
         return
     import httpx
 
     for repo in activity:
+        if is_local(f"{repo.get('owner')}/{repo.get('repo')}"):
+            continue
         prs = [r["pr"] for r in repo.get("recent_runs", []) if r.get("pr")][:max_lookups]
         if not prs:
             repo["prs_merged"] = 0

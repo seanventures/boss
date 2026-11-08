@@ -143,10 +143,15 @@ def story(connection: Connection, project_id: str, work_id: str) -> dict[str, An
                       "link": ({"label": "Decision", "href": href(project_id, area="decisions",
                                                                   decision=spec_dec["id"])}
                                if spec_dec else None)}
+    from ..local_repo_host import is_local_pr_url as _is_local_pr
+    from ..repo_links import pr_link as _pr_link
+
     build_sub = (f"{files} file{'s' if files != 1 else ''} changed"
                  if isinstance(files, int) else "")
     rows["build"] = {"sub": build_sub,
-                     "link": ({"label": "Diff", "external_url": f"{pr_url}/files"}
+                     # A local change set's diff is on BOSS's change-set view (BOSSAPP-919).
+                     "link": ({"label": "Diff", "external_url": (
+                         _pr_link(pr_url) if _is_local_pr(pr_url) else f"{pr_url}/files")}
                               if pr_url else None)}
     review_bits = []
     if state.get("tests_passed") is True:

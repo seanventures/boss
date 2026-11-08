@@ -847,6 +847,8 @@ def reader_for_project(connection: Any, settings: Any, project_id: str,
                                                project_id=project_id))
 
     state = github_state(connection, settings, project_id)
+    if not repository and state.get("host") == "local":
+        return reader_for_project(connection, settings, project_id, state["repo"])
     if not state.get("connected") or not (repository or state.get("repo")):
         raise CiSettingError("github_not_connected", 409,
                              "This project has no GitHub repository connected. Connect it in Setup.")

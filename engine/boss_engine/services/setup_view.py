@@ -309,22 +309,27 @@ def secrets_state(connection: Connection, settings: Any, project_id: str, *,
 def _repository(connection: Connection, settings: Any, project_id: str, now: datetime
                 ) -> dict[str, Any]:
     rows = connection.execute(
+        # LEFT JOIN: a repository BOSS keeps on this machine (host 'local', BOSSAPP-918) has no
+        # connection row; an inner join hid it, and the project read "Connect a repository".
         text("SELECT b.id, b.full_name, b.role, b.default_branch, b.visibility, b.checks, "
-             "       b.checked_at, c.id AS connection_id, c.auth_method, c.account_login, "
+             "       b.checked_at, COALESCE(b.host, 'github') AS host, "
+             "       c.id AS connection_id, c.auth_method, c.account_login, "
              "       c.expires_at, c.status AS connection_status "
              "  FROM github_repository_bindings b "
-             "  JOIN github_connections c ON c.id = b.connection_id "
-             " WHERE b.project_id = :p AND b.status = 'active' "
-             "   AND c.status NOT IN ('disabled', 'revoked') "
+             "  LEFT JOIN github_connections c ON c.id = b.connection_id "
+             " WHERE b.project_id = :p AND b.status = 'active' AND b.role <> 'mirror' "
+             "   AND (b.host = 'local' OR c.status NOT IN ('disabled', 'revoked')) "
              " ORDER BY (b.role = 'primary') DESC, b.created_at"),
         {"p": project_id}).mappings().all()
     connections = _connections(connection, project_id)
     connection_row = None
-    if rows:
-        connection_row = {"id": rows[0]["connection_id"], "auth_method": rows[0]["auth_method"],
-                          "account_login": rows[0]["account_login"],
-                          "expires_at": rows[0]["expires_at"]}
-    else:
+    connected = [r for r in rows if r["connection_id"]]
+    if connected:
+        connection_row = {"id": connected[0]["connection_id"],
+                          "auth_method": connected[0]["auth_method"],
+                          "account_login": connected[0]["account_login"],
+                          "expires_at": connected[0]["expires_at"]}
+    elif not rows:
         found = connection.execute(
             text("SELECT id, auth_method, account_login, expires_at FROM github_connections "
                  " WHERE project_id = :p AND status NOT IN ('disabled', 'revoked') "
@@ -343,7 +348,7 @@ def _repository(connection: Connection, settings: Any, project_id: str, now: dat
             private=(None if row["visibility"] is None else row["visibility"] != "public"),
             default_branch=row["default_branch"], checks=checks, state=state,
             expires=expires, checked=checked, retry_at=checks.get("retry_at"), now=now,
-            connection_id=row["connection_id"]))
+            connection_id=row["connection_id"], host=row["host"]))
 
     source = "connected"
     if not rows:
@@ -378,9 +383,10 @@ def _repository(connection: Connection, settings: Any, project_id: str, now: dat
             "expires_at": _iso(connection_row.get("expires_at")),
             "source": source,
         }
-        if source == "connected" and connection_out["auth"] == "token" and repos:
+        github_repos = [r for r in repos if r.get("host") != "local"]
+        if source == "connected" and connection_out["auth"] == "token" and github_repos:
             connection_out["builds"] = _builds_reach(connection, project_id, connection_row["id"],
-                                                     repos[0]["full_name"])
+                                                     github_repos[0]["full_name"])
     return {"connection": connection_out, "connections": connections, "repos": repos}
 
 
@@ -462,7 +468,9 @@ def _repo_entry(*, binding_id: Optional[str], full_name: str, default: bool,
                 private: Optional[bool], default_branch: Optional[str], checks: dict[str, Any],
                 state: str, expires: Optional[datetime], checked: Optional[datetime],
                 retry_at: Any, now: datetime,
-                connection_id: Optional[str] = None) -> dict[str, Any]:
+                connection_id: Optional[str] = None, host: Optional[str] = None) -> dict[str, Any]:
+    from . import repo_links
+
     days = max(0, (expires - now).days) if expires else None
     pill = setup_pills.pill(
         "repository", state, repo=full_name, n=days,
@@ -477,6 +485,10 @@ def _repo_entry(*, binding_id: Optional[str], full_name: str, default: bool,
     return {
         "binding_id": binding_id, "full_name": full_name, "default": default,
         "connection_id": connection_id,
+        # Where the code is (BOSSAPP-918), what a dot calls it, and its page (None = BOSS's own).
+        "host": repo_links.host_of(full_name, host),
+        "host_label": repo_links.host_label(full_name, host),
+        "external_url": repo_links.repo_url(full_name),
         "private": private, "default_branch": default_branch,
         "checks": {"read": part("read"), "write": part("write"),
                    "pull_requests": part("pull_requests")},

@@ -496,9 +496,15 @@ def clone_note(db: Any, org_id: Optional[str], *, full_name: str, binding_status
 
 def mint_allowed(db: Any, org_id: Optional[str], repos: list[str]) -> Optional[list[str]]:
     """The repositories of `repos` the registry REFUSES (unticked, archived, unreachable), or None
-    when the registry is not in use for this org (an install that never refreshed it)."""
+    when the registry is not in use for this org (an install that never refreshed it).
+
+    A repository BOSS keeps on this machine (`local_<project>/<name>`, BOSSAPP-918) is never the
+    GitHub registry's to refuse: nothing is minted or cloned through egress for it."""
+    from ..services.local_repo import is_local
+
+    repos = [r for r in repos if not is_local(r)] if repos else repos
     if not org_id or not repos:
-        return None
+        return None if not org_id else []
     try:
         with db.begin_nested():
             if not _registry_in_use(db, org_id):

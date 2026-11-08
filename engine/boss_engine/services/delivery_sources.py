@@ -29,6 +29,8 @@ from ..ports import sql
 def known_repos(connection, settings: Settings,
                 project_id: Optional[str] = None) -> list[dict[str, Any]]:
     """Every repository BOSS has built in or deployed from, newest activity first."""
+    from .repo_links import host_of, repo_url
+
     default_owner = getattr(settings, "target_github_owner", "") or ""
     seen: dict[tuple[str, str], dict[str, Any]] = {}
 
@@ -38,7 +40,9 @@ def known_repos(connection, settings: Settings,
         key = (owner or default_owner, repo)
         entry = seen.setdefault(key, {
             "owner": key[0], "repo": key[1], "full_name": f"{key[0]}/{key[1]}",
-            "url": f"https://github.com/{key[0]}/{key[1]}",
+            # None for a repository BOSS keeps on this machine (local_<project>/…): no web page.
+            "url": repo_url(f"{key[0]}/{key[1]}"),
+            "host": host_of(f"{key[0]}/{key[1]}"),
             "sources": [], "code_tasks": 0, "targets": 0, "last_seen": None,
         })
         if source not in entry["sources"]:

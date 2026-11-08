@@ -23,6 +23,8 @@ from typing import Any, Optional
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
+from ..local_repo_host import is_local_pr_url
+from ..repo_links import pr_link
 from .common import href, iso, pr_number, project_href, words
 
 LIMIT = 20
@@ -114,8 +116,11 @@ def search(connection: Connection, *, q: str, project_ids: list[str],
             by_pr[key] = {"label": (f"PR #{n} · {_short(r['title'], 'pull request')}" if n
                                     else _short(r["title"], "Pull request")),
                           "kind": "pr", "sub": names.get(str(r["project_id"]), r["project_id"]),
-                          "needs_you": waiting, "hint": "↵ drawer · ⌘↵ GitHub",
-                          "external_url": r["pull_request_url"],
+                          "needs_you": waiting,
+                          # A local change set opens BOSS's own view, never http://boss-local/.
+                          "hint": ("↵ drawer · ⌘↵ change set" if is_local_pr_url(r["pull_request_url"])
+                                   else "↵ drawer · ⌘↵ GitHub"),
+                          "external_url": pr_link(r["pull_request_url"]) or "",
                           "href": project_href(str(r["project_id"]), tab="work",
                                                drawer=f"build:{r['id']}"),
                           "project_id": r["project_id"]}

@@ -548,7 +548,10 @@ def learned(connection: Connection, project_id: str, limit: int = 6) -> list[dic
 def docs(connection: Connection, project_id: str, facts_docs: dict[str, Any],
          repo: Optional[str]) -> list[dict[str, Any]]:
     out = []
-    base = f"https://github.com/{repo}/blob/HEAD/" if repo else None
+    from ..repo_links import blob_url
+
+    # A local repository (BOSSAPP-918) has no web page: its documents open in BOSS, not GitHub.
+    base = blob_url(repo, "") if repo else None
     roster = agents(connection, project_id)
     for r in connection.execute(text(
             "SELECT id, COALESCE(title, directive) AS title, updated_at, role_keys, decision_id, "
@@ -766,7 +769,7 @@ def repo_rows(connection: Connection, project_id: str) -> list[dict[str, Any]]:
     if not out:
         return out
     via = {str(r["full_name"]).lower(): r for r in connection.execute(text(
-        "SELECT b.full_name, c.connection_label, c.auth_method, c.account_login FROM "
+        "SELECT b.full_name, b.host, c.connection_label, c.auth_method, c.account_login FROM "
         "github_repository_bindings b LEFT JOIN github_connections c ON c.id = b.connection_id "
         "WHERE b.project_id = :p AND b.status = 'active'"), {"p": project_id}).mappings()}
     pushed = connection.execute(text(
@@ -818,6 +821,8 @@ def repo_rows(connection: Connection, project_id: str) -> list[dict[str, Any]]:
         how = "GitHub App" if method.startswith("github_app") or c.get("connection_label") == \
             "GitHub App" else ("a token" if method else None)
         r["via"] = " · ".join(x for x in (how, c.get("account_login")) if x) or None
+        if str(c.get("host") or "") == "local" or r.get("host") == "local":
+            r["via"] = "On this machine"
         r["last_push"] = f"{age(pushed)} ago" if pushed else None
         r["deploys_to"] = (str(staging).title() if staging else None)
     return out

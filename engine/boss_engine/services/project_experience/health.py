@@ -603,8 +603,10 @@ def monitoring_pack(connection: Connection, project_id: str) -> dict[str, Any]:
             {"p": project_id}).mappings().first()
         if got and got["repository"]:
             path = got["path"] or "boss.deploy.yaml"
+            from ..repo_links import blob_url
+
             file = {"path": path, "external_url":
-                    f"https://github.com/{got['repository']}/blob/{got['commit_sha'] or 'HEAD'}/{path}"}
+                    blob_url(got["repository"], path, got["commit_sha"] or "HEAD")}
     return {"rules": rules, "off": off, "managed_in": managed, "kinds": kinds[:8], "file": file,
             # Observability › Alerts: every app's rules and what fired (no `rules` view exists).
             "href": href(project_id, area="observability", view="alerts")}

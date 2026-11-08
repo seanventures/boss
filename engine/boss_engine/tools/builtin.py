@@ -299,7 +299,8 @@ def _register_read_tools(reg: ToolRegistry) -> None:
             if row is None:
                 return {"ok": False, "error": "project_not_found", "project": project_id}
             repos = c.execute(_text(
-                "SELECT full_name, role, status, default_branch, connection_id, created_at "
+                "SELECT full_name, role, status, default_branch, connection_id, "
+                "COALESCE(host, 'github') AS host, created_at "
                 "  FROM github_repository_bindings WHERE project_id = :p "
                 " ORDER BY (role = 'primary') DESC, full_name"),
                 {"p": project_id}).mappings().all()
@@ -8198,7 +8199,8 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
                 raw = str(row["pull_request_url"])
 
         if not number:
-            m = _re.search(r"github\.com/([^/]+)/([^/]+)/pull/(\d+)", raw)
+            # github.com, or a local change set's http://boss-local/local_<project>/<name>/pull/N.
+            m = _re.search(r"(?:github\.com|//boss-local)/([^/]+)/([^/]+)/pull/(\d+)", raw)
             if m:
                 repo_full = repo_full or f"{m.group(1)}/{m.group(2)}"
                 number = m.group(3)
@@ -8219,6 +8221,32 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
         # authority to inspect an arbitrary private repository.
         if not run_repo and not _project_repository_bound(ctx, pid, repo_full):
             return {"ok": False, "error": "repository unavailable in this project"}
+        from boss_engine.services.local_repo import is_local as _is_local_repo
+
+        if _is_local_repo(repo_full):
+            # BOSSAPP-919: a repository BOSS keeps on this machine — its pull requests are local
+            # change sets, read from the bare repository, never from api.github.com.
+            from boss_engine.services.local_repo_host import LocalGitAdapter
+            from boss_engine.services.repo_links import change_view_path
+
+            l_owner, _, l_name = repo_full.partition("/")
+            try:
+                adapter = LocalGitAdapter(ctx.settings, owner=l_owner, repo=l_name, project_id=pid,
+                                          engine=ctx.engine)
+                meta = adapter.pull_request_meta(int(number))
+                files = adapter.pull_request_files(int(number))
+                diff = adapter.get_pull_request_diff(int(number)) if args.get("with_diff") else ""
+            except Exception as exc:  # noqa: BLE001 — a missing change set is an answer
+                return {"ok": False, "error": f"could not read {repo_full}#{number}: {exc}"[:250]}
+            listed = [{"path": f.get("path") or f.get("filename"), "status": f.get("status"),
+                       "additions": f.get("additions"), "deletions": f.get("deletions")}
+                      for f in files]
+            return {"repo": repo_full, "number": int(number), "host": "local",
+                    "title": meta.get("title"), "state": meta.get("state"),
+                    "merged": meta.get("state") == "merged", "branch": meta.get("head_ref"),
+                    "changed_files": len(listed), "files": listed,
+                    **({"diff": diff[:20000]} if diff else {}),
+                    "view": change_view_path(meta.get("url"))}
         if _community_restricted(ctx.settings):
             token = _github_token_for(ctx, pid, repo_full)
         else:

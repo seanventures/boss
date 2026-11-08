@@ -220,6 +220,19 @@ def github_state(connection: Connection, settings: Any, project_id: str) -> dict
         failing = str((error or {}).get("message") or "Setup's GitHub check failed") \
             if isinstance(error, dict) else str(error or "Setup's GitHub check failed")
     if row is None:
+        # BOSSAPP-918: the project's code is in a repository BOSS keeps on this machine. It is
+        # connected (builds, reads and CI run against it) — on host "local", with no GitHub API.
+        try:
+            local = connection.execute(text(
+                "SELECT full_name FROM github_repository_bindings WHERE project_id = :p "
+                "AND host = 'local' AND status = 'active' AND role <> 'mirror' "
+                "ORDER BY (role = 'primary') DESC, created_at LIMIT 1"),
+                {"p": project_id}).scalar()
+        except Exception:  # noqa: BLE001 — an older schema has no host column
+            local = None
+        if local:
+            return {"connected": True, "repo": str(local), "host": "local", "api_base": None,
+                    "failing": None, "has_connection": False}
         env_repo = "/".join(x for x in (getattr(settings, "github_owner", "") or "",
                                         getattr(settings, "github_repo", "") or "") if x)
         if conn_row is None and getattr(settings, "github_token", None) \
@@ -523,6 +536,15 @@ def _github_test(begin: Begin, settings: Any, project_id: str, *, push: bool,
             if state["connected"] else ""
     if not state["connected"] or not state["repo"]:
         return result(False, error="Connect your GitHub repo in Setup first", started=started)
+    if state.get("host") == "local":
+        from .local_repo import exists
+
+        owner, _, name = str(state["repo"]).partition("/")
+        if exists(owner, name, settings):
+            return result(True, fact=f"{state['repo']} is on this machine; BOSS commits to it "
+                                       "and its sandbox runs the checks (no GitHub).", started=started)
+        return result(False, error=f"{state['repo']} is not on this machine any more",
+                      started=started)
     if not token:
         return result(False, error="No GitHub token for this repo", started=started)
     repo = state["repo"]
@@ -960,6 +982,9 @@ def _connect_tracker(begin: Begin, settings: Any, project_id: str, provider: dic
             state = github_state(connection, settings, project_id)
             if not state["connected"] or not state["repo"]:
                 raise KitFieldError("Connect your GitHub repo in Setup first", None)
+            if state.get("host") == "local":
+                raise KitFieldError("This project's code is on this machine, not on GitHub: "
+                                    "publish it to GitHub first, or pick another tracker.", None)
             owner, _, repo = state["repo"].partition("/")
             config = {"owner": owner, "repo": repo, "api_base_url": state["api_base"],
                       "credential": "github_connection"}

@@ -676,6 +676,12 @@ def check_repository(connection: Connection, settings: Any, project_id: str,
 
     if binding_id == "install":
         return _check_install_repository(connection, settings, project_id, actor=actor, http=http)
+    local = connection.execute(
+        text("SELECT full_name FROM github_repository_bindings WHERE project_id = :p AND id = :b "
+             "AND host = 'local'"), {"p": project_id, "b": binding_id}).mappings().first()
+    if local is not None:
+        return _check_local_repository(connection, settings, project_id, binding_id,
+                                       local["full_name"], actor=actor)
     row = connection.execute(
         text("SELECT b.full_name, b.connection_id, c.api_base_url, c.status "
              "FROM github_repository_bindings b JOIN github_connections c "
@@ -735,6 +741,44 @@ def check_repository(connection: Connection, settings: Any, project_id: str,
                {"state": found["state"], "repository": row["full_name"],
                 "receipt_id": receipt_id})
     return found
+
+
+def _check_local_repository(connection: Connection, settings: Any, project_id: str,
+                            binding_id: str, full_name: str, *, actor: str) -> dict[str, Any]:
+    """A repository BOSS keeps on this machine (BOSSAPP-918): no GitHub to ask. Read = the bare
+    repository answers git; write and pull requests = BOSS owns it (commits and change sets are
+    its own). Recorded like a GitHub probe so the dots, Setup and readiness read one shape."""
+    from . import local_repo
+    from .core import emit_event
+
+    owner, _, name = str(full_name).partition("/")
+    at = iso(now_utc())
+    try:
+        described = local_repo.describe(owner, name, settings)
+        ok, why = bool(described.get("head_sha")) or local_repo.exists(owner, name, settings), ""
+    except Exception as error:  # noqa: BLE001 — a missing or broken repository, in words
+        described, ok, why = {}, False, str(error)[:200]
+    if ok:
+        part = {"ok": True, "state": "working", "at": at, "detail": "local"}
+        checks = {"read": part, "write": dict(part), "pull_requests": dict(part),
+                  "state": "working", "retry_at": None}
+        state = "working"
+    else:
+        part = {"ok": False, "state": "no_access", "at": at,
+                "detail": why or "The repository is not on this machine."}
+        checks = {"read": part, "state": "no_access", "retry_at": None}
+        state = "no_access"
+    connection.execute(
+        text("UPDATE github_repository_bindings SET checks = CAST(:c AS JSONB), "
+             "checked_at = now(), default_branch = COALESCE(:db, default_branch), "
+             "updated_at = now() WHERE id = :b"),
+        {"c": json.dumps(checks), "db": described.get("default_branch"), "b": binding_id})
+    emit_event(connection, project_id, "setup.repository_checked", actor,
+               "github_repository_binding", binding_id,
+               {"state": state, "repository": full_name, "host": "local"})
+    return {"state": state, "expires_at": None, "retry_at": None, "host": "local",
+            "default_branch": described.get("default_branch"), "private": True,
+            "checks": {k: v for k, v in checks.items() if isinstance(v, dict)}}
 
 
 def _check_install_repository(connection: Connection, settings: Any, project_id: str, *,

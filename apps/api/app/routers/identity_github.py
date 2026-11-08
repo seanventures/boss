@@ -111,7 +111,7 @@ def _in_use_repos(db: Any) -> list[str]:
     try:
         rows = db.execute(text(
             "SELECT DISTINCT lower(b.full_name) FROM github_repository_bindings b "
-            "WHERE b.status = 'active' AND ("
+            "WHERE b.status = 'active' AND b.full_name NOT LIKE 'local\\_%' AND ("
             "b.role = 'primary' OR EXISTS ("
             "SELECT 1 FROM app_components c WHERE c.binding_id = b.id)) ORDER BY 1")).scalars().all()
     except Exception:  # noqa: BLE001 — an older schema: no warning, the update still confirms
