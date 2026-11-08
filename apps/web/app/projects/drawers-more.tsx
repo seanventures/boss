@@ -252,7 +252,9 @@ export function NeedsBody({ ctx, n }: { ctx: PxCtx; n: NeedsYou }) {
   return (
     <>
       {n.mini.length ? <Flow nodes={n.mini} testid="px-drawer-needs-flow" /> : null}
-      {n.detail ? <p style={{ margin: 0, lineHeight: 1.5 }}>{n.detail}</p> : null}
+      {n.question ? <p style={{ margin: 0, lineHeight: 1.5, fontWeight: 600 }} data-testid="px-drawer-needs-question">{n.question}</p> : null}
+      {n.detail ? <p style={{ margin: 0, lineHeight: 1.5 }} className={n.question ? "px-muted" : undefined}
+                     data-testid="px-drawer-needs-detail">{n.detail}</p> : null}
       {n.entries && n.entries.length > 1 ? <NeedsEntries ctx={ctx} n={n} /> : null}
       {/* What the Shepherd found about the stuck or refused work this asks about (stuck_work). */}
       <DiagnosisFlow d={n.diagnosis} testId="px-drawer-needs-diagnosis" />

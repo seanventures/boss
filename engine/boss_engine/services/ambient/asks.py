@@ -269,7 +269,44 @@ def found_so_far(connection: Connection, item_id: str, limit: int = 200) -> str:
         connection, item_id, kinds=("finding", "hypothesis")) if m["sender"] != "boss"]
     last = next((s for s in reversed(said) if s), "")
     sentence = re.split(r"(?<=[.!?])\s", scrub(last, 600), maxsplit=1)[0].rstrip(" .;")
-    return clean_text(sentence, limit) or "nothing settled yet"
+    return clip_words(sentence, limit) or "nothing settled yet"
+
+
+def clip_words(text: Any, limit: int) -> str:
+    """Text cut to `limit` characters at a clause or word boundary, with an ellipsis — never
+    mid-word ("… that has nothing to d" on boss-dogfood's card, 2026-11-08)."""
+    body = " ".join(str(text or "").split())
+    if len(body) <= limit:
+        return body
+    cut = body[:limit - 1]
+    clause = max(cut.rfind("; "), cut.rfind(", "), cut.rfind(" — "))
+    if clause >= limit * 0.6:
+        cut = cut[:clause]
+    elif " " in cut:
+        cut = cut[:cut.rfind(" ")]
+    return cut.rstrip(" ,;:—-(") + "…"
+
+
+def entry_short(entry: Mapping[str, Any]) -> str:
+    """An entry's short title, naming its work: "This install: squad out of budget"."""
+    name = re.sub(r"[“”\"]", "", str(entry.get("name") or entry.get("subject") or "")).strip()
+    name = clip_words(name, 40)
+    what = {"budget": "squad out of budget", "question": "squad stuck",
+            "squad": "squad asks", "incident": "incident"}.get(entry_kind(entry), "hand-off")
+    return f"{name[:1].upper()}{name[1:]}: {what}" if name else what.capitalize()
+
+
+def card_short(entries: Sequence[Mapping[str, Any]]) -> str:
+    """THE CARD'S SHORT TITLE (Needs-you list, chip, drawer header), naming the work — never
+    the question cut to its first words ("Infra Steward's squad used")."""
+    if len(entries) == 1:
+        return entry_short(entries[0])
+    kinds = {entry_kind(e) for e in entries}
+    if kinds == {"budget"}:
+        return f"{len(entries)} squads out of budget"
+    if kinds == {"question"}:
+        return f"{len(entries)} squads stuck"
+    return f"{len(entries)} agent questions"
 
 
 def quoted(value: Any, words: int = 10) -> str:

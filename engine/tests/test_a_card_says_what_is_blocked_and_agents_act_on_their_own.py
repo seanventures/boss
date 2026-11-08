@@ -896,3 +896,39 @@ def test_an_open_budget_card_in_older_words_rewords_itself(eng, project):  # noq
     [entry] = card["recommendation"]["batch"]
     assert entry["detail"] == "Found so far: The restarts came from an update"
     assert card["question"] == entry["question"] and "““" not in card["question"]
+
+
+# ── the short title names the work; a finding is never cut mid-word ──────────────────────────
+
+LONG = ("The two restarts within an hour are not yet shown to be update-triggered; they are "
+        "equally consistent with a crash-loop (resource exhaustion, OOM, or a watchdog without "
+        "debounce) that has nothing to do with unattended-upgrades")
+
+
+def test_a_finding_is_clipped_at_a_boundary_never_mid_word():
+    for limit in (60, 120, 200, 211):
+        cut = asks.clip_words(LONG, limit)
+        assert len(cut) <= limit and cut.endswith("…"), cut
+        assert LONG.startswith(cut[:-1].rstrip()), "a prefix of the words, whole words only"
+        assert LONG[len(cut[:-1].rstrip())] in " ;,", cut
+    assert asks.clip_words("short enough", 40) == "short enough"
+
+
+def test_an_always_on_card_has_a_short_title_naming_its_work_and_keeps_its_question_apart(
+        eng, project):  # noqa: F811
+    from boss_engine.services.project_experience import needs
+
+    with eng.begin() as c:
+        item = _spent(c, project, finding=LONG)
+        card_id = asks.raise_card(c, project, [asks.budget_entry(
+            c, board.get(c, item["id"]), actor=INFRA)])
+        row = dict(c.execute(text("SELECT * FROM decisions WHERE id = :d"),
+                             {"d": card_id}).mappings().one())
+        shown = needs.card(c, project, row)
+    assert shown["label"] == "This install: squad out of budget"
+    assert shown["question"] == row["question"] and " — Found so far" not in shown["detail"]
+    assert shown["detail"].startswith("Found so far: The two restarts")
+    assert shown["detail"].endswith("…") and "nothing to d…" not in shown["detail"]
+    assert asks.card_short([{"ask_kind": "budget", "name": "this install"},
+                            {"ask_kind": "budget", "name": "esbuild bump"}]) == \
+        "2 squads out of budget"

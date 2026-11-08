@@ -75,6 +75,19 @@ describe("an always-on card's answers", () => {
     expect(sent?.body).toMatchObject({ project_id: "boss-dogfood", answer: "reject" });
   });
 
+  it("the question stands on its own line, apart from what was found so far", async () => {
+    const one = parseOverview({ ...FX_OVERVIEW, needs_you: [{
+      id: "dec_1", kind: "question", label: "This install: squad out of budget", mini: [],
+      question: "Infra Steward's squad used its $1.50 on “Updates restarted a build” — give it $1 more, or close it?",
+      detail: "Found so far: The two restarts are not yet shown to be update-triggered…",
+      action: { label: "Answer", href: "?drawer=needs:dec_1", decision_id: "dec_1" },
+      answers: [{ action: "approve", label: "Give it $1 more" }] }] }).needs_you[0];
+    await drawer(one);
+    expect(tid("px-drawer-needs-question")!.textContent).toContain("give it $1 more, or close it?");
+    expect(tid("px-drawer-needs-detail")!.textContent).toMatch(/^Found so far: /);
+    expect(tid("px-drawer-needs-question")!.textContent).not.toContain("Found so far");
+  });
+
   it("the card's own answers say what they do and post the action that carries them", async () => {
     const calls = await drawer(card());
     const acts = tid("px-drawer-needs-acts")!;

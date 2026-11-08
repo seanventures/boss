@@ -105,6 +105,8 @@ export type NeedsYou = {
    *  one-line finding and answers, answered one by one. Absent on every other card. */
   answers?: NeedsAnswer[];
   entries?: NeedsEntry[];
+  /** An always-on card's question, on its own line; `detail` is then what was found so far. */
+  question?: string;
 };
 export type NeedsAnswer = { action: "approve" | "reject" | "revise"; label: string };
 export type NeedsEntry = { work_item_id: string; question: string; detail: string; answers: { key: string; label: string }[] };
@@ -563,6 +565,7 @@ export const parseOverview = (v: unknown): Overview => {
                detail: s(y.detail), mini: mini(y.mini), release: parseRelease(y.release),
                diagnosis: parseDiagnosis(y.diagnosis),
                answers: parseAnswers(y.answers), entries: parseEntries(y.entries),
+               ...(typeof y.question === "string" && y.question ? { question: y.question } : {}),
                action: act.label || act.href ? { label: s(act.label, "Open"), href: s(act.href), decision_id: s(act.decision_id) } : null };
     }),
     tiles: {

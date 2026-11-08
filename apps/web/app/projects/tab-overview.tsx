@@ -180,7 +180,7 @@ export function OverviewTab({ ctx }: { ctx: PxCtx }) {
                   <div className="px-ny-b">
                     <button type="button" className="px-wk-t" onClick={() => ctx.open("needs", it.id)}>{it.label}</button>
                     {it.mini.length ? <Flow nodes={it.mini.map((m) => ({ ...m, icon: m.state === "waiting" ? <Lock size={10} weight="fill" aria-hidden /> : undefined }))} testid={`px-ov-ny-flow-${it.id}`} />
-                      : it.detail ? <small className="px-faint" style={{ display: "block" }}>{it.detail}</small> : null}
+                      : it.question || it.detail ? <small className="px-faint" style={{ display: "block" }}>{it.question || it.detail}</small> : null}
                     {it.mini.length && it.kind === "setup" && it.detail ? <small className="px-faint">{it.detail}</small> : null}
                   </div>
                   {it.action ? <ActionButton ctx={ctx} label={it.action.label} href={it.action.href} amber testid={`px-ov-ny-act-${it.id}`} /> : null}

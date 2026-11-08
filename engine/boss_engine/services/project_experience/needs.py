@@ -170,6 +170,16 @@ def one_per_subject(cards_: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
+def ambient_short(batch: list[dict[str, Any]]) -> str:
+    """An always-on card's short title naming its work (asks.card_short), or "" for a card of
+    Chief-of-Staff hand-offs, whose own question is already short ("Nudge: “…”?")."""
+    from ..ambient import asks
+
+    if not batch or all(asks.entry_kind(e) == "handoff" for e in batch):
+        return ""
+    return asks.card_short(batch)
+
+
 def ambient_answers(decision: Mapping[str, Any], batch: list[dict[str, Any]]
                     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """(entries, answers) of an always-on card: every entry with its own question, one-line
@@ -240,14 +250,21 @@ def card(connection: Connection, project_id: str, decision: Mapping[str, Any],
     said = ("" if len(batch) > 1 else next((str(e.get("detail")) for e in batch
                                              if e.get("detail")), "")) or str(rec.get("why") or "")
     detail = str(decision.get("question") or "")
-    if diagnosis and (diagnosis.get("cause") or diagnosis.get("headline")):
+    question = None
+    short = ambient_short(batch) if answers else ""
+    if short:
+        # AN ALWAYS-ON CARD: a short title naming its work ("This install: squad out of
+        # budget", asks.card_short), the question on its own line, the finding as the detail —
+        # never the question cut to its first words, never the two run together with " — ".
+        label, question, detail = short, detail, said
+    elif diagnosis and (diagnosis.get("cause") or diagnosis.get("headline")):
         # Concise: what to do, then the cause in a few words; the diagram and Details carry more.
         cause = str(diagnosis.get("cause") or diagnosis.get("headline"))
         detail = f"{detail} — {cause}" if detail else cause
     elif said:
         detail = f"{detail} — {said}" if detail else said
     return {"id": decision["id"], "kind": kind, "label": label,
-            "detail": detail,
+            "detail": detail, **({"question": question} if question else {}),
             **({"diagnosis": diagnosis} if diagnosis else {}),
             "work_id": (run or {}).get("id"),
             "work_label": short_title((run or {}).get("label"), (run or {}).get("title"))
