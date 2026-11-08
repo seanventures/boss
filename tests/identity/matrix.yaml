@@ -3,7 +3,7 @@
 # One line per operation: its declaration, then the built-in roles allowed
 # (O owner, A admin, P operator, V viewer, U auditor; '-' none). Every other role is denied
 # 403, or 404 when the operation names an object the role cannot even read.
-# 1800 operations.
+# 1806 operations.
 "GET /.well-known/boss-jwks.json": ["public:jwks", "OAPVU"]
 "GET /docs": ["public:api_description", "OAPVU"]
 "GET /docs/oauth2-redirect": ["public:api_description", "OAPVU"]
@@ -1401,6 +1401,12 @@
 "GET /v1/projects/{project_id}/start": ["permit project:read @ project(path=project_id)", "OAPVU"]
 "POST /v1/projects/{project_id}/suggest-components": ["permit repository:read @ project(path=project_id)", "OAPVU"]
 "POST /v1/projects/{project_id}/unarchive": ["permit project:delete @ org", "O"]
+"POST /v1/projects/{project_id}/watch": ["permit observability:manage @ project(path=project_id)", "OA"]
+"POST /v1/projects/{project_id}/watch/read": ["permit observability:read @ project(path=project_id)", "OAPVU"]
+"GET /v1/projects/{project_id}/watch/{target_id}": ["permit observability:read @ project(path=project_id)", "OAPVU"]
+"POST /v1/projects/{project_id}/watch/{target_id}/change": ["permit observability:manage @ project(path=project_id)", "OA"]
+"POST /v1/projects/{project_id}/watch/{target_id}/resend": ["permit observability:manage @ project(path=project_id)", "OA"]
+"POST /v1/projects/{project_id}/watch/{target_id}/verify": ["permit observability:manage @ project(path=project_id)", "OA"]
 "GET /v1/projects/{project_id}/work": ["permit project:read @ project(path=project_id)", "OAPVU"]
 "POST /v1/projects/{project_id}/work": ["permit workflow_run:start @ project(path=project_id)", "OAP"]
 "GET /v1/projects/{project_id}/work/plan": ["permit project:read @ project(path=project_id)", "OAPVU"]

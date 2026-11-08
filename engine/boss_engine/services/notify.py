@@ -363,8 +363,10 @@ def preview(connection, project_id: str, labels: Mapping[str, str],
 
 
 def set_rule_notify(connection, project_id: str, rule_id: str, contact_point_ids: list[str], *,
-                    actor: str) -> dict[str, Any]:
-    """The rule sheet's Notify column: a one-level child policy {alert_rule_id="<id>"}."""
+                    actor: str, quiet_hours: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
+    """The rule sheet's Notify column: a one-level child policy {alert_rule_id="<id>"}.
+    `quiet_hours` ({start, end, timezone}) holds the rule's low-urgency messages overnight
+    (Watch this app's "Wait till 08:00"); None inherits the root's."""
     root = ensure_root(connection, project_id)
     for cid in contact_point_ids:
         if not _cp_row(connection, project_id, cid):
@@ -376,15 +378,17 @@ def set_rule_notify(connection, project_id: str, rule_id: str, contact_point_ids
         pid_ = make_id("np")
         connection.execute(sql(
             "INSERT INTO notification_policies (id, project_id, parent_id, position, name, "
-            " matchers, contact_point_ids, rule_id, created_by) VALUES (:i, :p, :root, -1, :n, "
-            " CAST(:m AS JSONB), CAST(:c AS JSONB), :r, :by)"),
+            " matchers, contact_point_ids, rule_id, created_by, quiet_hours) VALUES (:i, :p, "
+            " :root, -1, :n, CAST(:m AS JSONB), CAST(:c AS JSONB), :r, :by, CAST(:q AS JSONB))"),
             {"i": pid_, "p": project_id, "root": root["id"], "n": f"Rule {rule_id}",
              "m": json.dumps([{"name": "alert_rule_id", "op": "=", "value": rule_id}]),
-             "c": json.dumps(contact_point_ids), "r": rule_id, "by": actor})
+             "c": json.dumps(contact_point_ids), "r": rule_id, "by": actor,
+             "q": json.dumps(dict(quiet_hours)) if quiet_hours else None})
     connection.execute(sql("UPDATE app_alert_rules SET notify = :n WHERE id = :r"),
                        {"n": ",".join(contact_point_ids) or "console", "r": rule_id})
     mon.audit(connection, project_id, "notification_policy", pid_ or rule_id, "rule_notify",
-              after={"rule_id": rule_id, "contact_point_ids": contact_point_ids}, actor=actor)
+              after={"rule_id": rule_id, "contact_point_ids": contact_point_ids,
+                     **({"quiet_hours": dict(quiet_hours)} if quiet_hours else {})}, actor=actor)
     return {"policy_id": pid_}
 
 

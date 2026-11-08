@@ -626,6 +626,19 @@ def links(connection: Connection, project_id: str, apps: list[str]) -> dict[str,
                                   app=apps[0] if len(apps) == 1 else None)}
 
 
+def _watched(connection: Connection, project_id: str) -> list[dict[str, Any]]:
+    from ..watch_app import landings
+
+    point = connection.begin_nested()
+    try:
+        out = landings(connection, project_id)
+        point.commit()
+        return out
+    except Exception:  # noqa: BLE001 — an install without app_watches yet: nothing watched
+        point.rollback()
+        return []
+
+
 def view(connection: Connection, project_id: str, *, now: Optional[datetime] = None
          ) -> dict[str, Any]:
     envs = environments(connection, project_id, now=now)
@@ -633,7 +646,10 @@ def view(connection: Connection, project_id: str, *, now: Optional[datetime] = N
     out = {"environments": envs, "alerts": alerts(connection, project_id, now=now),
            "incidents": incidents(connection, project_id), "monitoring_pack": pack,
            # Observability opens an app by its deploy target id (`app=<target id>`), never its name.
-           "links": links(connection, project_id, sorted({e["target_id"] for e in envs}))}
+           "links": links(connection, project_id, sorted({e["target_id"] for e in envs})),
+           # WATCH THIS APP's landings (services/watch_app.py): each watched app's diagram,
+           # Now line and its one gate, on the same read as the rest of Health.
+           "watched": _watched(connection, project_id)}
     if not envs:
         out["empty"] = {"label": "Nothing deployed yet",
                         "detail": "Health appears after the first deploy: Beacon adds a "

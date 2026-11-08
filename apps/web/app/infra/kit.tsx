@@ -207,6 +207,10 @@ function useDialog(onClose: () => void) {
     const box = ref.current;
     box?.querySelector<HTMLElement>("[data-autofocus], button, a[href], input, select, textarea, [tabindex='0']")?.focus();
     const onKey = (e: KeyboardEvent) => {
+      // A DIALOG ABOVE THIS ONE (the consent sheet, "Confirm it's you") owns the keys while the
+      // focus is in it: Esc closes that one, never the sheet underneath it.
+      const at = document.activeElement;
+      if (ref.current && at && !ref.current.contains(at) && at.closest("[role='dialog']")) return;
       if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closer.current(); return; }
       if (e.key !== "Tab" || !ref.current) return;
       const els = [...ref.current.querySelectorAll<HTMLElement>("button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex='0']")];

@@ -217,6 +217,11 @@ def mount_platform_routers(app: FastAPI) -> None:
     from .add_server import router as add_server_router
 
     app.include_router(add_server_router)
+    # Project › Health › Watch this app (agentic-factory 2): the SRE agent's read, Start
+    # watching, the landing and its one gate — over Observability's rules and contact points.
+    from .watch_app import router as watch_app_router
+
+    app.include_router(watch_app_router)
     # Add a project v2 (new-project-v2): Helm's understanding, the preview, Create and start.
     from .add_project import router as add_project_router
 

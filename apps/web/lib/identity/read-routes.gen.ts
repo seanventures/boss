@@ -522,6 +522,7 @@ export const READ_ROUTES: ReadonlyArray<readonly [string, Permission]> = [
   ["projects/{}/repositories", "repository:read"],
   ["projects/{}/settings", "project:read"],
   ["projects/{}/start", "project:read"],
+  ["projects/{}/watch/{}", "observability:read"],
   ["projects/{}/work", "project:read"],
   ["projects/{}/work/plan", "project:read"],
   ["projects/{}/work/{}/story", "project:read"],

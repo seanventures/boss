@@ -20,6 +20,9 @@ import { usePulse } from "../../lib/obs-view";
 import "../infra/infra.css";
 import "../observability/obs.css";
 import { P95_SOURCE } from "./tab-deployments";
+import { closeWatch, useWatchParam, WatchDoor, WatchedCard, WatchSheet } from "./watch-app";
+import { parseLanding, type Landing } from "../../lib/watch-app";
+import { notifyChanged } from "../changed";
 import type { PxCtx } from "./project-page";
 
 type Env = HealthView["environments"][number];
@@ -64,8 +67,19 @@ const packOrder = (k: string) => { const i = PACK_ORDER.indexOf(k); return i < 0
 export function HealthTab({ ctx }: { ctx: PxCtx }) {
   const read = usePxRead<HealthView>(PX_PATHS.health(ctx.projectId), parseHealth, { everyMs: 20_000, demo: () => parseHealth(FX_HEALTH) });
   const obs = `?area=observability&project_id=${encodeURIComponent(ctx.projectId)}`;
+  // WATCH THIS APP (agentic-factory 2): the door, the sheet (`watch=1`) and each watched app's
+  // landing. A write's answer shows at once; the Health read follows on the next tick.
+  const watchParam = useWatchParam();
+  const [fresh, setFresh] = React.useState<Record<string, Landing>>({});
+  const landed = (l: Landing) => { setFresh((cur) => ({ ...cur, [l.targetId]: l })); notifyChanged("observability"); };
+  // A newer Health read wins over a write's answer (the read after the write carries it).
+  React.useEffect(() => { setFresh({}); }, [read.data]);
   return (
     <div className="px-stack" data-testid="px-health">
+      {watchParam && !isPxDemo() ? (
+        <WatchSheet projectId={ctx.projectId} actor={ctx.actor} initialTarget={watchParam} onClose={closeWatch}
+                    onStarted={(l) => { landed(l); closeWatch(); }} />
+      ) : null}
       <ReadGate read={read} what="Health" missing={
         <>
           <EngineNotReady what="This project's health summary"><a className="px-btn" href={pxHref(obs)} data-testid="px-health-obs">Open Observability</a></EngineNotReady>
@@ -74,6 +88,12 @@ export function HealthTab({ ctx }: { ctx: PxCtx }) {
       }>
         {(h) => (
           <>
+            {!isPxDemo() ? <WatchDoor projectId={ctx.projectId} watched={h.watched.length} /> : null}
+            {(() => {
+              const byId = new Map(h.watched.map(parseLanding).map((l) => [l.targetId, l] as const));
+              for (const [id, l] of Object.entries(fresh)) byId.set(id, l);
+              return [...byId.values()].map((l) => <WatchedCard key={l.targetId} l={l} projectId={ctx.projectId} actor={ctx.actor} onChanged={landed} />);
+            })()}
             {h.environments.length ? h.environments.map((e) => <EnvCard key={e.key} e={e} ctx={ctx} />) : (
               <div className="px-card"><Empty icon={Heartbeat} tone="green" title="No environment to watch yet" line="Health starts once the app is deployed: Beacon installs a monitoring pack on the first deploy." testid="px-health-empty" /></div>
             )}

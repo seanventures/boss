@@ -351,6 +351,8 @@ export type HealthView = {
                mini: { label: string; state: StepState; type: string; at?: string | null }[] }[];
   monitoring_pack: { rules: number; off: number; managed_in: string; href: string; kinds: string[]; file: { path: string; external_url: string } | null } | null;
   links: { grafana: string; grafana_reason: string; logs: string; observability: string };
+  /** Watch this app's landings (lib/watch-app.ts parseLanding), one per watched app. */
+  watched: unknown[];
 };
 
 // ── parsers ──────────────────────────────────────────────────────────────────────────────────
@@ -819,6 +821,7 @@ export const parseHealth = (v: unknown): HealthView => {
       kinds: a(mp.kinds).map((k) => s(k)).filter(Boolean),
       file: s(o(mp.file).path) ? { path: s(o(mp.file).path), external_url: s(o(mp.file).external_url) } : null } : null,
     links: { grafana: s(l.grafana), grafana_reason: s(l.grafana_reason), logs: s(l.logs), observability: s(l.observability) },
+    watched: a(x.watched),
   };
 };
 

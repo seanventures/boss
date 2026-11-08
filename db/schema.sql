@@ -11400,3 +11400,22 @@ CREATE TABLE IF NOT EXISTS decide_rule_changes (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_decide_rule_changes_kind ON decide_rule_changes (kind, created_at DESC);
+
+-- WATCH THIS APP (agentic-factory 2-watch-an-app.html, Project › Health): one row per app the
+-- SRE agent was asked to watch. The watches themselves are the app's alert rules
+-- (app_alert_rules), the channels its contact points and the routing its notification
+-- policies; this row only remembers what the person asked for and the outside channel that
+-- waits for its code, so the Health page can draw the landing.
+CREATE TABLE IF NOT EXISTS app_watches (
+  target_id TEXT PRIMARY KEY REFERENCES deployment_targets(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  words TEXT NOT NULL DEFAULT '',
+  night TEXT NOT NULL DEFAULT 'wake' CHECK (night IN ('wake', 'wait', 'alone')),
+  alone BOOLEAN NOT NULL DEFAULT true,
+  tell_cp_id TEXT,
+  plan JSONB NOT NULL DEFAULT '{}'::jsonb,
+  started_by TEXT NOT NULL,
+  started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_app_watches_project ON app_watches (project_id);

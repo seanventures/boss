@@ -102,6 +102,11 @@ export const WRITE_HELPERS: Readonly<Record<string, WriteGate | readonly Permiss
   "lib/hardware.ts#registerHardwareProvider": "host:manage",      // POST /v1/hardware/places/providers
   // lib/add-server.ts — Infra › Add a server
   "lib/add-server.ts#createServer": "host:manage",                // POST /v1/servers (step-up)
+  // lib/watch-app.ts — Project › Health › Watch this app
+  "lib/watch-app.ts#startWatching": "observability:manage",       // POST /v1/projects/{id}/watch
+  "lib/watch-app.ts#verifyChannel": "observability:manage",       // POST …/watch/{target}/verify
+  "lib/watch-app.ts#resendCode": "observability:manage",          // POST …/watch/{target}/resend
+  "lib/watch-app.ts#changeWatch": "observability:manage",         // POST …/watch/{target}/change
 
   // lib/stack-deploy.ts — stack deployments
   "lib/stack-deploy.ts#createStackTarget": "deployment_target:manage", // POST /v1/deployments/stack/targets
