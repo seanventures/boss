@@ -127,6 +127,7 @@ def unique(prefix: str) -> str:
 #: What the guard measures in the sheet: every element's box against the sheet's, the body's
 #: against the footer's top, and any text that runs out of its own box.
 MEASURE = r"""() => {
+  if (!document.documentElement || !document.body) throw new Error('not loaded yet');
   const out = { hscroll: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1, outside: [], clipped: [], underFoot: [] };
   const sheet = document.querySelector('.npx-sheet');
   if (!sheet) return out;
@@ -200,7 +201,10 @@ class Person:
 
     def go(self, query: str = "", area: str = "projects", wait: str = "[data-testid='px-projects'], [data-testid='px-add-project']") -> None:
         q = f"?org={ORG}&project_id={PROJECT}&area={area}" + (f"&{query}" if query else "")
-        self.p.goto(f"{CONSOLE}/{q}", wait_until="domcontentloaded", timeout=180_000)
+        try:
+            self.p.goto(f"{CONSOLE}/{q}", wait_until="domcontentloaded", timeout=120_000)
+        except Exception:  # noqa: BLE001 — a dev server that stalled once (next dev, swap): once more
+            self.p.goto(f"{CONSOLE}/{q}", wait_until="domcontentloaded", timeout=180_000)
         if wait:
             self.p.wait_for_selector(wait, timeout=180_000)
 
@@ -307,7 +311,13 @@ class Person:
 
     # the guard ------------------------------------------------------------------------------
     def check(self, where: str = "") -> None:
-        m = self.p.evaluate(MEASURE)
+        self.p.wait_for_load_state("domcontentloaded")
+        try:
+            m = self.p.evaluate(MEASURE)
+        except Exception:  # noqa: BLE001 — measured mid-navigation (a landing): measure the new page
+            self.p.wait_for_timeout(1500)
+            self.p.wait_for_load_state("domcontentloaded")
+            m = self.p.evaluate(MEASURE)
         problems = []
         if m["hscroll"]:
             problems.append("the page scrolls sideways")
