@@ -1,5 +1,6 @@
 "use client";
 
+import { changeHref, isLocalChangeUrl, linkTarget } from "../lib/repo-links";
 import { HERO_BRIEF_PARAM } from "./url-intent";
 import React, { useCallback, useEffect, useState, useTransition, useRef} from "react";
 
@@ -1295,7 +1296,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
                 {context.code_tasks.map((c) => (
                   <span key={c.id}>
                     {c.status}/{c.phase}
-                    {c.pull_request_url ? <> · <a href={c.pull_request_url} target="_blank" rel="noreferrer">PR #{c.pull_request_number}</a></> : null}
+                    {c.pull_request_url ? <> · <a href={changeHref(c.pull_request_url)} {...linkTarget(c.pull_request_url)}>{`${isLocalChangeUrl(c.pull_request_url) ? "Change" : "PR"} #${c.pull_request_number}`}</a></> : null}
                   </span>
                 ))}
               </div>

@@ -8,6 +8,7 @@
  * them from here and replaces them one at a time.
  */
 
+import { changeHref, isLocalChangeUrl, linkTarget } from "../../lib/repo-links";
 import { useSearchParams } from "next/navigation";
 import { PROJECT_ID } from "../../lib/client";
 import { PrMadeBy, useBuildWork, useStageFaces } from "../agents/build-faces";
@@ -2281,8 +2282,8 @@ export function CodeTaskDetail({ run, previews = [] }: { run: CodeTaskRun; previ
         <div className="ct-block-title">Outcome</div>
         <div className="ct-outcome">
           {run.pull_request_url ? (
-            <a className="cap-btn" href={run.pull_request_url} target="_blank" rel="noreferrer">
-              View PR #{run.pull_request_number} →
+            <a className="cap-btn" href={changeHref(run.pull_request_url)} {...linkTarget(run.pull_request_url)}>
+              {`${isLocalChangeUrl(run.pull_request_url) ? "View change set" : "View PR"} #${run.pull_request_number} →`}
             </a>
           ) : <span className="detail">No PR opened.</span>}
           {run.pull_request_url ? (

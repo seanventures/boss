@@ -1,4 +1,5 @@
 
+import { changeHref, isLocalChangeUrl, linkTarget, prWhere } from "../lib/repo-links";
 import { networkTrustedConsole } from "../lib/console-session";
 import { accessForArea } from "../lib/identity/area-access";
 import { checkWith } from "../lib/identity/check";
@@ -238,7 +239,7 @@ function formatRecommendation(decision: DecisionFeedItem): string {
   if (action === "review_pull_request") {
     return [
       title ? `Approve the code change “${title}”.` : "Approve this code change.",
-      pr ? `Pull request ${prNum} is open on GitHub with the full diff to review.` : "",
+      pr ? `${isLocalChangeUrl(pr) ? "Change set" : "Pull request"} ${prNum} is open ${prWhere(pr)} with the full diff to review.` : "",
       vstatus
         ? `Automated checks: ${vstatus.replaceAll("_", " ")}${vsummary ? ` — ${vsummary}` : ""}.`
         : "",
@@ -2959,7 +2960,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                       </code>
                     )}
                     {codeTask.pull_request_url ? (
-                      <a href={codeTask.pull_request_url} target="_blank" rel="noreferrer">
+                      <a href={changeHref(codeTask.pull_request_url)} {...linkTarget(codeTask.pull_request_url)}>
                         {codeTask.pull_request_url}
                       </a>
                     ) : null}
@@ -3425,7 +3426,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                           </p>
                         ) : null}
                         {evidence.pullRequestUrl ? (
-                          <a href={evidence.pullRequestUrl} rel="noreferrer" target="_blank">
+                          <a href={changeHref(evidence.pullRequestUrl)} {...linkTarget(evidence.pullRequestUrl)}>
                             Open sandbox PR
                           </a>
                         ) : null}

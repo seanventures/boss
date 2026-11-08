@@ -8,6 +8,7 @@
  * server's `word`; nothing here counts tests (only commands are real) or draws a diff (hunks are
  * not served: `View diff ↗` goes to the PR).
  */
+import { changeHref, changeSubHref, isLocalChangeUrl, linkTarget } from "../../lib/repo-links";
 import { latestPerStep } from "../../lib/model-routes";
 import { WhyThisModel } from "../why-this-model";
 import { CaretDown, CaretRight, Check, X } from "@phosphor-icons/react";
@@ -210,9 +211,9 @@ function PrBody({ c, actor, onRefresh }: { c: Cockpit; actor: string; onRefresh?
   return (
     <span className="fx-out-col">
       <span className="fx-out-links">
-        {pr.url ? <a className="ag-link" href={pr.url} target="_blank" rel="noreferrer" data-testid="fx-pr-open">Open PR ↗</a> : null}
+        {pr.url ? <a className="ag-link" href={changeHref(pr.url)} {...linkTarget(pr.url)} data-testid="fx-pr-open">{isLocalChangeUrl(pr.url) ? "Open change set" : "Open PR ↗"}</a> : null}
         {pr.filesUrl || pr.url ? (
-          <a className="ag-link" href={pr.filesUrl || `${pr.url}/files`} target="_blank" rel="noreferrer">View diff ↗</a>
+          <a className="ag-link" href={pr.filesUrl || changeSubHref(pr.url, "files") || undefined} {...linkTarget(pr.filesUrl || pr.url)}>{isLocalChangeUrl(pr.url) ? "View diff" : "View diff ↗"}</a>
         ) : null}
         {decisionId ? (
           <a className="ag-link" href={areaHref({ area: "decisions", decision: decisionId })} data-testid="fx-pr-review"
@@ -399,7 +400,7 @@ function TestsBody({ c }: { c: Cockpit }) {
 function ChangesBody({ c }: { c: Cockpit }) {
   const ch = c.outputs.changes;
   if (!ch || (!ch.tests.length && !ch.code.length && !ch.filesChanged)) return <span className="fx-muted">Not yet</span>;
-  const diff = ch.diffUrl || c.outputs.pr?.filesUrl || (c.outputs.pr?.url ? `${c.outputs.pr.url}/files` : undefined);
+  const diff = ch.diffUrl || c.outputs.pr?.filesUrl || (c.outputs.pr?.url ? changeSubHref(c.outputs.pr.url, "files") ?? undefined : undefined);
   const group = (name: string, files: { path: string; bytes?: number }[], roleKey: string | null) => files.length ? (
     <span className="fx-out-col" data-group={name}>
       <span className="fx-out-sub">{name} <Maker roleKey={roleKey} /></span>

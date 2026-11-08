@@ -18,6 +18,7 @@
  * 0a while a step is open; 0b (the guide beside Helm's live onboarding) once a project with a
  * repo exists and the URL asks for the first run (`&first_run=1`).
  */
+import { changeHref, isLocalChangeUrl, linkTarget } from "../../lib/repo-links";
 import React, { useEffect, useState } from "react";
 import {
   Brain, Check, Compass, FolderPlus, GitBranch, GithubLogo, GitPullRequest, Lightbulb, Lightning, Path, Plug, Plus, Signpost, Sparkle, Flask, HandWaving, Play,
@@ -185,7 +186,7 @@ function LastRun({ run }: { run: NonNullable<SetupView["try"]["last_run"]> }) {
   return (
     <div className="px-row px-wrap" style={{ fontSize: ".6rem" }} data-testid="px-fr-last-run">
       <span className="px-faint">Last sample:</span>
-      {run.pr_url ? <a className="px-chip" href={run.pr_url} target="_blank" rel="noreferrer noopener" data-testid="px-fr-last-pr">{run.pill.label} ↗</a>
+      {run.pr_url ? <a className="px-chip" href={changeHref(run.pr_url)} {...linkTarget(run.pr_url)} data-testid="px-fr-last-pr">{isLocalChangeUrl(run.pr_url) ? run.pill.label : `${run.pill.label} ↗`}</a>
         : <a className="px-chip" href={runHref}>{run.pill.label}</a>}
       {run.pill.tone === "red" ? <a className="px-chip" href={runHref} data-testid="px-fr-last-open">Open run</a> : null}
     </div>

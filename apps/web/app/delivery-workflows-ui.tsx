@@ -1,5 +1,6 @@
 "use client";
 
+import { changeHref, isLocalChangeUrl, linkTarget } from "../lib/repo-links";
 import { GatedButton, useGate } from "../components/gated";
 import type { Permission } from "../lib/identity/permissions.gen";
 import { routeForStep, useRunRoutes } from "./why-this-model";
@@ -2871,9 +2872,9 @@ function ReviewAndDecide({ step }: { step: RunStep }) {
     // by itself once GitHub shows it merged (runner._follow_merge).
     return (
       <div className="dw-step-decide" data-testid="dw-step-merge">
-        <a className="cap-btn primary dw-decide-btn" href={merge.pull_request_url}
-           target="_blank" rel="noreferrer" data-testid="dw-step-merge-link">
-          Merge PR #{merge.pull_request_number} in GitHub →
+        <a className="cap-btn primary dw-decide-btn" href={changeHref(merge.pull_request_url)}
+           {...linkTarget(merge.pull_request_url)} data-testid="dw-step-merge-link">
+          {isLocalChangeUrl(merge.pull_request_url) ? `Merge change set #${merge.pull_request_number} in BOSS →` : `Merge PR #${merge.pull_request_number} in GitHub →`}
         </a>
         <span className="detail">This step deploys by itself once it is merged.</span>
       </div>

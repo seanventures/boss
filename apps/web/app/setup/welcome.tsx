@@ -6,6 +6,7 @@
  * Done-ness is the server's: a green account or working repo, a green model, a first PR (`try.done`).
  * The project buttons only link to the New project flow (`/?new_project=sample|import|idea`).
  */
+import { changeHref, linkTarget } from "../../lib/repo-links";
 import React, { useState } from "react";
 import { Check, GitBranch, Lightbulb } from "@phosphor-icons/react";
 
@@ -69,7 +70,7 @@ function LastRun({ run }: { run: NonNullable<SetupView["try"]["last_run"]> }) {
   return (
     <span className="su-line" data-testid="su-wl-last-run">
       {run.pr_url ? (
-        <a className="su-pill su-tone-green" href={run.pr_url} target="_blank" rel="noreferrer noopener"
+        <a className="su-pill su-tone-green" href={changeHref(run.pr_url)} {...linkTarget(run.pr_url)}
            title={run.pill.tip} data-tip={run.pill.tip} data-testid="su-wl-last-pr">{run.pill.label}</a>
       ) : <a href={runHref} className="su-plain"><Pill pill={run.pill} testid="su-wl-last-pill" /></a>}
       {run.pill.tone === "red" ? <a className="su-link" href={runHref} data-testid="su-wl-last-open">Open run ↗</a> : null}

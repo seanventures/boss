@@ -504,6 +504,7 @@ export const READ_ROUTES: ReadonlyArray<readonly [string, Permission]> = [
   ["projects/{}/archive", "project:read"],
   ["projects/{}/captain", "project:read"],
   ["projects/{}/change-sets", "code_task:read"],
+  ["projects/{}/delete", "project:read"],
   ["projects/{}/demo-logins", "project:read"],
   ["projects/{}/demo-logins/reveal", "secret:manage"],
   ["projects/{}/deployments", "project:read"],

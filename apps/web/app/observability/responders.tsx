@@ -21,6 +21,7 @@
  * Agent Studio, where its skills are. A step that has not run yet shows its job and nothing it
  * did. One component, used by the card; pure render from the parsed view.
  */
+import { changeHref, isLocalChangeUrl, linkTarget } from "../../lib/repo-links";
 import React, { useState } from "react";
 
 import type { CrewMember, RedGreen, Responder, ResponderWho } from "../../lib/incident-response";
@@ -181,7 +182,7 @@ export function Responders({ rows, onReport, answer }: {
                 <span className="inf-faint inf-num" title={r.endedAt ? lt.full(r.endedAt) : undefined}>
                   {pending ? (r.status === "waiting" ? "waiting" : r.status === "running" ? "working" : "not yet") : took || (r.endedAt ? lt.hhmm(Date.parse(r.endedAt)) : "")}
                 </span>
-                {r.pullRequestUrl ? <a className="inf-link" href={r.pullRequestUrl} target="_blank" rel="noreferrer noopener" title={r.pullRequestUrl}>PR ↗</a> : null}
+                {r.pullRequestUrl ? <a className="inf-link" href={changeHref(r.pullRequestUrl)} {...linkTarget(r.pullRequestUrl)} title={r.pullRequestUrl}>{isLocalChangeUrl(r.pullRequestUrl) ? "Change set" : "PR ↗"}</a> : null}
                 {r.kind === "incident_report" && r.status === "succeeded" && onReport ? (
                   <button type="button" className="inf-link" onClick={onReport} title="Read the report here">View</button>
                 ) : null}

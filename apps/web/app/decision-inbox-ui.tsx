@@ -1,5 +1,6 @@
 "use client";
 
+import { isLocalChangeUrl, prWhere } from "../lib/repo-links";
 import { WhyAsked } from "./skills/why-asked";
 import { ReasonChips, rejectKind, sendReasons } from "./improve/rate-it";
 import React, { useEffect, useMemo, useState } from "react";
@@ -103,7 +104,7 @@ export function formatRecommendation(decision: DecisionFeedItem): string {
   if (action === "review_pull_request") {
     return [
       title ? `Approve the code change “${title}”.` : "Approve this code change.",
-      pr ? `Pull request ${prNum} is open on GitHub with the full diff to review.` : "",
+      pr ? `${isLocalChangeUrl(pr) ? "Change set" : "Pull request"} ${prNum} is open ${prWhere(pr)} with the full diff to review.` : "",
       vstatus
         ? `Automated checks: ${vstatus.replaceAll("_", " ")}${vsummary ? ` — ${vsummary}` : ""}.`
         : "",

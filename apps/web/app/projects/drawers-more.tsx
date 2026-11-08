@@ -8,6 +8,7 @@
  *                   from the reads the page has (onboarding, work, roadmap, deployments);
  *   NeedsBody       a Needs-you item: why it waits, its path, the work and the PR.
  */
+import { changeHref, isLocalChangeUrl } from "../../lib/repo-links";
 import { DiagnosisFlow } from "../../components/stuck-work";
 import React from "react";
 import {
@@ -265,7 +266,7 @@ export function NeedsBody({ ctx, n }: { ctx: PxCtx; n: NeedsYou }) {
       </dl>
       <div className="px-row px-wrap" data-testid="px-drawer-needs-links">
         {w ? <button type="button" className="px-chip" onClick={() => ctx.open("work", w.id)} data-testid="px-drawer-needs-work"><Kanban size={11} aria-hidden /> {w.label}</button> : null}
-        {n.external_url ? <PxLink href={n.external_url} testid="px-drawer-needs-pr"><GitMerge size={11} aria-hidden /> {/\/pull\/(\d+)/.exec(n.external_url) ? `PR #${/\/pull\/(\d+)/.exec(n.external_url)![1]}` : "On GitHub"}</PxLink> : null}
+        {n.external_url ? <PxLink href={changeHref(n.external_url) ?? ""} testid="px-drawer-needs-pr"><GitMerge size={11} aria-hidden /> {/\/pull\/(\d+)/.exec(n.external_url) ? `${isLocalChangeUrl(n.external_url) ? "Change" : "PR"} #${/\/pull\/(\d+)/.exec(n.external_url)![1]}` : "On GitHub"}</PxLink> : null}
         {n.action?.decision_id ? <PxLink href={`?area=decisions&decision=${encodeURIComponent(n.action.decision_id)}`} testid="px-drawer-needs-approvals"><Warning size={11} aria-hidden /> Open in Approvals</PxLink> : null}
       </div>
     </>
@@ -434,7 +435,7 @@ export function DecisionActs({ ctx, n, onDone }: { ctx: PxCtx; n: NeedsYou; onDo
             {n.kind === "merge" ? <GitMerge size={12} aria-hidden /> : n.kind === "deploy" ? <RocketLaunch size={12} aria-hidden /> : <Check size={12} aria-hidden />} {actWord(n)}</GatedButton>
           <GatedButton permission="decision:approve" projectId={ctx.projectId} className="px-btn" data-size="s" disabled={busy}
                        data-testid="px-drawer-needs-reject" onClick={() => setRejecting(true)}>Reject</GatedButton>
-          {review ? <PxLink href={review} testid="px-drawer-needs-review">Review on GitHub</PxLink> : null}
+          {review ? <PxLink href={changeHref(review) ?? ""} testid="px-drawer-needs-review">{isLocalChangeUrl(review) ? "Review the change set" : "Review on GitHub"}</PxLink> : null}
         </div>
       )}
       <Said text={said.text} tone={said.tone} />

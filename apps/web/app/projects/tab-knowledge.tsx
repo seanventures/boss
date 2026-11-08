@@ -12,7 +12,7 @@
 import React, { useMemo, useState } from "react";
 import {
   ArrowRight, ArrowSquareOut, ArrowsClockwise, Atom, BookOpen, Brain, CaretRight, Check, Copy, Cube, Database, Eye, FileCode, FileText, Files,
-  Gavel, GitBranch, GitPullRequest, GithubLogo, Graph, IdentificationBadge, Lightning, Lock, Package, Plus, RocketLaunch, Scales, Signpost,
+  Gavel, GitBranch, GitPullRequest, GithubLogo, Graph, HardDrives, IdentificationBadge, Lightning, Lock, Package, Plus, RocketLaunch, Scales, Signpost,
   Sparkle, UploadSimple, Wrench, type Icon,
 } from "@phosphor-icons/react";
 
@@ -26,6 +26,7 @@ import { UploadDocument, UploadPreview } from "../knowledge/kg-upload";
 import type { KgUploadPreview } from "../../lib/kg-view";
 import { Drawer, Empty, Face, Flow, Ico, PxLink, ReadGate, Ring, Said, Tag, openDrawer } from "./kit";
 import { whenLocal } from "../../lib/local-time";
+import { isLocalRepo, repoHref } from "../../lib/repo-links";
 import type { PxCtx } from "./project-page";
 import { AddRepoDrawer } from "./add-repo";
 
@@ -94,12 +95,17 @@ function Repos({ ctx, repos, onChecked }: { ctx: PxCtx; repos: KnowledgeRepo[]; 
       {repos.length ? repos.map((r) => (
         <div key={r.full_name} className="px-kn-repo" data-testid={`px-kn-repo-${r.full_name}`}>
           <div style={{ minWidth: 0 }}>
-            <a className="px-kn-repo-name px-mono" href={r.external_url || `https://github.com/${r.full_name}`} target="_blank" rel="noreferrer noopener">
-              {r.full_name} <ArrowSquareOut size={12} aria-label="opens in a new tab" /></a>
+            {isLocalRepo(r.full_name) ? (
+              <span className="px-kn-repo-name px-mono" title="A repository BOSS keeps on this machine">
+                <HardDrives size={12} aria-hidden /> {r.full_name}</span>
+            ) : (
+              <a className="px-kn-repo-name px-mono" href={repoHref(r.full_name, r.external_url) ?? undefined} target="_blank" rel="noreferrer noopener">
+                {r.full_name} <ArrowSquareOut size={12} aria-label="opens in a new tab" /></a>
+            )}
             <div className="px-kn-repo-meta">
               <span><GitBranch size={10} aria-hidden /> {r.branch}</span>
               {r.last_push ? <span>last push {r.last_push.replace(/ ago$/, "")}</span> : null}
-              {r.via ? <span>via {r.via}</span> : null}
+              {r.via ? <span>via {r.via}</span> : isLocalRepo(r.full_name) ? <span>on this machine</span> : null}
             </div>
           </div>
           <div className="px-kn-access" title="Access checks — BOSS re-checks before every run">

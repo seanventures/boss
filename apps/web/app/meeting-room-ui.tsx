@@ -21,6 +21,7 @@
  * humanBrief (lib/research-panels) — the scaffolding BOSS wraps around a panel's prompt is
  * shown only as the readable "Context BOSS added".
  */
+import { changeHref, linkTarget } from "../lib/repo-links";
 import React, { useActionState, useCallback, useEffect, useMemo, useState } from "react";
 import { RateIt } from "./improve/rate-it";
 
@@ -254,7 +255,7 @@ function Synthesis({ meeting }: { meeting: Meeting }) {
           <div className="rp-card-h">
             <b>The PRD</b><span className="rp-spacer" />
             {meeting.pull_request_url ? (
-              <a className="rp-link" href={meeting.pull_request_url} target="_blank" rel="noreferrer">
+              <a className="rp-link" href={changeHref(meeting.pull_request_url)} {...linkTarget(meeting.pull_request_url)}>
                 PR #{meeting.pull_request_number ?? ""} ↗
               </a>
             ) : null}
@@ -358,7 +359,7 @@ export function OutcomeCard({ meeting, search, projectId, inWorkflow = false }: 
           <a className="rp-btn primary" data-testid="meeting-build-it" href={buildHref(meeting, search)}>Build it →</a>
         ) : null}
         {meeting.pull_request_url ? (
-          <a className={`rp-btn${inWorkflow ? " primary" : ""}`} href={meeting.pull_request_url} target="_blank" rel="noreferrer">
+          <a className={`rp-btn${inWorkflow ? " primary" : ""}`} href={changeHref(meeting.pull_request_url)} {...linkTarget(meeting.pull_request_url)}>
             Open the PR ↗
           </a>
         ) : null}
@@ -1037,7 +1038,7 @@ export function MeetingCompact({ meetingId, projectId, buildState }: {
         ) : null}
         <div className="rp-cmp-foot">
           {meeting.pull_request_url ? (
-            <a className="rp-btn sm primary" href={meeting.pull_request_url} target="_blank" rel="noreferrer"
+            <a className="rp-btn sm primary" href={changeHref(meeting.pull_request_url)} {...linkTarget(meeting.pull_request_url)}
                data-testid="meeting-compact-pr">Open the PR ↗</a>
           ) : o.stage === "awaiting" ? (
             <a className="rp-btn sm primary" href={decisionHref(search, meeting.decision_id)}>Review in Approvals →</a>

@@ -15,10 +15,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowSquareOut, ChatCircleDots, Check, ClipboardText, Compass, GearSix, GitBranch, Globe, HandWaving, Heartbeat, House, Kanban, MapTrifold,
-  Plus, RocketLaunch, TreeStructure, GitMerge, CloudCheck, ListChecks, GithubLogo, type Icon,
+  Plus, RocketLaunch, TreeStructure, GitMerge, CloudCheck, ListChecks, GithubLogo, HardDrives, type Icon,
 } from "@phosphor-icons/react";
 
 import { GatedButton, useGate } from "../../components/gated";
+import { isLocalRepo } from "../../lib/repo-links";
 import { openDockAbout } from "../../lib/dock-subject";
 import {
   PX_PATHS, TAB_WORDS, isMissingStatus, navigateTo, needsYouCards, overviewFromStart, parseOnboarding, parseOverview, parseWork, projectHref, pxHref, readPxUrl, usePxRead,
@@ -293,7 +294,7 @@ function Header({ ctx, onboarding }: { ctx: PxCtx; onboarding: boolean }) {
             <a className="px-hchip" href={pxHref(`?project_id=${encodeURIComponent(ctx.projectId)}&area=project&tab=knowledge`)} data-testid="px-head-repo"
                title="Repository — opens Repo & knowledge"
                onClick={(e) => { if (e.metaKey || e.ctrlKey || e.shiftKey) return; e.preventDefault(); ctx.tab("knowledge"); }}>
-              <GithubLogo size={11} aria-hidden />{repo.full_name}</a>
+              {isLocalRepo(repo.full_name) ? <HardDrives size={11} aria-label="Local repo" /> : <GithubLogo size={11} aria-hidden />}{repo.full_name}</a>
           ) : (
             <a className="px-hchip" href="#" data-testid="px-head-norepo" onClick={(e) => { e.preventDefault(); ctx.tab("settings", { section: "repos" }); }}>
               <Plus size={11} aria-hidden /> Add a repo</a>

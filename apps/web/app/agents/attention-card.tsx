@@ -15,6 +15,7 @@
  * NEVER A GUESSED FACE. The attributed agent's face, or the BOSS glyph (setup, refusals) or
  * `You` (a gate on a run you started) when the server attributes none.
  */
+import { changeHref, isLocalChangeUrl, linkTarget } from "../../lib/repo-links";
 import { CaretDown, CaretRight, SpinnerGap } from "@phosphor-icons/react";
 import React, { useEffect, useId, useRef, useState } from "react";
 
@@ -406,7 +407,7 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
           </a>
         ) : null}
         {item.kind === "approval" && build?.prUrl ? (
-          <a className="ag-btn" href={build.prUrl} target="_blank" rel="noreferrer" data-testid="ag-att-open-pr">Open PR ↗</a>
+          <a className="ag-btn" href={changeHref(build.prUrl)} {...linkTarget(build.prUrl)} data-testid="ag-att-open-pr">{isLocalChangeUrl(build.prUrl) ? "Open change set" : "Open PR ↗"}</a>
         ) : null}
         {item.kind === "approval" && build?.previewUrl ? (
           <a className="ag-btn" href={build.previewUrl} target="_blank" rel="noreferrer" data-testid="ag-att-open-preview">Open preview ↗</a>

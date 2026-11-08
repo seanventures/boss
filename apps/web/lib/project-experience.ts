@@ -22,6 +22,7 @@ import { obsWrite } from "../app/observability/obs-write";
 import { useAreaShown } from "./area-shown";
 import { isConsoleLive, subscribeConsoleLive } from "./console-live";
 import { isHydrated, localWith, markHydrated } from "./local-time";
+import { isLocalRepo, repoHref } from "./repo-links";
 
 // ── shared enums (§ Shared enums) ────────────────────────────────────────────────────────────
 
@@ -1103,7 +1104,7 @@ export function overviewFromStart(raw: unknown, projectId: string): Overview {
   return {
     project: { id: projectId, name, initials: initialsOf(name), stage: work.length ? "working" : repo.full_name ? "ready" : "onboarding",
                repos: repo.full_name ? [{ full_name: s(repo.full_name), branch: s(repo.branch, "main"), access: { read: true, write: true, pr: true },
-                                          external_url: `https://github.com/${s(repo.full_name)}` }] : [],
+                                          external_url: isLocalRepo(s(repo.full_name)) ? "" : (repoHref(s(repo.full_name)) ?? "") }] : [],
                live_url: "", status_label: work.length ? "Working" : "Ready", health: "unknown" },
     journey: [], needs_you: needs.map((w) => ({ id: w.id, kind: "question", label: label4(w.label), detail: w.detail, mini: [],
                                                 action: { label: "Open", href: w.href, decision_id: "" } })),

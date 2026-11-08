@@ -22,6 +22,7 @@ import { DemoLoginRow } from "./tab-settings";
 import { ConfirmSheet } from "./confirm-sheet";
 import { ItemAction } from "./staging-target-sheet";
 import { whenLocal } from "../../lib/local-time";
+import { changeHref, isLocalChangeUrl, linkTarget } from "../../lib/repo-links";
 import type { PxCtx } from "./project-page";
 
 const BEACON = { name: "Beacon", role_key: "sre" };
@@ -202,7 +203,7 @@ function EnvCard({ e, ctx }: { e: Environment; ctx: PxCtx }) {
       <div className="px-row px-wrap px-env-f">
         <Face agent={BEACON} size={20} />
         {e.last_deploy ? <span>Last deploy {e.last_deploy.pr_url
-                  ? <a href={e.last_deploy.pr_url} target="_blank" rel="noreferrer noopener" title="Opens the pull request"><b>{e.last_deploy.label}</b></a>
+                  ? <a href={changeHref(e.last_deploy.pr_url)} {...linkTarget(changeHref(e.last_deploy.pr_url))} title={isLocalChangeUrl(e.last_deploy.pr_url) ? "Opens the change set" : "Opens the pull request"}><b>{e.last_deploy.label}</b></a>
                   : <b>{e.last_deploy.label}</b>} · {agoWords(e.last_deploy.at) || whenLocal(e.last_deploy.at)}</span> : <span className="px-faint">Not deployed yet</span>}
         {e.last_deploy?.commit ? <span className="px-mono px-faint">{e.last_deploy.commit}</span> : null}
         <span className="px-spacer" />

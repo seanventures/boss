@@ -18,6 +18,7 @@ import {
   testGitHubConnectionAction,
 } from "./actions";
 import { formatDateTime } from "../lib/datetime";
+import { changeHref, linkTarget } from "../lib/repo-links";
 import type { GitHubOperationsFeed } from "../lib/github-operations";
 import { SubmitButton } from "./submit-button";
 import { ActionForm } from "./client-forms";
@@ -632,7 +633,7 @@ export function GitHubOperations({
           <div className="ghx-flow-items">
             {mergeAuthorizations.length === 0 ? <span className="ghx-muted">No merge authorizations</span> : mergeAuthorizations.slice(0, 6).map((authorization) => (
               <div className="ghx-flow-item expanded" key={authorization.id}>
-                <a href={authorization.pull_request_url} target="_blank" rel="noreferrer">
+                <a href={changeHref(authorization.pull_request_url)} {...linkTarget(authorization.pull_request_url)}>
                   PR #{authorization.pull_request_number}
                 </a>
                 <Status value={authorization.status} />

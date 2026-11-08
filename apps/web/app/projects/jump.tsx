@@ -15,6 +15,7 @@
  * On an engine without §9, projects and the actions still answer.
  */
 import { LOCAL } from "../../lib/local-time";
+import { changeHref } from "../../lib/repo-links";
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -41,7 +42,7 @@ export function parseJumpRows(v: unknown): JumpRow[] {
   return items.map((z) => {
     const y = (z && typeof z === "object" ? z : {}) as Record<string, unknown>;
     return { label: s(y.label), kind: s(y.kind), href: s(y.href), sub: s(y.sub), hint: s(y.hint), needs_you: y.needs_you === true,
-             external_url: s(y.external_url), role_key: s(y.role_key), project_id: s(y.project_id), at: s(y.at) || undefined };
+             external_url: changeHref(s(y.external_url)) ?? "", role_key: s(y.role_key), project_id: s(y.project_id), at: s(y.at) || undefined };
   }).filter((j) => j.label && (j.href || j.external_url));
 }
 
@@ -145,6 +146,7 @@ export function JumpResults({ query, projectId, projects, onDone }: {
     onDone();
     const href = external && it.external_url ? it.external_url : it.href || it.external_url;
     if (/^https?:\/\//.test(href)) window.open(href, "_blank", "noopener,noreferrer");
+    else if (href.startsWith("/changes/")) window.location.assign(href);   // a local change set: BOSS's own view
     else navigateTo(pxHref(href));
   };
   const [switching, setSwitching] = useState(false);

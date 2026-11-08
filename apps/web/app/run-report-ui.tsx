@@ -1,5 +1,6 @@
 "use client";
 
+import { changeHref, isLocalChangeUrl } from "../lib/repo-links";
 import { GatedButton } from "../components/gated";
 import { usd } from "../lib/money";
 import { humanDuration } from "../lib/datetime";
@@ -468,7 +469,7 @@ export function RunReportPanel(
           {build.files_changed ? `${build.files_changed} files changed` : null}
           {build.test_files?.length ? ` · ${build.test_files.length} test files` : null}
           {build.pull_request_url ? (
-            <> · <a href={build.pull_request_url}>pull request</a></>
+            <> · <a href={changeHref(build.pull_request_url)}>{isLocalChangeUrl(build.pull_request_url) ? "change set" : "pull request"}</a></>
           ) : null}
         </p>
         {build.summary ? (

@@ -35,6 +35,7 @@ import { CaptainPicker, captainChoices } from "./captain-picker";
 import { ConfirmSheet } from "./confirm-sheet";
 import { AddRepoDrawer } from "./add-repo";
 import { DangerZone } from "../project-delete";
+import { isLocalRepo, repoHostLabel, repoHref } from "../../lib/repo-links";
 
 /** The section nav and card icons, in the wireframe's order and colours (13-01). */
 const SECTION_ICON: Record<string, { icon: Icon; c: Tone | "grey" }> = {
@@ -62,7 +63,7 @@ function fallbackSettings(ctx: PxCtx): Settings {
     section("captain", "Captain & squad", "robot", c ? [{ label: "Captain", value: c.name, sub: "", reveal: null, href: "" }] : [], [go("Agent Studio", "?area=workforce")]),
     section("autonomy", "Autonomy & budget", "gauge", [], [go("Autonomy", "?area=budget&tab=autonomy"), go("Budget in Govern", "?area=budget&tab=limits")]),
     section("repos", "Repos", "git",
-            p.repos.map((r) => ({ label: r.full_name, value: r.branch, sub: "", reveal: null, href: r.external_url || `https://github.com/${r.full_name}` })),
+            p.repos.map((r) => ({ label: r.full_name, value: r.branch, sub: "", reveal: null, href: repoHref(r.full_name, r.external_url, ctx.projectId) ?? "" })),
             [go("Add", "?area=setup&focus=repository&open=add")]),
     section("notifications", "Notifications", "bell", [], [go("Notifications", "?area=observability&view=notify")]),
   ] };
@@ -545,7 +546,9 @@ function Repos({ sec }: { sec: SettingsSection }) {
       {rows.map((r) => (
         <div key={s(r.full_name)} className="px-row px-set-repo">
           <GitBranch size={13} aria-hidden />
-          <a className="px-mono px-ell" href={s(r.external_url) || `https://github.com/${s(r.full_name)}`} target="_blank" rel="noreferrer noopener" title={`${s(r.full_name)} — open on GitHub`}>{s(r.full_name)}</a>
+          {isLocalRepo(s(r.full_name))
+            ? <span className="px-mono px-ell" title={`${s(r.full_name)} — a ${repoHostLabel(s(r.full_name)).toLowerCase()} BOSS keeps on this machine`}>{s(r.full_name)}</span>
+            : <a className="px-mono px-ell" href={repoHref(s(r.full_name), s(r.external_url)) ?? undefined} target="_blank" rel="noreferrer noopener" title={`${s(r.full_name)} — open on GitHub`}>{s(r.full_name)}</a>}
           <Tag>{s(r.branch, "main")}</Tag>
           <span className="px-spacer" />
           <Tag tone={r.access_ok === true ? "green" : r.access_ok === false ? "red" : undefined}>{s(r.access_words, "access ✓")}</Tag>

@@ -8,6 +8,7 @@
  *   env:<key>     an environment's full picture;  deploy:<id>  one deploy
  * Prose lives here, never on the page.
  */
+import { changeHref, isLocalChangeUrl, linkTarget } from "../../lib/repo-links";
 import { DiagnosisFlow, WhyLine } from "../../components/stuck-work";
 import React, { useEffect, useState } from "react";
 import {
@@ -164,7 +165,7 @@ function WorkDrawer({ ctx, w, onClose }: { ctx: PxCtx; w: WorkItem; onClose: () 
               with no question on record it opens the PR on GitHub. */}
           {l.pr ? (l.decision
             ? <a className="px-btn" data-kind="amber" data-size="s" href={pxHref(l.decision)} data-testid="px-drawer-work-merge"><GitMerge size={12} aria-hidden /> Merge PR #{l.pr.number}</a>
-            : <a className="px-btn" data-kind="amber" data-size="s" href={l.pr.external_url} target="_blank" rel="noreferrer noopener" data-testid="px-drawer-work-merge"><GitMerge size={12} aria-hidden /> Merge PR #{l.pr.number} ↗</a>)
+            : <a className="px-btn" data-kind="amber" data-size="s" href={changeHref(l.pr.external_url) ?? undefined} {...linkTarget(l.pr.external_url)} data-testid="px-drawer-work-merge"><GitMerge size={12} aria-hidden /> {isLocalChangeUrl(l.pr.external_url) ? `Open change set #${l.pr.number}` : `Merge PR #${l.pr.number} ↗`}</a>)
             : l.decision ? <PxLink href={l.decision} className="px-btn" testid="px-drawer-work-decide">Decide</PxLink>
             : l.workflow_run ? <PxLink href={l.workflow_run} className="px-btn">Decide</PxLink> : null}
         </div>
@@ -190,7 +191,7 @@ function WorkDrawer({ ctx, w, onClose }: { ctx: PxCtx; w: WorkItem; onClose: () 
         <div className="px-row px-wrap" style={{ marginTop: 6 }} data-testid="px-drawer-work-links">
           {l.workflow_run ? <PxLink href={l.workflow_run} testid="px-drawer-link-run"><FlowArrow size={11} aria-hidden /> Workflow run</PxLink> : null}
           {l.build ? <PxLink href={l.build} testid="px-drawer-link-build"><Code size={11} aria-hidden /> Build in Code Tasks</PxLink> : null}
-          {l.pr ? <PxLink href={l.pr.external_url} testid="px-drawer-link-pr"><GitPullRequest size={11} aria-hidden /> PR #{l.pr.number}</PxLink> : null}
+          {l.pr ? <PxLink href={changeHref(l.pr.external_url) ?? ""} testid="px-drawer-link-pr"><GitPullRequest size={11} aria-hidden /> PR #{l.pr.number}</PxLink> : null}
           {l.deploy ? <PxLink href={l.deploy}><RocketLaunch size={11} aria-hidden /> Deploy</PxLink> : null}
           {l.log ? <PxLink href={l.log} testid="px-drawer-link-log"><Terminal size={11} aria-hidden /> Live log</PxLink> : null}
           {/* THIS RUN'S OWN LESSONS (05b-16): what its agents learned, consulted and reused —
