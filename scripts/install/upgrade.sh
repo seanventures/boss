@@ -203,8 +203,13 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
 fi
 
 FETCHED_INSTALLER="$(mktemp)"
-trap 'rm -f "$FETCHED_INSTALLER"' EXIT
+# The new release's post-start check, kept aside: a rollback is verified with it (below).
+FETCHED_CHECK="$(mktemp)"
+OLD_INSTALLER=""
+trap 'rm -f "$FETCHED_INSTALLER" "$FETCHED_CHECK" ${OLD_INSTALLER:+"$OLD_INSTALLER"}' EXIT
 git -C "$INSTALL_DIR" show "$NEW_COMMIT:install.sh" > "$FETCHED_INSTALLER"
+git -C "$INSTALL_DIR" show "$NEW_COMMIT:scripts/install/post_check.sh" > "$FETCHED_CHECK" 2>/dev/null ||
+  : > "$FETCHED_CHECK"
 # The fetched installer makes this run's fresh backup before changing source.
 # Pin it to the commit we already fetched so a moving branch cannot change
 # between the preflight and the installer's second fetch. BOSS_RELEASE_REF_NAME tells
@@ -225,11 +230,18 @@ if ! BOSS_RELEASE_REF_NAME="$REF" bash "$FETCHED_INSTALLER" "${install_args[@]}"
       git -C "$INSTALL_DIR" checkout -q --detach "$OLD_COMMIT" </dev/null
     fi
     OLD_INSTALLER="$(mktemp)"
-    trap 'rm -f "$FETCHED_INSTALLER" "$OLD_INSTALLER"' EXIT
     git -C "$INSTALL_DIR" show "$OLD_COMMIT:install.sh" > "$OLD_INSTALLER"
     if BOSS_RELEASE_REF_NAME="$CURRENT_REF" bash "$OLD_INSTALLER" --dir "$INSTALL_DIR" \
          --ref "$OLD_COMMIT" --yes --skip-model-key </dev/null; then
       echo "Rolled back: $CURRENT_REF is running again. Nothing was lost." >&2
+      echo "Read the error above, then see scripts/install/README.md (upgrade problems) before retrying." >&2
+    elif [[ -s "$FETCHED_CHECK" ]] &&
+         bash "$FETCHED_CHECK" --dir "$INSTALL_DIR" --wait "${BOSS_ROLLBACK_CHECK_WAIT:-180}" </dev/null >&2; then
+      # The previous installer's own last check failed, but the previous release IS running: an
+      # older installer probes with the shared BOSS_API_KEY, which Identity retires 30 days after
+      # its first use. The new release's check (public /health, host tools key) passed.
+      echo "Rolled back: $CURRENT_REF is running again (verified with $REF's check). Nothing was lost." >&2
+      echo "Its own installer's final check failed (an older installer probes with the shared key, retired after 30 days); BOSS answers with the host tools key." >&2
       echo "Read the error above, then see scripts/install/README.md (upgrade problems) before retrying." >&2
     else
       echo 'The rollback did not start either. Restore the recovery backup: scripts/install/README.md (restore).' >&2
