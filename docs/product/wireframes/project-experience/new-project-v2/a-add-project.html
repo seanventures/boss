@@ -57,11 +57,11 @@ No chat or phone for now.<span class="caret"></span></div>
       <div class="pick"><i class="ph ph-folder-open"></i><span class="mono">/srv/apps/<b>helpdesk</b></span><span class="faint" style="font-size:.54rem">on boss-1 · read-only</span><span class="wf-spacer"></span><span class="faint mono" style="font-size:.54rem">2d</span></div>
     </div>
 
-    <!-- ── HERE'S WHAT I UNDERSTOOD (idea) ───────────────────────────── -->
+    <!-- ── PROJECT BRIEF (idea) ─────────────────────────────────────────── -->
     <div class="ub m-idea" data-sub-card title="Helm's rewrite of your words as a brief. Check it before anything starts.">
       <div class="ub-h">
         <span class="face" data-a="helm" data-size="m"></span>
-        <div><b>Here’s what I understood</b> <span class="pin">2</span><small class="s-look">Helm rewrote your 4 lines as a brief · click any line to edit it</small><small class="s-fix">Editing · change any line, or tell Helm how to rewrite it</small></div>
+        <div><b>Project brief</b> <span class="pin">2</span><small class="s-look">From your 4 lines · edit any line</small><small class="s-fix">Editing · change any line, or give a hint and Rewrite</small></div>
         <span class="wf-spacer"></span>
         <span class="ub-key np2-hide-s" title="So you can see what Helm added to your words"><i>your words</i><i><mark>Helm added</mark></i></span>
       </div>
@@ -101,7 +101,7 @@ No chat or phone for now.<span class="caret"></span></div>
     <div class="ub m-repo" title="Helm's summary of the repo, and what onboarding will do with it">
       <div class="ub-h">
         <span class="face" data-a="helm_live" data-size="m"></span>
-        <div><b>Here’s what I understood</b> <span class="pin">2</span><small>From <span class="mono">helpdesk-ai-demo</span> so far · 118 / 214 files · fills as Helm reads</small></div>
+        <div><b>Repo summary</b> <span class="pin">2</span><small>From <span class="mono">helpdesk-ai-demo</span> so far · 118 / 214 files · fills as Helm reads</small></div>
         <span class="wf-spacer"></span><span class="tag" data-tone="blue"><span class="dot" data-s="run"></span>reading</span>
       </div>
       <div class="ub-grid">
@@ -201,7 +201,7 @@ No chat or phone for now.<span class="caret"></span></div>
 <div class="notes" style="margin:0 18px 16px">
 <b>Design notes — one screen, one button (v3: multi-line input + Helm’s understanding)</b><ol class="np2-n">
   <li><b>1</b> One <b>multi-line</b> input: starts at 5 lines, grows to 12, then scrolls; ⤢ opens a full-screen editor; ⇧↵ is a new line, ⌘↵ is Create and start. Detection is unchanged: several lines or a sentence → new app; <span class="mono">owner/repo</span>, a GitHub URL → existing repo (extra lines below it become a note to Helm); <span class="mono">/path</span> → folder. The kind pill still forces another reading.</li>
-  <li><b>2</b> <b>Here’s what I understood</b>: Helm rewrites the words into a brief (title · problem · who uses it · 3–6 must-haves · out of scope · done when · open questions with quick answers). Helm’s additions are dotted-underlined so you see what it inferred vs what you said. For a repo, the card summarises what Helm found and lists what onboarding will do.</li>
+  <li><b>2</b> <b>Project brief</b> (from an idea) or <b>Repo summary</b> (from a repo): Helm rewrites the words into a brief (title · problem · who uses it · 3–6 must-haves · out of scope · done when · open questions with quick answers). Helm’s additions are dotted-underlined so you see what it inferred vs what you said. For a repo, the card summarises what Helm found and lists what onboarding will do.</li>
   <li><b>3</b> Confirm or correct: <b>Looks right</b> confirms; <b>Fix it</b> makes every line editable in place (?mode=fix); a hint + <b>Rewrite</b> asks Helm for a new version (“shorter”, “split into phases”). Editing your own words above re-runs the rewrite and keeps your manual edits pinned.</li>
   <li><b>4</b> What BOSS will do is unchanged (six boxes, step strip), now picked from the brief rather than the raw sentence.</li>
   <li><b>5</b> Models and the GitHub account stay global and read-only (readiness dots, account chip).</li>

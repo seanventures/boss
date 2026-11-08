@@ -1,5 +1,5 @@
-"""HELM'S UNDERSTANDING: "Here's what I understood", one pattern for every box a person types
-work into (New work on a project; Add a project reuses the same turn with its own fields).
+"""HELM'S UNDERSTANDING: the brief card ("Task" in New work), one pattern for every box a person
+types work into (New work on a project; Add a project reuses the same turn with its own fields).
 
 The person's words stay as they wrote them. Helm — the project's captain — rewrites them into a
 short brief, checked against the project's code graph:

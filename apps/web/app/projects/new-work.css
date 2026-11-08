@@ -47,7 +47,7 @@
 .px-nw-chip[data-tone="green"] { border-color: color-mix(in srgb, var(--green) 55%, transparent); color: var(--green); }
 .px-nw-chip[data-tone="blue"] { border-color: var(--accent-line); color: var(--accent-text); background: var(--accent-soft); }
 
-/* ── "Here's what I understood" (the shared card) ───────────────────────────────────────── */
+/* ── "Task" (the shared brief card) ───────────────────────────────────────── */
 .px-btn[data-kind="ok"] { background: var(--green-soft); border-color: color-mix(in srgb, var(--green) 55%, transparent); color: var(--green); }
 
 /* ── Talk it through ────────────────────────────────────────────────────────────────────── */

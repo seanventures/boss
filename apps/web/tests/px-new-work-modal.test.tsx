@@ -154,6 +154,8 @@ describe("Helm's understanding and Talk it through", () => {
     expect(first).toHaveLength(1);
     expect((first[0].body as { text: string; kind: string }).kind).toBe("feature");
     expect(tid("px-ub-v-title")!.textContent).toBe("Auto-tag new tickets by product");
+    expect(tid("px-ub-heading")!.textContent).toBe("Task");
+    expect(tid("px-ub")!.textContent).not.toMatch(/understood/i);
     expect($$("[data-testid='px-ub'] mark").map((m) => m.textContent)).toContain("with a confidence");
     expect(tid("px-ub-row-area")!.textContent).toContain("api/tickets/intake.py");
     expect(tid("px-ub-row-area")!.textContent).toContain("+ migrations/tickets_product.py");

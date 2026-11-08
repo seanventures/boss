@@ -6,7 +6,8 @@
  */
 import { CSRF_HEADER, ME_PATH } from "./contract";
 import { isPermission, type Permission } from "./permissions.gen";
-import { apiWrite, isAborted, type WriteMethod } from "../api-write";
+import { apiWrite, isAborted, stepUpNotConfirmedSentence, type WriteMethod } from "../api-write";
+import { currentMirror, liveMirror } from "./mirror";
 import { sendToEnrolment } from "./enrolment";
 import { humanise, needsWords, permissionName } from "./words";
 import { refusalCode } from "./refusal-code";
@@ -212,7 +213,40 @@ async function refreshCsrf(): Promise<void> {
   } catch { /* the retry is skipped: the refusal stands */ }
 }
 
-export async function idFetch<T>(method: string, path: string, body?: unknown, init: { signal?: AbortSignal } = {}): Promise<T> {
+/** The reason the step-up sheet gives for an identity write sent inside useGuardedCall. Read
+ *  SYNCHRONOUSLY when idFetch is called (a guarded call's write is sent in the same tick). */
+let guardedReason: string | null = null;
+/** Run `call` with `reason` as the step-up sheet's words for the identity writes it sends. */
+export function withStepUpReason<T>(reason: string, call: () => Promise<T>): Promise<T> {
+  const was = guardedReason;
+  guardedReason = reason;
+  try { return call(); } finally { guardedReason = was; }
+}
+
+/**
+ * EVERY IDENTITY WRITE GETS "CONFIRM IT'S YOU", never a silent refusal. A write the API refuses
+ * `401 step_up_required` (a step-up permission, a second factor over ten minutes old) opens the
+ * one step-up sheet of the provider on the page and is sent once more when the person confirms;
+ * cancelled, or no press started it (lib/user-gesture.ts), it is refused as `step_up_cancelled`
+ * with words. Before this, idFetch told the one write path "the caller handles it" for every
+ * call, so a write no caller wrapped in useGuardedCall (Add a project's Enter on an idea,
+ * 2026-11-08) came back as a bare refusal and the screen just waited. `background` writes (an
+ * effect, a timer) opt out and keep the refusal.
+ */
+export async function idFetch<T>(method: string, path: string, body?: unknown, init: { signal?: AbortSignal; background?: boolean } = {}): Promise<T> {
+  const reason = guardedReason;
+  try {
+    return await idFetchFresh<T>(method, path, body, init);
+  } catch (e) {
+    if (!(e instanceof IdentityError && e.stepUp && WRITE.has(method) && !init.background)) throw e;
+    const mirror = currentMirror() ?? liveMirror();
+    if (!mirror) throw e;  // no console on the page to ask through: the caller's own handling
+    if (await mirror.stepUp(reason ?? "Confirm it's you to continue.")) return idFetchFresh<T>(method, path, body, init);
+    throw new IdentityError(401, "step_up_cancelled", { body: { error: "step_up_cancelled", detail: stepUpNotConfirmedSentence() } });
+  }
+}
+
+async function idFetchFresh<T>(method: string, path: string, body?: unknown, init: { signal?: AbortSignal } = {}): Promise<T> {
   // COMPARED WITH WHAT WAS SENT, not with what is held now. After a step-up the provider re-reads
   // /me on its own (the sheet closing, the tab coming back), so by the time the refusal arrives the
   // held token is often already the new one; comparing the fresh token with it said "unchanged"
@@ -238,7 +272,7 @@ async function idFetchOnce<T>(method: string, path: string, body?: unknown, init
     const payload = body === undefined ? undefined : JSON.stringify(body);
     // A write is one press (lib/api-write.ts): an Idempotency-Key, and a double click sends once.
     res = WRITE.has(method)
-      // useGuardedCall answers step_up_required for identity writes (with its own reason).
+      // idFetch answers step_up_required for identity writes (with useGuardedCall's reason).
       ? await apiWrite(path, { method: method as WriteMethod, headers, body: payload, credentials: "same-origin", cache: "no-store", signal: init.signal }, { noStepUp: true })
       : await fetch(path, { headers, credentials: "same-origin", cache: "no-store", signal: init.signal });
   } catch (error) {

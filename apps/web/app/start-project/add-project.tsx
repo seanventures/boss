@@ -34,6 +34,7 @@ import { AgentAvatar } from "../agent-avatar";
 import { consoleHref } from "../console-href";
 import { GatedButton, useGate } from "../../components/gated";
 import { useGuardedCall } from "../../components/identity/identity-provider";
+import { notePress } from "../../lib/user-gesture";
 import { IdentityError } from "../../lib/identity/api";
 import { withConsent } from "../../lib/identity/consent";
 import { openPlan } from "../../lib/converse-doors";
@@ -398,7 +399,7 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
   const onBoxKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key !== "Enter" || e.shiftKey || e.metaKey || e.ctrlKey) return;
     if (showResults && rows.length) { e.preventDefault(); void pickRow(cursor); return; }
-    if (kind === "idea") { e.preventDefault(); void understand({ force: true }); }
+    if (kind === "idea") { e.preventDefault(); notePress(e.nativeEvent); void understand({ force: true }); }
   };
   const onBoxNav = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (!showResults || !rows.length) return;
@@ -530,7 +531,7 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
             </div>
           ) : null}
 
-          {/* 2 HERE'S WHAT I UNDERSTOOD */}
+          {/* 2 PROJECT BRIEF (idea) · REPO SUMMARY (repo) */}
           {kind === "idea" ? (
             <IdeaCard text={text} u={u} reading={reading} ok={ok} fix={fix}
                       onOk={() => setOk(true)} onFix={() => brief && setFix({ ...brief })} onFixChange={setFix}
@@ -636,7 +637,7 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
   return typeof document === "undefined" ? sheet : createPortal(sheet, document.body);
 }
 
-// ── the cards: the ONE "Here's what I understood" card (app/projects/brief-card.tsx), the
+// ── the cards: the ONE brief card (app/projects/brief-card.tsx: "Project brief" · "Repo summary"), the
 //    same one New work draws, with Add a project's own rows ──────────────────────────────────
 
 const HELM = { name: "Helm", role_key: "engineering_captain", avatar: "" };
@@ -653,7 +654,7 @@ function IdeaCard({ text, u, reading, ok, fix, onOk, onFix, onFixChange, onSave,
     return (
       <section className="px-ub" data-state="empty" data-testid="ap-understood" style={{ borderStyle: "dashed" }}>
         <div className="px-ub-h"><AgentAvatar agent="engineering_captain" size={30} aiBadge={false} />
-          <div><b>Here’s what I understood</b><small>{words < MIN_WORDS ? "Type a few lines: Helm rewrites them as a brief you confirm." : "Helm reads it when you pause, or press ↵."}</small></div></div>
+          <div><b data-testid="ap-ub-heading">Project brief</b><small>{words < MIN_WORDS ? "Type a few lines: the brief fills here for you to confirm." : "Fills when you pause, or press ↵."}</small></div></div>
       </section>
     );
   }
@@ -706,14 +707,14 @@ function IdeaCard({ text, u, reading, ok, fix, onOk, onFix, onFixChange, onSave,
   const state = reading && !b ? "reading" : u && u.status !== "ok" ? "fallback" : ok && !f ? "confirmed" : "ready";
   return (
     <div data-testid="ap-understood" data-state={u?.status ?? "reading"} data-ok={ok || undefined}>
-      <BriefCard state={state} agent={HELM} rows={rows} columns={2} editing={!!f} confirmed={ok}
+      <BriefCard state={state} agent={HELM} heading="Project brief" rows={rows} columns={2} editing={!!f} confirmed={ok}
                  title={b?.title ?? ""} testid="ap-ub"
                  chips={<>{b?.must_haves.length ? <span className="px-tag">{b.must_haves.length} must-haves</span> : null}
                    {b?.done_when ? <span className="px-tag" data-tone="green">done when set</span> : null}
                    {open ? <span className="px-tag" data-tone="amber">{open} open · to the PRD</span> : null}</>}
                  reading={<>Helm is reading your {n} line{n === 1 ? "" : "s"}…</>}
                  sub={state === "fallback" ? `${u?.message ?? "No model answered."}` : ok ? "Brief confirmed · it becomes the PRD’s first draft"
-                   : f ? "Editing · change any line, or tell Helm how to rewrite it" : `Helm rewrote your ${n} line${n === 1 ? "" : "s"} as a brief · Fix it to edit any line`}
+                   : f ? "Editing · change any line, or give a hint and Rewrite" : `From your ${n} line${n === 1 ? "" : "s"} · edit any line`}
                  live={reading && b ? <span className="px-tag" data-tone="blue"><span className="px-dot" data-s="now" aria-hidden /> rewriting</span> : undefined}
                  onConfirm={onOk} onFix={() => (f ? onSave() : onFix())} onRewrite={onRewrite} onRetry={onRetry} onOpen={() => undefined}
                  hintPlaceholder="Hint for a rewrite, e.g. “shorter”, “split into phases”" />
@@ -730,7 +731,7 @@ function RepoCard({ kind, repo, read, readError, folder, folderError, note, live
     return (
       <section className="px-ub" data-state="empty" data-testid="ap-found" style={{ borderStyle: "dashed" }}>
         <div className="px-ub-h"><AgentAvatar agent="engineering_captain" size={30} aiBadge={false} />
-          <div><b>Here’s what I understood</b><small>{kind === "folder" ? "Pick the folder above: Helm reads it over one read-only session." : "Pick a repo above: Helm reads it live."}</small></div></div>
+          <div><b data-testid="ap-repo-ub-heading">Repo summary</b><small>{kind === "folder" ? "Pick the folder above: Helm reads it over one read-only session." : "Pick a repo above: Helm reads it live."}</small></div></div>
       </section>
     );
   }
@@ -755,7 +756,7 @@ function RepoCard({ kind, repo, read, readError, folder, folderError, note, live
   return (
     <div data-testid="ap-found" data-ok={ok || undefined}>
       {readError || folderError ? <p className="npx-faint" role="status">Couldn’t read it now: {readError ?? folderError}</p> : null}
-      <BriefCard state={!loaded && live ? "reading" : "ready"} agent={HELM} rows={rows} columns={2} editing={false} confirmed={ok}
+      <BriefCard state={!loaded && live ? "reading" : "ready"} agent={HELM} heading="Repo summary" rows={rows} columns={2} editing={false} confirmed={ok}
                  title={repo} testid="ap-repo-ub"
                  reading={<>Reading <span className="npx-mono">{repo.split("/").pop()}</span>…</>}
                  sub={<>From <span className="npx-mono">{repo.split("/").pop()}</span>{read?.files_total ? ` · ${read.files_total} files` : folder?.files ? ` · ${folder.files} files` : ""} · {live ? "fills as Helm reads" : ok ? "confirmed" : "read"}</>}

@@ -1,4 +1,4 @@
-/* "HERE'S WHAT I UNDERSTOOD" (brief-card.tsx): the one card New work and Add a project draw.
+/* THE BRIEF CARD (brief-card.tsx: "Task" · "Project brief" · "Repo summary"): the one card New work and Add a project draw.
    Moved here from new-work.css so both surfaces load it with the component. */
 .px-ub { border: 1.5px solid color-mix(in srgb, var(--teal) 45%, transparent); border-radius: 14px; background: color-mix(in srgb, var(--teal) 5%, var(--surface));
   padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; min-width: 0; animation: px-rise .15s ease-out; }

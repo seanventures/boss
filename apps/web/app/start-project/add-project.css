@@ -107,7 +107,7 @@
 .npx-lbl { font-family: var(--mono); font-size: .5rem; letter-spacing: .14em; text-transform: uppercase; color: var(--faint); display: flex; align-items: center; gap: 5px; }
 .npx-ok { color: var(--green); margin-left: auto; }
 
-/* 2 Here's what I understood */
+/* 2 Project brief / Repo summary */
 .npx-ub { border: 1.5px solid color-mix(in srgb, var(--teal) 45%, transparent); border-radius: 14px; background: color-mix(in srgb, var(--teal) 5%, var(--surface));
   padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; min-width: 0; animation: npx-rise .22s ease-out; }
 .npx-ub[data-empty] { border-style: dashed; background: var(--surface); }

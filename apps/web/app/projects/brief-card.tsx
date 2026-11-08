@@ -1,8 +1,9 @@
 "use client";
 
 /**
- * "HERE'S WHAT I UNDERSTOOD": the one card every box a person types work into draws (New work on
- * a project; Add a project draws the same card with its own rows). The person's words stay above
+ * THE BRIEF CARD: the one card every box a person types work into draws (New work on a project:
+ * "Task"; Add a project draws the same card with its own rows: "Project brief" from an idea,
+ * "Repo summary" from a repo). The heading names what the card IS, never a hedge. The person's words stay above
  * it; Helm's rewrite is the card, with the phrases Helm added dotted-underlined (`Marked`), and
  * three presses: Looks right · Fix it (every line editable in place) · Rewrite with a hint.
  *
@@ -70,11 +71,13 @@ function Grid({ rows, columns, children }: { rows: BriefRow[]; columns: 1 | 2; c
 }
 
 export function BriefCard({
-  state, agent, title, sub, rows, chips, editing, onConfirm, onFix, onRewrite, onOpen, onRetry, confirmed, reading, foot, testid = "px-ub",
+  state, agent, heading, title, sub, rows, chips, editing, onConfirm, onFix, onRewrite, onOpen, onRetry, confirmed, reading, foot, testid = "px-ub",
   columns = 1, live, actions, hintPlaceholder,
 }: {
   state: BriefState; agent: Agent | null;
-  /** The card's heading: "Here's what I understood", or the brief's own title once confirmed. */
+  /** What the card is, said plainly: "Task", "Project brief", "Repo summary". */
+  heading: string;
+  /** The brief's own title, the heading once confirmed and folded. */
   title: React.ReactNode; sub?: React.ReactNode;
   rows: BriefRow[];
   /** The folded card's chips (confirmed). */
@@ -117,7 +120,7 @@ export function BriefCard({
       <section className="px-ub" data-state="reading" data-testid={testid} aria-busy="true" aria-live="polite">
         <div className="px-ub-h">
           <Face agent={face} size={30} state="working" />
-          <div><b>Here&apos;s what I understood</b><small>{reading ?? "Reading your words and the code graph…"}</small></div>
+          <div><b data-testid={`${testid}-heading`}>{heading}</b><small>{reading ?? "Reading your words and the code graph…"}</small></div>
           <span className="px-tag" data-tone="blue"><span className="px-dot" data-s="now" aria-hidden /> reading</span>
         </div>
         <Grid rows={rows} columns={columns}>{(r) => (
@@ -151,7 +154,7 @@ export function BriefCard({
     <section className="px-ub" data-ok={confirmed ? "" : undefined} data-edit={editing ? "" : undefined} data-state={confirmed ? "confirmed" : "ready"} data-testid={testid}>
       <div className="px-ub-h">
         <Face agent={face} size={30} />
-        <div><b>Here&apos;s what I understood</b>
+        <div><b data-testid={`${testid}-heading`}>{heading}</b>
           {confirmed ? <small className="px-ub-ok"><Check size={11} weight="bold" aria-hidden /> {sub ?? "Confirmed"}</small> : <small>{sub}</small>}</div>
         {live}
         <span className="px-ub-key px-hide-phone" aria-hidden><i>your words</i><i><mark className="px-ub-mark">Helm added</mark></i></span>

@@ -189,6 +189,37 @@ def test_the_understand_route_answers_and_a_slow_model_is_a_timeout_not_an_error
     assert r.json()["brief"]["raw"] is True
 
 
+def test_reading_the_words_needs_no_step_up_and_create_still_does(client, world, monkeypatch):
+    """boss-1, 2026-11-08: "enforce denied … step_up_required project:create" on Enter in the
+    idea box. Reading and rewriting create nothing: understand, connectors and preview pass with
+    a second factor long lapsed (assistant:chat / project:read, no step-up); Create and start
+    still asks for it (project:create); a viewer still may not spend a model turn."""
+    monkeypatch.setattr(add_project, "understand", lambda *a, **k: {
+        "status": "ok", "brief": add_project.shape_brief(ANSWER, words=WORDS),
+        "picks": {"stack": None, "connectors": [], "workflow": None}})
+    lapsed = world.ctx(world.owner, mfa=False)
+    with world.acting_as(lapsed):
+        r = client.post(f"/v1/projects/{world.project_a}/add-project/understand",
+                        json={"words": WORDS})
+        assert r.status_code == 200, r.text
+        assert r.json()["brief"]["title"].startswith("HelpDesk")
+        r = client.post(f"/v1/projects/{world.project_a}/add-project/connectors",
+                        json={"brief": ANSWER, "words": WORDS})
+        assert r.status_code == 200, r.text
+        r = client.get(f"/v1/projects/{world.project_a}/add-project/preview",
+                       params={"mode": "idea"})
+        assert r.status_code == 200, r.text
+        r = client.post("/v1/add-project", json={
+            "context_project_id": world.project_a, "kind": "idea",
+            "name": f"Lapsed {uuid.uuid4().hex[:6]}", "words": WORDS})
+        assert r.status_code == 401, r.text
+        assert r.json()["error"] == "step_up_required"
+    with world.acting_as(world.ctx(world.viewer, mfa=True)):
+        r = client.post(f"/v1/projects/{world.project_a}/add-project/understand",
+                        json={"words": WORDS})
+    assert r.status_code in (403, 404), r.text
+
+
 # ── what BOSS will do ───────────────────────────────────────────────────────────────────────
 
 def test_the_preview_reads_real_workflows_hosts_and_readiness(client, world, engine, monkeypatch):

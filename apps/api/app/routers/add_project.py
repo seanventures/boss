@@ -23,6 +23,12 @@ on their own connection, which cannot see an uncommitted project. A refusal only
 make (a consent grant, a pre-check) keeps the project and answers `retry.project_id`; the same
 call with `project_id` starts it, never a second project. Each step's permission is checked at
 the new project, in the transaction that does it.
+
+READING CREATES NOTHING, SO IT NEVER ASKS FOR A STEP-UP. Understand and connectors are one model
+turn each: they need `assistant:chat` on the project open now (the permission New work's own
+understand route uses: never a viewer, model spend governed by the turn's own budget gate in the
+agent pipeline), and preview needs `project:read`. Only Create and start needs `project:create`,
+the step-up permission: a lapsed passkey must never block a person reading their own words.
 """
 from __future__ import annotations
 
@@ -136,12 +142,12 @@ def _within(fn, wait_s: float, words: str) -> dict[str, Any]:
 
 
 @router.post("/v1/projects/{project_id}/add-project/understand")
-@permit(P.PROJECT_CREATE, scope=Scope.org())
+@permit(P.ASSISTANT_CHAT, scope=Scope.project(path="project_id"))
 def add_project_understand(project_id: str, payload: UnderstandBody,
                            request: Request) -> dict[str, Any]:
     """Helm rewrites the words into a brief and picks the stack, connectors and workflow, with
-    the words that led to each. A model turn costs: it is asked by whoever may create a project
-    (project:create), never by a viewer. status ok | no_model | timeout | empty; never a 5xx for a model
+    the words that led to each. A model turn costs: it is asked by whoever may talk to the project's
+    agents (assistant:chat, no step-up: it creates nothing), never by a viewer. status ok | no_model | timeout | empty; never a 5xx for a model
     that is missing or slow."""
     from boss_engine.services.project_experience import add_project
 
@@ -159,7 +165,7 @@ class ConnectorsBody(BaseModel):
 
 
 @router.post("/v1/projects/{project_id}/add-project/connectors")
-@permit(P.PROJECT_CREATE, scope=Scope.org())
+@permit(P.ASSISTANT_CHAT, scope=Scope.project(path="project_id"))
 def add_project_connectors(project_id: str, payload: ConnectorsBody,
                            request: Request) -> dict[str, Any]:
     """The picks for a brief the person edited by hand (Fix it › Save): the same turn, with

@@ -39,10 +39,10 @@ A staging box.<span class="caret"></span></div>
       </div>
     </div>
 
-    <!-- HERE'S WHAT I UNDERSTOOD -->
+    <!-- AGENT ACTIONS -->
     <div class="ub">
       <div class="ub-h"><span class="face" data-a="forge_live" data-size="m"></span>
-        <div><b>Here’s what I understood</b> <span class="pin">3</span><small>Infra agent · from the network now; the rest fills the moment the key lands</small></div>
+        <div><b>Agent actions</b> <span class="pin">3</span><small>Infra agent · from the network now; the rest fills the moment the key lands</small></div>
         <span class="tag" data-tone="amber">waiting for the key</span></div>
       <div class="ub-grid">
         <div>
@@ -158,7 +158,7 @@ A staging box.<span class="caret"></span></div>
 <div class="notes"><b>Design notes: a server onboards itself, like a repo does</b><ol class="np2-n">
   <li><b>1</b> One input. An address, <span class="mono">user@host</span>, an ssh line or a sentence. The probe shows what it can already see (port, host key) before any credential.</li>
   <li><b>2</b> The single human step is handing over access. It is on the list in Where people decide (Secrets and credentials), so it is drawn amber and set apart. The agent detects that the key landed, so there is no “I ran it” button.</li>
-  <li><b>3</b> <b>Here’s what I understood</b> says what the machine is for (a role: staging, prod or builds, never an app) and lists what the agent will do.</li>
+  <li><b>3</b> <b>Agent actions</b> says what the machine is for (a role: staging, prod or builds, never an app) and lists what the agent will do.</li>
   <li><b>4</b> Six boxes, each with a popover. Every old field is still reachable, prefilled.</li>
   <li><b>5</b> One primary, <b>Add and set up</b>.</li>
   <li><b>6</b> Lands on the server page with the setup as a diagram and a live log. No app moves: each app picks servers on its own Deployments tab, where this one now appears as ready. Prod is never picked for you.</li>
