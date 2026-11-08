@@ -5,8 +5,12 @@ POST /v1/projects/{id}/host-folders/probe    read one folder on one server (read
 POST /v1/projects/{id}/host-folders          record a folder as the project's source
 GET  /v1/projects/{id}/host-folders          the project's recorded folders
 
-Reading a server is `host:exec` (the same bar as inspect_host); recording the source is
-`project:update`. The probe is repeated server-side on register, so what is stored is what the
+READING A FOLDER CREATES NOTHING, SO IT NEVER ASKS FOR A STEP-UP (operator, 2026-11-07: "Couldn't
+read it now: Not created: you cancelled the check" on a probe). The probe is one fixed, read-only
+command over the host's own key (host_folder.command_for): it needs `assistant:chat` on the
+project, the bar Add a project's other reads by Helm use (understand, connectors): never a viewer
+or an auditor, no fresh second factor. Recording the source is `project:update` (step-up), and
+Create and start re-runs the probe itself under `project:create`. The probe is repeated server-side on register, so what is stored is what the
 server said, never what the browser sent.
 """
 from __future__ import annotations
@@ -63,7 +67,7 @@ def host_folder_hosts(project_id: str) -> dict[str, Any]:
 
 
 @router.post("/v1/projects/{project_id}/host-folders/probe")
-@permit(P.HOST_EXEC, scope=Scope.project(path="project_id"))
+@permit(P.ASSISTANT_CHAT, scope=Scope.project(path="project_id"))
 def host_folder_probe(project_id: str, payload: FolderBody) -> Any:
     from boss_engine.services.project_experience import host_folder
 

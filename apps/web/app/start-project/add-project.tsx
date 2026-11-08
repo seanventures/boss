@@ -67,9 +67,14 @@ function initialPlan(): PlanState {
            when: ["needs_you", "pr_ready"], audience: "", doneWhen: [], readFirst: [], talksTo: [], mapRules: false, egressOk: false };
 }
 
-function refusalText(e: unknown): string {
+/** A refusal in words. `doing` says what was being done, so a closed "Confirm it's you" reads as
+ *  what did NOT happen ("Not created …"), never as a create when the press was something else. */
+function refusalText(e: unknown, doing: "create" | "read" = "read"): string {
   if (e instanceof IdentityError) {
-    if (e.code === "step_up_cancelled") return "Not created: you cancelled the check.";
+    if (e.code === "step_up_cancelled") {
+      return doing === "create" ? "Not created: “Confirm it’s you” was closed. Press Create and start to confirm and go on."
+        : "Not read: “Confirm it’s you” was closed.";
+    }
     return typeof e.body.message === "string" && e.body.message ? e.body.message : e.message;
   }
   return e instanceof Error ? e.message : String(e);
@@ -90,9 +95,14 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
   const guarded = useGuardedCall();
   const canCreate = useGate("project:create");
   const [text, setText] = useState(initialText);
-  const [forced, setForced] = useState<Kind | null>(startKind === "repo" || startKind === "folder" ? startKind : null);
+  // THE KIND IS READ FROM THE WORDS. A door ("Import a repo") only says how the EMPTY box starts;
+  // the moment there are words, detect() decides (a sentence is an idea, never a repo or a
+  // folder: walk 2026-11-07 read "Expense tracker for our team: …" as /srv/apps/expense…). Only
+  // the person forces another reading: the kind pill, or picking a result row.
+  const [forced, setForced] = useState<Kind | null>(null);
   const det = useMemo(() => detect(text), [text]);
-  const kind: Kind = forced ?? (text.trim() ? det.kind : (startKind === "repo" || startKind === "folder" ? startKind : "idea"));
+  const hinted: Kind = startKind === "repo" || startKind === "folder" ? startKind : "idea";
+  const kind: Kind = forced ?? (text.trim() ? det.kind : hinted);
   const [full, setFull] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -158,8 +168,11 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
     return [...exact, ...rest].slice(0, 6);
   }, [kind, allRepos, q, det.ref]);
   const folderPath = kind === "folder" ? (text.split("\n")[0].trim() || "/") : "";
-  const folderRows = useMemo(() => (kind === "folder" || (kind === "repo" && q.length > 1)) && hosts
-    ? hosts.slice(0, 4).map((h) => ({ hostId: h.id, host: h.name, path: kind === "folder" ? folderPath : `/srv/apps/${q}` })) : [], [kind, hosts, folderPath, q]);
+  // A repo search also offers /srv/apps/<name> on each host, only for a NAME (one token), never
+  // for words with spaces in them.
+  const slugQ = /^[\w.-]{2,}$/.test(q);
+  const folderRows = useMemo(() => (kind === "folder" || (kind === "repo" && slugQ)) && hosts
+    ? hosts.slice(0, 4).map((h) => ({ hostId: h.id, host: h.name, path: kind === "folder" ? folderPath : `/srv/apps/${q}` })) : [], [kind, hosts, folderPath, q, slugQ]);
   const rows = [...repoRows.map((r) => ({ type: "repo" as const, id: r.id })), ...folderRows.map((f) => ({ type: "folder" as const, id: `${f.hostId}:${f.path}` }))];
   const showResults = (kind === "repo" || kind === "folder") && !pickedRepo && !pickedFolder;
   useEffect(() => { setCursor(0); }, [q, kind]);
