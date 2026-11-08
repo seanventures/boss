@@ -146,7 +146,7 @@ export function FirstRun({ projectId, cards }: { projectId: string; actor: strin
         <Orbit />
         <h1 id="px-fr-title">Add your first project</h1>
         <p>Point the crew at a repo or an idea. Helm, your captain, reads it, gets it ready, and suggests the first piece of work.</p>
-        <Journey nodes={strip} testid="px-fr-strip" onOpen={(n) => { if (n.href) navigateTo(n.href); else if (n.key === "project") openAddProject("import"); }} />
+        <Journey nodes={strip} testid="px-fr-strip" onOpen={(n) => { if (n.href) navigateTo(n.href); else if (n.key === "project") openAddProject("1"); }} />
         <small className="px-faint">About 10 minutes · change anything later in <a href={pxHref("?area=setup")} data-testid="px-fr-setup">Repo and models</a></small>
       </section>
 

@@ -189,6 +189,37 @@ def test_the_understand_route_answers_and_a_slow_model_is_a_timeout_not_an_error
     assert r.json()["brief"]["raw"] is True
 
 
+def test_reading_the_words_needs_no_step_up_and_create_still_does(client, world, monkeypatch):
+    """boss-1, 2026-11-08: "enforce denied … step_up_required project:create" on Enter in the
+    idea box. Reading and rewriting create nothing: understand, connectors and preview pass with
+    a second factor long lapsed (assistant:chat / project:read, no step-up); Create and start
+    still asks for it (project:create); a viewer still may not spend a model turn."""
+    monkeypatch.setattr(add_project, "understand", lambda *a, **k: {
+        "status": "ok", "brief": add_project.shape_brief(ANSWER, words=WORDS),
+        "picks": {"stack": None, "connectors": [], "workflow": None}})
+    lapsed = world.ctx(world.owner, mfa=False)
+    with world.acting_as(lapsed):
+        r = client.post(f"/v1/projects/{world.project_a}/add-project/understand",
+                        json={"words": WORDS})
+        assert r.status_code == 200, r.text
+        assert r.json()["brief"]["title"].startswith("HelpDesk")
+        r = client.post(f"/v1/projects/{world.project_a}/add-project/connectors",
+                        json={"brief": ANSWER, "words": WORDS})
+        assert r.status_code == 200, r.text
+        r = client.get(f"/v1/projects/{world.project_a}/add-project/preview",
+                       params={"mode": "idea"})
+        assert r.status_code == 200, r.text
+        r = client.post("/v1/add-project", json={
+            "context_project_id": world.project_a, "kind": "idea",
+            "name": f"Lapsed {uuid.uuid4().hex[:6]}", "words": WORDS})
+        assert r.status_code == 401, r.text
+        assert r.json()["error"] == "step_up_required"
+    with world.acting_as(world.ctx(world.viewer, mfa=True)):
+        r = client.post(f"/v1/projects/{world.project_a}/add-project/understand",
+                        json={"words": WORDS})
+    assert r.status_code in (403, 404), r.text
+
+
 # ── what BOSS will do ───────────────────────────────────────────────────────────────────────
 
 def test_the_preview_reads_real_workflows_hosts_and_readiness(client, world, engine, monkeypatch):
@@ -416,3 +447,35 @@ def test_connectors_without_a_stack_refuse_before_anything_is_kept(client, world
     assert r.status_code == 422, r.text
     assert r.json()["step"] == "connectors" and r.json()["message"] == "Pick a stack for the connectors."
     assert not _exists(engine, name)
+
+
+def test_start_anyway_on_the_kept_project_still_may_apply_connectors(world):
+    """Walk 2026-11-08: a readiness refusal kept the project; Start anyway resent the create with
+    retry.project_id, and its connectors step answered "You may not apply connectors
+    (template:read)": template:read is held org-wide, and was checked AT the project. Every
+    step's permission is checked where it is held."""
+    from types import SimpleNamespace
+
+    req = SimpleNamespace(state=SimpleNamespace(identity=world.ctx(world.owner, mfa=True),
+                                                identity_mode="enforce"))
+    route._need(req, "template:read", "apply_connectors", world.project_a)   # no refusal
+    route._need(req, "workflow_run:start", "start_the_plan", world.project_a)
+    with pytest.raises(route.Refused):
+        route._need(SimpleNamespace(state=SimpleNamespace(identity=world.ctx(world.viewer, mfa=True),
+                                                          identity_mode="enforce")),
+                    "workflow_run:start", "start_the_plan", world.project_a)
+
+
+def test_talks_to_in_words_goes_into_the_directive_not_app_links():
+    """More detail › Talks to "Xero API" was sent as an app link and refused the whole create
+    ("an alias is A-Z, 0-9 and _…"). Words are what the app calls; only an app of the project,
+    with its key and an alias, is a link."""
+    body = route.CreateAndStartBody(context_project_id="p", name="Receipts", words=WORDS,
+                                    talks_to=[{"name": "Xero API"},
+                                              {"provider_app_key": "billing", "alias": "BILLING"}])
+    run = route._run_input(body, {}, None)
+    assert "It talks to: Xero API." in run["directive"]
+    assert run["app_links"] == [{"provider_app_key": "billing", "alias": "BILLING"}]
+    plain = route._run_input(route.CreateAndStartBody(context_project_id="p", name="R", words=WORDS,
+                                                      talks_to=[{"name": "Stripe"}]), {}, None)
+    assert "app_links" not in plain

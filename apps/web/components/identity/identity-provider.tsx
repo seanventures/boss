@@ -22,7 +22,7 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import { snapshotFrom, ME_PATH, ME_PERMISSIONS_PATH, type CanResult, type MePermissionsResponse, type MeResponse, type PermissionSnapshot } from "../../lib/identity/contract";
 import type { Permission } from "../../lib/identity/permissions.gen";
 import { checkWith } from "../../lib/identity/check";
-import { IdentityError, idGet, setCsrfToken } from "../../lib/identity/api";
+import { IdentityError, idGet, setCsrfToken, withStepUpReason } from "../../lib/identity/api";
 import { StepUpSheet } from "./step-up-sheet";
 import { currentMirror, installMirror, liveMirror, registerLiveMirror, type Mirror } from "../../lib/identity/mirror";
 import { installReadGate } from "../../lib/identity/read-gates";
@@ -245,12 +245,14 @@ export function Can({ permission, projectId, children }: {
 /**
  * Run a write that may need a fresh second factor: on `401 step_up_required` the step-up sheet
  * opens, and the write is retried once when the person confirms. Any other refusal is thrown.
+ * Identity writes (idFetch) already step up themselves, with `reason` as the sheet's words; this
+ * catches what reaches it otherwise.
  */
 export function useGuardedCall() {
   const { stepUp, refresh } = useIdentity();
   return useCallback(async <T,>(reason: string, call: () => Promise<T>): Promise<T> => {
     try {
-      return await call();
+      return await withStepUpReason(reason, call);
     } catch (error) {
       if (error instanceof IdentityError && error.stepUp) {
         if (await stepUp(reason)) return call();

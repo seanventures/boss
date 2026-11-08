@@ -87,3 +87,10 @@ export function isInteractive(): boolean {
 export function resetGesturesForTest(): void {
   lastGestureAt = -Infinity;
 }
+
+/** A key a control defines as its own action (↵ reads the idea in Add a project's box): the person
+ *  pressed it, so a step-up it meets may ask. Only a trusted event counts. */
+export function notePress(event: { isTrusted?: boolean }): void {
+  if (event.isTrusted === false) return;
+  lastGestureAt = now();
+}

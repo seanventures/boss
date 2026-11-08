@@ -125,6 +125,10 @@ describe("an idea: Helm's understanding, then Create and start", () => {
     expect(calls.find((c) => c.path === "/v1/projects/p1/add-project/understand")!.body).toMatchObject({ words: WORDS });
     const card = tid("ap-understood")!;
     expect(card.textContent).toContain("HelpDesk AI: email support with approved AI replies");
+    // A confident heading that names the card (operator, 2026-11-08): never "Here's what I understood".
+    expect(tid("ap-ub-heading")!.textContent).toBe("Project brief");
+    expect(card.textContent).toContain("From your 3 lines · edit any line");
+    expect(card.textContent).not.toMatch(/understood|rewrote/i);
     // The ONE brief card (app/projects/brief-card.tsx), the same New work draws.
     expect(tid("ap-ub")).not.toBeNull();
     expect([...card.querySelectorAll(".px-ub-grid mark")].map((m) => m.textContent).sort()).toEqual(["a customer portal", "nothing sends without approval"]);
@@ -244,6 +248,8 @@ describe("a repo: inline results, Helm's read, onboarding", () => {
     expect(tid("ap-results")).toBeNull();
     const found = tid("ap-found")!;
     expect(found.textContent).toContain("Storefront UI");
+    expect(tid("ap-repo-ub-heading")!.textContent).toBe("Repo summary");
+    expect(found.textContent).not.toMatch(/understood/i);
     expect(found.textContent).toContain("src/inbox");
     expect(tid("ap-onboarding-will")!.textContent).toContain("Set up staging on boss-1:8005");
     expect(tid("ap-box-workflow")!.textContent).toContain("Onboard →");
@@ -310,9 +316,15 @@ describe("the walk's gaps stay closed (laptop walk 2026-11-07)", () => {
     expect(wide).toMatch(/\.npx-foot > \.npx-faint \{[^}]*text-overflow: ellipsis/);
   });
 
-  it("on a phone an open popover is not covered by the sticky foot", () => {
-    const phone = css.slice(css.indexOf("@media (max-width: 760px)"));
-    expect(phone).toMatch(/\.npx-sheet:has\(\.npx-body \.npx-pop\) \.npx-foot \{ display: none; \}/);
+  it("nothing is ever drawn under the foot: the body scrolls between a head and a foot that stay put", () => {
+    // Walk 2026-11-07: long box values ran under the footer (it was sticky inside a scrolling
+    // backdrop, 28 px above its edge). The sheet is the window's height at most, its body
+    // scrolls, the foot is not sticky; on a phone a popover opens in the body's flow, so the
+    // foot never covers it and needs no hiding.
+    expect(css).toMatch(/\.npx-sheet \{[^}]*max-height: calc\(100dvh - 56px\)/);
+    expect(css).toMatch(/\.npx-body \{[^}]*min-height: 0; overflow-y: auto/);
+    expect(css).not.toMatch(/\.npx-foot \{[^}]*position: sticky/);
+    expect(css).not.toMatch(/\.npx-foot \{ display: none; \}/);
   });
 
   it("a long name ends in an ellipsis inside its chip", () => {

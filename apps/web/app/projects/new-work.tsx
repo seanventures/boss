@@ -9,7 +9,7 @@
  *   ┌ New work · <project> its branch ────────────────────────────── ⤢ ✕ ┐
  *   │ Feature · Bug · Ticket or link        │ Talk it through            │
  *   │ [ multi-line box                    ] │  Helm: one question, quick │
- *   │ Here's what I understood (Helm)       │  replies; you reply freely │
+ *   │ Task (Helm)                           │  replies; you reply freely │
  *   │  title · what changes · area (graph)  │  and the brief updates     │
  *   │  done when · risk   Looks right/Fix/↻ │  Open in Ask Helm          │
  *   │ Picked for you: Workflow · Priority · Estimate · Issue · Tell · Target · More │
@@ -707,7 +707,7 @@ export function NewWorkModal({ ctx, prefill, onClose, onDone }: {
             {kinds}
             {showWords || wordsOpen ? box_ : folded}
             {briefState ? (
-              <BriefCard state={briefState} agent={helm} rows={rows} editing={editing} confirmed={confirmed}
+              <BriefCard state={briefState} agent={helm} heading="Task" rows={rows} editing={editing} confirmed={confirmed}
                          title={b?.title ?? ""} chips={foldChips}
                          reading={<>Reading your words and the code graph{graph?.indexed ? "" : "…"}</>}
                          sub={briefState === "fallback" ? `${helm?.name ?? "Helm"} couldn't read it just now — no model answered in time.`

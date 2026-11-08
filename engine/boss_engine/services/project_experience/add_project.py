@@ -1,7 +1,7 @@
 """ADD A PROJECT v2 (docs/product/wireframes/project-experience/new-project-v2): one screen that
 absorbs Workflows › New build.
 
-  understand()   "Here's what I understood": Helm rewrites a person's words into a structured
+  understand()   "Project brief": Helm rewrites a person's words into a structured
                  brief (title · problem · who uses it · must-haves · out of scope · done when ·
                  open questions with quick answers) and, from the same reading, picks the stack,
                  the connectors and the workflow, each with the words that triggered it. ONE turn

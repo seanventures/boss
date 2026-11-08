@@ -1920,15 +1920,15 @@ function ConsoleShellInner({
               <JumpResults query={query} projectId={scope.projectId ?? scope.project}
                            projects={projects?.items ?? []} onDone={() => setPaletteOpen(false)} />
               {/* START SOMETHING: the New project composer, like the top bar's New build. */}
-              {!query.trim() || "new build new project".includes(query.trim().toLowerCase()) ? (
+              {!query.trim() || "add project add a project new project new build new app".includes(query.trim().toLowerCase()) ? (
                 <button type="button" className={`bx-palette-item${filtered.length ? "" : " active"}`}
                         data-testid="palette-new-build"
                         title={NEW_BUILD_TIP}
                         onClick={() => { setPaletteOpen(false); openNewProject(); }}>
                   <Plus size={17} aria-hidden />
                   <span>
-                    <span style={{ fontWeight: 600 }}>New build</span>
-                    <span style={{ display: "block", fontSize: "0.78rem", color: "var(--muted)" }}>A new app or a feature</span>
+                    <span style={{ fontWeight: 600 }}>Add project</span>
+                    <span style={{ display: "block", fontSize: "0.78rem", color: "var(--muted)" }}>An idea, a repo or a folder</span>
                   </span>
                 </button>
               ) : null}

@@ -25,7 +25,7 @@
 import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
-  ArrowsIn, ArrowsOut, ArrowsVertical, ChatsCircle, DotsThree, Flask, FolderOpen, FolderPlus,
+  ArrowsIn, ArrowsOut, ArrowsVertical, ChatsCircle, CircleNotch, DotsThree, Flask, FolderOpen, FolderPlus,
   GitBranch, GithubLogo, HardDrives, Lightbulb, Play, Plus, RocketLaunch, ShieldCheck,
   Sparkle, Trash, User, X, DotsSixVertical,
 } from "@phosphor-icons/react";
@@ -34,6 +34,7 @@ import { AgentAvatar } from "../agent-avatar";
 import { consoleHref } from "../console-href";
 import { GatedButton, useGate } from "../../components/gated";
 import { useGuardedCall } from "../../components/identity/identity-provider";
+import { notePress } from "../../lib/user-gesture";
 import { IdentityError } from "../../lib/identity/api";
 import { withConsent } from "../../lib/identity/consent";
 import { openPlan } from "../../lib/converse-doors";
@@ -66,9 +67,26 @@ function initialPlan(): PlanState {
            when: ["needs_you", "pr_ready"], audience: "", doneWhen: [], readFirst: [], talksTo: [], mapRules: false, egressOk: false };
 }
 
-function refusalText(e: unknown): string {
+const DRAFT_KEY = "boss.add-project.draft";
+function readDraft(): string {
+  try { return window.sessionStorage.getItem(DRAFT_KEY) ?? ""; } catch { return ""; }
+}
+function writeDraft(text: string): void {
+  try {
+    if (text.trim()) window.sessionStorage.setItem(DRAFT_KEY, text);
+    else window.sessionStorage.removeItem(DRAFT_KEY);
+  } catch { /* no storage: the draft is not kept */ }
+}
+function dropDraft(): void { writeDraft(""); }
+
+/** A refusal in words. `doing` says what was being done, so a closed "Confirm it's you" reads as
+ *  what did NOT happen ("Not created …"), never as a create when the press was something else. */
+function refusalText(e: unknown, doing: "create" | "read" = "read"): string {
   if (e instanceof IdentityError) {
-    if (e.code === "step_up_cancelled") return "Not created: you cancelled the check.";
+    if (e.code === "step_up_cancelled") {
+      return doing === "create" ? "Not created: “Confirm it’s you” was closed. Press Create and start to confirm and go on."
+        : "Not read: “Confirm it’s you” was closed.";
+    }
     return typeof e.body.message === "string" && e.body.message ? e.body.message : e.message;
   }
   return e instanceof Error ? e.message : String(e);
@@ -88,10 +106,20 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
   const titleId = useId();
   const guarded = useGuardedCall();
   const canCreate = useGate("project:create");
-  const [text, setText] = useState(initialText);
-  const [forced, setForced] = useState<Kind | null>(startKind === "repo" || startKind === "folder" ? startKind : null);
+  // ESC NEVER LOSES WORDS: what is typed is kept for this tab until Create and start succeeds or
+  // the person presses Clear; opening the sheet again brings it back, said in one line.
+  const [restored] = useState(() => (initialText ? "" : readDraft()));
+  const [text, setText] = useState(initialText || restored);
+  const [draftShown, setDraftShown] = useState(!!restored);
+  useEffect(() => { writeDraft(text); }, [text]);
+  // THE KIND IS READ FROM THE WORDS. A door ("Import a repo") only says how the EMPTY box starts;
+  // the moment there are words, detect() decides (a sentence is an idea, never a repo or a
+  // folder: walk 2026-11-07 read "Expense tracker for our team: …" as /srv/apps/expense…). Only
+  // the person forces another reading: the kind pill, or picking a result row.
+  const [forced, setForced] = useState<Kind | null>(null);
   const det = useMemo(() => detect(text), [text]);
-  const kind: Kind = forced ?? (text.trim() ? det.kind : (startKind === "repo" || startKind === "folder" ? startKind : "idea"));
+  const hinted: Kind = startKind === "repo" || startKind === "folder" ? startKind : "idea";
+  const kind: Kind = forced ?? (text.trim() ? det.kind : hinted);
   const [full, setFull] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -157,8 +185,11 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
     return [...exact, ...rest].slice(0, 6);
   }, [kind, allRepos, q, det.ref]);
   const folderPath = kind === "folder" ? (text.split("\n")[0].trim() || "/") : "";
-  const folderRows = useMemo(() => (kind === "folder" || (kind === "repo" && q.length > 1)) && hosts
-    ? hosts.slice(0, 4).map((h) => ({ hostId: h.id, host: h.name, path: kind === "folder" ? folderPath : `/srv/apps/${q}` })) : [], [kind, hosts, folderPath, q]);
+  // A repo search also offers /srv/apps/<name> on each host, only for a NAME (one token), never
+  // for words with spaces in them.
+  const slugQ = /^[\w.-]{2,}$/.test(q);
+  const folderRows = useMemo(() => (kind === "folder" || (kind === "repo" && slugQ)) && hosts
+    ? hosts.slice(0, 4).map((h) => ({ hostId: h.id, host: h.name, path: kind === "folder" ? folderPath : `/srv/apps/${q}` })) : [], [kind, hosts, folderPath, q, slugQ]);
   const rows = [...repoRows.map((r) => ({ type: "repo" as const, id: r.id })), ...folderRows.map((f) => ({ type: "folder" as const, id: `${f.hostId}:${f.path}` }))];
   const showResults = (kind === "repo" || kind === "folder") && !pickedRepo && !pickedFolder;
   useEffect(() => { setCursor(0); }, [q, kind]);
@@ -210,14 +241,17 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
   const [fix, setFix] = useState<Brief | null>(null);
   const [pinned, setPinned] = useState<Partial<Record<BriefField, unknown>>>({});
   const [hint, setHint] = useState("");
+  // ONE READ PER WORDS (walk 2026-11-07: ↵ showed nothing for 90 s). `asked` is the words the
+  // last read was asked for, whatever started it — the pause, ↵, Rewrite or Try again. The pause
+  // and ↵ ask only when the words changed since; Rewrite and Try again always ask. A rewrite's
+  // answer is never overwritten by the pause timer re-asking without the hint.
   const asked = useRef<string>("");
   const seq = useRef(0);
   const understand = useCallback(async (opts: { hint?: string; force?: boolean } = {}) => {
     const words = text.trim();
     if (kind !== "idea" || words.split(/\s+/).length < MIN_WORDS) return;
-    const key = `${words}\u0000${opts.hint ?? ""}`;
-    if (!opts.force && key === asked.current) return;
-    asked.current = key;
+    if (!opts.force && words === asked.current) return;
+    asked.current = words;
     const mine = ++seq.current;
     setReading(true); setOk(false);
     try {
@@ -238,11 +272,14 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
       if (mine === seq.current) setReading(false);
     }
   }, [text, kind, projectId, u?.brief, pinned, auto]);
+  const understandRef = useRef(understand);
+  understandRef.current = understand;
+  // The pause: only the words (and the kind) restart it, never a new answer.
   useEffect(() => {
     if (kind !== "idea" || fix) return undefined;
-    const t = window.setTimeout(() => { void understand(); }, PAUSE_MS);
+    const t = window.setTimeout(() => { void understandRef.current(); }, PAUSE_MS);
     return () => window.clearTimeout(t);
-  }, [text, kind, fix, understand]);
+  }, [text, kind, fix]);
   // Changing the words un-confirms the brief: the person confirms what is shown.
   useEffect(() => { setOk(false); }, [text]);
   const brief: Brief | null = u?.brief ?? null;
@@ -282,19 +319,35 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
   // ── Create and start ───────────────────────────────────────────────────────────────────
   // The name: the person's, else the brief's title, else the first words (never a blank start).
   const name = plan.name.trim() || (kind === "idea" ? nameFromIdea(text) : "");
-  const ready = kind === "idea" ? text.trim().split(/\s+/).length >= MIN_WORDS && !!name
-    : kind === "repo" ? !!repo && !!plan.name.trim() : !!folder?.exists && !!plan.name.trim();
   const open = unaccepted(refusal, startAnyway);
   const pickedCards = kind === "idea" ? plan.connectors.map((k) => (cards ?? []).find((c) => c.key === k)).filter((c): c is NonNullable<typeof c> => !!c) : [];
   const egress = egressOf(pickedCards);
   const [askEgress, setAskEgress] = useState(false);
+  // WHY CREATE CAN'T BE PRESSED, in words, on hover and under the button (walk 2026-11-07: it
+  // "looked disabled with no reason given"). "" = it can.
+  const words = text.trim().split(/\s+/).filter(Boolean).length;
+  const why = busy ? "" : !canCreate.allowed ? canCreate.reason
+    : kind === "idea" && words < MIN_WORDS ? "Type a few words about the app first"
+    : kind === "repo" && !repo ? "Pick a repo from the list first"
+    : kind === "folder" && !folder?.exists ? (pickedFolder && !folder && !folderError ? "Reading the folder…" : "Pick a folder on a server first")
+    : !name ? "Give it a name (the Name chip)"
+    : refusal && open.length ? `Tick ${open.length === 1 ? "the item" : `the ${open.length} items`} above to start anyway`
+    : askEgress && egress.length && !plan.egressOk ? "Tick “Allow these hosts” above first" : "";
+  const egressBox = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!askEgress) return;
+    egressBox.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    egressBox.current?.querySelector<HTMLInputElement>("input")?.focus({ preventScroll: true });
+  }, [askEgress]);
+  // One press, one project: a second press (a double click, ⌘↵ while it posts) is ignored.
+  const pressing = useRef(false);
   const create = async () => {
-    if (!ready || busy || (refusal && open.length)) return;
+    if (pressing.current || busy || why) return;
     // THE HOSTS THE APP TALKS TO are allowed out loud (the templates' own consent): asked here,
-    // inline, the first time; the tick is the answer.
+    // inline and in view, the first time; the tick is the answer.
     if (egress.length && !plan.egressOk) { setAskEgress(true); return; }
-    if (!canCreate.allowed) { setError(canCreate.reason); return; }
-    setBusy("create"); setError(null);
+    pressing.current = true;
+    setBusy("create"); setError(null); setFixHref(null);
     const repoIds = kind === "repo" ? [pickedRepo] : kind === "idea" ? plan.repoIds : [];
     const fields = ownFields(workflow);
     const inputs: Record<string, unknown> = {};
@@ -318,6 +371,7 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
       const r = await guarded("Create the project and start it.", () => withConsent(() =>
         addProjectApi.create({ ...body, project_id: kept.current }, (id) => { kept.current = id; })));
       if (!r.ok) {
+        pressing.current = false;
         if (r.refusal.project_id) kept.current = r.refusal.retry?.project_id ?? kept.current;
         const ready2 = asReadiness(r.refusal.readiness);
         if (ready2) { setRefusal(ready2); setBusy(null); return; }
@@ -326,9 +380,12 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
         setBusy(null);
         return;
       }
+      setBusy("created");
+      dropDraft();
       go(projectPageHref(r.data.project_id, homeId, "project", kind === "idea" ? null : "onboarding"));
     } catch (e) {
-      setError(refusalText(e));
+      pressing.current = false;
+      setError(refusalText(e, "create"));
       setBusy(null);
     }
   };
@@ -380,7 +437,11 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
   createRef.current = create;
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !busy) { if (full) setFull(false); else onClose(); }
+      // Esc belongs to whatever sits on top: "Confirm it's you", a popover (it stops the key), the
+      // full-screen editor, then the sheet. The words stay (the draft).
+      if (e.key === "Escape" && !busy && !e.defaultPrevented && !document.querySelector("[data-testid='step-up-sheet']")) {
+        if (full) setFull(false); else onClose();
+      }
       if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void createRef.current(); }
     };
     document.addEventListener("keydown", onKey);
@@ -398,8 +459,19 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
   const onBoxKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key !== "Enter" || e.shiftKey || e.metaKey || e.ctrlKey) return;
     if (showResults && rows.length) { e.preventDefault(); void pickRow(cursor); return; }
-    if (kind === "idea") { e.preventDefault(); void understand({ force: true }); }
+    // ↵ before the list has loaded (a pasted URL, then ↵ at once) is kept and taken when it lands.
+    if (showResults && (!registry || !hosts)) { e.preventDefault(); enterWaiting.current = true; return; }
+    // ↵ reads the words now (the pause would in a moment); words already read are not asked again.
+    if (kind === "idea") { e.preventDefault(); notePress(e.nativeEvent); void understand(); }
   };
+  const enterWaiting = useRef(false);
+  const pickRef = useRef(pickRow);
+  pickRef.current = pickRow;
+  useEffect(() => {
+    if (!enterWaiting.current || !rows.length || !registry) return;
+    enterWaiting.current = false;
+    void pickRef.current(0);
+  }, [rows.length, registry]);
   const onBoxNav = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (!showResults || !rows.length) return;
     if (e.key === "ArrowDown") { e.preventDefault(); setCursor((c) => Math.min(rows.length - 1, c + 1)); }
@@ -435,7 +507,7 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
             <textarea ref={box} className="npx-txt" data-testid="ap-input" aria-label="Your idea, a repo or a folder" maxLength={8000} autoFocus
                       placeholder={"A few lines about the app, e.g. “A helpdesk: customers email support@ and it becomes a ticket; AI drafts the reply; staff approve it.”\nOr paste owner/repo, a GitHub URL, or /srv/app"}
                       value={text} rows={kind === "idea" ? 5 : 1}
-                      onChange={(e) => { setText(e.target.value); if (pickedRepo || pickedFolder) { const d = detect(e.target.value); if (d.kind === "idea" || !repo || !e.target.value.toLowerCase().startsWith(repo.full_name.toLowerCase())) unpick(); } }}
+                      onChange={(e) => { setText(e.target.value); if (pickedRepo || pickedFolder) { const d = detect(e.target.value); if (d.kind === "idea" || !repo || !e.target.value.toLowerCase().startsWith(repo.full_name.toLowerCase())) { unpick(); setForced(null); } } }}
                       onKeyDown={(e) => { onBoxNav(e); onBoxKey(e); }} />
             <div className="npx-tools">
               {kind === "idea" ? (
@@ -463,7 +535,13 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
                 </>
               )}
             </div>
-            <div className="npx-in-foot">
+            <div className="npx-in-foot" data-testid="ap-input-foot">
+              {draftShown && text === restored ? (
+                <span className="npx-draft" data-testid="ap-draft" role="status">Your words from before ·{" "}
+                  <button type="button" className="npx-link" data-testid="ap-draft-clear"
+                          onClick={() => { setText(""); setDraftShown(false); dropDraft(); box.current?.focus(); }}>Clear</button>
+                  <span>·</span></span>
+              ) : null}
               {kind === "idea" ? (
                 <>
                   <span title="Starts at 5 lines and grows to 12, then scrolls; ⤢ opens the full-screen editor"><ArrowsVertical size={11} aria-hidden /> {text.trim() ? `${lines} line${lines === 1 ? "" : "s"} · grows` : "5 lines · grows"}</span>
@@ -530,7 +608,7 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
             </div>
           ) : null}
 
-          {/* 2 HERE'S WHAT I UNDERSTOOD */}
+          {/* 2 PROJECT BRIEF (idea) · REPO SUMMARY (repo) */}
           {kind === "idea" ? (
             <IdeaCard text={text} u={u} reading={reading} ok={ok} fix={fix}
                       onOk={() => setOk(true)} onFix={() => brief && setFix({ ...brief })} onFixChange={setFix}
@@ -553,7 +631,7 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
                   : pickedRepo ? <>Helm is reading <span className="npx-mono">{repo?.full_name.split("/")[1]}</span>{read?.files_total ? ` · ${read.files_total} files` : ""}</> : "Pick the code first"}</small></div>
               <span className="npx-spacer" />
               {helmLive && kind !== "idea" ? <span className="npx-tag" data-tone="blue"><i className="npx-pulse" aria-hidden />live</span> : null}
-              <span className="npx-ready npx-hide-s" data-testid="ap-ready" title="Readiness: what this install needs before it can start">
+              <span className="npx-ready" data-testid="ap-ready" title="Readiness: what this install needs before it can start">
                 {(preview?.readiness ?? []).map((d) => (
                   <a key={d.key} href={d.ok || !d.href ? undefined : homeHref(Object.fromEntries(new URLSearchParams(d.href.replace(/^\/?\?/, ""))))}
                      data-ok={d.ok || undefined} data-testid={`ap-dot-${d.key}`} title={`${d.label}: ${d.detail}`}><i aria-hidden />{d.label}</a>
@@ -567,15 +645,15 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
           </section>
 
           {askEgress && egress.length ? (
-            <div className="npx-refusal" data-testid="ap-egress" role="alert">
-              <p style={{ margin: "8px 0 4px" }}><b>The connectors’ app talks to {egress.length} outside host{egress.length === 1 ? "" : "s"}</b></p>
+            <div className="npx-refusal npx-egress" data-testid="ap-egress" role="alert" ref={egressBox}>
+              <p><b>The app talks to {egress.length} outside host{egress.length === 1 ? "" : "s"}</b></p>
               <span className="npx-chips">{egress.map((h) => <span key={h} className="npx-chip npx-mono">{h}</span>)}</span>
-              <label style={{ display: "flex", gap: 6, alignItems: "center", margin: "8px 0" }}>
-                <input type="checkbox" data-testid="ap-egress-allow" checked={plan.egressOk} onChange={(e) => set({ egressOk: e.target.checked })} /> Allow these hosts, then Create and start</label>
+              <label className="npx-egress-ok">
+                <input type="checkbox" data-testid="ap-egress-allow" checked={plan.egressOk} onChange={(e) => set({ egressOk: e.target.checked })} /> Allow these hosts</label>
             </div>
           ) : null}
           {refusal ? (
-            <div className="npx-refusal" data-testid="ap-readiness">
+            <div data-testid="ap-readiness">
               <ReadinessPanel readiness={refusal} accepted={startAnyway} onAccept={setStartAnyway} />
             </div>
           ) : null}
@@ -600,7 +678,7 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
                     <button type="button" role="menuitem" className="npx-opt" data-testid="ap-way-blank" onClick={onForm}><Plus size={13} aria-hidden /><b>Blank project</b><small>no build yet</small></button>
                     <button type="button" role="menuitem" className="npx-opt" data-testid="ap-way-kg" onClick={onForm}><GitBranch size={13} aria-hidden /><b>Knowledge-graph project</b><small>type, description</small></button>
                     <button type="button" role="menuitem" className="npx-opt" data-testid="ap-way-presets" onClick={() => setWays("presets")}><Sparkle size={13} aria-hidden /><b>Presets</b><small>samples · banking KG</small></button>
-                    <button type="button" role="menuitem" className="npx-opt npx-show-s" onClick={() => { onClose(); openPlan("pm", { from: "composer" }); }}><ChatsCircle size={13} aria-hidden /><b>Plan with an agent first</b></button>
+                    <button type="button" role="menuitem" className="npx-opt npx-show-s" data-testid="ap-way-plan" onClick={() => { onClose(); openPlan("pm", { from: "composer" }); }}><ChatsCircle size={13} aria-hidden /><b>Plan with an agent first</b></button>
                   </>
                 ) : (
                   <div className="npx-presets" data-testid="ap-presets">
@@ -617,18 +695,24 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
             ) : null}
           </span>
           <GatedButton permission="project:create" className="npx-primary" data-testid="ap-create"
-                       disabled={!ready || !!busy || (!!refusal && open.length > 0)}
-                       title="Creates the project and starts it with the brief above (confirming it)"
+                       disabled={!!why || !!busy} aria-busy={!!busy || undefined} data-busy={busy === "create" || busy === "created" || undefined}
+                       aria-describedby={why ? `${titleId}-why` : undefined}
+                       title={why || (refusal ? "Starts it with the items above accepted (⌘↵)" : "Creates the project and starts it with the brief above (⌘↵)")}
                        onClick={() => void create()}>
-            <RocketLaunch size={16} aria-hidden />{busy === "create" ? "Creating…" : refusal ? "Start anyway" : "Create and start"}<span className="npx-kbd2" aria-hidden>⌘↵</span>
+            {busy === "create" || busy === "created" ? <CircleNotch size={16} className="npx-spin" aria-hidden /> : <RocketLaunch size={16} aria-hidden />}
+            {busy === "create" ? "Creating…" : busy === "created" ? "Created · opening…" : refusal ? "Start anyway" : "Create and start"}<span className="npx-kbd2" aria-hidden>⌘↵</span>
           </GatedButton>
+          {why ? <span className="npx-why" id={`${titleId}-why`} data-testid="ap-create-why">{why}</span> : null}
         </div>
       </div>
       {full ? (
         <div className="npx-full" role="dialog" aria-label="Full screen editor" data-testid="ap-full-editor">
           <div className="npx-full-h"><b>Describe the app</b><span className="npx-spacer" />
             <button type="button" className="npx-btn" onClick={() => setFull(false)}><ArrowsIn size={13} aria-hidden /> Done</button></div>
-          <textarea className="npx-full-txt" autoFocus value={text} maxLength={8000} onChange={(e) => setText(e.target.value)} />
+          {/* The cursor lands where the words end, so typing goes on from there. */}
+          <textarea className="npx-full-txt" autoFocus value={text} maxLength={8000} aria-label="Describe the app" data-testid="ap-full-input"
+                    onFocus={(e) => { const el = e.currentTarget; el.setSelectionRange(el.value.length, el.value.length); }}
+                    onChange={(e) => setText(e.target.value)} />
         </div>
       ) : null}
     </div>
@@ -636,24 +720,27 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
   return typeof document === "undefined" ? sheet : createPortal(sheet, document.body);
 }
 
-// ── the cards: the ONE "Here's what I understood" card (app/projects/brief-card.tsx), the
+// ── the cards: the ONE brief card (app/projects/brief-card.tsx: "Project brief" · "Repo summary"), the
 //    same one New work draws, with Add a project's own rows ──────────────────────────────────
 
 const HELM = { name: "Helm", role_key: "engineering_captain", avatar: "" };
 
 function IdeaCard({ text, u, reading, ok, fix, onOk, onFix, onFixChange, onSave, onAnswer, onRewrite, onRetry }: {
   text: string; u: Understanding | null; reading: boolean; ok: boolean; fix: Brief | null;
-  onOk: () => void; onFix: () => void; onFixChange: (b: Brief) => void; onSave: () => void;
+  onOk: () => void; onFix: () => void; onFixChange: (b: Brief | null) => void; onSave: () => void;
   onAnswer: (i: number, a: string) => void; onRewrite: (hint: string) => void; onRetry: () => void;
 }) {
   const b = u?.brief ?? null;
+  // Reading with nothing good on screen yet (the first read, or Try again after no model or a
+  // timeout): the card shows Helm reading, never the old "couldn't read it" while it asks again.
+  const fresh = reading && (!b || (u?.status ?? "ok") !== "ok");
   const words = text.trim().split(/\s+/).filter(Boolean).length;
   const n = lineCount(text);
   if (!b && !reading) {
     return (
       <section className="px-ub" data-state="empty" data-testid="ap-understood" style={{ borderStyle: "dashed" }}>
         <div className="px-ub-h"><AgentAvatar agent="engineering_captain" size={30} aiBadge={false} />
-          <div><b>Here’s what I understood</b><small>{words < MIN_WORDS ? "Type a few lines: Helm rewrites them as a brief you confirm." : "Helm reads it when you pause, or press ↵."}</small></div></div>
+          <div><b data-testid="ap-ub-heading">Project brief</b><small>{words < MIN_WORDS ? "Type a few lines: the brief fills here for you to confirm." : "Fills when you pause, or press ↵."}</small></div></div>
       </section>
     );
   }
@@ -689,7 +776,7 @@ function IdeaCard({ text, u, reading, ok, fix, onOk, onFix, onFixChange, onSave,
     { key: "done", label: "Done when", col: 2, skeleton: [90, 70],
       value: <Marked text={b?.done_when ?? ""} added={added} />,
       edit: f ? <textarea className="npx-input" rows={2} value={f.done_when} onChange={(e) => edit({ done_when: e.target.value })} /> : undefined },
-  ].filter((r) => reading && !b ? true : f || r.key === "title" || r.key === "musts" || (r.key === "problem" && b?.problem) || (r.key === "who" && b?.who_uses)
+  ].filter((r) => fresh ? true : f || r.key === "title" || r.key === "musts" || (r.key === "problem" && b?.problem) || (r.key === "who" && b?.who_uses)
     || (r.key === "scope" && b?.out_of_scope.length) || (r.key === "done" && b?.done_when)) as BriefRow[];
   if (b?.open_questions.length) {
     rows.push({ key: "open", label: `Open · ${open}`, col: 2, question: true, value: (
@@ -703,20 +790,21 @@ function IdeaCard({ text, u, reading, ok, fix, onOk, onFix, onFixChange, onSave,
         ))}
       </div>) });
   }
-  const state = reading && !b ? "reading" : u && u.status !== "ok" ? "fallback" : ok && !f ? "confirmed" : "ready";
+  const state = fresh ? "reading" : u && u.status !== "ok" ? "fallback" : ok && !f ? "confirmed" : "ready";
   return (
-    <div data-testid="ap-understood" data-state={u?.status ?? "reading"} data-ok={ok || undefined}>
-      <BriefCard state={state} agent={HELM} rows={rows} columns={2} editing={!!f} confirmed={ok}
+    <div data-testid="ap-understood" data-state={fresh ? "reading" : u?.status ?? "reading"} data-ok={ok || undefined}>
+      <BriefCard state={state} agent={HELM} heading="Project brief" rows={rows} columns={2} editing={!!f} confirmed={ok}
                  title={b?.title ?? ""} testid="ap-ub"
                  chips={<>{b?.must_haves.length ? <span className="px-tag">{b.must_haves.length} must-haves</span> : null}
                    {b?.done_when ? <span className="px-tag" data-tone="green">done when set</span> : null}
                    {open ? <span className="px-tag" data-tone="amber">{open} open · to the PRD</span> : null}</>}
                  reading={<>Helm is reading your {n} line{n === 1 ? "" : "s"}…</>}
                  sub={state === "fallback" ? `${u?.message ?? "No model answered."}` : ok ? "Brief confirmed · it becomes the PRD’s first draft"
-                   : f ? "Editing · change any line, or tell Helm how to rewrite it" : `Helm rewrote your ${n} line${n === 1 ? "" : "s"} as a brief · Fix it to edit any line`}
+                   : f ? "Editing · change any line, or give a hint and Rewrite" : `From your ${n} line${n === 1 ? "" : "s"} · edit any line`}
                  live={reading && b ? <span className="px-tag" data-tone="blue"><span className="px-dot" data-s="now" aria-hidden /> rewriting</span> : undefined}
                  onConfirm={onOk} onFix={() => (f ? onSave() : onFix())} onRewrite={onRewrite} onRetry={onRetry} onOpen={() => undefined}
-                 hintPlaceholder="Hint for a rewrite, e.g. “shorter”, “split into phases”" />
+                 hintPlaceholder="Hint for a rewrite, e.g. “shorter”, “split into phases”"
+                 saveLabel="Save brief" onCancel={f ? () => onFixChange(null) : undefined} />
     </div>
   );
 }
@@ -730,7 +818,7 @@ function RepoCard({ kind, repo, read, readError, folder, folderError, note, live
     return (
       <section className="px-ub" data-state="empty" data-testid="ap-found" style={{ borderStyle: "dashed" }}>
         <div className="px-ub-h"><AgentAvatar agent="engineering_captain" size={30} aiBadge={false} />
-          <div><b>Here’s what I understood</b><small>{kind === "folder" ? "Pick the folder above: Helm reads it over one read-only session." : "Pick a repo above: Helm reads it live."}</small></div></div>
+          <div><b data-testid="ap-repo-ub-heading">Repo summary</b><small>{kind === "folder" ? "Pick the folder above: Helm reads it over one read-only session." : "Pick a repo above: Helm reads it live."}</small></div></div>
       </section>
     );
   }
@@ -755,7 +843,7 @@ function RepoCard({ kind, repo, read, readError, folder, folderError, note, live
   return (
     <div data-testid="ap-found" data-ok={ok || undefined}>
       {readError || folderError ? <p className="npx-faint" role="status">Couldn’t read it now: {readError ?? folderError}</p> : null}
-      <BriefCard state={!loaded && live ? "reading" : "ready"} agent={HELM} rows={rows} columns={2} editing={false} confirmed={ok}
+      <BriefCard state={!loaded && live ? "reading" : "ready"} agent={HELM} heading="Repo summary" rows={rows} columns={2} editing={false} confirmed={ok}
                  title={repo} testid="ap-repo-ub"
                  reading={<>Reading <span className="npx-mono">{repo.split("/").pop()}</span>…</>}
                  sub={<>From <span className="npx-mono">{repo.split("/").pop()}</span>{read?.files_total ? ` · ${read.files_total} files` : folder?.files ? ` · ${folder.files} files` : ""} · {live ? "fills as Helm reads" : ok ? "confirmed" : "read"}</>}

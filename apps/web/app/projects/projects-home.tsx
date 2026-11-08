@@ -119,7 +119,7 @@ function ProjectsList({ cards, note, cap, onRetry, onChanged }: {
         </div>
         <span className="px-spacer" />
         <GatedButton permission="project:create" className="px-btn" data-kind="primary" data-size="l" data-testid="px-add-project"
-                     title="A new app from an idea, or an existing repo" onClick={() => openAddProject("import")}>
+                     title="A new app from an idea, or an existing repo" onClick={() => openAddProject("1")}>
           <Plus size={14} weight="bold" aria-hidden /> Add project
         </GatedButton>
       </div>
@@ -152,7 +152,7 @@ function ProjectsList({ cards, note, cap, onRetry, onChanged }: {
       <div className="px-grid px-g3" data-testid="px-project-cards">
         {shown.map((c) => <ProjectCardView key={c.id} card={c} onChanged={onChanged} />)}
         {filter === "all" ? (
-          <button type="button" className="px-pc-new" data-testid="px-card-add" onClick={() => openAddProject("import")}>
+          <button type="button" className="px-pc-new" data-testid="px-card-add" onClick={() => openAddProject("1")}>
             <span className="px-pc-plus" aria-hidden><Plus size={22} /></span>
             <b>Add project</b>
             <small>New idea · existing repo</small>

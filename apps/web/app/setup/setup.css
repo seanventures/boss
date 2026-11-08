@@ -317,7 +317,7 @@ svg.su-dot { background: none; width: 12px; height: 12px; color: var(--muted); }
 .su-option:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .su-picker .su-btn { align-self: flex-start; }
 /* Add repo from every account: one heading per account, its repositories under it. */
-.su-picker-group { padding: 8px 10px 4px; font-size: 12px; overflow-wrap: anywhere; }
+.su-picker-group { padding: 8px 10px 4px; font-size: .632rem; overflow-wrap: anywhere; }
 .su-picker-group:not(:first-child) { border-top: 1px solid var(--border); margin-top: 4px; }
 
 /* ── Add a model ────────────────────────────────────────────────────────────────── */
@@ -691,7 +691,7 @@ svg.su-dot { background: none; width: 12px; height: 12px; color: var(--muted); }
 
 /* Paste-back sign-in (Claude Code): three numbered steps, the action in each one obvious. */
 .su-signin-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 14px; }
-.su-signin-steps > li { display: grid; grid-template-columns: 26px 1fr; gap: 12px; align-items: start; }
+.su-signin-steps > li { display: grid; grid-template-columns: 1.37rem 1fr; gap: 12px; align-items: start; }
 .su-signin-step-n {
   display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: 50%;
   border: 1px solid var(--accent); color: var(--accent); font: 700 0.8125rem/1 var(--sans);
@@ -731,7 +731,7 @@ svg.su-dot { background: none; width: 12px; height: 12px; color: var(--muted); }
 .su-table td { padding: 8px 8px 8px 0; border-bottom: 1px solid var(--border); vertical-align: middle; }
 .su-table tr:last-child td { border-bottom: 0; }
 .su-table .su-chip { margin-left: 6px; }
-.su-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+.su-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(10.53rem, 1fr)); gap: 10px; }
 .su-card {
   display: flex; flex-direction: column; gap: 4px; align-items: flex-start;
   padding: 12px; border: 1px solid var(--border); border-radius: var(--r-lg);
@@ -784,7 +784,7 @@ svg.su-dot { background: none; width: 12px; height: 12px; color: var(--muted); }
 .su-wl-flow > .su-chip { height: 20px; padding: 0 6px; font-size: 0.6875rem; white-space: nowrap; }
 /* ONE LINE ON A DESKTOP (walk 2026-11-04: "Live preview" fell to a second line); phones wrap. */
 @media (min-width: 1280px) { .su-wl-flow { flex-wrap: nowrap; gap: 3px; } }
-.su-wl-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+.su-wl-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(11.58rem, 1fr)); gap: 10px; }
 .su-wl-card { flex-direction: row; align-items: center; gap: 10px; }
 .su-wl-card:hover { border-color: var(--accent-line); }
 @media (max-width: 640px) {
@@ -795,7 +795,7 @@ svg.su-dot { background: none; width: 12px; height: 12px; color: var(--muted); }
 }
 
 /* ② Repos › Connect GitHub (BOSSAPP-815): what happens on GitHub, before it opens. */
-.su-next-steps { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 13px; }
+.su-next-steps { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: .684rem; }
 button.su-chip { background: transparent; font: 600 0.75rem/1 var(--sans); cursor: pointer; }
 button.su-chip:hover, button.su-chip:focus-visible { border-color: var(--accent); }
 button.su-chip[aria-checked="true"] { color: var(--accent); border-color: var(--accent); }

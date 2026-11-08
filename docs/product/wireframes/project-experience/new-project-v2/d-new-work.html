@@ -76,7 +76,7 @@ Lead wants to filter the inbox by product.</div>
       <!-- (a) Helm reading -->
       <div class="ub" data-in="typing">
         <div class="ub-h"><span class="face" data-a="helm_live" data-size="m"></span>
-          <div><b>Here’s what I understood</b> <span class="pin">2</span><small>Reading your words and the code graph · <span class="mono">api/tickets</span>, <span class="mono">api/tags</span>…</small></div>
+          <div><b>Task</b> <span class="pin">2</span><small>Reading your words and the code graph · <span class="mono">api/tickets</span>, <span class="mono">api/tags</span>…</small></div>
           <span class="wf-spacer"></span><span class="tag" data-tone="blue"><span class="dot" data-s="run"></span>reading</span></div>
         <div class="ub-grid">
           <div><div class="ub-f"><span class="lbl">Title</span><span class="ub-sk" style="width:70%;margin-top:4px"></span><i></i></div>
@@ -102,7 +102,7 @@ Lead wants to filter the inbox by product.</div>
       </div>
       <div class="ub" data-in="chat" title="Helm's rewrite of your words, checked against the code graph">
         <div class="ub-h"><span class="face" data-a="helm" data-size="m"></span>
-          <div><b>Here’s what I understood</b> <span class="pin">2</span>
+          <div><b>Task</b> <span class="pin">2</span>
             <small data-in="chat">Your 3 lines as a change · checked against the code graph · click any line to edit</small>
             <small data-in="ready refused" style="color:var(--green)"><i class="ph-bold ph-check"></i> Confirmed · updated from your chat with Helm</small></div>
           <span class="wf-spacer"></span>
@@ -233,7 +233,7 @@ Lead wants to filter the inbox by product.</div>
 <div class="notes" style="margin:0 18px 16px">
 <b>Design notes — New work as a small modal (replaces the one-line composer)</b><ol class="np2-n">
   <li><b>1</b> Opens from the header’s <b>New work</b>, from the bar that replaces the composer on Project › Work (typing there opens it with your words), from <b>N</b>, and from an Ask-Helm answer’s “New work” card (prefilled, never sent). Kind tabs: Feature · Bug · Ticket or link. A pasted GitHub/Plane link is read on any tab.</li>
-  <li><b>2</b> The words are a multi-line box. Helm rewrites them into <b>Here’s what I understood</b>: title · what changes · done when (acceptance) · area from the code graph · risk. Same pattern as Add a project: Looks right / Fix it / Rewrite with a hint; Helm’s additions are dotted-underlined.</li>
+  <li><b>2</b> The words are a multi-line box. Helm rewrites them into the <b>Task</b> card: title · what changes · done when (acceptance) · area from the code graph · risk. Same pattern as Add a project: Looks right / Fix it / Rewrite with a hint; Helm’s additions are dotted-underlined.</li>
   <li><b>3</b> <b>Talk it through</b>: at most 4 turns. Helm asks one clarifying question with quick replies; answers update the brief (marked “+ from chat”) and the defaults. Optional: you can start without answering. Longer talks move to Ask Helm with this draft attached.</li>
   <li><b>4</b> <b>Picked for you</b>: workflow (default per kind, with its steps and the approval points in amber), priority, estimate (time and cost from this project’s runs), issue (link or create), who to tell, target (staging). Each chip opens a popover; More holds crew, connector, branch.</li>
   <li><b>5</b> The plan preview shows who does each step and where you step in.</li>

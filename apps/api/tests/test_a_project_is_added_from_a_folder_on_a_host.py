@@ -159,6 +159,22 @@ def test_a_server_boss_cannot_reach_is_said_in_words(world, client, helpdesk, mo
     assert cap.status_code == 502
 
 
+def test_reading_a_folder_needs_no_step_up_but_recording_it_does(world, client, helpdesk, fake_ssh):
+    """Operator, 2026-11-07: the probe answered 401 step_up_required and the sheet said "Not
+    created: you cancelled the check". A probe reads; it creates nothing. With the second factor
+    long lapsed the probe and the hosts answer; recording the folder still asks for it."""
+    pid, host = helpdesk["id"], helpdesk["host_id"]
+    with world.acting_as(world.ctx(world.owner, mfa=False)):
+        hosts = client.get(f"/v1/projects/{pid}/host-folders/hosts")
+        read = client.post(f"/v1/projects/{pid}/host-folders/probe",
+                           json={"host_id": host, "path": "/srv/apps/ledger-api"})
+        saved = client.post(f"/v1/projects/{pid}/host-folders",
+                            json={"host_id": host, "path": "/srv/apps/ledger-api"})
+    assert hosts.status_code == 200, hosts.text
+    assert read.status_code == 200 and read.json()["exists"] is True, read.text
+    assert saved.status_code == 401 and saved.json()["error"] == "step_up_required", saved.text
+
+
 def test_a_viewer_cannot_read_a_server_folder(world, client, helpdesk, fake_ssh):
     with _as(world, world.viewer):
         r = client.post(f"/v1/projects/{helpdesk['id']}/host-folders/probe",

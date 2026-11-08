@@ -83,16 +83,22 @@
   --tier-frontier: #C58AF9;
   --tier-frontier-soft: rgba(197, 138, 249, 0.14);
 
-  /* THE TYPE SCALE (BOSSAPP-914): the Project page's sizes, named once so every area's header,
-     cards and rows read as the same product (at the 19px root: 20, 14.8, 14, 13.3, 12.5, 11.4, 10.6, 10.3 px). */
-  --fs-page: 1.05rem;   /* a page's title (h1) */
-  --fs-title: .78rem;   /* a card's or section's title */
+  /* THE TYPE SCALE (BOSSAPP-914): one set of sizes for every area, named once so every header,
+     card and row reads as the same product. Taken from the Workflows page as it renders (the
+     console's best-read screen), not from the wireframes: their sizes were drawn small (meta
+     11.4px, tags 10.6px, labels 10.3px) and made every screen built from them read a size small.
+     At the 19px root: display 26, page 21.5, title 16, body and rows 14, buttons and inputs 13.3,
+     meta 12.5, tags 12, MONO CAPS labels 11 px. Nothing that is read sits below 12px except a
+     caps label. tests/type-is-a-token.test.ts holds these floors and keeps literal sizes out. */
+  --fs-display: 1.368rem; /* a big number, a hero glyph */
+  --fs-page: 1.132rem;  /* a page's title (h1) */
+  --fs-title: .842rem;  /* a card's, sheet's or section's title */
   --fs-body: .737rem;   /* body text */
-  --fs-row: .7rem;      /* a list row's title */
-  --fs-ui: .66rem;      /* buttons, inputs, tabs */
-  --fs-meta: .6rem;     /* meta lines, chips, counts, links */
-  --fs-tag: .56rem;     /* tags, badges, ages */
-  --fs-label: .54rem;   /* MONO CAPS section labels */
+  --fs-row: .737rem;    /* a list row's title */
+  --fs-ui: .7rem;       /* buttons, inputs, tabs */
+  --fs-meta: .658rem;   /* meta lines, chips, counts, links */
+  --fs-tag: .632rem;    /* tags, badges, ages */
+  --fs-label: .579rem;  /* MONO CAPS section labels */
 
   /* shape */
   --r-sm: 8px;
@@ -8899,7 +8905,7 @@ details[open] > .skill-form-summary::before { transform: rotate(90deg); }
   background: var(--surface); color: var(--ink); box-shadow: 0 32px 90px rgba(0, 0, 0, 0.5);
   font-size: 0.875rem; line-height: 1.45; box-sizing: border-box;
 }
-.bx-np-title { margin: 0; font-family: var(--display); font-size: 1.15rem; font-weight: 600; }
+.bx-np-title { margin: 0; font-family: var(--display); font-size: var(--fs-page); font-weight: 600; }
 .bx-np-sub { margin: -6px 0 0; color: var(--ink-soft); }
 .bx-np-sheet .bx-project-type { display: grid; gap: 8px; margin: 0; padding: 0; border: 0; min-width: 0; }
 .bx-np-sheet .bx-project-type legend { padding: 0 0 6px; color: var(--ink-soft); font-weight: 600; }
@@ -8910,16 +8916,16 @@ details[open] > .skill-form-summary::before { transform: rotate(90deg); }
 .bx-np-sheet .bx-project-type-option[data-checked] { border-color: var(--accent-line); background: var(--accent-soft); color: var(--ink); }
 .bx-np-sheet .bx-project-type-option input { margin: 3px 0 0; accent-color: var(--accent); }
 .bx-np-field { display: grid; gap: 4px; color: var(--ink-soft); }
-.bx-np-field em { font-style: normal; color: var(--faint); font-size: 0.75rem; }
+.bx-np-field em { font-style: normal; color: var(--faint); font-size: var(--fs-body); }
 .bx-np-field .input { width: 100%; box-sizing: border-box; }
-.bx-np-next { margin: 0; padding: 8px 10px; border-radius: var(--r); background: var(--surface-2); color: var(--ink-soft); font-size: 0.82rem; }
+.bx-np-next { margin: 0; padding: 8px 10px; border-radius: var(--r); background: var(--surface-2); color: var(--ink-soft); font-size: var(--fs-body); }
 .bx-np-error { margin: 0; color: var(--red); }
 .bx-np-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
 
 /* An answer's leading path as flow chips (lib/answer-flow; captain drawer, screen 09). */
 .agent-flow { display: flex; align-items: center; flex-wrap: wrap; row-gap: 6px; margin: 2px 0 8px; }
 .agent-flow-n { display: inline-flex; align-items: center; padding: 3px 9px; border-radius: 8px; border: 1.5px solid var(--border-strong);
-  font-size: .72rem; font-weight: 600; white-space: nowrap; }
+  font-size: var(--fs-ui); font-weight: 600; white-space: nowrap; }
 .agent-flow-n[data-s="done"] { border-color: var(--green); color: var(--green); }
 .agent-flow-n[data-s="now"] { border-color: var(--teal); color: var(--teal); box-shadow: 0 0 0 2px color-mix(in srgb, var(--teal) 25%, transparent); }
 .agent-flow-n[data-s="waiting"] { background: var(--amber); border-color: var(--amber); color: #1b1300; }
@@ -8937,7 +8943,7 @@ details[open] > .skill-form-summary::before { transform: rotate(90deg); }
 .agent-flow-n[data-s="you"] { border-style: dashed; border-color: var(--amber); color: var(--amber); }
 .ac-cites { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 2px; }
 .ac-cite { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--border-strong);
-  font-size: .7rem; font-weight: 600; color: var(--ink-soft, var(--muted)); text-decoration: none; max-width: 100%; }
+  font-size: var(--fs-ui); font-weight: 600; color: var(--ink-soft, var(--muted)); text-decoration: none; max-width: 100%; }
 .ac-cite > span:first-of-type { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ac-cite:hover { border-color: var(--accent); color: var(--accent-text, var(--accent)); }
 .ac-cite[data-kind="pr"] svg { color: var(--green); } .ac-cite[data-kind="issue"] svg { color: var(--red); }
@@ -8949,20 +8955,20 @@ details[open] > .skill-form-summary::before { transform: rotate(90deg); }
 .ac-act-h { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
 .ac-ico { width: 24px; height: 24px; border-radius: 7px; display: inline-grid; place-items: center; flex: none;
   color: var(--teal); background: color-mix(in srgb, var(--teal) 16%, transparent); }
-.ac-act-t { font-size: .8rem; min-width: 0; overflow-wrap: anywhere; }
+.ac-act-t { font-size: var(--fs-title); min-width: 0; overflow-wrap: anywhere; }
 .ac-spacer { flex: 1; }
-.ac-cost { font-family: var(--mono); font-size: .66rem; font-weight: 600; padding: 2px 8px; border-radius: 999px;
+.ac-cost { font-family: var(--mono); font-size: var(--fs-meta); font-weight: 600; padding: 2px 8px; border-radius: 999px;
   color: var(--px-violet, #8b7cf6); background: color-mix(in srgb, var(--px-violet, #8b7cf6) 14%, transparent); }
 .ac-act .agent-flow { margin: 2px 0 0; }
 .ac-act-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .ac-btn { display: inline-flex; align-items: center; gap: 5px; padding: 4px 11px; border-radius: 8px; border: 1px solid var(--border-strong);
-  background: var(--surface, transparent); color: var(--ink, inherit); font: inherit; font-size: .72rem; font-weight: 600; cursor: pointer; text-decoration: none; }
+  background: var(--surface, transparent); color: var(--ink, inherit); font: inherit; font-size: var(--fs-ui); font-weight: 600; cursor: pointer; text-decoration: none; }
 .ac-btn[data-kind="primary"] { background: var(--accent); border-color: var(--accent); color: #fff; }
 .ac-btn[data-kind="ghost"] { border-color: transparent; background: none; color: var(--muted); }
 .ac-btn:disabled { opacity: .6; cursor: default; }
-.ac-done { color: var(--green); font-weight: 700; font-size: .74rem; }
-.ac-link { display: inline-flex; align-items: center; gap: 4px; font-size: .72rem; font-weight: 600; color: var(--accent-text, var(--accent)); }
-.ac-said { margin: 0; font-size: .7rem; color: var(--amber); }
+.ac-done { color: var(--green); font-weight: 700; font-size: var(--fs-body); }
+.ac-link { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-ui); font-weight: 600; color: var(--accent-text, var(--accent)); }
+.ac-said { margin: 0; font-size: var(--fs-ui); color: var(--amber); }
 @media (prefers-reduced-motion: reduce) { .ac-act, .ac-cite { transition: none; } }
 
 /* THE COMPACT ATTENTION CARD (BOSSAPP-914 round 3): an attention card ("Order API recovered",

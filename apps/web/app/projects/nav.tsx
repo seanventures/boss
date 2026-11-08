@@ -117,7 +117,7 @@ export function ProjectsNav({ items, active, activeProjectId, onGo, open, onTogg
                 </button>
               ) : null}
               <button type="button" className="bx-nav-item bx-nav-child" data-testid="nav-add-project"
-                      title={ADD_TIP} onClick={() => openAddProject("import")}>
+                      title={ADD_TIP} onClick={() => openAddProject("1")}>
                 <Plus size={13} aria-hidden /><span className="bx-nav-ell">Add project</span>
               </button>
             </>
