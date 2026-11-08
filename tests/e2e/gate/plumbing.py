@@ -22,6 +22,13 @@ way a build runs it, and fails on the class of bugs that broke HelpDesk builds o
      both (the run's database, a generated demo login);
   9. a secret scan that blocks ordinary app files: a localhost DATABASE_URL in .env.example, the
      compose default `postgres://postgres:postgres@db`, a seed's demo password, a README's.
+ 10. LOCAL-FIRST (BOSSAPP-915): a local project's build that reaches GitHub at all, or does not
+     commit into the bare repository BOSS keeps; a change set merged without a person's approval;
+     a preview or staging deploy that does not clone the local repository; a GitHub outage mid-build
+     that fails the build instead of ending `waiting_for_github` and pushing (and opening the pull
+     request) once GitHub answers; a view that hides a local repository or links it to GitHub.
+     Run alongside, on its own throwaway database, by the suites that drive the pipeline's own
+     functions with GitHub switched off and its calls counted (must be zero).
 
 WHERE IT RUNS. Inside a throwaway container of the installed worker image (scripts/e2e-gate.sh
 starts it; never the install's own containers), with the BOSS under test mounted at /boss and
@@ -856,6 +863,53 @@ def start_retry_suites(full_db_url: str, work: Path) -> Optional[Background]:
                       env, "/boss", work / "retry-suites.log")
 
 
+#: LOCAL-FIRST (bug 10): the pipeline's own functions on a local project and through an outage.
+LOCAL_FIRST_SUITES = [
+    "apps/api/tests/test_local_first_projects.py::"
+    "test_a_local_project_builds_reviews_merges_previews_and_deploys_without_github",
+    "apps/api/tests/test_publish_and_github_outage.py::"
+    "test_a_github_outage_finishes_the_build_locally_then_pushes_and_opens_the_pr",
+    "apps/api/tests/test_local_project_in_every_view.py",
+]
+
+
+def start_local_first_suites(db_url: str, work: Path) -> Optional[Background]:
+    if any(not (Path("/boss") / n.split("::", 1)[0]).is_file() for n in LOCAL_FIRST_SUITES):
+        return None
+    url = db_url.replace("postgresql://", "postgresql+psycopg://")
+    # The suites call the pipeline's functions directly (the sandbox's provision, the preview's
+    # clone) with no run identity held, as the API suite does; the uid pool is the other checks'.
+    env = {**os.environ, "DATABASE_URL": url, "BOSS_TEST_DATABASE_URL": url,
+           "BOSS_SANDBOX_ISOLATION": "off",
+           "PYTHONPATH": "/boss:/boss/engine:/boss/apps/api:/boss/apps/worker"}
+    return Background([sys.executable, str(Path(__file__).resolve()), "--local-first-suites"],
+                      env, "/boss", work / "local-first.log")
+
+
+def run_local_first_suites() -> int:
+    """`plumbing.py --local-first-suites`: the suites, in the background."""
+    import pytest
+
+    return int(pytest.main(["-q", "-p", "no:cacheprovider", "-W", "ignore", "-rs",
+                            *LOCAL_FIRST_SUITES]))
+
+
+@check("local-first: builds commit locally, a person merges, preview and deploy use local, "
+       "zero GitHub calls; an outage ends waiting_for_github, then pushes", bug="10")
+def check_local_first(bg: Optional[Background]) -> str:
+    if bg is None:
+        raise CheckFailed("this BOSS has no local-first suites: "
+                          + ", ".join(LOCAL_FIRST_SUITES))
+    code, out = bg.wait(420)
+    last = _tail(out, 1)
+    if code != 0:
+        failed = [ln for ln in out.splitlines() if ln.startswith(("FAILED", "ERROR"))]
+        raise CheckFailed(f"{last}: " + " | ".join(failed[:4]))
+    if " skipped" in last or " passed" not in last:
+        raise CheckFailed(f"the local-first suites did not run: {last}")
+    return f"{last} (ran alongside, {bg.seconds:.0f}s)"
+
+
 def run_retry_suites() -> int:
     """`plumbing.py --retry-suites`: the full schema, then the suites (in the background)."""
     _full_schema(os.environ["BOSS_IDENTITY_FULL_TEST_DATABASE_URL"])
@@ -1271,6 +1325,8 @@ def _full_schema(url: str) -> None:
 def main() -> int:
     if sys.argv[1:] == ["--retry-suites"]:
         return run_retry_suites()
+    if sys.argv[1:] == ["--local-first-suites"]:
+        return run_local_first_suites()
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
@@ -1279,12 +1335,13 @@ def main() -> int:
     work = Path(tempfile.mkdtemp(prefix="boss-e2egate-"))
     started = time.monotonic()
     g = Gate(pg_url, work)
-    approval = retries = None
+    approval = retries = local_first = None
     try:
         # The two checks that need only a database run alongside the pipeline.
         approval = start_approval(_database(pg_url, "boss_test_e2egate").replace(
             "postgresql://", "postgresql+psycopg://"), work)
         retries = start_retry_suites(_database(pg_url, "boss_test_e2egate_full"), work)
+        local_first = start_local_first_suites(_database(pg_url, "boss_test_e2egate_local"), work)
         g.open()
         check_clone(g)
         if g.root is not None:
@@ -1308,17 +1365,18 @@ def main() -> int:
         check_stack_smoke(post)
         check_retry_regressions(retries)
         check_approval(approval)
+        check_local_first(local_first)
     except Exception as exc:  # noqa: BLE001 — the gate's own set-up failing is a FAIL
         RESULTS.append({"check": "gate set-up", "bug": "", "status": "FAIL", "seconds": 0,
                         "detail": f"{type(exc).__name__}: {exc}"[:500]})
         traceback.print_exc()
     finally:
-        for bg in (approval, retries):
+        for bg in (approval, retries, local_first):
             if bg is not None and bg.proc.poll() is None:
                 bg.proc.kill()
         g.close()
         logs = Path(args.out).parent
-        for name in ("approval.log", "retry-suites.log"):
+        for name in ("approval.log", "retry-suites.log", "local-first.log"):
             with contextlib.suppress(OSError):
                 shutil.copy(work / name, logs / name)
         shutil.rmtree(work, ignore_errors=True)
