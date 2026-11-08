@@ -59,7 +59,8 @@ export function nameFromTitle(title: string): string {
 // ── what BOSS will do ───────────────────────────────────────────────────────────────────────
 
 export type Face = { agent_id?: string | null; role_key?: string | null; name?: string | null; role?: string | null } | null;
-export type Step = { id: string; label: string; you: boolean; agent: Face };
+/** `short`: what a person approves here, in the strip legend's few words ("PRD", "deploy"). */
+export type Step = { id: string; label: string; short?: string; you: boolean; agent: Face };
 export type Estimate = { minutes: number | null; minutes_basis: string | null; minutes_runs: number; usd: number | null; usd_runs: number } | null;
 export type Workflow = {
   key: string; name: string; short: string; detail: string; work_class: string | null; path: boolean;
@@ -68,6 +69,13 @@ export type Workflow = {
 };
 export type Candidate = { agent_id: string; role_key: string; name: string; role: string; captain_capable?: boolean; recommended?: boolean; line?: string };
 export type Host = { host_id: string; host: string; address: string | null; port: number | null; suggested: boolean; shared: boolean };
+
+/** THE way a staging host and its port are written: host:port ("203.0.113.20:8006"), the host
+ *  alone with no port; an IPv6 literal is bracketed so its port stays readable. */
+export function hostPort(host: string, port: number | null | undefined): string {
+  if (!port) return host;
+  return `${host.includes(":") && !host.startsWith("[") ? `[${host}]` : host}:${port}`;
+}
 export type Dot = { key: string; label: string; ok: boolean; detail: string; href: string | null };
 export type Preview = {
   mode: Kind; workflows: Workflow[]; default_workflow: string | null;

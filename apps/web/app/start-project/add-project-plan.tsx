@@ -20,7 +20,7 @@ import type { TemplateCard } from "../../lib/templates";
 import type { StackAdapter } from "../../lib/templates";
 import { workflowInputFields, type WorkflowInputField } from "../../lib/workflow-inputs";
 import { WIZARD_COLLECTS } from "../workflow-readiness-ui";
-import type { Candidate, Host, Kind, Pick, Preview, Workflow } from "../../lib/add-project";
+import { hostPort, type Candidate, type Host, type Kind, type Pick, type Preview, type Workflow } from "../../lib/add-project";
 import type { RegistryRepo } from "../../lib/multirepo";
 
 export type BoxKey = "captain" | "stack" | "connectors" | "workflow" | "code" | "staging" | "tell" | "more";
@@ -114,7 +114,7 @@ function Pop({ title, icon, anchor, children, onDone, foot, testid, wide }: {
 /** The step strip: every step, numbered; where a person approves, ✋ in amber. */
 export function StepStrip({ w, testid = "ap-strip" }: { w: Workflow | null; testid?: string }) {
   if (!w) return null;
-  const you = w.step_list.filter((s) => s.you).map((s) => s.label.toLowerCase());
+  const you = w.step_list.filter((s) => s.you).map((s) => s.short || s.label.toLowerCase());
   return (
     <div className="npx-strip" data-testid={testid} title={`${w.name}: every step; amber = you approve`}>
       <span className="npx-lbl">Steps</span>
@@ -131,13 +131,13 @@ export function StepStrip({ w, testid = "ap-strip" }: { w: Workflow | null; test
   );
 }
 
-export function PlanBoxes({ kind, preview, plan, set, cards, adapters, helmPicks, workflow, registry, repoLabel, codeName = "", live, readFiles, accountLogin, homeHref }: {
+export function PlanBoxes({ kind, preview, plan, set, cards, adapters, helmPicks, workflow, registry, repoLabel, codeName = "", live, accountLogin, homeHref }: {
   kind: Kind; preview: Preview | null; plan: PlanState; set: (patch: Partial<PlanState>) => void;
   cards: TemplateCard[] | null; adapters: StackAdapter[]; helmPicks: { stack: Pick | null; connectors: Pick[]; workflow: Pick | null };
   workflow: Workflow | null; registry: RegistryRepo[]; repoLabel: { v: string; s: string };
   /** The picked repository's name or the folder's path (the Code box). */
   codeName?: string;
-  live: boolean; readFiles: string | null; accountLogin: string; homeHref: (p: Record<string, string>) => string;
+  live: boolean; accountLogin: string; homeHref: (p: Record<string, string>) => string;
 }) {
   const [open, setOpen] = usePopover();
   const toggle = (k: BoxKey) => setOpen(open === k ? null : k);
@@ -406,7 +406,7 @@ export function PlanBoxes({ kind, preview, plan, set, cards, adapters, helmPicks
           <button type="button" className="npx-node" data-testid="ap-box-staging" aria-expanded={open === "staging"} data-open={open === "staging" || undefined}
                   title="Staging target suggested from your hosts · change it" onClick={() => toggle("staging")}>
             <span className="npx-lbl">Staging<CaretDown size={11} aria-hidden /></span>
-            <span className="npx-v">{host ? `${host.host}${host.port ? ` · :${host.port}` : ""}` : "Preview only"}</span>
+            <span className="npx-v">{host ? hostPort(host.host, host.port) : "Preview only"}</span>
             <span className="npx-s">{host ? (host.suggested && !plan.stagingTouched ? "suggested · free port" : "your pick") : preview?.staging.length ? "no staging yet" : "no verified host yet"}</span>
           </button>
           {open === "staging" ? (
@@ -431,7 +431,7 @@ export function PlanBoxes({ kind, preview, plan, set, cards, adapters, helmPicks
         </div>
       </div>
 
-      <StepStripOrOnboarding kind={kind} w={workflow} live={live} readFiles={readFiles} />
+      <StepStripOrOnboarding kind={kind} w={workflow} live={live} />
 
       <div className="npx-chips-row">
         <NameChip plan={plan} set={set} />
@@ -502,7 +502,9 @@ function CodeLabel({ kind, plan, registry, preview, name }: { kind: Kind; plan: 
   return <><span className="npx-v npx-mono">{preview?.default_repository ?? "No repo yet"}</span><span className="npx-s">{preview?.default_repository ? "new app folder · 1 PR" : "connect before build"}</span></>;
 }
 
-function StepStripOrOnboarding({ kind, w, live, readFiles }: { kind: Kind; w: Workflow | null; live: boolean; readFiles: string | null }) {
+/** A repo's THEN strip: the onboarding stages, ending at what you accept (the file count is the
+ *  summary's, not a stage). */
+function StepStripOrOnboarding({ kind, w, live }: { kind: Kind; w: Workflow | null; live: boolean }) {
   if (kind === "idea") return <StepStrip w={w} />;
   return (
     <div className="npx-strip" data-testid="ap-then" title="Onboarding, then the first work runs on the workflow above">
@@ -513,7 +515,6 @@ function StepStripOrOnboarding({ kind, w, live, readFiles }: { kind: Kind; w: Wo
         <span className="npx-fl-n">Backlog</span><span className="npx-fl-w" />
         <span className="npx-fl-n" data-t="you">You accept</span>
       </span>
-      {readFiles ? <span className="npx-faint npx-mono">{readFiles}</span> : null}
     </div>
   );
 }

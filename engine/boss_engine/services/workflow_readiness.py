@@ -344,7 +344,7 @@ def _label(step: Mapping[str, Any], custom: Mapping[str, Mapping[str, Any]]) -> 
     if own.get("label"):
         return str(own["label"])
     if key in caps.CAPABILITY_KEYS:
-        return caps.get(key).label
+        return caps.label_for(key)
     if binding.get("agent_work"):
         return "Agent step"
     return str(step.get("id"))

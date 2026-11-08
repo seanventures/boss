@@ -221,6 +221,34 @@ def test_the_preview_reads_real_workflows_hosts_and_readiness(client, world, eng
     assert view["captain"]["candidates"]
 
 
+@pytest.mark.parametrize("prd_auto", [True, False])
+def test_a_step_is_you_approve_only_where_the_run_stops_for_a_person(client, world, monkeypatch,
+                                                                      prd_auto):
+    """The box count, the strip, its legend and the popover read ONE `you` per step, and it is
+    what the run does (stops_for_a_person under this install's PRD setting). A step labelled
+    "(automatic)" is never a person's approval, and a step a person signs never says automatic.
+    The legend's words are the few-word `short` ("PRD", "deploy"), not the step's full label."""
+    from boss_engine.services import workflow_capabilities as caps
+
+    monkeypatch.setattr(caps, "prd_auto_approved", lambda settings=None: prd_auto)
+    with _owner(world):
+        home = client.post("/v1/projects", json={"name": f"Home {uuid.uuid4().hex[:8]}"}).json()["id"]
+        view = client.get(f"/v1/projects/{home}/add-project/preview", params={"mode": "idea"}).json()
+    prd_steps = 0
+    for w in view["workflows"]:
+        assert w["approvals"] == sum(1 for s in w["step_list"] if s["you"])
+        assert w["approve_words"] == list(dict.fromkeys(s["short"] for s in w["step_list"] if s["you"]))[:6]
+        for s in w["step_list"]:
+            assert s["short"] and len(s["short"].split()) <= 2 and "(" not in s["short"], s
+            if "(automatic)" in s["label"]:
+                assert not s["you"], f"{w['key']}: {s['label']} is automatic, not a person's"
+            if s["label"].startswith("PRD approval"):
+                prd_steps += 1
+                assert s["you"] is (not prd_auto) and s["short"] == "PRD"
+                assert ("(automatic)" in s["label"]) is prd_auto
+    assert prd_steps, "the catalogue's PRD approval step was read"
+
+
 # ── Create and start: one transaction ───────────────────────────────────────────────────────
 
 def _exists(engine, name: str) -> bool:

@@ -377,6 +377,21 @@ def _step_label(step: Mapping[str, Any], custom: Mapping[str, Mapping[str, Any]]
 #: Structure, not work: a fork and its join are not steps a person counts.
 _STRUCTURE = ("parallel", "join")
 
+#: What a person approves at a step, in the few words the strip's legend uses (the wireframe's
+#: "you approve: PRD · PR · demo · prod"). A step without one is named by its own first words.
+_SHORT = {"meeting": "PRD", "spec_review": "PRD", "architecture": "architecture", "ux_review": "UX",
+          "merge": "PR", "release_approval": "release"}
+
+
+def _short(step: Mapping[str, Any], label: str) -> str:
+    from .new_work import _cap  # noqa: SLF001 — THE capability of a step
+
+    word = _SHORT.get(str(_cap(step) or ""))
+    if word:
+        return word
+    plain = re.sub(r"\s*\([^)]*\)", "", label).strip() or label
+    return " ".join(plain.split()[:2]).lower()
+
 
 def workflow_steps(connection: Connection, project_id: str, spec: Mapping[str, Any]
                    ) -> list[dict[str, Any]]:
@@ -400,8 +415,9 @@ def workflow_steps(connection: Connection, project_id: str, spec: Mapping[str, A
             continue
         you = _gated(step, prd_auto)
         who = _who(step)
-        out.append({"id": str(step.get("id") or ""), "label": _step_label(step, custom), "you": you,
-                    "agent": None if you else face(roster, who)})
+        label = _step_label(step, custom)
+        out.append({"id": str(step.get("id") or ""), "label": label, "short": _short(step, label),
+                    "you": you, "agent": None if you else face(roster, who)})
     return out
 
 
@@ -430,7 +446,7 @@ def workflows(connection: Connection, project_id: str) -> list[dict[str, Any]]:
                     "detail": _clean(r["description"], 200), "work_class": classes.get(key),
                     "path": key in PATHS, "steps": len(steps), "step_list": steps,
                     "approvals": sum(1 for s in steps if s["you"]),
-                    "approve_words": list(dict.fromkeys(s["label"] for s in steps if s["you"]))[:6],
+                    "approve_words": list(dict.fromkeys(s["short"] for s in steps if s["you"]))[:6],
                     "input_schema": spec.get("input_schema") or spec.get("inputs") or None,
                     "estimate": est})
     out.sort(key=lambda w: (not w["path"], PATHS.index(w["key"]) if w["path"] else 0, w["name"]))
