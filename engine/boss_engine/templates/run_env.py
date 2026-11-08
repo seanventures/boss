@@ -131,6 +131,13 @@ class RunEnvironment:
         issued variables) and `names` the launcher sets (PORT, HOST). They WIN: a supplied name
         is never "unset" and never "needs a secret". Returns self."""
         given = {k: v for k, v in (values or {}).items() if isinstance(v, str) and v}
+        for name in names:
+            # THE LAUNCHER'S NAME CARRIES THE LAUNCHER'S VALUE. A value declared or bound for it
+            # (boss.deploy.yaml `PORT: "3000"`, a literal every run gets since 1aee54c41) rode
+            # in on `values`, which launch_app applies AFTER its own PORT: the app bound 3000
+            # while BOSS waited on the port it had chosen, and a known-good app "did not answer
+            # HTTP within 90s" (the release gate, 2026-11-07).
+            self.values.pop(name, None)
         for name in [*given, *names]:
             if name in self.unset:
                 self.unset.remove(name)
@@ -275,7 +282,7 @@ def resolve(declared: Mapping[str, Need], *, purpose: str,
             env.unset.append(name)
         else:
             env.needs.append(need)
-    env.supply(names=[n for n in PLATFORM_NAMES if n in declared])
+    env.supply(names=[n for n in PLATFORM_NAMES if n in declared or n in bound])
     env.supply(supplied)
     if env.generated:
         # A generated value is a secret like any other: kept out of every log line.
