@@ -598,3 +598,69 @@ def test_an_ask_for_a_tool_that_does_not_exist_is_refused_with_the_reads_it_hold
     refusal = model.prompts[-1][1]
     assert "no tool or skill named host:install logs exists" in refusal
     assert "install_restarts" in refusal, "the catalogue it holds is named"
+
+
+# ── turn → ask → withdraw → the next tick gives the turn; a guard's stop is never silent ─────
+#
+# Live, 23:28-23:56: the withdrawn item kept the 60-minute lease of the turn that asked, its
+# lead's next turn read past the read phase's cap and "passed" with no answer, and that turn
+# took the squad past its $1.50 budget — after which every tick refused it without a word.
+
+def test_turn_ask_withdraw_and_the_next_tick_gives_the_turn(eng, project):  # noqa: F811
+    from boss_engine.services.ambient import owners
+
+    from ._squad_support import Launchers
+
+    with eng.begin() as c:
+        item = _restarts_item(c, project)
+        _handed(c, item)
+        asked = squad_turns.take_turn(c, settings(), item["id"], INFRA, model=ScriptedSquadModel(
+            {INFRA: [move("escalate", reason=REASON, blocked="read the install's logs",
+                          need="grant log access", need_kind="access", grant="read_logs")]}))
+        assert asked["status"] == "needs_you"
+        assert board.get(c, item["id"])["lease_owner"] == INFRA, "the asking turn's lease"
+        _grant(c, project, "infra_steward")                    # granted elsewhere: withdrawn
+        cos.reconsider(c, project, mode="propose")
+        back = board.get(c, item["id"])
+    assert back["lifecycle"] == "proposed" and back["needs_you_decision_id"] is None
+    assert back["lease_owner"] is None, "back on the board means free: the lease went with it"
+    report = owners.work(eng, settings(), project_id=project, limit=1,
+                         model=ScriptedSquadModel({}), launchers=Launchers(), rounds=1)
+    [worked] = [w for w in report["worked"] if w["work_item_id"] == item["id"]]
+    assert worked["kind"] == "squad" and worked["turns"] >= 1, report
+
+
+def test_a_squad_out_of_budget_takes_no_slot_and_says_why_once(eng, project):  # noqa: F811
+    from boss_engine.services.ambient import owners
+
+    from ._squad_support import Launchers
+
+    with eng.begin() as c:
+        item = _restarts_item(c, project)
+        _handed(c, item)
+        c.execute(text("UPDATE work_items SET cost_usd_micros = :m WHERE id = :w"),
+                  {"m": squad_turns.SQUAD_BUDGET_USD_MICROS + 26_945, "w": item["id"]})
+        assert owners.due_items(c, project_id=project) == []
+    for _ in range(2):
+        report = owners.work(eng, settings(), project_id=project, model=ScriptedSquadModel({}),
+                             launchers=Launchers(), rounds=1)
+        assert not [w for w in report["worked"] if w["work_item_id"] == item["id"]]
+    with eng.begin() as c:
+        said = [r for r in ledger.list_decisions(c, project, work_item_id=item["id"])
+                if r["question"] == owners.Q_WHY_NO_TURN]
+    assert len(said) == 1 and "budget for this item is spent ($1.53 of $1.50)" in \
+        said[0]["rationale"]
+
+
+def test_a_read_phase_past_its_spend_cap_still_answers(eng, project, monkeypatch):  # noqa: F811
+    from boss_engine.services import workflow_precheck_agent
+
+    monkeypatch.setattr(workflow_precheck_agent, "_turn_cost", lambda usage: 200_000)
+    with eng.begin() as c:
+        item = _restarts_item(c, project)
+        _grant(c, project, "infra_steward")
+        model = ReadingModel("install_restarts")
+        turn = squad_turns.take_turn(c, settings(), item["id"], INFRA, model=model)
+    assert model.results, "it read once"
+    assert model.offered[-1] == [], "the turn past the cap is asked without tools"
+    assert turn["status"] == "posted", turn

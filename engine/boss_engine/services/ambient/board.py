@@ -520,10 +520,19 @@ def unask(connection: Connection, item_id: str, *, actor: str, reason: str) -> d
     item = _must(connection, item_id)
     if item["lifecycle"] != "needs_you":
         return item
+    # BACK ON THE BOARD MEANS FREE. The lease of the turn that asked (an agent's, never a
+    # person's) is let go with the question, so whoever works it next — the squad's owed turn,
+    # the Chief of Staff settling it — claims it on the next tick instead of waiting out a lease
+    # taken before the ask (boss-dogfood 2026-11-07: a 60-minute lease from 23:05 outlived the
+    # withdrawal at 23:28).
     connection.execute(text(
-        "UPDATE work_items SET needs_you_decision_id = NULL, needs_you_at = NULL "
+        "UPDATE work_items SET needs_you_decision_id = NULL, needs_you_at = NULL, "
+        "lease_owner = CASE WHEN lease_kind = 'agent' THEN NULL ELSE lease_owner END, "
+        "lease_token = CASE WHEN lease_kind = 'agent' THEN NULL ELSE lease_token END, "
+        "lease_expires_at = CASE WHEN lease_kind = 'agent' THEN NULL ELSE lease_expires_at END, "
+        "lease_kind = CASE WHEN lease_kind = 'agent' THEN NULL ELSE lease_kind END "
         "WHERE id = :id"), {"id": item_id})
-    return _transition(connection, item, "proposed", actor=actor,
+    return _transition(connection, _must(connection, item_id), "proposed", actor=actor,
                        extra={"withdrawn": clean_text(reason, 300)})
 
 

@@ -638,8 +638,11 @@ def _ask_reading(adapter: Any, system: str, prompt: str, *, read: ReadPhase,
     tools = [dict(t) for t in (read.tools or ())]
     can_tool = bool(tools) and read.run is not None
     spent, turns, asked_again, why, model_seen = 0, 0, 0, "", ""
-    while turns < read.max_turns and spent < read.max_usd_micros:
-        final = turns == read.max_turns - 1
+    while turns < read.max_turns:
+        # The LAST turn is always an answer without tools: the turn cap, or the spend cap
+        # reached by the reads. A read phase that spent its budget used to end with no answer
+        # at all (boss-dogfood 2026-11-07: a squad lead read, ran past $0.15, and "passed").
+        final = turns == read.max_turns - 1 or spent >= read.max_usd_micros
         if final and messages[-1].get("role") == "tool":
             messages.append({"role": "user", "content": ANSWER_NOW})
         try:

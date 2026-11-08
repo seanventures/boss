@@ -79,6 +79,7 @@ def _incident_classes() -> tuple[str, ...]:
 #: Items handed over and still the owners' to work. `squad_turn_at` is the last squad turn.
 _HANDED = (
     "SELECT w.id, w.project_id, w.task_class, w.lifecycle, w.answered_at, w.effective_score, "
+    "  w.lease_owner, w.lease_kind, w.lease_expires_at, w.cost_usd_micros, "
     "  (SELECT max(e.created_at) FROM events e WHERE e.project_id = w.project_id "
     "     AND e.event_type = 'ambient.squad_turn' AND e.entity_id = w.id) AS squad_turn_at, "
     "  (SELECT max(e.created_at) FROM events e WHERE e.project_id = w.project_id "
@@ -180,10 +181,14 @@ def due_items(connection: Connection, *, project_id: Optional[str] = None,
     rows = sorted(rows, key=lambda r: (owed_since(r) is None, starving_since(r) is None,
                                        _epoch(starving_since(r))))
 
-    def hold(r: Mapping[str, Any], why: str) -> None:
-        if held is not None and owed_since(r) is not None:
+    def hold(r: Mapping[str, Any], why: str, *, always: bool = False) -> None:
+        """An owed item held back is said on the ledger; so is one a guard holds for good
+        (`always`), once since its last squad turn."""
+        since = owed_since(r) or (r.get("squad_turn_at") or r.get("handed_at") if always
+                                  else None)
+        if held is not None and since is not None:
             held.append({"id": r["id"], "project_id": r["project_id"], "why": why,
-                         "since": owed_since(r)})
+                         "since": since})
 
     for r in rows:
         if len(out) >= limit:
@@ -242,12 +247,29 @@ def due_items(connection: Connection, *, project_id: Optional[str] = None,
             continue
         roster = squads.roster(connection, r["id"]) or {"members": []}
         members = {m["party"] for m in roster["members"]}
+        expires = r.get("lease_expires_at")
+        if (r.get("lease_kind") == "agent" and r.get("lease_owner") != roster.get("lead")
+                and expires is not None and expires > now()):
+            # Another agent holds it (the lead resumes only a lapsed lease): said, not silent.
+            hold(r, f"it is still leased by {r['lease_owner']} until {expires:%H:%M} UTC",
+                 always=True)
+            continue
+        if int(r.get("cost_usd_micros") or 0) >= squad_turns.SQUAD_BUDGET_USD_MICROS:
+            # Its squad's budget is spent: no turn can run, so it takes no slot — and says why.
+            hold(r, f"its squad's budget for this item is spent "
+                    f"(${int(r['cost_usd_micros']) / 1e6:.2f} of "
+                    f"${squad_turns.SQUAD_BUDGET_USD_MICROS / 1e6:.2f})", always=True)
+            continue
         last = r["squad_turn_at"]
         stale = last is None or last < now() - timedelta(minutes=SQUAD_RECHECK_MINUTES)
         if stale or owed_since(r) is not None or _newer_than(connection, r["id"], last, members):
             out.append({**r, "kind": "squad", "owed": owed_since(r) is not None})
     return out
 
+
+#: Guards whose stop leaves the item with no next turn until something changes: always said.
+GUARD_STOPS = frozenset({"budget", "turn_cap", "envelope", "lease_lost", "stopped",
+                         "taken_over", "no_squad"})
 
 #: The question an owed item's silence is recorded under (once per return to the board).
 Q_WHY_NO_TURN = "Give this item its owners' next turn now?"
@@ -365,11 +387,16 @@ def _work(engine: Any, settings: Any, report: dict[str, Any], *, project_id: Opt
                 "work_item_id": item_id, "kind": "squad", "rounds": run["rounds"],
                 "turns": len(run["turns"]), "settled": [s.get("state") for s in run["settled"]],
                 "stopped": (run.get("stopped") or {}).get("guard")})
-            if entry.get("owed") and not run["turns"]:
-                # Owed a turn and a guard refused it (turn or spend cap, a take-over …): said.
-                stop = run.get("stopped") or {}
+            stop = run.get("stopped") or {}
+            if stop.get("guard") in GUARD_STOPS or (entry.get("owed") and not run["turns"]):
+                # A guard refused the squad's turns (its spend or turn cap, the envelope, a
+                # lease, a take-over): said on the ledger — once since its last squad turn —
+                # owed or not. boss-dogfood 2026-11-07: the item passed its $1.50 squad
+                # budget at 23:28 and every later tick refused it without a word.
+                since = (owed_since(entry) or entry.get("squad_turn_at")
+                         or entry.get("handed_at"))
                 _say_why(engine, item_id, f"a squad guard stopped it ({stop.get('guard')}: "
-                                          f"{stop.get('reason')})", owed_since(entry), report)
+                                          f"{stop.get('reason')})", since, report)
         except Exception as exc:  # noqa: BLE001 — one item's failure never stops the others
             log.warning("ambient owners failed on %s", item_id, exc_info=True)
             report["worked"].append({"work_item_id": item_id, "kind": "error",
