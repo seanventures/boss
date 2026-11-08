@@ -2635,8 +2635,23 @@ def find_local_run_workspace(run_id: str) -> Optional[Path]:
         for cand in root.glob(f"{run_id}*"):
             if not cand.is_dir():
                 continue
-            if (cand / "package.json").is_file() or (cand / "bugbox" / "package.json").is_file():
+            if workspace_app_root(cand) is not None:
                 return cand
+    return None
+
+
+def workspace_app_root(workspace: Path) -> Optional[Path]:
+    """Where the app is inside a retained workspace (app_root's rule): the workspace itself when
+    it carries an app manifest (package.json, pyproject.toml, pom.xml, …), else its one app
+    folder. Not "a top-level package.json": a Python or Java app, or an app in a subfolder, is
+    previewable too (BOSSAPP-920)."""
+    from . import app_root as _app_root
+
+    if _app_root._has_manifest(workspace):  # noqa: SLF001 — the module's own manifest rule
+        return workspace
+    apps = _app_root.subfolder_apps(workspace)
+    if len(apps) == 1:
+        return workspace / apps[0]
     return None
 
 
@@ -2741,7 +2756,7 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
     workdir = _preview_workdir(preview_id, ident)
     local_ws = None if (run.get("pull_request_url") or "") else find_local_run_workspace(run_id)
     if local_ws is not None:
-        src = local_ws / "bugbox" if (local_ws / "bugbox" / "package.json").is_file() else local_ws
+        src = workspace_app_root(local_ws) or local_ws
         try:
             from . import workspace_perms
 

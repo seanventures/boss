@@ -1439,6 +1439,8 @@ fi
 # directory exists before Compose mounts it, so Docker never creates it as root. Empty until
 # `boss self-fix seed`; nothing in it is secret.
 mkdir -p .boss/selfsrc && chmod 755 .boss .boss/selfsrc
+# Import local code (BOSSAPP-923) reads folders put here, mounted read-only into the API.
+mkdir -p .boss/import && chmod 755 .boss/import
 # >>> self-fix mirror refresh
 # A SEEDED MIRROR FOLLOWS THE RELEASE (brec_069e56332d714ad08c01): an upgrade reruns this
 # installer at the new commit, and a mirror left on the old one makes a self-fix diagnose and

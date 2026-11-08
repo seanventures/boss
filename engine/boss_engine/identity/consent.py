@@ -481,7 +481,11 @@ def workflow_needs(db: Any, project_id: str, spec: Any, input_data: Any) -> tupl
         default = _resolved_builder()
         if default not in roles:
             roles.append(default)
-    return roles, frozenset(perms), (_repos_for(db, project_id, input_data) if builds else [])
+    # A LOCAL REPOSITORY (BOSSAPP-918) is on this machine: no GitHub access is asked for it.
+    from ..services.local_repo import is_local
+
+    repos = [r for r in (_repos_for(db, project_id, input_data) if builds else []) if not is_local(r)]
+    return roles, frozenset(perms), repos
 
 
 def _resolved_builder(named: Optional[str] = None) -> str:

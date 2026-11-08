@@ -1273,6 +1273,18 @@ class Settings(BaseSettings):
                                  alias="BOSS_SELF_FIX_SOURCE")
     # Where self-fix builds check BOSS out and run its tests ("" = <artifact root>/self-fix).
     self_fix_work_dir: str = Field(default="", alias="BOSS_SELF_FIX_WORK_DIR")
+    # LOCAL-FIRST PROJECTS (BOSSAPP-915, services/local_repo.py): the BOSS-owned directory that
+    # holds one bare git repository per local project, and the mirrors of GitHub repositories a
+    # build falls back to while GitHub is down. The compose mounts a named volume here in the API
+    # and the worker ("" = <artifact root>/repos).
+    local_repo_root: str = Field(default="", alias="BOSS_LOCAL_REPO_ROOT")
+    # The one directory on this machine whose folders "Import local code" may read ("" = no
+    # import from this machine; a verified host still works). Never an arbitrary path.
+    local_import_root: str = Field(default="", alias="BOSS_LOCAL_IMPORT_ROOT")
+    # GITHUB OUTAGES (services/github_outage.py, BOSSAPP-922): every GitHub build refreshes a bare
+    # mirror of its repository under the local repo root at build start, and continues on it when
+    # GitHub stops answering. Off: a GitHub outage fails the build as before.
+    github_outage_mirror: bool = Field(default=True, alias="BOSS_GITHUB_OUTAGE_MIRROR")
     # THE MODEL PRE-CHECK (services/workflow_precheck_agent.py): an agent that reads the coded
     # pre-check's evidence and predicts what the coded checks do not cover. Off at the start
     # door by default, so starting a workflow is neither slower nor costs money unasked; the

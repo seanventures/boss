@@ -317,7 +317,11 @@ def build_multirepo_router() -> APIRouter:
             with begin() as db:
                 cs_id = change_sets.for_run(db, run_id) or change_sets.member_change_set(db, run_id)
                 if not cs_id:
-                    raise MultiRepoError(404, "no_change_set", "This build is not part of a change.")
+                    # AN ANSWER, NOT AN ERROR. The Build page asks this of every build; a build
+                    # that is not part of a multi-repo change is the normal case, and a 404 put
+                    # a red line in the browser console on every build page (2026-11-07).
+                    return {"run_id": run_id, "change_set": None, "error": "no_change_set",
+                            "message": "This build is not part of a change."}
                 return _mine(db, cs_id, project_id)
         except MultiRepoError as exc:
             return _refuse(exc)
