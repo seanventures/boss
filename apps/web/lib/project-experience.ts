@@ -200,6 +200,20 @@ export type NextItem = {
   /** Why, in a few words ("71/190 pass · a blocked build"); the Roadmap item it is (`rec_id`). */
   why?: string; rec_id?: string;
 };
+export type StillAnswerable = { count: number; since: string; href: string };
+/** The engine's still_answerable line, or null when there is none (or it is malformed). */
+export function parseStillAnswerable(raw: unknown): StillAnswerable | null {
+  if (!raw || typeof raw !== "object") return null;
+  const y = raw as Record<string, unknown>;
+  const count = typeof y.count === "number" && Number.isFinite(y.count) ? y.count : 0;
+  if (count <= 0) return null;
+  return { count, since: typeof y.since === "string" ? y.since : "", href: typeof y.href === "string" ? y.href : "" };
+}
+/** "waiting since Nov 7": when the oldest still-answerable question was asked. */
+export function waitingSinceWords(since: string): string {
+  const d = new Date(since);
+  return Number.isFinite(d.getTime()) ? `waiting since ${d.toLocaleDateString(undefined, { month: "short", day: "numeric" })}` : "waiting";
+}
 export type DemoLogin = { user: string; label: string; reveal: { href: string; requires: string } | null };
 export type Overview = {
   project: { id: string; name: string; initials: string; stage: Stage; repos: Repo[]; live_url: string; status_label: string; health: Health;
@@ -210,6 +224,9 @@ export type Overview = {
   errors?: Record<string, string>;
   /** The Roadmap tab's count (open + accepted). */
   roadmap_count?: number | null;
+  /** Questions that expired off the compliance boundary but can still be answered (engine
+   *  needs.still_answerable): one line under Needs you, never counted, never hidden. */
+  still_answerable?: StillAnswerable | null;
   tiles: {
     open_work: { count: number; by_state: Record<string, number>; href: string } | null;
     running: { count: number; current: { label: string; progress: [number, number]; agent: Agent | null; sub?: string; id?: string } | null; href: string } | null;
@@ -565,6 +582,7 @@ export const parseOverview = (v: unknown): Overview => {
                health: oneOf(p.health ?? st.health, HEALTHS, "unknown"), health_reason: s(p.health_reason) },
     journey: a(x.journey).map(parseNode),
     roadmap_count: nn(x.roadmap_count),
+    still_answerable: parseStillAnswerable(x.still_answerable),
     needs_you: a(x.needs_you).map((it) => {
       const y = o(it); const act = o(y.action);
       return { id: s(y.id), kind: oneOf(y.kind, ["merge", "deploy", "plan", "question", "setup"] as const, "question"), label: s(y.label),

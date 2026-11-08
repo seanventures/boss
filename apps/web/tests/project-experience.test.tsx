@@ -27,7 +27,8 @@ import {
   FX_DEPLOYMENTS, FX_HEALTH, FX_JUMP, FX_KNOWLEDGE, FX_ONBOARDING, FX_OVERVIEW, FX_ROADMAP, FX_SETTINGS, FX_SUMMARY, FX_WORK,
 } from "../lib/project-experience-fixtures";
 import {
-  attemptsPill, label4, parseOverview, parseSummary, parseWork, pxHref, readPxUrl, TABS,
+  attemptsPill, label4, parseOverview, parseStillAnswerable, parseSummary, parseWork, pxHref, readPxUrl, TABS,
+  waitingSinceWords,
 } from "../lib/project-experience";
 import { parseResident } from "../lib/infra-view";
 import { rulesWire, historyWire } from "./_helpers/alerts-fixtures";
@@ -98,6 +99,17 @@ describe("the contract client", () => {
     expect(empty.needs_you).toEqual([]);
     expect(empty.tiles.open_work).toBeNull();
     expect(parseSummary(null).items).toEqual([]);
+  });
+
+  it("keeps the questions that expired but can still be answered: one line, never counted", () => {
+    const line = { count: 3, since: "2026-11-01T10:00:00Z", href: "?area=decisions&decision_filter=expired" };
+    expect(parseStillAnswerable(line)).toEqual(line);
+    expect(parseStillAnswerable({ count: 0 })).toBeNull();
+    expect(parseStillAnswerable(null)).toBeNull();
+    expect(parseOverview({ still_answerable: line }).still_answerable?.count).toBe(3);
+    expect(parseOverview({}).still_answerable).toBeNull();
+    expect(waitingSinceWords(line.since)).toMatch(/^waiting since /);
+    expect(waitingSinceWords("")).toBe("waiting");
   });
 
   it("keeps diagram labels to four words", () => {

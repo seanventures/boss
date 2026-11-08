@@ -976,11 +976,10 @@ function DecisionInboxRow({
               from weeks ago is a different act from the same button on one raised today. */}
           {expired ? (
             <p className="dq-rationale" data-testid="decision-expired-note">
-              Expired{" "}
-              <ClientRelativeTime iso={decision.deadlineAt ?? decision.updatedAt} empty=""
-                as="span" />{" "}
-              without an answer, so nothing was applied. Answer it only if it still matters;
-              the work it was about may have moved on.
+              Waiting since{" "}
+              <ClientRelativeTime iso={decision.createdAt ?? decision.deadlineAt ?? decision.updatedAt}
+                empty="" as="span" />. Its deadline passed with nothing applied, so you can
+              still answer it; the work it was about may have moved on.
             </p>
           ) : null}
           {refusal ? null : isAmlGateCard && why ? (

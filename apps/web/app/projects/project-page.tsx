@@ -22,7 +22,7 @@ import { GatedButton, useGate } from "../../components/gated";
 import { isLocalRepo } from "../../lib/repo-links";
 import { openDockAbout } from "../../lib/dock-subject";
 import {
-  PX_PATHS, TAB_WORDS, isMissingStatus, navigateTo, needsYouCards, overviewFromStart, parseOnboarding, parseOverview, parseWork, projectHref, pxHref, readPxUrl, usePxRead,
+  PX_PATHS, TAB_WORDS, isMissingStatus, navigateTo, needsYouCards, waitingSinceWords, overviewFromStart, parseOnboarding, parseOverview, parseWork, projectHref, pxHref, readPxUrl, usePxRead,
   workFromStartRow, writePxUrl, type Overview, type Onboarding, type PxUrl, type Tab, type WorkList, a, o,
 } from "../../lib/project-experience";
 import { FX_ONBOARDING, FX_ONBOARDING_PROJECT, FX_OVERVIEW, FX_WORK } from "../../lib/project-experience-fixtures";
@@ -358,10 +358,19 @@ function NeedsBar({ ctx, onboarding }: { ctx: PxCtx; onboarding: Onboarding | nu
   // The live onboarding record's items keep their own links below; every other card is a button.
   const items = yours.length ? all.filter((it) => !it.id.startsWith("onb:")) : all;
   const n = all.length;
+  // EXPIRED BUT STILL ANSWERABLE (engine needs.still_answerable): never counted as waiting,
+  // never hidden — one quiet link to Approvals' Expired view, where each still has its buttons.
+  const older = ctx.overview.still_answerable;
+  const olderLink = older ? (
+    <a className="px-needs-item px-faint" href={pxHref(older.href)} data-testid="px-needs-older"
+       title="Their deadline passed with nothing applied; you can still answer them in Approvals">
+      {older.count} older · {waitingSinceWords(older.since)}</a>
+  ) : null;
   if (!n) {
     return (
       <div className="px-needs-bar" data-calm data-testid="px-needs-bar" role="status">
         <Check size={14} weight="bold" style={{ color: "var(--green)" }} aria-hidden /> <span>Nothing needs you</span>
+        {olderLink}
       </div>
     );
   }
@@ -380,6 +389,7 @@ function NeedsBar({ ctx, onboarding }: { ctx: PxCtx; onboarding: Onboarding | nu
            onClick={it.action ? undefined : (e) => { e.preventDefault(); ctx.tab("overview"); }}>
           <ClipboardText size={12} aria-hidden />{it.label}</a>
       ))}
+      {olderLink}
       <span className="px-spacer" />
       {/* About a minute of the person's time per item (X-39 "≈ 2 min"); hidden on a phone. */}
       <span className="px-faint px-hide-phone" title="About how long these take you" data-testid="px-needs-time">≈ {n} min</span>

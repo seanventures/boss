@@ -644,7 +644,9 @@ def trail(connection: Any, kind: str, *, limit: int = 3, days: int = 30) -> list
     for row in _decisions(connection, hours=days * 24, limit=2000):
         if classify(row) != kind:
             continue
-        answered = row["status"] not in ("pending", "delegated")
+        from .decision_actions import OPEN_STATUSES
+
+        answered = row["status"] not in OPEN_STATUSES
         items.append({"at": _iso(row.get("approved_at") or row["created_at"]), "type": "decision",
                       "id": row["id"], "project_id": row["project_id"],
                       "who": row.get("approved_by") if answered else None,
@@ -819,11 +821,16 @@ def activity(connection: Any, *, project_id: Optional[str], hours: int = 24) -> 
         "SELECT count(*) FROM decisions WHERE created_at > now() - make_interval(hours => :h) "
         "AND NOT (status = 'approved' AND (approved_by LIKE 'autonomy:%' OR approved_by = "
         "'auto_approval'))"), h).scalar() or 0)
-    open_rows = connection.execute(text(
-        "SELECT id, project_id, question, created_at FROM decisions WHERE status IN "
-        "('pending', 'delegated') ORDER BY created_at ASC LIMIT 1")).mappings().first()
-    waiting = int(connection.execute(text(
-        "SELECT count(*) FROM decisions WHERE status IN ('pending', 'delegated')")).scalar() or 0)
+    # WAITING ON YOU by the one rule every surface uses (decision_actions.attention): a
+    # boundary question past its deadline still waits; an expired off-list one does not.
+    from .decision_actions import ATTENTION_CANDIDATE_STATUSES, attention
+
+    candidates = [dict(r) for r in connection.execute(text(
+        "SELECT * FROM decisions WHERE status = ANY(:c) ORDER BY created_at ASC"),
+        {"c": list(ATTENTION_CANDIDATE_STATUSES)}).mappings().all()]
+    waiting_rows = [r for r in candidates if attention(r) == "needs_action"]
+    open_rows = waiting_rows[0] if waiting_rows else None
+    waiting = len(waiting_rows)
     summary = {"hours": hours, "handled_by_agents": alone_acts + auto, "asked_a_person": asked,
                "waiting": waiting,
                "oldest": ({"id": open_rows["id"], "project_id": open_rows["project_id"],

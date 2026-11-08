@@ -200,10 +200,15 @@ def starters(connection: Connection, project_id: str) -> list[dict[str, str]]:
     waiting on the person names its PR; cost is always answerable; planning is always offered."""
     out = [{"label": "Plan next week", "message": "Plan next week for this project.",
             "icon": "map"}]
+    from ..decision_actions import waiting_on_operator
+
+    # A merge waiting on the person, by the one reader every surface uses.
+    waiting = [str(d["id"]) for d in waiting_on_operator(connection, project_id)]
     pr = connection.execute(text(
-        "SELECT pull_request_number FROM code_task_runs c JOIN decisions d ON d.id = c.decision_id "
-        "WHERE c.project_id = :p AND d.status = 'pending' AND c.pull_request_number IS NOT NULL "
-        "ORDER BY c.created_at DESC LIMIT 1"), {"p": project_id}).scalar()
+        "SELECT pull_request_number FROM code_task_runs c WHERE c.project_id = :p "
+        "AND c.decision_id = ANY(:w) AND c.pull_request_number IS NOT NULL "
+        "ORDER BY c.created_at DESC LIMIT 1"), {"p": project_id, "w": waiting}).scalar() \
+        if waiting else None
     if pr:
         out.append({"label": f"Why is PR #{pr} waiting?",
                     "message": f"Why is PR #{pr} waiting, and what do I need to do?",

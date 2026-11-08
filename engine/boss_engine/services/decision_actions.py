@@ -675,6 +675,33 @@ def allowed_actions(decision: Mapping[str, Any]) -> list[dict[str, Any]]:
     return actions
 
 
+def on_the_boundary(decision: Mapping[str, Any]) -> bool:
+    """Is this decision one of the kinds only a person decides (decide_list: production deploy,
+    merge to the default branch, spend above the cap, secrets, outside messages, deleting data,
+    who can do what)?"""
+    from .decide_list import classify
+
+    try:
+        return classify(decision) is not None
+    except Exception:  # noqa: BLE001 — an unreadable row is not on the boundary
+        return False
+
+
+def never_expires(decision: Mapping[str, Any]) -> bool:
+    """A QUESTION ON THE COMPLIANCE BOUNDARY NEVER SILENTLY EXPIRES.
+
+    Its default is hold, so a passing deadline applies nothing: expiring it could only hide it.
+    Four "Approve code change" merges for the helpdesk security fixes (dec_409e473b…,
+    2026-11-08) went to `expired` 24 h after they were asked and dropped out of Needs you, the
+    bell and Approvals' default view while their runs sat "waiting on PR #3 to be merged".
+    So such a decision stays open past its deadline and ages from when it was asked:
+    DecisionService.expire_overdue clears the deadline and records ONE `decision.overdue`
+    reminder instead of expiring it, and reopens any that expired before this rule."""
+    if str(decision.get("default_action") or "hold").lower() != "hold":
+        return False
+    return on_the_boundary(decision)
+
+
 def reopenable(decision: Mapping[str, Any]) -> bool:
     """A decision in a status that looks closed but can still be answered.
 
@@ -705,6 +732,8 @@ def reopenable(decision: Mapping[str, Any]) -> bool:
 #:   needs_action  pending or delegated and not past its deadline, or parked in a
 #:                 revision_requested nothing reads (the stuck pull requests): the operator is
 #:                 the only way it moves.
+#:                 A question on the compliance boundary (never_expires) is needs_action
+#:                 past its deadline and even when an older build expired it.
 #:   expired       expired with a hold default, so nothing was applied and it can still be
 #:                 answered. Shown in its own group with its age, never in the default view:
 #:                 most of these are about work that has long moved on.
@@ -715,8 +744,9 @@ ATTENTION = ("needs_action", "expired", "resolved")
 #: The statuses a needs_action or expired decision can be in. A reader that selects in SQL
 #: selects these and classifies the rows with `attention`; the rule itself is never in SQL.
 ATTENTION_CANDIDATE_STATUSES = ("pending", "delegated", "revision_requested", "expired")
-#: The statuses a needs_action decision can be in (the same, without expired).
-NEEDS_ACTION_CANDIDATE_STATUSES = ("pending", "delegated", "revision_requested")
+#: The statuses a needs_action decision can be in: the same, since a boundary question an older
+#: build let expire is needs_action (never_expires) until the sweep reopens it.
+NEEDS_ACTION_CANDIDATE_STATUSES = ATTENTION_CANDIDATE_STATUSES
 
 
 def _deadline_passed(decision: Mapping[str, Any], now: Optional[datetime]) -> bool:
@@ -742,14 +772,17 @@ def attention(decision: Mapping[str, Any], now: Optional[datetime] = None) -> st
     expired in the inbox.
     """
     status = str(decision.get("status") or "")
-    if status in _OPEN and _deadline_passed(decision, now):
+    held = never_expires(decision)
+    if status in _OPEN and _deadline_passed(decision, now) and not held:
         status = "expired"
     if status in _OPEN:
         return "needs_action"
     if status == "revision_requested":
         return "resolved" if consumes_revision(decision) else "needs_action"
     if status in _REOPENABLE and reopenable({**dict(decision), "status": status}):
-        return "expired"
+        # A boundary question that expired before this rule (or before the sweep reopens it)
+        # still waits for a person, on every surface at once.
+        return "needs_action" if held else "expired"
     return "resolved"
 
 

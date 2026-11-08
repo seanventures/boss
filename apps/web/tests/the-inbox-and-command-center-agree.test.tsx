@@ -106,7 +106,8 @@ describe("the inbox groups by the engine's attention", () => {
     expect(markup).toContain('data-testid="decision-filter-expired"');
     expect(markup).toContain("Expired, still answerable");
     expect(markup).toContain('data-testid="decision-expired-note"');
-    expect(markup).toContain("nothing was applied");
+    expect(markup).toContain("Waiting since");
+    expect(markup).toContain("nothing applied");
     expect(markup).not.toContain("q pending");
   });
 });

@@ -1588,6 +1588,16 @@ async def lifespan(_: FastAPI):
             print(f"[lifespan] stale build questions withdrawn: {len(stale)}")
     except Exception as exc:  # noqa: BLE001 — never block boot on a repair
         print(f"[lifespan] stale build-question sweep skipped: {exc}")
+    # BOUNDARY QUESTIONS NEVER EXPIRE (decision_actions.never_expires). Those an older build let
+    # expire — merges, deploys, spend still unanswered — are reopened here, after the two
+    # sweeps above closed the ones whose run is over. Idempotent; expire_overdue repeats it.
+    try:
+        with begin(engine) as connection:
+            reopened = decisions.reopen_boundary_decisions(connection)
+        if reopened:
+            print(f"[lifespan] boundary decisions reopened: {len(reopened)}")
+    except Exception as exc:  # noqa: BLE001 — never block boot on a repair
+        print(f"[lifespan] boundary-decision reopen skipped: {exc}")
     # QUESTIONS WHOSE CAUSE CLEARED (cleared_causes): a failed effect's "GitHub integration is
     # not configured" after GitHub writes succeeded, a merge question after its PR merged.
     try:

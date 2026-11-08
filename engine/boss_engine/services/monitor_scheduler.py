@@ -501,6 +501,16 @@ def tick(engine, settings: Any, *, now: Optional[datetime] = None,
         from .project_experience import notify_routes
 
         return notify_routes.plan_all(engine, settings, now)
+    # DECISION DEADLINES ON THE TICK: hold-default questions past their deadline are swept
+    # without waiting for someone to open Approvals, and a boundary question is kept open
+    # (one `decision.overdue` reminder) or reopened, never silently expired
+    # (DecisionService.expire_overdue / decision_actions.never_expires).
+    def deadlines():
+        from .decisions import DecisionService
+
+        with begin(engine) as c:
+            return DecisionService(settings).expire_overdue(c)
+    out["decisions_expired"] = guard("deadlines", deadlines) or 0
     out["routed"] = guard("routes", routes)
     out["delivery"] = guard("deliver", lambda: notify.deliver_due(engine, settings, now=now))
     from . import bundled_monitoring

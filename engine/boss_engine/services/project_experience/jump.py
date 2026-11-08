@@ -23,6 +23,7 @@ from typing import Any, Optional
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
+from ..decision_actions import attention
 from ..local_repo_host import is_local_pr_url
 from ..repo_links import pr_link
 from .common import href, iso, pr_number, project_href, words
@@ -61,6 +62,20 @@ def _bare_url(url: Any) -> str:
     return re.sub(r"^https?://", "", str(url or "")).rstrip("/")
 
 
+def _waiting_runs(connection: Connection, run_ids: list[str]) -> set[str]:
+    """The runs with a decision waiting on a person, by decision_actions.attention."""
+    from ..decision_actions import ATTENTION_CANDIDATE_STATUSES
+
+    if not run_ids:
+        return set()
+    rows = connection.execute(text(
+        "SELECT * FROM decisions WHERE recommendation->>'workflow_run_id' = ANY(:r) "
+        "AND status = ANY(:c)"), {"r": run_ids, "c": list(ATTENTION_CANDIDATE_STATUSES)}
+    ).mappings().all()
+    return {str((r["recommendation"] or {}).get("workflow_run_id")) for r in rows
+            if attention(dict(r)) == "needs_action"}
+
+
 def search(connection: Connection, *, q: str, project_ids: list[str],
            project_id: Optional[str] = None, limit: int = LIMIT) -> list[dict[str, Any]]:
     q = str(q or "").strip()[:100]
@@ -91,7 +106,8 @@ def search(connection: Connection, *, q: str, project_ids: list[str],
         return projects[:limit]
 
     pr_sql = ("SELECT c.id, c.project_id, c.title, c.pull_request_url, c.pull_request_number, "
-              "c.status, d.status AS decision_status FROM code_task_runs c "
+              "c.status, d.status AS decision_status, d.id AS decision_id, d.default_action, "
+              "d.deadline_at, d.question, d.recommendation FROM code_task_runs c "
               "LEFT JOIN decisions d ON d.id = c.decision_id "
               "WHERE c.project_id = ANY(:ids) AND COALESCE(c.pull_request_url, '') <> '' AND ")
     if found_run:
@@ -111,7 +127,9 @@ def search(connection: Connection, *, q: str, project_ids: list[str],
         n = r["pull_request_number"] or pr_number(r["pull_request_url"])
         key = (str(r["project_id"]), n or r["pull_request_url"])
         first = by_pr.get(key)
-        waiting = r["decision_status"] == "pending"
+        # Waiting on you by the one rule every surface uses (decision_actions.attention).
+        waiting = bool(r["decision_id"]) and attention(
+            {**dict(r), "status": r["decision_status"]}) == "needs_action"
         if first is None:
             by_pr[key] = {"label": (f"PR #{n} · {_short(r['title'], 'pull request')}" if n
                                     else _short(r["title"], "Pull request")),
@@ -131,12 +149,10 @@ def search(connection: Connection, *, q: str, project_ids: list[str],
     seen_runs: set[str] = set()
     # "Run #43": the run's number in its project, counted as the Work drawer counts it
     # (work.everything / work_story._run_number: every run of the project up to this one).
-    for r in connection.execute(text(
+    run_rows = [dict(r) for r in connection.execute(text(
             "SELECT * FROM (SELECT r.id, r.project_id, r.status, r.created_at, "
             "COALESCE(r.input->>'title', d.name) AS title, r.input->>'directive' AS brief, d.name AS dname, "
-            "d.namespace, r.mode, n.run_number, "
-            "EXISTS (SELECT 1 FROM decisions x WHERE x.status = 'pending' AND "
-            " x.recommendation->>'workflow_run_id' = r.id) AS waiting "
+            "d.namespace, r.mode, n.run_number "
             "FROM workflow_runs r JOIN workflow_definitions d ON d.id = r.workflow_definition_id "
             # count(*) over created_at (peers included) = work.py's "runs up to this one".
             "JOIN (SELECT id, count(*) OVER (PARTITION BY project_id ORDER BY created_at) AS run_number "
@@ -151,7 +167,9 @@ def search(connection: Connection, *, q: str, project_ids: list[str],
             "ORDER BY (CAST(:rn AS INT) IS NOT NULL AND r.run_number = :rn) DESC, r.created_at DESC LIMIT 12"),
             {"ids": scope, "q": like if number is None and not all_prs else "%__none__%",
              "exact": q, "n": number, "rn": run_n, "only_rn": bool(found_run),
-             "tail": f"%/pull/{number}" if number is not None else ""}).mappings():
+             "tail": f"%/pull/{number}" if number is not None else ""}).mappings()]
+    waiting_runs = _waiting_runs(connection, [str(r["id"]) for r in run_rows])
+    for r in run_rows:
         name = _short(r["title"], "workflow run", r["brief"])
         if name in seen_runs and not (run_n is not None and int(r["run_number"] or 0) == run_n):
             continue   # a retry of the same work is the same row (unless it is the one asked for)
@@ -159,7 +177,7 @@ def search(connection: Connection, *, q: str, project_ids: list[str],
         num = int(r["run_number"] or 0)
         out.append({"label": f"Run #{num} · {name}" if num else f"Run · {name}",
                     "kind": "run", "sub": str(r["status"] or "").replace("_", " "),
-                    "needs_you": bool(r["waiting"]), "hint": "Workflows",
+                    "needs_you": str(r["id"]) in waiting_runs, "hint": "Workflows",
                     "href": project_href(str(r["project_id"]), tab="work", drawer=f"run:{r['id']}"),
                     "full_href": href(str(r["project_id"]), area="delivery_workflows", wfr=r["id"]),
                     "project_id": r["project_id"]})

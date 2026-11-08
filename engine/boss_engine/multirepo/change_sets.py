@@ -735,10 +735,13 @@ def _ask(db: Any, cs: dict[str, Any], touched: list[dict[str, Any]]) -> str:
 
 def _withdraw_decision(db: Any, cs: dict[str, Any], why: str) -> None:
     """The open question is about content that no longer exists: withdraw it, never leave it
-    answerable (an approval of old SHAs would merge something nobody reviewed)."""
+    answerable (an approval of old SHAs would merge something nobody reviewed). `withdrawn`,
+    the status run_decisions closes such questions with: `expired` on a hold default reads as
+    still answerable (decision_actions.reopenable), and a merge question on the boundary would
+    be reopened (DecisionService.reopen_boundary_decisions)."""
     if not cs.get("decision_id"):
         return
-    db.execute(sql("UPDATE decisions SET status = 'expired', resolution_note = :n, updated_at = now() "
+    db.execute(sql("UPDATE decisions SET status = 'withdrawn', resolution_note = :n, updated_at = now() "
                    "WHERE id = :d AND status IN ('pending', 'delegated', 'revision_requested', 'approved')"),
                {"n": f"Withdrawn: {why}. BOSS asks again when the set is ready.", "d": cs["decision_id"]})
     db.execute(sql("UPDATE repo_change_sets SET approved_shas = NULL, approved_by = NULL, approved_at = NULL, "

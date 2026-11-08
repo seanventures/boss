@@ -385,5 +385,27 @@ def cards(connection: Connection, project_id: str, work_items: list[dict[str, An
                              onboarding_row=onboarding_row)
 
 
-__all__ = ["ACTION_WORDS", "card", "cards", "decision_kind", "one_per_subject", "prod_host_card",
+def still_answerable(connection: Connection, project_id: str, *,
+                     now: Any = None) -> Optional[dict[str, Any]]:
+    """THE QUESTIONS THAT EXPIRED BUT CAN STILL BE ANSWERED, as one line under Needs you:
+    {count, since (when the oldest was asked), href (Approvals' Expired view)} or None.
+
+    A hold-default decision off the compliance boundary still expires at its deadline (most are
+    about work that has long moved on, so they are not counted as waiting on you), but it never
+    vanishes while it can be answered: Needs you says how many and since when, one press from
+    Approvals, where each card says "Waiting since …" and keeps its buttons. A question ON the
+    boundary never expires at all (decision_actions.never_expires): it is a card above."""
+    from ..decision_actions import attention, waiting_on_operator
+
+    rows = [d for d in waiting_on_operator(connection, project_id, now=now, include_expired=True)
+            if attention(d, now) == "expired"]
+    if not rows:
+        return None
+    oldest = min((d.get("created_at") for d in rows if d.get("created_at") is not None),
+                 default=None)
+    return {"count": len(rows), "since": iso(oldest),
+            "href": href(project_id, area="decisions", decision_filter="expired")}
+
+
+__all__ = ["ACTION_WORDS", "card", "cards", "still_answerable", "decision_kind", "one_per_subject", "prod_host_card",
            "prod_waits", "release_of", "setup_cards", "shipped_words", "subject_of"]

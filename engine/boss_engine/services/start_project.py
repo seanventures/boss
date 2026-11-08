@@ -56,7 +56,6 @@ NEXT_STEPS: tuple[dict[str, Any], ...] = (
 )
 
 _LIVE_RUN = ("queued", "validating", "running", "waiting", "paused", "blocked")
-_OPEN_GATE = ("pending", "delegated")
 _PLAN_STEPS = ("meeting", "spec_review", "research")
 
 
@@ -348,13 +347,17 @@ def _work(connection: Connection, project_id: str, limit: int = 8) -> list[dict[
     if not runs:
         return []
     ids = [r["id"] for r in runs]
+    from .decision_actions import ATTENTION_CANDIDATE_STATUSES, attention
+
     gates: dict[str, str] = {}
     for g in connection.execute(text(
-            "SELECT s.workflow_run_id, s.step_id FROM workflow_step_runs s "
+            "SELECT s.workflow_run_id, s.step_id, dd.* FROM workflow_step_runs s "
             "JOIN decisions dd ON dd.id = s.decision_id "
             "WHERE s.workflow_run_id = ANY(:ids) AND s.status = 'waiting' AND dd.status = ANY(:open) "
-            "ORDER BY s.created_at"), {"ids": ids, "open": list(_OPEN_GATE)}).mappings().all():
-        gates.setdefault(str(g["workflow_run_id"]), str(g["step_id"]))
+            "ORDER BY s.created_at"),
+            {"ids": ids, "open": list(ATTENTION_CANDIDATE_STATUSES)}).mappings().all():
+        if attention(dict(g)) == "needs_action":    # the one rule every surface uses
+            gates.setdefault(str(g["workflow_run_id"]), str(g["step_id"]))
     prs: dict[str, str] = {}
     for p in connection.execute(text(
             "SELECT workflow_run_id, output->>'pull_request_url' AS url FROM workflow_step_runs "

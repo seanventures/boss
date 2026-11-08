@@ -65,11 +65,13 @@ class DecisionService:
             params["project_id"] = project_id
             project_filter = "AND project_id = :project_id"
         self.hold_plan_gates(connection, project_id)
+        self.reopen_boundary_decisions(connection, project_id)
 
         rows = connection.execute(
             text(
                 f"""
-                SELECT id, project_id, default_action, deadline_at
+                SELECT id, project_id, default_action, deadline_at, question, recommendation,
+                       created_at
                 FROM decisions
                 WHERE status IN ('pending', 'delegated')
                   AND deadline_at IS NOT NULL
@@ -82,6 +84,9 @@ class DecisionService:
 
         expired = 0
         for row in rows:
+            if decision_actions.never_expires(row):
+                self._keep_open_past_deadline(connection, dict(row))
+                continue
             updated = connection.execute(
                 text(
                     """
@@ -127,6 +132,75 @@ class DecisionService:
                 },
             )
         return expired
+
+    def _keep_open_past_deadline(self, connection: Connection, row: dict) -> bool:
+        """A boundary question at its deadline stays open (decision_actions.never_expires): the
+        deadline is cleared, so the question ages from when it was asked, and ONE
+        `decision.overdue` reminder is recorded (the deadline is gone, so it never repeats)."""
+        updated = connection.execute(
+            text(
+                "UPDATE decisions SET deadline_at = NULL, updated_at = :now "
+                "WHERE id = :id AND status IN ('pending', 'delegated') AND deadline_at IS NOT NULL"
+            ),
+            {"id": row["id"], "now": now_utc()},
+        )
+        if updated.rowcount != 1:
+            return False
+        created = row.get("created_at")
+        emit_event(
+            connection, row["project_id"], "decision.overdue", "system", "decision", row["id"],
+            {"deadline_at": row["deadline_at"].isoformat() if row.get("deadline_at") else None,
+             "waiting_since": created.isoformat() if hasattr(created, "isoformat") else created,
+             "default_action": "hold", "still_answerable": True, "reminder": "once",
+             "note": ("Nobody answered by the deadline. Only a person decides this, so it "
+                      "stays open and waits; nothing was applied.")},
+        )
+        return True
+
+    def reopen_boundary_decisions(self, connection: Connection,
+                                  project_id: Optional[str] = None) -> list[str]:
+        """BOUNDARY QUESTIONS THAT EXPIRED BEFORE THEY STOPPED EXPIRING COME BACK.
+
+        Every expired, hold-default decision on the compliance boundary that can still be
+        answered (its run has not ended) is set back to pending with no deadline, with a
+        `decision.reopened` event. Runs on every sweep (expire_overdue: the inbox, the status
+        read, the Command Center, the monitor tick) and once at boot, so the helpdesk merges
+        that expired on 2026-11-08 reappear on upgrade with no edit to the database. Idempotent:
+        once reopened, nothing is left to find."""
+        from .run_decisions import refusal_to_answer
+
+        scope = "AND project_id = :project_id" if project_id else ""
+        rows = connection.execute(
+            text(
+                "SELECT id, project_id, status, question, recommendation, default_action, "
+                "resolution_note FROM decisions WHERE status = 'expired' "
+                f"AND lower(COALESCE(default_action, 'hold')) = 'hold' {scope}"
+            ),
+            {"project_id": project_id} if project_id else {},
+        ).mappings().all()
+        out: list[str] = []
+        for row in rows:
+            decision = dict(row)
+            if not decision_actions.never_expires(decision):
+                continue
+            if refusal_to_answer(connection, decision):
+                continue
+            updated = connection.execute(
+                text(
+                    "UPDATE decisions SET status = 'pending', deadline_at = NULL, "
+                    "updated_at = :now WHERE id = :id AND status = 'expired'"
+                ),
+                {"id": decision["id"], "now": now_utc()},
+            )
+            if updated.rowcount != 1:
+                continue
+            out.append(str(decision["id"]))
+            emit_event(connection, decision["project_id"], "decision.reopened", "system",
+                       "decision", decision["id"],
+                       {"was": "expired",
+                        "why": ("Only a person decides this, so it never expires: nothing was "
+                                "applied and it waits for an answer again.")})
+        return out
 
     def hold_plan_gates(self, connection: Connection, project_id: Optional[str] = None) -> list[str]:
         """A BUILD WAITING AT ITS PLAN WAITS FOR A PERSON, SO ITS QUESTION STAYS OPEN.

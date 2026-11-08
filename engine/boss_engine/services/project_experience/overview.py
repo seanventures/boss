@@ -188,6 +188,14 @@ def needs_you(connection: Connection, project_id: str, work_items: list[dict[str
     return cards(connection, project_id, work_items, onboarding)
 
 
+def still_answerable(connection: Connection, project_id: str, *, now: Any = None
+                     ) -> Optional[dict[str, Any]]:
+    """Needs you's "N older · waiting since …" line (needs.still_answerable)."""
+    from .needs import still_answerable as line
+
+    return line(connection, project_id, now=now)
+
+
 # ── tiles ───────────────────────────────────────────────────────────────────────────────────
 
 #: A finished day's spend, per project, for this long: a past day's money barely moves, and the
@@ -541,6 +549,10 @@ def view(connection: Connection, project_id: str, *, now: Optional[datetime] = N
                            prod_waits=prod_waits, ats=ats,
                            active=facts["active"] or bool(facts["got"].get("_onboarding_running"))),
         "needs_you": waiting,
+        # Questions that expired off the compliance boundary and can still be answered: one
+        # line under Needs you (never counted as waiting, never hidden) — needs.still_answerable.
+        "still_answerable": part(("needs_you",), lambda: still_answerable(connection, project_id,
+                                                                         now=now), None),
         # The Roadmap tab's count: what is proposed or accepted and not done yet.
         "roadmap_count": part(("next",), lambda: onboarding_service.backlog_counts(
             connection, project_id)["total"], None),
