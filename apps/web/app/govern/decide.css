@@ -53,7 +53,7 @@ a.wd-chip:hover { border-color: var(--accent-line); color: var(--ink); }
 .wd-cap-sub { font-family: inherit; letter-spacing: 0; text-transform: none; font-weight: 400; }
 
 /* the cards */
-.wd-bounds { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 15.5rem), 1fr)); gap: 12px; }
+.wd-bounds { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 12.5rem), 1fr)); gap: 12px; }
 .wd-b { position: relative; display: flex; flex-direction: column; align-items: stretch; gap: 7px; text-align: left; min-width: 0;
   border: 1.5px solid color-mix(in srgb, var(--amber) 42%, transparent); border-radius: 14px; padding: 12px 13px 11px; background: var(--surface);
   color: var(--ink); font: inherit; cursor: pointer; transition: border-color .12s, background .12s, box-shadow .12s; }
@@ -100,6 +100,7 @@ a.wd-chip:hover { border-color: var(--accent-line); color: var(--ink); }
 .wd-trail { display: flex; flex-direction: column; font-size: var(--fs-meta); }
 .wd-trail > div { display: grid; grid-template-columns: 3.6rem 18px minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 6px 0; border-top: 1px dashed var(--border); color: var(--ink-soft); }
 .wd-trail > div > span:nth-child(3) { overflow-wrap: anywhere; }
+.wd-trail > div > :nth-child(4) { align-self: center; justify-self: end; height: auto; }
 .wd-t { font-family: var(--mono); color: var(--faint); font-size: var(--fs-tag); }
 .wd-pop-f { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .wd-refusal { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 8px 12px; border-radius: var(--r); background: var(--red-soft); color: var(--ink);
@@ -162,6 +163,6 @@ a.wd-chip:hover { border-color: var(--accent-line); color: var(--ink); }
   .wd-ub-f { grid-template-columns: minmax(0, 1fr) 22px; }
   .wd-ub-f > .wd-lbl { grid-column: 1 / -1; }
   .wd-trail > div { grid-template-columns: 3rem 16px minmax(0, 1fr); }
-  .wd-trail > div > :nth-child(4) { grid-column: 3; justify-self: start; }
+  .wd-trail > div > :nth-child(4) { grid-column: 3; justify-self: start; align-self: start; }
   .wd-pop { padding: 12px; }
 }
