@@ -1,10 +1,8 @@
 # Failures that also fail on origin/main (pre-existing). scripts/test-tier.sh reports them
 # but does not count them. One test id, or one whole file, per line. Delete a line when fixed.
 # Seeded 2026-10-13 from the rc10 full-suite comparison against main.
-engine/tests/test_deps_audit_strict.py::test_deps_audit_strict_fails_on_high_not_moderate
-engine/tests/test_deps_audit_strict.py::test_deps_audit_strict_script_exists_and_excludes_dev_only
-engine/tests/test_infra_ui_v1_isolated.py::test_ui_v1_cut_doc_exists_and_names_the_home_nav
-engine/tests/test_sandbox_s1_go.py::test_config_default_keeps_microvm_claims_frozen
+# BOSSAPP-950, 951, and 952 removed the install-template freeze test, the UI cut
+# test, and both dependency-audit tests. The Go sandbox service is still absent.
 engine/tests/test_sandbox_s1_go.py::test_go_sandbox_service_unit_tests
 engine/tests/test_sandbox_s1_go.py::test_golden_submit_fixture_matches_python_contract
 engine/tests/test_verification_target.py::test_guest_verify_cwd_prefers_app_package_json
