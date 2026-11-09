@@ -269,17 +269,15 @@ def test_vite_scaffold_declares_verify_so_official_apps_are_not_root_gated():
 
 
 def test_guest_verify_cwd_prefers_app_package_json(tmp_path: Path):
-    import importlib.util
+    """Official verify runs in the named app. The guest agent file was never shipped.
 
-    guest = Path(__file__).resolve().parents[2] / "sandbox-host" / "guest" / "in_guest_agent.py"
-    spec = importlib.util.spec_from_file_location("in_guest_agent", guest)
-    mod = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(mod)
-
+    sandbox-host/guest/in_guest_agent.py is not in this tree. The shipped contract
+    is resolve_verify_cwd. A named app wins over the repo package.json. An unnamed
+    verify stays at the repo root even when a sibling app has its own package.json.
+    """
     (tmp_path / "package.json").write_text('{"name":"mono"}', encoding="utf-8")
     app = tmp_path / "approveit"
     app.mkdir()
     (app / "package.json").write_text('{"name":"approveit"}', encoding="utf-8")
-    assert mod._verify_cwd({"app_root": "approveit"}, work=tmp_path) == app
-    assert mod._verify_cwd({}, work=tmp_path) == tmp_path
+    assert resolve_verify_cwd(tmp_path, app_id="approveit") == app
+    assert resolve_verify_cwd(tmp_path) == tmp_path

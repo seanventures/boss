@@ -3,9 +3,11 @@
 # Seeded 2026-10-13 from the rc10 full-suite comparison against main.
 # BOSSAPP-950, 951, and 952 removed the install-template freeze test, the UI cut
 # test, and both dependency-audit tests. The Go sandbox service is still absent.
+# BOSSAPP-953 points official verify at resolve_verify_cwd. The guest agent file
+# was never in this tree. The API test that wants the guest runner's error words
+# still imports that missing file.
 engine/tests/test_sandbox_s1_go.py::test_go_sandbox_service_unit_tests
 engine/tests/test_sandbox_s1_go.py::test_golden_submit_fixture_matches_python_contract
-engine/tests/test_verification_target.py::test_guest_verify_cwd_prefers_app_package_json
 # Also failing on origin/main at e6f8bd71 (2026-10-13 rc10 gate); fix in rc10.x.
 # Fail on main too and need more than a test fix (2026-10-15):
 # - the test-run and re-run doors (#512) start a run without asking readiness: product call.
