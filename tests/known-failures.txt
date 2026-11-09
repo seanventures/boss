@@ -3,7 +3,6 @@
 # Seeded 2026-10-13 from the rc10 full-suite comparison against main.
 engine/tests/test_deps_audit_strict.py::test_deps_audit_strict_fails_on_high_not_moderate
 engine/tests/test_deps_audit_strict.py::test_deps_audit_strict_script_exists_and_excludes_dev_only
-engine/tests/test_every_route_the_worker_calls_is_reachable_by_the_worker.py::test_no_worker_route_is_held_for_human_confirmation
 engine/tests/test_infra_ui_v1_isolated.py::test_ui_v1_cut_doc_exists_and_names_the_home_nav
 engine/tests/test_sandbox_s1_go.py::test_config_default_keeps_microvm_claims_frozen
 engine/tests/test_sandbox_s1_go.py::test_go_sandbox_service_unit_tests
