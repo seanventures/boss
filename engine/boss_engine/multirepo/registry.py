@@ -403,9 +403,10 @@ def registration_disagreement(*, binding_status: str = "", connection_status: st
                               last_test_status: str = "", may_clone: Optional[bool] = None,
                               reason: Optional[str] = None,
                               full_name: str = "") -> Optional[str]:
-    """Warn when the registration looks healthy and the allow-list says not_allowed.
+    """Deny reason when a registration still looks usable and the allow-list says not_allowed.
 
-    Archived, unreachable, and an unused registry are different facts and do not warn.
+    Archived, unreachable, and an unused registry are different facts and do not use this reason.
+    The sentence is the allow-list decision, not a claim that the registration is active or passed.
     """
     if may_clone is not False or reason != "not_allowed":
         return None
@@ -416,12 +417,7 @@ def registration_disagreement(*, binding_status: str = "", connection_status: st
     if not test_passed and not connection_active:
         return None
     name = full_name or "this repository"
-    healthy = "registration is active"
-    if test_passed:
-        healthy += " and the connection test passed"
-    else:
-        healthy += " and the connection is active"
-    return (f"{name}: {healthy}, but the org allow-list says not_allowed. "
+    return (f"{name}: not allowed by the org allow-list. "
             f"Egress will refuse the clone (repo_not_allowed).")
 
 
@@ -443,10 +439,21 @@ def refusal_reason(db: Any, org_id: Optional[str], full_name: str) -> Optional[s
     return state_of(dict(row))
 
 
+def _looks_usable(binding_status: Any, connection_status: Any, last_test_status: Any) -> bool:
+    """The registration a person would read as active or passed."""
+    return (str(binding_status or "") in ("active", "passed")
+            or str(connection_status or "") == "active"
+            or str(last_test_status or "") == "passed")
+
+
 def clone_note(db: Any, org_id: Optional[str], *, full_name: str, binding_status: Any,
                connection_status: Any, last_test_status: Any,
                registry_row: Optional[dict[str, Any]] = None) -> dict[str, Any]:
-    """`clone_allowed` and, when the records disagree, `allow_list_warning`."""
+    """What egress will do, and the status a person should read for this repository.
+
+    Stored rows stay as they are. When the allow-list says not_allowed, the view follows
+    that decision (`status`, `state`, `last_test_status`) and carries `deny_reason`.
+    """
     try:
         verdict = may_clone(db, org_id, full_name)
         if verdict is False and registry_row is not None:
@@ -465,7 +472,19 @@ def clone_note(db: Any, org_id: Optional[str], *, full_name: str, binding_status
     note: dict[str, Any] = {}
     if verdict is not None:
         note["clone_allowed"] = verdict
-    if warning:
+    refused = (verdict is False and reason == "not_allowed"
+               and _looks_usable(binding_status, connection_status, last_test_status))
+    if refused:
+        name = full_name or "this repository"
+        note["status"] = "not_allowed"
+        note["connection_status"] = "not_allowed"
+        note["last_test_status"] = "not_allowed"
+        note["state"] = "not_allowed"
+        note["deny_reason"] = "repo_not_allowed"
+        note["allow_list_warning"] = warning or (
+            f"{name}: not allowed by the org allow-list. "
+            f"Egress will refuse the clone (repo_not_allowed).")
+    elif warning:
         note["allow_list_warning"] = warning
     return note
 

@@ -3086,7 +3086,7 @@ export type GitHubRepositoryBindingSummary = {
   default_branch?: string;
   visibility?: string;
   archived: boolean;
-  status: "active" | "disabled";
+  status: "active" | "disabled" | "not_allowed";
   permissions: Record<string, boolean>;
   capabilities: string[];
   metadata: Record<string, unknown>;
@@ -3094,8 +3094,10 @@ export type GitHubRepositoryBindingSummary = {
   created_by: string;
   created_at: string;
   updated_at: string;
-  /** Set when this binding looks active/passed and the org allow-list says not_allowed. */
+  /** Allow-list decision when egress will refuse this repository. */
   allow_list_warning?: string | null;
+  /** `repo_not_allowed` when the org allow-list says not_allowed. */
+  deny_reason?: string | null;
   clone_allowed?: boolean | null;
 };
 

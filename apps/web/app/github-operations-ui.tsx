@@ -205,7 +205,9 @@ export function GitHubOperations({
   const latestSnapshot = snapshots[0];
   const activeConnectionCount = feed.summary.activeConnections;
   const connectionHealth =
-    connection?.last_test_status ?? connection?.status ?? "unconfigured";
+    selectedBinding?.status === "not_allowed"
+      ? "not_allowed"
+      : (connection?.last_test_status ?? connection?.status ?? "unconfigured");
 
   function chooseBinding(nextBindingId: string) {
     setBindingId(nextBindingId);

@@ -45191,6 +45191,7 @@ components:
           enum:
           - active
           - disabled
+          - not_allowed
           title: Status
         permissions:
           additionalProperties:

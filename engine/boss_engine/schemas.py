@@ -4682,7 +4682,7 @@ class GitHubRepositoryBindingSummary(BaseModel):
     default_branch: Optional[str] = None
     visibility: Optional[str] = None
     archived: bool
-    status: Literal["active", "disabled"]
+    status: Literal["active", "disabled", "not_allowed"]
     permissions: dict[str, bool] = Field(default_factory=dict)
     capabilities: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -4690,8 +4690,10 @@ class GitHubRepositoryBindingSummary(BaseModel):
     created_by: str
     created_at: str
     updated_at: str
-    #: Set when this binding looks active/passed and the org allow-list says not_allowed.
+    #: Allow-list decision when egress will refuse this repository. Not a second status.
     allow_list_warning: Optional[str] = None
+    #: `repo_not_allowed` when the org allow-list says not_allowed.
+    deny_reason: Optional[str] = None
     clone_allowed: Optional[bool] = None
 
 

@@ -41,8 +41,9 @@ def _row_to_target(row: dict[str, Any], *, source: str) -> dict[str, Any]:
     }
 
 
-def list_repositories(connection, project_id: str, *, limit: int = 50) -> list[dict]:
-    """Every repository registered to this project, with its connection's health."""
+def _registered_rows(connection, project_id: str, *, limit: int) -> list[dict]:
+    """Stored registration rows. Callers that decide whether a repo is registered use this,
+    not the allow-list view from `list_repositories`."""
     rows = connection.execute(
         text(
             """
@@ -59,6 +60,16 @@ def list_repositories(connection, project_id: str, *, limit: int = 50) -> list[d
         ),
         {"p": project_id, "lim": limit},
     ).mappings().all()
+    return [dict(row) for row in rows]
+
+
+def list_repositories(connection, project_id: str, *, limit: int = 50) -> list[dict]:
+    """Every repository registered to this project, with the status a person should read.
+
+    The stored binding can stay active and the connection test can stay passed. When the
+    org allow-list says not_allowed, this view says not_allowed and names the deny reason.
+    Egress is unchanged: it still refuses the clone.
+    """
     from ..multirepo import registry
     from ..multirepo.common import org_of_project
 
@@ -67,7 +78,7 @@ def list_repositories(connection, project_id: str, *, limit: int = 50) -> list[d
     except Exception:  # noqa: BLE001 — the list still loads; the warning is absent
         org_id = None
     out = []
-    for row in rows:
+    for row in _registered_rows(connection, project_id, limit=limit):
         item = dict(row)
         item.update(registry.clone_note(
             connection, org_id, full_name=item.get("full_name") or "",
@@ -239,7 +250,9 @@ def resolve_repository_target(
     Falls back to the legacy global settings only when the project has no registry yet,
     so single-repo deployments keep working while multi-repo customers are onboarded.
     """
-    bindings = [b for b in list_repositories(connection, project_id, limit=200)
+    # The stored binding, not the allow-list view. A not_allowed repo stays registered so
+    # resolution does not fall through to the legacy global repo; egress still refuses the clone.
+    bindings = [b for b in _registered_rows(connection, project_id, limit=200)
                 if b["status"] == "active"]
 
     if selector:
