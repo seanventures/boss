@@ -871,6 +871,127 @@ def test_intent_protection_and_floor_rollback_together_before_contact(
     assert owned.model.calls == 1
 
 
+def _intent(response):
+    found = [event for event in events(response) if event["type"] == "intent"]
+    assert found, [event["type"] for event in events(response)]
+    return found[0]
+
+
+def test_failed_turn_and_its_replay_carry_the_original_message_and_action(client, engine, owned):
+    """The break: a failed turns stream, and the replay of that same request, omit the
+    caller's message, the turns action, and the Idempotency-Key that named the request."""
+    message = "BOSSAPP-496 keeps this ledger sentence."
+    key = "496-turn-intent"
+    owned.model.fail = True
+    first = post(client, owned, key, message=message)
+    assert first.status_code == 200, first.text
+    assert _intent(first) == {
+        "type": "intent",
+        "action": "turns",
+        "message": message,
+        "idempotency_key": key,
+    }
+    second = post(client, owned, key, message=message)
+    assert second.status_code == 200, second.text
+    assert second.headers["Idempotency-Replayed"] == "true"
+    assert second.content == first.content
+    assert _intent(second)["message"] == message and _intent(second)["action"] == "turns"
+    assert owned.model.calls == 1
+    with engine.connect() as c:
+        stored = c.execute(
+            text(
+                "SELECT state, path, response_body FROM api_idempotency_keys "
+                "WHERE idempotency_key=:k"
+            ),
+            {"k": key},
+        ).one()
+        assert stored.state == "completed"
+        assert stored.path.endswith("/turns")
+        assert message.encode() in bytes(stored.response_body or b"")
+        assert (
+            c.execute(
+                text(
+                    "SELECT content FROM agent_conversation_turns "
+                    "WHERE conversation_id=:c AND speaker_kind='person'"
+                ),
+                {"c": owned.cid},
+            ).scalar_one()
+            == message
+        )
+
+
+def test_failed_summary_and_propose_and_their_replays_carry_the_requested_action(
+    client, engine, owned
+):
+    """Summary and propose have no message field. A failed stream and its replay still name
+    the action the caller requested, and the key that named that request."""
+    made = client.post(
+        "/v1/conversations",
+        json={"project_id": owned.project, "kind": "room", "seats": ["qa", "pm"]},
+    )
+    assert made.status_code == 201, made.text
+    cid = made.json()["conversation_id"]
+    with engine.begin() as c:
+        agent_converse._insert_turn(
+            c, cid, speaker_kind="person", actor=owned.owner.id,
+            content="A bounded owned plan", status="complete",
+        )
+        agent_converse._insert_turn(
+            c, cid, speaker_kind="agent", role_key="qa", actor=owned.owner.id,
+            content="Owned prior contribution", status="complete",
+        )
+    owned.model.fail = True
+    summary_key = "496-summary-intent"
+    summary_path = f"/v1/conversations/{cid}/summary"
+    body = {"project_id": owned.project}
+    first = client.post(summary_path, json=body, headers={"Idempotency-Key": summary_key})
+    assert first.status_code == 200, first.text
+    assert _intent(first) == {
+        "type": "intent",
+        "action": "summary",
+        "message": "",
+        "idempotency_key": summary_key,
+    }
+    second = client.post(summary_path, json=body, headers={"Idempotency-Key": summary_key})
+    assert second.content == first.content and second.headers["Idempotency-Replayed"] == "true"
+    plan = client.post(
+        "/v1/conversations",
+        json={"project_id": owned.project, "kind": "plan", "seats": ["qa"]},
+    )
+    assert plan.status_code == 201, plan.text
+    plan_id = plan.json()["conversation_id"]
+    with engine.begin() as c:
+        agent_converse._insert_turn(
+            c, plan_id, speaker_kind="person", actor=owned.owner.id,
+            content="A bounded owned plan", status="complete",
+        )
+    propose_key = "496-propose-intent"
+    propose_path = f"/v1/conversations/{plan_id}/propose"
+    proposed = client.post(propose_path, json=body, headers={"Idempotency-Key": propose_key})
+    assert proposed.status_code == 200, proposed.text
+    assert _intent(proposed) == {
+        "type": "intent",
+        "action": "propose",
+        "message": "",
+        "idempotency_key": propose_key,
+    }
+    again = client.post(propose_path, json=body, headers={"Idempotency-Key": propose_key})
+    assert again.content == proposed.content and again.headers["Idempotency-Replayed"] == "true"
+    assert owned.model.calls == 1
+    with engine.connect() as c:
+        rows = c.execute(
+            text(
+                "SELECT idempotency_key, state, path FROM api_idempotency_keys "
+                "WHERE idempotency_key IN ('496-summary-intent', '496-propose-intent') "
+                "ORDER BY idempotency_key"
+            )
+        ).mappings().all()
+    assert [(row["idempotency_key"], row["state"], row["path"].rsplit("/", 1)[-1]) for row in rows] == [
+        ("496-propose-intent", "completed", "propose"),
+        ("496-summary-intent", "completed", "summary"),
+    ]
+
+
 def test_modern_unsettled_cost_is_null_and_historical_or_settled_cost_is_preserved():
     for status in ("not_admitted", "admitted", "needs_reconciliation"):
         assert (

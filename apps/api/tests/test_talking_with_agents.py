@@ -185,9 +185,13 @@ def test_a_talk_greets_in_character_streams_and_signs_every_reply(client, engine
     assert conv["seat_info"][0]["role_key"] == "qa"
 
     hello = _say(client, conv["conversation_id"], "")
-    assert [e["type"] for e in hello][:2] == ["turn_start", "token"]
-    assert [e["type"] for e in hello][-2:] == ["turn_end", "done"]
-    start = hello[0]
+    preface = hello[0]
+    assert preface["type"] == "intent"
+    assert (preface["action"], preface["message"]) == ("turns", "")
+    spoken = [event for event in hello if event["type"] != "intent"]
+    assert [e["type"] for e in spoken][:2] == ["turn_start", "token"]
+    assert [e["type"] for e in spoken][-2:] == ["turn_end", "done"]
+    start = spoken[0]
     assert (start["role_key"], start["speaker_kind"]) == ("qa", "agent") and start["act_id"]
     said = "".join(e["text"] for e in hello if e["type"] == "token")
     assert said.startswith("QA Lead speaking")

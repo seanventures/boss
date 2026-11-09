@@ -31813,7 +31813,7 @@ def _conversation_authority(request: Request, project: str):
 
 
 def _converse_stream(request: Request, project_id: str, claimed: Optional[str], endpoint: str,
-                     open_stream) -> StreamingResponse:
+                     open_stream, *, action: str, message: str) -> StreamingResponse:
     with begin(engine) as connection:
         actor = _converse_actor(connection, project_id, claimed)
     authority = _conversation_authority(request, project_id)
@@ -31823,10 +31823,18 @@ def _converse_stream(request: Request, project_id: str, claimed: Optional[str], 
         events = open_stream(actor, authority)
     except _converse.ConverseError as error:
         raise _converse_refused(error) from error
+    # This preface is part of the body a completed stream stores. A failed producer that
+    # still finishes, and a replay of that request, repeat the message, action, and key.
+    # Only the producer finishing below certifies the claim.
+    intent = {"action": action, "message": message}
+    named = (request.headers.get(idempotency.HEADER) or "").strip()
+    if named:
+        intent["idempotency_key"] = named
 
     def stream():
         completed = False
         try:
+            yield f"event: intent\ndata: {json.dumps(intent)}\n\n"
             yield from _converse.sse(events)
             completed = True
         finally:
@@ -31849,7 +31857,8 @@ def conversation_turn_endpoint(conversation_id: str, payload: ConversationTurnBo
         lambda actor, authority: _converse.take_turn(
             engine, project_id=project_id, conversation_id=conversation_id, actor=actor,
             message=str(payload.message or ""), to=list(payload.to or []),
-            rounds=int(payload.rounds or 1), settings=settings, authority=authority))
+            rounds=int(payload.rounds or 1), settings=settings, authority=authority),
+        action="turns", message=str(payload.message or ""))
 
 
 @app.post("/v1/conversations/{conversation_id}/summary")
@@ -31862,7 +31871,8 @@ def conversation_summary_endpoint(conversation_id: str, payload: open_bodies.Pro
         request, project_id, payload.actor, "/v1/conversations/summary",
         lambda actor, authority: _converse.summarize_room(
             engine, project_id=project_id, conversation_id=conversation_id, actor=actor,
-            settings=settings, authority=authority))
+            settings=settings, authority=authority),
+        action="summary", message="")
 
 
 @app.post("/v1/conversations/{conversation_id}/propose")
@@ -31875,7 +31885,8 @@ def conversation_propose_endpoint(conversation_id: str, payload: open_bodies.Pro
         request, project_id, payload.actor, "/v1/conversations/propose",
         lambda actor, authority: _converse.propose_start(
             engine, project_id=project_id, conversation_id=conversation_id, actor=actor,
-            settings=settings, authority=authority))
+            settings=settings, authority=authority),
+        action="propose", message="")
 
 
 @app.post("/v1/conversations/{conversation_id}/start")
