@@ -238,6 +238,16 @@ def card(connection: Connection, project_id: str, decision: Mapping[str, Any],
     else:
         label = shorten(decision.get("question") or "Answer a question", 5) or "Answer a question"
         mini = [{"label": s.get("name") or s.get("label"), "state": s.get("state")} for s in stages]
+    # A MEETING'S PRD (BOSSAPP-929): the card carries the document, the panel that argued it and
+    # its file in the repository (prd_record.links, the same record Approvals shows).
+    from .. import prd_record
+
+    prd = prd_record.links(connection, {**dict(decision), "project_id": project_id})
+    if prd:
+        name = shorten(prd.get("title") or "", 4)
+        label = f"Approve PRD: {name}" if name else "Approve the PRD"
+        mini = [{"label": "Panel", "state": "done"}, {"label": "You approve", "state": "waiting"},
+                {"label": "Build", "state": "todo"}]
     # WHAT THE AGENT FOUND (stuck_work): a card about stuck or refused work carries the
     # Shepherd's diagnosis, and its detail is the reason -- never only "X is stuck on Y".
     from .. import stuck_work
@@ -275,6 +285,7 @@ def card(connection: Connection, project_id: str, decision: Mapping[str, Any],
             # WHAT THIS DEPLOY SHIPS, as its release card lists it (release_scope): the drawer
             # shows these commits and approves with their hash, as Approvals does.
             **({"release": release} if release else {}),
+            **({"prd": prd} if prd else {}),
             # AN ALWAYS-ON CARD'S OWN ANSWERS: the card's (`answers`, each with the decision
             # action that carries it) and each entry's (`entries`, answered one by one at
             # /v1/ambient/cards/<id>/entries/<work item>/answer).

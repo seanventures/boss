@@ -925,6 +925,116 @@ def _summary(rec: Mapping[str, Any], rank: Optional[int] = None, *,
     return out
 
 
+def item_path(rec: Mapping[str, Any]) -> Optional[str]:
+    """The file or folder a recommendation is about: a detector's `file:<path>` subject, an
+    onboarding proposal's `where` (when it names a path), else None."""
+    from ..project_scope import looks_like_path
+
+    head, _, tail = str(rec.get("subject") or "").partition(":")
+    if head == "file" and tail:
+        return tail
+    facts = rec.get("facts") if isinstance(rec.get("facts"), dict) else {}
+    where = facts.get("where")
+    return str(where).strip() if looks_like_path(where) else None
+
+
+#: Signal kinds about the repository as a whole (dossier.seed): CI, a README, a whole-repo test
+#: gap, a vulnerable dependency.
+_REPO_SIGNALS = ("scan.no_ci", "scan.no_docs", "scan.missing_tests")
+
+
+def place_item(scope: Mapping[str, Any], rec: Mapping[str, Any],
+               kinds: Optional[Mapping[str, str]] = None) -> dict[str, Any]:
+    """Where one recommendation belongs for this project (project_scope.place): its app, another
+    app in the same repository, or the whole repository."""
+    from ..project_scope import place
+
+    path = item_path(rec)
+    if path:
+        out = place(dict(scope), path)
+    else:
+        sig = str(rec.get("subject") or "").partition(":")[2]
+        kind = str((kinds or {}).get(sig, "") or "")
+        whole = rec.get("detector") == "onboarding" and (kind in _REPO_SIGNALS
+                                                          or kind.startswith("osv."))
+        out = {"where": "repo" if whole and scope.get("scoped") else "app", "app": None,
+               "project": None}
+    out["path"] = path
+    out["label"] = ("Whole repo" if out["where"] == "repo" else
+                    str(out["app"] or "") if out["where"] == "elsewhere" else "")
+    return out
+
+
+def _scoped(connection: Connection, project_id: str, recs: list[dict[str, Any]],
+            items: list[dict[str, Any]], kinds: Mapping[str, str]
+            ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+    """(this project's items, ranked again; the other apps' items grouped by app; the scope)."""
+    from ..project_experience.common import href
+    from ..project_scope import of
+
+    scope = of(connection, project_id)
+    summary = {"scoped": bool(scope.get("scoped")), "roots": scope.get("roots") or [],
+               "repository": scope.get("repository"), "elsewhere_count": 0}
+    if not scope.get("scoped"):
+        return items, [], summary
+    mine: list[dict[str, Any]] = []
+    groups: dict[str, dict[str, Any]] = {}
+    for rec, item in zip(recs, items):
+        where = place_item(scope, rec, kinds)
+        item["scope"] = where
+        if where["where"] != "elsewhere":
+            mine.append(item)
+            continue
+        group = groups.setdefault(str(where["app"]), {"app": where["app"], "project": None,
+                                                      "hand_to": None, "items": []})
+        if where.get("project") and not group["project"]:
+            proj = dict(where["project"])
+            proj["href"] = href(proj["id"], area="project", tab="roadmap")
+            group["project"] = proj
+            group["hand_to"] = {"label": f"Hand to {proj['name']}", "project_id": proj["id"]}
+        group["items"].append(item)
+    for i, item in enumerate(mine):
+        item["rank"] = i + 1
+    elsewhere = sorted(groups.values(), key=lambda g: (-len(g["items"]), str(g["app"])))
+    for g in elsewhere:
+        g["count"] = len(g["items"])
+    summary["elsewhere_count"] = sum(g["count"] for g in elsewhere)
+    return mine, elsewhere, summary
+
+
+def hand_to(connection: Connection, item_id: str, *, project_id: str, to_project: str,
+            actor: str) -> dict[str, Any]:
+    """Move a recommendation about another app to the project that owns it (the same
+    repository). When that project already holds the same item, this one is closed instead."""
+    from ..project_scope import of
+
+    rec = _rec(connection, item_id, project_id=project_id)
+    scope = of(connection, project_id)
+    if to_project not in {n["project_id"] for n in scope.get("neighbours") or []}:
+        raise ValueError("That project does not share this repository.")
+    clash = connection.execute(text(
+        "SELECT 1 FROM work_items a JOIN work_items b ON b.subject_type = a.subject_type AND "
+        "b.subject_id = a.subject_id AND b.id <> a.id WHERE a.id = :i AND b.project_id = :t "
+        "LIMIT 1"), {"i": item_id, "t": to_project}).first()
+    if clash:
+        connection.execute(text(
+            "UPDATE ambient_recommendations SET status = 'rejected', reject_category = "
+            "'handed_off', reject_reason = :why, decided_at = now(), updated_at = now() "
+            "WHERE work_item_id = :i"),
+            {"i": item_id, "why": f"Already on {to_project}'s roadmap"})
+        moved = False
+    else:
+        connection.execute(text("UPDATE work_items SET project_id = :t WHERE id = :i"),
+                           {"t": to_project, "i": item_id})
+        connection.execute(text("UPDATE ambient_recommendations SET project_id = :t, "
+                                "updated_at = now() WHERE work_item_id = :i"),
+                           {"t": to_project, "i": item_id})
+        moved = True
+    emit(connection, project_id, "ambient.recommendation_handed_off", actor, "work_item", item_id,
+         {"to_project": to_project, "moved": moved, "title": rec.get("title")})
+    return {"id": item_id, "to_project": to_project, "moved": moved}
+
+
 def list_roadmap(connection: Connection, project_id: str, *, status: str = "open",
                  kind: Optional[str] = None, detector: Optional[str] = None,
                  limit: int = 30) -> dict[str, Any]:
@@ -954,6 +1064,7 @@ def list_roadmap(connection: Connection, project_id: str, *, status: str = "open
         else None
     items = [_summary(r, rank=i + 1, kinds=kinds, build_usd=build_usd)
              for i, r in enumerate(recs)]
+    items, elsewhere, scope = _scoped(connection, project_id, recs, items, kinds)
     counts = {r["status"]: int(r["n"]) for r in connection.execute(text(
         "SELECT status, count(*) AS n FROM ambient_recommendations WHERE project_id = :p "
         "GROUP BY status"), {"p": project_id}).mappings()}
@@ -961,6 +1072,9 @@ def list_roadmap(connection: Connection, project_id: str, *, status: str = "open
         "SELECT last_run_at, last_error FROM signal_adapter_cursors WHERE adapter = :a"),
         {"a": f"roadmap@{project_id}"}).mappings().first()
     return {"status": status, "items": items,
+            # OTHER APPS IN THE SAME REPOSITORY (BOSSAPP-931): their items, grouped by app, apart
+            # from this project's; empty for a repository that holds one app.
+            "elsewhere": elsewhere, "scope": scope,
             "counts": {s: counts.get(s, 0) for s in STATUSES},
             "detectors": list(detector_stats(connection, project_id).values()),
             "last_run": serialize_row(last) if last else None}

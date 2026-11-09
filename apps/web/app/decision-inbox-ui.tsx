@@ -20,6 +20,7 @@ import { reviewPatch } from "./agents/presence-pill";
 import { useAttention } from "../lib/agents-live";
 import { isAreaId } from "../lib/area-ids";
 import { displayTitle } from "../lib/directive-subject";
+import { PrdRecordView } from "./prd-record";
 import { SubmitButton } from "./submit-button";
 import { formatDateTime as formatDateTimeShared } from "../lib/datetime";
 import { sentenceCut } from "../lib/decision-excerpt";
@@ -1020,7 +1021,10 @@ function DecisionInboxRow({
           {preview && !refusal ? <ActionPreview preview={preview} /> : null}
           {/* THE RELEASE'S MONITORING PACK (engine monitoring_pack): approved with it. */}
           {monitoringPackOf(rec.monitoring_pack) ? <MonitoringPackCard pack={monitoringPackOf(rec.monitoring_pack)!} onCard /> : null}
-          {subject ? (
+          {decision.prd ? (
+            // A MEETING'S PRD (BOSSAPP-929): rendered, with its meeting and its file in the repo.
+            <PrdRecordView prd={decision.prd} testid="decision-prd" />
+          ) : subject ? (
             <details className="decision-plan-details">
               <summary>
                 Read the full document before approving

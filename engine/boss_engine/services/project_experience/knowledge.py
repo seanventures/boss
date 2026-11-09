@@ -282,12 +282,36 @@ def _hub(connection: Connection, project_id: str, hot_path: Optional[str]) -> Op
     return max(cands, key=lambda c: (degree.get(str(c["id"]), 0), c["kind"] == "rule"))
 
 
+def _scoped_hub(connection: Connection, project_id: str, keep: Any) -> Optional[dict[str, Any]]:
+    """The best-connected file inside the app (a scoped preview whose hottest file is elsewhere)."""
+    rows = [dict(r) for r in connection.execute(text(
+        "SELECT n.id, n.kind, n.name, n.path, n.knowledge_layer, n.source, n.attrs, "
+        "(SELECT count(*) FROM kg_edges e WHERE (e.src_id = n.id OR e.dst_id = n.id) "
+        " AND e.valid_to IS NULL) AS degree FROM kg_nodes n WHERE n.project_id = :p "
+        "AND n.kind = 'file' AND n.valid_to IS NULL AND n.path IS NOT NULL LIMIT 5000"),
+        {"p": project_id}).mappings().all()]
+    rows = [r for r in rows if keep(r["path"])]
+    if not rows:
+        return None
+    best = max(rows, key=lambda r: (int(r["degree"] or 0), str(r["path"])))
+    best.pop("degree", None)
+    return best
+
+
 def graph(connection: Connection, project_id: str, limit: int = NEIGHBOURS,
-          hot_path: Optional[str] = None) -> dict[str, Any]:
+          hot_path: Optional[str] = None, keep: Any = None) -> dict[str, Any]:
     """A snippet of the project's graph CENTRED on its hottest entity (screen 06): the hub, up
     to `limit` neighbours of mixed kinds (rules and learned facts first), the edges among them,
-    and the counts the chips show (nodes, rules, learned)."""
+    and the counts the chips show (nodes, rules, learned).
+
+    `keep(path)` scopes the snippet to one app of a shared repository (knowledge_scope): the hub
+    is a file of that app and no neighbour is a file of another app. Nodes without a path (rules,
+    lessons, tables) stay."""
     hub = _hub(connection, project_id, hot_path)
+    if keep is not None and hub is not None and hub.get("path") and not keep(hub["path"]):
+        hub = None
+    if keep is not None and hub is None:
+        hub = _scoped_hub(connection, project_id, keep)
     nodes: list[dict[str, Any]] = []
     if hub:
         near = [dict(r) for r in connection.execute(text(
@@ -301,6 +325,8 @@ def graph(connection: Connection, project_id: str, limit: int = NEIGHBOURS,
             if n["id"] in seen:
                 continue
             seen.add(n["id"])
+            if keep is not None and n.get("path") and not keep(n["path"]):
+                continue
             if n["kind"] in ("run", "agent", "pull_request", "person", "decision"):
                 continue  # the lifecycle (who ran what) is the graph's own view, not the snippet
             key = "learned" if n["source"] == LEARNED_SOURCE else (
@@ -339,6 +365,8 @@ def graph(connection: Connection, project_id: str, limit: int = NEIGHBOURS,
             for n in hop:
                 if len(picked) >= limit:
                     break
+                if keep is not None and n.get("path") and not keep(n["path"]):
+                    continue
                 if n["id"] not in have:
                     have.add(n["id"])
                     picked.append(n)
@@ -710,14 +738,32 @@ def project_docs(connection: Connection, project_id: str) -> list[dict[str, Any]
     return docs(connection, project_id, _facts_docs(connection, project_id), primary)
 
 
-def view(connection: Connection, project_id: str) -> dict[str, Any]:
+def view(connection: Connection, project_id: str, scope: Optional[str] = None) -> dict[str, Any]:
+    """The Repo & knowledge tab. `scope` is "app" (the default: this project's part of a shared
+    repository, knowledge_scope) or "repo" (the whole repository). A repository with one app is
+    always shown whole."""
+    from .. import project_scope
+    from . import knowledge_scope
+
     d = dossier(connection, project_id)
     facts_docs: dict[str, Any] = _facts_docs(connection, project_id) if d is not None else {}
     the_repos = repo_rows(connection, project_id)
     primary = the_repos[0]["full_name"] if the_repos else None
+    sc = project_scope.of(connection, project_id)
+    mode = knowledge_scope.mode_of(scope, sc)
+    keep = (lambda p: project_scope.in_scope(sc, p)) if mode == knowledge_scope.APP else None
+    if d is not None and keep is not None:
+        from ..ambient import dossier as dossier_service
+
+        rows = dossier_service.get(connection, project_id)
+        facts = (as_json(rows[0].get("facts"), {}) or {}) if rows else {}
+        d = knowledge_scope.scope_dossier(connection, project_id, d, facts, sc)
     hot = ((d or {}).get("hotspots") or [{}])[0].get("path") if d else None
+    if keep is not None and not hot:
+        hot = next((p for p in sc.get("files") or [] if keep(p)), None)
     out = {"repos": the_repos, "mapping": mapping(connection, project_id), "dossier": d,
-           "graph": graph(connection, project_id, hot_path=hot),
+           "scope": knowledge_scope.summary(sc, mode),
+           "graph": graph(connection, project_id, hot_path=hot, keep=keep),
            "docs": docs(connection, project_id, facts_docs, primary),
            "decisions": decisions(connection, project_id),
            "learned": learned(connection, project_id),

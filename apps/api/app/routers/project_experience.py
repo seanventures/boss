@@ -373,12 +373,13 @@ def project_new_work(project_id: str, payload: NewWorkBody) -> dict[str, Any]:
 
 @router.get("/v1/projects/{project_id}/knowledge")
 @permit(P.PROJECT_READ, scope=Scope.project(path="project_id"))
-def project_knowledge(project_id: str) -> dict[str, Any]:
+def project_knowledge(project_id: str, scope: Optional[str] = None) -> dict[str, Any]:
+    """`scope`: "app" (default — this project's part of a shared repository) or "repo"."""
     from boss_engine.services.project_experience import knowledge
 
     with begin(_engine) as connection:
         _require_project(connection, project_id)
-        return knowledge.view(connection, project_id)
+        return knowledge.view(connection, project_id, scope=scope)
 
 
 @router.get("/v1/projects/{project_id}/deployments")
