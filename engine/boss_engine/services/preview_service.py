@@ -307,7 +307,8 @@ def _origin_key(origin: str) -> Optional[tuple[str, str, int]]:
     return parts.scheme, parts.hostname.lower(), int(port)
 
 
-def boss_origins(host_header: Optional[str] = None, scheme: str = "http") -> set[tuple[str, str, int]]:
+def boss_origins(host_header: Optional[str] = None,
+                 scheme: str = "http") -> set[tuple[str, str, int]]:
     """BOSS'S OWN ORIGINS: the console/API a browser reached (`host_header`), and BOSS_PUBLIC_URL.
     A preview origin must never be one of them (see PREVIEW_ORIGIN_SANDBOX_CSP)."""
     out: set[tuple[str, str, int]] = set()

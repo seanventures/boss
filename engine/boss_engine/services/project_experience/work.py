@@ -27,7 +27,8 @@ from sqlalchemy.engine import Connection
 
 from .new_work import issue_of
 from .titles import short_title
-from .common import (LIVE_RUN, age, agents, as_json, aware, face, href, is_local_project, iso, pr_number,
+from .common import (LIVE_RUN, age, agents, as_json, aware, face, href, is_local_project, iso,
+                     pr_number,
                      project_href, words)
 
 #: The station strip (contract §3 `stages`), with the capabilities that belong to each.
