@@ -3,7 +3,7 @@
 # One line per operation: its declaration, then the built-in roles allowed
 # (O owner, A admin, P operator, V viewer, U auditor; '-' none). Every other role is denied
 # 403, or 404 when the operation names an object the role cannot even read.
-# 1823 operations.
+# 1827 operations.
 "GET /.well-known/boss-jwks.json": ["public:jwks", "OAPVU"]
 "GET /docs": ["public:api_description", "OAPVU"]
 "GET /docs/oauth2-redirect": ["public:api_description", "OAPVU"]
@@ -864,6 +864,10 @@
 "GET /v1/identity/epoch": ["authenticated:self", "OAPVU"]
 "GET /v1/identity/epoch/stream": ["authenticated:self", "OAPVU"]
 "GET /v1/identity/github": ["permit github:read @ org", "OAPVU"]
+"POST /v1/identity/github/accounts/allow": ["permit repository:register @ project(body=project_id)", "OA"]
+"GET /v1/identity/github/accounts/installations/{installation_id}/repos": ["permit github:read @ org", "OAPVU"]
+"POST /v1/identity/github/accounts/lookup": ["permit github:connect @ org", "OA"]
+"POST /v1/identity/github/accounts/watch": ["permit github:connect @ org", "OA"]
 "DELETE /v1/identity/github/app": ["permit github:connect @ org", "OA"]
 "GET /v1/identity/github/app/created": ["public:oauth_state_bound_callback", "OAPVU"]
 "POST /v1/identity/github/app/installation": ["permit github:connect @ org", "OA"]

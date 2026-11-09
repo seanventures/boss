@@ -358,13 +358,115 @@ def select_installation(*, installation_id: str, org_id: str, db: Any, by: str) 
                     "account_login), account_type = :t, verified = NULL, verified_at = NULL, updated_at = now() "
                     "WHERE org_id = :o"),
                {"i": installation_id, "l": account, "t": kind, "o": org_id})
+    _keep_default(db, org_id, installation_id, account, kind, by)
     _event(db, org_id, by, "github_app", installation_id, {"how": "app", "step": "installed", "account": account})
     return {"installation_id": installation_id, "account": account}
+
+
+# ---- every account the App is installed on (BOSSAPP-945) ----------------------------------------------
+
+def _savepoint(db: Any, fn: Any, default: Any) -> Any:
+    """One statement on the installations table; an older schema (no table yet) answers `default`."""
+    nested = getattr(db, "begin_nested", None)
+    point = nested() if callable(nested) else None
+    try:
+        out = fn()
+    except Exception:  # noqa: BLE001 — no table on this schema yet
+        if point is not None:
+            point.rollback()
+        return default
+    if point is not None:
+        point.commit()
+    return out
+
+
+def recorded_installations(db: Any, org_id: Optional[str] = None) -> list[dict[str, Any]]:
+    """The App's installations BOSS knows, oldest first (the default one is on identity_github_app)."""
+    q = ("SELECT installation_id, account_login, account_type, account_id, repository_selection "
+         "FROM identity_github_installations")
+
+    def read() -> list[dict[str, Any]]:
+        res = (db.execute(_sql(q + " WHERE org_id = :o ORDER BY created_at"), {"o": org_id}) if org_id
+               else db.execute(_sql(q + " ORDER BY created_at")))
+        return [dict(r) for r in res.mappings().all()]
+    return _savepoint(db, read, []) if db is not None else []
+
+
+def installation_ids(db: Any, org_id: Optional[str] = None) -> list[str]:
+    """The default installation first, then every other account's."""
+    out: list[str] = []
+    first = app_config(db, org_id).get("installation_id")
+    if first:
+        out.append(str(first))
+    for row in recorded_installations(db, org_id):
+        inst = str(row["installation_id"])
+        if inst not in out:
+            out.append(inst)
+    return out
+
+
+def installation_for_owner(db: Any, owner: str) -> Optional[str]:
+    """The installation on the account that owns a repository (Add a GitHub account), or None:
+    the caller uses the default installation."""
+    if not owner or db is None:
+        return None
+    found = _savepoint(db, lambda: db.execute(_sql(
+        "SELECT installation_id FROM identity_github_installations WHERE lower(account_login) = lower(:l) "
+        "ORDER BY updated_at DESC LIMIT 1"), {"l": owner}).scalar(), None)
+    return str(found) if found else None
+
+
+def record_installation(db: Any, org_id: str, installation: dict[str, Any], *, by: str) -> dict[str, Any]:
+    """Keep one of the App's installations, as GitHub's own API listed it (GET /app/installations,
+    asked with the App's key: the list proves it is the App's). The first one becomes the default
+    on identity_github_app, as the install callback does; later ones sit beside it, so adding an
+    account never moves the repositories that already build."""
+    require_org_credentials_authority(org_id, db=db)
+    inst = str(installation.get("id") or "").strip()
+    if not inst.isdigit():
+        raise GitHubSetupError("bad_installation", 422)
+    account = installation.get("account") or {}
+    login = account.get("login")
+    kind = github_urls.account_type(account.get("type"))
+    fresh = db.execute(_sql(
+        "INSERT INTO identity_github_installations (org_id, installation_id, account_login, account_type, "
+        "account_id, repository_selection, created_by) VALUES (:o, :i, :l, :t, :a, :s, :by) "
+        "ON CONFLICT (org_id, installation_id) DO UPDATE SET account_login = EXCLUDED.account_login, "
+        "account_type = EXCLUDED.account_type, account_id = EXCLUDED.account_id, "
+        "repository_selection = EXCLUDED.repository_selection, updated_at = now() "
+        "RETURNING (xmax = 0) AS inserted"),
+        {"o": org_id, "i": inst, "l": login, "t": kind, "a": str(account.get("id") or "") or None,
+         "s": installation.get("repository_selection"), "by": by or None}).scalar()
+    became_default = False
+    cfg = app_config(db, org_id)
+    if cfg.get("source") == "setup" and not cfg.get("installation_id"):
+        db.execute(_sql("UPDATE identity_github_app SET installation_id = :i, account_login = coalesce(:l, "
+                        "account_login), account_type = :t, verified = NULL, verified_at = NULL, updated_at = now() "
+                        "WHERE org_id = :o"), {"i": inst, "l": login, "t": kind, "o": org_id})
+        became_default = True
+    if fresh:
+        _event(db, org_id, by, "github_app", inst, {"how": "app", "step": "installed", "account": login,
+                                                    "default": became_default})
+    return {"installation_id": inst, "account": login, "account_type": kind, "default": became_default,
+            "new": bool(fresh)}
+
+
+def _keep_default(db: Any, org_id: str, installation_id: str, account: Any, kind: Optional[str], by: str) -> None:
+    """The default installation is one of the recorded ones too (Add a GitHub account lists them)."""
+    def write() -> None:
+        db.execute(_sql(
+            "INSERT INTO identity_github_installations (org_id, installation_id, account_login, account_type, "
+            "created_by) VALUES (:o, :i, :l, :t, :by) ON CONFLICT (org_id, installation_id) DO UPDATE SET "
+            "account_login = EXCLUDED.account_login, account_type = EXCLUDED.account_type, updated_at = now()"),
+            {"o": org_id, "i": installation_id, "l": account, "t": kind, "by": by or None})
+    _savepoint(db, write, None)
 
 
 def disconnect_app(*, org_id: str, db: Any, by: str) -> None:
     require_org_credentials_authority(org_id, db=db)
     db.execute(_sql("DELETE FROM identity_github_app WHERE org_id = :o"), {"o": org_id})
+    _savepoint(db, lambda: db.execute(_sql("DELETE FROM identity_github_installations WHERE org_id = :o"),
+                                      {"o": org_id}), None)
     db.execute(_sql("UPDATE identity_vault_items SET status = 'revoked' WHERE provider IN ('github', 'github-app') "
                     "AND kind IN ('app_private_key', 'oidc_client_secret') AND status = 'active'"))
     _event(db, org_id, by, "github_app", "-", {"how": "app", "step": "disconnected"}, revoked=True)
@@ -637,14 +739,17 @@ def control_plane_token(db: Any, owner: str, repo: str) -> Optional[str]:
     return None
 
 
-def installation_token_all(db: Any) -> str:
+def installation_token_all(db: Any, installation_id: Optional[str] = None) -> str:
     """A 1-hour installation token for every repo the Setup-created App is installed on, with the
     control plane's permissions. Backs Setup › Repo's "GitHub App" connection (secret ref
-    `identity_github:app`); the worker uses it, a build's sandbox never does."""
+    `identity_github:app`); the worker uses it, a build's sandbox never does. `installation_id`:
+    one of the App's other installations (another account, Add a GitHub account) instead of the
+    default one."""
     cfg = app_config(db)
     if cfg["source"] != "setup" or not app_ready(db):
         raise GitHubSetupError("app_not_connected", 409)
-    resp = github_app._call("POST", f"/app/installations/{cfg['installation_id']}/access_tokens",  # noqa: SLF001
+    inst = str(installation_id or cfg["installation_id"])
+    resp = github_app._call("POST", f"/app/installations/{inst}/access_tokens",  # noqa: SLF001
                             token=github_app.app_jwt(db), body={"permissions": dict(CONTROL_PLANE_PERMISSIONS)})
     if resp.status not in (200, 201):
         raise GitHubSetupError("mint_failed", 502, status=resp.status)
@@ -657,9 +762,30 @@ def installation_token_all(db: Any) -> str:
     return token
 
 
-def installation_repositories(db: Any) -> list[dict[str, Any]]:
-    """The repositories the App can reach, in Setup's repo-picker shape."""
-    token = installation_token_all(db)
+def installation_repositories(db: Any, installation_id: Optional[str] = None) -> list[dict[str, Any]]:
+    """The repositories the App can reach, in Setup's repo-picker shape: on every account it is
+    installed on (each installation in turn, a repository once), or on one installation."""
+    if installation_id:
+        return _one_installation_repositories(db, str(installation_id))
+    default = str(app_config(db).get("installation_id") or "")
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for inst in installation_ids(db) or [default]:
+        try:
+            listed = _one_installation_repositories(db, inst or None)
+        except GitHubSetupError:
+            if not inst or inst == default:
+                raise                      # the default installation: as before
+            continue                       # another account's, gone or suspended: the rest still list
+        for item in listed:
+            if item["full_name"].lower() not in seen:
+                seen.add(item["full_name"].lower())
+                out.append(item)
+    return out
+
+
+def _one_installation_repositories(db: Any, installation_id: Optional[str]) -> list[dict[str, Any]]:
+    token = installation_token_all(db, installation_id)
     out: list[dict[str, Any]] = []
     for page in range(1, 4):
         resp = github_app._call("GET", f"/installation/repositories?per_page=100&page={page}", token=token)  # noqa: SLF001

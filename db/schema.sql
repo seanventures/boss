@@ -8436,6 +8436,24 @@ ALTER TABLE identity_github_app ADD COLUMN IF NOT EXISTS owner_type TEXT;
 ALTER TABLE identity_github_app ADD COLUMN IF NOT EXISTS account_type TEXT;
 ALTER TABLE identity_github_app ADD COLUMN IF NOT EXISTS verified JSONB;
 ALTER TABLE identity_github_app ADD COLUMN IF NOT EXISTS verified_at TIMESTAMPTZ;
+-- EVERY ACCOUNT THE APP IS INSTALLED ON (BOSSAPP-945, Add a GitHub account): one row per
+-- installation of the org's App, as GitHub's own API reported it (GET /app/installations). The
+-- installation on identity_github_app stays the first one (the default); a token for a repository
+-- is minted on the installation of that repository's owner (github_app.mint_installation_token).
+CREATE TABLE IF NOT EXISTS identity_github_installations (
+  org_id               TEXT NOT NULL REFERENCES orgs(id),
+  installation_id      TEXT NOT NULL,
+  account_login        TEXT,
+  account_type         TEXT,
+  account_id           TEXT,
+  repository_selection TEXT,
+  created_by           TEXT,
+  created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (org_id, installation_id)
+);
+CREATE INDEX IF NOT EXISTS identity_github_installations_login
+  ON identity_github_installations (lower(account_login));
 
 -- "Request access" from a refusal (amendment A13): who asked for which permission where, kept so
 -- an admin can see open requests and the requester is never asked twice. Decided by a binding.

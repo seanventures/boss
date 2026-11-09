@@ -369,7 +369,13 @@ describe("Screen 3 — Add a GitHub account", () => {
     const { container } = await mount(view);
     await click(q(container, "su-add-account-open"));
     const panel = q(document.body, "su-add-account")!;
+    // BOSSAPP-945: BOSS's guided way opens first; the earlier steps are one of the Other ways.
+    expect(q(panel, "ga-input")).not.toBeNull();
+    expect(q(panel, "ga-other")!.textContent).toContain("Paste an access token");
+    await click(q(panel, "ga-other-token"));
     expect(panel.textContent).toContain("How to connect");
+    expect(q(panel, "su-account-token-perms")!.textContent).toBe(
+      "Contents: Read and writePull requests: Read and writeMetadata: Read-only");
     expect(panel.textContent).toContain("Pick repos");
     expect(panel.textContent).toContain("Check access");
     expect(q(panel, "su-how-own")!.textContent).toContain("My own account");
@@ -412,6 +418,9 @@ describe("Screen 3 — Add a GitHub account", () => {
     const { container } = await mount(view);
     await click(q(container, "su-add-account-open"));
     const panel = q(document.body, "su-add-account")!;
+    // The org App's classic step stays one press away (Other ways, then An organisation).
+    await click(q(panel, "ga-other-token"));
+    await click(q(panel, "su-how-org")!.querySelector("input"));
     expect((q(panel, "su-how-org")!.querySelector("input") as HTMLInputElement).checked).toBe(true);
     expect(q(panel, "su-how-org")!.textContent).toContain("Recommended");
     expect(q(panel, "su-how-org")!.textContent).toContain("@paramg");
@@ -426,7 +435,7 @@ describe("Screen 3 — Add a GitHub account", () => {
     const api = fakeApi(view);
     const { container } = await mount(view);
     await click(q(container, "su-add-account-open"));
-    await click(q(document.body, "su-account-cancel"));
+    await click(q(document.body, "ga-cancel"));
     expect(q(document.body, "su-add-account")).toBeNull();
     expect(api.calls.filter((c) => c.method !== "GET")).toEqual([]);
   });

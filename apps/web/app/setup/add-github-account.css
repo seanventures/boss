@@ -1,0 +1,112 @@
+/* Setup › Add a GitHub account, guided by BOSS (agentic-factory 4-add-github-account.html).
+   Tokens only: every size is a --fs-* token, every colour a variable. */
+
+.su-drawer[data-wide] { width: min(640px, 100%); }
+.su-token-perms { margin: 0; padding-left: 18px; font-size: var(--fs-meta); color: var(--muted); }
+.su-back { align-self: flex-start; }
+
+.ga { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.ga-faint { color: var(--faint); font-size: var(--fs-meta); }
+.ga-mono, .ga code { font-family: var(--mono); font-size: var(--fs-meta); }
+.ga-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; min-width: 0; }
+.ga-spacer { flex: 1; }
+.ga-spin { animation: ga-spin 1s linear infinite; }
+@keyframes ga-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .ga-spin { animation: none; } }
+
+/* 1 · the one input */
+.ga-in { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 6px 12px; padding: 12px 14px;
+  border: 1px solid var(--accent-line); border-radius: var(--r-xl); background: var(--surface-2);
+  box-shadow: 0 0 0 3px var(--accent-soft); min-width: 0; cursor: text; }
+.ga-in-ico { display: grid; place-items: center; width: 36px; height: 36px; border-radius: var(--r); color: var(--accent-text);
+  background: var(--accent-soft); border: 1px solid var(--accent-line); }
+.ga-in-text { width: 100%; min-width: 0; border: 0; outline: none; background: transparent; color: var(--ink); font: inherit;
+  font-size: var(--fs-title); }
+.ga-in-foot { grid-column: 1 / -1; font-size: var(--fs-meta); color: var(--muted); }
+.ga-detect { display: flex; align-items: center; gap: 8px; margin: 0; font-size: var(--fs-body); color: var(--muted);
+  overflow-wrap: anywhere; min-width: 0; }
+.ga-detect b { color: var(--ink); }
+.ga-avatar { width: 20px; height: 20px; border-radius: 50%; flex: none; border: 1px solid var(--border); }
+.ga-error { margin: 0; padding: 8px 10px; border: 1px solid var(--red); border-radius: var(--r); background: var(--red-soft);
+  color: var(--red); font-size: var(--fs-body); }
+
+/* 2 · Agent actions */
+.ga-card { display: flex; flex-direction: column; gap: 12px; padding: 14px; border: 1px solid var(--accent-line);
+  border-radius: var(--r-xl); background: var(--surface-2); min-width: 0; }
+.ga-card-h { display: flex; align-items: flex-start; gap: 10px; min-width: 0; }
+.ga-card-t { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ga-card-t h3 { margin: 0; font-size: var(--fs-title); }
+.ga-card-t small { font-size: var(--fs-meta); color: var(--muted); overflow-wrap: anywhere; }
+.ga-prog { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 6px; margin: 0; padding: 0; list-style: none; }
+.ga-ps { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 0; padding: 8px;
+  border: 1px solid var(--border); border-radius: var(--r); background: var(--surface); }
+.ga-ps b { font-size: var(--fs-meta); overflow-wrap: anywhere; }
+.ga-ps small { font-size: var(--fs-tag); color: var(--faint); }
+.ga-ps-c { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; border: 1px solid var(--border-strong);
+  color: var(--muted); font-size: var(--fs-meta); }
+.ga-ps[data-s="done"] .ga-ps-c { background: var(--green-soft); border-color: var(--green); color: var(--green); }
+.ga-ps[data-s="run"] { border-color: var(--amber); box-shadow: 0 0 0 2px var(--amber-soft); }
+.ga-ps[data-s="run"] .ga-ps-c { background: var(--amber-soft); border-color: var(--amber); color: var(--amber); }
+.ga-ps[data-s="todo"] { opacity: .7; }
+
+/* 3/4 · the human steps (amber, set apart) */
+.ga-gate { display: flex; flex-direction: column; gap: 10px; padding: 14px; border: 1px solid var(--amber);
+  border-radius: var(--r-xl); background: var(--amber-soft); min-width: 0; }
+.ga-gate[data-dim] { opacity: .6; border-color: var(--border-strong); background: var(--surface-2); }
+.ga-gate-h { display: flex; gap: 10px; align-items: flex-start; min-width: 0; }
+.ga-gate-h b { font-size: var(--fs-body); }
+.ga-gate-h small { display: block; margin-top: 2px; font-size: var(--fs-meta); color: var(--muted); overflow-wrap: anywhere; }
+.ga-hand { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; background: var(--amber);
+  font-size: var(--fs-body); flex: none; }
+
+/* buttons, links, tags */
+.ga-btn { display: inline-flex; align-items: center; gap: 6px; min-height: 34px; padding: 4px 12px; border: 1px solid var(--border-strong);
+  border-radius: var(--r); background: var(--surface); color: var(--ink); font: inherit; font-size: var(--fs-ui); cursor: pointer;
+  text-decoration: none; white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.ga-btn-primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+.ga-btn:disabled, .ga-btn[aria-disabled="true"] { opacity: .65; cursor: default; }
+.ga-link { display: inline-flex; align-items: center; gap: 6px; padding: 0; border: 0; background: none; color: var(--accent-text);
+  font: inherit; font-size: var(--fs-ui); cursor: pointer; text-decoration: none; }
+.ga-tag { display: inline-flex; align-items: center; padding: 1px 8px; border: 1px solid var(--border-strong); border-radius: 999px;
+  font-size: var(--fs-tag); color: var(--muted); white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.ga-tag[data-tone="green"] { color: var(--green); border-color: var(--green); background: var(--green-soft); }
+.ga-tag[data-tone="accent"] { color: var(--accent-text); border-color: var(--accent-line); background: var(--accent-soft); }
+
+/* 6 · the installation's repositories */
+.ga-repos { display: flex; flex-direction: column; gap: 10px; padding: 14px; border: 1px solid var(--border-strong);
+  border-radius: var(--r-xl); background: var(--surface-2); min-width: 0; }
+.ga-repos-h { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: var(--fs-body); }
+.ga-repos-h .ga-link { margin-left: auto; font-size: var(--fs-meta); }
+.ga-list { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.ga-repo { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; padding: 8px 10px; border: 1px solid var(--border);
+  border-radius: var(--r); background: var(--surface); min-width: 0; }
+.ga-repo-l { display: inline-flex; align-items: center; gap: 8px; min-width: 0; flex: 1 1 200px; cursor: pointer; }
+.ga-repo-l span { overflow-wrap: anywhere; }
+.ga-result { flex: 1 1 100%; font-size: var(--fs-meta); color: var(--muted); }
+.ga-result[data-tone="green"] { color: var(--green); }
+.ga-result[data-tone="amber"] { color: var(--amber); }
+.ga-result[data-tone="red"] { color: var(--red); }
+
+/* 5 · other ways */
+.ga-other summary { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; font-size: var(--fs-meta); color: var(--muted); }
+.ga-other ul { display: flex; flex-direction: column; gap: 8px; margin: 8px 0 0; padding: 0; list-style: none; }
+.ga-other li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; font-size: var(--fs-meta); }
+
+/* the footer */
+.ga-foot { position: sticky; bottom: 0; z-index: 1; display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+  margin: 0 -16px -16px; padding: 10px 16px 16px; border-top: 1px solid var(--border); background: var(--surface); }
+
+@media (max-width: 640px) {
+  /* a phone: what to do now first, the plan after it */
+  .ga-card { order: 2; }
+  .ga-other { order: 3; }
+  .ga-foot { order: 4; }
+  /* one line per step */
+  .ga-prog { grid-auto-flow: row; grid-auto-columns: auto; grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  .ga-ps { flex-direction: row; align-items: center; gap: 8px; padding: 6px 8px; }
+  .ga-ps small { margin-left: auto; text-align: right; }
+  .ga-ps-c { width: 20px; height: 20px; flex: none; }
+  .ga-foot .ga-tag { flex: 1 1 100%; }
+  .ga-foot .ga-spacer { display: none; }
+  .ga-foot .ga-btn { flex: 1 1 0; justify-content: center; }
+}
