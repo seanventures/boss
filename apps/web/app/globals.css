@@ -90,7 +90,6 @@ body {
   --boss-c-0f8422b1cb: rgba(46, 197, 197, 0.38);
   --boss-c-101725: #101725;
   --boss-c-101a30: #101A30;
-  --boss-c-1034812e70: hsl(calc(var(--h);
   --boss-c-106b6b: #106b6b;
   --boss-c-1093b81c1b: rgba(16, 26, 48, 0.8);
   --boss-c-11f4c7d2ec: rgba(248, 113, 113, 0.3);
@@ -201,7 +200,6 @@ body {
   --boss-c-3a8aee2106: rgba(46, 197, 197, 0.025);
   --boss-c-3adc870d2f: rgba(46,209,139,.42);
   --boss-c-3b5590: #3B5590;
-  --boss-c-3bcde99ce5: hsl(var(--h);
   --boss-c-3c14b81382: rgba(52, 211, 153, 0.7);
   --boss-c-3d6bd8adaa: rgba(128, 146, 179, 0.16);
   --boss-c-3e0e6bfa6a: rgba(99, 230, 216, 0.6);
@@ -406,7 +404,6 @@ body {
   --boss-c-9d61909259: rgba(47, 111, 224, .08);
   --boss-c-9d67e9768d: hsl(215 30% 45% / .45);
   --boss-c-9e86bd773e: rgba(46, 197, 197, .22);
-  --boss-c-9f2ac02d36: hsl(var(--np-hue);
   --boss-c-9f497d2c22: rgba(47, 111, 224, 0.07);
   --boss-c-9f78f25dd8: rgba(128,128,128,0.03);
   --boss-c-9f989e185d: rgba(47, 111, 224, .34);

@@ -265,7 +265,7 @@
 .np-art svg { width: 100%; height: 100%; display: block; }
 .np-mono {
   height: 100%; display: grid; place-items: center; font: 700 1.15789rem var(--display); color: var(--boss-c-fff);
-  background: radial-gradient(120% 120% at 20% 0%, var(--boss-c-9f2ac02d36) 70% 55% / 0.55), transparent 60%), var(--boss-c-0e1730);
+  background: radial-gradient(120% 120% at 20% 0%, hsl(var(--np-hue) 70% 55% / 0.55), transparent 60%), var(--boss-c-0e1730);
 }
 .np-app-t { padding: 8px 10px 9px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .np-app-t b { font-size: 0.68421rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
