@@ -973,6 +973,10 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
         )
         # BLOCKED IS NOT MERGED. A merge the API could not perform returned "blocked" and the job
         # was marked succeeded, so nothing said the approved PR was still open (2026-11-06).
+        # A moved head (409) or a GitHub hiccup retries with backoff (merge_failures); a
+        # conflict or a superseded PR was handled by the API and is not raised at all.
+        if result.get("status") == "failed" and result.get("retryable"):
+            raise RetryableJobError(result.get("message") or "Pull-request merge failed.")
         if result.get("status") in ("failed", "blocked"):
             raise RuntimeError(result.get("message") or result.get("reason")
                                or "Pull-request merge failed.")

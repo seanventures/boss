@@ -243,6 +243,8 @@ def _attempt_sql() -> str:
         "c.finalize_ctx->>'parent_run_id' AS parent, "
         "c.finalize_ctx->>'deferred_from_run' AS deferred, "
         "c.finalize_ctx->>'attempt' AS attempt, "
+        "c.finalize_ctx->'merge'->>'sha' AS merged_sha, "
+        "dd.recommendation->'merge_failed'->>'reason' AS merge_failed, "
         f"{LAST_ACTIVITY_SQL} AS last_activity, {live_job_sql('c')} AS live_job "
         "FROM code_task_runs c LEFT JOIN decisions dd ON dd.id = c.decision_id ")
 
@@ -564,6 +566,42 @@ def _standalone_groups(connection: Connection, project_id: str, limit: int
     return groups
 
 
+def _settle_merged(members: list[dict[str, Any]]) -> None:
+    """A PULL REQUEST MERGED ON RECORD ASKS NOBODY TO MERGE IT (pr_merge, pr_follow_up): every
+    attempt carrying a merged pull request is not waiting on a merge, whatever its own question
+    still says. Hello World (2026-11-08): #236 was merged by BOSS, and the run still read
+    "Ready to merge · Merge PR #236" from a later attempt's question."""
+    merged = {str(m["pull_request_url"]) for m in members
+              if m.get("merged_sha") and m.get("pull_request_url")}
+    for m in members:
+        if m.get("merge_open") and (m.get("merged_sha")
+                                    or str(m.get("pull_request_url") or "") in merged):
+            m["merge_open"] = False
+
+
+def _merge_links(members: list[dict[str, Any]], merge: Optional[Mapping[str, Any]]
+                 ) -> dict[str, Any]:
+    """`merge_pr`: the pull request the open merge question is about (a follow-up after a merged
+    one says which), and `merged_pr`: the newest pull request merged on record."""
+    ordered = sorted(members, key=lambda m: str(iso(m.get("created_at")) or ""))
+    done = next((m for m in reversed(ordered) if m.get("merged_sha")
+                 and m.get("pull_request_url")), None)
+    out: dict[str, Any] = {"merge_pr": None, "merged_pr": None}
+    if done is not None:
+        out["merged_pr"] = {"number": done.get("pull_request_number")
+                            or pr_number(done["pull_request_url"]),
+                            "external_url": done["pull_request_url"]}
+    if merge is not None and merge.get("pull_request_url"):
+        url = merge["pull_request_url"]
+        after = (out["merged_pr"] or {}).get("number") \
+            if done is not None and str(done["pull_request_url"]) != str(url) else None
+        out["merge_pr"] = {"number": merge.get("pull_request_number") or pr_number(url),
+                           "external_url": url, "follow_up_of": after,
+                           # Its last merge failed (merge_failures): said, never "Ready".
+                           "failed": merge.get("merge_failed") or None}
+    return out
+
+
 def _states(members: list[dict[str, Any]], now: datetime, horizon: float) -> None:
     for m in members:
         m["_state"], m["_since"] = attempt_state(m, now, horizon)
@@ -614,15 +652,21 @@ def _run_items(connection: Connection, project_id: str, limit: int,
         members = own + [m for m in attached.get(rid, []) if str(m["id"]) not in
                          {str(b["id"]) for b in own}]
         members.sort(key=lambda m: str(iso(m.get("created_at")) or ""))
+        _settle_merged(members)
         _states(members, now, horizon)
         group = _group_fields(project_id, members, str(members[0]["id"]) if members else "", costs)
         latest = group.pop("latest")
-        pr_url = next((s["output"].get("pull_request_url") for s in run_steps.values()
-                       if s["output"].get("pull_request_url")), None) or next(
-            (b["pull_request_url"] for b in reversed(members) if b["pull_request_url"]), None)
         gate_id = next((sid for sid, st in run_steps.items() if st["gate_open"]), None)
         gate = run_steps.get(gate_id) if gate_id else None
         merge = next((b for b in reversed(members) if b.get("merge_open")), None)
+        merge_links = _merge_links(members, merge)
+        # THE PULL REQUEST SHOWN IS THE ONE IN QUESTION: the one waiting on a merge, else the
+        # one merged, else the run's own — never the run's first PR beside a later one's merge.
+        pr_url = ((merge_links["merge_pr"] or merge_links["merged_pr"] or {})
+                  .get("external_url")) or next(
+            (s["output"].get("pull_request_url") for s in run_steps.values()
+             if s["output"].get("pull_request_url")), None) or next(
+            (b["pull_request_url"] for b in reversed(members) if b["pull_request_url"]), None)
         status = str(r["status"])
         state = run_state(status, gate is not None or merge is not None)
         since = None
@@ -693,6 +737,7 @@ def _run_items(connection: Connection, project_id: str, limit: int,
                 if (gate or merge) else None,
                 # The issue it was started from (a pasted Ticket link, `issue:12`): the #12 chip.
                 "issue": issue_of(r["source_ref"], r["source_url"], r["repository"]),
+                **merge_links,
             },
             "decision_ids": [d for d in ((gate or {}).get("decision_id"),
                                          (merge or {}).get("decision_id")) if d],
@@ -718,6 +763,7 @@ def _build_items(connection: Connection, project_id: str,
         members = g["members"]
         if not members:
             continue
+        _settle_merged(members)
         _states(members, now, horizon)
         group = _group_fields(project_id, members, key, costs)
         latest = group.pop("latest")
@@ -727,9 +773,12 @@ def _build_items(connection: Connection, project_id: str,
         state = latest["_state"]
         if merge is not None and state != "failed":
             state = "needs_you"
+        merge_links = _merge_links(members, merge)
+        shown = merge_links["merge_pr"] or merge_links["merged_pr"]
         with_pr = next((m for m in sorted(members, key=lambda m: str(iso(m["created_at"])),
                                           reverse=True) if m.get("pull_request_url")), None)
-        pr_url = with_pr["pull_request_url"] if with_pr else None
+        pr_url = (shown or {}).get("external_url") or (
+            with_pr["pull_request_url"] if with_pr else None)
         strip = _build_strip({**latest, "merge_open": bool(merge)}, latest["_state"])
         raw_title = root.get("title") or "Build"
         title = clean_title(raw_title)
@@ -751,8 +800,10 @@ def _build_items(connection: Connection, project_id: str,
                       if root.get("wfr") else None,
                       "build": href(project_id, area="code_tasks", view="apps", build=latest["id"]),
                       "log": href(project_id, area="code_tasks", build=latest["id"], logs="build"),
-                      "pr": ({"number": with_pr["pull_request_number"] or pr_number(pr_url),
+                      "pr": ({"number": shown["number"], "external_url": pr_url} if shown else
+                             {"number": with_pr["pull_request_number"] or pr_number(pr_url),
                               "external_url": pr_url} if pr_url else None),
+                      **merge_links,
                       "deploy": None, "preview": previews.get(str(latest["id"])),
                       "decision": href(project_id, area="decisions", decision=merge["decision_id"])
                       if merge is not None else None},
