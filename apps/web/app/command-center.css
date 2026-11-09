@@ -40,7 +40,7 @@
 .dq-reasoned { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start; width: 100%; }
 .dq-reasoned .decision-note { flex: 1 1 260px; min-width: 0; }
 /* A merge/deploy CI still holds (BOSSAPP-946): the gate's words under the disabled button. */
-.dq-held { flex: 1 1 100%; font-size: .72rem; line-height: 1.45; color: var(--muted, #8b95a7); }
+.dq-held { flex: 1 1 100%; font-size: var(--fs-meta); line-height: 1.45; color: var(--muted); }
 
 /* Agent Studio: the quiet setup check, what Flows holds, and the runs started here. */
 .as-button.ghost { border: 1px solid transparent; background: transparent; color: var(--muted); }

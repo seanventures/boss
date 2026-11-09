@@ -158,6 +158,17 @@ describe("an idea: Helm's understanding, then Create and start", () => {
     expect(tid("ap-ub")!.dataset.state).toBe("confirmed");
   });
 
+  it("a name the brief suggests that a project already has is filled as the first free one (BOSSAPP-946)", async () => {
+    const calls = api((c) => (c.path === "/v1/projects/p1/add-project/name"
+      ? { body: { name: "HelpDesk AI", free: "HelpDesk AI 2", taken: true } } : undefined));
+    await mountAs(<AddProjectSheet projectId="p1" homeId="p1" onClose={() => {}} onForm={() => {}} go={vi.fn()} />);
+    await type(tid("ap-input"), WORDS);
+    await enter(tid("ap-input"));
+    await settle();
+    expect(calls.some((c) => c.path === "/v1/projects/p1/add-project/name" && c.search === "?name=HelpDesk%20AI")).toBe(true);
+    expect(tid("ap-chip-name")!.textContent).toContain("HelpDesk AI 2");
+  });
+
   it("no model keeps the words and lets the person continue", async () => {
     api((c) => (c.path.endsWith("/understand") ? { body: { status: "no_model", message: "No model answered, so Helm could not rewrite it. Your words are kept as they are; you can continue.",
       brief: { title: "A helpdesk for our support team.", problem: "", who_uses: "", must_haves: ["Customers email support@"], out_of_scope: [], done_when: "", open_questions: [], added: [], pinned: [], raw: true },

@@ -144,7 +144,7 @@ export function WorkTab({ ctx }: { ctx: PxCtx }) {
         <span className="px-spacer" />
         <span className="px-legend px-hide-phone" aria-hidden>
           {[["P", "Plan"], ["D", "Decide"], ["B", "Build"], ["R", "Review"],
-            projectIsLocal(ctx.overview.project.repos) ? ["CS", "Change set"] : ["PR", "PR"], ["S", "Staging"]].map(([k, v]) => <span key={k}><span className="px-st-n">{k}</span>{v}</span>)}
+            projectIsLocal(ctx.overview?.project?.repos) ? ["CS", "Change set"] : ["PR", "PR"], ["S", "Staging"]].map(([k, v]) => <span key={k}><span className="px-st-n">{k}</span>{v}</span>)}
         </span>
         <div className="px-seg px-hide-phone" role="group" aria-label="View">
           <button type="button" aria-pressed={view === "list"} onClick={() => setView("list")} data-testid="px-work-list"><ListBullets size={13} /> List</button>
@@ -350,7 +350,7 @@ export function WorkRow({ w, ctx, fresh = false, rank = null }: { w: WorkItem; c
                 stage/age words whenever the build is not working. */}
             {w.why ? <WhyLine why={w.why} testId={`px-work-why-${w.id}`} compact />
               : w.state === "needs_you" ? (setup && w.waiting.length ? <span>Waiting: {w.waiting[0].label}</span> : w.age ? <span>Waiting {w.age}</span> : null)
-              : w.state === "running" ? <span>{whereNow(w, projectIsLocal(ctx.overview.project.repos))}</span>
+              : w.state === "running" ? <span>{whereNow(w, projectIsLocal(ctx.overview?.project?.repos))}</span>
               : w.state === "planned" ? (w.next_up ? <span data-testid={`px-work-next-${w.id}`}>Next up</span> : null)
               : w.state === "done" || w.state === "failed" ? <span>{doneDay(w)}</span>
               : w.state === "stalled" ? null : w.age ? <span>{w.age}</span> : null}

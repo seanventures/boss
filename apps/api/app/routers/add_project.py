@@ -204,6 +204,20 @@ def add_project_preview(project_id: str, mode: str = "idea", app_name: str = "")
     return out
 
 
+@router.get("/v1/projects/{project_id}/add-project/name")
+@permit(P.PROJECT_READ, scope=Scope.project(path="project_id"))
+def add_project_free_name(project_id: str, name: str = "") -> dict[str, Any]:
+    """The name Add project pre-fills: `name` when it is free in this org, else the first free
+    "name 2", "name 3" … (bootstrap.free_project_name, the create's own rule; BOSSAPP-946)."""
+    from boss_engine.bootstrap import free_project_name
+
+    asked = (name or "").strip()[:120]
+    with begin(_engine) as connection:
+        _require_project(connection, project_id)
+        free = free_project_name(connection, _org(connection, project_id), asked) if asked else ""
+    return {"name": asked, "free": free, "taken": bool(asked) and free != asked}
+
+
 @router.get("/v1/projects/{project_id}/add-project/repo/{repo_id}")
 @permit(P.REPOSITORY_READ, scope=Scope.project(path="project_id"))
 def add_project_repo(project_id: str, repo_id: str) -> Any:

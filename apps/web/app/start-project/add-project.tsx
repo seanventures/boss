@@ -159,7 +159,16 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
       for (const [k, v] of Object.entries(patch) as [keyof PlanState, never][]) if (!touched.current.has(k)) next[k] = v;
       return next;
     });
-  }, []);
+    // A NAME BOSS PRE-FILLS IS ONE NO PROJECT HAS (BOSSAPP-946): "HelpDesk AI", already taken,
+    // was pre-filled and Create refused it. The engine's own rule answers ("HelpDesk AI 2").
+    const asked = typeof patch.name === "string" ? patch.name.trim() : "";
+    if (asked && !touched.current.has("name")) {
+      void addProjectApi.freeName(projectId, asked).then((r) => {
+        if (!r.taken || !r.free || touched.current.has("name")) return;
+        setPlanState((p) => (p.name === asked ? { ...p, name: r.free } : p));
+      }).catch(() => undefined);
+    }
+  }, [projectId]);
   const box = useRef<HTMLTextAreaElement>(null);
   const setDoor = (d: Door) => {
     setDoorState(d); setError(null); setFixHref(null); setRefusal(null);

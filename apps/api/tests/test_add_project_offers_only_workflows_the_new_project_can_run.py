@@ -95,3 +95,22 @@ def test_another_projects_own_workflow_is_never_offered_for_a_new_project(client
     for key in keys:
         with engine.begin() as db:
             assert route._version_of(db, home, key)[1], key
+
+
+def test_the_name_add_project_prefills_is_one_no_project_has(client, world):
+    """Finding 9: Add project pre-filled "HelpDesk AI", already taken. The name it fills is the
+    engine's answer: the name when free, else the first free "name 2", "name 3" …"""
+    name = f"HelpDesk {uuid.uuid4().hex[:6]}"
+    with _owner(world):
+        home = client.post("/v1/projects", json={"name": name}).json()["id"]
+        taken = client.get(f"/v1/projects/{home}/add-project/name", params={"name": name}).json()
+        assert client.post("/v1/projects", json={"name": f"{name} 2"}).status_code == 201
+        next_free = client.get(f"/v1/projects/{home}/add-project/name", params={"name": name}).json()
+        free = client.get(f"/v1/projects/{home}/add-project/name",
+                          params={"name": f"Fresh {uuid.uuid4().hex[:6]}"}).json()
+    assert taken == {"name": name, "free": f"{name} 2", "taken": True}
+    assert next_free["free"] == f"{name} 3"
+    assert free["taken"] is False and free["free"] == free["name"]
+    # And Create accepts the name it offered.
+    with _owner(world):
+        assert client.post("/v1/projects", json={"name": next_free["free"]}).status_code == 201
