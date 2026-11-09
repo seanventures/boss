@@ -39,7 +39,7 @@ def conn(eng):
 
 def test_nothing_set_is_off(conn):
     state = policy.mode_state(conn, _settings())
-    assert state == {"mode": "off", "source": "default", "pinned": False, "by": None, "at": None}
+    assert state == {"mode": "route", "source": "default", "pinned": False, "by": None, "at": None}
 
 
 @pytest.mark.parametrize("mode", ["propose", "route", "off"])
@@ -52,7 +52,7 @@ def test_a_person_turns_it_on_in_the_console_and_it_is_audited(project, conn, mo
     event = conn.execute(text(
         "SELECT data FROM events WHERE project_id = :p AND event_type = 'ambient.mode_changed' "
         "ORDER BY created_at DESC LIMIT 1"), {"p": project}).scalar()
-    assert event is not None and event["to"] == mode and event["from"] == "off"
+    assert event is not None and event["to"] == mode and event["from"] == "route"   # the default: on
 
 
 def test_env_pins_the_mode_and_the_console_cannot_change_it(conn):

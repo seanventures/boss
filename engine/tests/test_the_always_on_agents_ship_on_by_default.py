@@ -1,6 +1,9 @@
-"""v1.0-rc10.11: the autonomous agents are a preview and ship OFF.
+"""The always-on agents ship ON (operator, 2026-11-09; rc10.11–rc10.12 shipped them off).
 
-* BOSS_AMBIENT_COS unset → off: the Chief of Staff triages nothing and no squad works.
+* BOSS_AMBIENT_COS unset and no mode chosen in the console → route: the Chief of Staff triages
+  every signal and routes it to its squad, which acts within its autonomy level. Decisions on
+  the Where people decide list still wait for a person.
+* Off stays one choice away: BOSS_AMBIENT_COS=off, or Off in Govern, always wins.
 * The signal sweep (BOSS_AMBIENT_SIGNALS) and the learning tick (BOSS_AMBIENT_LEARNING) follow
   the mode when unset, and an explicit 1/0 wins either way.
 """
@@ -18,13 +21,23 @@ def _settings(**env: str) -> Settings:
     return Settings(_env_file=None, **{k: v for k, v in env.items()})
 
 
-def test_an_install_with_nothing_set_runs_no_autonomous_agent(monkeypatch):
+def test_an_install_with_nothing_set_runs_the_always_on_agents(monkeypatch):
     for name in ("BOSS_AMBIENT_COS", "BOSS_AMBIENT_SIGNALS", "BOSS_AMBIENT_LEARNING"):
         monkeypatch.delenv(name, raising=False)
     s = _settings()
+    assert policy.DEFAULT_COS_MODE == "route"
+    assert chief_of_staff.mode_of(s) == "route"
+    assert policy.signals_on(s)
+    assert policy.learning_on(s)
+
+
+def test_off_is_still_one_choice_away(monkeypatch):
+    monkeypatch.setenv("BOSS_AMBIENT_COS", "off")
+    monkeypatch.delenv("BOSS_AMBIENT_SIGNALS", raising=False)
+    monkeypatch.delenv("BOSS_AMBIENT_LEARNING", raising=False)
+    s = _settings()
     assert chief_of_staff.mode_of(s) == "off"
-    assert not policy.signals_on(s)
-    assert not policy.learning_on(s)
+    assert not policy.signals_on(s) and not policy.learning_on(s)
 
 
 @pytest.mark.parametrize("mode", ["propose", "route"])

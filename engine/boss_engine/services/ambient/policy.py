@@ -74,11 +74,14 @@ REJECTED_OUTCOMES = frozenset({"dismissed", "ignored", "overridden", "failed"})
 DEMOTING_OUTCOMES = frozenset({"reverted", "incident_caused"})
 
 
-# ── what runs by default (v1.0-rc10.11: the autonomous agents are a preview, off) ────────────
+# ── what runs by default (v1.0-rc10.13: the always-on agents are ON; rc10.11–12 shipped them off) ──
 
 #: BOSS_AMBIENT_COS when it is unset and no person chose a mode in the console: the Chief of
-#: Staff triages nothing and no squad works.
-DEFAULT_COS_MODE = "off"
+#: Staff triages every signal and routes it to its owning squad, which acts within its task
+#: class's autonomy level. Decisions on the Where people decide list still wait for a person.
+#: A mode chosen in Govern or pinned in .env always wins (operator, 2026-11-09: "make the Agent
+#: always on mode by default").
+DEFAULT_COS_MODE = "route"
 MODES = ("off", "propose", "route")
 #: system_state key of the mode a person chose in the console (Govern › Autonomy › Always-on).
 #: Its own key: the install-wide stop rewrites system_state['ambient'] whole.
@@ -94,7 +97,7 @@ def _normal_mode(value: Any) -> str:
 
 def cos_mode(settings: Any, mode: Optional[str] = None) -> str:
     """off | propose | route. `mode` (the effective mode, see mode_state) wins when given; else
-    BOSS_AMBIENT_COS. Unset → off; an unknown value → propose, the safe one of the two that act."""
+    BOSS_AMBIENT_COS. Unset → DEFAULT_COS_MODE (route); an unknown value → propose."""
     if mode is not None:
         return _normal_mode(mode)
     return _normal_mode(getattr(settings, "ambient_cos_mode", None))
@@ -108,7 +111,7 @@ def env_pins_mode(settings: Any) -> bool:
 
 def mode_state(connection: Connection, settings: Any) -> dict[str, Any]:
     """The always-on mode in force and where it comes from: env (BOSS_AMBIENT_COS, pinned),
-    console (a person chose it in Govern), or default (off). One answer for the tick, the
+    console (a person chose it in Govern), or default (route: on). One answer for the tick, the
     learning tick, Discovery's dossier and the console."""
     if env_pins_mode(settings):
         return {"mode": cos_mode(settings), "source": "env", "pinned": True, "by": None,

@@ -1,6 +1,6 @@
 # Engineering spec: autonomous agents — Chief of Staff, squads, AI SRE and learning
 
-**Status:** Built and integrated (foundation + 903–912); ships in v1.0-rc10.11 as a **preview, off by default** · **Epic:** BOSSAPP-902 · **Branch:** `feat/autonomous-agents` · **Date:** 2026-11-06
+**Status:** Built and integrated (foundation + 903–912); **on by default** from v1.0-rc10.13 (rc10.11–rc10.12 shipped it as a preview, off) · **Epic:** BOSSAPP-902 · **Branch:** `feat/autonomous-agents` · **Date:** 2026-11-06
 **Design:** `boss-autonomous-agents-design.md` (Option B, approved 2026-11-05; attached to BOSSAPP-902). Section numbers `§n` below refer to it.
 **Code:** `engine/boss_engine/services/ambient/` · `engine/boss_engine/services/incident_squad*.py` · `apps/api/app/routers/ambient*.py`, `incident_squad.py` · `apps/web/app/agent-ops/` · `db/schema.sql` (block "AUTONOMOUS AGENTS").
 
@@ -8,20 +8,9 @@ BOSS notices problems on its own, decides who should work them, and its agents w
 
 ---
 
-## 0. Off by default (v1.0-rc10.11)
+## 0. On by default (v1.0-rc10.13)
 
-The autonomous agents ship as a **preview, off by default**. With nothing set, the worker's minute tick only expires leases: no signal sweep, no Chief-of-Staff triage, no squad turn, no automatic Discovery dossier and no Recommended-roadmap tick. The **Agents at work** area still shows, **Load demo** still works on a demo project, and a person's **Triage now** runs once in `propose` mode (every handover is a Needs-you card).
-
-To turn it on, open **Govern › Autonomy › Always-on agents** (`PUT /v1/ambient/mode`, `autonomy:manage`, audited as `ambient.mode_changed`) and choose **Ask first** (`propose`) or **Act within levels** (`route`). The choice is install-wide (`system_state['ambient_mode']`) and takes effect on the next tick; no restart. To pin the mode on the server instead, set it in the install's `.env` and run `boss update` (or recreate the api and worker); the community compose forwards every `BOSS_AMBIENT_*` key (`engine/tests/test_compose_forwards_every_setting_an_operator_is_told_to_set.py` pins that), and a pinned mode shows as pinned in the console:
-
-```sh
-BOSS_AMBIENT_COS=propose   # safe: every handover asks a person first (route = act on A2+ classes)
-# optional, both follow the mode when unset:
-# BOSS_AMBIENT_SIGNALS=1   # the sweep + automatic dossier, even with the Chief of Staff off
-# BOSS_AMBIENT_LEARNING=1  # the Recommended-roadmap tick, even with the Chief of Staff off
-```
-
-`BOSS_AMBIENT_DISABLED=1`, **Stop all** and a project's **Stop** still win over every setting. The gates live in `services/ambient/policy.py` (`mode_state`, `cos_mode`, `signals_on`, `learning_on`); `engine/tests/test_the_autonomous_agents_ship_off_by_default.py` pins them.
+The always-on agents ship **on**. With nothing set (no `BOSS_AMBIENT_COS`, no mode chosen in Govern), the mode is `route`: the signal sweep runs, the Chief of Staff triages every signal and routes it to its owning squad, and the squad acts within its task class's autonomy level. Decisions on the **Where people decide** list (production deploy, merge to the default branch, spend above the cap, secrets, outside messages, deleting data, who can do what) still wait for a person. Off is one choice away: **Off** in Govern, or `BOSS_AMBIENT_COS=off` in `.env`; either wins over the default. rc10.11 and rc10.12 shipped the agents off, as a preview.
 
 ## 1. How to see it
 
