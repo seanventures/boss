@@ -47,6 +47,7 @@ import {
 import { BriefCard, Marked, type BriefRow } from "./brief-card";
 import { Face, Flow, Said } from "./kit";
 import type { PxCtx } from "./project-page";
+import { changeWords, projectIsLocal } from "../../lib/repo-links";
 import "./new-work.css";
 
 export type Kind = WorkKind;
@@ -676,7 +677,7 @@ export function NewWorkModal({ ctx, prefill, onClose, onDone }: {
     <div className="px-nw-plan">
       <div className="px-row"><span className="px-lbl">Plan</span><span className="px-spacer" /><span className="px-faint" style={{ fontSize: ".54rem" }}>Nothing reaches prod without you</span></div>
       <Flow testid="px-compose-strip" nodes={nodes.map((n) => ({
-        label: n.type === "you" && /approve/i.test(n.label) && n.key !== "approve" ? n.label : n.key === "pr" ? "PR" : n.label,
+        label: n.type === "you" && /approve/i.test(n.label) && n.key !== "approve" ? n.label : n.key === "pr" ? changeWords(projectIsLocal(ctx.overview?.project?.repos)).station : n.label,
         type: n.type === "you" ? "waiting" : n.type === "agent" ? "agent" : "todo",
         icon: n.type === "agent" && n.agent ? <Face agent={n.agent} size={16} /> : NODE_ICON[n.key] ?? (n.key === "ship" ? <RocketLaunch size={11} aria-hidden /> : null),
       }))} />

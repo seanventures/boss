@@ -373,8 +373,12 @@ def assemble(*, project_id: str, runs: list[Mapping[str, Any]],
             # the Floor, Agents › Live, the pill and here.
             title = "Approve the plan?"
         elif build and build.get("kind") == "pr":
-            title = f"Merge PR #{build['pr_number']}?" if build.get("pr_number") \
-                else "Merge the PR?"
+            from .project_experience.common import change_ref
+
+            # "Merge change #1?" for a local change set (BOSSAPP-946).
+            rec_url = (decision.get("recommendation") or {}).get("pull_request_url") \
+                if isinstance(decision.get("recommendation"), dict) else None
+            title = f"Merge {change_ref(rec_url, build.get('pr_number'), lower=True)}?"
         elif run:
             title = f"“{run['step_label']}” is waiting for you on {run['name']}"
         else:

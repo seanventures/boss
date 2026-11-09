@@ -232,6 +232,9 @@ export const addProjectApi = {
     idPost<{ status: string; picks: Picks | null; message?: string }>(`/v1/projects/${enc(projectId)}/add-project/connectors`, { brief, words }),
   preview: (projectId: string, mode: Kind, appName = "", signal?: AbortSignal) =>
     idGet<Preview>(`/v1/projects/${enc(projectId)}/add-project/preview?mode=${mode}&app_name=${enc(appName)}`, { signal }),
+  /** The name to pre-fill: `name`, else the first free "name 2", "name 3" … in this org. */
+  freeName: (projectId: string, name: string) =>
+    idGet<{ name: string; free: string; taken: boolean }>(`/v1/projects/${enc(projectId)}/add-project/name?name=${enc(name)}`),
   repo: (projectId: string, repoId: string, signal?: AbortSignal) =>
     idGet<RepoRead>(`/v1/projects/${enc(projectId)}/add-project/repo/${enc(repoId)}`, { signal }),
   /** Bring existing code › This machine: the import directory's folders (read-only). */

@@ -110,10 +110,14 @@ def test_every_push_of_the_build_waits_for_the_hold():
     source = textwrap.dedent(inspect.getsource(gov._run_governed_code_task))  # noqa: SLF001
     tree = ast.parse(source)
     parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
-    pushes = [n for n in ast.walk(tree) if isinstance(n, ast.Call)
-              and isinstance(n.func, ast.Attribute) and n.func.attr in _PUSHES]
+    # A stage's commit goes through software_factory.commit_change (BOSSAPP-946): a push too.
+    pushes = [n for n in ast.walk(tree) if isinstance(n, ast.Call) and (
+        (isinstance(n.func, ast.Attribute) and n.func.attr in _PUSHES)
+        or (isinstance(n.func, ast.Name) and n.func.id == "commit_change"))]
     assert len(pushes) >= 8, "the scan no longer sees the build's pushes"
-    unguarded = [f"line {n.lineno}: {n.func.attr}" for n in pushes if not _guarded(n, parents)]
+    assert any(isinstance(n.func, ast.Name) for n in pushes), "stage commits are scanned too"
+    unguarded = [f"line {n.lineno}: {getattr(n.func, 'attr', None) or n.func.id}"
+                 for n in pushes if not _guarded(n, parents)]
     assert not unguarded, unguarded
 
 

@@ -457,6 +457,31 @@ def project_slug_for(name: str, slug: str | None) -> str:
     return derived
 
 
+def slug_taken(connection, org_id: str, slug: str) -> bool:
+    """Whether create_project would refuse this slug (ProjectExists): the same query."""
+    return connection.execute(text(
+        "SELECT 1 FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
+        "WHERE p.id = :s OR (p.slug = :s AND w.org_id = :o) LIMIT 1"),
+        {"s": slug, "o": org_id}).first() is not None
+
+
+def free_project_name(connection, org_id: str, name: str) -> str:
+    """THE NAME ADD PROJECT OFFERS (BOSSAPP-946): `name` when no project has it, else "name 2",
+    "name 3" … — the first create_project would accept. Add project pre-filled "HelpDesk AI",
+    already taken, and Create was refused for it."""
+    base = str(name or "").strip()[:110]
+    try:
+        if not slug_taken(connection, org_id, project_slug_for(base, None)):
+            return base
+    except ValueError:
+        return base          # too few letters for a slug: the create says so in words
+    for n in range(2, 100):
+        candidate = f"{base} {n}"
+        if not slug_taken(connection, org_id, project_slug_for(candidate, None)):
+            return candidate
+    return base
+
+
 #: What a project is for (projects.project_type): `app` builds apps; `knowledge_graph` maps an
 #: existing codebase into a knowledge graph (services/knowledge/project_setup.py guides it).
 PROJECT_TYPES = ("app", "knowledge_graph")

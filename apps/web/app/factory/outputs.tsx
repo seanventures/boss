@@ -8,7 +8,7 @@
  * server's `word`; nothing here counts tests (only commands are real) or draws a diff (hunks are
  * not served: `View diff ↗` goes to the PR).
  */
-import { changeHref, changeSubHref, isLocalChangeUrl, linkTarget, reviewChangeWords } from "../../lib/repo-links";
+import { changeHref, changeSubHref, isLocalChangeUrl, isLocalRepo, linkTarget, reviewChangeWords } from "../../lib/repo-links";
 import { latestPerStep } from "../../lib/model-routes";
 import { WhyThisModel } from "../why-this-model";
 import { CaretDown, CaretRight, Check, X } from "@phosphor-icons/react";
@@ -74,7 +74,17 @@ export function briefWord(c: Pick<Cockpit, "brief">): string {
 /** Why a row has nothing yet, when the server's word only says that it hasn't (lib/build-detail). */
 function missingOf(key: OutputKey, c: Cockpit): { word: string; tip?: string } | null {
   if (key !== "pr" && key !== "tests" && key !== "changes" && key !== "preview" && key !== "cost") return null;
-  return missingWord(key, { ...nowInput(c), outputs: c.outputs });
+  return missingWord(key, { ...nowInput(c), outputs: c.outputs, local: buildIsLocal(c) });
+}
+
+/** A build whose code is on this machine: its "Pull request" row is its Change set (BOSSAPP-946). */
+export function buildIsLocal(c: Pick<Cockpit, "brief" | "outputs">): boolean {
+  return isLocalRepo(c.brief.repo ?? "") || isLocalChangeUrl((c.outputs.pr as { url?: string | null } | null)?.url ?? "");
+}
+
+/** The row's label, in the build's own words. */
+export function outputLabel(k: OutputKey, c: Pick<Cockpit, "brief" | "outputs">): string {
+  return k === "pr" && buildIsLocal(c) ? "Change set" : LABELS[k];
 }
 
 function valueOf(key: OutputKey, o: CockpitOutputs, c: Cockpit): string {
@@ -136,7 +146,7 @@ export function Outputs({ projectId, actor, cockpit: c, open, onOpen, onLogs, on
               <button type="button" className="fx-out-head" aria-expanded={isOpen} data-testid={`fx-out-head-${k}`}
                       title={k === "changes" ? "Files only. Open the PR for the diff." : undefined}
                       onClick={() => onOpen(isOpen ? null : k)}>
-                <span className="fx-out-label">{LABELS[k]}</span>
+                <span className="fx-out-label">{outputLabel(k, c)}</span>
                 <span className="fx-out-value" data-testid={`fx-out-value-${k}`}
                       title={missingOf(k, c)?.tip ?? (k === "cost" && o.cost.word === "Included in plan" ? "Ran on a subscription. No metered spend."
                         : k === "cost" ? "Metered model spend so far"

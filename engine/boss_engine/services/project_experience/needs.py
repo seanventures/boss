@@ -22,7 +22,7 @@ from typing import Any, Mapping, Optional
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
-from .common import href, iso, pr_number, project_href
+from .common import change_ref, href, is_local_change, iso, pr_number, project_href
 from .health import env_label
 from .titles import shorten, short_title
 
@@ -33,6 +33,13 @@ ONLY_YOU_WORDS = {"deploy_target": "Pick a staging host", "secrets": "Set the ap
 
 ACTION_WORDS = {"merge": "Review PR", "deploy": "Approve deploy", "plan": "Review plan",
                 "setup": "Fix setup", "question": "Answer"}
+
+
+def action_words(kind: str, pr_url: Any = None) -> str:
+    """The card's button: "Review PR", or "Review change" for a local change set."""
+    if kind == "merge" and is_local_change(pr_url):
+        return "Review change"
+    return ACTION_WORDS[kind]
 
 
 def decision_kind(decision: Mapping[str, Any]) -> str:
@@ -113,18 +120,23 @@ def shipped_words(connection: Connection, project_id: str, rec: Mapping[str, Any
     the work the deploy hangs on: 99b569f, PR #2's open head, read "Deploy PR #1 to Staging"
     because the workflow's first PR was #1 (helpdesk-ai-v3, dec_8eaeba2f, 2026-11-07)."""
     commit = str(rec.get("commit") or "")
+    # A local project's changes are change sets, never "PR"s (BOSSAPP-946).
+    from .common import is_local_project
+
+    noun = ("Change" if is_local_change(rec.get("pull_request_url"))
+            or is_local_project(connection, project_id) else "PR")
     merged = _pr_of_commit(connection, project_id, commit)
     if merged:
-        return f"PR #{merged}", {"label": f"PR #{merged} merged", "state": "done"}
+        return f"{noun} #{merged}", {"label": f"{noun} #{merged} merged", "state": "done"}
     pulled = _PULL_REF.match(str(rec.get("ref") or "").strip())
     if pulled:
         n = int(pulled.group(1))
-        return (f"PR #{n} (not merged)",
-                {"label": f"PR #{n} not merged", "state": "failed"})
+        return (f"{noun} #{n} (not merged)",
+                {"label": f"{noun} #{n} not merged", "state": "failed"})
     if commit:
         return commit[:7], {"label": f"{commit[:7]} · not a merge", "state": "waiting"}
     if number:
-        return f"PR #{number}", {"label": f"PR #{number}", "state": "done"}
+        return f"{noun} #{number}", {"label": f"{noun} #{number}", "state": "done"}
     return "", {"label": "Merged", "state": "done"}
 
 
@@ -223,7 +235,7 @@ def card(connection: Connection, project_id: str, decision: Mapping[str, Any],
                 {"label": "Smoke test", "state": "todo"}]
         release = release_of(rec)
     elif kind == "merge":
-        label = f"Merge PR #{number}" if number else "Merge the pull request"
+        label = f"Merge {change_ref(pr_url, number, lower=True)}"
         tests = tests_of(connection, project_id, pr_url)
         review = state_of.get("review", "done")
         mini = [{"label": (f"Tests {tests['count']}" if tests and tests["count"] else "Tests"),
@@ -273,7 +285,14 @@ def card(connection: Connection, project_id: str, decision: Mapping[str, Any],
         detail = f"{detail} — {cause}" if detail else cause
     elif said:
         detail = f"{detail} — {said}" if detail else said
+    # HELD BY CI (BOSSAPP-946): a merge or deploy that CI still holds says so on its button
+    # ("Checks running…", disabled, with the gate's own words), never an Approve that is refused.
+    from .. import ci_gate
+
+    held = ci_gate.approval_hold(connection, project_id, rec) if kind in ("merge", "deploy") \
+        else None
     return {"id": decision["id"], "kind": kind, "label": label,
+            **({"held": held} if held else {}),
             "detail": detail, **({"question": question} if question else {}),
             **({"diagnosis": diagnosis} if diagnosis else {}),
             "work_id": (run or {}).get("id"),
@@ -293,7 +312,7 @@ def card(connection: Connection, project_id: str, decision: Mapping[str, Any],
             # The button acts IN PLACE (04-19/21): Review PR opens the work's drawer (its PR,
             # checks and Merge); everything else opens this card's drawer, which approves or
             # rejects there with step-up. Approvals stays one link away inside it.
-            "action": {"label": ACTION_WORDS[kind], "decision_id": decision["id"],
+            "action": {"label": action_words(kind, pr_url), "decision_id": decision["id"],
                        "href": (project_href(project_id, drawer=f"run:{run['id']}")
                                 if kind == "merge" and run and run.get("source") == "workflow_run"
                                 else project_href(project_id, drawer=f"needs:{decision['id']}")),
@@ -388,7 +407,7 @@ def cards(connection: Connection, project_id: str, work_items: list[dict[str, An
                     "detail": str(w.get("detail") or ""), "work_id": w["id"],
                     "work_label": w["label"], "mini": [], "created_at": w.get("updated_at"),
                     "external_url": ((w.get("links") or {}).get("pr") or {}).get("external_url"),
-                    "action": {"label": ACTION_WORDS[kind], "decision_id": decision,
+                    "action": {"label": action_words(kind, pr), "decision_id": decision,
                                "href": (w.get("links") or {}).get("decision") or w.get("href")}})
     # The onboarding agent's "only you" items belong to the Onboarding row of the Work tab.
     onboarding_row = next((w["id"] for w in work_items if w.get("source") == "onboarding"), None)

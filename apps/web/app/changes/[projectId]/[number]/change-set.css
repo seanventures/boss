@@ -112,6 +112,15 @@
 .cs-inline td { padding: 6px 10px; background: var(--surface); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); white-space: normal; }
 .cs-inline-c { display: flex; align-items: flex-start; gap: 8px; font-family: var(--sans, inherit); font-size: var(--fs-ui); color: var(--ink); }
 .cs-inline-c + .cs-inline-c { margin-top: 6px; }
+/* The author keeps its own width and the note takes the rest: the "Boss" label sat on top of the
+   note's first words when the code cell's table squeezed it (BOSSAPP-946). */
+.cs-inline-c > .cs-who { flex: none; }
+.cs-inline-b { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+/* A note's Markdown (**MINOR**, `code`) renders; no raw asterisks. */
+.cs-md > :first-child { margin-top: 0; }
+.cs-md > :last-child { margin-bottom: 0; }
+.cs-md p { margin: 0 0 4px; }
+.cs-note-cb { flex: 1 1 240px; min-width: 0; }
 .tk-kw { color: var(--cs-violet); }
 .tk-str { color: var(--green); }
 .tk-com { color: var(--faint); font-style: italic; }

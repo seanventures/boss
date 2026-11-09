@@ -295,23 +295,69 @@ def preview_port() -> Optional[int]:
     return port if 0 < port < 65536 else DEFAULT_PREVIEW_PORT
 
 
+def _origin_key(origin: str) -> Optional[tuple[str, str, int]]:
+    """(scheme, host, port) of an origin, the default port filled in; None when it is not one."""
+    parts = urllib.parse.urlsplit(str(origin or "").strip())
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        return None
+    try:
+        port = parts.port or (443 if parts.scheme == "https" else 80)
+    except ValueError:
+        return None
+    return parts.scheme, parts.hostname.lower(), int(port)
+
+
+def boss_origins(host_header: Optional[str] = None,
+                 scheme: str = "http") -> set[tuple[str, str, int]]:
+    """BOSS'S OWN ORIGINS: the console/API a browser reached (`host_header`), and BOSS_PUBLIC_URL.
+    A preview origin must never be one of them (see PREVIEW_ORIGIN_SANDBOX_CSP)."""
+    out: set[tuple[str, str, int]] = set()
+    if host_header:
+        key = _origin_key(f"{'https' if scheme == 'https' else 'http'}://{host_header.strip()}")
+        if key:
+            out.add(key)
+    try:
+        from ..config import get_settings
+
+        key = _origin_key(str(get_settings().public_url or ""))
+        if key:
+            out.add(key)
+    except Exception:  # noqa: BLE001 — no settings: the request's own origin still counts
+        pass
+    return out
+
+
+def is_boss_origin(origin: str, host_header: Optional[str] = None, scheme: str = "http") -> bool:
+    key = _origin_key(origin)
+    return key is not None and key in boss_origins(host_header, scheme)
+
+
 def configured_preview_origin() -> str:
-    """BOSS_PREVIEW_ORIGIN as a bare origin (scheme://host[:port]), or "" when unset/invalid."""
+    """BOSS_PREVIEW_ORIGIN as a bare origin (scheme://host[:port]), or "" when unset/invalid —
+    or when it names BOSS's own public origin: a preview is never served where BOSS is."""
     raw = (os.environ.get(PREVIEW_ORIGIN_ENV) or "").strip()
     if not raw:
         return ""
     parts = urllib.parse.urlsplit(raw)
     if parts.scheme not in ("http", "https") or not parts.hostname or parts.username or parts.password:
         return ""
-    return f"{parts.scheme}://{parts.netloc}"
+    origin = f"{parts.scheme}://{parts.netloc}"
+    if is_boss_origin(origin):
+        logger.warning("BOSS_PREVIEW_ORIGIN %s is BOSS's own origin; previews are not served "
+                       "there", origin)
+        return ""
+    return origin
 
 
 def preview_origin_for(host_header: Optional[str], scheme: str = "http") -> str:
     """Where a browser that reached BOSS at `host_header` opens previews: BOSS_PREVIEW_ORIGIN, or
-    the same host on BOSS_PREVIEW_PORT. "" when neither can be said (no port, no usable host)."""
+    the same host on BOSS_PREVIEW_PORT. "" when neither can be said (no port, no usable host) —
+    and "" when the answer would be BOSS's own origin (BOSS_PREVIEW_PORT set to the console's
+    port, BOSS_PREVIEW_ORIGIN naming the console): a preview page may keep its own cookies
+    (allow-same-origin) only because it never shares an origin with BOSS."""
     configured = configured_preview_origin()
     if configured:
-        return configured
+        return "" if is_boss_origin(configured, host_header, scheme) else configured
     port = preview_port()
     if port is None:
         return ""
@@ -320,7 +366,8 @@ def preview_origin_for(host_header: Optional[str], scheme: str = "http") -> str:
     if not found:
         return ""
     hostname = found.group(1)
-    return f"{'https' if scheme == 'https' else 'http'}://{hostname}:{port}"
+    origin = f"{'https' if scheme == 'https' else 'http'}://{hostname}:{port}"
+    return "" if is_boss_origin(origin, host_header, scheme) else origin
 
 
 def public_preview_url(preview_id: str, host_header: Optional[str] = None, scheme: str = "http",
@@ -3814,6 +3861,16 @@ def _inject_shim(html: bytes, prefix: str, *, at_root: bool = False) -> bytes:
 PREVIEW_SANDBOX_CSP = (
     "sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads"
 )
+# ON THE PREVIEW ORIGIN, THE APP KEEPS ITS OWN COOKIES (BOSSAPP-946). Without allow-same-origin
+# the page's origin is opaque: every fetch to its own backend is cross-site, the browser drops
+# the session cookie its sign-in sets, and a login app stops at its sign-in page (the
+# local-first HelpDesk on localhost:3001). The preview origin (apps/api/app/preview_origin.py)
+# is a listener that serves previews and nothing else, never BOSS's own origin
+# (preview_origin_for refuses one), strips every BOSS credential on the way in and relays only
+# this preview's tagged cookies on the way out — so the page may have a real origin there.
+# The console's own origin keeps PREVIEW_SANDBOX_CSP (opaque): a preview answered there is
+# never same-origin with BOSS.
+PREVIEW_ORIGIN_SANDBOX_CSP = PREVIEW_SANDBOX_CSP + " allow-same-origin"
 
 
 def preview_isolation_headers() -> dict[str, str]:

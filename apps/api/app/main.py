@@ -3313,6 +3313,13 @@ def decision_card_from_row(row, connection=None, project_id: Optional[str] = Non
     # the PRD, the panel that argued it and its file in the repository from one source.
     prd = (prd_record.links(connection, {**dict(row), "project_id": row.get("project_id") or project_id})
            if connection is not None else None)
+    held = None
+    if connection is not None and row["status"] in ("pending", "delegated") \
+            and (row.get("project_id") or project_id):
+        from boss_engine.services import ci_gate
+
+        held = ci_gate.approval_hold(connection, str(row.get("project_id") or project_id),
+                                     rec if isinstance(rec, dict) else {})
     return DecisionCard(
         id=row["id"],
         task_id=row.get("task_id"),
@@ -3352,6 +3359,7 @@ def decision_card_from_row(row, connection=None, project_id: Optional[str] = Non
         updated_at=row["updated_at"].isoformat(),
         **decision_actions.describe(row),
         prd=prd,
+        held=held,
     )
 
 

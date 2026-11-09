@@ -569,6 +569,19 @@ class CiReader(Protocol):
     def has_workflows(self, sha: str) -> bool: ...
 
 
+#: The words of a wait on a repository whose host runs no CI of its own (BOSSAPP-946).
+NO_HOSTED_CI_SUMMARY = ("No hosted CI: {repository} lives on this machine, so BOSS's sandbox "
+                        "checks (install, build, typecheck, lint, tests, app start) are its CI, "
+                        "and they ran before the change was proposed. Nothing to wait for.")
+
+
+def hosted_ci(reader: Any) -> bool:
+    """Whether the reader's repository HOST runs CI at all: a capability of the host, never
+    guessed from an error. A local repository (LocalGitAdapter.has_hosted_ci = False) has none;
+    BOSS's sandbox checks are its CI. A reader that does not say is hosted (GitHub)."""
+    return getattr(reader, "has_hosted_ci", True) is not False
+
+
 @dataclass
 class CiOutcome:
     state: str                      # waiting | passed | failed | timed_out | no_ci | unreadable
@@ -650,15 +663,26 @@ def look(reader: CiReader, sha: str) -> CiOutcome:
     return evaluate(normalise(reader.check_runs(sha), reader.statuses(sha)))
 
 
-def settle(outcome: CiOutcome, *, elapsed: float, timeout: float, has_ci: bool,
+def settle(outcome: CiOutcome, *, elapsed: float, timeout: float, has_ci: Optional[bool],
            repository: str = "", grace: float = NO_CI_GRACE_SECONDS) -> CiOutcome:
-    """Turn a non-terminal look into a terminal answer when time says so."""
+    """Turn a non-terminal look into a terminal answer when time says so.
+
+    `has_ci` has three values: True (workflows found, or a check reported), False (none), None
+    (BOSS could not tell). UNKNOWN NEVER MEANS "HAS CI": with no check reported by the grace
+    period, an unknown repository is `unreadable` (terminal and fail closed: the merge and the
+    deploy stay refused in words, and an explicit look reads it again), not a 30-minute wait for
+    checks that may never come."""
     if outcome.terminal:
         return outcome
-    if not outcome.checks and not has_ci and elapsed >= min(grace, timeout):
+    if not outcome.checks and has_ci is False and elapsed >= min(grace, timeout):
         where = f" for {repository}" if repository else ""
         return CiOutcome("no_ci", f"No CI is configured{where} (no .github/workflows and no "
                                   "check reported), so there was nothing to wait for.", [])
+    if not outcome.checks and has_ci is None and elapsed >= min(grace, timeout):
+        where = f"{repository} " if repository else "the repository "
+        return CiOutcome("unreadable", unreadable_words(
+            f"BOSS could not tell whether {where}has CI, and no check reported in "
+            f"{_minutes(min(grace, timeout))}. Read CI again once the host answers"), [])
     if elapsed >= timeout:
         if not outcome.checks and outcome.summary.startswith(UNREADABLE_PREFIX):
             return CiOutcome("unreadable", outcome.summary, [])
@@ -688,6 +712,8 @@ def wait_for_ci(reader: CiReader, sha: str, *, timeout_seconds: float = DEFAULT_
                 clock: Callable[[], float] = time.monotonic,
                 on_look: Optional[Callable[[CiOutcome], None]] = None) -> CiOutcome:
     """BLOCK until CI on `sha` finishes or `timeout_seconds` pass, polling with backoff."""
+    if not hosted_ci(reader):
+        return CiOutcome("no_ci", NO_HOSTED_CI_SUMMARY.format(repository=repository or "it"), [])
     if has_ci is None:
         has_ci = _safe_has_workflows(reader, sha)
     start = clock()
@@ -700,7 +726,7 @@ def wait_for_ci(reader: CiReader, sha: str, *, timeout_seconds: float = DEFAULT_
         if outcome.checks:
             has_ci = True
         outcome = settle(outcome, elapsed=clock() - start, timeout=timeout_seconds,
-                         has_ci=bool(has_ci), repository=repository)
+                         has_ci=has_ci, repository=repository)
         if on_look:
             on_look(outcome)
         if outcome.terminal:
@@ -710,11 +736,23 @@ def wait_for_ci(reader: CiReader, sha: str, *, timeout_seconds: float = DEFAULT_
         attempt += 1
 
 
-def _safe_has_workflows(reader: CiReader, sha: str) -> bool:
+def _safe_has_workflows(reader: Any, sha: str) -> Optional[bool]:
+    """True / False, or None when it could not be read. The host's capability decides first: a
+    host with no hosted CI runs no workflows, whatever its files say. An error is UNKNOWN (None):
+    never "has CI" (BOSSAPP-946: a local repository's probe raised an error type nobody
+    recognised, so every local build waited 30 minutes for checks that never come, and its merge
+    was refused), and never "no CI" either (silence must not pass): `settle` turns unknown into a
+    terminal, fail-closed `unreadable` after the grace period."""
+    if reader is None:
+        return None
+    if not hosted_ci(reader):
+        return False
     try:
         return bool(reader.has_workflows(sha))
-    except Exception:  # noqa: BLE001 — unknown: assume CI exists, so silence never passes
-        return True
+    except Exception:  # noqa: BLE001 — unknown, see above
+        _log.info("could not tell whether %s has CI",
+                  getattr(reader, "repository", "") or sha)
+        return None
 
 
 def _is_forbidden(error: BaseException) -> bool:
@@ -794,6 +832,15 @@ class AdapterCiReader:
     def __init__(self, github: Any):
         self.github = github
 
+    @property
+    def has_hosted_ci(self) -> bool:
+        """The adapter's host capability (LocalGitAdapter: none; GitHub: yes)."""
+        return getattr(self.github, "has_hosted_ci", True) is not False
+
+    @property
+    def repository(self) -> str:
+        return str(getattr(self.github, "repository_full_name", "") or "")
+
     def _get(self, path: str) -> Any:
         return self.github._request(  # noqa: SLF001 — the adapter's one HTTP edge
             "GET", f"/repos/{self.github.repository_full_name}{path}")
@@ -813,6 +860,8 @@ class AdapterCiReader:
     def has_workflows(self, sha: str) -> bool:
         import httpx
 
+        if not self.has_hosted_ci:
+            return False          # a host with no hosted CI runs no workflows
         try:
             found = self._get(f"/contents/.github/workflows?ref={sha}")
         except httpx.HTTPStatusError as error:
@@ -912,8 +961,10 @@ def start_wait(connection: Any, *, project_id: str, repository: str, head_sha: s
     timeout = int(timeout_seconds or DEFAULT_TIMEOUT_SECONDS)
     if timeout < 30 or timeout > 6 * 3600:
         raise CiSettingError("bad_timeout", 422, "The CI wait must be between 30 s and 6 h.")
-    if has_ci is None:
-        has_ci = _safe_has_workflows(reader, head_sha) if reader is not None else True
+    if reader is not None and not hosted_ci(reader):
+        has_ci = False
+    elif has_ci is None:
+        has_ci = _safe_has_workflows(reader, head_sha)
     wait_id = make_id("ciw")
     now = _now()
     connection.execute(text(
@@ -922,12 +973,12 @@ def start_wait(connection: Any, *, project_id: str, repository: str, head_sha: s
         "next_poll_at, created_by, created_at, updated_at) VALUES (:id, :p, :r, :s, :u, :ct, "
         ":wf, 'waiting', :h, :t, :d, :n, :by, :n, :n)"),
         {"id": wait_id, "p": project_id, "r": repository, "s": head_sha, "u": pull_request_url,
-         "ct": code_task_run_id, "wf": workflow_run_id, "h": bool(has_ci), "t": timeout,
+         "ct": code_task_run_id, "wf": workflow_run_id, "h": has_ci, "t": timeout,
          "d": now + timedelta(seconds=timeout), "n": now, "by": actor})
     emit_event(connection, project_id, "ci.wait_started", actor, "ci_wait", wait_id,
                {"repository": repository, "head_sha": head_sha,
                 "pull_request_url": pull_request_url, "timeout_seconds": timeout,
-                "has_ci": bool(has_ci)})
+                "has_ci": has_ci})
     return get_wait(connection, wait_id)
 
 
@@ -979,6 +1030,19 @@ def poll_wait(connection: Any, wait_id: str, reader: CiReader, *, force: bool = 
     if row is None:
         raise CiSettingError("ci_wait_not_found", 404, "No such CI wait.")
     now = now or _now()
+    if not hosted_ci(reader) and row["status"] not in CLEARED | {"cancelled"}:
+        # NO HOSTED CI (BOSSAPP-946): the host's answer, not the clock's, so it is given at once:
+        # on the first look, and on any later look at a wait recorded before BOSS knew (a local
+        # build's 30-minute `timed_out` wait clears on the next Approve, recheck or tick).
+        summary = NO_HOSTED_CI_SUMMARY.format(repository=row["repository"] or "this repository")
+        connection.execute(text(
+            "UPDATE ci_waits SET status = 'no_ci', summary = :su, checks = CAST('[]' AS JSONB), "
+            "failing_url = NULL, has_ci = false, finished_at = :now, updated_at = :now "
+            "WHERE id = :i"), {"su": summary, "now": now, "i": wait_id})
+        emit_event(connection, row["project_id"], "ci.no_ci", "boss", "ci_wait", wait_id,
+                   {"summary": summary, "pull_request_url": row["pull_request_url"],
+                    "head_sha": row["head_sha"], "was": row["status"], "checks": 0})
+        return get_wait(connection, wait_id)
     rerun = False
     if row["status"] in TERMINAL:
         # A RED OR UNREAD RESULT IS NOT FOREVER. A person re-runs the failed job on GitHub (same
@@ -1007,7 +1071,7 @@ def poll_wait(connection: Any, wait_id: str, reader: CiReader, *, force: bool = 
         emit_event(connection, row["project_id"], "ci.rerun", "boss", "ci_wait", wait_id,
                    {"head_sha": row["head_sha"], "was": row["status"]})
         return get_wait(connection, wait_id)
-    has_ci = bool(row["has_ci"] or outcome.checks)
+    has_ci = True if outcome.checks else row["has_ci"]      # None: unknown (see settle)
     # Time is measured against the wait's own deadline, so a re-armed wait gets a full timeout.
     timeout = float(row["timeout_seconds"])
     deadline = row.get("deadline_at") if hasattr(row, "get") else row["deadline_at"]
@@ -1219,6 +1283,67 @@ def refuse_approval(connection: Any, row: Mapping[str, Any], actor: str, *,
         msg = f"{wait['summary']}. The {what} cannot be approved until CI passes."
     raise CiGateRefused("ci_not_passed", msg.replace("..", "."), ci_wait_id=wait["id"],
                         ci_status=wait["status"], failing_url=wait.get("failing_url"))
+
+
+#: What a held merge/deploy button says while CI keeps it from being approved (BOSSAPP-946).
+HOLD_WORDS = {"waiting": "Checks running…", "failed": "Checks failed",
+              "timed_out": "Checks didn't finish", "unreadable": "Checks not read"}
+
+
+def _settle_hostless(connection: Any, project_id: str, wait: dict[str, Any]) -> dict[str, Any]:
+    """A wait on a repository whose host has no CI, answered by the host (poll_wait's first
+    branch) — so a wait recorded before BOSS knew (a local build's 30-minute `timed_out`) clears
+    on the first look at its question. Its own savepoint; any failure keeps the wait as it was.
+    Only local repositories are read here: no network on a page load."""
+    from .local_repo import is_local
+
+    if wait["status"] in CLEARED or not is_local(wait.get("repository")):
+        return wait
+    try:
+        from ..config import get_settings
+
+        point = connection.begin_nested()
+        try:
+            reader = reader_for_project(connection, get_settings(), project_id,
+                                        wait.get("repository"))
+            got = (poll_wait(connection, wait["id"], reader, force=True, rearm=False)
+                   if not hosted_ci(reader) else wait)
+        except Exception:
+            point.rollback()
+            raise
+        point.commit()
+        return got
+    except Exception:  # noqa: BLE001 — unread: the wait stands
+        return wait
+
+
+def approval_hold(connection: Any, project_id: str, rec: Mapping[str, Any]
+                  ) -> Optional[dict[str, Any]]:
+    """WHY A MERGE OR DEPLOY CANNOT BE APPROVED YET, before anyone presses it (BOSSAPP-946: the
+    merge card offered "Merge PR #1" while CI was still running, and the press was refused).
+    {state, label, reason} — the label is the held button's ("Checks running…"), the reason the
+    gate's own words — or None when CI does not hold it (cleared, or no wait recorded). The same
+    wait `refuse_approval` reads, so the card and the gate never disagree."""
+    action = str((rec or {}).get("action") or "")
+    if action not in DEPLOY_ACTIONS | MERGE_ACTIONS:
+        return None
+    wait = latest_wait(connection, project_id, pull_request_url=rec.get("pull_request_url"),
+                       shas=_shas(rec))
+    if wait is None:
+        return None
+    wait = _settle_hostless(connection, project_id, wait)
+    if wait["status"] in CLEARED or wait["status"] == "cancelled":
+        return None
+    what = "deploy" if action in DEPLOY_ACTIONS else "merge"
+    if wait["status"] == "waiting":
+        reason = (f"CI is still running on this change; the {what} can be approved when it "
+                  f"passes. {wait.get('summary') or ''}").strip()
+    else:
+        reason = f"{wait.get('summary') or 'CI has not passed'}. The {what} can be approved " \
+                 "once CI passes."
+    return {"state": wait["status"], "label": HOLD_WORDS.get(wait["status"], "Checks not passed"),
+            "reason": reason.replace("..", "."), "ci_wait_id": wait["id"],
+            "failing_url": wait.get("failing_url")}
 
 
 def recheck(connection: Any, project_id: str, wait: dict[str, Any]) -> dict[str, Any]:

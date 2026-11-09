@@ -33,6 +33,7 @@ the step-up permission: a lapsed passkey must never block a person reading their
 from __future__ import annotations
 
 import concurrent.futures
+import json
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Request
@@ -110,7 +111,7 @@ def _understand(project_id: str, payload: UnderstandBody, actor: str) -> dict[st
 
     with begin(_engine) as connection:
         catalogue = _catalogue(connection, _org(connection, project_id))
-        flows = add_project.workflows(connection, project_id)
+        flows = add_project.workflows(connection, project_id, for_a_new_project=True)
         return add_project.understand(
             connection, _settings, project_id, words=payload.words, hint=payload.hint or "",
             previous=payload.previous, pinned=payload.pinned, catalogue=catalogue,
@@ -201,6 +202,20 @@ def add_project_preview(project_id: str, mode: str = "idea", app_name: str = "")
     out["default_repository"] = f"{owner}/{repo}" if owner and repo else None
     out["stacks"] = _stacks()
     return out
+
+
+@router.get("/v1/projects/{project_id}/add-project/name")
+@permit(P.PROJECT_READ, scope=Scope.project(path="project_id"))
+def add_project_free_name(project_id: str, name: str = "") -> dict[str, Any]:
+    """The name Add project pre-fills: `name` when it is free in this org, else the first free
+    "name 2", "name 3" … (bootstrap.free_project_name, the create's own rule; BOSSAPP-946)."""
+    from boss_engine.bootstrap import free_project_name
+
+    asked = (name or "").strip()[:120]
+    with begin(_engine) as connection:
+        _require_project(connection, project_id)
+        free = free_project_name(connection, _org(connection, project_id), asked) if asked else ""
+    return {"name": asked, "free": free, "taken": bool(asked) and free != asked}
 
 
 @router.get("/v1/projects/{project_id}/add-project/repo/{repo_id}")
@@ -711,7 +726,12 @@ def _create_and_start(request: Request, body: CreateAndStartBody) -> dict[str, A
                                 "when": body.notify_when},
                      "audience": body.audience, "done_when": body.done_when,
                      "read_first": body.read_first, "map_rules": body.map_rules,
-                     "note": (body.note or "").strip() or None}
+                     "note": (body.note or "").strip() or None,
+                     # THE START, KEPT (BOSSAPP-946): the start only follows the commit (a
+                     # consent names the project it is for), so an unanswered consent or a
+                     # reload must not strand the project — the project page's Start sends
+                     # this again (POST …/add-project/start). No secrets: those are stored.
+                     "start_request": _start_request(body)}
             add_project.save_seed(db, pid, kind=kind, words=body.words, brief=brief, picks=picks,
                                   actor=actor)
 
@@ -769,20 +789,93 @@ def _create_and_start(request: Request, body: CreateAndStartBody) -> dict[str, A
             started = _start(request, body, pid, org_id, run_input, actor)
         except HTTPException as exc:
             # Only the start could refuse this (a consent grant, a pre-check): the project is
-            # kept, and the same call with retry.project_id starts it.
+            # kept, and the same call with retry.project_id starts it — or, after a cancel or a
+            # reload, the project page's one Start (POST …/add-project/start).
             said = _words_of(exc)
+            _note_refused_start(pid, said)
             return JSONResponse({**said, "step": "start", "created": True, "project_id": pid,
                                  "retry": {"project_id": pid}, "steps": steps},
                                 status_code=exc.status_code)
         except Refused as refused:
+            _note_refused_start(pid, refused.body)
             return JSONResponse({**refused.body, "step": refused.step, "created": True,
                                  "project_id": pid, "retry": {"project_id": pid},
                                  "steps": steps}, status_code=refused.status)
+        _note_refused_start(pid, None)
         steps.append({"key": "start", "ok": True, "label": "Planning started"})
         href = project_href(pid, tab="overview")
     return {"created": True, "project_id": pid, "name": body.name.strip(), "kind": kind,
             "href": href, "steps": steps, "started": started, "staging": staged,
             "publish": published}
+
+
+#: What a kept start leaves out: what made the project (phase 1 ran it), and every secret.
+_NOT_REPLAYED = {"connector_secrets", "project_id", "repo_ids", "folder", "local_folder",
+                 "new_repo", "staging", "allow_shared_repo"}
+
+
+def _start_request(body: CreateAndStartBody) -> dict[str, Any]:
+    """The Create-and-start request as the project page's Start sends it again (phase 2 only)."""
+    return body.model_dump(mode="json", exclude=_NOT_REPLAYED)
+
+
+def _note_refused_start(pid: str, said: Optional[dict[str, Any]]) -> None:
+    """Why the start did not happen (the project page says it), or cleared once it did."""
+    from sqlalchemy import text
+
+    try:
+        with begin(_engine) as db:
+            if said is None:
+                db.execute(text("UPDATE project_seeds SET picks = picks - 'start_refused' "
+                                "WHERE project_id = :p AND picks ? 'start_refused'"), {"p": pid})
+            else:
+                db.execute(text(
+                    "UPDATE project_seeds SET picks = jsonb_set(picks, '{start_refused}', "
+                    "CAST(:r AS JSONB)), updated_at = now() WHERE project_id = :p"),
+                    {"p": pid, "r": json.dumps({
+                        "error": str(said.get("error") or "")[:80] or None,
+                        "message": str(said.get("message") or "")[:300] or None})})
+    except Exception:  # noqa: BLE001 — the words are a help; the start's own answer stands
+        import logging
+
+        logging.getLogger(__name__).warning("could not note the refused start of %s", pid)
+
+
+class ResumeBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    start_anyway: list[str] = Field(default_factory=list, max_length=20)
+
+
+@router.post("/v1/projects/{project_id}/add-project/start")
+@permit(P.WORKFLOW_RUN_START, scope=Scope.project(path="project_id"))
+def add_project_resume(project_id: str, request: Request, payload: ResumeBody) -> Any:
+    """START A PROJECT ADD PROJECT MADE BUT DID NOT START (BOSSAPP-946): the consent sheet was
+    cancelled or never answered, or the page reloaded. The kept start is sent again as phase 2
+    of Create and start — never a second project; a consent still owed answers 409
+    consent_required again, for the page's consent sheet."""
+    from boss_engine.services.project_experience import add_project
+
+    with begin(_engine) as db:
+        _require_project(db, project_id)
+        seed = add_project.seed_of(db, project_id)
+        started = add_project.started(db, project_id) if seed else {}
+    kept = ((seed or {}).get("picks") or {}).get("start_request")
+    if not seed or seed.get("kind") != "idea" or not isinstance(kept, dict):
+        return JSONResponse({"error": "nothing_to_start", "created": False, "message":
+                             "This project has no start kept to send: start work from its "
+                             "Work tab."}, status_code=409)
+    if started.get("run"):
+        return {"created": True, "project_id": project_id, "already": True,
+                "started": {"run_id": started["run"]["id"]}}
+    body = CreateAndStartBody(**{**kept, "project_id": project_id,
+                                 "start_anyway": list(dict.fromkeys(
+                                     [*(kept.get("start_anyway") or []),
+                                      *payload.start_anyway]))})
+    try:
+        return _create_and_start(request, body)
+    except Refused as refused:
+        return JSONResponse({**refused.body, "step": refused.step, "created": True,
+                             "project_id": project_id}, status_code=refused.status)
 
 
 def _connector_plan_body(body: CreateAndStartBody, pid: str, run_input: dict[str, Any]) -> dict:

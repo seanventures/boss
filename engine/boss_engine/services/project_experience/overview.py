@@ -20,6 +20,7 @@ from . import demo_logins as demo
 from . import onboarding as onboarding_service
 from . import work as work_service
 from .common import (LIVE_RUN, web_url, STAGE_LABELS, STAGES, STATUS_LABELS, agents, avatar_of, face, href,
+                     change_ref,
                      initials, iso, pr_number, project_href, repos, require_project, short_day,
                      words)
 from .health import environments as health_environments
@@ -414,7 +415,8 @@ def week(connection: Connection, project_id: str, now: datetime, limit: int = 6
             "ORDER BY n, opened"), {"p": project_id}).mappings():
         if r["opened"] is not None and r["opened"] >= since:
             prs[int(r["n"])] = {"at": iso(r["opened"]), "kind": "pr",
-                                "label": f"PR #{r['n']} opened", "external_url": r["url"],
+                                "label": f"{change_ref(r['url'], r['n'])} opened",
+                                "external_url": r["url"],
                                 "href": href(project_id, area="code_tasks", view="apps",
                                              build=r["id"])}
     for r in connection.execute(text(
@@ -425,7 +427,8 @@ def week(connection: Connection, project_id: str, now: datetime, limit: int = 6
         n = pr_number(r["url"])
         if n is None:
             continue
-        prs[n] = {"at": iso(r["approved_at"]), "kind": "merge", "label": f"PR #{n} merged",
+        prs[n] = {"at": iso(r["approved_at"]), "kind": "merge",
+                  "label": f"{change_ref(r['url'], n)} merged",
                   "external_url": r["url"],
                   "href": href(project_id, area="decisions", decision=r["id"])}
     out.extend(prs.values())

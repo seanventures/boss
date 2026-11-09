@@ -85,7 +85,8 @@ def test_every_pr_boss_opens_goes_through_the_gate_before_anything_is_written():
     src = inspect.getsource(SoftwareFactoryService.propose_pull_request)
     assert "monitoring_removals" in inspect.signature(
         SoftwareFactoryService.propose_pull_request).parameters
-    assert src.index("monitoring_guard.guard_files(") < src.index("self.github.upsert_file(")
+    # The write is commit_change (one commit per stage where the host can, BOSSAPP-946).
+    assert src.index("monitoring_guard.guard_files(") < src.index("commit_change(")
     assert "monitoring_guard.pr_section(" in src
 
 

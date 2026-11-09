@@ -222,7 +222,7 @@ function DiffTable({ file, inline }: { file: DiffFile; inline: Map<string, Inlin
                     {notes ? (
                       <tr className="cs-inline"><td colSpan={3}>
                         {notes.map((n, ni) => (
-                          <div key={ni} className="cs-inline-c"><Who name={n.author} size={18} /><span data-user-text>{n.body}</span></div>
+                          <InlineNote key={ni} author={n.author} body={n.body} />
                         ))}
                       </td></tr>
                     ) : null}
@@ -275,7 +275,16 @@ function eventTone(e: string): string {
   return v.includes("APPROVE") ? "green" : v.includes("CHANGES") || v.includes("REQUEST") ? "amber" : "grey";
 }
 
-function Review({ notes }: { notes: ChangeSetNote[] }) {
+/** A review note on a line of the diff: its author beside it (never on top of its words), the
+ *  note as Markdown (BOSSAPP-946: "Boss" overlapped "MINOR** —" with the asterisks raw). */
+export function InlineNote({ author, body }: { author: string; body: string }) {
+  return (
+    <div className="cs-inline-c" data-testid="change-set-inline-note"><Who name={author} size={18} />
+      <div className="cs-inline-b cs-md" data-user-text><Markdown text={body} /></div></div>
+  );
+}
+
+export function Review({ notes }: { notes: ChangeSetNote[] }) {
   return (
     <section className="cs-card" id="cs-review" data-testid="change-set-review" aria-label="Review">
       <div className="cs-card-h"><ChatCircleText size={15} aria-hidden /><b>Review</b><span className="cs-faint">{notes.length}</span></div>
@@ -283,10 +292,10 @@ function Review({ notes }: { notes: ChangeSetNote[] }) {
         <article key={String(n.id)} className="cs-note">
           <div className="cs-note-h"><Who name={n.author} />
             {n.event || n.kind ? <span className="cs-pill" data-tone={eventTone(n.event || n.kind)}>{(n.event || n.kind).replace(/_/g, " ").toLowerCase()}</span> : null}</div>
-          {n.body ? <p className="cs-note-b" data-user-text>{n.body}</p> : null}
+          {n.body ? <div className="cs-note-b cs-md" data-user-text><Markdown text={n.body} /></div> : null}
           {n.comments.length ? (
             <ul className="cs-note-c">{n.comments.map((c, i) => (
-              <li key={i}>{c.path ? <code className="cs-chip">{c.path}{c.line ? `:${c.line}` : ""}</code> : null}<span data-user-text>{c.body}</span></li>
+              <li key={i}>{c.path ? <code className="cs-chip">{c.path}{c.line ? `:${c.line}` : ""}</code> : null}<div className="cs-note-cb cs-md" data-user-text><Markdown text={c.body} /></div></li>
             ))}</ul>
           ) : null}
         </article>
@@ -309,7 +318,7 @@ function Body({ text }: { text: string }) {
 
 // ── the decision, Merge and the checks ──────────────────────────────────────────────────────
 
-function Decide({ cs, projectId, number, reread }: { cs: ChangeSet; projectId: string; number: string; reread: () => Promise<ChangeSet> }) {
+export function Decide({ cs, projectId, number, reread }: { cs: ChangeSet; projectId: string; number: string; reread: () => Promise<ChangeSet> }) {
   const guarded = useGuardedCall();
   const [busy, setBusy] = useState<"merge" | "merging" | null>(null);
   const [said, setSaid] = useState<string | null>(null);
@@ -353,12 +362,14 @@ function Decide({ cs, projectId, number, reread }: { cs: ChangeSet; projectId: s
         <p className="cs-merging" role="status" data-testid="change-set-merging"><CircleNotch size={14} className="cs-spin" aria-hidden /> Approved · BOSS is merging…</p>
       ) : cs.merge ? (
         <>
-          <button type="button" className="cs-primary" data-testid="change-set-merge" disabled={!!busy} aria-busy={!!busy || undefined}
+          <button type="button" className="cs-primary" data-testid="change-set-merge" disabled={!!busy || !!cs.merge.held} aria-busy={!!busy || undefined}
+                  title={cs.merge.held?.reason || undefined} data-held={cs.merge.held?.state || undefined}
                   onClick={() => void merge()}>
             {busy ? <CircleNotch size={15} className="cs-spin" aria-hidden /> : <GitMerge size={15} weight="bold" aria-hidden />}
-            Merge into {cs.base_branch}
+            {cs.merge.held ? cs.merge.held.label : `Merge into ${cs.base_branch}`}
           </button>
-          <p className="cs-faint cs-small">A person merges · BOSS runs the governed merge</p>
+          <p className="cs-faint cs-small" data-testid={cs.merge.held ? "change-set-held" : undefined}>
+            {cs.merge.held ? cs.merge.held.reason : "A person merges · BOSS runs the governed merge"}</p>
         </>
       ) : cs.state === "open" ? <p className="cs-faint cs-small">Merge opens once the review asks for a decision.</p> : null}
       {said ? <p className="cs-error" role="alert">{said}</p> : null}

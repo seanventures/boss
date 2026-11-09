@@ -9,6 +9,7 @@
  */
 
 import { repoUrl } from "./github-urls";
+import { parseCiHold, type CiHold } from "./ci-hold";
 
 const LOCAL_OWNER_PREFIX = "local_";
 const LOCAL_PR_HOST = "boss-local";
@@ -94,6 +95,27 @@ export function reviewChangeWords(url: string | null | undefined): string | null
   return local ? `Review change #${local.number} ›` : null;
 }
 
+/** HOW A CHANGE IS NAMED (BOSSAPP-946): "PR #3" on GitHub, "Change #3" for a local change set
+ *  (`lower`: "change #3" mid-sentence, "Merge change #3"). The local-first HelpDesk's page said
+ *  "PR #1", "Merge PR #1" and "Pull request" for a project with no GitHub anywhere. */
+export function changeRef(url: string | null | undefined, n: number | string | null | undefined, lower = false): string {
+  if (isLocalChangeUrl(url)) return n ? `${lower ? "change" : "Change"} #${n}` : (lower ? "the change" : "The change");
+  return n ? `PR #${n}` : (lower ? "the pull request" : "The pull request");
+}
+
+/** A project whose code is on this machine (its repositories are local ones). */
+export function projectIsLocal(repos: ReadonlyArray<{ full_name?: string | null }> | null | undefined): boolean {
+  const list = (repos ?? []).filter((r) => r && r.full_name);
+  return list.length > 0 && list.every((r) => isLocalRepo(r.full_name));
+}
+
+/** A project's change words: GitHub's, or a local project's (no GitHub word anywhere). */
+export function changeWords(local: boolean): { short: string; set: string; station: string; ideaTo: string; merge: string } {
+  return local
+    ? { short: "Change", set: "Change set", station: "Change set", ideaTo: "Idea to change set", merge: "Merge change" }
+    : { short: "PR", set: "Pull request", station: "PR", ideaTo: "Idea to PR", merge: "Merge PR" };
+}
+
 /** The words on a PR link. */
 export function prLinkLabel(url: string | null | undefined): string {
   return isLocalChangeUrl(url) ? "Open change set" : "Open PR on GitHub";
@@ -110,7 +132,7 @@ export type ChangeSet = {
   files: ChangeSetFile[]; diff: string; diff_error: string | null; commits: { sha: string; message: string }[];
   review: ChangeSetNote[];
   checks: { where: string; run_status: string | null; tests_passed: string | null; gates?: unknown } | null;
-  merge: { how: string; decision_id: string } | null;
+  merge: { how: string; decision_id: string; held?: CiHold | null } | null;
   /** The review decision whose approval merges it (pending while it is open). */
   decision: { id: string; status: string; question: string } | null;
   draft: boolean; labels: string[]; pending_push: boolean; run_id: string | null; head_sha: string | null;
@@ -147,7 +169,7 @@ export function parseChangeSet(raw: unknown): ChangeSet {
     checks: checks ? { where: str(checks.where, "BOSS's sandbox"), run_status: str(checks.run_status) || null,
                        tests_passed: checks.tests_passed == null ? null : str(checks.tests_passed),
                        ...(checks.gates !== undefined ? { gates: checks.gates } : {}) } : null,
-    merge: merge && str(merge.decision_id) ? { how: str(merge.how), decision_id: str(merge.decision_id) } : null,
+    merge: merge && str(merge.decision_id) ? { how: str(merge.how), decision_id: str(merge.decision_id), held: parseCiHold(merge.held) } : null,
     decision: decision && str(decision.id) ? { id: str(decision.id), status: str(decision.status, "pending"), question: str(decision.question) } : null,
     draft: r.draft === true, labels: Array.isArray(r.labels) ? r.labels.map((l) => str(l)).filter(Boolean) : [],
     pending_push: r.pending_push === true, run_id: str(r.run_id) || null, head_sha: str(r.head_sha) || null,

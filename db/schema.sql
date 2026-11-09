@@ -1249,7 +1249,7 @@ CREATE TABLE IF NOT EXISTS ci_waits (
   code_task_run_id TEXT,
   workflow_run_id TEXT,
   status TEXT NOT NULL DEFAULT 'waiting',
-  has_ci BOOLEAN NOT NULL DEFAULT true,
+  has_ci BOOLEAN DEFAULT true,          -- NULL: BOSS could not tell (ci_gate.settle)
   summary TEXT NOT NULL DEFAULT '',
   checks JSONB NOT NULL DEFAULT '[]'::jsonb,
   failing_url TEXT,
@@ -1267,6 +1267,8 @@ CREATE INDEX IF NOT EXISTS idx_ci_waits_project_pr
   ON ci_waits(project_id, pull_request_url, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_ci_waits_project_sha
   ON ci_waits(project_id, head_sha, created_at DESC);
+-- BOSSAPP-946: whether a repository has CI can be unknown (NULL); unknown never means "has CI".
+ALTER TABLE ci_waits ALTER COLUMN has_ci DROP NOT NULL;
 
 CREATE TABLE IF NOT EXISTS github_branch_policies (
   id TEXT PRIMARY KEY,

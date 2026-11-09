@@ -18,7 +18,9 @@ port is the default preview origin, BOSS_PREVIEW_ORIGIN overrides it) and:
     here): only cookies carrying this preview's tag pass (boss_engine.services.preview_cookies);
   - relays a Set-Cookie only when it is one the preview gateway made for THIS preview (tagged,
     Path exactly `/v1/previews/<id>/`, no Domain), and always answers with the sandbox CSP,
-    whatever the handler said.
+    whatever the handler said. A preview PAGE's sandbox here includes allow-same-origin
+    (page_csp, BOSSAPP-946), so a login app keeps its session cookie: safe only because this
+    origin is never BOSS's own (preview_service.preview_origin_for refuses that).
 
 It delegates to the API's own preview handlers (apps/api/app/main.py preview_web_proxy,
 preview_websocket_proxy, submit_preview_feedback_endpoint), so there is one preview gateway.
@@ -34,7 +36,9 @@ import re
 from typing import Any, Awaitable, Callable, Optional
 
 from boss_engine.services.preview_cookies import is_relayable_set_cookie, own_cookie_pairs
-from boss_engine.services.preview_service import PREVIEW_SANDBOX_CSP, PREVIEW_TAB_NAME
+from boss_engine.services.preview_service import (
+    PREVIEW_ORIGIN_SANDBOX_CSP, PREVIEW_SANDBOX_CSP, PREVIEW_TAB_NAME, is_boss_origin,
+)
 
 Scope = dict[str, Any]
 Receive = Callable[[], Awaitable[dict]]
@@ -105,14 +109,28 @@ def stripped_headers(headers: list[tuple[bytes, bytes]],
     return out
 
 
+def page_csp(scope: Scope) -> str:
+    """The sandbox a preview PAGE gets here: with allow-same-origin, so the app keeps its own
+    session cookie (BOSSAPP-946) — this listener is the preview origin, never BOSS's. Should a
+    request arrive here under BOSS's own origin all the same (a proxy pointing the console's
+    name at this port), the page stays opaque."""
+    headers = {k.lower(): v for k, v in scope.get("headers") or []}
+    host = headers.get(b"host", b"").decode("latin-1").strip()
+    scheme = "https" if scope.get("scheme") in ("https", "wss") else "http"
+    if not host or is_boss_origin(f"{scheme}://{host}"):
+        return PREVIEW_SANDBOX_CSP
+    return PREVIEW_ORIGIN_SANDBOX_CSP
+
+
 def _isolated_response_headers(headers: list[tuple[bytes, bytes]],
-                               preview_id: Optional[str] = None) -> list[tuple[bytes, bytes]]:
+                               preview_id: Optional[str] = None,
+                               csp: str = PREVIEW_SANDBOX_CSP) -> list[tuple[bytes, bytes]]:
     out = [(k, v) for k, v in headers
            if k.lower() not in (b"set-cookie", b"content-security-policy",
                                 b"access-control-allow-credentials")
            or (k.lower() == b"set-cookie" and preview_id
                and is_relayable_set_cookie(preview_id, v.decode("latin-1")))]
-    out.append((b"content-security-policy", PREVIEW_SANDBOX_CSP.encode()))
+    out.append((b"content-security-policy", csp.encode()))
     return out
 
 
@@ -196,10 +214,13 @@ def preview_only(app: ASGIApp) -> ASGIApp:
         inner.setdefault("state", {})
         inner["state"] = {**inner["state"], "boss_preview_origin": True}
 
+        csp = page_csp(scope)
+
         async def isolated_send(message: dict) -> None:
             if message.get("type") == "http.response.start":
                 message = {**message, "headers": _isolated_response_headers(
-                    list(message.get("headers") or []), preview_id if kind == "http" else None)}
+                    list(message.get("headers") or []), preview_id if kind == "http" else None,
+                    csp)}
             await send(message)
 
         await app(inner, receive, isolated_send)

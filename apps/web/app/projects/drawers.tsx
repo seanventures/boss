@@ -8,7 +8,7 @@
  *   env:<key>     an environment's full picture;  deploy:<id>  one deploy
  * Prose lives here, never on the page.
  */
-import { changeHref, isLocalChangeUrl, linkTarget, reviewChangeWords } from "../../lib/repo-links";
+import { changeHref, changeRef, isLocalChangeUrl, linkTarget, reviewChangeWords } from "../../lib/repo-links";
 import { DiagnosisFlow, WhyLine } from "../../components/stuck-work";
 import React, { useEffect, useState } from "react";
 import {
@@ -168,7 +168,7 @@ function WorkDrawer({ ctx, w, onClose }: { ctx: PxCtx; w: WorkItem; onClose: () 
           {/* ONE ACTION (screen 05b): merging is approving the build's merge question in BOSS;
               with no question on record it opens the PR on GitHub. */}
           {mp ? (l.decision
-            ? <a className="px-btn" data-kind="amber" data-size="s" href={pxHref(l.decision)} data-testid="px-drawer-work-merge"><GitMerge size={12} aria-hidden /> Merge PR #{mp.number}</a>
+            ? <a className="px-btn" data-kind="amber" data-size="s" href={pxHref(l.decision)} data-testid="px-drawer-work-merge"><GitMerge size={12} aria-hidden /> Merge {changeRef(mp.external_url, mp.number, true)}</a>
             : <a className="px-btn" data-kind="amber" data-size="s" href={changeHref(mp.external_url) ?? undefined} {...linkTarget(mp.external_url)} data-testid="px-drawer-work-merge"><GitMerge size={12} aria-hidden /> {isLocalChangeUrl(mp.external_url) ? `Open change set #${mp.number}` : `Merge PR #${mp.number} ↗`}</a>)
             : l.decision ? <PxLink href={l.decision} className="px-btn" testid="px-drawer-work-decide">Decide</PxLink>
             : l.workflow_run ? <PxLink href={l.workflow_run} className="px-btn">Decide</PxLink> : null}

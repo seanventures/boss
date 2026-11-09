@@ -264,6 +264,13 @@ def local_change(project_id: str, number: int) -> dict[str, Any]:
         view["merge"] = ({"how": "approve the review decision", "decision_id": decision["id"]}
                          if decision and decision["status"] == "pending" and row["state"] == "open"
                          else None)
+        if view["merge"] is not None:
+            # HELD BY CI (BOSSAPP-946): the same answer the gate gives, before the press.
+            from boss_engine.services import ci_gate
+
+            view["merge"]["held"] = ci_gate.approval_hold(connection, project_id, {
+                "action": "review_pull_request", "pull_request_url": view["url"],
+                "head_sha": row.get("head_sha") or ""})
         return view
 
 

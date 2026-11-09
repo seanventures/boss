@@ -8,7 +8,7 @@
  *                   from the reads the page has (onboarding, work, roadmap, deployments);
  *   NeedsBody       a Needs-you item: why it waits, its path, the work and the PR.
  */
-import { changeHref, isLocalChangeUrl, reviewChangeWords } from "../../lib/repo-links";
+import { changeHref, changeRef, isLocalChangeUrl, reviewChangeWords } from "../../lib/repo-links";
 import { DiagnosisFlow } from "../../components/stuck-work";
 import React from "react";
 import {
@@ -203,7 +203,7 @@ export function StageBody({ ctx, n }: { ctx: PxCtx; n: Node }) {
           {items.length ? <div data-testid="px-stage-work">{items.map((w) => (
             <button key={w.id} type="button" className="px-li px-li-btn" onClick={() => ctx.open("work", w.id)}>
               <span className="px-dot" data-s={w.state === "running" ? "now" : w.state === "needs_you" ? "you" : w.state === "stalled" ? "stalled" : w.state === "done" ? "done" : w.state === "failed" ? "bad" : undefined} aria-hidden />
-              <span style={{ minWidth: 0 }}><b className="px-ell" style={{ display: "block" }}>{w.label}</b><small>{w.links.pr ? `PR #${w.links.pr.number}` : workWhen(w)}</small></span>
+              <span style={{ minWidth: 0 }}><b className="px-ell" style={{ display: "block" }}>{w.label}</b><small>{w.links.pr ? changeRef(w.links.pr.external_url, w.links.pr.number) : workWhen(w)}</small></span>
               <Stations stages={w.stages} /></button>))}</div>
             : <Empty icon={Kanban} title="Nothing in flight" line="New work starts from New work, the Roadmap or What's next." />}
         </>
@@ -345,7 +345,7 @@ export function ReleaseList({ n }: { n: NeedsYou }) {
 
 /** The drawer's primary, named for what it does: "Merge PR #3", "Approve deploy". */
 export function actWord(n: NeedsYou): string {
-  if (n.kind === "merge") return /^Merge PR #\d+$/.test(n.label) ? n.label : "Merge";
+  if (n.kind === "merge") return /^Merge (PR|change) #\d+$/.test(n.label) ? n.label : "Merge";
   if (n.kind === "deploy") return "Approve deploy";
   if (n.kind === "plan") return "Approve plan";
   return "Approve";
@@ -371,6 +371,9 @@ export function DecisionActs({ ctx, n, onDone }: { ctx: PxCtx; n: NeedsYou; onDo
         ...(release.needs_reason ? { force: true } : {}) }
     : { note: "" };
   const blocked = Boolean(release?.needs_reason && !why.trim());
+  // HELD BY CI (BOSSAPP-946): "Checks running…", disabled, with the gate's own words — never an
+  // Approve the gate refuses.
+  const held = n.held ?? null;
   if (!id) return null;
   const answer = async (verb: "approve" | "reject") => {
     setBusy(true); setSaid({ text: "" });
@@ -433,15 +436,16 @@ export function DecisionActs({ ctx, n, onDone }: { ctx: PxCtx; n: NeedsYou; onDo
                    onChange={(e) => setWhy(e.target.value)} aria-label="Why ship it anyway" data-testid="px-drawer-needs-why"
                    style={{ flex: "1 1 100%" }} />
           ) : null}
-          <GatedButton permission="decision:approve" projectId={ctx.projectId} className="px-btn" data-kind="amber" data-size="s" disabled={busy || blocked}
-                       title={blocked ? "Say why it should ship anyway first" : undefined}
-                       data-testid="px-drawer-needs-approve" onClick={() => void answer("approve")}>
-            {n.kind === "merge" ? <GitMerge size={12} aria-hidden /> : n.kind === "deploy" ? <RocketLaunch size={12} aria-hidden /> : <Check size={12} aria-hidden />} {actWord(n)}</GatedButton>
+          <GatedButton permission="decision:approve" projectId={ctx.projectId} className="px-btn" data-kind="amber" data-size="s" disabled={busy || blocked || Boolean(held)}
+                       title={held ? held.reason : blocked ? "Say why it should ship anyway first" : undefined}
+                       data-testid="px-drawer-needs-approve" data-held={held ? held.state : undefined} onClick={() => void answer("approve")}>
+            {n.kind === "merge" ? <GitMerge size={12} aria-hidden /> : n.kind === "deploy" ? <RocketLaunch size={12} aria-hidden /> : <Check size={12} aria-hidden />} {held ? held.label : actWord(n)}</GatedButton>
           <GatedButton permission="decision:approve" projectId={ctx.projectId} className="px-btn" data-size="s" disabled={busy}
                        data-testid="px-drawer-needs-reject" onClick={() => setRejecting(true)}>Reject</GatedButton>
           {review ? <PxLink href={changeHref(review) ?? ""} testid="px-drawer-needs-review">{isLocalChangeUrl(review) ? reviewChangeWords(review) ?? "Review the change set" : "Review on GitHub"}</PxLink> : null}
         </div>
       )}
+      {held && !said.text ? <span className="px-faint" style={{ fontSize: ".64rem", lineHeight: 1.45 }} data-testid="px-drawer-needs-held">{held.reason}</span> : null}
       <Said text={said.text} tone={said.tone} />
     </div>
   );
